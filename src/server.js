@@ -425,7 +425,7 @@ import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
 import { trustPage } from "./trust-page.js";
 import { markGateMounted } from "./gate-mounts.js";
-import { conformanceDocument, CONFORMANCE_PATH } from "./conformance.js";
+import { conformanceDocumentCached, resetConformanceCache, CONFORMANCE_PATH } from "./conformance.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
 import { pressPage } from "./press-page.js";
@@ -4573,7 +4573,7 @@ for (const p of A2A_WELL_KNOWN_PATHS) {
 }
 // Per payment rail, the protocol features this server implements and the
 // refund terms as data, computed at each request (src/conformance.js).
-app.get(CONFORMANCE_PATH, (_req, res) => res.set("Cache-Control", "public, max-age=300").json(conformanceDocument(BASE_URL)));
+app.get(CONFORMANCE_PATH, (_req, res) => res.set("Cache-Control", "public, max-age=300").json(conformanceDocumentCached(BASE_URL, { freeMode: FREE_MODE })));
 app.get("/.well-known/glama.json", (_req, res) => {
   const email = process.env.GLAMA_MAINTAINER_EMAIL || "mike@agent402.tools";
   res.set("Cache-Control", "public, max-age=86400").json({
@@ -13401,6 +13401,8 @@ await Promise.race([ledgerFiguresBoot, new Promise((ok) => setTimeout(ok, LEDGER
 void loadDiscoveryRefusals();
 const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
+  // Every gate is mounted by now: a conformance document built earlier is dropped.
+  resetConformanceCache();
   // The deploy overlap window (src/replay-topology.js) is counted from here,
   // not from the first import: a slow store load must not spend it.
   markListening(listenedAt);

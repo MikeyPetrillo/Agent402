@@ -33,6 +33,7 @@ import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { IDEMPOTENCY_CREDENTIALS } from "./idempotency.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { refundClauses, REPAYMENT_FAMILIES } from "./refund-terms.js";
+import { sanctionsScreenStatus } from "./sanctions-screen.js";
 
 export { CONFORMANCE_PATH };
 export const CONFORMANCE_VERSION = 1;
@@ -83,6 +84,9 @@ function liveState() {
     rails: paymentRailsLive(),
     x402: gateMounted("x402"),
     payerScreen: gateMounted("x402PayerScreen"),
+    // fresh | stale | missing: while no list is loaded the x402 screen fails
+    // open (src/x402-payer-screen.js) and the cell says so.
+    screenList: sanctionsScreenStatus(),
     replayGuard: gateMounted("replayGuard"),
     idempotency: gateMounted("idempotency"),
     hangupHook: gateMounted("hangupHook"),
@@ -143,9 +147,11 @@ function x402Row(L, { scheme, network, batched, offered }) {
         : cell(false, "The x402 paywall is not mounted on this server.", "src/replay-guard.js"),
       refundOnChargedFailure: refundCell(network, batched ? "A Gateway payment settled for a request never served:" : "A charge that did not deliver:"),
       hangupForgiveness: hangupCell(L, "Settlement is aborted before any facilitator call (client_disconnected)."),
-      sanctionsScreening: L.payerScreen
-        ? cell(true, network.startsWith("eip155:") ? "The signed EVM payer (authorization.from, or the Permit2 signer) is checked after verification and before the route runs; a listed payer is refused 403 and not charged." : "The transaction's signers are checked after verification and before the route runs; a listed signer is refused 403 and not charged.", "src/x402-payer-screen.js")
-        : cell(false, "The x402 payer screen is not mounted on this server.", "src/x402-payer-screen.js"),
+      sanctionsScreening: !L.payerScreen
+        ? cell(false, "The x402 payer screen is not mounted on this server.", "src/x402-payer-screen.js")
+        : L.screenList === "missing"
+        ? cell(false, "The x402 payer screen is mounted but no sanctions list is loaded right now, so it fails open: payers are served unscreened until the list loads.", "src/x402-payer-screen.js")
+        : cell(true, network.startsWith("eip155:") ? "The signed EVM payer (authorization.from, or the Permit2 signer) is checked after verification and before the route runs; a listed payer is refused 403 and not charged. While no list is loaded the screen fails open (served unscreened)." : "The transaction's signers are checked after verification and before the route runs; a listed signer is refused 403 and not charged. While no list is loaded the screen fails open (served unscreened).", "src/x402-payer-screen.js"),
       receipt: cell(true, "PAYMENT-RESPONSE: the settlement result, with the transaction.", "src/payments.js"),
       signedReceipt: NOT_SIGNED("PAYMENT-RESPONSE"),
     },
@@ -304,15 +310,33 @@ export function refundTermsDocument(baseUrl = "") {
   };
 }
 
-export function conformanceDocument(baseUrl = "") {
+export function conformanceDocument(baseUrl = "", { freeMode = false } = {}) {
   return {
     document: "agent402-conformance",
     version: CONFORMANCE_VERSION,
     url: `${baseUrl}${CONFORMANCE_PATH}`,
     generatedAt: new Date().toISOString(),
-    legend: { supported: "true: implemented on this rail; false: not implemented; null: does not apply to this rail", offered: "true while this server accepts payment on the rail" },
+    // FREE_MODE answers every tool without payment, so every rail (proof of
+    // work included) reads offered:false; this flag says why.
+    freeMode: !!freeMode,
+    legend: { supported: "true: implemented on this rail; false: not implemented; null: does not apply to this rail", offered: "true while this server accepts payment on the rail", freeMode: "true when this server answers every tool without payment or proof of work, so no rail is offered" },
     features: FEATURES,
     rails: conformanceRails(),
     refundTerms: refundTermsDocument(baseUrl),
   };
+}
+
+// The document is built once per CONFORMANCE_CACHE_MS (the gates are fixed
+// once the server listens; a rail dropped by the boot check or a list that
+// loads shows within the window, and the list status is part of the key).
+// src/server.js clears it when the server starts listening.
+export const CONFORMANCE_CACHE_MS = 60_000;
+let docCache = null; // { key, at, value }
+export function resetConformanceCache() { docCache = null; }
+export function conformanceDocumentCached(baseUrl = "", { freeMode = false, now = Date.now() } = {}) {
+  const key = `${baseUrl}|${!!freeMode}|${sanctionsScreenStatus(now)}`;
+  if (docCache && docCache.key === key && now - docCache.at >= 0 && now - docCache.at < CONFORMANCE_CACHE_MS) return docCache.value;
+  const value = conformanceDocument(baseUrl, { freeMode });
+  docCache = { key, at: now, value };
+  return value;
 }
