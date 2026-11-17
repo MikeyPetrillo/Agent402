@@ -62,7 +62,10 @@
 //   lost state            With no saved state and an issue open, a route the
 //                         issue already lists counts as a repeat miss (never
 //                         bought again, the issue updated), and the issue is
-//                         never closed while any route is missing.
+//                         never closed while any route is missing. With the MCP
+//                         listing issue open, that check holds it as is and
+//                         records no absent listing as seen or missing; only a
+//                         listing observed in the reading becomes seen.
 //
 // Reads only: /api/pricing and the listing. The buy is scripts/refresh-bazaar.js
 // MODE=missing with the slugs this writes (REQUIRE_SLUGS=1), which reads the
@@ -203,11 +206,12 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
   const missing = missingFromEveryPass(catalog, reading.passes);
   // The MCP tool listings, apart from the routes. One counts as missing only
   // once it has been listed: seen by a check before, or missing before (the
-  // state names it, or the state is lost while the MCP issue is open). An
-  // older state kept them in `missing` beside the routes; that still counts.
+  // state names it). An older state kept them in `missing` beside the routes;
+  // that still counts. Only a listing observed in a reading becomes seen, so a
+  // lost state never turns a listing that was never listed into a miss.
   const mcpAbsent = missingFromEveryPass(mcpRows, reading.passes);
   const absentKeys = new Set(mcpAbsent.map((m) => m.key));
-  const mcpWasMissing = (m) => prevMcpMissing.includes(m.key) || Object.hasOwn(prevMissing, m.key) || (lost && mcpOpenIssue);
+  const mcpWasMissing = (m) => prevMcpMissing.includes(m.key) || Object.hasOwn(prevMissing, m.key);
   const seen = new Set(prevSeen);
   for (const m of mcpRows) if (!absentKeys.has(m.key)) seen.add(m.mcp);
   const notYetListed = mcpAbsent.filter((m) => !seen.has(m.mcp) && !mcpWasMissing(m));
@@ -216,8 +220,9 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
   const mcpRepeat = mcpMissing.filter(mcpWasMissing);
   // Opened once, never edited while open (its text is fixed; the log names
   // the listings); closed on a readable check with no repeat miss, never on
-  // lost state while a listing is missing.
-  const mcpAction = mcpRepeat.length ? (mcpOpenIssue ? "none" : "open") : !mcpOpenIssue ? "none" : lost && mcpMissing.length ? "none" : "close";
+  // lost state while a listing is absent: that check holds the issue as is
+  // and records no absent listing, so the next readable check decides.
+  const mcpAction = mcpRepeat.length ? (mcpOpenIssue ? "none" : "open") : !mcpOpenIssue ? "none" : lost && mcpAbsent.length ? "none" : "close";
   const repeat = missing.filter(wasMissing);
   const newlyMissing = missing.filter((m) => !wasMissing(m));
   // State lost and the open issue unreadable: no way to tell a repeat, so no buy.

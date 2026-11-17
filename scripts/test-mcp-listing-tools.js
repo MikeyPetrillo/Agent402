@@ -342,9 +342,9 @@ const offerFor = (toolName, micros, over = {}) => ({
     // Open and still missing: never edited.
     const d3 = dec({ reading: reading(without), prev: d2.state, mcpOpenIssue: true });
     ok(d3.mcpAction === "none" && d3.mcpRepeat.length === 1, `${tag}: with its issue open and the listing still missing, the issue is kept and not edited`);
-    // State lost with that issue open: what is missing is a repeat miss, never closed.
+    // State lost with that issue open: held as is for that check, the absent listing not recorded.
     const lost = dec({ reading: reading(without), prev: null, mcpOpenIssue: true });
-    ok(lost.mcpRepeat.length === 1 && lost.notYetListed.length === 0 && lost.mcpAction === "none", `${tag}: state lost with the MCP issue open: the missing listing is a repeat miss and the issue stays open`);
+    ok(lost.mcpRepeat.length === 0 && lost.mcpMissing.length === 0 && lost.mcpAction === "none" && !lost.state.mcpSeen.includes("web.answer") && lost.state.mcpMissing.length === 0, `${tag}: state lost with the MCP issue open: the issue is held and the absent listing is not recorded as seen or missing`);
     ok(dec({ reading: reading([...httpKeys, ...mcpKeys]), prev: null, mcpOpenIssue: true }).mcpAction === "close", `${tag}: state lost, every listing back: the MCP issue closes`);
     // It returns: the issue closes.
     const back = dec({ reading: reading([...httpKeys, ...mcpKeys]), prev: d2.state, mcpOpenIssue: true });
@@ -361,6 +361,25 @@ const offerFor = (toolName, micros, over = {}) => ({
     // The route issue opened over a route closes when the route is back, the listing still absent.
     const routeBack = dec({ reading: reading(without), prev: r2.state, openIssue: true, mcpOpenIssue: true });
     ok(routeBack.action === "close" && routeBack.mcpAction === "none", `${tag}: the route issue closes on its own; the MCP issue stays open`);
+  }
+  // State lost while the MCP issue is open: a listing never observed is not made seen or missing.
+  {
+    const onlySearch = [...httpKeys, "/mcp#web.search"];
+    let d = decide({ reading: reading(onlySearch), prev: { missing: {}, unreadable: 0 } });
+    d = decide({ reading: reading(httpKeys), prev: d.state });
+    d = decide({ reading: reading(httpKeys), prev: d.state });
+    ok(d.mcpAction === "open" && d.mcpRepeat.map((m) => m.key).join() === "MCP /mcp#web.search", "only web.search was listed; it leaves twice: the MCP issue opens");
+    const lostHeld = decide({ reading: reading(httpKeys), prev: null, mcpOpenIssue: true });
+    ok(lostHeld.mcpAction === "none" && lostHeld.mcpRepeat.length === 0 && lostHeld.mcpMissing.length === 0 && lostHeld.state.mcpSeen.length === 0 && lostHeld.state.mcpMissing.length === 0,
+      `state lost with the MCP issue open: the issue is held for one check and no absent listing is recorded as seen or missing (seen ${lostHeld.state.mcpSeen.join()}, missing ${lostHeld.state.mcpMissing.join()})`);
+    d = decide({ reading: reading(onlySearch), prev: lostHeld.state, mcpOpenIssue: true });
+    ok(d.mcpAction === "close" && d.mcpRepeat.length === 0 && d.state.mcpSeen.join() === "web.search" && d.state.mcpMissing.length === 0,
+      `after lost state, the listing that was seen is back: the MCP issue closes (action ${d.mcpAction}, repeat ${d.mcpRepeat.map((m) => m.key).join()})`);
+    const lostBack = decide({ reading: reading(onlySearch), prev: null, mcpOpenIssue: true });
+    ok(lostBack.state.mcpSeen.join() === "web.search" && lostBack.state.mcpMissing.length === 0, "state lost, only web.search listed: only the observed listing becomes seen");
+    let after = decide({ reading: reading(onlySearch), prev: lostBack.state, mcpOpenIssue: true });
+    for (let i = 0; i < 3; i++) after = decide({ reading: reading(onlySearch), prev: after.state, mcpOpenIssue: after.mcpAction !== "close" });
+    ok(after.mcpAction === "none" && after.mcpRepeat.length === 0 && after.state.mcpMissing.length === 0, "never-listed listings never become permanent repeats");
   }
   // An older state that kept a listing in the route set still counts it as missing before.
   {
