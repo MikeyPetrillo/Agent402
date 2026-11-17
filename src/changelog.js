@@ -8,10 +8,10 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-17",
-    title: "A non-streamed model call's time limit follows its max_tokens",
+    title: "A non-streamed model call paid on x402 EVM may run to 110 seconds",
     items: [
-      "Gateway: A non-streamed call on the chat completions, Messages or Responses routes waits on the model for 10 seconds plus one second per 30 tokens of its max_tokens (the tier's default output cap when none is sent), at least 90 seconds and at most 300; the payment window and the time a connection through the CDN waits for an answer still end it sooner.",
-      "Gateway: A model answer that runs out that time while its body is still arriving is answered 504 and says it was not charged, and counts as a timed-out attempt in the model chain, as a timeout before the first byte already did.",
+      "Gateway: A non-streamed call on the chat completions, Messages or Responses routes paid with an x402 EVM authorization waits on the model for 10 seconds plus one second per 30 tokens of its max_tokens (the tier's default output cap when none is sent), at least 90 seconds and at most 110, inside the published 120 second client timeout; the payment window and the time a connection through the CDN waits for an answer still end it sooner. Every other payment method keeps 90 seconds.",
+      "Gateway: A model answer that runs out that time while its body is still arriving is answered 504 and says it was not charged, and counts as a timed-out attempt in the model chain, as a timeout before the first byte already did. A model connection that closes mid-answer is answered 504 the same way and the call moves on to the next model; the direct text and image routes answer both cases 504.",
     ],
   },
   {

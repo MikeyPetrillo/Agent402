@@ -10,7 +10,8 @@
 //   - a buffered answer whose body stalls after its headers until the attempt's
 //     deadline (real fetch against a local stub) is a 504 marked upstreamTimeout
 //     that says it was not charged, and counts; the buyer leaving mid-read is
-//     still the 499;
+//     still the 499; a reset mid-body is a 504 that walks to the next model,
+//     and the direct OpenAI text and image kits read their bodies the same way;
 //   - provider errors with no timeout still walk the whole chain.
 // Offline: stub fetch and a loopback stub, no network, no keys.
 //
@@ -147,6 +148,7 @@ globalThis.setTimeout = realSetTimeout;
       rs.writeHead(200, { "content-type": "application/json" });
       rs.write(" ");
       if (rq.url === "/slow-ok") setTimeout(() => rs.end(JSON.stringify(rs.__okBody || {})), 100);
+      else if (rq.url === "/reset") { rs.write('{"id":"g","choi'); setTimeout(() => rs.socket?.destroy(), 20); }
       else held.add(rs);
     });
   });
@@ -199,6 +201,55 @@ globalThis.setTimeout = realSetTimeout;
     let err = null;
     try { await runInAbortableScope(() => WIRES[0].tool.handler(WIRES[0].input({}), routeReq()), { signal: ctl.signal }); } catch (e) { err = e; }
     ok(isClientGoneAbort(err) && err.statusCode === 499 && !err.upstreamTimeout && n === 1 && Date.now() - t0 < 2000, `the buyer leaving during the body read is still the 499, one attempt, no timed-out mark (${err?.statusCode} ${err?.message?.slice(0, 60)}, attempts ${n})`);
+  }
+  // An upstream that resets the connection mid-body: a 504 that says it was
+  // not charged (never a raw TypeError, a 500), not a timed-out attempt, and
+  // the walk moves on to the next model as a failure before the headers does.
+  for (const w of WIRES) {
+    let n = 0;
+    globalThis.fetch = async (url, init = {}) => { n++; return realFetch(`${base}/reset`, init); };
+    let err = null;
+    try { await w.tool.handler(w.input({}), routeReq()); } catch (e) { err = e; }
+    ok(n > 2 && err?.statusCode === 504 && !err.upstreamTimeout && /Nothing was charged\./.test(err?.message || ""),
+      `${w.name} plain: a reset mid-body is a 504 not charged, not a timed-out attempt, and walks the chain (attempts ${n}, ${err?.statusCode} ${err?.message})`);
+  }
+  // ... and the next model serves the answer.
+  {
+    const w = WIRES[0];
+    let n = 0;
+    globalThis.fetch = async (url, init = {}) => {
+      n++;
+      if (n === 1) return realFetch(`${base}/reset`, init);
+      const b = JSON.parse(init.body);
+      return { ok: true, status: 200, headers: new Headers(), text: async () => JSON.stringify({ id: "g", model: b.model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] }) };
+    };
+    let out = null, err = null;
+    try { out = await w.tool.handler(w.input({}), routeReq()); } catch (e) { err = e; }
+    ok(!err && n === 2 && out?.choices?.[0]?.message?.content === "OK", `a reset mid-body moves to the next model, which serves (attempts ${n}, ${err?.message || "200"})`);
+  }
+  // The direct OpenAI text and image kits read their body the same way: a
+  // stalled body past the kit's own timeout and a reset are 504s, never a 500.
+  {
+    const { LLM_TOOLS } = await import("../src/tools/llm-kit.js");
+    const { IMAGE_GEN_TOOLS } = await import("../src/tools/image-gen-kit.js");
+    const prevKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "sk-test-not-real";
+    const at = AbortSignal.timeout;
+    const direct = [
+      { name: "llm", run: () => LLM_TOOLS.find((t) => t.slug === "llm").handler({ messages: [{ role: "user", content: "hi" }] }) },
+      { name: "image-gen", run: () => IMAGE_GEN_TOOLS[0].handler(IMAGE_GEN_TOOLS[0].discovery?.input || IMAGE_GEN_TOOLS[0].discovery?.example || { prompt: "a red square" }) },
+    ];
+    for (const d of direct) {
+      for (const path of ["/stall", "/reset"]) {
+        AbortSignal.timeout = () => at.call(AbortSignal, 400);
+        globalThis.fetch = async (url, init = {}) => realFetch(`${base}${path}`, init);
+        let err = null;
+        try { await d.run(); } catch (e) { err = e; }
+        AbortSignal.timeout = at;
+        ok(err?.statusCode === 504 && (path === "/stall") === (err?.upstreamTimeout === true), `${d.name}: a ${path === "/stall" ? "stalled" : "reset"} body is a 504, not a 500 (${err?.statusCode} ${err?.message})`);
+      }
+    }
+    if (prevKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = prevKey;
   }
   delete process.env.LLM_ATTEMPT_MAX_MS;
   for (const rs of held) rs.destroy();

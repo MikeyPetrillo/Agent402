@@ -52,13 +52,14 @@ import { payerFromRequest, paymentHeaderOf } from "../payer.js";
 // module header) - refuses before any upstream call, arms the outcome listener.
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { clientGoneSignal } from "../drain-abort.js";
-import { heavyInput, ourKeyRefusedError } from "../upstream-deadline.js";
+import { heavyInput, ourKeyRefusedError, readUpstreamBody } from "../upstream-deadline.js";
 import { directUpstreamConfig, withDirectAttempts, directBodyFrom, directShareDraw, directCostUsd, stripVendorExtensions, noteDirectAb, noteDirectSkip, noteDirectAnomaly, failureBucket, directModelFor, directBreakerTake, directBreakerRelease, noteDirectOutcome, directHeavyOutput } from "../gateway-direct-upstream.js";
 import { directPriceDecision, noteDirectMeasure } from "../gateway-direct-pricebook.js";
 import { noteDirectSpend } from "../direct-upstream-spend.js";
 import { readBytesCapped, declaredLength, discardBody } from "../capped-body.js";
 import { clientGoneError } from "../hangup-settlement.js";
-import { evmCredentialSettleableMs } from "../evm-validity.js";
+import { evmCredentialSettleableMs, evmCredentialExpiry } from "../evm-validity.js";
+import { noteChatAttemptBound } from "../slow-paid-calls.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
 import { cacheGet, cacheSet } from "../cache.js";
@@ -3124,48 +3125,50 @@ export function createSseUsageScrubber({ onUsage, vendorKeys = false, modelAs } 
 
 export const UPSTREAM_TIMEOUT_MS = 90_000;
 
-/** One buffered (non-stream) model attempt's own deadline, sized to the
- *  output it may produce: the first-token allowance plus `maxTokens` at a
- *  floor generation rate, never under the floor and never over the ceiling.
- *  The caller's payment window and the CDN proxy's wait still shorten it
- *  (paymentWindowTimeoutMs). A request with no cap is sized at the tier's
- *  default output cap.
- *    LLM_ATTEMPT_FLOOR_MS          floor (default UPSTREAM_TIMEOUT_MS, 90 s)
- *    LLM_ATTEMPT_TOKENS_PER_SEC    floor generation rate (default 30)
- *    LLM_ATTEMPT_MAX_MS            ceiling (default 300 s, the life of a
- *                                  stock EVM authorization); wins over the floor
- *  Only an attempt the provider generates slower than the floor rate runs
- *  out; the upstream stops billing when the attempt is cut. */
+/** Seconds a metered caller's client is told to wait (src/metered-lead.js
+ *  prints it): one 90 s attempt plus room for the settlement and a retry. */
+export const meteredClientTimeoutMs = () => UPSTREAM_TIMEOUT_MS + 30_000;
+/** A longer buffered attempt still ends this long before the published client
+ *  timeout, so the answer and its settlement reach a client that waits as told. */
+export const CLIENT_SAFE_MARGIN_MS = 10_000;
+export const clientSafeAttemptMs = () => meteredClientTimeoutMs() - CLIENT_SAFE_MARGIN_MS;
 export const ATTEMPT_FIRST_TOKEN_MS = 10_000;
-export const attemptFloorMs = () => envPositive("LLM_ATTEMPT_FLOOR_MS", UPSTREAM_TIMEOUT_MS);
-export const attemptTokensPerSec = () => envPositive("LLM_ATTEMPT_TOKENS_PER_SEC", 30);
-export const attemptCeilingMs = () => envPositive("LLM_ATTEMPT_MAX_MS", 300_000);
-export function bufferedAttemptMs(maxTokens, tier = null) {
-  const asked = Number(maxTokens);
-  const fallback = Number(tier?.defaultMaxTokens) > 0 ? Math.min(Number(tier.defaultMaxTokens), Number(tier.maxTokens) || Infinity) : Number(tier?.maxTokens) || 0;
-  const cap = Number.isFinite(asked) && asked > 0 ? asked : fallback;
-  const sized = ATTEMPT_FIRST_TOKEN_MS + Math.ceil((cap / attemptTokensPerSec()) * 1000);
-  return Math.round(Math.min(attemptCeilingMs(), Math.max(attemptFloorMs(), sized)));
+export const ATTEMPT_TOKENS_PER_SEC = 30;
+/** LLM_ATTEMPT_MAX_MS: an operator cap that can only shorten an attempt. */
+export const attemptCapMs = () => envPositive("LLM_ATTEMPT_MAX_MS", Infinity);
+
+/** Whether this request's own x402 EVM authorization (EIP-3009 validBefore or
+ *  a Permit2 deadline, verified by the paywall) bounds the call, so an attempt
+ *  past 90 s still ends before the payment can no longer settle
+ *  (paymentWindowTimeoutMs cuts it to that window). Credits, Tempo, Stripe,
+ *  Solana, Stellar and Algorand carry none. */
+export function evmWindowBounds(req) {
+  return evmCredentialExpiry(paymentHeaderOf(req)) != null;
 }
 
-/** A buffered answer's body, read under the attempt's own signal. OpenRouter
- *  commits its 200 headers early (keep-alive whitespace while the model
- *  works), so the attempt's timer usually fires during this read, not during
- *  fetch(): that is our own timeout, a 504 (not charged) marked
- *  upstreamTimeout so the chain walk counts it in the timed-out budget. An
- *  abort reason we raised ourselves (the client-gone 499, a drain abort)
- *  carries its own status and is rethrown as it is, as is any other failure.
- *  `as: "bytes"` reads a Buffer. */
-export async function readUpstreamBody(res, { req = null, as = "text" } = {}) {
-  try {
-    return as === "bytes" ? Buffer.from(await res.arrayBuffer()) : await res.text();
-  } catch (e) {
-    if (!Number.isInteger(e?.statusCode) && (e?.name === "TimeoutError" || e?.name === "AbortError")) {
-      throw Object.assign(bad(`Upstream did not finish the answer within this attempt's time limit.${notChargedOn(req)}`, 504), { upstreamTimeout: true });
-    }
-    throw e;
+/** One buffered (non-stream) model attempt's own deadline. Under an EVM
+ *  payment window: 10 s plus `maxTokens` at 30 tokens a second (the tier's
+ *  default output cap when none is sent), never under 90 s
+ *  (UPSTREAM_TIMEOUT_MS) and never over clientSafeAttemptMs() (110 s, inside
+ *  the published 120 s client timeout). Any other rail keeps 90 s.
+ *  LLM_ATTEMPT_MAX_MS only lowers it. The payment window and the CDN proxy's
+ *  wait still shorten it (paymentWindowTimeoutMs). */
+export function bufferedAttemptMs(maxTokens, tier = null, req = null) {
+  let ms = UPSTREAM_TIMEOUT_MS;
+  if (evmWindowBounds(req)) {
+    const asked = Number(maxTokens);
+    const fallback = Number(tier?.defaultMaxTokens) > 0 ? Math.min(Number(tier.defaultMaxTokens), Number(tier.maxTokens) || Infinity) : Number(tier?.maxTokens) || 0;
+    const cap = Number.isFinite(asked) && asked > 0 ? asked : fallback;
+    const sized = ATTEMPT_FIRST_TOKEN_MS + Math.ceil((cap / ATTEMPT_TOKENS_PER_SEC) * 1000);
+    ms = Math.min(clientSafeAttemptMs(), Math.max(UPSTREAM_TIMEOUT_MS, sized));
   }
+  ms = Math.round(Math.min(ms, attemptCapMs()));
+  // The paid-call alarm reads this call's own bound (src/slow-paid-calls.js).
+  noteChatAttemptBound(req, ms);
+  return ms;
 }
+
+export { readUpstreamBody };
 
 export async function fetchOpenRouter(body, { timeoutMs, signal, url = OPENROUTER_URL } = {}) {
   const key = OPENROUTER_KEY();
@@ -4703,7 +4706,7 @@ function makeHandler(routeTier) {
       const abListed = !!directModelFor(model, directCfg);
       const abLabel = directBody ? "direct" : "openrouter";
       // This attempt's own deadline, sized to the output cap it was sent with.
-      const ownMs = bufferedAttemptMs(outbound.max_tokens ?? outbound.max_completion_tokens, TIERS[tierSlug]);
+      const ownMs = bufferedAttemptMs(outbound.max_tokens ?? outbound.max_completion_tokens, TIERS[tierSlug], req);
       const timeoutMs = attemptTimeoutMs(directPlan, ownMs);
       const attemptStarted = Date.now();
       try {

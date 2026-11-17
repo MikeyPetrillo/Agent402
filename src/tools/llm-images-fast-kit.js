@@ -529,7 +529,8 @@ async function videosHandler(input, req) {
   else {
     const res = await fetchOpenRouter(body, { url: OPENROUTER_VIDEOS_URL, timeoutMs: 30_000 });
     if (!res.ok) await throwUpstreamError(res);
-    try { job = JSON.parse(await res.text()); } catch { throw bad("Upstream returned non-JSON", 502); }
+    const text = await readUpstreamBody(res, { req });
+    try { job = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
   }
   const id = typeof job?.id === "string" ? job.id : "";
   if (!id) throw bad("Upstream accepted no video job", 502);

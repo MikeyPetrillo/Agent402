@@ -47,6 +47,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { withRunCeiling, ceilingLeftMs } from "./run-ceiling.js";
 import { DEFAULT_MAX_TIMEOUT_SECONDS, SETTLE_RULE_SECONDS, SETTLE_MARGIN_SECONDS } from "./evm-validity.js";
+import { notChargedOn } from "./not-charged.js";
 
 /** The whole handler, every read included, answers inside this: the budget of
  *  the keyless data kits, whose reads answer in well under a second, sized so
@@ -375,6 +376,28 @@ export async function bodyUnderDeadline(promise, ctx = {}) {
   } catch (err) {
     if (isAbortError(err)) throw upstreamDeadline(ctx.label || "Upstream", ctx.step || "data", ctx.cap ?? ctx.timeoutMs ?? DEFAULT_READ_MS, { input: ctx.input });
     throw err;
+  }
+}
+
+/**
+ * A model answer's buffered body, read under the attempt's own signal (the
+ * gateway wires, embeddings, rerank, speech, images, and the direct OpenAI
+ * text and image kits). A provider may commit its 200 headers early, so the
+ * attempt's timer often fires during this read: that is our own timeout, a
+ * 504 marked upstreamTimeout (counted in a chain's timed-out budget). An
+ * upstream that closes the connection mid-body is a 504 as a failure before
+ * the headers is, so a chain walks on to its next model. Both say nothing was
+ * charged on a route call (`req`). An error that carries its own status (the
+ * client-gone 499, a drain abort) is rethrown as it is. `as: "bytes"` reads a
+ * Buffer.
+ */
+export async function readUpstreamBody(res, { req = null, as = "text" } = {}) {
+  try {
+    return as === "bytes" ? Buffer.from(await res.arrayBuffer()) : await res.text();
+  } catch (e) {
+    if (Number.isInteger(e?.statusCode)) throw e;
+    if (isAbortError(e)) throw Object.assign(bad(`Upstream did not finish the answer within this attempt's time limit.${notChargedOn(req)}`, 504), { upstreamTimeout: true });
+    throw bad(`Upstream closed the connection before the answer was complete.${notChargedOn(req)}`, 504);
   }
 }
 

@@ -519,7 +519,7 @@ export function makeResponsesHandler(routeTier) {
       let outbound;
       try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
       // This attempt's own deadline, sized to the output cap it was sent with.
-      const ownMs = bufferedAttemptMs(outbound.max_output_tokens, tier);
+      const ownMs = bufferedAttemptMs(outbound.max_output_tokens, tier, req);
       const timeoutMs = paymentWindowTimeoutMs(req, ownMs);
       const attemptStarted = Date.now();
       try {

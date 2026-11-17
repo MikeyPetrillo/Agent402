@@ -6,9 +6,10 @@
 //   - an EVM authorization bounds each attempt: too little settleable life left
 //     means no new attempt (504, not charged), otherwise the per-attempt
 //     timeout is cut to fit; with no EVM authorization nothing changes;
-//   - a buffered attempt's own deadline is sized to its output cap (about
-//     277 s for 8000 tokens), within the floor and ceiling knobs, and the CDN
-//     wait and the payment window still cap it, on every wire;
+//   - a buffered attempt's own deadline is sized to its output cap only under
+//     an x402 EVM window (90 to 110 s, inside the published 120 s client
+//     timeout), every other rail keeps 90 s, and the CDN wait and the payment
+//     window still cap it, on every wire;
 //   - an unusable upstream 200 (no message, no content array, an empty
 //     content_filter incomplete, no embeddings, no image, no choice) is a 502,
 //     while an empty end_turn / stop stays a 200;
@@ -262,25 +263,37 @@ for (const w of wires) {
   ok(b.out?.__binary && rec.seen.includes(60_000), "speech control: no EVM authorization keeps the 60 s timeout");
 }
 
-// ---- 5b. a buffered attempt's deadline is sized to its output cap ----------
-// max(floor, 10 s + max_tokens / 30 tokens per second), never past the ceiling,
-// then shortened by the payment window and the CDN proxy's wait as before.
+// ---- 5b. a buffered attempt's deadline: longer only under an EVM window ----
+// Under an x402 EVM authorization: max(90 s, 10 s + max_tokens / 30 per s),
+// never past clientSafeAttemptMs() (the published client timeout less 10 s);
+// every other rail keeps 90 s. The payment window and the CDN proxy's wait
+// still shorten it.
 {
-  const { bufferedAttemptMs, TIERS, UPSTREAM_TIMEOUT_MS } = G;
+  const { bufferedAttemptMs, clientSafeAttemptMs, CLIENT_SAFE_MARGIN_MS, TIERS, UPSTREAM_TIMEOUT_MS } = G;
+  const { meteredClientTimeoutSeconds } = await import("../src/metered-lead.js");
   const premium = TIERS["v1-chat-premium"];
-  const t8k = bufferedAttemptMs(8000, premium);
-  ok(t8k > 276_000 && t8k < 278_000, `an 8000-token cap gets about 277 s (${t8k} ms)`);
-  ok(bufferedAttemptMs(200, premium) === UPSTREAM_TIMEOUT_MS && UPSTREAM_TIMEOUT_MS === 90_000, "a short cap keeps the 90 s floor");
-  ok(bufferedAttemptMs(undefined, premium) === bufferedAttemptMs(premium.defaultMaxTokens, premium) && bufferedAttemptMs(undefined, premium) > 90_000, `no cap: sized at the tier's default output cap (${bufferedAttemptMs(undefined, premium)} ms)`);
-  ok(bufferedAttemptMs(100_000, premium) === 300_000, "the ceiling (300 s) bounds any cap");
-  process.env.LLM_ATTEMPT_TOKENS_PER_SEC = "60"; process.env.LLM_ATTEMPT_FLOOR_MS = "120000"; process.env.LLM_ATTEMPT_MAX_MS = "200000";
-  const knobs = [bufferedAttemptMs(8000, premium), bufferedAttemptMs(200, premium), bufferedAttemptMs(20_000, premium)];
-  delete process.env.LLM_ATTEMPT_TOKENS_PER_SEC; delete process.env.LLM_ATTEMPT_FLOOR_MS; delete process.env.LLM_ATTEMPT_MAX_MS;
-  ok(knobs[0] > 143_000 && knobs[0] < 144_000 && knobs[1] === 120_000 && knobs[2] === 200_000, `the rate, floor and ceiling knobs apply (${knobs.join(",")})`);
-  process.env.LLM_ATTEMPT_TOKENS_PER_SEC = "abc"; process.env.LLM_ATTEMPT_FLOOR_MS = "-5";
-  const junk = bufferedAttemptMs(8000, premium);
-  delete process.env.LLM_ATTEMPT_TOKENS_PER_SEC; delete process.env.LLM_ATTEMPT_FLOOR_MS;
-  ok(junk === t8k, "an unreadable knob reads its default");
+  const evm = evmReq(300);
+  const svmHeader = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", maxTimeoutSeconds: 300 }, payload: { transaction: "AQ==" } })).toString("base64");
+  const svm = { ip: "203.0.113.5", headers: { "payment-signature": svmHeader }, header: (n) => (String(n).toLowerCase() === "payment-signature" ? svmHeader : undefined) };
+  const credits = { ip: "203.0.113.5", headers: {}, header: () => undefined, creditsSettling: true };
+  ok(UPSTREAM_TIMEOUT_MS === 90_000 && meteredClientTimeoutSeconds() === 120, `the published client timeout stays 120 s (${meteredClientTimeoutSeconds()})`);
+  ok(clientSafeAttemptMs() === meteredClientTimeoutSeconds() * 1000 - CLIENT_SAFE_MARGIN_MS && clientSafeAttemptMs() === 110_000, `the longest attempt ends 10 s inside the published client timeout (${clientSafeAttemptMs()} ms)`);
+  ok(bufferedAttemptMs(8000, premium, evm) === 110_000, `EVM window, 8000 tokens: capped at 110 s (${bufferedAttemptMs(8000, premium, evm)} ms)`);
+  ok(bufferedAttemptMs(2700, premium, evm) === 100_000, `EVM window, 2700 tokens: 10 s + 90 s = 100 s (${bufferedAttemptMs(2700, premium, evm)} ms)`);
+  ok(bufferedAttemptMs(200, premium, evm) === 90_000, "EVM window, a short cap keeps the 90 s floor");
+  ok(bufferedAttemptMs(undefined, premium, evm) === bufferedAttemptMs(premium.defaultMaxTokens, premium, evm), `EVM window, no cap: sized at the tier's default output cap (${bufferedAttemptMs(undefined, premium, evm)} ms)`);
+  for (const [name, r] of [["no request", null], ["credits", credits], ["solana", svm]]) {
+    ok(bufferedAttemptMs(8000, premium, r) === 90_000, `${name}: 8000 tokens keep 90 s (no EVM window bounds it)`);
+  }
+  process.env.LLM_ATTEMPT_MAX_MS = "60000";
+  const lowered = [bufferedAttemptMs(8000, premium, evm), bufferedAttemptMs(8000, premium, credits)];
+  process.env.LLM_ATTEMPT_MAX_MS = "500000";
+  const raised = bufferedAttemptMs(8000, premium, evm);
+  process.env.LLM_ATTEMPT_MAX_MS = "abc";
+  const junk = bufferedAttemptMs(8000, premium, evm);
+  delete process.env.LLM_ATTEMPT_MAX_MS;
+  ok(lowered[0] === 60_000 && lowered[1] === 60_000, `LLM_ATTEMPT_MAX_MS lowers an attempt on every rail (${lowered.join(",")})`);
+  ok(raised === 110_000 && junk === 110_000, `LLM_ATTEMPT_MAX_MS never raises it past 110 s, and an unreadable value is ignored (${raised}, ${junk})`);
   // Through each wire's premium handler, on the timeout the attempt is sent with.
   const premiumWires = [
     { name: "chat", run: (extra, req) => tool("v1-chat-premium").handler({ messages: [{ role: "user", content: "hi" }], ...extra }, req), okBody: chatOk, cap: "max_tokens" },
@@ -297,15 +310,18 @@ for (const w of wires) {
     return { ms: seen[0], cap: caps[0], err };
   };
   const cdnReq = (secs) => Object.assign(evmReq(300), { viaCdn: true, cdnSyncDeadlineMs: Date.now() + secs * 1000 });
+  const creditsReq = () => ({ ip: "203.0.113.5", headers: {}, header: () => undefined, creditsSettling: true });
   for (const w of premiumWires) {
     const open = await sent(w, { max_tokens: 8000 }, evmReq(300));
-    ok(!open.err && open.cap === 8000 && open.ms > 276_000 && open.ms < 278_000, `${w.name} premium: 8000 tokens under a stock 300 s authorization, off the CDN path, gets about 277 s (${open.ms} ms, cap ${open.cap}, ${open.err?.message || "200"})`);
+    ok(!open.err && open.cap === 8000 && open.ms === 110_000, `${w.name} premium: 8000 tokens under a stock 300 s authorization, off the CDN path, gets 110 s (${open.ms} ms, cap ${open.cap}, ${open.err?.message || "200"})`);
     const cdn = await sent(w, { max_tokens: 8000 }, cdnReq(90));
     ok(!cdn.err && cdn.ms <= 85_000 && cdn.ms > 80_000, `${w.name} premium: on the CDN path the proxy's wait still caps it (${cdn.ms} ms)`);
     const short = await sent(w, { max_tokens: 8000 }, evmReq(66));
     ok(!short.err && short.ms < 60_000 - PAYMENT_WINDOW_TAIL_MS + 1 && short.ms > 40_000, `${w.name} premium: the payment window always caps it (${short.ms} ms)`);
     const none = await sent(w, {}, evmReq(300));
-    ok(!none.err && none.ms === bufferedAttemptMs(none.cap, premium) && none.ms > 90_000, `${w.name} premium: no cap sent -> sized at the cap the attempt carries, the tier default (${none.ms} ms, cap ${none.cap})`);
+    ok(!none.err && none.ms === bufferedAttemptMs(none.cap, premium, evmReq(300)) && none.ms >= 90_000 && none.ms <= 110_000, `${w.name} premium: no cap sent -> sized at the cap the attempt carries, the tier default (${none.ms} ms, cap ${none.cap})`);
+    const cr = await sent(w, { max_tokens: 8000 }, creditsReq());
+    ok(!cr.err && cr.ms === 90_000, `${w.name} premium: credits (no EVM window) keep 90 s at 8000 tokens (${cr.ms} ms)`);
   }
 }
 
