@@ -1134,6 +1134,27 @@ export function getDailyUpstreamCalls(upstream) {
   }
 }
 
+// Answers served on the referral copies (/ref/<slug>), per UTC day and slug:
+// the "served" side of the operator's referral reconciliation (sales booked
+// are the other). Kept in the day-bucketed outbound-call table under a name
+// of its own, so it lands in the state database with every other daily tally
+// and survives a deploy; no public figure reads it.
+const REFERRAL_ANSWER_KEY = "referral-answer";
+/** Count one answer served (a 200) on a referral copy of `slug`. Best-effort. */
+export function recordReferralAnswer(slug) {
+  recordUpstreamCall(REFERRAL_ANSWER_KEY, String(slug || "unknown"));
+}
+/** Answers served on the referral copies per slug, over the UTC days from
+ *  `sinceDay` to `untilDay` (YYYY-MM-DD, both inclusive): `{ [slug]: n }`. */
+export function referralAnswersByDay(sinceDay, untilDay = "9999-12-31") {
+  const out = {};
+  for (const r of getDailyUpstreamCalls(REFERRAL_ANSWER_KEY)) {
+    if (r.day < sinceDay || r.day > untilDay) continue;
+    out[r.caller] = (out[r.caller] || 0) + (Number(r.n) || 0);
+  }
+  return out;
+}
+
 /** First day the daily tally recorded anything, or null before the first call. */
 export function dailyCallsRecordingSince() {
   const rows = S.dailyCalls();

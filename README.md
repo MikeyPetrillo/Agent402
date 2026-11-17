@@ -474,7 +474,7 @@ PORT=8090 node server.js      # then open http://localhost:8090
 node test.js                  # offline tests
 ```
 
-Optional settings: `LIVE_BASE_RPCS` and `LIVE_TEMPO_RPCS` (comma-separated RPC URLs), `LIVE_INCLUDE_UNLISTED=1` (also count Base payments to wallets no discovery listing names), `LIVE_INTERNAL_PAYERS` (payer wallets to label as test traffic), `LIVE_MAX_PAYMENT_USD` (default 50).
+Optional settings: `LIVE_BASE_RPCS` and `LIVE_TEMPO_RPCS` (comma-separated RPC URLs), `LIVE_INCLUDE_UNLISTED=1` (also count Base payments to wallets no discovery listing names), `LIVE_INTERNAL_PAYERS` (payer wallets to label as test traffic), `LIVE_MAX_PAYMENT_USD` (default 50), `LIVE_REFERRAL_ROUTERS` (comma-separated split-contract addresses a referral network pays sellers through; a settlement to one is drawn as a payment to the seller it paid in that transaction; none by default).
 
 ## Plug into your agent framework (zero-dep adapters)
 

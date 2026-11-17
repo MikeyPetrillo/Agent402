@@ -48,7 +48,7 @@ export function meterUpstreamSpend(source, usd) {
 /** Tests only: route every metered spend to `fn(source, usd)` instead of the
  *  stats table (null restores it). */
 export function setMeterSpendSinkForTest(fn) { __meterSink = typeof fn === "function" ? fn : null; }
-import { isPaidRail } from "./paid-rails.js";
+import { isCountedRail } from "./paid-rails.js";
 import { OWN_UA, indexerFor, isBrowserUa } from "./traffic-classifier.js";
 
 const API_KEY = process.env.POSTHOG_API_KEY || "";
@@ -511,7 +511,7 @@ export function capturePostHogSettlement({ slug, rail, network, priceUsd, synthe
     rail: String(rail || "unknown"),
     network: network ? String(network) : null,
     priceUsd: Number(priceUsd) || 0,
-    paid: isPaidRail(rail),
+    paid: isCountedRail(rail),
     synthetic: !!synthetic,
     ...(payer ? { payer } : {}),
     ...(clientUa ? { clientUa: String(clientUa).slice(0, 40) } : {}),

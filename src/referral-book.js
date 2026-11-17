@@ -55,7 +55,8 @@
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
+import { SKIP_UPDATE } from "./json-document.js";
+import { createJsonRowsDocument } from "./json-rows-document.js";
 import { chainVerdict } from "./referral-chain.js";
 
 export const REFERRAL_BOOK_DOC = "referral-settlements";
@@ -72,14 +73,19 @@ export const SOLD_MAX = 2000;
 /** Records of refused entries dropped at capacity that are kept at once, and how many the sweep reads a pass. */
 export const DROPPED_MAX = 2000;
 export const SWEEP_DROPPED_MAX = 25;
-/** A dropped record is given up only when BOTH hold: this many reads after its expiry reached no verdict, and this long has passed since that expiry. */
+/** A dropped record is given up only when BOTH hold: this many reads after its expiry that the chain answered (the nonce read as unspent, or as spent with its receipt read or its search complete) reached no verdict, and this long has passed since that expiry. */
 export const DROPPED_GIVE_UP_READS = 5;
 export const DROPPED_GIVE_UP_MS = 6 * 3600_000;
 /** The share of a pass's open-entry reads kept for refused entries, and the share of its chain budget kept for dropped records. */
 export const SWEEP_REFUSED_SHARE = 0.2;
 export const SWEEP_DROPPED_BUDGET_SHARE = 0.2;
-/** The wall time one sweep pass gives ALL its chain reads (open entries, then refused ones, then dropped records). */
+/** The wall time one sweep pass gives ALL its chain reads (unconfirmed entries, charged ones, open entries, refused ones, then dropped records). */
 export const SWEEP_CHAIN_BUDGET_MS = 40_000;
+/** No proof read for an unconfirmed entry starts past this share of the pass's chain budget, none for a charged entry past this one. */
+export const SWEEP_UNCONFIRMED_BUDGET_SHARE = 0.25;
+export const SWEEP_CHARGED_BUDGET_SHARE = 0.5;
+/** The sections stored one row per key with a state database (src/json-rows-document.js). */
+export const REFERRAL_BOOK_PARTS = Object.freeze(["entries", "sold", "dropped"]);
 
 /** Charged, undelivered entries the sweep hands on in one pass (the rest wait for the next). */
 export const SWEEP_CHARGED_MAX = 50;
@@ -89,7 +95,11 @@ const TX = /^0x[0-9a-fA-F]{64}$/;
 /** An authorization is read as expired this long after its validBefore (host clock slack). */
 export const EXPIRY_SLACK_MS = 120_000;
 
-// With a state database the document is a row. Without one it is a file:
+// With a state database the document is a head row and one row per entry,
+// booked-payment mark and dropped record (src/json-rows-document.js: a write
+// under the head's row lock, the size of what it changes; for one release the
+// head also carries the whole body, so a build before rows running beside this
+// one during a deploy's overlap reads and writes the same book). Without one it is a file:
 // REFERRAL_BOOK_FILE, else under /data when that volume exists, else under the
 // system temp directory (as the other file stores do), so the book survives a
 // restart in every mode.
@@ -97,7 +107,7 @@ export const referralBookFile = () => (process.env.REFERRAL_BOOK_FILE || join(ex
 const defaultFile = referralBookFile;
 
 export function createReferralBook({ doc = null, file = defaultFile(), now = Date.now, log = console, maxEntries = MAX_ENTRIES, maxPerPayer = PER_PAYER_MAX, maxDropped = DROPPED_MAX } = {}) {
-  const store = doc || createJsonDocument({ name: REFERRAL_BOOK_DOC, file, log: () => {} });
+  const store = doc || createJsonRowsDocument({ name: REFERRAL_BOOK_DOC, parts: REFERRAL_BOOK_PARTS, file, log: (m) => { try { (log.warn || log.log).call(log, m); } catch { /* a log never breaks a write */ } } });
   let entries = {};
   // The gate's own hang-up forgiveness records ([time, micro-dollars, key
   // digests]), kept here so a restart does not refill that budget.
@@ -220,8 +230,8 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   async function flush() {
     try {
       while (queue.length) {
-        const batch = queue;
-        queue = [];
+        // A change put back alone after its batch failed is written alone.
+        const batch = queue[0].solo ? [queue.shift()] : queue.splice(0, queue.findIndex((b) => b.solo) >= 0 ? queue.findIndex((b) => b.solo) : queue.length);
         // The write now in flight: a deadline missed by a change in it, or by
         // one waiting behind it, is counted once for this write.
         const write = { missed: false };
@@ -235,12 +245,25 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
           queue = [...batch.filter((b) => !b.threw), ...queue];
           continue;
         }
+        // ONE FAILED WRITE NEVER FAILS ITS WHOLE BATCH: each change in it is
+        // written again on its own, once (a change whose deadline has passed
+        // already answered false and is not).
+        if (!r.ok && batch.length > 1) {
+          writes.failed++;
+          writes.lastOk = false;
+          writes.lastAt = now();
+          const again = batch.filter((b) => !b.dropped && !b.expired);
+          for (const item of batch) if (item.dropped || item.expired) { if (item.timer) clearTimeout(item.timer); item.resolve(false); }
+          for (const item of again) { item.solo = true; item.started = false; }
+          queue = [...again, ...queue];
+          continue;
+        }
         writes.updates++;
         writes.changes += batch.length;
         writes.lastOk = !!r.ok;
         writes.lastAt = now();
         if (!r.ok) writes.failed++;
-        if (r.ok && r.changed !== false) { try { writes.bytes += JSON.stringify(r.body ?? null).length; } catch { /* a count only */ } }
+        if (r.ok && r.changed !== false) { if (Number.isFinite(r.bytes)) writes.bytes += r.bytes; else { try { writes.bytes += JSON.stringify(r.body ?? null).length; } catch { /* a count only */ } } }
         if (r.ok && r.body) absorb(r.body);
         for (const item of batch) { if (item.timer) clearTimeout(item.timer); item.resolve(!!r.ok && !item.dropped); }
       }
@@ -249,6 +272,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   // A change's deadline passed: one not yet started is dropped; the miss is
   // counted once per write (the write it is in, else the one it waits behind).
   function missedDeadline(item) {
+    item.expired = true;
     if (!item.started) item.dropped = true;
     const w = item.write || inFlight;
     if (w) { if (w.missed) return; w.missed = true; }
@@ -314,7 +338,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       if (payerFull) say("error", `one payer holds its whole share of the settlement book (${maxPerPayer} open entries, payer=${String(payer).slice(0, 6)}); its new settlement is refused before /settle until its entries resolve`);
       if (full) say("error", `the settlement book is full (${maxEntries} open entries, none may be retired); a new settlement is refused before /settle until entries resolve`);
       // (An expired record evicted before any read reached a verdict is counted with the unresolved ones.)
-      if (ok && expiredOut) droppedUnresolved += expiredOut;
+      if (ok && expiredOut) { droppedUnresolved += expiredOut; say("error", `${expiredOut} record(s) of refused settles dropped at capacity were pushed out at the cap (more than ${maxDropped} at once) after their authorization expired, before a read reached a verdict: a payment that landed for one of them would not be found by the sweep`); }
       if (ok && early) { droppedEarly += early; say("error", `${early} record(s) of refused settles dropped at capacity were themselves dropped before their authorization expired (more than ${maxDropped} at once): a payment that lands late for one of them would not be found`); }
       lastIntentFault = ok ? (full ? "full" : payerFull ? "payer" : null) : "store";
       return ok && !full && !payerFull;
@@ -536,7 +560,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
      * in flight in this process. At most `max` entries are read a pass, the
      * ones read least recently first, so every open entry is reached in turn.
      */
-    async sweep({ chain, bookSale, payTo, minNetOf = () => null, productIdOf = () => null, onUnpaid = () => {}, onCharged = async () => {}, onUnrecognized = () => {}, onHeld = () => {}, onSendUnconfirmed = null, unrecognizedMax = UNRECOGNIZED_READS_MAX, graceMs = 120_000, max = 50, maxCharged = SWEEP_CHARGED_MAX, chainBudgetMs = SWEEP_CHAIN_BUDGET_MS } = {}) {
+    async sweep({ chain, bookSale, payTo, minNetOf = () => null, productIdOf = () => null, onUnpaid = () => {}, onCharged = async () => {}, onUnrecognized = () => {}, onHeld = () => {}, onSendUnconfirmed = null, unrecognizedMax = UNRECOGNIZED_READS_MAX, graceMs = 120_000, max = 50, maxCharged = SWEEP_CHARGED_MAX, chainBudgetMs = SWEEP_CHAIN_BUDGET_MS, startedAt = null } = {}) {
       const t = now();
       // "Read and nothing changed" marks (the check count and time of each
       // entry read this pass) are written ONCE, at the end of the pass, not
@@ -552,8 +576,15 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       // What is read first: entries charged already are handed on before any
       // read (below, and again at the end for the ones this pass finds); then
       // in-doubt and intent entries; then refused ones; then dropped records.
-      const started = Date.now();
+      // (`startedAt`: the pass began earlier, with the caller's own proof
+      // reads, which spent part of this same budget.)
+      const started = Number.isFinite(startedAt) && startedAt <= Date.now() ? startedAt : Date.now();
       const budgetSpent = () => Date.now() - started >= chainBudgetMs;
+      // A charged entry's hand-on reads its receipt again (the refund's proof,
+      // or a send never confirmed): none starts past its share of the budget,
+      // so charged entries against a chain that does not answer never hold
+      // the pass for one read's timeout each. The rest wait for the next pass.
+      const chargedBudgetSpent = () => Date.now() - started >= chainBudgetMs * SWEEP_CHARGED_BUDGET_SHARE;
       const handed = new Set();
       const self = this;
       // A charged entry is closed only by its delivery or by a refund owed
@@ -576,6 +607,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         // (onSendUnconfirmed: true = it handled the entry); with no caller the
         // entry is closed as served, as before.
         if (e.delivered === true) {
+          if (typeof onSendUnconfirmed === "function" && chargedBudgetSpent()) { out.chargedLeft = (out.chargedLeft || 0) + 1; continue; }
           let handled = false;
           if (typeof onSendUnconfirmed === "function") { try { handled = (await onSendUnconfirmed(e)) === true; } catch { handled = true; } }
           if (!handled) await self.resolve(key, null);
@@ -584,7 +616,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         // A request (in this process or another one on the same book) settled
         // it moments ago and is about to send its answer: left to that request.
         if (Number(e.inCallUntil) > t) continue;
-        if (out.charged >= Math.max(1, maxCharged)) { out.chargedLeft = (out.chargedLeft || 0) + 1; continue; }
+        if (out.charged >= Math.max(1, maxCharged) || chargedBudgetSpent()) { out.chargedLeft = (out.chargedLeft || 0) + 1; continue; }
         out.charged++;
         try { await onCharged(e); } catch { /* the next pass asks again */ }
       }
@@ -701,28 +733,38 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       // landed after all is written back as an entry, charged and
       // undelivered (the loop below hands it on); the rest are forgotten on a verdict.
       {
-        // Read order: earliest expiry first (among records already expired,
-        // the least recently read first). At most SWEEP_DROPPED_MAX a pass,
+        // Read order: records already expired first, then the rest; in each
+        // group the least recently read first, then the earliest expiry. At most SWEEP_DROPPED_MAX a pass,
         // and after the first no read starts once `chainBudgetMs` is spent: a chain
         // that does not answer never holds up the rest of it. A record is
         // forgotten on a verdict (spent without paying us, expired unused, or
         // spent with nothing found by a complete search after expiry); a read
         // that reaches none keeps it, and it is given up only when BOTH
-        // DROPPED_GIVE_UP_READS reads after its expiry reached no verdict and
+        // DROPPED_GIVE_UP_READS ANSWERED reads after its expiry reached no verdict and
         // DROPPED_GIVE_UP_MS has passed since that expiry: then a line names
         // it, it is counted, and a notice for the status word is recorded.
         const expiredAt = (g) => (Number(g.validBefore) || 0) * 1000 + EXPIRY_SLACK_MS;
         const all = Object.values(dropped).sort((a, b) => {
           const ea = t > expiredAt(a), eb = t > expiredAt(b);
           if (ea !== eb) return ea ? -1 : 1;
-          return ea ? (a.checkedAt || 0) - (b.checkedAt || 0) || (Number(a.validBefore) || 0) - (Number(b.validBefore) || 0) : (Number(a.validBefore) || 0) - (Number(b.validBefore) || 0) || (a.checkedAt || 0) - (b.checkedAt || 0);
+          // (Within each group the least recently read first, by the book's own
+          // read sequence, not the clock: two passes in one millisecond, or a
+          // clock that steps back, never put the same earlier few first again;
+          // then the earliest expiry. Every record is reached in turn.)
+          return (Number(a.readSeq) || 0) - (Number(b.readSeq) || 0) || (a.checkedAt || 0) - (b.checkedAt || 0) || (Number(a.validBefore) || 0) - (Number(b.validBefore) || 0);
         });
+        const seqBase = Object.values(dropped).reduce((m, g) => Math.max(m, Number(g.readSeq) || 0), 0);
         const graveNow = all.slice(0, SWEEP_DROPPED_MAX);
-        const forget = [], seen = [], back = [], late = [], giveUp = [];
+        const forget = [], seen = [], back = [], late = [], giveUp = [], restore = [];
+        const lastTx = new Map();
+        // Each record read takes the next number of the read sequence, in the
+        // pass's read order: the next pass takes up the ones read longest ago.
+        const readSeq = new Map();
         let readNow = 0;
         for (const g of graveNow) {
           // (At least one dropped record is read every pass, whatever the budget.)
           if (readNow > 0 && budgetSpent()) break;
+          readSeq.set(g.key, seqBase + 1 + readNow);
           readNow++;
           let st;
           try { st = await chain.state({ from: g.payer, nonce: g.nonce, payTo, amount: g.amount, fromBlock: g.fromBlock, minNet: minNetOf(g), productId: productIdOf(g) }); } catch { st = { used: null, paid: null, transaction: null, complete: false }; }
@@ -734,19 +776,41 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
             out.landed++;
             say("error", `CHARGED-BUT-NOT-SERVED: a refused settle whose entry was dropped at capacity landed on chain (${g.slug} payer=${String(g.payer).slice(0, 6)} tx=${st.transaction})${booked ? ", sale booked" : ", sale NOT booked"}`);
           } else if (verdict === "unpaid" || verdict === "expired-unused") forget.push(g.key);
-          else if (t > expiredAt(g)) { if ((Number(g.lateReads) || 0) + 1 >= DROPPED_GIVE_UP_READS && t > (Number(g.validBefore) || 0) * 1000 + DROPPED_GIVE_UP_MS) giveUp.push(g); else late.push(g.key); }
+          // A receipt read in full that is no proof and shows the BUYER'S OWN
+          // TRANSFER into the split contract (`moved`), or the contract's routed
+          // event naming OUR merchant: the reading an open entry is kept for,
+          // never closed by itself. The record is never given up on it: it is
+          // written back as an open entry in doubt that names the transaction,
+          // and handed to the caller as an open one is (onHeld: the refund the
+          // gate writes for a buyer who paid, the operator's hold for the rest).
+          else if (st?.used === true && st.paid === null && TX.test(String(st.transaction || "")) && st.receiptRead === true && (st.moved === true || st.routedToUs === true)) restore.push({ g, st });
+          // Only a read the chain ANSWERED counts toward giving a record up: the
+          // nonce read as unspent, or as spent with its receipt read in full or
+          // its search complete. A chain that does not answer, however long, or
+          // a spent nonce whose log search or receipt read failed, never gives
+          // up a record whose payment may have landed.
+          else if (t > expiredAt(g) && (st?.used === false || (st?.used === true && (st.receiptRead === true || st.complete === true)))) { if (TX.test(String(st.transaction || ""))) lastTx.set(g.key, String(st.transaction).toLowerCase()); if ((Number(g.lateReads) || 0) + 1 >= DROPPED_GIVE_UP_READS && t > (Number(g.validBefore) || 0) * 1000 + DROPPED_GIVE_UP_MS) giveUp.push(g); else late.push(g.key); }
           else seen.push(g.key);
         }
         out.droppedUnread = Math.max(0, all.length - readNow);
-        if (forget.length || seen.length || back.length || late.length || giveUp.length) {
-          let gaveUp = [];
+        if (forget.length || seen.length || back.length || late.length || giveUp.length || restore.length) {
+          let gaveUp = [], restored = [];
           const wrote = await change((cur, _kept, done, _gone, _shut, _under, _warm, _marks, graves) => {
             gaveUp = [];
+            restored = [];
             for (const k of forget) delete graves[k];
+            for (const { g, st } of restore) {
+              if (!graves[g.key]) continue;
+              delete graves[g.key];
+              // (An entry written again for the same payment stands as it is.)
+              if (cur[g.key]) continue;
+              cur[g.key] = { key: g.key, slug: g.slug, payer: g.payer, nonce: g.nonce, amount: g.amount, validBefore: g.validBefore, fromBlock: g.fromBlock ?? null, at: g.at || t, state: "in-doubt", checks: 1, checkedAt: t, seenTx: String(st.transaction).toLowerCase(), ...(st.routedToUs === true ? { routedToUs: true } : {}), why: String(st.why || "").slice(0, 160), restoredAt: t, updatedAt: t };
+              restored.push({ e: cur[g.key], st });
+            }
             for (const g of giveUp) if (graves[g.key]) { delete graves[g.key]; gaveUp.push(g); }
             if (gaveUp.length) noteDropped(done, "unresolved", gaveUp.length, t);
-            for (const k of seen) if (graves[k]) graves[k] = { ...graves[k], checkedAt: t };
-            for (const k of late) if (graves[k]) graves[k] = { ...graves[k], checkedAt: t, lateReads: (Number(graves[k].lateReads) || 0) + 1 };
+            for (const k of seen) if (graves[k]) graves[k] = { ...graves[k], checkedAt: t, readSeq: Math.max(Number(graves[k].readSeq) || 0, readSeq.get(k) || 0) };
+            for (const k of late) if (graves[k]) graves[k] = { ...graves[k], checkedAt: t, readSeq: Math.max(Number(graves[k].readSeq) || 0, readSeq.get(k) || 0), lateReads: (Number(graves[k].lateReads) || 0) + 1 };
             for (const { g, tx, booked } of back) {
               if (!graves[g.key]) continue;
               delete graves[g.key];
@@ -755,9 +819,14 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
             return undefined;
           });
           // Counted and logged once, when the write that removed the record stood.
+          if (wrote) for (const { e, st } of restored) {
+            out.restored = (out.restored || 0) + 1;
+            say("error", `a refused settle dropped at capacity was spent on chain by a transaction whose receipt, read in full, is not one the proof rule accepts and ${st.moved === true ? "shows the buyer's own transfer into the split contract" : "was routed to THIS merchant by the split contract"} (${e.slug} payer=${String(e.payer).slice(0, 6)} tx=${e.seenTx}: ${e.why}); written back as an open entry, never given up`);
+            try { onHeld(e, st); } catch { /* the caller's note only */ }
+          }
           if (wrote) for (const g of gaveUp) {
             droppedUnresolved++;
-            say("error", `a refused settle dropped at capacity could not be read to a verdict in ${DROPPED_GIVE_UP_READS} or more reads over ${Math.round(DROPPED_GIVE_UP_MS / 3600_000)} hours after its authorization's expiry (no answer, or a search that was not complete): its record is given up (${g.slug} payer=${String(g.payer).slice(0, 6)} nonce=${String(g.nonce).slice(0, 10)} amount=${g.amount}); if a payment landed for it, it was not found`);
+            say("error", `a refused settle dropped at capacity could not be read to a verdict in ${DROPPED_GIVE_UP_READS} or more reads over ${Math.round(DROPPED_GIVE_UP_MS / 3600_000)} hours after its authorization's expiry (no answer, or a search that was not complete): its record is given up (${g.slug} payer=${String(g.payer).slice(0, 6)} nonce=${String(g.nonce).slice(0, 10)} amount=${g.amount}${lastTx.has(g.key) ? ` tx=${lastTx.get(g.key)}` : ""}); if a payment landed for it, it was not found`);
           }
         }
       }
@@ -785,13 +854,28 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
 export const REFERRAL_BOOK_SWEEP_MS = 60_000;
 const SWEEP_LEASE = "referral-settle-sweep";
 let sweepTimer = null;
+/**
+ * `fn` run at most once at a time in this process: a call made while one runs
+ * answers `{ skipped: "running" }` at once. The sweep's lease keeps two
+ * processes apart; this keeps two ticks of ONE process apart, also where no
+ * lease is taken (no state database, or a lease run without one).
+ */
+export function oneAtATime(fn) {
+  let running = false;
+  return async (...args) => {
+    if (running) return { skipped: "running" };
+    running = true;
+    try { return await fn(...args); } finally { running = false; }
+  };
+}
 /** Run the sweep once now and then under its lease every minute, once per process. */
 export function startReferralBookSweep({ sweepOnce, intervalMs = REFERRAL_BOOK_SWEEP_MS } = {}) {
   if (sweepTimer || typeof sweepOnce !== "function") return null;
   sweepTimer = "starting";
   return (async () => {
     const [{ leased }, { contained }] = await Promise.all([import("./state-db.js"), import("./contained-turn.js")]);
-    const tick = leased(SWEEP_LEASE, { ttlMs: Math.max(intervalMs * 2, 120_000) }, () => sweepOnce());
+    const once = oneAtATime(() => sweepOnce());
+    const tick = leased(SWEEP_LEASE, { ttlMs: Math.max(intervalMs * 2, 120_000) }, () => once());
     tick().catch(() => {});
     sweepTimer = setInterval(contained(SWEEP_LEASE, () => tick().catch(() => {})), intervalMs);
     sweepTimer.unref?.();

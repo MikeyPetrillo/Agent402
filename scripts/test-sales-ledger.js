@@ -446,7 +446,9 @@ rmSync(dir, { recursive: true, force: true });
     ok(privateRailSaleStands("0xbatch", "referral", A) === true && bBefore === false && privateRailSaleStands("0xbatch", "referral", B) === true && changedB === true && rowsB[0].price_usd === 0.45 && rowsB[1].price_usd === 0.015 && rowsB[1].slug === "small-tool" && netOf(A) === 1 && netOf(B) === 1 && amendPrivateRailSaleNet("0xbatch", "referral", 0.01) === false && amendPrivateRailSaleNet("0xbatch", "referral", 0.01, "0x" + "d3".repeat(20)) === false, `a sale stands per payer under a transaction, and a correction touches only that payer's row (never without a payer, never another payer's) (${JSON.stringify(rowsB)})`);
   }
   const externalAfter = salesSummary({ detailed: true }).totals.external;
-  ok(externalAfter.sales === external.sales && externalAfter.revenueUsd === external.revenueUsd, "and no public total moves: the private rail is in none of them");
+  // The two sales booked since count once each at what their buyers paid (0.5 + 0.02); the net
+  // corrections moved no public total (the figures never read the net).
+  ok(externalAfter.sales === external.sales + 2 && Math.abs(externalAfter.revenueUsd - (external.revenueUsd + 0.52)) < 1e-9, `and the public totals count each private-rail sale once at the gross, whatever its net reads (${external.sales} -> ${externalAfter.sales}, $${external.revenueUsd} -> $${externalAfter.revenueUsd})`);
 }
 function isDeepStrictEqualJson(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 

@@ -20,6 +20,33 @@ const ENTRIES = [
   },
   {
     date: "2026-11-16",
+    title: "Computed market answers replace the DeFi analytics routes",
+    items: [
+      "Tools: Eight new tools answer with figures computed per call: funding-screener (one coin's perpetual funding and basis across every listed venue, with dispersion and annualized carry), stablecoin-depeg-watch (every USD stablecoin above a size floor, its deviation now, over 24 hours and over 7 days), exchange-spread (one coin's price on each venue against the cross-venue median), dex-pool-health (one pool's liquidity, turnover, trade sizes and wallet mix, with a price-impact estimate), defi-screener, dex-volume-board, chain-board, and lending-rates (Aave v3 and Compound v3 supply and borrow rates read from the lending contracts on five networks). The seven market-data tools carry the CoinGecko credit in every answer; lending-rates reads on-chain state only. dex-pool-health and dex-volume-board answer on a deployment that holds a market-data key. Each market-data listing states how often its figures are refreshed: every 5 minutes for exchange-spread and for a pool's recent trades, every 15 for stablecoin-depeg-watch, and every 30 for the rest.",
+      "Tools: Fifteen routes are retired and answer 410 Gone with a Sunset date. One names a replacement that answers the same question: defi-dex-volume (dex-volume-board). The other fourteen name none: defi-yields, defi-yield-history, defi-protocols, defi-protocol, defi-chains, defi-chain-tvl-history, stablecoins, stablecoin-supply-history, defi-fees, defi-tvl, dex-top-pools, l2-tvl, options-volume and crypto-orderbook.",
+      "Skill packs: defi-protocol-scanner reads the token's supply and valuation profile (coin-profile) where it read locked value, and defi-dashboard reads the DeFi market cap and dominance (global-defi); each pack's price follows its parts.",
+    ],
+  },
+  {
+    date: "2026-11-16",
+    title: "Marketplace answers arrive whole or are not settled",
+    items: [
+      "Payments: An input a tool refuses on a call bought through a marketplace listing is answered with the tool's expected fields, required fields and example, as on the direct route, and this server does not settle the payment.",
+      "Payments: An answer larger than a marketplace passes on whole (64,000 bytes) is refused with status 413 before the payment is settled, so we do not settle it: the refusal gives the answer's size and the limit and names the tool's own input fields that narrow the request. No answer is cut to fit, and a tool whose published example answer is over the limit is not offered there.",
+      "Payments: The wait for a marketplace settlement to answer is 60 seconds by default, which covers the longest that settlement takes to answer. A call whose run was slow waits less, so its answer starts before the connection's own time limit; a settlement still unanswered then is read from the chain, and the answer is kept for the same payment sent again.",
+      "Tools: The published example for edgar-company-facts asks for two named concepts (tags=Revenues,Assets), an answer of a few tens of KB. Every input answers as it did before.",
+    ],
+  },
+  {
+    date: "2026-11-16",
+    title: "Marketplace sales count in our figures",
+    items: [
+      "Payments: A sale made through a marketplace listing of one of our tools now counts in the public sales figures: the sales summary, the served-call counters, the tool rankings, the bestsellers feed, the buyer scorecard and the per-network split each count it once, as an outside sale of that tool, at the price its buyer paid.",
+      "Payments: On the transactions page, a marketplace sale settled on chain is counted once, and the paying wallets figure counts the buyer who paid for it, not the payment contract the marketplace uses.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "CoinGecko answers carry the source credit",
     items: [
       `Tools: Every answer from a tool that serves CoinGecko data carries a credit field, "Data provided by CoinGecko" with a link to the CoinGecko API page, and each such tool's description ends with the same linked sentence. A market tick answer that includes a coin figure carries it too, and a skill pack that runs a CoinGecko tool prints it once, on the pack's answer.`,
@@ -38,15 +65,6 @@ const ENTRIES = [
     title: "CamelCase seller names are read as words",
     items: [
       "Router: /api/route also reads a camelCase seller name as words: an operationId such as webPageToMarkdown or getUSDCPrice splits at its capitals (get usdc price), so a multi-word query covers the name as it covers a snake_case or kebab-case one. The parts are extra words beside the whole name: a brand-cased name (GitHub, OpenAI, DeFi) still matches as one word and scores as before, and a fragment of two letters scores nothing on its own. Query words are read as before.",
-    ],
-  },
-  {
-    date: "2026-11-16",
-    title: "Computed market answers replace the DeFi analytics routes",
-    items: [
-      "Tools: Eight new tools answer with figures computed per call: funding-screener (one coin's perpetual funding and basis across every listed venue, with dispersion and annualized carry), stablecoin-depeg-watch (every USD stablecoin above a size floor, its deviation now, over 24 hours and over 7 days), exchange-spread (one coin's price on each venue against the cross-venue median), dex-pool-health (one pool's liquidity, turnover, trade sizes and wallet mix, with a price-impact estimate), defi-screener, dex-volume-board, chain-board, and lending-rates (Aave v3 and Compound v3 supply and borrow rates read from the lending contracts on five networks). The seven market-data tools carry the CoinGecko credit in every answer; lending-rates reads on-chain state only. dex-pool-health and dex-volume-board answer on a deployment that holds a market-data key. Each market-data listing states how often its figures are refreshed: every 5 minutes for exchange-spread and for a pool's recent trades, every 15 for stablecoin-depeg-watch, and every 30 for the rest.",
-      "Tools: Fifteen routes are retired and answer 410 Gone with a Sunset date. One names a replacement that answers the same question: defi-dex-volume (dex-volume-board). The other fourteen name none: defi-yields, defi-yield-history, defi-protocols, defi-protocol, defi-chains, defi-chain-tvl-history, stablecoins, stablecoin-supply-history, defi-fees, defi-tvl, dex-top-pools, l2-tvl, options-volume and crypto-orderbook.",
-      "Skill packs: defi-protocol-scanner reads the token's supply and valuation profile (coin-profile) where it read locked value, and defi-dashboard reads the DeFi market cap and dominance (global-defi); each pack's price follows its parts.",
     ],
   },
   {

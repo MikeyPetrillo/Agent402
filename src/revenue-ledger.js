@@ -36,7 +36,7 @@ import {
 import { usdcDeltaForOwner, payerFromMeta, isExternalPayment } from "../scripts/revenue-scan-solana.js";
 import { solanaHistoryRead } from "./solana-history-rpc.js";
 import { evmLogsRead } from "./evm-logs-rpc.js";
-import { externalTempoPaymentsSteps, gatewayBatchedPayments } from "./sales-ledger.js";
+import { externalTempoPaymentsSteps, gatewayBatchedPayments, privateRailBuyersByTx } from "./sales-ledger.js";
 import { createBlockClock, rpcHeaderReader, dateFromAnchors } from "./block-clock.js";
 import { NOMINAL_BLOCK_MS, blockMs, blocksForSeconds, refreshBlockMs, blockTimeChanges } from "./chain-block-time.js";
 import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
@@ -1531,6 +1531,35 @@ export function setPayerDustFloorUsd(usd) {
 export function getPayerDustFloorUsd() { return payerDustFloorUsd; }
 const belowDust = (usd) => payerDustFloorUsd > 0 && !(Number(usd) + DUST_EPSILON >= payerDustFloorUsd);
 
+// A REFERRAL SALE'S BUYER. A sale through the referral network's split
+// contract (REFERRAL_PAY_TO, src/referral-gate.js) reaches our wallet as a
+// transfer FROM that contract, in the transaction that settled it: the
+// ledger counts it once, as an outside payment, like any other. Its payer on
+// chain is the contract, which bought nothing: read as a buyer, every
+// referral sale would fold into one "wallet". The buyer is the one the sales
+// ledger booked under that transaction (the referral rail's row, payer from
+// the signed authorization), so the payment is attributed to them; a row of
+// our own (a test purchase) is not an outside buyer's payment and is left
+// out; with no row booked yet the payment counts, unattributed.
+const referralSplitContract = () => {
+  const a = String(process.env.REFERRAL_PAY_TO || "").trim().toLowerCase();
+  return /^0x[0-9a-f]{40}$/.test(a) ? a : null;
+};
+/** The buyer behind a transfer from the split contract: { skip } for our own
+ *  row, { payer } otherwise (null when no row is booked). `taken` counts the
+ *  rows already given to earlier transfers of the same transaction. */
+function referralBuyerOf(t, taken) {
+  const tx = String(t.tx_hash || "").toLowerCase();
+  if (!tx) return { payer: null };
+  const rows = privateRailBuyersByTx(tx, "referral");
+  const i = taken.get(tx) || 0;
+  taken.set(tx, i + 1);
+  const r = rows[i];
+  if (!r) return { payer: null };
+  if (r.internal) return { skip: true };
+  return { payer: buyerKey(r.payer || null) };
+}
+
 export function externalPaymentEventsFor(wallets) { return readExternalPaymentEvents(wallets); }
 /** externalPaymentEventsFor spread over event-loop turns (same events, same order). */
 export function externalPaymentEventsForAsync(wallets) { return runLedgerStepsSliced(externalPaymentEventSteps(wallets)); }
@@ -1538,6 +1567,8 @@ function externalPaymentEvents(wallets, events) { return events || readExternalP
 function readExternalPaymentEvents(wallets) { return runLedgerSteps(externalPaymentEventSteps(wallets)); }
 function* externalPaymentEventSteps(wallets) {
   const out = [];
+  const split = referralSplitContract();
+  const taken = new Map(); // tx -> referral rows already attributed
   const points = new Map(); // chain -> dated points, read once per walk
   for (const [chain, wallet] of walletPairs(wallets)) {
     if (!wallet) continue;
@@ -1556,6 +1587,12 @@ function* externalPaymentEventSteps(wallets) {
       let ms = t.when_ts ? t.when_ts * 1000 : null;
       if (ms == null) ms = dateOf(t.block);
       if (ms == null) continue;
+      if (split && String(t.payer || "").toLowerCase() === split) {
+        const b = referralBuyerOf(t, taken);
+        if (b.skip) continue;
+        out.push({ day: new Date(ms).toISOString().slice(0, 10), payer: b.payer });
+        continue;
+      }
       out.push({ day: new Date(ms).toISOString().slice(0, 10), payer: buyerKey(t.payer || null) });
     }
   }
