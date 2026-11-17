@@ -712,11 +712,14 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 
 ## Ownership and licensing
 
-- Agent402 and the "Agent402" name are owned by Cardhavok LLC (doing business as Havok
-  Holdings LLC); outside contributions are used under the terms recorded in [NOTICE](NOTICE).
+- Cardhavok LLC (doing business as Havok Holdings LLC) holds the copyright in the code it
+  wrote for Agent402, the rights its contributors grant and the "Agent402" name. Outside
+  contributors keep the copyright in their contributions, used under the terms recorded in
+  [NOTICE](NOTICE).
 - The server is AGPL-3.0-or-later and every published package is MIT (details under Legal
-  below). For commercial licensing, write to [mike@agent402.tools](mailto:mike@agent402.tools)
-  or see [agent402.tools/company](https://agent402.tools/company).
+  below). For a commercial license to the code the company can license, write to
+  [mike@agent402.tools](mailto:mike@agent402.tools) or see
+  [agent402.tools/company](https://agent402.tools/company).
 - Outside contributions carry a DCO sign-off on every commit and the contributor license
   agreement in [CLA.md](CLA.md); see [CONTRIBUTING.md](CONTRIBUTING.md).
 - [NOTICE](NOTICE) records ownership, contributions and AI-assisted development;

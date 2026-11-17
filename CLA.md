@@ -2,10 +2,10 @@
 Adapted from the Apache Software Foundation Individual Contributor License
 Agreement, version 2.2 (https://www.apache.org/licenses/icla.pdf), which is
 offered for reuse; the grant in section 2 adds an express right to license the
-Contributions under other terms. Draft pending counsel review: the owner has
-not yet reviewed this text with counsel.
--->
-# Agent402 Individual Contributor License Agreement
+Contributions under other terms.
+--># Agent402 Individual Contributor License Agreement
+
+Version: CLA v1.0, 2026-11-17
 
 Thank you for your interest in Agent402. This agreement documents the rights
 you grant when you contribute to the project, so that the project, its users
@@ -19,11 +19,15 @@ transfer of ownership.
 Put this sentence in the description of your pull request, or in a comment
 you write on it:
 
-> I have read the Agent402 Contributor License Agreement in CLA.md and I agree to its terms.
+> I have read the Agent402 Contributor License Agreement (CLA v1.0, 2026-11-17) in CLA.md and I agree to its terms.
 
-Your agreement covers the Contributions in that pull request and every later
-Contribution you submit to the project, until you tell us in writing that it
-no longer covers future Contributions. Each commit must also carry a
+The sentence names the version of this agreement you agree to. Your
+agreement covers the Contributions in that pull request, every Contribution You
+submitted to this repository before You agreed, and every later Contribution
+you submit to the project, until you tell us in writing that it no longer
+covers future Contributions. If a pull request holds commits by more than one
+person, each of them agrees: the pull request author as above, and every other
+commit author by posting the sentence in a comment of their own on it. Each commit must also carry a
 Developer Certificate of Origin sign-off (`git commit -s`); see
 [CONTRIBUTING.md](CONTRIBUTING.md). If your employer or another party has
 rights in your work, read section 4 before you agree.
@@ -39,7 +43,8 @@ successors and assigns.
 "Contribution" means any original work of authorship, including any
 modifications or additions to an existing work, that You intentionally submit
 to the Company for inclusion in, or documentation of, any of the projects
-owned or managed by the Company (the "Work"). "Submit" means any form of
+owned or managed by the Company (the "Work"), including work You submitted
+before You agreed to this agreement. "Submit" means any form of
 electronic, verbal or written communication sent to the Company or its
 representatives, including pull requests, commits, issues and comments on the
 Company's repositories, that is made to discuss or improve the Work, but

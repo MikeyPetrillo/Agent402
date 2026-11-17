@@ -21,20 +21,25 @@ pull request:
 2. **Contributor License Agreement (CLA).** Put this sentence in your pull
    request description (or in a comment of your own on it):
 
-   > I have read the Agent402 Contributor License Agreement in CLA.md and I agree to its terms.
+   > I have read the Agent402 Contributor License Agreement (CLA v1.0, 2026-11-17) in CLA.md and I agree to its terms.
 
    By contributing, you grant Cardhavok LLC (doing business as Havok Holdings
    LLC) the copyright and patent license stated in [CLA.md](CLA.md), and you
-   confirm that you have the right to contribute the work.
+   confirm that you have the right to contribute the work. Your agreement also
+   covers what you contributed to this repository before. If someone else
+   authored commits in your pull request, they post the sentence in a comment
+   of their own. A comment runs the check again.
 
-Why both: the project is owned and licensed by one company, which offers it
-under AGPL-3.0 and MIT today and may offer it under other terms, including
-commercial ones. The sign-off records where each commit came from, and the
-agreement records that the company may keep using, licensing and relicensing
-what you contributed. Together they let anyone who relies on the code,
-including a future owner of the project, check that every outside line is
-accounted for. You keep the copyright in your contribution; the agreement is
-a license, not an assignment.
+Why both: the company holds the copyright in the code it wrote and the rights
+its contributors grant, and offers Agent402 under AGPL-3.0 and MIT. The
+sign-off records where each commit came from, and the agreement records that
+the company may keep using, licensing and relicensing what you contributed,
+including under commercial terms. Together they let anyone who relies on the
+code check where each outside contribution came from and under which terms.
+You keep the copyright in your contribution; the agreement is a license, not
+an assignment. Contributions made before these terms came in under the
+license of the component they changed, and their authors keep their
+copyright.
 
 Your contribution is also licensed under the license of the component you
 change: AGPL-3.0-or-later for the server (the repository root, where most

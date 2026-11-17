@@ -800,15 +800,6 @@ Other published npm packages
 ============================
 These bundle no third-party code. Their dependencies are installed by the user's own package manager under each dependency's own license.
 
-  agent402-client (MIT)
-    dependencies: none
-    peer dependencies: none
-  agent402-tollbooth (MIT)
-    dependencies: express ^5.0.0
-    peer dependencies: @coinbase/x402 >=2.0.0 <3, @x402/core >=2.0.0 <3, @x402/evm >=2.0.0 <3, @x402/express >=2.0.0 <3
-  agent402-openclaw (MIT)
-    dependencies: none
-    peer dependencies: @x402/evm >=2.20.0 <3, @x402/fetch >=2.20.0 <3, viem >=2.48.11 <3
   agent402-agentkit (MIT)
     dependencies: agent402-client >=0.8.21 <1.0.0
     peer dependencies: @coinbase/agentkit >=0.10.0 <1, @x402/evm >=2.0.0 <3, @x402/fetch >=2.0.0 <3, zod >=3.23.0 <5
@@ -839,6 +830,23 @@ These bundle no third-party code. Their dependencies are installed by the user's
   agent402-strands (MIT)
     dependencies: agent402-client >=0.8.21 <1.0.0
     peer dependencies: @strands-agents/sdk >=1 <2, zod >=3 <5
+  agent402-client (MIT)
+    dependencies: none
+    peer dependencies: none
+  agent402-openclaw (MIT)
+    dependencies: none
+    peer dependencies: @x402/evm >=2.20.0 <3, @x402/fetch >=2.20.0 <3, viem >=2.48.11 <3
+  agent402-tollbooth (MIT)
+    dependencies: express ^5.0.0
+    peer dependencies: @coinbase/x402 >=2.0.0 <3, @x402/core >=2.0.0 <3, @x402/evm >=2.0.0 <3, @x402/express >=2.0.0 <3
+
+Published Python packages
+=========================
+These bundle no third-party code. Their dependencies are installed by the user's pip under each dependency's own license.
+
+  agent402-langchain (adapters/langchain-py/)
+    dependencies: requests>=2.25
+    optional dependencies: langchain: langchain-core>=0.2, pydantic>=2
 
 Outside npm
 ===========
@@ -849,8 +857,6 @@ Outside npm
   Chromium build installed by Playwright, ffmpeg and gosu) are installed from their
   distributions under their own licenses and run as separate programs; ffmpeg's
   license is LGPL-2.1-or-later or GPL-2.0-or-later depending on its build options.
-  The Python adapter (adapters/langchain-py) depends on requests (Apache-2.0) and,
-  optionally, langchain-core and pydantic (MIT), installed by the user's pip.
 
 Notes
 =====
