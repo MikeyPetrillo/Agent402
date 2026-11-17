@@ -189,6 +189,15 @@ export async function releaseSettlementKey(key, holder, { now = Date.now() } = {
   }
 }
 
+/** Drop a key whoever holds it. Only for a claim the caller has proven is
+ *  no longer a live settle (the claim hook's `retake`). */
+export async function forgetSettlementKey(key) {
+  local.delete(key);
+  const c = await getSharedRedisClient();
+  if (!c) return;
+  try { await within(c.del(PREFIX + key)); } catch (e) { console.error("[settlement-claims] redis forget failed:", e.message); }
+}
+
 // An EVM payment's claim names its network, signer and nonce: the chain
 // consumes a nonce per (token, signer), so two wallets that sign the same
 // nonce are two payments. An EVM address is lowercased; any other signer is
@@ -281,7 +290,7 @@ export const DUPLICATE_AUTHORIZATION = "duplicate_authorization";
  * Register BEFORE the settle-failure hooks; register the release with
  * registerSettlementClaimRelease AFTER them.
  */
-export function registerSettlementClaimHooks(server) {
+export function registerSettlementClaimHooks(server, { retake = null } = {}) {
   server.onBeforeVerify((ctx) => { try { stamp(reqOf(ctx)); } catch { /* never touch a payment */ } });
   server.onBeforeSettle(async (ctx) => {
     let refuse = false;
@@ -295,7 +304,16 @@ export function registerSettlementClaimHooks(server) {
       // Every key or none: a request refused on one key gives back the
       // others it took, so a refused request holds nothing.
       for (const key of keys) {
-        const r = await claimSettlementKey(key, s.id, { ttlSeconds: INFLIGHT_TTL_SECONDS });
+        let r = await claimSettlementKey(key, s.id, { ttlSeconds: INFLIGHT_TTL_SECONDS });
+        // An EIP-3009 authorization an earlier request's unconfirmed settle
+        // still holds, read as unused on chain since: `retake` hands it to
+        // one further request (src/late-settlements.js takeRetry). The nonce
+        // moves money once, so whichever transfer lands is the only one.
+        if (!r.claimed && a && !a.permit2 && typeof retake === "function" && (await retake({ network: a.network, from: a.from, nonce: a.nonce }).catch(() => false)) === true) {
+          await forgetSettlementKey(key);
+          if (legacyNonceClaimKey(a.network, a.nonce) !== key) await forgetSettlementKey(legacyNonceClaimKey(a.network, a.nonce));
+          r = await claimSettlementKey(key, s.id, { ttlSeconds: INFLIGHT_TTL_SECONDS });
+        }
         if (!r.claimed) { refuse = true; break; }
         if (!s.nonceKey) s.nonceKey = key;
         if (!s.nonceKeys.includes(key)) s.nonceKeys.push(key);

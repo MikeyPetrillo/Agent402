@@ -922,5 +922,82 @@ await check("a Solana or Algorand transaction a facilitator answers twice serves
   assert.deepEqual(await settled(RH, txh(82)), { served: true }, "EVM keeps its nonce claim before settle as the guard");
 });
 
+await check("one payer holds at most its bound of open unproven entries; past it nothing is written and the bound is logged once a minute", async () => {
+  const alarms = [];
+  const book = makeBook({ unprovenPerPayerMax: 3, alarm: (l) => alarms.push(l) });
+  const P = payer(9601), Q = payer(9602);
+  const auth = (i, who, over = {}) => ({ network: RH, tx: null, nonce: txh(i), payer: who, payTo: TREASURY, asset: TOKEN, amount: "2500", validBefore: Math.floor(clock / 1000) + 300, via: "listed", unproven: true, ...over });
+  const made = [];
+  for (let i = 0; i < 6; i++) made.push(await book.book(auth(9610 + i, P)));
+  assert.deepEqual(made, [true, true, true, false, false, false]);
+  assert.equal(book.list().filter((e) => e.payer === P).length, 3);
+  assert.equal(alarms.filter((l) => /per-payer bound/.test(l)).length, 1, "one line, not one per refused booking");
+  assert.equal(await book.book(auth(9610, P)), true, "an entry already there is still reported booked");
+  assert.equal(await book.book(auth(9620, Q)), true, "another payer is not held by it");
+  assert.equal(await book.book(auth(9621, P.toUpperCase().replace("0X", "0x"))), false, "the same payer in another case is the same payer");
+  assert.equal(await book.book({ ...auth(9622, P), unproven: undefined }), true, "an entry of another kind (a pending answer, an outage read) is outside this bound");
+  assert.equal(await book.book(entry(9623, { payer: P, unproven: true })), false, "an unproven entry naming a transaction counts in it too");
+  clock += 61_000;
+  assert.equal(await book.book(auth(9624, P)), false);
+  assert.equal(alarms.filter((l) => /per-payer bound/.test(l)).length, 2, "logged again a minute later");
+  assert.ok(!alarms.join(" ").includes(P), "the line names the payer by its first characters only");
+});
+
+await check("a re-sent authorization: open while booked, one further settle once read as unused, owed once its transfer landed", async () => {
+  const owedRows = new Set();
+  const book = makeBook({ recordOwed: async (row) => { owedRows.add(row.tx); return true; }, owedRecorded: async (tx) => owedRows.has(tx) });
+  const P = payer(9701), nonce = txh(9701), id = { network: RH, payer: P, nonce };
+  assert.equal(book.authorizationState(id), null, "nothing booked: nothing to answer");
+  await book.book({ network: RH, tx: null, nonce, payer: P, payTo: TREASURY, asset: TOKEN, amount: "2500", validBefore: Math.floor(clock / 1000) + 3600, via: "listed", unproven: true });
+  let st = book.authorizationState({ ...id, payer: P.toUpperCase().replace("0X", "0x"), nonce: nonce.toUpperCase().replace("0X", "0x") });
+  assert.equal(st?.state, "open");
+  assert.equal(st.retryable, false, "not read on chain yet");
+  assert.deepEqual(st.transactions, []);
+  assert.equal(st.validBefore, Math.floor(clock / 1000) + 3600);
+  assert.equal(await book.takeRetry(id), false, "no further settle before a pass read it as unused");
+  assert.equal(book.authorizationState({ ...id, payer: payer(9702) }), null, "another payer's same nonce is another payment");
+  authState.set(nonce, "fail");
+  clock += 60_000;
+  await book.reconcile();
+  assert.equal(book.authorizationState(id).retryable, false, "a read that failed proves nothing");
+  authState.set(nonce, false);
+  clock += 20 * 60_000;
+  await book.reconcile();
+  assert.equal(book.authorizationState(id).retryable, true, "read as unused and still valid");
+  assert.equal(await book.takeRetry(id), true);
+  assert.equal(await book.takeRetry(id), false, "one further settle per entry");
+  assert.equal(book.authorizationState(id).retryable, false);
+  assert.equal(book.authorizationState(id).state, "open", "still answered as unconfirmed");
+  // The transfer lands: owed, and the record outlives the entry.
+  authState.set(nonce, true);
+  authTx.set(nonce, txh(9703));
+  receipts.set(txh(9703), { status: "0x1", logs: [transferLog(P, TREASURY, 2500)] });
+  clock += 20 * 60_000;
+  const r = await book.reconcile();
+  assert.equal(r.owed, 1);
+  assert.equal(book.list().length, 0);
+  assert.deepEqual(book.authorizationState(id), { state: "owed", transaction: txh(9703) });
+  // An authorization about to expire is not handed a further settle.
+  const n2 = txh(9704);
+  await book.book({ network: RH, tx: null, nonce: n2, payer: P, payTo: TREASURY, asset: TOKEN, amount: "2500", validBefore: Math.floor(clock / 1000) + 40, via: "listed", unproven: true });
+  authState.set(n2, false);
+  clock += 38_000;
+  await book.reconcile();
+  assert.ok(book.list()[0].unusedAt > 0);
+  assert.equal(book.authorizationState({ ...id, nonce: n2 }).retryable, false, "within seconds of validBefore");
+  assert.equal(await book.takeRetry({ ...id, nonce: n2 }), false);
+  // An entry of another kind (not an unproven stop) is answered open and never retried here.
+  const n3 = txh(9705);
+  await book.book({ network: RH, tx: null, nonce: n3, payer: P, payTo: TREASURY, asset: TOKEN, amount: "2500", validBefore: Math.floor(clock / 1000) + 3600, via: "ambiguous facilitator" });
+  authState.set(n3, false);
+  clock += 60_000;
+  await book.reconcile();
+  assert.equal(book.authorizationState({ ...id, nonce: n3 }).state, "open");
+  assert.equal(book.authorizationState({ ...id, nonce: n3 }).retryable, false);
+  // A transaction-keyed entry carrying the nonce names its transaction.
+  await book.book({ ...entry(9706, { payer: P }), nonce: txh(9707) });
+  assert.deepEqual(book.authorizationState({ ...id, nonce: txh(9707) }).transactions, [txh(9706)]);
+});
+
 console.log(`test-late-settlements: ${failures ? `FAILED (${failures})` : "all passed"}`);
 process.exit(failures ? 1 : 0);

@@ -108,7 +108,21 @@ export const NEAR_CAPACITY_SHARE = 0.8;
 export const STATUS_TTL_MS = 10_000;
 /** How long an absent transaction is looked for before it is closed. */
 export const WINDOW_MS = 60 * 60_000;
-export const FIRST_CHECK_MS = 30_000;
+export const FIRST_CHECK_MS = Number(process.env.LATE_SETTLE_FIRST_CHECK_MS) > 0 ? Number(process.env.LATE_SETTLE_FIRST_CHECK_MS) : 30_000;
+// The most open entries one payer may hold from settles that ended unproven
+// (src/payments.js markUnprovenStop). Past it a new one is not booked: the
+// buyer's answer then promises no repayment record, and one error line a
+// minute names the bound. The book's own bound (MAX_ENTRIES) covers the rest.
+export const UNPROVEN_PER_PAYER_MAX = Number(process.env.LATE_SETTLE_UNPROVEN_PER_PAYER_MAX) > 0 ? Math.floor(Number(process.env.LATE_SETTLE_UNPROVEN_PER_PAYER_MAX)) : 25;
+const PAYER_BOUND_LOG_MS = 60_000;
+// How long the memory view of the book answers a re-sent payment's lookup
+// before the store is read again (in the background).
+export const RESEND_VIEW_MS = 5_000;
+// Authorizations whose transfer landed after the refusal and is owed back:
+// kept so a re-send is answered with the record, for as long as a settled
+// claim lasts, at most this many.
+export const OWED_KEPT = 2000;
+export const OWED_KEPT_MS = 30 * 24 * 3600_000;
 export const MAX_BACKOFF_MS = 10 * 60_000;
 /** An entry whose absence is never proven becomes unresolved after this. */
 export const MAX_AGE_MS = 24 * 3600_000;
@@ -209,6 +223,7 @@ export function lateSettleCandidate(ctx) {
       payTo: String(req.payTo || ""), asset: String(req.asset || ""), amount: String(req.amount ?? ""),
       resource: ctx?.paymentPayload?.resource?.url || null, validBefore: validBeforeOf(la.validBefore ?? auth.validBefore), via: la.via || "ambiguous facilitator",
       ...(lateSlugOfTwin(ctx) ? { slug: lateSlugOfTwin(ctx) } : {}),
+      ...(ctx?.__a402UnprovenStop ? { unproven: true } : {}),
     };
   }
   if (!txOk(req.network, tx)) return null;
@@ -229,6 +244,7 @@ export function lateSettleCandidate(ctx) {
     // A payment our relayer settled first (the facilitator read dry) named
     // its transaction as the primary's answer: the entry says whose it is.
     via: ctx?.__a402LateTx?.via || (ownFirstAttemptOf(ctx?.paymentPayload, req.network) ? "own relayer" : "primary"),
+    ...(ctx?.__a402UnprovenStop ? { unproven: true } : {}),
   };
 }
 
@@ -272,6 +288,7 @@ export function createLateSettleBook({
   now = () => Date.now(),
   log = console.warn,
   maxEntries = MAX_ENTRIES,
+  unprovenPerPayerMax = UNPROVEN_PER_PAYER_MAX,
   // Where a booking whose store write failed is kept until it lands: the
   // money journals' dead-letter (local disk, or Redis with
   // LEDGER_JOURNAL_REDIS=on), built on first use.
@@ -287,13 +304,44 @@ export function createLateSettleBook({
 
   // Decisions read the SHARED store, never this process's memory alone: two
   // replicas share one book.
+  let refreshedAt = 0;
   const refresh = async () => {
     try {
       const b = PG ? await doc.load(null) : doc.loadSync(null);
       if (b && typeof b === "object") absorb(b);
       else state = { pending: {} };
+      refreshedAt = now();
     } catch { /* keep the last body read */ }
   };
+  // Authorizations whose landed transfer was booked owed (see OWED_KEPT), in
+  // their own document: the book's body stays { pending } only.
+  const owedDoc = createJsonDocument({ name: "late-settlements-owed", file: `${file}.owed.json`, log: () => {} });
+  let owed = {};
+  const absorbOwed = (b) => { if (b && typeof b === "object" && b.owed && typeof b.owed === "object") owed = { ...b.owed }; };
+  try { absorbOwed(owedDoc.loadSync?.(null)); } catch { /* read on the first refresh */ }
+  const owedReady = owedDoc.backend === "pg" ? owedDoc.load(null).then(absorbOwed).catch(() => null) : Promise.resolve();
+  const refreshOwed = async () => {
+    try { absorbOwed(owedDoc.backend === "pg" ? await owedDoc.load(null) : owedDoc.loadSync(null)); } catch { /* keep the last body read */ }
+  };
+  const noteOwed = async (e) => {
+    const nonce = String(e.nonce || e.authNonce || "");
+    if (railOf(e.network) !== "evm" || !NONCE.test(nonce) || !TX.test(String(e.tx || ""))) return;
+    const key = lateAuthKey(e.network, e.payer, nonce);
+    const t = now();
+    try {
+      await owedReady;
+      const r = await owedDoc.update((b) => {
+        const had = b && typeof b === "object" && b.owed && typeof b.owed === "object" ? b.owed : {};
+        const kept = Object.entries({ ...had, [key]: { tx: String(e.tx).toLowerCase(), network: e.network, at: t } })
+          .filter(([, v]) => v && t - Number(v.at || 0) < OWED_KEPT_MS)
+          .sort((a, b2) => Number(a[1].at) - Number(b2[1].at)).slice(-OWED_KEPT);
+        return { owed: Object.fromEntries(kept) };
+      }, { fallback: null });
+      if (r?.ok) absorbOwed(r.body);
+    } catch { /* the refund ledger holds the debt either way */ }
+  };
+  let payerBoundLoggedAt = 0;
+  const samePayer = (a, b) => String(a || "").toLowerCase() === String(b || "").toLowerCase();
   // Read-modify-write against the stored body, so two containers booking or
   // resolving at once never drop each other's entries.
   const change = async (fn) => {
@@ -381,19 +429,21 @@ export function createLateSettleBook({
     return journalImpl;
   };
   // One entry into the store: "made" (or already there), "full" (the open
-  // bound is reached), or "failed" (the write did not land).
+  // bound is reached), "payer_full" (this payer's bound on unproven entries
+  // is reached), or "failed" (the write did not land).
   const put = async (entry) => {
     let out = "failed";
     let wrote = false;
     try {
       wrote = await change((p) => {
         if (p[entry.key]) { out = "made"; return; }
+        if (entry.unproven === true && Object.values(p).filter((e) => e?.unproven === true && e.state !== "unresolved" && e.network === entry.network && samePayer(e.payer, entry.payer)).length >= unprovenPerPayerMax) { out = "payer_full"; return; }
         if (openCount(p) >= maxEntries) { out = "full"; return; }
         p[entry.key] = entry;
         out = "made";
       });
     } catch { wrote = false; }
-    if (out === "full") return "full";
+    if (out === "full" || out === "payer_full") return out;
     return out === "made" && wrote === true ? "made" : "failed";
   };
   const journalCount = async () => {
@@ -444,6 +494,7 @@ export function createLateSettleBook({
         payer: String(c.payer), payTo: String(c.payTo), asset: String(c.asset),
         amount: String(c.amount), validBefore: validBeforeOf(c.validBefore), slug: typeof c.slug === "string" && SLUG_RE.test(c.slug) ? c.slug : slugOf(c.resource), via: String(c.via || "primary").slice(0, 60),
         ...(!byAuth && NONCE.test(String(c.authNonce || "")) ? { authNonce: String(c.authNonce).toLowerCase() } : {}),
+        ...(c.unproven === true ? { unproven: true } : {}),
         at: t, nextCheckAt: t + FIRST_CHECK_MS, checks: 0, unreadable: 0, failures: 0, state: "pending",
       };
       const r = await put(entry);
@@ -452,6 +503,15 @@ export function createLateSettleBook({
           ? `[late-settle] ${network} authorization ${shortPayer(c.payer)} nonce ${c.nonce} (via ${entry.via}): outcome unknown; booked until it is read on chain`
           : `[late-settle] ${network} settlement failed naming tx ${c.tx} (via ${entry.via}); booked until its receipt is read`);
         return true;
+      }
+      // One payer's bound on unproven entries: nothing is written, here or in
+      // the journal, and the caller's answer promises no record.
+      if (r === "payer_full") {
+        if (t - payerBoundLoggedAt >= PAYER_BOUND_LOG_MS) {
+          payerBoundLoggedAt = t;
+          alarm(`[late-settle] ${network} payer ${shortPayer(c.payer)} holds ${unprovenPerPayerMax} open unproven settlements (the per-payer bound); further ones are not booked until one closes`);
+        }
+        return false;
       }
       // The store did not take it (its write failed, or the open bound is
       // reached): kept in the journal and landed by a later reconcile pass
@@ -473,6 +533,57 @@ export function createLateSettleBook({
     },
     /** The entries as last read; call refresh() first for the shared view. */
     list() { return entries(); },
+    /**
+     * What the book holds for one EVM authorization, for a request that
+     * re-sends it (src/payments.js withUnconfirmedResend). Answered from this
+     * process's view, read again from the store in the background once it is
+     * older than RESEND_VIEW_MS, so a paid request never waits on the store.
+     *   { state: "owed", transaction }   its transfer landed after the
+     *                                    refusal and is booked owed;
+     *   { state: "open", ... }           an entry still names it: its
+     *                                    transactions, validBefore (unix
+     *                                    seconds or null), and `retryable`
+     *                                    (takeRetry may hand it one more
+     *                                    settle);
+     *   null                             nothing.
+     */
+    authorizationState({ network, payer, nonce } = {}) {
+      const net = String(network || ""), n = String(nonce || "").toLowerCase();
+      if (railOf(net) !== "evm" || !NONCE.test(n) || !ADDR.test(String(payer || ""))) return null;
+      const t = now();
+      if (t - refreshedAt > RESEND_VIEW_MS) { refreshedAt = t; void refresh(); void refreshOwed(); }
+      const o = owed[lateAuthKey(net, payer, n)];
+      if (o && TX.test(String(o.tx || "")) && t - Number(o.at || 0) < OWED_KEPT_MS) return { state: "owed", transaction: String(o.tx) };
+      const hits = entries().filter((e) => e && e.network === net && samePayer(e.payer, payer) && (String(e.nonce || "").toLowerCase() === n || String(e.authNonce || "").toLowerCase() === n));
+      if (!hits.length) return null;
+      const transactions = [...new Set(hits.map((e) => e.tx).filter((x) => TX.test(String(x || ""))).map((x) => String(x).toLowerCase()))];
+      const validBefore = hits.map((e) => e.validBefore).find((v) => v != null) ?? null;
+      const byAuth = hits.length === 1 && !hits[0].tx ? hits[0] : null;
+      const retryable = !!byAuth && byAuth.unproven === true && byAuth.state === "pending" && Number(byAuth.unusedAt) > 0 && !byAuth.resentAt && !authorizationExpired(validBefore, t + 5_000);
+      return { state: "open", key: byAuth?.key || hits[0].key, transactions, validBefore, retryable };
+    },
+    /**
+     * Hand an authorization-keyed unproven entry its one further settle: true
+     * exactly once per entry, and only after a pass read the authorization as
+     * unused on chain (`unusedAt`) while it is still valid. One EIP-3009
+     * nonce moves money once, so whichever transfer lands is the only one.
+     */
+    async takeRetry({ network, payer, nonce } = {}) {
+      const net = String(network || ""), n = String(nonce || "").toLowerCase();
+      if (railOf(net) !== "evm" || !NONCE.test(n) || !ADDR.test(String(payer || ""))) return false;
+      const key = lateAuthKey(net, payer, n);
+      let took = false;
+      try {
+        const wrote = await change((p) => {
+          const e = p[key];
+          took = false;
+          if (!e || e.tx || e.unproven !== true || e.state !== "pending" || !(Number(e.unusedAt) > 0) || e.resentAt || authorizationExpired(e.validBefore, now() + 5_000)) return;
+          p[key] = { ...e, resentAt: now() };
+          took = true;
+        });
+        return took && wrote === true;
+      } catch { return false; }
+    },
     /**
      * One word for /api/gateway-status, read from the shared store (reused
      * for STATUS_TTL_MS): full (the open bound is reached, so new bookings
@@ -700,7 +811,10 @@ export function createLateSettleBook({
       // authorization can no longer move money: past the window and past its
       // validBefore, a transaction mined later reverts.
       const authExpired = authorizationExpired(e.validBefore, now());
-      await this._notFound(e, out, { readable, canClose: authExpired && !usedAuth, why: "its authorization has expired" });
+      // Booked by authorization and read as unused: nothing has landed so far
+      // (takeRetry reads the mark).
+      const mark = readable && !e0.tx && !e.tx && !usedAuth && NONCE.test(String(e0.nonce || "")) && !(Number(e0.unusedAt) > 0) ? { unusedAt: now() } : null;
+      await this._notFound(e, out, { readable, canClose: authExpired && !usedAuth, why: "its authorization has expired", mark });
     },
     // A transaction the chain holds that is this payment's transfer: owed,
     // unless it was served after all. `decimalsOf()` reads the token's.
@@ -720,6 +834,7 @@ export function createLateSettleBook({
       // Dropped only once the ledger holds the debt (a new row or one
       // already there for this tx); a write that did not land is retried.
       if (await owedRecorded(e.tx).catch(() => false)) {
+        await noteOwed(e);
         await drop();
         out.owed++;
         log(`[late-settle] ${e.network} tx ${e.tx} landed after a 402; booked owed (${SETTLED_AFTER_402})`);
@@ -732,7 +847,7 @@ export function createLateSettleBook({
     // landed only once the chain answered, the window has passed and
     // `canClose` (it can no longer land); otherwise kept with a backoff, and
     // past MAX_AGE_MS left unresolved for a human.
-    async _notFound(e, out, { readable, canClose, why }) {
+    async _notFound(e, out, { readable, canClose, why, mark = null }) {
       const checks = e.checks + 1;
       const unreadable = readable ? e.unreadable : e.unreadable + 1;
       const t = now();
@@ -745,19 +860,19 @@ export function createLateSettleBook({
       if (e.state === "unresolved") {
         // A slow re-read of an unresolved entry that still proves nothing:
         // kept for a human, read again after UNRESOLVED_RECHECK_MS.
-        await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], checks, unreadable, recheckAt: t + UNRESOLVED_RECHECK_MS }; });
+        await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], ...(mark || {}), checks, unreadable, recheckAt: t + UNRESOLVED_RECHECK_MS }; });
         out.rechecked++;
         return;
       }
       if (t - e.at >= MAX_AGE_MS) {
         // Absence never proven (reads failing, or an authorization still
         // valid): kept for a human, never dropped.
-        await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], checks, unreadable, state: "unresolved", unresolvedAt: t, recheckAt: t + UNRESOLVED_RECHECK_MS }; });
+        await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], ...(mark || {}), checks, unreadable, state: "unresolved", unresolvedAt: t, recheckAt: t + UNRESOLVED_RECHECK_MS }; });
         out.unresolved++;
         log(`[late-settle] ${e.network} ${labelOf(e)} unresolved after ${checks} checks (${unreadable} unreadable); operator action needed`);
         return;
       }
-      await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], checks, unreadable, failures: 0, nextCheckAt: now() + backoff(checks) }; });
+      await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], ...(mark || {}), checks, unreadable, failures: 0, nextCheckAt: now() + backoff(checks) }; });
       if (readable) out.pending++; else out.unreadable++;
     },
     // A Solana or Algorand transaction, read by the rails' own verifier.
@@ -866,7 +981,11 @@ export function registerLateSettleHook(server, bookFor) {
       const all = lateSettleCandidates(ctx);
       if (!all.length) return;
       const b = await bookFor();
-      if (b) for (const c of all) await b.book(await withRailHints(c, ctx));
+      // Whether anything was booked rides on the context: the buyer's answer
+      // promises a repayment record only then (src/payments.js).
+      let booked = false;
+      if (b) for (const c of all) { if (await b.book(await withRailHints(c, ctx))) booked = true; }
+      if (ctx && typeof ctx === "object") ctx.__a402LateBooked = booked;
       // The notes have been booked: a later read of this payment starts clean.
       takePendingAnswers(ctx?.paymentPayload);
     } catch { /* booking never breaks the settle path */ }

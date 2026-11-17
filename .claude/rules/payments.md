@@ -493,15 +493,34 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `PENDING_SETTLE_MAX_INFLIGHT` (default 8) reads run per process; past it, or after an RPC 429
   or rate-limit error, the read ends. Outcomes by network and facilitator are on
   `/__operator/tool-failures.json` (`pendingSettles`; `scripts/test-pending-settle.js`).
-  A settle chain that a fallback stops on an answer proving nothing (an HTTP error, a time limit,
-  a reset, an unreadable body, a failure naming a transaction), and any settler's unreadable HTTP
-  200, is marked (`markUnprovenStop`, `src/payments.js`): the named transaction, or with none the
-  authorization, is booked for the late-settlement read, and the answer is restated
+  A settle chain that ends on an answer proving nothing is marked (`markUnprovenStop`,
+  `src/payments.js`). The class, exactly: a fallback's thrown failure that is not a refusal made
+  before sending (an HTTP error other than 402, a time limit, a reset, an unreadable body); a
+  fallback's graceful failed answer that names a transaction, or names none and is not a verdict
+  about the buyer's payment; a listed fallback's passed-on refusal nothing settled; any settler's
+  unreadable HTTP 200. NOT in it: a fallback's graceful verdict about the buyer with no transaction
+  (`isDecidedSettleVerdict`: a signature, the balance, an expired window, a payload refused, as
+  `src/settle-verdict.js` reads them; a used authorization is never one), our relayer's
+  nothing-sent refusal, a billing refusal: the earlier refusal stands, nothing is booked.
+  A marked stop books the named transaction, or with none the EIP-3009 authorization (a Permit2 or
+  non-EVM payment with no transaction has nothing the book reads), and the answer is restated
   (`unprovenSettleRefusal`, `src/payment-reject.js`): reason `settlement-unconfirmed`, retry
-  `watch-transaction` or `check-wallet`, no sentence that the call went uncharged, and a PAYMENT-RESPONSE whose
-  reason is `settlement_unconfirmed`, so no reader (the connector's offer rule included) takes
-  the primary's billing refusal for the payment's outcome
-  (`scripts/test-settle-fallback-unproven.js`).
+  `watch-transaction` or `check-wallet`, `authorizationValidBefore` (the signed validBefore as an
+  ISO time: a new payment is safe after it), `refundStatusUrl` for a named transaction, no
+  sentence that the call went uncharged, the owed sentence only when the book took the entry
+  (`ctx.__a402LateBooked`), and a PAYMENT-RESPONSE whose reason is `settlement_unconfirmed`.
+  That reason reads `not-buyer` in the settle breaker (`src/settle-fault.js`): such a stop is
+  ours or a third party's and never counts against the wallet. One payer holds at most
+  `LATE_SETTLE_UNPROVEN_PER_PAYER_MAX` (default 25) open unproven entries; past it nothing is
+  written, the answer drops the owed sentence, and one error line a minute names the bound.
+  The same payment sent again while the book names its authorization is answered before the
+  paywall (`withUnconfirmedResend`): the unconfirmed 402 again, with no verify, handler run or
+  settle; a 409 `settled-refund-owed` (the transfer and `refundStatusUrl`) once its transfer
+  landed and was booked owed; and after a pass read the authorization as unused on chain while
+  it is still valid, one further settle (`takeRetry`, the claim hook's `retake`).
+  `LATE_SETTLE_FIRST_CHECK_MS` (default 30000) is an entry's first read
+  (`scripts/test-settle-fallback-unproven.js`, `scripts/test-late-settlements.js`,
+  `scripts/test-rh-prose-refusal.js`).
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read. The key is the client

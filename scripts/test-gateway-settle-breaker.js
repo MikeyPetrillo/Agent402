@@ -581,6 +581,30 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     }
     ok(wrong.length === 0, `facilitator HTTP codes: 400/402/404/409/410/422 unknown, 401/403/408/429/5xx not-buyer, on both prefixes (${wrong.join(", ")})`);
   }
+  // A settle chain that ended unconfirmed (this server's restated receipt,
+  // src/payments.js markUnprovenStop) is ours or a third party's: never the
+  // buyer's, whatever the facilitator's kept words say. Through the receipt
+  // guard too: the restated receipt set after the facilitator's own does not
+  // turn the fault into unknown.
+  {
+    const { settleFailureFault, RAW_SETTLE_RECEIPT } = await import("../src/settle-fault.js");
+    const { settleReceiptHeaderGuard } = await import("../src/facilitator-diagnostics.js");
+    const { unprovenSettleReceipt } = await import("../src/payment-reject.js");
+    const restated = unprovenSettleReceipt({ success: false, errorReason: "free_tier_exhausted", network: BASE, payer: "0xabc" });
+    const faults = [null, { errorReason: "settlement_unconfirmed", errorMessage: restated.errorMessage }, { errorReason: "free_tier_exhausted", errorMessage: "x" }, { errorReason: "insufficient_funds", errorMessage: "" }, { errorReason: "unexpected_settle_error", errorMessage: "boom" }]
+      .map((raw) => settleFailureFault({ receipt: restated, raw, network: BASE }));
+    ok(faults.every((f) => f === "not-buyer"), `an unconfirmed settle's receipt reads not-buyer with any kept words (${faults.join(", ")})`);
+    ok(settleFailureFault({ receipt: { success: false, errorReason: "settlement_failed", network: BASE }, raw: { errorReason: "settlement_failed", errorMessage: "" } }) === "unknown", "control: a bare settlement_failed still reads unknown");
+    const req = { method: "POST", path: "/x" }, headers = {};
+    const res = { setHeader(n, v) { headers[n] = v; } };
+    settleReceiptHeaderGuard({ log: () => {} })(req, res, () => {});
+    const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
+    res.setHeader("PAYMENT-RESPONSE", b64({ success: false, errorReason: "free_tier_exhausted", errorMessage: "free_tier_exhausted", network: BASE }));
+    res.setHeader("PAYMENT-RESPONSE", b64(restated));
+    const sent = JSON.parse(Buffer.from(headers["PAYMENT-RESPONSE"], "base64").toString("utf8"));
+    ok(sent.errorReason === "settlement_unconfirmed" && settleFailureFault({ receipt: sent, raw: req[RAW_SETTLE_RECEIPT], network: BASE }) === "not-buyer",
+      `through the receipt guard, the restated receipt after a billing refusal reads not-buyer (${sent.errorReason})`);
+  }
   // A wallet whose counted verdicts include our blocklist's, beside balance
   // verdicts, gets the neutral words too: the refusal never tells a story
   // one of its strikes does not.

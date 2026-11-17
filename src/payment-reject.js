@@ -68,7 +68,8 @@ export const REJECTION_REASONS = Object.freeze([
   { reason: "unclassified", means: "It decoded and still matched nothing, in a way this server has no name for. The refusal lists the field NAMES received so you can compare them yourself, and we would like to hear about it: an unclassified refusal is as likely to be our defect as yours." },
   { reason: "not-checked", means: "The payment never got a verdict: this server's verify request to the facilitator did not complete (a connection error or this server's own time limit), the facilitator answered with an HTTP error, or an on-chain signature check could not finish. Nothing was charged and nothing is known to be wrong with the payment. retry is same-payment: send the same payment again after Retry-After, with no new signature, while its authorization is still valid." },
   { reason: "facilitator-quota", means: "The payment verified and the call ran, then the facilitator for that network refused to settle it under a billing quota on this server's own account. Nothing was charged and nothing is wrong with your wallet. Ask the route for a fresh 402 without paying and pay on another network it lists." },
-  { reason: "settlement-unconfirmed", means: "The payment's settlement is not confirmed, so the answer was withheld. Either a facilitator broadcast the transfer and answered that it was still pending, and the transaction listed in `transactions` was not confirmed on chain within this server's wait (retry is watch-transaction); or a settle attempt ended on an answer that does not show whether a transfer was sent (a facilitator's HTTP error, a dropped connection, an unreadable body, a failure naming a transaction): retry is watch-transaction when a transaction is named and check-wallet when none is. The transfer may still land. If it does, the amount is booked as owed to the paying wallet and repaid after on-chain proof. Watch the listed transaction or the paying wallet; a new authorization for the same call is a new payment, not a step in that repayment." },
+  { reason: "settlement-unconfirmed", means: "The payment's settlement is not confirmed, so the answer was withheld. Either a facilitator broadcast the transfer and answered that it was still pending, and the transaction listed in `transactions` was not confirmed on chain within this server's wait (retry is watch-transaction); or a settle attempt ended on an answer that does not show whether a transfer was sent (a facilitator's HTTP error, a dropped connection, an unreadable body, a failure naming a transaction, or a refusal in the facilitator's own words that is not a verdict about the payment): retry is watch-transaction when a transaction is named and check-wallet when none is. The transfer may still land. The hint says whether this payment is recorded for the on-chain read (on an EVM chain: the named transaction, or with none the EIP-3009 authorization itself, up to a bound per paying wallet; a Permit2 payment and a payment on Solana, Stellar or Algorand with no transaction read on chain are not recorded): when it is, a transfer that lands is booked as owed to the paying wallet and repaid after on-chain proof, and when it is not the hint makes no such promise. `authorizationValidBefore` is the time after which the signed authorization can no longer move money, so a new payment is safe from then on, and `refundStatusUrl` is the free lookup for a named transaction. Before that time a new authorization for the same call is a new payment, not a step in that repayment. The same payment sent again while it is recorded gets this answer again without the call running." },
+  { reason: "settled-refund-owed", means: "The payment sent with this request already moved on chain after an earlier request with it was refused as unconfirmed. The call was not served for it, so its amount is recorded as owed to the paying wallet and repaid after on-chain proof; `transaction` names the transfer and `refundStatusUrl` shows where the repayment stands. That authorization is spent: sign a new one to make the call (retry is fresh-authorization)." },
 ]);
 
 // A verify failure that carries no verdict on the payment. Read from the
@@ -152,8 +153,14 @@ export function pendingSettleRefusal({ network = null, transactions = [] } = {})
  *  explanation of the primary's refusal would say nothing was charged). */
 export function withPendingSettleRefusal(body, refusal) {
   if (!refusal || !body || typeof body !== "object" || Array.isArray(body)) return body;
-  const { error: _error, reason: _reason, retry: _retry, hint: _hint, network: _network, transactions: _txs, ...rest } = body;
-  return { ...rest, reason: refusal.reason, retry: refusal.retry, ...(refusal.network ? { network: refusal.network } : {}), ...(Array.isArray(refusal.transactions) ? { transactions: refusal.transactions } : {}), hint: refusal.detail };
+  const { error: _error, reason: _reason, retry: _retry, hint: _hint, network: _network, transactions: _txs, authorizationValidBefore: _vb, refundStatusUrl: _rs, ...rest } = body;
+  return {
+    ...rest, reason: refusal.reason, retry: refusal.retry, ...(refusal.network ? { network: refusal.network } : {}),
+    ...(Array.isArray(refusal.transactions) ? { transactions: refusal.transactions } : {}),
+    ...(refusal.authorizationValidBefore ? { authorizationValidBefore: refusal.authorizationValidBefore } : {}),
+    ...(refusal.refundStatusUrl ? { refundStatusUrl: refusal.refundStatusUrl } : {}),
+    hint: refusal.detail,
+  };
 }
 
 /** The settle receipt's reason once a settle attempt ended without showing
@@ -161,19 +168,38 @@ export function withPendingSettleRefusal(body, refusal) {
  *  the payment, so no reader takes it for a refusal made before sending. */
 export const SETTLEMENT_UNCONFIRMED = "settlement_unconfirmed";
 
+/** An authorization's validBefore (unix seconds) as an ISO time, or null
+ *  when it is missing, unreadable or past any date a clock reaches. */
+export function validBeforeIso(v) {
+  let n;
+  try { n = BigInt(String(v ?? "").trim()); } catch { return null; }
+  if (n <= 0n || n > 10_000_000_000n) return null;
+  return new Date(Number(n) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** The free refund lookup for one transaction on this server, or null. */
+export function refundStatusUrlOf(origin, tx) {
+  const o = typeof origin === "string" ? origin.replace(/\/+$/, "") : "";
+  return /^https?:\/\/[^\s/]+$/.test(o) && TX_HASH.test(String(tx || "")) ? `${o}/api/refunds?tx=${String(tx).toLowerCase()}` : null;
+}
+
 /**
  * The refusal a buyer gets when the settle chain stopped on an answer that
  * does not prove nothing was sent: a facilitator's HTTP error, a dropped
- * connection, a time limit, an unreadable body, or a failure that names a
- * transaction (src/payments.js). An earlier facilitator's refusal made before
- * sending (a billing quota on this server's account) no longer describes the
- * payment, so this never says the buyer was not charged and never points at
- * another way to pay. `transactions` are the ones a settle answer named;
- * `booked` says the authorization or a named transaction is in the
- * late-settlement book (src/late-settlements.js), which is what makes the
- * owed sentence true.
+ * connection, a time limit, an unreadable body, a failure that names a
+ * transaction, or a refusal in a facilitator's own words (src/payments.js
+ * markUnprovenStop names the class). An earlier facilitator's refusal made
+ * before sending (a billing quota on this server's account) no longer
+ * describes the payment, so this never says the buyer was not charged and
+ * never points at another way to pay. `transactions` are the ones a settle
+ * answer named; `booked` says the authorization or a named transaction is in
+ * the late-settlement book (src/late-settlements.js), which is what makes the
+ * owed sentence true; `validBefore` is the signed authorization's (unix
+ * seconds): past it the authorization cannot move money, so the answer names
+ * that time as when a new payment is safe; `origin` is this server's public
+ * origin, for the refund lookup of a named transaction.
  */
-export function unprovenSettleRefusal({ network = null, transactions = [], booked = false } = {}) {
+export function unprovenSettleRefusal({ network = null, transactions = [], booked = false, validBefore = null, origin = null } = {}) {
   const txs = [];
   for (const t of Array.isArray(transactions) ? transactions : []) {
     const tx = String(t || "").toLowerCase();
@@ -182,11 +208,15 @@ export function unprovenSettleRefusal({ network = null, transactions = [], booke
   }
   const net = typeof network === "string" && /^[a-z0-9-]{1,32}:[A-Za-z0-9-]{1,64}$/.test(network) ? network : null;
   const one = txs.length === 1;
+  const until = validBeforeIso(validBefore);
+  const refundStatusUrl = txs.length ? refundStatusUrlOf(origin, txs[0]) : null;
   return {
     reason: "settlement-unconfirmed",
     retry: txs.length ? "watch-transaction" : "check-wallet",
     network: net,
     ...(txs.length ? { transactions: txs } : {}),
+    ...(until ? { authorizationValidBefore: until } : {}),
+    ...(refundStatusUrl ? { refundStatusUrl } : {}),
     detail:
       "This payment's settlement is not confirmed, so the answer was withheld. "
       + (txs.length
@@ -194,8 +224,34 @@ export function unprovenSettleRefusal({ network = null, transactions = [], booke
         : "A settle attempt ended without showing whether the transfer was sent. ")
       + "The transfer may still land. "
       + (booked ? "If it does, the amount is booked as owed to the paying wallet and repaid after on-chain proof, with nothing more for you to send. " : "")
-      + "Do not sign a new authorization for this call: a second one is a second payment. "
-      + (txs.length ? `Watch the transaction${one ? "" : "s"} listed in transactions${net ? ` on ${net}` : ""}.` : `Check the paying wallet${net ? ` on ${net}` : ""} before paying for this call again.`),
+      + "Do not sign a new authorization for this call"
+      + (until ? ` before ${until}: until then the signed authorization can still move money, and a second one is a second payment. After that time it can no longer land, and a new payment is safe. ` : ": a second one is a second payment. ")
+      + (txs.length ? `Watch the transaction${one ? "" : "s"} listed in transactions${net ? ` on ${net}` : ""}` : `Check the paying wallet${net ? ` on ${net}` : ""} before paying for this call again`)
+      + (refundStatusUrl ? "; refundStatusUrl shows any repayment recorded for it." : "."),
+  };
+}
+
+/**
+ * The answer for a request that re-sends a payment whose transfer landed
+ * after an earlier request with it was refused as unconfirmed: the amount is
+ * in the refund ledger (src/late-settlements.js), the call is not run again
+ * for it, and the authorization is spent, so a new one is a new call.
+ */
+export function settledRefundOwedRefusal({ network = null, transaction = null, origin = null } = {}) {
+  const tx = TX_HASH.test(String(transaction || "")) ? String(transaction).toLowerCase() : null;
+  const net = typeof network === "string" && /^[a-z0-9-]{1,32}:[A-Za-z0-9-]{1,64}$/.test(network) ? network : null;
+  const refundStatusUrl = refundStatusUrlOf(origin, tx);
+  return {
+    reason: "settled-refund-owed",
+    retry: "fresh-authorization",
+    network: net,
+    ...(tx ? { transaction: tx } : {}),
+    ...(refundStatusUrl ? { refundStatusUrl } : {}),
+    detail:
+      "This payment already moved on chain after an earlier request with it was refused as unconfirmed, and the call was not served for it. "
+      + "Its amount is recorded as owed to the paying wallet and repaid after on-chain proof"
+      + (refundStatusUrl ? "; transaction names the transfer and refundStatusUrl shows where the repayment stands. " : ". ")
+      + "That authorization is spent: sign a new one to make this call.",
   };
 }
 

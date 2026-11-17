@@ -457,6 +457,13 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `{"action":"acknowledge_unrecorded","note"}`; each is recorded in the
   `late-settlements-resolutions` document before the entry is dropped and listed on
   `/__operator/refunds.json` (`unconfirmedSettlements.resolutions`).
+  An EVM authorization whose transfer the pass booked owed is also kept in the
+  `late-settlements-owed` document (at most 2000, for 30 days), so the same payment sent again is
+  answered with that record; the refund ledger stays the debt's source of truth. An entry from a
+  settle that ended unproven carries `unproven`, counts toward its payer's bound
+  (`LATE_SETTLE_UNPROVEN_PER_PAYER_MAX`), and records `unusedAt` (a pass read the authorization
+  as unused) and `resentAt` (its one further settle was handed out); an older build ignores all
+  three, so a rollback needs no cleanup.
   Rollback: a build before batch 2026-11-08a counts unresolved entries toward the 2000-entry
   bound and refuses a new booking past it ("NOT booked"), so before rolling back resolve entries
   until the whole book (open plus unresolved, `/__operator/refunds.json`) is under 2000. Such a

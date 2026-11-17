@@ -56,7 +56,7 @@ const graceful = (reason, network = RH) => ({ success: false, errorReason: reaso
 /** One failed settlement through the real hook. The primary is a marked stub
  *  that answers `primary` (a result, or throws); `listed` are the listed
  *  fallbacks; our relayer and the default chain follow them, as at boot. */
-async function run({ network = RH, primary, listed = [], withOwn = true, outage = null }) {
+async function run({ network = RH, primary, listed = [], withOwn = true, own = null, outage = null }) {
   __resetSettlementClaims();
   const asked = [];
   const p = payment(network);
@@ -69,7 +69,7 @@ async function run({ network = RH, primary, listed = [], withOwn = true, outage 
   const stub = (name, answer, extra = {}) => ({ name, ...extra, client: { settle: async () => { asked.push(name); return answer(); } } });
   const candidates = [
     ...listed.map(([name, answer]) => stub(name, answer, { revertRetry: true, confirmed: true })),
-    ...(withOwn ? [stub("own", () => ({ success: true, transaction: txh(`own-${seq}`), network }), { revertRetry: true, confirmed: true, own: true })] : []),
+    ...(withOwn ? [stub("own", own || (() => ({ success: true, transaction: txh(`own-${seq}`), network })), { revertRetry: true, confirmed: true, own: true })] : []),
     stub("Solvador", () => ({ success: true, transaction: txh(`default-${seq}`), network })),
   ];
   const hooks = {};
@@ -77,8 +77,9 @@ async function run({ network = RH, primary, listed = [], withOwn = true, outage 
   const handled = [];
   const outageStub = outage ? { network: RH, handle: async (ctx) => { handled.push(ctx?.paymentPayload === p.paymentPayload); asked.push("outage"); return outage(p); } } : null;
   registerFacilitatorFailureHooks(server, null, null, { [network]: () => candidates }, { outageFor: (n) => (n === RH ? outageStub : null) });
-  const out = await hooks.fail({ requirements: p.requirements, paymentPayload: p.paymentPayload, error });
-  return { out, asked, handled, error, p };
+  const ctx = { requirements: p.requirements, paymentPayload: p.paymentPayload, error };
+  const out = await hooks.fail(ctx);
+  return { out, asked, handled, error, p, ctx };
 }
 const ok = (name) => () => ({ success: true, transaction: txh(`${name}-${seq}`), network: RH });
 const served = (p) => ({ served: true, result: { success: true, transaction: txh(`chain-${seq}`), network: RH, payer: p.paymentPayload.payload.authorization.from } });
@@ -209,6 +210,56 @@ await check("without our relayer (no outage handler): the next listed is still a
   const { out, asked } = await run({ primary: () => graceful(NO_VERDICT), listed: [["RH2", () => graceful(NO_VERDICT)]], withOwn: false, outage: null });
   assert.equal(out, undefined);
   assert.deepEqual(asked, ["primary", "RH2"]);
+});
+// How the chain ended, as the failure context records it (src/payments.js
+// markUnprovenStop): the mark is what restates the buyer's answer as
+// unconfirmed and notes the authorization for the late-settlement book.
+const REVERT = () => ({ success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: 'The contract function "transferWithAuthorization" reverted.', transaction: "", network: RH });
+await check("a listed fallback's passed-on refusal that nothing settled is how the chain ended: marked unconfirmed, the authorization noted", async () => {
+  const { out, asked, ctx, p } = await run({ primary: REVERT, listed: [["RH2", () => graceful(NO_VERDICT)], ["RH3", () => graceful(GAS)]], withOwn: false, outage: null });
+  assert.equal(out, undefined);
+  assert.deepEqual(asked, ["primary", "RH2", "RH3"]);
+  assert.equal(ctx.__a402UnprovenStop?.via, "RH2", "marked at the first fallback that passed its refusal on");
+  assert.equal(ctx.__a402LateAuth?.nonce, p.paymentPayload.payload.authorization.nonce, "the authorization is noted for the late-settlement book");
+});
+await check("control: the primary's own passed-on refusal, with every listed fallback refusing too, is not marked (its refusal stands)", async () => {
+  const { out, asked, ctx } = await run({ primary: () => graceful(NO_VERDICT), listed: [["RH2", () => graceful(NO_VERDICT)]], withOwn: false, outage: null });
+  assert.equal(out, undefined);
+  assert.deepEqual(asked, ["primary", "RH2"]);
+  assert.equal(ctx.__a402UnprovenStop, undefined);
+  assert.equal(ctx.__a402LateAuth, undefined);
+});
+await check("our relayer's refusal before it signed anything (nothingSent) is not marked: nothing of ours can land", async () => {
+  const { out, asked, ctx } = await run({ primary: REVERT, own: () => ({ success: false, errorReason: "own_relayer_refused", errorMessage: "gas price over the cap", nothingSent: true, transaction: "", network: RH }), outage: null });
+  assert.equal(out, undefined);
+  assert.deepEqual(asked, ["primary", "own"]);
+  assert.equal(ctx.__a402UnprovenStop, undefined, "the earlier refusal stands");
+  assert.equal(ctx.__a402LateAuth, undefined, "nothing is noted for the late-settlement book");
+});
+await check("control: our relayer's failed answer without nothingSent, or one naming a transaction, is marked unconfirmed", async () => {
+  const a = await run({ primary: REVERT, own: () => ({ success: false, errorReason: "relayer_error", errorMessage: "receipt wait expired", transaction: "", network: RH }), outage: null });
+  assert.deepEqual(a.asked, ["primary", "own"]);
+  assert.equal(a.ctx.__a402UnprovenStop?.via, "own");
+  assert.equal(a.ctx.__a402LateAuth?.nonce, a.p.paymentPayload.payload.authorization.nonce);
+  const named = txh("own-named");
+  const b = await run({ primary: REVERT, own: () => ({ success: false, errorReason: "own_relayer_refused", nothingSent: true, transaction: named, network: RH }), outage: null });
+  assert.equal(b.ctx.__a402UnprovenStop?.transaction, named, "a named transaction is never a nothing-sent refusal");
+});
+await check("a listed fallback's graceful verdict about the buyer with no transaction is a decided answer: not marked, nothing noted", async () => {
+  for (const reason of [SIGNATURE, BALANCE, EXPIRED, "insufficient_funds"]) {
+    const { out, asked, ctx } = await run({ primary: REVERT, listed: [["RH2", () => graceful(reason)]], outage: null });
+    assert.equal(out, undefined, reason);
+    assert.deepEqual(asked, ["primary", "RH2"], reason);
+    assert.equal(ctx.__a402UnprovenStop, undefined, reason);
+    assert.equal(ctx.__a402LateAuth, undefined, reason);
+  }
+  const named = txh("verdict-named");
+  const withTx = await run({ primary: REVERT, listed: [["RH2", () => ({ ...graceful(BALANCE), transaction: named })]], outage: null });
+  assert.equal(withTx.ctx.__a402UnprovenStop?.transaction, named, "the same verdict naming a transaction may still land");
+  const used = await run({ primary: REVERT, listed: [["RH2", () => graceful(NONCE_USED)]], outage: null });
+  assert.equal(used.ctx.__a402UnprovenStop?.via, "RH2", "a used authorization is not a decided answer: a transfer may have used it");
+  const http = await run({ primary: REVERT, listed: [["RH2", () => { throw new SettleError(502, graceful(BALANCE)); }]], outage: null });
+  assert.equal(http.ctx.__a402UnprovenStop?.via, "RH2", "the same words over an HTTP error are not a graceful answer");
 });
 await check("the codes that already pass on still do: a revert reaches the listed fallback", async () => {
   const { out, asked } = await run({ primary: () => ({ success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: 'The contract function "transferWithAuthorization" reverted.', transaction: "", network: RH }), listed: [["RH2", ok("rh2")]], outage: served });
