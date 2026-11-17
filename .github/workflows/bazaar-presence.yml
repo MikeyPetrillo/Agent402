@@ -36,7 +36,14 @@
 # check never takes the one pending place in that group from a keep-alive pass.
 # The check step reads the keep-alive runs again just before deciding and buys
 # nothing (HOLD_BUY=1) when one has been queued since.
-# Logs and the issue carry route paths and counts, never a price or a total.
+# The connector's MCP tool listings (/mcp#<tool>) are read beside the routes
+# and never bought here. One that was listed and left is named in the log on
+# every check, and ONE separate issue under its own fixed title opens when one
+# is missing on two readable checks in a row, whether or not the scheduled MCP
+# listings pass (repo variable BAZAAR_MCP_KEEPALIVE) is on. Its text is fixed
+# and it is never edited while open; it closes on a readable check with no
+# listing missing twice in a row. The route issue never lists a listing.
+# Logs and the issues carry route paths and counts, never a price or a total.
 name: Bazaar presence check
 
 on:
@@ -88,7 +95,8 @@ jobs:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       MAX_SPEND_USD: ${{ vars.BAZAAR_PRESENCE_MAX_USD || '2' }}
       MAX_ROUTES: "10"
-      # MCP tool listings count only while their scheduled pass runs.
+      MCP_TITLE: Bazaar MCP listing presence check
+      # Whether the scheduled MCP listings pass runs (the log says so).
       BAZAAR_MCP_KEEPALIVE: ${{ vars.BAZAAR_MCP_KEEPALIVE }}
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -111,6 +119,8 @@ jobs:
           # bot, is ours; an issue anyone else opens under it is ignored.
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions")][0].number // empty')
           echo "open=$OPEN" >> "$GITHUB_OUTPUT"
+          MCP_OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$MCP_TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.MCP_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions")][0].number // empty')
+          echo "mcp_open=$MCP_OPEN" >> "$GITHUB_OUTPUT"
           # The open issue's body lists the routes it is about (read when the
           # saved state is lost); an unreadable body holds every buy.
           rm -f open-issue.md
@@ -123,7 +133,7 @@ jobs:
             N=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$WF" --limit 20 --json status --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo unreadable)
             [ "$N" = "0" ] || HOLD=1
           done
-          HOLD_BUY="$HOLD" OPEN_ISSUE="$OPEN" OPEN_ISSUE_BODY_FILE=open-issue.md OUT_DIR=out node scripts/bazaar-presence.js
+          HOLD_BUY="$HOLD" OPEN_ISSUE="$OPEN" MCP_OPEN_ISSUE="$MCP_OPEN" OPEN_ISSUE_BODY_FILE=open-issue.md OUT_DIR=out node scripts/bazaar-presence.js
       - name: Install the x402 client
         if: steps.check.outputs.slugs != '' && github.ref == 'refs/heads/main'
         run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
@@ -161,4 +171,14 @@ jobs:
             open) gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file out/body.md ;;
             update) gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body-file out/body.md ;;
             close) gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "A readable check found no route of ours missing twice in a row. Run: $RUN_URL" ;;
+          esac
+      - name: Open or close the one MCP listing issue
+        if: always() && steps.check.outcome == 'success'
+        env:
+          MCP_ACTION: ${{ steps.check.outputs.mcp_action }}
+          MCP_OPEN: ${{ steps.check.outputs.mcp_open }}
+        run: |
+          case "$MCP_ACTION" in
+            open) gh issue create --repo "$GITHUB_REPOSITORY" --title "$MCP_TITLE" --body-file out/mcp-body.md ;;
+            close) gh issue close "$MCP_OPEN" --repo "$GITHUB_REPOSITORY" --comment "A readable check found no MCP tool listing of ours missing twice in a row. Run: $RUN_URL" ;;
           esac
