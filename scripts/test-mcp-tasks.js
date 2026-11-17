@@ -577,6 +577,45 @@ ok(dt.slug === undefined && dt.owner === undefined, "internal bookkeeping (slug,
 const ct = createTaskResult(rec);
 ok(ct.resultType === "task" && ct.result === undefined, "CreateTaskResult carries the handle only, never the result");
 
+// --------------------------------------------- 2026-07-28 (no initialize)
+// The same tasks wire on a request that carries the 2026-07-28 envelope (the
+// SDK v2 modern path): the handle, the poll and the completed result are the
+// 2025-era answers plus the serverInfo the modern path stamps, and a request
+// that did not declare the extension is the 400 the modern HTTP binding gives
+// a missing client capability.
+{
+  const ENVELOPE = { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}, "io.modelcontextprotocol/clientInfo": { name: "t", version: "1" } };
+  async function mrpc(method, params, name) {
+    const res = await fetch(`${BASE}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2026-07-28", "mcp-method": method, ...(name ? { "mcp-name": name } : {}) },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params: { ...params, _meta: { ...ENVELOPE, ...(params?._meta || {}) } } }),
+    });
+    return { status: res.status, body: await res.json() };
+  }
+  const disc = await mrpc("server/discover", {});
+  ok(disc.status === 200 && disc.body.result?.capabilities?.extensions?.[TASKS_EXTENSION] !== undefined, "server/discover advertises io.modelcontextprotocol/tasks");
+  plan = { research: { delayMs: 300, res: jsonRes(200, { report: "modern goods" }, { "payment-receipt": "" }) } };
+  const nRuns = calls.filter((c) => c.slug === "research").length;
+  const mh = await mrpc("tools/call", { name: "catalog.call", arguments: { slug: "research", params: { q: "hello" } }, _meta: CLIENT_CAPS }, "catalog.call");
+  ok(mh.status === 200 && mh.body.result?.resultType === "task" && mh.body.result?.taskId?.length === 48 && mh.body.result?.task === undefined, `a 2026-07-28 call answers the flat task handle (${JSON.stringify(mh.body.result).slice(0, 120)})`);
+  ok(JSON.stringify(Object.keys(mh.body.result || {}).filter((k) => k !== "_meta")) === JSON.stringify(Object.keys(handle)), `the handle carries the 2025-era handle's fields in its order (${Object.keys(mh.body.result || {}).join(",")})`);
+  ok(Object.keys(mh.body.result?._meta || {}).join() === "io.modelcontextprotocol/serverInfo", "the only addition is the serverInfo the 2026-07-28 path stamps");
+  await sleep(600);
+  const mdone = await mrpc("tasks/get", { taskId: mh.body.result.taskId, _meta: CLIENT_CAPS }, mh.body.result.taskId);
+  ok(mdone.status === 200 && mdone.body.result?.status === "completed" && mdone.body.result?.result?.structuredContent?.result?.report === "modern goods", "polling on 2026-07-28 returns the completed result");
+  const ldone = await rpc("tasks/get", { taskId: mh.body.result.taskId, _meta: CLIENT_CAPS });
+  ok(JSON.stringify(ldone.result) === JSON.stringify(mdone.body.result), "the same task polled on either revision reads byte for byte the same");
+  ok(calls.filter((c) => c.slug === "research").length === nRuns + 1, "the 2026-07-28 call ran the work exactly once");
+  const nocap = await mrpc("tasks/get", { taskId: mh.body.result.taskId }, mh.body.result.taskId);
+  ok(nocap.status === 400 && nocap.body.error?.code === TASK_MISSING_CAPABILITY, `an undeclared 2026-07-28 tasks/get is a 400 with -32021 (${nocap.status} ${nocap.body.error?.code})`);
+  const nocapLegacy = await rpc("tasks/get", { taskId: mh.body.result.taskId });
+  ok(nocapLegacy.error?.code === TASK_MISSING_CAPABILITY, "the 2025-era answer to the same request keeps its code");
+  plan = { research: { delayMs: 50, res: jsonRes(200, { report: "blocking" }) } };
+  const blocking = await mrpc("tools/call", { name: "catalog.call", arguments: { slug: "research", params: { q: "hello" } } }, "catalog.call");
+  ok(blocking.status === 200 && blocking.body.result?.resultType !== "task", "a 2026-07-28 call that did not declare the extension never gets a task handle");
+}
+
 // ---------------------------------------------------------------- teardown
 
 server.close();

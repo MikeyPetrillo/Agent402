@@ -661,6 +661,34 @@ try {
   ok(again.isError === true && !again._meta?.[X402_PAYMENT_RESPONSE_META] && counts.settle === c0.settle + 1 && !JSON.stringify(again.content).includes("hello"),
     `the same payment sent again is refused, unsettled, with no output (${JSON.stringify(again.content).slice(0, 200)})`);
 
+  // 4b. The same wires on 2026-07-28: the SDK v2 client pinned to the modern
+  // revision (server/discover, the per-request envelope, no initialize) gets
+  // the same first ask, pays it in the call, and gets the same output and a
+  // settle receipt; an MPP credential the gate refuses is answered exactly as
+  // the 2025-era request is answered.
+  {
+    const v2 = await import("@modelcontextprotocol/client");
+    const m = new v2.Client({ name: "test-mcp-x402-connector-2026", version: "0.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
+    await m.connect(new v2.StreamableHTTPClientTransport(new URL(`${B}/mcp`), { requestInit: { headers: { "X-Forwarded-For": "203.0.113.13" } } }));
+    clients.push(m);
+    ok(m.getProtocolEra() === "modern", "the v2 client settles on 2026-07-28 against the paid boot");
+    const mAsk = await m.callTool({ name: "memory.read", arguments: { key } });
+    ok(mAsk.isError === true && !("structuredContent" in mAsk) && JSON.stringify(PR(mAsk)?.accepts) === JSON.stringify(offer.accepts) && JSON.stringify(mAsk.content.slice(1)) === JSON.stringify(ask.content.slice(1))
+      && Array.isArray(mAsk._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges), "2026-07-28: memory.read's first ask carries the same x402 offer, text and MPP challenges");
+    c0 = { ...counts };
+    const mPaid = await m.callTool({ name: "memory.read", arguments: { key }, _meta: { [X402_PAYMENT_META]: await payA.payments.createPaymentPayload(offer) } });
+    ok(mPaid.isError !== true && JSON.stringify(mPaid.content) === JSON.stringify(first.content) && mPaid._meta?.[X402_PAYMENT_RESPONSE_META]?.success === true
+      && mPaid._meta[X402_PAYMENT_RESPONSE_META].payer?.toLowerCase() === A.address.toLowerCase() && counts.verify === c0.verify + 1 && counts.settle === c0.settle + 1,
+      `2026-07-28: an x402 payment in the call settles once and returns the writer's value with the receipt (${counts.verify - c0.verify}/${counts.settle - c0.settle}) ${mPaid.isError ? JSON.stringify(mPaid.content).slice(0, 200) : ""}`);
+    const badCred = `Payment ${Buffer.from(JSON.stringify({ challenge: { id: "nope", method: "evm", intent: "charge" }, payload: { signature: "0x00" } })).toString("base64url")}`;
+    const outcome = async (fn) => { try { const r = await fn(); return { result: { isError: r.isError, content: r.content } }; } catch (e) { return { code: e.code, data: e.data }; } };
+    const legacyMpp = await outcome(() => plain.raw.callTool({ name: "memory.read", arguments: { key }, _meta: { [MCP_CREDENTIAL_META]: badCred } }));
+    const modernMpp = await outcome(() => m.callTool({ name: "memory.read", arguments: { key }, _meta: { [MCP_CREDENTIAL_META]: badCred } }));
+    // Each refusal carries fresh challenges: their ids and expiries differ, the rest is the same.
+    const fresh = (o) => JSON.stringify(o, (k, v) => (k === "id" || k === "expires" ? "<fresh>" : v));
+    ok(fresh(modernMpp) === fresh(legacyMpp) && legacyMpp.code === -32043 && legacyMpp.data?.challenges?.length > 0, `2026-07-28: an MPP credential the gate refuses is answered as on 2025-11-25 (${fresh(modernMpp).slice(0, 160)})`);
+  }
+
   // 5. A settle that fails naming a transaction (it may have landed): the
   // route's 402 through the real paywall is answered with no offer, the
   // transaction to watch and none of the tool's output.

@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 // Two MCP wire contracts, on both connectors.
 //
-// 1. Protocol versions. The hosted /mcp answers `initialize` through the
-//    SDK's Server, which echoes a version it supports and otherwise answers
-//    its latest. A 2026-07-28 client that opens with `initialize` is served
-//    the negotiated revision, and tools/list plus a free tool call work under
-//    it. A request carrying only the 2026-07-28 header (no handshake) gets a
-//    400 whose body is not the modern UnsupportedProtocolVersionError, which
-//    is the signal a dual-era client reads to fall back to `initialize`.
+// 1. Protocol versions. The hosted /mcp serves both eras (SDK v2). A client
+//    that opens with `initialize` is served the 2025-era revision it names,
+//    or the newest one both sides support (a 2026-07-28 `initialize` is
+//    answered 2025-11-25), and tools/list plus a free tool call work under it.
+//    A 2026-07-28 request carries the per-request envelope: server/discover
+//    lists 2026-07-28, and tools/list plus a free call answer with
+//    resultType. A request carrying only the 2026-07-28 header (no envelope)
+//    is a 400 naming the missing envelope, and an envelope naming a revision
+//    the server does not serve is the modern -32022 with the supported list.
 //
 // 2. Tool input element bound. Both connectors refuse a tools/call whose
 //    arguments hold more array elements plus object members than
@@ -32,6 +34,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SUPPORTED_PROTOCOL_VERSIONS, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { SUPPORTED_PROTOCOL_VERSIONS as SUPPORTED_V2 } from "@modelcontextprotocol/server";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
@@ -117,8 +120,8 @@ let up = false;
 for (let i = 0; i < 240 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch {} if (!up) await new Promise((r) => setTimeout(r, 500)); }
 ok(up, "server booted");
 
-const rpc = async (path, method, params, { version, id = 1 } = {}) => {
-  const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
+const rpc = async (path, method, params, { version, id = 1, headers: extra = {} } = {}) => {
+  const headers = { "content-type": "application/json", accept: "application/json, text/event-stream", ...extra };
   if (version) headers["mcp-protocol-version"] = version;
   const res = await fetch(`${B}${path}`, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id, method, ...(params ? { params } : {}) }) });
   const text = await res.text();
@@ -138,8 +141,30 @@ const rpc = async (path, method, params, { version, id = 1 } = {}) => {
   const call = await rpc("/mcp", "tools/call", { name: "catalog.call", arguments: { slug: "hash", params: { text: "agent402", algorithm: "sha256" } } }, { version: negotiated, id: 3 });
   const text = call.body?.result?.content?.[0]?.text || "";
   ok(call.status === 200 && call.body?.result?.isError !== true && /[0-9a-f]{64}/.test(text), `a free tool runs under the negotiated version (${text.slice(0, 80)})`);
-  const modern = await rpc("/mcp", "tools/list", undefined, { version: "2026-07-28", id: 4 });
-  ok(modern.status === 400 && modern.body?.error?.code !== -32022, `a header-only 2026-07-28 request is a 400 without the modern -32022 error (code ${modern.body?.error?.code}), so a dual-era client falls back to initialize`);
+  ok(negotiated === "2025-11-25", `a 2026-07-28 initialize settles on the newest 2025-era revision (${negotiated})`);
+  for (const v of SUPPORTED_V2) {
+    const r = await rpc("/mcp", "initialize", { protocolVersion: v, capabilities: {}, clientInfo: { name: "old", version: "1" } }, { id: 9 });
+    ok(r.status === 200 && r.body?.result?.protocolVersion === v, `initialize with ${v} is answered with ${v} (${r.body?.result?.protocolVersion})`);
+  }
+  const headerOnly = await rpc("/mcp", "tools/list", undefined, { version: "2026-07-28", id: 4 });
+  ok(headerOnly.status === 400 && headerOnly.body?.error?.code === ErrorCode.InvalidParams, `a header-only 2026-07-28 request (no envelope) is a 400 InvalidParams (code ${headerOnly.body?.error?.code})`);
+
+  // The 2026-07-28 envelope: no initialize, every request self-describing.
+  const env = (extra = {}) => ({ "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}, "io.modelcontextprotocol/clientInfo": { name: "modern", version: "1" }, ...extra });
+  const mrpc = (method, params, name, id) => rpc("/mcp", method, { ...(params || {}), _meta: env() }, { version: "2026-07-28", id, headers: { "mcp-method": method, ...(name ? { "mcp-name": name } : {}) } });
+  const disc = await mrpc("server/discover", undefined, null, 10);
+  ok(disc.status === 200 && disc.body?.result?.supportedVersions?.includes("2026-07-28") && disc.body?.result?.capabilities?.tools && disc.body?.result?._meta?.["io.modelcontextprotocol/serverInfo"]?.name === "agent402",
+    `server/discover lists 2026-07-28, the tools capability and serverInfo (${JSON.stringify(disc.body?.result?.supportedVersions)})`);
+  ok(typeof disc.body?.result?.instructions === "string" && disc.body.result.instructions.length > 40, "server/discover carries the connector's instructions");
+  const mlist = await mrpc("tools/list", undefined, null, 11);
+  ok(mlist.status === 200 && mlist.body?.result?.resultType === "complete" && mlist.body.result.tools?.some((t) => t.name === "catalog.call"), `tools/list on 2026-07-28 answers resultType complete with the catalog tools (${mlist.body?.result?.tools?.length})`);
+  ok(JSON.stringify(mlist.body?.result?.tools) === JSON.stringify(list.body?.result?.tools), "the 2026-07-28 tool listing is byte for byte the 2025-era listing");
+  const mcall = await mrpc("tools/call", { name: "catalog.call", arguments: { slug: "hash", params: { text: "agent402", algorithm: "sha256" } } }, "catalog.call", 12);
+  ok(mcall.status === 200 && mcall.body?.result?.resultType === "complete" && JSON.stringify(mcall.body?.result?.content) === JSON.stringify(call.body?.result?.content), "a free tool call on 2026-07-28 answers resultType complete with the 2025-era content");
+  const wrongName = await rpc("/mcp", "tools/call", { name: "catalog.call", arguments: { slug: "hash", params: { text: "x" } }, _meta: env() }, { version: "2026-07-28", id: 13, headers: { "mcp-method": "tools/call", "mcp-name": "catalog.find" } });
+  ok(wrongName.status === 400 && wrongName.body?.error?.code === -32020, `an Mcp-Name header that disagrees with the body is the 2026-07-28 header-mismatch error (code ${wrongName.body?.error?.code})`);
+  const future = await rpc("/mcp", "tools/list", { _meta: env({ "io.modelcontextprotocol/protocolVersion": "2099-01-01" }) }, { version: "2099-01-01", id: 14, headers: { "mcp-method": "tools/list" } });
+  ok(future.status === 400 && future.body?.error?.code === -32022 && future.body?.error?.data?.supported?.includes("2026-07-28"), `an envelope naming an unserved revision is the modern -32022 with the supported list (code ${future.body?.error?.code})`);
 }
 
 {
@@ -167,6 +192,9 @@ const rpc = async (path, method, params, { version, id = 1 } = {}) => {
   ok(!under.error, `at the bound (40 elements) the call goes through (${JSON.stringify(under).slice(0, 80)})`);
   const over = await post({ slug: "echo", params: Object.fromEntries(series(39, (i) => [`k${i}`, 1])) });
   ok(over.error?.code === ErrorCode.InvalidParams && /more than the maximum of 40 elements/.test(over.error?.message || ""), `one past it is InvalidParams before the tool runs (${over.error?.code} ${over.error?.message})`);
+  // The wire message reads as it did under SDK v1 (whose McpError prefixed it).
+  const refusal = hosted.toolInputBoundRefusal("catalog.call", { slug: "echo", params: Object.fromEntries(series(39, (i) => [`k${i}`, 1])) }, 40);
+  ok(over.error?.message === `MCP error ${ErrorCode.InvalidParams}: ${refusal}`, `the refusal's wire message keeps the "MCP error -32602: " prefix (${over.error?.message})`);
   srv.close();
 }
 

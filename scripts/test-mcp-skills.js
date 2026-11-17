@@ -246,6 +246,38 @@ try {
   const scopedInit = await init("/mcp-scoped", DECLARE);
   ok(!scopedInit.result?.capabilities?.extensions?.[SKILLS_EXTENSION] && !scopedInit.result?.capabilities?.resources, "scoped profile: a declaring client is not offered skills");
 
+  // ---- 2026-07-28 (no initialize): server/discover shows the extension only
+  // to a request that declares it; skills/list and resources/read answer what
+  // the 2025-era requests answer; the SDK v2 client pinned to 2026-07-28 reads it.
+  {
+    const ENV = (caps) => ({ "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": caps, "io.modelcontextprotocol/clientInfo": { name: "t", version: "1" } });
+    const mrpc = async (path, method, params, caps = {}, name = null) => {
+      const res = await fetch(`${BASE}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": method, ...(name ? { "Mcp-Name": name } : {}) },
+        body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params: { ...(params || {}), _meta: ENV(caps) } }),
+      });
+      return res.json();
+    };
+    const dOn = await mrpc("/mcp", "server/discover", {}, DECLARE);
+    ok(dOn.result?.capabilities?.extensions?.[SKILLS_EXTENSION] && dOn.result?.capabilities?.resources, "2026-07-28: server/discover shows skills and resources to a declaring request");
+    const dPlain = await mrpc("/mcp", "server/discover", {}, {});
+    const dOff = await mrpc("/mcp-off", "server/discover", {}, DECLARE);
+    ok(!dPlain.result?.capabilities?.extensions?.[SKILLS_EXTENSION] && !dPlain.result?.capabilities?.resources, "2026-07-28: a request that does not declare skills is not shown them");
+    ok(JSON.stringify(dPlain.result?.capabilities) === JSON.stringify(dOff.result?.capabilities), "2026-07-28: an undeclared discover equals the switch-off discover");
+    ok(dPlain.result?.instructions === plain.result?.instructions, "2026-07-28: discover carries the initialize instructions");
+    const mList = await mrpc("/mcp", "skills/list", {}, DECLARE);
+    ok(JSON.stringify(mList.result) === JSON.stringify(list.result), "2026-07-28: skills/list answers the 2025-era listing byte for byte");
+    const mRead = await mrpc("/mcp", "resources/read", { uri: packUri }, DECLARE, packUri);
+    ok(mRead.result?.resultType === "complete" && mRead.result?.contents?.[0]?.text === body, "2026-07-28: resources/read returns the same SKILL.md");
+    const v2 = await import("@modelcontextprotocol/client");
+    const mc = new v2.Client({ name: "test-mcp-skills-v2", version: "1" }, { capabilities: DECLARE, versionNegotiation: { mode: { pin: "2026-07-28" } } });
+    await mc.connect(new v2.StreamableHTTPClientTransport(new URL(`${BASE}/mcp`)));
+    ok(mc.getProtocolEra() === "modern" && mc.getServerCapabilities()?.extensions?.[SKILLS_EXTENSION], "SDK v2 client on 2026-07-28: server declares the skills extension");
+    ok((await mc.readResource({ uri: packUri })).contents?.[0]?.text === body, "SDK v2 client on 2026-07-28: resources/read returns the same SKILL.md");
+    await mc.close();
+  }
+
   // ---- reference SDK client
   const client = new Client({ name: "test-mcp-skills-sdk", version: "1" }, { capabilities: DECLARE });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${BASE}/mcp`)));

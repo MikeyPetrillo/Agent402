@@ -24,14 +24,30 @@
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/mcp-client-check.js
 //   MCP_CHECK_TARGET=prod node scripts/mcp-client-check.js   (https://agent402.tools)
 //   MCP_CHECK_OUT=/path/summary.json   writes a short JSON summary
+//   MCP_CHECK_PROTOCOL=2026-07-28      reads with the SDK v2 Client
+//     (@modelcontextprotocol/client) pinned to the 2026-07-28 revision:
+//     server/discover and the per-request envelope, no initialize. Unset or
+//     2025-11-25 (the default), the SDK v1 Client opens with initialize.
 //
 // Prints one line per check (`ok - ...` / `FAIL - ...`) and exits non-zero on
 // any failure, a transport failure included.
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { McpError, ResultSchema } from "@modelcontextprotocol/sdk/types.js";
+
+// The protocol revision this run reads with, and the reference client for it.
+const PROTOCOL = (process.env.MCP_CHECK_PROTOCOL || "").trim() || "2025-11-25";
+const MODERN = PROTOCOL === "2026-07-28";
+if (!MODERN && PROTOCOL !== "2025-11-25") { console.error(`MCP_CHECK_PROTOCOL must be 2025-11-25 or 2026-07-28, not ${JSON.stringify(PROTOCOL)}`); process.exit(2); }
+const { Client, StreamableHTTPClientTransport, McpError, ResultSchema } = MODERN
+  ? await (async () => {
+    const v2 = await import("@modelcontextprotocol/client");
+    const { z } = await import("zod");
+    return { Client: v2.Client, StreamableHTTPClientTransport: v2.StreamableHTTPClientTransport, McpError: v2.ProtocolError, ResultSchema: z.looseObject({}) };
+  })()
+  : await (async () => {
+    const [c, t, types] = await Promise.all([import("@modelcontextprotocol/sdk/client/index.js"), import("@modelcontextprotocol/sdk/client/streamableHttp.js"), import("@modelcontextprotocol/sdk/types.js")]);
+    return { Client: c.Client, StreamableHTTPClientTransport: t.StreamableHTTPClientTransport, McpError: types.McpError, ResultSchema: types.ResultSchema };
+  })();
 
 const PROD_URL = "https://agent402.tools";
 const base = (process.env.MCP_CHECK_TARGET || "").trim().toLowerCase() === "prod"
@@ -92,7 +108,8 @@ function finish(fatal = null) {
   const summary = {
     target: MCP_URL.toString(),
     at: new Date().toISOString(),
-    client: "@modelcontextprotocol/sdk streamable-http",
+    client: MODERN ? "@modelcontextprotocol/client streamable-http" : "@modelcontextprotocol/sdk streamable-http",
+    protocol: PROTOCOL,
     server: serverVersion,
     passed,
     failed,
@@ -101,7 +118,7 @@ function finish(fatal = null) {
   };
   const out = (process.env.MCP_CHECK_OUT || "").trim();
   if (out) { try { writeFileSync(out, JSON.stringify(summary, null, 2) + "\n"); } catch (err) { console.error(`could not write ${out}: ${err.message}`); } }
-  console.log(`\nmcp-client-check: ${passed} passed, ${failed} failed against ${MCP_URL}${fatal ? ` (${fatal})` : ""}`);
+  console.log(`\nmcp-client-check: ${passed} passed, ${failed} failed against ${MCP_URL} (protocol ${PROTOCOL})${fatal ? ` (${fatal})` : ""}`);
   process.exit(failed === 0 && !fatal ? 0 : 1);
 }
 
@@ -109,14 +126,17 @@ let serverVersion = null;
 const totalTimer = setTimeout(() => { record("completes within the time budget", false, `${TOTAL_MS}ms elapsed`); finish("timed out"); }, TOTAL_MS);
 totalTimer.unref?.();
 
-const client = new Client({ name: "agent402-mcp-client-check", version: "1.0.0" }, { capabilities: {} });
+const client = new Client({ name: "agent402-mcp-client-check", version: "1.0.0" }, { capabilities: {}, ...(MODERN ? { versionNegotiation: { mode: { pin: PROTOCOL } } } : {}) });
 const transport = new StreamableHTTPClientTransport(MCP_URL);
 const opts = { timeout: PER_CALL_MS };
-const callTool = (name, args = {}) => client.callTool({ name, arguments: args }, undefined, opts);
+const callTool = MODERN
+  ? (name, args = {}) => client.callTool({ name, arguments: args }, opts)
+  : (name, args = {}) => client.callTool({ name, arguments: args }, undefined, opts);
 
-// 1. initialize
-const connected = await check("initialize: serverInfo.name is agent402, instructions and tools capability present", async () => {
+// 1. initialize (2025-11-25) or server/discover (2026-07-28)
+const connected = await check(`${MODERN ? "server/discover" : "initialize"}: serverInfo.name is agent402, instructions and tools capability present`, async () => {
   await client.connect(transport, opts);
+  if (MODERN) assert(client.getProtocolEra?.() === "modern", `the client settled on the ${client.getProtocolEra?.()} era, not 2026-07-28`);
   const info = client.getServerVersion();
   serverVersion = info ? { name: info.name, version: info.version } : null;
   assert(info?.name === "agent402", `serverInfo.name is ${JSON.stringify(info?.name)}`);
@@ -126,7 +146,7 @@ const connected = await check("initialize: serverInfo.name is agent402, instruct
   assert(caps.tools, "capabilities.tools missing");
   return `version ${info.version}`;
 });
-if (!connected) finish("could not initialize");
+if (!connected) finish(MODERN ? "could not discover" : "could not initialize");
 
 // 2. tools/list
 let listed = [];
@@ -247,7 +267,17 @@ for (const [tool, args] of UNPAID_CALLS) {
     method: "tasks/get",
     params: { taskId: "0".repeat(48), ...(declare ? { _meta: { [CLIENT_CAPABILITIES_META]: { extensions: { [TASKS_EXTENSION]: {} } } } } : {}) },
   }, ResultSchema, opts);
-  const codeOf = async (p) => { try { await p; return null; } catch (err) { return err instanceof McpError ? err.code : `thrown: ${err?.message}`; } };
+  // A 2026-07-28 server answers some JSON-RPC errors with an HTTP status
+  // (method not found 404, a missing client capability 400); the v2 client
+  // surfaces those as an HTTP error whose message carries the JSON-RPC body.
+  const codeOf = async (p) => {
+    try { await p; return null; } catch (err) {
+      if (err instanceof McpError) return err.code;
+      const body = MODERN ? String(err?.message || "").match(/\{"jsonrpc".*\}$/s)?.[0] : null;
+      try { const code = body ? JSON.parse(body)?.error?.code : undefined; if (Number.isInteger(code)) return code; } catch { /* not a JSON-RPC body */ }
+      return `thrown: ${err?.message}`;
+    }
+  };
   if (advertised) {
     await check("tasks: an unknown task id answers the extension's invalid-params code", async () => {
       const code = await codeOf(taskGet(true));
