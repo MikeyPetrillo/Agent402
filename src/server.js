@@ -468,7 +468,7 @@ import { priceToMicroUsd, sellerRouteUrl, isUrlTemplateRoute } from "./x402-inde
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
+import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, removalPreview, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
 import { crawlSwitch } from "./crawl-switch.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
@@ -7102,14 +7102,21 @@ app.post("/__operator/seller-funding", express.json(), async (req, res) => {
 });
 // Remove ONE seller origin from the index and the router, permanently (until
 // restored). Exact origin only - no name matching, no wildcards - so a typo
-// cannot take out a neighbour. Restore only lifts the block; the owner can
-// then register again.
+// cannot take out a neighbour. Restore only lifts the block; how the origin
+// comes back depends on where the index knew it from (`returnsBy`): a seed or
+// a registry listing returns by itself, an owner's submission when the owner
+// registers again. `dryRun: true` answers the same reading and removes nothing.
 app.post("/__operator/sellers/remove", express.json(), (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
+  if (req.body?.dryRun === true) {
+    const p = removalPreview(req.body?.origin);
+    if (p.error) return res.status(400).json({ error: p.error });
+    return res.set("Cache-Control", "no-store").json({ dryRun: true, ...p, removed: false, alreadyRemoved: p.removed });
+  }
   const r = removeOrigin(req.body?.origin, { note: typeof req.body?.note === "string" ? req.body.note : "" });
   if (r.error) return res.status(400).json({ error: r.error });
-  res.set("Cache-Control", "no-store").json({ removed: true, origin: r.origin, removedAt: r.removedAt });
+  res.set("Cache-Control", "no-store").json({ removed: true, origin: r.origin, removedAt: r.removedAt, knownFrom: r.knownFrom, returnsBy: r.returnsBy, afterRestore: r.afterRestore });
 });
 // Operator bulk seed: origins read from another registry are
 // submitted through the SAME registerOrigin path a seller's own /sell call
@@ -7167,7 +7174,7 @@ app.post("/__operator/sellers/restore", express.json(), (req, res) => {
   // retry is the remedy, so say 503 with when to try, not a bad request.
   if (r.notLoaded) return res.status(503).set("Retry-After", "30").set("Cache-Control", "no-store").json({ error: r.error, origin: r.origin, notLoaded: true });
   if (r.error) return res.status(400).json({ error: r.error });
-  res.set("Cache-Control", "no-store").json({ ...r, note: r.restored ? "the owner can register the origin again" : "that origin was not removed" });
+  res.set("Cache-Control", "no-store").json({ ...r, ...(r.restored ? {} : { returnsBy: null }), note: r.restored ? r.afterRestore : "that origin was not removed" });
 });
 // What settlement evidence do we hold for ONE origin, per source, free.
 // Runs the seller-dossier tool's own handler so the operator answer and the

@@ -17,7 +17,7 @@
 //     origin.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -113,6 +113,62 @@ r = await idx.registerOrigin(O, { crawl });
 ok(r.listed === true, "the owner can register again after restore");
 ok(idx.restoreOrigin(O).restored === false, "restoring a non-removed origin reports false");
 
+// Preview and provenance. A dry run names what a removal would take, where
+// the origin is known from and how it comes back once restored, and changes
+// nothing. A registry-only origin returns by itself on the next registry read;
+// an origin only its owner submitted returns when the owner registers again.
+idx.__testResetSubmitted();
+const REG = `https://registry-${TAG}.example.com`;
+const OWN = `https://owned-${TAG}.example.com`;
+const regTools = [{ route: "/a", name: "a" }, { route: "/b", name: "b" }];
+idx.__testSetBazaarTools(REG, regTools);
+idx.__testSeedCache([[REG, { ...entry, tools: regTools, source: "bazaar-fallback" }]]);
+ok(idx.removalPreview("Acme").error, "preview refuses a name");
+let p = idx.removalPreview(`${REG}/`);
+ok(p.origin === REG && p.removed === false, "preview: normalized origin, not removed");
+ok(JSON.stringify(p.knownFrom) === '["registry"]', "preview: a registry-only origin reads knownFrom registry");
+ok(p.returnsBy === "registry" && /registry/.test(p.afterRestore), "preview: a registry-only origin returns on its own after restore");
+ok(p.held.cached === true && p.held.tools === 2 && p.held.toolsTotal === 2 && p.held.registryRows === 2 && p.held.source === "bazaar-fallback", "preview: counts what the index holds");
+ok(p.held.submitted === false && p.held.successions === 0, "preview: nothing submitted, no succession");
+ok(idx._cacheForTests().has(REG) && !idx.isRemovedOrigin(REG) && idx.listRemovedOrigins().length === 0, "preview changes nothing");
+{
+  const { SELLER_TOOL_CAP } = await import("../src/seller-tool-cap.js");
+  const many = Array.from({ length: SELLER_TOOL_CAP + 5 }, (_, i) => ({ route: `/r${i}`, name: `r${i}` }));
+  idx.__testSeedCache([[REG, { ...entry, tools: many, source: "bazaar-fallback" }]]);
+  const h = idx.removalPreview(REG).held;
+  ok(h.tools === SELLER_TOOL_CAP && h.toolsTotal === SELLER_TOOL_CAP + 5, "preview: a capped listing reads the kept rows and the count it listed");
+  idx.__testSeedCache([[REG, { ...entry, tools: regTools, source: "bazaar-fallback" }]]);
+}
+
+r = idx.removeOrigin(REG, { note: "diagnostic" });
+ok(r.removed === true && JSON.stringify(r.knownFrom) === '["registry"]' && r.returnsBy === "registry", "removal answer carries the provenance");
+ok(JSON.stringify(idx.listRemovedOrigins()[0].knownFrom) === '["registry"]', "the removed list carries the provenance");
+ok(JSON.stringify(JSON.parse(readFileSync(FILE, "utf8"))[0].knownFrom) === '["registry"]', "provenance persisted");
+p = idx.removalPreview(REG);
+ok(p.removed === true && p.held.cached === false && JSON.stringify(p.knownFrom) === '["registry"]', "preview of a removed origin reads the stored provenance");
+idx.__testResetSubmitted();
+ok(idx.loadRemovedOrigins() === 1 && JSON.stringify(idx.listRemovedOrigins()[0].knownFrom) === '["registry"]', "provenance survives a reload");
+r = idx.restoreOrigin(REG);
+ok(r.restored === true && r.returnsBy === "registry" && /registry/.test(r.afterRestore), "restore says a registry-only origin comes back on its own");
+
+r = await idx.registerOrigin(OWN, { crawl });
+ok(r.listed === true, "precondition: an owner-submitted origin");
+p = idx.removalPreview(OWN);
+ok(JSON.stringify(p.knownFrom) === '["owner"]' && p.returnsBy === "owner" && /owner/.test(p.afterRestore), "preview: an owner-submitted origin returns when the owner registers again");
+idx.removeOrigin(OWN);
+r = idx.restoreOrigin(OWN);
+ok(r.restored === true && r.returnsBy === "owner", "restore: the owner-submitted origin waits for its owner");
+p = idx.removalPreview(`https://nothing-${TAG}.example.com`);
+ok(p.knownFrom.length === 0 && p.returnsBy === null && p.held.cached === false, "preview: an origin the index never held");
+// A stored record written before provenance existed reads as unknown.
+idx.__testResetSubmitted();
+writeFileSync(FILE, JSON.stringify([{ origin: OWN, removedAt: 1, note: "" }, { origin: REG, removedAt: 2, note: "", knownFrom: ["registry", "bogus", 7] }]));
+idx.loadRemovedOrigins();
+const byOrigin = Object.fromEntries(idx.listRemovedOrigins().map((x) => [x.origin, x]));
+ok(byOrigin[OWN].knownFrom === null && byOrigin[OWN].returnsBy === null, "an old record has no provenance");
+ok(JSON.stringify(byOrigin[REG].knownFrom) === '["registry"]', "a stored provenance keeps only known words");
+idx.restoreOrigin(OWN); idx.restoreOrigin(REG);
+
 // Booted leg: auth, routes, register refusal.
 idx.__testResetSubmitted();
 const TOKEN = `op-${TAG}-secret-token`;
@@ -146,8 +202,14 @@ try {
 
   ok((await post("/__operator/sellers/remove", { origin: "Acme" }, auth)).status === 400, "remove: name-like input 400");
   ok((await post("/__operator/sellers/remove", { origin: "https://*.example.com" }, auth)).status === 400, "remove: wildcard 400");
-  let res = await post("/__operator/sellers/remove", { origin: B, note: "n" }, auth);
+  let res = await post("/__operator/sellers/remove", { origin: B, dryRun: true }, auth);
   let j = await res.json();
+  ok(res.status === 200 && j.dryRun === true && j.removed === false && j.origin === B && Array.isArray(j.knownFrom) && j.held && "afterRestore" in j, "remove dryRun: 200 with the preview");
+  j = await (await fetch(`${base}/__operator/sellers/removed.json`, { headers: auth })).json();
+  ok(j.total === 0, "remove dryRun: nothing removed");
+  ok((await post("/__operator/sellers/remove", { origin: "Acme", dryRun: true }, auth)).status === 400, "remove dryRun: name-like input 400");
+  res = await post("/__operator/sellers/remove", { origin: B, note: "n" }, auth);
+  j = await res.json();
   ok(res.status === 200 && j.removed === true && j.origin === B && j.removedAt > 0, "remove: 200 with the token");
   j = await (await fetch(`${base}/__operator/sellers/removed.json`, { headers: auth })).json();
   ok(j.total === 1 && j.removed[0].origin === B, "list shows the removed origin");
@@ -160,7 +222,7 @@ try {
 
   res = await post("/__operator/sellers/restore", { origin: B }, auth);
   j = await res.json();
-  ok(res.status === 200 && j.restored === true, "restore: 200 with the token");
+  ok(res.status === 200 && j.restored === true && "returnsBy" in j && typeof j.note === "string", "restore: 200 with the token and how it returns");
   j = await (await fetch(`${base}/__operator/sellers/removed.json`, { headers: auth })).json();
   ok(j.total === 0, "list empty after restore");
 } finally {
