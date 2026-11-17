@@ -174,7 +174,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
   };
   // The unconfirmed answer of a payment, back for the same payment (above).
   const replayUnconfirmed = (req, res, rec) => {
-    res.setHeader("Cache-Control", "no-store");
+    // Every 402 is no-store already (src/paid-no-store.js).
     if (typeof rec.receipt === "string" && rec.receipt) res.setHeader("PAYMENT-RESPONSE", rec.receipt);
     res.setHeader("X-Replayed-Answer", "1");
     req.__paymentRejectReason = typeof rec.body?.reason === "string" ? rec.body.reason : "settlement-unconfirmed";

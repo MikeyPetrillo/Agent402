@@ -506,8 +506,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   to book and their answer promises no record); the claim stays held. The 402 is restated at send
   time (`unconfirmedSettleRefusal`): `settlement-unconfirmed`, `retry` watch-transaction (a named
   transaction, with `refundStatusUrl`) or check-wallet, `authorizationValidBefore`, "Do not sign a new
-  authorization", the owed sentence only when `ctx.__a402LateBooked`, no offer, `Cache-Control:
-  no-store`; the receipt's errorReason becomes `settlement_unconfirmed` (NOT_BUYER_CODE in
+  authorization", the owed sentence only when `ctx.__a402LateBooked`, no offer (no-store, as
+  every 402: src/paid-no-store.js); the receipt's errorReason becomes `settlement_unconfirmed` (NOT_BUYER_CODE in
   src/settle-fault.js: never counted against the wallet), and the facilitator's raw words kept for the
   breaker (`RAW_SETTLE_RECEIPT`) are put back after the restated header passes the guard. One EVM
   payer holds at most `LATE_SETTLE_UNCONFIRMED_PER_PAYER_MAX` (default 25) open unconfirmed entries
