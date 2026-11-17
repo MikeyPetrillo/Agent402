@@ -34,6 +34,8 @@ t node scripts/test-payment-reject.js
 t node scripts/test-x402-v1-accepts.js
 # The 402 JSON body carries the same PaymentRequired object as the PAYMENT-REQUIRED header
 t node scripts/test-payment-required-body.js
+# The 402 asks the catalog price whatever price-shaped fields the caller sends, and a payment on other terms never reaches the facilitator (boots a paid server, offline)
+t node scripts/test-price-from-catalog.js
 # The three-line front door leads /llms.txt, /agents.md, the MCP server.describe answer and the unpaid 402 body
 t node scripts/test-front-door.js
 # HEAD paywall bypass closed (HEAD on paid GET routes 402s with challenges + empty body; free surfaces untouched — offline)
