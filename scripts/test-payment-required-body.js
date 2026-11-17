@@ -187,7 +187,7 @@ for (const [label, body] of [["HTML", "<!doctype html><html><body>Pay</body></ht
 {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   const at = (needle) => src.indexOf(needle);
-  const mount = at("app.use(paymentRequiredBodyMiddleware())");
+  const mount = at("app.use(paymentRequiredBodyMiddleware(");
   ok(mount > -1, "U11 server.js mounts paymentRequiredBodyMiddleware");
   for (const later of ["app.use(mppShim)", "app.use(tempoGate)", "app.use(stripeGate)"]) {
     ok(at(later) > -1 && mount < at(later), `U11 the mount comes before ${later}`);

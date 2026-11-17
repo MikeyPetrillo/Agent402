@@ -20,8 +20,8 @@ Payments:
 
 Surfaces:
 - The 402 body states the PAYMENT-REQUIRED header's size and how to ask for the
-  compact one (paymentRequiredHeader), and /llms.txt, /llms-full.txt,
-  /how-to-pay and the wiki say how a client with a small header limit reads the
+  compact one (paymentRequiredHeader), and /llms-full.txt, /how-to-pay,
+  /x402-test and the wiki say how a client with a small header limit reads the
   402: raise aiohttp's max_line_size and max_field_size, or send
   X-Payment-Compact: 1.
 

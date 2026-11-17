@@ -122,9 +122,9 @@ const FULL = {
   const text = smallHeaderLimitText();
   ok(text.includes(COMPACT_REQUEST_EXAMPLE) && text.includes(COMPACT_HEADER_MAX_BYTES.toLocaleString("en-US")) && !/—/.test(text), "U26 the small-header paragraph names the request and the ceiling");
   ok(flat(readFileSync(new URL("../wiki/Paying-with-x402.md", import.meta.url), "utf8")).includes(flat(text)), "U27 the wiki carries the paragraph word for word");
-  const { llmsTxt, llmsFullTxt } = await import("../src/seo.js");
+  const { llmsFullTxt } = await import("../src/seo.js");
   const { howToPayPage } = await import("../src/how-to-pay.js");
-  ok(llmsTxt("https://agent402.test", {}).includes(text) && llmsFullTxt("https://agent402.test", {}).includes(text), "U28 /llms.txt and /llms-full.txt carry the paragraph");
+  ok(llmsFullTxt("https://agent402.test", {}).includes(text), "U28 /llms-full.txt carries the paragraph");
   ok(howToPayPage("https://agent402.test", {}, { networks: [] }).includes("X-Payment-Compact: 1"), "U29 /how-to-pay carries the paragraph");
   const relayed = withoutPaymentRequired({ x402Version: 2, accepts: [], hint: "h", [HEADER_NOTE_KEY]: { bytes: 1 } });
   ok(!(HEADER_NOTE_KEY in relayed) && relayed.hint === "h", "U24 a relayed refusal drops the header note with the offer");

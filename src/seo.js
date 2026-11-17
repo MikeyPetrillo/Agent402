@@ -744,8 +744,7 @@ export function llmsTxt(baseUrl, catalog) {
   const identity = `## Identity and receiving wallet
 - Receiving wallet: agent402.base.eth on Base, verifiable on Basescan. Every stablecoin call settles to the payTo its 402 names.
 - Identity-bound tools (${identityBoundListOf(catalog)}): keyed on the signed EVM payer, EVM-exact only, refused on the Tempo and credits gates.
-- Replays: a re-sent signed payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted).
-- Small header limit: ${smallHeaderLimitText()}`;
+- Replays: a re-sent signed payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted).`;
 
   // The llms.txt order (the llms.txt spec: title, summary blockquote, then
   // plain paragraphs before the first H2): the base URL and the full-text
