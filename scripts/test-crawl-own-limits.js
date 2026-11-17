@@ -19,7 +19,11 @@ import { ownStoreEnv } from "./lib/own-stores.js";
 Object.assign(process.env, ownStoreEnv("crawl-own-limits"));
 process.env.X402_INDEX_CRAWL = "off";
 process.env.SELLER_PROBE_DAILY_BUDGET = "60";
-process.env.CRAWL_SLOW_ORIGINS = "https://slowpoke.example";
+process.env.CRAWL_SLOW_ORIGINS = "https://slowpoke.example,https://slowcycle.example";
+process.env.X402_INDEX_SEEDS = "https://slowcycle.example";
+// A hold window shorter than the slow cycle, so a hold that counted from the
+// last read alone would have ended by the slow origin's next read.
+process.env.INDEX_CRAWL_HOLD_HOURS = "5";
 {
   const { mkdtempSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
@@ -145,6 +149,30 @@ const entry = (o) => idx._cacheForTests().get(o);
   ok(readAt.length === 3 && readAt.every((t, i) => i === 0 || t - readAt[i - 1] >= SLOW_READ_INTERVAL_MS),
     `read every six hours by the clock across six boots (${readAt.map((t) => new Date(t).toISOString().slice(11, 16)).join(", ")})`);
   ok(sellerLoad.status().crawlsSkipped.slow > 0, "the operator view counts the slow waits");
+}
+
+// ---- a slow origin waiting its cycle keeps its listing through our failed read -----
+{
+  // Whole crawl cycles: the slow origin is left out of each while it waits,
+  // and each of those cycles is a turn we put off, so the hold of its last
+  // good listing counts from the last of them.
+  const SC = "https://slowcycle.example";
+  serve(SC);
+  idx.__setLastCycleOursShareForTest(0);
+  const start = Date.parse("2026-11-27T00:00:00Z");
+  clock = start;
+  await idx.__runCrawlCycleForTest();
+  ok(entry(SC)?.tools?.length === 1, "the slow origin is listed by its first cycle");
+  const r0 = readsOf(SC);
+  for (let m = 30; m < 6 * 60; m += 30) { clock = start + m * 60_000; idx.__setLastCycleOursShareForTest(0); await idx.__runCrawlCycleForTest(); }
+  ok(readsOf(SC) === r0, "it is not read while it waits its slow cycle");
+  dark(SC);
+  clock = start + 6 * H;
+  idx.__setLastCycleOursShareForTest(0);
+  await idx.__runCrawlCycleForTest();
+  const e = entry(SC);
+  ok(readsOf(SC) > r0 && e && !e.error && e.readIncomplete && e.tools?.length === 1,
+    "read when its cycle comes, a read of ours that does not complete keeps its listing, six hours after the last read");
 }
 
 Date.now = realNow;

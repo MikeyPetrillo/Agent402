@@ -303,7 +303,7 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 // this is the multiplier.
 // 30 min crawl, 1 hr discovery: defined in src/crawl-cadence.js so the pages
 // that quote the cadence read the same constants without importing this file.
-import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
+import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
 import { sellerLoad, bodyHash, landingGate } from "./seller-load.js";
@@ -7498,6 +7498,9 @@ async function runCrawl() {
     // seen every 5th cycle (~2.5h) instead of every 30 minutes. Single-host
     // sellers - almost all of them - are untouched.
     const due = originsDueThisCycle(ordered, crawlCycle);
+    // A slow origin left out while it waits its slow cycle is a turn we put
+    // off: the hold of its last good listing counts from here (turnNotReadAt).
+    if (SLOW_ORIGINS.size) { const dueSet = new Set(due); for (const o of ordered) if (!dueSet.has(o) && sellerLoad.slowWaiting(o, "x402")) noteTurnNotRead(o); }
     crawlCycleTally = { done: 0, ours: 0 };
     // Each origin's load controls (src/seller-load.js) decide whether it is
     // read this cycle: held by its own Retry-After, past its host's daily
