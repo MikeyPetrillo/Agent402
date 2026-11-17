@@ -142,83 +142,191 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
     `a window with real settlements survives an unreadable counter (claimed=${r.totals.claimed}, blind=${r.blind})`);
 }
 
-// --- Solana: an unmatched row is confirmed by its signature first -----------
+// --- Solana: an unmatched row is matched on chain only when it paid us ------
 // The revenue ledger can trail the chain (a scan page behind, a history read
-// that failed), so a Solana settlement missing from it is read on chain by its
-// signature before it is counted unconfirmed. Confirmed there = matched; not
-// found = unconfirmed; a read that fails leaves the row as it was and never
-// moves the top-level status. Stubbed reader: no network.
+// that failed), so a Solana settlement missing from it is read on chain before
+// it is counted unconfirmed. A landed signature is not enough: the transaction
+// must raise our payTo's USDC by the row's amount, and one signature pays for
+// one row. Stubbed readers: no network.
 {
-  const { SOLANA_CONFIRM_BATCH_MAX } = await import("../src/settlement-reconcile.js");
+  const { createHash } = await import("node:crypto");
+  const { SOLANA_CONFIRM_BATCH_MAX, isSolanaSignature } = await import("../src/settlement-reconcile.js");
+  const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const b58 = (buf) => {
+    let n = BigInt("0x" + buf.toString("hex")), s = "";
+    while (n > 0n) { s = B58[Number(n % 58n)] + s; n /= 58n; }
+    for (const b of buf) { if (b === 0) s = "1" + s; else break; }
+    return s;
+  };
+  const sig = (label) => b58(createHash("sha512").update(label).digest());
+  const S = Object.fromEntries(["LEDGER", "LANDED", "MISSING", "FAILED", "UNRELATED", "WRONGTO", "CASEFOLD", "SHORT", "DUP", "PROCESSED"].map((k) => [k, sig(k)]));
+  ok(Object.values(S).every(isSolanaSignature), "the fixture signatures are well-formed base58");
+
+  const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const PAYTO = "Pay2ourWa11etXyzABCDEFGHJKLMNPQRSTUVWXYZabc";
+  const OTHER = "0therWa11etXyzABCDEFGHJKLMNPQRSTUVWXYZabcde";
+  const credit = (owner, atomic) => ({ meta: { err: null,
+    preTokenBalances: [{ owner, mint: USDC, uiTokenAmount: { amount: "5000" } }, { owner: "Buyer", mint: USDC, uiTokenAmount: { amount: "90000" } }],
+    postTokenBalances: [{ owner, mint: USDC, uiTokenAmount: { amount: String(5000 + atomic) } }, { owner: "Buyer", mint: USDC, uiTokenAmount: { amount: String(90000 - atomic) } }] } });
+  const LAND = { slot: 9, confirmations: null, err: null, confirmationStatus: "finalized" };
+  const onChain = {
+    [S.LANDED]: LAND, [S.UNRELATED]: LAND, [S.WRONGTO]: LAND, [S.CASEFOLD]: LAND, [S.SHORT]: LAND, [S.DUP]: LAND,
+    [S.FAILED]: { slot: 9, confirmations: null, err: { InstructionError: [0, "Custom"] }, confirmationStatus: "finalized" },
+    [S.PROCESSED]: { slot: 9, confirmations: 0, err: null, confirmationStatus: "processed" },
+  };
+  const txs = {
+    [S.LANDED]: credit(PAYTO, 1000),
+    [S.UNRELATED]: { meta: { err: null, preTokenBalances: [], postTokenBalances: [] } }, // a real transaction that moved no USDC
+    [S.WRONGTO]: credit(OTHER, 1000),
+    [S.CASEFOLD]: credit(PAYTO.toLowerCase(), 1000),  // base58 is case-sensitive: not our account
+    [S.SHORT]: credit(PAYTO, 1000),                    // the row claims 0.002
+    [S.DUP]: credit(PAYTO, 1000),
+  };
+
   const SOL_NOW = NOW + 30 * 86_400_000; // a window that holds only this section's rows
   const SOL_OLD = SOL_NOW - 3 * 3600_000;
-  // The chain is scanned: one transfer seen, matched by the ledger directly.
-  recordTransfer({ chain: "solana", wallet: "w", txid: "SIG_LEDGER:0", tx_hash: "SIG_LEDGER", block: 1, when_ts: SOL_OLD / 1000, payer: "P", usd: 0.001, asset: "USDC", external: 1 });
-  at(SOL_OLD, () => recordSale({ slug: "hash", priceUsd: 0.001, rail: "usdc", network: "solana", payer: "P", tx: "SIG_LEDGER", synthetic: false }));
-  at(SOL_OLD, () => recordSale({ slug: "uuid", priceUsd: 0.001, rail: "usdc", network: "solana", payer: "P", tx: "SIG_LANDED", synthetic: false }));
-  at(SOL_OLD, () => recordSale({ slug: "random", priceUsd: 0.002, rail: "usdc", network: "solana", payer: "P", tx: "SIG_MISSING", synthetic: false }));
-  at(SOL_OLD, () => recordSale({ slug: "hash", priceUsd: 0.001, rail: "usdc", network: "solana", payer: "P", tx: "SIG_FAILED", synthetic: false }));
-  const onChain = {
-    SIG_LANDED: { slot: 9, confirmations: null, err: null, confirmationStatus: "finalized" },
-    SIG_FAILED: { slot: 9, confirmations: null, err: { InstructionError: [0, "Custom"] }, confirmationStatus: "finalized" },
+  recordTransfer({ chain: "solana", wallet: "w", txid: `${S.LEDGER}:0`, tx_hash: S.LEDGER, block: 1, when_ts: SOL_OLD / 1000, payer: "P", usd: 0.001, asset: "USDC", external: 1 });
+  const sale = (slug, usd, tx) => at(SOL_OLD, () => recordSale({ slug, priceUsd: usd, rail: "usdc", network: "solana", payer: "P", tx, synthetic: false }));
+  sale("hash", 0.001, S.LEDGER);
+  sale("uuid", 0.001, S.LANDED);
+  sale("random", 0.002, S.MISSING);
+  sale("hash", 0.001, S.FAILED);
+  sale("unrelated", 0.001, S.UNRELATED);
+  sale("wrongto", 0.001, S.WRONGTO);
+  sale("casefold", 0.001, S.CASEFOLD);
+  sale("short", 0.002, S.SHORT);
+  sale("dup", 0.001, S.DUP);
+  sale("dup", 0.001, S.DUP);
+  sale("processed", 0.001, S.PROCESSED);
+  sale("malformed", 0.001, "not-a-signature");
+
+  const calls = [], txCalls = [];
+  const reader = async (sigs) => {
+    if (sigs.some((s) => !isSolanaSignature(s))) throw new Error("Invalid param: not a signature"); // the whole batch fails, as the RPC does
+    calls.push([...sigs]); return sigs.map((s) => onChain[s] || null);
   };
-  const calls = [];
-  const reader = async (sigs) => { calls.push([...sigs]); return sigs.map((s) => onChain[s] || null); };
-  const pass = (o = {}) => reconcileSettlements({ days: 1, now: SOL_NOW, dailyCalls: () => [], ...o });
+  const txReader = async (s) => { txCalls.push(s); return txs[s] ?? null; };
+  const pass = (o = {}) => reconcileSettlements({ days: 1, now: SOL_NOW, dailyCalls: () => [], readTransaction: txReader, solanaPayTo: PAYTO, ...o });
+  const solOf = (r) => r.chains.find((c) => c.chain === "solana");
 
   let r = await pass({ confirmSignatures: reader });
-  let sol = r.chains.find((c) => c.chain === "solana");
-  ok(calls.length === 1 && calls[0].length === 3 && !calls[0].includes("SIG_LEDGER"),
-    `only the rows the ledger lacks are read, in one batch (got ${JSON.stringify(calls)})`);
-  ok(sol.confirmed === 2, `a signature confirmed on chain is matched, not unconfirmed (confirmed=${sol.confirmed})`);
-  ok(sol.unconfirmed === 2, `not found, and found but failed, stay unconfirmed (unconfirmed=${sol.unconfirmed})`);
-  ok(sol.unconfirmedUsd === 0.003, `the unconfirmed amount drops the matched row (got ${sol.unconfirmedUsd})`);
+  let sol = solOf(r);
+  let rd = sol.signatureReads;
+  ok(calls.length === 1 && calls[0].length === 9 && !calls[0].includes(S.LEDGER) && new Set(calls[0]).size === 9,
+    `only the rows the ledger lacks are read, each signature once, in one batch (got ${calls.map((c) => c.length)})`);
+  ok(rd.notSignature === 1 && rd.readsFailed === 0, `a malformed tx is never sent, so its batch still reads (got ${JSON.stringify(rd)})`);
+  ok(sol.confirmed === 3, `the ledger row, the correct transfer and the first claim of a shared signature are confirmed (confirmed=${sol.confirmed})`);
+  ok(sol.claimed === 12 && sol.unconfirmed === 9, `every other row stays unconfirmed (unconfirmed=${sol.unconfirmed})`);
   ok(!sol.samples.some((s) => s.slug === "uuid"), "a matched row is not listed as an unconfirmed sample");
-  ok(sol.signatureReads && sol.signatureReads.matched === 1 && sol.signatureReads.notFound === 1 && sol.signatureReads.failedOnChain === 1 && sol.signatureReads.unread === 0,
-    `the per-signature reads are counted on the chain (got ${JSON.stringify(sol.signatureReads)})`);
+  ok(rd.matched === 2 && rd.transferMismatch === 4 && rd.duplicate === 1,
+    `an unrelated signature, the wrong recipient, a case-folded owner and a short amount do not match; a reused signature counts once (got ${JSON.stringify(rd)})`);
+  ok(rd.notFound === 1 && rd.failedOnChain === 1, `not found and failed on chain stay unconfirmed (got ${JSON.stringify(rd)})`);
+  ok(rd.unread === 1 && !txCalls.includes(S.PROCESSED), `a processed (not yet confirmed) signature is unread and never matched (got unread=${rd.unread})`);
+  ok(txCalls.length === 6 && rd.txReads === 6 && rd.landedUnverified === 0 && sol.landedUnverified === 0,
+    `each landed signature's transaction is read once (got ${txCalls.length})`);
+  ok(rd.deadlineHit === false, "a pass inside its deadline says so");
   ok(r.status === "ok", `a pass with reads that answered reads ok (got ${r.status})`);
+  const base = { confirmed: sol.confirmed, unconfirmed: sol.unconfirmed };
+
+  // A landed signature whose transaction cannot be read is never confirmed.
+  txCalls.length = 0;
+  r = await pass({ confirmSignatures: reader, readTransaction: async () => { throw new Error("all 2 RPCs failed"); } });
+  sol = solOf(r);
+  ok(sol.confirmed === 1 && sol.unconfirmed === 11 && sol.signatureReads.landedUnverified === 6 && sol.landedUnverified === 6 && r.totals.landedUnverified === 6,
+    `a failed transaction read leaves landed rows landedUnverified, never confirmed (got ${JSON.stringify(sol.signatureReads)})`);
+  r = await pass({ confirmSignatures: reader, readTransaction: async () => null });
+  ok(solOf(r).confirmed === 1 && solOf(r).signatureReads.landedUnverified === 6, "a transaction not found is landedUnverified too");
+  txCalls.length = 0;
+  r = await pass({ confirmSignatures: reader, solanaPayTo: null });
+  ok(solOf(r).confirmed === 1 && solOf(r).signatureReads.landedUnverified === 6 && txCalls.length === 0,
+    "with no payTo to check against, nothing is read and nothing landed is confirmed");
+  txCalls.length = 0;
+  r = await pass({ confirmSignatures: reader, solanaVerifyMaxReads: 1 });
+  ok(txCalls.length === 1 && solOf(r).signatureReads.landedUnverified === 5, `the transaction-read budget holds (got ${txCalls.length})`);
 
   // RPC down: every row stays as it was, the status word does not move.
   calls.length = 0;
   const down = async (sigs) => { calls.push([...sigs]); throw new Error("all 2 RPCs failed - timeout"); };
   r = await pass({ confirmSignatures: down });
-  sol = r.chains.find((c) => c.chain === "solana");
-  ok(sol.confirmed === 1 && sol.unconfirmed === 3,
+  sol = solOf(r);
+  ok(sol.confirmed === 1 && sol.unconfirmed === 11,
     `a failed read leaves every row as it was: neither matched nor dropped (confirmed=${sol.confirmed}, unconfirmed=${sol.unconfirmed})`);
-  ok(sol.signatureReads.readsFailed === 1 && sol.signatureReads.unread === 3,
+  ok(sol.signatureReads.readsFailed === 1 && sol.signatureReads.unread === 9,
     `...and the rows it could not read are counted as unread (got ${JSON.stringify(sol.signatureReads)})`);
   ok(r.status === "ok" && r.blind === false, `our own RPC failure never moves the status word (got ${r.status})`);
 
   // A malformed answer (wrong length) is a failed read too, never a verdict.
   r = await pass({ confirmSignatures: async () => [null] });
-  sol = r.chains.find((c) => c.chain === "solana");
-  ok(sol.confirmed === 1 && sol.unconfirmed === 3 && sol.signatureReads.readsFailed === 1,
+  sol = solOf(r);
+  ok(sol.confirmed === 1 && sol.unconfirmed === 11 && sol.signatureReads.readsFailed === 1,
     `an answer that does not cover the batch is a failed read (got ${JSON.stringify(sol.signatureReads)})`);
 
-  // Batch size and the pass budget: 3 rows, batches of 2, one read allowed.
+  // Batch size and the pass budget: nine signatures, batches of 2, one read allowed.
   calls.length = 0;
   r = await pass({ confirmSignatures: reader, solanaBatchSize: 2, solanaMaxReads: 1 });
-  sol = r.chains.find((c) => c.chain === "solana");
-  ok(calls.length === 1 && calls[0].length === 2, `a pass makes at most its read budget, each at most the batch size (got ${JSON.stringify(calls)})`);
-  ok(sol.signatureReads.reads === 1 && sol.signatureReads.unread === 1,
+  sol = solOf(r);
+  ok(calls.length === 1 && calls[0].length === 2, `a pass makes at most its read budget, each at most the batch size (got ${JSON.stringify(calls.map((c) => c.length))})`);
+  ok(sol.signatureReads.reads === 1 && sol.signatureReads.unread === 7,
     `rows past the budget are unread and stay as they were (got ${JSON.stringify(sol.signatureReads)})`);
-  ok(sol.confirmed + sol.unconfirmed === 4, "every judged row is still in exactly one bucket");
+  ok(sol.confirmed + sol.unconfirmed === 12, "every judged row is still in exactly one bucket");
 
-  // Batches of 2 with budget: the three rows take two reads.
   calls.length = 0;
   r = await pass({ confirmSignatures: reader, solanaBatchSize: 2, solanaMaxReads: 5 });
-  ok(calls.length === 2 && calls.every((c) => c.length <= 2), `rows are read in batches of the batch size (got ${JSON.stringify(calls)})`);
-  ok(r.chains.find((c) => c.chain === "solana").confirmed === 2, "...and the result matches the single-batch pass");
+  ok(calls.length === 5 && calls.every((c) => c.length <= 2), `rows are read in batches of the batch size (got ${JSON.stringify(calls.map((c) => c.length))})`);
+  ok(solOf(r).confirmed === base.confirmed && solOf(r).unconfirmed === base.unconfirmed, "...and the result matches the single-batch pass");
+
+  // The pass deadline: a status read that never answers ends at the deadline.
+  let t0 = Date.now();
+  r = await pass({ confirmSignatures: () => new Promise(() => {}), solanaDeadlineMs: 300 });
+  let ms = Date.now() - t0;
+  sol = solOf(r);
+  ok(ms < 2000 && sol.signatureReads.deadlineHit === true && sol.signatureReads.unread === 9 && sol.confirmed === 1,
+    `a hanging status read is cut at the pass deadline and its rows are unread (${ms} ms, ${JSON.stringify(sol.signatureReads)})`);
+  // ...and a later batch never starts once the deadline has passed.
+  calls.length = 0;
+  let first = true;
+  const slowOnce = async (sigs) => { if (first) { first = false; await new Promise((res) => setTimeout(res, 400)); } return reader(sigs); };
+  r = await pass({ confirmSignatures: slowOnce, solanaBatchSize: 2, solanaDeadlineMs: 200 });
+  sol = solOf(r);
+  ok(calls.length === 0 && sol.signatureReads.reads === 1 && sol.signatureReads.unread === 9 && sol.signatureReads.deadlineHit,
+    `no batch starts past the deadline (got ${JSON.stringify(sol.signatureReads)})`);
+  // A transaction read that never answers ends at the deadline too.
+  t0 = Date.now();
+  r = await pass({ confirmSignatures: reader, readTransaction: () => new Promise(() => {}), solanaDeadlineMs: 300 });
+  ms = Date.now() - t0;
+  sol = solOf(r);
+  ok(ms < 2000 && sol.signatureReads.landedUnverified === 6 && sol.confirmed === 1 && sol.signatureReads.deadlineHit,
+    `hanging transaction reads end at the pass deadline, landedUnverified (${ms} ms, ${JSON.stringify(sol.signatureReads)})`);
+
+  // The default reader's RPC call honors the deadline across lanes: three
+  // lanes that accept and never answer, six seconds each, end at the deadline.
+  {
+    const { createServer } = await import("node:http");
+    const { rpcCall } = await import("../src/revenue-live.js");
+    const servers = [];
+    for (let i = 0; i < 3; i++) {
+      const s = createServer(() => {}); // never answers
+      await new Promise((res) => s.listen(0, "127.0.0.1", res));
+      servers.push(s);
+    }
+    const urls = servers.map((s) => `http://127.0.0.1:${s.address().port}/`);
+    t0 = Date.now();
+    let err = null;
+    try { await rpcCall(urls, "getSignatureStatuses", [[S.LANDED]], 6000, { deadline: Date.now() + 400 }); } catch (e) { err = e; }
+    ms = Date.now() - t0;
+    ok(err && ms < 2000, `rpcCall stops at its deadline across hanging lanes (${ms} ms)`);
+    for (const s of servers) { s.closeAllConnections?.(); s.close(); }
+  }
 
   // The batch size is held to the RPC method's own limit (a window with more
   // unmatched rows than one call may carry).
   {
     const BIG_NOW = SOL_NOW + 30 * 86_400_000;
     for (let i = 0; i < SOLANA_CONFIRM_BATCH_MAX + 4; i++) {
-      at(BIG_NOW - 3 * 3600_000, () => recordSale({ slug: "hash", priceUsd: 0.001, rail: "usdc", network: "solana", payer: "P", tx: `SIG_BULK_${i}`, synthetic: false }));
+      at(BIG_NOW - 3 * 3600_000, () => recordSale({ slug: "hash", priceUsd: 0.001, rail: "usdc", network: "solana", payer: "P", tx: sig(`BULK_${i}`), synthetic: false }));
     }
     calls.length = 0;
-    await reconcileSettlements({ days: 1, now: BIG_NOW, dailyCalls: () => [], confirmSignatures: reader, solanaBatchSize: 10_000 });
+    await reconcileSettlements({ days: 1, now: BIG_NOW, dailyCalls: () => [], confirmSignatures: reader, readTransaction: txReader, solanaPayTo: PAYTO, solanaBatchSize: 10_000 });
     ok(SOLANA_CONFIRM_BATCH_MAX <= 256 && calls.length === 2 && calls[0].length === SOLANA_CONFIRM_BATCH_MAX && calls[1].length === 4,
       `a batch never exceeds the method's signature limit (got ${calls.map((c) => c.length).join(",")})`);
   }
@@ -226,7 +334,7 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
   // A budget of zero reads nothing and leaves every row as it was.
   calls.length = 0;
   r = await pass({ confirmSignatures: reader, solanaMaxReads: 0 });
-  ok(calls.length === 0 && r.chains.find((c) => c.chain === "solana").unconfirmed === 3, "a zero budget makes no read and changes no row");
+  ok(calls.length === 0 && solOf(r).unconfirmed === 11, "a zero budget makes no read and changes no row");
 
   // Another chain's unmatched rows are never read by signature.
   calls.length = 0;
