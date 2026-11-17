@@ -180,7 +180,8 @@ More: [Paying with MPP](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-wi
 | **PDFs & media** | `pdf-to-markdown`, `pdf-merge`, `pdf-extract-pages`, `pdf-rotate`, `images-to-pdf`, `audio-convert`, `audio-normalize` (EBU R128, real ffmpeg) |
 | **Images** | `image-resize`, `image-convert`, `image-thumbnail`, `barcode-decode` (jimp/zxing, pure-CPU) |
 | **OCR** | `image-ocr` (text out of any image - pure-CPU, no model) |
-| **Geo** | `geo-distance` (haversine, pure-CPU), `geocode`, `reverse-geocode`, `place-search`, `geo-lookup` |
+| **Geo** | `geo-distance` (haversine, pure-CPU), `place-lookup` (place names worldwide), `geo-lookup` (US county and state), `sun-times` |
+| **Weather** | `weather-current`, `weather-daily`, `weather-hourly`, `weather-history`, `weather-air-quality` by coordinates or place name; `weather-probability`, `weather-market-brackets`, `weather-market-board` (ensemble probabilities); `weather-window`, `weather-thresholds`; free calculators `heat-index-calc`, `aqi-calc`, `degree-days-calc`, `wmo-weather-code` |
 | **Live data** | `fx-rate` (ECB), `barcode-lookup` (Open Food Facts), `gov-data` (data.gov), `weather-forecast`/`weather-alerts`, `earthquakes` (USGS) |
 | **Finance & crypto** | `stock-quote`/`stock-history` (a licensed feed, multi-venue consolidation), `crypto-price`/`crypto-market`/`crypto-history`/`crypto-trending`/`crypto-global` (CoinGecko) |
 | **Crypto derivatives & options** | `perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`, `perp-open-interest`, `perp-klines`, `perp-orderbook` (live perpetuals: mark/oracle price, funding, OI, candles, depth); `options-summary`, `crypto-options-chain`, `options-ticker`, `options-volume` (options book, IV and greeks, onchain options volume) - $0.001 to $0.005 a call, no exchange account |

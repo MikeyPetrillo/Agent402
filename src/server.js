@@ -537,7 +537,6 @@ const BROWSER_MEASURE_TOOLS = BROWSER_MEASURE_TOOLS_RAW.map((t) => {
   return { ...t, handler: t.slug === "html-frames" ? withHtmlFramesFailureBound(run, (req) => payerFromRequest(req) || req?.ip) : run };
 });
 import { GOV_TOOLS } from "./tools/gov-kit.js";
-import { GEO_TOOLS } from "./tools/geo-kit.js";
 import { OCR_TOOLS } from "./tools/ocr-kit.js";
 import { AGENT_TOOLS } from "./tools/agent-kit.js";
 import { SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration, erc8004AgentId } from "./tools/a2a-card.js";
@@ -589,6 +588,9 @@ import { MEV_AND_L2_TOOLS } from "./tools/mev-and-l2-kit.js";
 import { ONCHAIN_IDENTITY_TOOLS } from "./tools/onchain-identity-kit.js";
 import { NFT_MARKET_TOOLS } from "./tools/nft-market-kit.js";
 import { WEATHER_TOOLS, openMeteoStatus } from "./tools/weather-kit.js";
+import { WEATHER_PROBABILITY_TOOLS } from "./tools/weather-probability-kit.js";
+import { WEATHER_PLAN_TOOLS } from "./tools/weather-plan-kit.js";
+import { WEATHER_CALC_TOOLS } from "./tools/weather-calc-kit.js";
 import { DATE_TIME_TOOLS } from "./tools/date-time-kit.js";
 import { TEXT_ANALYSIS_TOOLS } from "./tools/text-analysis-kit.js";
 import { VALIDATION_TOOLS } from "./tools/validation-kit.js";
@@ -664,17 +666,10 @@ import { spendWindowStatus, refreshSpendWindowShared } from "./router-spend-wind
 import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus, refreshXDataSpendShared } from "./tools/x-data-kit.js";
 import { jevSpendStatus, refreshJevSpendShared, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
-import { EXA_TOOLS, exaEnabled, exaSpendStatus, refreshExaSpendShared, exaAllowanceStatus, exaCallsToday } from "./tools/exa-kit.js";
-import { upstreamBudgetStatus, registerUpstreamCounter } from "./upstream-budgets.js";
+import { upstreamBudgetStatus } from "./upstream-budgets.js";
 import { hardCapStatus, startHardCapSync } from "./upstream-hard-caps.js";
-// Exa is also an indexed seller the crawlers read unpaid; its budget counts only
-// the calls our Exa tools make.
-registerUpstreamCounter("exa", exaCallsToday);
 import { b2bEnrichEnabled } from "./tools/b2b-enrich-kit.js";
 const X_DATA_TOOLS_ENABLED = xDataEnabled() ? X_DATA_TOOLS : [];
-// Env-gated on EXA_API_KEY: unkeyed deployments list nothing rather than
-// advertising routes that can only 503.
-const EXA_TOOLS_ENABLED = exaEnabled() ? EXA_TOOLS : [];
 const B2B_ENRICH_TOOLS_ENABLED = b2bEnrichEnabled();
 import { STT_TOOLS, sttUnmeasuredSinceBoot } from "./tools/stt-kit.js";
 import { EMBED_TOOLS } from "./tools/embed-kit.js";
@@ -769,7 +764,7 @@ const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePr
 // status probe's mark) or a payer that is one of our wallets. Stats only.
 const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...EXA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -795,7 +790,7 @@ const MODEL_BACKED_KITS = [
 ];
 const MODEL_BACKED_SLUGS = new Set(MODEL_BACKED_KITS.map((t) => t.slug).filter(Boolean));
 // A tool that runs a model inside a kit of deterministic tools (`answer` in the
-// search kit, `exa-answer` in the Exa kit) declares `modelBacked: true` on its
+// search kit) declares `modelBacked: true` on its
 // own definition. Skill packs are added below, once their tools exist: a pack
 // that runs any model-backed step is model-backed.
 for (const def of ALL_KIT) if (def?.modelBacked === true && def.slug) MODEL_BACKED_SLUGS.add(def.slug);
@@ -4207,12 +4202,12 @@ app.get("/api/gateway-status", async (req, res) => {
   const full = operatorView(req, res);
   // The wrong-credential and unauthenticated-CDN-peer counts every replica
   // contributed to, when shared.
-  // Also the shared day behind xDataSpend, exaSpend and jevSpend: a new
+  // Also the shared day behind xDataSpend and jevSpend: a new
   // process's own counters start empty, so each word is built from the larger
   // of the two (one bounded read each, reused for a few seconds; never
   // rejects). jevSpend reads unknown until its shared day has been read once.
-  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared(), refreshJevSpendShared(), refreshSpendWindowShared(), refreshDirectSpendShared()]);
-  const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
+  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshJevSpendShared(), refreshSpendWindowShared(), refreshDirectSpendShared()]);
+  const spend = { xDataSpend: xDataSpendStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   // The global unsettled external-spend ceiling: one word, never a figure.
   const externalSpendGlobal = await globalUnsettledStatus().catch(() => ({ status: "unknown" }));
@@ -4222,8 +4217,6 @@ app.get("/api/gateway-status", async (req, res) => {
     // one word for all of them and one per chain ("off" with none enabled).
     upstreamBuyerEvm,
     xDataSpend: full ? spend.xDataSpend : publicBucket(spend.xDataSpend),
-    exaSpend: full ? spend.exaSpend : publicBucket(spend.exaSpend),
-    exaAllowance: full ? spend.exaAllowance : publicBucket(spend.exaAllowance),
     jevSpend: full ? spend.jevSpend : publicBucket(spend.jevSpend),
     // x-search-recent's expanded-author reads today (src/x-search-stats.js):
     // ok / alert past X_SEARCH_AUTHOR_DAILY_ALERT / unknown. An alarm only,

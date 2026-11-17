@@ -89,7 +89,6 @@ const NETWORK = new Set([
   "/api/options-summary", "/api/crypto-options-chain", "/api/options-ticker", "/api/options-volume",
   "/api/token-safety", "/api/sol-token-safety", "/api/sol-token-report", "/api/sol-token-holders", "/api/sol-token-pairs", "/api/sol-token-search", "/api/sol-trending", "/api/sol-price", "/api/sol-swap-quote", "/api/sol-token-lookup",
   "/api/x-search-recent", "/api/x-user", "/api/x-user-tweets", "/api/x-tweet", "/api/x-users-lookup",
-  "/api/exa-search", "/api/exa-answer", "/api/exa-contents",
   "/api/hunter-domain-search", "/api/hunter-email-finder", "/api/hunter-email-verify", "/api/hunter-company", "/api/apollo-people-search", "/api/apollo-org-enrich", "/api/apollo-person-match",
   "/api/extract", "/api/meta", "/api/dns", "/api/render", "/api/screenshot", "/api/pdf",
   "/api/http-check", "/api/fetch-json", "/api/tls-cert", "/api/whois", "/api/robots-check", "/api/sitemap",
@@ -128,7 +127,6 @@ const NETWORK = new Set([
   "/api/device-recalls", "/api/college-lookup", "/api/fec-candidates",
   "/api/drug-label", "/api/drug-ndc", "/api/device-510k", "/api/device-adverse-events",
   "/api/federal-awards", "/api/geo-lookup", "/api/fema-disasters",
-  "/api/geocode", "/api/reverse-geocode", "/api/place-search",
   "/api/image-ocr",
   // Image-kit URL tools: the examples fetch sample-photo.jpg from our own
   // /fixtures/ on production over live egress, so a network failure on the
@@ -141,6 +139,8 @@ const NETWORK = new Set([
   // must not hard-block the deploy gate).
   "/api/weather-current", "/api/weather-daily", "/api/weather-hourly",
   "/api/weather-history", "/api/weather-air-quality",
+  "/api/place-lookup", "/api/weather-probability", "/api/weather-market-brackets", "/api/weather-market-board",
+  "/api/weather-window", "/api/weather-thresholds",
   // B20 log scans: chunked eth_getLogs against public Base RPCs — flappy in CI.
   "/api/b20-new-tokens", "/api/b20-memos",
   // B20 eth_call tools: the SAME public-RPC egress (15s abort x 3 RPCs x 2

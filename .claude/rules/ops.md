@@ -46,7 +46,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   that page covered are read one at a time, then full pages resume.
 - **Store deadlines:** `src/loop-deadline.js` (`withLoopTimeout`, `withLoopDeadline`, `loopDeadline`)
   bounds every Redis wait (shared limits, the hang-up ticket, the spend reserve, journals,
-  idempotency, the first-call allowance, the shared Databento and Nominatim reads, the cache, the
+  idempotency, the first-call allowance, the shared Databento read, the cache, the
   database ping, lease release) in loop time: a deadline re-arms once for time the loop was held
   and expires only after a poll phase, so an answer that landed during boot work is read, not
   booked as a store that did not answer (`scripts/test-loop-deadline.js`, `test-loop-deadline-sites.js`).
@@ -276,13 +276,6 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `unknown` when the stored day cannot be read. One store read per status answer, reused 30 s.
   An alarm only: no call is refused or capped for it. Paged under "X search author reads OVER the
   daily alert", closed on `ok` (`scripts/test-x-search-stats.js`, `scripts/test-status-word-pagers.js`).
-- **Exa ceilings:** the same two ceilings and words, read the same way (`src/daily-ceilings.js`): `EXA_DAILY_MAX_USD`
-  (default 1; `0` refuses every call) is the alarm and `exaSpend` reads `over` past it while the
-  Exa tools keep serving; `EXA_DAILY_HARD_MAX_USD` (default 5 times the alarm ceiling; never
-  under it) refuses 503 and reads `capped`. Paged under "Exa daily spend OVER its ceiling",
-  closed on `ok` or `off` (`scripts/test-exa-ceilings.js`). `exaAllowance` and `EXA_CREDITS_USD`
-  are separate and unchanged: with the prepaid balance spent the upstream refuses and the tools
-  answer 503 whatever the ceilings say.
 - **Router per-minute spend word:** `routerSpendWindow` carries the same words (`over` serves,
   `capped` refuses, `off` is the switch) for `SOR_SPEND_CAP_ATOMIC` and
   `SOR_SPEND_HARD_CAP_ATOMIC`, each held an hour; paged under "Router spend per minute OVER its

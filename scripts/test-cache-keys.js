@@ -63,9 +63,10 @@ ok(k({ ids: ["a", "b"] }) !== k({ ids: ["a", "c"] }), "array values are part of 
 ok(cacheKeyFor("/api/x", { q: "a" }, []) !== cacheKeyFor("/api/y", { q: "a" }, []), "the path is part of the key");
 
 import { cacheTtlFor } from "../src/cache.js";
-const geoPolicy = CACHEABLE_ROUTES["/api/geocode"];
+// A route with a backup provider declares fallbackSource and fallbackTtl.
+const geoPolicy = { ttl: 86400, keyFields: ["q"], fallbackSource: "photon", fallbackTtl: 600 };
 ok(cacheTtlFor(geoPolicy, { source: "photon.komoot.io (ODbL)" }) === geoPolicy.fallbackTtl && geoPolicy.fallbackTtl < geoPolicy.ttl, "a backup-geocoder answer is kept for the shorter fallbackTtl");
-ok(cacheTtlFor(geoPolicy, { source: "nominatim.openstreetmap.org (ODbL)" }) === geoPolicy.ttl, "a primary answer keeps the route ttl");
+ok(cacheTtlFor(geoPolicy, { source: "primary.example (ODbL)" }) === geoPolicy.ttl, "a primary answer keeps the route ttl");
 ok(cacheTtlFor(CACHEABLE_ROUTES["/api/fx-rate"], { source: "photon" }) === CACHEABLE_ROUTES["/api/fx-rate"].ttl, "a route without a fallback policy keeps its ttl");
 
 console.log(failed ? `${failed} failed` : "all passed");

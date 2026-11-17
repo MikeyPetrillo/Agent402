@@ -39,4 +39,7 @@ export const FREE_TIER_SLUGS = new Set([
   "time-convert", "timezone-convert", "token-count", "totp", "truncate", "ulid",
   "unit-convert", "url-code", "url-parse", "user-agent", "uuid", "uuid-validate",
   "webhook-verify", "x402-market-pulse", "xml-to-json", "yaml-to-json",
+  // Weather calculators (src/tools/weather-calc-kit.js): published formulas
+  // over the caller's own numbers, no forecast read.
+  "aqi-calc", "degree-days-calc", "heat-index-calc", "sun-times", "wmo-weather-code",
 ]);

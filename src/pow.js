@@ -228,8 +228,6 @@ export const WALLET_ONLY_SLUGS = new Set([
   "options-summary", "crypto-options-chain", "options-ticker", "options-volume",
   "sol-token-safety", "sol-token-report", "sol-token-holders", "sol-token-pairs", "sol-token-search", "sol-trending", "sol-price", "sol-swap-quote", "sol-token-lookup",
   "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup",
-  // Exa: a metered upstream quota, never PoW-eligible.
-  "exa-search", "exa-answer", "exa-contents",
   "hunter-domain-search", "hunter-email-finder", "hunter-email-verify", "hunter-company", "apollo-people-search", "apollo-org-enrich", "apollo-person-match",
   "extract", "meta", "dns", "render", "screenshot", "pdf", "multi-search",
   // Browser pool (a held Chromium slot per call): browser-measure-kit.js.
@@ -377,10 +375,11 @@ export const WALLET_ONLY_SLUGS = new Set([
   // pool with chain-kit / dex-kit / mev-and-l2-kit). 3 net-new market-side
   // tools that complement chain-kit's existing nft-holdings + nft-metadata.
   "nft-collection", "nft-floor",
-  // Weather-kit: all 5 tools fetch from Open-Meteo (keyed when OPEN_METEO_API_KEY is set).
+  // Weather-kit: all 5 tools fetch from Open-Meteo (keyed when OPEN_METEO_API_KEY is set),
+  // as do place-lookup, the ensemble probability tools and the planning tools.
   "weather-current", "weather-daily", "weather-hourly", "weather-history", "weather-air-quality",
-  // Geo-kit: all 3 tools fetch from Nominatim (shared per-IP rate limit).
-  "geocode", "reverse-geocode", "place-search",
+  "place-lookup", "weather-probability", "weather-market-brackets", "weather-market-board",
+  "weather-window", "weather-thresholds",
   // OCR-kit: image-ocr conditionally fetches external URLs (url param).
   "image-ocr",
   // Skill packs (bundled execution endpoints) — premium + standard tiers
@@ -421,7 +420,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "skill-gas-optimizer", "skill-ssl-audit", "skill-email-security",
   "skill-brand-protection", "skill-competitor-scan", "skill-page-audit",
   // Light-tier packs that call wallet-only tools in-process:
-  "skill-trip-planner",       // calls weather-forecast (wallet-only)
+  "skill-trip-planner",       // calls place-lookup and weather-daily (wallet-only)
   "skill-user-onboarding",   // calls email-validate (wallet-only)
   "skill-weather-brief",     // calls weather-current/daily/air-quality (all wallet-only)
   "skill-price-monitor",     // calls stock-quote/history + crypto-price/history (all wallet-only — the exact tools buyers pay for)

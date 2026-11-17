@@ -23,6 +23,17 @@
 
 /** Tools: /api/<slug>. `replacement` is a live catalog slug or null. */
 export const RETIRED_TOOLS = Object.freeze({
+  // 2026-11-17: the three open-map geocoding tools. place-lookup resolves
+  // place names (not street addresses), geo-lookup reads a US county and
+  // state from coordinates; nothing live searches points of interest.
+  geocode: { retiredAt: "2026-11-17", replacement: "place-lookup" },
+  "reverse-geocode": { retiredAt: "2026-11-17", replacement: "geo-lookup" },
+  "place-search": { retiredAt: "2026-11-17", replacement: null },
+  // 2026-11-17: the three second-provider search tools; the first-party
+  // search, answer and extract tools serve the same questions.
+  "exa-search": { retiredAt: "2026-11-17", replacement: "search" },
+  "exa-answer": { retiredAt: "2026-11-17", replacement: "answer" },
+  "exa-contents": { retiredAt: "2026-11-17", replacement: "extract" },
   // 2026-09-24: the Polymarket tools. The nearest live question is a Kalshi
   // read; a Kalshi market is a different venue, so each names the closest tool.
   "polymarket-search": { retiredAt: "2026-09-24", replacement: "kalshi-markets" },

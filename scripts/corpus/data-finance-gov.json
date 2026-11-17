@@ -1,5 +1,5 @@
 {
-  "about": "Tier 1: EDGAR, Databento equities, openFDA, NHTSA, FEMA, USAspending, FEC, Census, USGS, Nominatim, Wikidata, GLEIF, Treasury, certificate transparency, B20.",
+  "about": "Tier 1: EDGAR, Databento equities, openFDA, NHTSA, FEMA, USAspending, FEC, Census, USGS, Wikidata, GLEIF, Treasury, certificate transparency, B20.",
   "cases": [
     {
       "slug": "college-lookup",
@@ -439,39 +439,6 @@
       }
     },
     {
-      "slug": "geocode",
-      "name": "a landmark",
-      "input": {
-        "q": "Big Ben, London",
-        "limit": 1
-      },
-      "expect": {
-        "equals": {
-          "count": 1
-        },
-        "populated": [
-          "results[0].lat",
-          "results[0].lon"
-        ]
-      }
-    },
-    {
-      "slug": "geocode",
-      "name": "nonsense is an honest zero",
-      "input": {
-        "q": "zzqx qqzx nowhere-at-all-9x",
-        "limit": 1
-      },
-      "expect": {
-        "equals": {
-          "count": 0
-        },
-        "empty": [
-          "results"
-        ]
-      }
-    },
-    {
       "slug": "github-repo",
       "name": "a big public repo",
       "input": {
@@ -602,23 +569,6 @@
         "equals": {
           "found": false
         }
-      }
-    },
-    {
-      "slug": "place-search",
-      "name": "bounded country search",
-      "input": {
-        "q": "central station",
-        "countryCodes": "nl",
-        "limit": 2
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "results[0]"
-        ]
       }
     },
     {

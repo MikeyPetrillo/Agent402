@@ -267,6 +267,10 @@ t node scripts/test-macro-dates.js
 t node scripts/test-flights-local-date.js
 # weather tools keep a missing precipitation value as null, never 0 mm (offline)
 t node scripts/test-weather-null-precip.js
+# Place lookup and the place input, ensemble probabilities, market brackets and board (caller-sent prices only), forecast windows and thresholds (offline, stubbed fetch)
+t node scripts/test-weather-probability.js
+# Weather calculators against published values: sun times, heat index and wind chill, EPA AQI breakpoints, degree days, WMO codes (offline, no fetch)
+t node scripts/test-weather-calc-kit.js
 # IPO filings list each accession once across pages (offline)
 t node scripts/test-ipo-dedupe.js
 # 13F amendments apply oldest first (offline)

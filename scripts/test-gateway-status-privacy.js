@@ -3,7 +3,7 @@
 // The rule was already written for the OpenRouter leg - "bucketed status,
 // numbers never exposed" - and the spend counters added later did not honour
 // it. Before this guard the unauthenticated response carried xDataSpend's
-// capUsd and spentUsd, exaSpend's daily cap, exaAllowance's funded and
+// capUsd and spentUsd, a second search provider's daily cap and funded and
 // remaining dollars, and upstreamBudgets' exact daily ceiling for SEVEN
 // vendors.
 //
@@ -26,7 +26,7 @@ const PORT = await getFreePort();
 const TOKEN = "privacy-test-operator-token-0123456789";
 const child = spawn(process.execPath, ["src/server.js"], {
   env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
-         AGENT402_OPERATOR_TOKEN: TOKEN, SOR_EVM_CHAINS: "", EXA_KEY: "k", EXA_CREDITS_USD: "10", X_BEARER_TOKEN: "t" },
+         AGENT402_OPERATOR_TOKEN: TOKEN, SOR_EVM_CHAINS: "", X_BEARER_TOKEN: "t" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 const base = `http://127.0.0.1:${PORT}`;
@@ -121,7 +121,7 @@ ok(!MONEY.test(JSON.stringify(pubBody)),
 ok(MONEY.test(JSON.stringify(opBody)), "the OPERATOR response still carries them - the figures are what you act on");
 
 // --- the verdict survives, or the alarm is useless -------------------------
-for (const k of ["xDataSpend", "exaSpend", "exaAllowance", "upstreamBudgets"]) {
+for (const k of ["xDataSpend", "upstreamBudgets"]) {
   ok(typeof pubBody?.[k]?.status === "string", `${k} still publishes its status word publicly`);
 }
 // Heartbeat reads only .status, so bucketing must not break paging.
@@ -140,7 +140,7 @@ ok(Object.keys(opBody?.upstreamHardCaps?.upstreams || {}).length > 0, "the OPERA
 ok(Object.keys(pubBody?.upstreamBudgets || {}).join(",") === "status", `upstreamBudgets publishes its word only (${JSON.stringify(pubBody?.upstreamBudgets)})`);
 ok(Object.keys(opBody?.upstreamBudgets?.upstreams || {}).length > 0 && Object.values(opBody.upstreamBudgets.upstreams).every((v) => typeof v.callsToday === "number"),
   "the OPERATOR view keeps the per-upstream rows with their counts");
-for (const k of ["exaAllowance", "exaSpend", "xDataSpend", "jevSpend"]) {
+for (const k of ["xDataSpend", "jevSpend"]) {
   ok(!("note" in (pubBody?.[k] || {})) && !("reason" in (pubBody?.[k] || {})), `${k} publishes no note or reason text (written for the operator, names the upstream)`);
 }
 

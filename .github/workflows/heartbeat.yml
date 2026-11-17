@@ -512,28 +512,6 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "upstreamHardCaps is ok; closing." || true
           fi
 
-      - name: Exa prepaid allowance low
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Exa publishes NO balance endpoint (42 endpoints in their public
-          # OpenAPI, none for credits), so this alarms on OUR OWN cumulative
-          # spend against EXA_CREDITS_USD. The count is in memory and resets on
-          # deploy, so it under-reports - which is why the threshold is a
-          # fraction remaining and not "near zero".
-          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.exaAllowance.status // "unknown"' 2>/dev/null || echo unknown)
-          TITLE="Exa prepaid allowance LOW"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
-          if [ "$STATUS" = "low" ]; then
-            if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.exaAllowance\` reports **low**: cumulative spend on that upstream has passed the configured share of its funded total. Top up in the upstream's console and raise \`EXA_CREDITS_USD\` on Railway to the new funded total. Note the counter is in memory and resets on deploy, so real remaining credit is at or below what is reported."
-            fi
-          elif [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "exaAllowance is ${STATUS}; closing." || true
-          fi
-
       # X data daily spend (src/tools/x-data-kit.js): over = past the alarm
       # ceiling and still serving; capped = the hard ceiling refuses, or
       # refused a call within the last hour. off is the switch and never pages.
@@ -1025,27 +1003,6 @@ jobs:
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "openMeteo is ${STATUS}; closing." || true
-          fi
-
-      # Exa daily spend (src/tools/exa-kit.js): the same words as xDataSpend.
-      # Apart from the prepaid allowance step above, which reads exaAllowance.
-      - name: Exa daily spend over its ceiling
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.exaSpend.status // "unknown"' 2>/dev/null || echo unknown)
-          echo "exa spend: $STATUS"
-          TITLE="Exa daily spend OVER its ceiling"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
-          if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
-            if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.exaSpend\` reports **over** or **capped**. On **over** the day's booked spend on the Exa tools passed \`EXA_DAILY_MAX_USD\` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past \`EXA_DAILY_HARD_MAX_USD\` was refused 503 (uncharged) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; \`exaAllowance\` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under \`EXA_DAILY_MAX_USD\`, otherwise the next UTC day."
-            fi
-          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "exaSpend is ${STATUS}; closing." || true
           fi
 
       # The router's per-minute holds for outside sellers
@@ -2021,7 +1978,7 @@ jobs:
           esac
 
       # Private upstream-cost table (src/upstream-costs.js). Without it the
-      # metered tier, embeddings, images, Exa and X reads refuse and the flat
+      # metered tier, embeddings, images and X reads refuse and the flat
       # tiers price at their caps. "partial" means it loaded without a key some
       # path reads (that path refuses) or with a model row that did not parse.
       # One word only, never a value. Two readings 30 s apart, because a

@@ -11,8 +11,8 @@
 // The terms behind each sentence: FRED API Terms of Use
 // (https://fred.stlouisfed.org/docs/api/terms_of_use.html, the notice the
 // macro kit's FRED routes carry); CoinGecko in src/tools/coingecko-rate.js;
-// Jupiter in src/tools/solana-intel-kit.js; OpenStreetMap in
-// src/tools/geo-kit.js; Open-Meteo in src/tools/weather-kit.js; NVD in
+// Jupiter in src/tools/solana-intel-kit.js; Open-Meteo and GeoNames in
+// src/tools/weather-kit.js; NVD in
 // src/tools/cve-kit.js; the ECB's reuse terms, which ask that the ECB be
 // cited as the source of its reference rates
 // (https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html),
@@ -31,13 +31,15 @@
 export const FRED_NOTICE ="This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.";
 export const COINGECKO_ATTRIBUTION = "Data provided by CoinGecko.";
 export const JUPITER_ATTRIBUTION = "Powered by Jupiter.";
-export const OSM_ATTRIBUTION = "Data © OpenStreetMap contributors, ODbL (openstreetmap.org/copyright).";
 export const OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0).";
 export const NVD_NOTICE = "This product uses the NVD API but is not endorsed or certified by the NVD.";
 export const ECB_ATTRIBUTION = "Source: European Central Bank.";
 export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
 export const CAMS_ATTRIBUTION = "Contains modified Copernicus Atmosphere Monitoring Service information (CAMS ENSEMBLE data provider).";
 export const C3S_ATTRIBUTION = "Contains modified Copernicus Climate Change Service information.";
+// GeoNames (CC BY 4.0, geonames.org: "give credit to GeoNames"), the place
+// data behind Open-Meteo's geocoding API (open-meteo.com/en/docs/geocoding-api).
+export const GEONAMES_ATTRIBUTION = "Place data from GeoNames (CC BY 4.0).";
 export const COPERNICUS_DISCLAIMER = "Neither the European Commission nor ECMWF is responsible for any use that may be made of the Copernicus information or data it contains.";
 /** The Copernicus credit an answer carries: its sentence, then the disclaimer. */
 export const CAMS_CREDIT = `${CAMS_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;
@@ -48,13 +50,13 @@ export const ATTRIBUTIONS = Object.freeze({
   fred: FRED_NOTICE,
   coingecko: COINGECKO_ATTRIBUTION,
   jupiter: JUPITER_ATTRIBUTION,
-  openstreetmap: OSM_ATTRIBUTION,
   "open-meteo": OPEN_METEO_ATTRIBUTION,
   nvd: NVD_NOTICE,
   ecb: ECB_ATTRIBUTION,
   "us-treasury": US_TREASURY_ATTRIBUTION,
   "open-meteo-cams": `${OPEN_METEO_ATTRIBUTION} ${CAMS_CREDIT}`,
   "open-meteo-c3s": `${OPEN_METEO_ATTRIBUTION} ${C3S_CREDIT}`,
+  geonames: GEONAMES_ATTRIBUTION,
 });
 
 /** Every sentence the listing cut keeps when a description ends with it. */

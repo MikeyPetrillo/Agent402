@@ -23,7 +23,7 @@ console.log(result);`,
     code: `// Search for tools matching a query - /api/find is free and
 // unpaywalled, so this skips the proof-of-work step entirely.
 const result = await callTool("find", {
-  q: "geocode"
+  q: "weather"
 }, { path: "/api/find", method: "GET", free: true });
 console.log(result);`,
   },

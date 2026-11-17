@@ -1,7 +1,7 @@
 // Tool response cache — Redis-backed, per-route, optional.
 //
 // Wraps the central handler dispatch in src/server.js so that for a known set
-// of "expensive upstream" tools (whois, dns, ip-info, geocode, fx, etc.) we
+// of "expensive upstream" tools (whois, dns, ip-info, place lookup, fx, etc.) we
 // can return a cached JSON body without hitting the third-party API again.
 //
 // Design notes:
@@ -100,11 +100,18 @@ export const CACHEABLE_ROUTES = {
   // http-check) or a route the server defines itself never belongs here.
   "/api/ens-resolve":    { ttl:  3600, keyFields: ["name"] },
 
-  // Geo — almost never changes.
-  // An answer from the backup geocoder (source photon...) is kept briefly.
-  "/api/geocode":         { ttl: 86400, keyFields: ["q", "limit", "countryCodes"], fallbackSource: "photon", fallbackTtl: 600 },
-  "/api/reverse-geocode": { ttl: 86400, keyFields: ["lat", "lon", "zoom"], fallbackSource: "photon", fallbackTtl: 600 },
-  "/api/place-search":    { ttl:  3600, keyFields: ["q", "limit", "countryCodes", "viewbox", "bounded"], fallbackSource: "photon", fallbackTtl: 600 },
+  // Places: almost never change.
+  "/api/place-lookup":    { ttl: 86400, keyFields: ["q", "count", "country", "language"] },
+
+  // Global weather (src/tools/weather-kit.js): a forecast is kept for ten
+  // minutes, the probability and planning answers for the same (the models
+  // run a few times a day). The key carries every input field, so lat/lon,
+  // place, units and limits each get their own entry.
+  "/api/weather-current":     { ttl: 600, keyFields: ["lat", "lon", "place", "units"] },
+  "/api/weather-daily":       { ttl: 600, keyFields: ["lat", "lon", "place", "days", "units"] },
+  "/api/weather-hourly":      { ttl: 600, keyFields: ["lat", "lon", "place", "hours", "units"] },
+  "/api/weather-air-quality": { ttl: 600, keyFields: ["lat", "lon", "place"] },
+  "/api/weather-probability": { ttl: 600, keyFields: ["lat", "lon", "place", "date", "variable", "units", "op", "value", "min", "max", "rounding"] },
 
   // Time-sensitive but coarsely cacheable.
   "/api/fx-rate":          { ttl:   300, keyFields: ["from", "to", "amount"] },

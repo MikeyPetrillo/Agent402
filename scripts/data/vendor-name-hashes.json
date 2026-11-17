@@ -41,13 +41,9 @@
   "8d3aa1a6f227d714692a": [
    "^apollo-people-search$::^description$"
   ],
-  "91ae68a817b9bc2b9b13": [
-   "^(geocode|reverse-geocode|place-search)$::^description$",
-   "^skill-(location-intel|trip-planner)$::^description$"
-  ],
   "955d3d03f58c01c26cbe": [
-   "^weather-(current|daily|hourly|history|air-quality)$::^description$",
-   "^skill-(weather-brief)$::^description$"
+   "^weather-(current|daily|hourly|history|air-quality|probability|market-brackets|market-board|window|thresholds)$::^description$",
+   "^skill-(weather-brief|location-intel|trip-planner)$::^description$"
   ],
   "f80f21938e5248ec70b8": [
    "^eas-attestations$::^description$",
