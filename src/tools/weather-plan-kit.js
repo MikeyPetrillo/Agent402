@@ -260,6 +260,7 @@ export const WEATHER_PLAN_TOOLS = [
       `Check the hourly forecast against your own rules: for each rule (a variable, a comparison, a value) get whether it is met in the next 1-168 hours, the first and last hour it is met, how many hours, and the highest or lowest value. Up to ${MAX_RULES} rules over temperature, feels-like, humidity, precipitation and its probability, snowfall, wind, gusts, cloud cover and UV, for example frost (temperature < 0) or gusts > 60. Any place by coordinates or name. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "forecast", "threshold", "frost", "wind", "alert"],
     discovery: {
+      bodyType: "json",
       input: { place: "Denver", hours: 72, rules: [{ variable: "temperature", op: "<", value: 0 }, { variable: "wind_gusts", op: ">", value: 60 }] },
       inputSchema: {
         properties: {

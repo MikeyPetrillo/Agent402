@@ -384,6 +384,7 @@ export const WEATHER_PROBABILITY_TOOLS = [
       `Forecast probability for every bracket of a weather market. Send the place, the date and your brackets (label, min, max and the market price you hold for each): each bracket comes back with the share of up to 82 members (ECMWF IFS and NOAA GEFS) that land in it, your price beside it as sent. You supply brackets and prices; this tool reads no market feed and gives facts only, no rating or recommendation. Raw model output, not station-calibrated. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "probability", "ensemble", "prediction-market", "brackets", "temperature"],
     discovery: {
+      bodyType: "json",
       input: {
         place: "New York", units: "fahrenheit", variable: "temperature_max", rounding: "integer",
         brackets: [
@@ -470,6 +471,7 @@ export const WEATHER_PROBABILITY_TOOLS = [
       `One date, many cities: per city, the ensemble spread of a daily weather value (up to 82 members, ECMWF IFS and NOAA GEFS) and the forecast probability of each bracket on a ladder. Default: 13 large US cities, or send up to ${MAX_BOARD_CITIES} by name or lat/lon, with your own brackets and the market prices you hold, shown beside each probability. This tool reads no market feed and gives facts only, no rating or recommendation. Raw model output, not station-calibrated. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "probability", "ensemble", "prediction-market", "cities", "temperature", "board"],
     discovery: {
+      bodyType: "json",
       // Three cities keep the published call light; with no `cities` the
       // board covers DEFAULT_BOARD_CITIES.
       input: {

@@ -406,6 +406,7 @@ export const WEATHER_CALC_TOOLS = [
       "Heating, cooling and growing degree days from a daily temperature series you supply: daily means, or min/max pairs (the mean is their midpoint). Heating and cooling use one base (default 18 °C or 65 °F); growing degree days use their own base (default 10 °C or 50 °F) and an optional upper cutoff applied to each day's min and max. Returns the totals and each day's values, for up to 400 days.",
     tags: ["degree-days", "hdd", "cdd", "gdd", "energy", "agriculture", "calculator"],
     discovery: {
+      bodyType: "json",
       input: { days: [{ min: 8, max: 19 }, { min: 12, max: 24 }, { min: 15, max: 29 }], base: 18, growingBase: 10 },
       inputSchema: {
         properties: {
