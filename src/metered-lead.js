@@ -4,7 +4,7 @@
 // SKILL.md, the MCP connector, the home page, the guides, the flat tiers' 402)
 // reads this module, so the wording and the figures cannot drift apart.
 // Prices and the default model are read from the tier table, never typed.
-import { TIERS, tierPriceLabel, isFlatTier, UPSTREAM_TIMEOUT_MS } from "./tools/llm-gateway-kit.js";
+import { TIERS, tierPriceLabel, isFlatTier, meteredClientTimeoutMs } from "./tools/llm-gateway-kit.js";
 import { MESSAGES_PATH_BY_TIER } from "./tools/llm-messages-kit.js";
 import { RESPONSES_PATH_BY_TIER } from "./tools/llm-responses-kit.js";
 import { GEMINI_PATH_BY_TIER } from "./tools/llm-gemini-kit.js";
@@ -36,7 +36,7 @@ export function meteredQuoteSentence() {
 /** Seconds a metered caller's client should wait: one upstream attempt's own
  *  bound plus room for the settlement and a retry on another link. */
 export function meteredClientTimeoutSeconds() {
-  return Math.ceil(UPSTREAM_TIMEOUT_MS / 1000) + 30;
+  return Math.ceil(meteredClientTimeoutMs() / 1000);
 }
 
 /** Why and how long to wait (2026-11-09: Solana metered buyers whose client

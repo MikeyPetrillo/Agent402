@@ -52,19 +52,21 @@ import { payerFromRequest, paymentHeaderOf } from "../payer.js";
 // module header) - refuses before any upstream call, arms the outcome listener.
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { clientGoneSignal } from "../drain-abort.js";
-import { heavyInput, ourKeyRefusedError } from "../upstream-deadline.js";
+import { heavyInput, ourKeyRefusedError, readUpstreamBody } from "../upstream-deadline.js";
 import { directUpstreamConfig, withDirectAttempts, directBodyFrom, directShareDraw, directCostUsd, stripVendorExtensions, noteDirectAb, noteDirectSkip, noteDirectAnomaly, failureBucket, directModelFor, directBreakerTake, directBreakerRelease, noteDirectOutcome, directHeavyOutput } from "../gateway-direct-upstream.js";
 import { directPriceDecision, noteDirectMeasure } from "../gateway-direct-pricebook.js";
 import { noteDirectSpend } from "../direct-upstream-spend.js";
 import { readBytesCapped, declaredLength, discardBody } from "../capped-body.js";
 import { clientGoneError } from "../hangup-settlement.js";
-import { evmCredentialSettleableMs } from "../evm-validity.js";
+import { evmCredentialSettleableMs, evmCredentialExpiry } from "../evm-validity.js";
+import { noteChatAttemptBound } from "../slow-paid-calls.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
 import { cacheGet, cacheSet } from "../cache.js";
 import { unknownModelVerdict, isListedModel, contextTokensOf, listedModelsWithContext, MAX_SUGGESTIONS } from "../model-catalog.js";
 import { stripControlChars } from "../prepayment-refusal.js";
 import { notChargedOn } from "../not-charged.js";
+import { envPositive } from "../env-num.js";
 import { routeHint, inReferralRun } from "../referral-run.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -3122,6 +3124,52 @@ export function createSseUsageScrubber({ onUsage, vendorKeys = false, modelAs } 
  */
 
 export const UPSTREAM_TIMEOUT_MS = 90_000;
+
+/** Seconds a metered caller's client is told to wait (src/metered-lead.js
+ *  prints it): one 90 s attempt plus room for the settlement and a retry. */
+export const meteredClientTimeoutMs = () => UPSTREAM_TIMEOUT_MS + 30_000;
+/** A longer buffered attempt still ends this long before the published client
+ *  timeout, so the answer and its settlement reach a client that waits as told. */
+export const CLIENT_SAFE_MARGIN_MS = 10_000;
+export const clientSafeAttemptMs = () => meteredClientTimeoutMs() - CLIENT_SAFE_MARGIN_MS;
+export const ATTEMPT_FIRST_TOKEN_MS = 10_000;
+export const ATTEMPT_TOKENS_PER_SEC = 30;
+/** LLM_ATTEMPT_MAX_MS: an operator cap that can only shorten an attempt. */
+export const attemptCapMs = () => envPositive("LLM_ATTEMPT_MAX_MS", Infinity);
+
+/** Whether this request's own x402 EVM authorization (EIP-3009 validBefore or
+ *  a Permit2 deadline, verified by the paywall) bounds the call, so an attempt
+ *  past 90 s still ends before the payment can no longer settle
+ *  (paymentWindowTimeoutMs cuts it to that window). Credits, Tempo, Stripe,
+ *  Solana, Stellar and Algorand carry none. */
+export function evmWindowBounds(req) {
+  return evmCredentialExpiry(paymentHeaderOf(req)) != null;
+}
+
+/** One buffered (non-stream) model attempt's own deadline. Under an EVM
+ *  payment window: 10 s plus `maxTokens` at 30 tokens a second (the tier's
+ *  default output cap when none is sent), never under 90 s
+ *  (UPSTREAM_TIMEOUT_MS) and never over clientSafeAttemptMs() (110 s, inside
+ *  the published 120 s client timeout). Any other rail keeps 90 s.
+ *  LLM_ATTEMPT_MAX_MS only lowers it. The payment window and the CDN proxy's
+ *  wait still shorten it (paymentWindowTimeoutMs). */
+export function bufferedAttemptMs(maxTokens, tier = null, req = null) {
+  let ms = UPSTREAM_TIMEOUT_MS;
+  if (evmWindowBounds(req)) {
+    const asked = Number(maxTokens);
+    const fallback = Number(tier?.defaultMaxTokens) > 0 ? Math.min(Number(tier.defaultMaxTokens), Number(tier.maxTokens) || Infinity) : Number(tier?.maxTokens) || 0;
+    const cap = Number.isFinite(asked) && asked > 0 ? asked : fallback;
+    const sized = ATTEMPT_FIRST_TOKEN_MS + Math.ceil((cap / ATTEMPT_TOKENS_PER_SEC) * 1000);
+    ms = Math.min(clientSafeAttemptMs(), Math.max(UPSTREAM_TIMEOUT_MS, sized));
+  }
+  ms = Math.round(Math.min(ms, attemptCapMs()));
+  // The paid-call alarm reads this call's own bound (src/slow-paid-calls.js).
+  noteChatAttemptBound(req, ms);
+  return ms;
+}
+
+export { readUpstreamBody };
+
 export async function fetchOpenRouter(body, { timeoutMs, signal, url = OPENROUTER_URL } = {}) {
   const key = OPENROUTER_KEY();
   if (!key) throw bad("LLM gateway not configured (OPENROUTER_API_KEY unset)", 503);
@@ -3235,7 +3283,7 @@ export function assertUpstreamBody(data, { model } = {}) {
 async function callOpenRouter(body, { timeoutMs, req = null } = {}) {
   const res = await fetchOpenRouter(body, { timeoutMs });
   if (!res.ok) await upstreamHttpError(res, body?.model);
-  const text = await res.text();
+  const text = await readUpstreamBody(res, { req });
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
   assertUpstreamBody(data, { model: body?.model });
@@ -3925,7 +3973,7 @@ async function embeddingsHandler(input, req) {
     throw bad(`Upstream request failed: ${e.message}`, 504);
   }
   if (!res.ok) await throwUpstreamError(res);
-  const text = await res.text();
+  const text = await readUpstreamBody(res, { req });
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
   assertUpstreamBody(data);
@@ -4033,7 +4081,7 @@ async function rerankHandler(input, req) {
     throw bad(`Upstream request failed: ${e.message}`, 504);
   }
   if (!res.ok) await throwUpstreamError(res);
-  const text = await res.text();
+  const text = await readUpstreamBody(res, { req });
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
   assertUpstreamBody(data);
@@ -4334,7 +4382,7 @@ async function speechHandler(input, req) {
         throw err;
       }
       if (!res.ok) await throwUpstreamError(res);
-      const buffer = Buffer.from(await res.arrayBuffer());
+      const buffer = await readUpstreamBody(res, { req, as: "bytes" });
       if (buffer.length === 0) throw bad("Upstream returned no audio - retry, or rephrase the input", 502);
       // Speech bills per input character at the served link's private rate
       // (the wire reports no cost); the same meter and margin event as the
@@ -4657,7 +4705,9 @@ function makeHandler(routeTier) {
       const directBody = directPlan ? directPlan.body : null;
       const abListed = !!directModelFor(model, directCfg);
       const abLabel = directBody ? "direct" : "openrouter";
-      const timeoutMs = attemptTimeoutMs(directPlan, UPSTREAM_TIMEOUT_MS);
+      // This attempt's own deadline, sized to the output cap it was sent with.
+      const ownMs = bufferedAttemptMs(outbound.max_tokens ?? outbound.max_completion_tokens, TIERS[tierSlug], req);
+      const timeoutMs = attemptTimeoutMs(directPlan, ownMs);
       const attemptStarted = Date.now();
       try {
         // usage.include once asked OpenRouter for the exact upstream bill;
@@ -4679,7 +4729,7 @@ function makeHandler(routeTier) {
         if (!directBody && isEmptyLength(data)) {
           const plan = lowestEffortRetry(outbound.reasoning, body.reasoning, model);
           const again = await retryEmptyAtLowestEffort({
-            once: recovery, plan, req, timeouts,
+            once: recovery, plan, req, timeouts, defaultMs: ownMs,
             affordable: () => recoveryRunAffordable(outbound[LINK_PROBE], TIERS[tierSlug], imageCount, data?.usage?.cost, req?.__meteredQuoteUsd, discardedUsd),
             run: (p, ms) => retryRateLimited(() => callOpenRouter({ ...outbound, reasoning: p.reasoning, usage: { include: true } }, { timeoutMs: ms, req }), { delays: rateLimitDelaysFor(flex) }),
             usable: (d) => !isEmptyLength(d) && !isEmptyRefusal(d),
@@ -4772,7 +4822,7 @@ function makeHandler(routeTier) {
         return data;
       } catch (e) {
         if (abListed) noteDirectAb(abLabel, { ok: false, reason: failureBucket(e) });
-        if (directBody) noteDirectOutcome(false, failureBucket(e), undefined, directOpts(model, timeoutMs, directBody, UPSTREAM_TIMEOUT_MS));
+        if (directBody) noteDirectOutcome(false, failureBucket(e), undefined, directOpts(model, timeoutMs, directBody, ownMs));
         if (![502, 503, 504].includes(e?.statusCode)) throw e;
         if (!directBody || !lastErr) lastErr = e;
         // Not counted for a direct attempt (see the stream walk above).

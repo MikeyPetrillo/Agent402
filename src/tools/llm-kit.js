@@ -18,7 +18,7 @@
 
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
-import { ourKeyRefusedError } from "../upstream-deadline.js";
+import { ourKeyRefusedError, readUpstreamBody } from "../upstream-deadline.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
@@ -288,7 +288,7 @@ async function callOpenAI(model, messages, maxTokens, responseFormat, opts, tier
     throw bad(`OpenAI request failed: ${e.message}`, 504);
   }
 
-  const text = await res.text();
+  const text = await readUpstreamBody(res);
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) throw ourKeyRefusedError("Text generation", res.status);
     if (res.status === 429) throw bad("OpenAI rate-limited - retry shortly", 503);

@@ -36,7 +36,7 @@
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
-import { ourKeyRefusedError } from "../upstream-deadline.js";
+import { ourKeyRefusedError, readUpstreamBody } from "../upstream-deadline.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
@@ -207,7 +207,7 @@ async function callOpenAI(prompt, size, tierSlug, moderation = DEFAULT_MODERATIO
   if (skipsModeration(tier.model)) { delete body.moderation; sentLevel = "auto"; fellBack = true; }
 
   let res = await postImages(key, body, tier.timeoutMs);
-  let text = await res.text();
+  let text = await readUpstreamBody(res);
   if (res.status === 400 && "moderation" in body) {
     const first = parseError(text);
     if (isModerationParamError(res.status, first.error)) {
@@ -222,14 +222,14 @@ async function callOpenAI(prompt, size, tierSlug, moderation = DEFAULT_MODERATIO
       sentLevel = "auto";
       fellBack = true;
       res = await postImages(key, body, tier.timeoutMs);
-      text = await res.text();
+      text = await readUpstreamBody(res);
     }
   }
   if (res.status === 400 && "complexity" in body && isParamError(res.status, parseError(text).error, "complexity")) {
     // Once: a model that does not take the planning level renders without it.
     delete body.complexity;
     res = await postImages(key, body, tier.timeoutMs);
-    text = await res.text();
+    text = await readUpstreamBody(res);
   }
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) throw ourKeyRefusedError("Image generation", res.status);
