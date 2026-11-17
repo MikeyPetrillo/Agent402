@@ -51,6 +51,10 @@ agent402-tollbooth - live pay-per-crawl demo
 npm install agent402-tollbooth
 ```
 
+TypeScript declarations ship with the package (since 0.12.0): `index.d.ts` for
+`agent402-tollbooth` (`createTollbooth`, `TollboothConfig`, the stores and sinks)
+and `edge.d.ts` for `agent402-tollbooth/edge`.
+
 ## Use it as Express middleware
 
 ```js

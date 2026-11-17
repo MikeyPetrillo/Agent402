@@ -34,6 +34,11 @@ const out = await a.call("hash", { text: "hello world", algo: "sha256" });
 console.log(out.hex);
 ```
 
+The proof-of-work is solved on a worker thread, so your process keeps serving
+while it searches, and a challenge asking for more than 28 bits
+(`MAX_POW_DIFFICULTY`, the most an Agent402 server asks) is refused rather than
+searched (since 0.9.0).
+
 ## Paid tools: x402 or MPP, your choice of wire
 
 Wallet-only tools settle in USDC. The SDK never touches your key: pass a
@@ -123,7 +128,12 @@ const out = await a.call("extract", { url: "https://agent402.tools/guides/x402-i
 `signer` is any EIP-712 signer with `address` and `signTypedData` (a viem
 account). `gateway.networks` (chain names, as `withNetworkPreference` takes, for
 example `["arc"]`) limits which chains' batched accepts are signed; the default
-is any EVM chain the 402 offers one on. The caps are checked against the
+is any EVM chain the 402 offers one on. The accept's `verifyingContract` must be
+the chain's own GatewayWallet contract (`GATEWAY_VERIFYING_CONTRACTS`: Circle's
+published address on each mainnet and testnet Gateway serves); a batched accept
+naming another contract, or on a chain the table does not list, is never signed
+(since 0.9.0), and `gateway.verifyingContracts` (`{ "eip155:<chainId>": "0x..." }`)
+adds or replaces entries. The caps are checked against the
 accept's own amount before anything is signed. A 402 with no batched accept this
 signer may pay (another seller, an identity-bound route, a route with a lasting
 effect) falls back to your payment `fetch` or `creditsKey` exactly as without the
@@ -136,7 +146,7 @@ batched authorization that was sent and refused stays valid until its
 `validBefore` and keeps counting against the caps; only a signer that throws
 before anything is sent releases the amount. The mechanism in full: [wiki: Circle Gateway](https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway).
 Two helpers are exported for a client of your own: `gatewayAcceptOf(accepts,
-networks?)` and `signGatewayPayment(accept, { signer, resource })`.
+networks?, verifyingContracts?)` and `signGatewayPayment(accept, { signer, resource, verifyingContracts? })`.
 
 ## Retries and double charges
 
@@ -276,19 +286,34 @@ delivered and settled. Pass `respondAsync: false` (constructor or call) to wait
 on the connection instead, or `respondAsync: true` to use a job on every route
 that runs as one.
 
+## Timeouts
+
+Each request the SDK sends is abandoned after `timeoutMs` (default 120000, the
+client timeout Agent402 publishes for metered calls, so the client never hangs
+up before the server's own deadline) with `RequestTimeoutError`. A paid request
+that times out may already have carried a payment, so its error reads
+`paid: "unknown"` and the amount is held against the caps like any other sent
+payment. Pass `timeoutMs: null` to wait as long as the connection stays open, or
+`call(slug, params, { timeoutMs })` for one call.
+
+## TypeScript
+
+`index.d.ts` ships with the package (`"types"` in package.json) and declares the
+whole API: `Agent402Options`, `CallOptions`, the error classes and the helpers.
+
 ## API
 
 | Method | What |
 |---|---|
-| `new Agent402({ baseUrl?, fetch?, x402Client?, creditsKey?, gateway?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, payNetworks?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, userAgent? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `x402Client` is the `@x402/core` client that `fetch` wraps, so the caps are enforced on the payment that is signed (see below); `payNetworks` (for example `["base"]`, the names `withNetworkPreference` takes) tells the caps which chains a pre-wrapped `fetch` without an `x402Client` pays on, so a call is counted at the dearest option on those chains (when none of a 402's options is on them, the dearest of all counts); `creditsKey` is a prepaid credits key (`a402_...`) used for paid tools when no `fetch` is given; `gateway` (`{ signer, networks? }`) pays the Circle Gateway batched accept where a 402 offers one, from the signer's Gateway deposit (see above); `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above); `userAgent` (`"name/version"`) is a calling package's own product token, sent before `agent402-client/<version>` in the User-Agent |
+| `new Agent402({ baseUrl?, fetch?, x402Client?, creditsKey?, gateway?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, payNetworks?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, userAgent?, timeoutMs? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `x402Client` is the `@x402/core` client that `fetch` wraps, so the caps are enforced on the payment that is signed (see below); `payNetworks` (for example `["base"]`, the names `withNetworkPreference` takes) tells the caps which chains a pre-wrapped `fetch` without an `x402Client` pays on, so a call is counted at the dearest option on those chains (when none of a 402's options is on them, the dearest of all counts); `creditsKey` is a prepaid credits key (`a402_...`) used for paid tools when no `fetch` is given; `gateway` (`{ signer, networks?, verifyingContracts? }`) pays the Circle Gateway batched accept where a 402 offers one, from the signer's Gateway deposit (see above); `cache` (default `true`) memoizes deterministic results; the three USD caps set spending limits, `maxPerCallUsd` ($4) and `dailyLimitUsd` ($25) on by default (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above); `userAgent` (`"name/version"`) is a calling package's own product token, sent before `agent402-client/<version>` in the User-Agent; `timeoutMs` (default 120000, `null` to wait without one) abandons a request that has not answered with `RequestTimeoutError` |
 | `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools on **this host** (route, price, schema, example) |
 | `await a.route(task, { k?, include?, network? })` | Cross-seller Smart Order Router: rank eligible/routable seller rows from the host's current index (free, read-only; opaque results may include server-reported `executeVia`) |
 | `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |
 | `await a.getWorkflowPrompt(slug, args)` | Fetch the rendered prompt messages for a skill pack with arguments substituted in |
 | `await a.topSellers({ limit?, sort?, include? })` | Live x402 leaderboard: which sellers are settling the most USDC (primarily on Base) in the last ~24h (free, no payment) |
-| `await a.call(slug, params, { idempotencyKey?, cache?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress? })` | Call a tool; auto-pays (PoW for free tools; your payment `fetch` or the credits key for wallet-only); a slow route runs as a job and is collected for you; returns the JSON result |
+| `await a.call(slug, params, { idempotencyKey?, cache?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, maxUsd?, timeoutMs? })` | Call a tool; auto-pays (PoW for free tools; your payment `fetch` or the credits key for wallet-only); a slow route runs as a job and is collected for you; returns the JSON result. `maxUsd` allows this call to pay up to that amount (see Spending caps); `timeoutMs` replaces the client's for this call |
 | `await a.collectJob(jobUrl, { timeoutMs?, onProgress? })` | Collect a job link (from `AsyncJobPendingError.jobUrl`) until it has the answer |
-| `Agent402.solvePow(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value |
+| `Agent402.solvePow(pow)` / `await Agent402.solvePowAsync(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value, on the calling thread or on a worker thread; a difficulty above 28 bits is refused |
 | `a.guardX402Client(client)` | Enforce this client's caps on every payment the given `@x402/core` client signs (the same as passing `x402Client`); returns the client |
 | `a.spendingSummary()` | Rolling-24h paid spend so far: `{ dailyUsd, calls, byHost, heldUsd, heldCalls, heldByHost, limits }`; `dailyUsd`, `calls` and `byHost` are settled calls, the `held*` fields are payments sent without a delivered answer |
 | `a.clearCache()` | Drop the in-memory result cache |
@@ -365,9 +390,17 @@ Keep it cheap, or accept that cost knowingly.
 
 ## Spending caps (never overpay)
 
-By default the client pays whatever a tool costs. Set optional hard ceilings and a
-call that would exceed one is **refused before any payment is signed** (it throws
-`SpendingLimitError` - no funds move):
+A paid call that would exceed a ceiling is **refused before any payment is
+signed** (it throws `SpendingLimitError` - no funds move). Two ceilings are on by
+default (since 0.9.0): `maxPerCallUsd` at $4 (`DEFAULT_MAX_PER_CALL_USD`, above
+every list price in the Agent402 catalog) and `dailyLimitUsd` at $25
+(`DEFAULT_DAILY_LIMIT_USD`). Set your own numbers, pass `null` to turn one off,
+or allow one call by name with `a.call(slug, params, { maxUsd })`: that amount
+replaces the per-call cap for the call, and the default daily cap does not apply
+to it (a `dailyLimitUsd` or `maxPerHostUsd` you set yourself still does). Under
+any cap, each payment is priced from the known-asset table, so a seller that
+asks for an asset the table does not know is refused; construct with
+`{ maxPerCallUsd: null, dailyLimitUsd: null }` to pay one.
 
 ```js
 import { Agent402, SpendingLimitError } from "agent402-client";
