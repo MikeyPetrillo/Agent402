@@ -7208,6 +7208,8 @@ app.post("/__operator/seller-funding", express.json(), async (req, res) => {
 app.post("/__operator/sellers/remove", express.json(), (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
+  // A preview typed as "true" or 1 must not remove: only a JSON boolean is read.
+  if (req.body && "dryRun" in req.body && typeof req.body.dryRun !== "boolean") return res.status(400).json({ error: "dryRun must be true or false (a JSON boolean); nothing was removed" });
   if (req.body?.dryRun === true) {
     const p = removalPreview(req.body?.origin);
     if (p.error) return res.status(400).json({ error: p.error });

@@ -219,6 +219,13 @@ try {
   j = await (await fetch(`${base}/__operator/sellers/removed.json`, { headers: auth })).json();
   ok(j.total === 0, "remove dryRun: nothing removed");
   ok((await post("/__operator/sellers/remove", { origin: "Acme", dryRun: true }, auth)).status === 400, "remove dryRun: name-like input 400");
+  for (const dryRun of ["true", 1]) {
+    res = await post("/__operator/sellers/remove", { origin: B, dryRun }, auth);
+    j = await res.json();
+    ok(res.status === 400 && /dryRun/.test(j.error || ""), `remove dryRun ${JSON.stringify(dryRun)}: 400 naming the field (${res.status})`);
+  }
+  j = await (await fetch(`${base}/__operator/sellers/removed.json`, { headers: auth })).json();
+  ok(j.total === 0, "a non-boolean dryRun removes nothing");
   res = await post("/__operator/sellers/remove", { origin: B, note: "n" }, auth);
   j = await res.json();
   ok(res.status === 200 && j.removed === true && j.origin === B && j.removedAt > 0, "remove: 200 with the token");
