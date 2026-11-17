@@ -103,9 +103,7 @@ export function atomicContext(obj) {
   // sentence. An asset field carrying a real identifier still states base
   // units, which is what an x402 accept carries and what every case this
   // machinery was built for looks like.
-  // A token identifier in `currency` states base units too: an OpenAPI price
-  // of { currency: <USDC contract>, amount: "10000" } is $0.01, not $10,000.
-  if (looksLikeAssetIdentifier(obj.asset) || looksLikeAssetIdentifier(obj.currency)) return true;
+  // CLEANROOM 48: implement per spec 48
   return typeof obj.currency === "string" && !!obj.currency.trim()
     && (typeof obj.method === "string" || typeof obj.intent === "string");
 }

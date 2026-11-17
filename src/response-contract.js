@@ -102,56 +102,7 @@ function jsonSchemaOf(variant) {
   return isRecord(entry?.schema) ? entry.schema : null;
 }
 
-/**
- * Report what a seller's OpenAPI operation guarantees on success.
- *
- * @returns {{state:"declared"|"partial"|"absent", source:"seller_openapi",
- *            successVariants:number, jsonSchemas:number,
- *            guaranteedPaths:string[], runtimeVerified:false}}
- */
-export function responseContractOf(operation) {
-  const empty = {
-    state: "absent", source: "seller_openapi",
-    successVariants: 0, jsonSchemas: 0, guaranteedPaths: [], runtimeVerified: false,
-  };
-  if (!isRecord(operation) || !isRecord(operation.responses)) return empty;
-
-  // EXPLICIT 2xx only. `default` is a catch-all the seller wrote for everything
-  // including errors; treating it as a success guarantee would manufacture one.
-  // OpenAPI's `2XX` range is also an explicit success declaration. Ignoring it
-  // would let a narrower numeric response speak for statuses the range covers.
-  const allCodes = Object.keys(operation.responses)
-    .filter((c) => /^(?:2\d\d|2XX)$/.test(c))
-    .sort();
-  const codes = allCodes.slice(0, MAX_VARIANTS);
-  if (!codes.length) return empty;
-
-  let jsonSchemas = 0;
-  let intersection = null;
-  // A capped walk is not complete evidence. Refuse guarantees exactly as the
-  // depth and breadth bounds do, while retaining the seller's truthful count.
-  let everyVariantAdmissible = allCodes.length <= MAX_VARIANTS;
-
-  for (const code of codes) {
-    const schema = jsonSchemaOf(operation.responses[code]);
-    if (!schema || hasUnsupported(schema)) { everyVariantAdmissible = false; continue; }
-    jsonSchemas++;
-    const walk = requiredPaths(schema);
-    if (walk.truncated) { everyVariantAdmissible = false; continue; }
-    const paths = new Set(walk.paths);
-    intersection = intersection === null ? paths : new Set([...intersection].filter((p) => paths.has(p)));
-  }
-
-  const guaranteedPaths = everyVariantAdmissible && intersection ? [...intersection].sort() : [];
-  const state = jsonSchemas === 0 ? "absent"
-    : everyVariantAdmissible && guaranteedPaths.length ? "declared"
-    : "partial";
-  return {
-    state, source: "seller_openapi",
-    successVariants: allCodes.length, jsonSchemas,
-    guaranteedPaths, runtimeVerified: false,
-  };
-}
+// CLEANROOM 51: implement per spec 51
 
 /** Compact tuple for the crawl cache. The public object repeats a constant
  *  source string and a constant false on every row; a cache holding tens of
@@ -164,15 +115,7 @@ export function packResponseContract(c) {
 /** Rehydrate for a public projection. Anything unrecognised reads as absent
  *  rather than throwing: a stale cache entry must not break a listing. */
 export function unpackResponseContract(t) {
-  let descriptor;
-  try {
-    descriptor = t && typeof t === "object"
-      ? Object.getOwnPropertyDescriptor(t, "responseContract")
-      : undefined;
-  } catch {
-    return null;
-  }
-  const v = descriptor && "value" in descriptor ? descriptor.value : undefined;
+  // CLEANROOM 50: implement per spec 50
   if (!Array.isArray(v) || v.length !== 4) return null;
   const [state, successVariants, jsonSchemas, guaranteedPaths] = v;
   if (state !== "declared" && state !== "partial") return null;

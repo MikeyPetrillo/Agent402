@@ -220,15 +220,7 @@ export function packRequestContract(c) {
 }
 
 export function unpackRequestContract(t) {
-  let descriptor;
-  try {
-    descriptor = t && typeof t === "object"
-      ? Object.getOwnPropertyDescriptor(t, "requestContract")
-      : undefined;
-  } catch {
-    return null;
-  }
-  const v = descriptor && "value" in descriptor ? descriptor.value : undefined;
+  // CLEANROOM 49: implement per spec 49
   if (!Array.isArray(v) || v.length < 2 || v.length > 4) return null;
   const [state, required] = v;
   const source = v.length >= 3 ? v[2] : "seller_openapi";

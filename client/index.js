@@ -209,9 +209,7 @@ export class Agent402 {
    *        by default. A 402 with no batched accept falls back to `fetch` or `creditsKey`.
    * @param {number|null} [opts.maxResponseBytes=33554432]
    *        Hard ceiling on a response body, enforced BEFORE it is parsed. null disables it.
-   * @param {{id:string, validate:function}} [opts.outputValidator]
-   *        Optional buyer-owned result validator. `id` namespaces cache entries;
-   *        `validate` may return false or throw to reject delivery.
+   // CLEANROOM 75: implement per spec 75
    * @param {"auto"|boolean} [opts.respondAsync="auto"]
    *        Slow paid routes (the catalog's `async.recommended`): "auto" sends the
    *        paid call with Prefer: respond-async and polls the job link until the
@@ -284,9 +282,7 @@ export class Agent402 {
       : null;
     // A response-size ceiling, enforced before parsing. See _readJson.
     this.maxResponseBytes = maxResponseBytes === null ? null : (numOrNull(maxResponseBytes) ?? DEFAULT_MAX_RESPONSE_BYTES);
-    // Buyer-owned delivery policy. The callback stays entirely local and may
-    // use Ajv, Zod, agent-payment-policy, or ordinary application code.
-    this.outputValidator = normalizeOutputValidator(outputValidator, "constructor");
+    // CLEANROOM 76: implement per spec 76
   }
 
   /**
@@ -448,35 +444,7 @@ export class Agent402 {
     return (await r.json()).results || [];
   }
 
-  /**
-   * Cross-seller Smart Order Router - rank tools across eligible/routable seller
-   * rows in the host's current index (local catalog plus crawled x402/MPP sellers
-   * the router considers healthy enough to route). Free; no payment, no wallet, no
-   * proof-of-work. Coverage is whatever the host's index holds at call time, not
-   * every seller on the internet.
-   *
-   * Returns the server JSON as-is (reporting only - no validation or authorization).
-   * Each result may carry server-reported `executeVia` naming a `route-execute*`
-   * tier whose underlying cap covers that row's price. `call(executeVia.tool, ...)`
-   * re-resolves an eligible match under that tier at execution time; it does not
-   * bind the discovery row's url, route, seller, or identity.
-   *
-   * @param {string} task
-   * @param {object} [opts]
-   * @param {number} [opts.k=5]                         max results (1-25, server-bounded)
-   * @param {"all"|"external"|"local"} [opts.include="all"]
-   * @param {string} [opts.network]                       chain filter (e.g. "robinhood", "eip155:4663")
-   * @returns {Promise<{query:string, include:string, count:number, sellers:number, results:Array<object>}>}
-   */
-  async route(task, { k = 5, include = "all", network } = {}) {
-    const top = Math.min(Math.max(parseInt(k, 10) || 5, 1), 25);
-    const includeParam = include === "external" || include === "local" ? include : "all";
-    const qs = new URLSearchParams({ q: String(task ?? ""), k: String(top), include: includeParam });
-    if (network) qs.set("network", String(network));
-    const r = await this._discoveryGet("route", `/api/route?${qs}`);
-    return r.json();
-  }
-
+  // CLEANROOM 77: implement per spec 77
   /**
    * Resolve a task to matching multi-tool workflow templates (skill packs).
    * Each pack composes 5-7 catalog tools into a Claude-ready task template
@@ -564,29 +532,12 @@ export class Agent402 {
    * wallet-only) and returns the parsed JSON result.
    */
   async call(slug, params = {}, { idempotencyKey, cache = true, maxResponseBytes, outputValidator, respondAsync, asyncTimeoutMs, onProgress } = {}) {
-    // Resolve and validate the buyer-owned contract before catalog fetch,
-    // credential access, payment preflight, or any other network action.
-    const validator = outputValidator == null
-      ? this.outputValidator
-      : normalizeOutputValidator(outputValidator, "call");
+    // CLEANROOM 78: implement per spec 78
     const cat = await this._loadCatalog();
     const tool = cat.get(slug);
     if (!tool) throw new Error(`unknown tool "${slug}" - use client.find(task) to discover one`);
 
-    const cacheKey = resultCacheKey(slug, params, validator);
-    if (this._cache && cache && this._cache.has(cacheKey)) {
-      const stored = this._cache.get(cacheKey);
-      // Callers receive the stored object by reference and may mutate it.
-      // Revalidate contracted hits so a now-invalid object cannot pass merely
-      // because it was valid before the caller changed it.
-      try {
-        await this._assertOutput(slug, stored, validator, { paid: false, cacheHit: true });
-      } catch (error) {
-        this._cache.delete(cacheKey);
-        throw error;
-      }
-      return stored;
-    }
+    // CLEANROOM 79: implement per spec 79
 
     // Default key = stable per (client instance, slug, params, validator) while
     // caching is on: the SDK already treats that tuple as one operation (a
@@ -667,21 +618,15 @@ export class Agent402 {
         const reservation = this._spendReserve(host, usd, slug, listUsd, { always: guarded });
         const ctx = { reservation, signedUsd: null, refusal: null, sent: [] };
         const sentPayment = () => !guarded || ctx.sent.length > 0;
-        let settled = false;
+        // CLEANROOM 80: implement per spec 80
         try {
           const r = await collect(await this._signCtx.run(ctx, () => paidSend(asyncHeaders, this.payFetch)));
           if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
           if (!sentPayment()) this._spendRelease(reservation);
           else this._spendHold(reservation, guarded ? ctx.sent : null, { settleLast: true });
-          settled = true;
-          return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
+          // CLEANROOM 80: implement per spec 80
         } catch (e) {
-          // An invalid or oversized paid HTTP-success body is failed delivery,
-          // not a rollback of money that already moved. Any other failure once
-          // a payment header was sent (an error status, a dropped connection,
-          // a redirect, a job still running) leaves an authorization the seller
-          // can still redeem, so its signed amount is held, not released. Only
-          // a call that sent no payment releases its reservation.
+          // CLEANROOM 80: implement per spec 80
           if (!settled) {
             if (sentPayment()) markOutcomeUnknown(e, slug, this._spendHold(reservation, guarded ? ctx.sent : null, { ownHost: this._unsettledAnswer(e) }), { seen: guarded });
             else this._spendRelease(reservation);
@@ -712,7 +657,7 @@ export class Agent402 {
         const listUsd = parseUsd(tool.price);
         const usd = await this._quotedUsd(paidSend, listUsd, { slug, mode: "credits" });
         const reservation = this._spendReserve(host, usd, slug, listUsd);
-        let settled = false;
+        // CLEANROOM 80: implement per spec 80
         try {
           const r = await collect(await paidSend({ Authorization: `Bearer ${this.creditsKey}`, ...asyncHeaders }));
           if (r.status === 402) {
@@ -721,8 +666,7 @@ export class Agent402 {
           }
           if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
           this._spendSettle(reservation);
-          settled = true;
-          return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
+          // CLEANROOM 80: implement per spec 80
         } catch (e) {
           // A job still running may yet be debited, so its amount is held.
           if (e instanceof AsyncJobPendingError) markOutcomeUnknown(e, slug, this._spendHold(reservation));
@@ -731,7 +675,7 @@ export class Agent402 {
         }
       }
       const r = await send(); // no wallet - succeeds only on a FREE_MODE instance
-      if (r.ok) return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
+      // CLEANROOM 80: implement per spec 80
       throw this._fail(slug, r, `call "${slug}" failed: HTTP ${r.status} - wallet-only tool; construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch) or { creditsKey } (a prepaid credits key; routes that buy from an outside seller need a wallet)`);
     }
 
@@ -744,7 +688,7 @@ export class Agent402 {
       r = await send({ "X-Pow-Solution": Agent402.solvePow(chal) });
     }
     if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r, " after proof-of-work"));
-    return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
+    // CLEANROOM 80: implement per spec 80
   }
 
   /**
@@ -832,30 +776,10 @@ export class Agent402 {
       throw e;
     }
     this._spendSettle(reservation);
-    return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
+    // CLEANROOM 80: implement per spec 80
   }
 
-  async _assertOutput(slug, body, validator, { paid = false, cacheHit = false } = {}) {
-    if (!validator) return body;
-    try {
-      // BOUNDED. The validator is caller-owned code we await inside call(), so
-      // one that never settles hangs the buyer's call forever - and on a paid
-      // route the money has already moved by the time it runs, which makes an
-      // indefinite hang the worst possible place to have one. A timeout is a
-      // REJECTION, not a pass: an unfinished contract has not been satisfied.
-      const result = await withValidatorTimeout(validator.validate(body), validator.timeoutMs ?? OUTPUT_VALIDATOR_TIMEOUT_MS, validator.id);
-      if (result === false) throw new Error("validator returned false");
-      return body;
-    } catch (cause) {
-      throw new OutputValidationError(`output for "${slug}" failed buyer validator "${validator.id}"${paid ? "; this call WAS paid" : ""}`,
-        { slug, contractId: validator.id, paid, cacheHit, cause });
-    }
-  }
-
-  async _deliverResponse(slug, response, cacheKey, cache, validator, { maxResponseBytes, paid } = {}) {
-    const body = await this._readJson(response, { maxBytes: maxResponseBytes, slug, paid });
-    await this._assertOutput(slug, body, validator, { paid });
-    return this._store(cacheKey, body, cache);
+  // CLEANROOM 81: implement per spec 81
   }
 
   async _powChallenge(slug) {
@@ -1117,16 +1041,7 @@ export class ResponseTooLargeError extends Error {
   }
 }
 
-/** A buyer-owned validator rejected the delivered body. `paid` records whether
- * this invocation had already settled before validation ran. */
-export class OutputValidationError extends Error {
-  constructor(message, { slug, contractId, paid, cacheHit, cause } = {}) {
-    super(message, cause === undefined ? undefined : { cause });
-    this.name = "OutputValidationError";
-    Object.assign(this, { slug, contractId, paid: Boolean(paid), cacheHit: Boolean(cacheHit) });
-  }
-}
-
+// CLEANROOM 82: implement per spec 82
 export class SpendingLimitError extends Error {
   constructor(message, details = {}) {
     super(message);
@@ -1290,56 +1205,7 @@ function parseUsd(price) {
 }
 function hostOf(url) { try { return new URL(url).host; } catch { return String(url); } }
 
-const OUTPUT_VALIDATOR_ID_MAX_CHARS = 256;
-// How long a buyer-owned validator may take before delivery is refused.
-const OUTPUT_VALIDATOR_TIMEOUT_MS = 5_000;
-
-function normalizeOutputValidator(value, where) {
-  if (value == null) return null;
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(`${where} outputValidator must be null or { id, validate }`);
-  }
-  const id = value.id;
-  if (typeof id !== "string" || id.trim() !== id || id.length < 1 || id.length > OUTPUT_VALIDATOR_ID_MAX_CHARS) {
-    throw new TypeError(`${where} outputValidator.id must be a nonempty trimmed string of at most ${OUTPUT_VALIDATOR_ID_MAX_CHARS} characters`);
-  }
-  if (typeof value.validate !== "function") {
-    throw new TypeError(`${where} outputValidator.validate must be a function`);
-  }
-  // Opt-in per-validator override; anything unusable falls back to the default
-  // rather than silently disabling the bound.
-  const t = Number(value.timeoutMs);
-  const timeoutMs = Number.isFinite(t) && t > 0 ? t : OUTPUT_VALIDATOR_TIMEOUT_MS;
-  return Object.freeze({ id, validate: value.validate, timeoutMs });
-}
-
-/** Reject if the caller's validator has not settled in `ms`. The timer is
- *  cleared on both paths so a fast validator leaves nothing pending (an
- *  un-cleared timer would hold the event loop open on a short-lived script). */
-function withValidatorTimeout(promise, ms, id) {
-  let timer;
-  return Promise.race([
-    Promise.resolve(promise),
-    new Promise((_, reject) => {
-      // NOT unref'd: an unref'd timer lets a short-lived script exit before the
-      // rejection fires, so the buyer gets a silent process exit instead of an
-      // OutputValidationError - which is the failure this bound exists to
-      // prevent. clearTimeout in finally() is what stops it lingering.
-      timer = setTimeout(() => reject(new Error(`validator ${JSON.stringify(id)} did not settle within ${ms}ms`)), ms);
-    }),
-  ]).finally(() => clearTimeout(timer));
-}
-
-function resultCacheKey(slug, params, validator) {
-  const requestKey = `${slug}:${JSON.stringify(params)}`;
-  if (!validator) return requestKey;
-  // The caller supplies a stable semantic identity because function source is
-  // neither stable nor meaningful. Hashing keeps arbitrary labels out of map
-  // keys and avoids an unbounded readable cache-key surface.
-  const digest = createHash("sha256").update(validator.id, "utf8").digest("hex");
-  return `${requestKey}#output-validator/v1/${digest}`;
-}
-
+// CLEANROOM 83: implement per spec 83
 /**
  * Restrict + order which chains an @x402 client will pay on (duck-typed - any
  * client version with createPaymentPayload works, zero new dependencies).

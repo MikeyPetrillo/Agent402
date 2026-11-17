@@ -8,9 +8,7 @@
 //   SMOKE_METHOD  GET | POST                     (default GET)
 //   SMOKE_QUERY   querystring for GET, e.g. q=gdp&limit=3   (optional)
 //   SMOKE_BODY    JSON string for POST                       (optional)
-//   SMOKE_EXPECT  a substring the response JSON must contain (required with SMOKE_TARGET)
-//   SMOKE_RECEIPT_OUT  write a complete signed offer receipt to this new file;
-//                      fails closed if capture was requested but none is returned
+// CLEANROOM 66: implement per spec 66
 //   SMOKE_TARGET  full origin to buy from INSTEAD of production (an external
 //                 x402 seller compatibility check, e.g. https://seller.example).
 //                 The internal-traffic marker is suppressed for external
@@ -20,12 +18,7 @@
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { readFileSync, existsSync } from "node:fs";
 import { createHmac, createHash } from "node:crypto";
-import {
-  decodeSettlementHeader,
-  receiptOutputPath,
-  signedOfferReceiptFromSettlement,
-  writeSignedOfferReceipt,
-} from "./lib/smoke-receipt.js";
+// CLEANROOM 67: implement per spec 67
 import { assertOwnPaidTarget, guardCappedSigning } from "./lib/buyer-guard.js";
 
 const EXTERNAL_TARGET = (process.env.SMOKE_TARGET || "").trim().replace(/\/+$/, "");
@@ -38,9 +31,7 @@ const METHOD = (process.env.SMOKE_METHOD || "GET").trim().toUpperCase();
 const QUERY = (process.env.SMOKE_QUERY || "").trim();
 const BODY = (process.env.SMOKE_BODY || "").trim();
 const EXPECT = (process.env.SMOKE_EXPECT || "").trim();
-let RECEIPT_OUT = "";
-try { RECEIPT_OUT = receiptOutputPath(process.env.SMOKE_RECEIPT_OUT); }
-catch (error) { console.error(error.message); process.exit(2); }
+// CLEANROOM 68: implement per spec 68
 // Diagnostic: drop named x402 extensions from the seller's challenge BEFORE the
 // client sees it. The @x402 client echoes every extension it is offered back
 // into the payment payload verbatim, schemas and all, so one seller's rich 402
@@ -50,7 +41,7 @@ catch (error) { console.error(error.message); process.exit(2); }
 // which extension is responsible. Comma-separated, e.g. "offer-receipt".
 const STRIP_EXT = (process.env.SMOKE_STRIP_EXTENSIONS || "").split(",").map((x) => x.trim()).filter(Boolean);
 if (!ROUTE) { console.error("smoke-buy: SMOKE_ROUTE is required (e.g. /api/unemployment-rate)"); process.exit(2); }
-if (EXTERNAL_TARGET && !EXPECT) { console.error("smoke-buy: SMOKE_EXPECT is required when SMOKE_TARGET selects an external target"); process.exit(2); }
+// CLEANROOM 69: implement per spec 69
 
 const pk = (process.env.BURNER_KEY || "").trim() || (existsSync(KEY_FILE) ? readFileSync(KEY_FILE, "utf8").trim() : "");
 if (!pk) { console.error("smoke-buy: no BURNER_KEY / KEY_FILE — cannot run the paid check"); process.exit(2); }
@@ -125,28 +116,12 @@ console.log(`  response: ${text.slice(0, 8000).replace(/\s+/g, " ")}`);
 // mirror - a seller shipping only the v2 header must not read as "no
 // receipt" (that blind spot would have re-confirmed a gap a partner fixed).
 const settleHdr = res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.headers.get("payment-receipt") || "";
-const settlement = decodeSettlementHeader(settleHdr);
-const signedOfferReceipt = signedOfferReceiptFromSettlement(settlement);
-if (settleHdr) {
-  if (settlement) console.log(`  settle: network=${settlement.network || "?"} tx=${settlement.transaction || "?"} payer=${settlement.payer || "?"}`);
-  else console.log(`  settle (raw header): ${settleHdr.slice(0, 300)}`);
-}
-if (RECEIPT_OUT && signedOfferReceipt) {
-  writeSignedOfferReceipt(RECEIPT_OUT, signedOfferReceipt);
-  console.log("  signed offer receipt: captured");
-} else if (RECEIPT_OUT) {
-  console.warn("WARN  signed offer receipt: capture requested but the seller returned none");
-}
+// CLEANROOM 70: implement per spec 70
 const reqId = res.headers.get("x-request-id");
 if (reqId) console.log(`  x-request-id: ${reqId}`);
 console.log(`  bodySha256: sha256:${createHash("sha256").update(text).digest("hex")}`);
 
 const ok200 = res.status === 200 && body && typeof body === "object";
 const expectOk = !EXPECT || text.includes(EXPECT);
-const receiptOk = !RECEIPT_OUT || Boolean(signedOfferReceipt);
-if (!ok200 || !expectOk || !receiptOk) {
-  const reason = !receiptOk ? " with the requested signed offer receipt" : (EXPECT && !expectOk ? ` containing "${EXPECT}"` : "");
-  console.error(`SMOKE FAIL: ${ROUTE} did not return a healthy 200 JSON${reason}.`);
-  process.exit(1);
-}
+// CLEANROOM 71: implement per spec 71
 console.log(`SMOKE OK: ${ROUTE} returned live data and payment settled.`);

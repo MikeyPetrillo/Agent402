@@ -108,18 +108,7 @@ export function schemaFromExample(value, depth = 0) {
   return schema;
 }
 
-function addRequiredForRoute(path, example, schema) {
-  if (!path || SHAPE_HAPPY_PATH_ONLY.has(path)) return schema;
-  if (!example || typeof example !== "object" || Array.isArray(example)) return schema;
-  if (schema?.type !== "object" || !schema.properties) return schema;
-  // Promise only fields that both survived the byte-bounded projection and
-  // are covered by the catalog's response-shape sweep. Null examples still
-  // say nothing about a value's type, so keep the OpenAPI rule here too.
-  const required = Object.keys(schema.properties)
-    .filter((k) => example[k] !== null && example[k] !== undefined);
-  if (required.length) schema.required = required;
-  return schema;
-}
+// CLEANROOM 45: implement per spec 45
 
 /** A tool's declared optional output fields (discovery.output.optional:
  *  field name to a typed schema with a description) added to an object
@@ -142,43 +131,7 @@ export function responseSchemaFor(path, example, optional = null) {
   return withOptionalOutput(addRequiredForRoute(path, example, schema), optional);
 }
 
-/** A typed schema for a tool's output that fits a byte budget.
- *
- *  The 402 challenge is echoed back by the buyer inside its payment payload, so
- *  bytes here are bytes on every buyer's request header (see
- *  scripts/test-challenge-size.js). A full schema is affordable on most routes
- *  and not on the widest ones, so this shallows the schema a level at a time
- *  and gives up rather than blow the budget: the complete typed schema always
- *  lives in /openapi.json, which the listing links.
- *
- *  Returns null when even a depth-1 schema does not fit. */
-export function boundedSchemaFromExample(example, maxBytes = 1500) {
-  if (!example || typeof example !== "object" || Array.isArray(example)) return null;
-  return boundedResponseSchemaFor(null, example, maxBytes);
-}
-
-/** The challenge-side response schema. It uses the same route-aware required
- *  policy as /openapi.json, but keeps the 402's stricter byte budget. Arrays
- *  and scalar/raw outputs are schemas too: treating a speech response string
- *  as an object makes the official Bazaar validator reject the declaration. */
-export function boundedResponseSchemaFor(path, example, maxBytes = 1500, optional = null) {
-  if (example === null || example === undefined) return null;
-  for (let depth = MAX_DEPTH; depth >= 1; depth--) {
-    const base = addRequiredForRoute(path, example, schemaAtDepth(example, depth));
-    if (!base || !Object.keys(base).length) return null;
-    // The declared optional fields first, typed only (as the example's are);
-    // a budget they do not fit drops them before the example's own fields
-    // are shallowed.
-    const typed = optional && typeof optional === "object" ? Object.fromEntries(Object.entries(optional).map(([k, v]) => [k, v && typeof v === "object" && v.type ? { type: v.type } : {}])) : null;
-    for (const schema of typed ? [withOptionalOutput(base, typed), base] : [base]) {
-      if (JSON.stringify(schema).length <= maxBytes) return schema;
-    }
-  }
-  return null;
-}
-
-/** schemaFromExample with a shallower ceiling than the default. Handles any
- *  JSON value because Bazaar output examples are not necessarily objects. */
+// CLEANROOM 46: implement per spec 46
 function schemaAtDepth(value, limit, depth = 0) {
   if (value === null || value === undefined) return {};
   if (Array.isArray(value)) {

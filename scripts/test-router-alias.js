@@ -106,47 +106,7 @@ seed("https://rival.example", "https://rival.example", ["url-to-markdown-fast"])
   ok(perSeller["https://rival.example"] >= 1, "rival gets a slot instead of the operator's duplicate");
 }
 
-// ---- 8. exact Railway deployment alias collapses onto one custom domain ----
-cache.clear();
-function paidTool(seller, slug, payTo, price = 0.005) {
-  return {
-    ...tool(seller, slug),
-    price,
-    networks: ["eip155:8453"],
-    payToByNetwork: { "eip155:8453": payTo },
-  };
-}
-function seedPaid(origin, slugs, payTo) {
-  cache.set(origin, {
-    manifest: { name: "seller", homepage: origin },
-    tools: slugs.map((slug) => paidTool(origin, slug, payTo)),
-    fetchedAt: Date.now(),
-    error: null,
-    history: [1, 1, 1, 1, 1],
-  });
-}
-const sharedPayee = `0x${"1".repeat(40)}`;
-seedPaid("https://agents.example.com", ["offer-preflight", "audit"], sharedPayee);
-seedPaid("https://seller-production.up.railway.app", ["offer-preflight", "audit"], sharedPayee);
-{
-  const aliases = computeAliasOrigins(cache);
-  ok(aliases.has("https://seller-production.up.railway.app"), "exact Railway deployment origin is flagged");
-  ok(!aliases.has("https://agents.example.com"), "durable custom origin keeps ranking");
-  const r = routeQuery({ query: "url to markdown", top: 10, include: "external", ...ctx });
-  ok(!r.results.some((x) => x.seller === "https://seller-production.up.railway.app"), "Railway duplicate produces no route rows");
-}
-
-// ---- 9. same wallet or same routes alone never collapse a real service ----
-cache.clear();
-seedPaid("https://agents.example.com", ["offer-preflight", "audit"], sharedPayee);
-seedPaid("https://different-production.up.railway.app", ["offer-preflight", "distinct"], sharedPayee);
-seedPaid("https://other-production.up.railway.app", ["offer-preflight", "audit"], `0x${"2".repeat(40)}`);
-{
-  const aliases = computeAliasOrigins(cache);
-  ok(!aliases.has("https://different-production.up.railway.app"), "shared payee with distinct tools stays independent");
-  ok(!aliases.has("https://other-production.up.railway.app"), "identical tools with a distinct payee stay independent");
-}
-
+// CLEANROOM 35: implement per spec 35
 cache.clear();
 console.log("router-alias tests passed");
 

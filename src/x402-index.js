@@ -2445,7 +2445,7 @@ function priceRank(p) {
 // per-network price/asset), an optional serviceName, description, and tags.
 // We deliberately keep the price in atomic USDC units → USD here so the router
 // can compare across sellers without a per-network price lookup.
-// Exported for offline merge-contract tests alongside normaliseOpenapiTools.
+// CLEANROOM 20: implement per spec 20
 // PayAI's open registry (and occasionally others) carries `network` as a bare
 // shorthand string ("base", "solana") instead of proper CAIP-2
 // ("eip155:8453", "solana:5eykt4Us...") on some listings - every downstream
@@ -2535,19 +2535,7 @@ function addSellerPayTo(own, registry, t) {
   }
 }
 
-/**
- * Everything an `accepts` array says about money, in the shape an index row
- * carries it: price, chains, payTo per chain, the EIP-712 domain per chain.
- *
- * Lifted out of `bazaarItemToTool` so the MANIFEST reader can derive the same
- * fields from the same code. A seller who publishes their payment terms inside
- * a catalogue entry (`resources[].accepts`, or `resources[].network` flat) was
- * read for its URL, name and price string and for nothing else, so the row
- * came out chainless and the seller landed on `network_unknown` — listed and
- * unroutable, the same defect class as the single-resource manifest above and
- * the same cost. Sharing the derivation is what keeps a manifest row and a
- * Bazaar row describing one endpoint from disagreeing about what it costs.
- */
+// CLEANROOM 1: implement per spec 1
 // USDC by its identity per chain family, for an accept that states no decimals.
 const SVM_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const AVM_USDC_ASA = "31566704";
@@ -2570,69 +2558,8 @@ export function acceptDecimals(a) {
   return null;
 }
 
-export function paymentFieldsFromAccepts(rawAccepts) {
-  // Normalized ONCE here so every downstream read (the `preferred` accept
-  // below, `networks:`, `stellarPayTo`, `algorandPayTo`, `payToByNetwork`)
-  // sees a real CAIP-2 id without each site needing its own fix.
-  const accepts = (Array.isArray(rawAccepts) ? rawAccepts : []).map((a) =>
-    a && typeof a.network === "string" ? { ...a, network: normalizeNetwork(a.network) } : a
-  );
-  // Prefer the first Base USDC accept; fall back to any USDC; fall back to first.
-  const preferred =
-    accepts.find((a) => a?.network === "eip155:8453" && typeof a?.extra?.name === "string" && /USDC|USD Coin/i.test(a.extra.name)) ||
-    accepts.find((a) => typeof a?.extra?.name === "string" && /USDC|USD Coin/i.test(a.extra.name)) ||
-    accepts[0] ||
-    null;
-  let price = null;
-  // `amount` is the x402 v2 field; `maxAmountRequired` is the v1 spelling and
-  // the one most flat-`resources` manifests still publish. Reading only the
-  // first left those rows priceless AND cost the live-402 probe that would
-  // have learned the figure the origin already declared.
-  // Text or a number only: a JSON object here would throw when coerced.
-  const amount = sellerNumText(preferred?.amount) ?? sellerNumText(preferred?.maxAmountRequired);
-  // Atomic units of the accept's own asset: its stated decimals, or a USDC we
-  // know. An asset we cannot scale is left unpriced rather than read as USDC.
-  const decimals = preferred ? acceptDecimals(preferred) : null;
-  if (amount != null && decimals != null) {
-    const n = Number(amount);
-    if (Number.isFinite(n)) price = n / 10 ** decimals;
-  }
-  // payTo per network, the priced accept's own address first: the address a
-  // row names on a chain is the one its price was quoted for.
-  const payToByNetwork = {};
-  for (const a of [preferred, ...accepts]) {
-    if (typeof a?.network === "string" && typeof a?.payTo === "string" && a.payTo && !payToByNetwork[a.network]) payToByNetwork[a.network] = a.payTo;
-  }
-  return {
-    price,
-    // Every chain this resource's 402 advertises — the signal behind the
-    // router's ?network= filter ("who else settles on Robinhood Chain?").
-    networks: [...new Set(accepts.map((a) => a?.network).filter(Boolean))],
-    // Stellar payTo from the accepts — feeds /stellar's per-seller activity
-    // scan. Kept raw here; the snapshot validates the strkey shape before use.
-    stellarPayTo: accepts.find((a) => typeof a?.network === "string" && a.network.startsWith("stellar") && !a.network.includes("test"))?.payTo || null,
-    // Algorand payTo — same idea, feeds /algorand's per-seller activity scan.
-    // Mainnet-only: the CAIP-2 prefix distinguishes mainnet
-    // (algorand:wGHE2Pwd…) from testnet (algorand:SGO1GKSz…) — an
-    // includes("test") check would miss a testnet id that happens not to
-    // contain the literal substring "test".
-    algorandPayTo: accepts.find((a) => typeof a?.network === "string" && a.network.startsWith("algorand:wGHE2Pwd"))?.payTo || null,
-    // payTo keyed by advertised CAIP-2 network — feeds every market page's
-    // per-seller activity scan (the page looks up the payTo whose network
-    // matches the chain being viewed). Stellar/Algorand keep their dedicated
-    // strkey-validated fields above; this covers the EVM chains + Solana, whose
-    // /base, /polygon, /arbitrum, /solana pages had no per-seller address to
-    // scope to. Shape is validated by getActivityForChain before any RPC call.
-    payToByNetwork,
-    // The EIP-712 domain each EVM accept advertises (asset + extra.name). A
-    // Base accept naming "USDC" where the token signs under "USD Coin" is a
-    // challenge no stock buyer can pay; the router label reads this to say so
-    // (src/evm-usdc-domain.js). Omitted when no EVM accept carries a name.
-    ...(Object.keys(evmDomainsOfAccepts(accepts)).length ? { evmDomainByNetwork: evmDomainsOfAccepts(accepts) } : {}),
-  };
-}
-
-export function bazaarItemToTool(item, originUrl) {
+// CLEANROOM 1: implement per spec 1
+// CLEANROOM 20: implement per spec 20
   // `resource` = CDP Bazaar; `resourceUrl` = GoPlausible's AVM registry.
   const resource = item.resource || item.resourceUrl || item.url;
   if (typeof resource !== "string") return null;
@@ -2640,7 +2567,7 @@ export function bazaarItemToTool(item, originUrl) {
   // "https://hostile.example/...", nor a path seller "/app/x" own "/app/x2".
   // The host compares case-insensitively (a registry may record "API.Host").
   if (!isUnderSeller(resource, originUrl)) return null;
-  const pay = paymentFieldsFromAccepts(item.accepts);
+  // CLEANROOM 2: implement per spec 2
   let pathStr = "/";
   try {
     pathStr = new URL(resource).pathname || "/";
@@ -2658,20 +2585,19 @@ export function bazaarItemToTool(item, originUrl) {
     pathStr = scoped;
   }
   const tags = Array.isArray(item.tags) ? item.tags : [];
-  const methodInferred = !(typeof item.method === "string" && item.method);
+  // CLEANROOM 21: implement per spec 21
   // Bazaar entries don't always carry a method (GoPlausible's do); assume POST
   // if we can't tell. The router treats this as a hint and respects a 405 retry.
   return {
     seller: originUrl,
-    method: methodInferred ? "POST" : item.method.toUpperCase(),
-    methodInferred,
+    // CLEANROOM 21: implement per spec 21
     route: pathStr,
     slug: pathStr.replace(/^\//, "").replace(/\//g, "-") || originUrl.replace(/^https?:\/\//, ""),
     name: item.serviceName || pathStr,
     description: item.description || "",
     category: tags[0] || "other",
     tags,
-    ...pay,
+    // CLEANROOM 2: implement per spec 2
     provenance: "bazaar",
     ...(scopedHere ? { [SCOPED_ROW]: true } : {}),
     // Coinbase-measured 30-day usage of THIS resource (null when absent).
@@ -2683,8 +2609,7 @@ export function bazaarItemToTool(item, originUrl) {
   };
 }
 
-// Exported for the offline crawler contract test. Keeping this pure makes the
-// exact OpenAPI -> index row mapping testable without network I/O.
+// CLEANROOM 22: implement per spec 22
 /** The path prefix an OpenAPI document's `paths` are relative to.
  *
  *  OpenAPI paths are relative to `servers[].url`, so a document declaring
@@ -2741,9 +2666,7 @@ function isDevServerHost(h) {
     || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
 }
 
-export function normaliseOpenapiTools(openapi, originUrl) {
-  return scopeRowsToSeller(runSteps(normaliseOpenapiToolsSteps(openapi, originUrl)), originUrl);
-}
+// CLEANROOM 22: implement per spec 22
 // The crawl's copy: the same rows, built in slices of CRAWL_SLICE_MS. A
 // multi-megabyte document resolves its local refs twice per operation, and
 // one such document held the loop for most of a second in one turn.
@@ -2931,32 +2854,18 @@ function* normaliseOpenapiToolsSteps(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
   if (base == null) return [];
-  const documentDistinguishesPaidOperations = openapiHasPaymentSignal(openapi);
+  // CLEANROOM 23: implement per spec 23
   logUnknownPaymentKeys(openapi, originUrl);
-  const httpMethods = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
-  const nonToolPath =
-    /^\/(\.well-known|health|openapi|llms|sitemap|robots|favicon|admin|internal)|\.(png|ico|svg|txt|xml)$/i;
+  // CLEANROOM 23: implement per spec 23
   const out = [];
   for (const [rawPath, methods] of Object.entries(openapi.paths)) {
     // Apply the basePath unless the document already spells it out (some specs
     // repeat the prefix in every path even though servers declares it).
     const pathStr = base && !rawPath.startsWith(base + "/") && rawPath !== base ? base + rawPath : rawPath;
     for (const [method, op] of Object.entries(methods || {})) {
-      if (!httpMethods.has(method.toLowerCase())) continue;
+      // CLEANROOM 23: implement per spec 23
       if (!op || typeof op !== "object") continue;
-      // A seller that annotates any paid operation is trusted to distinguish
-      // paid from free siblings — but the free siblings are still part of the
-      // curated surface they publish, so they LIST (marked paid:false) rather
-      // than vanish. Hiding them made a 42-operation seller read as 17 while
-      // x402scan showed all 42 (seller escalation, 2026-07-27). What the
-      // annotation gate now controls is the `paid` flag, which in turn gates
-      // paid ROUTING — a free op must never be a buy candidate. Deprecated
-      // operations and obvious discovery/static-asset paths are excluded in
-      // all cases (the junk #478 was aimed at). Zero-annotation documents
-      // retain the legacy inclusive behavior with `paid` unknown, because
-      // many settlement-proven sellers do not use payment extensions yet.
-      if (nonToolPath.test(rawPath) || nonToolPath.test(pathStr)) continue;
-      if (op.deprecated === true) continue;
+      // CLEANROOM 23: implement per spec 23
       // One reader for every annotation dialect (see openapiOperationPayment):
       // price, paid/free, the chains and the payTo the operation declares.
       const pay = openapiOperationPayment(op);
@@ -3089,39 +2998,12 @@ function mergeManifestToolRows(a, b) {
     price: prefer.price || other.price || null,
     slug: (prefer.slug && prefer.slug !== prefer.route) ? prefer.slug : (other.slug || prefer.slug),
     method: prefer.method || other.method,
-    // Richness is measured on price/description/name, so the row that wins can
-    // easily be the chainless one: two entries for the same method+route where
-    // only the thin one carries `accepts`. Blank-fill the payment fields the
-    // same way, or the merge itself re-creates the network_unknown it just fixed.
-    ...(prefer.networks?.length ? {} : (other.networks?.length ? { networks: other.networks } : {})),
-    ...(Object.keys(prefer.payToByNetwork || {}).length ? {}
-      : (Object.keys(other.payToByNetwork || {}).length ? { payToByNetwork: other.payToByNetwork } : {})),
-    ...(prefer.stellarPayTo ? {} : (other.stellarPayTo ? { stellarPayTo: other.stellarPayTo } : {})),
-    ...(prefer.algorandPayTo ? {} : (other.algorandPayTo ? { algorandPayTo: other.algorandPayTo } : {})),
-    ...(prefer.evmDomainByNetwork ? {} : (other.evmDomainByNetwork ? { evmDomainByNetwork: other.evmDomainByNetwork } : {})),
+    // CLEANROOM 3: implement per spec 3
     ...(a[MANIFEST_HOST_RELATIVE] || b[MANIFEST_HOST_RELATIVE] ? { [MANIFEST_HOST_RELATIVE]: true } : {}),
   };
 }
 
-/**
- * `amount` / `maxAmountRequired` on an ACCEPT-SHAPED entry are ATOMIC UNITS of
- * the asset, never dollars. Reading them as a scalar price published the
- * seller's own listing at a million times its real figure - measured live
- * 2026-09-15 on one seller, whose $0.10 route read **$100000**
- * in the index (`resources: [{scheme, network, asset, amount: "100000", ...}]`,
- * six-decimal USDC). An entry that names a network, an asset or a scheme is
- * quoting the x402 accept shape and its amount goes through the accepts
- * reader, which divides by the decimals; a manifest that carries a bare
- * `amount` with no payment context still means dollars and is read as before.
- * Same failure direction as the 2026-08-29 price ratchet (#1043): an overquote
- * a seller cannot see, on their own listing.
- */
-function acceptShaped(raw) {
-  return !!raw && typeof raw === "object"
-    && (typeof raw.network === "string" || typeof raw.asset === "string" || typeof raw.scheme === "string"
-      || typeof raw.payTo === "string" || typeof raw.maxAmountRequired === "string" || Array.isArray(raw.accepts));
-}
-
+// CLEANROOM 4: implement per spec 4
 /** An explicit DOLLAR label (`display`, `amountLabel`) the seller wrote for
  *  humans: preferred over any figure we would have to convert. Taken only when
  *  it reads as one dollar amount ("$0.003", "0.003 USDC"), never a sentence. */
@@ -3231,50 +3113,7 @@ export function singleResourceManifestTool(manifest, originUrl) {
   return { ...tool, provenance: "manifest" };
 }
 
-/**
- * The payment terms a CATALOGUE ENTRY declares, as an `accepts` array.
- *
- * Three shapes are published in the wild besides the single-resource one, and
- * the catalogue loop below read none of them — it took the entry's URL, name,
- * description and price string and dropped everything about money:
- *
- *   resources: [{ resource, accepts: [{network, asset, payTo, …}] }]   nested
- *   resources: [{ resource, scheme, network, asset, payTo, amount }]   flat
- *   payment:   { network, asset_address, pay_to, … }                   service-wide
- *
- * The service-wide block is a manifest-level default: it applies to every
- * catalogue row that declares no payment of its own, which is exactly how the
- * sellers publishing it mean it (one service, one chain, many routes).
- *
- * Measured against the live index 2026-09-15: of the 304 sellers the router
- * labelled `network_unknown`, 83 still served a manifest, and 59 of those 83
- * declared a chain in one of these three shapes — 49 of them `eip155:8453`.
- * Each was listed and unroutable: on the marketplace, invisible to the router
- * and to its own chain page.
- */
-function catalogueEntryAccepts(raw, fallback) {
-  if (!raw || typeof raw !== "object") return fallback;
-  if (Array.isArray(raw.accepts) && raw.accepts.length) return raw.accepts;
-  // A per-entry `payment` block, the `paths` manifest's shape: its own accepts,
-  // or a `networks` list (CAIP-2) beside one asset and payTo.
-  const own = entryPaymentBlockAccepts(raw.payment);
-  if (own.length) return own;
-  const network = raw.network || raw.chain;
-  if (typeof network === "string" && network) {
-    return [{
-      scheme: raw.scheme || "exact",
-      network,
-      asset: raw.asset || raw.asset_address || raw.assetAddress,
-      payTo: raw.payTo || raw.pay_to,
-      amount: raw.amount ?? raw.maxAmountRequired,
-      maxAmountRequired: raw.maxAmountRequired ?? raw.amount,
-      maxTimeoutSeconds: raw.maxTimeoutSeconds,
-      extra: raw.extra,
-    }];
-  }
-  return fallback;
-}
-
+// CLEANROOM 5: implement per spec 5
 /** The accepts a catalogue entry's own `payment` block declares: its accepts
  *  array, else one accept per network it names (`network`, `chain`, or a
  *  `networks` list), each with the block's asset and, where its shape fits the
@@ -3372,26 +3211,7 @@ function manifestX402BlockAccepts(p) {
   }));
 }
 
-/** The service-wide `payment` block, read as accepts. Empty when absent. */
-function manifestPaymentAccepts(manifest) {
-  const p = manifest?.payment;
-  if (!p || typeof p !== "object") return [];
-  const network = p.network || p.chain;
-  if (typeof network !== "string" || !network) return manifestX402BlockAccepts(p);
-  return [{
-    scheme: p.scheme || "exact",
-    network,
-    asset: p.asset_address || p.assetAddress || p.asset,
-    payTo: p.pay_to || p.payTo,
-    amount: p.amount ?? p.maxAmountRequired,
-    maxTimeoutSeconds: p.maxTimeoutSeconds,
-    // `asset` in these manifests is the ticker ("USDC") while `asset_address`
-    // is the contract; the EIP-712 domain reader wants the ticker-ish name, so
-    // pass whichever of the two is NOT an address.
-    extra: p.extra || (typeof p.asset === "string" && !/^0x[0-9a-f]{40}$/i.test(p.asset) ? { name: p.asset } : undefined),
-  }];
-}
-
+// CLEANROOM 6: implement per spec 6
 export function normaliseManifestTools(manifest, originUrl, { examples = null } = {}) {
   // `examples` (a Map, crawl-local) collects each entry's published example
   // request for the unpaid quote probe and nothing else; see
@@ -3496,8 +3316,7 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   const metaByPath = new Map();
   // Probe examples by row key, only when the caller collects them.
   const exampleByKey = exampleOf ? new Map() : null;
-  // Manifest-level default, applied only to rows that declare nothing.
-  const manifestAccepts = manifestPaymentAccepts(manifest);
+  // CLEANROOM 7: implement per spec 7
   const widePayment = widePriceView(manifest.payment);
   const manifestAcceptsWide = widePayment !== manifest.payment ? manifestPaymentAccepts({ payment: widePayment }) : manifestAccepts;
   // A catalogue row that carries only a bare `amount` under a manifest whose
@@ -3506,34 +3325,13 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   // times too large.
   const manifestAtomic = [...(Array.isArray(manifest.accepts) ? manifest.accepts : []), ...manifestAccepts]
     .find((a) => atomicContext(a) && tokenDecimalsOf(a) != null) || null;
-  const notePathMeta = (path, { name, description, price, slug, pay }) => {
-    if (!path) return;
-    const cur = metaByPath.get(path) || {};
-    const named = name && name !== path && !String(name).startsWith("/");
-    const curNamed = cur.name && cur.name !== path && !String(cur.name).startsWith("/");
-    metaByPath.set(path, {
-      name: (named ? name : null) || (curNamed ? cur.name : null) || cur.name || name || "",
-      description: description || cur.description || "",
-      price: price || cur.price || null,
-      slug: (slug && slug !== path) ? slug : (cur.slug || slug || ""),
-      // One path, one set of payment terms: a rich entry that carries accepts
-      // lends its chain to the sibling methods on that path published as thin
-      // strings, exactly as it already lends them its price and description.
-      pay: (pay && pay.networks?.length) ? pay : (cur.pay || null),
-    });
-  };
+  // CLEANROOM 8: implement per spec 8
 
   for (const list of catalogues) {
     for (const raw of list.slice(0, 1000)) {
       let ref = "", name = "", description = "", price = null, inputSchema = null;
       const methodList = [];
-      // What this entry says about money, from its own accepts / flat payment
-      // fields, falling back to the service-wide block. A thin string entry
-      // inherits the service-wide block and nothing else.
-      const entryAccepts = typeof raw === "string"
-        ? manifestAccepts
-        : catalogueEntryAccepts(raw, manifestAccepts);
-      let pay = entryAccepts.length ? paymentFieldsFromAccepts(entryAccepts) : null;
+      // CLEANROOM 7: implement per spec 7
       if (typeof raw === "string") {
         ref = raw.trim();
       } else if (raw && typeof raw === "object") {
@@ -3587,7 +3385,7 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
       if (!u.pathname || u.pathname === "/" || MANIFEST_NON_TOOL_PATH.test(u.pathname)) continue;
       const pathOnly = u.pathname;
       const slug = cleanListingSlug(name) || u.pathname.replace(/^\//, "").replace(/\//g, "-");
-      notePathMeta(pathOnly, { name, description, price, slug, pay });
+      // CLEANROOM 8: implement per spec 8
       const methodsToEmit = methodList.length ? [...new Set(methodList)] : [""];
       for (const method of methodsToEmit) {
         // Keyed on method+route INCLUDING the query string: two entries that differ
@@ -3613,14 +3411,9 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
           description: description.slice(0, 400),
           category: "other",
           tags: [],
-          // A price the entry states as a display string ("$0.05") wins over
-          // one derived from atomic units: it is the seller's own wording and
-          // it is what `originDeclaredPrice` is stamped from below.
-          price: price ?? (pay && pay.price != null ? `$${pay.price}` : null),
+          // CLEANROOM 9: implement per spec 9
           ...(() => { const packed = inputSchema ? packRequestContract(requestContractFromInputSchema(inputSchema, method || "GET")) : null; return packed ? { requestContract: packed } : {}; })(),
-          ...(pay ? { networks: pay.networks, stellarPayTo: pay.stellarPayTo,
-            algorandPayTo: pay.algorandPayTo, payToByNetwork: pay.payToByNetwork,
-            ...(pay.evmDomainByNetwork ? { evmDomainByNetwork: pay.evmDomainByNetwork } : {}) } : {}),
+          // CLEANROOM 9: implement per spec 9
         };
         byKey.set(key, mergeManifestToolRows(byKey.get(key), row));
         if (example && !exampleByKey.has(key)) exampleByKey.set(key, example);
@@ -3638,15 +3431,7 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
     if ((!t.name || t.name === t.route || String(t.name).startsWith("/")) && meta.name) t.name = meta.name;
     if (!t.description && meta.description) t.description = String(meta.description).slice(0, 400);
     if ((!t.slug || t.slug === t.route) && meta.slug) t.slug = meta.slug;
-    if (!(t.networks || []).length && meta.pay?.networks?.length) {
-      t.networks = meta.pay.networks;
-      if (!Object.keys(t.payToByNetwork || {}).length && Object.keys(meta.pay.payToByNetwork || {}).length) {
-        t.payToByNetwork = meta.pay.payToByNetwork;
-      }
-      if (!t.stellarPayTo && meta.pay.stellarPayTo) t.stellarPayTo = meta.pay.stellarPayTo;
-      if (!t.algorandPayTo && meta.pay.algorandPayTo) t.algorandPayTo = meta.pay.algorandPayTo;
-      if (!t.evmDomainByNetwork && meta.pay.evmDomainByNetwork) t.evmDomainByNetwork = meta.pay.evmDomainByNetwork;
-    }
+    // CLEANROOM 8: implement per spec 8
   }
   // A price in the seller's OWN manifest is an origin declaration, exactly like
   // one in their openapi.json, and must be marked as such: `originDeclaredPrice`
@@ -4173,10 +3958,7 @@ function openapiOperationPaymentOnce(op) {
   return out;
 }
 
-function openapiOperationHasPaymentSignal(op) {
-  return openapiOperationPayment(op).paid === true;
-}
-
+// CLEANROOM 24: implement per spec 24
 // Annotation-dialect watch. There is no standard for payment extensions, so
 // sellers invent keys — and in an ANNOTATED document an unrecognized price key
 // doesn't inflate anything, it silently DELETES: the op reads as unannotated
@@ -4224,32 +4006,9 @@ function logUnknownPaymentKeys(openapi, originUrl) {
   }
 }
 
-// Does this openapi document look like a *paid* x402 service rather than any
-// random Swagger site? True when at least one operation carries a payment
-// extension. Gates the openapi-fallback crawl path: without a manifest AND
-// without a Bazaar settlement record, a payment extension is the only signal
-// that the origin actually sells anything.
-export function openapiHasPaymentSignal(openapi) {
-  if (!openapi || typeof openapi !== "object" || !openapi.paths) return false;
-  for (const methods of Object.values(openapi.paths)) {
-    for (const op of Object.values(methods || {})) {
-      if (openapiOperationHasPaymentSignal(op)) return true;
-    }
-  }
-  return false;
-}
+// CLEANROOM 24: implement per spec 24
 
-// Overlay openapi tool metadata onto Bazaar-derived tools for the same origin.
-// Bazaar entries are payment-proven (price, networks, payTo observed from real
-// 402s) but carry only a path-derived slug and no name — a seller whose routes
-// are short ("/md") is invisible to the router's slug/name scoring even when
-// its openapi.json says exactly what the tool does (operationId → slug,
-// summary → name, tags). Match by method+route (route-only as a fallback,
-// Bazaar guesses POST when the registry omits the method); openapi wins on
-// descriptive fields and the declared HTTP method. Bazaar wins on observed
-// payment truth when it has an amount; otherwise the OpenAPI payment extension
-// fills the unknown price. Openapi-only routes are appended as-is;
-// Bazaar-only routes pass through untouched.
+// CLEANROOM 25: implement per spec 25
 /** Every operation's {method, route} in a document — NO payment filtering, no
  *  static-asset skip. Used only to COLLAPSE facilitator-registry rows whose
  *  concrete URLs instantiate a templated path (see mergeOpenapiIntoBazaar);
@@ -4257,22 +4016,7 @@ export function openapiHasPaymentSignal(openapi) {
 export function openapiAllOperationRoutes(openapi, originUrl) {
   return scopeRowsToSeller(openapiAllOperationRoutesUnscoped(openapi, originUrl), originUrl);
 }
-function openapiAllOperationRoutesUnscoped(openapi, originUrl) {
-  if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
-  const base = openapiBasePath(openapi, originUrl);
-  if (base == null) return [];
-  const httpMethods = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
-  const out = [];
-  for (const [rawPath, methods] of Object.entries(openapi.paths)) {
-    const pathStr = base && !rawPath.startsWith(base + "/") && rawPath !== base ? base + rawPath : rawPath;
-    for (const [method, op] of Object.entries(methods || {})) {
-      if (!httpMethods.has(method.toLowerCase())) continue;
-      if (!op || typeof op !== "object") continue;
-      out.push({ method: method.toUpperCase(), route: pathStr });
-    }
-  }
-  return out;
-}
+// CLEANROOM 26: implement per spec 26
 
 // Does `concrete` instantiate the templated `route` ("/a/{id}/b" matches
 // "/a/57dc.../b")? Literal segments must match exactly; {param} segments match
@@ -4329,46 +4073,7 @@ function* templatesMatching(index, concreteRoute) {
   }
 }
 
-// Bazaar and other registry rows are settlement/discovery evidence, never
-// seller application-contract authority. Build a fresh plain object from own
-// enumerable data fields so contract-shaped own accessors are not invoked and
-// inherited/prototype-carried fields cannot become own published evidence.
-//
-// A row with neither contract key and no symbol key (every row the registry
-// fold builds for an unscoped seller) is copied in one step, so the copy takes
-// its source's shape. Built key by key, 77,000 copies could each end with a
-// shape of their own (measured: about 450 ms for the list, and every later
-// read of those rows slower, against 8 ms copied whole). The key-by-key form
-// stays for the rows that need it: it skips a contract key without reading it
-// and leaves symbol keys behind, as it always has.
-const ownKey = Object.prototype.hasOwnProperty;
-function withoutRegistryContracts(row) {
-  if (!row || typeof row !== "object") return row;
-  if (!ownKey.call(row, "requestContract") && !ownKey.call(row, "responseContract") && Object.getOwnPropertySymbols(row).length === 0) return { ...row };
-  const clean = {};
-  for (const key of Object.keys(row)) {
-    if (key === "requestContract" || key === "responseContract") continue;
-    clean[key] = row[key];
-  }
-  return clean;
-}
-
-// OpenAPI contract tuples may cross the join only as own data properties of
-// the normalized seller operation. Refuse accessors and prototype values.
-function ownContractTuple(row, key) {
-  let descriptor;
-  try {
-    descriptor = row && typeof row === "object"
-      ? Object.getOwnPropertyDescriptor(row, key)
-      : undefined;
-  } catch {
-    return null;
-  }
-  return descriptor && "value" in descriptor && Array.isArray(descriptor.value)
-    ? descriptor.value
-    : null;
-}
-
+// CLEANROOM 27: implement per spec 27
 export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { allRoutes = [] } = {}) {
   return runSteps(mergeOpenapiIntoBazaarSteps(openapiTools, bazaarTools, { allRoutes }));
 }
@@ -4389,10 +4094,7 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
   const byRoute = new Map();
   for (const o of openapiTools) {
     exact.set(`${o.method} ${o.route}`, o);
-    // A route-only match is safe only when the document declares exactly one
-    // operation for that path. null marks an ambiguous GET+POST-style path.
-    if (!byRoute.has(o.route)) byRoute.set(o.route, o);
-    else byRoute.set(o.route, null);
+    // CLEANROOM 28: implement per spec 28
   }
   // Templated operations, for collapsing per-instance registry rows. A
   // facilitator registry records every settled URL verbatim, so one templated
@@ -4415,12 +4117,7 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
   };
   const used = new Set();
   const enrich = (b, o, route) => {
-    // Bazaar is settlement evidence, never application-contract authority.
-    // Strip contract-shaped fields before carrying only the matched seller
-    // OpenAPI operation's packed tuples below.
-    const bazaar = withoutRegistryContracts(b);
-    const requestContract = ownContractTuple(o, "requestContract");
-    const responseContract = ownContractTuple(o, "responseContract");
+    // CLEANROOM 29: implement per spec 29
     const bazaarMicro = priceToMicroUsd(b.price);
     const originMicro = priceToMicroUsd(o.price);
     const priceConflict = bazaarMicro != null && originMicro != null && bazaarMicro !== originMicro;
@@ -4443,22 +4140,14 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     if (priceConflict) price = microUsdToPrice(originMicro);
     else price = b.price == null ? o.price : b.price;
     return ({
-    ...bazaar,
-    // Bazaar defaults missing methods to POST. The OpenAPI operation is the
-    // authoritative verb once the route-only fallback finds a match.
-    method: b.methodInferred ? (o.method || b.method) : b.method,
+    // CLEANROOM 29: implement per spec 29
     route,
     slug: o.slug || b.slug,
     name: o.name && o.name !== o.route ? o.name : b.name,
     description: o.description || b.description,
     tags: o.tags?.length ? o.tags : b.tags,
     category: o.tags?.length ? o.category : b.category,
-    // The seller's OpenAPI operation is the only source of these packed
-    // contract tuples. Carry them across the settlement-evidence join without
-    // reconstructing them from the Bazaar row or letting them affect ranking,
-    // routing, pricing, or payment behavior.
-    ...(requestContract ? { requestContract } : {}),
-    ...(responseContract ? { responseContract } : {}),
+    // CLEANROOM 29: implement per spec 29
     price,
     // What the ORIGIN itself declared this crawl, kept separately so a later
     // stage cannot quietly overwrite the seller's own current number with an
@@ -4494,12 +4183,7 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
   });
   };
   const mergeRow = (b) => {
-    // Only an inferred Bazaar verb may fall back to a route-only match. An
-    // explicit verb must match exactly: GET and POST on the same path can be
-    // different tools with different descriptions and prices.
-    const o = b.methodInferred
-      ? byRoute.get(b.route)
-      : exact.get(`${b.method} ${b.route}`);
+    // CLEANROOM 30: implement per spec 30
     if (o) { used.add(o); return enrich(b, o, b.route); }
     // Per-instance collapse, indexed operations first: the first instance
     // becomes the operation's row (templated route, registry payment truth);
@@ -4518,15 +4202,11 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     if (d) {
       const key = `${d.method} ${d.route}`;
       if (collapsedDocRows.has(key)) return null;
-      const row = {
-        ...withoutRegistryContracts(b),
-        route: d.route,
-        slug: d.route.replace(/^\//, "").replace(/\//g, "-"),
-      };
+      // CLEANROOM 31: implement per spec 31
       collapsedDocRows.set(key, row);
       return row;
     }
-    return withoutRegistryContracts(b);
+    // CLEANROOM 31: implement per spec 31
   };
   const merged = [];
   for (let i = 0; i < bazaarTools.length; i++) {
@@ -6721,10 +6401,7 @@ function isRoutable(entry) {
 // key, and a dropped entry's memo goes with it.
 const slugSetMemo = new WeakMap();
 const serviceKeyMemo = new WeakMap();
-// The payees part of the key from allPayTosByNetwork's answer.
-const canonicalPayeesFrom = (byNetwork) => Object.entries(byNetwork)
-  .sort(([a], [b]) => a.localeCompare(b))
-  .map(([network, values]) => [network, [...values].map((value) => String(value).toLowerCase()).sort()]);
+// CLEANROOM 32: implement per spec 32
 // The full tool contract + payees of one entry, memoized by identity. Built
 // here rather than inside computeAliasOriginsBaseSteps so the route index can
 // prime it in the background as each re-crawled entry lands.
@@ -6762,14 +6439,7 @@ function* exactServiceKeySteps(v) {
     const pairs = new Array(tools.length);
     for (let i = 0; i < tools.length; i++) {
       const t = tools[i];
-      const c = [
-        String(t.method || "GET").toUpperCase(),
-        String(t.route || ""),
-        String(t.slug || ""),
-        String(t.price ?? ""),
-        t.paid === false ? "free" : "paid-or-unknown",
-        [...(t.networks || [])].map(String).sort(),
-      ];
+      // CLEANROOM 33: implement per spec 33
       pairs[i] = JSON.stringify(c);
       if (i % SERVICE_KEY_STEP === SERVICE_KEY_STEP - 1) { serviceKeySteps++; yield; }
     }
@@ -6895,38 +6565,7 @@ function* computeAliasOriginsBaseSteps(entries) {
     for (const s of mine) if (!theirs.has(s)) { subset = false; break; }
     if (subset) aliases.add(origin);
   }
-
-  // Some sellers expose the same service on both a durable custom domain and
-  // Railway's generated deployment hostname. Both manifests can be
-  // self-canonical, so the homepage rule above cannot identify the deployment
-  // origin as an alias. Collapse only the measured, fail-closed case: exactly
-  // one non-Railway origin has the same complete tool contract and the same
-  // payees as one or more `*.up.railway.app` origins. Shared wallets alone do
-  // not collapse anything, and two custom origins remain distinct.
-  const exactServiceKey = exactServiceKeyOf;
-  const railwayDeploymentOrigin = (origin) => {
-    try { return new URL(origin).hostname.toLowerCase().endsWith(".up.railway.app"); }
-    catch { return false; }
-  };
-  const exactGroups = new Map();
-  for (const [origin, v] of entries) {
-    if (++walked % ALIAS_YIELD_ENTRIES === 0) yield;
-    if (v?.error || aliases.has(origin)) continue;
-    // A key not yet memoized is built in steps here too.
-    const key = v && typeof v === "object" && !serviceKeyMemo.has(v) ? yield* exactServiceKeySteps(v) : exactServiceKey(v);
-    if (!key) continue;
-    if (!exactGroups.has(key)) exactGroups.set(key, []);
-    exactGroups.get(key).push(origin);
-  }
-  for (const origins of exactGroups.values()) {
-    // A key held by one origin folds nothing, so its hostname is never read.
-    if (origins.length < 2) continue;
-    const durable = origins.filter((origin) => !railwayDeploymentOrigin(origin));
-    if (durable.length !== 1) continue;
-    for (const origin of origins) {
-      if (origin !== durable[0] && railwayDeploymentOrigin(origin)) aliases.add(origin);
-    }
-  }
+// CLEANROOM 34: implement per spec 34
   return aliases;
 }
 

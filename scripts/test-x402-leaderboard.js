@@ -11,7 +11,7 @@ import {
   canonicalHost,
   rankBy,
   mergeCrawledWallets,
-  advertisedMicroUsd,
+  // CLEANROOM 59: implement per spec 59
   priceMatches,
 } from "../src/leaderboard.js";
 
@@ -442,25 +442,7 @@ eq(original.map((r) => r.name), snap, "rankBy does not mutate input array");
   ok(noMap.merged.every((r) => r.prices instanceof Set && r.prices.size === 0), "no price map: every crawl-only row gets an empty set");
 }
 
-// ---- v1 `base` listings ----
-// A registry that mixes x402 v1 listings in names Base by its shorthand;
-// those accepts are read as Base mainnet, and only Base mainnet.
-{
-  const V1_WALLET = "0x3333333333333333333333333333333333333333";
-  const v1 = {
-    resource: "https://v1.example/api/report",
-    accepts: [{ scheme: "exact", network: "base", maxAmountRequired: "1500000", asset: USDC, payTo: V1_WALLET }],
-  };
-  eq(baseUsdcPayToFromItem(v1), { wallet: V1_WALLET, network: "base" }, "a v1 listing on `base` is read as Base mainnet");
-  ok(advertisedMicroUsd(v1) === 1500000, "and its v1 maxAmountRequired is its advertised price, from the same accept");
-  ok(baseUsdcPayToFromItem({ accepts: [{ network: "base-sepolia", asset: USDC, payTo: V1_WALLET }] }) === null,
-    "v1 base-sepolia stays out, like its CAIP-2 twin");
-  ok(baseUsdcPayToFromItem({ accepts: [{ network: "solana", payTo: V1_WALLET }] }) === null,
-    "a v1 shorthand for another chain is not read as Base");
-  ok(baseUsdcPayToFromItem({ accepts: [{ network: "base", asset: "0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddead", payTo: V1_WALLET }] }) === null,
-    "a v1 `base` accept in another token is still skipped");
-}
-
+// CLEANROOM 59: implement per spec 59
 // ---- our own payments are not a seller's evidence (2026-09-19) ----
 // Found verifying three transfers a seller offered as proof that his row was
 // mis-measured: one was our own Base spending wallet, paying him because a

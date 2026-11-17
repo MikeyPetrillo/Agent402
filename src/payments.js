@@ -25,7 +25,7 @@ import { clarifySvmSettleFailure } from "./svm-clarify.js";
 import {
   bazaarResourceServerExtension,
   declareDiscoveryExtension,
-  sanitizeTags,
+  // CLEANROOM 47: implement per spec 47
 } from "@x402/extensions/bazaar";
 import {
   BUILDER_CODE,
@@ -2728,7 +2728,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const routes = Object.fromEntries(
     Object.entries(catalog).map(([route, item]) => {
       const ext = {};
-      const path = route.split(" ")[1];
+      // CLEANROOM 47: implement per spec 47
       const { keepListing, descriptionFirst, ...discovery } = item.discovery || {};
       const slimmed = item.bazaar !== false && item.discovery ? slimDiscovery(discovery, path, item) : null;
       const listingText = capDesc(BAZAAR_DESCRIPTIONS[item.slug] || item.description);
@@ -2790,12 +2790,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           // it cannot be the whole rule), but the change stands on
           // discoverability alone.
           serviceName: serviceNameFor(item),
-          // Discovery tags feed marketplace categorizers (x402scan, the Bazaar).
-          // Include the resource's own category alongside its specific tags so
-          // an indexer sees the real category signal (unit conversion, data,
-          // crypto, llm, ...) - every entry is honestly tagged with what it is.
-          // Use the protocol's own sanitizer: printable ASCII, ≤32 chars,
-          // case-insensitive dedupe, and the official maximum of five tags.
+          // CLEANROOM 47: implement per spec 47
           tags: bazaarTagsFor(item),
           // The content type the published example answers with: JSON, or
           // the raw bytes a binary tool sends (its def's mimeType).
@@ -2831,7 +2826,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       accepts: acceptsFor(cfg),
       description: capDesc(cfg.description),
       serviceName: "Agent402.tools",
-      tags: sanitizeTags([cfg.category, "agents", "x402", "tools"]),
+      // CLEANROOM 47: implement per spec 47
       mimeType: "application/json",
       resource: `${baseUrl}${route.split(" ")[1]}`,
       iconUrl: `${baseUrl}${BAZAAR_ICON_PATH}`,

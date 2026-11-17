@@ -4,9 +4,11 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (10 scripts, one process each)
+# @step 1: Offline suites (11 scripts, one process each)
 # Wildcard route bypass closed (@x402/core 2.21.0 dotAll fix — percent-encoded line terminators can't skip payment on /api/convert/* — offline)
 t node scripts/test-wildcard-route-bypass.js
+# Wildcard route tags and challenge contract (clean-room behavior test, offline)
+t node scripts/test-cleanroom-wildcard-tags.js
 # Wallet-free trial (scope, bounds, never counted as revenue)
 t node scripts/test-trial.js
 # LLM gateway validation (OpenAI-compat tiers, caps, env-gated 503)

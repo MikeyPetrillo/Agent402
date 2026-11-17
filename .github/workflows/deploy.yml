@@ -998,7 +998,7 @@ jobs:
           node adapters/eliza/test-runtime.js
           ELIZA_CORE_VERSION=beta node adapters/eliza/test-runtime.js
 
-      - name: Offline suites (10 scripts, one process each)
+      - name: Offline suites (11 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a 1
 
       - name: Tollbooth tests (pay-per-crawl gate — node + edge/Web-Crypto)
@@ -1473,7 +1473,7 @@ jobs:
         if: matrix.shard == 1
         run: node scripts/check-bazaar.mjs
 
-      - name: Offline suites (62 scripts, one process each)
+      - name: Offline suites (63 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a4 2
 
       - name: Crawl backoff (stop re-probing an origin that keeps saying no)
@@ -1491,7 +1491,7 @@ jobs:
           SOCKET_API_TOKEN: ${{ secrets.SOCKET_API_TOKEN }}
         run: node scripts/socket-check.js
 
-      - name: Offline suites (26 scripts, one process each)
+      - name: Offline suites (27 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a4 4
 
   test-unit-b:
@@ -1999,7 +1999,7 @@ jobs:
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
             X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
-      - name: Offline suites (36 scripts, one process each)
+      - name: Offline suites (37 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-b4 1
 
       - name: "Redis integration (the REAL client against a REAL server — cap-of-1, refund, cache round trip; the gap that made a redis major bump undecidable)"
@@ -2022,7 +2022,7 @@ jobs:
         if: matrix.shard == 1
         run: X402_INDEX_CRAWL=off node scripts/test-crawl-robots.js
 
-      - name: Offline suites (105 scripts, one process each)
+      - name: Offline suites (106 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-b4 3
 
   test-unit-d:
@@ -2110,7 +2110,7 @@ jobs:
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
             X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
-      - name: Offline suites (162 scripts, one process each)
+      - name: Offline suites (163 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-d 1
 
       - name: Search-kit tests (Brave web/news/images/suggest — validation always runs; live calls opt-in via BRAVE_LIVE_TEST=1, otherwise paid-canary covers post-deploy)
