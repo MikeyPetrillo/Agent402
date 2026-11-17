@@ -161,6 +161,13 @@ export const PLACE_QUERY_MAX = 100;
 export const PLACE_CACHE_TTL_MS = 10 * 60_000;
 export const PLACE_CACHE_MAX = 2000;
 const placeCache = new Map(); // key -> { at, rows }
+// One spelling per name, for the upstream read and the key alike: Unicode
+// compatibility forms folded (NFKC: full-width letters, a no-break space),
+// runs of whitespace as one space, trailing punctuation dropped. The upstream
+// matches none of "Paris.", "Paris!" or a doubled space, so the plain
+// spelling is also the one that answers.
+const plainText = (s) => String(s ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
+const plainPart = (s) => s.replace(/[\s.,;:!?]+$/u, "").trim();
 export function _resetPlaceCache() { placeCache.clear(); }
 async function placeRows(params) {
   const key = [params.get("name").toLowerCase(), params.get("count"), params.get("language"), params.get("countryCode") ?? ""].join("\n");
@@ -211,7 +218,7 @@ export async function lookupPlaces({ q, count = 5, country, language } = {}) {
   const query = String(q ?? "").trim();
   if (query.length < 2) throw bad('"q" must be a place name of at least 2 characters');
   if (query.length > PLACE_QUERY_MAX) throw bad(`"q" must be at most ${PLACE_QUERY_MAX} characters`);
-  let [name, ...qualifiers] = query.split(",").map((p) => p.trim()).filter(Boolean);
+  let [name, ...qualifiers] = plainText(query).split(",").map(plainPart).filter(Boolean);
   // "Pittsburgh PA": a trailing US state code with no comma is a qualifier too.
   const tail = qualifiers.length ? null : /^(.{2,}?)\s+([A-Z]{2})$/.exec(name ?? "");
   if (tail && Object.hasOwn(US_STATES, tail[2])) { name = tail[1].trim(); qualifiers = [tail[2]]; }

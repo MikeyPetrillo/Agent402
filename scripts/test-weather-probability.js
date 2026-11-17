@@ -99,6 +99,21 @@ reply = (u) => (u.host === "geocoding-api.open-meteo.com" ? json(u.searchParams.
   reply = (u) => json(u.searchParams.get("name") === "Nowhere" ? {} : { results: PLACES });
   const after = await lookup({ q: "Outage City" });
   ok(failed && failed.statusCode >= 500 && after.found === true, "place-lookup: a failed read is not remembered");
+  // Trivial variants of one name are one entry and one upstream name: width and compatibility forms
+  // (NFKC), runs of inner whitespace, and trailing punctuation.
+  _resetPlaceCache();
+  fetched.length = 0;
+  const variants = ["New York", "  new   york ", "New\u00a0York", "New\tYork", "New York.", "NEW YORK!!", "New York ,", "\uff2e\uff45\uff57 \uff39\uff4f\uff52\uff4b", "New York?;"];
+  const names = [];
+  for (const q of variants) names.push((await lookup({ q })).found);
+  ok(fetched.length === 1 && new URL(fetched[0]).searchParams.get("name") === "New York", `place-lookup: ${variants.length} spellings of one name are one upstream read, sent as "New York" (${fetched.length} reads, "${new URL(fetched[0]).searchParams.get("name")}")`);
+  ok(names.length === variants.length && names.every((n) => n === true) && (await lookup({ q: "  new   york " })).query === "new   york", "place-lookup: every spelling is answered, and the answer echoes the query as it was sent");
+  await lookup({ q: "Austin,  TX." }); await lookup({ q: "austin , tx" }); await lookup({ q: "Austin TX." }); await lookup({ q: "\uff21ustin\uff0c TX" });
+  ok(fetched.length === 2 && new URL(fetched[1]).searchParams.get("name") === "Austin", `place-lookup: a qualified name in other spacing, punctuation or width is the same entry (${fetched.length - 1} read)`);
+  await lookup({ q: "Newyork" }); await lookup({ q: "St. Louis" }); await lookup({ q: "St Louis" });
+  ok(fetched.length === 5 && new URL(fetched[3]).searchParams.get("name") === "St. Louis", "place-lookup: a different name is its own entry, and punctuation inside a name is kept");
+  const dots = await errOf(() => lookup({ q: " .,!? " }));
+  ok(dots?.statusCode === 400 && fetched.length === 5, "place-lookup: a query of punctuation alone is a 400 before any read");
   _resetPlaceCache();
   for (let k = 0; k < PLACE_CACHE_MAX + 5; k++) await lookup({ q: `Town ${k}` });
   fetched.length = 0;
