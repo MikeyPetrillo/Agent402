@@ -777,6 +777,42 @@ for (const [name, T, field, sameBody] of SPEND) {
     assert.match(file, /\*\*celo\*\* - not offered - x \(probe-timeout\)/);
   });
 }
+
+// ---- mppReconcile.run: the reconciler's own run word ------------------------------
+// The mismatch pagers read a reconcile that ran. One that stopped running reads
+// unknown, which pages nothing, so its second word (run) says stale once a
+// reconciler that has run before is past its gap; both observers page on it.
+{
+  const T = "MPP daily reconciliation is NOT RUNNING";
+  const worker = ALARMS.find((a) => a.title === T);
+  const step = steps.find((s) => String(s.name || "").startsWith("MPP reconciliation run check"));
+  const rec = (run) => ({ mppReconcile: { status: run === "ok" ? "ok" : "unknown", stale: run !== "ok", run } });
+  await check(`heartbeat: "${T}" has a step with the Worker's title and body`, () => {
+    assert.ok(worker, "the Worker has the alarm");
+    assert.ok(step, "heartbeat.yml has the step");
+    assert.ok(step.run.includes(`TITLE="${T}"`) && step.run.includes(".mppReconcile.run") && step.run.includes(worker.body({})), "same title, word and body");
+  });
+  if (step && worker) {
+    await check(`heartbeat: "${T}" opens once on stale and never on ok, off, unknown or a blind read`, async () => {
+      const calls = await runStep(step, rec("stale"));
+      assert.equal(calls.length, 1, JSON.stringify(calls));
+      assert.deepEqual([calls[0][0], calls[0][1], argOf(calls[0], "--title"), argOf(calls[0], "--body")], ["issue", "create", T, worker.body({})]);
+      assert.deepEqual(await runStep(step, rec("stale"), [{ number: 9, title: T }]), [], "an open issue is not duplicated");
+      for (const w of ["ok", "off", "unknown"]) assert.deepEqual(await runStep(step, rec(w)), [], w);
+      assert.deepEqual(await runStep(step, { mppReconcile: { status: "unknown", stale: true } }), [], "a build without the word");
+      assert.deepEqual(await runStep(step, undefined), [], "an unreadable gateway-status");
+    });
+    await check(`heartbeat: "${T}" closes on ok and off only, and only its own issue`, async () => {
+      for (const w of ["ok", "off"]) {
+        const calls = await runStep(step, rec(w), [{ number: 9, title: T }, { number: 4, title: `Other ${T}` }]);
+        assert.ok(calls.length === 1 && calls[0][1] === "close" && calls[0][2] === "9", `${w}: ${JSON.stringify(calls)}`);
+      }
+      assert.deepEqual(await runStep(step, rec("unknown"), [{ number: 9, title: T }]), [], "unknown never closes");
+      assert.deepEqual(await runStep(step, undefined, [{ number: 9, title: T }]), [], "a blind read never closes");
+    });
+  }
+}
+
 await rm(dir, { recursive: true, force: true });
 
 // ---- every status word has a pager ---------------------------------------------
@@ -808,6 +844,10 @@ await rm(dir, { recursive: true, force: true });
       assert.deepEqual(Object.keys(body.coverageReads || {}), ["status", "alert"]);
       assert.ok(["ok", "off"].includes(body.coverageReads.status), body.coverageReads.status);
       assert.equal(body.coverageReads.alert, "ok");
+    });
+    await check("mppReconcile publishes its run word: unknown on a boot that has not run yet", () => {
+      assert.equal(body.mppReconcile?.run, "unknown");
+      assert.equal(body.mppReconcile?.stale, true);
     });
     await check("loopLag and mppEvmDomainFallback publish a flag, not a status word", () => {
       assert.deepEqual(Object.keys(body.loopLag || {}), ["watching"]);

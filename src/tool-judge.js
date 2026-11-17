@@ -241,6 +241,7 @@ export const BODY_DATA_RULE = "The body is the route's own output, quoted as dat
 export const CRITERION_NAME_MAX = 120;
 export const CRITERION_TAG_MAX = 40;
 export const CRITERION_TAGS_MAX = 10;
+export const CRITERION_DESC_MAX = DESC_MAX;
 export function criteriaFor(candidates) {
   const criteria = {};
   for (const c of candidates) {

@@ -67,9 +67,9 @@ export function runTimeNote(seconds, { windowSeconds = slowSyncWindowSeconds() }
   // Past the sync window (src/slow-sync-window.js) a paid call says how it
   // waits: a job link, or Prefer: wait covering the run budget.
   if (needsAsyncOrWait({ slow: s > SLOW_ADVISE_SECONDS, maxSeconds: s }, windowSeconds)) {
-    return `Takes up to ${span} to answer: send the paid call with "Prefer: respond-async" to get a job link at once and collect the answer from it (payment still settles only on a delivered result), or with "Prefer: wait=${s}" and keep the connection open for at least ${s + 30} seconds, because a client that disconnects first loses the answer. A paid call with neither header is answered 400 before any payment is taken.`;
+    return `Takes up to ${span} to answer: send the paid call with "Prefer: respond-async" to get a job link at once and collect the answer from it (on x402 the payment settles only on a delivered result), or with "Prefer: wait=${s}" and keep the connection open for at least ${s + 30} seconds, because a client that disconnects first loses the answer. A paid call with neither header is answered 400 before any payment is taken.`;
   }
-  return `Takes up to ${span} to answer: keep the connection open for at least ${s + 30} seconds, because a client that disconnects first loses the answer, or send the paid call with "Prefer: respond-async" to get a job link at once and collect the answer from it (payment still settles only on a delivered result).`;
+  return `Takes up to ${span} to answer: keep the connection open for at least ${s + 30} seconds, because a client that disconnects first loses the answer, or send the paid call with "Prefer: respond-async" to get a job link at once and collect the answer from it (on x402 the payment settles only on a delivered result).`;
 }
 
 const UINT = /^\d{1,20}$/;
@@ -131,7 +131,7 @@ export function evmValidityShortfall(headerValue, slug, { nowMs = Date.now() } =
   const field = exp.form === "permit2" ? "deadline" : "validBefore";
   return {
     remaining, required,
-    message: `Payment authorization expires too soon for this route: about ${Math.max(0, Math.floor(remaining))} s remain before its ${field}, and ${slug} settles only after its work is done, which needs about ${required} s. It would expire before it could settle. You have not been charged. Request a fresh 402 and pay it at once, or sign with ${field} at least ${required} s ahead.`,
+    message: `Payment authorization expires too soon for this route: about ${Math.max(0, Math.floor(remaining))} s remain before its ${field}, and ${slug} settles this authorization only after its work is done, which needs about ${required} s. It would expire before it could settle. You have not been charged. Request a fresh 402 and pay it at once, or sign with ${field} at least ${required} s ahead.`,
   };
 }
 

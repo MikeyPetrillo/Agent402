@@ -40,8 +40,10 @@ let e2bInFlight = 0;
 
 // Per-payer concurrency: one caller cannot hold every sandbox slot. Keyed on
 // the payer's own identity where the request carries one (signed EVM payer,
-// credits key, Tempo sender); otherwise on the client IP, with a looser limit
-// because many callers can share one address.
+// credits key, Tempo sender); a call paid another way on its own payment, so
+// it is never refused for another caller's runs; otherwise on the client IP,
+// with a looser limit because many callers can share one address
+// (src/dispatch-caller.js callerKeyOf).
 // The service-wide figure the public copy quotes (src/guides.js, the wiki).
 export const CODE_RUN_PER_PAYER_MAX = 2;
 const PER_PAYER_MAX_CONCURRENT = perReplica(CODE_RUN_PER_PAYER_MAX);
