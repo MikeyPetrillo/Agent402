@@ -55,6 +55,13 @@ const sentTo = (host) => sent.filter((u) => isHost(u, host)).length;
   ok(sentTo("busy.example") === before && entry?.verified === true, "past the budget a crawl sends nothing and the listing stands as it was");
   await mpp.verifyMppSeller(O, { probe, fetchDoc, fetchText });
   ok(sentTo("busy.example") === before + 1, "a registration the seller asked for is still sent");
+  // A registration anyone asks for is counted apart: it never spends the day
+  // the crawl reads.
+  const R = "https://registered.example";
+  await mpp.verifyMppSeller(R, { probe, fetchDoc, fetchText });
+  ok(sentTo("registered.example") === 2 && (await sellerLoad.budgetSpent(R)).used === 0, "a registration's reads are sent and not counted on the site's day");
+  await mpp.verifyMppSeller(R, { probe, fetchDoc, fetchText, gate: true });
+  ok((await sellerLoad.budgetSpent(R)).used === 1, "control: the crawl's own probe is counted on it");
   clock += 24 * 3_600_000;
   await mpp.verifyMppSeller(O, { probe, fetchDoc, fetchText, gate: true });
   ok(sentTo("busy.example") === before + 2, "the next UTC day the crawl probes again");
