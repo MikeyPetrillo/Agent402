@@ -350,9 +350,10 @@ body { transition: background-color .18s ease, color .18s ease; }
 @media (max-width:900px){
 }
 @media (min-width:1101px){ .ml-mobile-menu { display:none !important; } }
-/* From 1101px up to where the container's full width is free, the bar's words sit closer, so every word
-   (Decide included when it is live), the theme toggle and the primary action fit on one row. */
-@media (min-width:1101px) and (max-width:1240px){ .ml-nav-in { gap:20px !important; } .ml-nav-links { gap:16px !important; margin-left:0 !important; } }
+/* The desktop bar holds every word (Decide included when it is live), the theme toggle and the primary
+   action on one row, with room to spare under wider fallback fonts: 16px between words at full width
+   (the inline style), 14px from 1101px up to where the container's full width is free. */
+@media (min-width:1101px) and (max-width:1240px){ .ml-nav-in { gap:16px !important; } .ml-nav-links { gap:14px !important; } }
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body { background: var(--paper); font-family: var(--font-body); color: var(--ink); -webkit-font-smoothing: antialiased; }
@@ -1010,12 +1011,12 @@ function nav(activePath) {
   const divider = `<span style="width:1px;height:15px;background:var(--hairline);flex:none;"></span>`;
 
   return `<nav aria-label="Main" style="border-bottom:1px solid var(--hairline);background:var(--nav-bg);backdrop-filter:saturate(1.4) blur(14px);-webkit-backdrop-filter:saturate(1.4) blur(14px);position:sticky;top:0;z-index:50;">
-  <div class="ml-nav-in" style="max-width:1180px;margin:0 auto;padding:15px 30px;display:flex;align-items:center;gap:26px;">
+  <div class="ml-nav-in" style="max-width:1180px;margin:0 auto;padding:15px 30px;display:flex;align-items:center;gap:22px;">
     <a href="/" style="display:flex;align-items:center;gap:11px;text-decoration:none;color:var(--ink);">
       ${brandMark(24, "n")}
       <span style="font-weight:600;font-size:var(--fs-lg);letter-spacing:-.01em;">Agent402</span>
     </a>
-    <div class="ml-nav-links" style="display:flex;align-items:center;gap:22px;margin-left:10px;font-family:var(--font-body);font-size:var(--fs-md);">
+    <div class="ml-nav-links" style="display:flex;align-items:center;gap:16px;font-family:var(--font-body);font-size:var(--fs-md);">
       ${zone1}
       ${divider}
       ${zone2}
