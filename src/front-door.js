@@ -13,6 +13,7 @@
 // read from the allowance config and the catalog. The recovery lines state
 // each rule only where it holds; scripts/test-front-door.js reads every
 // surface in both switch states.
+import { PAYMENT_RETRY_VERBS_NOTE } from "./tool-error-fields.js";
 import { FLAGSHIP_MCP_NAMES, FLAGSHIP_SLUGS, AGENT402_MCP_VERSION } from "./mcp-flagship.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { RAILS_OR, liveRails } from "./rails.js";
@@ -63,8 +64,14 @@ export const RECOVERY_ANCHOR = `#${RECOVERY_HEADING.toLowerCase().replace(/\s+/g
  *  out, a disconnect during it, or a facilitator's pending answer whose
  *  receipt was not read in time (src/pending-settle.js), while the transfer
  *  still lands. Every surface that says no PAYMENT-RESPONSE means nothing
- *  settled carries it (scripts/test-front-door.js scans for the claim). */
-export const LATE_SETTLE_EXCEPTION = "One exception, on the EVM chains: a transfer that lands after a timed-out settle, a disconnect during settle, or a settle the facilitator answered as pending whose receipt was not read in time, is booked as a refund owed and repaid after on-chain proof.";
+ *  settled carries it (scripts/test-front-door.js scans for the claim). Its
+ *  second sentence (UNCONFIRMED_SETTLE_CLAUSE) is the one failed receipt that
+ *  is not a refusal: a settle chain that ended without showing whether the
+ *  transfer was sent (src/payments.js markUnprovenStop). Every surface that
+ *  says a success:false receipt means not charged carries it
+ *  (scripts/test-copy-absolutes.js scans for that claim). */
+export const UNCONFIRMED_SETTLE_CLAUSE = "A failed receipt whose reason is settlement_unconfirmed is not a refusal: the settle ended without showing whether the transfer was sent, so the payment may still land. Do not sign a new authorization before the authorizationValidBefore time that answer names; a transfer that lands for a payment the answer says is recorded is booked as a refund owed the same way.";
+export const LATE_SETTLE_EXCEPTION = `One exception, on the EVM chains: a transfer that lands after a timed-out settle, a disconnect during settle, or a settle the facilitator answered as pending whose receipt was not read in time, is booked as a refund owed and repaid after on-chain proof. ${UNCONFIRMED_SETTLE_CLAUSE}`;
 
 /** What the paid tier settles in and over which wires, from the live config:
  *  the stablecoins named from the rails list (USDC alone only when every rail
@@ -172,7 +179,8 @@ export function recoveryMarkdown(catalog, baseUrl) {
 - **If a call fails:** ${d.recovery[0]}
 - **If an answer is lost:** ${d.recovery[1]}
 - **To retry:** ${d.recovery[2]}
-- **If a call is slow:** ${d.recovery[3]}`;
+- **If a call is slow:** ${d.recovery[3]}
+- **If a payment is refused:** ${PAYMENT_RETRY_VERBS_NOTE}`;
 }
 
 /** JSON: the MCP server.describe answer, and the source of the unpaid 402

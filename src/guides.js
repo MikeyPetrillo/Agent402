@@ -423,7 +423,8 @@ Each answer says whether it settled:
 
 - No \`PAYMENT-RESPONSE\` header: nothing settled.
 - \`PAYMENT-RESPONSE\` whose receipt reads \`success: false\`: settlement was
-  refused, nothing moved.
+  refused, nothing moved, unless its reason is \`settlement_unconfirmed\`
+  (below).
 - \`PAYMENT-RESPONSE\` with a status under 400: charged and served.
 
 ${LATE_SETTLE_EXCEPTION}
@@ -1783,10 +1784,7 @@ maxPerCallUsd: 0.05, dailyLimitUsd: 2 })\` from
 A \`200\` with JSON and a \`PAYMENT-RESPONSE\` header (the settle receipt).
 A \`4xx\`/\`5xx\` is not charged on x402: settlement runs after the handler and only
 for a successful response, and you can verify that from the headers you hold
-(no \`PAYMENT-RESPONSE\` = nothing settled). One exception: a transfer that
-lands after a timed-out settle, a disconnect during settle, or a settle the
-facilitator answered as pending whose receipt was not read in time, is booked
-as a refund owed and repaid after on-chain proof. Prefer MPP? The same 402 also
+(no \`PAYMENT-RESPONSE\` = nothing settled). ${LATE_SETTLE_EXCEPTION} Prefer MPP? The same 402 also
 carries a \`WWW-Authenticate: Payment\` challenge - see
 [x402 and MPP on the same paywall](/guides/x402-and-mpp).
 `,

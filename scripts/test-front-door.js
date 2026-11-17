@@ -40,9 +40,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const EM_DASH = /[—–]/;
 const strip = (s) => String(s).replace(/`/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
 /** Words that belong to the recovery lines: none of them may sit in the three-line block. */
-const RECOVERY_WORDS = /If a call fails|If an answer is lost|To retry|If a call is slow|PAYMENT-RESPONSE|X-Replayed-Answer|Idempotency-Key|Prefer: respond-async|\/api\/jobs/;
+const RECOVERY_WORDS = /If a call fails|If an answer is lost|To retry|If a call is slow|If a payment is refused|watch-transaction|check-wallet|PAYMENT-RESPONSE|X-Replayed-Answer|Idempotency-Key|Prefer: respond-async|\/api\/jobs/;
 const LABELS = ["First call", "Access", "Use when"];
-const RECOVERY_LABELS = ["If a call fails", "If an answer is lost", "To retry", "If a call is slow"];
+const RECOVERY_LABELS = ["If a call fails", "If an answer is lost", "To retry", "If a call is slow", "If a payment is refused"];
 
 /** A labeled bullet list under a "## heading", up to the next blank line. */
 function listOf(md, heading, label, labels) {
@@ -345,6 +345,11 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
   const R = listOf(agents, RECOVERY_HEADING, `${tag} ${AGENTS_MD_PATH}`, RECOVERY_LABELS);
   ok(R.at > A.at && R.at < agents.indexOf("## Connect") && agents.indexOf("## Connect") < agents.indexOf("## Pay"), `${tag} ${AGENTS_MD_PATH}: "${RECOVERY_HEADING}" follows the block, ahead of Connect and Pay`);
   assertRecoveryScope(`${tag} ${AGENTS_MD_PATH}`, RECOVERY_LABELS.map((k) => R.lines[k]));
+  {
+    const refused = strip(R.lines["If a payment is refused"] || "");
+    ok(/same-payment/.test(refused) && /watch-transaction/.test(refused) && /check-wallet/.test(refused) && /fresh-authorization/.test(refused) && /authorizationValidBefore/.test(refused) && /refundStatusUrl/.test(refused) && /do not sign a new authorization/.test(refused),
+      `${tag} ${AGENTS_MD_PATH}: the refused-payment line names the retry verbs, the time a new payment is safe and the refund lookup`);
+  }
   ok(mpp ? agents.includes("both offers (x402") : agents.includes("the x402 offer (`PAYMENT-REQUIRED`)") && !agents.includes("both offers"), `${tag} ${AGENTS_MD_PATH}: Connect names ${mpp ? "both offers" : "the x402 offer only"}`);
   ok(!EM_DASH.test(agents), `${tag} ${AGENTS_MD_PATH}: no em or en dash anywhere`);
 

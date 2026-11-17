@@ -3,6 +3,18 @@
 import { coverReasonOf } from "./refusal-reason.js";
 const HINT_RE = /^[a-z][a-z0-9-]{0,39}$/;
 
+/**
+ * The `retry` verbs a refused payment's body carries, in one sentence, for
+ * every surface that documents the 402 body (/openapi.json, /llms-full.txt,
+ * /agents.md; the wiki's Paying with x402 page and the client README say the
+ * same in their own words). The verbs: `same-payment` (src/gateway-wire.js,
+ * src/payment-reject.js not-checked), `watch-transaction` and `check-wallet`
+ * (a settlement that is not confirmed, src/payment-reject.js),
+ * `fresh-authorization`, `other-network` (a refusal scoped to one network,
+ * below), `fund-wallet`, `rebuild-payment` and the classifier's others.
+ */
+export const PAYMENT_RETRY_VERBS_NOTE = "On a refused payment the body's retry field says which retry is safe: same-payment means send the same payment again after Retry-After; watch-transaction (the body lists transactions) and check-wallet (it lists none) mean the settlement is not confirmed, so do not sign a new authorization before the authorizationValidBefore time the body names, and read refundStatusUrl (a free lookup) when it is there; fresh-authorization means sign a new payment; every other value names the change that helps.";
+
 /** { upstreamStatus?, attribution?, retryAfterSeconds?, hint?, reason?, retry?, refusedNetwork?, otherNetworksFrom?, fix? } from a thrown error. */
 export function toolErrorFields(err) {
   const upstreamStatus = Number.isInteger(err?.upstreamStatus) ? err.upstreamStatus : null;

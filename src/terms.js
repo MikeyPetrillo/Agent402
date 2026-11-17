@@ -56,7 +56,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-16.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-17.</p>
 </section>
 
 <section>
@@ -149,7 +149,9 @@ call runs, such as an MPP payment sent as a Tempo transfer; if that call then fa
 closes after a payment has settled and before the response is delivered, we record the amount as owed
 back to the paying wallet, and repay it as described under refunds below. If an x402 payment on an EVM
 chain, Solana or Algorand whose failed settlement named its transaction, or a Tempo transaction, lands on chain after we
-answered the call with an error, we record the amount as owed back to the paying wallet and repay it the same way. Micropayments are per call and, once settled on-chain, are final and
+answered the call with an error, we record the amount as owed back to the paying wallet and repay it the same way. When the settlement of an
+x402 payment on an EVM chain ends without confirmation and names no transaction, we record the signed authorization itself, up to a
+limit per paying wallet, and if a transfer that uses it lands on chain we record the amount as owed back and repay it the same way. Micropayments are per call and, once settled on-chain, are final and
 non-refundable except as described in these terms or where required by law. Metered routes quote a ceiling before
 payment and settle at or under it. You are responsible for your own wallet and keys; we never receive or
 hold your private key.${publicIndex ? ` ${publicIndex}` : ""}</p>${gatewayBatched ? `

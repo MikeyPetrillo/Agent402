@@ -866,5 +866,40 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   ok(bad.length === 0, `every refusal that prints the shared sentence reads as one statement to each payer class${bad.length ? ` - ${bad.join(" | ")}` : ""}`);
 }
 
+// A failed receipt is not always "not charged". A settle chain that ended
+// without showing whether the transfer was sent answers with a success:false
+// receipt whose reason is settlement_unconfirmed, and that payment may still
+// land (src/payments.js markUnprovenStop). So any surface that says a
+// success:false receipt means not charged (or nothing moved, or safe to
+// retry) names that case right after: in words, or through the shared clause
+// (LATE_SETTLE_EXCEPTION carries UNCONFIRMED_SETTLE_CLAUSE, src/front-door.js).
+{
+  // The claim may run into the next sentence ("... REJECTED. You were not
+  // charged ..."), so a sentence end does not stop the read.
+  const CLAIM = /\breceipt\b[^.|]{0,60}success: ?false\b[^|]{0,260}?\b(?:not charged|nothing moved)\b|success: ?false\W{0,6}receipt\b[^.]{0,260}?\b(?:not charged|nothing moved)\b|success: ?false\W{0,4} means x402 settlement was refused[^.]{0,120}\bnot charged\b/gi;
+  const CARVE = /settlement_unconfirmed|\$\{LATE_SETTLE_EXCEPTION\}|\$\{UNCONFIRMED_SETTLE_CLAUSE\}/;
+  const scan = (text) => {
+    const flat = String(text || "").replace(/\\`/g, "`").replace(/\s+/g, " ");
+    const out = [];
+    for (const m of flat.matchAll(CLAIM)) out.push({ claim: m[0], carved: CARVE.test(flat.slice(m.index, m.index + m[0].length + 900)) });
+    return out;
+  };
+  let claims = 0;
+  const bare = [];
+  for (const rel of files.filter((f) => /\.(?:js|md|txt)$/.test(f))) {
+    for (const c of scan(read(rel))) { claims++; if (!c.carved) bare.push(`${rel}: ${c.claim.slice(0, 120)}`); }
+  }
+  ok(claims >= 6, `found ${claims} places that say a success:false receipt means not charged (a collapsed scan must fail)`);
+  ok(bare.length === 0, `every such claim names the unconfirmed case after it${bare.length ? ` - ${bare.join(" | ")}` : ""}`);
+  const { LATE_SETTLE_EXCEPTION, UNCONFIRMED_SETTLE_CLAUSE } = await import("../src/front-door.js");
+  ok(LATE_SETTLE_EXCEPTION.endsWith(UNCONFIRMED_SETTLE_CLAUSE) && /settlement_unconfirmed/.test(UNCONFIRMED_SETTLE_CLAUSE) && /authorizationValidBefore/.test(UNCONFIRMED_SETTLE_CLAUSE) && /Do not sign a new authorization/.test(UNCONFIRMED_SETTLE_CLAUSE),
+    "the shared exception carries the unconfirmed clause: the reason, the time field and the instruction not to sign again");
+  const unscoped = "- **`PAYMENT-RESPONSE` present, receipt `success: false`** - settlement was attempted and REJECTED. You were not charged on x402. Safe to retry with a fresh authorization.";
+  ok(scan(unscoped).length === 1 && scan(unscoped)[0].carved === false && scan(`${unscoped} ${UNCONFIRMED_SETTLE_CLAUSE}`)[0].carved === true
+    && scan("a failed call is answered with no payment receipt, or with a receipt marked success:false, and is not charged. A retry replays.")[0]?.carved === false
+    && scan("| 402 with `success: false` receipt | Facilitator rejected settlement | Fund the wallet; you were not charged on x402 |")[0]?.carved === false,
+    "control: the unscoped sentence, in each published form, fails the scan, and the same sentence with the clause passes");
+}
+
 console.log(`test-copy-absolutes: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

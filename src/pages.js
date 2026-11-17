@@ -3,6 +3,7 @@
 import { siteOrgRef } from "./site-org.js";
 import { usdToBaseUnits } from "./base-units.js";
 import { frontDoorOneLine } from "./front-door.js";
+import { PAYMENT_RETRY_VERBS_NOTE } from "./tool-error-fields.js";
 import { openapiRequestBody } from "./openapi-request.js";
 import { asyncAdvice } from "./slow-routes.js";
 import { leaderboardCadence } from "./refresh-cadence.js";
@@ -870,7 +871,7 @@ export function openapiSpec(baseUrl, catalog) {
             ? { schema: responseSchemaFor(path, discovery?.output?.example, discovery?.output?.optional), example: discovery?.output?.example ?? {}, ...(discovery?.output?.captured ? { "x-example-source": { kind: "captured-paid-answer", capturedAt: discovery.output.captured.capturedAt, modelBacked: discovery.output.captured.modelBacked === true } } : {}) }
             : { schema: { type: "string", format: "binary" } }])),
         },
-        402: { description: "Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment). A first-contact body also carries payment: this request's price in dollars on the named network, how to pay, the proof-of-work path on a free-tier tool (noWallet), the caller's own inputs on a route quoted from its body (quote), and links to /llms.txt, the pay section of /agents.md and the MCP connector" },
+        402: { description: `Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment). A first-contact body also carries payment: this request's price in dollars on the named network, how to pay, the proof-of-work path on a free-tier tool (noWallet), the caller's own inputs on a route quoted from its body (quote), and links to /llms.txt, the pay section of /agents.md and the MCP connector. ${PAYMENT_RETRY_VERBS_NOTE}` },
         400: { description: "Invalid input - the JSON body names the tool's input schema (expected, required), its example, and howToCall: the same example as a ready-to-run request (method, url, and a JSON body, or form parts for a multipart tool), with the other method under alternate where it is served; a call over 1024 bytes carries only method and url" },
         // One shared object (the description is the same on every route).
         429: OPENAPI_429,

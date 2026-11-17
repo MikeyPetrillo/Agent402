@@ -19,14 +19,32 @@ Surfaces:
 
 Payments:
 - When a settle fallback answers with an HTTP error, a dropped connection, an
-  unreadable body or a failure that names a transaction, the refusal says the
+  unreadable body, a failure that names a transaction, or a refusal in its own
+  words that is not a verdict about the payment, the refusal says the
   settlement is not confirmed (reason settlement-unconfirmed, retry
   watch-transaction when a transaction is named and check-wallet when none is)
   and carries no offer to sign, on the HTTP route and on the hosted MCP
-  connector. The authorization or the named transaction is booked, and a
-  transfer that lands is owed to the paying wallet and repaid after on-chain
-  proof. A facilitator's HTTP 200 answer that cannot be read is answered the
-  same way.
+  connector. It names the time the signed authorization stops being usable
+  (authorizationValidBefore), after which a new payment is safe, and the free
+  refund lookup for a named transaction (refundStatusUrl). On an EVM chain the
+  named transaction, or with none the EIP-3009 authorization, is booked, up to
+  a bound per paying wallet, and a transfer that lands is owed to the paying
+  wallet and repaid after on-chain proof; the refusal says so only when the
+  booking was made. A fallback's verdict about the payment itself that names
+  no transaction (a signature, the balance, an expired window) is a decided
+  answer and keeps the earlier refusal. A facilitator's HTTP 200 answer that
+  cannot be read is answered as unconfirmed too. Such a refusal never counts
+  against the paying wallet. The same payment sent again while it is booked
+  gets the same answer without the call running; once its transfer has landed
+  it gets the owed record (reason settled-refund-owed), and after a chain read
+  shows the authorization unused it is settled once more.
+
+Packages:
+- In source for the next release of the buyer client and the MCP server: an
+  answer that says the settlement is not confirmed (retry watch-transaction or
+  check-wallet) keeps its spending hold until the signed authorization expires
+  and is never worded as not charged; the client's error carries the refusal's
+  reason, retry, authorizationValidBefore, transactions and refundStatusUrl.
 
 Operations:
 - The MCP tool listings pass signs only an offer that pays the server's

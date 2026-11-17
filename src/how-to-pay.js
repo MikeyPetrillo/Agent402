@@ -26,6 +26,7 @@ import { LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
+import { UNCONFIRMED_SETTLE_CLAUSE } from "./front-door.js";
 import { listAnd, mono, eyebrow, h2, h3, p, link, code, pre, section, th, thead, td, row, table as sharedTable } from "./page-html.js";
 
 const NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen"];
@@ -299,7 +300,7 @@ ${section("failed", `
   ${eyebrow("07 / WHEN A CALL FAILS")}
   ${h2("What happens to the money, rail by rail.")}
   ${table(["rail", "a 4xx or 5xx", "a 200 whose settlement fails", "an answer that never reached you"], [
-    row([tdMono("x402"), td("Not charged: the error cancels settlement before any facilitator call."), td("The result is withheld and you get a 402; nothing settled. A transfer that lands after a timed-out settle, a disconnect during settle, or a settle the facilitator answered as pending whose receipt was not read in time, is booked as a refund owed and repaid after on-chain proof."), td("Not charged while the hang-up budget holds (below); past it, the charge is booked as owed.")]),
+    row([tdMono("x402"), td("Not charged: the error cancels settlement before any facilitator call."), td(`The result is withheld and you get a 402; nothing settled. A transfer that lands after a timed-out settle, a disconnect during settle, or a settle the facilitator answered as pending whose receipt was not read in time, is booked as a refund owed and repaid after on-chain proof. ${UNCONFIRMED_SETTLE_CLAUSE}`), td("Not charged while the hang-up budget holds (below); past it, the charge is booked as owed.")]),
     ...(gatewayOfferPublic() ? [row([tdMono("Gateway batched"), td("Not charged: the same settlement path as x402."), td("A 402 with Retry-After; resend the same payment to be served; a payment that settles and is never served is booked as owed."), td("Same budget rule as x402.")])] : []),
     row([tdMono("MPP evm"), td("Not charged: the same settlement path as x402."), td("Same as x402."), td("Same as x402.")]),
     row([tdMono("Tempo charge"), td("Not charged: the credential is broadcast only after a response below 400."), td("A 402 and nothing broadcast."), td("Same budget rule as x402.")]),

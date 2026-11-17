@@ -37,6 +37,24 @@ ok(!/failed call is never charged/i.test(llms),
 ok(!/cannot happen/i.test(llms.replace(/rather than claim it cannot happen/i, "")),
   "no other 'cannot happen' absolute crept in");
 
+// --- the one failed receipt that is not a refusal ---------------------------
+// A settle that ended without showing whether the transfer was sent answers
+// with a success:false receipt whose reason is settlement_unconfirmed: that
+// payment may still land, so "not charged, sign again" must not cover it.
+{
+  const branch2 = (llms.split("\n").find((l) => /receipt .?success: false.?\*\* - settlement was attempted/.test(l)) || "");
+  ok(/settlement_unconfirmed/.test(branch2) && /authorizationValidBefore/.test(branch2) && !/REJECTED[^.]*\)\. You were not charged on x402\. Safe to retry/.test(branch2),
+    "branch 2 is scoped: a receipt whose reason is settlement_unconfirmed is not 'not charged, safe to retry'");
+  ok(/A failed receipt whose reason is settlement_unconfirmed is not a refusal/.test(llms) && /Do not sign a new authorization before the authorizationValidBefore time/.test(llms),
+    "the unconfirmed case is stated: the payment may still land, and when a new payment is safe");
+  ok(/watch-transaction/.test(llms) && /check-wallet/.test(llms) && /same-payment/.test(llms) && /refundStatusUrl/.test(llms),
+    "the retry verbs a refused payment carries are documented (same-payment, watch-transaction, check-wallet) with the refund lookup field");
+  const agents = await (await fetch(`${TARGET}/agents.md`)).text();
+  ok(/watch-transaction/.test(agents) && /check-wallet/.test(agents) && /authorizationValidBefore/.test(agents) && /settlement_unconfirmed/.test(agents), "/agents.md documents the same verbs and the unconfirmed case");
+  const openapi = await (await fetch(`${TARGET}/openapi.json`)).text();
+  ok(/watch-transaction/.test(openapi) && /check-wallet/.test(openapi) && /authorizationValidBefore/.test(openapi), "/openapi.json's 402 description documents the retry verbs");
+}
+
 // --- the operational facts a retrying buyer needs ---------------------------
 ok(/single-use/i.test(llms), "states that an authorization is single-use, so a retry needs a fresh signature");
 ok(/Idempotency-Key/.test(llms), "states how to make a paid retry replay instead of re-charging");
