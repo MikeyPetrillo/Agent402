@@ -6,6 +6,16 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-17 (seller documentation links on the exact seller record)
+Surfaces:
+- An exact seller record (/api/index?seller=<host>) carries an operation's
+  documentation link as sellerDocsUrl when the seller's own OpenAPI names one
+  (externalDocs.url) as an https link on the seller's exact host, with no
+  credentials or fragment, ASCII only and 200 characters at most. The link is
+  seller-supplied and unverified: it is never fetched, changes no price, quote
+  or routing, and is withheld on a row the listing screen flags. No other
+  surface carries it.
+
 ### 2026-11-17 (press kit, MCP server card and one profile list)
 Site:
 - /press is a press kit: how to write the name, the logo and social card files,

@@ -8,6 +8,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-17",
+    title: "Seller documentation links on the exact seller record",
+    items: [
+      "Surfaces: An exact seller record (/api/index?seller=<host>) carries an operation's documentation link as sellerDocsUrl when the seller's own OpenAPI names one (externalDocs.url) as an https link on the seller's exact host, with no credentials or fragment, ASCII only and 200 characters at most. The link is seller-supplied and unverified: it is never fetched, changes no price, quote or routing, and is withheld on a row the listing screen flags. No other surface carries it.",
+    ],
+  },
+  {
+    date: "2026-11-17",
     title: "Press kit, MCP server card and one profile list",
     items: [
       "Site: /press is a press kit: how to write the name, the logo and social card files, the operating company and the press contact. /about answers at /company, the entity page.",

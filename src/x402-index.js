@@ -2816,6 +2816,41 @@ function isDevServerHost(h) {
     || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
 }
 
+/** The documentation link an OpenAPI operation names (`externalDocs.url`),
+ *  kept only when it is an https URL on exactly the seller origin's host (no
+ *  www folding, no subdomain), with no credentials or fragment, printable
+ *  ASCII throughout and at most SELLER_DOCS_URL_MAX characters before and
+ *  after it is re-serialized through URL. Anything else is null. The link is
+ *  seller-supplied and never fetched by the index; `externalDocs.description`
+ *  is not read. Served on the exact ?seller= record only (sellerDetail). */
+export const SELLER_DOCS_URL_MAX = 200;
+const PRINTABLE_ASCII_RE = /^[\x21-\x7e]+$/;
+export function sellerDocsUrlFor(raw, sellerOrigin) {
+  if (typeof raw !== "string" || !raw || raw.length > SELLER_DOCS_URL_MAX || !PRINTABLE_ASCII_RE.test(raw) || raw.includes("#")) return null;
+  let u, o;
+  try { u = new URL(raw); o = new URL(String(sellerOrigin || "")); } catch { return null; }
+  if (u.protocol !== "https:" || u.username || u.password || u.hash) return null;
+  if (!u.host || u.host !== o.host) return null;
+  const out = u.href;
+  return out.length <= SELLER_DOCS_URL_MAX && PRINTABLE_ASCII_RE.test(out) ? out : null;
+}
+export const SELLER_DOCS_URL_LEGEND = "Per tool: sellerDocsUrl = the documentation link the seller's own OpenAPI gives this operation (externalDocs.url). It is seller-supplied and unverified: this index never fetches it, it does not change price, quote, routing or payment, and it is kept only as an https link on this seller's exact host. A row the listing screen flags is served without it.";
+/** True when a stored docs link trips the listing screen, as written or
+ *  percent-decoded. */
+function sellerDocsUrlFlagged(url) {
+  if (typeof url !== "string") return true;
+  if (listingInjectionFinding(url)) return true;
+  let decoded = url;
+  try { decoded = decodeURIComponent(url); } catch { /* not decodable: the raw text is read spaced */ }
+  // Path separators read as spaces, so a phrase spelled as a slug is seen.
+  return listingInjectionFinding(decoded.replace(/[-_/+.=&?:]+/g, " ")) != null;
+}
+/** An operation's externalDocs.url, validated against the seller origin. */
+function operationDocsUrl(op, originUrl) {
+  const docs = op && typeof op === "object" ? op.externalDocs : null;
+  return docs && typeof docs === "object" && !Array.isArray(docs) ? sellerDocsUrlFor(docs.url, originUrl) : null;
+}
+
 export function normaliseOpenapiTools(openapi, originUrl) {
   return scopeRowsToSeller(runSteps(normaliseOpenapiToolsSteps(openapi, originUrl)), originUrl);
 }
@@ -3070,6 +3105,11 @@ function* normaliseOpenapiToolsSteps(openapi, originUrl) {
         })(),
         ...(pay.networks.length ? { networks: pay.networks } : {}),
         ...(Object.keys(pay.payToByNetwork).length ? { payToByNetwork: pay.payToByNetwork } : {}),
+        // The operation's own documentation link (externalDocs.url), same
+        // host only (operationDocsUrl). Stored on the row, served on the exact
+        // ?seller= record alone; never fetched, never read by ranking,
+        // pricing, quoting or dispatch.
+        ...(() => { const d = operationDocsUrl(op, originUrl); return d ? { sellerDocsUrl: d } : {}; })(),
         // In a document that distinguishes paid operations, an unannotated
         // sibling is free (paid:false) - the seller's own free routes list
         // rather than vanish. An explicit `x-payment-required: false` reads
@@ -4419,10 +4459,11 @@ function* templatesMatching(index, concreteRoute) {
 const ownKey = Object.prototype.hasOwnProperty;
 function withoutRegistryContracts(row) {
   if (!row || typeof row !== "object") return row;
-  if (!ownKey.call(row, "requestContract") && !ownKey.call(row, "responseContract") && Object.getOwnPropertySymbols(row).length === 0) return { ...row };
+  if (!ownKey.call(row, "requestContract") && !ownKey.call(row, "responseContract") && !ownKey.call(row, "sellerDocsUrl") && Object.getOwnPropertySymbols(row).length === 0) return { ...row };
   const clean = {};
   for (const key of Object.keys(row)) {
-    if (key === "requestContract" || key === "responseContract") continue;
+    // sellerDocsUrl too: only the seller's own OpenAPI operation names it.
+    if (key === "requestContract" || key === "responseContract" || key === "sellerDocsUrl") continue;
     clean[key] = row[key];
   }
   return clean;
@@ -4496,6 +4537,9 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     const bazaar = withoutRegistryContracts(b);
     const requestContract = ownContractTuple(o, "requestContract");
     const responseContract = ownContractTuple(o, "responseContract");
+    // The operation's own documentation link, an own string re-checked
+    // against the row's seller origin (sellerDocsUrlFor).
+    const sellerDocsUrl = ownKey.call(o, "sellerDocsUrl") ? sellerDocsUrlFor(o.sellerDocsUrl, o.seller) : null;
     const bazaarMicro = priceToMicroUsd(b.price);
     const originMicro = priceToMicroUsd(o.price);
     const priceConflict = bazaarMicro != null && originMicro != null && bazaarMicro !== originMicro;
@@ -4534,6 +4578,7 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     // routing, pricing, or payment behavior.
     ...(requestContract ? { requestContract } : {}),
     ...(responseContract ? { responseContract } : {}),
+    ...(sellerDocsUrl ? { sellerDocsUrl } : {}),
     price,
     // What the ORIGIN itself declared this crawl, kept separately so a later
     // stage cannot quietly overwrite the seller's own current number with an
@@ -9737,7 +9782,13 @@ export function sellerDetail(originOrHost) {
         // came from, and when it last answered us live. An undeclared row
         // that stops answering leaves the listing (see stampDeclared).
         ...listingBasisProjection(t),
+        // The operation's documentation link from the seller's own OpenAPI
+        // (externalDocs.url), re-checked against this origin. This record
+        // alone carries it; screenSellerDetailForServe withholds it on a
+        // flagged row. Legend: sellerDocsUrlLegend.
+        ...(() => { const d = sellerDocsUrlFor(t.sellerDocsUrl, origin); return d ? { sellerDocsUrl: d } : {}; })(),
       })),
+      sellerDocsUrlLegend: SELLER_DOCS_URL_LEGEND,
     };
   }
   return null;
@@ -9769,6 +9820,9 @@ export function screenSellerDetailForServe(d) {
       const s = memoServeScreen(rawRow || t, "detailListing", [t.name, t.description, category, t.tags, t.route || null, t.slug ?? null],
         () => screenListingForServe({ name: t.name, description: t.description, category, tags: t.tags, slug: t.slug ?? null, route: t.route ?? null }, { fallbackName: t.route || null }));
       const row = { ...t, name: s.name ?? null, description: s.description ? s.description : null };
+      // A flagged row's documentation link is withheld with its text, and a
+      // link that itself reads as an instruction is never served.
+      if ("sellerDocsUrl" in row && (s.finding || sellerDocsUrlFlagged(row.sellerDocsUrl))) delete row.sellerDocsUrl;
       if (t.slug !== undefined) row.slug = s.slug ?? null;
       if (t.tags !== undefined) row.tags = s.tags.length ? s.tags : undefined;
       return { ...row, ...untrustedMarker(s.finding) };
