@@ -381,14 +381,19 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
   }
   // Two readers slicing at once never share a loop pass: Node runs every
   // immediate queued for a pass back to back, so per-runner scheduling ran
-  // one slice of each in the same pass. A 1 ms timer marks the passes.
+  // one slice of each in the same pass. An immediate that requeues itself
+  // marks the passes: it runs once in every pass, ahead of the slice (it was
+  // queued first and both requeue in order), so the mark is exact whatever a
+  // slice's length. (A 1 ms timer as the mark read two passes as one when a
+  // job's last slice was shorter than the timer.)
   {
-    let pass = 0;
-    const tick = setInterval(() => { pass++; }, 1);
+    let pass = 0, marking = true;
+    const mark = () => { pass++; if (marking) setImmediate(mark); };
+    setImmediate(mark);
     const seenIn = new Map();
     const job = function* (id) { for (let k = 0; k < 60; k++) { const t = performance.now(); while (performance.now() - t < 0.5); (seenIn.get(pass) || seenIn.set(pass, new Set()).get(pass)).add(id); yield; } };
     await Promise.all([runSliced(job("a")), runSliced(job("b"))]);
-    clearInterval(tick);
+    marking = false;
     const shared = [...seenIn.values()].filter((ids) => ids.size > 1).length;
     ok(shared === 0, `two slicing readers take turns, one slice per loop pass (${shared} of ${seenIn.size} passes ran both)`);
   }
