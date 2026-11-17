@@ -5,7 +5,7 @@
 // turning the database on carries every store across. The Postgres half runs
 // only when STATE_DATABASE_URL points at a database (required under CI).
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -38,6 +38,37 @@ process.env.DATABASE_URL = "postgres://ignored.example/analytics"; // DATABASE_U
   ok(mem.backend === "memory" && (await mem.load("x")) === "x", "no file and no database: memory backend");
   await mem.save({ m: 1 });
   ok((await mem.load()).m === 1 && (await mem.mergeKeys({ n: 2 })).n === 2, "memory save and merge");
+  // saveSerialized on the file backend: the pieces are the file, written off
+  // the loop, and saves issued together land in call order.
+  {
+    const sfile = join(DIR, "ser", "s.json");
+    const sdoc = createJsonDocument({ file: sfile, log: () => {} });
+    const piecesFor = (body) => { const raw = JSON.stringify(body); const out = []; for (let i = 0; i < raw.length; i += 4096) out.push(raw.slice(i, i + 4096)); return out; };
+    const big = { n: "big", rows: Array.from({ length: 60_000 }, (_, i) => ({ i, s: `row ${i} \u00e9` })) };
+    const small = { n: "small", rows: [1] };
+    const bigPieces = piecesFor(big);
+    ok(bigPieces.length > 100, `the large body is ${bigPieces.length} pieces`);
+    const first = sdoc.saveSerialized(big, bigPieces);
+    const second = sdoc.saveSerialized(small, piecesFor(small));
+    ok((await second) === true && (await first) === true, "two serialized saves issued together both resolve true");
+    ok(readFileSync(sfile, "utf8") === JSON.stringify(small), "the body saved last stands in the file: a large earlier body's slower write never lands over it");
+    await sdoc.saveSerialized(big, bigPieces);
+    ok(readFileSync(sfile, "utf8") === JSON.stringify(big) && (await sdoc.load()).rows.length === 60_000, "the pieces are written in order and read back as the body");
+    ok(!readdirSync(join(DIR, "ser")).some((f) => f.endsWith(".tmp")), "no temp file is left behind");
+    let landed = false;
+    const pending = sdoc.saveSerialized(small, piecesFor(small)).then(() => { landed = true; });
+    ok((await sdoc.flush()) === true && landed, "flush waits for a serialized save in flight");
+    await pending;
+    // A write that fails resolves false with the error kept, and the next save still lands.
+    const blocked = join(DIR, "ser", "blocked.json");
+    mkdirSync(blocked);
+    const bdoc = createJsonDocument({ file: blocked, log: () => {} });
+    ok((await bdoc.saveSerialized(small, piecesFor(small))) === false && bdoc.lastError, "a serialized save that cannot be written resolves false and keeps the error");
+    rmSync(blocked, { recursive: true });
+    ok((await bdoc.saveSerialized(small, piecesFor(small))) === true && bdoc.lastError === null && !readdirSync(join(DIR, "ser")).some((f) => f.endsWith(".tmp")), "...the next one lands, and the failed write left no temp file");
+    const smem = createJsonDocument({ name: "mem-serialized", log: () => {} });
+    ok((await smem.saveSerialized(small, ["ignored"])) === true && (await smem.load()).n === "small", "the memory backend keeps the body");
+  }
   let threw = false; try { createJsonDocument({ name: "Bad Name!" }); } catch { threw = true; }
   ok(threw, "a name outside the allowed shape is refused");
 }

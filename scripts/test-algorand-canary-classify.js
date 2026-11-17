@@ -6,15 +6,32 @@
 // upstream vendor 5xx was booked as a broken tool on first sight.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
-import { outcomeOf, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
+import { outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };
+const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m}${JSON.stringify(a) === JSON.stringify(b) ? "" : ` (got ${JSON.stringify(a)})`}`);
 const R = (status, body = "", elapsedMs = 6000) => ({ status, body, elapsedMs });
 
 // ---- outcomeOf ----
 ok(outcomeOf(R(200, '{"x":1}')) === "ok", "200 with a body is ok");
 ok(outcomeOf(R(200, "   ")) === "empty", "200 with a blank body is empty");
+ok(outcomeOf(R(200, "")) === "empty" && outcomeOf({ status: 200, elapsedMs: 10 }) === "empty" && outcomeOf(R(200, "", 10)) === "empty",
+  "200 with no body, or one that could not be read (the sweep reads it as \"\"), is empty at any speed");
+
+// ---- nextStep: what is signed again, every branch ----
+// A 200 is the settled status: an empty one is a charge, never a retry (a
+// retry that answered would be two charges with one counted and exit 0).
+ok(nextStep("empty") === "charged-empty", "a 200 with an empty body is charged-empty");
+ok(nextStep(outcomeOf(R(200, ""))) !== "retry" && nextStep(outcomeOf(R(200, " \n"))) !== "retry", "...so an empty or unreadable 200 is NEVER signed again");
+ok(nextStep("ok") === "done", "a delivered payload is done");
+ok(nextStep("no-answer") === "read-chain", "no answer: the chain decides before anything is signed");
+ok(nextStep("unfunded") === "stop", "an unfunded wallet stops, no retry");
+for (const o of ["breaker", "fast-402", "throttle", "slow-402", "other"]) ok(nextStep(o) === "retry", `an HTTP error answer (${o}) cancels settlement: one fresh retry`);
+ok(nextStep("something-new") === "stop" && nextStep(undefined) === "stop", "an outcome nobody classified signs nothing");
+// Every outcome outcomeOf can name is decided, and only >=400 answers retry.
+for (const [a, want] of [[R(200, "x"), "done"], [R(200, ""), "charged-empty"], [R(402, "{}", 85), "retry"], [R(402, "{}", 5629), "retry"], [R(429, ""), "retry"], [R(500, "x"), "retry"], [transportAttempt(new Error("socket hang up"), 10, "T"), "read-chain"]])
+  ok(nextStep(outcomeOf(a)) === want, `status ${a.status} -> ${want}`);
 ok(outcomeOf(R(402, "{}", 85)) === "fast-402", "a sub-1.5s 402 is fast-402 (never reached the chain)");
 ok(outcomeOf(R(402, "{}", 5629)) === "slow-402", "a 5.6s 402 is slow-402 (a genuine settlement attempt)");
 ok(outcomeOf(R(402, '{"error":"Payment rejected","reason":"requirements-mismatch","hint":"..."}', 40)) === "slow-402",
@@ -97,6 +114,128 @@ ok(isOurSettleBreaker(402, BREAKER_BODY) === false, "the text alone is not enoug
 // Ordering: `breaker` is decided before the 402 shapes and before isThrottle,
 // because it is the only outcome that says nothing at all about the tool.
 ok(outcomeOf({ status: 429, body: BREAKER_BODY, elapsedMs: 50 }) === "breaker", "a FAST breaker refusal is still a breaker, not a fast-402 or a throttle");
+
+// ---- a paid request that got no HTTP answer --------------------------------
+// The server settles a connection that closes during its settle call, so a
+// request that threw may have been charged. The rule: never exit 0 after a
+// possible charge. The chain is asked about the signed payment BEFORE anything
+// is signed again.
+{
+  const algosdk = (await import("algosdk")).default;
+  const TXID = "A".repeat(52);
+  const dropped = transportAttempt(Object.assign(new TypeError("fetch failed"), { cause: { code: "UND_ERR_SOCKET" } }), 1200, TXID);
+  ok(dropped.status === 0 && dropped.noAnswer === true && dropped.elapsedMs === 1200 && dropped.tx === null && dropped.txid === TXID, "a thrown request is shaped as an attempt with no status, no receipt, and its payment's id");
+  ok(/fetch failed \(UND_ERR_SOCKET\)/.test(dropped.body) && dropped.kind === "connection", "...whose body names the error and its cause code, kind `connection`");
+  ok(outcomeOf(dropped) === "no-answer", "...and it classifies `no-answer`, never `other`: its payment's fate is unknown");
+  const timedOut = transportAttempt(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }), 90000, TXID);
+  ok(outcomeOf(timedOut) === "no-answer" && timedOut.kind === "timeout", "the request's own deadline reads the same way, kind `timeout`");
+  ok(outcomeOf(transportAttempt(new Error("Invalid URL"), 3)) === "no-answer" && transportAttempt(new Error("Invalid URL")).txid === null, "any other throw is a no-answer too, with no id unless one is given");
+  ok(outcomeOf({ status: 500, body: "fetch failed", elapsedMs: 9 }) === "other", "CONTROL: an HTTP error ANSWER is still `other` (a >=400 cancels settlement)");
+  ok(transportAttempt("x".repeat(5000)).body.length <= 300, "the recorded text is bounded");
+
+  // The payment's id, from a signed payload shaped as @x402/avm signs it.
+  const acct = algosdk.generateAccount();
+  const sp = { fee: 1000, minFee: 1000, flatFee: true, firstValid: 100, lastValid: 1100, genesisID: "mainnet-v1.0", genesisHash: new Uint8Array(32).fill(7) };
+  const mk = (amount) => algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({ sender: acct.addr, receiver: acct.addr, amount, assetIndex: 31566704, suggestedParams: sp });
+  const [feeTxn, payTxn] = algosdk.assignGroupID([mk(0), mk(1000)]);
+  const b64 = (t) => Buffer.from(t.signTxn(acct.sk)).toString("base64");
+  const signedPayload = { x402Version: 2, payload: { paymentGroup: [b64(feeTxn), b64(payTxn)], paymentIndex: 1 } };
+  ok(avmPaymentTxid(signedPayload) === payTxn.txID() && payTxn.txID() !== feeTxn.txID(), "the payment's id is the transaction at paymentIndex, grouped or not");
+  ok(avmPaymentTxid({ payload: { paymentGroup: [Buffer.from(algosdk.encodeUnsignedTransaction(feeTxn)).toString("base64"), b64(payTxn)], paymentIndex: 0 } }) === feeTxn.txID(), "an unsigned group member (a fee payer signs later) still has an id");
+  for (const bad of [null, {}, { payload: {} }, { payload: { paymentGroup: [], paymentIndex: 0 } }, { payload: { paymentGroup: ["AAAA"], paymentIndex: 0 } }, { payload: { paymentGroup: [b64(payTxn)], paymentIndex: 3 } }]) {
+    ok(avmPaymentTxid(bad) === null, `an unreadable payload has no id (${JSON.stringify(bad)?.slice(0, 40)})`);
+  }
+
+  // The chain reading, against stub nodes. `algod` and `idx` are status codes
+  // or bodies; "throw" is a failed read.
+  const chain = (algod, idx, extra = {}) => {
+    const calls = [];
+    const answer = (v) => {
+      if (v === "throw") throw new Error("socket");
+      if (typeof v === "number") return new Response("{}", { status: v });
+      return new Response(JSON.stringify(v), { status: 200 });
+    };
+    const fetchImpl = async (url) => { calls.push(url); return answer(url.includes("/pending/") ? algod : (Array.isArray(idx) ? idx[calls.filter((u) => !u.includes("/pending/")).length - 1] : idx)); };
+    return readPaymentOnChain({ txid: TXID, algodUrl: "https://algod.example/", indexers: ["https://idx.example"], fetchImpl, ...extra }).then((v) => ({ v, calls }));
+  };
+  const landedIdx = { transaction: { "confirmed-round": 9 } };
+  ok((await chain({ "confirmed-round": 9 }, 404)).v === "landed", "a confirmed round on algod: landed");
+  ok((await chain(404, landedIdx)).v === "landed", "a confirmed transaction on the indexer: landed, even when algod no longer holds it");
+  ok((await chain("throw", landedIdx)).v === "landed", "...and even when algod cannot be read");
+  const absent = await chain(404, 404);
+  ok(absent.v === "absent" && absent.calls[0] === `https://algod.example/v2/transactions/pending/${TXID}` && absent.calls[1] === `https://idx.example/v2/transactions/${TXID}`, "algod 404 AND the indexer 404: absent (both asked, by the payment's id)");
+  ok((await chain({ "confirmed-round": 0, "pool-error": "" }, 404)).v === "pending", "in algod's pool, unconfirmed: pending, never absent");
+  ok((await chain({ "pool-error": "transaction already in ledger" }, 404)).v === "absent", "refused by the pool and not indexed: absent");
+  ok((await chain(404, "throw")).v === "unreadable", "an indexer that cannot be read proves nothing: unreadable");
+  ok((await chain(404, 500)).v === "unreadable", "an indexer 5xx is not a 404: unreadable");
+  ok((await chain("throw", 404)).v === "unreadable", "algod unreadable: unreadable, never absent on the indexer's word alone (it lags)");
+  ok((await chain(503, 404)).v === "unreadable", "algod 5xx: unreadable");
+  ok((await chain(404, { transaction: {} })).v === "unreadable", "an indexer row with no confirmed round is not a landing and not a 404: unreadable");
+  ok((await chain(404, [404, 500], { indexers: ["https://a.example", "https://b.example"] })).v === "unreadable", "EVERY indexer must answer 404 for absent");
+  ok((await chain(404, [500, landedIdx], { indexers: ["https://a.example", "https://b.example"] })).v === "landed", "any indexer holding it is a landing");
+  ok((await readPaymentOnChain({ txid: null, algodUrl: "https://algod.example", indexers: ["https://idx.example"], fetchImpl: async () => new Response("{}", { status: 404 }) })) === "unreadable", "no readable id: unreadable (two 404s for nothing are not absence)");
+  ok((await readPaymentOnChain({ txid: TXID, algodUrl: "https://algod.example", indexers: [], fetchImpl: async () => new Response("{}", { status: 404 }) })) === "unreadable", "no indexer configured: unreadable");
+
+  // A pooled payment is read again until it confirms or drops.
+  const polled = async (seq, polls) => { let i = 0, slept = 0; const v = await settledChainReading({ read: async () => seq[Math.min(i++, seq.length - 1)], sleep: async () => { slept++; }, polls }); return { v, reads: i, slept }; };
+  eq(await polled(["pending", "pending", "landed"], 4), { v: "landed", reads: 3, slept: 2 }, "a pooled payment is read again until it lands");
+  eq(await polled(["pending"], 3), { v: "pending", reads: 3, slept: 2 }, "still pooled after the last read stays pending");
+  eq(await polled(["absent", "landed"], 4), { v: "absent", reads: 1, slept: 0 }, "a settled reading is not read twice");
+
+  // THE RULE, every branch.
+  ok(noAnswerVerdict({ chain: "landed" }) === "charged" && noAnswerVerdict({ chain: "landed", retried: true }) === "charged", "landed: charged, on the first attempt or the retry");
+  for (const c of ["pending", "unreadable", undefined, "something-new"]) {
+    ok(noAnswerVerdict({ chain: c }) === "unverified" && noAnswerVerdict({ chain: c, retried: true }) === "unverified", `chain ${c}: unverified (a charge is not ruled out), never a retry`);
+  }
+  ok(noAnswerVerdict({ chain: "absent" }) === "retry", "absent on the first attempt: the one fresh retry");
+  ok(noAnswerVerdict({ chain: "absent", retried: true }) === "no-answer", "absent on the last attempt: no-answer, which fails the run");
+  ok(noAnswerVerdict() === "unverified", "no reading at all: unverified");
+  ok(recheckVerdict({ chain: "landed" }) === "charged", "end of run: a payment that landed after its request failed is charged");
+  ok(recheckVerdict({ chain: "absent" }) === "clear", "end of run: still absent is clear");
+  ok(recheckVerdict({ chain: "pending" }) === "unverified" && recheckVerdict({ chain: "unreadable" }) === "unverified" && recheckVerdict() === "unverified", "end of run: pooled or unreadable is unverified");
+  ok(recheckVerdict({ chain: "landed", delivered: true }) === "clear", "end of run: an id that answered 200 is that buy's own payment");
+
+  // And the sweep acts on it (source pins: the sweep self-runs on import).
+  const src = readFileSync(new URL("./algorand-rail-canary.js", import.meta.url), "utf8");
+  ok(/try \{ paid = await signed\.send\(\); \} catch \(e\) \{ return transportAttempt\(e, Date\.now\(\) - startedMs, signed\.txid\); \}/.test(src),
+     "the sweep shapes a thrown request as an attempt that carries its signed payment's id");
+  ok(/const signed = await signOnce\(\);\s*let paid;/.test(src), "...while a throw from signing stays outside that catch and fails on first sight");
+  ok(/return \{ send, txid: avmPaymentTxid\(payload\) \};/.test(src), "the id is read from the payload that was signed");
+  ok(/const send = \(\) => fetch\(url, \{\s*\.\.\.reqInit,\s*signal: AbortSignal\.timeout\(/.test(src) && !/const reqInit = \{[^}]*signal:/.test(src),
+     "each attempt gets its own deadline: a signal built once left the retry already aborted");
+  ok(/const first = out === "no-answer" \? await settleNoAnswer\(a, false\) : "retry";\s*if \(first === "retry"\) \{\s*a = await attempt\(\);/.test(src),
+     "a no-answer is settled on chain BEFORE the retry signs, and only `retry` signs again");
+  // An empty 200 is a charge: the retry block is entered on the classifier's
+  // word alone, and there is no other attempt anywhere in the sweep.
+  ok(/const step = nextStep\(out\);\s*if \(step === "retry" \|\| step === "read-chain"\) \{/.test(src), "the retry block is entered only on nextStep's retry or read-chain");
+  ok((src.match(/await attempt\(\)/g) || []).length === 2 && !/if \(out !== "ok"\) \{/.test(src) && !/nextStep\([^)]*\) (!==|===) "(done|charged-empty)"/.test(src),
+     "...and the sweep holds exactly two attempts: the first, and the one inside that block");
+  {
+    const block = /const step = nextStep\(out\);[\s\S]*?\n    \}\n/.exec(src)?.[0] || "";
+    ok(block.includes("a = await attempt();") && src.replace(block, "").match(/await attempt\(\)/g)?.length === 1, "the second attempt sits inside the gated block");
+  }
+  ok(/\} else if \(out === "empty"\) \{[^}]*\s*report\.chargedEmpty\.push\(\{ key, slug: t\.slug, usd, tx: a\.tx \|\| null,[^\n]*\n\s*report\.spentUsd \+= usd;/.test(src),
+     "an empty 200 is recorded as charged with an empty answer (tool, receipt transaction id) and counted in the spend");
+  ok(/CHARGED, empty answer: 200 with [^\n]*\$\{t\.slug\}\$\{a\.tx \? ` · tx \$\{a\.tx\}`/.test(src), "its line names the tool and the receipt's transaction id");
+  ok(!/report\.toolFail\.push\([^\n]*empty body/.test(src), "an empty 200 is never booked as an uncharged tool failure");
+  ok(/const bad = [^;]*\+ noAnswerBad \+ report\.chargedEmpty\.length;/.test(src), "a charge with an empty answer FAILS the run");
+  ok(/const body = await paid\.text\(\)\.catch\(\(\) => \{ unreadable = true; return ""; \}\);/.test(src), "a body that cannot be read is an empty one");
+  ok(/const chain = x\.txid \? await chainReading\(x\.txid\) : "unreadable";\s*const verdict = noAnswerVerdict\(\{ chain, retried: wasRetry \}\);/.test(src),
+     "the verdict is the classifier's, on the chain's reading; a payment with no id is unreadable");
+  ok(/if \(verdict === "charged"\) \{\s*report\.chargedNoAnswer\.push\(row\);\s*report\.spentUsd \+= usd;/.test(src), "a landed payment is counted in the spend and recorded as charged without an answer");
+  ok(/if \(out === "no-answer"\) \{ await sleep\(THROTTLE_BACKOFF_MS\); await settleNoAnswer\(a, true\); \}/.test(src), "a retry with no answer is settled the same way, and there is no third attempt");
+  ok(/const noAnswerBad = report\.chargedNoAnswer\.length \+ report\.chargeUnverified\.length \+ report\.noAnswer\.length;\s*const bad = [^;]*\+ noAnswerBad[;\s+]/.test(src),
+     "charged, not ruled out, and unanswered on the last attempt each FAIL the run");
+  ok(!/report\.upstreamFail\.push\([^)]*answerOf|a\.status \? "not charged/.test(src) && !/answerOf/.test(src), "a no-answer never reaches the upstream bucket, whose header says the buyer was not charged");
+  ok(/for \(const p of absentPayments\) \{\s*const waitMs = p\.failedAt \+ CHARGE_RECHECK_MS - Date\.now\(\);\s*if \(waitMs > 0\) await sleep\(waitMs\);/.test(src)
+     && /const verdict = recheckVerdict\(\{ chain, delivered \}\);/.test(src)
+     && /report\.chargedNoAnswer\.push\(\{ \.\.\.row, late: true \}\);\s*report\.spentUsd \+= p\.usd;/.test(src),
+     "every absent payment is read again at the end of the run, after the recheck wait, and a late landing is spend and a failure");
+  ok(src.indexOf("for (const p of absentPayments)") < src.indexOf("const noAnswerBad =") && src.indexOf("for (const p of absentPayments)") > src.indexOf("await sleep(DELAY_MS);"),
+     "...after the sweep and before the verdict");
+  ok(/if \(paid\.status === 200 && signed\.txid\) deliveredTxids\.add\(signed\.txid\);/.test(src), "an id that answered 200 is remembered as delivered");
+  ok(/NEVER EXIT 0 AFTER A POSSIBLE\s*\/\/\s*CHARGE, and never sign again after one\./.test(src) && /A 200 WITH AN EMPTY OR UNREADABLE BODY/.test(src), "the rule is stated in the script header, the empty 200 included");
+}
 
 // ---- and the SWEEP acts on it ---------------------------------------------
 //

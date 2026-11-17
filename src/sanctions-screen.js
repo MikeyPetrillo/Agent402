@@ -38,7 +38,7 @@ import { existsSync } from "node:fs";
 import { createJsonDocument } from "./json-document.js";
 import { leased, trackStoreReady } from "./state-db.js";
 import { shared, noteSharedLimitsDegraded } from "./shared-limits.js";
-import { parseSdnXml, sdnEvmAddresses, sdnEvmAddressesAsync, loadSdnList, runSliced, sortSteps } from "./ofac-sdn.js";
+import { parseSdnXml, sdnEvmAddresses, sdnEvmAddressesAsync, loadSdnList, runSliced, sortSteps, storedBodySteps } from "./ofac-sdn.js";
 import { registerMemoryStore } from "./memory-stores.js";
 import { envAtLeast as envMs } from "./env-num.js";
 
@@ -136,8 +136,12 @@ export async function refreshSanctionsScreen({ fetchImpl = globalThis.fetch, now
   state.source = "fetch";
   state.lastError = null;
   await new Promise((resolve) => setImmediate(resolve));
-  const body = { v: 1, loadedAt: list.fetchedAt, publishDate: parsed.publishDate, perAsset: parsed.perAsset, addresses: await runSliced(sortSteps(parsed.addresses)) };
-  const stored = await getDoc().save(body).catch(() => false);
+  // The body is serialized across turns too and written off the loop
+  // (saveSerialized): one JSON.stringify and a synchronous file write of a
+  // large set held the loop, for seconds on a busy disk.
+  const sorted = await runSliced(sortSteps(parsed.addresses));
+  const { body, pieces } = await runSliced(storedBodySteps({ v: 1, loadedAt: list.fetchedAt, publishDate: parsed.publishDate, perAsset: parsed.perAsset }, "addresses", sorted));
+  const stored = await getDoc().saveSerialized(body, pieces).catch(() => false);
   if (!stored) log(`[sanctions-screen] list loaded but not stored: ${String(getDoc().lastError || "save refused").slice(0, 120)}`);
   console.log(`[sanctions-screen] OFAC SDN loaded: ${parsed.addresses.size} EVM addresses (${Object.entries(parsed.perAsset).map(([k, v]) => `${k} ${v}`).join(", ")})${state.publishDate ? `, published ${state.publishDate}` : ""}`);
   return { ok: true, evmAddresses: parsed.addresses.size };
@@ -493,8 +497,8 @@ export async function screenFunding(payers, { fetchImpl = globalThis.fetch, now 
 export function __clearOneHopLocalForTests() { oneHopLocal = new Map(); }
 
 /** Test seam: forget everything (and the store handle, so env changes apply). */
-/** Tests only: hold the store (a stand-in with save()) so a run can leave
- *  out the stored write, which is one turn sized by the address count. */
+/** Tests only: hold the store (a stand-in with saveSerialized()) so a run
+ *  can leave out the stored write. */
 export function __setSanctionsScreenStoreForTests(d) { doc = d; }
 export function __resetSanctionsScreenForTests() {
   if (timer) clearTimeout(timer);

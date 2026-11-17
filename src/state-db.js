@@ -509,11 +509,15 @@ export const documents = {
   },
   /** Upsert the whole body. */
   async put(name, body) {
+    return documents.putText(name, JSON.stringify(body ?? null));
+  },
+  /** Upsert the whole body from its JSON text (a caller that serialized it across turns). */
+  async putText(name, text) {
     const r = await stateQuery(
       `INSERT INTO ${T("documents")} (name, body) VALUES ($1, $2::jsonb)
        ON CONFLICT (name) DO UPDATE SET body = EXCLUDED.body, version = ${T("documents")}.version + 1, updated_at = now()
        RETURNING version`,
-      [checkName(name), JSON.stringify(body ?? null)],
+      [checkName(name), String(text)],
     );
     return Number(r.rows[0].version);
   },
