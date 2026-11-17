@@ -83,6 +83,9 @@ const BASIC_IN_TEXT_RE = /\b(Basic\s+)([A-Za-z0-9+/]{8,1024}={0,2})(?![A-Za-z0-9
 // not a plain word ("Basic authentication", "Basic arithmetic").
 const looksLikeBase64Token = (t) => t.length % 4 === 0 && /[0-9+/=]|.[A-Z]/.test(t);
 const DB_URL_NAME_RE = /(DATABASE|REDIS|POSTGRES|PG|MONGO|AMQP)_?URLS?(?:_|$)/i;
+// One entry of a keyword connection string that carries the password
+// (password=..., quoted or bare). Anchored, one pass.
+const DSN_PASSWORD_RE = /^(?:password|passwd|pwd)=(?:'([^']*)'|"([^"]*)"|(.*))$/i;
 const CREDENTIAL_PARAM_RE = /^(key|api[-_]?key|apikey|token|access[-_]?token|auth|secret|password|pass|sig|signature|x-api-key)$/i;
 // Bounded parts, so the scan is linear: error text can carry a caller's input
 // (100 KB of "a.a.a..." once took seconds with an unbounded scheme).
@@ -129,11 +132,15 @@ function urlSecrets(name, value) {
     if (!entry) continue;
     let u = null;
     try { u = new URL(entry); } catch { /* not a URL */ }
-    // Under a suffixed name an entry counts only when it is a URL: of any
-    // scheme where the name ends in URL (FOO_RPC_PROXY_URL=socks5://...) or
-    // names a database, or where the URL carries userinfo; otherwise http(s)
-    // or ws(s). A setting that shares the word (a method list) is no URL.
-    if (suffixed && !(u && (db || urlEnd || ENDPOINT_PROTOCOLS.has(u.protocol) || u.password || u.username))) continue;
+    // A database name is redacted whole whatever its entries look like: a
+    // connection string need not be a URL ("host=... password=..."), and the
+    // name may hold an RPC word too (RPC_DATABASE_URL, EVM_RPC_PG_URL). That
+    // rule is read first. Under any other suffixed name an entry counts only
+    // when it is a URL: of any scheme where the name ends in URL
+    // (FOO_RPC_PROXY_URL=socks5://...) or where the URL carries userinfo;
+    // otherwise http(s) or ws(s). A setting that shares the word (a method
+    // list) is no URL.
+    if (!db && suffixed && !(u && (urlEnd || ENDPOINT_PROTOCOLS.has(u.protocol) || u.password || u.username))) continue;
     const whole = rpc || db;
     const parts = [];
     if (u) {
@@ -145,6 +152,8 @@ function urlSecrets(name, value) {
         if (rpc || looksLikeCredential(seg)) parts.push(seg);
       }
     }
+    // A keyword connection string names its password: that value on its own.
+    if (db && !u) { const pw = DSN_PASSWORD_RE.exec(entry); if (pw) parts.push(pw[1] ?? pw[2] ?? pw[3]); }
     if (whole) {
       out.push(entry);
       // A client prints the parsed form (trailing slash added, case folded).

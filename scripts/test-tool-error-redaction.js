@@ -126,6 +126,22 @@ const OP_TOKEN = ["op", "Canary", "Token", RUN].join("");
   ok(!r(`tunnel socks5h://relay:${SFX("q")}@tunnel.example.test:1080 closed`).includes(SFX_TAG) && !r(`bad password ${SFX("q")}`).includes(SFX_TAG), "...and so does one under a name that ends in a chain id");
   ok(!r(`dial socks5://proxy2.example.test:1080/${SFX("s")}`).includes(SFX_TAG), "a name that ends in URLS reads a URL of any scheme");
   ok(r("method eth_getBalance is not allowed").includes("eth_getBalance") && r("eth_blockNumber failed").includes("eth_blockNumber"), "a method list under *_RPC_METHODS still flags nothing");
+  // A database name is redacted whole whatever else the name holds and
+  // whatever the value looks like: a keyword connection string is no URL,
+  // and the name may carry an RPC word before the database one.
+  process.env.PROBE_RPC_DATABASE_URL = `host=rpcdb.example.test port=5432 dbname=rpcstate user=rpcapp password=${SFX("t")}`;
+  process.env.PROBE_EVM_RPC_PG_URL = `host=evmdb.example.test password=${SFX("u")} sslmode=require`;
+  process.env.PROBE_RPC_REDIS_URL_REPLICA = `rediss://default:${SFX("v")}@cache.example.test:6380`;
+  process.env.PROBE_PLAIN_DATABASE_URL = `host=plaindb.example.test dbname=plainstate password='${SFX("w")}'`;
+  process.env.EVM_RPC_METHODS = "eth_getBalance,eth_blockNumber,eth_getTransactionReceipt";
+  const dsnOut = r(`could not connect: host=rpcdb.example.test port=5432 dbname=rpcstate user=rpcapp password=${SFX("t")}`);
+  ok(!dsnOut.includes(SFX_TAG) && !dsnOut.includes("rpcdb.example.test") && !dsnOut.includes("dbname=rpcstate"), `a keyword connection string under a database name that also holds an RPC word (RPC_DATABASE_URL) is redacted entry by entry (${dsnOut})`);
+  ok(!r(`password authentication failed (${SFX("t")})`).includes(SFX_TAG), "...and its password on its own");
+  ok(!r(`dial host=evmdb.example.test password=${SFX("u")} sslmode=require`).includes(SFX_TAG) && !r(`dial evmdb failed for host=evmdb.example.test`).includes("evmdb.example.test") && !r(`bad password ${SFX("u")}`).includes(SFX_TAG), "...and one under EVM_RPC_PG_URL");
+  ok(!r(`connect rediss://default:${SFX("v")}@cache.example.test:6380 refused`).includes("cache.example.test"), "a URL under such a name is still redacted whole");
+  ok(!r(`connect host=plaindb.example.test dbname=plainstate password='${SFX("w")}'`).includes(SFX_TAG) && !r(`auth failed: ${SFX("w")}`).includes(SFX_TAG), "a keyword connection string under a plain database name loses its quoted password, alone too");
+  ok(r("method eth_getBalance is not allowed") === "method eth_getBalance is not allowed" && r("eth_getTransactionReceipt returned null") === "eth_getTransactionReceipt returned null", "EVM_RPC_METHODS flags nothing");
+  delete process.env.EVM_RPC_METHODS;
   // The name rule runs over every variable name on each call: a long hostile
   // name costs time in its length, not its square.
   {
