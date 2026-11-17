@@ -91,6 +91,39 @@ const NOT_CHARGED = /not charged|nothing (?:was|is) charged|never charged/i;
   ok(REJECTION_REASONS.some((r) => r.reason === "settlement-unconfirmed" && /check-wallet/.test(r.means) && /watch-transaction/.test(r.means) && /authorizationValidBefore/.test(r.means) && !NOT_CHARGED.test(r.means)), "the published reason names both verbs and the fields");
 }
 
+// ---- the per-payer bound: past it a booking waits in the journal and lands
+// once the payer's open entries fall under the bound -------------------------
+{
+  const { createLateSettleBook } = await import("../src/late-settlements.js");
+  const dir = mkdtempSync(join(tmpdir(), "settle-unconfirmed-bound-"));
+  const file = join(dir, "late.json");
+  const lines = [];
+  try {
+    const book = createLateSettleBook({ file, rpcFor: () => "http://127.0.0.1:9", log: (l) => lines.push(l), alarm: (l) => lines.push(l), unconfirmedPerPayerMax: 1 });
+    await book.ready;
+    const payer = `0x${"aa".repeat(20)}`;
+    const base = { network: BASE_NET, payer, payTo: `0x${"bb".repeat(20)}`, asset: `0x${"cc".repeat(20)}`, amount: "1000", validBefore: 2_000_000_000, via: "fallback", unconfirmed: true };
+    const nonce = (n) => `0x${String(n).repeat(64)}`;
+    const first = await book.book({ ...base, nonce: nonce(1) });
+    const second = await book.book({ ...base, nonce: nonce(2) });
+    const other = await book.book({ ...base, payer: `0x${"dd".repeat(20)}`, nonce: nonce(3) });
+    const open = () => Object.values(JSON.parse(readFileSync(file, "utf8")).pending);
+    ok(first === true && second === true && other === true && open().length === 2 && open().every((e) => e.unconfirmed === true),
+      `one payer at its bound: the next booking is not in the book, another payer's is (${open().length} open)`);
+    ok(lines.filter((l) => /per-payer bound/.test(l)).length === 1 && existsSync(`${file}.pending.ndjson`) && readFileSync(`${file}.pending.ndjson`, "utf8").includes(nonce(2)),
+      "past the bound the booking is journaled with a line naming the bound, never dropped");
+    ok((await book.alarmStatus({ ttlMs: 0 })) === "unresolved", "the status word reads the journaled booking");
+    await book.reconcile();
+    ok(open().length === 2, "while the payer is at its bound the journaled booking stays in the journal");
+    const doc = JSON.parse(readFileSync(file, "utf8"));
+    for (const [k, e] of Object.entries(doc.pending)) if (String(e.nonce) === nonce(1)) delete doc.pending[k];
+    (await import("node:fs")).writeFileSync(file, JSON.stringify(doc));
+    await book.reconcile();
+    ok(open().some((e) => String(e.nonce) === nonce(2) && e.unconfirmed === true) && (await book.alarmStatus({ ttlMs: 0 })) === "ok",
+      "once the payer's entry closes, the journaled booking lands in the book and the word clears");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
 const TMP = mkdtempSync(join(tmpdir(), "settle-fallback-unconfirmed-"));
 const LATE = join(TMP, "late.json");
 const failTxOf = (nonce) => `0x${createHash("sha256").update(`fallback:${String(nonce).toLowerCase()}`).digest("hex")}`;
