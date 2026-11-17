@@ -1796,6 +1796,45 @@ try {
   }
   fac.reset(); sales.length = 0;
   {
+    // One client address that rotates FRESH wallets is refused by nothing (a payer is never refused for other
+    // wallets' runs), and each oversized answer is an unpaid tool run: REFERRAL_OVERSIZE_ALERT of them from one
+    // address in the unsettled-run window raise the status word, and refuse nobody.
+    const appO = await mount({ REFERRAL_MAX_ANSWER_BYTES: "" });
+    try {
+      const big = async (acct, n, ip) => send(`${appO.url}/ref/big`, { body: { n }, headers: { "payment-signature": (await signPayment(accept, { account: acct })).header, "x-test-ip": ip } });
+      const named = (w) => w.reasons.filter((x) => /^oversized answers from one address/.test(x));
+      const envDoc = readFileSync(new URL("../.env.example", import.meta.url), "utf8"), rules = readFileSync(new URL("../.claude/rules/payments.md", import.meta.url), "utf8");
+      ok(appO.config.oversizeAlert === 30 && gateMod.REFERRAL_DEFAULTS.oversizeAlert === 30 && referralConfig({ ...ENV, REFERRAL_OVERSIZE_ALERT: "5" }).oversizeAlert === 5 && referralConfig({ ...ENV, REFERRAL_OVERSIZE_ALERT: "abc" }).oversizeAlert === 30 && /^# REFERRAL_OVERSIZE_ALERT=30 /m.test(envDoc) && rules.includes("`REFERRAL_OVERSIZE_ALERT` (30)") && rules.includes("`REFERRAL_OVERSIZE_ALERT` (30,"), `REFERRAL_OVERSIZE_ALERT defaults to 30, reads its setting, and is documented at 30 in .env.example and the rules (${appO.config.oversizeAlert})`);
+      // Twelve different addresses, one oversized answer each: nothing to read.
+      const spread = [];
+      for (let i = 0; i < 12; i++) spread.push((await big(newAccount(), 70_000, freshIp())).status);
+      const wordSpread = appO.gate.statusWord();
+      ok(spread.every((s) => s === 413) && wordSpread.status === "ok" && named(wordSpread).length === 0, `twelve addresses with one oversized answer each leave the word ok (${wordSpread.status}: ${wordSpread.reasons.join("|").slice(0, 120) || "no reasons"})`);
+      // One address, a fresh wallet each time: 29 leave the word ok, the 30th raises it, and every one still ran.
+      const oneIp = "198.51.100.77";
+      const runsO = appO.gate.stats().runs;
+      const from = [];
+      for (let i = 0; i < 29; i++) from.push((await big(newAccount(), 70_000, oneIp)).status);
+      const word29 = appO.gate.statusWord();
+      ok(from.every((s) => s === 413) && word29.status === "ok" && named(word29).length === 0, `29 oversized answers from one address across fresh wallets leave the word ok (${[...new Set(from)].join()}; ${word29.status}: ${word29.reasons.join("|").slice(0, 120) || "no reasons"})`);
+      const thirtieth = await big(newAccount(), 70_000, oneIp);
+      const word30 = appO.gate.statusWord();
+      const why = named(word30);
+      ok(thirtieth.status === 413 && word30.status === "attention" && why.length === 1 && word30.reasons.length === 1 && why[0].includes("30 answers") && why[0].includes("address 198.51...") && !why[0].includes(oneIp), `the 30th raises attention with a reason of its own that names the first characters of the address only (${word30.status}: ${why.join("|")})`);
+      // An alarm only: the same address's next wallets are served, oversized or narrowed.
+      const next413 = await big(newAccount(), 70_000, oneIp);
+      const nextOk = await big(newAccount(), 10, oneIp);
+      const word31 = appO.gate.statusWord();
+      ok(next413.status === 413 && nextOk.status === 200 && appO.gate.stats().runs === runsO + 32 && named(word31).length === 1 && named(word31)[0].includes("31 answers") && word31.tag === word30.tag, `nobody is refused for it: the address's next wallets still run (${next413.status}, ${nextOk.status}; ${appO.gate.stats().runs - runsO} runs), and the word's tag does not move with the count`);
+      // The count ages out with the window.
+      skew.ms = appO.config.unsettledWindowMs + 1_000;
+      const wordAged = appO.gate.statusWord();
+      skew.ms = 0;
+      ok(wordAged.status === "ok" && named(wordAged).length === 0, `the count leaves with the unsettled-run window and the word reads ok again (${wordAged.status}: ${wordAged.reasons.join("|").slice(0, 120) || "no reasons"})`);
+    } finally { skew.ms = 0; await appO.close(); }
+  }
+  fac.reset(); sales.length = 0;
+  {
     // T4b: an intermediary's answer at /verify is no verdict on the payment.
     for (const [name, answer] of [["a 429", { status: 429, body: {} }], ["a 403 page", { status: 403, body: "<html>blocked</html>", type: "text/html" }], ["an undocumented 418", { status: 418, body: { errorReason: "teapot" } }]]) {
       fac.mode.verify = () => answer;
@@ -4100,7 +4139,7 @@ try {
       const wordFn = gateText.slice(gateText.indexOf("  function statusWord() {"), gateText.indexOf("  /** An operator acknowledges having read"));
       const raised = (wordFn.match(/reasons\.push\(/g) || []).length;
       const heartbeat = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"), worker = readFileSync(new URL("../workers/status-probe/src/index.js", import.meta.url), "utf8");
-      const FAMILIES = ["open past fifteen minutes", "the chain contradicts", "receipt cannot be read", "does not prove the sale", "routed to this merchant", "under the amount the commission map expects", "product id differs", "under its stop floor", "this server does not serve", "published example answer is over the answer bound", "contradicted successes came from several payers", "unsettled runs from many payers", "refused this server's own request", "unanswered over ten minutes", "chain head could not be read", "intent to settle could not be stored", "store is not taking writes", "failed or were late in the last five minutes", "went without a verdict in the last day", "book is full", "retired at capacity", "closed as unrecognized"];
+      const FAMILIES = ["open past fifteen minutes", "the chain contradicts", "receipt cannot be read", "does not prove the sale", "routed to this merchant", "under the amount the commission map expects", "product id differs", "under its stop floor", "this server does not serve", "published example answer is over the answer bound", "contradicted successes came from several payers", "unsettled runs from many payers", "answers over the answer bound from one client address", "refused this server's own request", "unanswered over ten minutes", "chain head could not be read", "intent to settle could not be stored", "store is not taking writes", "failed or were late in the last five minutes", "went without a verdict in the last day", "book is full", "retired at capacity", "closed as unrecognized"];
       const missing = FAMILIES.filter((f) => !heartbeat.includes(f) || !worker.includes(f));
       // The raw tag is never output anywhere (an issue, a comment, the job log): every line that
       // names it is its own assignment, its shape check, or the keyed digest made from it.
@@ -4149,7 +4188,7 @@ try {
         ok(step && existsSync(comments) && runs3.every((r) => r.status === 0) && afterSame.length === 1 && /reasons mark [0-9a-f]{24} /.test(afterSame[0]) && afterNew.length === 2 && afterNew[0] !== afterNew[1] && !/aaaaaaaa|bbbbbbbb/.test(printed), `the heartbeat step, run for three cycles on one reasons tag against an open issue, comments once; a new tag adds one more comment; the raw tag is in no output (${afterSame.length} then ${afterNew.length} comments)`);
       }
       const owedWording = "include_repeat_hangups for repeat hang-up debts, include_review_holds for rows a route marked held for review";
-      ok(raised === 23 && heartbeat.includes(owedWording) && worker.includes(owedWording) && !/include_repeat_hangups for hang-up debts held for review/.test(heartbeat + worker) && missing.length === 0 && !/One of these holds/.test(heartbeat + worker) && tagPosted === false && tokenHashed === false && /reasons mark \$MARK/.test(heartbeat), `the pagers' issue text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list), and the heartbeat posts the reasons tag only keyed with a dedicated mark key (never the operator token, which only reads the operator view), never the tag itself (${missing.join("; ") || "all named"})`);
+      ok(raised === 24 && heartbeat.includes(owedWording) && worker.includes(owedWording) && !/include_repeat_hangups for hang-up debts held for review/.test(heartbeat + worker) && missing.length === 0 && !/One of these holds/.test(heartbeat + worker) && tagPosted === false && tokenHashed === false && /reasons mark \$MARK/.test(heartbeat), `the pagers' issue text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list), and the heartbeat posts the reasons tag only keyed with a dedicated mark key (never the operator token, which only reads the operator view), never the tag itself (${missing.join("; ") || "all named"})`);
     }
     // P7. During a drain a settle ends before the database pool starts closing, with room for its book write.
     {

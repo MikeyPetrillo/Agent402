@@ -156,6 +156,10 @@ export const REFERRAL_DEFAULTS = Object.freeze({
   // 12 distinct failing payers a never-paid one is held at 1.
   unsettledHardMax: 40,
   globalMax: 12,
+  // Oversized answers (413, each an unpaid tool run) from ONE client address
+  // in the unsettled-run window that raise the status word. An alarm only:
+  // it refuses nobody (wallets behind one address can be different buyers).
+  oversizeAlert: 30,
   // Our own faults: this many refusals of OUR request in a row answer 503
   // before the handler for the cool-down, then one call probes again.
   ownFaultMax: 3,
@@ -481,6 +485,9 @@ const REQUIRED_VARS = ["REFERRAL_PAY_TO", "REFERRAL_FACILITATOR_URL", "REFERRAL_
  *   REFERRAL_MAX_ANSWER_BYTES   (64000) the most bytes of one answer the network passes on to a
  *                               buyer: a larger answer is refused 413 before settlement (not settled),
  *                               and a slug whose published example answer is larger is not served
+ *   REFERRAL_OVERSIZE_ALERT     (30) answers over that bound from one client address in the
+ *                               unsettled-run window before the status word reads attention
+ *                               (an alarm only: nobody is refused for it)
  *   REFERRAL_SEND_IDLE_MS       (15000) an answer's send with no progress for this long is ended
  *   REFERRAL_SEND_MAX_MS        (120000) an answer's send is ended this long after it began
  *   REFERRAL_HANGUP_KEY_USD, REFERRAL_HANGUP_GLOBAL_USD, REFERRAL_HANGUP_WINDOW_MS
@@ -542,6 +549,7 @@ export function referralConfig(env = process.env) {
       payerInflightMax: intKnob(env, "REFERRAL_PAYER_INFLIGHT_MAX", REFERRAL_DEFAULTS.payerInflightMax, { min: 1, max: 1000 }),
       unsettledHardMax: intKnob(env, "REFERRAL_UNSETTLED_HARD_MAX", REFERRAL_DEFAULTS.unsettledHardMax, { min: 1, max: 10_000 }),
       globalMax: intKnob(env, "REFERRAL_UNSETTLED_GLOBAL_MAX", REFERRAL_DEFAULTS.globalMax, { min: 1, max: 10_000 }),
+      oversizeAlert: intKnob(env, "REFERRAL_OVERSIZE_ALERT", REFERRAL_DEFAULTS.oversizeAlert, { min: 1, max: 100_000 }),
       ownFaultMax: intKnob(env, "REFERRAL_OWN_FAULT_MAX", REFERRAL_DEFAULTS.ownFaultMax, { min: 1, max: 1000 }),
       ownFaultCooldownMs: msKnob(env, "REFERRAL_OWN_FAULT_COOLDOWN_MS", REFERRAL_DEFAULTS.ownFaultCooldownMs),
       // Slugs served although the public route gives them for less (default: none).
@@ -1015,6 +1023,10 @@ export function createReferralGate({
   //     settle: it counts in the payer's and the address's own figures (so one
   //     wallet's repeats end at `unsettledMax`), and neither in the
   //     service-wide count of payers nor toward the never-paid rule.
+  //     One address that rotates fresh wallets is refused by none of this (a
+  //     payer is never refused for other wallets' runs): `oversizeAlert`
+  //     such answers from one address in the window raise the status word
+  //     instead, an alarm that refuses nobody.
   //   - runs in flight are bounded per payer apart from all of this, at a
   //     figure honest concurrency does not reach (`payerInflightMax`).
   // Retry-After is when the oldest unsettled outcome that holds the refusal
@@ -1041,6 +1053,21 @@ export function createReferralGate({
     let n = 0;
     for (const [k, l] of lane) { if (!k.startsWith("payer:")) continue; trimLane(l, t); if (l.fails.some((f) => !f[2])) n++; }
     return n;
+  };
+  /** The client address with the most oversized answers (413) in the window,
+   *  when it holds `oversizeAlert` of them or more; else null. Read by the
+   *  status word only: it refuses nobody. */
+  const oversizeAlertAt = Number.isFinite(config.oversizeAlert) && config.oversizeAlert >= 1 ? config.oversizeAlert : REFERRAL_DEFAULTS.oversizeAlert;
+  const oversizedAddress = (t) => {
+    let top = null;
+    for (const [k, l] of lane) {
+      if (!k.startsWith("addr:")) continue;
+      trimLane(l, t);
+      let n = 0;
+      for (const f of l.fails) if (f[2]) n++;
+      if (n >= oversizeAlertAt && (!top || n > top.count)) top = { address: k.slice(5), count: n };
+    }
+    return top;
   };
   /** THE SERVICE-WIDE RULE, on the run slots too. While `globalMax` distinct
    *  payers have unsettled runs in the window (a stream of payments that run
@@ -1781,7 +1808,10 @@ export function createReferralGate({
    *   - an intent that could not be stored in the last 15 minutes;
    *   - the book is full;
    *   - an entry was retired at capacity, or closed because its receipt is
-   *     not recognized, in the last day.
+   *     not recognized, in the last day;
+   *   - one client address holds `oversizeAlert` oversized answers (413, each
+   *     an unpaid tool run) in the unsettled-run window, for as long as it
+   *     does (nobody is refused for it).
    * The reasons are operator-only.
    */
   function statusWord() {
@@ -1795,6 +1825,8 @@ export function createReferralGate({
     if (all.some((e) => e.state === "contradicted")) reasons.push("a settle the chain contradicted is open");
     if (all.some((e) => e.state === "unconfirmed" && e.flagged === true)) reasons.push("a settle success whose receipt cannot be read is open");
     { const n = failingPayers(t); if (n >= config.globalMax) reasons.push(`unsettled runs came from ${n} payers in the window: payers with no paid sale share ${newPayerSlots()} of ${config.maxInflight} run slots`); }
+    // One address, many oversized answers (fresh wallets included): each was an unpaid tool run. The first characters of the address only.
+    { const o = oversizedAddress(t); if (o) reasons.push(`oversized answers from one address (${o.count} answers over the bound in the window, address ${String(o.address).slice(0, 6)}...; an alarm only, nobody is refused for it)`); }
     if (all.some((e) => e.state === "in-doubt" && e.unproven === true)) reasons.push("a settle success whose receipt, read in full, does not prove the sale is open");
     for (const p of productStops()) reasons.push(`${p.slug}: product id differs: configured ${p.configured}, receipt ${p.received}; new calls on it are held`);
     // A slug held by this process's own count where the book holds no record of it (its write did not land).
