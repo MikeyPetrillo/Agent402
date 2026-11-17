@@ -11,7 +11,7 @@ import { Agent402 } from "agent402-client";
 const DEFAULT_BASE = "https://agent402.tools";
 // Keep in lockstep with package.json: the User-Agent product token that names
 // this package on every call it sends.
-const USER_AGENT = "elizaos-plugin-agent402/0.2.11";
+const USER_AGENT = "elizaos-plugin-agent402/0.3.0";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
@@ -99,7 +99,8 @@ async function clientFor(runtime, fetchImpl = globalThis.fetch) {
   const baseUrl = (setting(runtime, "AGENT402_BASE_URL") || DEFAULT_BASE).replace(/\/+$/, "");
   const creditsKey = setting(runtime, "AGENT402_CREDITS_KEY");
   const walletKey = setting(runtime, "AGENT402_WALLET_KEY");
-  const maxPerCallUsd = num(setting(runtime, "AGENT402_MAX_PER_CALL_USD"), 1);
+  // Spending caps are opt-in: none unless a setting names one.
+  const maxPerCallUsd = num(setting(runtime, "AGENT402_MAX_PER_CALL_USD"), null);
   const dailyLimitUsd = num(setting(runtime, "AGENT402_DAILY_LIMIT_USD"), null);
   const sig = JSON.stringify([baseUrl, creditsKey, walletKey, maxPerCallUsd, dailyLimitUsd]);
   const key = runtime && typeof runtime === "object" ? runtime : clientFor;
