@@ -4,8 +4,10 @@
 # license agreement in CLA.md by its agreement sentence below (letter case and
 # runs of whitespace aside):
 #   - the PR author: in the PR description or in a comment of their own;
-#   - every other commit author with a GitHub account: in a comment of their
-#     own, or in the PR description as "@login: <sentence>";
+#   - every other commit author with a GitHub account: in a comment posted by
+#     that same account (the comment's author login equals the login linked to
+#     the commit). Only the PR author can edit the description, so it never
+#     carries anyone else's agreement.
 # The repository owner and bots are exempt. A commit whose author email is not
 # linked to a GitHub account fails: its agreement cannot be matched to anyone.
 # The sentence names the agreement's version; CLA.md and CONTRIBUTING.md print
@@ -64,18 +66,14 @@ for who in $people; do
     echo "CLA: $who agreed in the pull request description."
     continue
   fi
-  if printf '%s' "$body" | grep -qF -e "@$who: $want" -e "@$who $want"; then
-    echo "CLA: the pull request description carries the agreement for $who."
-    continue
-  fi
   if printf '%s' "$comments" | jq -r --arg w "$who" '.[] | select((.user.login // "" | ascii_downcase) == $w) | .body // ""' | normalize | grep -qF -- "$want"; then
     echo "CLA: $who agreed in a comment."
     continue
   fi
   if [ "$who" = "$author" ]; then
-    echo "::error::This pull request needs the contributor license agreement from its author ($who). Read CLA.md, then add this sentence to the pull request description or post it as a comment (either runs this check again): $AGREEMENT"
+    echo "::error::This pull request needs the contributor license agreement from its author ($who). Read CLA.md, then add this sentence to the pull request description or post it as a comment (after a comment, re-run this check or push a commit): $AGREEMENT"
   else
-    echo "::error::Commits in this pull request are authored by $who, who has not agreed to the contributor license agreement. $who reads CLA.md and posts this sentence as a comment on the pull request (which runs this check again): $AGREEMENT"
+    echo "::error::Commits in this pull request are authored by $who, who has not agreed to the contributor license agreement. $who reads CLA.md and posts this sentence in a comment from their own GitHub account on the pull request, then re-runs this check or pushes a commit: $AGREEMENT"
   fi
   failed=1
 done

@@ -28,7 +28,9 @@ pull request:
    confirm that you have the right to contribute the work. Your agreement also
    covers what you contributed to this repository before. If someone else
    authored commits in your pull request, they post the sentence in a comment
-   of their own. A comment runs the check again.
+   of their own. A comment does not re-run the check by itself: after
+   agreeing in a comment, the contributor (or a maintainer) re-runs the check
+   or pushes a commit.
 
 Why both: the company holds the copyright in the code it wrote and the rights
 its contributors grant, and offers Agent402 under AGPL-3.0 and MIT. The

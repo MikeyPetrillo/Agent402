@@ -24,8 +24,8 @@
 //     fails; a merge commit is exempt; 250 commits fails; shell syntax in a
 //     commit message is never executed;
 //   - CLA: the PR author agrees in the description or an own comment; every
-//     other commit author must agree in an own comment or be named in the
-//     description; owner and bot commits are exempt; a commit with no GitHub
+//     other commit author must agree in an own comment (a description naming
+//     them does not count); owner and bot commits are exempt; a commit with no GitHub
 //     account fails; the old unversioned sentence and part of the sentence do
 //     not count; PR text is never executed; the comment event works too.
 // Offline: a stub `gh` on PATH.
@@ -169,7 +169,9 @@ exit 1
   r = run(CLA, { commits: withBob, body: S, comments: [{ user: { login: "bob" }, body: S }] });
   ok(r.code === 0, "CLA: another commit author agreeing in a comment of their own passes");
   r = run(CLA, { commits: withBob, body: `${S}\n\n@bob: ${S}` });
-  ok(r.code === 0, "CLA: the description naming the other commit author with the sentence passes");
+  ok(r.code === 1 && /authored by bob/.test(r.out), "CLA: a co-author named with the sentence in the description by the PR author does not pass");
+  r = run(CLA, { commits: withBob, body: `${S}\n\n@bob ${S}` });
+  ok(r.code === 1, "CLA: a co-author named without a colon in the description does not pass either");
   r = run(CLA, { commits: withBob, body: S, comments: [{ user: { login: "ann" }, body: `@bob: ${S}` }] });
   ok(r.code === 1, "CLA: the PR author cannot agree for another commit author in a comment");
   r = run(CLA, { commits: [commit({}), commit({ login: "MikeyPetrillo" }), commit({ login: "dependabot[bot]", type: "Bot" })], body: S });
