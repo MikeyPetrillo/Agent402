@@ -206,6 +206,21 @@ ok(creditsLegalDate("2099-01-01") === "2099-01-01" && creditsLegalDate("2026-01-
 delete process.env.CREDITS_SALES;
 ok(/the key's record also keeps the amount refunded, when you asked, and Stripe's id for the refund/.test(strip(pOn)) && !/amount refunded, when you asked/.test(strip(pOff)), "/privacy states the refund record only while sales are on");
 
+// ---- copy that cannot be true in both states reads the switch -----------------
+{
+  const { skillMd } = await import("../src/skill-md.js");
+  process.env.CREDITS_SALES = "on";
+  const on = skillMd("https://agent402.tools", {});
+  delete process.env.CREDITS_SALES;
+  const off = skillMd("https://agent402.tools", {});
+  ok(/\(new keys are sold by card at https:\/\/agent402\.tools\/credits\)/.test(on) && !/new credits are not on sale/.test(on), "SKILL.md (on) says new keys are sold at /credits");
+  ok(/\(new credits are not on sale\)/.test(off) && !/new keys are sold by card/.test(off), "SKILL.md (off) keeps saying new credits are not on sale");
+  // The on-sale lines that name where a key pays name the routes that refuse one.
+  const learnSrc = readFileSync(new URL("../src/learn.js", import.meta.url), "utf8"), pagesSrc = readFileSync(new URL("../src/pages.js", import.meta.url), "utf8");
+  ok(/creditsSalesEnabled\(\) \? "For most of the rest, a prepaid card-credits key works on any paid tool except the wallet-scoped ones \(memory, usage\) and the routes that buy from an outside seller/.test(learnSrc), "/learn (on) names the routes a key does not pay");
+  ok(/creditsOnSale \? ' Prepaid credits at <a href="\/credits">\/credits<\/a> pay any paid tool except the wallet-scoped ones and the routes that buy from an outside seller[^']*refunded to your card on request\.'/.test(pagesSrc), "/faq (on) names the routes a key does not pay and the refund on request");
+}
+
 rmSync(DIR, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
