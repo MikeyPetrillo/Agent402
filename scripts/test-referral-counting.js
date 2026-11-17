@@ -26,7 +26,7 @@ const { referralReconciliation, reconcileDays } = await import("../src/referral-
 const { createReferralBook } = await import("../src/referral-book.js");
 const { createJsonDocument } = await import("../src/json-document.js");
 const { paidExternalSettlements } = await import("../src/host-entry.js");
-const { isCountedRail, isPaidRail, publicRailName } = await import("../src/paid-rails.js");
+const { isCountedRail, isPaidRail, publicRailName, isCountedPublicRail, COUNTED_RAILS } = await import("../src/paid-rails.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -53,6 +53,8 @@ ok(!/0\.00075|0\.0075/.test(text) && sum.totals.internal.sales === 1, "no net am
 ok(sum.totals.revenueBasis?.marketplace === "buyer price" && /buyer paid/.test(sum.totals.revenueNote || "") && /on-chain/.test(sum.totals.revenueNote || "") && !/\d/.test(sum.totals.revenueNote || ""), `the summary says a marketplace sale counts at its buyer's price, and that the on-chain figures count the payout received, with no figure (${JSON.stringify(sum.totals.revenueBasis)}: ${sum.totals.revenueNote})`);
 ok(sum.distinctExternalBuyers === 3 && sum.distinctToolsSoldExternal === 2, `distinct outside buyers and tools include the referral buyers (${sum.distinctExternalBuyers} buyers, ${sum.distinctToolsSoldExternal} tools)`);
 ok(paidExternalSettlements(sum) === 3, `the host entry's settlement count includes them (${paidExternalSettlements(sum)})`);
+ok(COUNTED_RAILS.every((r) => isCountedPublicRail(publicRailName(r))) && isCountedPublicRail("marketplace") && isCountedPublicRail("usdc") && !isCountedPublicRail("referral") && !isCountedPublicRail("pow") && !isCountedPublicRail(""), "a rail split key is read by its public name: every counted rail's public name is counted, a private rail's own name and a free rail are not");
+ok(paidExternalSettlements({ totals: { byRail: { "external:marketplace": 1, "external:pow": 5, "internal:marketplace": 4, "internal:usdc": 2 }, external: { sales: 6 } } }) === 1, "one outside marketplace sale is in the host entry's settlement figure once, beside free and internal rows that are not");
 const det = salesSummary({ days: 30, detailed: true });
 const opHash = det.topExternal.find((r) => r.slug === "hash");
 ok(opHash?.sales === 2 && near(opHash.revenueUsd, 0.002) && det.recentExternal.filter((r) => r.rail === "referral").every((r) => r.priceUsd === 0.001 || r.priceUsd === 0.01), `the operator's detailed view ranks it under its slug at the gross (${JSON.stringify(opHash)})`);

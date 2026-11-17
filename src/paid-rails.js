@@ -87,3 +87,10 @@ export const SALE_AMOUNT_SQL = BUYER_AMOUNT_SQL;
 export function publicRailName(rail) {
   return isPrivateRail(rail) ? "marketplace" : String(rail || "");
 }
+/** Is this PUBLIC rail name (the rail half of a `byRail` key, as publicRailName
+ *  wrote it) a counted sale? A reader of the public split asks this, never
+ *  isCountedRail: a private rail is not in the split under its own name. */
+export function isCountedPublicRail(name) {
+  const key = String(name || "");
+  return COUNTED_RAILS.some((r) => publicRailName(r) === key);
+}
