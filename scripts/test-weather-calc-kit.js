@@ -70,6 +70,18 @@ const minutesApart = (iso, want) => Math.abs(Date.parse(iso) - Date.parse(want))
   // (humid air, 80-87 F); 100 F at 10% is 94.8 less 0.6 (dry air, 80-112 F).
   ok((await run("heat-index-calc", { temperature: 80, humidity: 95, units: "f" })).heatIndex === 87.8, "heat-index-calc: the high-humidity adjustment is applied (80 F at 95% -> 87.8)");
   ok((await run("heat-index-calc", { temperature: 100, humidity: 10, units: "f" })).heatIndex === 94.1, "heat-index-calc: the low-humidity adjustment is applied (100 F at 10% -> 94.1)");
+  // Past the chart the regression extrapolates (150 F at 100% reads 802 F):
+  // no number, a field that says so, and the band only inside the air range.
+  {
+    const hot = await run("heat-index-calc", { temperature: 150, humidity: 100, units: "f" });
+    ok(hot.heatIndex === null && hot.heatIndexOutsideChart === true && hot.heatIndexBand === null && /not valid/.test(hot.heatIndexNote), `heat-index-calc: 150 F at 100% gives no heat index and says it is past the chart (${JSON.stringify({ hi: hot.heatIndex, band: hot.heatIndexBand })})`);
+    const humid = await run("heat-index-calc", { temperature: 106, humidity: 70, units: "f" });
+    ok(humid.heatIndex === null && humid.heatIndexOutsideChart === true && humid.heatIndexBand === "Extreme Danger", "heat-index-calc: 106 F at 70% is past the chart's top cell: no number, the Extreme Danger band");
+    const top = await run("heat-index-calc", { temperature: 110, humidity: 40, units: "f" });
+    ok(Math.abs(top.heatIndex - 136) <= 1 && top.heatIndexOutsideChart === undefined, `heat-index-calc: the chart's top cell (110 F at 40%) still reads its value (${top.heatIndex})`);
+    const c = await run("heat-index-calc", { temperature: 60, humidity: 100 });
+    ok(c.heatIndex === null && c.heatIndexOutsideChart === true, "heat-index-calc: in Celsius too (60 C is past the chart's air range)");
+  }
   let o = await run("heat-index-calc", { temperature: 96, humidity: 65, units: "f" });
   ok(o.heatIndexBand === "Danger" && (await run("heat-index-calc", { temperature: 84, humidity: 40, units: "f" })).heatIndexBand === "Caution" && (await run("heat-index-calc", { temperature: 90, humidity: 60, units: "f" })).heatIndexBand === "Extreme Caution" && (await run("heat-index-calc", { temperature: 106, humidity: 70, units: "f" })).heatIndexBand === "Extreme Danger", "heat-index-calc: the chart's four published bands");
   // NWS wind chill chart cells (°F, mph -> °F).

@@ -530,6 +530,11 @@ reset();
   ok(idle.recentTrades === null && idle.flags.join() === "no-recent-trades" && idle.activity24h.buyTradeSharePct === null, "an idle pool: no trade block, the flag, a null share");
   await throws(h("dex-pool-health")({ network: "eth" }), 400, "pool is required");
   await throws(h("dex-pool-health")({ network: "eth", pool: "0x12/../x" }), 400, "a path-shaped pool never reaches the URL");
+  for (const pool of [`0x${"a".repeat(30)}/../trades`, `0x${"a".repeat(30)}.json`, `${"A".repeat(25)} B`, `0x${"a".repeat(30)}%2f`]) {
+    const before = calls.length;
+    await throws(h("dex-pool-health")({ network: "eth", pool }), 400, `a pool of the right length with a separator (${pool.slice(-8)}) is refused`);
+    ok(calls.length === before, "and makes no upstream read");
+  }
   await throws(h("dex-pool-health")({ pool: PA }), 400, "network is required");
   // The pool is read first and alone: an unknown pool is one upstream read, and is remembered.
   reset();

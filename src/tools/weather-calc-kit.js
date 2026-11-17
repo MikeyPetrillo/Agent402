@@ -146,6 +146,19 @@ function heatIndexF(T, RH) {
   else if (RH > 85 && T >= 80 && T <= 87) hi += ((RH - 85) / 10) * ((87 - T) / 5);
   return hi;
 }
+// The NWS heat index chart's range: air from 80 °F to 112 °F (the range of the
+// regression's adjustments) and a heat index up to its top cell, 137 °F.
+export const HEAT_INDEX_CHART = Object.freeze({ minAirF: 80, maxAirF: 112, maxIndexF: 137 });
+function heatIndexFields(tF, hiF, F) {
+  const C = HEAT_INDEX_CHART;
+  if (tF < C.minAirF) return { heatIndex: null, heatIndexNote: "The heat index is defined for 27 °C (80 °F) or warmer." };
+  if (tF <= C.maxAirF && hiF <= C.maxIndexF) return { heatIndex: r1(F ? hiF : fToC(hiF)), heatIndexBand: heatBand(hiF) };
+  return {
+    heatIndex: null, heatIndexOutsideChart: true,
+    heatIndexBand: tF <= C.maxAirF ? "Extreme Danger" : null,
+    heatIndexNote: "Past the NWS heat index chart (air up to 44 °C / 112 °F, heat index up to 58 °C / 137 °F), where the formula is not valid, so no value is given.",
+  };
+}
 // The NWS heat index chart's four published bands (degrees Fahrenheit).
 function heatBand(hiF) {
   if (hiF >= 125) return "Extreme Danger";
@@ -332,9 +345,13 @@ export const WEATHER_CALC_TOOLS = [
       const wetBulbApplies = rh >= 5 && tC >= -20 && tC <= 50;
       return {
         temperature: t, humidity: rh, windSpeed: wind, unit: F ? "°F" : "°C", windUnit: F ? "mph" : "km/h",
-        // The heat index is defined for warm air: below 80 °F it is not reported.
-        heatIndex: tF >= 80 ? r1(F ? hiF : fToC(hiF)) : null,
-        ...(tF >= 80 ? { heatIndexBand: heatBand(hiF) } : { heatIndexNote: "The heat index is defined for 27 °C (80 °F) or warmer." }),
+        // The heat index is defined for warm air: below 80 °F it is not
+        // reported. Past the NWS chart (air above 112 °F, or a heat index
+        // above its top cell, 137 °F) the regression is extrapolating (150 °F
+        // at 100% reads 802 °F), so no number is given: the band is still
+        // stated where the regression is past the chart's top inside its air
+        // range, which is the chart's Extreme Danger region.
+        ...heatIndexFields(tF, hiF, F),
         humidex: out(humidexC), dewPoint: out(dewC),
         wetBulb: wetBulbApplies ? out(wetBulbC(tC, rh)) : null,
         ...(wetBulbApplies ? {} : { wetBulbNote: "The wet-bulb approximation holds for 5-99% humidity and -20 to 50 °C." }),
