@@ -359,6 +359,7 @@ const NETWORK = new Set([
   "/api/moderate",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
+const MEMORY_NS = `smoke-all-${process.pid}-${Date.now().toString(36)}`;
 // Wallet-keyed tools (payment = identity): in free mode there is no payment,
 // so their documented "pay to unlock" 4xx is the CORRECT answer, not a bug —
 // same leniency class as the memory tools.
@@ -510,7 +511,10 @@ for (const [path, methods] of paths) {
         : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(example) };
     }
     // Memory tools need an identity in free mode; give them a demo namespace.
-    if (isMemory(path)) url += (url.includes("?") ? "&" : "?") + "ns=smoke-all";
+    // One per run: the compare-and-swap example takes a 30 s lease, and a
+    // second run against the same server inside it would be refused the lease
+    // (swapped: false, no expiresAt) under a namespace both runs shared.
+    if (isMemory(path)) url += (url.includes("?") ? "&" : "?") + `ns=${MEMORY_NS}`;
 
     tasks.push({ path, method, op, cat, url, init });
   }
