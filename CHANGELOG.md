@@ -24,6 +24,16 @@ Payments:
   wallet and repaid after on-chain proof. The same payment sent again, in any
   encoding, gets the same answer back without the call running, and these
   answers never count against the paying wallet or its report and media runs.
+- A facilitator's pending answer whose transaction is not confirmed within the
+  wait is kept the same way, so the same payment sent again gets that answer
+  back. A backup settler's HTTP 4xx refusal that names a verdict on the
+  buyer's payment and no transaction keeps the earlier answer, as the same
+  verdict answered without an HTTP error does.
+Surfaces:
+- /agents.md lists the retry verbs a refused payment names under its recovery
+  lines, and /.well-known/x402 lists the reads an unconfirmed settlement
+  makes: the authorization recorded for the on-chain read, the expiry each
+  payment names, and the stored answer with a digest of the payer's signature.
 
 ### 2026-11-16 (an MCP payment ask every client reads)
 Surfaces:

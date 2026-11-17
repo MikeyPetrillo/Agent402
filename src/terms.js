@@ -151,8 +151,9 @@ back to the paying wallet, and repay it as described under refunds below. If an 
 chain, Solana or Algorand whose failed settlement named its transaction, or a Tempo transaction, lands on chain after we
 answered the call with an error, we record the amount as owed back to the paying wallet and repay it the same way. If an
 x402 payment signed as an EIP-3009 authorization on an EVM chain is answered settlement-unconfirmed (its settlement ended
-without showing whether the transfer was sent) and its transfer then lands on chain, we record the amount as owed back
-to the paying wallet and repay it the same way. Micropayments are per call and, once settled on-chain, are final and
+without showing whether the transfer was sent), that answer says when the payment was recorded for an on-chain check
+(it says so only then); when it was and its transfer then lands on chain, we record the amount as owed back to the
+paying wallet and repay it the same way. Micropayments are per call and, once settled on-chain, are final and
 non-refundable except as described in these terms or where required by law. Metered routes quote a ceiling before
 payment and settle at or under it. You are responsible for your own wallet and keys; we never receive or
 hold your private key.${publicIndex ? ` ${publicIndex}` : ""}</p>${gatewayBatched ? `

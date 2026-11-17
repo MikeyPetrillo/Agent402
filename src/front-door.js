@@ -186,7 +186,8 @@ export function recoveryMarkdown(catalog, baseUrl) {
 - **If a call fails:** ${d.recovery[0]}
 - **If an answer is lost:** ${d.recovery[1]}
 - **To retry:** ${d.recovery[2]}
-- **If a call is slow:** ${d.recovery[3]}`;
+- **If a call is slow:** ${d.recovery[3]}
+- **If a payment is refused:** ${d.recovery[4]}`;
 }
 
 /** JSON: the MCP server.describe answer, and the source of the unpaid 402

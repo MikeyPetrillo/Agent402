@@ -901,5 +901,38 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "control: the unscoped sentence is matched and is not taken as carrying the clause");
 }
 
+// The retry verbs a refused payment names (src/tool-error-fields.js
+// PAYMENT_RETRY_VERBS_NOTE) reach every surface an agent reads them on: the
+// served 402 description in /openapi.json, /llms-full.txt, the front door's
+// recovery list on /agents.md, and the hand-written copies in the client README and the
+// wiki. A surface that drops the note teaches a buyer to sign a second
+// payment for a call whose transfer may still land.
+{
+  const { PAYMENT_RETRY_VERBS_NOTE: NOTE } = await import("../src/tool-error-fields.js");
+  const { openapiSpec } = await import("../src/pages.js");
+  const { llmsFullTxt } = await import("../src/seo.js");
+  const { frontDoor, agentsMd } = await import("../src/front-door.js");
+  const B = "http://unit.test";
+  const c = { "GET /api/front-door-probe": { slug: "front-door-probe", route: "GET /api/front-door-probe", price: "$0.01", category: "web", description: "probe", tags: [] } };
+  const flat = (s) => String(s).replace(/\s+/g, " ");
+  ok(/same-payment/.test(NOTE) && /watch-transaction/.test(NOTE) && /check-wallet/.test(NOTE) && /fresh-authorization/.test(NOTE) && /settlement-unconfirmed/.test(NOTE),
+    "the retry-verbs note names same-payment, watch-transaction, check-wallet and fresh-authorization");
+  let spec = null; try { spec = openapiSpec(B, c); } catch (e) { spec = { error: String(e?.message || e) }; }
+  ok(JSON.stringify(spec).includes(JSON.stringify(NOTE).slice(1, -1)), "/openapi.json's 402 description carries the retry-verbs note");
+  let full = ""; try { full = llmsFullTxt(B, c); } catch (e) { full = String(e?.message || e); }
+  ok(full.includes(NOTE), "/llms-full.txt carries the retry-verbs note");
+  let door = null; try { door = frontDoor(c, B); } catch { door = null; }
+  let agents = ""; try { agents = agentsMd(B, c); } catch (e) { agents = String(e?.message || e); }
+  ok(Array.isArray(door?.recovery) && door.recovery.includes(NOTE) && agents.includes(NOTE), "the front door's recovery list, as /agents.md serves it, carries the retry-verbs note");
+  const readme = flat(readFileSync(join(root, "client/README.md"), "utf8"));
+  ok(/A refused payment's body names a `retry` verb: `watch-transaction` or `check-wallet` \(`reason: "settlement-unconfirmed"`\) means the settlement is not confirmed/.test(readme)
+    && /`same-payment` means send the same payment again, and `fresh-authorization` means sign a new one/.test(readme),
+    "the client README names the retry verbs and the unconfirmed settlement");
+  const wiki = flat(readFileSync(join(root, "wiki/Paying-with-x402.md"), "utf8"));
+  ok(/`same-payment` means send the same payment again after `Retry-After`, with no new signature; `watch-transaction` \(the body lists `transactions`\) and `check-wallet` \(it lists none\) mean the settlement is not confirmed/.test(wiki)
+    && /`fresh-authorization` means sign a new payment/.test(wiki),
+    "the wiki's Paying-with-x402 page names the retry verbs and the unconfirmed settlement");
+}
+
 console.log(`test-copy-absolutes: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

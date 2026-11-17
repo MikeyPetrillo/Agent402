@@ -424,6 +424,35 @@ await check("our relayer settled first (the facilitator read dry) and answered p
   assert.deepEqual(book.list().filter((e) => e.tx === txh(20)).map((e) => e.via), ["primary"]);
 });
 
+await check("a booking neither the store nor the journal takes leaves the payment unbooked: the unconfirmed answer promises no owed record, and the terms promise one only when the answer says so", async () => {
+  const { join: pj } = await import("node:path");
+  const { writeFileSync: wf, readFileSync: rf } = await import("node:fs");
+  const { unconfirmedSettleRefusal } = await import("../src/payment-reject.js");
+  const blocker = pj(dir, `blocker-unbooked-${Date.now()}`);
+  wf(blocker, "not a directory");
+  const alarms = [];
+  const none = createLateSettleBook({ file: pj(blocker, "late.json"), now, log: () => {}, alarm: (m) => alarms.push(m), fetchImpl, rpcFor: (net) => (net === RH ? RPC : null), journal: { add: () => null, size: () => 0, drain: async () => 0 } });
+  const { server, fail } = hookHost();
+  registerLateSettleHook(server, async () => none);
+  const ctx = ctxFor(23, Object.assign(new Error("settle timed out"), { name: "SettleError", statusCode: 504, errorReason: "unexpected_settle_error", transaction: txh(23) }));
+  await fail(ctx);
+  assert.equal(ctx.__a402LateBooked, false, "the hook records that nothing was booked");
+  assert.ok(alarms.some((m) => /could NOT be recorded/.test(m)), "and raises the alarm");
+  const answer = unconfirmedSettleRefusal({ network: RH, transactions: [txh(23)], booked: ctx.__a402LateBooked === true });
+  assert.ok(!/booked as owed/.test(answer.detail), "the answer does not promise an owed record");
+  // Control: a book that takes it marks it booked, and the answer says so.
+  const ok2 = makeBook();
+  const h2 = hookHost();
+  registerLateSettleHook(h2.server, async () => ok2);
+  const ctx2 = ctxFor(24, Object.assign(new Error("settle timed out"), { name: "SettleError", statusCode: 504, errorReason: "unexpected_settle_error", transaction: txh(24) }));
+  await h2.fail(ctx2);
+  assert.equal(ctx2.__a402LateBooked, true, "control: a booking that lands is marked booked");
+  assert.ok(/booked as owed/.test(unconfirmedSettleRefusal({ network: RH, transactions: [txh(24)], booked: true }).detail), "control: the booked answer promises the owed record");
+  const terms = rf(new URL("../src/terms.js", import.meta.url), "utf8").replace(/\s+/g, " ");
+  assert.ok(/settlement-unconfirmed \(its settlement ended without showing whether the transfer was sent\), that answer says when the payment was recorded for an on-chain check \(it says so only then\); when it was and its transfer then lands/.test(terms),
+    "the terms promise the owed record for an unconfirmed EIP-3009 payment only when its answer says it was recorded");
+});
+
 await check("a recovered settlement (a fallback settled it) books nothing", async () => {
   const book = makeBook();
   const { server, fail } = hookHost();

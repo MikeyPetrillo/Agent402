@@ -27,6 +27,7 @@ import {
   LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION, frontDoorMarkdown, frontDoorJson, frontDoor402Json, agentsMd, paidWiresPhrase,
 } from "../src/front-door.js";
 import { RAILS } from "../src/rails.js";
+import { PAYMENT_RETRY_VERBS_NOTE } from "../src/tool-error-fields.js";
 import { FLAGSHIP_MCP_NAMES } from "../src/mcp-flagship.js";
 import { isComputePayable } from "../src/pow.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
@@ -40,9 +41,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const EM_DASH = /[—–]/;
 const strip = (s) => String(s).replace(/`/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
 /** Words that belong to the recovery lines: none of them may sit in the three-line block. */
-const RECOVERY_WORDS = /If a call fails|If an answer is lost|To retry|If a call is slow|PAYMENT-RESPONSE|X-Replayed-Answer|Idempotency-Key|Prefer: respond-async|\/api\/jobs/;
+const RECOVERY_WORDS = /If a call fails|If an answer is lost|To retry|If a call is slow|If a payment is refused|PAYMENT-RESPONSE|X-Replayed-Answer|Idempotency-Key|Prefer: respond-async|\/api\/jobs/;
 const LABELS = ["First call", "Access", "Use when"];
-const RECOVERY_LABELS = ["If a call fails", "If an answer is lost", "To retry", "If a call is slow"];
+const RECOVERY_LABELS = ["If a call fails", "If an answer is lost", "To retry", "If a call is slow", "If a payment is refused"];
 
 /** A labeled bullet list under a "## heading", up to the next blank line. */
 function listOf(md, heading, label, labels) {
@@ -70,6 +71,8 @@ function assertRecoveryScope(label, rec, { tempo = false } = {}) {
     `${label}: the explicit key is bound to the same credential, route and body, first 200 only, with its size cap`);
   ok(/slow route/.test(rec[3]) && /Prefer: respond-async/.test(rec[3]) && /\/api\/jobs\/\{id\}/.test(rec[3]) && /delivered answer/.test(rec[3]),
     `${label}: the async sentence is scoped to a slow route`);
+  ok(rec[4] === PAYMENT_RETRY_VERBS_NOTE && /watch-transaction/.test(rec[4]) && /check-wallet/.test(rec[4]) && /same-payment/.test(rec[4]),
+    `${label}: the refused-payment line is the retry-verbs note`);
 }
 
 /** The access line: no account or key, the free tier first with its count and
