@@ -12,8 +12,10 @@
 //   initialize; tools/list (every expected dotted name, a non-empty
 //   description, an object inputSchema); server.describe; payment.info;
 //   catalog.search; catalog.find; sellers.list; one free pure-CPU tool through
-//   catalog.call (hash, checked against node:crypto); a wallet-only flagship
-//   without payment (must answer a payment pointer, never run and never crash);
+//   catalog.call (hash, checked against node:crypto); every wallet-only
+//   flagship and one wallet-only slug through catalog.call without payment
+//   (each must answer a payment pointer this client can read: never a run,
+//   never a result the client's output-schema check throws on);
 //   and the MCP Tasks extension's wire (an unknown task id and an undeclared
 //   capability answer the codes the extension pins) where it is advertised.
 // It spends nothing: the free tool runs on the free tier, the paid call carries
@@ -192,25 +194,49 @@ await check("catalog.call: the free hash tool runs on the free tier and matches 
   assert(r.structuredContent?.result?.hex === expected, "structuredContent.result.hex does not match");
 });
 
-// 9. a wallet-only flagship without payment: a payment pointer, never a run
-await check("web.search without payment: answers a payment pointer (challenges or the paid path), does not run", async () => {
-  let r;
-  try {
-    r = await callTool("web.search", { q: "x402" });
-  } catch (err) {
-    // Native MPP on the connector: a JSON-RPC error carrying the challenges.
-    assert(err instanceof McpError && MPP_PAYMENT_REQUIRED_CODES.has(err.code), `unexpected error: ${err?.message}`);
-    assert(Array.isArray(err.data?.challenges) && err.data.challenges.length > 0, "payment error carries no challenges");
-    return `JSON-RPC ${err.code} with ${err.data.challenges.length} challenge(s)`;
-  }
-  const text = String(r.content?.[0]?.text || "");
-  assert(r.isError === true, "the call ran without payment");
-  assert(!/"results"\s*:/.test(text) && !text.includes("<html"), "the answer carries search results");
-  const challenges = r._meta?.[MPP_PAYMENT_REQUIRED_META];
-  const namesPaidPath = /agent402-mcp|AGENT_KEY|MPP|x402/.test(text);
-  assert(challenges || namesPaidPath, `neither challenges nor a paid path named: ${text.slice(0, 120)}`);
-  return challenges ? "isError result with MPP challenges in _meta" : "isError result naming the paid path";
-});
+// 9. every wallet-only flagship, and a wallet-only slug through catalog.call,
+// without payment: a payment pointer the client can READ, never a run. Each
+// of these tools lists an outputSchema, and this client checks any
+// structuredContent a result carries against it (error results included), so
+// a payment ask shaped as structured content is thrown as -32602 before a
+// host ever sees it.
+const UNPAID_CALLS = [
+  ["web.search", { q: "x402" }],
+  ["web.answer", { q: "what is x402" }],
+  ["web.news", { q: "x402" }],
+  ["browser.render", { url: "https://example.com" }],
+  ["market.quote", { symbol: "AAPL" }],
+  ["audio.transcribe", { url: "https://example.com/a.mp3" }],
+  ["memory.read", { key: "mcp-client-check" }],
+  ["memory.write", { key: "mcp-client-check", value: "unpaid" }],
+  ["catalog.call", { slug: "search", params: { q: "x402" } }],
+];
+for (const [tool, args] of UNPAID_CALLS) {
+  const label = tool === "catalog.call" ? `catalog.call ${args.slug}` : tool;
+  await check(`${label} without payment: answers a payment pointer (challenges or the paid path), does not run`, async () => {
+    let r;
+    try {
+      r = await callTool(tool, args);
+    } catch (err) {
+      // Native MPP on the connector: a JSON-RPC error carrying the challenges.
+      assert(err instanceof McpError && MPP_PAYMENT_REQUIRED_CODES.has(err.code), `the client could not read the answer: ${err?.message}`);
+      assert(Array.isArray(err.data?.challenges) && err.data.challenges.length > 0, "payment error carries no challenges");
+      return `JSON-RPC ${err.code} with ${err.data.challenges.length} challenge(s)`;
+    }
+    assert(r.isError === true, "the call ran without payment");
+    // An x402 offer rides as JSON in the first text block (it quotes the
+    // tool's example output inside its discovery extension, which is not a
+    // run); every other block is prose.
+    let offer = null;
+    try { const first = JSON.parse(String(r.content?.[0]?.text || "")); offer = first && first.x402Version === 2 && Array.isArray(first.accepts) && first.accepts.length ? first : null; } catch { offer = null; }
+    const text = (r.content || []).slice(offer ? 1 : 0).map((c) => String(c?.text || "")).join("\n");
+    assert(!/"results"\s*:/.test(text) && !text.includes("<html"), "the answer carries tool output");
+    const challenges = r._meta?.[MPP_PAYMENT_REQUIRED_META];
+    const namesPaidPath = /agent402-mcp|AGENT_KEY|MPP|x402/.test(text);
+    assert(challenges || offer || namesPaidPath, `neither challenges, an x402 offer nor a paid path named: ${text.slice(0, 120)}`);
+    return [offer && "x402 offer in the first text block", challenges && "MPP challenges in _meta", !offer && !challenges && "isError result naming the paid path"].filter(Boolean).join(", ");
+  });
+}
 
 // 10. MCP Tasks extension wire, where advertised (a task only carries a paid
 // run, so an instance without a paid path does not advertise it).

@@ -36,7 +36,7 @@ Proof-of-work proves *effort*, not *cost coverage*. Anything that spends real re
 
 ## Free-tier abuse limits
 
-- Hosted MCP connector: free calls are limited to the pure-CPU set, per-IP sliding window (20/min, 120/hr); wallet-only tools are payable in the call over MPP.
+- Hosted MCP connector: free calls are limited to the pure-CPU set, per-IP sliding window (20/min, 120/hr); wallet-only tools are payable in the call over x402 or MPP.
 - Operator surfaces (`/__operator/*`, `POST /api/status/probe`): token auth with a timing-safe compare. The uptime probe endpoint is authed precisely because an open one would let anyone forge our availability record.
 - Card endpoints that make an outbound Stripe call (`/api/buy`, `/api/subscribe`, `/api/credits/checkout`, session reads) are per-IP rate-limited, and unknown or unpaid session ids are negatively cached, so nobody can amplify requests into Stripe through us.
 

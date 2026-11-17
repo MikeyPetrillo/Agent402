@@ -478,7 +478,7 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
       key: { type: "string" },
       bytes: { type: "integer" },
       updated: { type: "number" },
-      expiresAt: { type: "number" },
+      expiresAt: { type: ["number", "null"], description: "Expiry in unix seconds; null when the key does not expire" },
       owner: { type: "string" },
       persistent: { type: "boolean" },
       deleted: { type: "boolean" },
@@ -582,7 +582,7 @@ export function mcpInstallHints(baseUrl) {
  */
 // `mpp`: a paid call can be settled over MPP on this connector (the loopback);
 // `mppOffered`: the MPP switch, which sets the wires the lead sentence names.
-export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false, mppOffered = true } = {}) {
+export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false, x402 = false, mppOffered = true } = {}) {
   const install = mcpInstallHints(baseUrl);
   const hosted = install.hostedUrl;
   return [
@@ -594,7 +594,7 @@ export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false
     ...(decide ? ["Multi-step jobs: decide.plan returns a call-ready plan (tools, order, fallbacks, inputs); decide.execute runs it. The plan fee is credited toward the run."] : []),
     "Also: server.describe (connector details), payment.info (wallet and payment setup), demand.request (report a missing tool).",
     `Install (npm package, pinned): ${install.claudeCodeNpm}`,
-    `${mpp ? "Hosted connector (proof-of-work tools free; other tools payable over MPP from a wallet)" : "Hosted connector (proof-of-work tools free; others need a wallet on the npm package)"}: ${install.claudeCodeHosted}`,
+    `Hosted connector (proof-of-work tools free; ${x402 || mpp ? `other tools paid in the call over ${[x402 && "x402", mpp && "MPP"].filter(Boolean).join(" or ")} from a wallet` : "others need a wallet on the npm package"}): ${install.claudeCodeHosted}`,
     `Cursor mcp.json: { "mcpServers": { "agent402": { "url": "${hosted}" } } }`,
     `Docs: ${baseUrl}/llms.txt · status ${baseUrl}/status`,
   ].join("\n");
