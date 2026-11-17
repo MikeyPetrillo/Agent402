@@ -46,9 +46,7 @@ const SOURCE = "coingecko";
 // miss the cache every time. The ceiling is the day less a reserve kept for
 // the other CoinGecko tools (cgScopeAll at the end of this file, cgCeiling in
 // coingecko-rate.js: COINGECKO_OTHERS_RESERVE of COINGECKO_DAILY_MAX),
-// whatever the inputs, so the other tools always keep that reserve; and every
-// page a board reads past its default is quoted at the listed price per page
-// (dexVolumeBoard.quote), so a read costs the same whatever `pools` asks.
+// whatever the inputs, so the other tools always keep that reserve.
 //   funding rates settle every one to eight hours           30 minutes
 //   the stablecoin page (now, 24-hour and 7-day ranges)     15 minutes
 //   one coin's venue tickers move fastest                    5 minutes
@@ -844,40 +842,21 @@ const reducePoolPage = {
 
 const unknownNetwork = (network) => bad(`No pools are tracked for network "${network}" - check the network id`, 422);
 
-// PRICED BY THE PAGES READ. The listed price covers the default board (60
-// pools, three pages); 80 and 100 pools read a fourth and fifth page, and each
-// page past the default is quoted at the listed price over the default's pages
-// (the per-input quote, src/payments.js acceptsForItem), so a read costs the
-// same on every board. Fewer pools than the default pay the listed price.
-const BOARD_PRICE = "$0.005";
-const BOARD_DEFAULT_POOLS = 60;
-const usdText = (usd) => "$" + Number(usd).toFixed(6).replace(/0+$/, "").replace(/\.$/, ""); // as the 402 writes it
-const boardPages = (pools) => pools / POOLS_PER_PAGE;
-/** The price of a board of \`pools\` pools, in USD: never below the listed price. */
-export function boardQuoteUsd(pools) {
-  const list = Number(BOARD_PRICE.slice(1));
-  const n = typeof pools === "number" ? pools : (typeof pools === "string" && /^\d+$/.test(pools.trim()) ? Number(pools) : BOARD_DEFAULT_POOLS);
-  const pages = Number.isInteger(n) && n >= POOLS_PER_PAGE && n <= 100 && n % POOLS_PER_PAGE === 0 ? boardPages(n) : boardPages(BOARD_DEFAULT_POOLS);
-  return Math.ceil(list * Math.max(1, pages / boardPages(BOARD_DEFAULT_POOLS)) * 1e6) / 1e6;
-}
-
 const dexVolumeBoard = {
   route: "GET /api/dex-volume-board",
   name: "DEX volume board by network",
   slug: "dex-volume-board", aliases: ["dex-volume", "dex-market-share"],
   category: "crypto",
-  price: BOARD_PRICE,
-  quote: (body) => boardQuoteUsd(body?.pools),
-  quoteMaxUsd: boardQuoteUsd(100),
+  price: "$0.005",
   description:
-    `A network's decentralized exchanges ranked by their share of 24h volume across the network's top pools (the ${BOARD_DEFAULT_POOLS} largest by volume, or 20-100 with \`pools\`): each DEX's volume share, liquidity share, turnover (volume over liquidity), pool count, buy share of trades and its largest pool, with the network's concentration (the top DEX's share and a Herfindahl index). Networks use on-chain ids such as eth, base, solana, arbitrum, bsc, polygon_pos. Shares are of the pools read, stated in the answer. Up to ${BOARD_DEFAULT_POOLS} pools is the listed price; 80 and 100 pools read more pages and are quoted at ${usdText(boardQuoteUsd(80))} and ${usdText(boardQuoteUsd(100))} in the 402. Deterministic code over market data; refreshed every 30 minutes.`,
+    "A network's decentralized exchanges ranked by their share of 24h volume across the network's top pools (the 60 largest by volume, or 20-100 with `pools`): each DEX's volume share, liquidity share, turnover (volume over liquidity), pool count, buy share of trades and its largest pool, with the network's concentration (the top DEX's share and a Herfindahl index). Networks use on-chain ids such as eth, base, solana, arbitrum, bsc, polygon_pos. Shares are of the pools read, stated in the answer. Deterministic code over market data; refreshed every 30 minutes.",
   tags: ["crypto", "dex", "volume", "market-share", "liquidity", "network", "ranking", "defi", "concentration"],
   discovery: {
     input: { network: "base" },
     inputSchema: {
       properties: {
         network: { type: "string", description: "On-chain network id: eth, base, solana, arbitrum, bsc, polygon_pos, optimism, avax, ..." },
-        pools: { type: "number", description: `How many of the network's top pools by 24h volume to add up: 20, 40, 60, 80 or 100 (default ${BOARD_DEFAULT_POOLS}); 80 and 100 are quoted at ${usdText(boardQuoteUsd(80))} and ${usdText(boardQuoteUsd(100))}.` },
+        pools: { type: "number", description: "How many of the network's top pools by 24h volume to add up: 20, 40, 60, 80 or 100 (default 60)." },
         limit: { type: "number", description: "DEXes returned, 1-50 (default 15)." },
       },
       required: ["network"],
@@ -895,7 +874,7 @@ const dexVolumeBoard = {
   },
   handler: async (i = {}) => {
     const network = takeId(i.network, "network");
-    const want = takeInt(i.pools, "pools", { min: POOLS_PER_PAGE, max: 100, dflt: BOARD_DEFAULT_POOLS });
+    const want = takeInt(i.pools, "pools", { min: POOLS_PER_PAGE, max: 100, dflt: 60 });
     if (want % POOLS_PER_PAGE !== 0) throw bad('"pools" must be 20, 40, 60, 80 or 100');
     const limit = takeInt(i.limit, "limit", { min: 1, max: 50, dflt: 15 });
     if (unknownNetworks.has(network)) throw unknownNetwork(network);

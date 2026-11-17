@@ -176,7 +176,7 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
 // answered with no read and paid calls keep the rest of the day.
 {
   const { CRYPTO_MARKETS_TOOLS, clearCryptoMarketsCache } = markets;
-  const { CRYPTO_SCREENS_TOOLS, boardQuoteUsd } = await import("../src/tools/crypto-screens-kit.js");
+  const { CRYPTO_SCREENS_TOOLS } = await import("../src/tools/crypto-screens-kit.js");
   const H = (tools, slug) => tools.find((t) => t.slug === slug).handler;
   const profile = H(CRYPTO_MARKETS_TOOLS, "coin-profile");
   const coinHistory = H(CRYPTO_MARKETS_TOOLS, "coin-history");
@@ -214,7 +214,7 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
     if (/^\/onchain\/networks\/[a-z0-9]+\/pools$/.test(p)) return J(200, { data: [{ id: "x", attributes: { address: `0x${u.searchParams.get("page")}`, name: "A / B", volume_usd: { h24: "1" }, reserve_in_usd: "1", transactions: { h24: { buys: 1, sells: 1 } } }, relationships: { dex: { data: { id: "d" } } } }], included: [] });
     return J(404, { error: "coin not found" });
   };
-  const call = async (fn, input) => { try { const out = await fn(input); return out?.recorded === false ? "200-unrecorded" : 200; } catch (e) { return e?.statusCode ?? 500; } };
+  const call = async (fn, input) => { try { await fn(input); return 200; } catch (e) { return e?.statusCode ?? 500; } };
   const count = (re) => paths.filter((p) => re.test(p)).length;
   const fresh = () => { rate.resetCgRateLimit(); clearCryptoMarketsCache(); clearCryptoCache(); clearPriceFeedCache(); paths.length = 0; };
   try {
@@ -268,9 +268,14 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
     const mixedPf = await pfPrice({ ids: ["bitcoin", "madepf-mixed"] });
     ok(mixedPf.count === 2 && mixedPf.unknown?.[0] === "madepf-mixed" && mixedPf.prices[1].price === null, "price-coingecko: a partial miss keeps its null row and lists the id");
 
-    // 4. A listed coin with no market data that day is a settled answer, not a free read.
-    const hist = await coinHistory({ coin: "bitcoin", daysAgo: 3 });
-    ok(hist.recorded === false && hist.price === null && hist.id === "bitcoin", "coin-history: a date with no market data answers 200 with recorded false and null values");
+    // 4. A listed coin with no market data that day is a free 422, never a
+    // charged empty answer; the miss is kept, so a repeat reads nothing.
+    const histReads = () => count(/^\/coins\/bitcoin\/history/);
+    eq(await call(coinHistory, { coin: "bitcoin", daysAgo: 3 }), 422, "coin-history: a date with no market data answers 422");
+    const firstReads = histReads();
+    ok(firstReads >= 1, `control: the first miss read the date upstream (${firstReads})`);
+    eq(await call(coinHistory, { coin: "bitcoin", daysAgo: 3 }), 422, "coin-history: the same coin and date again is 422");
+    eq(histReads(), firstReads, "and reads nothing upstream");
 
     // 5. Paid calls for real ids after the flood still answer, and use the rest of the day.
     const after = [];
@@ -308,12 +313,9 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
     for (let k = 0; k < 40; k++) boards2.push(await call(board, { network: `nb${k}`, pools: 20 }));
     eq(boards2.filter((s) => s === 200).length, caps.screens - 10, `after 10 other reads the screens answer ${caps.screens - 10} more: the ceiling is total reads, not a share of their own`);
 
-    // 8. Each board page past the default is priced, derived from the listed price.
+    // 8. The board is sold at its listed price for every pool count (no per-input quote).
     const def = CRYPTO_SCREENS_TOOLS.find((t) => t.slug === "dex-volume-board");
-    const list = Number(def.price.slice(1));
-    ok(def.quote({}) === list && def.quote({ pools: 20 }) === list && def.quote({ pools: "60" }) === list, "the default board and smaller ones are quoted at the listed price");
-    ok(Math.abs(def.quote({ pools: 100 }) - list * 5 / 3) < 1e-6 && Math.abs(def.quote({ pools: "80" }) - list * 4 / 3) < 1e-6 && def.quote({ pools: 100 }) >= list * 5 / 3, "80 and 100 pools are quoted per page read, never under");
-    ok(def.quoteMaxUsd === boardQuoteUsd(100) && def.quote({ pools: 7 }) === list, "the ceiling is the 100-pool quote; an input the handler refuses quotes the list price");
+    ok(def.price === "$0.005" && def.quote === undefined && def.quoteMaxUsd === undefined, "dex-volume-board has one listed price for every pool count");
   } finally {
     globalThis.fetch = orig;
     delete process.env.COINGECKO_API_KEY; delete process.env.COINGECKO_DAILY_MAX; delete process.env.COINGECKO_MAX_PER_MIN;

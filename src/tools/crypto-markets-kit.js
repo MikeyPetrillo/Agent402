@@ -51,7 +51,7 @@ export const TTL = Object.freeze({ price: 60_000, list: 300_000, coinList: 600_0
 const MAX_ENTRIES = 256;
 const cache = createCgCache("markets", { max: MAX_ENTRIES, keepParsed: true });
 
-export function clearCryptoMarketsCache() { cache.clear(); }
+export function clearCryptoMarketsCache() { cache.clear(); historyMisses.clear(); }
 
 function userAgent() {
   return (process.env.CRYPTO_USER_AGENT || "").trim() || "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
@@ -134,6 +134,27 @@ export async function knownIdsGate(kind, ids) {
 export async function knownIdGate(kind, id) {
   const { unknown } = await knownIdsGate(kind, [id]);
   if (unknown.length) throw unknownIdError(kind);
+}
+
+// --- coin-history misses --------------------------------------------------------
+// A coin and date with no market data answer 422 (free). The miss is kept for
+// a day per coin and date, so a repeat answers the same 422 with no read. The
+// memo is bounded: past HISTORY_MISS_MAX entries the oldest is dropped.
+export const HISTORY_MISS_TTL_MS = 86_400_000;
+export const HISTORY_MISS_MAX = 5000;
+const historyMisses = new Map(); // "coin|YYYY-MM-DD" -> expiry (ms)
+const noHistory = () => bad("No market data recorded for that coin on that date", 422);
+function historyMissed(key) {
+  const exp = historyMisses.get(key);
+  if (exp == null) return false;
+  if (exp > Date.now()) return true;
+  historyMisses.delete(key);
+  return false;
+}
+function noteHistoryMiss(key) {
+  historyMisses.delete(key);
+  historyMisses.set(key, Date.now() + HISTORY_MISS_TTL_MS);
+  while (historyMisses.size > HISTORY_MISS_MAX) historyMisses.delete(historyMisses.keys().next().value);
 }
 
 // One upstream read for cgGet: the body text of a 200 that parses as JSON, or
@@ -493,7 +514,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Price, market cap and 24h volume of a coin on ONE past date (00:00 UTC snapshot), in every currency at once plus your chosen one called out. Pass `date` (YYYY-MM-DD) or `daysAgo` (1-365). The point-in-time sibling of crypto-history (which returns a series): use it to value a position as of a date, compute a since-date return, or check a tax-lot basis. Historical range on this plan is the past 365 days, enforced before the call. A date with no market data recorded for the coin (before it traded) answers recorded false with null values. Cached in-process for 5 minutes.",
+      "Price, market cap and 24h volume of a coin on ONE past date (00:00 UTC snapshot), in every currency at once plus your chosen one called out. Pass `date` (YYYY-MM-DD) or `daysAgo` (1-365). The point-in-time sibling of crypto-history (which returns a series): use it to value a position as of a date, compute a since-date return, or check a tax-lot basis. Historical range on this plan is the past 365 days, enforced before the call. Cached in-process for 5 minutes.",
     tags: ["crypto", "history", "snapshot", "price", "date", "market-cap", "tax"],
     discovery: {
       input: { coin: "bitcoin", daysAgo: 30, currency: "usd" },
@@ -509,7 +530,7 @@ export const CRYPTO_MARKETS_TOOLS = [
       output: {
         example: {
           source: "coingecko", fetchedAt: "2026-08-22T13:20:00.000Z", cached: false,
-          id: "bitcoin", symbol: "BTC", name: "Bitcoin", date: "2026-07-23", currency: "usd", recorded: true,
+          id: "bitcoin", symbol: "BTC", name: "Bitcoin", date: "2026-07-23", currency: "usd",
           price: 118412.55, marketCap: 2356000000000, volume24h: 41000000000,
           allCurrencies: { price: { usd: 118412.55, eur: 100812.3, btc: 1 }, marketCap: { usd: 2356000000000 }, volume24h: { usd: 41000000000 } },
         },
@@ -532,26 +553,17 @@ export const CRYPTO_MARKETS_TOOLS = [
         dateStr = new Date(Date.now() - daysAgo * DAY_MS).toISOString().slice(0, 10);
       }
       const [y, m, dd] = dateStr.split("-");
+      const missKey = `${coin}|${dateStr}`;
+      if (historyMissed(missKey)) throw noHistory();
       await knownIdGate("coin", coin);
       const { data: d, fetchedAt, cached } = await cgGet(`/coins/${encodeURIComponent(coin)}/history`, { date: `${dd}-${m}-${y}`, localization: "false" }, TTL.list);
       if (!d || typeof d !== "object" || !d.id) throw bad("Market data upstream returned an unexpected shape", 502);
       const md = d.market_data;
-      // A listed coin with no market data that day (a date before it traded)
-      // is an answer, not a refused input: the date was read, so it is a 200
-      // with recorded false and null values. A 422 here was a read nobody paid
-      // for, and a coin and date pair sent fresh each call spent the day free.
+      if (!md) { noteHistoryMiss(missKey); throw noHistory(); }
       const numMap = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [k, num(v)]).filter(([, v]) => v != null));
-      if (!md) {
-        return {
-          source: SOURCE, fetchedAt, cached,
-          id: d.id, symbol: upper(d.symbol), name: d.name ?? null, date: dateStr, currency, recorded: false,
-          price: null, marketCap: null, volume24h: null,
-          allCurrencies: { price: {}, marketCap: {}, volume24h: {} },
-        };
-      }
       return {
         source: SOURCE, fetchedAt, cached,
-        id: d.id, symbol: upper(d.symbol), name: d.name ?? null, date: dateStr, currency, recorded: true,
+        id: d.id, symbol: upper(d.symbol), name: d.name ?? null, date: dateStr, currency,
         price: num(md.current_price?.[currency]),
         marketCap: num(md.market_cap?.[currency]),
         volume24h: num(md.total_volume?.[currency]),
@@ -1286,7 +1298,7 @@ CRYPTO_MARKETS_TOOLS.push(...RWA_TOOLS);
 // `credit` field of every answer.
 for (const t of CRYPTO_MARKETS_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 
-export const __test = { takeId, takeCurrency, takeInt, takeBool, takeIdList, takeContracts, takeTime, takeLookback, cgGet, TTL, MAX_ENTRIES, MAX_HISTORY_DAYS, takeRwaType, shapeRwaMarket };
+export const __test = { takeId, takeCurrency, takeInt, takeBool, takeIdList, takeContracts, takeTime, takeLookback, cgGet, TTL, MAX_ENTRIES, MAX_HISTORY_DAYS, takeRwaType, shapeRwaMarket, historyMissSize: () => historyMisses.size, clearHistoryMisses: () => historyMisses.clear() };
 
 // The step a buyer reads in a deadline 503, from the upstream path.
 function stepOf(path) { return String(path || "").replace(/^\/api\/v3\//, "").split("?")[0].split("/").filter((seg) => /^[a-z_]+$/.test(seg)).join(" ").replace(/_/g, " ") || "market data"; }
