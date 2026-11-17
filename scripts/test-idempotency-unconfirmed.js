@@ -25,7 +25,7 @@ const DAY = 86_400_000;
 const NET = "eip155:8453";
 const PAYER = `0x${randomBytes(20).toString("hex")}`;
 
-const GOOD_SIG = `0x${"11".repeat(65)}`;
+const GOOD_SIG = `0x${"ab".repeat(65)}`;
 const payloadOf = ({ nonce, validBefore, resource = "https://agent402.tools/api/memory" }) => ({
   x402Version: 2, resource: { url: resource }, accepted: { scheme: "exact", network: NET, amount: "1000", payTo: `0x${"bb".repeat(20)}`, asset: `0x${"cc".repeat(20)}` },
   payload: { signature: GOOD_SIG, authorization: { from: PAYER, to: `0x${"bb".repeat(20)}`, value: "1000", validAfter: "0", validBefore: String(validBefore), nonce } },
@@ -83,7 +83,7 @@ const realNow = Date.now;
     const again = [await s.send(header), await s.send(enc(p, 2)), await s.send(enc({ payload: p.payload, ...p })), await s.send(enc({ ...p, resource: { url: "https://agent402.tools/api/other?x=1" } }), { key: "other" })];
     ok(again.every((r) => r.status === 402 && r.replayed === "1" && /settlement-unconfirmed/.test(r.text) && r.receipt) && s.runs.n === 1,
       `the same authorization as sent, re-spaced, re-ordered, and with another resource and body: the stored answer, nothing run (${again.map((r) => `${r.status}/${r.replayed}`).join(" ")}; ${s.runs.n} runs)`);
-    const upper = await s.send(enc({ ...p, payload: { ...p.payload, signature: `0x${"11".repeat(65).toUpperCase()}` } }));
+    const upper = await s.send(enc({ ...p, payload: { ...p.payload, signature: GOOD_SIG.toUpperCase().replace("0X", "0x") } }));
     ok(upper.replayed === "1" && s.runs.n === 1, "the same signature in upper-case hex replays");
     // Another header naming the same (network, payer, nonce) without the payer's signature.
     const unsigned = await s.send(enc(unsignedOf(p)));
@@ -95,6 +95,13 @@ const realNow = Date.now;
     ok(wrong.replayed !== "1" && /invalid_exact_evm_payload_signature/.test(wrong.text) && s.runs.n === 3, "a header with another signature for the same identity: the normal refusal");
     const own = await s.send(enc(p, 4));
     ok(own.status === 402 && own.replayed === "1" && /settlement-unconfirmed/.test(own.text) && !/impostor/.test(own.text) && s.runs.n === 3, "the payer's own re-send still gets its stored answer after those");
+    // An unsigned header that arrives first keeps nothing, so the payer's own
+    // payment that follows keeps and replays its answer.
+    const first2 = payloadOf({ nonce: newNonce(), validBefore: vb });
+    await s.send(enc(unsignedOf(first2))); await settle();
+    await s.send(enc(first2)); await settle();
+    const own2 = await s.send(enc(first2, 1));
+    ok(own2.replayed === "1" && !/impostor/.test(own2.text), "an unsigned header sent first stores nothing; the payer's answer is kept and replayed");
     s.runs.n = 1;
     const other = await s.send(enc(payloadOf({ nonce: newNonce(), validBefore: vb })));
     await settle();
@@ -123,10 +130,15 @@ const realNow = Date.now;
     const fake = (h) => ({ header: (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined) });
     ok(unconfirmedKeyOf(fake(enc(p)), enc(p)) === unconfirmedKeyOf(fake(enc(p, 3)), enc(p, 3)) && unconfirmedKeyOf(fake("not-a-payment"), "not-a-payment") !== unconfirmedKeyOf(fake("other-text"), "other-text"),
       "the key is the payment's identity; an unreadable credential keys on its text");
-    // A signed transaction: the digest is of its decoded bytes.
-    const txA = randomBytes(200), txB = Buffer.from(txA); txB[1] ^= 0xff;
+    // A signed transaction: the digest is of its decoded bytes. A legacy
+    // Solana transaction (one signature, then its message): B is A's message
+    // under another signature, one payment to the replay guard.
+    const message = Buffer.concat([Buffer.from([1, 0, 1, 2]), randomBytes(64), randomBytes(32), Buffer.from([0])]);
+    const txA = Buffer.concat([Buffer.from([1]), randomBytes(64), message]);
+    const txB = Buffer.concat([Buffer.from([1]), randomBytes(64), message]);
     const svm = (tx, url = false) => { const t = tx.toString("base64"); return enc({ x402Version: 2, accepted: { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" }, payload: { transaction: url ? t.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") : t } }); };
     const sigOf = (h) => unconfirmedSignatureOf(fake(h), h);
+    ok(unconfirmedKeyOf(fake(svm(txA)), svm(txA)) === unconfirmedKeyOf(fake(svm(txB)), svm(txB)), "control: the same message under another signature is one payment's key");
     ok(sigOf(svm(txA)) === sigOf(svm(txA, true)) && sigOf(svm(txA)) !== sigOf(svm(txB)) && typeof sigOf(svm(txA)) === "string",
       "a signed transaction binds on its decoded bytes: re-encoded matches, other signature bytes do not");
     const avm = (tx) => enc({ x402Version: 2, accepted: { scheme: "exact", network: "algorand:mainnet" }, payload: { paymentGroup: [tx.toString("base64")], paymentIndex: 0 } });
