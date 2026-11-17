@@ -27,6 +27,59 @@ export const MCP_LISTING_TOOLS = Object.freeze({
 export const MCP_ENDPOINT_PATH = "/mcp";
 export const MCP_LISTING_TRANSPORT = "streamable-http";
 export const MCP_LISTING_NETWORK = "eip155:8453";
+/** USDC on Base (the token contract), the one asset a listing is bought in. */
+export const MCP_LISTING_ASSET = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+/** The longest validity window a listing offer may ask a signature for. */
+export const MCP_OFFER_MAX_VALIDITY_SECONDS = 600;
+const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+const sameAddress = (a, b) => typeof a === "string" && typeof b === "string" && EVM_ADDRESS_RE.test(a) && a.toLowerCase() === b.toLowerCase();
+
+/** dotted MCP tool name -> catalog slug (the inverse of MCP_LISTING_TOOLS). */
+export function mcpListingSlugOf(name) {
+  const n = String(name ?? "").trim();
+  if (Object.hasOwn(MCP_LISTING_TOOLS, n)) return n;
+  for (const [slug, tool] of Object.entries(MCP_LISTING_TOOLS)) if (tool === n) return slug;
+  return null;
+}
+
+/** A dispatched list (catalog slugs, dotted tool names, or both) as catalog
+ *  slugs, each once, in the order asked: { slugs, unknown }. Anything that is
+ *  neither is `unknown`, and the caller refuses the whole list. */
+export function mcpListingSlugsOf(list) {
+  const slugs = [], unknown = [];
+  for (const raw of String(list ?? "").split(",").map((x) => x.trim()).filter(Boolean)) {
+    const slug = mcpListingSlugOf(raw);
+    if (!slug) unknown.push(raw);
+    else if (!slugs.includes(slug)) slugs.push(slug);
+  }
+  return { slugs, unknown };
+}
+
+/** The server's published EVM receiving address, from its service manifest
+ *  (/.well-known/x402 payment.x402.payTo), or null. */
+export function publishedPayTo(manifest) {
+  const v = manifest?.payment?.x402?.payTo;
+  return typeof v === "string" && EVM_ADDRESS_RE.test(v) ? v : null;
+}
+
+/** The accepts of an offer a listing buy may sign: exact, on Base, in USDC,
+ *  by a plain EIP-3009 transfer authorization (not Permit2, not a batched
+ *  Gateway authorization, which carry other validity windows and spenders). */
+export function mcpListingAccepts(pr) {
+  const accepts = Array.isArray(pr?.accepts) ? pr.accepts : [];
+  return accepts.filter((a) => a && typeof a === "object" && a.network === MCP_LISTING_NETWORK && a.scheme === "exact"
+    && sameAddress(a.asset, MCP_LISTING_ASSET)
+    && (a.extra?.assetTransferMethod === undefined || a.extra.assetTransferMethod === "eip3009")
+    && a.extra?.verifyingContract === undefined);
+}
+
+/** The offer a buy signs: the checked accept and no other, so the signer
+ *  cannot select an accept the check did not read. null when there is not
+ *  exactly one. */
+export function mcpSignableOffer(pr) {
+  const own = mcpListingAccepts(pr);
+  return own.length === 1 ? { ...pr, accepts: [own[0]] } : null;
+}
 const TOOL_NAME_RE = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 
 /** The key an MCP tool listing is read by: the path and fragment of its feed resource. */
@@ -98,9 +151,12 @@ export function usdText(micros) {
  * ([] when it is). A payment signed against anything else would settle a
  * different resource: the tool's HTTP route (a build without the twins), or
  * another tool. `micros`, when given, is the list price the Base accept must
- * ask exactly.
+ * ask exactly. `payTo`, when given, is the receiving address it must pay (the
+ * server's published one; a buy always gives it). The offer must hold exactly
+ * one accept a buy may sign (mcpListingAccepts), and its validity window is
+ * bounded (MCP_OFFER_MAX_VALIDITY_SECONDS).
  */
-export function mcpOfferProblems(pr, { toolName, origin, micros = null } = {}) {
+export function mcpOfferProblems(pr, { toolName, origin, micros = null, payTo = null } = {}) {
   const out = [];
   if (!pr || typeof pr !== "object" || Array.isArray(pr)) return ["no PaymentRequired object"];
   if (pr.x402Version !== 2) out.push(`x402Version is ${JSON.stringify(pr.x402Version)}, not 2`);
@@ -119,9 +175,15 @@ export function mcpOfferProblems(pr, { toolName, origin, micros = null } = {}) {
     if (input.example !== undefined && (!input.example || typeof input.example !== "object" || Array.isArray(input.example))) out.push("extension example is not an object");
     if (!ext.schema || typeof ext.schema !== "object") out.push("the bazaar extension has no schema");
   }
-  const accepts = Array.isArray(pr.accepts) ? pr.accepts : [];
-  const base = accepts.filter((a) => a && a.network === MCP_LISTING_NETWORK && a.scheme === "exact");
-  if (!base.length) out.push(`no exact accept on ${MCP_LISTING_NETWORK}`);
-  else if (micros != null && !base.some((a) => String(a.amount) === String(micros))) out.push("the Base accept does not ask the list price");
+  const own = mcpListingAccepts(pr);
+  if (!own.length) out.push(`no exact accept on ${MCP_LISTING_NETWORK}`);
+  else if (own.length !== 1) out.push(`${own.length} exact USDC accepts on ${MCP_LISTING_NETWORK}, not exactly one`);
+  else {
+    const a = own[0];
+    if (micros != null && String(a.amount) !== String(micros)) out.push("the Base accept does not ask the list price");
+    if (payTo != null && !sameAddress(a.payTo, payTo)) out.push("the Base accept does not pay the server's published receiving address");
+    const t = a.maxTimeoutSeconds;
+    if (!Number.isInteger(t) || t < 1 || t > MCP_OFFER_MAX_VALIDITY_SECONDS) out.push(`the Base accept's validity window is ${JSON.stringify(t ?? null)} s, not 1 to ${MCP_OFFER_MAX_VALIDITY_SECONDS}`);
+  }
   return out;
 }

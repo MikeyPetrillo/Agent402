@@ -40,13 +40,15 @@ import { load } from "js-yaml";
 import { bootServer } from "./lib/boot-server.js";
 import {
   MCP_LISTING_TOOLS, mcpListingRoutes, selectMcpListings, mcpOfferProblems, mcpToolOfResource, isMcpFeedRow, mcpListingKey, usdText,
+  mcpListingSlugsOf, mcpSignableOffer, publishedPayTo, MCP_OFFER_MAX_VALIDITY_SECONDS,
 } from "./lib/mcp-listings.js";
-import { buyMcpListing, X402_PAYMENT_META, X402_PAYMENT_RESPONSE_META } from "./lib/mcp-x402-client.js";
-import { staleCandidates } from "./refresh-bazaar.js";
+import { buyMcpListing, askMcpOffer, signedPaymentProblems, X402_PAYMENT_META, X402_PAYMENT_RESPONSE_META } from "./lib/mcp-x402-client.js";
+import { staleCandidates, buyMcpListings, buildPayClient, signedSpendBudget } from "./refresh-bazaar.js";
 import { decide, issueBody, issueListedKeys, logLines, listingKeyOnHost, mcpCatalogRows, readListing } from "./bazaar-presence.js";
 import { run as planRun, mcpPassRoutes } from "./keepalive-plan.js";
 import { aboveCeilingRoutes, passMicros, burnerLowWaterUsd, microsToUsd } from "./lib/keepalive-plan.js";
 import { runMcpValidation, mcpListingOfferProblems } from "./bazaar-validate.js";
+import { decide as decideIssue, issueBody as issueOf, recordedSlugs } from "./mcp-listings-issue.js";
 
 const { MCP_X402_SLUGS, MCP_X402_TRANSPORT } = await import("../src/mcp-x402-routes.js");
 const { FLAGSHIP_MCP_NAMES } = await import("../src/mcp-flagship.js");
@@ -79,6 +81,8 @@ const PRICING = {
 };
 const SPEC = { paths: Object.fromEntries(Object.values(PATHS).map(([m, p]) => [p, { [m.toLowerCase()]: { parameters: [{ name: "q", example: "x402" }] } }])) };
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const PAY_TO = "0x000000000000000000000000000000000000dEaD";
+const OTHER = "0x00000000000000000000000000000000000000A1";
 const offerFor = (toolName, micros, over = {}) => ({
   x402Version: 2, error: "Payment required",
   resource: { url: `${ORIGIN}/mcp`, description: toolName, mimeType: "application/json" },
@@ -120,7 +124,7 @@ const offerFor = (toolName, micros, over = {}) => ({
 // ---- the offer check ---------------------------------------------------------------
 {
   const good = offerFor("web.search", 10000);
-  const args = { toolName: "web.search", origin: ORIGIN, micros: 10000 };
+  const args = { toolName: "web.search", origin: ORIGIN, micros: 10000, payTo: PAY_TO };
   ok(mcpOfferProblems(good, args).length === 0, "the tool's MCP listing offer at the list price has no problem");
   const bad = (over, re, label) => { const p = mcpOfferProblems({ ...good, ...over }, args); ok(p.some((x) => re.test(x)), `${label} (${p.join("; ").slice(0, 110)})`); };
   bad({ resource: { url: `${ORIGIN}/api/search` } }, /resource is/, "an offer naming the HTTP route is refused");
@@ -130,6 +134,21 @@ const offerFor = (toolName, micros, over = {}) => ({
   bad({ accepts: [{ ...good.accepts[0], amount: "10001" }] }, /list price/, "a Base accept asking another amount is refused");
   bad({ accepts: [{ ...good.accepts[0], network: "eip155:10" }] }, /no exact accept on eip155:8453/, "an offer with no Base accept is refused");
   bad({ x402Version: 1 }, /x402Version/, "a v1 offer is refused");
+  // What a signature would authorize: where it pays, for how long, and that there is one accept to sign.
+  bad({ accepts: [{ ...good.accepts[0], payTo: OTHER }] }, /published receiving address/, "an offer at the list price paying ANOTHER address is refused");
+  bad({ accepts: [{ ...good.accepts[0], payTo: undefined }] }, /published receiving address/, "an offer with no payTo is refused");
+  bad({ accepts: [{ ...good.accepts[0], maxTimeoutSeconds: 10 * 365 * 86400 }] }, /validity window/, "an offer asking a ten-year validity window is refused");
+  bad({ accepts: [{ ...good.accepts[0], maxTimeoutSeconds: MCP_OFFER_MAX_VALIDITY_SECONDS + 1 }] }, /validity window/, "one second past the bounded window is refused");
+  bad({ accepts: [{ ...good.accepts[0], maxTimeoutSeconds: undefined }] }, /validity window/, "an offer with no validity window is refused");
+  bad({ accepts: [good.accepts[0], { ...good.accepts[0], payTo: OTHER }] }, /2 exact USDC accepts .* not exactly one/, "two exact USDC accepts on Base are refused: the signer could pick either");
+  bad({ accepts: [{ ...good.accepts[0], asset: OTHER }] }, /no exact accept on eip155:8453/, "a Base accept in another asset is refused");
+  ok(mcpOfferProblems({ ...good, accepts: [{ ...good.accepts[0], maxTimeoutSeconds: MCP_OFFER_MAX_VALIDITY_SECONDS }] }, args).length === 0 && mcpOfferProblems({ ...good, accepts: [{ ...good.accepts[0], payTo: PAY_TO.toLowerCase() }] }, args).length === 0, "the bound itself and another letter case of the address pass");
+  // Other ways to pay on Base ride beside the plain accept (Permit2, a batched authorization with a week-long window): never the ones signed.
+  const beside = { ...good, accepts: [{ ...good.accepts[0], scheme: "upto", extra: { assetTransferMethod: "permit2" } }, good.accepts[0], { ...good.accepts[0], maxTimeoutSeconds: 604900, extra: { name: "GatewayWalletBatched", version: "1", verifyingContract: OTHER } }, { ...good.accepts[0], network: "eip155:10" }] };
+  const signable = mcpSignableOffer(beside);
+  ok(mcpOfferProblems(beside, args).length === 0 && signable?.accepts.length === 1 && signable.accepts[0] === good.accepts[0] && signable.resource === beside.resource && mcpSignableOffer({ ...good, accepts: [] }) === null,
+    "beside other Base accepts the plain one is checked, and it alone is handed to the signer");
+  ok(publishedPayTo({ payment: { x402: { payTo: PAY_TO } } }) === PAY_TO && publishedPayTo({ payment: { x402: { payTo: "0x12" } } }) === null && publishedPayTo({}) === null && publishedPayTo(null) === null, "the published receiving address is read from the service manifest, or is none");
   const sse = JSON.parse(JSON.stringify(good)); sse.extensions.bazaar.info.input.transport = "sse";
   ok(mcpOfferProblems(sse, args).some((x) => /transport/.test(x)), "another transport is refused");
   const noSchema = JSON.parse(JSON.stringify(good)); delete noSchema.extensions.bazaar.info.input.inputSchema;
@@ -145,42 +164,131 @@ const offerFor = (toolName, micros, over = {}) => ({
 {
   const route = { slug: "search", toolName: "web.search", micros: 10000 };
   const mk = (answers) => { const calls = []; return { calls, callTool: async (name, args, meta) => { calls.push({ name, meta }); const a = answers[calls.length - 1]; if (a instanceof Error) throw a; return a; } }; };
-  const ask = (offer) => ({ isError: true, structuredContent: offer, content: [{ type: "text", text: JSON.stringify(offer) }] });
-  let signed = 0;
-  const signPayment = async () => { signed++; return { x402Version: 2, payload: { signature: "0x00" } }; };
+  // The connector's ask: the offer as JSON in the first text block, no structuredContent.
+  const ask = (offer) => ({ isError: true, content: [{ type: "text", text: JSON.stringify(offer) }, { type: "text", text: "This tool requires payment." }] });
+  ok((await askMcpOffer(async () => ask(offerFor("web.search", 10000)), "web.search", {})).offer?.accepts?.length === 1 && (await askMcpOffer(async () => ({ isError: true, structuredContent: offerFor("web.search", 10000), content: [] }), "web.search", {})).offer?.x402Version === 2,
+    "the offer is read from the first text block, and from structuredContent where a server sends it");
+  let signed = 0, lastSigned = null;
+  const authFor = (over = {}) => ({ x402Version: 2, payload: { signature: "0x00", authorization: { to: PAY_TO, value: "10000", validAfter: "0", validBefore: String(Math.floor(Date.now() / 1000) + 60), ...over } } });
+  const signPayment = async (offer) => { signed++; lastSigned = offer; return authFor(); };
+  // Every buy below is held to the published receiving address.
+  const buy1 = (o) => buyMcpListing({ payTo: PAY_TO, ...o });
   const paidOk = { content: [{ type: "text", text: "{}" }], _meta: { [X402_PAYMENT_RESPONSE_META]: { success: true, transaction: "0x1" } } };
 
   let c = mk([ask(offerFor("web.search", 10000)), paidOk]);
-  let r = await buyMcpListing({ ...c, signPayment, route, args: { q: "x" }, origin: ORIGIN });
+  let r = await buy1({ ...c, signPayment, route, args: { q: "x" }, origin: ORIGIN });
   ok(r.ok && signed === 1 && c.calls.length === 2 && !c.calls[0].meta && c.calls[1].meta?.[X402_PAYMENT_META]?.payload?.signature === "0x00", "a buy is one unpaid ask, one signature, one paid call carrying the payment in _meta");
 
   signed = 0; c = mk([ask(offerFor("web.search", 10000, { resource: { url: `${ORIGIN}/api/search` } })), paidOk]);
-  r = await buyMcpListing({ ...c, signPayment, route, origin: ORIGIN });
+  r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
   ok(!r.ok && !r.signed && signed === 0 && c.calls.length === 1 && /not this tool's MCP listing offer/.test(r.why), `the HTTP route's offer (a build without the twins) is never signed (${String(r.why).slice(0, 90)})`);
 
   signed = 0; c = mk([ask(offerFor("web.search", 20000)), paidOk]);
-  r = await buyMcpListing({ ...c, signPayment, route, origin: ORIGIN });
+  r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
   ok(!r.ok && signed === 0 && c.calls.length === 1, "an offer above the list price is never signed");
 
   signed = 0; c = mk([{ content: [{ type: "text", text: "served free" }] }]);
-  r = await buyMcpListing({ ...c, signPayment, route, origin: ORIGIN });
+  r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
   ok(!r.ok && signed === 0 && /without asking for a payment/.test(r.why), "a tool that answers without a payment is not a buy");
 
   signed = 0; c = mk([{ isError: true, content: [{ type: "text", text: "wallet required: run the npm package" }] }]);
-  r = await buyMcpListing({ ...c, signPayment, route, origin: ORIGIN });
+  r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
   ok(!r.ok && signed === 0 && /no x402 offer/.test(r.why), "a refusal with no x402 offer (no paywall on the connector) is not a buy");
 
   signed = 0; c = mk([ask(offerFor("web.search", 10000)), new Error("timeout")]);
-  r = await buyMcpListing({ ...c, signPayment, route, origin: ORIGIN });
+  r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
   ok(!r.ok && r.sent && signed === 1 && c.calls.length === 2 && /not sent again/.test(r.why), "a paid call that does not answer is reported and never sent again");
 
   signed = 0; c = mk([ask(offerFor("web.search", 10000)), { isError: true, content: [{ type: "text", text: "settlement failed" }], _meta: { [X402_PAYMENT_RESPONSE_META]: { success: false } } }]);
-  r = await buyMcpListing({ ...c, signPayment, route, origin: ORIGIN });
+  r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
   ok(!r.ok && r.sent && signed === 1 && c.calls.length === 2 && /did not settle/.test(r.why), "a settle that fails is reported and never sent again");
 
   signed = 0; c = mk([ask(offerFor("web.search", 10000)), paidOk]);
-  r = await buyMcpListing({ ...c, signPayment: async () => { throw new Error("selected accept refused: over the cap"); }, route, origin: ORIGIN });
+  r = await buy1({ ...c, signPayment: async () => { throw new Error("selected accept refused: over the cap"); }, route, origin: ORIGIN });
   ok(!r.ok && !r.sent && c.calls.length === 1 && /no payment was signed/.test(r.why), "a signature the cap refuses sends nothing");
+
+  // Where the money goes and for how long: never signed otherwise.
+  for (const [over, label] of [
+    [{ payTo: OTHER }, "an offer at the list price to another address"],
+    [{ maxTimeoutSeconds: 10 * 365 * 86400 }, "an offer with a ten-year validity window"],
+  ]) {
+    const o = offerFor("web.search", 10000); o.accepts = [{ ...o.accepts[0], ...over }];
+    signed = 0; c = mk([ask(o), paidOk]);
+    r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
+    ok(!r.ok && !r.signed && signed === 0 && c.calls.length === 1, `${label} is never signed (${String(r.why).slice(-70)})`);
+  }
+  { const o = offerFor("web.search", 10000); o.accepts = [o.accepts[0], { ...o.accepts[0], payTo: OTHER }];
+    signed = 0; c = mk([ask(o), paidOk]);
+    r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
+    ok(!r.ok && signed === 0 && c.calls.length === 1, "an offer with two exact USDC accepts on Base is never signed"); }
+  { const o = offerFor("web.search", 10000); o.accepts = [{ ...o.accepts[0], maxTimeoutSeconds: 604900, extra: { name: "GatewayWalletBatched", verifyingContract: OTHER } }, o.accepts[0]];
+    signed = 0; lastSigned = null; c = mk([ask(o), paidOk]);
+    r = await buy1({ ...c, signPayment, route, origin: ORIGIN });
+    ok(r.ok && signed === 1 && lastSigned.accepts.length === 1 && lastSigned.accepts[0].maxTimeoutSeconds === 60 && lastSigned.accepts[0].extra?.verifyingContract === undefined, "the signer is handed the one checked accept, never the batched one listed before it"); }
+  signed = 0; c = mk([ask(offerFor("web.search", 10000)), paidOk]);
+  r = await buyMcpListing({ ...c, signPayment, route, origin: ORIGIN });
+  ok(!r.ok && signed === 0 && c.calls.length === 0 && /no published receiving address/.test(r.why), "with no published receiving address to hold the offer to, nothing is asked or signed");
+  // The signed authorization is read back before it is sent.
+  for (const [over, re, label] of [
+    [{ to: OTHER }, /another address/, "an authorization that pays another address"],
+    [{ value: "10001" }, /list price/, "an authorization for another amount"],
+    [{ validBefore: String(Math.floor(Date.now() / 1000) + 10 * 365 * 86400) }, /longer than the bounded window/, "an authorization valid for ten years"],
+  ]) {
+    c = mk([ask(offerFor("web.search", 10000)), paidOk]);
+    r = await buy1({ ...c, signPayment: async () => authFor(over), route, origin: ORIGIN });
+    ok(!r.ok && r.signed && !r.sent && c.calls.length === 1 && re.test(r.why), `${label} is not sent`);
+  }
+  ok(signedPaymentProblems(authFor(), { micros: 10000, payTo: PAY_TO }).length === 0 && signedPaymentProblems({ payload: {} }, { micros: 10000, payTo: PAY_TO })[0] === "no readable transfer authorization", "the read-back passes the authorization the offer asked for, and refuses a payload without one");
+}
+
+// ---- the two holds on what a run may sign, with the real capped client --------------------
+{
+  const key = generatePrivateKey();
+  const mkRoutes = () => [{ slug: "search", toolName: "web.search", micros: 10000 }, { slug: "search-news", toolName: "web.news", micros: 10000 }, { slug: "memory-read", toolName: "memory.read", micros: 1000 }];
+  const quiet = { log: () => {}, err: () => {} };
+  const valueOf = (payment) => String(payment?.payload?.authorization?.value);
+  // A buy that signs whatever offer it is given: what a missed offer check would do.
+  const blindBuy = (offerOf) => async ({ signPayment, route }) => {
+    try { const payment = await signPayment(offerOf(route)); return { ok: true, signed: true, sent: true, payment }; } catch (e) { return { ok: false, signed: false, sent: false, why: String(e?.message || e) }; }
+  };
+  const origError = console.error, origLog = console.log;
+  console.error = () => {}; console.log = () => {};
+  try {
+    // The per-listing hold: one tool's offer asks ten times its list price.
+    {
+      const routes = mkRoutes();
+      const budget = signedSpendBudget(routes.reduce((n, r) => n + r.micros, 0) / 1e6);
+      const client = await buildPayClient(budget, { key });
+      const seenValues = [];
+      const out = await buyMcpListings({ routes, budget, callTool: null, signPayment: async (offer) => { const p = await client.createPaymentPayload(offer); seenValues.push(valueOf(p)); return p; }, origin: ORIGIN, payTo: PAY_TO, ...quiet,
+        buy: blindBuy((r) => offerFor(r.toolName, r.toolName === "memory.read" ? 10000 : r.micros)) });
+      ok(out.okCount === 2 && out.failed.join() === "memory.read" && seenValues.join() === "10000,10000" && budget.signatures === 2 && budget.signedMicros === 20000,
+        `an offer asking above its listing's list price is not signed, though the run's total would still cover it (signed ${seenValues.join(",")}; failed ${out.failed.join()})`);
+      let after = null;
+      try { await client.createPaymentPayload(offerFor("memory.read", 1000)); after = "signed"; } catch { after = "refused"; }
+      ok(after === "refused" && budget.signatures === 2, "once the loop ends nothing more is signable with that client");
+    }
+    // The run total: the sum of the listed prices, and no signature past it.
+    {
+      const routes = mkRoutes().slice(0, 2);
+      const budget = signedSpendBudget(0.015); // one listing fits, two do not
+      const client = await buildPayClient(budget, { key });
+      const asked = [];
+      const out = await buyMcpListings({ routes, budget, callTool: null, signPayment: (offer) => client.createPaymentPayload(offer), origin: ORIGIN, payTo: PAY_TO, ...quiet,
+        buy: async (o) => { asked.push(o.route.toolName); return blindBuy((r) => offerFor(r.toolName, r.micros))(o); } });
+      ok(out.okCount === 1 && out.failed.join() === "web.news" && asked.join() === "web.search" && budget.signatures === 1 && budget.signedMicros === 10000, `a listing that does not fit under what the run may still sign is not asked for (asked ${asked.join()})`);
+    }
+    {
+      // The same total held at the signature itself: a second signature of a listing already bought.
+      const routes = [mkRoutes()[0]];
+      const budget = signedSpendBudget(0.01);
+      const client = await buildPayClient(budget, { key });
+      let second = null;
+      const out = await buyMcpListings({ routes, budget, callTool: null, signPayment: (offer) => client.createPaymentPayload(offer), origin: ORIGIN, payTo: PAY_TO, ...quiet,
+        buy: async (o) => { const first = await blindBuy((r) => offerFor(r.toolName, r.micros))(o); try { await o.signPayment(offerFor(o.route.toolName, o.route.micros)); second = "signed"; } catch { second = "refused"; } return first; } });
+      ok(out.okCount === 1 && second === "refused" && budget.signatures === 1 && budget.signedMicros === 10000, "past the listings' list prices together, a further signature is refused");
+    }
+  } finally { console.error = origError; console.log = origLog; }
 }
 
 // ---- the presence check ------------------------------------------------------------
@@ -264,12 +372,17 @@ const offerFor = (toolName, micros, over = {}) => ({
   const exempt = { endpoints: PRICING.endpoints.map((e) => (e.slug === "answer" ? { ...e, quoted: true } : e)) };
   ok(mcpPassRoutes(exempt).length === 5 && !mcpPassRoutes(exempt).some((r) => r.slug === "answer"), "an exempt kind is left out of the plan");
   const low = [];
-  await planRun(["low-water"], { env: {}, log: (l) => low.push(l), err: () => {}, fetchPricing });
+  await planRun(["low-water"], { env: { BAZAAR_MCP_KEEPALIVE: "on" }, log: (l) => low.push(l), err: () => {}, fetchPricing });
   const tail = microsToUsd(passMicros(aboveCeilingRoutes(PRICING)));
+  const lowOff = [];
+  await planRun(["low-water"], { env: {}, log: (l) => lowOff.push(l), err: () => {}, fetchPricing });
+  const lowOff2 = [];
+  await planRun(["low-water"], { env: { BAZAAR_MCP_KEEPALIVE: "off" }, log: (l) => lowOff2.push(l), err: () => {}, fetchPricing });
+  ok(Number(lowOff[0]) === burnerLowWaterUsd(tail) && lowOff2[0] === lowOff[0] && /BAZAAR_MCP_KEEPALIVE: \$\{\{ vars\.BAZAAR_MCP_KEEPALIVE \}\}/.test(read(".github/workflows/heartbeat.yml")), `with the scheduled pass off, the figure counts no MCP listings pass, and the heartbeat hands the switch to the plan (${lowOff[0]})`);
   ok(Number(low[0]) === burnerLowWaterUsd(tail + 0.112) && tail === 0.85, `the burner low-water figure covers one pass above the ceiling and one MCP listings pass (${low[0]})`);
   const big = { endpoints: [...PRICING.endpoints.filter((e) => e.slug !== "answer"), { slug: "answer", method: "POST", path: "/api/answer", price: "$19.50" }, { slug: "pack", method: "POST", path: "/api/pack", price: "$0.60" }] };
   const lowBig = [];
-  await planRun(["low-water"], { env: {}, log: (l) => lowBig.push(l), err: () => {}, fetchPricing: async () => big });
+  await planRun(["low-water"], { env: { BAZAAR_MCP_KEEPALIVE: "on" }, log: (l) => lowBig.push(l), err: () => {}, fetchPricing: async () => big });
   const tailBig = microsToUsd(passMicros(aboveCeilingRoutes(big)));
   ok(Number(lowBig[0]) === burnerLowWaterUsd(tailBig + microsToUsd(passMicros(mcpPassRoutes(big)))) && Number(lowBig[0]) > burnerLowWaterUsd(tailBig), `a dearer MCP pass raises the figure (${lowBig[0]} over ${burnerLowWaterUsd(tailBig)})`);
 }
@@ -289,13 +402,21 @@ const runScript = (script, args, env) => new Promise((resolve) => {
   const stub = createServer((req, res) => {
     hits++;
     if (req.url.startsWith("/mcp")) { mcpHits++; res.writeHead(500); return res.end(); }
-    const body = req.url === "/api/pricing" ? PRICING : req.url === "/openapi.json" ? SPEC : null;
+    const body = req.url === "/api/pricing" ? PRICING : req.url === "/openapi.json" ? SPEC : req.url === "/.well-known/x402" && manifest ? manifest : null;
     res.writeHead(body ? 200 : 404, { "Content-Type": "application/json" });
     res.end(JSON.stringify(body || {}));
   });
+  let manifest = null;
   await new Promise((r) => stub.listen(0, "127.0.0.1", r));
   const T = `http://127.0.0.1:${stub.address().port}`;
   try {
+    // No published receiving address: a paying run stops before a key is loaded or the connector asked.
+    const noAddr = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", SLUGS: "search", BURNER_KEY: generatePrivateKey() });
+    ok(noAddr.code === 2 && /published receiving address could not be read/.test(noAddr.err) && mcpHits === 0 && !/Paying via/.test(noAddr.all), "a paying run with no published receiving address to hold the offer to signs nothing and asks nothing");
+    manifest = { payment: { x402: { payTo: "not-an-address" } } };
+    const badAddr = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", SLUGS: "search", BURNER_KEY: generatePrivateKey() });
+    ok(badAddr.code === 2 && mcpHits === 0 && !/Paying via/.test(badAddr.all), "an unreadable published address is no address");
+    manifest = null;
     const dry = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", DRY_RUN: "1", SLUGS: SIX });
     const want = [
       `MCP tool listings to buy through ${T}/mcp (x402 MCP transport, Base, one buy each): 6`,
@@ -439,7 +560,7 @@ try {
   const fCode = await runMcpValidation({ target: free.url, env: { LISTING_ORIGIN: ORIGIN }, log: (l) => fLines.push(l) });
   ok(fCode === 1 && fLines.some((l) => /^FAIL MCP memory\.read - no x402 offer/.test(l)), `a boot with no paywall has no MCP listing offer to validate (exit ${fCode})`);
   const fBuy = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: free.url, LISTING_ORIGIN: ORIGIN, MODE: "mcp", SLUGS: "memory-read", BURNER_KEY: KEY });
-  ok(fBuy.code === 1 && /0 ok, 1 failed, 0 signature\(s\)/.test(fBuy.out), "and the buy signs nothing there");
+  ok(fBuy.code !== 0 && !/OK memory\.read/.test(fBuy.out) && (/0 ok, 1 failed, 0 signature\(s\)/.test(fBuy.out) || /published receiving address could not be read/.test(fBuy.err)), "and the buy signs nothing there");
 } catch (e) {
   ok(false, e?.stack || String(e));
 } finally {
@@ -453,40 +574,118 @@ try {
 {
   const src = read(".github/workflows/bazaar-mcp-listings.yml");
   const wf = load(src);
-  const steps = wf.jobs?.buy?.steps || [];
-  const plan = steps.find((s) => s.id === "plan") || {};
-  const buy = steps.find((s) => /refresh-bazaar\.js/.test(String(s.run || ""))) || {};
-  const install = steps.find((s) => /npm ci/.test(String(s.run || ""))) || {};
+  const planJob = wf.jobs?.plan || {}, buyJob = wf.jobs?.buy || {}, reportJob = wf.jobs?.report || {};
+  const plan = (planJob.steps || []).find((s) => s.id === "plan") || {};
+  const buy = (buyJob.steps || []).find((s) => /refresh-bazaar\.js/.test(String(s.run || ""))) || {};
+  const install = (buyJob.steps || []).find((s) => /npm ci/.test(String(s.run || ""))) || {};
+  const report = (reportJob.steps || []).find((s) => /mcp-listings-issue\.js/.test(String(s.run || ""))) || {};
   ok(wf.on?.workflow_dispatch?.inputs?.slugs?.default === "" && (wf.on?.schedule || []).length === 1, "the workflow is dispatched with an explicit slug list (empty by default) and scheduled once");
-  ok(wf.concurrency?.group === load(read(".github/workflows/bazaar-keepalive-tail.yml")).concurrency?.group && wf.concurrency?.["cancel-in-progress"] === false, "it shares the keep-alive passes' concurrency group: one burner, one pass at a time");
-  ok(buy.env?.MODE === "mcp" && buy.env?.SLUGS === "${{ steps.plan.outputs.slugs }}" && buy.env?.PAY_NETWORK === "base" && /steps\.plan\.outputs\.slugs != ''/.test(String(buy.if)) && /steps\.plan\.outputs\.slugs != ''/.test(String(install.if)),
-    "the buy is MODE=mcp over the plan step's slugs, and neither it nor the install runs without them");
-  ok(!plan.env?.BURNER_KEY && !install.env && buy.env?.BURNER_KEY === "${{ secrets.BURNER_KEY }}" && /BURNER_KEY is not set[^\n]*exit 1/.test(buy.run) && /add-mask::\$BURNER_KEY/.test(buy.run), "only the buy step holds the key, masked, and a missing key fails the pass");
-  ok(plan.env?.ASKED === "${{ inputs.slugs }}" && !/\$\{\{/.test(String(plan.run)) && !/\$\{\{/.test(String(buy.run)) && plan.run.includes('[[ "$ASKED" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]]'),
-    "the dispatched list reaches the shell through the environment only, and must be a comma list of slugs");
+  // The group is taken by the buying job alone, after the plan decided there is something to buy.
+  ok(!wf.concurrency && !planJob.concurrency && !reportJob.concurrency && buyJob.concurrency?.group === load(read(".github/workflows/bazaar-keepalive-tail.yml")).concurrency?.group && buyJob.concurrency?.["cancel-in-progress"] === false,
+    "only the buy job joins the keep-alive passes' concurrency group: a run that buys nothing never takes a place in it");
+  ok(buyJob.needs === "plan" && /needs\.plan\.outputs\.slugs != ''/.test(String(buyJob.if)) && planJob.outputs?.slugs === "${{ steps.plan.outputs.slugs }}", "the buy job starts only on a planned list");
+  for (const [name, s] of [["the buy job", buyJob], ["the install step", install], ["the buy step", buy]]) {
+    ok(/needs\.plan\.outputs\.slugs != ''/.test(s.if || "") && /github\.ref == 'refs\/heads\/main'/.test(s.if || "") && !/\|\|/.test(s.if || ""), `${name} runs only on refs/heads/main`);
+  }
+  ok(buy.env?.MODE === "mcp" && buy.env?.SLUGS === "${{ needs.plan.outputs.slugs }}" && buy.env?.PAY_NETWORK === "base" && buy.id === "buy" && buyJob.outputs?.bought === "${{ steps.buy.outputs.bought }}" && buyJob.outputs?.failed === "${{ steps.buy.outputs.failed }}",
+    "the buy is MODE=mcp over the plan's slugs, and hands on what it bought and what it did not");
+  const keyHolders = Object.values(wf.jobs).flatMap((j) => j.steps || []).filter((s) => /BURNER_KEY|POW_SECRET/.test(JSON.stringify(s.env || {})));
+  ok(keyHolders.length === 1 && keyHolders[0] === buy && !JSON.stringify(planJob).includes("secrets.") && !JSON.stringify(reportJob).includes("secrets.") && /BURNER_KEY is not set[^\n]*exit 1/.test(buy.run) && /add-mask::\$BURNER_KEY/.test(buy.run), "only the buy step holds the key, masked, and a missing key fails the pass");
+  ok(plan.env?.ASKED === "${{ inputs.slugs }}" && !Object.values(wf.jobs).flatMap((j) => j.steps || []).some((s) => /\$\{\{/.test(String(s.run || ""))) && plan.run.includes('[[ "$ASKED" =~ ^[a-z0-9.-]+(,[a-z0-9.-]+)*$ ]]'),
+    "the dispatched list reaches the shell through the environment only, and must be a comma list of slugs or tool names");
   ok(/"\$ENABLED" = "on"/.test(plan.run) && plan.env?.ENABLED === "${{ vars.BAZAAR_MCP_KEEPALIVE }}" && /keepalive-plan\.js mcp/.test(plan.run), "the scheduled run buys only while the repo variable BAZAAR_MCP_KEEPALIVE is on, from the plan's list");
   ok(plan.env?.MAX_SPEND_USD === buy.env?.MAX_SPEND_USD && /'1'/.test(String(buy.env?.MAX_SPEND_USD)), "the plan and the buy read one pass cap");
-  ok(/gh issue create/.test(JSON.stringify(wf.jobs?.report || {})) && wf.jobs?.report?.if === "always()" && Number.isInteger(wf.jobs?.buy?.["timeout-minutes"]), "a failed pass pages, and the job is bounded");
+  ok(reportJob.if === "always()" && JSON.stringify(reportJob.needs) === '["plan","buy"]' && Number.isInteger(buyJob["timeout-minutes"]) && Number.isInteger(planJob["timeout-minutes"]) && Number.isInteger(reportJob["timeout-minutes"]), "the issue step always runs, and every job is bounded");
+  ok(/select\(\.title == env\.TITLE\)/.test(report.run) && /github-actions\[bot\]/.test(report.run) && /app\/github-actions/.test(report.run) && /--json number,title,author/.test(report.run), "the issue it reads is its own: this exact title, opened by the workflow bot");
+  ok(report.env?.BOUGHT === "${{ needs.buy.outputs.bought }}" && report.env?.FAILED === "${{ needs.buy.outputs.failed }}" && report.env?.PLANNED === "${{ needs.plan.outputs.slugs }}" && report.env?.BUY === "${{ needs.buy.result }}" && report.env?.PLAN === "${{ needs.plan.result }}" && !/gh issue close[^\n]*\n?/.test(report.run.replace(/close\) gh issue close[^\n]*/, "")),
+    "the issue step reads what was planned, bought and not bought, and closes only on the script's verdict");
+  // The presence check waits for this pass as it does for the others.
+  const presence = read(".github/workflows/bazaar-presence.yml");
+  ok((presence.match(/for WF in bazaar-keepalive\.yml bazaar-keepalive-tail\.yml bazaar-mcp-listings\.yml; do/g) || []).length === 2, "the presence check's busy and hold reads both know this workflow");
   ok(!/removes a resource|30-day (removal|rule)/i.test(src) && /observed to leave the Bazaar listing after about 30 days/.test(src), "it states the 30-day behavior as observed");
-  // The plan step as written: a dispatch with a list, without one, with a hostile one; a schedule on and off.
+
+  // The plan step as written, against a stub catalog: dispatches and schedules.
+  const stub = createServer((req, res) => { const body = req.url === "/api/pricing" ? PRICING : req.url === "/openapi.json" ? SPEC : null; res.writeHead(body ? 200 : 404, { "Content-Type": "application/json" }); res.end(JSON.stringify(body || {})); });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  const T = `http://127.0.0.1:${stub.address().port}`;
   const runPlan = (env) => new Promise((resolve) => {
     const dir = mkdtempSync(join(tmpdir(), "mcp-wf-"));
     const outFile = join(dir, "out");
-    const child = spawn("bash", ["-c", plan.run], { cwd: dir, env: { PATH: process.env.PATH, GITHUB_OUTPUT: outFile, ...env } });
+    const child = spawn("bash", ["-c", plan.run], { cwd: ROOT, env: { PATH: process.env.PATH, GITHUB_OUTPUT: outFile, TARGET_URL: T, MAX_SPEND_USD: "1", ...env } });
     let text = "";
     child.stdout.on("data", (d) => { text += d; });
     child.stderr.on("data", (d) => { text += d; });
     child.on("exit", (code) => { let o = ""; try { o = readFileSync(outFile, "utf8"); } catch { /* none */ } resolve({ code, text, out: o }); });
   });
-  const a = await runPlan({ EVENT: "workflow_dispatch", ASKED: SIX });
-  ok(a.code === 0 && a.out === `slugs=${SIX}\n`, "a dispatch with the six slugs hands exactly them to the buy");
-  const b = await runPlan({ EVENT: "workflow_dispatch", ASKED: "" });
-  ok(b.code === 0 && b.out === "" && /nothing bought/.test(b.text), "a dispatch with no slugs buys nothing");
-  const c = await runPlan({ EVENT: "workflow_dispatch", ASKED: "search\nslugs=hash" });
-  const c2 = await runPlan({ EVENT: "workflow_dispatch", ASKED: "search;id" });
-  ok(c.code === 1 && c.out === "" && c2.code === 1 && c2.out === "", "a list that is not a comma list of slugs fails the step and writes nothing");
-  const off = await runPlan({ EVENT: "schedule", ASKED: "", ENABLED: "" });
-  ok(off.code === 0 && off.out === "" && /is off/.test(off.text), "a scheduled run with the switch off buys nothing");
+  const slugsOut = (o) => (o.match(/^slugs=(.*)$/m) || [])[1];
+  const DOTTED = "web.search,web.news,web.answer,market.quote,browser.render,memory.read";
+  try {
+    const a = await runPlan({ EVENT: "workflow_dispatch", ASKED: SIX });
+    ok(a.code === 0 && slugsOut(a.out) === SIX && /^count=6$/m.test(a.out), `a dispatch with the six catalog slugs plans exactly six buys (${slugsOut(a.out)})`);
+    const d = await runPlan({ EVENT: "workflow_dispatch", ASKED: DOTTED });
+    ok(d.code === 0 && slugsOut(d.out) === SIX && /^count=6$/m.test(d.out), `a dispatch with the six dotted tool names plans the same six catalog slugs (${slugsOut(d.out)})`);
+    const mix = await runPlan({ EVENT: "workflow_dispatch", ASKED: "web.search,search,memory.read" });
+    ok(mix.code === 0 && slugsOut(mix.out) === "search,memory-read" && /^count=2$/m.test(mix.out), "a listing named twice, by slug and by tool name, is planned once");
+    const b = await runPlan({ EVENT: "workflow_dispatch", ASKED: "" });
+    ok(b.code === 0 && b.out === "" && /nothing bought/.test(b.text), "a dispatch with no slugs buys nothing");
+    const c = await runPlan({ EVENT: "workflow_dispatch", ASKED: "search\nslugs=hash" });
+    const c2 = await runPlan({ EVENT: "workflow_dispatch", ASKED: "search;id" });
+    ok(c.code === 1 && c.out === "" && c2.code === 1 && c2.out === "", "a list that is not a comma list of names fails the step and writes nothing");
+    for (const [asked, label] of [["search,hash", "a catalog slug that is not a listing"], ["web.search,web.fetch", "a tool name that is not a listing"], ["search,memory-write", "a flagship with no listing"]]) {
+      const u = await runPlan({ EVENT: "workflow_dispatch", ASKED: asked });
+      ok(u.code === 2 && !slugsOut(u.out) && /name no MCP tool listing/.test(u.text) && /search \(web\.search\)/.test(u.text), `${label} refuses the whole list in the plan, where no key is held (exit ${u.code})`);
+    }
+    const over = await runPlan({ EVENT: "workflow_dispatch", ASKED: SIX, MAX_SPEND_USD: "0.10" });
+    ok(over.code === 3 && !slugsOut(over.out), "a list over the pass cap refuses in the plan");
+    const off = await runPlan({ EVENT: "schedule", ASKED: "", ENABLED: "" });
+    ok(off.code === 0 && off.out === "" && /is off/.test(off.text), "a scheduled run with the switch off buys nothing");
+    const on = await runPlan({ EVENT: "schedule", ASKED: "", ENABLED: "on" });
+    ok(on.code === 0 && slugsOut(on.out) === SIX, "a scheduled run with the switch on plans every live listing");
+    // The two spellings buy the same six listings at the list prices together.
+    const dryA = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", DRY_RUN: "1", SLUGS: SIX });
+    const dryD = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", DRY_RUN: "1", SLUGS: DOTTED });
+    ok(dryA.code === 0 && dryD.code === 0 && dryA.out === dryD.out && /\nTotal: 6 listings, \$0\.112\n/.test(dryD.out), "the dry run takes the dotted tool names too: the same six listings and the same total");
+    const dryBad = await runScript("scripts/refresh-bazaar.js", [], { TARGET_URL: T, MODE: "mcp", DRY_RUN: "1", SLUGS: "web.search,web.fetch" });
+    ok(dryBad.code === 2 && /refused "web\.fetch": not an MCP tool listing/.test(dryBad.err) && /named by its catalog slug or its tool name: search \(web\.search\)/.test(dryBad.err), "an unknown tool name refuses the run, and the refusal says how a listing is named");
+  } finally {
+    stub.closeAllConnections?.();
+    await new Promise((r) => stub.close(r));
+  }
+
+  // The issue: closes only when the listings it names are bought.
+  {
+    const base = { plan: "success", buy: "success", planned: "", bought: "", failed: "", open: false, openBody: "" };
+    const body = (slugs) => issueOf(slugs, "https://github.com/o/r/actions/runs/1");
+    let d = decideIssue({ ...base, buy: "failure", planned: "search,answer", bought: "search", failed: "answer" });
+    ok(d.action === "open" && d.slugs.join() === "answer" && recordedSlugs(body(d.slugs)).join() === "answer" && /-f slugs=answer`/.test(body(d.slugs)) && /`answer` \(web\.answer\)/.test(body(d.slugs)) && /\nRun: https:\/\/github\.com\/o\/r\/actions\/runs\/1$/.test(body(d.slugs)),
+      "a failed buy opens the issue naming the listing not bought, by the slug the re-run takes");
+    const open = { ...base, open: true, openBody: body(["answer", "render"]) };
+    ok(decideIssue({ ...open, buy: "skipped" }).action === "none", "a run that planned nothing (the switch off, an empty dispatch) leaves the issue open");
+    ok(decideIssue({ ...open, buy: "skipped", planned: "answer,render" }).action === "none", "a planned run that did not buy (off main) leaves it open");
+    ok(decideIssue({ ...open, planned: "search", bought: "search" }).action === "none", "a run that bought another listing leaves it open");
+    d = decideIssue({ ...open, planned: "answer", bought: "answer" });
+    ok(d.action === "update" && d.slugs.join() === "render", "a run that bought one of the two named listings keeps it open for the other");
+    ok(decideIssue({ ...open, planned: "answer,render,search", bought: "search,answer,render" }).action === "close", "a run that bought every named listing closes it");
+    ok(decideIssue({ ...open, bought: "" }).action === "none", "a green run that bought nothing never closes it");
+    d = decideIssue({ ...open, buy: "failure", planned: "answer,search", bought: "answer", failed: "search" });
+    ok(d.action === "update" && d.slugs.join() === "search,render", "a later failed run adds its own and drops what it bought");
+    ok(decideIssue({ ...open, buy: "failure", planned: "answer,render", bought: "", failed: "answer,render" }).action === "none", "the same failure again changes nothing");
+    d = decideIssue({ ...base, buy: "cancelled", planned: "search,answer" });
+    ok(d.action === "open" && d.slugs.join() === "search,answer", "a buy job that ended without naming what it bought counts every planned listing as not bought");
+    d = decideIssue({ ...base, plan: "failure", buy: "skipped" });
+    ok(d.action === "open" && d.slugs.length === 0 && /not recorded/.test(body(d.slugs)) && /-f slugs=<slug>/.test(body(d.slugs)), "a failed plan opens the issue with no listing named");
+    const unnamed = { ...base, open: true, openBody: body([]) };
+    ok(decideIssue({ ...unnamed, buy: "skipped" }).action === "none" && decideIssue({ ...unnamed, planned: "search", bought: "search" }).action === "close", "that one closes on the next run that buys a listing, and not on a run that buys nothing");
+    ok(decideIssue(base).action === "none" && recordedSlugs("Listings not bought: `search`, `hash`, `../x`").join() === "search", "no issue and a clean run: nothing to do; only listing slugs are read from a body");
+    ok(!/\$\s?\d|—/.test(body(["search", "answer"])), "the issue body carries no figure");
+  }
+  // The presence issue names the slug the re-run takes beside the MCP row.
+  {
+    const dec = { cause: "missing", repeat: [{ key: "MCP /mcp#web.search", method: "MCP", path: "/mcp#web.search" }, { key: "GET /api/dns", method: "GET", path: "/api/dns" }], state: { missing: { "MCP /mcp#web.search": "mcp listing", "GET /api/dns": "bought" } } };
+    const text = issueBody(dec, "");
+    ok(/- `MCP \/mcp#web\.search`: [^\n]*\(catalog slug `search`\)/.test(text) && !/- `GET \/api\/dns`[^\n]*catalog slug/.test(text) && [...issueListedKeys(text)].sort().join("|") === "GET /api/dns|MCP /mcp#web.search",
+      "the presence issue names the catalog slug on an MCP listing's line, and its lines still read back as keys");
+  }
   const claude = read("CLAUDE.md");
   ok(/`BAZAAR_MCP_KEEPALIVE`/.test(claude) && /bazaar-mcp-listings\.yml/.test(claude), "CLAUDE.md documents the workflow and its switch");
 }

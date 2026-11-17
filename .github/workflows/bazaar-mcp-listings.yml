@@ -8,26 +8,31 @@
 # settlement; the purpose of this pass is to keep those tools listed.
 #
 # Two ways in, both through scripts/refresh-bazaar.js MODE=mcp, which takes an
-# explicit slug list, refuses the whole run on any slug that is not an MCP tool
-# listing, and buys each listing exactly once (one signature held to its list
-# price, one paid call, no retry):
-#   dispatch   `slugs` is the explicit list; an empty one buys nothing.
+# explicit slug list, refuses the whole run on any entry that is not an MCP
+# tool listing, and buys each listing exactly once (one signature held to its
+# list price and to the server's published receiving address, one paid call,
+# no retry):
+#   dispatch   `slugs` is the explicit list, by catalog slug (search) or by
+#              tool name (web.search); an empty one buys nothing.
 #   schedule   the 1st and 15th, only while the repo variable
 #              BAZAAR_MCP_KEEPALIVE is "on"; the list is the plan's
 #              (scripts/keepalive-plan.js mcp: every MCP tool listing live in
 #              the catalog, exempt kinds left out).
+# The plan job holds no key and joins no concurrency group, so a run that buys
+# nothing (the switch off, an empty dispatch, a refused list) never takes the
+# pending place of a keep-alive pass. Only a run on main buys.
 # The logs carry tool names and counts, never a total or a cap.
 name: Bazaar MCP tool listings
 
 on:
   schedule:
     # 1st and 15th, 15:23 UTC: after the pass above the ceiling (14:41), which
-    # shares this concurrency group and the burner.
+    # shares the buy job's concurrency group and the burner.
     - cron: "23 15 1,15 * *"
   workflow_dispatch:
     inputs:
       slugs:
-        description: "Explicit comma list of MCP listing slugs to buy once each (search, search-news, answer, stock-quote, render, memory-read). Empty buys nothing."
+        description: "Explicit comma list of MCP listings to buy once each, by catalog slug (search, search-news, answer, stock-quote, render, memory-read) or tool name (web.search, web.news, web.answer, market.quote, browser.render, memory.read). Empty buys nothing."
         default: ""
       max_spend_usd:
         description: "Hard cap for the whole pass (USD). The pass refuses to start above it."
@@ -37,15 +42,12 @@ permissions:
   contents: read
   issues: write
 
-# One group with the keep-alive passes: one burner, never two passes at once.
-concurrency:
-  group: bazaar-keepalive
-  cancel-in-progress: false
-
 jobs:
-  buy:
+  plan:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
+    outputs:
+      slugs: ${{ steps.plan.outputs.slugs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -62,24 +64,47 @@ jobs:
         run: |
           if [ "$EVENT" = "workflow_dispatch" ]; then
             if [ -z "$ASKED" ]; then echo "No slugs given: nothing bought."; exit 0; fi
-            # Matched as one string (a newline never passes), then written as one line.
-            [[ "$ASKED" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || { echo "::error::slugs must be a comma list of MCP listing slugs"; exit 1; }
-            echo "slugs=$ASKED" >> "$GITHUB_OUTPUT"
-          elif [ "$ENABLED" = "on" ]; then
+            # Matched as one string (a newline never passes). The plan maps each
+            # entry (a catalog slug or a dotted tool name) to its catalog slug
+            # and refuses the whole list on an entry that names no listing.
+            [[ "$ASKED" =~ ^[a-z0-9.-]+(,[a-z0-9.-]+)*$ ]] || { echo "::error::slugs must be a comma list of MCP listings, by catalog slug (search) or tool name (web.search)"; exit 1; }
             node scripts/keepalive-plan.js mcp
+          elif [ "$ENABLED" = "on" ]; then
+            ASKED="" node scripts/keepalive-plan.js mcp
           else
             echo "The scheduled MCP listings pass is off (the repo variable BAZAAR_MCP_KEEPALIVE is not on). Nothing bought."
           fi
+
+  buy:
+    needs: plan
+    # Only a planned list, and only on main: a dispatch from another ref runs
+    # that ref's scripts, and they never meet the key.
+    if: needs.plan.outputs.slugs != '' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # One group with the keep-alive passes: one burner, never two passes at once.
+    concurrency:
+      group: bazaar-keepalive
+      cancel-in-progress: false
+    outputs:
+      bought: ${{ steps.buy.outputs.bought }}
+      failed: ${{ steps.buy.outputs.failed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
       - name: Install the x402 client
-        if: steps.plan.outputs.slugs != ''
+        if: needs.plan.outputs.slugs != '' && github.ref == 'refs/heads/main'
         run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
       - name: Buy the MCP tool listings
-        if: steps.plan.outputs.slugs != ''
+        id: buy
+        if: needs.plan.outputs.slugs != '' && github.ref == 'refs/heads/main'
         env:
           TARGET_URL: https://agent402.tools
           MODE: mcp
           PAY_NETWORK: base
-          SLUGS: ${{ steps.plan.outputs.slugs }}
+          SLUGS: ${{ needs.plan.outputs.slugs }}
           MAX_SPEND_USD: ${{ inputs.max_spend_usd || '1' }}
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
           # Signs X-Heartbeat-Token so these self-buys are booked as ours.
@@ -91,24 +116,33 @@ jobs:
           node scripts/refresh-bazaar.js
 
   report:
-    needs: buy
+    needs: [plan, buy]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Page if the pass failed
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Open, update or close the one issue
         env:
           GH_TOKEN: ${{ github.token }}
+          TITLE: Bazaar MCP tool listings pass FAILED
+          PLAN: ${{ needs.plan.result }}
           BUY: ${{ needs.buy.result }}
+          PLANNED: ${{ needs.plan.outputs.slugs }}
+          BOUGHT: ${{ needs.buy.outputs.bought }}
+          FAILED: ${{ needs.buy.outputs.failed }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          TITLE="Bazaar MCP tool listings pass FAILED"
-          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
-          if [ "$BUY" != "success" ]; then
-            if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The pass that buys the hosted connector's MCP tool listings did not complete (result: $BUY). Listings have been observed to leave the Bazaar listing after about 30 days without a settlement, so this pass keeps those tools listed. The run log names a refused list, a failed buy or a missing key; a buy is never sent twice, so a failed one is bought again only by a new run. Re-run: \`gh workflow run bazaar-mcp-listings.yml --ref main -f slugs=<slug>\`."
-            else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ)."
-            fi
-          elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Pass completed at $(date -u +%FT%TZ)."
-          fi
+          # Only an open issue with exactly this title, opened by the workflow
+          # bot, is ours; an issue anyone else opens under it is ignored.
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions")][0].number // empty')
+          rm -f open-issue.md
+          if [ -n "$OPEN" ]; then gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body > open-issue.md || { echo "::error::the open issue could not be read; it is left as it is"; exit 1; }; fi
+          OPEN_ISSUE="$OPEN" OPEN_ISSUE_BODY_FILE=open-issue.md OUT_DIR=out node scripts/mcp-listings-issue.js
+          ACTION=$(cat out/action)
+          case "$ACTION" in
+            open) gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file out/body.md ;;
+            update) gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body-file out/body.md ;;
+            close) gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Every listing this issue named was bought at $(date -u +%FT%TZ)." ;;
+            *) echo "Nothing to open, update or close." ;;
+          esac

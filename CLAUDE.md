@@ -215,10 +215,17 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   One issue opens on a route missing two checks in a row, or three unreadable checks in a row.
 - `bazaar-mcp-listings.yml` buys the hosted connector's MCP tool listings (the six fixed-price
   flagship tools, `scripts/lib/mcp-listings.js`) through the connector's x402 transport, once each:
-  `refresh-bazaar.js` MODE=mcp takes an explicit slug list and refuses the run on any other slug. A
-  dispatch buys its `slugs` input; the 1st and 15th run buys the plan's list only while the repo
-  variable `BAZAAR_MCP_KEEPALIVE` is `on`. The presence check reads the listings (`/mcp#<tool>`),
-  pages on one that was listed and left, and never buys one; `bazaar-validate.js --mcp` checks the offers.
+  `refresh-bazaar.js` MODE=mcp takes an explicit list (catalog slugs or dotted tool names) and
+  refuses the run on any other entry. It signs only an offer that pays the address the server
+  publishes at `/.well-known/x402`, holds exactly one plain exact USDC accept on Base at the list
+  price and asks ten minutes of validity or less; each signature is held to its listing's price
+  and the run to the listings' prices together. A dispatch buys its `slugs` input; the 1st and
+  15th run buys the plan's list only while the repo variable `BAZAAR_MCP_KEEPALIVE` is `on` (the
+  burner low-water mark counts the pass only then). The plan job holds no key and joins no
+  concurrency group; only a run on main buys. One issue records the listings a pass did not buy
+  and closes when a run buys them (`scripts/mcp-listings-issue.js`). The presence check reads the
+  listings (`/mcp#<tool>`), pages on one that was listed and left, and never buys one;
+  `bazaar-validate.js --mcp` checks the offers.
 - The heartbeat also pages (one issue) on a security advisory in triage longer than the repo
   variable `ADVISORY_TRIAGE_MAX_HOURS` (default 24), and on a read it cannot make
   (`scripts/advisory-triage-check.js`): it reads with the Actions secret `ADVISORY_READ_TOKEN`

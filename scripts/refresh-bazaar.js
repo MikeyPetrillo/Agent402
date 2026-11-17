@@ -62,10 +62,19 @@
 // the connector's x402 MCP transport (the offer's resource is `${origin}/mcp`
 // with an extension of type "mcp"), so this mode pays there, on Base, from the
 // burner. It takes an explicit slug list and nothing else:
-//   SLUGS             required; each slug must be one of the MCP tool listings,
-//                     live in the catalog and not an exempt kind. Any other
-//                     slug refuses the whole run; a slug named twice is bought
-//                     once. No price, prefix, staleness or batch filter applies.
+//   SLUGS             required; each entry names one of the MCP tool listings,
+//                     by its catalog slug (search) or its dotted tool name
+//                     (web.search), live in the catalog and not an exempt
+//                     kind. Any other entry refuses the whole run; a listing
+//                     named twice is bought once. No price, prefix, staleness
+//                     or batch filter applies.
+//   The offer must pay the server's published receiving address
+//   (/.well-known/x402), hold exactly one plain exact USDC accept on Base at
+//   the list price, and ask a validity window of ten minutes or less; the one
+//   checked accept is the only one handed to the signer, and the signed
+//   authorization is read back before it is sent. What may be signed is held
+//   twice more: to the listing's list price while it is bought, and to the
+//   listings' list prices together for the run.
 //   DRY_RUN=1         prints each listing with its list price and the total,
 //                     signs and sends nothing. With CHECK_OFFER=1 it also asks
 //                     each tool for its offer (an unpaid call) and reports
@@ -94,12 +103,12 @@ const heartbeatHeaders = () => {
   const minute = Math.floor(Date.now() / 60_000);
   return { "X-Heartbeat-Token": createHmac("sha256", secret).update(`heartbeat:${minute}`).digest("base64url").slice(0, 32) };
 };
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { chainOf, routeSellsOn, walkAgreed, BAZAAR_REGISTRY_URL } from "./listing-coverage.js";
 import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
 import { usdMicros, passMicros, spendCapVerdict } from "./lib/keepalive-plan.js";
-import { selectMcpListings, isMcpFeedRow, mcpOfferProblems, usdText, MCP_LISTING_TOOLS } from "./lib/mcp-listings.js";
+import { selectMcpListings, isMcpFeedRow, mcpOfferProblems, mcpListingSlugOf, publishedPayTo, usdText, MCP_LISTING_TOOLS } from "./lib/mcp-listings.js";
 import { connectMcp, askMcpOffer, buyMcpListing } from "./lib/mcp-x402-client.js";
 // viem + @x402/* are loaded lazily so DRY_RUN works without them installed.
 
@@ -737,7 +746,7 @@ async function buildPayFetch(budget = null) {
 }
 
 // The capped x402 client behind it (MODE=mcp signs with it directly).
-async function buildPayClient(budget = null) {
+export async function buildPayClient(budget = null, { key = null } = {}) {
   assertOwnPaidTarget(TARGET, "refresh-bazaar");
   const { x402Client } = await import("@x402/core/client");
   const client = disableVendorSpendControls(new x402Client());
@@ -776,7 +785,7 @@ async function buildPayClient(budget = null) {
   } else {
     const { privateKeyToAccount } = await import("viem/accounts");
     const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
-    const account = privateKeyToAccount(loadKey());
+    const account = privateKeyToAccount(key || loadKey());
     registerExactEvmScheme(client, { signer: account });
     guardCappedSigning(client, { maxUsd, networks: ["eip155:8453"], log });
     countSigned();
@@ -796,9 +805,11 @@ export async function runMcpMode({
 } = {}) {
   const dryRun = env.DRY_RUN === "1" || env.DRY_RUN === "true";
   const origin = String(env.LISTING_ORIGIN || target).replace(/\/+$/, "");
-  const asked = String(env.SLUGS || "").split(",").map((x) => x.trim()).filter(Boolean);
+  // A listing is named by its catalog slug or its dotted tool name; anything
+  // else stays as typed and is refused below with the rest of the list.
+  const asked = String(env.SLUGS || "").split(",").map((x) => x.trim()).filter(Boolean).map((x) => mcpListingSlugOf(x) || x);
   if (!asked.length) {
-    err(`refresh-bazaar: MODE=mcp needs an explicit SLUGS list (the MCP tool listings are: ${Object.keys(MCP_LISTING_TOOLS).join(", ")}). Nothing is bought without one.`);
+    err(`refresh-bazaar: MODE=mcp needs an explicit SLUGS list (the MCP tool listings are: ${Object.entries(MCP_LISTING_TOOLS).map(([slug, tool]) => `${slug} or ${tool}`).join(", ")}). Nothing is bought without one.`);
     return 2;
   }
   if ((env.PAY_NETWORK || "base").toLowerCase() !== "base") {
@@ -815,6 +826,7 @@ export async function runMcpMode({
   const sel = selectMcpListings(pricing, asked);
   if (sel.refused.length) {
     for (const r of sel.refused) err(`  refused ${JSON.stringify(r.slug)}: ${r.why}`);
+    err(`  a listing is named by its catalog slug or its tool name: ${Object.entries(MCP_LISTING_TOOLS).map(([slug, tool]) => `${slug} (${tool})`).join(", ")}`);
     err(`refresh-bazaar: ${sel.refused.length} of the ${sel.asked.length} slugs asked cannot be bought as an MCP tool listing. Refusing the whole run; nothing bought.`);
     return 2;
   }
@@ -827,6 +839,14 @@ export async function runMcpMode({
   }
   const examples = examplesFromSpec(spec);
   const argsOf = (r) => examples.get(`${r.method} ${r.path}`) || {};
+  // The receiving address every offer is held to: the server's published one
+  // (its service manifest), read before a key is loaded. No address, no buy.
+  const readPayTo = async () => {
+    let payTo = null;
+    try { payTo = publishedPayTo(await fetchJson(`${target}/.well-known/x402`)); } catch { payTo = null; }
+    if (!payTo) err("refresh-bazaar: the server's published receiving address could not be read (/.well-known/x402). Nothing signed, nothing bought.");
+    return payTo;
+  };
   log(`MCP tool listings to buy through ${target}/mcp (x402 MCP transport, Base, one buy each): ${routes.length}`);
   // A dry run names each price and the total (the catalog's own list prices);
   // a paying run's log carries tool names and counts only.
@@ -836,13 +856,15 @@ export async function runMcpMode({
     log("DRY_RUN=1: nothing signed, nothing sent.");
     if (!(env.CHECK_OFFER === "1" || env.CHECK_OFFER === "true")) return 0;
     let bad = 0;
+    const payTo = await readPayTo();
+    if (!payTo) return 2;
     const mcp = await connect(target, { headers: heartbeatHeaders });
     try {
       for (const r of routes) {
         let why = null;
         try {
           const a = await askMcpOffer(mcp.callTool, r.toolName, argsOf(r));
-          const problems = a.offer ? mcpOfferProblems(a.offer, { toolName: r.toolName, origin, micros: r.micros }) : [a.why];
+          const problems = a.offer ? mcpOfferProblems(a.offer, { toolName: r.toolName, origin, micros: r.micros, payTo }) : [a.why];
           if (problems.length) why = problems.join("; ");
         } catch (e) { why = `the offer could not be read (${String(e?.message || e).slice(0, 120)})`; }
         if (why) bad++;
@@ -854,26 +876,54 @@ export async function runMcpMode({
   log("The listings' list prices together are within the MAX_SPEND_USD cap.");
   // The pass can sign the listings' list prices together and no more: each
   // signature is held to its listing's price, and the total to their sum.
+  const payTo = await readPayTo();
+  if (!payTo) return 2;
   const budget = signedSpendBudget(Math.min(usdMicros(cap), passMicros(routes)) / 1e6);
   const client = await payClient(budget);
   const mcp = await connect(target, { headers: heartbeatHeaders });
+  let okCount = 0, failed = [], finished = false;
+  try {
+    ({ okCount, failed } = await buyMcpListings({ routes, budget, callTool: mcp.callTool, signPayment: (offer) => client.createPaymentPayload(offer), argsOf, origin, payTo, log, err }));
+    finished = true;
+  } finally {
+    await mcp.close();
+    // What this run bought and what it did not, as catalog slugs, for the
+    // workflow's issue step (it closes only when the failed ones are bought).
+    // A loop that did not finish counts every listing as not bought.
+    if (env.GITHUB_OUTPUT) {
+      const slugOf = new Map(routes.map((r) => [r.toolName, r.slug]));
+      const failedSlugs = finished ? failed.map((t) => slugOf.get(t)) : routes.map((r) => r.slug);
+      try { appendFileSync(env.GITHUB_OUTPUT, `bought=${routes.map((r) => r.slug).filter((x) => !failedSlugs.includes(x)).join(",")}\nfailed=${failedSlugs.join(",")}\n`); } catch { /* the exit code still says it */ }
+    }
+  }
+  log(`\nMCP listing pass complete: ${okCount} ok, ${failed.length} failed, ${budget.signatures} signature(s).`);
+  if (failed.length) err(`Failed buys (${failed.length}): ${failed.join(", ")}`);
+  return failed.length ? 1 : 0;
+}
+
+/** The buy loop of MODE=mcp: each listing once, under two holds on what may
+ *  be signed. The run total: `budget` is capped at the listings' list prices
+ *  together, a listing that no longer fits under it is not asked for, and no
+ *  signature may authorize more than what is left of it. The per-listing
+ *  hold: while a listing is bought, a signature may authorize its list price
+ *  and no more (budget.forRoute), whatever the offer asks. Returns
+ *  { okCount, failed }. Exported for scripts/test-mcp-listing-tools.js. */
+export async function buyMcpListings({ routes, budget, callTool, signPayment, argsOf = () => ({}), origin, payTo, buy = buyMcpListing, log = console.log, err = console.error }) {
   const failed = [];
   let okCount = 0;
   try {
     for (const r of routes) {
       if (!budget.fits(r.micros / 1e6)) { failed.push(r.toolName); err(`  CAP ${r.toolName} not bought: what the run has signed plus this listing is over its cap.`); continue; }
       budget.forRoute(r.micros / 1e6);
-      const out = await buyMcpListing({ callTool: mcp.callTool, signPayment: (offer) => client.createPaymentPayload(offer), route: r, args: argsOf(r), origin });
+      const out = await buy({ callTool, signPayment, route: r, args: argsOf(r), origin, payTo });
       if (out.ok) { okCount++; log(`  OK ${r.toolName}`); }
       else { failed.push(r.toolName); err(`  FAIL ${r.toolName}: ${out.why}`); }
     }
   } finally {
-    budget.forRoute(null);
-    await mcp.close();
+    // Nothing is signable once the loop ends: a zero hold, not a lifted one.
+    budget.forRoute(0);
   }
-  log(`\nMCP listing pass complete: ${okCount} ok, ${failed.length} failed, ${budget.signatures} signature(s).`);
-  if (failed.length) err(`Failed buys (${failed.length}): ${failed.join(", ")}`);
-  return failed.length ? 1 : 0;
+  return { okCount, failed };
 }
 
 function loadKey() {

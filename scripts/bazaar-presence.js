@@ -76,7 +76,7 @@ import { walkAgreed, BAZAAR_REGISTRY_URL } from "./listing-coverage.js";
 import {
   exemptKind, aboveCeilingRoutes, usdMicros, microsToUsd, spendCapVerdict, routeCountVerdict,
 } from "./lib/keepalive-plan.js";
-import { mcpListingRoutes, mcpToolOfResource, mcpListingKey } from "./lib/mcp-listings.js";
+import { mcpListingRoutes, mcpToolOfResource, mcpListingKey, mcpListingSlugOf } from "./lib/mcp-listings.js";
 
 export const DEFAULT_MAX_ROUTES = 10;
 export const DEFAULT_MAX_SPEND_USD = 2;
@@ -235,6 +235,14 @@ const NOTE = {
   "unreadable slug": "not bought here: unreadable slug",
 };
 
+/** The catalog slug the MCP listings pass takes for a missing MCP tool
+ *  listing (its line names `MCP /mcp#<tool>`), else null. */
+function mcpRerunSlug(m) {
+  if (m?.method !== "MCP") return null;
+  const tool = String(m.path || "").split("#")[1] || "";
+  return mcpListingSlugOf(tool);
+}
+
 /** The issue body: fixed text and our own route paths, no figure or count. */
 export function issueBody(decision, runUrl = "") {
   const run = runUrl && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+$/.test(runUrl) ? `\n\nRun: ${runUrl}` : "";
@@ -243,13 +251,13 @@ export function issueBody(decision, runUrl = "") {
   }
   const lines = decision.repeat
     .filter((m) => PATH_RE.test(m.path))
-    .map((m) => `- \`${m.method} ${m.path}\`: ${NOTE[decision.state.missing[m.key]] || "not bought here"}`);
+    .map((m) => `- \`${m.method} ${m.path}\`: ${NOTE[decision.state.missing[m.key]] || "not bought here"}${mcpRerunSlug(m) ? ` (catalog slug \`${mcpRerunSlug(m)}\`)` : ""}`);
   return [
     "These routes of ours were observed to leave the Bazaar discovery listing and were still missing on the next check (each check reads the listing in two full passes at least, and a route counts as missing only when every pass lacks it).",
     "",
     ...lines,
     "",
-    "A route the check may buy is bought once per absence (scripts/bazaar-presence.js, then scripts/refresh-bazaar.js MODE=missing). A route still missing after that, or one of a kind the check never buys, needs a hand pass: `gh workflow run bazaar-keepalive.yml --ref main -f slugs=<slug>` for a route at or under the ceiling, `gh workflow run bazaar-keepalive-tail.yml --ref main` for one above it, `gh workflow run bazaar-mcp-listings.yml --ref main -f slugs=<slug>` for an MCP tool listing (`MCP /mcp#<tool>`). This issue closes on the next readable check with no route missing twice in a row.",
+    "A route the check may buy is bought once per absence (scripts/bazaar-presence.js, then scripts/refresh-bazaar.js MODE=missing). A route still missing after that, or one of a kind the check never buys, needs a hand pass: `gh workflow run bazaar-keepalive.yml --ref main -f slugs=<slug>` for a route at or under the ceiling, `gh workflow run bazaar-keepalive-tail.yml --ref main` for one above it, `gh workflow run bazaar-mcp-listings.yml --ref main -f slugs=<slug>` for an MCP tool listing (`MCP /mcp#<tool>`: the catalog slug named on its line, or the tool name itself). This issue closes on the next readable check with no route missing twice in a row.",
   ].join("\n") + run;
 }
 
