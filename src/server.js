@@ -3063,6 +3063,9 @@ const phProxyLimiter = createRateLimiter("posthog-proxy", { perMin: PH_MAX_PER_M
 // refused by the allowlist lookup, but 86 free swings at a Stripe-session
 // endpoint is more than this door ever needs to open.
 const checkoutLimiter = createRateLimiter("checkout", { perMin: 6, perHour: 40 });
+// Refund requests count on their own key, so a holder resending a refund never
+// uses up the same address's checkout budget.
+const creditsRefundLimiter = createRateLimiter("credits-refund", { perMin: 6, perHour: 40 });
 // The paths that limiter guards. Named here because the check has to run BEFORE
 // express.json() (mounted globally further down): a malformed body 400s at the
 // parser, so those requests never reached the in-route check at all - which is
@@ -3351,6 +3354,8 @@ try {
     onChargeReversed: (paymentIntent, type, reversal) => (_credits ? _credits.disableByPaymentIntent(paymentIntent, type === "charge.dispute.created" ? "disputed" : "refunded", reversal) : null),
     // A dispute that closed in our favor gives the key it disabled back.
     onDisputeClosed: (paymentIntent, { won }) => (won && _credits ? _credits.enableByPaymentIntent(paymentIntent, "disputed") : null),
+    // A refund sent on request settles by its own status (src/credits.js settleRefund).
+    onRefundUpdated: (refund) => (_credits ? _credits.settleRefund(refund) : null),
   }) : null;
 } catch (e) { console.warn("[monitors] subscriptions init failed:", String(e?.message || e).slice(0, 200)); _subs = null; }
 // The SAME monitor products, subscribed to with a WALLET instead of a card
@@ -5230,11 +5235,11 @@ if (_credits) {
   // with no fee, and the key is disabled. Served only while credits are on
   // sale (the terms that offer it show only then); otherwise the request
   // falls through as if the route did not exist.
-  const REFUND_HTTP = { refunded: 200, nothing_to_refund: 200, pending: 202, in_flight: 409, disabled: 409, unknown: 401, malformed: 401 };
+  const REFUND_HTTP = { refunded: 200, nothing_to_refund: 200, pending: 202, in_flight: 409, disputed: 409, unknown: 401, malformed: 401 };
   app.post("/api/credits/refund", async (req, res, next) => {
     if (!creditsSalesEnabled()) return next();
     res.set("Cache-Control", "no-store");
-    if (checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
+    { const rl = creditsRefundLimiter.check(clientIp(req)); if (rl.limited) { res.set("Retry-After", String(Math.max(1, Math.ceil(Number(rl.retryAfterSeconds) || 60)))); return res.status(429).json({ status: "rate_limited", error: "Too many requests, please slow down. Nothing moved." }); } }
     const auth = String(req.headers.authorization || "");
     if (!/^Bearer a402_/.test(auth)) return res.status(401).json({ status: "malformed", error: "Send your credits key as Authorization: Bearer a402_…" });
     let r;
@@ -5246,7 +5251,7 @@ if (_credits) {
       nothing_to_refund: "This key holds no unspent balance; nothing was refunded.",
       pending: `The refund of $${Number(r.refundUsd || 0).toFixed(2)} is recorded and the key is disabled, but the card refund has not gone through yet. Send this request again to retry; if it still cannot be sent, we refund it by hand.`,
       in_flight: "A call on this key is still running; send the request again when it ends. Nothing moved.",
-      disabled: "This key is disabled, so no refund can be requested with it.",
+      disputed: "The payment that bought this key is under a dispute, so the dispute settles what goes back to the card; no refund can be requested with the key while it is open.",
       unknown: "Unknown credits key.",
       malformed: "Malformed credits key.",
     }[r.status];

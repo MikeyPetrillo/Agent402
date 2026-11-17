@@ -198,8 +198,10 @@ call tools, and the unspent balance on a key is refundable on request, with no f
 <code>POST /api/credits/refund</code> with the key as <code>Authorization: Bearer a402_…</code>, and the whole
 unspent balance, rounded up to the cent, is refunded to the card that bought the key, and the key is disabled.
 A request made while a call on the key is still running moves nothing; send it again when the call ends. A
-refund that cannot be sent at once stays owed to you, and we send it by hand if a repeated request still
-fails. Card refunds take the time your card issuer takes to post them.` : `Prepaid credits are consumed as you
+key we switched off keeps its unspent balance refundable the same way; while a dispute of the payment that
+bought the key is open, the dispute settles what goes back to the card instead. A refund that cannot be sent
+at once, or that Stripe reports as failed, stays owed to you, and we send it by hand if a repeated request
+still fails. Card refunds take the time your card issuer takes to post them.` : `Prepaid credits are consumed as you
 call tools and are non-refundable except where required by law, with one exception: an unspent balance
 under $10 on a key is refunded to its card on request to the email on the purchase.`} A refunded or
 disputed purchase disables the key that purchase issued. One buyer may buy at most $${creditsLimitUsd} of

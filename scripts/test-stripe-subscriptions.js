@@ -147,7 +147,10 @@ ok(invoices.length === 1 && invoices[0].amountUsd === 9 && invoices[0].product =
 {
   const reversed = [];
   const closed = [];
-  const dsubs = createStripeSubscriptions({ stripe, baseUrl: "https://agent402.tools", storePath: STORE, onInvoicePaid: () => {}, onChargeReversed: (pi, type, reversal) => reversed.push({ pi, type, reversal }), onDisputeClosed: (pi, o) => closed.push({ pi, ...o }) });
+  const refundEvents = [];
+  let refundHookThrows = false;
+  const dsubs = createStripeSubscriptions({ stripe, baseUrl: "https://agent402.tools", storePath: STORE, onInvoicePaid: () => {}, onChargeReversed: (pi, type, reversal) => reversed.push({ pi, type, reversal }), onDisputeClosed: (pi, o) => closed.push({ pi, ...o }),
+    onRefundUpdated: (r) => { if (refundHookThrows) throw new Error("store down"); refundEvents.push(r); } });
   await dsubs.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_d0", type: "customer.subscription.updated", data: { object: { id: "sub_1", customer: "cus_1", status: "active", metadata: { product: "domain-monitor", target: "example.com" }, items: { data: [{ current_period_end: 1893456000 }] } } } })), "goodsig");
   await dsubs.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_d1", type: "invoice.paid", data: { object: { id: "in_9", subscription: "sub_1", customer: "cus_1", amount_paid: 900, payments: { data: [{ payment: { payment_intent: "pi_in9" } }] } } } })), "goodsig");
   ok(dsubs.get("sub_1")?.lastPaymentIntent === "pi_in9" && dsubs.listActive("domain").some((x) => x.subId === "sub_1"), "a paid invoice records the PaymentIntent it was paid with; the subscription is active");
@@ -175,6 +178,27 @@ ok(invoices.length === 1 && invoices[0].amountUsd === 9 && invoices[0].product =
   ok(closed.length === 4 && dsubs.listDisputed().length === 0 && dsubs.get("sub_1")?.disputed === false, "a closed dispute on an unknown payment changes no record (the hook still hears it)");
   await dsubs.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_d4", type: "charge.refunded", data: { object: { id: "ch_5", payment_intent: "pi_pack", amount: 10000, amount_refunded: 2500, refunded: false } } })), "goodsig");
   ok(reversed.length === 3 && reversed[2].pi === "pi_pack" && reversed[2].reversal.amountRefundedCents === 2500 && reversed[2].reversal.fullyRefunded === false, "a partial refund reaches the clawback hook with its amount and that it is partial");
+  // A refund's own status events reach the refund hook (credits settle a
+  // refund sent on request by them); a bad signature never does, a repeat is
+  // dropped, and a hook that throws leaves the event unacknowledged (503) so
+  // Stripe's retry applies it.
+  const refundEvt = (id, type, status) => Buffer.from(JSON.stringify({ id, type, data: { object: { id: "re_9", object: "refund", payment_intent: "pi_pack", amount: 500, status, metadata: { credits_refund_request: "k_1" } } } }));
+  for (const [i, [type, status]] of [["refund.updated", "succeeded"], ["refund.failed", "failed"], ["charge.refund.updated", "canceled"]].entries()) {
+    await dsubs.handleWebhook(refundEvt(`evt_r${i}`, type, status), "goodsig");
+    ok(refundEvents.length === i + 1 && refundEvents[i].id === "re_9" && refundEvents[i].status === status, `${type} (${status}) reaches the refund hook`);
+  }
+  await dsubs.handleWebhook(refundEvt("evt_r0", "refund.updated", "succeeded"), "goodsig");
+  ok(refundEvents.length === 3, "a repeated delivery of the same event does not reach the hook again");
+  let badSig = null;
+  try { await dsubs.handleWebhook(refundEvt("evt_rbad", "refund.failed", "failed"), "badsig"); } catch (e) { badSig = e; }
+  ok(badSig?.statusCode === 400 && refundEvents.length === 3, "a refund event with a bad signature is refused and reaches no hook");
+  refundHookThrows = true;
+  let unacked = null;
+  try { await dsubs.handleWebhook(refundEvt("evt_r9", "refund.failed", "failed"), "goodsig"); } catch (e) { unacked = e; }
+  refundHookThrows = false;
+  ok(unacked?.statusCode === 503, "a refund hook that throws leaves the event unacknowledged (503)");
+  await dsubs.handleWebhook(refundEvt("evt_r9", "refund.failed", "failed"), "goodsig");
+  ok(refundEvents.length === 4 && refundEvents[3].status === "failed", "...and Stripe's retry of it reaches the hook");
 }
 
 // Every record carries its id: one created by a webhook alone (the thanks

@@ -26,6 +26,9 @@ rmSync(DIR, { recursive: true, force: true });
 const charges = {}; // pi -> { amount, amount_refunded }
 const refunds = [];
 let refundMode = "ok"; // ok | fail | lost (lands, then the reply is lost)
+let refundStatus = "succeeded"; // the status Stripe answers a refund with
+const made = {}; // re_id -> the refund object Stripe holds
+let clock = Date.now();
 const sessions = {};
 const paid = (id, pack, pi, email) => {
   sessions[id] = { id, mode: "payment", payment_status: "paid", payment_intent: pi, customer_details: { email }, metadata: { credits_pack: pack } };
@@ -41,11 +44,16 @@ const stripe = {
     const amt = a.amount ?? (c.amount - c.amount_refunded);
     if (c.amount_refunded + amt > c.amount) throw new Error("amount exceeds charge");
     c.amount_refunded += amt;
+    const r = { id: `re_${refunds.length}`, amount: amt, status: refundStatus, payment_intent: a.payment_intent, metadata: a.metadata || {} };
+    made[r.id] = r;
+    if (refundStatus === "failed" || refundStatus === "canceled") c.amount_refunded -= amt;
     if (refundMode === "lost") throw new Error("socket hang up");
-    return { id: `re_${refunds.length}`, amount: amt };
-  } },
+    return { ...r };
+  },
+  retrieve: async (id) => { if (!made[id]) throw new Error("no such refund"); return { ...made[id] }; },
+  list: async ({ payment_intent }) => ({ data: Object.values(made).filter((r) => r.payment_intent === payment_intent).map((r) => ({ ...r })) }) },
 };
-const cr = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: () => {} });
+const cr = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: () => {}, now: () => clock });
 
 // ---- the cap on one key's balance --------------------------------------------
 ok(creditsBalanceMaxCents() === 10_000, "the cap on one key's balance defaults to $100");
@@ -85,7 +93,7 @@ ok(A.status === "minted" && A.balanceUsd === 20, "a $20 key is minted");
   rec.createdAt = "2016-01-01T00:00:00.000Z";
   (await import("node:fs")).writeFileSync(recPath, JSON.stringify(rec));
 }
-const crAged = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: () => {} });
+const crAged = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: () => {}, now: () => clock });
 const aged = crAged.authorize(A.key, 0.5);
 ok(aged.ok, "a key issued ten years ago still authorizes");
 crAged.settle(aged.hash, aged.heldMicro, "whois");
@@ -172,6 +180,94 @@ stripe._readFails = false;
 crAged.disableByPaymentIntent("pi_g", "refunded", { amountRefundedCents: 2000, fullyRefunded: true });
 ok(!(await crAged.refundRequestsOwed()).includes(G.keyId) && crAged.balance(G.key).refund?.state === "refunded", "a refund made by hand is recorded by the charge.refunded webhook");
 
+// ---- a refund is done only when Stripe says it succeeded --------------------------
+const rrOf = (key) => JSON.parse(readFileSync(join(DIR, `k_${hashKey(key)}.json`), "utf8")).refundRequest;
+const refundEvent = (id, status) => ({ ...made[id], status });
+const setStatus = (id, status) => { const r = made[id]; const c = charges[r.payment_intent]; if ((status === "failed" || status === "canceled") && r.status !== "failed" && r.status !== "canceled") c.amount_refunded -= r.amount; r.status = status; };
+// Pending: answered pending, recorded with Stripe's id, not owed while Stripe
+// holds it; the refund.updated webhook settles it, once.
+paid("cs_h", "credits-20", "pi_h", "h@x.com");
+const H = await crAged.claim("cs_h");
+refundStatus = "pending";
+const h1 = await crAged.requestRefund(H.key);
+const hId = rrOf(H.key).refundId;
+ok(h1.status === "pending" && rrOf(H.key).state === "pending" && /^re_/.test(hId) && crAged.balance(H.key).refund?.state === "pending", "a refund Stripe answers pending is not recorded as refunded");
+clock += 60 * 60_000;
+ok(!(await crAged.refundRequestsOwed()).includes(H.keyId), "a refund pending at Stripe is not owed while it waits for its webhook");
+const hSends = refunds.length;
+ok((await crAged.requestRefund(H.key)).status === "pending" && refunds.length === hSends, "asking again reads the pending refund and sends nothing");
+ok(crAged.disableByPaymentIntent("pi_h", "refunded", { amountRefundedCents: 2000, fullyRefunded: true }) === H.keyId && rrOf(H.key).state === "pending", "the charge.refunded webhook does not settle a refund we sent (its charge counts a pending refund)");
+setStatus(hId, "succeeded");
+ok(crAged.settleRefund(refundEvent(hId, "succeeded")) === H.keyId && rrOf(H.key).state === "done" && crAged.balance(H.key).refund?.state === "refunded", "refund.updated succeeded marks the request done");
+ok(crAged.settleRefund(refundEvent(hId, "succeeded")) === null && rrOf(H.key).state === "done", "a retried delivery changes nothing");
+ok(crAged.settleRefund({ ...refundEvent(hId, "succeeded"), metadata: { credits_refund_request: "k_other" } }) === null && crAged.settleRefund({ ...refundEvent(hId, "succeeded"), payment_intent: "pi_other" }) === null, "an event naming another key or payment changes nothing");
+// Pending, then failed at Stripe: owed (creditsRefunds), and asking again sends anew under a new idempotency key.
+paid("cs_i", "credits-20", "pi_i", "i@x.com");
+const I = await crAged.claim("cs_i");
+await crAged.requestRefund(I.key);
+const iId = rrOf(I.key).refundId;
+setStatus(iId, "failed");
+ok(crAged.settleRefund(refundEvent(iId, "failed")) === I.keyId && rrOf(I.key).state === "failed", "refund.failed moves a pending request to failed");
+ok((await crAged.refundRequestsOwed()).includes(I.keyId), "...and it is owed (creditsRefunds)");
+ok(crAged.settleRefund(refundEvent(iId, "failed")) === null && crAged.settleRefund(refundEvent(iId, "canceled")) === null && rrOf(I.key).failedIds.length === 1, "a retried failure event changes nothing");
+refundStatus = "succeeded";
+const i2 = await crAged.requestRefund(I.key);
+const iSends = refunds.filter((r) => r.payment_intent === "pi_i");
+ok(i2.status === "refunded" && iSends.length === 2 && iSends[0].idem !== iSends[1].idem && charges.pi_i.amount_refunded === 2000, "asking again after a failure sends a new refund under a new idempotency key, and it lands once");
+ok(!(await crAged.refundRequestsOwed()).includes(I.keyId), "...and nothing is owed after");
+ok(crAged.settleRefund(refundEvent(iId, "failed")) === null && rrOf(I.key).state === "done", "a late event for the failed refund leaves the done request alone");
+// Stripe answers the send itself with failed (or canceled): owed at once.
+for (const st of ["failed", "canceled"]) {
+  paid(`cs_j${st}`, "credits-20", `pi_j${st}`, `j${st}@x.com`);
+  const J = await crAged.claim(`cs_j${st}`);
+  refundStatus = st;
+  const j1 = await crAged.requestRefund(J.key);
+  ok(j1.status === "pending" && rrOf(J.key).state === "failed" && (await crAged.refundRequestsOwed()).includes(J.keyId) && charges[`pi_j${st}`].amount_refunded === 0, `a refund Stripe answers ${st} is owed, never recorded as refunded`);
+  // The charge can still count it for a while: the refunds themselves decide.
+  charges[`pi_j${st}`].amount_refunded = 2000;
+  refundStatus = "succeeded";
+  const j2 = await crAged.requestRefund(J.key);
+  ok(j2.status === "pending" && rrOf(J.key).state === "failed" && (await crAged.refundRequestsOwed()).includes(J.keyId), `after a ${st} refund, a charge that still counts it does not read as refunded; it stays owed`);
+  charges[`pi_j${st}`].amount_refunded = 0;
+  const j3 = await crAged.requestRefund(J.key);
+  const jSends = refunds.filter((r) => r.payment_intent === `pi_j${st}`);
+  ok(j3.status === "refunded" && jSends.length === 3 && jSends[0].idem !== jSends[2].idem && charges[`pi_j${st}`].amount_refunded === 2000, `...and once the charge drops it, asking again sends a new refund under a new idempotency key (${jSends.length} sends)`);
+}
+// Succeeded, then failed later at Stripe: owed again.
+paid("cs_k", "credits-20", "pi_k", "k@x.com");
+const K = await crAged.claim("cs_k");
+await crAged.requestRefund(K.key);
+const kId = rrOf(K.key).refundId;
+ok(rrOf(K.key).state === "done", "a refund Stripe answers succeeded is done");
+setStatus(kId, "failed");
+ok(crAged.settleRefund(refundEvent(kId, "failed")) === K.keyId && rrOf(K.key).state === "failed" && (await crAged.refundRequestsOwed()).includes(K.keyId) && crAged.balance(K.key).refund?.state === "pending", "a refund that fails after it succeeded is owed again");
+// Pending at Stripe past a week: owed, so it pages.
+paid("cs_l", "credits-20", "pi_l", "l@x.com");
+const L = await crAged.claim("cs_l");
+refundStatus = "pending";
+await crAged.requestRefund(L.key);
+refundStatus = "succeeded";
+clock += 8 * 86_400_000;
+ok((await crAged.refundRequestsOwed()).includes(L.keyId), "a refund still pending at Stripe after a week is owed");
+setStatus(rrOf(L.key).refundId, "succeeded");
+crAged.settleRefund(refundEvent(rrOf(L.key).refundId, "succeeded"));
+ok(!(await crAged.refundRequestsOwed()).includes(L.keyId), "...and clears once it succeeds");
+
+// ---- a key the operator switched off keeps its balance refundable --------------------
+paid("cs_m", "credits-20", "pi_m", "m@x.com");
+const M = await crAged.claim("cs_m");
+crAged.setDisabled(M.keyId, true);
+const m1 = await crAged.requestRefund(M.key);
+const mRec = JSON.parse(readFileSync(join(DIR, `k_${hashKey(M.key)}.json`), "utf8"));
+ok(m1.status === "refunded" && m1.refundedUsd === 20 && charges.pi_m.amount_refunded === 2000 && mRec.disabled && mRec.disabledReason === "operator", "an operator-disabled key gets its unspent balance back, and the operator's cause stays on the key");
+paid("cs_n", "credits-20", "pi_n", "n@x.com");
+const N = await crAged.claim("cs_n");
+crAged.disableByPaymentIntent("pi_n", "disputed");
+const nBefore = refunds.length;
+ok((await crAged.requestRefund(N.key)).status === "disputed" && refunds.length === nBefore, "a key under an open dispute answers disputed and sends nothing");
+crAged.setDisabled(N.keyId, true);
+ok((await crAged.requestRefund(N.key)).status === "disputed" && refunds.length === nBefore, "...also when the operator switched it off after the dispute");
+
 // ---- the checkout states the terms it sells on -----------------------------------
 process.env.CREDITS_SALES = "on";
 stripe._last = null;
@@ -192,6 +288,7 @@ const tOff = termsPage("https://agent402.tools"), pOff = privacyPage("https://ag
 const tOnText = strip(tOn), tOffText = strip(tOff);
 ok(tOnText.includes("the unspent balance on a key is refundable on request, with no fee") && tOnText.includes("POST /api/credits/refund"), "/terms (on) offers refund on request through the route the server serves");
 ok(/app\.post\("\/api\/credits\/refund"/.test(readFileSync(new URL("../src/server.js", import.meta.url), "utf8")), "...and that route exists");
+ok(/A key we switched off keeps its unspent balance refundable the same way; while a dispute of the payment that bought the key is open, the dispute settles what goes back to the card instead/.test(tOnText) && /or that Stripe reports as failed, stays owed to you/.test(tOnText), "/terms (on) states the rule for a switched-off or disputed key and for a refund Stripe fails");
 ok(tOnText.includes(`no key holds more than $${creditsBalanceMaxCents() / 100}`), "/terms (on) states the cap the code enforces");
 ok(/Credits never expire and carry no fees/.test(tOnText) && /Routes that buy from an outside seller with our wallet are paid with a wallet, not with credits/.test(tOnText), "/terms (on) states no expiry, no fees and own services only");
 ok(!tOnText.includes("unspent balance under $10") && !/non-refundable/.test(tOnText.slice(tOnText.indexOf("Prepaid credits are consumed"), tOnText.indexOf("Prepaid credits are consumed") + 300)), "/terms (on) drops the $10 exception and the non-refundable rule");

@@ -85,6 +85,9 @@ const isRefused = (v) => typeof v === "string" && v.startsWith("refused");
 const refusalOutcome = (v) => (isRefused(v) ? String(v).slice(String(v).lastIndexOf(":") + 1).replace(/@\d+$/, "") : null);
 const pendingSince = (v) => { const m = /:pending@(\d+)$/.exec(String(v)); return m ? Number(m[1]) : 0; };
 const STUCK_MS = 5 * 60_000;
+// A refund Stripe accepted but has not finished (status "pending") waits for
+// its webhook; one still pending after this long is owed (creditsRefunds).
+const SENT_STUCK_MS = 7 * 86_400_000;
 const refusalRefunded = (v) => { const o = refusalOutcome(v); return o === "refunded" ? true : o === "failed" ? false : null; };
 // EU member states and the United Kingdom: VAT is due on digital services to
 // a consumer there from the first sale, so a buyer billed there gives a
@@ -761,7 +764,9 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
         const delta = refundedMicro - (r.refundedMicro || 0);
         if (delta > 0) { r.balanceMicro = Math.max(0, r.balanceMicro - delta); r.refundedMicro = refundedMicro; }
         // A requested refund made by hand in Stripe is done once the charge shows it.
-        if (r.refundRequest && r.refundRequest.state !== "done" && Number(r.refundRequest.targetCents) > 0 && Math.round(cents) >= Number(r.refundRequest.targetCents)) r.refundRequest = { ...r.refundRequest, state: "done", doneAt: new Date(now()).toISOString() };
+        // One we sent (its Stripe refund id is recorded) is settled by that
+        // refund's own events instead: a charge counts a pending refund too.
+        if (r.refundRequest && r.refundRequest.state !== "done" && !r.refundRequest.refundId && Number(r.refundRequest.targetCents) > 0 && Math.round(cents) >= Number(r.refundRequest.targetCents)) r.refundRequest = { ...r.refundRequest, state: "done", doneAt: new Date(now()).toISOString() };
         if (fullyRefunded !== true && refundedMicro < (r.loadedMicro || 0)) { log(`[credits] key ${r.keyId}: $${(cents / 100).toFixed(2)} refunded (${paymentIntent}), balance reduced`); return r.keyId; }
       }
       // A key disabled with no recorded cause was switched off by the operator
@@ -809,7 +814,14 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
   // idempotency key, and a later send first reads the charge: a refund that
   // already landed (a lost reply, or one made by hand) is recorded, never sent
   // again. A send that fails leaves the request "failed" (owed: creditsRefunds
-  // on /api/gateway-status); asking again retries it.
+  // on /api/gateway-status); asking again retries it. The request is done only
+  // when Stripe says the refund succeeded: a pending one waits for its webhook
+  // (settleRefund), and a failed or canceled one is owed and sent again on the
+  // next request under a new idempotency key. A key the operator switched off
+  // keeps its unspent balance refundable; a key whose payment is under an open
+  // dispute answers "disputed" (the dispute settles what goes back).
+  const disputeOpen = (rec) => Boolean(rec.disputedPaymentIntent) && (!rec.disputeClosedAt || String(rec.disputeAt || "") > String(rec.disputeClosedAt));
+  const refundIdemKey = (keyId, rr) => `credits-refund-${keyId}-${rr.at}${Array.isArray(rr.failedIds) && rr.failedIds.length ? `-${rr.failedIds.length}` : ""}`;
   async function requestRefund(keyString) {
     if (typeof keyString !== "string" || !KEY_RE.test(keyString)) return { status: "malformed" };
     const hash = hashKey(keyString);
@@ -819,7 +831,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
       const rr = rec.refundRequest;
       if (rr && rr.state === "done") return { result: { status: "refunded", keyId: rec.keyId, refundedUsd: (Number(rr.cents) || 0) / 100 } };
       if (rr) return { result: { status: "retry", keyId: rec.keyId, rr: { ...rr }, pi: piOf(rec) } };
-      if (rec.disabled) return { result: { status: "disabled", keyId: rec.keyId } };
+      if (rec.disabled && (rec.disabledReason === "disputed" || disputeOpen(rec))) return { result: { status: "disputed", keyId: rec.keyId } };
       if ((Number(rec.heldMicro) || 0) > 0) return { result: { status: "in_flight", keyId: rec.keyId } };
       // The amount and the charge total it brings the charge to are fixed
       // here, under the lock, so every send of this request is the same one.
@@ -827,7 +839,9 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
       const cents = Math.max(0, Math.min(Math.ceil(rec.balanceMicro / 10_000), Math.round((Number(rec.loadedMicro) || 0) / 10_000) - refundedCents));
       if (!(rec.balanceMicro > 0) || cents === 0) return { result: { status: "nothing_to_refund", keyId: rec.keyId } };
       const fresh = { micro: rec.balanceMicro, cents, targetCents: refundedCents + cents, at: now(), state: "pending" };
-      rec.refundRequest = fresh; rec.balanceMicro = 0; rec.disabled = true; rec.disabledReason = "refund-requested";
+      // An operator disable stays the key's cause (it ranks above a request).
+      const keepCause = rec.disabled === true && rec.disabledReason !== "refund-requested" && (CAUSE_RANK[rec.disabledReason] || 3) > CAUSE_RANK["refund-requested"];
+      rec.refundRequest = fresh; rec.balanceMicro = 0; rec.disabled = true; rec.disabledReason = keepCause ? (rec.disabledReason || "operator") : "refund-requested";
       return { rec, result: { status: "new", keyId: rec.keyId, rr: { ...fresh }, pi: piOf(rec) } };
     });
     if (start.status !== "new" && start.status !== "retry") return start;
@@ -847,6 +861,24 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
       log(`[credits] key ${keyId}: unspent balance refunded on request ($${(rr.cents / 100).toFixed(2)})`);
       return { status: "refunded", keyId, refundedUsd: rr.cents / 100 };
     };
+    // What Stripe answered for a refund of ours: done only on "succeeded".
+    const failedIds = Array.isArray(rr.failedIds) ? rr.failedIds : [];
+    const apply = async (r) => {
+      const st = String(r?.status || "");
+      if (st === "succeeded") return finish(r.id || null);
+      if (st === "failed" || st === "canceled") {
+        if (!r.id || !failedIds.includes(r.id)) await setRequest({ state: "failed", why: `refund_${st}`, refundId: null, failedIds: [...failedIds, ...(r.id ? [r.id] : [])].slice(-20) });
+        log(`[credits] key ${keyId}: refund on request ${st} at Stripe; asking again sends it anew, or refund it by hand (creditsRefunds on /api/gateway-status)`);
+        return pending();
+      }
+      // Pending (or a status not yet known): its webhook settles it.
+      if (r?.id && r.id !== rr.refundId) await setRequest({ state: "pending", refundId: r.id, sentAt: now() });
+      return pending();
+    };
+    // A refund we sent and Stripe holds as pending: read where it stands now.
+    if (rr.state === "pending" && rr.refundId) {
+      try { return await apply(await stripe.refunds.retrieve(rr.refundId)); } catch { return pending(); }
+    }
     if (!pi) { await setRequest({ state: "failed", why: "no_payment" }); log(`[credits] key ${keyId}: refund requested but the key names no payment - refund it by hand (creditsRefunds on /api/gateway-status)`); return pending(); }
     // What the charge shows now: its amount and how much of it was refunded.
     let charge = null;
@@ -858,21 +890,75 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     // A refund that already landed (a lost reply, a send from another
     // container, or one made by hand) is recorded, never sent again; on a
     // later send, a charge that cannot be read sends nothing.
-    if (charge && charge.refunded >= rr.targetCents) return finish(null);
+    if (charge && charge.refunded >= rr.targetCents) {
+      // The charge's total can still count a refund that failed, so the
+      // refunds themselves decide: the live ones (not failed or canceled)
+      // reach the target, and ours among them settles by its status, or none
+      // of ours means it was made by hand. Unreadable: decided later.
+      let list;
+      try { list = await stripe.refunds.list({ payment_intent: pi, limit: 100 }); } catch { return pending(); }
+      const live = (list?.data || []).filter((x) => x && x.status !== "failed" && x.status !== "canceled" && !failedIds.includes(x.id));
+      if (live.reduce((n, x) => n + (Number(x.amount) || 0), 0) >= rr.targetCents) {
+        const mine = live.find((x) => x?.metadata?.credits_refund_request === keyId);
+        return mine ? apply(mine) : finish(null);
+      }
+    }
     if (!charge && start.status === "retry") return pending();
     try {
-      const r = await stripe.refunds.create({ payment_intent: pi, amount: rr.cents, metadata: { credits_refund_request: keyId } }, { idempotencyKey: `credits-refund-${keyId}-${rr.at}` });
-      return finish(r?.id || null);
+      const r = await stripe.refunds.create({ payment_intent: pi, amount: rr.cents, metadata: { credits_refund_request: keyId } }, { idempotencyKey: refundIdemKey(keyId, rr) });
+      return apply(r);
     } catch (e) {
       try { await setRequest({ state: "failed" }); } catch { /* owed once pending passes STUCK_MS */ }
       log(`[credits] key ${keyId}: refund on request FAILED (${String(e?.message || e).slice(0, 120)}); asking again retries it, or refund it by hand (creditsRefunds on /api/gateway-status)`);
       return pending();
     }
   }
-  /** Keys whose requested refund failed or never finished (pending past STUCK_MS). */
+  /** Keys whose requested refund failed, or never finished: not sent (pending
+   *  past STUCK_MS), or sent and still pending at Stripe past SENT_STUCK_MS. */
   async function refundRequestsOwed() {
     const t = now();
-    return (await allKeys()).filter(({ rec }) => rec?.refundRequest && (rec.refundRequest.state === "failed" || (rec.refundRequest.state === "pending" && t - Number(rec.refundRequest.at) > STUCK_MS))).map(({ rec }) => rec.keyId);
+    const stuck = (rr) => (rr.refundId ? t - Number(rr.sentAt || rr.at) > SENT_STUCK_MS : t - Number(rr.at) > STUCK_MS);
+    return (await allKeys()).filter(({ rec }) => rec?.refundRequest && (rec.refundRequest.state === "failed" || (rec.refundRequest.state === "pending" && stuck(rec.refundRequest)))).map(({ rec }) => rec.keyId);
+  }
+
+  // A Stripe refund event (refund.updated, refund.failed,
+  // charge.refund.updated) for a refund we sent on request, matched by its
+  // metadata and payment: succeeded marks the request done, failed or
+  // canceled moves it to failed (owed; a done one too, since Stripe can fail
+  // a refund after it succeeded), pending records its id. Idempotent: a
+  // retried delivery changes nothing, and an event for an older refund of
+  // the same request (one already recorded failed) is ignored. Returns the key
+  // id it changed, or null.
+  function settleRefund(refund) {
+    const keyId = refund?.metadata?.credits_refund_request;
+    const id = typeof refund?.id === "string" ? refund.id : null;
+    const pi = typeof refund?.payment_intent === "string" ? refund.payment_intent : refund?.payment_intent?.id || null;
+    const st = String(refund?.status || "");
+    if (!keyId || !id || !pi) return answer(null);
+    const step = (rec) => {
+      const rr = rec?.refundRequest;
+      if (!rr || rec.keyId !== keyId || !paidBy(rec, pi)) return { result: null };
+      const failed = Array.isArray(rr.failedIds) ? rr.failedIds : [];
+      if (failed.includes(id)) return { result: null };
+      if (rr.refundId && rr.refundId !== id) return { result: null };
+      if (st === "succeeded") {
+        if (rr.state === "done") return { result: null };
+        rec.refundRequest = { ...rr, state: "done", refundId: id, doneAt: new Date(now()).toISOString() };
+        rec.refundedMicro = Math.max(Number(rec.refundedMicro) || 0, Number(rr.targetCents) * 10_000);
+        log(`[credits] key ${keyId}: unspent balance refunded on request ($${((Number(rr.cents) || 0) / 100).toFixed(2)}, ${id})`);
+      } else if (st === "failed" || st === "canceled") {
+        if (rr.state === "done") rec.refundedMicro = Math.max(0, (Number(rec.refundedMicro) || 0) - (Number(rr.cents) || 0) * 10_000);
+        rec.refundRequest = { ...rr, state: "failed", why: `refund_${st}`, refundId: null, failedIds: [...failed, id].slice(-20) };
+        log(`[credits] key ${keyId}: refund on request ${st} at Stripe (${id}); owed: asking again sends it anew, or refund it by hand (creditsRefunds on /api/gateway-status)`);
+      } else if (st === "pending" || st === "requires_action") {
+        if (rr.state === "done" || rr.refundId === id) return { result: null };
+        rec.refundRequest = { ...rr, state: "pending", refundId: id, sentAt: now() };
+      } else return { result: null };
+      return { rec, result: keyId };
+    };
+    if (usePg) return allKeys().then((xs) => { const hit = xs.find((x) => x.rec?.keyId === keyId); return hit ? mutatePg(hit.hash, step) : null; });
+    for (const { hash, rec } of allKeys()) { if (rec?.keyId === keyId) return mutateFile(hash, step); }
+    return null;
   }
 
   // On the database, a settle or release after the answer is a promise nobody
@@ -1122,5 +1208,5 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const pick = (xs) => { const hit = xs.find((x) => x.rec && x.rec.keyId === keyId); return hit ? microToUsd(hit.rec.balanceMicro) : null; };
     return usePg ? allKeys().then(pick) : pick(allKeys());
   }
-  return { createCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, noteBadKey, _internals: { boughtInDayCents, refuseAndRefund, refuseSession }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
+  return { createCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, settleRefund, noteBadKey, _internals: { boughtInDayCents, refuseAndRefund, refuseSession }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
 }

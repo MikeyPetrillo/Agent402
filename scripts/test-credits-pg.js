@@ -302,12 +302,13 @@ try {
   // ---- refund on request, on the rows: two containers, one refund ---------
   {
     const charges = { pi_rr: { amount: 2000, amount_refunded: 0 } };
-    const sends = [], done = {};
+    const sends = [], done = {}, made = [];
     const rstripe = {
       checkout: { sessions: { retrieve: async (id) => (id === "cs_rr" ? { id, mode: "payment", payment_status: "paid", payment_intent: "pi_rr", customer_details: { email: "rr@x.com" }, metadata: { credits_pack: "credits-20" } } : (() => { throw new Error("no"); })()) } },
       paymentIntents: { retrieve: async (id) => ({ id, latest_charge: charges[id] ? { ...charges[id] } : null }) },
       // Stripe answers a repeated idempotency key with the first result.
-      refunds: { create: async (a, o = {}) => { sends.push({ ...a, idem: o.idempotencyKey }); if (done[o.idempotencyKey]) return done[o.idempotencyKey]; const p = (async () => { await wait(30); const c = charges[a.payment_intent]; if (c.amount_refunded + a.amount > c.amount) throw new Error("over"); c.amount_refunded += a.amount; return { id: `re_${sends.length}` }; })(); done[o.idempotencyKey] = p; return p; } },
+      refunds: { create: async (a, o = {}) => { sends.push({ ...a, idem: o.idempotencyKey }); if (done[o.idempotencyKey]) return done[o.idempotencyKey]; const p = (async () => { await wait(30); const c = charges[a.payment_intent]; if (c.amount_refunded + a.amount > c.amount) throw new Error("over"); c.amount_refunded += a.amount; const r = { id: `re_${sends.length}`, amount: a.amount, status: "succeeded", payment_intent: a.payment_intent, metadata: a.metadata || {} }; made.push(r); return r; })(); done[o.idempotencyKey] = p; return p; },
+        list: async ({ payment_intent }) => ({ data: made.filter((r) => r.payment_intent === payment_intent) }) },
     };
     const R1 = createCredits({ stripe: rstripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: quiet });
     const R2 = createCredits({ stripe: rstripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: quiet });
@@ -323,6 +324,26 @@ try {
     const row = await rowRec(hashKey(m.key));
     ok(row.balanceMicro === 0 && row.disabled === true && row.refundRequest?.state === "done" && row.refundedMicro === 17_500_000, "pg: the row is empty, disabled and records the refund");
     ok((await R2.authorize(m.key, 0.001)).reason === "disabled" && !(await R2.refundRequestsOwed()).includes(m.keyId), "pg: the key cannot spend and nothing is owed");
+  }
+  // ---- a refund Stripe holds as pending settles by its webhook, on the rows --
+  {
+    const made = [];
+    const pstripe = {
+      checkout: { sessions: { retrieve: async (id) => ({ id, mode: "payment", payment_status: "paid", payment_intent: `pi_${id}`, customer_details: { email: `${id}@x.com` }, metadata: { credits_pack: "credits-20" } }) } },
+      paymentIntents: { retrieve: async (id) => ({ id, latest_charge: { amount: 2000, amount_refunded: 0 } }) },
+      refunds: { create: async (a, o = {}) => { const r = { id: `re_p${made.length}`, amount: a.amount, status: "pending", payment_intent: a.payment_intent, metadata: a.metadata || {}, idem: o.idempotencyKey }; made.push(r); return { ...r }; },
+        retrieve: async (id) => ({ ...made.find((r) => r.id === id) }), list: async () => ({ data: [] }) },
+    };
+    const P1 = createCredits({ stripe: pstripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: quiet });
+    const P2 = createCredits({ stripe: pstripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: quiet });
+    const k = await P1.claim("cs_pp");
+    ok((await P1.requestRefund(k.key)).status === "pending" && (await rowRec(hashKey(k.key))).refundRequest?.state === "pending", "pg: a refund Stripe answers pending stays pending on the row");
+    const ev = (status) => ({ ...made[0], status });
+    ok((await P2.settleRefund(ev("failed"))) === k.keyId && (await rowRec(hashKey(k.key))).refundRequest?.state === "failed" && (await P1.refundRequestsOwed()).includes(k.keyId), "pg: refund.failed from another container makes it owed");
+    ok((await P2.settleRefund(ev("failed"))) === null, "pg: a retried delivery changes nothing");
+    const again = await P1.requestRefund(k.key);
+    ok(again.status === "pending" && made.length === 2 && made[0].idem !== made[1].idem, "pg: asking again sends anew under a new idempotency key");
+    ok((await P2.settleRefund({ ...made[1], status: "succeeded" })) === k.keyId && (await rowRec(hashKey(k.key))).refundRequest?.state === "done" && !(await P1.refundRequestsOwed()).includes(k.keyId), "pg: refund.updated succeeded marks it done and nothing is owed");
   }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
