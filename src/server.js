@@ -8,6 +8,7 @@ import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread, UNPAI
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, retiredEntryForSlug, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
+import { createFunnel, funnelEventOf, emptyFunnelRow, ARRIVALS as FUNNEL_ARRIVALS } from "./funnel.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf, workerEgressAddressKeyOf } from "./unpaid-quote-budget.js";
 import { createPaidQuoteTrust, paidAndSettled } from "./paid-quote-trust.js";
 import { stripMcpMarker } from "./mcp-loopback.js";
@@ -744,7 +745,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -2987,6 +2988,19 @@ app.use((req, res, next) => {
 const TRAFFIC = createTrafficStore();
 TRAFFIC.load();
 app.use(trafficMiddleware(TRAFFIC, { payerOf: (req, res) => payerFromRequest(req) || payerFromPaymentResponse(String(res.getHeader("payment-response") || "")) }));
+// The paid-call funnel (src/funnel.js): per day and arrival path, probes,
+// 402s served, payment attempts, settlements and why a 402 did not become a
+// payment, counted on the traffic store's day rollups (counts only). Fed by
+// the catalog routes' finish hook and the marketplace copies under /ref;
+// read at /__operator/funnel.json.
+const FUNNEL = createFunnel({ bump: (day, arrival, field, n, sub) => TRAFFIC.bumpFunnel(day, arrival, field, n, sub) });
+function noteFunnelOnFinish(req, res) {
+  if (Object.hasOwn(req, "__a402FunnelNoted")) return;
+  req.__a402FunnelNoted = true;
+  res.once("finish", () => {
+    try { FUNNEL.record(funnelEventOf(req, res, { ours: callIsOurs(req) }), { ip: clientIp(req) }); } catch { /* counting never fails a response */ }
+  });
+}
 const CANONICAL_HOST = (() => { try { return new URL(BASE_URL).host.toLowerCase(); } catch { return ""; } })();
 app.use((req, res, next) => {
   const host = String(req.hostname || "").toLowerCase();
@@ -5606,6 +5620,80 @@ app.get("/__operator/cohorts.json", (req, res) => {
   res.set("Cache-Control", "no-store");
   try {
     res.json(salesCohorts({ days: req.query.days, toolsPerDay: req.query.toolsPerDay, callsPerHour: req.query.callsPerHour }));
+  } catch (err) {
+    res.status(500).json({ error: redactSecrets(err?.message) });
+  }
+});
+
+// The paid-call funnel and the weekly figures (operator only, counts only:
+// no wallet, address or hash in the answer). Two halves per UTC day and
+// arrival path: `requests` from the funnel counters (src/funnel.js, on the
+// traffic store's day rollups: probes, 402s served, attempts, settlements,
+// refusal classes, callers that never came back) and `sales` from the sales
+// ledger (outside sales, dollars and paying wallets). `week` holds the
+// scoreboard figures the ledger can compute. ?days= (default 14, max 30).
+// Read once a minute per window at most; the ledger half yields between pages.
+let funnelCache = null; // { key, at, value }
+const FUNNEL_CACHE_MS = 60_000;
+async function funnelView(days) {
+  const now = Date.now();
+  if (funnelCache && funnelCache.key === days && now - funnelCache.at < FUNNEL_CACHE_MS) return funnelCache.value;
+  const ledger = await funnelLedgerAsync({ days, weekDays: 7, now });
+  const counted = new Map(TRAFFIC.funnelDays(FUNNEL_MAX_DAYS + 1).map((r) => [r.day, r.funnel]));
+  const sum = (rows) => rows.reduce((t, r) => {
+    for (const [k, v] of Object.entries(r)) {
+      if (typeof v === "number") t[k] = (t[k] || 0) + v;
+      else for (const [kk, vv] of Object.entries(v || {})) { const g = t[k] || (t[k] = {}); g[kk] = (g[kk] || 0) + (Number(vv) || 0); }
+    }
+    return t;
+  }, emptyFunnelRow());
+  const rowOf = (f) => { const e = emptyFunnelRow(); for (const [k, v] of Object.entries(f || {})) { if (typeof v === "number") e[k] = v; else if (v && typeof v === "object") e[k] = { ...(e[k] || {}), ...v }; } return e; };
+  const byDay = ledger.byDay.map((d) => {
+    const f = counted.get(d.day) || {};
+    const byArrival = Object.fromEntries(FUNNEL_ARRIVALS.filter((a) => a !== "unknown").map((a) => [a, rowOf(f[a])]));
+    return { day: d.day, partial: d.partial, requests: { ...sum(Object.values(byArrival)), byArrival }, sales: { sales: d.sales, revenueUsd: d.revenueUsd, unknownShare: d.unknownShare, byArrival: d.byArrival } };
+  });
+  const conversion = {};
+  for (const a of FUNNEL_ARRIVALS.filter((x) => x !== "unknown")) {
+    const t = sum(byDay.map((d) => d.requests.byArrival[a]));
+    const closed = t.probedCallers - t.untracked;
+    conversion[a] = {
+      probes: t.probes, challenges: t.challenges, attempts: t.attempts, settled: t.settled,
+      settledPerProbe: t.probes ? +(t.settled / t.probes).toFixed(4) : null,
+      probedCallers: t.probedCallers, paidAfterProbe: t.paidAfterProbe,
+      callerConversion: closed > 0 ? +(t.paidAfterProbe / closed).toFixed(4) : null,
+      neverRetried: t.neverRetried,
+    };
+  }
+  const value = {
+    generatedAt: new Date(now).toISOString(),
+    window: ledger.window,
+    countingSince: [...counted.keys()].sort()[0] || null,
+    definitions: {
+      arrival: "marketplace: /ref copies; mcp: the hosted connector or our MCP package; bazaar: a User-Agent naming the Bazaar; direct: every other request. A request carries no sign of where its caller found the URL, so a buyer who read a listing and calls with a plain client reads direct. unknown (sales only): a sale booked with no arrival path.",
+      probes: "requests to a paid route with no payment credential and no proof of work",
+      challenges: "402 answers served, to probes and to refused credentials",
+      attempts: "requests that carried a payment credential",
+      settled: "attempts answered 2xx with a settlement receipt",
+      refusal: "why an attempt got a 402: unfundedWallet, wrongNetwork, verifyRefused (payload or authorization faults), ourSide (not checked, quota, unconfirmed), unclassified, noReason",
+      neverRetried: "callers whose first probe in a 30-minute window was followed by no credential from them inside it (per replica)",
+      sales: "outside sales from the sales ledger (our own wallets and signed probes excluded), dollars at the buyer's price",
+      week: "the 7 whole UTC days before today; wallets, not operators",
+    },
+    byDay,
+    conversion,
+    week: ledger.week,
+  };
+  funnelCache = { key: days, at: now, value };
+  return value;
+}
+app.get("/__operator/funnel.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.vary("X-Operator-Token");
+  res.set("Cache-Control", "private, no-store");
+  try {
+    const days = Math.max(1, Math.min(FUNNEL_MAX_DAYS, parseInt(req.query.days, 10) || 14));
+    res.json(await funnelView(days));
   } catch (err) {
     res.status(500).json({ error: redactSecrets(err?.message) });
   }
@@ -10862,6 +10950,7 @@ if (REFERRAL_GATE) {
   // Every answer the copy sends (a 200) is tallied per slug and day: the
   // "served" side of the operator's reconciliation (below).
   const referralRoute = (req, res) => {
+    noteFunnelOnFinish(req, res);
     res.once("finish", () => { if (res.statusCode === 200) { try { recordReferralAnswer(req.params?.slug); } catch { /* a tally never fails a call */ } } });
     return REFERRAL_GATE.handler(req, res);
   };
@@ -11414,6 +11503,7 @@ if (FREE_MODE) {
   app.use((req, res, next) => {
     const def = CATALOG[`${req.method} ${req.path}`];
     if (def) {
+      noteFunnelOnFinish(req, res);
       // Make the free tier DISCOVERABLE at the moment of rejection: PostHog
       // showed 2.1M 402 challenges vs 235 PoW challenges issued in 14 days —
       // the on-ramp exists but nothing at the paywall points to it. For

@@ -101,7 +101,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-16.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-17.</p>
 </section>
 
 <section>
@@ -158,7 +158,11 @@ so every claim below is verifiable in code.</p>
     <li>for a paid call, the sales ledger keeps the tool's name and a SHA-256 hash of the response we
     served, so a receipt can prove what was delivered; the response itself is not kept. It also keeps
     how the call arrived: through our hosted MCP connector, from one of our client packages (its name
-    and version, the first word of the User-Agent it sends), or as any other HTTP request;</li>
+    and version, the first word of the User-Agent it sends), from a client whose User-Agent names the
+    Bazaar discovery service, or as any other HTTP request. Beside it we count, per day and per those
+    same arrival paths, the requests to paid tools that carried no payment, the payment requests we
+    answered, the payments tried and settled and the refusal reason of each one refused; these are
+    counts only, kept with the daily traffic statistics;</li>
     <li>a verdict you leave on a paid call through <code>/api/feedback</code>, including the reason
     you write, is kept with that call's transaction id and is never published;</li>${allowanceOn ? `
     <li>the first-call allowance (a wallet's first paid call on an eligible tool served without
