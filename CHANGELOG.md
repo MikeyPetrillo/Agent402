@@ -94,6 +94,9 @@ Tools:
   The seven market-data tools carry the CoinGecko credit in every answer;
   lending-rates reads on-chain state only. dex-pool-health and
   dex-volume-board answer on a deployment that holds a market-data key.
+  Each market-data listing states how often its figures are refreshed: every
+  5 minutes for exchange-spread and for a pool's recent trades, every 15 for
+  stablecoin-depeg-watch, and every 30 for the rest.
 - Fifteen routes are retired and answer 410 Gone with a Sunset date. Two name
   a replacement that answers the same question: stablecoins
   (stablecoin-depeg-watch) and defi-dex-volume (dex-volume-board). The other

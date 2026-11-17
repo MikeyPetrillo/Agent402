@@ -17,7 +17,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 //   - wording: no advice, rating or trade-direction words in any description,
 //     flag or published example.
 
-import { CRYPTO_SCREENS_TOOLS, KEY_ONLY_SCREEN_SLUGS, SCREENS_MAX_TTL_MS, SCREEN_TTL, UNKNOWN_NETWORK_MAX, resetUnknownNetworks, __test } from "../src/tools/crypto-screens-kit.js";
+import { CRYPTO_SCREENS_TOOLS, KEY_ONLY_SCREEN_SLUGS, SCREENS_MAX_TTL_MS, SCREEN_TTL, SCREEN_READS, readsPerDay, UNKNOWN_ID_MAX, UNKNOWN_ID_TTL_MS, ANSWER_MEMO_MAX, resetScreensMemory, __test } from "../src/tools/crypto-screens-kit.js";
 import { clearCryptoMarketsCache, resetCgRateLimit, TTL } from "../src/tools/crypto-markets-kit.js";
 import { COINGECKO_CREDIT, COINGECKO_API_URL, attributionTailOf } from "../src/data-attribution.js";
 import { METERED_SLUGS } from "../src/metered-slugs.js";
@@ -55,7 +55,7 @@ globalThis.fetch = async (url, init) => {
   return jsonRes(404, { error: "not found" });
 };
 const path = (p) => (u) => u.pathname === `/api/v3${p}`;
-const reset = () => { calls.length = 0; clearCryptoMarketsCache(); resetCgRateLimit(); resetUnknownNetworks(); };
+const reset = () => { calls.length = 0; clearCryptoMarketsCache(); resetCgRateLimit(); resetScreensMemory(); };
 for (const k of ["COINGECKO_API_KEY", "COINGECKO_API_TIER", "COINGECKO_MAX_PER_MIN", "COINGECKO_DAILY_MAX"]) delete process.env[k];
 
 // ----------------------------------------------------------------------------
@@ -81,16 +81,28 @@ for (const t of CRYPTO_SCREENS_TOOLS) {
 ok(ADVICE.test("a strong buy") && ADVICE.test("an arbitrage opportunity") && !ADVICE.test("buy share of trades"), "control: the wording check catches advice and passes a measured buy share");
 ok(KEY_ONLY_SCREEN_SLUGS.length === 2 && KEY_ONLY_SCREEN_SLUGS.every((s) => METERED_SLUGS.has(s)), "the two key-only pool tools are in METERED_SLUGS (CI holds no key)");
 ok(SLUGS.filter((s) => !KEY_ONLY_SCREEN_SLUGS.includes(s)).every((s) => !METERED_SLUGS.has(s)), "the keyless tools are not in METERED_SLUGS");
-ok(SCREENS_MAX_TTL_MS === Math.max(...Object.values(SCREEN_TTL)) && SCREENS_MAX_TTL_MS === 600_000, "the longest cache window the kit reports is the longest it uses");
-// Each tool's documents are kept for as long as the data behind them moves:
-// one caller polling every minute spends at most 86400 / window reads a day.
-ok(JSON.stringify(SCREEN_TTL) === JSON.stringify({ funding: 600_000, depeg: 300_000, spread: 120_000, defi: 300_000, chainMarkets: 300_000, chainPlatforms: 600_000, dexBoard: 300_000, pool: 60_000 }) && Object.values(SCREEN_TTL).every((ms) => ms >= 60_000), `the cache windows: funding 10 min, depeg, DeFi screen, chain and DEX boards 5 min, spread 2 min, pool health 60 s (${JSON.stringify(SCREEN_TTL)})`);
+const MINUTE = 60_000;
+ok(SCREENS_MAX_TTL_MS === 30 * MINUTE && SCREENS_MAX_TTL_MS === Math.max(...Object.entries(SCREEN_TTL).filter(([k]) => k !== "chainPlatforms").map(([, ms]) => ms)), "the oldest market reading the kit reports is its longest market-data window (the chain list, reference data, is kept longer)");
+// Each tool's documents are kept for as long as the data behind them moves, and
+// the windows together fit the key's daily budget: one caller per tool polling
+// without pause spends (documents read) x (1440 / window minutes) reads a day.
+ok(JSON.stringify(SCREEN_TTL) === JSON.stringify({ funding: 30 * MINUTE, depeg: 15 * MINUTE, spread: 5 * MINUTE, defi: 30 * MINUTE, chainMarkets: 30 * MINUTE, chainPlatforms: 360 * MINUTE, dexBoard: 30 * MINUTE, poolTrades: 5 * MINUTE, pool: 30 * MINUTE }) && Object.values(SCREEN_TTL).every((ms) => ms >= 5 * MINUTE),
+  `the cache windows: funding, DeFi screen, chain and DEX boards and a pool's totals 30 min, depeg 15 min, spread and a pool's trades 5 min, the chain list 6 h (${JSON.stringify(SCREEN_TTL)})`);
 {
-  const said = (slug) => /cached (\d+) (seconds|minutes)\./.exec(CRYPTO_SCREENS_TOOLS.find((t) => t.slug === slug).description);
-  const ms = (m) => (m ? Number(m[1]) * (m[2] === "minutes" ? 60_000 : 1000) : null);
-  const want = { "funding-screener": SCREEN_TTL.funding, "stablecoin-depeg-watch": SCREEN_TTL.depeg, "exchange-spread": SCREEN_TTL.spread, "defi-screener": SCREEN_TTL.defi, "chain-board": SCREEN_TTL.chainMarkets, "dex-volume-board": SCREEN_TTL.dexBoard, "dex-pool-health": SCREEN_TTL.pool };
-  const off = Object.entries(want).filter(([slug, w]) => ms(said(slug)) !== w).map(([slug]) => slug);
-  ok(off.length === 0, `each listing states its own cache window (${off.join(", ") || "all seven"})`);
+  const perDay = Object.fromEntries(SLUGS.map((s) => [s, readsPerDay(s)]));
+  const total = Object.values(perDay).reduce((a, b) => a + b, 0);
+  console.log(`  reads a day, one caller per tool polling without pause: ${JSON.stringify(perDay)} total ${total}`);
+  ok(Object.keys(SCREEN_READS).sort().join() === [...SLUGS].sort().join() && JSON.stringify(perDay) === JSON.stringify({ "funding-screener": 48, "stablecoin-depeg-watch": 96, "exchange-spread": 288, "defi-screener": 48, "chain-board": 100, "dex-volume-board": 240, "dex-pool-health": 336 }), "reads a day per tool are (documents read) x (1440 / window minutes)");
+  ok(total <= 1200, `continuous polling of every tool stays within 1,200 upstream reads a day (${total})`);
+}
+{
+  const d = (slug) => CRYPTO_SCREENS_TOOLS.find((t) => t.slug === slug).description;
+  const said = (slug) => / refreshed every (\d+) minutes[ .,]/.exec(d(slug));
+  const want = { "funding-screener": SCREEN_TTL.funding, "stablecoin-depeg-watch": SCREEN_TTL.depeg, "exchange-spread": SCREEN_TTL.spread, "defi-screener": SCREEN_TTL.defi, "chain-board": SCREEN_TTL.chainMarkets, "dex-volume-board": SCREEN_TTL.dexBoard, "dex-pool-health": SCREEN_TTL.poolTrades };
+  const off = Object.entries(want).filter(([slug, w]) => Number(said(slug)?.[1]) * MINUTE !== w).map(([slug]) => slug);
+  ok(off.length === 0, `each listing states its own refresh window (${off.join(", ") || "all seven"})`);
+  ok(d("chain-board").includes(`(the list of chains every ${SCREEN_TTL.chainPlatforms / (60 * MINUTE)} hours)`) && d("dex-pool-health").includes(`recent trades refreshed every ${SCREEN_TTL.poolTrades / MINUTE} minutes, the pool's liquidity, 24h volume and 24h counts every ${SCREEN_TTL.pool / MINUTE} minutes`), "chain-board states the chain list's window and dex-pool-health the pool totals' window");
+  ok(CRYPTO_SCREENS_TOOLS.every((t) => !/\bcached \d+ (seconds|minutes)/.test(t.description)), "no listing states a window the kit no longer uses");
 }
 
 // pure helpers
@@ -151,13 +163,36 @@ reset();
   ok(byDisp.coins.length === 1 && byDisp.coins[0].coin === "ETH" && byDisp.truncated === true, "board sorts by dispersion and marks a capped list");
   ok(calls.length === 1, "still one upstream read");
 
-  // The derivatives document is kept ten minutes: a caller polling every minute reads it upstream six times an hour, not sixty.
+  // A computed answer is kept with its document: the same question again works nothing out, and
+  // another question, or the same one over a document read again, is computed once.
+  {
+    reset();
+    const c = __test.memoCounts;
+    const one = await h("funding-screener")({});
+    const two = await h("funding-screener")({});
+    ok(c.computed === 1 && c.kept === 1 && two.cached === true && one.cached === false && JSON.stringify({ ...two, cached: false }) === JSON.stringify(one), `the board asked twice is computed once and reads the same (${c.computed} computed, ${c.kept} kept)`);
+    const boardCoins = one.coins.length;
+    one.coins.length = 0; two.coins.length = 0;
+    const three = await h("funding-screener")({ limit: 10, sort: "open_interest", minOpenInterestUsd: "1000000" });
+    ok(c.computed === 1 && c.kept === 2 && boardCoins > 0 && three.coins.length === boardCoins, "the same question spelled with its defaults is the kept answer, and a caller's edits to one answer reach no other");
+    await h("funding-screener")({ sort: "funding" }); await h("funding-screener")({ coin: "ETH" }); await h("funding-screener")({ coin: "eth" });
+    ok(c.computed === 3 && c.kept === 3, `another sort or a coin is computed once each (${c.computed} computed, ${c.kept} kept)`);
+    clearCryptoMarketsCache();
+    const fresh = await h("funding-screener")({});
+    ok(c.computed === 4 && fresh.cached === false && calls.length === 2, "a document read again upstream is computed again");
+    await throws(h("funding-screener")({ coin: "NOPE" }), 422, "a coin no venue lists, over the kept document");
+    for (let k = 0; k < ANSWER_MEMO_MAX + 5; k++) await h("funding-screener")({ minOpenInterestUsd: 100000 + k });
+    ok(__test.answerMemoSize() === ANSWER_MEMO_MAX && ANSWER_MEMO_MAX === 500, `the kept answers are bounded (${__test.answerMemoSize()})`);
+    reset();
+    await h("funding-screener")({ coin: "ETH" });
+  }
+  // The derivatives document is kept thirty minutes: a caller polling every minute reads it upstream twice an hour, not sixty times.
   {
     const realNow = Date.now, t0 = realNow();
     let polls = 0;
     for (let minute = 1; minute <= 60; minute++) { Date.now = () => t0 + minute * 60_000; await h("funding-screener")({ coin: "ETH" }); polls++; }
     Date.now = realNow;
-    ok(polls === 60 && calls.length === 1 + 6, `sixty one-minute polls spend six upstream reads (${calls.length - 1})`);
+    ok(polls === 60 && calls.length === 1 + 2, `sixty one-minute polls spend two upstream reads (${calls.length - 1})`);
     reset();
     await h("funding-screener")({ coin: "ETH" }); await h("funding-screener")({ coin: "eth", minOpenInterestUsd: 100000 }); await h("funding-screener")({ sort: "funding" });
     ok(calls.length === 1, "any coin, floor or sort is answered from the one kept document");
@@ -302,7 +337,34 @@ reset();
   await throws(h("exchange-spread")({}), 400, "coin is required");
   await throws(h("exchange-spread")({ coin: "ethereum", quote: "US D" }), 400, "a malformed quote");
   await throws(h("exchange-spread")({ coin: "../x" }), 400, "a path-shaped coin id never reaches the URL");
-  await throws(h("exchange-spread")({ coin: "nope" }), 422, "an unknown coin (upstream 404)");
+  await throws(h("exchange-spread")({ coin: "nope" }), 422, "an unknown coin (upstream 404)", /coin with the id "nope"/);
+  // An unknown coin id is remembered for a short time: the same id again costs no upstream read.
+  const before = calls.length;
+  await throws(h("exchange-spread")({ coin: "nope" }), 422, "the same unknown coin again", /coin with the id "nope"/);
+  await throws(h("exchange-spread")({ coin: " NOPE ", quote: "USDT" }), 422, "the same unknown coin in another case and with a quote", /coin with the id "nope"/);
+  ok(calls.length === before, `an unknown coin sent again makes no upstream read (${calls.length - before} more)`);
+  {
+    const realNow = Date.now;
+    Date.now = () => realNow() + UNKNOWN_ID_TTL_MS + 1000;
+    await throws(h("exchange-spread")({ coin: "nope" }), 422, "the unknown coin after the memory's window");
+    Date.now = realNow;
+    ok(calls.length === before + 1 && UNKNOWN_ID_TTL_MS === 300_000, "an unknown coin is read again after five minutes");
+  }
+  // An upstream failure is not a verdict on the id: nothing is remembered.
+  const saved = routes;
+  routes = [[(u) => u.pathname === "/api/v3/coins/flaky-coin/tickers", () => jsonRes(500, {})]];
+  await throws(h("exchange-spread")({ coin: "flaky-coin" }), 502, "an upstream failure on the tickers");
+  const afterFail = calls.length;
+  await throws(h("exchange-spread")({ coin: "flaky-coin" }), 502, "the same coin after a failed read");
+  ok(calls.length > afterFail, "a coin whose read failed upstream is read again");
+  // The remembered set is bounded.
+  reset(); routes = [];
+  for (let k = 0; k < UNKNOWN_ID_MAX + 3; k++) await h("exchange-spread")({ coin: `ghost-${k}` }).catch(() => {});
+  calls.length = 0;
+  await h("exchange-spread")({ coin: "ghost-0" }).catch(() => {});
+  await h("exchange-spread")({ coin: `ghost-${UNKNOWN_ID_MAX + 2}` }).catch(() => {});
+  ok(calls.length === 1, `the remembered coins hold ${UNKNOWN_ID_MAX} ids, oldest dropped first`);
+  routes = saved; reset();
 }
 
 // ----------------------------------------------------------------------------
@@ -414,11 +476,11 @@ reset();
   // The remembered set is bounded.
   reset();
   routes = [];
-  for (let k = 0; k < UNKNOWN_NETWORK_MAX + 3; k++) await h("dex-volume-board")({ network: `ghost-${k}`, pools: 20 }).catch(() => {});
+  for (let k = 0; k < UNKNOWN_ID_MAX + 3; k++) await h("dex-volume-board")({ network: `ghost-${k}`, pools: 20 }).catch(() => {});
   calls.length = 0;
   await h("dex-volume-board")({ network: "ghost-0", pools: 20 }).catch(() => {});
-  await h("dex-volume-board")({ network: `ghost-${UNKNOWN_NETWORK_MAX + 2}`, pools: 20 }).catch(() => {});
-  ok(calls.length === 1, `the remembered set holds ${UNKNOWN_NETWORK_MAX} ids, oldest dropped first`);
+  await h("dex-volume-board")({ network: `ghost-${UNKNOWN_ID_MAX + 2}`, pools: 20 }).catch(() => {});
+  ok(calls.length === 1, `the remembered set holds ${UNKNOWN_ID_MAX} ids, oldest dropped first`);
   reset();
 }
 
@@ -469,7 +531,44 @@ reset();
   await throws(h("dex-pool-health")({ network: "eth" }), 400, "pool is required");
   await throws(h("dex-pool-health")({ network: "eth", pool: "0x12/../x" }), 400, "a path-shaped pool never reaches the URL");
   await throws(h("dex-pool-health")({ pool: PA }), 400, "network is required");
-  await throws(h("dex-pool-health")({ network: "eth", pool: "0x00000000000000000000000000000000000000ff" }), 422, "an unknown pool (upstream 404)");
+  // The pool is read first and alone: an unknown pool is one upstream read, and is remembered.
+  reset();
+  const GHOST = "0x00000000000000000000000000000000000000ff";
+  await throws(h("dex-pool-health")({ network: "eth", pool: GHOST }), 422, "an unknown pool (upstream 404)", /No pool "0x0{38}ff" is tracked on network "eth"/);
+  ok(calls.length === 1 && !calls[0].url.pathname.endsWith("/trades"), `an unknown pool is one upstream read, the pool itself (${calls.length})`);
+  await throws(h("dex-pool-health")({ network: "eth", pool: GHOST }), 422, "the same unknown pool again", /No pool/);
+  await throws(h("dex-pool-health")({ network: "ETH", pool: GHOST.toUpperCase().replace("0X", "0x") }), 422, "the same unknown pool in another case", /No pool/);
+  ok(calls.length === 1, `an unknown pool sent again makes no upstream read (${calls.length - 1} more)`);
+  await throws(h("dex-pool-health")({ network: "base", pool: GHOST }), 422, "the same address on another network");
+  ok(calls.length === 2, "the memory is per network and pool");
+  poolDoc = POOL(); tradesDoc = TRADES;
+  ok((await h("dex-pool-health")({ network: "eth", pool: PA })).name === "WETH / USDC 0.05%" && calls.length === 4, "a known pool is still read: the pool, then its trades");
+  // An upstream failure is not a verdict on the pool: nothing is remembered.
+  reset();
+  const keep = routes;
+  routes = [[(u) => u.pathname === poolPath, () => jsonRes(500, {})]];
+  await throws(h("dex-pool-health")({ network: "eth", pool: PA }), 502, "an upstream failure on the pool");
+  routes = keep;
+  ok((await h("dex-pool-health")({ network: "eth", pool: PA })).liquidityUsd === 2_000_000, "a pool whose read failed upstream is read again");
+  // The pool's totals are kept longer than its trades: past the trades' window only the trades are read again.
+  reset();
+  await h("dex-pool-health")({ network: "eth", pool: PA });
+  {
+    const realNow = Date.now;
+    Date.now = () => realNow() + SCREEN_TTL.poolTrades + 1000;
+    const later = await h("dex-pool-health")({ network: "eth", pool: PA });
+    Date.now = realNow;
+    ok(calls.length === 3 && calls[2].url.pathname.endsWith("/trades") && later.cached === false, `past the trades' window one read, the trades (${calls.length - 2})`);
+  }
+  // The remembered set is bounded.
+  reset(); routes = [];
+  const ghost = (k) => `0x${String(k).padStart(40, "0")}`;
+  for (let k = 0; k < UNKNOWN_ID_MAX + 3; k++) await h("dex-pool-health")({ network: "eth", pool: ghost(k) }).catch(() => {});
+  calls.length = 0;
+  await h("dex-pool-health")({ network: "eth", pool: ghost(0) }).catch(() => {});
+  await h("dex-pool-health")({ network: "eth", pool: ghost(UNKNOWN_ID_MAX + 2) }).catch(() => {});
+  ok(calls.length === 1, `the remembered pools hold ${UNKNOWN_ID_MAX} ids, oldest dropped first`);
+  routes = keep; reset();
 }
 
 // ----------------------------------------------------------------------------
@@ -491,6 +590,40 @@ ok(calls.every((c) => Object.keys(c.headers).every((k) => !/^x-cg-/i.test(k))), 
   ok(out.liquidityUsd === 2_000_000 && calls.length === 2 && calls.every((c) => c.url.hostname === "pro-api.coingecko.com" && c.headers["x-cg-pro-api-key"] === "placeholder-not-a-key"), "keyed: the pro host with the key in its header");
   ok(!JSON.stringify(out).includes("placeholder-not-a-key") && calls.every((c) => !c.url.href.includes("placeholder-not-a-key")), "the key is in no URL and no answer");
   delete process.env.COINGECKO_API_KEY; delete process.env.COINGECKO_API_TIER;
+}
+
+// ----------------------------------------------------------------------------
+// A whole day: one caller per tool polling every minute, each with the input
+// that reads the most (pools=100). The upstream reads counted here are the
+// daily budget those seven callers spend.
+// ----------------------------------------------------------------------------
+{
+  reset();
+  poolDoc = POOL(); tradesDoc = TRADES;
+  routes = [
+    [path("/derivatives"), () => jsonRes(200, DERIVATIVES)],
+    [(u) => u.pathname === "/api/v3/coins/markets" && u.searchParams.get("category") === "stablecoins", () => jsonRes(200, STABLES)],
+    [path("/coins/ethereum/tickers"), () => jsonRes(200, TICKERS)],
+    [(u) => u.pathname === "/api/v3/coins/markets" && u.searchParams.get("category") === "decentralized-finance-defi", () => jsonRes(200, DEFI)],
+    [path("/coins/markets"), () => jsonRes(200, MARKETS)],
+    [path("/asset_platforms"), () => jsonRes(200, PLATFORMS)],
+    [path("/global"), () => jsonRes(200, { data: { total_market_cap: { usd: 10000 }, market_cap_change_percentage_24h_usd: 1 } })],
+    [(u) => u.pathname === "/api/v3/onchain/networks/base/pools", (u) => jsonRes(200, u.searchParams.get("page") === "1" ? PAGE1 : PAGE2)],
+    [(u) => u.pathname === poolPath, () => jsonRes(200, poolDoc)], [(u) => u.pathname === `${poolPath}/trades`, () => jsonRes(200, tradesDoc)],
+  ];
+  const polls = { "funding-screener": {}, "stablecoin-depeg-watch": {}, "exchange-spread": { coin: "ethereum" }, "defi-screener": {}, "chain-board": {}, "dex-volume-board": { network: "base", pools: 100 }, "dex-pool-health": { network: "eth", pool: PA } };
+  const spent = {};
+  const realNow = Date.now, t0 = realNow();
+  for (let minute = 0; minute < 1440; minute++) {
+    Date.now = () => t0 + minute * 60_000;
+    for (const [slug, input] of Object.entries(polls)) { const before = calls.length; await h(slug)(input); spent[slug] = (spent[slug] || 0) + calls.length - before; }
+  }
+  Date.now = realNow;
+  const want = Object.fromEntries(SLUGS.map((s) => [s, readsPerDay(s)]));
+  ok(JSON.stringify(spent) === JSON.stringify(want), `a day of one-minute polls spends each tool's stated reads (${JSON.stringify(spent)})`);
+  ok(calls.length <= 1200 && calls.length === 1156, `a day of one-minute polls of all seven tools is ${calls.length} upstream reads`);
+  ok(__test.memoCounts.computed === 864 && __test.memoCounts.kept === 1440 * 7 - 864, `and an answer was worked out only when one of its documents was read again (${__test.memoCounts.computed} of ${1440 * 7} calls)`);
+  reset();
 }
 
 // ----------------------------------------------------------------------------
