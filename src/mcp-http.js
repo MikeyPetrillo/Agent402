@@ -47,7 +47,7 @@ import { SKILLS_EXTENSION, mcpSkillsEnabled, clientDeclaresSkills, isSkillMethod
 import { EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug } from "./composite-spend-guard.js";
 import { registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
 import { tempoEnabled, pushHashOf, tempoOfferedFor } from "./mpp-tempo.js";
-import { isIdentityBoundRoute } from "./payments.js";
+import { isIdentityBoundRoute, isPreBroadcastSettleRejection } from "./payments.js";
 import { mppFlagshipRows, mppFlagshipOffersPhrase } from "./mpp-flagship.js";
 import { stripeEnabled } from "./mpp-stripe.js";
 import { findTools, findRelatedSellers, applyFrontDoorTerms } from "./find.js";
@@ -106,7 +106,7 @@ import { decodePaymentResponseHeader } from "@x402/core/http";
 import {
   readPaymentFromMeta, paymentSignatureHeader, paymentRequiredFromHeader,
   buildPaymentRequiredResult, buildInvalidPaymentResult, buildSettlementFailedResult, withPaymentResponse,
-  buildSettlementPendingResult, isSettlementUndecided,
+  buildSettlementPendingResult, buildSettlementUnprovenResult, isSettlementUndecided,
 } from "./mcp-x402.js";
 import { mcpX402Entries, mcpX402PathOf, MCP_X402_PREFIX } from "./mcp-x402-routes.js";
 import { decodesAsMppCredential, decodesAsX402Payment } from "./payment-attempt.js";
@@ -615,7 +615,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // paid call here cannot be settled at all.
           ...(mppLoopback ? { experimental: { payment: { methods: mcpPaymentMethods() } } } : {}),
         },
-        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], mpp: payMpp, x402: payX402, mppOffered: mppMethodsSummary().enabled }),
+        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], mpp: payMpp, x402: payX402, mppOffered: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled }),
       },
     );
 
@@ -972,15 +972,17 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const target = x402TargetOf(def, isNamed);
       const params = paidParamsOf(args, isNamed);
       const startedAt = Date.now();
+      // A long call first, whatever the payment reads as: it is never paid
+      // here over x402, so no answer to it carries an offer to sign.
+      if (needsAsyncOrWait(def.asyncProfile, PAID_LOOPBACK_TIMEOUT_MS / 1000)) {
+        const budget = Number(def.asyncProfile?.maxSeconds);
+        return { content: [{ type: "text", text: `respond_async_required: ${def.slug} can take up to ${budget} s, longer than this connector waits for a call paid over x402 (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s). Call the HTTP route ${def.route} with the header Prefer: respond-async, which answers 202 with a job link. This call was refused before the payment was presented, so nothing was charged.` }], isError: true };
+      }
       if (!read.ok) {
         // The payment cannot be used: nothing was sent to any paywall.
         const offer = await x402Offer(target, params, ip, signal);
         return (offer && buildInvalidPaymentResult(offer, { reason: read.reason, message: read.message }))
           || { content: [{ type: "text", text: `Agent402 (${def.slug}): ${read.message} - not charged.` }], isError: true };
-      }
-      if (needsAsyncOrWait(def.asyncProfile, PAID_LOOPBACK_TIMEOUT_MS / 1000)) {
-        const budget = Number(def.asyncProfile?.maxSeconds);
-        return { content: [{ type: "text", text: `respond_async_required: ${def.slug} can take up to ${budget} s, longer than this connector waits for a call paid over x402 (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s). Call the HTTP route ${def.route} with the header Prefer: respond-async, which answers 202 with a job link. This call was refused before the payment was presented, so nothing was charged.` }], isError: true };
       }
       const paymentSignature = paymentSignatureHeader(read.payment);
       const idempotencyKey = reqParams?._meta?.["org.agent402/idempotency-key"];
@@ -1002,13 +1004,32 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       return translateX402Response(entry, target, params, isNamed, r, ip, signal);
     }
 
+    /** The no-offer result for a paid loopback's 402 that records a failed
+     *  settle the route's own rule does not prove pre-broadcast (src/payments.js
+     *  isPreBroadcastSettleRejection, read on the settle receipt the route
+     *  sent: a receipt naming a transaction is never pre-broadcast), or the
+     *  paywall's bare settlement_failed body with no receipt and no offer of
+     *  its own. The transfer may have been sent, so nothing here may be signed
+     *  again. null for every other answer. `settle` is the decoded
+     *  PAYMENT-RESPONSE (or null), `body` the 402's JSON body. */
+    function unprovenSettleResult(def, r, body, settle) {
+      const failed = Boolean(settle) && typeof settle === "object" && settle.success === false;
+      const bare = !settle && !r.headers.get("payment-required") && body?.error === "settlement_failed";
+      if (!failed && !bare) return null;
+      if (failed && isPreBroadcastSettleRejection(settle)) return null;
+      return buildSettlementUnprovenResult({ label: `Agent402 (${def.slug})`, refusal: body, settleResponse: failed ? settle : null });
+    }
+
     /** Turn the route's answer to an x402-paid loopback into the MCP result:
      *  a <400 answer is the tool result plus the settle receipt in
-     *  _meta["x402/payment-response"]; a settle that failed after the handler
-     *  is the settlement-failed result with none of the tool's output; a
-     *  settlement not decided yet is the pending result (no offer); any
-     *  other 402 is the invalid-payment result (a fresh PaymentRequired to
-     *  sign again); any other status is an error that was not charged. */
+     *  _meta["x402/payment-response"]; a settlement not decided yet is the
+     *  pending result (no offer); a settle that failed after the handler is
+     *  the settlement-failed result (a fresh PaymentRequired, none of the
+     *  tool's output) only when the route's own rule proves nothing was sent
+     *  (isPreBroadcastSettleRejection), and otherwise the route's explanation
+     *  with no offer (unprovenSettleResult); any other 402 is the
+     *  invalid-payment result (a fresh PaymentRequired to sign again); any
+     *  other status is an error that was not charged. */
     async function translateX402Response(entry, target, params, isNamed, r, ip, signal) {
       const def = entry.def;
       if (r.status === 402) {
@@ -1022,8 +1043,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (isSettlementUndecided(body, settle)) {
           return buildSettlementPendingResult({ label: `Agent402 (${def.slug})`, refusal: body, retryAfterSeconds: r.headers.get("retry-after"), settleResponse: settle });
         }
+        const unproven = unprovenSettleResult(def, r, body, settle);
+        if (unproven) return unproven;
         const offer = paymentRequiredFromHeader(r.headers.get("payment-required")) || await x402Offer(target, params, ip, signal);
         if (settle && settle.success === false) {
+          // Proven pre-broadcast (a billing refusal on this server's account
+          // that names no transaction): nothing was sent, so a fresh offer.
           const out = offer && buildSettlementFailedResult(offer, { reason: typeof settle.errorReason === "string" ? settle.errorReason : "", settleResponse: settle });
           return out || { content: [{ type: "text", text: `Agent402 (${def.slug}): the x402 payment did not settle, so this call was not charged.` }], isError: true };
         }
@@ -1080,6 +1105,16 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     function translateMppResponse(entry, meta, params, startedAt, isNamed, r, { softAsk = true, x402Required = null } = {}) {
       if (r.status === 402) {
         const challenges = challengesFromHeader(r.headers.get("www-authenticate"));
+        // A credential whose settle failed without proof that nothing was
+        // sent (the route's PAYMENT-RESPONSE on this 402): the route's
+        // explanation and nothing to pay again, as on the x402 wire.
+        if (credentialHeaderFromMeta(meta)) {
+          let settle = null;
+          try { settle = r.headers.get("payment-response") ? decodePaymentResponseHeader(String(r.headers.get("payment-response")).trim()) : null; } catch { settle = null; }
+          const body = r.json && typeof r.json === "object" ? r.json : {};
+          const unproven = unprovenSettleResult(entry.def, r, body, settle);
+          if (unproven) return unproven;
+        }
         if (!challenges.length) {
           // No MPP challenge on the 402 (gates not minting for this route):
           // the x402 offer alone when there is one, else the paid-access

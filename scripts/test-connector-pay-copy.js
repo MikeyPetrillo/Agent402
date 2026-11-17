@@ -4,13 +4,14 @@
 //
 //   node scripts/test-connector-pay-copy.js
 //
-// Offline. Three boots of the real server, each read on its text and page
+// Offline. Four boots of the real server, each read on its text and page
 // surfaces and on the connector's own answers:
 //   paid, MPP gates on    x402 and MPP in the call
 //   paid, no MPP gates    x402 alone, MPP never named as a way to pay there
 //   FREE_MODE             no paywall: no surface offers payment on the
 //                         connector, and the text says the instance is in
 //                         free mode
+//   FREE_MODE, MPP key    the same: a key with no paywall offers nothing
 // On each boot the pages and the connector agree: what /llms.txt, /agents.md,
 // /how-to-pay, /quickstart, /learn/mcp-payments, /integrations/mcp and the
 // agent-hosts guide say is what the connector's initialize instructions, its
@@ -63,7 +64,7 @@ const ORIGIN = "https://agent402.tools";
   ok(![both, x, m, none].some((t) => /—|\$\s?\d/.test(t)), "no em dash and no typed price in any variant");
 }
 
-// ---- three boots -------------------------------------------------------------------
+// ---- four boots --------------------------------------------------------------------
 const TMP = mkdtempSync(join(tmpdir(), "connector-pay-copy-"));
 const facilitator = createServer((req, res) => {
   let b = ""; req.on("data", (c) => { b += c; });
@@ -159,6 +160,8 @@ for (const boot of BOOTS) {
     await client.connect(new StreamableHTTPClientTransport(new URL(`${srv.url}/mcp`)));
     const hosted = String(client.getInstructions() || "").split("\n").find((l) => l.startsWith("Hosted connector")) || "";
     const wires = [boot.x402 && "x402", boot.mpp && "MPP"].filter(Boolean);
+    const lead = String(client.getInstructions() || "").split("\n")[0];
+    ok(lead.includes(boot.mpp ? "pay for per request over x402 or MPP," : "pay for per request over x402,"), `${boot.label}: the initialize lead names MPP only where the connector takes it (${lead.slice(0, 110)})`);
     ok(hosted.includes(wires.length ? `other tools paid in the call over ${wires.join(" or ")} from a wallet)` : "others need a wallet on the npm package)"), `${boot.label}: the initialize instructions name ${want} (${hosted.slice(0, 110)})`);
     const tools = (await client.listTools()).tools;
     const info = tools.find((t) => t.name === "payment.info")?.description || "";

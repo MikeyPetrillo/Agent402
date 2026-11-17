@@ -18,7 +18,10 @@
 //   - memory.read is keyed on the signed payer: the writer reads its value,
 //     another wallet does not (and its error answer is not settled);
 //   - a payment sent twice is refused the second time, unsettled;
-//   - a settle that fails returns the settlement-failed result, no tool output;
+//   - a settle that fails returns no tool output, and a fresh offer only when
+//     the route's own rule proves nothing was sent (a transaction named, a
+//     timeout or a bare failure answers the explanation and nothing to sign),
+//     over MPP too;
 //   - a payment the reader refuses, and one the facilitator refuses, return
 //     the invalid-payment result (a fresh offer, the reason named);
 //   - an MPP credential beside an x402 payment: MPP decides, x402 is not read;
@@ -112,20 +115,41 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       body: { reason: "settlement-unconfirmed", retry: "watch-transaction", network: "eip155:8453", transactions: [TX], hint: "Watch the transaction listed in transactions. Signing a new authorization for this call is a new payment; it does not start or speed that repayment." },
     },
   };
+  const SOL_SIG = "5".repeat(87);
+  const payer1 = "0x0000000000000000000000000000000000000001";
+  Object.assign(variants, {
+    // A settle that failed naming a transaction: possibly landed.
+    failedTx: { settle: { success: false, errorReason: "transaction_failed", errorMessage: "The payment could not be settled.", transaction: TX, network: "eip155:8453", payer: payer1 }, body: {} },
+    failedSolTx: { settle: { success: false, errorReason: "settlement_failed", transaction: SOL_SIG, network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", payer: payer1 }, body: {} },
+    // No transaction named, and nothing that proves none was sent.
+    failedBare: { settle: { success: false, errorReason: "settlement_failed", errorMessage: "The payment could not be settled.", transaction: "", network: "eip155:8453", payer: payer1 }, body: {} },
+    failedTimeout: { settle: { success: false, errorReason: "timeout", transaction: "", network: "eip155:8453", payer: payer1 }, body: { hint: "ROUTE-HINT-7" } },
+    // Billing words beside a transaction: the transaction decides.
+    billingTx: { settle: { success: false, errorReason: "free_tier_exhausted", transaction: TX, network: "eip155:8453", payer: payer1 }, body: {} },
+    // The paywall's bare body: no receipt, no offer of its own.
+    noReceipt: { settle: null, body: { error: "settlement_failed" }, noOffer: true },
+    // The route's own rule proves nothing was sent: a billing refusal on
+    // this server's account naming no transaction.
+    preBroadcast: { settle: { success: false, errorReason: "free_tier_exhausted", errorMessage: "Settlement refused: free_tier_exhausted", transaction: "", network: "eip155:8453", payer: payer1 }, body: { reason: "facilitator-quota", retry: "other-network", network: "eip155:8453", hint: "Nothing was charged." } },
+    preBroadcastWords: { settle: { success: false, errorReason: "settlement_failed", errorMessage: "Settlement refused: insufficient credits", transaction: "", network: "eip155:8453", payer: payer1 }, body: {} },
+  });
   let mode = "pending";
   let paidReplays = 0;
   const stubFetch = async (url, init) => {
-    const paid = Boolean(init?.headers?.["PAYMENT-SIGNATURE"]);
+    const paid = Boolean(init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.Authorization || init?.headers?.authorization);
     const headers = { "content-type": "application/json", "payment-required": encodePaymentRequiredHeader(offerObj) };
     if (!paid) return new Response(JSON.stringify({ error: "Payment required" }), { status: 402, headers });
     paidReplays++;
     const v = variants[mode];
-    return new Response(JSON.stringify(v.body), { status: 402, headers: { ...headers, "payment-response": encodePaymentResponseHeader(v.settle), ...(v.retryAfter ? { "retry-after": v.retryAfter } : {}) } });
+    // A settle-failure 402 carries PAYMENT-RESPONSE and no PAYMENT-REQUIRED
+    // (src/payment-required-body.js); the unpaid ask above is where the
+    // connector could fetch a fresh offer from.
+    return new Response(JSON.stringify(v.body), { status: 402, headers: { "content-type": "application/json", ...(v.noOffer || v.settle?.success === false && !v.retryAfter && !v.body.retry ? {} : { "payment-required": headers["payment-required"] }), ...(v.settle ? { "payment-response": encodePaymentResponseHeader(v.settle) } : {}), ...(v.retryAfter ? { "retry-after": v.retryAfter } : {}) } });
   };
   const CAT = { "POST /api/paid-x": { route: "POST /api/paid-x", slug: "paid-x", name: "paid-x", category: "test", price: "$0.001", description: "paid-x test tool", tags: ["paid-x"], discovery: { inputSchema: { properties: {} }, input: {} }, handler: async () => { throw new Error("ran in-process"); } } };
   const app = express();
   app.use(express.json({ limit: "1mb" }));
-  mountMcp(app, CAT, { baseUrl: "http://localhost", isComputePayable: () => false, x402Loopback: createMcpMppLoopback({ port: 1, fetchImpl: stubFetch }) });
+  mountMcp(app, CAT, { baseUrl: "http://localhost", isComputePayable: () => false, x402Loopback: createMcpMppLoopback({ port: 1, fetchImpl: stubFetch }), mppLoopback: createMcpMppLoopback({ port: 1, fetchImpl: stubFetch }) });
   const httpSrv = app.listen(0, "127.0.0.1");
   await new Promise((r) => httpSrv.once("listening", r));
   const raw = new Client({ name: "pending", version: "0.0.0" });
@@ -148,7 +172,50 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       `an unconfirmed broadcast answers the transactions to watch, no fresh offer, never "not charged" (${uText.slice(0, 160)})`);
     ok(uText.includes(TX) && uText.includes(`_meta[\\"${SETTLEMENT_PENDING_META}\\"].transactions`),
       `its text names the hash and says where the list is (_meta), since the result has no "transactions" field of its own (${uText.slice(-220)})`);
+    // A settle that failed. The connector hands back a fresh offer only when
+    // the route's own rule (isPreBroadcastSettleRejection) proves nothing was
+    // sent; every other failure is the explanation with nothing to sign.
+    for (const [m, tx] of [["failedTx", TX], ["failedSolTx", SOL_SIG], ["failedBare", null], ["failedTimeout", null], ["billingTx", TX], ["noReceipt", null]]) {
+      mode = m;
+      const f = await call();
+      const fText = JSON.stringify(f.content || "");
+      ok(f.isError === true && !("structuredContent" in f) && !PR(f) && !/"accepts"|x402Version/.test(fText) && /Do not sign a new authorization/.test(fText) && !/not charged/i.test(fText),
+        `${m}: a failed settle not proven unsent answers no offer and says not to sign again (${fText.slice(0, 200)})`);
+      const fm = f._meta?.[SETTLEMENT_PENDING_META];
+      ok(fm?.reason === "settlement-failed" && (tx ? fm.transactions?.[0] === tx && fm.retry === "watch-transaction" && fText.includes(tx) && /may still land/.test(fText) : !fm.transactions && !fm.retry)
+        && (m === "noReceipt" ? !f._meta?.[X402_PAYMENT_RESPONSE_META] : f._meta?.[X402_PAYMENT_RESPONSE_META]?.success === false),
+        `${m}: ${tx ? "it names the transaction to watch, exactly as written" : "it names no transaction"}, and the failed receipt rides in _meta when the route sent one (${String(JSON.stringify(fm)).slice(0, 200)})`);
+    }
+    mode = "failedTimeout";
+    ok(JSON.stringify((await call()).content).includes("ROUTE-HINT-7"), "the route's own hint is kept in the text");
+    for (const m of ["preBroadcast", "preBroadcastWords"]) {
+      mode = m;
+      const f = await call();
+      ok(f.isError === true && Array.isArray(PR(f)?.accepts) && /^Payment settlement failed/.test(String(PR(f)?.error)) && f._meta?.[X402_PAYMENT_RESPONSE_META]?.success === false && !f._meta?.[SETTLEMENT_PENDING_META],
+        `${m}: a refusal the route's rule proves pre-broadcast answers the settlement-failed result with a fresh offer (${PR(f)?.error})`);
+    }
+    // The same over MPP: a credential whose settle failed naming a transaction.
+    {
+      const cred = `Payment ${Buffer.from(JSON.stringify({ challenge: { id: "c1", method: "evm", intent: "charge" }, payload: { signature: "0x00" } })).toString("base64url")}`;
+      mode = "failedTx";
+      let m1 = null, mErr = null;
+      try { m1 = await raw.callTool({ name: "catalog.call", arguments: { slug: "paid-x", params: {} }, _meta: { [MCP_CREDENTIAL_META]: cred } }); } catch (e) { mErr = e; }
+      const mText = JSON.stringify(m1?.content || "");
+      ok(!mErr && m1?.isError === true && !PR(m1) && !m1._meta?.[MCP_PAYMENT_REQUIRED_META] && /Do not sign a new authorization/.test(mText) && mText.includes(TX),
+        `over MPP, a credential whose settle failed naming a transaction answers no challenge and no offer, and names the transaction (${mErr ? mErr.message : mText.slice(0, 200)})`);
+    }
     // The official client: one payment for the call, and no second signature.
+    {
+      const p2 = new x402Client();
+      registerExactEvmScheme(p2, { signer: privateKeyToAccount(generatePrivateKey()) });
+      const auto = new x402MCPClient(raw, p2, { autoPayment: true });
+      for (const m of ["failedTx", "failedBare"]) {
+        mode = m;
+        const b4 = paidReplays;
+        const o2 = await auto.callTool("catalog.call", { slug: "paid-x", params: {} });
+        ok(paidReplays - b4 === 1 && o2.isError === true, `${m}: the official client pays once and does not sign again (${paidReplays - b4} paid replays)`);
+      }
+    }
     const payer = new x402Client();
     registerExactEvmScheme(payer, { signer: privateKeyToAccount(generatePrivateKey()) });
     const official = new x402MCPClient(raw, payer, { autoPayment: true });
@@ -222,6 +289,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       if (x402) {
         const signed = await raw.callTool({ name: "catalog.call", arguments: { slug: "long-x", params: {} }, _meta: { [X402_PAYMENT_META]: { x402Version: 2, accepted, payload: { signature: "0x00" } } } });
         ok(/^respond_async_required/.test(texts(signed)), `${label}: control: a signed x402 retry of the long tool is refused (${texts(signed).slice(0, 80)}), which is why the ask never invites one`);
+        // A payment the reader refuses: the same refusal, never an offer.
+        const unreadable = await raw.callTool({ name: "catalog.call", arguments: { slug: "long-x", params: {} }, _meta: { [X402_PAYMENT_META]: { x402Version: 1, accepted, payload: { signature: "0x00" } } } });
+        ok(unreadable.isError === true && /^respond_async_required/.test(texts(unreadable)) && !PR(unreadable) && !/"accepts"/.test(texts(unreadable)), `${label}: a long tool called with an unreadable x402 payment gets the same refusal and no offer (${texts(unreadable).slice(0, 80)})`);
       }
       const wires = [x402 && "x402", mpp && "MPP"].filter(Boolean);
       const instructions = String(raw.getInstructions() || "");
@@ -262,7 +332,7 @@ const BASE_NET = "eip155:8453";
 const TMP = mkdtempSync(join(tmpdir(), "mcp-x402-conn-"));
 const SALES_DB = join(TMP, "sales.db");
 const counts = { verify: 0, settle: 0 };
-const stub = { settleFailTx: null, verifyInvalid: null };
+const stub = { settleFailTx: null, settleRefuse: null, verifyInvalid: null };
 let txN = 0;
 const facilitator = createServer((req, res) => {
   let b = ""; req.on("data", (c) => { b += c; });
@@ -277,6 +347,9 @@ const facilitator = createServer((req, res) => {
       if (stub.verifyInvalid) { const reason = stub.verifyInvalid; stub.verifyInvalid = null; return reply({ isValid: false, invalidReason: reason, payer }); }
       return reply({ isValid: true, payer });
     }
+    // A refusal that names no transaction; answered until the test clears it,
+    // so a settle fallback asking the same stub reads the same refusal.
+    if (req.url === "/settle" && stub.settleRefuse) { counts.settle++; return reply({ success: false, errorReason: stub.settleRefuse, transaction: "", network: BASE_NET, payer }); }
     if (req.url === "/settle" && stub.settleFailTx) { counts.settle++; const transaction = stub.settleFailTx; stub.settleFailTx = null; return reply({ success: false, errorReason: "transaction_failed", transaction, network: BASE_NET, payer }); }
     if (req.url === "/settle") { counts.settle++; return reply({ success: true, transaction: `0x${(++txN).toString(16).padStart(64, "0")}`, network: BASE_NET, payer }); }
     reply({});
@@ -377,6 +450,8 @@ try {
     const c1 = { ...counts };
     const signed = await plain.client.callTool({ name: "catalog.call", arguments: { slug: "domain-audit", params: { domain: "example.com" } }, _meta: { [X402_PAYMENT_META]: { x402Version: 2, accepted: offerElsewhere.accepts[0], payload: { signature: "0x00" } } } });
     ok(/^respond_async_required/.test(String(signed.content?.[0]?.text)) && counts.verify === c1.verify, `control: a signed x402 retry of domain-audit is refused before the paywall (${String(signed.content?.[0]?.text).slice(0, 60)})`);
+    const unreadable = await plain.client.callTool({ name: "catalog.call", arguments: { slug: "domain-audit", params: { domain: "example.com" } }, _meta: { [X402_PAYMENT_META]: { x402Version: 1, accepted: offerElsewhere.accepts[0], payload: { signature: "0x00" } } } });
+    ok(/^respond_async_required/.test(String(unreadable.content?.[0]?.text)) && !PR(unreadable) && !/"accepts"/.test(JSON.stringify(unreadable.content)) && counts.verify === c1.verify, `domain-audit called with an unreadable x402 payment gets the same refusal and no offer (${String(unreadable.content?.[0]?.text).slice(0, 60)})`);
     const listedInfo = listedTools.find((t) => t.name === "payment.info")?.description || "";
     ok(/settle in USDC over x402 or MPP \(payable here, in the call, over x402 or MPP\)/.test(listedInfo), `payment.info's listed description names x402 or MPP on this boot (${listedInfo.slice(0, 160)})`);
   }
@@ -416,14 +491,33 @@ try {
   ok(again.isError === true && !again._meta?.[X402_PAYMENT_RESPONSE_META] && counts.settle === c0.settle + 1 && !JSON.stringify(again.content).includes("hello"),
     `the same payment sent again is refused, unsettled, with no output (${JSON.stringify(again.content).slice(0, 200)})`);
 
-  // 5. A settle that fails: the settlement-failed result, none of the tool's output.
-  stub.settleFailTx = `0x${"9b".repeat(32)}`;
+  // 5. A settle that fails naming a transaction (it may have landed): the
+  // route's 402 through the real paywall is answered with no offer, the
+  // transaction to watch and none of the tool's output.
+  const FAIL_TX = `0x${"9b".repeat(32)}`;
+  stub.settleFailTx = FAIL_TX;
   c0 = { ...counts };
   const failedSettle = await sendRaw(payA.raw, await payA.payments.createPaymentPayload(offer));
   const fsText = JSON.stringify(failedSettle.content || "");
-  ok(counts.settle === c0.settle + 1 && failedSettle.isError === true && /^Payment settlement failed/.test(String(PR(failedSettle)?.error)) && Array.isArray(PR(failedSettle)?.accepts),
-    `a failed settle answers the settlement-failed result (${PR(failedSettle)?.error})`);
-  ok(!fsText.includes("hello") && failedSettle._meta?.[X402_PAYMENT_RESPONSE_META]?.success !== true, "it carries none of the tool's output and no success receipt");
+  ok(counts.settle === c0.settle + 1 && failedSettle.isError === true && !PR(failedSettle) && !/"accepts"/.test(fsText) && /Do not sign a new authorization/.test(fsText) && fsText.includes(FAIL_TX)
+    && failedSettle._meta?.[SETTLEMENT_PENDING_META]?.transactions?.[0] === FAIL_TX,
+    `a settle that failed naming a transaction answers no offer and the transaction to watch (${fsText.slice(0, 240)})`);
+  ok(!fsText.includes("hello") && failedSettle._meta?.[X402_PAYMENT_RESPONSE_META]?.success === false, "it carries none of the tool's output and the failed receipt");
+  // The official client, paying automatically: one payment, no second one.
+  stub.settleFailTx = `0x${"9c".repeat(32)}`;
+  c0 = { ...counts };
+  const autoFailed = await payA.client.callTool("memory.read", { key });
+  ok(autoFailed.isError === true && counts.verify === c0.verify + 1 && counts.settle === c0.settle + 1 && stub.settleFailTx === null,
+    `the official client signs once for a settle that failed naming a transaction (${counts.verify - c0.verify} verifies, ${counts.settle - c0.settle} settles)`);
+  // A refusal the route's rule proves pre-broadcast (a billing refusal on
+  // this server's account, no transaction): the settlement-failed result
+  // with a fresh offer.
+  stub.settleRefuse = "free_tier_exhausted";
+  c0 = { ...counts };
+  const refused = await sendRaw(payA.raw, await payA.payments.createPaymentPayload(offer));
+  stub.settleRefuse = null;
+  ok(counts.settle > c0.settle && refused.isError === true && /^Payment settlement failed/.test(String(PR(refused)?.error)) && Array.isArray(PR(refused)?.accepts) && refused._meta?.[X402_PAYMENT_RESPONSE_META]?.success === false && !JSON.stringify(refused.content).includes("hello"),
+    `a settle refused pre-broadcast answers the settlement-failed result with a fresh offer and no output (${PR(refused)?.error || JSON.stringify(refused.content).slice(0, 240)})`);
 
   // 6. Invalid payments: the reader's refusal and the facilitator's.
   c0 = { ...counts };

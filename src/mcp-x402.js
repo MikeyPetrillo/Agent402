@@ -308,6 +308,54 @@ export function buildSettlementPendingResult({ label = "Agent402", refusal = {},
   return result;
 }
 
+// A transaction id as each rail writes it: an EVM hash, a Solana signature, an
+// Algorand id. Kept exactly as written.
+const TX_ID = /^(?:0x[0-9a-fA-F]{64}|[1-9A-HJ-NP-Za-km-z]{64,88}|[A-Z2-7]{52})$/;
+
+/**
+ * The result for a settle that failed with no proof that nothing was sent: a
+ * settle answer naming a transaction, a timeout, a revert, a bare
+ * settlement_failed. The transfer may have been broadcast, so it carries NO
+ * PaymentRequired (a client that signed a fresh one could pay twice): the
+ * text says not to sign again, names the transaction to watch when the settle
+ * answer or the route's body names one, and adds the route's own hint.
+ * `refusal` is the route's 402 body; `settleResponse` its decoded
+ * PAYMENT-RESPONSE (or null when the 402 carried none). The fields ride in
+ * _meta["org.agent402/settlement-pending"] with reason settlement-failed.
+ * Never throws.
+ */
+export function buildSettlementUnprovenResult({ label = "Agent402", refusal = {}, settleResponse = null } = {}) {
+  const r = isPlainObject(refusal) ? refusal : {};
+  const s = isPlainObject(settleResponse) && settleResponse.success === false ? settleResponse : null;
+  const text = (v, n) => (typeof v === "string" && v.trim() ? v.trim().slice(0, n) : null);
+  const transactions = [];
+  for (const t of [s?.transaction, ...(Array.isArray(r.transactions) ? r.transactions : [])]) {
+    if (typeof t === "string" && TX_ID.test(t.trim()) && !transactions.includes(t.trim()) && transactions.length < 8) transactions.push(t.trim());
+  }
+  const code = text(s?.errorReason, 80);
+  const network = text(r.network, 80) || text(s?.network, 80);
+  const hint = `This payment did not settle${code && /^[A-Za-z][A-Za-z0-9_.:-]*$/.test(code) ? ` (${code})` : ""}, so the answer was withheld. `
+    + (transactions.length
+      ? `The settle answer names ${transactions.length > 1 ? "transactions" : "a transaction"}, so the transfer may still land; if it does, the amount is booked as owed to the paying wallet and repaid after on-chain proof. `
+      : "Nothing here proves that no transfer was sent. ")
+    + "Do not sign a new authorization for this call: a second one is a second payment. Check the paying wallet before paying for this call again.";
+  const where = transactions.length ? ` Transaction${transactions.length > 1 ? "s" : ""} to watch${network ? ` on ${network}` : ""}: ${transactions.join(", ")} (also in this result's _meta["${SETTLEMENT_PENDING_META}"].transactions).` : "";
+  const routeHint = text(r.hint, 1000);
+  const structured = {
+    reason: "settlement-failed",
+    ...(transactions.length ? { retry: "watch-transaction" } : {}),
+    ...(network ? { network } : {}),
+    ...(transactions.length ? { transactions } : {}),
+    hint,
+  };
+  const result = { isError: true, content: [{ type: "text", text: `${label}: ${hint}${where}${routeHint ? ` ${routeHint}` : ""}` }], _meta: { [SETTLEMENT_PENDING_META]: structured } };
+  if (s) {
+    const { copy } = jsonCopy(s, X402_PAYMENT_MAX_BYTES);
+    if (copy && copy.success === false) result._meta[X402_PAYMENT_RESPONSE_META] = copy;
+  }
+  return result;
+}
+
 /** True for a paid route's 402 that says the payment's settlement is not
  *  decided yet (buildSettlementPendingResult): its body's retry verb is
  *  same-payment or watch-transaction, or its settle answer reads
