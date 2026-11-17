@@ -167,4 +167,159 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
     eq(fetched, 2, "price-feed-kit: a body over 256 KB is not cached");
   } finally { globalThis.fetch = orig; delete process.env.COINGECKO_MAX_PER_MIN; rate.resetCgRateLimit(); clearCryptoCache(); clearPriceFeedCache(); }
 }
+// ---- reads of calls that end unsettled hold a share of the day; paid calls the whole day --
+// Every read counts on the day, and a read is refused only at the whole
+// ceiling. A call that ends in an error is never settled; its reads also count
+// on the unsettled share (10%), and a call whose ids no list has confirmed
+// takes a place there before it reads. Once the share is full, ids and
+// currencies are checked against their lists first, so made-up inputs are
+// answered with no read and paid calls keep the rest of the day.
+{
+  const { CRYPTO_MARKETS_TOOLS, clearCryptoMarketsCache } = markets;
+  const { CRYPTO_SCREENS_TOOLS } = await import("../src/tools/crypto-screens-kit.js");
+  const H = (tools, slug) => tools.find((t) => t.slug === slug).handler;
+  const profile = H(CRYPTO_MARKETS_TOOLS, "coin-profile");
+  const coinHistory = H(CRYPTO_MARKETS_TOOLS, "coin-history");
+  const exTickers = H(CRYPTO_MARKETS_TOOLS, "exchange-tickers");
+  const ohlc = H(CRYPTO_MARKETS_TOOLS, "coin-ohlc");
+  const spread = H(CRYPTO_SCREENS_TOOLS, "exchange-spread");
+  const board = H(CRYPTO_SCREENS_TOOLS, "dex-volume-board");
+  const ckPrice = H(CRYPTO_TOOLS, "crypto-price");
+  const ckHistory = H(CRYPTO_TOOLS, "crypto-history");
+  const ckPeg = H(CRYPTO_TOOLS, "stablecoin-peg");
+  const pfPrice = H(PRICE_FEED_TOOLS, "price-coingecko");
+  const orig = globalThis.fetch;
+  const paths = [];
+  let slow = 0;
+  globalThis.fetch = async (input) => {
+    const u = new URL(typeof input === "string" ? input : input.url ?? String(input));
+    const p = u.pathname.replace(/^\/api\/v3/, "");
+    paths.push(p + u.search);
+    if (slow) await new Promise((r) => setTimeout(r, slow));
+    if (p === "/coins/list") return J(200, [{ id: "bitcoin", symbol: "btc", name: "Bitcoin" }, { id: "ethereum", symbol: "eth", name: "Ethereum" }, { id: "tether", symbol: "usdt", name: "Tether" }]);
+    if (p === "/exchanges/list") return J(200, [{ id: "gdax", name: "Coinbase Exchange" }]);
+    if (p === "/simple/supported_vs_currencies") return J(200, ["usd", "eur", "btc"]);
+    if (p === "/simple/price") {
+      const vs = u.searchParams.get("vs_currencies");
+      const body = {};
+      for (const id of String(u.searchParams.get("ids") || "").split(",")) if (id === "bitcoin" || id === "ethereum") body[id] = { [vs]: 1, last_updated_at: 1_700_000_000 };
+      return J(200, body);
+    }
+    if (p === "/coins/bitcoin") return J(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin", market_data: {} });
+    if (p === "/coins/ethereum") return J(500, { error: "upstream failure" });
+    if (p === "/coins/bitcoin/history") return J(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin" }); // a date with no market data
+    if (p === "/coins/bitcoin/market_chart" || p === "/coins/bitcoin/ohlc") return J(200, p.endsWith("ohlc") ? [[1_700_000_000_000, 1, 1, 1, 1]] : { prices: [[1_700_000_000_000, 1]], market_caps: [], total_volumes: [] });
+    if (p === "/coins/markets") return J(200, [{ id: "tether", symbol: "usdt", name: "Tether", current_price: 1 }]);
+    if (p === "/exchanges/gdax/tickers") return J(200, { name: "Coinbase Exchange", tickers: [] });
+    if (/^\/onchain\/networks\/[a-z0-9]+\/pools$/.test(p)) return J(200, { data: [{ id: "x", attributes: { address: `0x${u.searchParams.get("page")}`, name: "A / B", volume_usd: { h24: "1" }, reserve_in_usd: "1", transactions: { h24: { buys: 1, sells: 1 } } }, relationships: { dex: { data: { id: "d" } } } }], included: [] });
+    return J(404, { error: "coin not found" });
+  };
+  const call = async (fn, input) => { try { await fn(input); return 200; } catch (e) { return e?.statusCode ?? 500; } };
+  const count = (re) => paths.filter((p) => re.test(p)).length;
+  const fresh = () => { rate.resetCgRateLimit(); clearCryptoMarketsCache(); clearCryptoCache(); clearPriceFeedCache(); paths.length = 0; };
+  try {
+    process.env.COINGECKO_API_KEY = "cg-test-key"; process.env.COINGECKO_DAILY_MAX = "40"; process.env.COINGECKO_MAX_PER_MIN = "100000";
+    const caps = rate.cgDayCaps();
+    ok(caps.day === 40 && caps.unsettled === 4 && caps.reserve === 8 && caps.screens === 32, `a day of 40 reads: 4 for unsettled calls, 8 kept from the screens (${JSON.stringify(caps)})`);
+    eq(rate.cgCeiling(), 40, "every tool but the screens is held to the whole day");
+
+    // 1. With no unpaid use, paid calls use the whole day, not the day less the unsettled share.
+    fresh();
+    const paid = [];
+    for (let k = 0; k < 45; k++) { clearCryptoMarketsCache(); paid.push(await call(profile, { coin: "bitcoin" })); }
+    eq(paid.filter((s) => s === 200).length, 40, `paid calls answer until the whole day is spent (${paid.filter((s) => s === 200).length} of 45)`);
+    ok(paid.slice(40).every((s) => s === 503), "and only then refuse 503, uncharged");
+    ok(!(await rate.cgUnsettledSpent()), "a settled call gives back the place it reserved: the unsettled share is still empty");
+
+    // 2. Made-up coin ids: only the share's reads reach the upstream, then the list answers.
+    fresh();
+    ok(!(await rate.cgUnsettledSpent()), "control: the unsettled share starts empty");
+    const flood = [];
+    for (let k = 0; k < 100; k++) flood.push(await call(profile, { coin: `made-up-coin-${k}` }));
+    ok(flood.every((s) => s === 422), `100 made-up coin ids are each a 422 (${[...new Set(flood)].join(",")})`);
+    eq(count(/^\/coins\/made-up/), caps.unsettled, "only the unsettled share's reads reached the upstream for made-up ids");
+    eq(count(/^\/coins\/list/), 1, "the coin list was read once, and only after the share was full");
+    ok(await rate.cgUnsettledSpent(), "and the share is full");
+
+    // 3. The same for every CoinGecko path that reads a caller's id or currency.
+    const before = paths.length;
+    const cases = [
+      ["crypto-price", ckPrice, (k) => ({ coins: `madeprice${k}` }), 404],
+      ["crypto-price currency", ckPrice, (k) => ({ coins: "BTC", currency: `zz${k}` }), 400],
+      ["crypto-history", ckHistory, (k) => ({ coin: `madehist${k}` }), 422],
+      ["stablecoin-peg", ckPeg, (k) => ({ coins: `madepeg${k}` }), 422],
+      ["price-coingecko", pfPrice, (k) => ({ ids: [`madepf${k}`] }), 404],
+      ["price-coingecko vsCurrency", pfPrice, (k) => ({ ids: ["bitcoin"], vsCurrency: `qq${"abcdefghijklmnopqrst"[k]}` }), 400],
+      ["coin-ohlc currency", ohlc, (k) => ({ coin: "bitcoin", currency: `zz${k}` }), 422],
+      ["exchange-tickers", exTickers, (k) => ({ exchange: `made-up-ex-${k}` }), 422],
+      ["exchange-spread", spread, (k) => ({ coin: `made-up-spread-${k}` }), 422],
+    ];
+    for (const [label, fn, input, want] of cases) {
+      const st = [];
+      for (let k = 0; k < 20; k++) st.push(await call(fn, input(k)));
+      ok(st.every((s) => s === want), `${label}: unknown inputs answer ${want} once the share is full (${[...new Set(st)].join(",")})`);
+    }
+    const reads = paths.slice(before).filter((p) => !/^\/(coins\/list|simple\/supported_vs_currencies|exchanges\/list)\b/.test(p));
+    eq(reads.length, 0, `none of those ${cases.length * 20} calls read anything but a list (${reads.slice(0, 3).join(" ")})`);
+    // A batch with one real coin reads only the real one and lists the rest.
+    clearCryptoCache(); clearPriceFeedCache();
+    const mixed = await ckPrice({ coins: "BTC,madeprice-mixed" });
+    ok(mixed.count === 1 && mixed.unknown?.[0] === "madeprice-mixed" && paths.at(-1).includes("ids=bitcoin&"), "crypto-price: a partial miss still answers, and the made-up id is not sent upstream");
+    const mixedPf = await pfPrice({ ids: ["bitcoin", "madepf-mixed"] });
+    ok(mixedPf.count === 2 && mixedPf.unknown?.[0] === "madepf-mixed" && mixedPf.prices[1].price === null, "price-coingecko: a partial miss keeps its null row and lists the id");
+
+    // 4. A listed coin with no market data that day is a free 422, never a
+    // charged empty answer; the miss is kept, so a repeat reads nothing.
+    const histReads = () => count(/^\/coins\/bitcoin\/history/);
+    eq(await call(coinHistory, { coin: "bitcoin", daysAgo: 3 }), 422, "coin-history: a date with no market data answers 422");
+    const firstReads = histReads();
+    ok(firstReads >= 1, `control: the first miss read the date upstream (${firstReads})`);
+    eq(await call(coinHistory, { coin: "bitcoin", daysAgo: 3 }), 422, "coin-history: the same coin and date again is 422");
+    eq(histReads(), firstReads, "and reads nothing upstream");
+
+    // 5. Paid calls for real ids after the flood still answer, and use the rest of the day.
+    const after = [];
+    for (let k = 0; k < 10; k++) { clearCryptoMarketsCache(); after.push(await call(profile, { coin: "bitcoin" })); }
+    ok(after.every((s) => s === 200), `paid calls for a real coin after the flood answer 200 (${[...new Set(after)].join(",")})`);
+
+    // 6. A parallel burst cannot pass the share before any of its calls ends.
+    fresh(); slow = 20;
+    const burst = await Promise.all(Array.from({ length: 60 }, (_, k) => call(profile, { coin: `burst-${k}` })));
+    slow = 0;
+    ok(burst.every((s) => s === 422), `60 made-up ids sent together are each a 422 (${[...new Set(burst)].join(",")})`);
+    eq(count(/^\/coins\/burst-/), caps.unsettled, "and no more of them read than the share holds: the place is reserved before the read");
+
+    // 6b. A listed id whose read fails upstream (5xx, never settled) counts its
+    // reads on the share too: two calls of two reads each (the read and its
+    // retry) fill a share of four.
+    fresh();
+    const failing = [await call(profile, { coin: "ethereum" }), await call(profile, { coin: "ethereum" })];
+    ok(failing.every((s) => s === 502) && count(/^\/coins\/ethereum/) === 4, `two upstream failures read twice each (${failing.join(",")}, ${count(/^\/coins\/ethereum/)} reads)`);
+    ok(await rate.cgUnsettledSpent(), "and those unsettled reads filled the share");
+
+    // 7. The screens stop at the day less the reserve; the other tools keep the reserve.
+    fresh();
+    const boards = [];
+    for (let k = 0; k < 40; k++) boards.push(await call(board, { network: `net${k}`, pools: 20 }));
+    eq(boards.filter((s) => s === 200).length, caps.screens, `dex-volume-board on ${boards.length} networks answers until the day less the reserve is used (${caps.screens})`);
+    ok(boards.filter((s) => s !== 200).every((s) => s === 503), "and then refuses 503, uncharged");
+    const kept = [];
+    for (let k = 0; k < caps.reserve + 2; k++) { clearCryptoMarketsCache(); kept.push(await call(profile, { coin: "bitcoin" })); }
+    eq(kept.filter((s) => s === 200).length, caps.reserve, `the other tools keep the reserve (${kept.filter((s) => s === 200).length} of ${caps.reserve})`);
+    // When the other tools have used part of the day, the screens stop at the same total.
+    fresh();
+    for (let k = 0; k < 10; k++) { clearCryptoMarketsCache(); await call(profile, { coin: "bitcoin" }); }
+    const boards2 = [];
+    for (let k = 0; k < 40; k++) boards2.push(await call(board, { network: `nb${k}`, pools: 20 }));
+    eq(boards2.filter((s) => s === 200).length, caps.screens - 10, `after 10 other reads the screens answer ${caps.screens - 10} more: the ceiling is total reads, not a share of their own`);
+
+    // 8. The board is sold at its listed price for every pool count (no per-input quote).
+    const def = CRYPTO_SCREENS_TOOLS.find((t) => t.slug === "dex-volume-board");
+    ok(def.price === "$0.005" && def.quote === undefined && def.quoteMaxUsd === undefined, "dex-volume-board has one listed price for every pool count");
+  } finally {
+    globalThis.fetch = orig;
+    delete process.env.COINGECKO_API_KEY; delete process.env.COINGECKO_DAILY_MAX; delete process.env.COINGECKO_MAX_PER_MIN;
+    rate.resetCgRateLimit(); markets.clearCryptoMarketsCache(); clearCryptoCache(); clearPriceFeedCache();
+  }
+}
 console.log(`test-coingecko-rate: ${n} assertions ok`);

@@ -180,7 +180,7 @@ function whyPointsHtml() {
 export function whyDocsSectionHtml() {
   return `<section id="why">
       <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 12px;color:var(--ink);">Why pay here.</h2>
-      <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 22px;">Seven claims, each linked to the surface that proves it.</p>
+      <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 22px;">${countWord(WHY_POINTS.length).replace(/^./, (c) => c.toUpperCase())} claims, each linked to the surface that proves it.</p>
       <div class="why-list">${whyPointsHtml()}
       </div>
       <h3 id="why-compare" style="font-weight:600;font-size:var(--fs-xl);letter-spacing:-.02em;margin:34px 0 12px;color:var(--ink);">Side by side with the other ways in.</h3>

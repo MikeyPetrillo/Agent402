@@ -23,6 +23,25 @@ document.addEventListener('DOMContentLoaded', function(){
   }
   var burger = document.querySelector('.ml-burger');
   if (burger) burger.addEventListener('click', toggleMenu);
+  // Header dropdowns open on hover and focus (CSS). Each trigger's
+  // aria-expanded follows whether its panel shows, and Escape closes an open
+  // panel (focus returns to its trigger) until focus leaves the group or the
+  // pointer comes back.
+  Array.prototype.forEach.call(document.querySelectorAll('.mlnav-g'), function(g){
+    var t = g.querySelector('a[aria-expanded]'), dd = g.querySelector('.mlnav-dd');
+    if (!t || !dd) return;
+    function sync(){ try { t.setAttribute('aria-expanded', getComputedStyle(dd).display === 'none' ? 'false' : 'true'); } catch (e) {} }
+    function later(){ setTimeout(sync, 0); }
+    function reopen(){ g.classList.remove('mlnav-shut'); later(); }
+    g.addEventListener('mouseenter', reopen);
+    g.addEventListener('mouseleave', later);
+    g.addEventListener('focusin', later);
+    g.addEventListener('focusout', function(e){ if (!g.contains(e.relatedTarget)) g.classList.remove('mlnav-shut'); later(); });
+    g.addEventListener('keydown', function(e){
+      if (e.key !== 'Escape' || t.getAttribute('aria-expanded') !== 'true') return;
+      g.classList.add('mlnav-shut'); t.focus(); sync();
+    });
+  });
 });
 
 /* a402: reveal-on-scroll for every top-level header/section, site-wide. Was

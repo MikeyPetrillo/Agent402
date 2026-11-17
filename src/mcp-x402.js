@@ -115,6 +115,13 @@ function boundedSize(value, maxBytes) {
   try { return walk(value, 1); } catch { return "not_json"; }
 }
 
+/** True when JSON.stringify(value) would write `maxBytes` bytes or fewer
+ *  and nest no deeper than MAX_DEPTH, decided by the bounded walk before any
+ *  serialization. Never throws. */
+export function jsonWithin(value, maxBytes) {
+  return boundedSize(value, maxBytes) === null;
+}
+
 /** A detached JSON copy of `value` (no getters, no prototype chain, no
  *  accessor surprises), or a reason it cannot be one: bytes over `maxBytes`,
  *  depth over MAX_DEPTH, or a key that names a prototype slot. The bounded

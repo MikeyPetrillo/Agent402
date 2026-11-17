@@ -42,8 +42,6 @@ export const UPSTREAM_BUDGETS = [
     why: "paid sandbox time, billed by the minute" },
   { match: "api.neynar.com", name: "neynar", env: "BUDGET_NEYNAR_CALLS", dflt: 2000,
     why: "the Farcaster tools" },
-  { match: "api.exa.ai", name: "exa", env: "BUDGET_EXA_CALLS", dflt: 500,
-    why: "beside exaAllowance, which tracks spend; this tracks call volume" },
   { match: "api.hunter.io", name: "hunter", env: "BUDGET_HUNTER_CALLS", dflt: 200,
     why: "the b2b enrichment tools; billed per lookup" },
   { match: "api.apollo.io", name: "apollo", env: "BUDGET_APOLLO_CALLS", dflt: 200,

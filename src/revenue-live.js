@@ -388,18 +388,22 @@ export function isRateLimitError(e) {
   return /rate.?limit|too many requests|HTTP 429/i.test(msg);
 }
 
-export async function rpcCall(urls, method, params, timeoutMs = 5000) {
+// `deadline` (epoch ms, optional) bounds the whole call across lanes: each lane
+// waits at most the time left, and no lane starts once it has passed.
+export async function rpcCall(urls, method, params, timeoutMs = 5000, { deadline } = {}) {
   let lastErr;
   const failures = [];
   for (const entry of urls) {
     const url = typeof entry === "string" ? entry : entry.url;
     const extraHeaders = typeof entry === "string" ? {} : entry.headers || {};
+    const left = Number.isFinite(deadline) ? deadline - Date.now() : timeoutMs;
+    if (left <= 0) { failures.push(`${laneName(entry)}: deadline passed`); break; }
     try {
       const r = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...extraHeaders },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(Math.min(timeoutMs, left)),
       });
       const j = await r.json();
       if (j.result !== undefined) return j.result;

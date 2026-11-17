@@ -34,6 +34,7 @@
 //   WRAP_ALL=1 ...                                    (every generated page too)
 //   WRAP_PAGES=/,/sell WRAP_WIDTHS=1440 ...           (narrow a run while fixing)
 //   WRAP_FAMILY=tools,skills ...                      (some families; "pages" = hand-written)
+//   WRAP_COLOR_SCHEME=dark ...                        (lay out under the dark scheme; default light)
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
@@ -98,6 +99,7 @@ const CARVE_OUTS = [
   "rag: a block that is one code literal and nothing else (an example value in a cell) wraps where the literal allows",
   "split: one unbroken token longer than 24 characters (a CAIP-2 id, a hash, an address) may break; it has no word boundary",
   "split: a link inside a sentence (a <p> in a page's <header> hero) is prose, not a nav label",
+  "split: a row of links (four or more, nothing else) is read as a row by the lone rule; each link in it is still a label",
   "lone: a paragraph of prose with links in it is not a row; a row holds items and separators only",
   "break: a camelCase seam is a word boundary; a run of more than 24 letters and digits may break anywhere",
 ];
@@ -107,6 +109,7 @@ const RAG_MIN_WORDS = 3;
 
 let srv = null;
 let BASE = process.env.TARGET_URL;
+const SCHEME = process.env.WRAP_COLOR_SCHEME === "dark" ? "dark" : "light";
 async function boot() {
   const PORT = await getFreePort();
   srv = spawn(process.execPath, ["src/server.js"], {
@@ -225,9 +228,13 @@ function audit({ exclude, width, ragFrac, ragWords }) {
   }
 
   // 2. Split labels.
+  const ROW_ITEM = "a, button, .btn, [class*='chip'], [class*='pill'], [class*='badge'], [class*='tag']";
+  const isLinkRow = (el) => { const kids = [...el.children].filter((c) => !c.matches("script, style, template, br")); return kids.length >= 4 && kids.every((c) => c.matches(ROW_ITEM)) && [...el.childNodes].every((n) => n.nodeType !== 3 || /^[\s·|/•,→-]*$/.test(n.nodeValue)); };
   const isLabel = (el, s) => {
     // A link inside a sentence (a <p> in a page's <header> hero) is prose, not a nav label.
     if (el.matches("button, .btn, [class*='chip'], [class*='pill'], [class*='badge'], [class*='kicker'], [class*='eyebrow'], .ml-meta > span, .ml-items > *, nav a, header a:not(p a), [role='tab']")) return true;
+    // A row of links wraps between its links: the lone rule reads the row, and each link is a label of its own.
+    if (isLinkRow(el)) return false;
     // A link in a row of links (the parent holds links and separators, no wording of its own).
     if (el.matches("a") && el.parentElement && el.parentElement.children.length >= 2 && [...el.parentElement.children].every((c) => c.matches("a, span")) && [...el.parentElement.childNodes].every((n) => n.nodeType !== 3 || /^[\s·|/•,→-]*$/.test(n.nodeValue))) return true;
     const fs = parseFloat(s.fontSize);
@@ -425,8 +432,19 @@ try {
       if (!caught || !clean) failures++;
     }
     for (const width of WIDTHS) {
-      const ctx = await browser.newContext({ viewport: { width, height: width >= 900 ? 900 : 860 }, reducedMotion: "reduce", colorScheme: "light" });
-      await ctx.addInitScript(() => { try { localStorage.setItem("a402-theme", "light"); } catch {} });
+      const ctx = await browser.newContext({ viewport: { width, height: width >= 900 ? 900 : 860 }, reducedMotion: "reduce", colorScheme: SCHEME });
+      // The saved theme wins over the device setting (assets/js/theme-init.js),
+      // so the saved one is the scheme asked for.
+      await ctx.addInitScript((scheme) => { try { localStorage.setItem("a402-theme", scheme); } catch {} }, SCHEME);
+      {
+        // The scheme asked for is the one the pages draw in.
+        const probe = await ctx.newPage();
+        let drawn = "unread";
+        try { await probe.goto(`${BASE}/`, { waitUntil: "load", timeout: 45000 }); drawn = await probe.evaluate(() => document.documentElement.getAttribute("data-theme") || "light"); } catch {}
+        await probe.close();
+        console.log(`${drawn === SCHEME ? "ok" : "FAIL"} - pages draw in the ${SCHEME} scheme asked for @${width} (home reads ${drawn})`);
+        if (drawn !== SCHEME) failures++;
+      }
       const pool = await Promise.all(Array.from({ length: Math.min(CONCURRENCY, PAGES.length) }, () => ctx.newPage()));
       const free = pool.slice();
       const lines = await mapLimit(PAGES, pool.length, async (path) => {

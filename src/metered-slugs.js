@@ -14,6 +14,10 @@ export const METERED_SLUGS = new Set([
   // Reads stock-quote (and crypto-price) in-process: the same key dependency.
   // Listed only with MARKET_TICK=on (src/market-tick-switch.js).
   "market-tick",
+  // CoinGecko's on-chain pool endpoints answer only to a key (401 keyless),
+  // and CI holds none: these 503 on an unkeyed sweep. Offline coverage is
+  // scripts/test-crypto-screens-kit.js.
+  "dex-volume-board", "dex-pool-health",
   // Brave Search subscription
   "search", "search-lite", "search-news", "search-images", "search-videos", "search-suggest", "answer", "multi-search",
   "llm-context",      // Brave /llm/context - same subscription, billed per call
@@ -74,7 +78,6 @@ export const METERED_SLUGS = new Set([
   // X API v2 app-only bearer (per-post read billing) and the enrichment
   // providers - each lists only with its own key, and 503s without it.
   "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup",
-  "exa-search", "exa-answer", "exa-contents",
   "hunter-domain-search", "hunter-email-finder", "hunter-email-verify", "hunter-company",
   "apollo-people-search", "apollo-org-enrich", "apollo-person-match",
   // OpenRouter Image + Video APIs (flat per-image / per-second upstream price).

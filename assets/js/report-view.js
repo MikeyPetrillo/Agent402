@@ -1,16 +1,16 @@
 // Report delivery page (/r/:sessionId) behavior. External file (CSP: no inline
 // script). The session id comes from the #app element's data-session attribute.
+// The page markup is one function, doneHtml(record, ctx), which the server
+// also runs (src/report-prerender.js, in a VM context with no DOM) to send a
+// sample report already drawn; on such a page (#app data-rendered="1") this
+// script only wires the buttons.
 // On completion it renders a branded, print-ready report plus a data appendix:
 // Download PDF (window.print with a print stylesheet), one CSV per structured
 // table (financials, insider trades), and the full bundle as JSON. Downloads are
 // built client-side from the delivered record (this is our own origin, not a
 // sandboxed artifact, so Blob downloads work).
-(function () {
-  var app = document.getElementById("app");
-  var id = app && app.getAttribute("data-session");
-  // Monitor reports (/m/:id) are served by a different API but render identically.
-  var api = (app && app.getAttribute("data-api")) || "/api/r/";
-  if (!id) { if (app) app.innerHTML = notFound(); return; }
+(function (g) {
+  var app = g.document ? g.document.getElementById("app") : null;
 
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   // A data: URI for a delivered image, or "" when its type is not a raster image we generate or its payload is not plain base64.
@@ -123,20 +123,23 @@
   function reasonLabel(r) {
     return { welcome: "first report", scheduled: "scheduled re-run", change: "change detected", "tls-expiring": "certificate expiring", filing: "new 13F filing", recall: "new recall activity", "safety-change": "token safety changed", "filing-new": "new SEC filing", digest: "weekly digest", problem: "we could not complete this run" }[r] || r;
   }
-  function fmtDate(iso) {
-    try { var d = new Date(iso); if (isNaN(d)) return ""; return d.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }); }
+  // ctx.locale and ctx.timeZone are set on the server (one fixed reading); a browser uses its own.
+  function fmtDate(iso, ctx) {
+    try { var d = new Date(iso); if (isNaN(d)) return ""; var o = { year: "numeric", month: "long", day: "numeric" }; if (ctx && ctx.timeZone) o.timeZone = ctx.timeZone; return d.toLocaleDateString(ctx && ctx.locale ? ctx.locale : undefined, o); }
     catch (e) { return ""; }
   }
   // Under the title: the model-written note (its sentence comes from the page,
   // REPORT_MODEL_NOTE in src/report-disclosure.js) for every kind a model
   // writes, then the report's own disclaimer when its kit set one.
-  function modelNoteText(s) {
-    var text = (app && app.getAttribute("data-model-note")) || "";
-    var codeKinds = ((app && app.getAttribute("data-code-kinds")) || "").split(",");
+  // ctx: { modelNote, codeKinds: [kind], monitors: {kind: monitor}, origin }
+  // read from #app's data attributes in a browser, passed in on the server.
+  function modelNoteText(s, ctx) {
+    var text = (ctx && ctx.modelNote) || "";
+    var codeKinds = (ctx && ctx.codeKinds) || [];
     return text && codeKinds.indexOf(String((s && s.kind) || "")) < 0 ? text : "";
   }
-  function modelNote(s) {
-    var text = modelNoteText(s), out = "";
+  function modelNote(s, ctx) {
+    var text = modelNoteText(s, ctx), out = "";
     if (text) out += '<p class="rpt-note" id="model-note">' + esc(text) + "</p>";
     if (s && typeof s.disclaimer === "string" && s.disclaimer.trim()) out += '<p class="rpt-note" id="report-disclaimer">' + esc(s.disclaimer.trim()) + "</p>";
     // The grounding check's sentence (src/report-grounding.js), when a figure
@@ -175,16 +178,14 @@
   // cannot drift. A kind with no monitor (research, dossier) shows nothing, and
   // a report that IS a monitor delivery never offers what the reader already
   // has. Clicking POSTs to the same /api/subscribe the storefront uses.
-  function monitorFor(kind) {
-    try {
-      var map = JSON.parse((app && app.getAttribute("data-monitors")) || "{}");
-      var m = map && Object.prototype.hasOwnProperty.call(map, kind) ? map[kind] : null;
-      return m && m.product && m.label && m.priceUsd ? m : null;
-    } catch (e) { return null; }
+  function monitorFor(kind, ctx) {
+    var map = (ctx && ctx.monitors) || {};
+    var m = Object.prototype.hasOwnProperty.call(map, kind) ? map[kind] : null;
+    return m && m.product && m.label && m.priceUsd ? m : null;
   }
-  function upgradeBlock(s) {
+  function upgradeBlock(s, ctx) {
     if (s.monitor) return "";
-    var m = monitorFor(s.kind);
+    var m = monitorFor(s.kind, ctx);
     var target = String(s.input == null ? "" : s.input).trim();
     if (!m || !target) return "";
     // A short subject (a ticker, a domain) reads inside the sentence; a whole
@@ -261,9 +262,9 @@
     if (!m || !titleKey(title) || titleKey(m[1]) !== titleKey(title)) return text;
     return text.slice(m[0].length);
   }
-  function renderDone(s) {
+  // The whole delivered page as markup: no DOM, no network (the server runs it too).
+  function doneHtml(s, ctx) {
     setAllowedHosts(Array.isArray(s.sources) && s.sources.length ? s.sources : null);
-    var base = slugify(s.title);
     var tables = Array.isArray(s.tables) ? s.tables : [];
     var sources = Array.isArray(s.sources) ? s.sources : [];
     var images = Array.isArray(s.images) ? s.images : [];
@@ -273,8 +274,8 @@
       '<div class="rpt-head">' +
         '<div class="rpt-brand"><span class="n">agent402</span><span class="s">Report</span></div>' +
         '<h1 class="rpt-title">' + esc(s.title || "Report") + "</h1>" +
-        '<div class="rpt-meta">' + String(reportLabel(s)).split(/:\s+/).map(function (x) { return "<span>" + esc(x) + "</span>"; }).join("") + (s.at ? "<span>" + esc(fmtDate(s.at)) + "</span>" : "") + "</div>" +
-        modelNote(s) +
+        '<div class="rpt-meta">' + String(reportLabel(s)).split(/:\s+/).map(function (x) { return "<span>" + esc(x) + "</span>"; }).join("") + (s.at ? "<span>" + esc(fmtDate(s.at, ctx)) + "</span>" : "") + "</div>" +
+        modelNote(s, ctx) +
       "</div>";
 
     // Action bar (never printed).
@@ -297,9 +298,9 @@
         '<a class="btn btn-secondary" id="copy-link" href="#">Copy link</a>' +
         (s.sample !== true && s.publicView !== true && s.status === "done" ? '<button class="btn btn-secondary" id="mk-public">' + (s.public === true ? "Make private" : "Make public") + "</button>" : "") +
       "</div>" +
-      (s.sample !== true && s.publicView !== true && s.public === true && s.publicId ? '<div class="keep-hint no-print" id="public-note">Public at <a href="/reports/public/' + esc(s.publicId) + '">' + esc(location.origin + "/reports/public/" + s.publicId) + "</a>. Anyone with that link can read it and search engines may index it; make it private again any time.</div>" : "") +
+      (s.sample !== true && s.publicView !== true && s.public === true && s.publicId ? '<div class="keep-hint no-print" id="public-note">Public at <a href="/reports/public/' + esc(s.publicId) + '">' + esc(((ctx && ctx.origin) || "") + "/reports/public/" + s.publicId) + "</a>. Anyone with that link can read it and search engines may index it; make it private again any time.</div>" : "") +
       (s.sample === true || s.publicView === true
-        ? '<div class="keep-hint no-print">' + (s.publicView === true ? "A " + esc(midSentence(reportLabel(s))) + ' on "' + esc(s.input) + '" shared by its buyer' : "A real " + esc(midSentence(reportLabel(s))) + ' generated for "' + esc(s.input) + '"') + (s.at ? " on " + esc(fmtDate(s.at)) : "") + (included.length ? ". Includes " + included.join(" · ") : "") + ". Every report is generated fresh at request time from live sources.</div>" +
+        ? '<div class="keep-hint no-print">' + (s.publicView === true ? "A " + esc(midSentence(reportLabel(s))) + ' on "' + esc(s.input) + '" shared by its buyer' : "A real " + esc(midSentence(reportLabel(s))) + ' generated for "' + esc(s.input) + '"') + (s.at ? " on " + esc(fmtDate(s.at, ctx)) : "") + (included.length ? ". Includes " + included.join(" · ") : "") + ". Every report is generated fresh at request time from live sources.</div>" +
           (s.cutShort === true ? '<div class="keep-hint no-print" id="cut-short-note">This sample\'s text stops mid-sentence: the writing step reached its length limit when this sample was generated.</div>' : "") +
           '<form class="sample-buy no-print" id="sample-buy" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 22px;">' +
             '<input id="sample-input" class="field" style="flex:1 1 240px;" placeholder="Your own ' + esc(inputNoun(s.kind)) + '" aria-label="Your own ' + esc(inputNoun(s.kind)) + '">' +
@@ -331,8 +332,30 @@
       }).join(" ");
       return '<div class="rpt-image"><div class="rpt-meta">' + esc(im.slot || "image") + (im.alt ? " · " + esc(im.alt) : "") + "</div>" + prev + '<div class="report-actions no-print">' + files + "</div></div>";
     }).join("") + "</div>" : "";
-    app.innerHTML = actions + mon + '<div class="report" id="report-body">' + head + mdToHtml(withoutLeadingTitle(s.report, s.title)) + imgHtml + "</div>" + upgradeBlock(s);
+    return actions + mon + '<div class="report" id="report-body">' + head + mdToHtml(withoutLeadingTitle(s.report, s.title)) + imgHtml + "</div>" + upgradeBlock(s, ctx);
+  }
+  g.a402ReportView = { doneHtml: doneHtml };
+  if (!g.document) return;
+
+  var id = app && app.getAttribute("data-session");
+  // Monitor reports (/m/:id) are served by a different API but render identically.
+  var api = (app && app.getAttribute("data-api")) || "/api/r/";
+  if (!id) { if (app) app.innerHTML = notFound(); return; }
+  var ctx = { modelNote: app.getAttribute("data-model-note") || "", codeKinds: (app.getAttribute("data-code-kinds") || "").split(","), monitors: {}, origin: location.origin };
+  try { ctx.monitors = JSON.parse(app.getAttribute("data-monitors") || "{}") || {}; } catch (e) { /* no monitor offer */ }
+
+  function renderDone(s) {
+    app.innerHTML = doneHtml(s, ctx);
     if (window.a402BindWidows) window.a402BindWidows(app);
+    wire(s);
+    return true;
+  }
+  // The buttons of a drawn page: downloads, the monitor offer, the sample's buy box, make-public.
+  function wire(s) {
+    var base = slugify(s.title);
+    var tables = Array.isArray(s.tables) ? s.tables : [];
+    var sources = Array.isArray(s.sources) ? s.sources : [];
+    var images = Array.isArray(s.images) ? s.images : [];
     var imgBtns = app.querySelectorAll(".dl-img");
     for (var k = 0; k < imgBtns.length; k++) {
       imgBtns[k].addEventListener("click", function (e) {
@@ -371,7 +394,7 @@
     var json = document.getElementById("dl-json");
     if (json) json.addEventListener("click", function () {
       var bundle = { title: s.title, product: productLabel(s.kind), generatedAt: s.at };
-      if (modelNoteText(s)) bundle.notice = modelNoteText(s);
+      if (modelNoteText(s, ctx)) bundle.notice = modelNoteText(s, ctx);
       if (typeof s.disclaimer === "string" && s.disclaimer.trim()) bundle.disclaimer = s.disclaimer.trim();
       if (typeof s.groundingNote === "string" && s.groundingNote.trim()) bundle.groundingNote = s.groundingNote.trim();
       bundle.report = s.report; bundle.sources = sources; bundle.tables = tables; bundle.images = images;
@@ -382,7 +405,6 @@
       e.preventDefault();
       try { navigator.clipboard.writeText(location.href); cl.textContent = "Copied ✓"; setTimeout(function () { cl.textContent = "Copy link"; }, 1500); } catch (x) {}
     });
-    return true;
   }
 
   function render(s) {
@@ -408,5 +430,11 @@
     tickElapsed();
     setTimeout(poll, 3000);
   }
+  // A page the server drew (a sample) reads its record once, only to wire the
+  // buttons; the markup stays as served.
+  if (app.getAttribute("data-rendered") === "1") {
+    fetch(api + encodeURIComponent(id)).then(function (r) { return r.json(); }).then(function (s) { if (s && s.status === "done") wire(s); }).catch(function () { /* the page still reads; the buttons wait for a reload */ });
+    return;
+  }
   poll();
-})();
+})(this);

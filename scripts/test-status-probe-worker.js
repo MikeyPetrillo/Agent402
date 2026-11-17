@@ -11,6 +11,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { probe, observe, run, solvePow, checkPaidCall, PAID_CALL_MAX_DIFFICULTY, SOLVE_CAP_FACTOR } from "../workers/status-probe/src/index.js";
 
@@ -436,7 +437,7 @@ for (const [name, over, detail] of failCases) {
   // refused by the unpaid-quote budget once per attempt (one re-read each).
   let calls = 0;
   const HEALTHY_GW = { status: "ok", revenueLive: { status: "fresh" }, upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerEvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok", ceiling: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, lateSettlements: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "ok" },
-    upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, xDataSpend: { status: "ok" }, exaSpend: { status: "ok" }, routerSpendWindow: { status: "ok" }, gatewayBalance: { status: "ok" }, sharedLimits: { status: "on", alert: "ok" }, replayStore: { status: "ok", alert: "ok" }, jevSpend: { status: "ok" }, externalSpendGlobal: { status: "ok" }, solanaHistory: { status: "publics" }, evmLogs: { status: "publics" }, speechUpstream: { status: "ok" }, firstCallAllowance: { status: "on" }, xSearchAuthors: { status: "ok" }, mppSubscriptions: { status: "off" }, openMeteo: { status: "ok" }, referralSettlement: { status: "ok" }, coverageReads: { status: "ok", alert: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" },
+    upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, xDataSpend: { status: "ok" }, routerSpendWindow: { status: "ok" }, gatewayBalance: { status: "ok" }, sharedLimits: { status: "on", alert: "ok" }, replayStore: { status: "ok", alert: "ok" }, jevSpend: { status: "ok" }, externalSpendGlobal: { status: "ok" }, solanaHistory: { status: "publics" }, evmLogs: { status: "publics" }, speechUpstream: { status: "ok" }, firstCallAllowance: { status: "on" }, xSearchAuthors: { status: "ok" }, mppSubscriptions: { status: "off" }, openMeteo: { status: "ok" }, referralSettlement: { status: "ok" }, coverageReads: { status: "ok", alert: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" },
     mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok", run: "ok" },
     toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, topBuyerFailures: { status: "ok" }, onchainSqlBusy: { status: "ok" }, buyerRefusals: { status: "ok" }, settleFailures: { status: "ok" }, unsettledReports: { status: "ok" }, robinhoodSettler: { status: "ok" }, subscriptionRenewals: { status: "ok" }, directUpstream: { status: "ok" }, directUpstreamSpend: { status: "ok" }, directUpstreamBalance: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } };
   const { ALARMS, MAX_ISSUE_WRITES } = await import("../workers/status-probe/src/index.js");
@@ -801,6 +802,16 @@ for (const [name, over, detail] of failCases) {
     assert.match(named, /POST \/__operator\/late-settlements: action resolve/, "the body names the operator action that clears it");
     assert.match(named, /booked_owed/);
     assert.match(named, /acknowledge_unrecorded/);
+    // The book holds Solana and Algorand failures too (src/late-settlements.js),
+    // so the page never says the entry is an EVM one only.
+    assert.match(named, /on an EVM chain, Solana or Algorand/, "the body names every rail the book holds");
+    // heartbeat.yml opens the same issue under the same title: its body is
+    // the Worker's, word for word, with the status word substituted.
+    const yml = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
+    const step = yml.slice(yml.indexOf('TITLE="Late settlements need attention"'));
+    const hb = (step.match(/gh issue create [^\n]*--body "([^"]*)"/) || [])[1];
+    assert.ok(hb, "heartbeat.yml's late-settlements issue body is found");
+    assert.equal(hb.replace("$WORD", "unresolved"), named, "heartbeat.yml's body is the Worker's, word for word");
   });
   await acheck("an unresolved late settlement opens the issue; ok closes it", async () => {
     mkGh();
@@ -848,7 +859,7 @@ for (const [name, over, detail] of failCases) {
   await acheck("issue writes are capped per run: opens first, the rest wait for the next run", async () => {
     const titles = ALARMS.map((a) => a.title);
     const allOpen = titles.filter((t) => t !== "Upstream buyer wallet LOW (x402)").map((title, i) => ({ number: i + 1, title }));
-    const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, lateSettlements: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "new" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, xDataSpend: { status: "ok" }, exaSpend: { status: "ok" }, routerSpendWindow: { status: "ok" }, gatewayBalance: { status: "ok" }, sharedLimits: { status: "on", alert: "ok" }, replayStore: { status: "ok", alert: "ok" }, jevSpend: { status: "ok" }, externalSpendGlobal: { status: "ok" }, solanaHistory: { status: "publics" }, evmLogs: { status: "publics" }, speechUpstream: { status: "ok" }, firstCallAllowance: { status: "on" }, xSearchAuthors: { status: "ok" }, mppSubscriptions: { status: "off" }, openMeteo: { status: "ok" }, referralSettlement: { status: "ok" }, coverageReads: { status: "ok", alert: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok", run: "ok" }, toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, topBuyerFailures: { status: "ok" }, onchainSqlBusy: { status: "ok" }, buyerRefusals: { status: "ok" }, settleFailures: { status: "ok" }, unsettledReports: { status: "ok" }, robinhoodSettler: { status: "ok" }, subscriptionRenewals: { status: "ok" }, directUpstream: { status: "ok" }, directUpstreamSpend: { status: "ok" }, directUpstreamBalance: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } }, status: HEALTHY_STATUS };
+    const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, lateSettlements: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "new" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, xDataSpend: { status: "ok" }, routerSpendWindow: { status: "ok" }, gatewayBalance: { status: "ok" }, sharedLimits: { status: "on", alert: "ok" }, replayStore: { status: "ok", alert: "ok" }, jevSpend: { status: "ok" }, externalSpendGlobal: { status: "ok" }, solanaHistory: { status: "publics" }, evmLogs: { status: "publics" }, speechUpstream: { status: "ok" }, firstCallAllowance: { status: "on" }, xSearchAuthors: { status: "ok" }, mppSubscriptions: { status: "off" }, openMeteo: { status: "ok" }, referralSettlement: { status: "ok" }, coverageReads: { status: "ok", alert: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok", run: "ok" }, toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, topBuyerFailures: { status: "ok" }, onchainSqlBusy: { status: "ok" }, buyerRefusals: { status: "ok" }, settleFailures: { status: "ok" }, unsettledReports: { status: "ok" }, robinhoodSettler: { status: "ok" }, subscriptionRenewals: { status: "ok" }, directUpstream: { status: "ok" }, directUpstreamSpend: { status: "ok" }, directUpstreamBalance: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } }, status: HEALTHY_STATUS };
     mkGh(allOpen);
     const r1 = await syncAlarms(ENV, { ...nosleep, maxWrites: 4, probe: { paywallObserved: true }, fetchStatus: feed(everythingHealthy, everythingHealthy) });
     assert.deepEqual(r1.opened, ["Upstream buyer wallet LOW (x402)"]);
@@ -876,9 +887,7 @@ for (const [name, over, detail] of failCases) {
       ["Stellar facilitator fee account LOW (XLM)", "stellarFacilitator", ["low"], ["ok"]],
       ["Upstream call budget ELEVATED", "upstreamBudgets", ["elevated"], ["ok"]],
       ["Upstream hard ceiling REACHED", "upstreamHardCaps", ["capped"], ["ok"]],
-      ["Exa prepaid allowance LOW", "exaAllowance", ["low"], ["ok", "unconfigured"]],
       ["X data daily spend OVER its ceiling", "xDataSpend", ["over", "capped"], ["ok", "off"]],
-      ["Exa daily spend OVER its ceiling", "exaSpend", ["over", "capped"], ["ok", "off"]],
       ["Router spend per minute OVER its ceiling", "routerSpendWindow", ["over", "capped"], ["ok", "off"]],
       ["State database DEGRADED (Postgres)", "stateDb", ["degraded"], ["on"]],
       ["Sanctions lists STALE or UNLOADED (OFAC SDN)", "sanctions", ["stale", "unloaded"], ["ok"]],
@@ -1003,7 +1012,6 @@ for (const [name, over, detail] of failCases) {
       ["Gateway credits LOW (OpenRouter)", "we answer 502, settlement is canceled, so x402 buyers are NOT charged"],
       ["Upstream hard ceiling REACHED", "answer 503 (not charged on x402) until 00:00 UTC"],
       ["X data daily spend OVER its ceiling", "was refused 503 (not charged on x402) within the last hour"],
-      ["Exa daily spend OVER its ceiling", "was refused 503 (not charged on x402) within the last hour"],
     ];
     for (const [title, words] of pairs) {
       const alarm = ALARMS.find((x) => x.title === title);

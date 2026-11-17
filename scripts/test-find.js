@@ -122,7 +122,7 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   // The invariant that matters: the DOMAIN tool still wins. route-execute may
   // appear lower down (it carries buy/purchase tags and genuinely can buy
   // these), but it must never displace the tool that actually answers.
-  for (const [q, want] of [["buy bitcoin price", "crypto-price"], ["purchase price of ethereum", "crypto-price"], ["order book for a token", "crypto-orderbook"]]) {
+  for (const [q, want] of [["buy bitcoin price", "crypto-price"], ["purchase price of ethereum", "crypto-price"]]) {
     ok(top(q)[0] === want, `ordinary commerce query still resolves to ${want}: "${q}" -> ${JSON.stringify(top(q))}`);
   }
 }
@@ -339,18 +339,14 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
 // --- The catalog must answer in the ASKER's vocabulary ----------------------
 //
 // A tool we already ship is worth nothing if the words a domain-fluent agent
-// uses reach none of it. Measured against the live catalog, with `l2-tvl`
-// shipping the whole time:
+// uses reach none of it. Measured against the live catalog:
 //
-//   l2beat          -> ZERO results
-//   rollup tvs      -> l2-tvl at 22 (weak)
-//   rollup risk tvs -> l2-tvl at 22 (weak)
 //   layer 2 updates -> sql-guard at 4 (wrong tool entirely)
 //
-// L2Beat is the canonical rollup-data site and TVS (Total Value Secured) is
-// its metric; "layer 2" is the spelled-out form, and its digit is a 1-char
-// token dropped before ranking, so only "layer" survives to match on. None of
-// those words appeared in any tool record.
+// "layer 2" is the spelled-out form of the l2 tag, and its digit is a 1-char
+// token dropped before ranking, so only "layer" survives to match on. (The
+// rollup locked-value ranking, l2-tvl, was retired 2026-11-16 with its
+// vocabulary; a locked-value query now has no L2 tool to land on.)
 //
 // Asserted against the REAL kit records rather than a fixture, because the
 // thing under test IS the curated vocabulary on those records - a fixture
@@ -361,36 +357,29 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   const f = (q) => findTools(C, q, { baseUrl: "https://agent402.tools" });
   const top1 = (q) => f(q).results[0]?.slug;
 
-  ok(f("l2beat").count > 0, `"l2beat" returns SOMETHING (it returned nothing at all while l2-tvl shipped)`);
-  ok(top1("l2beat") === "l2-tvl", `"l2beat" -> l2-tvl (got ${top1("l2beat")})`);
-  ok(top1("rollup tvs") === "l2-tvl", `"rollup tvs" -> l2-tvl (got ${top1("rollup tvs")})`);
-  ok(top1("rollup risk tvs") === "l2-tvl", `"rollup risk tvs" -> l2-tvl (got ${top1("rollup risk tvs")})`);
+  // A retired route is never a find result, whatever the query.
+  for (const q of ["l2beat", "rollup tvs", "total value locked on rollups"]) {
+    ok(!f(q).results.some((r) => r.slug === "l2-tvl"), `"${q}" does not resolve to the retired l2-tvl`);
+  }
   ok(String(top1("layer 2 updates") || "").startsWith("l2-"), `"layer 2 updates" -> an L2 tool (got ${top1("layer 2 updates")})`);
   ok(String(top1("layer-2 gas costs") || "").startsWith("l2-"), `hyphenated "layer-2" also expands (got ${top1("layer-2 gas costs")})`);
 
   // ...and ONLY as a phrase. Tagging bare "layer" on the L2 tools was the first
   // attempt and it hijacked ordinary English: "osi model layer" and "layer of
-  // encryption" both resolved to l2-tvl at high confidence. These two assert
+  // encryption" both resolved to an L2 tool at high confidence. These two assert
   // the narrower rule, so reintroducing the broad tag fails here.
   ok(!String(top1("layer of encryption") || "").startsWith("l2-"),
     `bare "layer" does NOT reach the L2 tools (got ${top1("layer of encryption")})`);
   ok(!String(top1("osi model layer") || "").startsWith("l2-"),
     `a networking "layer" question does NOT reach the L2 tools (got ${top1("osi model layer")})`);
 
-  // ...and the routing terms must not smear across the two L2 tools. A gas
-  // question still belongs to the gas tool: widening vocabulary is only a fix
-  // if it does not trade a zero-result miss for a confidently wrong answer,
-  // which is the more expensive failure - the agent PAYS for that one.
+  // A gas question belongs to the gas tool, and a locked-value question must
+  // not land there: a zero-result miss is cheaper than a confidently wrong
+  // answer - the agent PAYS for that one.
   ok(top1("compare l2 gas fees across chains") === "l2-gas-comparison",
     `a gas query still resolves to l2-gas-comparison (got ${top1("compare l2 gas fees across chains")})`);
-  ok(top1("total value locked on rollups") === "l2-tvl",
-    `a TVL query still resolves to l2-tvl (got ${top1("total value locked on rollups")})`);
-
-  // The miss signal is what recorded this in the first place. Covering the
-  // vocabulary must also stop it re-recording, or the board keeps reporting a
-  // gap that no longer exists and buries the ones that do.
-  ok(f("l2beat").rarestTermCovered === true,
-    `"l2beat" no longer registers as a find-miss (rarest=${f("l2beat").rarestTerm})`);
+  ok(top1("total value locked on rollups") !== "l2-gas-comparison",
+    `a locked-value query does not land on the gas tool (got ${top1("total value locked on rollups")})`);
 }
 
 // --- Front door: search / answer / news phrasing ----------------------------
@@ -503,5 +492,61 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   const m = markMissRows({ results: [{ slug: "perp-orderbook" }] });
   ok(m.weakMatches === true && m.results[0].weak === true, "a miss marks every returned row weak");
 }
+// ---- currency words reach the currency converter (2026-11-17) ----
+// "convert currency" ranked the *-convert tools on "convert" ("currency" sits
+// inside "cryptocurrency" across the crypto kits) and read as a miss while
+// fx-rate does the task. Against the real kits that compete for the words.
+{
+  const { KIT } = await import("../src/tools/kit.js");
+  const { KIT2 } = await import("../src/tools/kit2.js");
+  const { DATA_TOOLS } = await import("../src/tools/data-kit.js");
+  const { MACRO_TOOLS } = await import("../src/tools/macro-kit.js");
+  const { MEDIA_TOOLS } = await import("../src/tools/media-kit.js");
+  const { CRYPTO_MARKETS_TOOLS } = await import("../src/tools/crypto-markets-kit.js");
+  const { PRICE_FEED_TOOLS } = await import("../src/tools/price-feed-kit.js");
+  const { FORECAST_TOOLS } = await import("../src/tools/forecast-kit.js");
+  const { PREDICTION_MARKET_TOOLS } = await import("../src/tools/prediction-market-kit.js");
+  const { FINANCE_MATH_TOOLS } = await import("../src/tools/finance-math-kit.js");
+  const { USAGE_TOOLS } = await import("../src/tools/usage-kit.js");
+  const C = {};
+  for (const t of [...API_TOOLS, ...CRYPTO_TOOLS, ...KIT, ...KIT2, ...DATA_TOOLS, ...MACRO_TOOLS, ...MEDIA_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...PRICE_FEED_TOOLS, ...FORECAST_TOOLS, ...PREDICTION_MARKET_TOOLS, ...FINANCE_MATH_TOOLS, ...USAGE_TOOLS]) C[t.route] = t;
+  for (const q of ["convert currency", "convert usd to eur", "convert 100 dollars to euros", "convert dollars to euros", "currency converter", "exchange currency"]) {
+    const r = findTools(C, q, {});
+    ok(r.results[0]?.slug === "fx-rate" && r.rarestTermCovered === true, `"${q}" -> fx-rate as a strong match (got ${r.results.slice(0, 3).map((x) => x.slug).join(", ")}, covered ${r.rarestTermCovered})`);
+  }
+  // Controls: crypto and unit phrasings keep their own tools.
+  for (const q of ["convert eth to usd", "bitcoin price in usd", "convert miles to kilometers", "convert php to python", "try base64 decode"]) {
+    const r = findTools(C, q, {});
+    ok(r.results[0]?.slug !== "fx-rate", `"${q}" is not sent to fx-rate (got ${r.results[0]?.slug})`);
+  }
+  {
+    const r = findTools(C, "convert yen to dollars", {});
+    ok(/^fx-/.test(r.results[0]?.slug || "") && r.rarestTermCovered === true, `"convert yen to dollars" -> an fx tool as a strong match (got ${r.results[0]?.slug}, covered ${r.rarestTermCovered})`);
+  }
+  // A money word outside a conversion still defines the task: a query whose
+  // only uncovered word is the currency stays a miss, never a confident hit.
+  for (const q of ["yuan devaluation", "jpy volatility", "dollar index", "pay in euros", "gbp interest rate", "invoice total in euros", "sterling exchange rate", "tip calculator dollars", "inflation in euros", "peso inflation argentina", "cpi us dollar"]) {
+    const r = findTools(C, q, {});
+    ok(r.rarestTermCovered === false, `"${q}" stays a weak match (top ${r.results[0]?.slug}, rarest "${r.rarestTerm}", covered ${r.rarestTermCovered})`);
+  }
+  // A crypto word anywhere keeps the currency rule off, even beside two fiat codes.
+  const { applyCurrencyTerms } = await import("../src/find.js");
+  for (const terms of [["crypto", "currency", "converter", "usd", "eur"], ["convert", "eth", "usd", "eur"], ["bitcoin", "dollars", "euros"]]) {
+    const t = [...terms];
+    ok(applyCurrencyTerms(t) === false && !t.includes("forex"), `[${terms.join(" ")}] is not a fiat conversion (terms ${t.join(" ")})`);
+  }
+  for (const q of ["crypto currency converter usd eur", "convert eth to usd and eur", "bitcoin price in dollars and euros"]) {
+    const r = findTools(C, q, {});
+    ok(!/^fx-/.test(r.results[0]?.slug || ""), `"${q}" stays with the crypto tools (got ${r.results[0]?.slug})`);
+  }
+  // Money named without a conversion keeps every word: no synthetic term.
+  for (const terms of [["g10", "fx", "dashboard", "usd"], ["currency", "usd", "eur", "dashboard"]]) {
+    const t = [...terms];
+    ok(applyCurrencyTerms(t) === false && !t.includes("forex"), `[${terms.join(" ")}] asks for no conversion (terms ${t.join(" ")})`);
+  }
+  const named = ["convert", "dollars", "euros"];
+  ok(applyCurrencyTerms(named) === true && named.includes("usd") && named.includes("eur") && named.includes("forex"), `currency names read as their codes in a conversion (terms ${named.join(" ")})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

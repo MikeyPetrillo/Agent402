@@ -57,7 +57,7 @@ const TOP1 = [
   ["token balance",                 "wallet-balance"],
   ["ens lookup",                    "ens-resolve"],
   ["lookup whois for a domain",    "whois"],
-  ["geocode an address",            "geocode"],
+  ["geocode a city",                "place-lookup"],
   ["validate an email address",    "email-validate"],
   ["stock price for AAPL",         "stock-quote"],
   ["current weather forecast",     "weather-forecast"],

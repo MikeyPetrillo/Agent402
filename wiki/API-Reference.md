@@ -114,8 +114,13 @@ were actually paid, including evidence it inherits from a shared payTo and who
 else claims that wallet; settlement evidence kept **per source** rather than
 summed (our own Base leaderboard, the Bazaar's measurement labeled as theirs,
 Solana SPL credits, MPP transfers); the router's dispatch verdict per chain with
-its reason and any recent refusal; and what happened the times our router
-actually paid it.
+its reason and any recent refusal; and what each route delivered when our
+router called it, paid calls and the unpaid non-answers it refused to resell
+alike.
+
+Each catalog row carries that delivery record as `responseDelivery`, the name
+the index's rows use. `ourPaidCalls` is deprecated: it carries the same value
+and stays in the answer for readers of the earlier name.
 
 It ends in plain-English flags and deliberately carries **no score** - a number
 reads as a verdict we did not measure. Like `seller-trust` it never fetches the

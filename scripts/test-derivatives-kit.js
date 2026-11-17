@@ -1,7 +1,7 @@
 // scripts/test-derivatives-kit.js
 // Offline tests for src/tools/derivatives-kit.js. No network: globalThis.fetch
 // is replaced with a router that answers each upstream (Hyperliquid info,
-// Deribit public, DefiLlama options overview) from fixtures, so the test pins
+// Deribit public) from fixtures, so the test pins
 //   - the catalog envelope (11 tools, prices, discovery),
 //   - input validation (400s) before any egress,
 //   - the output shape of every tool on fixture data,
@@ -76,14 +76,6 @@ const DERIBIT_PERP = {
   index_price: 77232.62, instrument_name: "BTC-PERPETUAL", last_price: 77263.5, open_interest: 903679080, mark_price: 77263.43,
   current_funding: 0.000149, funding_8h: 0.000195, best_ask_price: 77264, best_bid_price: 77263.5, best_ask_amount: 30000, best_bid_amount: 133980,
 };
-const LLAMA = {
-  allChains: ["Derive Chain", "Arbitrum"], total24h: 5093016, total7d: 11148265.31, total30d: 30971390.66, change_1d: 10.03, change_7d: 4.1,
-  protocols: [
-    { name: "Hegic", displayName: "Hegic", module: "hegic", category: "Options", chains: ["Arbitrum"], total24h: 7682, total7d: 12818.58, total30d: 23795.88, change_1d: 67.36, change_7d: 63916.67 },
-    { name: "Derive", displayName: "Derive", module: "derive", category: "Options", chains: ["Derive Chain"], total24h: 3000000, total7d: 7000000, total30d: 20000000, change_1d: 12.5, change_7d: 3.2 },
-  ],
-};
-
 // HIP-3 builder-deployed dexs (hyperliquid.gitbook.io Info endpoint > Perpetuals,
 // probed live 2026-09-18): `perpDexs` is [null, dex...] with the native dex as
 // the null at index 0; dex-scoped `meta` rows carry growthMode / onlyIsolated /
@@ -180,7 +172,6 @@ globalThis.fetch = async (url, opts = {}) => {
       default: return errEnv("unknown method", "method");
     }
   }
-  if (u === __test.LLAMA_OPTIONS) return res(200, LLAMA);
   throw new Error(`unexpected egress in test: ${u}`);
 };
 
@@ -191,7 +182,7 @@ const EXPECTED = {
   "perp-markets": "$0.003", "perp-funding": "$0.002", "perp-funding-screener": "$0.002", "perp-open-interest": "$0.001",
   "perp-klines": "$0.001", "perp-orderbook": "$0.002", "perp-basis": "$0.002",
   "perp-dexs": "$0.002", "perp-dex-markets": "$0.003", "perp-dex-limits": "$0.002",
-  "options-summary": "$0.005", "crypto-options-chain": "$0.004", "options-ticker": "$0.002", "options-volume": "$0.002",
+  "options-summary": "$0.005", "crypto-options-chain": "$0.004", "options-ticker": "$0.002",
 };
 ok(DERIVATIVES_TOOLS.length === Object.keys(EXPECTED).length, `${Object.keys(EXPECTED).length} tools exported (got ${DERIVATIVES_TOOLS.length})`);
 ok(new Set(DERIVATIVES_TOOLS.map((t) => t.slug)).size === DERIVATIVES_TOOLS.length, "slugs unique");
@@ -240,8 +231,6 @@ await throws(h("options-ticker")({}), 400, "options-ticker: neither instrument n
 await throws(h("options-ticker")({ instrument: "btc perpetual" }), 400, "options-ticker: instrument with space");
 await throws(h("options-ticker")({ instrument: "BTC-PERPETUAL; DROP" }), 400, "options-ticker: instrument bad chars");
 await throws(h("options-ticker")({ currency: "BTC", type: "call-spread" }), 400, "options-ticker: bad type");
-await throws(h("options-volume")({ limit: 101 }), 400, "options-volume: limit > 100");
-await throws(h("options-volume")({ chain: "<b>arb</b>" }), 400, "options-volume: chain bad chars");
 ok(calls.length === before, "input validation rejected before any egress");
 
 // ----------------------------------------------------------------------------
@@ -358,14 +347,6 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
   await throws(h("options-ticker")({ instrument: "BTC-99JAN99-80000-C" }), 422, "options-ticker: unknown instrument", /instrument not found/);
 }
 
-{
-  const out = await h("options-volume")({ limit: 1 });
-  ok(out.source === "defillama-options" && out.totals.volume24hUsd === 5093016 && out.chains.length === 2, "options-volume: totals + chains");
-  ok(out.count === 1 && out.protocols[0].slug === "derive" && out.protocols[0].volume24hUsd === 3000000, "options-volume: ranked by 24h volume");
-  const arb = await h("options-volume")({ chain: "arbitrum" });
-  ok(arb.count === 1 && arb.protocols[0].slug === "hegic", "options-volume: chain filter");
-}
-
 // ----------------------------------------------------------------------------
 // HIP-3 builder-deployed perp dexs (2026-09-18)
 // ----------------------------------------------------------------------------
@@ -442,18 +423,14 @@ mode = "http500";
 await throws(h("perp-markets")({}), 502, "HL 500 -> 502");
 await throws(h("options-summary")({}), 502, "Deribit 500 -> 502 (book summary is load-bearing)");
 await throws(h("options-ticker")({ instrument: "BTC-PERPETUAL" }), 502, "Deribit 500 -> 502 (ticker)");
-await throws(h("options-volume")({}), 502, "DefiLlama 500 -> 502");
 mode = "http429";
 await throws(h("perp-orderbook")({ coin: "BTC" }), 503, "HL 429 -> 503");
-await throws(h("options-volume")({}), 503, "DefiLlama 429 -> 503");
 mode = "timeout";
 await throws(h("perp-klines")({ coin: "BTC" }), 503, "HL deadline -> 503 naming the upstream and the step");
 await throws(h("crypto-options-chain")({}), 503, "Deribit deadline -> 503");
-await throws(h("options-volume")({}), 503, "DefiLlama deadline -> 503");
 mode = "htmljunk";
 await throws(h("perp-markets")({}), 502, "HL non-JSON 200 -> 502");
 await throws(h("options-ticker")({ instrument: "BTC-PERPETUAL" }), 502, "Deribit non-JSON 200 -> 502");
-await throws(h("options-volume")({}), 502, "DefiLlama non-JSON 200 -> 502");
 mode = "hl-unknown-500";
 __test.resetMetaCache();
 await throws(h("perp-klines")({ coin: "ZZZZ" }), 422, "HL 500 \"null\" (unknown coin) -> 422, not 502");

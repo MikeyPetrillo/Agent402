@@ -6,7 +6,7 @@
     },
     {
       label: "Find tools by keyword",
-      code: "// Search for tools matching a query - /api/find is free and\n// unpaywalled, so this skips the proof-of-work step entirely.\nconst result = await callTool(\"find\", {\n  q: \"geocode\"\n}, { path: \"/api/find\", method: \"GET\", free: true });\nconsole.log(result);",
+      code: "// Search for tools matching a query - /api/find is free and\n// unpaywalled, so this skips the proof-of-work step entirely.\nconst result = await callTool(\"find\", {\n  q: \"weather\"\n}, { path: \"/api/find\", method: \"GET\", free: true });\nconsole.log(result);",
     },
     {
       label: "Generate a UUID",
