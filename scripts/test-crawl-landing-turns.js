@@ -11,7 +11,12 @@
 //     (landingTurns), one after another, so none is read again while another still waits
 //     and the longest wait between two reads of one origin is one round;
 //   * they are read one after another, so a day's allowance ends partway
-//     through one origin's read, not through every read then on its way.
+//     through one origin's read, not through every read then on its way;
+//   * that shared turn ends inside the cycle (groupTurnGoesOn): a slow group
+//     never holds the cycle open much past a side-by-side read of the same
+//     origins, in an outage of ours included, and the members it does not
+//     reach wait for the next cycle, entries as they were and no vote cast;
+//   * a member whose turn throws is passed over and the rest are read.
 // Offline: no network, no server.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
@@ -71,12 +76,29 @@ const hostOf = (u) => new URL(u).origin;
 const sentTo = (o, from = 0) => sent.slice(from).filter((u) => hostOf(u) === o).length;
 const hops = new Map();   // origin -> the document reads of its that went on to the hub
 let duskOut = false;   // while true, our reads of the dusk origins time out
+// While true, our reads of the dusk origins stay open until every turn origin
+// has been asked this cycle: the rest of a cycle of thousands of origins runs
+// as long as the hub's shared turn, which goes on while it does.
+let duskLag = false;
+const turnSet = new Set(turnOrigins), askedNow = new Set();
+const cycle = () => { askedNow.clear(); return idx.__runCrawlCycleForTest(); };
 // Every seventh origin answers slowly, as hosts do: read side by side, a
 // slow origin is still on its way when the allowance ends on faster ones.
 const slow = new Set(turnOrigins.filter((_, i) => i % 7 === 3));
+let crawlStub = null;   // the later sections' own seeds answer here
 const pause = async (turns) => { for (let i = 0; i < turns; i++) await new Promise((r) => setImmediate(r)); };
 idx.__setCrawlFetchForTest(async (url, opts) => {
+  if (crawlStub) return crawlStub(url, opts);
   if (duskOut && new URL(url).hostname.startsWith("dusk-")) throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+  if (turnSet.has(hostOf(url))) askedNow.add(hostOf(url));
+  if (duskLag && new URL(url).hostname.startsWith("dusk-")) {
+    // Open until every turn origin is asked, or none has been for a while
+    // (the shared turn is over: a backed-off origin is never asked).
+    for (let seen = -1, idle = 0; askedNow.size < TURNS && idle < 300;) {
+      await new Promise((r) => setImmediate(r));
+      if (askedNow.size === seen) idle++; else { seen = askedNow.size; idle = 0; }
+    }
+  }
   sent.push(url);
   const to = redirects.get(hostOf(url));
   let at = url;
@@ -137,13 +159,14 @@ try {
   // which the order failed: an origin read while another, read less recently,
   // was left waiting; an origin on its second read while another had none.
   const last = new Map(turnOrigins.map((o) => [o, listed.includes(o) ? 0 : -1]));
+  duskLag = true;
   let perDayMin = Infinity, perDayMax = 0, outOfTurn = 0, cutShort = 0, twiceBeforeOnce = 0, worstLanded = 0, lateLandings = 0, day = 0, firstRoundDays = 0;
   while (day < 60 && turnOrigins.some((o) => count(o) < 4)) {
     today += DAY; day++;
     hops.clear();
-    await idx.__runCrawlCycleForTest();
+    await cycle();
     const mid = sent.length;
-    await idx.__runCrawlCycleForTest();
+    await cycle();
     lateLandings += sentTo(HUB, mid);
     const readToday = turnOrigins.filter((o) => entry(o)?.fetchedAt === today);
     const n = readToday.length, got = new Set(readToday);
@@ -172,6 +195,106 @@ try {
   ok(worstLanded <= BUDGET && lateLandings === 0, `no day lands more than the allowance on the hub, and a later cycle of a spent day sends it nothing (${worstLanded} of ${BUDGET}, ${lateLandings})`);
   ok(turnOrigins.every((o) => { const e = entry(o); return e && !e.error && e.tools.length === ROUTES.length && e.redirectedTo === HUB; }), "and every origin stays listed from the hub");
 } finally { Date.now = realNow; }
+
+// ---- a shared turn ends inside the cycle -----------------------------------------
+// The rule alone: a shared turn of `size` always reads ceil(size / slots)
+// members, the reads a side-by-side pool would spend on them; past that it
+// goes on only while another turn of the cycle is open.
+ok(idx.groupTurnGoesOn(0, 300, 0, 25) && idx.groupTurnGoesOn(11, 300, 0, 25) && !idx.groupTurnGoesOn(12, 300, 0, 25),
+  "a shared turn of 300 reads 12 members on 25 slots once the rest of the cycle is done");
+ok(idx.groupTurnGoesOn(12, 300, 1, 25) && idx.groupTurnGoesOn(299, 300, 3, 25), "and goes on while another turn of the cycle is open");
+ok(idx.groupTurnGoesOn(0, 2, 0, 25) && !idx.groupTurnGoesOn(1, 2, 0, 25), "a shared turn always reads its first member");
+
+// Whole cycles, scaled from a full index: many origins that answer at once,
+// and a group behind one landing host whose every read takes real time. A
+// fresh day, so the allowance never holds a read: the group's turn alone
+// decides how long the cycle runs.
+{
+  const FAR = 40, NEAR = 600, STALL = 40;
+  const FARHUB = "https://farhub.example";
+  const far = Array.from({ length: FAR }, (_, i) => `https://far-${i}.example`);
+  const near = Array.from({ length: NEAR }, (_, i) => `https://near-${i}.example`);
+  const farSet = new Set(far);
+  for (const d of DOCS) docs.set(`${FARHUB}${d}`, docs.get(`${HUB}${d}`).replaceAll(HUB, FARHUB));
+  for (const o of near) docs.set(`${o}/.well-known/x402`, docs.get(`${HUB}/.well-known/x402`).replaceAll(HUB, o));
+  let outage = false;   // while true, every read of ours times out after its wait
+  crawlStub = async (url, opts) => {
+    const h = hostOf(url), path = new URL(url).pathname;
+    let at = url;
+    if (farSet.has(h) && DOCS.includes(path)) {
+      await new Promise((r) => setTimeout(r, STALL));
+      if (outage) throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+      at = `${FARHUB}${path}`;
+      await opts?.beforeRedirect?.(at, url);
+    }
+    const d = docs.get(at);
+    if (!d) throw Object.assign(new Error(`Upstream returned HTTP 404 for ${url}`), { statusCode: 422, upstreamStatus: 404 });
+    return { html: d, finalUrl: at, validators: {} };
+  };
+  process.env.X402_INDEX_SEEDS = [FARHUB, ...near, ...far].join(",");
+  today += 2 * DAY;
+  sellerLoad.setClock(() => today);
+  Date.now = () => today;
+  const timed = async () => { const t0 = performance.now(); const s = await cycle(); return { s, ms: performance.now() - t0 }; };
+  const readAt = (o) => entry(o)?.fetchedAt;
+  try {
+    await idx.__crawlSellerForTest(FARHUB);
+    // The first cycle: no origin is known to land on the far hub, so every
+    // origin is its own turn, read side by side as before the shared turns.
+    const side = await timed();
+    ok(far.every((o) => entry(o)?.tools?.length === ROUTES.length && entry(o).redirectedTo === FARHUB) && near.every((o) => entry(o)?.tools?.length),
+      `control: read side by side, every origin is listed (${side.ms.toFixed(0)} ms)`);
+    // The next cycle reads the far origins in one shared turn, one after
+    // another: all of them would hold the cycle for FAR reads.
+    today += DAY;
+    const at1 = today - DAY;
+    const serialMs = FAR * STALL;
+    const turn = await timed();
+    const reached = far.filter((o) => readAt(o) === today), waiting = far.filter((o) => readAt(o) === at1);
+    console.log(`# ${NEAR + 1} origins and ${FAR} behind one host at ${STALL} ms a read: side by side ${side.ms.toFixed(0)} ms, shared turn ${turn.ms.toFixed(0)} ms (${reached.length} reached), all ${FAR} in turn ${serialMs} ms`);
+    ok(turn.ms <= side.ms + 3 * STALL + 250 && turn.ms < serialMs / 2,
+      `the shared turn ends inside the cycle: it closes within a few reads of side by side (${turn.ms.toFixed(0)} ms against ${side.ms.toFixed(0)} ms; ${serialMs} ms had it read all ${FAR})`);
+    ok(reached.length >= Math.ceil(FAR / 25) && waiting.length > 0 && reached.length + waiting.length === FAR,
+      `it reads at least its share of the slots, and the rest wait (${reached.length} reached, ${waiting.length} waiting)`);
+    ok(turn.s.skipped.turn === waiting.length && turn.s.crawled === turn.s.due - waiting.length,
+      `a member not reached is counted as waiting, not as a read, and casts no vote (${turn.s.skipped.turn} turn, ${turn.s.crawled} read of ${turn.s.due})`);
+    ok(waiting.every((o) => entry(o)?.tools?.length === ROUTES.length && !entry(o).error && entry(o).redirectedTo === FARHUB),
+      "a member not reached keeps its entry as it was");
+    // The next cycle reads the waiting members first.
+    today += DAY;
+    const next = await timed();
+    const nowRead = far.filter((o) => readAt(o) === today);
+    ok(nowRead.length > 0 && nowRead.every((o) => waiting.includes(o)),
+      `the members left waiting go first next cycle (${nowRead.length} read, all of them from the ${waiting.length} waiting)`);
+    ok(next.ms <= side.ms + 3 * STALL + 250, `and that cycle too ends inside its bound (${next.ms.toFixed(0)} ms)`);
+
+    // An outage of ours: every far read waits, then times out on our side.
+    // The cycle still closes inside its bound, the listings are kept, and
+    // no submission is released.
+    outage = true;
+    today += DAY;
+    const dark = await timed();
+    outage = false;
+    ok(dark.ms <= side.ms + 3 * STALL + 250 && dark.ms < serialMs / 2, `in an outage of ours the shared turn ends inside the cycle too (${dark.ms.toFixed(0)} ms)`);
+    ok(far.every((o) => entry(o)?.tools?.length === ROUTES.length && entry(o).redirectedTo === FARHUB), "every far origin stays listed through the outage");
+    ok(!dark.s.released, `and the outage releases nothing (${dark.s.released || 0} released: ${dark.s.reason || "none"})`);
+
+    // A member whose turn throws is passed over; the rest of the group is read.
+    today += DAY;
+    const realPlan = sellerLoad.crawlPlan;
+    let thrown = null;
+    sellerLoad.crawlPlan = async function (origin, o) {
+      if (!thrown && farSet.has(origin)) { thrown = origin; throw new Error("plan read failed"); }
+      return realPlan.call(this, origin, o);
+    };
+    let after;
+    try { after = await timed(); } finally { sellerLoad.crawlPlan = realPlan; }
+    const readAfter = far.filter((o) => readAt(o) === today);
+    ok(thrown && !readAfter.includes(thrown) && readAfter.length >= Math.ceil(FAR / 25) - 1,
+      `a member whose turn throws is passed over and the group's turn goes on (${readAfter.length} of the group read after it)`);
+    ok(after.s && after.s.due === turn.s.due, "and the cycle closes as usual");
+  } finally { Date.now = realNow; crawlStub = null; }
+}
 
 console.log(`\n${fail ? "FAILED" : "PASSED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -7428,6 +7428,17 @@ export function landingTurns(due, { landingOf, readAt }) {
   return turns;
 }
 
+/** Whether a shared turn reads its member `read` (0-based) of `size`. Read
+ *  side by side, the pool spreads those `size` reads over its
+ *  CRAWL_CONCURRENCY slots, so it spends at least ceil(size / slots) reads'
+ *  time on them: a shared turn always reads that many. Past that it goes on
+ *  only while other turns of the cycle are still open (`othersOpen`), so its
+ *  reads overlap theirs, and the cycle closes at most one read after it would
+ *  have read side by side. Exported for the test. */
+export function groupTurnGoesOn(read, size, othersOpen, slots = CRAWL_CONCURRENCY) {
+  return read < Math.ceil(size / Math.max(1, slots)) || othersOpen > 0;
+}
+
 /** True while a crawl cycle is running (every entry is being replaced). */
 export function crawlInProgress() { return !!crawlInFlight; }
 const runCrawlLeased = leased("x402-index-crawl", { ttlMs: 60 * 60_000, failOpen: true }, () => runCrawl());
@@ -7487,9 +7498,17 @@ async function runCrawl() {
       landingOf: (o) => landingHeldOn.get(o) || cache.get(o)?.redirectedTo || null,
       readAt: (o) => cache.get(o)?.fetchedAt,
     });
+    // A shared turn ends inside the cycle (groupTurnGoesOn): the members it
+    // does not reach wait for the next cycle, entries as they were and no
+    // vote cast, and being least recently read they go first then.
+    const open = { n: turns.length };   // turns not yet finished (a group's, not yet started)
     await runPool(turns, CRAWL_CONCURRENCY, async (turn) => {
-      if (!Array.isArray(turn)) return takeTurn(turn);
-      for (const origin of turn) { try { await takeTurn(origin); } catch { /* one origin's failure does not end the others' turns */ } }
+      if (!Array.isArray(turn)) { try { return await takeTurn(turn); } finally { open.n--; } }
+      open.n--;
+      for (let i = 0; i < turn.length; i++) {
+        if (!groupTurnGoesOn(i, turn.length, open.n)) { for (const o of turn.slice(i)) skipped.set(o, "turn"); break; }
+        try { await takeTurn(turn[i]); } catch { /* one origin's failure does not end the others' turns */ }
+      }
     });
     const crawled = skipped.size ? due.filter((o) => !skipped.has(o)) : due;
     // An origin backed off because its documents did not change votes as the

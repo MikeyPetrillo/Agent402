@@ -86,7 +86,11 @@ Loaded when an index, discovery, router or buyer file is read.
   vote in the cycle tally, and the origin's scheduled turn reads `landing` until the day rolls.
   Origins known to land on one such host take one turn in the cycle together, read one after
   another, least recently read first (`landingTurns`, `scripts/test-crawl-landing-turns.js`), so a
-  day's allowance refreshes each in turn and ends partway through at most one read.
+  day's allowance refreshes each in turn and ends partway through at most one read. That turn
+  ends inside the cycle (`groupTurnGoesOn`): it reads ceil(members / CRAWL_CONCURRENCY), then goes
+  on only while another turn of the cycle is open, so a slow group closes the cycle at most one
+  read after a side-by-side read would; members not reached read `turn` (no vote, entry kept) and
+  go first next cycle.
   The landing host's own day, crawl and router probes never read the landed count; a new
   redirect-following crawler read passes the gate (`scripts/test-crawl-redirect-budget.js`).
   A 429 or 503 on a crawler read or
