@@ -28,7 +28,7 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@0.14.0
 
 > Use a new wallet holding only a few dollars of USDC. Never use your main wallet.
 
-Use `SOLANA_AGENT_KEY` instead for USDC on Solana. No call is capped and there is no session budget unless you set `AGENT402_MAX_PER_CALL` or `AGENT402_BUDGET`.
+Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $5 by default to protect your wallet (`AGENT402_MAX_PER_CALL`, `0` or `off` turns it off); there is no session budget unless you set `AGENT402_BUDGET`.
 
 Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.14.0`
 (use a new wallet holding only a few dollars of USDC; never your main wallet).
@@ -46,14 +46,14 @@ Every variable the server reads (all optional):
 | `AGENT402_CREDITS_KEY` | _(unset)_ | A prepaid credits key (`a402_...`; [agent402.tools/credits](https://agent402.tools/credits) says whether packs are on sale). Sent as `Authorization: Bearer` on every catalog call; the server debits the list price only on a successful (200) call and answers `X-Credits-Balance`. Used only when no wallet key is set (a wallet key wins); in credits mode every call - pure-CPU tools included - is debited from the key. Credits pay Agent402's own services only: `router.execute`, `seller-payability`, `decide.execute` and the flight tools buy from outside sellers and need a wallet key, and memory and usage need a wallet identity. |
 | `AGENT402_URL` | `https://agent402.tools` | Target service (point at your own deployment). Paid calls never follow redirects, so use the address that serves the routes directly; a redirect is refused with the origin to use. |
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
-| `AGENT402_MAX_PER_CALL` | _(unset, no cap)_ | Optional: refuse any single call priced above this many USD (e.g. `0.05`); unset or `off` means no cap. A call it refuses names the setting to raise. Applies to the wallet and the credits path. |
+| `AGENT402_MAX_PER_CALL` | `5` | Refuse any single call priced above this many USD (e.g. `0.05`); `0` or `off` disables it. A call it refuses names the price, the cap and the setting to raise. Applies to the wallet and the credits path. |
 | `AGENT402_BUDGET` | _(unset, no cap)_ | Optional hard cap on total USD spent per session (e.g. `1.00`); unset or `off` means no session cap. A call it refuses names the setting to raise. Applies to the wallet and the credits path. |
 | `AGENT402_SHOW_ROUTER` | _(unset)_ | `1` lists `router.execute` and `sellers.list` even without a wallet. Both are listed automatically when a wallet key is set; a credits key does not pay `router.execute`, which buys from outside sellers and takes a wallet payment. |
 | `AGENT402_NETWORKS` | _(unset)_ | Restrict + order the chains to pay on - e.g. `robinhood` (USDG on Robinhood Chain), `base,solana`, or a raw CAIP-2 like `eip155:4663`. Unset = the client picks (effectively Base on multi-chain sellers). |
 | `AGENT402_ASYNC` | `auto` | Slow routes (reports, video, the premium image; `async.recommended` on their `/api/pricing` row) are paid with `Prefer: respond-async` and collected from their job link, so a long run never outlives the connection. `off` waits on the connection instead (since 0.13.18 sending `Prefer: wait=<maxSeconds>` where the row gives `async.preferWait`); `always` uses a job on every route that runs as one. |
 | `AGENT402_ASYNC_TIMEOUT_MS` | `900000` | How long to poll a job before answering with its link (`structuredContent.jobUrl`) to collect later. |
 
-The per-call cap and the session budget are both opt-in; when set, both are
+The per-call cap is on by default and the session budget is opt-in; both are
 enforced on the payment that is signed (or before a credits call is sent) - a
 call over the cap is refused before anything is signed. The
 wallet's x402 client carries a policy that drops every payment option over the
@@ -61,15 +61,17 @@ per-call cap or what is left of the budget, so the 402 the wallet signs is held
 to the caps, and a wallet call sends no unpaid preflight first. Each option is priced from the
 known decimals of its asset (USDC on each rail, USDG on Robinhood Chain), never
 from a decimals value in the challenge, and an option in any other asset is not
-signed. A value that is not a USD amount or `off` reads as no cap (and the
-server logs it). Set `AGENT402_BUDGET` to cap the session total.
+signed. A value that is not a USD amount, `0` or `off` (text, a negative number, an
+empty string) keeps the default, the $5 per-call cap and no session budget, and the
+server names the variable on stderr. Set `AGENT402_BUDGET` to cap the session total.
 `payment.info` reports the caps, what's been spent, and what remains. With no wallet key and no credits key,
 the server runs in proof-of-work mode (pure-CPU tools stay free). Use dedicated
 low-value wallets for `AGENT_KEY` / `SOLANA_AGENT_KEY`, funded only with what
 you intend to spend. Most tools cost $0.001 to $0.02. The routing tiers top out
 at $3.30 (`route-execute-pro`); multi-tool skill packs run $0.003 to $0.101; and the
 report products run $0.60 to $2.00 per report (domain-audit $0.60 up to the ticker pack at $2.00),
-so set `AGENT402_MAX_PER_CALL` to the ceiling you want, if any.
+so the default per-call cap of $5 covers every tool; set `AGENT402_MAX_PER_CALL` lower for a
+tighter ceiling, or `off` for none.
 
 **Held payments.** `payment.info` reports `heldThisSessionUsd`: money a wallet
 call sent a signed payment for without a confirmed answer (an error status, a

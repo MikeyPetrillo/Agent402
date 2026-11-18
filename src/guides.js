@@ -481,8 +481,9 @@ A refused call throws \`SpendingLimitError\` naming the cap, the quote and the
 list price. A payment that was sent and answered with an error counts as held
 until its authorization can no longer settle.
 
-**agent402-mcp.** The per-call cap and the session budget are both opt-in:
-neither is set unless you set it.
+**agent402-mcp.** The per-call cap is on by default at $5, which covers every
+fixed price in the catalog (\`0\` or \`off\` turns it off); the session budget
+is opt-in.
 
 \`\`\`bash
 export AGENT_KEY=0x...                # or SOLANA_AGENT_KEY for a Solana wallet
@@ -493,7 +494,10 @@ npx -y agent402-mcp@${AGENT402_MCP_VERSION}
 \`\`\`
 
 **agent402-openclaw.** \`maxPerCallUsd\` in the plugin config, or
-\`AGENT402_MAX_PER_CALL_USD\`, opt-in: no ceiling unless set.
+\`AGENT402_MAX_PER_CALL_USD\`, defaults to $5; \`0\` or \`off\` turns it off.
+
+In both packages a value that is not a USD amount keeps the default ceiling
+and is named on stderr, so a typo never removes it.
 
 All three refuse an accept that asks for a signing validity longer than a day,
 and refuse to send a payload signed past it.
@@ -906,8 +910,9 @@ chat) the check reads the quote for that request, so a longer script meets
 the cap before it is paid. A refused call throws \`SpendingLimitError\`.
 The caps live in one client instance: give each worker its own.
 
-In agent402-mcp, \`AGENT402_MAX_PER_CALL\` and \`AGENT402_BUDGET\` set the
-per-call and session ceilings.
+In agent402-mcp, \`AGENT402_MAX_PER_CALL\` (default $5; \`0\` or \`off\`
+turns it off) and \`AGENT402_BUDGET\` (opt-in) set the per-call and session
+ceilings.
 
 ### At volume
 
@@ -1963,7 +1968,7 @@ gateway. Any OpenAI-compatible client then uses it as its base URL:
 \`\`\`bash
 npm i agent402-openclaw @x402/fetch @x402/evm viem   # in one folder
 export AGENT402_WALLET_KEY=0x...      # an EVM key holding USDC on Base
-export AGENT402_MAX_PER_CALL_USD=2    # per-call ceiling checked before signing
+export AGENT402_MAX_PER_CALL_USD=5    # per-call ceiling checked before signing (the default; 0 or off turns it off)
 npx agent402-openclaw proxy           # run from that folder; serves http://127.0.0.1:8412/v1
 \`\`\`
 

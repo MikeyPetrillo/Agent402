@@ -5,7 +5,8 @@
 // Payment: a prepaid credits key (AGENT402_CREDITS_KEY) or an x402 wallet
 // (AGENT402_WALLET_KEY, with @x402/fetch + @x402/evm + viem present). Free-tier
 // tools pay with proof-of-work and need neither. Spend bounds ride with every
-// paid call when set (AGENT402_MAX_PER_CALL_USD, AGENT402_DAILY_LIMIT_USD; both opt-in).
+// paid call: AGENT402_MAX_PER_CALL_USD (default $5; 0 or off turns it off) and
+// the opt-in AGENT402_DAILY_LIMIT_USD.
 import { Agent402 } from "agent402-client";
 
 const DEFAULT_BASE = "https://agent402.tools";
@@ -68,6 +69,27 @@ const setting = (runtime, key) => {
   return typeof v === "string" && v.trim() ? v.trim() : null;
 };
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
+/** Default per-call ceiling in USD: it covers every fixed price in the Agent402
+ *  catalog, so it protects the wallet without refusing a listed tool. */
+export const DEFAULT_MAX_PER_CALL_USD = 5;
+const warnedCaps = new Set();
+/** The per-call ceiling agent402-client gets from AGENT402_MAX_PER_CALL_USD:
+ *  the default when unset, null (no ceiling) for 0 or "off", the amount for a
+ *  USD number. A value that does not parse (text, negative, NaN) keeps the
+ *  default and is named once on stderr, so a typo never removes the ceiling. */
+export function maxPerCallFrom(raw, warn = (m) => console.error(m)) {
+  if (raw == null) return DEFAULT_MAX_PER_CALL_USD;
+  const v = String(raw).trim().toLowerCase();
+  if (v === "off") return null;
+  const n = v === "" ? NaN : Number(v);
+  if (Number.isFinite(n) && n >= 0) return n === 0 ? null : n;
+  const shown = String(raw).length <= 16 ? JSON.stringify(String(raw)) : "(a long value, not shown)";
+  if (!warnedCaps.has(String(raw))) {
+    warnedCaps.add(String(raw));
+    warn(`[elizaos-plugin-agent402] AGENT402_MAX_PER_CALL_USD=${shown} is not a USD amount, 0 or "off"; keeping the default $${DEFAULT_MAX_PER_CALL_USD} per-call ceiling`);
+  }
+  return DEFAULT_MAX_PER_CALL_USD;
+}
 
 /** A fresh x402 client and its paying fetch for one agent402-client instance,
  *  which registers its signing guard on the client (the ceilings then hold on
@@ -99,8 +121,9 @@ async function clientFor(runtime, fetchImpl = globalThis.fetch) {
   const baseUrl = (setting(runtime, "AGENT402_BASE_URL") || DEFAULT_BASE).replace(/\/+$/, "");
   const creditsKey = setting(runtime, "AGENT402_CREDITS_KEY");
   const walletKey = setting(runtime, "AGENT402_WALLET_KEY");
-  // Spending caps are opt-in: none unless a setting names one.
-  const maxPerCallUsd = num(setting(runtime, "AGENT402_MAX_PER_CALL_USD"), null);
+  // A $5 per-call ceiling unless the setting names another (0 or off: none);
+  // the daily limit is opt-in.
+  const maxPerCallUsd = maxPerCallFrom(setting(runtime, "AGENT402_MAX_PER_CALL_USD"));
   const dailyLimitUsd = num(setting(runtime, "AGENT402_DAILY_LIMIT_USD"), null);
   const sig = JSON.stringify([baseUrl, creditsKey, walletKey, maxPerCallUsd, dailyLimitUsd]);
   const key = runtime && typeof runtime === "object" ? runtime : clientFor;
@@ -265,7 +288,7 @@ export const callAction = {
   description:
     "Call an Agent402 tool by slug with its input and return the tool's JSON result. Free-tier tools cost nothing " +
     "(proof-of-work); wallet-only tools are paid with the configured credits key or x402 wallet, typically $0.001 to " +
-    "$0.05 per call and, when set, never above AGENT402_MAX_PER_CALL_USD or the rolling AGENT402_DAILY_LIMIT_USD. If no slug is " +
+    "$0.05 per call and never above AGENT402_MAX_PER_CALL_USD ($5 unless set) or, when set, the rolling AGENT402_DAILY_LIMIT_USD. If no slug is " +
     "given the tool is chosen from the message and the last AGENT402_FIND result.",
   parameters: [
     { name: "slug", description: "Tool slug from AGENT402_FIND (for example: hash, search, extract, stock-quote)", required: false, schema: { type: "string" } },
@@ -293,7 +316,8 @@ export const callAction = {
       const msg = errorText(e);
       const code = e?.name === "SpendingLimitError" || /exceeds maxPerCallUsd|dailyLimitUsd|maxPerHostUsd/.test(msg) ? "spend_limit"
         : /wallet-only|402|refused by credits/.test(msg) ? "payment_required" : "upstream_error";
-      const hint = code === "payment_required" ? " Set AGENT402_WALLET_KEY (or AGENT402_CREDITS_KEY for a prepaid credits key) to pay for this tool." : "";
+      const hint = code === "payment_required" ? " Set AGENT402_WALLET_KEY (or AGENT402_CREDITS_KEY for a prepaid credits key) to pay for this tool."
+        : code === "spend_limit" && (e?.limit === "maxPerCallUsd" || /maxPerCallUsd/.test(msg)) ? `; nothing was signed. Raise AGENT402_MAX_PER_CALL_USD (default $${DEFAULT_MAX_PER_CALL_USD}), or set it to 0 or off, to allow it.` : "";
       return reply(callback, failure(code, `Agent402 \`${slug}\` failed: ${msg}${hint}`, { slug, params, resolvedVia: via }));
     }
     const data = out && typeof out === "object" ? out : { result: out };

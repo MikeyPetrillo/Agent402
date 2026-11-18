@@ -27,7 +27,7 @@ Character config:
 }
 ```
 
-`AGENT402_MAX_PER_CALL_USD` is optional: with no spending setting, no call is refused for its price.
+`AGENT402_MAX_PER_CALL_USD` protects the wallet with a $5 per-call ceiling by default, which covers every fixed price in the catalog; `0` or `off` turns it off, and a value that is not a USD amount keeps the default and is named on stderr.
 
 `AGENT402_CREDITS_KEY` is a prepaid card-credits key issued at
 https://agent402.tools/credits (shown once, emailed; that page says whether new
@@ -43,7 +43,7 @@ free tier still works.
 | Action | What it does | Cost |
 |---|---|---|
 | `AGENT402_FIND` | Plain-language task in, best-matching tools out: slug, price, whether payment is needed, a ready example input. Parameters: `task` (required), `k`. | Free |
-| `AGENT402_CALL` | Runs one tool and returns its JSON. Parameters: `slug`, `params` (both optional: with neither, the tool is chosen from the message and the last `AGENT402_FIND` result, see below). Proof-of-work for free-tier tools; the credits key or wallet for wallet-only tools, never above `AGENT402_MAX_PER_CALL_USD` or the rolling `AGENT402_DAILY_LIMIT_USD` when you set them (both opt-in, no cap by default). | $0.001 and up, quoted in every 402 |
+| `AGENT402_CALL` | Runs one tool and returns its JSON. Parameters: `slug`, `params` (both optional: with neither, the tool is chosen from the message and the last `AGENT402_FIND` result, see below). Proof-of-work for free-tier tools; the credits key or wallet for wallet-only tools, never above `AGENT402_MAX_PER_CALL_USD` (default $5) or, when set, the rolling `AGENT402_DAILY_LIMIT_USD`. | $0.001 and up, quoted in every 402 |
 | `AGENT402_ABOUT` | What Agent402 is, how it is paid, live tool counts. | Free |
 
 A provider (`AGENT402`) tells the agent on every turn that the catalog exists,
@@ -117,7 +117,7 @@ params, an unreachable catalog and no match are typed failures sent nowhere.
 | `AGENT402_CREDITS_KEY` | | a prepaid credits key (`a402_...`) |
 | `AGENT402_WALLET_KEY` | | EVM private key paying USDC over x402 |
 | `AGENT402_BASE_URL` | `https://agent402.tools` | self-hosters point this at their instance |
-| `AGENT402_MAX_PER_CALL_USD` | _(unset, no cap)_ | opt-in: refuse any single paid call above this; enforced on the payment that is signed |
+| `AGENT402_MAX_PER_CALL_USD` | `5` | refuse any single paid call above this; enforced on the payment that is signed; `0` or `off` turns it off |
 | `AGENT402_DAILY_LIMIT_USD` | | refuse once the runtime's rolling 24h paid spend would exceed this |
 | `AGENT402_MAX_RESULT_CHARS` | unset (no bound) | when set, a result JSON longer than this is an explicit `result_too_large` failure carrying the whole result in `data.result`; nothing partial reaches the text |
 

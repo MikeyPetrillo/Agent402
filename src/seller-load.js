@@ -109,6 +109,11 @@ export const REGISTRATION_HOURLY_MAX = countKnob("SELLER_REGISTRATION_HOURLY_MAX
 export const REGISTRATION_HOST_HOURLY_MAX = countKnob("SELLER_REGISTRATION_HOST_HOURLY_MAX", 200);
 /** The spacing of registration reads to one host past its hour's ceiling. */
 export const REGISTRATION_PACE_MS = 30_000;
+/** The furthest ahead one paced registration read may take its turn on a
+ *  host: past it the read is held (RequestHeld) instead of queued, so no
+ *  caller can put another caller's read hours into the future, and the
+ *  number of waiting reads per host stays bounded. */
+export const REGISTRATION_PACE_MAX_LEAD_MS = 10 * 60_000;
 /** Who a registration's reads are counted for: the registrant key the
  *  register routes pass (runAsRegistrant). Reads outside one share "-". */
 const registrantScope = new AsyncLocalStorage();
@@ -237,6 +242,7 @@ export function createSellerLoad({
   registrationHourlyMax = REGISTRATION_HOURLY_MAX,
   registrationHostHourlyMax = REGISTRATION_HOST_HOURLY_MAX,
   registrationPaceMs = REGISTRATION_PACE_MS,
+  registrationPaceMaxLeadMs = REGISTRATION_PACE_MAX_LEAD_MS,
   wait = (ms) => new Promise((r) => { const tm = setTimeout(r, ms); tm.unref?.(); }),
 } = {}) {
   const probeCap = Math.max(1, Math.floor(dailyBudget * probeShare));
@@ -666,6 +672,17 @@ export function createSellerLoad({
           if ((await countLocal(hostKey)) > registrationHostHourlyMax) {
             const host = operatorKey(target);
             const at = Math.max(clock(), paced.get(host) || 0) + registrationPaceMs;
+            // A turn further ahead than the lead allows is not queued: the
+            // read is held and its counts given back, so a crowd of callers
+            // cannot push a host's next registration read hours out.
+            const lead = at - registrationPaceMs - clock();
+            if (lead > registrationPaceMaxLeadMs) {
+              countShared(hostKey, -1);
+              await countLocal(hostKey, -1);
+              if (hourKey) await countLocal(hourKey, -1);
+              bump(counts.refused, `${k}:registration-pace`);
+              return { ok: false, used: 0, budget: dailyBudget, unscheduled: true, heldBy: "registration-pace", retryAfterSeconds: Math.max(1, Math.ceil(lead / 1000)) };
+            }
             paced.delete(host); paced.set(host, at); bounded(paced);
             const ms = at - registrationPaceMs - clock();
             bump(counts.requests, `${k}:registration-paced`);
@@ -886,6 +903,8 @@ export class RequestHeld extends Error {
   constructor(heldBy, retryAfterSeconds = 0) {
     super(heldBy === "registration-hour"
       ? `not sent: this caller's registration reads of that host are spent for this hour; retry in ${retryAfterSeconds} s`
+      : heldBy === "registration-pace"
+      ? `not sent: that host's registration reads are queued as far ahead as allowed; retry in ${retryAfterSeconds} s`
       : `not sent: that origin asked this caller's registration reads to wait; retry in ${retryAfterSeconds} s`);
     this.landingHeld = true;
     this.landingHost = null;

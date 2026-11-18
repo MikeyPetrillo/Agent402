@@ -70,19 +70,38 @@ async function discoveryFetch(fetchImpl, label, url, init) {
   throw err;
 }
 
+/** Default per-call ceiling in USD: it covers every fixed price in the Agent402
+ *  catalog, so it protects the wallet without refusing a listed tool. */
+export const DEFAULT_MAX_PER_CALL_USD = 5;
+/** The per-call ceiling agent402-client gets: the default when unset, null (no
+ *  ceiling) for 0 or "off", the amount for a USD number. A value that does not
+ *  parse (text, negative, NaN, empty) keeps the default and is named once on
+ *  stderr, so a typo never removes the ceiling. */
+export function resolveMaxPerCallUsd(v, warn = (m) => console.error(m)) {
+  if (v === undefined || v === null) return DEFAULT_MAX_PER_CALL_USD;
+  const raw = String(v).trim().toLowerCase();
+  if (raw === "off") return null;
+  const n = raw === "" ? NaN : Number(raw);
+  if (Number.isFinite(n) && n >= 0) return n === 0 ? null : n;
+  const shown = String(v).length <= 16 ? JSON.stringify(String(v)) : "(a long value, not shown)";
+  warn(`[agent402-agentkit] maxPerCallUsd=${shown} is not a USD amount, 0 or "off"; keeping the default $${DEFAULT_MAX_PER_CALL_USD} per-call ceiling`);
+  return DEFAULT_MAX_PER_CALL_USD;
+}
+
 /**
  * The three actions, as plain AgentKit custom-action definitions.
  * @param {object} [opts]
  * @param {string} [opts.baseUrl="https://agent402.tools"]
  * @param {typeof fetch} [opts.fetchImpl]  fetch used for free discovery and as the base of the paying fetch
  * @param {object} [opts.zod]              a zod module (loaded from the host when omitted)
- * @param {number} [opts.maxPerCallUsd]    opt-in ceiling on one paid call (USD; none unless set); over it the call is refused before paying
+ * @param {number|string} [opts.maxPerCallUsd=5]  ceiling on one paid call (USD); over it the call is refused before paying. 0 or "off" turns it off; a value that does not parse keeps the default and is named on stderr
  * @param {number} [opts.dailyLimitUsd]    ceiling on rolling-24h paid spend (USD)
  * @param {number} [opts.maxPerHostUsd]    ceiling on rolling-24h paid spend to one seller host (USD)
  * @param {string[]} [opts.payees]         only pay these payTo addresses (lowercased EVM); anything else is refused before signing
  * @param {string} [opts.creditsKey]       prepaid credits key (a402_...); pays wallet-only tools on Agent402's own services without a wallet
  */
-export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = globalThis.fetch, zod, maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, payees = null, creditsKey = null } = {}) {
+export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = globalThis.fetch, zod, maxPerCallUsd: maxPerCallSetting, dailyLimitUsd = null, maxPerHostUsd = null, payees = null, creditsKey = null } = {}) {
+  const maxPerCallUsd = resolveMaxPerCallUsd(maxPerCallSetting);
   const z = zod || (await loadZod());
   // ONE client per wallet provider for the life of these actions. The rolling
   // daily and per-host ceilings live in the client's ledger, so a client built
@@ -139,12 +158,23 @@ export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = glob
     }),
     invoke: async (walletProvider, { slug, params = {} }) => {
       // Spend bounds ride with every paid call and are checked on the payment
-      // that is signed: optional per-call, rolling daily and per-host
-      // ceilings (none applies unless set) and an optional payee allowlist.
-      // With maxPerCallUsd set, no single payment is signed above it,
-      // whatever baseUrl is set to; set dailyLimitUsd to bound the total too.
+      // that is signed: a per-call ceiling (default $5; 0 or "off" turns it
+      // off), optional rolling daily and per-host ceilings and an optional
+      // payee allowlist. With a per-call ceiling (the default), no single
+      // payment is signed above it, whatever baseUrl is set to; set
+      // dailyLimitUsd to bound the total too.
       const client = await clientFor(walletProvider);
-      const out = await client.call(slug, params);
+      let out;
+      try {
+        out = await client.call(slug, params);
+      } catch (e) {
+        // A per-call refusal says how to allow it; the error keeps its type
+        // and fields (SpendingLimitError, atSigning, priceUsd, cap).
+        if (e?.name === "SpendingLimitError" && (e.limit === "maxPerCallUsd" || e.details?.limit === "maxPerCallUsd") && typeof e.message === "string" && !/set it to 0 or "off"/.test(e.message)) {
+          e.message += `; nothing was signed. Raise maxPerCallUsd (default $${DEFAULT_MAX_PER_CALL_USD}), or set it to 0 or "off", to allow it`;
+        }
+        throw e;
+      }
       return typeof out === "string" ? out : JSON.stringify(out);
     },
   };
