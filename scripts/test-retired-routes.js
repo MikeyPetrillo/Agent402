@@ -420,7 +420,10 @@ try {
   }
   ok(bad.length === 0, `every retired snapshot route answers 410 with its registry replacement (wrong: ${bad.join(", ") || "none"})`);
   const research = await (await fetch(`${base}/api/research-company?ticker=AAPL`)).json();
-  ok(research.replacement?.slug === "skill-company-dossier" && /^POST \/api\/skill\/company-dossier$/.test(research.replacement?.route || ""), "a pack can be a tool's replacement, with the pack's own route");
+  // Its replacement pack runs a stock tool, so it is named only while a stock
+  // provider is active (src/tools/stock-provider.js); this boot has none.
+  ok(research.replacement === null && /no direct replacement/.test(research.hint || ""), `a retirement whose replacement pack is not listed names none (got ${JSON.stringify(research.replacement)})`);
+  ok(RETIRED_TOOLS["research-company"].replacement === null && RETIRED_TOOLS["premarket-quote"].replacement === null, "...and so does the registry on a boot with no stock provider");
   const livePack = [...live.packs][0];
   ok((await fetch(`${base}/api/skill-packs/${livePack}/prompt`)).status === 200, `a live pack's prompt is still served (${livePack})`);
   const tpl = await fetch(`${base}/api/skill-packs/%7Bslug%7D/prompt`);

@@ -18,7 +18,9 @@
 // a retirement cut would silently hollow out a pack that still sells.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
-import { SKILL_PACKS, PACK_PRICES } from "../src/skills.js";
+// Every pack, listed or not: the packs that run a stock tool are listed only
+// with a stock provider, and must be ready to sell the moment one is active.
+import { ALL_SKILL_PACKS as SKILL_PACKS, PACK_PRICES } from "../src/skills.js";
 import { PACK_STEPS, __test } from "../src/tools/skill-runner.js";
 const { getStepConfig } = __test;
 
@@ -107,7 +109,7 @@ for (const pack of SKILL_PACKS) {
 // ---- `when`: a conditional leg is skipped, never failed (2026-09-02) --------
 {
   const { __test: { runPack } } = await import("../src/tools/skill-runner.js");
-  const { SKILL_PACKS } = await import("../src/skills.js");
+  const { ALL_SKILL_PACKS: SKILL_PACKS } = await import("../src/skills.js");
   const packIndex = new Map(SKILL_PACKS.map((p) => [p.slug, p]));
   const bars = Array.from({ length: 40 }, (_, i) => ({ close: 100 + Math.sin(i) * 3 + i * 0.2 }));
   const calls = [];
@@ -144,7 +146,7 @@ for (const pack of SKILL_PACKS) {
 // run) and the bake-off ran forecast-eval once with drift.
 {
   const { __test: { runPack } } = await import("../src/tools/skill-runner.js");
-  const { SKILL_PACKS } = await import("../src/skills.js");
+  const { ALL_SKILL_PACKS: SKILL_PACKS } = await import("../src/skills.js");
   const packIndex = new Map(SKILL_PACKS.map((p) => [p.slug, p]));
   const mk = (base) => Array.from({ length: 40 }, (_, i) => ({ close: base + i * (base === 100 ? 0.5 : -0.3) + (i % 3) }));
   const seen = { corr: null, evals: [], forward: [] };
@@ -175,7 +177,7 @@ for (const pack of SKILL_PACKS) {
 // ---- security-audit checks subdomains the CT log names (2026-10-02) ---------
 {
   const { __test: { runPack }, AUDIT_DNS_SUBDOMAINS, AUDIT_HEADER_SUBDOMAINS } = await import("../src/tools/skill-runner.js");
-  const { SKILL_PACKS } = await import("../src/skills.js");
+  const { ALL_SKILL_PACKS: SKILL_PACKS } = await import("../src/skills.js");
   const packIndex = new Map(SKILL_PACKS.map((p) => [p.slug, p]));
   const dns = [], headers = [];
   const inline = {
@@ -202,7 +204,7 @@ console.log(`\n${passed} passed, 0 failed (${SKILL_PACKS.length} packs checked)`
 // ---- a pack running a model-backed tool is model-backed (2026-10-02) --------
 {
   const { modelBackedPackSlugs } = await import("../src/tools/skill-runner.js");
-  const { SKILL_PACKS } = await import("../src/skills.js");
+  const { ALL_SKILL_PACKS: SKILL_PACKS } = await import("../src/skills.js");
   const model = new Set(["pdf-summarize", "answer", "transcribe"]);
   const got = modelBackedPackSlugs(SKILL_PACKS, (s) => model.has(s)).sort();
   const want = SKILL_PACKS.filter((p) => p.toolSlugs.some((s) => model.has(s))).map((p) => `skill-${p.slug}`).sort();

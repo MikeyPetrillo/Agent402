@@ -15,6 +15,7 @@
 //
 //   node scripts/test-find-ranking.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { STOCK_SLUGS, stockDataEnabled } from "../src/tools/stock-provider.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -150,7 +151,8 @@ try {
   const pricing = await fetch(`${BASE}/api/pricing`).then((r) => r.json());
   ok((pricing.endpoints || []).length > 400, `live catalog has >400 endpoints (got ${(pricing.endpoints || []).length})`);
 
-  for (const [q, expected] of TOP1) {
+  // A stock tool is listed only with an active stock provider (this boot's env).
+  for (const [q, expected] of TOP1.filter(([, slug]) => stockDataEnabled() || !STOCK_SLUGS.has(slug))) {
     const found = await slugs(q, 3);
     ok(found[0] === expected, `top-1 for "${q}" is ${expected} (got ${found.join(",") || "none"})`);
   }

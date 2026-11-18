@@ -1,7 +1,7 @@
 // Finance tools: US equity end-of-day quote and daily bars, read through the
 // stock-provider seam (src/tools/stock-provider.js). The provider is chosen by
 // STOCK_DATA_PROVIDER and is active only with its own key; with none active
-// these tools are not listed (FINANCE_TOOLS_ENABLED is empty) and the routes
+// these tools are not listed (financeToolsEnabled() is empty) and the routes
 // answer 503 not-offered. Every answer names the source it came from and its
 // coverage (the adapter's provenance fields).
 import { selectedStockAdapter, stockDataEnabled, quote as providerQuote, dailyBars as providerDailyBars } from "./stock-provider.js";
