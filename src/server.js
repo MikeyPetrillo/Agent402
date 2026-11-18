@@ -454,6 +454,9 @@ import { initWithRetry } from "./db-init-retry.js";
 import { railOf, outcomeRailOf } from "./payment-rail.js";
 import { noteVerifiedPaidOutcome, errorTextOf, attributionTextOf, topBuyerFailuresStatus, startTopBuyerRefresh, topRefreshMs, isWatchedTopBuyer, onchainSqlBusyStatus, SQL_BUSY_KIND } from "./top-buyer-failures.js";
 import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
+import { captureServerException } from "./posthog-observability.js";
+import { webBotAuthEnabled, createWebBotAuth } from "./web-bot-auth.js";
+import { configureWalletSignIn, mountWalletSignIn, resolveRouteIdentity, MEMORY_SESSION_SLUGS } from "./wallet-sign-in.js";
 import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, toolGoneSourceOf, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage, operatorLoginPage } from "./operator.js";
@@ -2863,6 +2866,10 @@ app.use(paidNoStoreMiddleware());
 // email-link routes under /followups and /alerts are registered early; the
 // PostHog proxy sets its own nosniff as well).
 app.use(securityHeaders());
+// Web Bot Auth (src/web-bot-auth.js): off unless WEB_BOT_AUTH=on. Verifies a
+// signing agent's HTTP Message Signature and records it on req.webBotAuth;
+// never refuses and never changes an answer.
+if (webBotAuthEnabled()) app.use(createWebBotAuth().middleware());
 // Server-side memo for public surfaces whose body is built from SQLite
 // aggregates (revenue, sales, status, proof). A Cache-Control header only
 // asks browsers to reuse a response; every crawler and bot hit still rebuilt
@@ -3345,6 +3352,11 @@ app.get("/__operator/tweet-queue.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json(_tweetQueue.status());
 });
+// Wallet sign-in (EIP-4361) for the identity-bound routes: off unless
+// SIWE_SESSION_SECRET is set; off, nothing below mounts (src/wallet-sign-in.js).
+if (configureWalletSignIn({ baseUrl: BASE_URL })) {
+  mountWalletSignIn(app, { express, limiter: createRateLimiter("wallet-session", { perMin: 20, perHour: 200 }), clientIp });
+}
 const alertsSignupLimiter = createRateLimiter("alerts-signup", { perMin: 6, perHour: 40 });
 // A second bound keyed on the ADDRESS (hashed), so a distributed source cannot
 // flood one victim's inbox with confirmations by rotating IPs.
@@ -12984,7 +12996,12 @@ app.post("/api/pdf", withToolCallLog("pdf", async (req, res) => {
 // In FREE_MODE nothing verifies a payment header, so identityPayerOf is null
 // there and the only identity is the demo namespace (src/payer.js).
 function memoryActor(req, res) {
-  const payer = identityPayerOf(req);
+  // A wallet session (src/wallet-sign-in.js, off by default) names the wallet
+  // on a call whose payment carries no signed payer; grants stay payer-only.
+  const slug = CATALOG[`${req.method} ${req.path}`]?.slug;
+  const id = resolveRouteIdentity(req, MEMORY_SESSION_SLUGS.includes(slug) ? "memory" : "", identityPayerOf(req));
+  if (id.error) { res.status(id.error.status).json({ error: id.error.message }); return null; }
+  const payer = id.wallet;
   if (payer) return payer;
   if (FREE_MODE && req.query.ns) return `demo:${req.query.ns}`;
   res.status(400).json({
@@ -13378,6 +13395,9 @@ for (const tool of ALL_KIT) {
       // A coverage refusal (src/inflight-cover.js) is one line per wallet per
       // minute and a summary for the rest; every other error logs as before.
       logToolError(tool.slug, status, errorMessage, shape, synthetic, probe, err?.coverRefusal && status === 429 ? { quiet: !noteCoverRefusalLog(req, err) } : undefined);
+      // A 5xx our tool or its upstream raised: one $exception per fingerprint
+      // per window (src/posthog-observability.js; scrubbed type, wording, frames).
+      if (status >= 500) captureServerException(err, { source: "tool", slug: tool.slug, status });
       // WHOSE FAILURE IS THIS? Every 4xx carried the self-correction envelope -
       // the tool's input schema, its required keys and a working example - which
       // says one thing to a machine: your input was wrong, here is the shape.
@@ -14023,6 +14043,7 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 // already try/caught, so a rejection here is the unexpected tail.
 process.on("unhandledRejection", (reason) => {
   console.error("[unhandledRejection]", reason instanceof Error ? reason.stack : reason);
+  captureServerException(reason, { source: "unhandledRejection" });
 });
 // An uncaught exception leaves the process in an UNDEFINED state (Node's own
 // guidance), so continuing to serve payments from it is unsafe (security audit
@@ -14033,6 +14054,7 @@ process.on("unhandledRejection", (reason) => {
 // on complex teardown. If the drain setup itself throws, exit immediately.
 process.on("uncaughtException", (err) => {
   console.error("[uncaughtException] fatal - draining then exiting non-zero:", err?.stack || err);
+  captureServerException(err, { source: "uncaughtException", handled: false, level: "fatal" });
   try {
     shutdown("uncaughtException", { code: 1, deadlineMs: 10_000 });
   } catch {
