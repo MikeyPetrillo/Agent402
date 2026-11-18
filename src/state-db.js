@@ -761,6 +761,8 @@ export const leases = {
 // shutdown releases.
 const heldLeases = new Map();
 const leaseKey = (owner, name) => `${owner}\u0001${name}`;
+// Runs in progress here with no state database (no lease row), same keys.
+const localRuns = new Set();
 let leasesStopped = false;
 // A release that failed (the database unreachable as the tick ended) is not
 // forgotten: left alone, the row would hold its loop against every container
@@ -915,7 +917,16 @@ export async function withLease(name, opts = {}, fn) {
     failOpen: failOpenOpt = false, singleton = false, acquireTimeoutMs = stateDbTimeouts().leaseAcquireMs,
   } = opts || {};
   const failOpen = leaseMayFailOpen(name, { failOpen: failOpenOpt, singleton });
-  if (!stateDbEnabled()) return { ran: true, result: await runAsJob(name, () => fn(TRIVIAL_CTX)) };
+  if (!stateDbEnabled()) {
+    // No lease row to take, but the same in-process guard: a tick whose last
+    // run is still going answers busy, so two runs of one loop never
+    // interleave over the same entries.
+    const key = leaseKey(owner, String(name));
+    if (localRuns.has(key)) return { ran: false, reason: "busy" };
+    localRuns.add(key);
+    try { return { ran: true, result: await runAsJob(name, () => fn(TRIVIAL_CTX)) }; }
+    finally { localRuns.delete(key); }
+  }
   if (leasesStopped) return { ran: false, reason: "shutdown" };
   const key = leaseKey(owner, String(name));
   if (heldLeases.has(key)) return { ran: false, reason: "busy" };
