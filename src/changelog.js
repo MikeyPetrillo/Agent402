@@ -15,6 +15,39 @@ const ENTRIES = [
   },
   {
     date: "2026-11-17",
+    title: "Ownership, contributor agreement and third-party notices",
+    items: [
+      "Repository: Outside pull requests carry a DCO sign-off whose email is each commit's author email, and everyone whose commits are in the pull request agrees to the new contributor license agreement (CLA.md, v1.0) by its versioned sentence: the author in the description or an own comment, every other commit author in an own comment. The check runs the base branch's scripts, re-runs on a comment, and names the missing record and how to add it. The owner's pull requests and bot updates are unchanged.",
+      "Repository: NOTICE records who holds the copyright (the company for the code it wrote, each outside contributor for their own contributions), how outside contributions and AI-assisted development are covered, and points to THIRD_PARTY_NOTICES.txt, the packages each shipped artifact installs with their licenses, regenerated from the lockfiles and the tracked package manifests by scripts/gen-third-party-notices.js, which refuses a shipped package whose license is not permissive unless it is listed with a reason. The README, CONTRIBUTING.md and /llms-full.txt carry the copyright and licensing summary.",
+    ],
+  },
+  {
+    date: "2026-11-17",
+    title: "Press kit, MCP server card and one profile list",
+    items: [
+      "Site: /press is a press kit: how to write the name, the logo and social card files, the operating company and the press contact. /about answers at /company, the entity page.",
+      "Site: Structured data on every page lists one set of our profiles for the site and the company (the repository, X, the npm and PyPI packages and the MCP Registry entry) and says what Agent402.Tools is.",
+      "Site: The home page description says what a card buys: reports and monitors while prepaid credits are not on sale.",
+      "Surfaces: The MCP connector publishes a server card at /mcp/server-card, also at /.well-known/mcp/server-card.json: the name, version, title and streamable HTTP endpoint that /mcp reports, with the tool count.",
+    ],
+  },
+  {
+    date: "2026-11-17",
+    title: "Seller removal says how a seller returns",
+    items: [
+      "Operations: Removing a seller from the index can be previewed with a dry run (dryRun: true) that names what the index holds for it and where it is known from, and the removal and its restore say how the seller returns: one listed in a registry or seeded by the operator comes back by itself on the next read and crawl, one only its owner submitted comes back when the owner registers again.",
+    ],
+  },
+  {
+    date: "2026-11-17",
+    title: "A conformance document for every payment rail",
+    items: [
+      "Payments: /.well-known/agent402-conformance.json lists each payment rail this server accepts (x402 exact and upto per network, Circle Gateway batched, MPP evm, Tempo pull and push, card over MPP, prepaid credits, card checkout, proof of work) and, for each, whether it settles after a successful answer, honors an Idempotency-Key and the x402 payment-identifier, guards against a replayed credential, repays a charged failure and how, forgives a hang-up, screens the payer and returns a receipt. Each cell is computed at request time from the serving code and its switches. /trust and llms.txt link it.",
+      "Payments: The same document carries the refund terms as data (refundTerms): each clause is the sentence /terms prints, read from one source. /terms, dated 2026-11-17, points to it and states that the terms govern where the two differ.",
+    ],
+  },
+  {
+    date: "2026-11-17",
     title: "An unconfirmed settlement is answered as unconfirmed",
     items: [
       "Payments: When a backup settler ends a settlement on an answer that does not show whether the transfer was sent (an HTTP error, a dropped connection, an unreadable answer, or a failure naming a transaction), the call is answered 402 with reason settlement-unconfirmed: the answer says not to sign a new authorization for that call before the expiry the payment carries (an authorization's validBefore, a time by which a Solana transaction's blockhash has expired, an Algorand lastValid round or a Stellar expiration ledger), or when it carries none, until the paying wallet shows whether the transfer landed, names the transaction to watch and its refund lookup when there is one (retry watch-transaction, otherwise check-wallet), carries no new offer, and its receipt reads settlement_unconfirmed.",

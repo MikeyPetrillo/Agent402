@@ -390,6 +390,36 @@ export function createTrafficStore(opts = {}) {
     return cls;
   }
 
+  // The paid-call funnel's counts (src/funnel.js), kept on the same day
+  // rollup so they persist and merge across containers like every other
+  // count. `field` is a counter name, or "group.key" for one level of
+  // grouping (refusal classes, reasons). Counts only; the caller names the
+  // fields from fixed vocabularies, and every map here is capped anyway.
+  const FUNNEL_KEY_RE = /^[A-Za-z][A-Za-z0-9-]{0,39}$/;
+  function bumpFunnel(day, arrival, field, n = 1, sub = null) {
+    if (!DAY_RE.test(String(day)) || !FUNNEL_KEY_RE.test(String(arrival)) || expired(day, Date.now())) return false;
+    const [group, key0] = String(field).split(".");
+    const key = sub != null ? String(sub) : key0;
+    if (!FUNNEL_KEY_RE.test(group) || (key !== undefined && !FUNNEL_KEY_RE.test(key))) return false;
+    const r = rollup(day);
+    const f = r.funnel || (r.funnel = {});
+    if (!Object.hasOwn(f, arrival) && Object.keys(f).length >= 8) return false;
+    const row = f[arrival] || (f[arrival] = {});
+    const add = Number(n) || 0;
+    if (key === undefined) row[group] = (Number(row[group]) || 0) + add;
+    else {
+      const g = row[group] && typeof row[group] === "object" ? row[group] : (row[group] = {});
+      if (!Object.hasOwn(g, key) && Object.keys(g).length >= 64) return false;
+      g[key] = (Number(g[key]) || 0) + add;
+    }
+    dirty = true;
+    return true;
+  }
+  /** The funnel counts of the newest `n` days held, newest first: [{ day, funnel }]. */
+  function funnelDays(n = 14) {
+    return [...days.keys()].sort().reverse().slice(0, Math.max(1, n)).map((k) => ({ day: k, funnel: cloneJson(days.get(k).funnel || {}) }));
+  }
+
   function report({ days: n = 2, top = 15 } = {}) {
     const keys = [...days.keys()].sort().reverse().slice(0, n);
     return {
@@ -411,7 +441,7 @@ export function createTrafficStore(opts = {}) {
     };
   }
   const summaryLine = (day = dayOf(Date.now() - 864e5)) => { const r = days.get(day); if (!r) return null; const rails = railSummary(r.rails); return `[traffic] ${day} total=${r.total} ` + CLASSES.map((c) => `${c}=${r.classes[c]}`).join(" ") + ` distinctIps=${r.distinctIps} crawlers=${Object.keys(r.crawlers).length}` + Object.entries(rails).map(([k, v]) => ` rail.${k}=${v.paid}/${v.attempts}paid,${v.distinctPayers}payers`).join(""); };
-  return { record, report, persist, load, summaryLine, flush, ready: () => ready, backend: usePg ? "pg" : "file", _days: days, _payers: payers };
+  return { record, report, persist, load, summaryLine, flush, bumpFunnel, funnelDays, ready: () => ready, backend: usePg ? "pg" : "file", _days: days, _payers: payers };
 }
 
 /** Counts only: attempts, paid, refused, errored, distinct payers and paid

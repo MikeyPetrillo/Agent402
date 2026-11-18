@@ -1158,6 +1158,28 @@ export const REMOVED_ORIGINS_FILE = "/data/removed-origins.json";
 export const REMOVED_ORIGIN_ERROR = "origin removed at the owner's request";
 const REMOVED_ORIGINS_MAX = 5_000;
 const removedFile = () => process.env.REMOVED_ORIGINS_FILE || REMOVED_ORIGINS_FILE;
+// Where the index knew a removed origin from, read before the purge, so the
+// operator can tell how it comes back once restored: a configured seed or a
+// registry listing returns by itself, an origin only its owner submitted
+// returns when the owner registers again. Kept on the stored record; a record
+// written before this field reads as not recorded (null).
+const REMOVAL_SOURCES = ["config", "registry", "owner", "crawl"];
+const AFTER_RESTORE = {
+  config: "a configured seed: crawled and listed again on the next crawl cycle",
+  registry: "known from a registry: listed again by itself after the next registry read and crawl, with its history started fresh",
+  owner: "submitted by its owner: listed again only when the owner registers it",
+  crawl: "found by a crawl: listed again only when a registry, a seed or its owner names it",
+};
+function removalRecord(k, r) {
+  const kf = Array.isArray(r?.knownFrom) ? REMOVAL_SOURCES.filter((x) => r.knownFrom.includes(x)) : null;
+  return { origin: k, removedAt: Number(r?.removedAt) || 0, note: typeof r?.note === "string" ? r.note.slice(0, 500) : "", ...(kf ? { knownFrom: kf } : {}) };
+}
+/** How a removed origin returns once restored: the first source in REMOVAL_SOURCES order, else null. */
+function removalReturn(knownFrom) {
+  if (!Array.isArray(knownFrom)) return { knownFrom: null, returnsBy: null, afterRestore: "where the index knew this origin from was not recorded" };
+  const returnsBy = REMOVAL_SOURCES.find((x) => knownFrom.includes(x)) || null;
+  return { knownFrom, returnsBy, afterRestore: returnsBy ? AFTER_RESTORE[returnsBy] : "the index held nothing for this origin" };
+}
 
 /**
  * Strict form for the operator route: a bare http(s) origin, nothing else.
@@ -1208,7 +1230,7 @@ export function loadRemovedOrigins() {
       if (removedOrigins.size >= REMOVED_ORIGINS_MAX) break;
       const k = strictOriginKey(r?.origin);
       if (!k) continue;
-      removedOrigins.set(k, { origin: k, removedAt: Number(r.removedAt) || 0, note: typeof r.note === "string" ? r.note.slice(0, 500) : "" });
+      removedOrigins.set(k, removalRecord(k, r));
     }
     // A removal loaded after the stores were filled (a hand edit, a test) must
     // still take effect: purge whatever is already held.
@@ -1230,22 +1252,26 @@ function persistRemovedOrigins() {
 // lifts the removal here too.
 const REMOVED_ADAPTER = {
   entries: (b) => (Array.isArray(b) ? b.map((r) => [strictOriginKey(r?.origin), r]).filter(([k]) => k)
-    .map(([k, r]) => [k, { origin: k, removedAt: Number(r?.removedAt) || 0, note: typeof r?.note === "string" ? r.note.slice(0, 500) : "" }]) : []),
+    .map(([k, r]) => [k, removalRecord(k, r)]) : []),
   body: (es) => es.map(([, v]) => v),
   local: () => [...removedOrigins],
   set: (k, r) => {
     if (!removedOrigins.has(k) && removedOrigins.size >= REMOVED_ORIGINS_MAX) return;
-    removedOrigins.set(k, { origin: k, removedAt: Number(r?.removedAt) || 0, note: typeof r?.note === "string" ? r.note.slice(0, 500) : "" });
+    removedOrigins.set(k, removalRecord(k, r));
     purgeOrigin(k);
   },
   del: (k) => { removedOrigins.delete(k); },
 };
 
+// Whether a stored key falls under a removal key: a bare-origin key also
+// covers every path seller on that host.
+function removalMatcher(key) {
+  return (o) => { const k = removalKeyOf(o); return k === key || (!sellerPrefixOf(key) && k != null && sellerHostRootOf(k) === key); };
+}
 // Drop every piece of state keyed on this origin. Returns what was held.
 function purgeOrigin(key) {
   const held = { cache: false, submitted: false, discovered: false, successions: 0 };
-  // A bare-origin key also purges every path seller on that host.
-  const match = (o) => { const k = removalKeyOf(o); return k === key || (!sellerPrefixOf(key) && k != null && sellerHostRootOf(k) === key); };
+  const match = removalMatcher(key);
   for (const o of [...submittedSeeds]) if (match(o)) { submittedSeeds.delete(o); held.submitted = true; }
   for (const o of [...discoveredSeeds]) if (match(o)) { discoveredSeeds.delete(o); held.discovered = true; }
   for (const o of [...cache.keys()]) if (match(o)) { cache.delete(o); held.cache = true; }
@@ -1264,19 +1290,62 @@ function purgeOrigin(key) {
  * Remove one origin from the index and the router, permanently.
  * Returns { removed, origin, removedAt, held } or { error }.
  */
+const STRICT_ORIGIN_ERROR = "pass an exact origin such as https://seller.example (scheme and host, optional port and path prefix, no query, no wildcard)";
+
+/**
+ * What removing this origin would take, read only: the entries the index
+ * holds for it, where it is known from and how it would come back once
+ * restored. For an origin already removed, the provenance stored with the
+ * removal (the state it was read from is gone).
+ */
+export function removalPreview(raw) {
+  ensureRemovalsLoaded();
+  const key = strictOriginKey(raw);
+  if (!key) return { error: STRICT_ORIGIN_ERROR };
+  const rec = removedOrigins.get(key);
+  const held = removalHeld(key);
+  const knownFrom = rec ? (rec.knownFrom ?? null) : held.knownFrom;
+  delete held.knownFrom;
+  return { origin: key, removed: Boolean(rec), ...(rec ? { removedAt: rec.removedAt } : {}), held, ...removalReturn(knownFrom) };
+}
+function removalHeld(key) {
+  const match = removalMatcher(key);
+  const held = { cached: false, sellers: 0, source: null, tools: 0, toolsTotal: 0, registryRows: 0, submitted: false, discovered: false, successions: 0 };
+  let registry = false, config = false;
+  for (const [o, v] of cache) {
+    if (!match(o)) continue;
+    held.cached = true; held.sellers++;
+    const n = Array.isArray(v?.tools) ? v.tools.length : 0;
+    held.tools += n;
+    held.toolsTotal += v?.toolsCapped === true && Number.isFinite(Number(v.toolsTotal)) ? Number(v.toolsTotal) : n;
+    if (o === key || held.source == null) held.source = typeof v?.source === "string" ? v.source : held.source;
+    if (v?.source === "bazaar-fallback") registry = true;
+  }
+  for (const [o, arr] of bazaarToolsByOrigin) if (match(o)) { registry = true; held.registryRows += Array.isArray(arr) ? arr.length : 0; }
+  for (const o of submittedSeeds) if (match(o)) { held.submitted = true; break; }
+  for (const o of discoveredSeeds) if (match(o)) { held.discovered = true; break; }
+  for (const o of configuredSeeds()) if (match(o)) { config = true; break; }
+  for (const [from, r] of successions) if (match(from) || match(r.to)) held.successions++;
+  const flags = { config, registry, owner: held.submitted, crawl: held.discovered || held.cached };
+  held.knownFrom = REMOVAL_SOURCES.filter((x) => flags[x]);
+  // "crawl" is the fallback word: named only when nothing more specific is.
+  if (held.knownFrom.length > 1) held.knownFrom = held.knownFrom.filter((x) => x !== "crawl");
+  return held;
+}
+
 export function removeOrigin(raw, { note = "" } = {}) {
   ensureRemovalsLoaded();
   const key = strictOriginKey(raw);
-  if (!key) return { error: "pass an exact origin such as https://seller.example (scheme and host, optional port and path prefix, no query, no wildcard)" };
+  if (!key) return { error: STRICT_ORIGIN_ERROR };
   if (!removedOrigins.has(key) && removedOrigins.size >= REMOVED_ORIGINS_MAX) return { error: `removed list is full (${REMOVED_ORIGINS_MAX})` };
-  const rec = removedOrigins.get(key) || { origin: key, removedAt: Date.now(), note: String(note || "").slice(0, 500) };
+  const rec = removedOrigins.get(key) || { origin: key, removedAt: Date.now(), note: String(note || "").slice(0, 500), knownFrom: removalHeld(key).knownFrom };
   removedOrigins.set(key, rec);
   persistRemovedOrigins();
   const held = purgeOrigin(key);
   persistSubmittedSeeds();
   if (held.successions) persistSuccessions();
   console.log(`[x402-index] origin removed by operator: ${key}`);
-  return { removed: true, origin: key, removedAt: rec.removedAt, held };
+  return { removed: true, origin: key, removedAt: rec.removedAt, held, ...removalReturn(rec.knownFrom ?? null) };
 }
 
 /** Lift a removal. Seeds are NOT re-added; the owner can register again. */
@@ -1286,16 +1355,18 @@ export function restoreOrigin(raw) {
   // A stored removal cannot be lifted before the list is read: say so,
   // rather than "that origin was not removed".
   if (!removedOrigins.has(key) && !removalsKnown()) return { error: REMOVALS_NOT_LOADED_ERROR, notLoaded: true, origin: key };
+  const rec = removedOrigins.get(key);
   if (!removedOrigins.delete(key)) return { restored: false, origin: key };
   noteDeleted(removedFile(), key);
   persistRemovedOrigins();
-  return { restored: true, origin: key };
+  return { restored: true, origin: key, ...removalReturn(rec?.knownFrom ?? null) };
 }
 
 /** Every removed origin, newest first, for the operator surface. */
 export function listRemovedOrigins() {
   ensureRemovalsLoaded();
-  return [...removedOrigins.values()].sort((a, b) => (b.removedAt || 0) - (a.removedAt || 0));
+  return [...removedOrigins.values()].sort((a, b) => (b.removedAt || 0) - (a.removedAt || 0))
+    .map((r) => ({ ...r, ...removalReturn(r.knownFrom ?? null) }));
 }
 
 /**
@@ -2091,13 +2162,17 @@ const DEFAULT_SEEDS = [
   "https://compounder-market-api.vercel.app", // Compounder Market API — deterministic bounty-fit scoring with structured JSON verdicts, $0.01 USDC exact on Base
 ];
 
-export const seedList = () => {
+/** The operator-curated seeds: the committed defaults and X402_INDEX_SEEDS. */
+function configuredSeeds() {
   const envSeeds = String(process.env.X402_INDEX_SEEDS || "")
     .split(",")
     .map((s) => s.trim().replace(/\/+$/, ""))
     .filter((s) => /^https?:\/\//i.test(s));
+  return [...DEFAULT_SEEDS, ...envSeeds];
+}
+export const seedList = () => {
   // committed defaults + env seeds (both operator-curated), then auto-discovered.
-  return [...new Set([...DEFAULT_SEEDS, ...envSeeds, ...discoveredSeeds])].filter((o) => !isRemovedOrigin(o));
+  return [...new Set([...configuredSeeds(), ...discoveredSeeds])].filter((o) => !isRemovedOrigin(o));
 };
 
 function extractOrigin(rawUrl) {
@@ -8482,7 +8557,7 @@ async function reloadRemovedOrigins() {
     for (const r of Array.isArray(body) ? body : []) {
       const k = strictOriginKey(r?.origin);
       if (!k || removedOrigins.has(k) || removedOrigins.size >= REMOVED_ORIGINS_MAX) continue;
-      removedOrigins.set(k, { origin: k, removedAt: Number(r.removedAt) || 0, note: typeof r.note === "string" ? r.note.slice(0, 500) : "" });
+      removedOrigins.set(k, removalRecord(k, r));
       purgeOrigin(k);
     }
   } catch { /* the list held stays; the next pull tries again */ }

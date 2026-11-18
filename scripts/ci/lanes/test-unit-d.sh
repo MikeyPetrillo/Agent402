@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (163 scripts, one process each)
+# @step 1: Offline suites (165 scripts, one process each)
 # Client route discovery and output validation (clean-room behavior test, offline)
 t node scripts/test-cleanroom-client-contract.js
 # Paid scan budget (a public route must not spend without limit)
@@ -278,6 +278,8 @@ t node scripts/test-referral-counting.js
 t node scripts/test-mpp-agents-weekly.js
 # Arrival path per sale (mcp, client package, http) on the operator surfaces; sweep/burst cohorts; the Gateway test buyer is ours
 t node scripts/test-sale-path.js
+# Paid-call funnel per day and arrival path (probes, 402s served, attempts, settlements, refusal classes, callers that never came back), the ledger half and weekly figures, a 400k-row cost bound, operator-only /__operator/funnel.json (paid boot, stub facilitator)
+t node scripts/test-funnel.js
 # The connector's internal x402 twins of six flagships: 404 without the loopback secret, resource /mcp with a valid MCP Bazaar extension, the route's accepts on every chain, settle on the final 200 only, no payment spent on both, sales booked x402-mcp (paid boot, stub facilitator)
 t node scripts/test-mcp-x402-routes.js
 # First-call allowance returning payers (operator view): granted wallets with a later outside paid sale, and within 7 days; one batched ledger read, cached (offline, temp SQLite ledger)
@@ -311,6 +313,10 @@ t node scripts/test-workflow-run-refs.js
 t node scripts/test-workflow-runner-pins.js
 # Workflow trust gates (workflow_run jobs need a push run of this repo; PyPI build has no id-token; wish text fenced)
 t node scripts/test-workflow-trust-gates.js
+# Outside-PR check: DCO sign-off by the commit author and the CLA sentence; pinned, read-only, owner and bots exempt (scratch repo - offline)
+t node scripts/test-dco-cla-workflow.js
+# THIRD_PARTY_NOTICES.txt matches the lockfiles; no shipped package is copyleft-only (offline)
+t node scripts/test-third-party-notices.js
 # Metered settlement pricing rule (upto only, never above the ceiling, missing cost is not free - offline)
 t node scripts/test-gateway-meter.js
 t node scripts/test-metered-quote-binding.js

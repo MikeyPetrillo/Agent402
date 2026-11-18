@@ -63,6 +63,7 @@ export const PAGE_SOURCES = {
   "/trust": ["src/trust-page.js"],
   "/crawler": ["src/crawler-page.js"],
   "/company": ["src/company.js"],
+  "/press": ["src/press-page.js"],
   "/proof": ["src/proof.js"],
   "/scorecard": ["src/scorecard.js"],
   "/glossary": ["src/glossary.js"],

@@ -37,6 +37,12 @@ t node scripts/test-seo-meta.js
 t node scripts/test-operator-auth.js
 # Every route the booted router registers under /__operator refuses a caller without the token
 t node scripts/test-operator-routes-refuse.js
+# No repository, build, state or backup file is served, and no error answer carries a stack (boots a FREE_MODE server)
+t node scripts/test-exposed-files.js
+# SQL in src/ binds caller values as parameters; no template interpolates one (static)
+t node scripts/test-sql-interpolation.js
+# The pre-launch security checklist: every covered item's guard still exists, holds its assertion and runs in CI (static)
+t node scripts/test-security-checklist.js
 # Probe-only credential: STATUS_PROBE_TOKEN opens POST /api/status/probe and NOTHING else, the operator token still works there, and the narrow gate is wired to one route (boots a
 t node scripts/test-status-probe-token.js
 # The status Worker's paid-call challenge: STATUS_PROBE_TOKEN gets a low-difficulty challenge on the probe slug only, its call is booked internal, the mark cannot be forged or

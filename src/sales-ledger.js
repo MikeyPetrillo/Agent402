@@ -54,6 +54,7 @@ import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtim
 import { retryingLoad } from "./store-retry.js";
 import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
 import { cleanSalePath, salePathGroup } from "./sale-path.js";
+import { ARRIVALS, arrivalOfSale } from "./funnel.js";
 import { enableWal } from "./sqlite-wal.js";
 
 const HAS_DATA_DIR = existsSync("/data");
@@ -1811,6 +1812,107 @@ export function salesByPath({ days = 30 } = {}) {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// The paid-call funnel's ledger half and the weekly figures (operator only,
+// computed on read, nothing stored). Outside sales only: internal = 0 drops
+// our own traffic (signed probes, and every wallet of ours, the router's
+// spending wallets among them), on the counted rails.
+//
+// Per UTC day and arrival path (src/funnel.js arrivalOfSale): sales, dollars
+// at the buyer's price, distinct paying wallets. Weekly figures over the
+// `weekDays` whole UTC days before today: paying wallets, the share of them
+// that paid on two or more of those days (repeat), the share that had paid
+// before the week (returning), and outside dollars per day. Wallets, not
+// operators: no wallet is resolved to the operator behind it here.
+//
+// Cost: one pass over the window's rows a page of ids at a time (windowPages,
+// yielding between pages), grouped per page by day, rail, path, wire and
+// payer; memory is one entry per distinct payer and per (day, path). The
+// returning check is one index read (payer, ts) per wallet of the week,
+// yielding every FUNNEL_RETURNING_STEP wallets.
+export const FUNNEL_MAX_DAYS = 30;
+const FUNNEL_RETURNING_STEP = 200;
+const qFunnelPage = db.prepare(`
+  SELECT (ts / 86400000) AS d, rail, via, wire, payer, COUNT(*) AS n,
+         SUM(CAST(ROUND(${SALE_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano
+  ${WINDOW_PAGE} AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL}
+  GROUP BY d, rail, via, wire, payer`);
+const qPaidBefore = db.prepare(`
+  SELECT 1 FROM sales INDEXED BY idx_sales_payer WHERE payer = ? AND ts < ? AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL} LIMIT 1`).pluck();
+const dayKey = (d) => new Date(d * 86_400_000).toISOString().slice(0, 10);
+function* funnelLedgerSteps({ days = 14, weekDays = 7, now = Date.now() } = {}) {
+  const n = Math.max(1, Math.min(FUNNEL_MAX_DAYS, Math.floor(Number(days)) || 14));
+  const w = Math.max(1, Math.min(FUNNEL_MAX_DAYS - 1, Math.floor(Number(weekDays)) || 7));
+  const today = Math.floor(now / 86_400_000);
+  const firstDay = Math.min(today - n + 1, today - w);
+  const since = firstDay * 86_400_000;
+  const weekFrom = today - w; // whole days [weekFrom, today)
+  const cells = new Map(); // `${d}|${arrival}` -> { sales, nano, payers:Set }
+  const payerDays = new Map(); // payer -> Set(day numbers inside the week)
+  const dayNano = new Map(); // d -> nano (all arrivals)
+  let weekSalesNoPayer = 0;
+  yield* windowPages(since, (a, b) => {
+    for (const r of qFunnelPage.all(a, b, since)) {
+      const d = Number(r.d);
+      const cnt = Number(r.n) || 0, nano = Number(r.nano) || 0;
+      dayNano.set(d, (dayNano.get(d) || 0) + nano);
+      if (d >= weekFrom && d < today) {
+        if (r.payer) { let s = payerDays.get(r.payer); if (!s) payerDays.set(r.payer, (s = new Set())); s.add(d); }
+        else weekSalesNoPayer += cnt;
+      }
+      if (d < today - n + 1) continue;
+      const arrival = arrivalOfSale({ rail: r.rail, via: r.via, wire: r.wire });
+      const k = `${d}|${arrival}`;
+      const c = cells.get(k) || { sales: 0, nano: 0, payers: new Set() };
+      c.sales += cnt; c.nano += nano;
+      if (r.payer) c.payers.add(r.payer);
+      cells.set(k, c);
+    }
+  });
+  const byDay = [];
+  for (let d = today; d > today - n; d--) {
+    const byArrival = {};
+    let sales = 0, nano = 0, unknownSales = 0;
+    for (const a of ARRIVALS) {
+      const c = cells.get(`${d}|${a}`);
+      byArrival[a] = { sales: c?.sales || 0, revenueUsd: nanoToUsd4(c?.nano || 0), payers: c?.payers.size || 0 };
+      sales += c?.sales || 0; nano += c?.nano || 0;
+      if (a === "unknown") unknownSales = c?.sales || 0;
+    }
+    byDay.push({ day: dayKey(d), partial: d === today, sales, revenueUsd: nanoToUsd4(nano), unknownShare: sales ? +(unknownSales / sales).toFixed(3) : null, byArrival });
+  }
+  yield;
+  const weekStart = weekFrom * 86_400_000;
+  let repeat = 0, returning = 0, i = 0;
+  for (const [payer, set] of payerDays) {
+    if (set.size >= 2) repeat++;
+    if (qPaidBefore.get(payer, weekStart)) returning++;
+    if (++i % FUNNEL_RETURNING_STEP === 0) yield;
+  }
+  const wallets = payerDays.size;
+  const perDay = [];
+  let weekNano = 0;
+  for (let d = weekFrom; d < today; d++) { const v = dayNano.get(d) || 0; weekNano += v; perDay.push({ day: dayKey(d), revenueUsd: nanoToUsd4(v) }); }
+  return {
+    window: { days: n, from: dayKey(today - n + 1), to: dayKey(today), todayPartial: true },
+    byDay,
+    week: {
+      from: dayKey(weekFrom), to: dayKey(today - 1), days: w,
+      outsidePayingWallets: wallets,
+      outsidePayingOperators: null,
+      repeatShare: wallets ? +(repeat / wallets).toFixed(3) : null,
+      returningShare: wallets ? +(returning / wallets).toFixed(3) : null,
+      salesWithoutPayer: weekSalesNoPayer,
+      organicUsdPerDay: perDay,
+      organicUsdPerDayAvg: nanoToUsd4(Math.round(weekNano / w)),
+    },
+  };
+}
+/** The funnel's ledger half (see above), synchronously. */
+export function funnelLedger(opts = {}) { return runSteps(funnelLedgerSteps(opts)); }
+/** funnelLedger, spread over event-loop turns on elapsed time (same answer). */
+export function funnelLedgerAsync(opts = {}) { return runStepsAsync(funnelLedgerSteps(opts)); }
 
 // ---------------------------------------------------------------------------
 // Sweep and burst cohorts (operator only, computed on read, nothing stored).

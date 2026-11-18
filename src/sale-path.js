@@ -7,6 +7,8 @@
 //   "<pkg>/<version>" one of our client or adapter packages, read from the
 //                    User-Agent's first product token when it names a package
 //                    on the list below
+//   "bazaar"         a User-Agent the traffic classifier names as the Bazaar
+//                    (KNOWN_INDEXERS in src/traffic-classifier.js)
 //   "http"           everything else
 //
 // Only the product token is ever stored (at most 40 characters of letters,
@@ -14,6 +16,11 @@
 // address. Rows recorded before the column existed read "unknown".
 import { isMcpLoopback } from "./unpaid-quote-budget.js";
 import { isX402McpRequest, MCP_X402_SALE_PATH } from "./mcp-x402-routes.js";
+import { indexerFor } from "./traffic-classifier.js";
+
+/** The stored path of a call whose User-Agent names the Bazaar. */
+export const BAZAAR_SALE_PATH = "bazaar";
+const isBazaarUa = (ua) => indexerFor(ua)?.name === "coinbase-bazaar";
 
 /** Our published packages whose User-Agent product token names them. */
 export const CLIENT_PACKAGES = Object.freeze([
@@ -44,20 +51,21 @@ export function clientTokenOf(userAgent) {
   return PACKAGE_SET.has(name) ? token : null;
 }
 
-/** The path value recorded for this request: "x402-mcp", "mcp", a package token, or "http". */
+/** The path value recorded for this request: "x402-mcp", "mcp", a package token, "bazaar", or "http". */
 export function salePathOf(req) {
   try {
     if (isX402McpRequest(req)) return MCP_X402_SALE_PATH;
     if (isMcpLoopback(req)) return "mcp";
-    return clientTokenOf(req?.headers?.["user-agent"]) || "http";
+    const ua = req?.headers?.["user-agent"];
+    return clientTokenOf(ua) || (isBazaarUa(ua) ? BAZAAR_SALE_PATH : "http");
   } catch { return "http"; }
 }
 
-/** A stored value (or NULL) as its group: "x402-mcp", "mcp", "http", "unknown", or the package name. */
+/** A stored value (or NULL) as its group: "x402-mcp", "mcp", "bazaar", "http", "unknown", or the package name. */
 export function salePathGroup(via) {
   if (via == null || via === "") return "unknown";
   const s = String(via);
-  if (s === "mcp" || s === MCP_X402_SALE_PATH || s === "http" || s === "unknown") return s;
+  if (s === "mcp" || s === MCP_X402_SALE_PATH || s === BAZAAR_SALE_PATH || s === "http" || s === "unknown") return s;
   const name = s.split("/")[0].toLowerCase();
   return PACKAGE_SET.has(name) ? name : "unknown";
 }
@@ -66,6 +74,6 @@ export function salePathGroup(via) {
 export function cleanSalePath(via) {
   if (via == null) return null;
   const s = String(via);
-  if (s === "mcp" || s === MCP_X402_SALE_PATH || s === "http") return s;
+  if (s === "mcp" || s === MCP_X402_SALE_PATH || s === BAZAAR_SALE_PATH || s === "http") return s;
   return clientTokenOf(s);
 }
