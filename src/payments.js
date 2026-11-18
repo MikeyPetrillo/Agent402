@@ -2728,7 +2728,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const routes = Object.fromEntries(
     Object.entries(catalog).map(([route, item]) => {
       const ext = {};
-      const path = route.split(" ")[1];
+      const path = route.slice(route.indexOf(" ") + 1);
       const { keepListing, descriptionFirst, ...discovery } = item.discovery || {};
       const slimmed = item.bazaar !== false && item.discovery ? slimDiscovery(discovery, path, item) : null;
       const listingText = capDesc(BAZAAR_DESCRIPTIONS[item.slug] || item.description);
@@ -2790,12 +2790,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           // it cannot be the whole rule), but the change stands on
           // discoverability alone.
           serviceName: serviceNameFor(item),
-          // Discovery tags feed marketplace categorizers (x402scan, the Bazaar).
-          // Include the resource's own category alongside its specific tags so
-          // an indexer sees the real category signal (unit conversion, data,
-          // crypto, llm, ...) - every entry is honestly tagged with what it is.
-          // Use the protocol's own sanitizer: printable ASCII, ≤32 chars,
-          // case-insensitive dedupe, and the official maximum of five tags.
+          // Marketplace categorizers read these: the listing's own category
+          // leads, and the protocol's sanitizer bounds the list (printable
+          // ASCII, 32 chars each, case-insensitive dedupe, five at most).
           tags: bazaarTagsFor(item),
           // The content type the published example answers with: JSON, or
           // the raw bytes a binary tool sends (its def's mimeType).

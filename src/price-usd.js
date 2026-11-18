@@ -88,7 +88,7 @@ export function tokenDecimalsOf(obj) {
 function looksLikeAssetIdentifier(v) {
   if (typeof v !== "string") return false;
   const id = v.trim();
-  if (/^0x[0-9a-fA-F]{40}$/.test(id) || /^0x[0-9a-fA-F]{64}$/.test(id)) return true;
+  if (/^0x(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(id)) return true;
   if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(id)) return true; // base58 mint
   return id.includes(":") && /[/:][^\s:/]{6,}$/.test(id);   // caip-19 and friends
 }
@@ -103,8 +103,6 @@ export function atomicContext(obj) {
   // sentence. An asset field carrying a real identifier still states base
   // units, which is what an x402 accept carries and what every case this
   // machinery was built for looks like.
-  // A token identifier in `currency` states base units too: an OpenAPI price
-  // of { currency: <USDC contract>, amount: "10000" } is $0.01, not $10,000.
   if (looksLikeAssetIdentifier(obj.asset) || looksLikeAssetIdentifier(obj.currency)) return true;
   return typeof obj.currency === "string" && !!obj.currency.trim()
     && (typeof obj.method === "string" || typeof obj.intent === "string");

@@ -10,6 +10,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-17",
+    title: "Internal code changes, stricter reading of payment fields",
+    items: [
+      "Internal: Internal code changes; malformed seller payment fields and an explicit `cache: null` are handled more strictly. In the seller index, an empty payTo is no address, an amount that is not whole base units gives way to maxAmountRequired, a catalog entry whose network is not text names no chain, and hex addresses match whatever the case of their 0x prefix. In the buyer client, `cache: null` on a call is a fresh purchase, as `cache: false` is, and a paid answer refused on delivery is reported as that refusal.",
+    ],
+  },
+  {
+    date: "2026-11-17",
     title: "Ownership, contributor agreement and third-party notices",
     items: [
       "Repository: Outside pull requests carry a DCO sign-off whose email is each commit's author email, and everyone whose commits are in the pull request agrees to the new contributor license agreement (CLA.md, v1.0) by its versioned sentence: the author in the description or an own comment, every other commit author in an own comment. The check runs the base branch's scripts, re-runs on a comment, and names the missing record and how to add it. The owner's pull requests and bot updates are unchanged.",

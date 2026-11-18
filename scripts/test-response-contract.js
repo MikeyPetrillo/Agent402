@@ -51,50 +51,29 @@ const op = (responses) => ({ responses });
     "variants that guarantee nothing in common guarantee NOTHING, and say so as partial");
 }
 
-// --- every declared success variant participates, or the report fails closed
+// --- the variant cap is an evidence bound, and the 2XX range counts ------
 {
-  const firstEight = {};
-  for (let i = 0; i < 8; i++) {
-    firstEight[String(200 + i)] = json(obj(["data"], { data: { type: "object" } }));
-  }
-
-  const capped = responseContractOf(op({
-    ...firstEight,
-    208: json(obj([], {})),
-  }));
-  ok(capped.successVariants === 9 && capped.jsonSchemas === 8,
-    `a capped document retains its truthful variant count (got ${capped.successVariants}/${capped.jsonSchemas})`);
-  ok(capped.state === "partial" && capped.guaranteedPaths.length === 0,
+  const data = () => json(obj(["data"], { data: { type: "object" } }));
+  const eight = () => Object.fromEntries([200, 201, 202, 203, 204, 205, 206, 207].map((c) => [c, data()]));
+  const ninth = responseContractOf(op({ ...eight(), 208: json(obj([], {})) }));
+  ok(ninth.successVariants === 9 && ninth.jsonSchemas === 8,
+    `the true variant count is kept past the cap (got ${ninth.successVariants}/${ninth.jsonSchemas})`);
+  ok(ninth.state === "partial" && ninth.guaranteedPaths.length === 0,
     "a ninth variant that omits a path cannot be sliced away to manufacture a guarantee");
-
-  const unreadableTail = responseContractOf(op({
-    ...firstEight,
-    208: { description: "success without a JSON contract" },
-  }));
-  ok(unreadableTail.state === "partial" && unreadableTail.guaranteedPaths.length === 0,
-    "an unreadable ninth variant also fails closed");
-
-  const inBound = responseContractOf(op(firstEight));
-  ok(inBound.state === "declared" && inBound.guaranteedPaths.join() === "data",
-    "exactly eight admissible variants still report their common guarantee");
-
-  const identicalNine = {};
-  for (let i = 0; i < 9; i++) {
-    identicalNine[String(200 + i)] = json(obj(["data"], { data: { type: "object" } }));
-  }
-  ok(responseContractOf(op(identicalNine)).state === "partial",
-    "the cap is an evidence bound, not permission to assume the unread declarations match");
-
-  const projected = responseContractProjection({ responseContract: packResponseContract(capped) }).responseContract;
-  ok(projected?.state === "partial" && projected.successVariants === 9 && projected.guaranteedPaths.length === 0,
-    "the fail-closed capped report survives cache packing and public projection");
-
-  const ranged = responseContractOf(op({
-    200: json(obj(["data"], { data: { type: "object" } })),
-    "2XX": json(obj([], {})),
-  }));
-  ok(ranged.successVariants === 2 && ranged.state === "partial" && ranged.guaranteedPaths.length === 0,
-    "an OpenAPI 2XX range participates instead of letting a narrower status manufacture a guarantee");
+  const ninthBare = responseContractOf(op({ ...eight(), 208: { description: "no content" } }));
+  ok(ninthBare.state === "partial" && ninthBare.guaranteedPaths.length === 0,
+    "a ninth variant with no JSON content keeps the report partial");
+  const exact = responseContractOf(op(eight()));
+  ok(exact.state === "declared" && JSON.stringify(exact.guaranteedPaths) === JSON.stringify(["data"]),
+    "exactly eight agreeing variants are declared");
+  const nine = responseContractOf(op({ ...eight(), 208: data() }));
+  ok(nine.state === "partial", "nine identical variants stay partial: unread declarations are not assumed to match");
+  const projected = responseContractProjection({ responseContract: packResponseContract(ninth) }).responseContract;
+  ok(projected && projected.state === "partial" && projected.successVariants === 9 && projected.guaranteedPaths.length === 0,
+    "the capped partial report survives the cache and the projection");
+  const range = responseContractOf(op({ 200: data(), "2XX": json(obj([], {})) }));
+  ok(range.successVariants === 2 && range.state === "partial" && range.guaranteedPaths.length === 0,
+    "the OpenAPI 2XX range participates in the intersection");
 }
 
 // --- one unreadable variant must not let a strong one speak for the route --
@@ -190,22 +169,18 @@ for (const kw of ["$ref", "allOf", "anyOf", "oneOf", "not", "if", "patternProper
     ok(unpackResponseContract({ responseContract: junk }) === null,
       `a stale or malformed cache value reads as no contract, never a throw (${JSON.stringify(junk)})`);
   }
-
-  const inherited = Object.create({ responseContract: ["declared", 1, 1, ["inherited"]] });
-  ok(unpackResponseContract(inherited) === null,
-    "an inherited tuple is never promoted to seller OpenAPI evidence");
-  let getterRead = false;
-  const accessor = {};
-  Object.defineProperty(accessor, "responseContract", {
-    get() { getterRead = true; return ["declared", 1, 1, ["getter"]]; },
-  });
-  ok(unpackResponseContract(accessor) === null && getterRead === false,
-    "an accessor-backed tuple is refused without executing its getter");
-  const hostile = new Proxy({}, {
-    getOwnPropertyDescriptor() { throw new Error("hostile descriptor trap"); },
-  });
-  ok(unpackResponseContract(hostile) === null,
-    "a hostile descriptor trap fails closed without escaping");
+  {
+    const inherited = Object.create({ responseContract: ["declared", 1, 1, ["inherited"]] });
+    ok(unpackResponseContract(inherited) === null, "an inherited responseContract tuple is never promoted to seller evidence");
+    let ran = false;
+    const accessor = {};
+    Object.defineProperty(accessor, "responseContract", { enumerable: true, get() { ran = true; return ["declared", 1, 1, ["inherited"]]; } });
+    ok(unpackResponseContract(accessor) === null && !ran, "an accessor-backed responseContract reads as no contract, and its getter never runs");
+    const hostile = new Proxy({}, { getOwnPropertyDescriptor() { throw new Error("trap"); } });
+    let threw = false, got;
+    try { got = unpackResponseContract(hostile); } catch { threw = true; }
+    ok(!threw && got === null, "a proxy whose descriptor trap throws reads as no contract, and nothing escapes");
+  }
 }
 
 // --- ALL THREE SURFACES, or the field is inert -------------------------------
@@ -241,11 +216,13 @@ for (const kw of ["$ref", "allOf", "anyOf", "oneOf", "not", "if", "patternProper
     /^import \{.*\} from ".\/response-contract.js";$/,
     /^const packed = packResponseContract\(responseContractOf\(resolveLocalRefs\(op, openapi\)\)\);$/,
     /^return packed \? \{ responseContract: packed \} : \{\};$/,
-    /^if \(key === "requestContract" \|\| key === "responseContract"\) continue;$/,
+    // The two contract field names a registry-row copy leaves out and a
+    // merged row reads from the seller's own operation only.
+    /^const CONTRACT_FIELD_NAMES = \["requestContract", "responseContract"\];$/,
     // The crawl-side store's copy: a row with neither contract is copied whole.
     /^if \(!ownKey\.call\(row, "requestContract"\) && !ownKey\.call\(row, "responseContract"\) && Object\.getOwnPropertySymbols\(row\)\.length === 0\) return \{ \.\.\.row \};$/,
-    /^const responseContract = ownContractTuple\(o, "responseContract"\);$/,
-    /^\.\.\.\(responseContract \? \{ responseContract \} : \{\}\),$/,
+    // (The merge reads the seller's tuples by that list of names, so no line
+    // of its own names the field.)
     /^\.\.\.responseContractProjection\(t\),$/,
     /^\.\.\.\(external \? responseContractProjection\(t\) : \{\}\),$/,
   ];

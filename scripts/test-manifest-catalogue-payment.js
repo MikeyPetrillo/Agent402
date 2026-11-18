@@ -1,117 +1,83 @@
 #!/usr/bin/env node
-// A seller can publish their payment terms INSIDE a catalogue entry. Three
-// such shapes are live right now, and the catalogue reader took the entry's
-// URL, name, description and price string and dropped everything about money:
-//
-//   resources: [{ resource, accepts: [{network, asset, payTo, …}] }]   nested
-//   resources: [{ resource, scheme, network, asset, payTo, amount }]   flat
-//   payment:   { network, asset_address, pay_to, … }                   service-wide
-//
-// The row came out with networks: [], so the seller's `networks` aggregate was
-// empty and dispatch eligibility read `network_unknown`: on the marketplace,
-// invisible to the router and to its own chain page. Same defect class as the
-// single-resource manifest (scripts/test-single-resource-manifest.js) and the
-// same cost — listed and unroutable is worse than absent, it looks like it
-// worked.
-//
-// Measured against the live index 2026-09-15: 304 sellers labelled
-// `network_unknown`, 83 still serving a manifest, and 59 of those 83 declaring
-// a chain in one of these three shapes — 49 of them eip155:8453. The fixtures
-// below are the exact shapes of three of them, with addresses replaced.
+// Guards how a seller's manifest hands its payment terms to the index: terms
+// written on a catalogue entry (flat, as nested accepts, or once for the whole
+// service) have to show up on the rows as networks, payees and a dollar price,
+// or the router cannot send a buyer there. Runs offline.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { normaliseManifestTools } from "../src/x402-index.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) pass++; else { fail++; console.error("FAIL:", m); } };
-const BASE = "eip155:8453";
-const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-const PAYTO = "0x00000000000000000000000000000000000000aa";
 
-// --- shape 1: flat payment fields on the catalogue entry --------------------
-{
-  const ORIGIN = "https://flat.example";
-  const tools = normaliseManifestTools({
-    resources: [{
-      scheme: "exact", network: BASE, maxAmountRequired: "100000", amount: "100000",
-      resource: `${ORIGIN}/v1/topup`, description: "Top up credits.",
-      mimeType: "application/json", payTo: PAYTO, asset: USDC,
-      extra: { name: "USD Coin", version: "2" },
-    }],
-  }, ORIGIN);
-  ok(tools.length === 1, `flat: ${tools.length} tools, want 1`);
-  const t = tools[0] || {};
-  ok(JSON.stringify(t.networks) === `["${BASE}"]`, `flat networks ${JSON.stringify(t.networks)} — this is the router-invisible case`);
-  ok(t.payToByNetwork?.[BASE] === PAYTO, `flat payTo ${JSON.stringify(t.payToByNetwork)}`);
-  ok(t.price === "$0.1", `flat price ${t.price} (100000 atomic USDC is $0.1)`);
-  ok(t.evmDomainByNetwork?.[BASE]?.name === "USD Coin", `flat EIP-712 domain ${JSON.stringify(t.evmDomainByNetwork)}`);
-}
+const HOST = "https://seller.example";
+const BASE_ID = "eip155:8453";
+const BASE_USDC_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const WALLET = `0x${"a1".repeat(20)}`;
+const show = (v) => JSON.stringify(v);
+const chainsAre = (row, list) => show(row?.networks) === show(list);
 
-// --- shape 2: accepts nested inside the catalogue entry ---------------------
-{
-  const ORIGIN = "https://nested.example";
-  const tools = normaliseManifestTools({
-    x402Version: 2,
-    resources: [{
-      resource: `${ORIGIN}/service`,
-      accepts: [{
-        scheme: "exact", network: BASE, asset: USDC, maxAmountRequired: "30000",
-        resource: `${ORIGIN}/service`, description: "Pre-trade go/no-go verdict.",
-        mimeType: "application/json", payTo: PAYTO, maxTimeoutSeconds: 300,
-        extra: { name: "USD Coin", version: "2" },
-      }],
-    }],
-  }, ORIGIN);
-  ok(tools.length === 1, `nested: ${tools.length} tools, want 1`);
-  const t = tools[0] || {};
-  ok(JSON.stringify(t.networks) === `["${BASE}"]`, `nested networks ${JSON.stringify(t.networks)}`);
-  ok(t.payToByNetwork?.[BASE] === PAYTO, `nested payTo ${JSON.stringify(t.payToByNetwork)}`);
-  ok(t.price === "$0.03", `nested price ${t.price} — maxAmountRequired is the v1 spelling and must be read`);
-}
-
-// --- shape 3: one service-wide payment block, many routes -------------------
-{
-  const ORIGIN = "https://service.example";
-  const tools = normaliseManifestTools({
-    x402Version: 2,
-    service: { name: "Tech Detect", base_url: ORIGIN },
-    payment: {
-      protocol: "x402", scheme: "exact", network: "base", network_name: "Base Mainnet",
-      chain_id: 8453, asset: "USDC", asset_address: USDC, pay_to: PAYTO,
-    },
-    endpoints: [
-      { path: "/stack", method: "POST", name: "Detect stack", price: "$0.01" },
-      { path: "/stack/bulk", method: "POST", name: "Detect in bulk", price: "$0.05" },
+// Each case: a manifest, how many rows it gives, and what each row must hold.
+const manifestCases = [
+  {
+    what: "flat accept fields on a resources[] entry",
+    manifest: { resources: [{ resource: `${HOST}/v1/topup`, scheme: "exact", network: BASE_ID, asset: BASE_USDC_CONTRACT, payTo: WALLET,
+      amount: "100000", maxAmountRequired: "100000", extra: { name: "USD Coin", version: "2" } }] },
+    rows: 1,
+    each: (r) => [
+      [chainsAre(r, [BASE_ID]), `networks ${show(r.networks)}`],
+      [r.payToByNetwork?.[BASE_ID] === WALLET, "Base payee"],
+      [r.price === "$0.1", `price ${r.price} from 100000 base units`],
+      [r.evmDomainByNetwork?.[BASE_ID]?.name === "USD Coin", "EIP-712 domain name"],
     ],
-  }, ORIGIN);
-  ok(tools.length === 2, `service-wide: ${tools.length} tools, want 2`);
-  for (const t of tools) {
-    ok(JSON.stringify(t.networks) === `["${BASE}"]`,
-      `service-wide ${t.route}: networks ${JSON.stringify(t.networks)} — "base" must normalise to CAIP-2`);
-    ok(t.payToByNetwork?.[BASE] === PAYTO, `service-wide ${t.route}: payTo ${JSON.stringify(t.payToByNetwork)}`);
-  }
-  ok(tools[0].price === "$0.01" && tools[1].price === "$0.05",
-    `service-wide prices ${tools.map((t) => t.price).join(",")} — the entry's own price must survive`);
-}
-
-// --- a thin sibling on the same path inherits the chain ---------------------
-{
-  const ORIGIN = "https://sibling.example";
-  const tools = normaliseManifestTools({
-    resources: [`GET /ip-geo`, { resource: `${ORIGIN}/ip-geo`, method: "POST", network: BASE, payTo: PAYTO, asset: USDC, amount: "1000" }],
-  }, ORIGIN);
-  ok(tools.length === 2, `sibling: ${tools.length} tools, want 2`);
-  const get = tools.find((t) => t.method === "GET") || {};
-  ok(JSON.stringify(get.networks) === `["${BASE}"]`,
-    `sibling GET networks ${JSON.stringify(get.networks)} — one path, one set of payment terms`);
-}
-
-// --- a manifest that declares nothing stays as it was -----------------------
-{
-  const ORIGIN = "https://silent.example";
-  const tools = normaliseManifestTools({ resources: [`POST /a`, `POST /b`] }, ORIGIN);
-  ok(tools.length === 2, `silent: ${tools.length} tools, want 2`);
-  ok(tools.every((t) => !(t.networks || []).length), "a manifest that says nothing about money must not gain a chain");
-  ok(tools.every((t) => t.price === null), "a manifest that names no price must not gain one");
+  },
+  {
+    what: "accepts nested in a resources[] entry, maxAmountRequired only",
+    manifest: { resources: [{ resource: `${HOST}/v1/lookup`,
+      accepts: [{ scheme: "exact", network: BASE_ID, asset: BASE_USDC_CONTRACT, payTo: WALLET, maxAmountRequired: "30000", extra: { name: "USD Coin" } }] }] },
+    rows: 1,
+    each: (r) => [
+      [chainsAre(r, [BASE_ID]), `networks ${show(r.networks)}`],
+      [r.payToByNetwork?.[BASE_ID] === WALLET, "Base payee"],
+      [r.price === "$0.03", `price ${r.price} from maxAmountRequired`],
+    ],
+  },
+  {
+    what: "one payment block for the whole service",
+    manifest: {
+      payment: { protocol: "x402", scheme: "exact", network: "base", asset: "USDC", asset_address: BASE_USDC_CONTRACT, pay_to: WALLET },
+      endpoints: [{ path: "/stack", method: "POST", price: "$0.01" }, { path: "/stack/bulk", method: "POST", price: "$0.05" }],
+    },
+    rows: 2,
+    each: (r) => [
+      [chainsAre(r, [BASE_ID]), `${r.route}: "base" read as ${show(r.networks)}`],
+      [r.payToByNetwork?.[BASE_ID] === WALLET, `${r.route}: the block's payee`],
+    ],
+    all: (rows) => [[show(rows.map((r) => r.price)) === show(["$0.01", "$0.05"]), `each entry keeps its own price: ${show(rows.map((r) => r.price))}`]],
+  },
+  {
+    what: "a bare string sibling on a priced path",
+    manifest: { resources: ["GET /ip-geo", { resource: `${HOST}/ip-geo`, method: "POST", network: BASE_ID, payTo: WALLET, asset: BASE_USDC_CONTRACT, amount: "1000" }] },
+    rows: 2,
+    all: (rows) => {
+      const getRow = rows.find((r) => r.method === "GET");
+      return [[chainsAre(getRow, [BASE_ID]), `the GET sibling takes the path's chain: ${show(getRow?.networks)}`]];
+    },
+  },
+  {
+    what: "a manifest that says nothing about money",
+    manifest: { resources: ["POST /a", "POST /b"] },
+    rows: 2,
+    each: (r) => [
+      [!(Array.isArray(r.networks) && r.networks.length > 0), `${r.route}: no chain`],
+      [r.price === null, `${r.route}: no price`],
+    ],
+  },
+];
+for (const c of manifestCases) {
+  const rows = normaliseManifestTools(c.manifest, HOST);
+  ok(rows.length === c.rows, `${c.what}: ${rows.length} rows, expected ${c.rows}`);
+  const verdicts = [...rows.flatMap((r) => (c.each ? c.each(r) : [])), ...(c.all ? c.all(rows) : [])];
+  for (const [held, detail] of verdicts) ok(held, `${c.what}: ${detail}`);
 }
 
 // A catalogue row with only a bare `amount`, under a manifest whose accepts

@@ -32,11 +32,13 @@ t node scripts/test-error-attribution.js
 t node scripts/test-solana-kit-deps.js
 t node scripts/test-workflow-client-pins.js
 
-# @step 2: Offline suites (62 scripts, one process each)
+# @step 2: Offline suites (63 scripts, one process each)
 # images-fast kit (offline)
 t node scripts/test-images-fast-kit.js
 # Index openapi-fallback crawl tests (payment-signal gate, Bazaar merge, ranking — offline)
 t node scripts/test-openapi-fallback.js
+# Bounded response schemas from examples (clean-room behavior test, offline)
+t node scripts/test-cleanroom-response-schema.js
 # Producer/consumer shape contract (no consumer reads a field nothing emits)
 t node scripts/test-producer-shapes.js
 # Human checkout (no free report, generate-once, auto-refund)
@@ -250,7 +252,7 @@ t node scripts/test-tempo-sponsor-ceiling.js
 # Tempo buyer: a minted credential must move exactly the capped quote to the checked recipient, refused before it is sent; our paying scripts sign tempo/charge under the per-call
 t node scripts/test-tempo-credential-check.js
 
-# @step 4: Offline suites (26 scripts, one process each)
+# @step 4: Offline suites (27 scripts, one process each)
 # MPP leaderboard (live-offer recipients via mppx codec, one batched Tempo getLogs per chunk, grouping/ranking/priming, split-on-error + stale-keeps-previous, page badges - offline)
 t node scripts/test-mpp-leaderboard.js
 # Agent-kit tests (token-count, text-chunk, json-validate, jsonl)
@@ -265,6 +267,8 @@ t node scripts/test-sell-page.js
 t node scripts/test-marketplace-index-page.js
 # Router alias-collapse tests (redirect aliases, subset guard, Sybil slots — offline)
 t node scripts/test-router-alias.js
+# OpenAPI fallback and Railway alias behavior (clean-room behavior test, offline)
+t node scripts/test-cleanroom-openapi-alias.js
 # Reliability claims (a published guarantee must survive being checked)
 t node scripts/test-reliability-claims.js
 # Four false absolutes (a claim must stay true as the service widens)

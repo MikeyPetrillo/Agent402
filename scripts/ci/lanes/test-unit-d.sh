@@ -4,7 +4,9 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (164 scripts, one process each)
+# @step 1: Offline suites (165 scripts, one process each)
+# Client route discovery and output validation (clean-room behavior test, offline)
+t node scripts/test-cleanroom-client-contract.js
 # Paid scan budget (a public route must not spend without limit)
 t node scripts/test-paid-scan-budget.js
 # A registry listing is not a seller answering (origin-responded)

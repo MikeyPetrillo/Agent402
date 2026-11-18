@@ -1,11 +1,8 @@
 #!/usr/bin/env node
-// The manual buyer may spend real USDC against a third-party seller. An
-// explicit external target therefore needs a response expectation before the
-// script reads a key, initializes the payment client, or makes a request.
-//
-// Run every case in a child process with an absent key file: rejected cases
-// must stop at the expectation preflight, while accepted cases must reach the
-// existing key guard without getting far enough to import or use the client.
+// Offline guard test for the paid smoke buyer: every refusal below must happen
+// before a key is read, the payment client is imported or a request is made,
+// and the signed offer receipt helpers behave as documented. No key, no
+// network, no payment.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,147 +16,94 @@ import {
 } from "./lib/smoke-receipt.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const BUYER = join(ROOT, "scripts", "smoke-buy.js");
-const TEMP_DIR = mkdtempSync(join(tmpdir(), "a402-smoke-buy-"));
-const MISSING_KEY = join(TEMP_DIR, "missing-key");
-const EXISTING_RECEIPT = join(TEMP_DIR, "existing-receipt.json");
-const EXPECT_ERROR = "smoke-buy: SMOKE_EXPECT is required when SMOKE_TARGET selects an external target";
-const KEY_ERROR = "smoke-buy: no BURNER_KEY / KEY_FILE — cannot run the paid check";
+const SCRIPT = join(ROOT, "scripts", "smoke-buy.js");
+const TMP = mkdtempSync(join(tmpdir(), "a402-smoke-buy-"));
+const KEY_FILE = join(TMP, "no-such-key");
 
-let pass = 0, fail = 0;
-const ok = (condition, message) => {
-  if (condition) { pass++; console.log(`ok - ${message}`); }
-  else { fail++; console.error(`FAIL - ${message}`); }
-};
+let passed = 0, failed = 0;
+function check(cond, label, detail = "") {
+  if (cond) { passed++; console.log(`ok   ${label}`); }
+  else { failed++; console.error(`FAIL ${label}${detail ? `: ${detail}` : ""}`); }
+}
 
-const baseEnv = {
-  ...process.env,
-  KEY_FILE: MISSING_KEY,
-  SMOKE_ROUTE: "/api/external-canary",
-};
-for (const name of ["BURNER_KEY", "SMOKE_EXPECT", "SMOKE_TARGET", "TARGET_URL"]) delete baseEnv[name];
+const EXPECT_REQUIRED = "smoke-buy: SMOKE_EXPECT is required when SMOKE_TARGET selects an external target";
+const NO_KEY = "smoke-buy: no BURNER_KEY / KEY_FILE — cannot run the paid check";
 
-const cases = [
-  {
-    name: "external target with unset expectation",
-    env: { SMOKE_TARGET: "https://samedaydesk.example" },
-    error: EXPECT_ERROR,
-  },
-  {
-    name: "external target with blank expectation",
-    env: { SMOKE_TARGET: "https://samedaydesk.example", SMOKE_EXPECT: "" },
-    error: EXPECT_ERROR,
-  },
-  {
-    name: "external target with whitespace expectation",
-    env: { SMOKE_TARGET: "https://samedaydesk.example", SMOKE_EXPECT: " \t  " },
-    error: EXPECT_ERROR,
-  },
-  {
-    name: "trailing-slash external target",
-    env: { SMOKE_TARGET: "https://samedaydesk.example///", SMOKE_EXPECT: "" },
-    error: EXPECT_ERROR,
-  },
-  {
-    name: "explicit agent402.tools target",
-    env: { SMOKE_TARGET: "https://agent402.tools", SMOKE_EXPECT: "" },
-    error: EXPECT_ERROR,
-  },
-  {
-    name: "external target with a nonempty expectation",
-    env: { SMOKE_TARGET: "https://samedaydesk.example", SMOKE_EXPECT: "  requested outcome  " },
-    error: KEY_ERROR,
-  },
-  {
-    name: "empty target with empty expectation",
-    env: { SMOKE_TARGET: "", SMOKE_EXPECT: "" },
-    error: KEY_ERROR,
-  },
-  {
-    // TARGET_URL is the own-service mode: another origin is refused before
-    // any key is read (SMOKE_TARGET is the outside-seller mode).
-    name: "TARGET_URL naming another origin",
-    env: { TARGET_URL: "https://samedaydesk.example", SMOKE_EXPECT: "" },
-    error: 'smoke-buy: refusing to pay "https://samedaydesk.example": not our service. Set ALLOW_EXTERNAL_PAID_TARGET=1 to pay another origin.',
-  },
-  {
-    name: "TARGET_URL on loopback with empty expectation",
-    env: { TARGET_URL: "http://127.0.0.1:9", SMOKE_EXPECT: "" },
-    error: KEY_ERROR,
-  },
-];
+function baseEnv() {
+  const env = { ...process.env };
+  for (const k of ["BURNER_KEY", "SMOKE_EXPECT", "SMOKE_TARGET", "TARGET_URL", "SMOKE_RECEIPT_OUT"]) delete env[k];
+  env.SMOKE_ROUTE = "/api/external-canary";
+  env.KEY_FILE = KEY_FILE;
+  return env;
+}
+
+function runCase(label, overrides, expectedStderr) {
+  const env = baseEnv();
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v === undefined) delete env[k]; else env[k] = v;
+  }
+  const r = spawnSync(process.execPath, [SCRIPT], { cwd: ROOT, env, encoding: "utf8", timeout: 10_000 });
+  check(!r.error, `${label}: child ran`, r.error && r.error.message);
+  check(r.status === 2, `${label}: exit 2`, `got ${r.status}`);
+  check(r.stdout === "", `${label}: stdout empty`, JSON.stringify(r.stdout));
+  check(r.stderr === `${expectedStderr}\n`, `${label}: stderr`, JSON.stringify(r.stderr));
+  return r;
+}
 
 try {
-  ok(!existsSync(MISSING_KEY), "child key file is absent");
-  for (const testCase of cases) {
-    const run = spawnSync(process.execPath, [BUYER], {
-      cwd: ROOT,
-      env: { ...baseEnv, ...testCase.env },
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    ok(!run.error, `${testCase.name}: child process runs`);
-    ok(run.status === 2, `${testCase.name}: exits 2 (got ${run.status})`);
-    ok(run.stdout === "", `${testCase.name}: emits no stdout before the guard`);
-    ok(run.stderr === `${testCase.error}\n`, `${testCase.name}: stops at the expected guard`);
-  }
+  check(!existsSync(KEY_FILE), "key file is absent before the runs");
 
-  writeFileSync(EXISTING_RECEIPT, "keep");
-  const existingRun = spawnSync(process.execPath, [BUYER], {
-    cwd: ROOT,
-    env: { ...baseEnv, SMOKE_RECEIPT_OUT: EXISTING_RECEIPT },
-    encoding: "utf8",
-    timeout: 10_000,
-  });
-  ok(existingRun.status === 2, "existing receipt output is refused before key access");
-  ok(existingRun.stdout === "", "receipt preflight refusal emits no stdout");
-  ok(existingRun.stderr === `smoke-buy: SMOKE_RECEIPT_OUT already exists: ${EXISTING_RECEIPT}\n`,
-    "receipt capture never overwrites prior evidence");
-  ok(readFileSync(EXISTING_RECEIPT, "utf8") === "keep", "prior receipt evidence is unchanged");
+  const EXT = "https://seller.example";
+  // Preflight guards.
+  runCase("external target, expectation unset", { SMOKE_TARGET: EXT, SMOKE_EXPECT: undefined }, EXPECT_REQUIRED);
+  runCase("external target, expectation empty", { SMOKE_TARGET: EXT, SMOKE_EXPECT: "" }, EXPECT_REQUIRED);
+  runCase("external target, expectation whitespace", { SMOKE_TARGET: EXT, SMOKE_EXPECT: "  \t " }, EXPECT_REQUIRED);
+  runCase("external target with trailing slashes", { SMOKE_TARGET: `${EXT}///`, SMOKE_EXPECT: "" }, EXPECT_REQUIRED);
+  runCase("own origin named as SMOKE_TARGET", { SMOKE_TARGET: "https://agent402.tools", SMOKE_EXPECT: "" }, EXPECT_REQUIRED);
+  runCase("external target with an expectation", { SMOKE_TARGET: EXT, SMOKE_EXPECT: "  result  " }, NO_KEY);
+  runCase("own service, no expectation", { SMOKE_TARGET: "", SMOKE_EXPECT: "" }, NO_KEY);
+  const OTHER = "https://other.example";
+  runCase("TARGET_URL names another origin", { TARGET_URL: OTHER, SMOKE_EXPECT: "" },
+    `smoke-buy: refusing to pay "${OTHER}": not our service. Set ALLOW_EXTERNAL_PAID_TARGET=1 to pay another origin.`);
+  runCase("TARGET_URL on loopback", { TARGET_URL: "http://127.0.0.1:9", SMOKE_EXPECT: "" }, NO_KEY);
 
-  const missingParent = join(TEMP_DIR, "missing", "receipt.json");
-  const missingParentRun = spawnSync(process.execPath, [BUYER], {
-    cwd: ROOT,
-    env: { ...baseEnv, SMOKE_RECEIPT_OUT: missingParent },
-    encoding: "utf8",
-    timeout: 10_000,
-  });
-  ok(missingParentRun.status === 2, "missing receipt parent is refused before key access");
-  ok(missingParentRun.stderr === `smoke-buy: SMOKE_RECEIPT_OUT parent directory does not exist: ${join(TEMP_DIR, "missing")}\n`,
-    "receipt capture names the missing parent");
+  // Receipt output preflight.
+  const existing = join(TMP, "existing-receipt.json");
+  const original = "{\"kept\":true}\n";
+  writeFileSync(existing, original);
+  runCase("receipt output already exists", { SMOKE_RECEIPT_OUT: existing },
+    `smoke-buy: SMOKE_RECEIPT_OUT already exists: ${existing}`);
+  check(readFileSync(existing, "utf8") === original, "existing receipt file is unchanged");
+  const missingParent = join(TMP, "no-such-dir");
+  runCase("receipt output parent missing", { SMOKE_RECEIPT_OUT: join(missingParent, "receipt.json") },
+    `smoke-buy: SMOKE_RECEIPT_OUT parent directory does not exist: ${missingParent}`);
 
-  const signedReceipt = {
-    format: "jws",
-    payload: "eyJyZXNvdXJjZVVybCI6Imh0dHBzOi8vc2VsbGVyLmV4YW1wbGUvYXVkaXQifQ",
-    signature: "signed-evidence",
-  };
+  // Helper units.
+  const receipt = { format: "jws", payload: "eyJyZXNvdXJjZSI6Ii9hcGkveCJ9", signature: "c2lnbmF0dXJl" };
   const settlement = {
     success: true,
     network: "eip155:8453",
-    transaction: "0xabc",
-    extensions: { "offer-receipt": { info: { receipt: signedReceipt } } },
+    transaction: "0x" + "ab".repeat(32),
+    extensions: { "offer-receipt": { info: { receipt } } },
   };
-  const encoded = Buffer.from(JSON.stringify(settlement)).toString("base64");
-  ok(JSON.stringify(decodeSettlementHeader(encoded)) === JSON.stringify(settlement),
-    "settlement response header decodes without dropping extensions");
-  ok(signedOfferReceiptFromSettlement(settlement) === signedReceipt,
-    "complete signed offer receipt is selected from the standard extension");
-  ok(decodeSettlementHeader("not-base64-json") === null, "malformed settlement header is not evidence");
-  ok(signedOfferReceiptFromSettlement({ extensions: {} }) === null, "missing offer receipt is not fabricated");
-
-  const output = join(TEMP_DIR, "captured-receipt.json");
-  ok(receiptOutputPath(`  ${output}  `) === output, "receipt output path is normalized before payment");
-  ok(writeSignedOfferReceipt(output, signedReceipt), "signed offer receipt is written when requested");
-  ok(JSON.parse(readFileSync(output, "utf8")).signature === "signed-evidence",
-    "captured artifact preserves the complete signed receipt");
-  ok((statSync(output).mode & 0o777) === 0o600, "captured receipt artifact is mode 0600");
-  let overwriteRefused = false;
-  try { writeSignedOfferReceipt(output, signedReceipt); } catch (error) { overwriteRefused = error?.code === "EEXIST"; }
-  ok(overwriteRefused, "receipt writer itself fails closed on overwrite");
-  ok(receiptOutputPath("") === "", "receipt capture remains opt-in");
+  const decoded = decodeSettlementHeader(Buffer.from(JSON.stringify(settlement)).toString("base64"));
+  check(JSON.stringify(decoded) === JSON.stringify(settlement), "settlement header decodes with extensions intact");
+  check(signedOfferReceiptFromSettlement(settlement) === receipt, "receipt picker returns the same object");
+  check(decodeSettlementHeader("not base64 json!") === null, "undecodable header is null");
+  check(signedOfferReceiptFromSettlement({ success: true, extensions: {} }) === null, "no receipt in empty extensions");
+  const fresh = join(TMP, "fresh-receipt.json");
+  check(receiptOutputPath(`  ${fresh}  `) === fresh, "output path is trimmed");
+  check(writeSignedOfferReceipt(fresh, receipt) === true, "receipt write returns true");
+  const back = JSON.parse(readFileSync(fresh, "utf8"));
+  check(back.signature === receipt.signature && JSON.stringify(back) === JSON.stringify(receipt), "written receipt parses back unchanged");
+  check((statSync(fresh).mode & 0o777) === 0o600, "receipt file mode is 0600");
+  let code = null;
+  try { writeSignedOfferReceipt(fresh, receipt); } catch (err) { code = err.code; }
+  check(code === "EEXIST", "second write fails closed with EEXIST", String(code));
+  check(receiptOutputPath("") === "", "empty output path turns capture off");
 } finally {
-  rmSync(TEMP_DIR, { recursive: true, force: true });
+  rmSync(TMP, { recursive: true, force: true });
 }
 
-console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+console.log(`\n${passed} passed, ${failed} failed`);
+process.exit(failed ? 1 : 0);

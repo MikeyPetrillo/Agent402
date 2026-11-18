@@ -6,6 +6,16 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-17 (internal code changes, stricter reading of payment fields)
+Internal:
+- Internal code changes; malformed seller payment fields and an explicit
+  `cache: null` are handled more strictly. In the seller index, an empty
+  payTo is no address, an amount that is not whole base units gives way to
+  maxAmountRequired, a catalog entry whose network is not text names no
+  chain, and hex addresses match whatever the case of their 0x prefix. In the
+  buyer client, `cache: null` on a call is a fresh purchase, as `cache: false`
+  is, and a paid answer refused on delivery is reported as that refusal.
+
 ### 2026-11-17 (ownership, contributor agreement and third-party notices)
 Repository:
 - Outside pull requests carry a DCO sign-off whose email is each commit's
