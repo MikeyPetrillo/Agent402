@@ -6,6 +6,20 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-18 (audit report)
+Tools:
+- `POST /api/audit-report` returns the paying wallet's paid history over a
+  window of up to a year: each call's time, tool and route, amount, rail,
+  network, settlement, request and response digests and its signed receipt,
+  with totals by tool and by day, as JSON or a CSV file, a page at a time.
+  The report carries a summary receipt over itself that `POST
+  /api/receipts/verify` checks. Keyed to the wallet that pays for the call;
+  EVM x402 only.
+Privacy:
+- A signed receipt issued for a call paid from an EVM wallet or over Tempo
+  is kept for the paying wallet's audit report and deleted 400 days after it
+  was issued.
+
 ### 2026-11-18 (signed receipts on every paid call)
 Payments:
 - A streamed paid answer ends with an `event: agent402-receipt` server-sent

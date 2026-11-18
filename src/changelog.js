@@ -10,6 +10,14 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-18",
+    title: "Audit report",
+    items: [
+      "Tools: `POST /api/audit-report` returns the paying wallet's paid history over a window of up to a year: each call's time, tool and route, amount, rail, network, settlement, request and response digests and its signed receipt, with totals by tool and by day, as JSON or a CSV file, a page at a time. The report carries a summary receipt over itself that `POST /api/receipts/verify` checks. Keyed to the wallet that pays for the call; EVM x402 only.",
+      "Privacy: A signed receipt issued for a call paid from an EVM wallet or over Tempo is kept for the paying wallet's audit report and deleted 400 days after it was issued.",
+    ],
+  },
+  {
+    date: "2026-11-18",
     title: "Signed receipts on every paid call",
     items: [
       "Payments: A streamed paid answer ends with an `event: agent402-receipt` server-sent event whose data is the signed receipt over every byte streamed before it, and also carries it as an `Agent402-Receipt` trailer when the client sends `TE: trailers`.",
