@@ -521,7 +521,9 @@ import { submissionSlotStatus } from "./x402-index.js";
 import { sellerLoad, sellerLoadStatus, sendRouterProbe } from "./seller-load.js";
 import { ROUTER_UA } from "./user-agents.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, removalPreview, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
+import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, removalPreview, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus, sellerEntriesForReputation, sellerEntryByKey } from "./x402-index.js";
+import { startSellerReputation, sellerReputation, sellerDeliveryRoutes, toolReputationOf, reputationVersion, TOOL_REPUTATION_LEGEND } from "./seller-reputation.js";
+import { partialFields } from "./partial-answer.js";
 import { crawlSwitch } from "./crawl-switch.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
@@ -9466,6 +9468,98 @@ app.get("/api/index", (req, res) => {
     legend: dispatchLegend({ spendChains: spendChainsConfigured() }),
   });
 });
+// One outside seller's reputation (src/seller-reputation.js): what this
+// server's own crawl and the router's own paid calls measured over a rolling
+// window, each metric with its method, sample size and last measurement, and
+// a score only past its minimum sample. Free and bounded: a lookup reads one
+// seller's stored record and at most REPUTATION_TOOLS_CAP of its rows, never
+// the index; the answer is memoized per seller until the record or the index
+// changes, in a bounded map.
+const REPUTATION_TOOLS_CAP = 200;
+const REPUTATION_MEMO_MAX = 256;
+const REPUTATION_MEMO_MS = 60_000;
+const reputationMemo = new Map(); // seller key -> { at, stamp, body }
+// The seller-key lookup this route reads, the matching rules of findSellerKey
+// (an exact key with or without its scheme, else a bare host, a bare origin
+// before a path seller) in two Maps, rebuilt from the index's keys at most
+// every REPUTATION_KEYS_MS when the index changed. A lookup is two Map reads,
+// so a caller-chosen value never walks the index.
+const REPUTATION_KEYS_MS = 30_000;
+let reputationKeys = { at: 0, version: -1, withScheme: new Map(), bare: new Map(), byHost: new Map() };
+function reputationKeyOf(raw) {
+  const version = indexCacheVersion();
+  if (reputationKeys.version !== version && (Date.now() - reputationKeys.at >= REPUTATION_KEYS_MS || reputationKeys.version === -1)) {
+    const withScheme = new Map(), bare = new Map(), byHost = new Map();
+    for (const [origin] of sellerEntriesForReputation()) {
+      const k = origin.toLowerCase();
+      if (!withScheme.has(k)) withScheme.set(k, origin);
+      const nb = k.replace(/^https?:\/\//, "");
+      if (!bare.has(nb)) bare.set(nb, origin);
+      let host = "";
+      try { host = new URL(origin).host.toLowerCase(); } catch { /* not a URL */ }
+      const held = host ? byHost.get(host) : null;
+      const isPath = (o) => { try { return new URL(o).pathname.replace(/\/+$/, "") !== ""; } catch { return false; } };
+      if (host && (!held || (isPath(held) && !isPath(origin)))) byHost.set(host, origin);
+    }
+    reputationKeys = { at: Date.now(), version, withScheme, bare, byHost };
+  }
+  const q = String(raw || "").trim().toLowerCase().slice(0, 512).replace(/\/+$/, "");
+  if (!q) return null;
+  if (/^https?:\/\//.test(q)) {
+    const hit = reputationKeys.withScheme.get(q);
+    if (hit) return hit;
+  }
+  const qBare = q.replace(/^https?:\/\//, "");
+  return reputationKeys.bare.get(qBare) || (qBare.includes("/") ? null : reputationKeys.byHost.get(qBare) || null);
+}
+app.get("/api/reputation", (req, res) => {
+  const raw = typeof req.query.seller === "string" ? req.query.seller.trim() : "";
+  if (!raw) return res.status(400).json({ error: "name one seller: ?seller=<host or origin>", example: `${BASE_URL}/api/reputation?seller=seller.example` });
+  if (raw.length > 512) return res.status(400).json({ error: "seller is at most 512 characters" });
+  if (isSelfSellerQuery(raw, BASE_URL)) {
+    return res.status(404).json({ error: "this server does not score its own host; its own measurements are on /api/reliability and /status", seller: raw.slice(0, 253) });
+  }
+  const key = reputationKeyOf(raw);
+  if (!key) {
+    const r = indexReadiness();
+    if (!r.ready) {
+      return res.status(503).set("Retry-After", String(r.retryAfterSeconds)).set("Cache-Control", "no-store").json({
+        error: `the seller index is still loading on this server (${r.state}), so this is not an answer about ${raw.slice(0, 253)} - retry in ${r.retryAfterSeconds}s`,
+        seller: raw.slice(0, 253), indexing: true, indexState: r.state, retryAfterSeconds: r.retryAfterSeconds,
+      });
+    }
+    return res.status(404).json({ error: "seller not found in the index", seller: raw.slice(0, 253), indexing: false, indexState: r.state, indexedOrigins: r.sellers });
+  }
+  const stamp = `${reputationVersion()}|${indexCacheVersion()}`;
+  const now = Date.now();
+  let hit = reputationMemo.get(key);
+  if (!hit || hit.stamp !== stamp || now - hit.at > REPUTATION_MEMO_MS) {
+    const entry = sellerEntryByKey(key);
+    const tools = Array.isArray(entry?.tools) ? entry.tools : [];
+    const routes = sellerDeliveryRoutes(key);
+    const rows = tools.slice(0, REPUTATION_TOOLS_CAP).map((t) => ({
+      method: typeof t?.method === "string" ? t.method : null,
+      route: typeof t?.route === "string" ? t.route : null,
+      reputation: toolReputationOf(t, { routes, url: sellerRouteUrl(key, t?.route) }),
+    }));
+    const body = {
+      seller: key,
+      reputation: sellerReputation(key, { now }),
+      toolCount: tools.length,
+      toolsCap: REPUTATION_TOOLS_CAP,
+      ...partialFields(tools.length, rows.length),
+      tools: rows,
+      toolReputationLegend: TOOL_REPUTATION_LEGEND,
+      sellerDetail: `${BASE_URL}/api/index?seller=${encodeURIComponent(key)}`,
+    };
+    hit = { at: now, stamp, body };
+    reputationMemo.delete(key);
+    reputationMemo.set(key, hit);
+    while (reputationMemo.size > REPUTATION_MEMO_MAX) reputationMemo.delete(reputationMemo.keys().next().value);
+  }
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600").json(hit.body);
+});
+registerMemoryStore("server.reputationMemo", () => reputationMemo, { note: "per-seller reputation answers (bounded LRU)" });
 // Self-serve listing: validate + rate-limit here; ALL probing happens inside
 // the crawler behind safeFetch (SSRF guard). 5/IP/hour, 30 new probes/hour
 // globally — a public crawl trigger must not become a fetch amplifier. Body
@@ -12614,6 +12708,10 @@ if (!FREE_MODE) {
     // wrapper is outside every gate's buffering one, so it marks the handler's
     // own end.
     markPaidHandlerStart(req, res, def.slug, { describe: () => ({ payer: paidCallPayer(req), synthetic: callIsOurs(req) }) });
+    // A seller delivery the router records during this call counts toward the
+    // seller's public reputation only when the call is not ours (a heartbeat
+    // probe, a canary, our own wallets): src/seller-reputation.js reads this.
+    { const scope = currentRequestScope(); if (scope && typeof scope.isOurs !== "function") scope.isOurs = () => callIsOurs(req); }
     if (req.tempoSettled) return next();
     // Synchronous without a shared store; a promise with one (the shared
     // budget read). A reservation that throws must still let the call run:
@@ -13717,6 +13815,15 @@ if (!x402Crawl.on) {
     })().catch((e) => console.warn(`[index] boot warm failed (the first reader builds it): ${String(e?.message || e).slice(0, 120)}`));
   } });
 }
+// Seller reputation (src/seller-reputation.js): recorded and computed only
+// where the production crawl runs (the same switch), never on a CI, test or
+// local boot unless X402_INDEX_CRAWL=on says so; SELLER_REPUTATION=off turns
+// it off alone. A leased pass folds the index into the stored record hourly.
+startSellerReputation({
+  enabled: x402Crawl.on && String(process.env.SELLER_REPUTATION || "").trim().toLowerCase() !== "off",
+  entries: () => sellerEntriesForReputation(),
+  ready: () => indexReadiness().ready,
+});
 // Router worker pool (src/router-pool.js): route queries score in a worker
 // thread so a burst of them never holds this one. ROUTER_WORKERS=0 keeps them
 // here; until a worker is loaded (or when none is) queries run here anyway.

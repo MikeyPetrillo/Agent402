@@ -10,6 +10,14 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-18",
+    title: "Seller reputation",
+    items: [
+      "Seller index: `GET /api/reputation?seller=<host>` publishes one outside seller's reputation as this server measured it over a rolling 30-day window: manifest uptime, 402 uptime, responsiveness, price honesty (the live 402 price against the listed price) and delivery on routed paid calls, with age. Each metric names its method, sample size and last measurement and is scored only past its minimum sample. No metric counts payments or buyers.",
+      "Seller index: `/api/index?seller=` carries the same record as `reputation` and a compact `reputation` on each route row; a seller's card on a chain page shows it in one line.",
+    ],
+  },
+  {
+    date: "2026-11-18",
     title: "Signed receipts on every paid call",
     items: [
       "Payments: A streamed paid answer ends with an `event: agent402-receipt` server-sent event whose data is the signed receipt over every byte streamed before it, and also carries it as an `Agent402-Receipt` trailer when the client sends `TE: trailers`.",

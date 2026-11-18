@@ -195,6 +195,7 @@ import { parseRobots, robotsAllows } from "./tools/kit.js";
 import { partialFields, clampFields } from "./partial-answer.js";
 import { responseContractOf, packResponseContract, responseContractProjection } from "./response-contract.js";
 import { deliveryProjection } from "./response-observation.js";
+import { sellerReputation, sellerDeliveryRoutes, toolReputationOf, TOOL_REPUTATION_LEGEND } from "./seller-reputation.js";
 import { requestContractOf, requestContractFromInputSchema, packRequestContract, requestContractProjection, requestContractStrength } from "./request-contract.js";
 import { toolList } from "./pages.js";
 import { walkBazaarPages, isBazaarDiscoveryUrl } from "./bazaar-pager.js";
@@ -492,6 +493,11 @@ export class ProbeSkipped extends Error {
 // to a probe sent for another operator's origin holds only that operator's
 // probes there, and one to a registration's probe only that registrant's
 // (src/seller-load.js noteThrottle).
+// How long each probe's response took to arrive (headers), keyed on the
+// response object, so the paywall verdict can carry it (seller reputation's
+// responsiveness reads it). Only the request itself is timed, never a wait
+// our own load controls added before it.
+const probeAnswerMs = new WeakMap();
 async function probeOnce(target, opts, load) {
   const unscheduled = readIsUnscheduled();
   const chargeTo = load?.chargeTo || null;
@@ -504,7 +510,9 @@ async function probeOnce(target, opts, load) {
       if (b?.ok === false) throw new ProbeSkipped("budget");
     }
   }
+  const sentAt = performance.now();
   const res = await probeFetch(target, opts);
+  if (res && typeof res === "object") probeAnswerMs.set(res, Math.round(performance.now() - sentAt));
   if (load?.kind && (res?.status === 429 || res?.status === 503)) await sellerLoad.noteThrottle(target, res.status, res.headers?.get?.("retry-after"), { chargeTo, unscheduled });
   return res;
 }
@@ -5965,7 +5973,8 @@ async function probePaywall(tools, { redirectedTo = null, gated = false } = {}) 
       return paywallUnknown(url, `our unpaid probe was not a well-formed request for this route (HTTP ${res.status} to ${method === "GET" ? "a request without parameters" : "an empty JSON body"}); no paywall verdict`, res.status);
     }
     // `url` is the URL that answered, which is the upgraded one after a 301/308.
-    return { ok: res.status === 402, status: res.status, url, at: Date.now(), mpp };
+    const ms = probeAnswerMs.get(res);
+    return { ok: res.status === 402, status: res.status, url, at: Date.now(), mpp, ...(Number.isFinite(ms) ? { ms } : {}) };
   } catch (e) {
     // Not sent (the host's load controls held it back): the stored verdict stands.
     if (e?.sellerLoadSkip) return PAYWALL_NOT_SENT;
@@ -10130,6 +10139,8 @@ export function sellerDetail(originOrHost) {
   if (!key) return null;
   for (const [origin, v] of cache.entries()) {
     if (origin !== key) continue;
+    // The router's delivery outcomes per route, read once for the rows below.
+    const deliveryRoutes = sellerDeliveryRoutes(origin);
     const detail = {
       origin,
       // Present only for a path seller, so a bare origin's detail is unchanged.
@@ -10172,6 +10183,12 @@ export function sellerDetail(originOrHost) {
       // says the manifest parsed; a seller whose every paid route 500s scores a
       // perfect 1.0 on it. null = not probed yet (never assume healthy).
       paywall: v.paywall || null,
+      // What our own crawl and paid calls say about this seller over a rolling
+      // window (src/seller-reputation.js): each metric with its method,
+      // sample size and last measurement, scored only past its minimum
+      // sample. It never carries a payment, buyer or settlement count.
+      reputation: sellerReputation(origin),
+      toolReputationLegend: TOOL_REPUTATION_LEGEND,
       // The origin this seller's manifest is served from by permanent redirect,
       // when the crawl recorded one: live probes (and paywall.url) go there.
       ...(v.redirectedTo ? { redirectedTo: v.redirectedTo } : {}),
@@ -10279,6 +10296,9 @@ export function sellerDetail(originOrHost) {
         // came from, and when it last answered us live. An undeclared row
         // that stops answering leaves the listing (see stampDeclared).
         ...listingBasisProjection(t),
+        // This route's price reading and the router's delivery on it (the
+        // method is stated once, in toolReputationLegend).
+        reputation: toolReputationOf(t, { routes: deliveryRoutes, url: sellerRouteUrl(origin, t.route) }),
         // The seller's documentation link, checked once per stored row and
         // origin (src/seller-docs-url.js). This record is the only surface
         // that carries it.
@@ -12198,6 +12218,15 @@ export function indexMemoryFigures({ sampleBytes = false } = {}) {
   out.routeIndex = { tokens: routeIdx.postings.size, postingRefs, pending: routeIdx.pending.size, termCache: routeIdx.termCache.size, staleTools: routeIdx.staleTools, shadowBuilding: !!routeIdx.shadow };
   return out;
 }
+/** Every indexed seller as [key, raw entry], for the seller reputation pass
+ *  (src/seller-reputation.js), which folds each entry's newest crawl,
+ *  paywall and price reading. Our own hosts are never in the cache. */
+export function* sellerEntriesForReputation() {
+  for (const [origin, v] of cache) yield [origin, v];
+}
+/** The raw entry stored under an exact seller key (no matching), or null. */
+export function sellerEntryByKey(key) { return (typeof key === "string" && cache.get(key)) || null; }
+
 export function _cacheForTests() {
   return cache;
 }
