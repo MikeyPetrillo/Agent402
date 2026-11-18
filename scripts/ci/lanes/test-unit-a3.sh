@@ -49,6 +49,8 @@ t node scripts/test-no-url-pathname.js
 t node scripts/test-changelog-parity.js
 # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
 t env AGENT402_SHOW_ROUTER=1 node scripts/test-listing-text-serve.js
+# An operation's OpenAPI externalDocs.url is kept only as a same-host https link and served as sellerDocsUrl on /api/index?seller= alone, withheld on a flagged row (boots a server and reads every other surface)
+t node scripts/test-seller-docs-url.js
 # The listing screen's necessary-word hints answer exactly as the unhinted reading (implication per pattern on a generated corpus, agreement on the honest fixture; offline)
 t node scripts/test-listing-screen-hints.js
 # Well-known store (operator-published domain-verification docs; traversal impossible, reserved names refused, no shadowing of /.well-known/x402 — offline)
