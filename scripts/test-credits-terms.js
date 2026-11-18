@@ -209,6 +209,11 @@ const iId = rrOf(I.key).refundId;
 setStatus(iId, "failed");
 ok(crAged.settleRefund(refundEvent(iId, "failed")) === I.keyId && rrOf(I.key).state === "failed", "refund.failed moves a pending request to failed");
 ok((await crAged.refundRequestsOwed()).includes(I.keyId), "...and it is owed (creditsRefunds)");
+{
+  const w1 = crAged.refundsOwedWord(), w2 = crAged.refundsOwedWord();
+  ok(w1 === w2 && (await w1) === "owed", "the public owed word is one shared read inside its window, and reads owed");
+  ok(crAged.refundsOwedWord(0) !== w1, "...and a fresh read once the window has passed");
+}
 ok(crAged.settleRefund(refundEvent(iId, "failed")) === null && crAged.settleRefund(refundEvent(iId, "canceled")) === null && rrOf(I.key).failedIds.length === 1, "a retried failure event changes nothing");
 refundStatus = "succeeded";
 const i2 = await crAged.requestRefund(I.key);

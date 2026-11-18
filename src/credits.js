@@ -922,6 +922,21 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     return (await allKeys()).filter(({ rec }) => rec?.refundRequest && (rec.refundRequest.state === "failed" || (rec.refundRequest.state === "pending" && stuck(rec.refundRequest)))).map(({ rec }) => rec.keyId);
   }
 
+  // The one word /api/gateway-status shows for owed card refunds. Both reads
+  // walk every key record, and that surface is public and uncached, so the
+  // word is computed at most once per OWED_WORD_TTL_MS and concurrent readers
+  // share one walk; a failed walk is not kept.
+  const OWED_WORD_TTL_MS = 30_000;
+  let owedWordMemo = null;
+  function refundsOwedWord(ttlMs = OWED_WORD_TTL_MS) {
+    const t = Date.now();
+    if (owedWordMemo && t - owedWordMemo.at < ttlMs) return owedWordMemo.p;
+    const p = Promise.all([refusalsToRefund(), refundRequestsOwed()]).then(([a, b]) => (a.length || b.length ? "owed" : "ok"));
+    owedWordMemo = { at: t, p };
+    p.catch(() => { if (owedWordMemo?.p === p) owedWordMemo = null; });
+    return p;
+  }
+
   // A Stripe refund event (refund.updated, refund.failed,
   // charge.refund.updated) for a refund we sent on request, matched by its
   // metadata and payment: succeeded marks the request done, failed or
@@ -1209,5 +1224,5 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     const pick = (xs) => { const hit = xs.find((x) => x.rec && x.rec.keyId === keyId); return hit ? microToUsd(hit.rec.balanceMicro) : null; };
     return usePg ? allKeys().then(pick) : pick(allKeys());
   }
-  return { createCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, settleRefund, noteBadKey, _internals: { boughtInDayCents, refuseAndRefund, refuseSession }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
+  return { refundsOwedWord, createCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, enableByPaymentIntent, gate, keyIdOf, balanceById, billingByKeyId, refusalsToRefund, markRefusalRefunded, requestRefund, refundRequestsOwed, settleRefund, noteBadKey, _internals: { boughtInDayCents, refuseAndRefund, refuseSession }, badKeyStats: () => ({ ...badKeyStats, clientsTracked: badKeys.size }), _dir: dir, ready: () => readyP(), sweepAbandonedHolds, backend: usePg ? "pg" : "file" };
 }

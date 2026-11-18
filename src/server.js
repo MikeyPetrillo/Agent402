@@ -4418,7 +4418,9 @@ app.get("/api/gateway-status", async (req, res) => {
     // are on /__operator/credits.json.
     // A refund a key's holder asked for (src/credits.js requestRefund) that
     // could not be sent folds into the same word (refundRequestsOwed there).
-    creditsRefunds: _credits ? await Promise.all([_credits.refusalsToRefund(), _credits.refundRequestsOwed()]).then(([a, b]) => ({ status: a.length || b.length ? "owed" : "ok" })).catch(() => ({ status: "unknown" })) : { status: "ok" },
+    // The word is shared for 30 seconds (refundsOwedWord), since both reads
+    // walk every key record and this surface is public.
+    creditsRefunds: _credits ? await _credits.refundsOwedWord().then((status) => ({ status })).catch(() => ({ status: "unknown" })) : { status: "ok" },
     // CDN-range peers that reached the origin without the shared origin
     // secret (src/cdn-client-ip.js): with the resolver on, each such request
     // is keyed on the edge address instead of its client, so a missing or
