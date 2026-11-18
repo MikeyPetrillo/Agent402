@@ -16,17 +16,18 @@
 //      whose value is a new object, the deletions, and the head (its body
 //      only when the small sections changed; its version always).
 // A write is then the size of the entries it touches, not the size of the
-// book (once the mirror below is off; while it is on the head carries the
-// whole body too). Values in the copy are frozen: a change replaces an entry, it never
+// book (the mirror below is off by default; a writer that turns it on puts
+// the whole body in the head too). Values in the copy are frozen: a change replaces an entry, it never
 // edits one in place (an in-place edit would throw, never go unwritten).
 //
-// THE OVERLAP WITH A BUILD BEFORE THIS ONE (one release). A build before
-// this one reads and writes the book as ONE document (the head's body, by
+// THE OVERLAP WITH A BUILD BEFORE ROWS (the release that brought rows ran
+// with the mirror on; every build after it runs with it off). A build before
+// rows reads and writes the book as ONE document (the head's body, by
 // compare-and-set on its version) and runs beside this one for a deploy's
 // overlap (and after a rollback). So that each sees every change the other
 // makes:
-//   - this build writes the WHOLE body into the head beside the rows (the
-//     `mirror`), with a mark naming the head version it wrote (`__rowsAt`):
+//   - with `mirror: true` a build writes the WHOLE body into the head beside
+//     the rows, with a mark naming the head version it wrote (`__rowsAt`):
 //     an older build reads every entry, mark and record, and its own write
 //     is based on them (its compare-and-set re-reads after any write here);
 //   - a head whose mark is not its own version was written last by an older
@@ -35,10 +36,11 @@
 //     row, a key it changed is rewritten, and a row it no longer holds (an
 //     entry it closed) is deleted. The same holds for the whole-book head a
 //     build before this one left behind, read once at the first write.
-// The mirror costs a whole-book head write per update while it is on; the
-// release after this one turns it off (`mirror: false`), and the rows alone
-// are written from then on. A head that still carries a mirror (its mark) is
-// rewritten WITHOUT it by the first write made with the mirror off, whatever
+// The mirror costs a whole-book head write per update while it is on (about
+// 1.8 MB at 2,000 open entries), so it is off by default (`mirror: false`)
+// now that no build before rows serves: the rows alone are written, and a
+// rollback past the release that brought rows would read an empty book. A
+// head that still carries a mirror (its mark) is rewritten WITHOUT it by the first write made with the mirror off, whatever
 // that write changed: a mirror left beside a newer version would read, to
 // every later reader, as the book an older build wrote, and be taken over
 // the rows. So a process with the mirror off runs safely beside one that
@@ -79,7 +81,7 @@ export function wholeBodyOf({ body, version, rows, parts }) {
  * @param {string[]} o.parts   the sections stored one row per key
  * @param {string|null} [o.file]  the file without a database, and the one-time import source with one
  */
-export function createJsonRowsDocument({ name, parts, file = null, log = console.warn, lockWaitMs = ROWS_LOCK_WAIT_MS, mirror = true } = {}) {
+export function createJsonRowsDocument({ name, parts, file = null, log = console.warn, lockWaitMs = ROWS_LOCK_WAIT_MS, mirror = false } = {}) {
   if (!stateDbEnabled()) return createJsonDocument({ name, file, log });
   if (!Array.isArray(parts) || !parts.length) throw new Error("a rows document needs its parts");
   const PARTS = [...parts];

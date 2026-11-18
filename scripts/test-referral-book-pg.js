@@ -7,7 +7,7 @@
 //     (that build's code from git when this clone holds it): each build sees
 //     the entries the other writes, closes and changes, and an entry the older
 //     build closed after this one made it a row is never left open;
-//   - a write at 2,000 entries carries the entry it changes, not the book (mirror off);
+//   - as shipped (the mirror off), a write at 2,000 entries carries the entry it changes, not the book;
 //   - two processes writing one book at once lose no write;
 //   - the mirror turned off beside a process that still writes it: a write of
 //     rows alone leaves no whole body in the head for a later reader to take
@@ -131,7 +131,10 @@ try {
   for (let i = 0; i < 5; i++) { const k = `${hex(32)}#${hex(32)}`; oldDropped[k] = { key: k, slug: "echo", payer: hex(20), nonce: hex(32), amount: "10000", validBefore: nowS() + 60, fromBlock: null, at: t }; }
   const oldBody = { entries: oldEntries, forgiven: [[t, 5000, ["a"]]], resolved: [{ key: "ack:x", at: t }], retired: [], closed: [], short: {}, proven: { echo: { fp: "f", at: t } }, sold: oldSold, dropped: oldDropped };
   await sdb.documents.put(REFERRAL_BOOK_DOC, oldBody);
-  const book = createReferralBook({ file: null, log: quiet });
+  // The overlap with the build before rows is the mirror's job: this book
+  // turns it on (as the release that brought rows ran); the setting this
+  // build ships, off, is read in the size section below.
+  const book = createReferralBook({ doc: createJsonRowsDocument({ name: REFERRAL_BOOK_DOC, parts: REFERRAL_BOOK_PARTS, mirror: true, log: () => {} }), log: quiet });
   await book.ready;
   const readOld = book.size() === 1990 && Object.keys(book.soldMarks()).length === 2000 && book.droppedRefused().count === 5;
   const first = intentOf();
@@ -198,11 +201,14 @@ try {
     }
   }
 
-  // ---- a write at 2,000 entries is the size of what it changes (the mirror off, as the next release runs) ----
+  // ---- a write at 2,000 entries is the size of what it changes, with the setting this build ships ----
+  // The book's own document as the server builds it (createReferralBook with
+  // no `doc`, so the rows document's default mirror setting), under its own name.
   {
     const SIZE_DOC = "referral-size-test";
     await sdb.documents.put(SIZE_DOC, oldBody);
-    const lean = createReferralBook({ doc: createJsonRowsDocument({ name: SIZE_DOC, parts: REFERRAL_BOOK_PARTS, mirror: false, log: () => {} }), log: quiet });
+    const shipped = createJsonRowsDocument({ name: SIZE_DOC, parts: REFERRAL_BOOK_PARTS, log: () => {} });
+    const lean = createReferralBook({ doc: shipped, log: quiet });
     await lean.ready;
     await lean.intent(intentOf());
     const sizes = [], times = [];
@@ -210,7 +216,9 @@ try {
     const per = sizes.map((x, i) => x - (i ? sizes[i - 1] : sizes[0])).slice(1);
     times.sort((a, b) => a - b);
     console.log(`  (a write at ${lean.size()} entries: ${Math.max(...per)} bytes at most, median ${times[4].toFixed(1)} ms)`);
-    ok(lean.size() === 2000 && per.every((b) => b > 0 && b < 2048), `with the mirror off, a paid call's write at 2,000 open entries carries its own entry only (${Math.max(...per)} bytes at most, not the whole book)`);
+    ok(lean.size() === 2000 && per.every((b) => b > 0 && b < 2048), `as shipped, a paid call's write at 2,000 open entries carries its own entry only (${Math.max(...per)} bytes at most, not the whole book)`);
+    const head = (await sdb.documents.get(SIZE_DOC))?.body || {};
+    ok(!Object.hasOwn(head, ROWS_MARK) && REFERRAL_BOOK_PARTS.every((p) => !Object.hasOwn(head, p)), `as shipped, the head holds no mirror of the book (keys: ${Object.keys(head).join(",")})`);
   }
 
   // ---- another process's writes and deletions reach this copy ----
