@@ -29,7 +29,7 @@ const call = (opts, body) => new Promise((resolve) => {
   req.end();
 });
 
-const srv = spawn("node", ["src/server.js"], {
+const srv = spawn(process.execPath, ["src/server.js"], {
   env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -79,7 +79,7 @@ ok(/redeploying/i.test(r.data), "refusal names the redeploy and says not charged
 agent.destroy();
 srv.kill("SIGKILL");
 await sleep(300);
-const srv2 = spawn("node", ["src/server.js"], {
+const srv2 = spawn(process.execPath, ["src/server.js"], {
   env: { ...process.env, FREE_MODE: "true", PORT: String(PORT2), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" },
   stdio: ["ignore", "pipe", "pipe"],
 });

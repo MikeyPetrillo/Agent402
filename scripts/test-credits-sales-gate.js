@@ -46,7 +46,7 @@ async function keySurfaces() {
 }
 
 const boot = (env) => new Promise(async (resolve) => {
-  proc = spawn("node", ["src/server.js"], {
+  proc = spawn(process.execPath, ["src/server.js"], {
     env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", STRIPE_SECRET_KEY: "sk_test_x",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off",
       FREE_ALERTS: "off", FOLLOWUPS: "off", X402_SYNC_ON_START: "false", ...env },

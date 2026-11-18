@@ -54,7 +54,7 @@ const baseEnv = {
 };
 
 async function boot(extra) {
-  const proc = spawn("node", ["src/server.js"], { env: { ...baseEnv, ...extra }, stdio: ["ignore", "ignore", "pipe"] });
+  const proc = spawn(process.execPath, ["src/server.js"], { env: { ...baseEnv, ...extra }, stdio: ["ignore", "ignore", "pipe"] });
   let err = "";
   proc.stderr.on("data", (d) => { err = (err + d).slice(-4000); });
   for (let i = 0; i < 180; i++) {

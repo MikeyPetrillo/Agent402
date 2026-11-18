@@ -314,7 +314,7 @@ facilitator = createServer((req, res) => {
   });
 });
 await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
-const boot = (port, shareSwitch) => spawn("node", ["--import", "./scripts/lib/brave-answer-stub-preload.js", "src/server.js"], {
+const boot = (port, shareSwitch) => spawn(process.execPath, ["--import", "./scripts/lib/brave-answer-stub-preload.js", "src/server.js"], {
   env: {
     ...process.env, PORT: String(port), FREE_MODE: "", BRAVE_API_KEY: "stub-never-sent", BRAVE_ANSWERS_API_KEY: "",
     ANSWER_SHARE: shareSwitch, ANSWER_SHARE_PER_HOUR: "", AGENT402_OPERATOR_TOKEN: OP_TOKEN, FIRST_CALL_ALLOWANCE: "",

@@ -60,7 +60,7 @@ ok(listWellKnown().length === 0, "store drains clean");
 
 // --- caller path: booted server --------------------------------------------
 const PORT = 3187, B = `http://127.0.0.1:${PORT}`, OP = "test-operator-token";
-const proc = spawn("node", ["src/server.js"], {
+const proc = spawn(process.execPath, ["src/server.js"], {
   env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_INDEX_CRAWL: "off", AGENT402_OPERATOR_TOKEN: OP },
   stdio: ["ignore", "pipe", "pipe"],
 });

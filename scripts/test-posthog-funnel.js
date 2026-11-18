@@ -344,7 +344,7 @@ const facilitator = createServer((req, res) => {
 });
 await new Promise((r) => facilitator.listen(FAC_PORT, r));
 
-const proc = spawn("node", ["src/server.js"], {
+const proc = spawn(process.execPath, ["src/server.js"], {
   env: {
     ...process.env,
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",

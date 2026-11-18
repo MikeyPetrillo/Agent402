@@ -32,7 +32,7 @@ const PORT = 3087;
 const BASE = process.env.AGENT402_BASE_URL || `http://localhost:${PORT}`;
 let proc = null;
 if (!process.env.AGENT402_BASE_URL) {
-  proc = spawn("node", ["src/server.js"], {
+  proc = spawn(process.execPath, ["src/server.js"], {
     cwd: ROOT,
     env: { ...process.env, WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
       FACILITATOR_URL: "https://facilitator.payai.network", X402_SYNC_ON_START: "false",

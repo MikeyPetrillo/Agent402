@@ -65,7 +65,7 @@ async function main() {
   const PORT = 3199;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  const srv = spawn("node", ["src/server.js"], { env: { ...process.env, FREE_MODE: "true", PORT: String(PORT) }, stdio: "ignore" });
+  const srv = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, FREE_MODE: "true", PORT: String(PORT) }, stdio: "ignore" });
   try {
     let total = 0;
     for (let i = 0; i < 40; i++) {

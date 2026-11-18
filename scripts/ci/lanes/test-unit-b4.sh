@@ -217,6 +217,8 @@ t node scripts/test-ci-gating.js
 # A sharded lane runs every script it names in exactly one shard (dry run of every shard, mutated copies must fail)
 t node scripts/test-ci-shards.js
 t node scripts/test-port-hygiene.js
+# A suite starts this Node (process.execPath), never the first node on PATH (offline)
+t node scripts/test-spawn-exec-path.js
 # Every suite that reaches src/ takes a stats store of its own with its first import
 t node scripts/test-stats-store-hygiene.js
 # scripts/lib/boot-server.js: PORT=0 boots read the bound port back, two at once get two ports, a crash rejects with its log (boots the server; offline)

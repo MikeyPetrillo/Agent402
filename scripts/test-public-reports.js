@@ -69,7 +69,7 @@ ok(back.publicId === pub.publicId && readPublicReport(pub.publicId, DIR)?.public
 // ---- routes on a FREE_MODE boot with no Stripe ----
 const PORT = await getFreePort();
 const B = `http://127.0.0.1:${PORT}`;
-proc = spawn("node", ["src/server.js"], { env: { ...process.env, ...STORES, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", STRIPE_SECRET_KEY: "" }, stdio: "ignore" });
+proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, ...STORES, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", STRIPE_SECRET_KEY: "" }, stdio: "ignore" });
 try {
   for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
   const page = await fetch(`${B}/reports/public/${pub.publicId}`);

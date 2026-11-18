@@ -22,7 +22,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { conso
 
 const hb = () => createHmac("sha256", POW).update(`heartbeat:${Math.floor(Date.now() / 60_000)}`).digest("base64url").slice(0, 32);
 
-let proc = spawn("node", ["src/server.js"], {
+let proc = spawn(process.execPath, ["src/server.js"], {
   env: {
     ...process.env, PORT: String(PORT), FREE_MODE: "true",
     MPP_SECRET_KEY: SECRET, POW_SECRET: POW,

@@ -146,7 +146,7 @@ facilitator = createServer((req, res) => {
 });
 await new Promise((r) => facilitator.listen(FAC_PORT, r));
 
-proc = spawn("node", ["src/server.js"], {
+proc = spawn(process.execPath, ["src/server.js"], {
   env: {
     ...process.env, TRUST_PROXY_HOPS: "1", ...ownStoreEnv("mcp-mpp"), PORT: String(PORT), FREE_MODE: "",
     WALLET_ADDRESS: TREASURY, NETWORK: "base",
@@ -327,7 +327,7 @@ try {
   proc.kill("SIGKILL");
   const { getFreePort } = await import("./lib/free-port.js");
   const port2 = await getFreePort();
-  proc = spawn("node", ["src/server.js"], {
+  proc = spawn(process.execPath, ["src/server.js"], {
     env: {
       ...process.env, TRUST_PROXY_HOPS: "1", ...ownStoreEnv("mcp-mpp-deadline"), PORT: String(port2), FREE_MODE: "",
       WALLET_ADDRESS: TREASURY, NETWORK: "base",

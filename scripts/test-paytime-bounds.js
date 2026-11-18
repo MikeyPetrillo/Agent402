@@ -695,7 +695,7 @@ await new Promise((r) => orStub.listen(OR_PORT, "127.0.0.1", r));
 // With REDIS_URL the server keeps its controls in the shared store: its own
 // key prefix, so state the unit sections above wrote (and a fire-and-forget
 // write that lands after their reset) is not this server's.
-proc = spawn("node", ["--import", "./scripts/lib/openrouter-stub-preload.js", "src/server.js"], {
+proc = spawn(process.execPath, ["--import", "./scripts/lib/openrouter-stub-preload.js", "src/server.js"], {
   // The slow-route sync window (src/slow-sync-window.js) is off: this suite
   // drives slow routes synchronously; test-slow-sync-window.js covers the window.
   env: { ...process.env, TRUST_PROXY_HOPS: "1", SLOW_SYNC_WINDOW_SECONDS: "off", SHARED_LIMITS_PREFIX: `ptb${process.pid}${Date.now().toString(36)}`, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",

@@ -53,7 +53,7 @@ ok(sectionCardSvg("tools", ctx).includes("600 tools"), "the tool count comes fro
 // ---- booted: the shell serves the derived card, the route renders it -------
 const PORT = await getFreePort();
 const BASE = `http://127.0.0.1:${PORT}`;
-proc = spawn("node", ["src/server.js"], { cwd: ROOT, env: { ...process.env, FREE_MODE: "true", STRIPE_SECRET_KEY: "", CREDITS_SALES: "", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" }, stdio: ["ignore", "ignore", "inherit"] });
+proc = spawn(process.execPath, ["src/server.js"], { cwd: ROOT, env: { ...process.env, FREE_MODE: "true", STRIPE_SECRET_KEY: "", CREDITS_SALES: "", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" }, stdio: ["ignore", "ignore", "inherit"] });
 let up = false;
 for (let i = 0; i < 120 && !up; i++) { await new Promise((r) => setTimeout(r, 500)); try { up = (await fetch(`${BASE}/health`)).ok; } catch {} }
 if (!up) fail("server did not boot");
