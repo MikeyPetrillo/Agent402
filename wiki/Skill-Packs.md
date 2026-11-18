@@ -20,7 +20,7 @@ GET https://agent402.tools/skills/security-audit?domain=example.com
 
 The template is the **plan** - the agent then executes each step. Payment (USDC via x402 or free proof-of-work) only happens when the agent actually calls each tool.
 
-Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which runs the whole workflow in one call for one flat price. That price is the **Price** column in the tables below (verifiable in [`/api/pricing`](https://agent402.tools/api/pricing) under the `skill-{slug}` slugs). Rendering the template stays free either way; the flat price is what the bundled run costs.
+Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which runs the whole workflow in one call for one flat price. That price is the **Price** column in the tables below (verifiable in [`/api/pricing`](https://agent402.tools/api/pricing) under the `skill-{slug}` slugs). Rendering the template stays free either way; the flat price is what the bundled run costs. A pack with two prices adds a stock step on a server with a stock data provider, at the second price there.
 
 ---
 
@@ -70,11 +70,11 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | Pack | Price | What it solves |
 |---|---|---|
 | [**loan-comparison**](https://agent402.tools/skills/loan-comparison) | $0.006 | Compare loan offers with different rates and terms: payment, amortization, compound interest, NPV, IRR. |
-| [**financial-research**](https://agent402.tools/skills/financial-research) | $0.018 | SEC filings, XBRL company facts, insider filings and macro context for a single ticker. |
-| [**company-dossier**](https://agent402.tools/skills/company-dossier) | $0.036 | Raw company data in one call: financials, recent SEC filings, 90 days of insider trades and recent news results, each as its own answer (no written report). |
-| [**earnings-watch**](https://agent402.tools/skills/earnings-watch) | $0.014 | Has this company just reported? Newest SEC filings and recent coverage of analyst expectations. |
-| [**earnings-deep-dive**](https://agent402.tools/skills/earnings-deep-dive) | $0.032 | Everything before a company reports: latest financials, recent filings and fresh news in one pass. |
-| [**insider-alert**](https://agent402.tools/skills/insider-alert) | $0.009 | Insider buying/selling for a stock: Form 4 trades and recent SEC filings. |
+| [**financial-research**](https://agent402.tools/skills/financial-research) | $0.018 (with a stock data provider: $0.024) | SEC filings, XBRL company facts, insider filings and macro context for a single ticker. |
+| [**company-dossier**](https://agent402.tools/skills/company-dossier) | $0.036 (with a stock data provider: $0.037) | Raw company data in one call: financials, recent SEC filings, 90 days of insider trades and recent news results, each as its own answer (no written report). |
+| [**earnings-watch**](https://agent402.tools/skills/earnings-watch) | $0.014 (with a stock data provider: $0.015) | Has this company just reported? Newest SEC filings and recent coverage of analyst expectations. |
+| [**earnings-deep-dive**](https://agent402.tools/skills/earnings-deep-dive) | $0.032 (with a stock data provider: $0.033) | Everything before a company reports: latest financials, recent filings and fresh news in one pass. |
+| [**insider-alert**](https://agent402.tools/skills/insider-alert) | $0.009 (with a stock data provider: $0.01) | Insider buying/selling for a stock: Form 4 trades and recent SEC filings. |
 
 ## Macro & SEC (12)
 
@@ -98,8 +98,8 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | Pack | Price | What it solves |
 |---|---|---|
 | [**number-crunch**](https://agent402.tools/skills/number-crunch) | $0.003 | Descriptive statistics, correlation and outliers over a numeric series. |
-| [**trend-analysis**](https://agent402.tools/skills/trend-analysis) | $0.013 | Take any numeric series and run the full workup - descriptives, moving averages, trend, outliers, forecast. |
-| [**forecasting-bake-off**](https://agent402.tools/skills/forecasting-bake-off) | $0.009 | Backtest all four methods (naive/drift, SES, Holt, Holt-Winters), rank by RMSE, forecast with the winner. |
+| [**trend-analysis**](https://agent402.tools/skills/trend-analysis) | $0.013 (with a stock data provider: $0.018) | Take any numeric series and run the full workup - descriptives, moving averages, trend, outliers, forecast. |
+| [**forecasting-bake-off**](https://agent402.tools/skills/forecasting-bake-off) | $0.009 (with a stock data provider: $0.014) | Backtest all four methods (naive/drift, SES, Holt, Holt-Winters), rank by RMSE, forecast with the winner. |
 
 ## Crypto & onchain (13)
 
