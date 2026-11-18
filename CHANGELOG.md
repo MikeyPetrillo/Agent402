@@ -6,6 +6,25 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-17 (ownership, contributor agreement and third-party notices)
+Repository:
+- Outside pull requests carry a DCO sign-off whose email is each commit's
+  author email, and everyone whose commits are in the pull request agrees to
+  the new contributor license agreement (CLA.md, v1.0) by its versioned
+  sentence: the author in the description or an own comment, every other
+  commit author in an own comment. The check runs the base branch's scripts,
+  re-runs on a comment, and names the missing record and how to add it. The
+  owner's pull requests and bot updates are unchanged.
+- NOTICE records who holds the copyright (the company for the code it wrote,
+  each outside contributor for their own contributions), how outside
+  contributions and AI-assisted development are covered, and points to
+  THIRD_PARTY_NOTICES.txt, the packages each shipped artifact installs with
+  their licenses, regenerated from the lockfiles and the tracked package
+  manifests by scripts/gen-third-party-notices.js, which refuses a shipped
+  package whose license is not permissive unless it is listed with a reason.
+  The README, CONTRIBUTING.md and /llms-full.txt carry the copyright and
+  licensing summary.
+
 ### 2026-11-17 (press kit, MCP server card and one profile list)
 Site:
 - /press is a press kit: how to write the name, the logo and social card files,
