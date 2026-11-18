@@ -103,7 +103,7 @@ function shaped(n) {
 const HEADERS = ["user-agent", "accept", "accept-language", "referer", "origin", "x-forwarded-for", "authorization", "x-payment", "payment-signature", "x-operator-token", "cookie", "if-none-match", "range", "idempotency-key"];
 // Further headers a gate, the connector or the edge code reads; each gets the
 // general shapes.
-const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt", "x-payment-compact"];
+const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt", "x-payment-compact", "x-agent402-via", "x-agent402-via-call"];
 
 // --- the readers the surfaces do not reach, timed directly --------------------
 // Synchronous functions, so a reading is the time this thread had a core.
