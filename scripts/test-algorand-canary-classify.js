@@ -219,20 +219,27 @@ ok(outcomeOf({ status: 429, body: BREAKER_BODY, elapsedMs: 50 }) === "breaker", 
   const src = readFileSync(new URL("./algorand-rail-canary.js", import.meta.url), "utf8");
   ok(/try \{ paid = await signed\.send\(\); \} catch \(e\) \{ return transportAttempt\(e, Date\.now\(\) - startedMs, signed\.txid\); \}/.test(src),
      "the sweep shapes a thrown request as an attempt that carries its signed payment's id");
-  ok(/const signed = await signOnce\(\);\s*let paid;/.test(src), "...while a throw from signing stays outside that catch and fails on first sight");
+  ok(/let signed;\s*try \{ signed = await signOnce\(\); \} catch \(e\) \{ if \(isBuyerNetworkError\(e\)\) e\.buyerSide = true; throw e; \}\s*let paid;/.test(src), "...while a throw from signing stays outside that catch: marked as the runner's network only when it is a transport failure, and thrown either way");
+  // A throw before the paid request left is signed again once, and only then:
+  // the retry inside attemptOnce runs on e.buyerSide alone (nothing was sent).
+  {
+    const once = /const attemptOnce = async \(\) => \{[\s\S]*?\n  \};\n/.exec(src)?.[0] || "";
+    ok(/try \{ return await attempt\(\); \} catch \(e\) \{\s*if \(!e\?\.buyerSide\) throw e;[\s\S]*await sleep\(THROTTLE_BACKOFF_MS\);\s*return await attempt\(\);\s*\}/.test(once) && (once.match(/await attempt\(\)/g) || []).length === 2,
+       "attemptOnce signs again only after a throw before any paid request (buyerSide), once, after a pause");
+  }
   ok(/return \{ send, txid: avmPaymentTxid\(payload\) \};/.test(src), "the id is read from the payload that was signed");
   ok(/const send = \(\) => fetch\(url, \{\s*\.\.\.reqInit,\s*signal: AbortSignal\.timeout\(/.test(src) && !/const reqInit = \{[^}]*signal:/.test(src),
      "each attempt gets its own deadline: a signal built once left the retry already aborted");
-  ok(/const first = out === "no-answer" \? await settleNoAnswer\(a, false\) : "retry";\s*if \(first === "retry"\) \{\s*a = await attempt\(\);/.test(src),
+  ok(/const first = out === "no-answer" \? await settleNoAnswer\(a, false\) : "retry";\s*if \(first === "retry"\) \{\s*a = await attemptOnce\(\);/.test(src),
      "a no-answer is settled on chain BEFORE the retry signs, and only `retry` signs again");
   // An empty 200 is a charge: the retry block is entered on the classifier's
   // word alone, and there is no other attempt anywhere in the sweep.
   ok(/const step = nextStep\(out\);\s*if \(step === "retry" \|\| step === "read-chain"\) \{/.test(src), "the retry block is entered only on nextStep's retry or read-chain");
-  ok((src.match(/await attempt\(\)/g) || []).length === 2 && !/if \(out !== "ok"\) \{/.test(src) && !/nextStep\([^)]*\) (!==|===) "(done|charged-empty)"/.test(src),
+  ok((src.match(/await attemptOnce\(\)/g) || []).length === 2 && (src.match(/await attempt\(\)/g) || []).length === 2 && !/if \(out !== "ok"\) \{/.test(src) && !/nextStep\([^)]*\) (!==|===) "(done|charged-empty)"/.test(src),
      "...and the sweep holds exactly two attempts: the first, and the one inside that block");
   {
     const block = /const step = nextStep\(out\);[\s\S]*?\n    \}\n/.exec(src)?.[0] || "";
-    ok(block.includes("a = await attempt();") && src.replace(block, "").match(/await attempt\(\)/g)?.length === 1, "the second attempt sits inside the gated block");
+    ok(block.includes("a = await attemptOnce();") && src.replace(block, "").match(/await attemptOnce\(\)/g)?.length === 1, "the second attempt sits inside the gated block");
   }
   ok(/\} else if \(out === "empty"\) \{[^}]*\s*report\.chargedEmpty\.push\(\{ key, slug: t\.slug, usd, tx: a\.tx \|\| null,[^\n]*\n\s*report\.spentUsd \+= usd;/.test(src),
      "an empty 200 is recorded as charged with an empty answer (tool, receipt transaction id) and counted in the spend");
