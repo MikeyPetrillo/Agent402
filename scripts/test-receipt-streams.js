@@ -264,8 +264,12 @@ try {
     const first = await fetch(`${rig.url}${HASH.path}`, { method: "POST", headers: idem, body: JSON.stringify(HASH.body) });
     const firstText = await first.text();
     await new Promise((res) => setTimeout(res, 300));
+    const balanceOf = () => JSON.parse(readFileSync(join(credStores, `k_${hashKey(CREDIT_KEY)}.json`), "utf8")).balanceMicro;
+    const beforeReplay = balanceOf();
     const again = await fetch(`${rig.url}${HASH.path}`, { method: "POST", headers: idem, body: JSON.stringify(HASH.body) });
     const againText = await again.text();
+    await new Promise((res) => setTimeout(res, 300));
+    await ok(balanceOf() === beforeReplay, `credits: the keyed replay takes nothing from the key (${beforeReplay} -> ${balanceOf()})`);
     const fv = verifyReceipt(first.headers.get(RECEIPT_HEADER) || "", { keys: keyDoc.keys, responseBody: againText });
     await ok(again.status === 200 && again.headers.get("x-idempotent-replay") === "true" && !again.headers.get(RECEIPT_HEADER) && fv.valid && firstText === againText, `credits: a keyed replay is not debited and carries no new receipt; the first verifies against its bytes (${fv.reason})`);
   }
