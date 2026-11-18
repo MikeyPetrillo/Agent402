@@ -1876,13 +1876,15 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
       // A re-registration is the seller asking us to look again: every route
       // this origin had dropped or was about to drop is re-checked from scratch.
       clearGoneMarks(origin);
-      // Back on the normal crawl cycle (src/seller-load.js), whether or not
-      // the documents are re-read now.
-      await sellerLoad.resetRevisit(origin, "re-registration");
       // The windows another container opened for this origin count here too.
       await refreshOriginCooldowns(origin);
       if (forcedCrawlDue(origin)) {
         noteForcedCrawl(origin);
+        // Back on the normal crawl cycle (src/seller-load.js), with the same
+        // per-origin bound as the re-read: a registration needs no proof of
+        // control, so one inside the cooldown leaves another origin's
+        // back-off standing.
+        await sellerLoad.resetRevisit(origin, "re-registration");
         clearOriginProbeState(origin);
         reread = true;
         // The seller asked us to look again: its paywall is re-probed on this
@@ -6431,16 +6433,20 @@ export function crawlReadFailureIsOurs(e) {
 const CRAWL_HOLD_MS = (() => { const n = Number(process.env.INDEX_CRAWL_HOLD_HOURS); return (Number.isFinite(n) && n >= 0 ? n : 6) * 3600_000; })();
 const CRAWL_OURS_SIDE_SHARE = 0.5;
 const CRAWL_OURS_MIN_SAMPLE = 20;
-let crawlCycleTally = { done: 0, ours: 0 };
+// `read` counts the crawls that ran; `done` and `ours` also hold the votes of
+// backed-off origins (runCrawl). The sample floor is met by reads alone: a
+// vote repeats a rate, it is not another observation.
+let crawlCycleTally = { done: 0, ours: 0, read: 0 };
 let lastCycleOursShare = 0;
 /** Close a cycle's tally: the share of crawls that ended on our side. */
 function closeCrawlCycleTally() {
-  const { done, ours } = crawlCycleTally;
-  lastCycleOursShare = done >= CRAWL_OURS_MIN_SAMPLE ? ours / done : 0;
-  crawlCycleTally = { done: 0, ours: 0 };
+  const { done, ours, read } = crawlCycleTally;
+  lastCycleOursShare = read >= CRAWL_OURS_MIN_SAMPLE && done > 0 ? ours / done : 0;
+  crawlCycleTally = { done: 0, ours: 0, read: 0 };
   return lastCycleOursShare;
 }
-export function __setLastCycleOursShareForTest(x) { lastCycleOursShare = Number(x) || 0; crawlCycleTally = { done: 0, ours: 0 }; }
+export function __closeCrawlCycleTallyForTest(tally) { crawlCycleTally = { done: 0, ours: 0, read: 0, ...tally }; return closeCrawlCycleTally(); }
+export function __setLastCycleOursShareForTest(x) { lastCycleOursShare = Number(x) || 0; crawlCycleTally = { done: 0, ours: 0, read: 0 }; }
 /** May this failed crawl keep `prev` as it was? Only an entry whose last
  *  completed crawl succeeded with a catalog the origin itself served. */
 /** `holdFromAt`: when the window starts, if later than the last completed
@@ -6701,7 +6707,7 @@ async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
     noteLandingHeld(originUrl, e.landingHost);
     return { landingHeld: e.landingHost || true, error: String(e.message || e), ...(e.heldBy ? { heldBy: e.heldBy, retryAfterSeconds: e.retryAfterSeconds || 0 } : {}) };
   }
-  finally { if (read) { crawlCycleTally.done++; if (outcome.ours) crawlCycleTally.ours++; } }
+  finally { if (read) { crawlCycleTally.done++; crawlCycleTally.read++; if (outcome.ours) crawlCycleTally.ours++; } }
 }
 async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false, scheduled = false, revisitIntervalMs = 0 } = {}, outcome = { ours: false }) {
   const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
@@ -7796,7 +7802,7 @@ async function runCrawl() {
     // A slow origin left out while it waits its slow cycle is a turn we put
     // off: the hold of its last good listing counts from here (turnNotReadAt).
     if (SLOW_ORIGINS.size) { const dueSet = new Set(due); for (const o of ordered) if (!dueSet.has(o) && sellerLoad.slowWaiting(o, "x402")) noteTurnNotRead(o); }
-    crawlCycleTally = { done: 0, ours: 0 };
+    crawlCycleTally = { done: 0, ours: 0, read: 0 };
     // Each origin's load controls (src/seller-load.js) decide whether it is
     // read this cycle: held by its own Retry-After, past its host's daily
     // budget, or backed off because its documents have not changed. A skipped
@@ -8021,10 +8027,15 @@ function entryReadGood(entry) {
 }
 // The rates a backed-off origin votes at (see runCrawl): of this cycle's reads
 // of origins whose last read was good, the share that read good again and the
-// share that ended on our side. Kept for a cycle that reads none of them.
+// share that ended on our side. Measured only over at least
+// BACKED_OFF_VOTE_MIN_SAMPLE such reads, so a few origins a seller controls
+// (good once, then failing in a way that reads as ours) cannot set the rate
+// hundreds of backed-off origins vote at; a cycle with fewer keeps the last
+// rate that was measured on enough reads.
+const BACKED_OFF_VOTE_MIN_SAMPLE = CRAWL_OURS_MIN_SAMPLE;
 let lastBackedOffVote = null;
 function measureBackedOffVote(readAfterGood, oursByOrigin) {
-  if (!readAfterGood.length) return lastBackedOffVote;
+  if (readAfterGood.length < BACKED_OFF_VOTE_MIN_SAMPLE) return lastBackedOffVote;
   let ok = 0, ours = 0;
   for (const o of readAfterGood) {
     if (entryReadGood(cache.get(o))) ok++;
@@ -8032,6 +8043,10 @@ function measureBackedOffVote(readAfterGood, oursByOrigin) {
   }
   lastBackedOffVote = { ok: ok / readAfterGood.length, ours: ours / readAfterGood.length };
   return lastBackedOffVote;
+}
+export function __backedOffVoteForTest(readAfterGood, oursByOrigin, { reset = false } = {}) {
+  if (reset) lastBackedOffVote = null;
+  return measureBackedOffVote(readAfterGood, oursByOrigin);
 }
 
 // The release pass's health floor (see selectReleasableOrigins' outage guard).

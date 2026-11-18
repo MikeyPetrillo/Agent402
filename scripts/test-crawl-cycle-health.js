@@ -142,6 +142,21 @@ ok(tail.every((c) => c.oursShare < 0.5), `200 dark: no cycle reads as failing on
   ok(back.okFraction > 0.5, `control: the first cycle after the outage reads healthy again (${back.okFraction})`);
 }
 
+// ---- a few failing origins do not set the vote, and votes are not reads ----------
+{
+  const few = Array.from({ length: 5 }, (_, i) => `https://few${i}.example`);
+  const many = Array.from({ length: 20 }, (_, i) => `https://many${i}.example`);
+  const allOurs = (list) => new Map(list.map((o) => [o, true]));
+  ok(idx.__backedOffVoteForTest(few, allOurs(few), { reset: true }) === null, "five reads of once-good origins, all failing on our side, set no vote rate");
+  const measured = idx.__backedOffVoteForTest(many, new Map());
+  ok(measured?.ours === 0 && measured.ok === 0, `twenty such reads set the rate (${JSON.stringify(measured)})`);
+  ok(idx.__backedOffVoteForTest(few, allOurs(few))?.ours === 0, "a later cycle with five failing reads keeps the rate measured on twenty");
+  ok(idx.__backedOffVoteForTest(many, allOurs(many))?.ours === 1, "control: twenty failing reads do move the rate");
+  ok(idx.__closeCrawlCycleTallyForTest({ done: 600, ours: 600, read: 5 }) === 0, "votes do not meet the our-side sample floor: 5 reads and 595 votes read as no share");
+  ok(idx.__closeCrawlCycleTallyForTest({ done: 600, ours: 600, read: 20 }) === 1, "control: 20 reads meet it");
+  idx.__setLastCycleOursShareForTest(0);
+}
+
 Date.now = realNow;
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
