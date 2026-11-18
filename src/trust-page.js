@@ -63,7 +63,7 @@ const hh = (h) => `${String(h).padStart(2, "0")}:00 UTC`;
 export function trustPage(baseUrl) {
   const canonical = `${baseUrl}/trust`;
   const title = "Trust at Agent402";
-  const description = "How the hosted service handles data and incidents: the subprocessors that receive buyer data, what is stored and where, encryption, nightly backups and restore tests, status, paging, refunds and security reports.";
+  const description = "How to verify a paid call end to end, and how the hosted service handles data and incidents: the subprocessors that receive buyer data, what is stored and where, encryption, nightly backups and restore tests, status, paging, refunds and security reports.";
   const keep = backupKeepDays(), hour = backupUtcHour(), stale = backupStaleHours();
   const cacheMin = Math.round(IDEM_TTL_MS / 60000);
   const years = hstsYears();
@@ -73,7 +73,24 @@ export function trustPage(baseUrl) {
 <thead><tr>${heads.map((h) => `<th scope="col">${esc(h)}</th>`).join("")}</tr></thead>
 <tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
   const subs = trustSubprocessors();
+  const step = (t) => `<li style="margin:0 0 10px;padding-left:4px;">${t}</li>`;
   const SECTIONS = [
+    {
+      id: "verify",
+      h: "Verify what an agent paid for and received",
+      p: [
+        `One paid call, checked end to end with public records and no account:`,
+        `<div><ol style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 14px;padding-left:24px;">${[
+          step(`Before paying, the 402 names the price, the network, the asset and the ${code("payTo")} address; ${link("/.well-known/x402", code("/.well-known/x402"))} lists the same addresses.`),
+          step(`A settled x402 answer carries ${code("PAYMENT-RESPONSE")}: base64 JSON whose ${code("success")}, ${code("transaction")}, ${code("network")} and ${code("payer")} fields name the settlement. An MPP answer carries ${code("Payment-Receipt")}, whose ${code("reference")} names the payment.`),
+          step(`Look up ${code("transaction")} on that network's block explorer: a stablecoin transfer from ${code("payer")} to the ${code("payTo")} the 402 named. A batched payment names its batch transfer instead.`),
+          step(`Hash the exact bytes you received with sha256. To keep that digest beside the payment on chain, send the transaction to ${code("POST /api/attest")} from the paying EVM wallet; ${code("POST /api/receipts")} returns that wallet's settled calls with each transaction and response digest.`),
+          step(`Open ${link(CONFORMANCE_PATH, code(CONFORMANCE_PATH))}, find the row whose ${code("id")} names the rail and network you paid on, and read its ${code("receipt")}, ${code("settleAfterAnswer")} and ${code("refundOnChargedFailure")} cells. ${code("signedReceipt")} reads false on every paid rail: the receipt is the settlement's own record, with no signature added by this server.`),
+        ].join("")}</ol></div>`,
+        `A re-send with the same ${code("Idempotency-Key")}, credential, route and body within ${cacheMin} minutes replays the served JSON answer without a second charge. For an outside x402 seller the router buys from, ${code("/api/index?seller=<host>")} shows its's crawl history, the live probe of its paywall and the router's verdict on paying it.`,
+      ],
+      links: [[CONFORMANCE_PATH, "Conformance JSON"], ["/proof", "Receipts"], ["/api/reliability", "Reliability"]],
+    },
     {
       h: "Subprocessors",
       p: [
@@ -140,11 +157,11 @@ export function trustPage(baseUrl) {
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">trust</span></nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);max-width:900px;">Trust at Agent402.</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">How the hosted service handles data and incidents. Each statement links to the page, the live surface or the code that shows it.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">How to verify a paid call end to end, and how the hosted service handles data and incidents. Each statement links to the page, the live surface or the code that shows it.</p>
   </div>
 </header>
 ${SECTIONS.map((s) => `
-<section style="max-width:1180px;margin:0 auto;padding:40px 30px 0;">
+<section${s.id ? ` id="${esc(s.id)}"` : ""} style="max-width:1180px;margin:0 auto;padding:40px 30px 0;scroll-margin-top:90px;">
   <div style="display:grid;grid-template-columns:260px minmax(0,1fr);gap:30px;padding-bottom:36px;border-bottom:1px solid var(--hairline);" class="tr-2col">
     <h2 style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);font-weight:700;margin:4px 0 0;">${esc(s.h)}</h2>
     <div>

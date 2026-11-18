@@ -268,7 +268,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
       <div class="ml-stagger" style="display:flex;flex-direction:column;gap:26px;">
         <h1 class="ml-hero-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-hero);line-height:.98;margin:0;color:var(--ink);text-wrap:balance;">${esc(CATEGORY_LINE)}</h1>
         <p class="hm-lede" style="margin:0;text-wrap:pretty;">${leadHtml}</p>
-        <p style="margin:0;font-size:var(--fs-base);line-height:1.55;color:var(--muted);text-wrap:pretty;">Web search, browser rendering, SEC filings, market data and more: an agent sends a request, gets a price back in the <span style="font-family:var(--font-mono);color:var(--ink);">402</span>, pays it from its own wallet, and gets the answer.</p>
+        <p style="margin:0;font-size:var(--fs-base);line-height:1.55;color:var(--muted);text-wrap:pretty;">Web search, browser rendering, SEC filings, market data and more: an agent sends a request, gets a price back in the <span style="font-family:var(--font-mono);color:var(--ink);">402</span>, pays it from its own wallet, and gets the answer with a receipt it can <a href="/trust#verify" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">verify</a>.</p>
         <div class="ml-hero-ctas" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
           <a class="btn btn-primary" href="/docs#add">Add to your agent</a>
           <a class="btn btn-secondary" href="/tools">Browse tools</a>

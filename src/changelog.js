@@ -10,6 +10,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-17",
+    title: "Verify a paid call",
+    items: [
+      "Site: The /trust page opens with a walkthrough for checking one paid call end to end: the receipt header and its fields, the settlement on chain, the response digest and its attestation, and the conformance cell for the rail paid on. The home page links to it from the hero, and the README and /llms-full.txt carry the same steps.",
+    ],
+  },
+  {
+    date: "2026-11-17",
     title: "Internal code changes, stricter reading of payment fields",
     items: [
       "Internal: Internal code changes; malformed seller payment fields and an explicit `cache: null` are handled more strictly. In the seller index, an empty payTo is no address, an amount that is not whole base units gives way to maxAmountRequired, a catalog entry whose network is not text names no chain, and hex addresses match whatever the case of their 0x prefix. In the buyer client, `cache: null` on a call is a fresh purchase, as `cache: false` is, and a paid answer refused on delivery is reported as that refusal.",

@@ -21,6 +21,13 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 [![CI](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
+## Receipts and verification
+
+- Every settled x402 answer carries `PAYMENT-RESPONSE` (`success`, `transaction`, `network`, `payer`), and every MPP answer `Payment-Receipt` (`reference`). Look the x402 `transaction` up on its `network` to see the transfer to the `payTo` the 402 named.
+- [`/.well-known/agent402-conformance.json`](https://agent402.tools/.well-known/agent402-conformance.json) lists, per payment rail, settlement after the answer, idempotent re-sends, the replay guard, refunds of a charged failure and the receipt, computed from the serving code.
+- `POST /api/attest` binds a paid call's response digest to its settlement on Base; `POST /api/receipts` returns the paying wallet's settled calls with each transaction and digest.
+- [/trust#verify](https://agent402.tools/trust#verify) walks one call end to end; [`/api/index?seller=<host>`](https://agent402.tools/api/index) shows an outside seller's crawl history, paywall probe and router verdict.
+
 ## What Agent402 is
 
 > **Agentic Finance** is software agents paying and getting paid on their

@@ -6,6 +6,14 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-17 (verify a paid call)
+Site:
+- The /trust page opens with a walkthrough for checking one paid call end to
+  end: the receipt header and its fields, the settlement on chain, the
+  response digest and its attestation, and the conformance cell for the rail
+  paid on. The home page links to it from the hero, and the README and
+  /llms-full.txt carry the same steps.
+
 ### 2026-11-17 (internal code changes, stricter reading of payment fields)
 Internal:
 - Internal code changes; malformed seller payment fields and an explicit
