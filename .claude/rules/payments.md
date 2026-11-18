@@ -387,6 +387,28 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   The preflights read only string payload fields (`txt` in `src/circle-shapes.js`) and refuse an
   EIP-2612 permit with any permit field but no matching `from`
   (`scripts/test-evm-preflight-inputs.js`).
+- **x402 payment channels (`batch-settlement`, off by default):** `src/batch-settlement.js`.
+  `X402_BATCH_SETTLEMENT_NETWORKS` (CSV of CAIP-2) offers a `batch-settlement` accept LAST, at the
+  exact accept's price, payTo the treasury, on each listed network in the plain EVM offer that a
+  routing facilitator's `/supported` lists the kind for AND the scheme's own
+  `validateFacilitatorSupport` accepts (a receiver authorizer the facilitator holds; we hold no
+  authorizer key). Checked at boot only, before registration: a kind @x402/core rejects at
+  `initialize()` would refuse every rail. Refused (logged `x402 batch-settlement: REFUSING`): a floor,
+  a premium, no durable store (Redis via `REDIS_URL`; `X402_BATCH_SETTLEMENT_STORE=memory` names the
+  single-process store), an unpriceable asset. Never on identity-bound, lasting-effect or
+  `x402EvmOnly` routes, nor where the route's 402 budget has no room beside the listing
+  (`BATCH_ACCEPT_JSON_BYTES`, `batchWithheld`; a listing never shrinks for it). Money path: the
+  scheme commits a voucher's charge in its beforeSettle hook, which @x402/core runs after every manual
+  hook (hang-up, blocklist, settle-sent), and only for a handler answer below 400; one admission per
+  channel (lock); a replayed voucher fails the running-total check. A metered override charges less
+  than the signed cap (`isMeterable`). Books: a sale per committed call, wire `x402-batch`
+  (`settlementKindOf` offchain), tx null. A hang-up after the commit credits the channel back
+  (`creditHungUpBatchCall`); a credit the channel cannot take is booked owed under
+  `batch-hangup:<uuid>`. Claim, settle and idle refund run per network under a lease
+  (`X402_BATCH_CLAIM_INTERVAL_SECONDS` 300, `X402_BATCH_REFUND_INTERVAL_SECONDS` 900,
+  `X402_BATCH_IDLE_REFUND_SECONDS` 86400); a claimed batch is settled to payTo in the same pass or
+  the next. `/api/rails` `batchSettlement`, `/api/pricing` `payment.paymentChannels` and
+  `acceptKinds`, and the llms.txt line appear only while offered. Suite: `scripts/test-batch-settlement.js`.
 - **Solana funding refusals:** `src/svm-funding-refusal.js` words a Solana verify refused for no USDC
   account or too little USDC (`retry: fund-wallet`, Retry-After `SVM_FUNDING_RETRY_AFTER_S`, default 300)
   and, after `SVM_FUNDING_HOLD_AFTER` (3) such refusals per wallet and source account in

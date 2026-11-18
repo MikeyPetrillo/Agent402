@@ -52,6 +52,11 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   answered unchanged and only those writes are left out, so the budget never refuses a request.
   `GATEWAY_METERED_BILLING=on` gates metered settlement, the buffered override and a credits
   stream's debit on finish alike (`recordStreamedUsage`, `meteredUsdOf` in `src/gateway-meter.js`).
+  `METERED_MEDIA=on` (default off; needs `GATEWAY_METERED_BILLING=on` too) adds speech (`tts-kit.js`),
+  transcription (`stt-kit.js`, never a transcript served on a second billed attempt) and embeddings
+  (`embed-kit.js`): each reports its served usage through `setMeterSentinel`, so an upto, channel
+  (`batch-settlement`) or credits buyer settles that under the price. `isMeterable` reads `upto`,
+  `batch-settlement` and credits; an exact payment is never metered (`scripts/test-batch-settlement.js`).
 - **Model retirements** (`RETIRING_MODELS` in `llm-gateway-kit.js`): each id maps to the successor
   `canonicalModel` serves from `until` (`asItselfUntil` serves the id as itself before that day).
   `keepOn: [tierSlug]` keeps an id, and every id of its family, admitted on a tier whose list no
