@@ -15,7 +15,7 @@ import { EventEmitter } from "node:events";
 import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-credits-pg" });
 const sdb = await import("../src/state-db.js");
-const { createCredits, hashKey, usdToMicro } = await import("../src/credits.js");
+const { createCredits, hashKey, usdToMicro, emailKeyOf, ensureCreditsIndexes, CREDITS_INDEXES, CREDITS_LOOKUP_SQL } = await import("../src/credits.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -425,6 +425,46 @@ try {
     ok((await L.setLowNotice("aaaaaaaaaaa3", false)) === true && (await rowRec("lkc".padEnd(64, "c"))).lowNoticeOff && (await L.setLowNotice("zzzzzzzzzzzz", false)) === false, "pg: a key id finds its row (and an unknown one none)");
     const st = await L.status();
     ok(st.keys >= 43 && st.rows.every((r) => !("history" in r)), `pg: the operator status still walks every key (${st.keys})`);
+
+    // ONE NORMALIZED EMAIL FIELD. The email a key is found by is normalized
+    // once, in JS (emailKeyOf), stored on the row (`emailKey`) and compared
+    // as stored: Postgres lower() follows the database's locale and lowers
+    // "İ" differently from JS, so a non-ASCII email was not found.
+    ok(emailKeyOf(" İpek@X.COM ") === "i̇pek@x.com" && emailKeyOf("") === null && emailKeyOf(null) === null, `emailKeyOf trims and lowers once, in JS (${JSON.stringify(emailKeyOf(" İpek@X.COM "))})`);
+    sessions.cs_tr = { id: "cs_tr", mode: "payment", payment_status: "paid", payment_intent: "pi_tr", customer_details: { email: "İpek@X.com" }, metadata: { credits_pack: "credits-20" } };
+    const tr = await L.claim("cs_tr");
+    const trRow = await rowRec(hashKey(tr.key));
+    ok(tr.status === "minted" && trRow?.emailKey === "i̇pek@x.com" && trRow.email === "İpek@X.com", `pg: a minted key's row keeps the email as given and its normalized key (${JSON.stringify(trRow?.emailKey)})`);
+    const trFound = await L.balancesForEmail("İPEK@x.com");
+    ok(trFound.map((b) => b.keyId).join() === tr.keyId && (await L.historyFor(tr.keyId, "i̇pek@X.com"))?.keyId === tr.keyId, `pg: a non-ASCII email finds its balance whatever the database's locale (${trFound.map((b) => b.keyId).join() || "none"})`);
+    // A row written before the field (an older build) is given it at the next load, computed in JS.
+    await put("lkd".padEnd(64, "d"), rec("aaaaaaaaaaa4", "Ünïcode@Example.com"));
+    ok(!("emailKey" in (await rowRec("lkd".padEnd(64, "d")))), "a row an older build wrote has no normalized email");
+    const L2 = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: quiet });
+    await L2.ready();
+    ok((await rowRec("lkd".padEnd(64, "d")))?.emailKey === "ünïcode@example.com" && (await rowRec("lka".padEnd(64, "a")))?.emailKey === "mixed@example.com", "pg: the next load gives every older row its normalized email");
+    ok((await L2.balancesForEmail("ÜNÏCODE@example.com")).map((b) => b.keyId).join() === "aaaaaaaaaaa4", "pg: and it is found by it");
+
+    // EXPRESSION INDEXES, built CONCURRENTLY outside any transaction and
+    // outside the boot's schema lock, once; an index a failed build left
+    // INVALID is dropped and built again.
+    const schemaName = sdb.stateDbSchema();
+    const idx = async () => Object.fromEntries((await sdb.stateQuery(`SELECT c.relname AS name, i.indisvalid AS valid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = ANY($2)`, [schemaName, CREDITS_INDEXES.map((x) => x.name)])).rows.map((r) => [r.name, r.valid]));
+    ok(Object.keys(await idx()).length === 0, "no credits index exists before the build runs");
+    // A build that failed part way leaves an INVALID index under the name (a unique build over duplicate keys does).
+    await sdb.stateStatementOutsideTx(`CREATE UNIQUE INDEX CONCURRENTLY ${CREDITS_INDEXES[1].name} ON ${schemaName}.records ((body->>'balanceMicro')) WHERE collection = 'credits'`).catch(() => {});
+    ok((await idx())[CREDITS_INDEXES[1].name] === false, "a failed concurrent build leaves an invalid index (the case the build repairs)");
+    const built = await ensureCreditsIndexes({ log: quiet });
+    const after = await idx();
+    ok(built.ran === true && CREDITS_INDEXES.every((x) => after[x.name] === true), `the build leaves every credits index valid (${JSON.stringify(after)})`);
+    ok(built.result?.built?.length === 2 && built.result?.rebuilt?.join() === CREDITS_INDEXES[1].name, `the invalid one was dropped and built again (${JSON.stringify(built.result)})`);
+    const again = await ensureCreditsIndexes({ log: quiet });
+    ok(again.ran === true && again.result?.built?.length === 0, `a second run builds nothing (${JSON.stringify(again.result)})`);
+    const plan = async (sql, params) => (await sdb.withStateTx(async (c) => { await c.query("SET LOCAL enable_seqscan = off"); return (await c.query(`EXPLAIN ${sql}`, params)).rows.map((r) => r["QUERY PLAN"]).join("\n"); }));
+    const emailPlan = await plan(CREDITS_LOOKUP_SQL.email(`${schemaName}.records`), ["mixed@example.com"]);
+    const keyPlan = await plan(CREDITS_LOOKUP_SQL.keyId(`${schemaName}.records`), ["aaaaaaaaaaa1"]);
+    ok(emailPlan.includes(CREDITS_INDEXES[0].name) && keyPlan.includes(CREDITS_INDEXES[1].name), `the balance page's two lookups can use their indexes (${emailPlan.split("\n")[0]} | ${keyPlan.split("\n")[0]})`);
+    ok((await L2.balancesForEmail("mixed@example.com")).length === 2 && (await L2.historyFor("aaaaaaaaaaa1", "mixed@example.com"))?.keyId === "aaaaaaaaaaa1", "the lookups answer the same with the indexes in place");
   }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
