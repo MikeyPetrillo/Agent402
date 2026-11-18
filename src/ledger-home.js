@@ -8,14 +8,14 @@
 
 import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, decideLive, sectionMeta, fmtNum } from "./ledger-chrome.js";
-import { whyHomeClaims } from "./why.js";
+import { whyHomeClaims, WHY_POINTS } from "./why.js";
 import { decideConfig } from "./decide/config.js";
 import { toolList } from "./pages.js";
 import { RAILS, RAILS_SHORT } from "./rails.js";
 import { CAIP2_NAMES } from "./stats.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { routerPayChains } from "./tools/route-execute.js";
-import { railKey, chainDisplayName } from "./rails.js";
+import { railKey, chainDisplayName, countWord } from "./rails.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 import { HUMAN_PRODUCTS, humanCheckoutEnabled } from "./human-checkout.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -345,7 +345,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   <h2 class="hm-h2" style="margin:0 0 22px;">Why pay here.</h2>
   <div class="hm-claims">${claimsHtml}</div>
   <div class="hm-marks"><span class="hm-marks-k">settles on</span>${railMarksHtml}${tempoMarkHtml}</div>
-  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);margin-top:18px;"><a href="/docs#why" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;white-space:nowrap;">all seven claims, with proof →</a></div>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);margin-top:18px;"><a href="/docs#why" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;white-space:nowrap;">all ${countWord(WHY_POINTS.length)} claims, with proof →</a></div>
 </section>
 
 <section id="sell" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">

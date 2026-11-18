@@ -45,17 +45,17 @@
       if (!input) { errEl.textContent = "Please enter " + (need[kind] || "a value."); field.setAttribute("aria-invalid", "true"); field.focus(); return; }
       field.removeAttribute("aria-invalid");
       btn.disabled = true;
-      var label = btn.textContent;
+      var label = btn.innerHTML; // the price slot inside it stays, so a later tier choice still updates it
       ph("report_buy_click", { product: sel[kind], kind: kind });
       btn.innerHTML = '<span class="spin"></span>Redirecting to checkout…';
       try {
         var r = await fetch("/api/buy", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ product: sel[kind], input: input }) });
         var j = await r.json();
         if (j && j.url) { window.location = j.url; }
-        else { errEl.textContent = (j && j.error) || "Could not start checkout."; btn.disabled = false; btn.textContent = label; }
+        else { errEl.textContent = (j && j.error) || "Could not start checkout."; btn.disabled = false; btn.innerHTML = label; }
       } catch (e) {
         errEl.textContent = "Network error, please try again.";
-        btn.disabled = false; btn.textContent = label;
+        btn.disabled = false; btn.innerHTML = label;
       }
     });
   });

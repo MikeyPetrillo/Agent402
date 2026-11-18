@@ -6,7 +6,7 @@
 // works". `links` (at most two) sit on the row; `more` sit inside the expander.
 // scripts/test-wrap-quality.js measures the rows in Chromium. /why answers a 301 to /docs#why. The agent-facing
 // surfaces (llms.txt, MCP instructions, package READMEs) point at it, so the
-// seven points live in ONE place and read the same everywhere. First-party
+// points live in ONE place and read the same everywhere. First-party
 // claims only: no comparisons, no third-party names, evergreen "500+" counts.
 import { esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
@@ -153,14 +153,14 @@ export const WHY_SECTION_CSS = `
   .why-cmp td.why-cmp-here { color:var(--ink); }
   @media (max-width:600px){ .why-cmp td { min-width:150px; } }`;
 
-/** The comparison table under the seven points, in its own scroll wrapper. */
+/** The comparison table under the points, in its own scroll wrapper. */
 function whyCompareHtml() {
   const head = `<tr><th scope="col">Task</th>${WHY_COMPARE.cols.map((c) => `<th scope="col">${esc(c)}</th>`).join("")}</tr>`;
   const rows = WHY_COMPARE.rows.map(([label, ...cells]) => `<tr><th scope="row">${esc(label)}</th>${cells.map((c, i) => `<td${i === 0 ? ' class="why-cmp-here"' : ""}>${esc(c)}</td>`).join("")}</tr>`).join("");
   return `<div class="why-cmp-wrap" tabindex="0" aria-label="Comparison table, scrolls sideways on narrow screens"><table class="why-cmp"><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
 }
 
-/** The seven rows, each a kicker and a one-line heading on the left; on the
+/** The rows, each a kicker and a one-line heading on the left; on the
  * right one sentence, at most two proof links, and the full claim (with any
  * further proof links) behind "how it works". */
 function whyPointsHtml() {
@@ -175,7 +175,7 @@ function whyPointsHtml() {
     </div>`).join("");
 }
 
-/** The full "Why pay here" section, on /docs#why: the seven rows, then the
+/** The full "Why pay here" section, on /docs#why: the rows, then the
  * side-by-side table. The home page shows three short claims that link here. */
 export function whyDocsSectionHtml() {
   return `<section id="why">
