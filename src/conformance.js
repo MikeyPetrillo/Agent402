@@ -127,7 +127,7 @@ const NOT_SIGNED = (header) => cell(false, `${header} is the settlement's own re
 // loaded, and the rail one it signs on.
 function signedCell(L, rail, header) {
   return L.receiptSigner && SIGNED_RAILS.includes(rail)
-    ? cell(true, `${RECEIPT_HEADER}: a compact JWS (EdDSA, Ed25519) this server signs over the route, the request digest, the answer's digest, the price, the rail, the payer and the settlement ${header} names; sent only on a final 200 after settlement. Keys at ${RECEIPT_KEYS_PATH}.`, "src/receipt-signing.js")
+    ? cell(true, `${RECEIPT_HEADER}: a compact JWS (EdDSA, Ed25519) this server signs over the route, the request digest, the answer's digest, the price, the rail, the payer and the settlement ${header} names; sent only on a final, non-streamed 200 after settlement (a streamed answer carries none). Keys at ${RECEIPT_KEYS_PATH}.`, "src/receipt-signing.js")
     : NOT_SIGNED(header);
 }
 

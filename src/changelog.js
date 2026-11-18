@@ -10,6 +10,14 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-18",
+    title: "Signed receipts",
+    items: [
+      "Payments: A server run with a receipt signing key (`RECEIPT_SIGNING_KEY`) sends an `Agent402-Receipt` header on each settled paid answer that is not streamed: a compact JWS (EdDSA, Ed25519) over the route, the request digest, the sha256 of the answer, the price, the rail, the network, the payer and the settlement. The public keys are published at `/.well-known/agent402-receipt-key.json`, and `POST /api/receipts/verify` checks a receipt for free. The `signedReceipt` cell of each conformance row reads true only while the server signs.",
+      "Packages: agent402-client exports `verifyReceipt`, which checks an `Agent402-Receipt` against the published keys and, when given them, against the answer bytes and the request sent.",
+    ],
+  },
+  {
+    date: "2026-11-18",
     title: "Ownership statement",
     items: [
       "Repository: NOTICE, the README, CONTRIBUTING.md and /llms-full.txt state that Cardhavok LLC (doing business as Havok Holdings LLC) owns the code in this repository except a small number of trivial lines (seed URLs, a badge line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose authors keep their copyright, and that the contributor license agreement covers new and earlier contributions. The README's receipts section describes the signed receipt header a server sends when a receipt signing key is set.",

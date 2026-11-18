@@ -179,6 +179,12 @@ try {
   const llms = await (await fetch(`${rig.url}/llms-full.txt`)).text();
   await ok(trust.includes(RECEIPT_HEADER) && trust.includes(RECEIPT_KEYS_PATH) && !trust.includes("no signature added by this server"), "with a key: /trust offers the signed receipt and its keys");
   await ok(llms.includes(RECEIPT_HEADER) && llms.includes(RECEIPT_VERIFY_PATH) && !llms.includes("`signedReceipt` reads false"), "with a key: llms-full.txt names the header and the check");
+  // A streamed answer gets no receipt (the head leaves before the body), so
+  // every surface that offers one scopes it to non-streamed answers.
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const scoped = [["/trust", trust.replace(/<[^>]*>/g, "")], ["llms-full.txt", llms], ["the conformance cell", row("x402:exact:eip155:8453").features.signedReceipt.detail], ["README.md", readme.split("\n").find((l) => l.includes("`Agent402-Receipt`")) || ""], ["client/README.md", readFileSync(new URL("../client/README.md", import.meta.url), "utf8").replace(/\s+/g, " ")]];
+  for (const [where, text] of scoped) await ok(/non-streamed|not streamed/.test(text), `${where}: the signed receipt is scoped to answers that are not streamed`);
   const WIRE_ROW = { evm: "x402:exact:eip155:8453", svm: "x402:exact:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", avm: doc.rails.find((r) => /^x402:exact:algorand/.test(r.id)).id, stellar: "x402:exact:stellar:pubnet", "mpp-evm": "mpp:evm:eip155:8453", tempo: "mpp:tempo:pull" };
   for (const id of [...Object.values(WIRE_ROW), "mpp:tempo:push", "mpp:stripe"]) await ok(row(id).features.signedReceipt.supported === true && /Agent402-Receipt/.test(row(id).features.signedReceipt.detail), `${id}: with a key the cell reads signed`);
   for (const id of ["credits", "card:checkout"]) await ok(row(id).features.signedReceipt.supported === false, `${id}: no per-call receipt, still false`);

@@ -47,6 +47,8 @@ t node scripts/test-us-spelling.js
 t node scripts/test-no-url-pathname.js
 # CHANGELOG.md and the /changelog page agree: no duplicated page item, and every dated group from 2026-11-05 on is in both with the same item counts (offline)
 t node scripts/test-changelog-parity.js
+# NOTICE, the README, CONTRIBUTING.md and /llms-full.txt carry one ownership sentence, word for word (offline)
+t node scripts/test-ownership-statement.js
 # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
 t env AGENT402_SHOW_ROUTER=1 node scripts/test-listing-text-serve.js
 # An operation's OpenAPI externalDocs.url is kept only as a same-host https link and served as sellerDocsUrl on /api/index?seller= alone, withheld on a flagged row (boots a server and reads every other surface)
