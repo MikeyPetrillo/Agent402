@@ -90,6 +90,16 @@ const PAY_TO = "0x000000000000000000000000000000000000dEaD";
   }
 }
 
+// Speech and transcription report through the same switch (their upstreams
+// are not reachable offline, so their wiring is read from source).
+{
+  const { readFileSync } = await import("node:fs");
+  const tts = readFileSync(new URL("../src/tools/tts-kit.js", import.meta.url), "utf8");
+  const stt = readFileSync(new URL("../src/tools/stt-kit.js", import.meta.url), "utf8");
+  ok(/if \(mediaMeterEnabled\(\)\) setMeterSentinel\(out, upstreamUsd\);/.test(tts), "speech reports what was spoken to the meter only under METERED_MEDIA, through the non-enumerable sentinel");
+  ok(/if \(mediaMeterEnabled\(\) && !out\?\.agent402_retried\) setMeterSentinel\(out, upstreamUsd\);/.test(stt), "transcription reports under METERED_MEDIA, never for a transcript billed twice upstream");
+}
+
 // ---------------------------------------------------------------------------
 // Part 1: the scheme in @x402/core, as registered.
 async function rig({ failSettleTypes } = {}) {
@@ -361,6 +371,8 @@ try {
   ok(JSON.stringify(ch).length + 1 <= BATCH_ACCEPT_JSON_BYTES, `the live channel accept (${JSON.stringify(ch).length + 1} bytes with its comma) fits the budget charged for it (${BATCH_ACCEPT_JSON_BYTES})`);
   const memAccepts = (await acceptsOf(on.base, "/api/memory/read")).accepts;
   ok(!memAccepts.some((a) => a.scheme === "batch-settlement"), "an identity-bound route offers no channel accept");
+  const lasting = await (async () => { const r = await fetch(`${on.base}/api/seller-payability`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }); const h = r.headers.get("payment-required"); return { status: r.status, accepts: h ? JSON.parse(Buffer.from(h, "base64").toString("utf8")).accepts : [] }; })();
+  ok(lasting.status === 402 && lasting.accepts.length > 0 && !lasting.accepts.some((a) => a.scheme === "batch-settlement"), "a route whose effect outlives the answer offers no channel accept");
   const rails1 = await (await fetch(`${on.base}/api/rails`)).json();
   ok(rails1.batchSettlement?.status === "offered" && rails1.batchSettlement.networks.includes(BASE), "/api/rails reports the channel offer while on");
 
