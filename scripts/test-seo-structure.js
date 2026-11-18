@@ -9,7 +9,7 @@
 //      the company (`${base}/#org`, Havok Holdings LLC) as its parent; never a
 //      Person.
 //      Its sameAs lists only our own profiles (repo, X, our npm and PyPI
-//      packages), never a third-party listing of us.
+//      packages, our MCP Registry entry), never a third-party listing of us.
 //   4. A seeded report page is dated by the newest filing it showed when built.
 //
 // Boots FREE_MODE on a free port and reads every /tools and /skills URL in the
@@ -26,6 +26,7 @@ import { sitemapXml, sitemapReports } from "../src/seo.js";
 import { SEED_TICKERS, SEED_MANAGERS } from "../src/programmatic-seeds.js";
 import { REPO_URL } from "../src/repo-link.js";
 import { siteOrgLd } from "../src/site-org.js";
+import { MCP_REGISTRY_ENTRY_URL } from "../src/org-profiles.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -58,12 +59,14 @@ function trailItems(navHtml) {
 
 /** Problems with one rendered page, as strings (none = clean). */
 // First-party profiles only: our repository, our X account, our own npm and
-// PyPI packages. A third-party index or directory page about us is not one.
+// PyPI packages, our own MCP Registry entry. A third-party index or directory
+// page about us is not one.
 const FIRST_PARTY_PROFILE = [
   (u) => u === REPO_URL,
   (u) => u === "https://x.com/Agent402Tools",
   (u) => /^https:\/\/www\.npmjs\.com\/package\/agent402-[a-z0-9-]+$/.test(u),
   (u) => /^https:\/\/pypi\.org\/project\/agent402-[a-z0-9-]+\/?$/.test(u),
+  (u) => u === MCP_REGISTRY_ENTRY_URL,
 ];
 const foreignSameAs = (org) => [].concat(org?.sameAs ?? []).filter((u) => !FIRST_PARTY_PROFILE.some((f) => f(String(u))));
 

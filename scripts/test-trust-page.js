@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pageText } from "./lib/html-text.js";
 import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
+import { CONFORMANCE_PATH } from "../src/conformance-path.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -200,7 +201,9 @@ ok(/node scripts\/advisory-triage-check\.js/.test(src(".github/workflows/heartbe
   // The page's own content: from its h1 to the shared footer (the nav and footer have their own tests).
   const content = trustHtml.slice(trustHtml.indexOf("Trust at Agent402."), trustHtml.indexOf("<footer"));
   const hrefs = [...content.matchAll(/href="(\/[^"#?]*)/g)].map((m) => m[1]).filter((h) => !h.startsWith("//"));
-  const missing = [...new Set(hrefs)].filter((h) => h !== "/" && !server.includes(`app.get("${h}"`) && !server.includes(`"${h}"`));
+  // A route registered under a path constant (app.get(CONFORMANCE_PATH, ...)) counts with its value.
+  const viaConstant = new Set(server.includes("app.get(CONFORMANCE_PATH,") ? [CONFORMANCE_PATH] : []);
+  const missing = [...new Set(hrefs)].filter((h) => h !== "/" && !viaConstant.has(h) && !server.includes(`app.get("${h}"`) && !server.includes(`"${h}"`));
   ok(hrefs.length > 5 && missing.length === 0, `every internal link on /trust is a route (${missing.join(", ") || "all served"})`);
 }
 

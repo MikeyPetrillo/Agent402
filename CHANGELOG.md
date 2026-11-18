@@ -25,6 +25,44 @@ Repository:
   The README, CONTRIBUTING.md and /llms-full.txt carry the copyright and
   licensing summary.
 
+### 2026-11-17 (press kit, MCP server card and one profile list)
+Site:
+- /press is a press kit: how to write the name, the logo and social card files,
+  the operating company and the press contact. /about answers at /company, the
+  entity page.
+- Structured data on every page lists one set of our profiles for the site and
+  the company (the repository, X, the npm and PyPI packages and the MCP
+  Registry entry) and says what Agent402.Tools is.
+- The home page description says what a card buys: reports and monitors while
+  prepaid credits are not on sale.
+Surfaces:
+- The MCP connector publishes a server card at /mcp/server-card, also at
+  /.well-known/mcp/server-card.json: the name, version, title and streamable
+  HTTP endpoint that /mcp reports, with the tool count.
+
+### 2026-11-17 (seller removal says how a seller returns)
+Operations:
+- Removing a seller from the index can be previewed with a dry run (dryRun:
+  true) that names what the index holds for it and where it is known from, and
+  the removal and its restore say how the seller returns: one listed in a
+  registry or seeded by the operator comes back by itself on the next read and
+  crawl, one only its owner submitted comes back when the owner registers
+  again.
+
+### 2026-11-17 (a conformance document for every payment rail)
+Payments:
+- /.well-known/agent402-conformance.json lists each payment rail this server
+  accepts (x402 exact and upto per network, Circle Gateway batched, MPP evm,
+  Tempo pull and push, card over MPP, prepaid credits, card checkout, proof of
+  work) and, for each, whether it settles after a successful answer, honors an
+  Idempotency-Key and the x402 payment-identifier, guards against a replayed
+  credential, repays a charged failure and how, forgives a hang-up, screens the
+  payer and returns a receipt. Each cell is computed at request time from the
+  serving code and its switches. /trust and llms.txt link it.
+- The same document carries the refund terms as data (refundTerms): each clause
+  is the sentence /terms prints, read from one source. /terms, dated 2026-11-17,
+  points to it and states that the terms govern where the two differ.
+
 ### 2026-11-17 (an unconfirmed settlement is answered as unconfirmed)
 Payments:
 - When a backup settler ends a settlement on an answer that does not show
