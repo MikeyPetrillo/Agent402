@@ -127,8 +127,9 @@ function stubFetch({ bytes, declare, chunks = 4 }) {
     "a PAID call that oversizes records that it was paid");
   ok(perr && /WAS paid/.test(perr.message),
     "...and says so in the message, so a refused response is never a silently forgotten spend");
-  ok(c2.spendingSummary().dailyUsd === 0.01 && c2.spendingSummary().calls === 1,
-    "...and the settled payment remains in spend accounting despite failed delivery");
+  const spent = c2.spendingSummary();
+  ok(spent.dailyUsd === 0.01 && spent.calls === 1,
+    `...and its spend stays counted after the refused body (dailyUsd ${spent.dailyUsd}, calls ${spent.calls})`);
 }
 
 // --- nothing is cached when the body is refused -----------------------------

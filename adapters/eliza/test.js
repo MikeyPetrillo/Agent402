@@ -16,7 +16,7 @@ if (!existsSync(join(HERE, "node_modules", "agent402-client"))) {
 }
 const { getFreePort } = await import("../../scripts/lib/free-port.js");
 const plugin = (await import("./index.js")).default;
-const { findAction, callAction, aboutAction, agent402Provider } = await import("./index.js");
+const { findAction, callAction, aboutAction, agent402Provider, spendingSummaryFor, maxPerCallFrom, DEFAULT_MAX_PER_CALL_USD } = await import("./index.js");
 
 const PORT = await getFreePort();
 const BASE = process.env.AGENT402_BASE_URL || `http://127.0.0.1:${PORT}`;
@@ -108,13 +108,54 @@ async function main() {
       req.resume();
       if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.signed++; return j(200, { ok: true }); }
       seen.unpaid++;
-      return j(402, {}, { "payment-required": offer(seen.unpaid === 1 ? 10000 : 5000000) });
+      return j(402, {}, { "payment-required": offer(seen.unpaid === 1 ? 10000 : quote) });
     });
+    let quote = 5000000;
     await new Promise((resolve) => dear.listen(0, "127.0.0.1", resolve));
-    const rtDear = runtime({ AGENT402_BASE_URL: `http://127.0.0.1:${dear.address().port}`, AGENT402_WALLET_KEY: "0x" + "22".repeat(32) });
+    // Spending caps are opt-in: a per-call ceiling the operator sets holds on
+    // the signed payment, and with none set the same $5 payment is paid.
+    const rtDear = runtime({ AGENT402_BASE_URL: `http://127.0.0.1:${dear.address().port}`, AGENT402_WALLET_KEY: "0x" + "22".repeat(32), AGENT402_MAX_PER_CALL_USD: "1" });
     r = await callAction.handler(rtDear, msg({ text: "", slug: "dear", params: { q: "x" } }));
-    ok(seen.unpaid === 2 && seen.signed === 0, `the $5 payment the paid request asked for was never signed under the default $1 ceiling (unpaid ${seen.unpaid}, signed ${seen.signed})`);
+    ok(seen.unpaid === 2 && seen.signed === 0, `the $5 payment the paid request asked for was never signed under a $1 ceiling the operator set (unpaid ${seen.unpaid}, signed ${seen.signed})`);
     ok(r.success === false && r.data?.errorCode === "spend_limit", `the call answers a spend-limit refusal (got: ${r.text})`);
+    // With no setting the per-call ceiling is $5: a $5 call is paid and a $6
+    // one is refused before signing, naming the price, the ceiling and how
+    // to raise or turn it off. 0 or off pays it; a malformed value keeps $5.
+    const dearUrl = `http://127.0.0.1:${dear.address().port}`;
+    const rtOpen = runtime({ AGENT402_BASE_URL: dearUrl, AGENT402_WALLET_KEY: "0x" + "33".repeat(32) });
+    const r2 = await callAction.handler(rtOpen, msg({ text: "", slug: "dear", params: { q: "y" } }));
+    const lim = spendingSummaryFor(rtOpen)?.limits;
+    ok(lim && lim.maxPerCallUsd === 5 && lim.dailyLimitUsd === null, `with no spending setting the client has the $5 per-call ceiling and no daily limit (${JSON.stringify(lim)})`);
+    ok(r2.success === true && seen.signed === 1, `with no spending setting a $5 call is paid (signed ${seen.signed}, got: ${String(r2.text).slice(0, 120)})`);
+    quote = 6000000;
+    const r3 = await callAction.handler(rtOpen, msg({ text: "", slug: "dear", params: { q: "z" } }));
+    ok(r3.success === false && r3.data?.errorCode === "spend_limit" && seen.signed === 1, `the $5 default refuses a $6 call before signing (signed ${seen.signed}, got: ${String(r3.text).slice(0, 200)})`);
+    ok(/\$6\b/.test(r3.text) && /\$5/.test(r3.text) && /AGENT402_MAX_PER_CALL_USD/.test(r3.text) && /0 or off/.test(r3.text), `the refusal names the price, the ceiling and how to raise or turn it off (${r3.text})`);
+    for (const [i, v] of ["0", "off"].entries()) {
+      const rt = runtime({ AGENT402_BASE_URL: dearUrl, AGENT402_WALLET_KEY: "0x" + String(44 + i).repeat(32), AGENT402_MAX_PER_CALL_USD: v });
+      const before = seen.signed;
+      const rr = await callAction.handler(rt, msg({ text: "", slug: "dear", params: { q: v } }));
+      ok(rr.success === true && seen.signed === before + 1, `AGENT402_MAX_PER_CALL_USD=${v} turns the ceiling off and the $6 call is paid (${String(rr.text).slice(0, 120)})`);
+    }
+    {
+      const warned = [];
+      const origErr = console.error;
+      console.error = (...a) => warned.push(a.join(" "));
+      let rb;
+      const before = seen.signed;
+      try {
+        const rt = runtime({ AGENT402_BASE_URL: dearUrl, AGENT402_WALLET_KEY: "0x" + "66".repeat(32), AGENT402_MAX_PER_CALL_USD: "five" });
+        rb = await callAction.handler(rt, msg({ text: "", slug: "dear", params: { q: "bad" } }));
+        await callAction.handler(rt, msg({ text: "", slug: "dear", params: { q: "bad2" } }));
+      } finally { console.error = origErr; }
+      ok(rb?.success === false && rb.data?.errorCode === "spend_limit" && seen.signed === before && /\$5/.test(rb.text), `a malformed AGENT402_MAX_PER_CALL_USD keeps the $5 ceiling (${String(rb?.text).slice(0, 200)})`);
+      ok(warned.filter((m) => /AGENT402_MAX_PER_CALL_USD="five" is not a USD amount, 0 or "off"; keeping the default \$5 per-call ceiling/.test(m)).length === 1, `a malformed AGENT402_MAX_PER_CALL_USD is named once on stderr (${warned.join(" | ")})`);
+    }
+    {
+      const w = [];
+      ok(DEFAULT_MAX_PER_CALL_USD === 5 && maxPerCallFrom(null) === 5 && maxPerCallFrom("0") === null && maxPerCallFrom("OFF") === null && maxPerCallFrom("2.5") === 2.5, "maxPerCallFrom: unset is $5, 0 or off is none, a number sets it");
+      ok(["-1", "NaN", "abc ", "1e999"].every((v) => maxPerCallFrom(v, (m) => w.push(m)) === 5), "maxPerCallFrom: negative, NaN, text or infinite keeps the $5 default");
+    }
     dear.close();
   }
 

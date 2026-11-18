@@ -421,7 +421,7 @@ await agent402ActionProvider({
     ],
     payment: [
       "x402 in USDC on Base, signed by the AgentKit wallet provider. The key never leaves the provider.",
-      "`maxPerCallUsd` (default 1), `dailyLimitUsd` and `maxPerHostUsd` are measured against one client per wallet provider, so the daily ceiling holds across calls.",
+      "`maxPerCallUsd` (default 5; 0 or \"off\" turns it off), `dailyLimitUsd` and `maxPerHostUsd` (both opt-in) are measured against one client per wallet provider, so a daily ceiling holds across calls.",
       `\`creditsKey\`: ${CREDITS_HELD} (\`a402_...\`) pays wallet-only tools without a wallet.`,
     ],
     tools: ["crypto-price", "search", "answer", "hash", "route-execute"],
@@ -429,12 +429,12 @@ await agent402ActionProvider({
   },
   {
     slug: "eliza",
-    meta: `An elizaOS plugin to find and call Agent402 tools, paid in USDC over x402${CREDITS_ON ? " or by prepaid credits" : ""}, inside per-call and daily spend ceilings.`,
+    meta: `An elizaOS plugin to find and call Agent402 tools, paid in USDC over x402${CREDITS_ON ? " or by prepaid credits" : ""}, inside a per-call spend ceiling and an optional daily one.`,
     name: "elizaOS plugin",
     short: "elizaOS",
     pkg: "elizaos-plugin-agent402",
     dir: "adapters/eliza",
-    what: `An elizaOS plugin with three actions and a provider, installed from npm into the agent project and named in the character's \`plugins\` list. The agent can find a tool from a plain-language task and call it, paying in USDC over x402 or with ${CREDITS_HELD}, inside per-call and daily ceilings you set in the character config.`,
+    what: `An elizaOS plugin with three actions and a provider, installed from npm into the agent project and named in the character's \`plugins\` list. The agent can find a tool from a plain-language task and call it, paying in USDC over x402 or with ${CREDITS_HELD}, inside a per-call ceiling ($5 unless you set another) and any daily ceiling you set in the character config.`,
     install: "npm install elizaos-plugin-agent402",
     lang: "json",
     example: CREDITS_ON ? `{
@@ -465,7 +465,7 @@ bun add @x402/fetch @x402/evm viem
       `\`AGENT402_CREDITS_KEY\`: ${CREDITS_HELD}; wallet-only tools are debited only on a successful call.`,
       "`AGENT402_WALLET_KEY`: an EVM key paying USDC over x402 (optional peers `@x402/fetch @x402/evm viem`).",
       "Neither set: the proof-of-work free tier still works.",
-      "`AGENT402_MAX_PER_CALL_USD` (default 1) and `AGENT402_DAILY_LIMIT_USD` are enforced per runtime before any request is sent; every paid call carries an `Idempotency-Key`.",
+      "`AGENT402_MAX_PER_CALL_USD` (default 5; 0 or off turns it off) and the opt-in `AGENT402_DAILY_LIMIT_USD` are enforced per runtime before any request is sent; every paid call carries an `Idempotency-Key`.",
     ],
     tools: ["search", "render", "stock-quote", "dns-lookup", "tls-cert"],
     guides: ["agent-hosts", "x402-and-mpp"],
@@ -478,13 +478,13 @@ bun add @x402/fetch @x402/evm viem
     pkg: "agent402-mcp",
     dir: "mcp",
     what: "An MCP server for any MCP client (Claude Desktop, Claude Code, Cursor and others). Flagship tools are listed as first-class MCP tools and the rest of the catalog is reachable through `catalog.search`, `catalog.find` and `catalog.call`, with skill packs surfaced as MCP prompts. The hosted connector at /mcp needs no install at all.",
-    install: "npx -y agent402-mcp@0.13.32",
+    install: "npx -y agent402-mcp@0.14.0",
     lang: "json",
     example: `{
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.32"],
+      "args": ["-y", "agent402-mcp@0.14.0"],
       "env": { "AGENT_KEY": "0xYOUR_EVM_PRIVATE_KEY" }
     }
   }
@@ -497,7 +497,7 @@ claude mcp add --transport http agent402 https://agent402.tools/mcp
 
 # Claude Code, local server paying from a wallet
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.32
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.14.0
 
 # no AGENT_KEY: the local server still runs the pure-CPU tools by proof-of-work`,
     exposes: [
@@ -510,7 +510,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.32
       "`AGENT_KEY` (EVM) or `SOLANA_AGENT_KEY`: the server signs an x402 payment on a chain the tool accepts and retries.",
       `\`AGENT402_CREDITS_KEY\`: ${CREDITS_HELD}, sent as \`Authorization: Bearer a402_...\`; the list price is debited only on a 200.`,
       "Neither: the pure-CPU tools pay with proof-of-work (about 0.2 s of CPU).",
-      "`AGENT402_MAX_PER_CALL` is on by default ($4 per call, `off` disables it) and `AGENT402_BUDGET` is an opt-in session cap; both are enforced on the payment that is signed." + (connectorWires().names.length ? ` The hosted /mcp connector is also payable in the call over ${connectorWires().phrase}, from an MCP client that speaks it.` : ""),
+      "`AGENT402_MAX_PER_CALL` is on by default ($5 per call, `0` or `off` disables it) and `AGENT402_BUDGET` is an opt-in session cap; both are enforced on the payment that is signed." + (connectorWires().names.length ? ` The hosted /mcp connector is also payable in the call over ${connectorWires().phrase}, from an MCP client that speaks it.` : ""),
     ],
     tools: ["search", "answer", "search-news", "render", "stock-quote", "transcribe"],
     guides: ["agent-hosts", "x402-and-mpp", "buying-at-volume"],

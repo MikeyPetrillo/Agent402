@@ -1,17 +1,16 @@
 #!/usr/bin/env node
-// Full paid-route contract sweep for the data emitted in PAYMENT-REQUIRED.
-// Boots the real server against a local /supported stub: no payment is made,
-// but every catalog route builds the same x402 v2 challenge as production.
+// Paid-route contract sweep of what PAYMENT-REQUIRED emits. Boots the real
+// server against a local /supported stub (no payment is ever made); every
+// route builds the same x402 v2 challenge it builds in production, and each
+// one is checked against the official schemas, the Bazaar validators, the
+// byte budgets and its own published example.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { isDeepStrictEqual } from "node:util";
 import { spawn } from "node:child_process";
 import { getFreePorts } from "./lib/free-port.js";
 import { parsePaymentRequired, ResourceInfoSchema } from "@x402/core/schemas";
-import {
-  validateDiscoveryExtension,
-  validateDiscoveryExtensionSpec,
-} from "@x402/extensions/bazaar";
+import { validateDiscoveryExtension, validateDiscoveryExtensionSpec } from "@x402/extensions/bazaar";
 import { boundedSchemaFromExample, SHAPE_HAPPY_PATH_ONLY } from "../src/openapi-schema.js";
 import { gradeX402Response } from "../src/tools/x402-kit.js";
 import { CAIP2_PATTERN } from "../src/avm-network.js";
@@ -32,8 +31,8 @@ const openapiOutputExample = (openapi, endpoint) => {
   return ok?.example ?? ok?.examples?.default?.value;
 };
 const WHOLE_LISTING_ROUTES = new Set(["POST /v1/judge", "POST /v1/decisions", "POST /v1/judge/vision", "POST /api/loop-gate"]);
-
-const MAX_CHALLENGE_BYTES = 12_000;
+// The encoded challenge header a buyer echoes back stays under this.
+const MAX_HEADER_CHARS = 12_000;
 // The JSON body mirrors the header's PaymentRequired object (see
 // src/payment-required-body.js). Nobody echoes the body back, so this is not
 // the header's echo ceiling; it is a ratchet so a mirrored body cannot grow
@@ -46,67 +45,63 @@ const MAX_BODY_BYTES = 12_000;
 // header (which scripts/test-challenge-size.js caps against production) plus
 // our own fields, and those are capped here.
 const MAX_OWN_FIELD_BYTES = 2_048;
-const CURRENT_PRODUCTION_ROUTE_FLOOR = 560;
+const MIN_ROUTES = 560;
 const CONCURRENCY = 12;
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const [port, facPort] = await getFreePorts(2);
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const [port, stubPort] = await getFreePorts(2);
 const base = `http://127.0.0.1:${port}`;
 
-// Preserve the original helper contract: it exists for JSON object outputs.
-// The new route-aware helper used by payments owns scalar/array handling.
-for (const value of [null, "raw", [1, 2], 7, true]) {
-  if (boundedSchemaFromExample(value, 500) !== null) {
-    throw new Error(`boundedSchemaFromExample accepted non-object ${JSON.stringify(value)}`);
-  }
+// The helper's contract, checked before anything boots: an object example
+// gets an object schema, anything else gets none.
+for (const v of [null, "raw", [1, 2], 7, true]) {
+  if (boundedSchemaFromExample(v, 500) !== null) throw new Error(`boundedSchemaFromExample(${JSON.stringify(v)}) should be null`);
 }
-if (boundedSchemaFromExample({ ok: true }, 500)?.type !== "object") {
-  throw new Error("boundedSchemaFromExample stopped accepting object outputs");
-}
+if (boundedSchemaFromExample({ ok: true }, 500)?.type !== "object") throw new Error("boundedSchemaFromExample({ ok: true }) should be an object schema");
 
-const facilitator = createServer((req, res) => {
-  req.on("data", () => {});
+// The stub facilitator: answers /supported for Base exact, nothing else.
+const stub = createServer((req, res) => {
+  req.resume();
   req.on("end", () => {
     if (req.url === "/supported") {
       res.writeHead(200, { "content-type": "application/json" });
-      return res.end(JSON.stringify({
-        kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }],
-        extensions: [], signers: {},
-      }));
-    }
-    res.writeHead(404); res.end();
+      res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }));
+    } else { res.writeHead(404); res.end(); }
   });
 });
-await new Promise((resolve) => facilitator.listen(facPort, "127.0.0.1", resolve));
+await new Promise((resolve) => stub.listen(stubPort, "127.0.0.1", resolve));
 
 let serverLog = "";
+// Dummy keys let the gated paid routes register without reaching an upstream.
 const serverEnv = (listenPort, extra = {}) => ({
-    ...process.env,
-    PORT: String(listenPort), FREE_MODE: "", NODE_ENV: "test",
-    NETWORK: "base", PAYMENT_NETWORKS: "base",
-    WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
-    FACILITATOR_URL: `http://127.0.0.1:${facPort}`,
-    CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
-    // Mirror the current production catalog gates without contacting any
-    // upstream: payment middleware runs before handlers, so dummy non-secret
-    // values are sufficient to include the nine gated paid routes.
-    OPENROUTER_TTS_ENABLED: "true", X_BEARER_TOKEN: "test",
-    APOLLO_API_KEY: "test", TYPESAFE_API_KEY: "test",
-    X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
-    MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-    STATS_ALLOW_EPHEMERAL: "true",
-    ...extra,
+  ...process.env,
+  PORT: String(listenPort),
+  FREE_MODE: "",
+  NODE_ENV: "test",
+  NETWORK: "base",
+  PAYMENT_NETWORKS: "base",
+  WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
+  FACILITATOR_URL: `http://127.0.0.1:${stubPort}`,
+  CDP_API_KEY_ID: "",
+  CDP_API_KEY_SECRET: "",
+  OPENROUTER_TTS_ENABLED: "true",
+  X_BEARER_TOKEN: "test",
+  APOLLO_API_KEY: "test",
+  TYPESAFE_API_KEY: "test",
+  X402_INDEX_CRAWL: "off",
+  MPP_INDEX_CRAWL: "off",
+  MONITOR_SCHEDULER: "off",
+  FREE_ALERTS: "off",
+  FOLLOWUPS: "off",
+  STATS_ALLOW_EPHEMERAL: "true",
+  ...extra,
 });
 const child = spawn(process.execPath, ["src/server.js"], { env: serverEnv(port), stdio: ["ignore", "pipe", "pipe"] });
 child.stdout.on("data", (d) => { serverLog += d; });
 child.stderr.on("data", (d) => { serverLog += d; });
 
 const failures = [];
-const fail = (route, problem) => failures.push(`${route}: ${problem}`);
-const jsonType = (v) => Array.isArray(v) ? "array"
-  : v === null ? "null"
-  : Number.isInteger(v) ? "integer"
-  : typeof v === "number" ? "number"
-  : typeof v;
+const fail = (route, problem) => { failures.push(`${route}: ${problem}`); };
+const jsonType = (v) => (Array.isArray(v) ? "array" : v === null ? "null" : Number.isInteger(v) ? "integer" : typeof v === "number" ? "number" : typeof v);
 
 try {
   let up = false;
@@ -114,43 +109,36 @@ try {
     try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* booting */ }
     await wait(250);
   }
-  if (!up) throw new Error(`server did not boot: ${serverLog.slice(-1200)}`);
-
+  if (!up) throw new Error(`server did not boot:\n${serverLog.slice(-1200)}`);
   const pricing = await (await fetch(`${base}/api/pricing`)).json();
   const endpoints = Array.isArray(pricing.endpoints) ? pricing.endpoints : [];
-  if (!endpoints.length) throw new Error("/api/pricing listed no endpoints");
-  if (endpoints.length < CURRENT_PRODUCTION_ROUTE_FLOOR) {
-    throw new Error(`catalog shrank to ${endpoints.length}; expected at least ${CURRENT_PRODUCTION_ROUTE_FLOOR} current paid routes`);
-  }
-
+  if (!endpoints.length) throw new Error("/api/pricing lists no endpoints");
+  if (endpoints.length < MIN_ROUTES) throw new Error(`/api/pricing lists ${endpoints.length} routes, fewer than the ${MIN_ROUTES} floor`);
   // The paid sweeps replay each 402's example input; a long string there is
   // a placeholder, and the full example must come back from /openapi.json.
   const openapi = await (await fetch(`${base}/openapi.json`)).json();
   let shortenedExamples = 0;
 
-  let cursor = 0;
   const rows = [];
-  await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
+  let cursor = 0;
+  const worker = async () => {
     while (cursor < endpoints.length) {
       const endpoint = endpoints[cursor++];
       const method = String(endpoint.method || "GET").toUpperCase();
       const route = `${method} ${endpoint.path}`;
       try {
-        const response = await fetch(`${base}${endpoint.path}`, {
+        const res = await fetch(base + endpoint.path, {
           method,
           headers: { "content-type": "application/json" },
-          body: ["POST", "PUT", "PATCH"].includes(method) ? "{}" : undefined,
+          body: /^(POST|PUT|PATCH)$/.test(method) ? "{}" : undefined,
           signal: AbortSignal.timeout(20_000),
         });
-        const encoded = response.headers.get("payment-required") || "";
-        const bodyText = await response.text();
-        rows.push({ endpoint, route, status: response.status, encoded, bodyText, cacheControl: response.headers.get("cache-control") || "" });
-      } catch (error) {
-        fail(route, `request failed: ${error?.message || error}`);
-      }
+        const bodyText = await res.text();
+        rows.push({ endpoint, route, status: res.status, encoded: res.headers.get("payment-required") || "", bodyText, cacheControl: res.headers.get("cache-control") || "" });
+      } catch (e) { fail(route, `request failed: ${e.message}`); }
     }
-  }));
-
+  };
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
   // The amount a 402 asks for against what the price list publishes. A
   // fixed-price route asks exactly its list price. A quoted route (its row says
   // quoted: true with a quoteRange) prices the body it was sent, so its 402 for
@@ -160,17 +148,17 @@ try {
   const microOf = (usd) => Math.round(Number(String(usd ?? "").replace(/[^0-9.]/g, "")) * 1e6);
   let fixedPriced = 0;
   let quotedPriced = 0;
-  let requiredRoutes = 0;
-  let variableRoutes = 0;
-  let rawRoutes = 0;
-  let largest = { route: "", bytes: 0 };
+  // Output-schema tallies: routes whose published fields are all required,
+  // happy-path-only routes, and routes whose example is not an object.
+  const schemaTally = { fullyRequired: 0, happyPathOnly: 0, nonObject: 0 };
+  let largestHeader = { route: "", bytes: 0 };
   let largestBody = { route: "", bytes: 0 };
   let largestOwn = { route: "", bytes: 0 };
-  let speechSeen = false;
+  let speechChecked = false;
   // path -> listing mimeType, for every tool whose example answers raw bytes.
   const binaryListings = new Map();
   const method0 = (route) => route.split(" ")[0];
-  let specificTagSeen = false;
+  let extractTagSeen = false;
   // Fields the Bazaar ranks on (description, output schema, service metadata):
   // routes that carry each one, printed and required of every route.
   const has = { serviceName: 0, tags: 0, icon: 0, description: 0, input: 0, output: 0, outputSchema: 0, screened: 0 };
@@ -189,15 +177,13 @@ try {
   for (const { endpoint, route, status, encoded, bodyText, cacheControl } of rows) {
     if (status !== 402) { fail(route, `expected 402, got ${status}`); continue; }
     if (!encoded) { fail(route, "missing PAYMENT-REQUIRED header"); continue; }
-    if (encoded.length > largest.bytes) largest = { route, bytes: encoded.length };
-    if (encoded.length > MAX_CHALLENGE_BYTES) fail(route, `${encoded.length}-byte challenge exceeds ${MAX_CHALLENGE_BYTES}`);
-
+    if (encoded.length > largestHeader.bytes) largestHeader = { route, bytes: encoded.length };
+    if (encoded.length > MAX_HEADER_CHARS) fail(route, `${encoded.length}-char PAYMENT-REQUIRED header exceeds ${MAX_HEADER_CHARS}`);
     let paymentRequired;
     try { paymentRequired = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")); }
-    catch (error) { fail(route, `challenge is not base64 JSON: ${error?.message || error}`); continue; }
-
+    catch (e) { fail(route, `challenge is not base64 JSON: ${e.message}`); continue; }
     const parsed = parsePaymentRequired(paymentRequired);
-    if (!parsed.success) fail(route, `PaymentRequiredSchema: ${parsed.error.issues[0]?.message || "invalid"}`);
+    if (!parsed.success) fail(route, `PaymentRequiredSchema: ${parsed.error?.issues?.[0]?.message || "invalid"}`);
 
     // The body carries the same object as the header, key for key.
     const bodyBytes = Buffer.byteLength(bodyText || "");
@@ -264,15 +250,16 @@ try {
       const wantTypes = endpoint.responseTypes || [want];
       if (!isDeepStrictEqual(types, wantTypes)) fail(route, `/openapi.json 200 content types ${JSON.stringify(types)} are not ${JSON.stringify(wantTypes)}`);
     }
-    const resource = ResourceInfoSchema.safeParse(paymentRequired.resource);
-    if (!resource.success) fail(route, `ResourceInfoSchema: ${resource.error.issues[0]?.message || "invalid"}`);
-    const tags = paymentRequired.resource?.tags;
-    if (Array.isArray(tags) && tags.length > 5) fail(route, `resource carries ${tags.length} tags (max 5)`);
-    if (endpoint.path === "/api/extract") {
-      specificTagSeen = Array.isArray(tags) && tags.includes("scraping");
-      if (!specificTagSeen) fail(route, `route-specific tag "scraping" was displaced (${JSON.stringify(tags)})`);
+    {
+      const info = ResourceInfoSchema.safeParse(paymentRequired.resource);
+      if (!info.success) fail(route, `ResourceInfoSchema: ${info.error?.issues?.[0]?.message || "invalid"}`);
+      const tags = Array.isArray(listing.tags) ? listing.tags : [];
+      if (tags.length > 5) fail(route, `listing carries ${tags.length} tags, more than 5`);
+      if (endpoint.path === "/api/extract") {
+        if (tags.includes("scraping")) extractTagSeen = true;
+        else fail(route, `the route-specific "scraping" tag was displaced: ${JSON.stringify(tags)}`);
+      }
     }
-
     {
       // accepts[0] is read here ahead of the outputSchema checks below, which
       // declare their own `accepts` for the whole list.
@@ -303,11 +290,12 @@ try {
       }
       if (endpoint.path === "/api/html-frames" && hasShortenedExample(input)) fail(route, "html-frames' 402 example lost its document to the byte budget");
     }
-    const spec = validateDiscoveryExtensionSpec(extension);
-    if (!spec.valid) fail(route, `Bazaar spec: ${(spec.errors || []).join("; ")}`);
-    const schema = validateDiscoveryExtension(extension);
-    if (!schema.valid) fail(route, `Bazaar schema: ${(schema.errors || []).join("; ")}`);
-
+    {
+      const spec = validateDiscoveryExtensionSpec(extension);
+      if (!spec.valid) fail(route, `Bazaar spec: ${(spec.errors || []).join("; ")}`);
+      const schemaCheck = validateDiscoveryExtension(extension);
+      if (!schemaCheck.valid) fail(route, `Bazaar schema: ${(schemaCheck.errors || []).join("; ")}`);
+    }
     const example = extension.info?.output?.example;
     const outputSchema = extension.schema?.properties?.output?.properties?.example;
     // accepts[0].outputSchema (2026-09-02): the spec's own field carries the
@@ -362,40 +350,33 @@ try {
       if (extension.info?.output?.type !== "binary") fail(route, `binary listing's output.type is ${JSON.stringify(extension.info?.output?.type)}, not "binary"`);
     } else if (extension.info?.output && extension.info.output.type !== "json") fail(route, `JSON listing's output.type is ${JSON.stringify(extension.info.output.type)}`);
     if (example === undefined || !outputSchema) continue;
-    if (JSON.stringify(outputSchema).length > 500) fail(route, "output schema exceeds the 500-byte budget");
+    if (JSON.stringify(outputSchema).length > 500) fail(route, `output schema is ${JSON.stringify(outputSchema).length} chars, over 500`);
     if (TRIM_ROUTES.has(endpoint.path)) {
       trimSeen++;
       if (outputSchema.properties?.trimmedToCapSeconds?.type !== "number" || outputSchema.properties?.durationUnconfirmed?.type !== "boolean") fail(route, "output schema lacks trimmedToCapSeconds and durationUnconfirmed");
     }
-
-    const type = jsonType(example);
-    if (type === "object") {
+    const exampleType = jsonType(example);
+    if (exampleType === "object") {
       const required = Array.isArray(outputSchema.required) ? outputSchema.required : [];
-      const published = Object.keys(outputSchema.properties || {})
-        .filter((key) => example[key] !== null && example[key] !== undefined);
+      const published = Object.keys(outputSchema.properties || {}).filter((k) => example[k] !== null && example[k] !== undefined);
       if (SHAPE_HAPPY_PATH_ONLY.has(endpoint.path)) {
-        variableRoutes++;
+        schemaTally.happyPathOnly++;
         if (required.length) fail(route, `variable route invents required fields: ${required.join(",")}`);
       } else if (published.length) {
-        requiredRoutes++;
-        const missing = published.filter((key) => !required.includes(key));
-        if (missing.length) fail(route, `published fixed fields are not required: ${missing.join(",")}`);
+        schemaTally.fullyRequired++;
+        const missing = published.filter((k) => !required.includes(k));
+        if (missing.length) fail(route, `published fields not required: ${missing.join(",")}`);
       }
     } else {
-      rawRoutes++;
-      const compatible = outputSchema.type === type
-        || (type === "integer" && outputSchema.type === "number");
-      if (!compatible) fail(route, `raw ${type} example is declared ${outputSchema.type || "without a type"}`);
+      schemaTally.nonObject++;
+      const declared = outputSchema.type;
+      if (!(declared === exampleType || (exampleType === "integer" && declared === "number"))) fail(route, `raw ${exampleType} example is declared ${declared || "without a type"}`);
     }
-
     if (endpoint.path === "/v1/audio/speech") {
-      speechSeen = true;
-      if (type === "object" || outputSchema.type === "object") {
-        fail(route, "/v1/audio/speech raw output is still declared as an object");
-      }
+      speechChecked = true;
+      if (exampleType === "object" || outputSchema.type === "object") fail(route, "speech output is declared an object, not raw");
     }
   }
-
   if (rows.length !== endpoints.length) fail("catalog", `probed ${rows.length}/${endpoints.length} endpoints`);
   // The icon every listing names is served as an image (a host without
   // Chromium redirects to the SVG, which this boot may be).
@@ -412,7 +393,7 @@ try {
   if (trimSeen !== TRIM_ROUTES.size) fail("catalog", `checked ${trimSeen} of ${TRIM_ROUTES.size} transcription listings for the cut-answer fields`);
   if (wholeListingSeen !== WHOLE_LISTING_ROUTES.size) fail("catalog", `checked ${wholeListingSeen} of ${WHOLE_LISTING_ROUTES.size} typed-judgment listings`);
   if (!quotedPriced) fail("catalog", "no quoted route was checked against its published range (the metered tiers and decide are quoted)");
-  if (!speechSeen) fail("POST /v1/audio/speech", "route was not validated as a raw output");
+  if (!speechChecked) fail("POST /v1/audio/speech", "speech route was never validated as a raw output");
   // Derived from the catalog, so these name the floor, not the list: QR,
   // screenshot, the three image transforms and speech answer raw bytes.
   if (binaryListings.size < 6) fail("catalog", `only ${binaryListings.size} binary listings (${[...binaryListings.keys()].join(", ")}); expected 6 or more`);
@@ -420,11 +401,10 @@ try {
   if (binaryListings.get("/api/image-convert") !== "image/jpeg") fail("POST /api/image-convert", `listed as ${binaryListings.get("/api/image-convert") || "JSON"}, its example answers image/jpeg`);
   if (binaryListings.has("/api/hash")) fail("GET /api/hash", "a JSON tool is listed as binary");
   console.log(`binary listings: ${[...binaryListings].map(([p, t]) => `${p} ${t}`).join(", ")}`);
-  if (!specificTagSeen) fail("POST /api/extract", "representative route-specific tag did not survive sanitization");
-
+  if (!extractTagSeen) fail("POST /api/extract", "the route-specific tag never survived sanitization");
   console.log(`catalog routes: ${endpoints.length}`);
   console.log(`402 examples shortened by the byte budget (replayed from /openapi.json): ${shortenedExamples}`);
-  console.log(`route-aware required schemas: ${requiredRoutes}; variable schemas without required: ${variableRoutes}; raw/array schemas: ${rawRoutes}`);
+  console.log(`output schemas: ${schemaTally.fullyRequired} with a required list, ${schemaTally.happyPathOnly} variable, ${schemaTally.nonObject} raw`);
   console.log(`402 amount vs price list: ${fixedPriced} fixed routes at list price, ${quotedPriced} quoted routes inside their published range`);
   // The rollout switch: with X402_BINARY_LISTINGS=off every binary route
   // lists what it listed before it named its bytes: application/json, output
@@ -468,15 +448,13 @@ try {
       }
     } finally { try { off.kill("SIGKILL"); } catch { /* stopped */ } }
   }
-  console.log(`largest challenge: ${largest.route} at ${largest.bytes} bytes`);
+  console.log(`largest 402 header: ${largestHeader.route} at ${largestHeader.bytes} chars`);
   console.log(`largest 402 body: ${largestBody.route} at ${largestBody.bytes} bytes; largest own fields: ${largestOwn.route} at ${largestOwn.bytes} bytes`);
-  if (failures.length) {
-    for (const problem of failures.slice(0, 40)) console.error(`FAIL - ${problem}`);
-    if (failures.length > 40) console.error(`... ${failures.length - 40} more failure(s)`);
-  }
+  for (const f of failures.slice(0, 40)) console.error(`FAIL - ${f}`);
+  if (failures.length > 40) console.error(`... ${failures.length - 40} more failure(s)`);
   console.log(`${failures.length ? "FAILED" : "OK"}: ${endpoints.length - failures.length}/${endpoints.length} route checks green`);
   process.exitCode = failures.length ? 1 : 0;
 } finally {
   try { child.kill("SIGKILL"); } catch { /* stopped */ }
-  await new Promise((resolve) => facilitator.close(resolve));
+  stub.close();
 }

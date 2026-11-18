@@ -19,7 +19,7 @@ COPY mcp/package.json mcp/package-lock.json ./
 # script needs to run during install and none can execute during it.
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 # Every file index.js imports (scripts/test-mcp-dockerfiles.js checks this list).
-COPY mcp/index.js mcp/async-job.js mcp/known-assets.js mcp/networks.js mcp/output-schemas.js mcp/discovery.js mcp/README.md ./
+COPY mcp/index.js mcp/async-job.js mcp/known-assets.js mcp/networks.js mcp/output-schemas.js mcp/discovery.js mcp/pow-solver.js mcp/README.md ./
 # The stdio server writes nothing to disk, so the copied files stay root-owned
 # and world-readable and no ownership fixup is needed.
 USER node

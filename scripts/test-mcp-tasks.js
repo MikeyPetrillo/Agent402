@@ -577,6 +577,84 @@ ok(dt.slug === undefined && dt.owner === undefined, "internal bookkeeping (slug,
 const ct = createTaskResult(rec);
 ok(ct.resultType === "task" && ct.result === undefined, "CreateTaskResult carries the handle only, never the result");
 
+// --------------------------------------------- 2026-07-28 (no initialize)
+// The same tasks wire on a request that carries the 2026-07-28 envelope (the
+// SDK v2 modern path): the handle, the poll and the completed result are the
+// 2025-era answers plus the serverInfo the modern path stamps, and a request
+// that did not declare the extension is the 400 the modern HTTP binding gives
+// a missing client capability.
+{
+  const ENVELOPE = { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}, "io.modelcontextprotocol/clientInfo": { name: "t", version: "1" } };
+  async function mrpc(method, params, name) {
+    const res = await fetch(`${BASE}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2026-07-28", "mcp-method": method, ...(name ? { "mcp-name": name } : {}) },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params: { ...params, _meta: { ...ENVELOPE, ...(params?._meta || {}) } } }),
+    });
+    return { status: res.status, body: await res.json() };
+  }
+  const disc = await mrpc("server/discover", {});
+  ok(disc.status === 200 && disc.body.result?.capabilities?.extensions?.[TASKS_EXTENSION] !== undefined, "server/discover advertises io.modelcontextprotocol/tasks");
+  plan = { research: { delayMs: 300, res: jsonRes(200, { report: "modern goods" }, { "payment-receipt": "" }) } };
+  const nRuns = calls.filter((c) => c.slug === "research").length;
+  const mh = await mrpc("tools/call", { name: "catalog.call", arguments: { slug: "research", params: { q: "hello" } }, _meta: CLIENT_CAPS }, "catalog.call");
+  ok(mh.status === 200 && mh.body.result?.resultType === "task" && mh.body.result?.taskId?.length === 48 && mh.body.result?.task === undefined, `a 2026-07-28 call answers the flat task handle (${JSON.stringify(mh.body.result).slice(0, 120)})`);
+  ok(JSON.stringify(Object.keys(mh.body.result || {}).filter((k) => k !== "_meta")) === JSON.stringify(Object.keys(handle)), `the handle carries the 2025-era handle's fields in its order (${Object.keys(mh.body.result || {}).join(",")})`);
+  ok(Object.keys(mh.body.result?._meta || {}).join() === "io.modelcontextprotocol/serverInfo", "the only addition is the serverInfo the 2026-07-28 path stamps");
+  await sleep(600);
+  const mdone = await mrpc("tasks/get", { taskId: mh.body.result.taskId, _meta: CLIENT_CAPS }, mh.body.result.taskId);
+  ok(mdone.status === 200 && mdone.body.result?.status === "completed" && mdone.body.result?.result?.structuredContent?.result?.report === "modern goods", "polling on 2026-07-28 returns the completed result");
+  const ldone = await rpc("tasks/get", { taskId: mh.body.result.taskId, _meta: CLIENT_CAPS });
+  ok(JSON.stringify(ldone.result) === JSON.stringify(mdone.body.result), "the same task polled on either revision reads byte for byte the same");
+  ok(calls.filter((c) => c.slug === "research").length === nRuns + 1, "the 2026-07-28 call ran the work exactly once");
+  const nocap = await mrpc("tasks/get", { taskId: mh.body.result.taskId }, mh.body.result.taskId);
+  ok(nocap.status === 400 && nocap.body.error?.code === TASK_MISSING_CAPABILITY, `an undeclared 2026-07-28 tasks/get is a 400 with -32021 (${nocap.status} ${nocap.body.error?.code})`);
+  const nocapLegacy = await rpc("tasks/get", { taskId: mh.body.result.taskId });
+  ok(nocapLegacy.error?.code === TASK_MISSING_CAPABILITY, "the 2025-era answer to the same request keeps its code");
+  plan = { research: { delayMs: 50, res: jsonRes(200, { report: "blocking" }) } };
+  const blocking = await mrpc("tools/call", { name: "catalog.call", arguments: { slug: "research", params: { q: "hello" } } }, "catalog.call");
+  ok(blocking.status === 200 && blocking.body.result?.resultType !== "task", "a 2026-07-28 call that did not declare the extension never gets a task handle");
+
+  // The standard headers and the envelope are checked on tasks/* as on every
+  // other 2026-07-28 request, ahead of the task store.
+  const tid = mh.body.result.taskId;
+  const raw = async (headers, body) => {
+    const res = await fetch(`${BASE}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers }, body: JSON.stringify(body) });
+    return { status: res.status, body: await res.json() };
+  };
+  const getBody = (v = "2026-07-28") => ({ jsonrpc: "2.0", id: ++rpcId, method: "tasks/get", params: { taskId: tid, _meta: { ...ENVELOPE, "io.modelcontextprotocol/protocolVersion": v, ...CLIENT_CAPS } } });
+  const wrongName = await raw({ "mcp-protocol-version": "2026-07-28", "mcp-method": "tasks/get", "mcp-name": "not-this-task" }, getBody());
+  ok(wrongName.status === 400 && wrongName.body.error?.code === -32020 && wrongName.body.result === undefined, `an Mcp-Name that is not the taskId is the 400 -32020 (${wrongName.status} ${wrongName.body.error?.code})`);
+  const noName = await raw({ "mcp-protocol-version": "2026-07-28", "mcp-method": "tasks/get" }, getBody());
+  ok(noName.status === 400 && noName.body.error?.code === -32020, `a tasks/get with no Mcp-Name is the 400 -32020 (${noName.status} ${noName.body.error?.code})`);
+  const noMethod = await raw({ "mcp-protocol-version": "2026-07-28", "mcp-name": tid }, getBody());
+  ok(noMethod.status === 400 && noMethod.body.error?.code === -32020, `a tasks/get with no Mcp-Method is the 400 -32020 (${noMethod.status} ${noMethod.body.error?.code})`);
+  const wrongMethod = await raw({ "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list", "mcp-name": tid }, getBody());
+  ok(wrongMethod.status === 400 && wrongMethod.body.error?.code === -32020, `an Mcp-Method that is not the body's method is the 400 -32020 (${wrongMethod.status} ${wrongMethod.body.error?.code})`);
+  const unserved = await raw({ "mcp-protocol-version": "2099-01-01", "mcp-method": "tasks/get", "mcp-name": tid }, getBody("2099-01-01"));
+  ok(unserved.status === 400 && unserved.body.error?.code === -32022 && unserved.body.error?.data?.supported?.includes("2026-07-28"), `an envelope naming an unserved revision is the 400 -32022 (${unserved.status} ${unserved.body.error?.code})`);
+  const good = await raw({ "mcp-protocol-version": "2026-07-28", "mcp-method": "tasks/get", "mcp-name": tid }, getBody());
+  ok(good.status === 200 && good.body.result?.status === "completed", `the same tasks/get with matching headers is answered (${good.status})`);
+
+  // A 2025-era batch: each tools/call reads the tasks extension its own
+  // message declared, as one message on its own does.
+  plan = { research: { delayMs: 300, res: jsonRes(200, { report: "batched" }, { "payment-receipt": "" }) } };
+  const batchRes = await fetch(`${BASE}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify([
+      { jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name: "catalog.call", arguments: { slug: "research", params: { q: "a" } }, _meta: CLIENT_CAPS } },
+      { jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name: "catalog.call", arguments: { slug: "research", params: { q: "b" } } } },
+    ]),
+  });
+  const batchText = await batchRes.text();
+  let batch = null;
+  try { batch = JSON.parse(batchText); } catch { batch = (batchText.split("\n").filter((l) => l.startsWith("data:")).map((l) => JSON.parse(l.slice(5).trim()))).flat(); }
+  const [declared, undeclared] = [rpcId - 1, rpcId].map((id) => (Array.isArray(batch) ? batch : [batch]).find((m) => m?.id === id));
+  ok(declared?.result?.task?.taskId?.length === 48 || declared?.result?.taskId?.length === 48, `in a 2025-era batch, the call that declared tasks gets a task handle (${JSON.stringify(declared).slice(0, 160)})`);
+  ok(undeclared?.result && !undeclared.result.task && undeclared.result.resultType !== "task", `in the same batch, the call that did not declare tasks is answered blocking (${JSON.stringify(undeclared).slice(0, 160)})`);
+}
+
 // ---------------------------------------------------------------- teardown
 
 server.close();

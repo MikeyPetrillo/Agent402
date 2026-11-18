@@ -67,6 +67,25 @@ const { tools, execute } = await agent402Tools({
 });
 ```
 
+## Spending caps (opt-in)
+
+No cap is set by default: a call is never refused for its price unless you
+ask for a ceiling. To set one, pass agent402-client's caps through (since
+0.2.0); a paid call over one is refused before anything is signed, with a
+`SpendingLimitError`:
+
+```js
+const { tools, execute } = await agent402Tools({
+  slugs: ["search", "answer"], freeOnly: false, fetch: payFetch,
+  x402Client: client,      // the @x402/core client payFetch wraps: caps hold at signing
+  maxPerCallUsd: 0.05,     // per call
+  dailyLimitUsd: 5,        // rolling 24 hours
+  maxPerHostUsd: 1,        // rolling 24 hours, per seller host
+});
+```
+
+`agent402Execute` takes the same options.
+
 ## Self-hosted Agent402
 
 ```js

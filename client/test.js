@@ -10,9 +10,11 @@ import { Agent402, OutputValidationError, withNetworkPreference, withPayeeAllowl
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // The server binds an OS-assigned port (PORT=0) and keeps its stores in a
-// temp directory of its own, so two copies of this suite never meet.
+// temp directory of its own, so two copies of this suite never meet. It runs
+// on this suite's own Node (process.execPath), never the first `node` on PATH:
+// native modules are built for one Node, and another exits the server at boot.
 const { ownStoreEnv } = await import("../scripts/lib/own-stores.js");
-const proc = spawn("node", ["src/server.js"], {
+const proc = spawn(process.execPath, ["src/server.js"], {
   cwd: ROOT,
   env: { ...process.env, ...ownStoreEnv("client-test"), WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: "https://facilitator.payai.network", X402_SYNC_ON_START: "false",
@@ -20,8 +22,12 @@ const proc = spawn("node", ["src/server.js"], {
     // cases run would change what route() ranks by the time they finish.
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
     POW_DIFFICULTY: "12", PORT: "0", FREE_MODE: "" },
-  stdio: ["ignore", "pipe", "ignore"],
+  stdio: ["ignore", "pipe", "pipe"],
 });
+// The server's last stderr, printed when it never listens, so a boot failure
+// names its cause.
+let serverStderr = "";
+proc.stderr.on("data", (c) => { serverStderr = (serverStderr + c).slice(-4000); });
 // The port the server bound, read back from its listening line (null if it
 // exits or never listens).
 const boundPort = new Promise((resolve) => {
@@ -237,6 +243,93 @@ const advisoryWarnings = [];
   }
 }
 
+// Offline: index.d.ts (package.json "types") declares every runtime export,
+// so a TypeScript consumer sees the whole API.
+{
+  const mod = await import("./index.js");
+  const dts = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.d.ts"), "utf8");
+  const declared = new Set([...dts.matchAll(/^export (?:declare )?(?:class|const|function|let) ([A-Za-z0-9_]+)/gm)].map((m) => m[1]));
+  if (/^export default /m.test(dts)) declared.add("default");
+  const missing = Object.keys(mod).filter((k) => !declared.has(k));
+  const stale = [...declared].filter((k) => !(k in mod));
+  const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "package.json"), "utf8"));
+  ok(missing.length === 0 && stale.length === 0, `index.d.ts declares every export and nothing else (missing ${missing.join(",") || "none"}, stale ${stale.join(",") || "none"})`);
+  ok(pkg.types === "index.d.ts" && pkg.exports["."].types === "./index.d.ts" && pkg.files.includes("index.d.ts"), "package.json points types at index.d.ts and ships it");
+}
+
+// Offline: every request is given DEFAULT_REQUEST_TIMEOUT_MS, the published
+// client timeout for metered calls (src: meteredClientTimeoutMs), so the SDK
+// never hangs up before the server's own deadline and never waits forever.
+{
+  const { DEFAULT_REQUEST_TIMEOUT_MS, RequestTimeoutError } = await import("./index.js");
+  const { execFileSync } = await import("node:child_process");
+  const { ownStoreEnv: storeEnv } = await import("../scripts/lib/own-stores.js");
+  const published = Number(execFileSync(process.execPath, ["--input-type=module", "-e",
+    "const m = await import('./src/tools/llm-gateway-kit.js'); process.stdout.write(String(m.meteredClientTimeoutMs())); process.exit(0);"],
+    { cwd: ROOT, env: { ...process.env, ...storeEnv("client-test-timeout") }, encoding: "utf8" }).trim());
+  ok(DEFAULT_REQUEST_TIMEOUT_MS === 120_000 && DEFAULT_REQUEST_TIMEOUT_MS === published, `the default request timeout is the server's published metered client timeout (${DEFAULT_REQUEST_TIMEOUT_MS} vs ${published})`);
+  const hang = (_url, init = {}) => new Promise((_, reject) => {
+    if (!init.signal) return; // never answers: only a timeout ends it
+    init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+  });
+  ok(new Agent402({ fetchImpl: hang }).timeoutMs === 120_000 && new Agent402({ fetchImpl: hang, timeoutMs: null }).timeoutMs === null && new Agent402({ fetchImpl: hang, timeoutMs: 5000 }).timeoutMs === 5000, "timeoutMs defaults to 120 s, null turns it off, a number sets it");
+  {
+    const c = new Agent402({ baseUrl: "https://slow.example", fetchImpl: hang, timeoutMs: 50, retryResets: false });
+    const t0 = Date.now();
+    let e = null; try { await c.find("anything"); } catch (err) { e = err; }
+    ok(e instanceof RequestTimeoutError && e.timeoutMs === 50 && Date.now() - t0 < 2000, `a discovery read that never answers ends in RequestTimeoutError after timeoutMs (${e?.name}, ${Date.now() - t0} ms)`);
+  }
+  {
+    let signals = 0;
+    const seen = async (_url, init = {}) => { if (init.signal) signals++; return { ok: true, status: 200, json: async () => ({ results: [] }) }; };
+    await new Agent402({ baseUrl: "https://x.example", fetchImpl: seen, timeoutMs: null }).find("x");
+    await new Agent402({ baseUrl: "https://x.example", fetchImpl: seen }).find("x");
+    ok(signals === 1, "with timeoutMs null no timeout signal is attached; by default one is");
+  }
+  {
+    // A paid request that times out may have carried a payment: its amount is
+    // held against the caps and the error says the outcome is unknown.
+    const c = new Agent402({ baseUrl: "https://slow.example", cache: false, fetch: hang, fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }), timeoutMs: 50, maxPerCallUsd: null, dailyLimitUsd: 1 });
+    c._catalog = new Map([["chat", { method: "POST", path: "/v1/chat", computePayable: false, price: "$0.01" }]]);
+    let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+    ok(e instanceof RequestTimeoutError && e.paid === "unknown" && c.spendingSummary().heldUsd === 0.01, `a paid call that times out is marked paid: "unknown" and its amount held (${e?.name}, ${e?.paid}, held ${c.spendingSummary().heldUsd})`);
+    let e2 = null; const t0 = Date.now(); try { await c.call("chat", { n: 2 }, { timeoutMs: 120 }); } catch (err) { e2 = err; }
+    ok(e2 instanceof RequestTimeoutError && e2.timeoutMs === 120 && Date.now() - t0 >= 100, "a per-call timeoutMs replaces the client's for that call");
+  }
+}
+
+// Offline: proof-of-work difficulty is bounded and solving runs off the event loop.
+{
+  const { MAX_POW_DIFFICULTY } = await import("./index.js");
+  const { solvePowAsync: rawAsync, leadingZeroBits } = await import("./pow-solver.js");
+  const solved = (challenge, nonce, d) => leadingZeroBits(createHash("sha256").update(`${challenge}:${nonce}`).digest()) >= d;
+  ok(MAX_POW_DIFFICULTY === 28, "the solver's ceiling is 28 bits, the most an Agent402 server asks for");
+  for (const difficulty of [29, 60, 1.5, -1, "16", null]) {
+    const t0 = Date.now();
+    let sync = null, async_ = null;
+    try { Agent402.solvePow({ challenge: "c", difficulty, token: "t" }); } catch (err) { sync = err; }
+    try { await Agent402.solvePowAsync({ challenge: "c", difficulty, token: "t" }); } catch (err) { async_ = err; }
+    ok(sync && async_ && /difficulty/.test(sync.message) && Date.now() - t0 < 500, `difficulty ${JSON.stringify(difficulty)} is refused at once, sync and async (${sync?.message?.slice(0, 60)})`);
+  }
+  let noToken = null; try { await Agent402.solvePowAsync({ challenge: "c", difficulty: 4 }); } catch (err) { noToken = err; }
+  ok(noToken && /token/.test(noToken.message), "a challenge without a token is refused");
+  const sol = await Agent402.solvePowAsync({ challenge: "abc", difficulty: 14, token: "tok" });
+  ok(sol.startsWith("tok:") && solved("abc", sol.slice(4), 14), `solvePowAsync returns a valid token:nonce (${sol})`);
+  ok(Agent402.solvePow({ challenge: "abc", difficulty: 14, token: "tok" }) === sol, "the sync and worker solvers agree on the first solution");
+  // The event loop keeps turning while a worker solves; the sync solver, the
+  // control, holds it for the whole search.
+  let ticks = 0;
+  const iv = setInterval(() => { ticks++; }, 2);
+  Agent402.solvePow({ challenge: "loop-sync", difficulty: 17, token: "t" });
+  const syncTicks = ticks;
+  await rawAsync({ challenge: "loop-worker", difficulty: 19 });
+  const workerTicks = ticks - syncTicks;
+  clearInterval(iv);
+  ok(syncTicks === 0 && workerTicks >= 3, `a timer fires while the worker solves (${workerTicks} ticks) and not during the sync control (${syncTicks})`);
+  const sliced = await rawAsync({ challenge: "sliced", difficulty: 12 }, { useWorker: false });
+  ok(solved("sliced", sliced, 12), "the sliced main-thread fallback finds a valid nonce");
+}
+
 // Offline: the cap is enforced against the amount the 402 ACTUALLY QUOTES, not
 // the catalog price. A route may quote per request from the body (a token-
 // metered route, or a chat route priced by the model named in it), so a client
@@ -293,11 +386,45 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(c.spendingSummary().dailyUsd === 0.05, `settled spend is the quote, not the catalog price (${c.spendingSummary().dailyUsd})`);
   }
 
-  // no caps configured -> no preflight at all (the round trip buys nothing)
+  // caps turned off -> no preflight at all (the round trip buys nothing)
   {
-    const { c, counters } = mk(0.5, {});
+    const { c, counters } = mk(0.5, { maxPerCallUsd: null, dailyLimitUsd: null });
     await c.call("chat", {});
-    ok(counters.preflights === 0 && counters.paid === 1, "with no cap configured nothing is preflighted");
+    ok(counters.preflights === 0 && counters.paid === 1, "with both caps turned off (null) nothing is preflighted");
+  }
+
+  // Caps are opt-in: a client built with no cap option never refuses a
+  // purchase (no preflight, no ceiling), and a cap the caller sets still holds.
+  {
+    const plain = mk(3.3, {}).c.spendingSummary().limits;
+    ok(plain.maxPerCallUsd === null && plain.dailyLimitUsd === null && plain.maxPerHostUsd === null, `a client with no cap option has no caps (${JSON.stringify(plain)})`);
+    const { DEFAULT_MAX_PER_CALL_USD, DEFAULT_DAILY_LIMIT_USD } = await import("./index.js");
+    ok(DEFAULT_MAX_PER_CALL_USD === undefined && DEFAULT_DAILY_LIMIT_USD === undefined, "no default cap is exported");
+    {
+      const { c, counters } = mk(3.3, {});
+      c._catalog.set("pro", { method: "POST", path: "/api/route-execute-pro", computePayable: false, price: "$3.30" });
+      const out = await c.call("pro", { task: "t" });
+      ok(out?.ok === true && counters.paid === 1 && counters.preflights === 0, "an uncapped default client pays a $3.30 call with no refusal and no preflight");
+      for (let i = 0; i < 100; i++) await c.call("chat", { n: i });
+      ok(counters.paid === 101 && counters.preflights === 0, `the same client pays 100 more calls in a day with no refusal (${counters.paid} paid)`);
+    }
+    {
+      const { c, counters } = mk(5, { maxPerCallUsd: 4 });
+      let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+      ok(e?.name === "SpendingLimitError" && e.limit === "maxPerCallUsd" && e.cap === 4 && counters.paid === 0, `a caller-set per-call cap refuses a $5 quote before signing (${e?.message})`);
+      const out = await c.call("chat", {}, { maxUsd: 6 });
+      ok(out?.ok === true && counters.paid === 1, "the same call with maxUsd: 6 is paid");
+      let tight = null; try { await c.call("chat", {}, { maxUsd: 1 }); } catch (err) { tight = err; }
+      ok(tight?.name === "SpendingLimitError" && tight.cap === 1 && counters.paid === 1, "a maxUsd below the quote refuses the call");
+      let bad = null; try { await c.call("chat", {}, { maxUsd: -1 }); } catch (err) { bad = err; }
+      ok(bad instanceof TypeError && counters.paid === 1, "a negative maxUsd is refused before anything is sent");
+    }
+    {
+      const own = mk(3, { dailyLimitUsd: 4 });
+      await own.c.call("chat", {});
+      let e2 = null; try { await own.c.call("chat", {}, { maxUsd: 3 }); } catch (err) { e2 = err; }
+      ok(e2?.limit === "dailyLimitUsd" && e2.cap === 4 && own.counters.paid === 1, "a caller-set daily cap holds, an allowed call included");
+    }
   }
 
   // credits: the gate holds and debits the quote too, so the cap reads it
@@ -576,7 +703,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   // the unknown one, for an amount this client never priced.
   {
     const oddFirst = [...odd, ...cheap];
-    const { c, seen } = build({ preflight: oddFirst, paid: oddFirst, guard: false });
+    const { c, seen } = build({ preflight: oddFirst, paid: oddFirst, guard: false, maxPerCallUsd: null, dailyLimitUsd: null });
     await c.call("chat", {});
     ok(seen.signed.length === 1 && seen.signed[0].amount === "1", "control: a stock x402 client signs the unknown-asset accept when it is listed first");
   }
@@ -1062,33 +1189,32 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   } finally { seller.close(); elsewhere.close(); }
 }
 
-// Offline: caller-supplied output validators bind buyer intent without a peer
-// dependency. Validation happens before cache admission, contracted cache hits
-// are revalidated, and settled spend survives invalid delivery.
-{
-  const bodyResponse = (body) => ({ ok: true, status: 200, json: async () => body });
-  const paidClient = ({ outputValidator, creditsKey } = {}) => {
-    let paid = 0;
-    const c = new Agent402({
-      baseUrl: "https://seller.example",
-      outputValidator,
-      creditsKey,
-      fetch: creditsKey ? undefined : async () => { paid++; return bodyResponse({ value: 42 }); },
-      fetchImpl: async () => { paid++; return bodyResponse({ value: 42 }); },
-    });
-    c._catalog = new Map([["answer", { method: "POST", path: "/answer", computePayable: false, price: "$0.01" }]]);
-    return { c, paid: () => paid };
-  };
+// Offline: buyer-owned output validators. A shared fixture builds a client
+// whose catalog holds one paid tool and whose fetches count what they send.
+const validatorClient = ({ validator = null, credits = false } = {}) => {
+  const sent = { pay: 0, plain: 0 };
+  const answer = () => new Response(JSON.stringify({ value: 42 }), { status: 200, headers: { "content-type": "application/json" } });
+  const c = new Agent402({
+    baseUrl: "https://validator.example",
+    tlsDistrust: false,
+    ...(validator ? { outputValidator: validator } : {}),
+    ...(credits ? { creditsKey: `a402_${"V".repeat(32)}` } : { fetch: async () => { sent.pay++; return answer(); } }),
+    fetchImpl: async () => { sent.plain++; return answer(); },
+  });
+  c._catalog = new Map([["answer", { method: "POST", path: "/answer", computePayable: false, price: "$0.01" }]]);
+  return { c, sent };
+};
 
-  // Invalid controls fail before catalog/network work.
-  {
-    let touched = 0;
-    const c = new Agent402({ fetchImpl: async () => { touched++; return bodyResponse({}); } });
-    let err = null;
-    try { await c.call("answer", {}, { outputValidator: { id: "", validate: () => true } }); } catch (e) { err = e; }
-    ok(err instanceof TypeError && touched === 0 && c._catalog === null,
-      "invalid per-call outputValidator fails before catalog or network access");
-  }
+// A malformed per-call validator is refused before the catalog, credentials,
+// payment or any request.
+{
+  let requests = 0;
+  const c = new Agent402({ baseUrl: "https://validator.example", tlsDistrust: false, fetch: async () => { requests++; return new Response("{}"); }, fetchImpl: async () => { requests++; return new Response("{}"); } });
+  let err = null;
+  try { await c.call("answer", {}, { outputValidator: { id: "", validate: () => true } }); } catch (e) { err = e; }
+  ok(err instanceof TypeError, `an empty per-call validator id is a TypeError (${err?.name}: ${err?.message})`);
+  ok(requests === 0 && c._catalog === null, `and nothing was fetched, not even the catalog (${requests} requests)`);
+}
 
   // A buyer-owned validator is caller code we AWAIT inside call(), and on a paid
   // route the money has already moved by the time it runs - so one that never
@@ -1107,73 +1233,53 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       "a slow but finishing validator still passes - the bound is a ceiling, not a race");
   }
 
-  // A valid paid result is admitted and namespaced by its semantic id.
+{
+  const accept42 = (id = "answer/v1") => ({ id, validate: (b) => b.value === 42 });
   {
-    const { c, paid } = paidClient({ outputValidator: { id: "answer-number/v1", validate: (v) => v.value === 42 } });
-    const first = await c.call("answer");
-    const second = await c.call("answer");
-    ok(first === second && paid() === 1, "valid contracted paid result is cached under its contract identity");
+    const { c, sent } = validatorClient({ validator: accept42() });
+    const one = await c.call("answer", { q: 1 });
+    const two = await c.call("answer", { q: 1 });
+    ok(one === two && sent.pay === 1, `a valid contracted result is cached (${sent.pay} payments)`);
   }
-
-  // A different id never consumes the first contract's cache entry.
   {
-    const { c, paid } = paidClient();
-    await c.call("answer", {}, { outputValidator: { id: "answer/v1", validate: () => true } });
-    await c.call("answer", {}, { outputValidator: { id: "answer/v2", validate: () => true } });
-    ok(paid() === 2 && c._cache.size === 2, "different validator ids have disjoint cache entries");
+    const { c, sent } = validatorClient();
+    await c.call("answer", { q: 1 }, { outputValidator: accept42("answer/v1") });
+    await c.call("answer", { q: 1 }, { outputValidator: accept42("answer/v2") });
+    ok(sent.pay === 2 && c._cache.size === 2, `different contract ids never share a cache entry (${sent.pay} payments, ${c._cache.size} entries)`);
   }
-
-  // Mutating a returned object cannot turn a cache hit into invalid success.
   {
-    const validator = { id: "answer-number/v1", validate: (v) => v.value === 42 };
-    const { c, paid } = paidClient({ outputValidator: validator });
-    const first = await c.call("answer");
-    first.value = "wrong";
+    const { c, sent } = validatorClient({ validator: accept42() });
+    const first = await c.call("answer", { q: 1 });
+    first.value = 7;
     let err = null;
-    try { await c.call("answer"); } catch (e) { err = e; }
-    ok(err instanceof OutputValidationError && err.cacheHit && !err.paid,
-      "mutated contracted cache hit is rejected and labelled as an unpaid cache hit");
-    ok(paid() === 1 && c._cache.size === 0, "invalid cache hit is evicted without another payment");
+    try { await c.call("answer", { q: 1 }); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.cacheHit === true && err.paid === false, `a mutated cache hit is rejected as an unpaid cache hit (${err?.name}, cacheHit ${err?.cacheHit}, paid ${err?.paid})`);
+    ok(sent.pay === 1 && c._cache.size === 0, `and evicted with no second payment (${sent.pay} payments, ${c._cache.size} entries)`);
   }
-
-  // Validation failure occurs after HTTP success and must not erase settled spend.
   {
-    const { c, paid } = paidClient({ outputValidator: { id: "answer-impossible/v1", validate: () => false } });
+    const { c, sent } = validatorClient({ validator: { id: "never/v1", validate: () => false } });
     let err = null;
-    try { await c.call("answer"); } catch (e) { err = e; }
-    ok(err instanceof OutputValidationError && err.paid && err.contractId === "answer-impossible/v1",
-      "false validator result is failed paid delivery with contract identity");
-    ok(paid() === 1 && c.spendingSummary().dailyUsd === 0.01,
-      "invalid paid delivery remains in settled-spend accounting");
-    ok(c._cache.size === 0, "invalid paid delivery is never cached");
+    try { await c.call("answer", { q: 1 }); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.paid === true && err.contractId === "never/v1", `a refused paid body throws OutputValidationError with paid true (${err?.message})`);
+    ok(sent.pay === 1 && c.spendingSummary().dailyUsd === 0.01 && c._cache.size === 0, `its spend stays counted and nothing is cached (${c.spendingSummary().dailyUsd})`);
   }
-
-  // Async callbacks and thrown validation errors have the same fail-closed path.
   {
-    const { c } = paidClient({ outputValidator: { id: "async/v1", validate: async () => { throw new Error("bad shape"); } } });
+    const { c } = validatorClient({ validator: { id: "shape/v1", validate: async () => { throw new Error("bad shape"); } } });
     let err = null;
-    try { await c.call("answer"); } catch (e) { err = e; }
-    ok(err instanceof OutputValidationError && err.cause?.message === "bad shape" && err.paid,
-      "async validator exceptions are wrapped without losing paid-delivery state");
+    try { await c.call("answer", { q: 1 }); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.paid === true && err.cause?.message === "bad shape", `an async throw becomes the cause (${err?.cause?.message})`);
   }
-
-  // Credits are another settled paid path and retain spend on invalid output.
   {
-    const creditsKey = `a402_${"A".repeat(32)}`;
-    const { c } = paidClient({ creditsKey, outputValidator: { id: "credits/v1", validate: () => false } });
+    const { c } = validatorClient({ validator: { id: "never/v1", validate: () => false }, credits: true });
     let err = null;
-    try { await c.call("answer"); } catch (e) { err = e; }
-    ok(err instanceof OutputValidationError && err.paid && c.spendingSummary().dailyUsd === 0.01,
-      "credits-paid invalid delivery retains settled spend and fails closed");
+    try { await c.call("answer", { q: 1 }); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.paid === true && c.spendingSummary().dailyUsd === 0.01, `the credits path keeps a refused body's spend (${c.spendingSummary().dailyUsd})`);
   }
-
-  // Null cannot silently weaken an inherited constructor validator.
   {
-    const { c } = paidClient({ outputValidator: { id: "deny/v1", validate: () => false } });
+    const { c } = validatorClient({ validator: { id: "never/v1", validate: () => false } });
     let err = null;
-    try { await c.call("answer", {}, { outputValidator: null }); } catch (e) { err = e; }
-    ok(err instanceof OutputValidationError && err.paid,
-      "per-call null preserves the inherited constructor validator");
+    try { await c.call("answer", { q: 1 }, { outputValidator: null }); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.paid === true, "a per-call null keeps the constructor contract");
   }
 }
 
@@ -1185,6 +1291,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   let n = 0;
   const c = new Agent402({
     baseUrl: "https://seller.example", creditsKey: `a402_${"C".repeat(32)}`,
+    maxPerCallUsd: null, dailyLimitUsd: null, // counts sends: no capped preflight
     fetchImpl: async (url, init) => { keys.push(init.headers["Idempotency-Key"]); if (++n === 1) throw new Error("socket hang up"); return { ok: true, status: 200, json: async () => ({ value: 9 }) }; },
   });
   c._catalog = new Map([["answer", { method: "POST", path: "/answer", computePayable: false, price: "$0.01" }]]);
@@ -1206,6 +1313,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     const c = new Agent402({
       baseUrl: "https://seller.example",
       creditsKey,
+      maxPerCallUsd: null, dailyLimitUsd: null, // counts sends: no capped preflight
       // The framework-level retry is what this case drives, so the SDK's own
       // resend of a reset is off here (the case after this block covers it).
       retryResets: false,
@@ -1249,70 +1357,43 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   }
 }
 
-// Offline: route() is read-only discovery - exact query encoding, bounded k,
-// include/network filters, empty results, non-2xx errors, and no /api/pricing.
+// Offline: route() is one free read of /api/route, its answer passed through.
+const fakeRouter = () => {
+  const urls = [];
+  const fetchImpl = async (url) => {
+    urls.push(String(url));
+    const u = new URL(String(url));
+    if (u.pathname !== "/api/route") return new Response("{}", { status: 404 });
+    const network = u.searchParams.get("network");
+    return new Response(JSON.stringify({ query: u.searchParams.get("q"), include: u.searchParams.get("include"), ...(network ? { network } : {}), count: 0, sellers: 0, results: [] }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  return { urls, fetchImpl };
+};
 {
-  const calls = [];
-  const routeBody = (task, { k = 5, include = "all", network } = {}) => ({
-    query: String(task ?? ""),
-    include: include === "external" || include === "local" ? include : "all",
-    count: 0,
-    sellers: 0,
-    results: [],
-    ...(network ? { network: String(network) } : {}),
-  });
-  const mkRoute = () => new Agent402({
-    baseUrl: "https://router.example",
-    cache: false,
-    fetchImpl: async (url) => {
-      calls.push(String(url));
-      const u = new URL(url);
-      if (u.pathname !== "/api/route") return { ok: false, status: 404, json: async () => ({}) };
-      const task = u.searchParams.get("q") ?? "";
-      const k = Number(u.searchParams.get("k"));
-      const include = u.searchParams.get("include") ?? "all";
-      const network = u.searchParams.get("network");
-      return { ok: true, json: async () => routeBody(task, { k, include, network }) };
-    },
-  });
-
-  {
-    const c = mkRoute();
-    await c.route("screenshot webpage", { k: 3, include: "external", network: "robinhood" });
-    ok(calls.length === 1, "route() makes one request");
-    const u = new URL(calls[0]);
-    ok(u.pathname === "/api/route", "route() hits /api/route");
-    ok(u.searchParams.get("q") === "screenshot webpage", "route() encodes task as q");
-    ok(u.searchParams.get("k") === "3", "route() encodes bounded k");
-    ok(u.searchParams.get("include") === "external", "route() encodes include=external");
-    ok(u.searchParams.get("network") === "robinhood", "route() encodes network filter");
-    ok(!calls.some((x) => x.includes("/api/pricing")), "route() does not load /api/pricing");
-  }
-
-  {
-    const c = mkRoute();
-    const out = await c.route("", { k: 99, include: "bogus" });
-    ok(out.count === 0 && out.results.length === 0, "route() returns empty results for blank task");
-    ok(new URL(calls.at(-1)).searchParams.get("k") === "25", "route() caps k at 25");
-    ok(new URL(calls.at(-1)).searchParams.get("include") === "all", "route() normalizes unknown include to all");
-  }
-
-  {
-    const c = mkRoute();
-    await c.route("hash", { include: "local" });
-    ok(new URL(calls.at(-1)).searchParams.get("include") === "local", "route() passes include=local");
-  }
-
-  {
-    const c = new Agent402({
-      baseUrl: "https://router.example",
-      cache: false,
-      fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({ error: "busy" }) }),
-    });
-    let err = null;
-    try { await c.route("ocr"); } catch (e) { err = e; }
-    ok(err && /route failed: HTTP 503/.test(err.message), "route() throws on non-2xx");
-  }
+  const { urls, fetchImpl } = fakeRouter();
+  const c = new Agent402({ baseUrl: "https://router.example", cache: false, tlsDistrust: false, fetchImpl });
+  await c.route("screenshot webpage", { k: 3, include: "external", network: "robinhood" });
+  const u = new URL(urls[0]);
+  ok(urls.length === 1 && u.pathname === "/api/route", `route() makes one read of /api/route (${urls})`);
+  ok(u.searchParams.get("q") === "screenshot webpage" && u.searchParams.get("k") === "3" && u.searchParams.get("include") === "external" && u.searchParams.get("network") === "robinhood", `route() sends q, k, include and network (${u.search})`);
+  ok(!urls.some((x) => x.includes("/api/pricing")), "route() does not read the catalog");
+}
+{
+  const { urls, fetchImpl } = fakeRouter();
+  const c = new Agent402({ baseUrl: "https://router.example", cache: false, tlsDistrust: false, fetchImpl });
+  const out = await c.route("", { k: 99, include: "bogus" });
+  const u = new URL(urls[0]);
+  ok(out.count === 0 && Array.isArray(out.results) && out.results.length === 0, "route() returns the envelope as answered");
+  ok(u.searchParams.get("k") === "25" && u.searchParams.get("include") === "all", `k is capped at 25 and an unknown include is sent as all (${u.search})`);
+  await c.route("hash", { include: "local" });
+  ok(new URL(urls[1]).searchParams.get("include") === "local", "include local is sent as local");
+}
+{
+  const c = new Agent402({ baseUrl: "https://router.example", cache: false, tlsDistrust: false, fetchImpl: async () => new Response(JSON.stringify({ error: "busy" }), { status: 503 }) });
+  let err = null;
+  try { await c.route("ocr"); } catch (e) { err = e; }
+  ok(err && /route failed: HTTP 503/.test(err.message), `a failed route read throws naming route (${err?.message})`);
+}
 
   {
     // A seller's error detail reaches the caller WHOLE. 0.8.4 cut it at 2,000
@@ -1344,55 +1425,28 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(plain === 'call "t" failed: HTTP 402 - bad input', `a body's own error still comes first (${plain})`);
   }
 
-  {
-    let paid = 0;
-    const c = new Agent402({
-      baseUrl: "https://router.example",
-      cache: false,
-      fetch: async () => { paid++; return { ok: true, json: async () => ({}) }; },
-      fetchImpl: async (url) => {
-        if (String(url).includes("/api/pricing")) return { ok: true, json: async () => ({ endpoints: [] }) };
-        return { ok: true, json: async () => ({ query: "x", include: "all", count: 0, sellers: 0, results: [] }) };
-      },
-    });
-    await c.route("summarize pdf");
-    ok(paid === 0, "route() does not invoke the payment fetch");
-    ok(!c._catalog, "route() does not warm the paid-tool catalog");
-  }
-
-  {
-    const serverRow = {
-      seller: "https://external.example",
-      sellerHome: "https://external.example",
-      sellerName: "External",
-      slug: "render-page",
-      name: "render",
-      method: "POST",
-      route: "/api/render",
-      url: "https://external.example/api/render",
-      price: "$0.004",
-      priceUsd: 0.004,
-      executeVia: { tool: "route-execute", price: "$0.01", underlyingPriceUsd: 0.004, routingFeeUsd: 0.006 },
-      untrustedContent: true,
-      source: "https://external.example",
-    };
-    const serverBody = {
-      query: "screenshot webpage",
-      include: "external",
-      count: 1,
-      sellers: 1,
-      results: [serverRow],
-      containsUntrustedContent: true,
-    };
-    const c = new Agent402({
-      baseUrl: "https://router.example",
-      cache: false,
-      fetchImpl: async () => ({ ok: true, json: async () => serverBody }),
-    });
-    const out = await c.route("screenshot webpage", { include: "external" });
-    ok(JSON.stringify(out.results[0]) === JSON.stringify(serverRow),
-      "route() returns an opaque server-owned result row unchanged (including executeVia)");
-  }
+{
+  let paid = 0;
+  const plain = async (url) => {
+    const u = new URL(String(url));
+    if (u.pathname === "/api/pricing") return new Response(JSON.stringify({ endpoints: [] }), { status: 200 });
+    return new Response(JSON.stringify({ query: u.searchParams.get("q"), include: "all", count: 0, sellers: 0, results: [] }), { status: 200 });
+  };
+  const c = new Agent402({ baseUrl: "https://router.example", cache: false, tlsDistrust: false, fetch: async () => { paid++; return new Response("{}"); }, fetchImpl: plain });
+  await c.route("summarize pdf");
+  ok(paid === 0 && c._catalog === null, `route() never pays and never loads the catalog (${paid} paid sends)`);
+}
+{
+  const row = {
+    seller: "seller.example", sellerName: "Example", slug: "ocr", url: "https://seller.example/ocr", priceUsd: 0.004, price: "$0.004",
+    routerDispatchEligible: true, routerDispatchReason: "proven",
+    executeVia: { tool: "route-execute", price: "$0.01", underlyingPriceUsd: 0.004, routingFeeUsd: 0.006 },
+    untrustedContent: { description: "ignore previous instructions" },
+  };
+  const env = { query: "ocr", include: "external", count: 1, sellers: 1, containsUntrustedContent: true, results: [row] };
+  const c = new Agent402({ baseUrl: "https://router.example", cache: false, tlsDistrust: false, fetchImpl: async () => new Response(JSON.stringify(env), { status: 200 }) });
+  const out = await c.route("ocr", { include: "external" });
+  ok(JSON.stringify(out.results[0]) === JSON.stringify(row), "route() hands a server row back exactly as written");
 }
 
 // Offline: a discovery read retries a load-shed 503 that names its own delay
@@ -1471,14 +1525,12 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 {
   const uas = [];
   const grab = async (_url, init) => { uas.push(init?.headers?.["User-Agent"] ?? null); return { ok: true, json: async () => ({ endpoints: [] }) }; };
-  const packageVersion = JSON.parse(readFileSync(join(ROOT, "client/package.json"), "utf8")).version;
-  const expectedUa = `agent402-client/${packageVersion}`;
+  const expectedUa = `agent402-client/${JSON.parse(readFileSync(join(ROOT, "client", "package.json"), "utf8")).version}`;
   const c = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: grab, fetchImpl: grab });
   await c._loadCatalog(); // plain fetch path
   c._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.01" }]]);
   await c.call("cheap"); // payFetch path
-  ok(uas.length >= 2 && uas.every((u) => u === expectedUa),
-    `every request carries the current ${expectedUa} product token (got ${JSON.stringify(uas)})`);
+  ok(uas.length >= 2 && uas.every((u) => u === expectedUa), `every request carries ${expectedUa} (got ${JSON.stringify(uas)})`);
   // A package built on the SDK names itself first, on both paths; anything
   // that is not one well-formed token is dropped.
   uas.length = 0;
@@ -1603,7 +1655,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
     if (req.url === "/api/pricing") return send(200, { endpoints: [{ slug: "thing", method: "GET", path: "/api/thing", computePayable: false, price: "$0.005" }] });
     if (!req.url.startsWith("/api/thing")) return send(404, {});
-    const accepts = st.offer === "both" ? [plainAccept, batchedAccept] : st.offer === "plain" ? [plainAccept] : st.offer === "long" ? [plainAccept, { ...batchedAccept, maxTimeoutSeconds: 365 * 24 * 3600 }] : st.offer === "dear" ? [plainAccept, { ...batchedAccept, amount: "20000" }] : [plainAccept, arcBatched];
+    const accepts = st.offer === "both" ? [plainAccept, batchedAccept] : st.offer === "plain" ? [plainAccept] : st.offer === "long" ? [plainAccept, { ...batchedAccept, maxTimeoutSeconds: 365 * 24 * 3600 }] : st.offer === "dear" ? [plainAccept, { ...batchedAccept, amount: "20000" }] : st.offer === "rogue" ? [plainAccept, { ...batchedAccept, extra: { ...batchedAccept.extra, verifyingContract: "0x1111111111111111111111111111111111111111" } }] : [plainAccept, arcBatched];
     const offer = { x402Version: st.version ?? 2, resource: { url: `http://127.0.0.1:${port}/api/thing`, description: "thing", mimeType: "application/json" }, accepts };
     const header = req.headers["payment-signature"];
     if (!header) return send(402, {}, { "payment-required": b64(offer) });
@@ -1661,6 +1713,27 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     let bad = null; try { new Agent402({ baseUrl: base, fetchImpl: fetch, gateway: { signer: { address: "nope" } } }); } catch (e) { bad = e; }
     ok(bad instanceof TypeError, "a gateway option without an EIP-712 signer is refused at construction");
 
+    // The verifyingContract is pinned per chain: a batched accept naming
+    // another contract, or on a chain the table does not list, is never a
+    // candidate and never signed; a caller's own entry admits it.
+    {
+      const { GATEWAY_VERIFYING_CONTRACTS } = await import("./index.js");
+      const ROGUE = "0x1111111111111111111111111111111111111111";
+      ok(GATEWAY_VERIFYING_CONTRACTS["eip155:8453"].toLowerCase() === GW_WALLET && GATEWAY_VERIFYING_CONTRACTS["eip155:5042"].toLowerCase() === GW_WALLET, "the pinned table names Circle's GatewayWallet on Base and Arc");
+      const rogue = { ...batchedAccept, extra: { ...batchedAccept.extra, verifyingContract: ROGUE } };
+      const offTable = { ...batchedAccept, network: "eip155:4663" };
+      ok(gatewayAcceptOf([rogue]) === null, "a batched accept naming another verifyingContract is never a candidate");
+      ok(gatewayAcceptOf([offTable]) === null, "a batched accept on a chain with no pinned contract is never a candidate");
+      ok(gatewayAcceptOf([rogue], null, { ...GATEWAY_VERIFYING_CONTRACTS, "eip155:8453": ROGUE }) === rogue, "a caller's own table admits the contract it names");
+      const before = signs;
+      let e = null; try { await signGatewayPayment(rogue, { signer }); } catch (err) { e = err; }
+      ok(e instanceof TypeError && signs === before, "signGatewayPayment refuses an unpinned verifyingContract before signing");
+      let badTable = null; try { new Agent402({ baseUrl: base, fetchImpl: fetch, gateway: { signer, verifyingContracts: { base: ROGUE } } }); } catch (err) { badTable = err; }
+      ok(badTable instanceof TypeError, "a gateway.verifyingContracts entry that is not eip155:<id> -> 0x address is refused at construction");
+      const own = new Agent402({ baseUrl: base, fetchImpl: fetch, gateway: { signer, verifyingContracts: { "eip155:8453": ROGUE } } });
+      ok(own.gateway.verifyingContracts["eip155:8453"] === ROGUE && own.gateway.verifyingContracts["eip155:5042"].toLowerCase() === GW_WALLET, "a caller's entry replaces that chain's and keeps the rest");
+    }
+
     // Off by default: the payment fetch pays the plain accept.
     {
       const c = mk({ fetch: plainFetch() });
@@ -1701,6 +1774,20 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       e = null; try { await dear.call("thing", { q: 18 }); } catch (err) { e = err; }
       ok(e instanceof SpendingLimitError && e.limit === "maxPerCallUsd" && e.priceUsd === 0.02 && e.listPriceUsd === 0.005 && /quoted \$0\.02; the catalog lists \$0\.005/.test(e.message), `a batched accept quoting more than the catalog price is held to the cap at the quoted amount (${e?.message?.slice(0, 110)})`);
       ok(signs === before2.signs && st.paid.length === before2.sent, "and nothing was signed or sent");
+      st.offer = "both";
+    }
+    // A batched accept naming a contract that is not the chain's GatewayWallet:
+    // never signed; the payment fetch pays the plain accept, and with no fetch
+    // the call is refused with nothing signed.
+    {
+      st.offer = "rogue";
+      const before = { signs, sent: st.paid.length };
+      const c = mk({ gateway: { signer }, fetch: plainFetch() });
+      const out = await c.call("thing", { q: 40 });
+      ok(out.paid === "plain" && signs === before.signs, `a rogue verifyingContract is not signed; the plain accept is paid instead (${out.paid})`);
+      const bare = mk({ gateway: { signer } });
+      let e = null; try { await bare.call("thing", { q: 41 }); } catch (err) { e = err; }
+      ok(e?.status === 402 && e.paid === false && signs === before.signs, "with no payment fetch the call is refused and the gateway signer signs nothing");
       st.offer = "both";
     }
     // No batched accept this signer may pay: the plain paths, as without the option.
@@ -1806,7 +1893,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 try {
   const PORT = await boundPort;
-  if (!PORT) fail("the server never reported the port it bound");
+  if (!PORT) fail(`the server never reported the port it bound (exit ${proc.exitCode ?? proc.signalCode ?? "none"}); its stderr:\n${serverStderr || "(empty)"}`);
   for (let i = 0; i < 40; i++) { try { if ((await fetch(`http://localhost:${PORT}/api/pow`)).ok) break; } catch {} await sleep(500); }
   const a = new Agent402({ baseUrl: `http://localhost:${PORT}` });
 
@@ -1853,13 +1940,13 @@ try {
   ok(Array.isArray(sellers.results) && sellers.results.length <= 5, `topSellers honors limit (got ${sellers.results?.length} rows)`);
   ok(typeof sellers.source === "string" && sellers.source.endsWith("/api/leaderboard"), "topSellers links to /api/leaderboard");
 
-  // 10. route() proxies /api/route and preserves executeVia metadata.
+  // 10. route() ranks across the host's index; the local catalog is in it.
   const routed = await a.route("hash text with sha256", { k: 3, include: "all" });
-  ok(routed.include === "all" && Array.isArray(routed.results), "route() returns the server envelope");
-  ok(typeof routed.count === "number" && routed.count <= 3, "route() honors k against the live server");
-  const selfHit = routed.results.find((r) => r.slug === "hash" || r.seller === "self");
-  ok(selfHit, "route() ranks a local catalog match");
-  if (selfHit?.executeVia) ok(typeof selfHit.executeVia.tool === "string", "route() preserves executeVia.tool");
+  ok(routed.include === "all" && Array.isArray(routed.results), `route() returns its envelope (include=${routed.include})`);
+  ok(typeof routed.count === "number" && routed.count <= 3, `route() honors k (count=${routed.count})`);
+  const hashRow = routed.results.find((row) => row.slug === "hash" || row.seller === "self");
+  ok(!!hashRow, `route() ranks the local hash tool (${JSON.stringify(routed.results.map((row) => row.slug))})`);
+  if (hashRow?.executeVia) ok(typeof hashRow.executeVia.tool === "string", "a row's executeVia names a tool");
 
   console.log(`\n${pass} passed`);
   proc.kill("SIGKILL");

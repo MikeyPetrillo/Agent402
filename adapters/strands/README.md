@@ -56,6 +56,25 @@ That's it. The agent now has those tools available; when it calls one, the
 adapter signs an x402 payment (paid tier) or solves a proof-of-work (free
 tier) under the hood and returns the result as a structured object.
 
+## Spending caps (opt-in)
+
+No cap is set by default: a call is never refused for its price unless you
+ask for a ceiling. To set one, pass agent402-client's caps through (since
+0.2.0); a paid call over one is refused before anything is signed, with a
+`SpendingLimitError`:
+
+```js
+const { tools, execute } = await agent402Tools({
+  slugs: ["search", "answer"], freeOnly: false, fetch: payFetch,
+  x402Client: client,      // the @x402/core client payFetch wraps: caps hold at signing
+  maxPerCallUsd: 0.05,     // per call
+  dailyLimitUsd: 5,        // rolling 24 hours
+  maxPerHostUsd: 1,        // rolling 24 hours, per seller host
+});
+```
+
+`agent402Execute` takes the same options.
+
 ## On AWS Bedrock AgentCore
 
 Two ways in:
@@ -76,6 +95,10 @@ agent402Tools(opts?: {
   slugs?: string[];       // restrict to these tool slugs (recommended)
   freeOnly?: boolean;     // default true - only compute-payable tools (no wallet)
   fetch?: typeof fetch;   // an @x402/fetch-wrapped fetch (only for wallet-only tools)
+  maxPerCallUsd?: number; // opt-in spending caps (none by default)
+  dailyLimitUsd?: number;
+  maxPerHostUsd?: number;
+  x402Client?: object;    // the @x402/core client fetch wraps, so caps hold at signing
 }): Promise<{
   tools:   StrandsTool[];                       // pass to `new Agent({ tools })`
   execute: (name, args) => Promise<unknown>;    // pays under the hood
@@ -85,6 +108,7 @@ agent402Tools(opts?: {
 agent402Execute(opts?: {
   baseUrl?: string;
   fetch?: typeof fetch;
+  maxPerCallUsd?: number; dailyLimitUsd?: number; maxPerHostUsd?: number; x402Client?: object;
 }): (name, args) => Promise<unknown>;
 ```
 

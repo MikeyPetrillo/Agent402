@@ -297,7 +297,7 @@ const res = await fetch("https://agent402.tools/api/hash", {
 
 Or skip all of this: paste \`https://agent402.tools/mcp\` into Claude as a
 custom connector and the free tier just works, or run
-\`npx -y agent402-mcp@0.13.32\` with an \`AGENT_KEY\` for the full catalog with spend
+\`npx -y agent402-mcp@0.14.0\` with an \`AGENT_KEY\` for the full catalog with spend
 caps enforced before any payment is signed.
 
 ## Why this matters
@@ -481,8 +481,9 @@ A refused call throws \`SpendingLimitError\` naming the cap, the quote and the
 list price. A payment that was sent and answered with an error counts as held
 until its authorization can no longer settle.
 
-**agent402-mcp.** The per-call cap is on by default (\`off\` removes it); the
-session budget is opt-in.
+**agent402-mcp.** The per-call cap is on by default at $5, which covers every
+fixed price in the catalog (\`0\` or \`off\` turns it off); the session budget
+is opt-in.
 
 \`\`\`bash
 export AGENT_KEY=0x...                # or SOLANA_AGENT_KEY for a Solana wallet
@@ -493,8 +494,10 @@ npx -y agent402-mcp@${AGENT402_MCP_VERSION}
 \`\`\`
 
 **agent402-openclaw.** \`maxPerCallUsd\` in the plugin config, or
-\`AGENT402_MAX_PER_CALL_USD\`, defaults to the metered per-call cap below;
-\`off\` removes it only beside \`allowUncappedPayments: true\`.
+\`AGENT402_MAX_PER_CALL_USD\`, defaults to $5; \`0\` or \`off\` turns it off.
+
+In both packages a value that is not a USD amount keeps the default ceiling
+and is named on stderr, so a typo never removes it.
 
 All three refuse an accept that asks for a signing validity longer than a day,
 and refuse to send a payload signed past it.
@@ -907,8 +910,9 @@ chat) the check reads the quote for that request, so a longer script meets
 the cap before it is paid. A refused call throws \`SpendingLimitError\`.
 The caps live in one client instance: give each worker its own.
 
-In agent402-mcp, \`AGENT402_MAX_PER_CALL\` and \`AGENT402_BUDGET\` set the
-per-call and session ceilings.
+In agent402-mcp, \`AGENT402_MAX_PER_CALL\` (default $5; \`0\` or \`off\`
+turns it off) and \`AGENT402_BUDGET\` (opt-in) set the per-call and session
+ceilings.
 
 ### At volume
 
@@ -1964,7 +1968,7 @@ gateway. Any OpenAI-compatible client then uses it as its base URL:
 \`\`\`bash
 npm i agent402-openclaw @x402/fetch @x402/evm viem   # in one folder
 export AGENT402_WALLET_KEY=0x...      # an EVM key holding USDC on Base
-export AGENT402_MAX_PER_CALL_USD=2    # per-call ceiling checked before signing
+export AGENT402_MAX_PER_CALL_USD=5    # per-call ceiling checked before signing (the default; 0 or off turns it off)
 npx agent402-openclaw proxy           # run from that folder; serves http://127.0.0.1:8412/v1
 \`\`\`
 
@@ -2018,7 +2022,7 @@ claude mcp add --transport http agent402 https://agent402.tools/mcp
 Paid tools from a wallet, through the stdio server:
 
 \`\`\`bash
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.32
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.14.0
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -2030,7 +2034,7 @@ Or in \`.mcp.json\` at the project root:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.32"],
+      "args": ["-y", "agent402-mcp@0.14.0"],
       "env": { "AGENT_KEY": "\${AGENT_KEY}" }
     }
   }
@@ -2053,7 +2057,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.32"],
+      "args": ["-y", "agent402-mcp@0.14.0"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }
@@ -2277,7 +2281,7 @@ prompted input (VS Code stores it, the file never carries it):
     "agent402": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.32"],
+      "args": ["-y", "agent402-mcp@0.14.0"],
       "env": { "AGENT_KEY": "\${input:agent402-key}" }
     }
   }
@@ -2303,7 +2307,7 @@ interpolation is Windsurf's own):
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.32"],
+      "args": ["-y", "agent402-mcp@0.14.0"],
       "env": { "AGENT_KEY": "\${env:AGENT_KEY}" }
     }
   }
@@ -2330,7 +2334,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.32"],
+      "args": ["-y", "agent402-mcp@0.14.0"],
       "env": { "AGENT_KEY": "0x..." },
       "disabled": false,
       "autoApprove": []
@@ -2368,7 +2372,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.32"],
+      "args": ["-y", "agent402-mcp@0.14.0"],
       "env": { "AGENT_KEY": "0x..." },
       "alwaysAllow": [],
       "disabled": false
@@ -2392,7 +2396,7 @@ Or in \`~/.codex/config.toml\`, paid tools from a wallet through the stdio serve
 \`\`\`toml
 [mcp_servers.agent402]
 command = "npx"
-args = ["-y", "agent402-mcp@0.13.32"]
+args = ["-y", "agent402-mcp@0.14.0"]
 env = { AGENT_KEY = "0x..." }
 \`\`\`
 
@@ -2436,7 +2440,7 @@ Or in \`~/.gemini/settings.json\` (\`httpUrl\` is the Streamable HTTP key;
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.32"],
+      "args": ["-y", "agent402-mcp@0.14.0"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }

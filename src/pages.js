@@ -546,7 +546,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
 
   <h2 class="tp-h2">From an MCP client</h2>
   ${codeBlock(`catalog.call ${mcpArgs}`, { name: "the MCP call" })}
-  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.13.32</code>.</p>
+  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.14.0</code>.</p>
 
   <h2 class="tp-h2">Errors and behavior</h2>
   <ul class="tp-facts">${facts.map((f) => `<li>${f}</li>`).join("\n")}</ul>
@@ -686,7 +686,7 @@ export function faqItems() {
   const creditsOnSale = creditsSalesEnabled();
   return [
   { g: "paying", q: "Do I need an account or API key?", a: `No. Nothing here has a signup. Payment - USDC, proof-of-work, or a prepaid card-credits key${creditsOnSale ? ' you bought at <a href="/credits">/credits</a>' : " you already hold"} - is the only credential, charged per call.` },
-  { g: "paying", q: "Can I pay by card instead of crypto?", a: `Yes: buy a finished report at <a href="/reports">/reports</a> (${cardReportPriceRange(HUMAN_PRODUCTS)?.text || "priced per report"} by card, refunded if it fails) or subscribe to a monitor at <a href="/monitors">/monitors</a> (${reportLadderProse({ monitorProducts: MONITOR_PRODUCTS }).monthly || "priced per month"} a month, cancel anytime).${creditsOnSale ? ' Prepaid credits at <a href="/credits">/credits</a> pay any tool with <code>Authorization: Bearer a402_…</code>, debited only when a call succeeds.' : " Prepaid card credits are not on sale; a credits key bought earlier still pays any tool with <code>Authorization: Bearer a402_…</code>, debited only when a call succeeds."}` },
+  { g: "paying", q: "Can I pay by card instead of crypto?", a: `Yes: buy a finished report at <a href="/reports">/reports</a> (${cardReportPriceRange(HUMAN_PRODUCTS)?.text || "priced per report"} by card, refunded if it fails) or subscribe to a monitor at <a href="/monitors">/monitors</a> (${reportLadderProse({ monitorProducts: MONITOR_PRODUCTS }).monthly || "priced per month"} a month, cancel anytime).${creditsOnSale ? ' Prepaid credits at <a href="/credits">/credits</a> pay any paid tool except the wallet-scoped ones and the routes that buy from an outside seller, with <code>Authorization: Bearer a402_…</code>, debited only when a call succeeds; the unspent balance is refunded to your card on request.' : " Prepaid card credits are not on sale; a credits key bought earlier still pays any tool with <code>Authorization: Bearer a402_…</code>, debited only when a call succeeds."}` },
   // DERIVED. Every figure in this answer was typed once and then outlived two
   // repricings: the pack ceiling was over ten times the real one and the card
   // range was quoted below its own floor, which a reader meets at checkout.

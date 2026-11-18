@@ -3,6 +3,7 @@ paths:
   - "src/x402-index.js"
   - "src/index-parts.js"
   - "src/seller-tool-cap.js"
+  - "src/seller-docs-url.js"
   - "src/router-*.js"
   - "src/tools/route-execute.js"
   - "src/*-buyer.js"
@@ -19,6 +20,9 @@ paths:
   - "src/external-spend-guard.js"
   - "src/router-spend-window.js"
   - "src/upstream-buyer-status.js"
+  - "src/seller-load.js"
+  - "src/user-agents.js"
+  - "src/operator-key.js"
 ---
 
 # Seller index, router and route-execute
@@ -53,6 +57,84 @@ Loaded when an index, discovery, router or buyer file is read.
   `[x402-index] fallback passes <listed> rows (kept <n>) <origin hash>: pick= copy= vouch= stamp= carry=
   quotes= total= longest=` line when its listing was cut, its passes total over 200 ms or one pass is
   over 100 ms (`scripts/test-fallback-crawl-turn.js`).
+- **Our User-Agents:** `src/user-agents.js` is the one list of what each component sends to a
+  seller, rendered on /crawler: `Agent402-Crawler` (document and registry reads; robots.txt is
+  matched on it, and an `Agent402` group still applies), `Agent402-Probe` (paywall, quote and
+  network probes; `probePublicUrl`'s default), `Agent402-Router` (the pre-payment probe, the
+  model-list read and the purchase, with `X-Agent402-Via: router`), `Agent402-Fetch` (a tool
+  fetching a caller's URL; `safeFetch`'s default, or `NETWORK_KIT_USER_AGENT` in network-kit2 when
+  set) and `Agent402Bot` (the site-crawl tool). The older `Agent402/1.0` token is left only in the
+  kits that call one data provider's fixed API, a list `scripts/test-user-agents.js` pins. Every
+  robots.txt group naming one of our tokens is combined (RFC 9309; `robotsAllows` in kit.js).
+- **Seller load:** `src/seller-load.js`. Process memory decides every request; the shared limits
+  store is written behind it (per key, never awaited by a caller) and read once per crawl cycle by
+  `sellerLoad.prefetch(due)`, one parallel batch bounded by `PREFETCH_WAIT_MS`, so a slow store
+  never adds a round trip per origin or to a buyer's probe (`scripts/test-crawl-cycle-health.js`,
+  `scripts/test-router-probe-load.js`). An unchanged manifest and OpenAPI (304 or the same body hash) on a scheduled crawl
+  doubles that origin's wait from an hour up to `SELLER_REVISIT_MAX_HOURS` (default 12, at most 24,
+  `off` disables); a change, a failed crawl, a router purchase that did not deliver
+  (`noteSellerDeliveryFailure`) or a re-registration resets it, and an unscheduled read never
+  lengthens it. Every crawler read and probe is counted per operator (`src/operator-key.js`) per
+  UTC day; past `SELLER_PROBE_DAILY_BUDGET` (default 200, `off` disables) the scheduled crawl and
+  its paywall and quote probes and the MPP index's crawl reads wait, while reads inside a started
+  crawl are counted and never refused. The unpaid probes (paywall, quote, mpp-probe) take at most
+  `PROBE_SHARE` (half) of the day (`|probes` count), so the document reads keep the rest. A
+  registration's reads (`registerOrigin` runs in the `unscheduledReads` scope; the MPP index's
+  ungated verify) are counted on the origin's `|unscheduled` count, never on its day and never
+  refused, and their redirect landings on a `|landed-unscheduled` allowance of their own, so a
+  registration anyone makes never spends a domain's scheduled crawl (`scripts/test-crawl-own-limits.js`).
+  Shared-hosting suffixes in `src/operator-key.js` (cloud API, CDN and Pages hosts included) key
+  each hostname as its own operator. The router's pre-payment probe
+  (`sendRouterProbe`) has its own day count, is never refused and never counts against the crawl's
+  budget. A request that reaches another operator's host through a redirect (a probe sent where
+  the documents moved, `chargeTo`; a document read's hop, `landingGate` through safeFetch's
+  `beforeRedirect`, the MPP index's document read included) is counted on the crawled origin's day
+  and on the landing host's landed count, a second day's budget there: past it the request is not
+  sent (`LandingHeld`), the crawl ends with the entry, history and revisit wait untouched and no
+  vote in the cycle tally, and the origin's scheduled turn reads `landing` until the day rolls.
+  Origins known to land on one such host take one turn in the cycle together, read one after
+  another, least recently read first (`landingTurns`, `scripts/test-crawl-landing-turns.js`), so a
+  day's allowance refreshes each in turn and ends partway through at most one read. That turn
+  ends inside the cycle (`groupTurnGoesOn`): it reads ceil(members / CRAWL_CONCURRENCY), then goes
+  on only while another turn of the cycle is open, so a slow group closes the cycle at most one
+  read after a side-by-side read would; members not reached read `turn` (no vote, entry kept) and
+  go first next cycle.
+  The landing host's own day, crawl and router probes never read the landed count; a new
+  redirect-following crawler read passes the gate (`scripts/test-crawl-redirect-budget.js`).
+  A 429 or 503 on a crawler read or
+  a probe holds that hostname's scheduled crawl and probes until Retry-After (30 minutes without
+  one, at most a day), the MPP index's included; a router purchase is never held. A skipped origin
+  keeps its entry; one backed off for unchanged documents votes healthy (not our side) in
+  `cycleOkFraction` and the cycle tally, a throttled, budgeted or landing-held one is left out, and an origin read
+  after a wait gets the hold window (`INDEX_CRAWL_HOLD_HOURS`) counted from the end of that wait,
+  or from the last scheduled turn our limits passed over (`turnNotReadAt`: any skip reason), so a
+  seller is never dropped because we chose not to read it; once a read has failed
+  (`readIncomplete`), the start stays at `holdFromAt`, so a dark origin drops after the hold.
+  Registration (`unscheduled`) document reads and paywall/mpp probes (not route quotes, which keep
+  the reprice allowance): at most `SELLER_REGISTRATION_HOURLY_MAX` (default 20) per registrant
+  (the register route's IP key, `runAsRegistrant`) per operator of the target host per clock hour
+  (`RequestHeld` "registration-hour"; the register routes answer 429 with Retry-After), so one
+  registrant never spends another's. Across registrants, past `SELLER_REGISTRATION_HOST_HOURLY_MAX`
+  (default 200) per host-hour the reads are paced one per `REGISTRATION_PACE_MS` (30 s), never
+  refused. Names under wildcard or dynamic DNS suffixes (sslip.io, duckdns.org) are shared-hosting
+  tenants, each counted on its own hostname's day like any other; never pool them by the address
+  they resolve to, since anyone can point such a name at another seller's address.
+  `CRAWL_SLOW_ORIGINS` is by the clock: a slow origin's scheduled read sets a per-lane flag
+  (`noteSlowRead`, x402 and mpp) in the shared store, merged at prefetch, and `slowWaiting` /
+  `crawlPlan` skip "slow" until `SLOW_READ_INTERVAL_MS` has passed, so boots and extra cycles do not
+  read it early; it applies to the MPP index too (`mppCrawlDue`). Counts on
+  `/__operator/seller-load.json`; `?host=` gives the request log (per component and minute, two
+  days: one counter per host, minute and component in a shared-store tally per host and hour, so
+  a write never reads the host's history; a process holds a few minutes per host, at most 32
+  entries). Tests: `scripts/test-seller-load.js`, `scripts/test-crawl-revisit.js`,
+  `scripts/test-mpp-seller-load.js`.
+- **Live price reads:** a paid route's 402 is read once, then after `LIVE_QUOTE_MAX_AGE_MS` /
+  `NETWORKS_VERIFY_AGE_MS` (src/crawl-cadence.js, a week). A manifest price that fills an OpenAPI
+  row keeps `originDeclaredPrice`, and a carried quote that confirms a snapshot price keeps its age,
+  so a rebuilt row is not due every cycle. A route above every route-execute tier
+  (`readThisWeekAboveRouterCaps`) is read weekly at most whatever else makes it due, except on a
+  re-registration; the paywall probe asks the cheapest paid GET route
+  (`scripts/test-quote-weekly.js`).
 - **Paywall probe:** one unpaid request per seller checks that its paid route answers a 402,
   on a rotation capped at `X402_PAYWALL_PROBES_PER_CYCLE` sellers per crawl cycle (default 25; 0 turns
   every paywall probe off, re-checks included). The verdict is kept apart from crawl health: it reports
@@ -165,3 +247,8 @@ Loaded when an index, discovery, router or buyer file is read.
   Its phrase rules are a mitigation; the primary defense is each prompt's own rule that seller
   text is quoted data, never instructions. A paraphrase the rules miss is expected: add it to
   `scripts/redteam-corpus.json` and extend the rule, rather than treat each one as a blocker.
+- **Seller docs link:** `src/seller-docs-url.js`. A tool row on `/api/index?seller=<host>` carries
+  `sellerDocsUrl` when the seller's own OpenAPI operation names `externalDocs.url`, kept only as an
+  https link on the seller's exact host (under its own path for a seller listed with a path) and
+  dropped on a row the listing screen flags; the detail then carries `sellerDocsUrlLegend`. The index
+  never fetches it, and it changes no price, quote, routing or payment. `?seller=` is its only surface.

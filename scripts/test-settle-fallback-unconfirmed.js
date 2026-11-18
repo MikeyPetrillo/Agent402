@@ -187,6 +187,25 @@ const NOT_CHARGED = /not charged|nothing (?:was|is) charged|never charged/i;
   ok(REJECTION_REASONS.some((r) => r.reason === "settlement-unconfirmed" && /check-wallet/.test(r.means) && /watch-transaction/.test(r.means) && /authorizationValidBefore/.test(r.means) && !NOT_CHARGED.test(r.means)), "the published reason names both verbs and the fields");
 }
 
+// ---- the reconcile tick runs under leased(): with no state database a tick
+// whose previous run is still going answers busy, so two passes never handle
+// one entry at once --------------------------------------------------------
+{
+  const { leased, stateDbEnabled } = await import("../src/state-db.js");
+  let runs = 0, release;
+  const gate = new Promise((r) => { release = r; });
+  const tick = leased("late-settle-reconcile-test", { ttlMs: 60_000 }, async () => { runs++; await gate; return "done"; });
+  const first = tick();
+  // A second run that started would wait on the gate too: read it after a moment.
+  const second = await Promise.race([tick(), sleep(200).then(() => "a second run started")]);
+  const during = runs;
+  release();
+  const firstR = await first;
+  const third = await tick();
+  ok(!stateDbEnabled() && second?.skipped === "leased" && second?.reason === "busy" && during === 1 && firstR === "done" && third === "done" && runs === 2,
+    `no state database: a tick while the last run is going is skipped busy, the next runs (${JSON.stringify(second)}, ${runs} runs)`);
+}
+
 // ---- the per-payer bound: past it a booking waits in the journal and lands
 // once the payer's open entries fall under the bound -------------------------
 {
@@ -280,7 +299,7 @@ const LATE = join(TMP, "late.json");
 const failTxOf = (nonce) => `0x${createHash("sha256").update(`fallback:${String(nonce).toLowerCase()}`).digest("hex")}`;
 const st = { primary: "billing", fallback: "500" };
 // The chain the late-settlement pass reads. dark: nothing can be read.
-const chain = { dark: true, used: new Map() };
+const chain = { dark: true, used: new Map(), decimalsDelayMs: 0 };
 const word = (n) => `0x${BigInt(n).toString(16).padStart(64, "0")}`;
 const counts = { primary: 0, fallback: 0, verify: 0, images: 0 };
 const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -303,7 +322,7 @@ const stub = (name) => createServer((req, res) => {
       if (parsed.method === "eth_call") {
         const data = String(p0?.data || "");
         if (data.startsWith("0xe94a0102")) return chain.dark ? dark() : out(word(chain.used.has(`0x${data.slice(-64)}`.toLowerCase()) ? 1 : 0));
-        if (data.startsWith("0x313ce567")) return out(word(6));
+        if (data.startsWith("0x313ce567")) { if (chain.decimalsDelayMs) setTimeout(() => out(word(6)), chain.decimalsDelayMs); else out(word(6)); return; }
         return out("0x0");
       }
       if (parsed.method === "eth_getTransactionReceipt") return chain.dark ? dark() : out([...chain.used.values()].find((u) => u.tx === String(p0).toLowerCase())?.receipt ?? null);
@@ -586,11 +605,15 @@ try {
       { address: e.asset, topics: ["0x98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5", topic(e.payer), String(held.nonce).toLowerCase()], data: "0x" },
       { address: e.asset, topics: ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef", topic(e.payer), topic(e.payTo)], data: word(e.amount) },
     ] } });
+    // The decimals read answers slower than three reconcile ticks, so a pass
+    // is still on this entry when the next ticks fire.
+    chain.decimalsDelayMs = 1600;
     chain.dark = false;
     ok(await waitFor(() => !bookedFor(held), 60_000), "the reconcile finds the transfer that used the authorization and closes the entry");
+    chain.decimalsDelayMs = 0;
     const look = await (await fetch(`${B}/api/refunds?tx=${LANDED}`)).json();
     ok(/owed/i.test(JSON.stringify(look)), `the landed transfer is owed (${JSON.stringify(look).slice(0, 200)})`);
-    await sleep(1500);
+    await sleep(2500);
     const owedLines = srv.log().split("\n").filter((l) => l.includes(`tx ${LANDED} landed after a 402; booked owed`));
     ok(owedLines.length === 1 && !lateEntries().some((x) => String(x.tx || "").toLowerCase() === LANDED || String(x.nonce || "").toLowerCase() === String(held.nonce).toLowerCase()),
       `owed once across further passes, nothing left open for it (${owedLines.length} owed lines)`);

@@ -7,6 +7,8 @@ import { createHash, createHmac, randomBytes, randomUUID, randomInt } from "node
 import { resolveMx, Resolver } from "node:dns/promises";
 import { markEndsAtCeiling, capByCeiling, atCeiling, ceilingPassed, ceilingCutError, assertBeforeCeiling } from "../run-ceiling.js";
 import { isIP } from "node:net";
+import { FETCH_UA } from "../user-agents.js";
+import { noteHostRequest } from "../seller-load.js"; // the request log /crawler describes
 import tls from "node:tls";
 import { assertQueryableName } from "./dns-name-filter.js";
 import { Worker } from "node:worker_threads";
@@ -2024,13 +2026,17 @@ export function parseRobots(text) {
 
 export function robotsAllows(groups, ua, path) {
   const uaLower = ua.toLowerCase();
-  let group =
-    groups.find((g) => g.agents.some((a) => a !== "*" && uaLower.includes(a))) ??
-    groups.find((g) => g.agents.includes("*"));
-  if (!group) return { allowed: true, matchedRule: null };
+  // Every group that names us is read as one (RFC 9309 2.2.1: matching groups
+  // are combined): the longest rule that matches the path decides it, from
+  // whichever of those groups it came; only with no such group do the `*`
+  // groups apply, also combined.
+  const named = groups.filter((g) => g.agents.some((a) => a && a !== "*" && uaLower.includes(a)));
+  const matching = named.length ? named : groups.filter((g) => g.agents.includes("*"));
+  if (!matching.length) return { allowed: true, matchedRule: null };
+  const rules = matching.length === 1 ? matching[0].rules : matching.flatMap((g) => g.rules);
   const target = String(path).slice(0, ROBOTS_MAX_PATH_CHARS);
   let best = null;
-  for (const rule of group.rules) {
+  for (const rule of rules) {
     if (!rule.path) continue;
     // rule.path comes from the target site's own robots.txt and `path` from the
     // caller, so both sides are outside input. Matching is robotsRuleMatches
@@ -2038,7 +2044,9 @@ export function robotsAllows(groups, ua, path) {
     // skipped, as before, and rule and path lengths are bounded.
     if ((rule.path.match(/\*/g) || []).length > 3) continue;
     if (rule.path.length > ROBOTS_MAX_RULE_CHARS) continue;
-    if (robotsRuleMatches(rule.path, target) && (!best || rule.path.length > best.path.length)) best = rule;
+    // The longest match wins; between an Allow and a Disallow of the same
+    // length, the Allow (RFC 9309 2.2.2).
+    if (robotsRuleMatches(rule.path, target) && (!best || rule.path.length > best.path.length || (rule.path.length === best.path.length && rule.allow && !best.allow))) best = rule;
   }
   return { allowed: best ? best.allow : true, matchedRule: best ? `${best.allow ? "Allow" : "Disallow"}: ${best.path}` : null };
 }
@@ -2163,12 +2171,13 @@ const networkTools = [
       const started = Date.now();
       try {
         assertBeforeCeiling();
+        noteHostRequest(String(url), "fetch");
         const res = await fetch(url, {
           method,
           redirect: "follow",
           signal: controller.signal,
           dispatcher: ssrfDispatcher,
-          headers: { "User-Agent": "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)" },
+          headers: { "User-Agent": FETCH_UA },
         });
         const latencyMs = Date.now() - started;
         res.body?.cancel?.();

@@ -27,8 +27,9 @@ import { loadJsdom } from "./lazy-deps.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { ssrfDispatcher, safeFetch, assertPublicUrl, isSsrfBlock, retryTransient } from "./fetch-guard.js";
 
-import { REPO_URL } from "../repo-link.js";
-const USER_AGENT = `Mozilla/5.0 (compatible; Agent402/1.0; +${REPO_URL})`;
+// A tool fetching for its caller says so (src/user-agents.js).
+import { FETCH_UA as USER_AGENT } from "../user-agents.js";
+import { noteHostRequest } from "../seller-load.js"; // the request log /crawler describes
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -68,6 +69,7 @@ async function waybackAvailable(url, timestamp) {
   api.searchParams.set("url", url);
   if (timestamp) api.searchParams.set("timestamp", timestamp);
   const ctx = { label: "Wayback Machine", step: "availability", timeoutMs: WAYBACK_TIMEOUT_MS, tag: "[archive-snapshot]" };
+  noteHostRequest(String(api), "fetch");
   const res = await upstreamFetch(api, { headers: { Accept: "application/json", "User-Agent": USER_AGENT }, dispatcher: ssrfDispatcher }, ctx);
   if (res.status === 429) throw bad("Wayback Machine rate limit reached - retry shortly", 503);
   if (!res.ok) throw bad(`Wayback Machine error (HTTP ${res.status})`, 502);
@@ -91,6 +93,7 @@ async function mementoClosest(url, timestamp) {
   const dt = ts.slice(0, ts.length - (ts.length % 2));
   const bare = url.replace(/^https?:\/\//i, "");
   const ctx = { label: "Memento aggregator", step: "closest memento", timeoutMs: MEMENTO_TIMEOUT_MS, tag: "[archive-snapshot]" };
+  noteHostRequest("https://memgator.cs.odu.edu/", "fetch");
   const res = await upstreamFetch(`https://memgator.cs.odu.edu/memento/json/${dt}/${bare}`, { headers: { Accept: "application/json", "User-Agent": USER_AGENT }, dispatcher: ssrfDispatcher }, ctx);
   if (res.status === 404) return null;
   if (!res.ok) throw bad(`Memento aggregator error (HTTP ${res.status})`, 502);
@@ -206,6 +209,7 @@ const CHAIN_BUDGET_MS = 20_000;
 async function fetchHop(url, timeoutMs) {
   let res;
   try {
+    noteHostRequest(String(url), "fetch");
     res = await fetch(url, {
       method: "GET",
       redirect: "manual",

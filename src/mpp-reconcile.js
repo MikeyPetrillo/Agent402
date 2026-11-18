@@ -493,7 +493,17 @@ export function createMppReconciler({
    *  at that day's end. Concurrent calls share one run. */
   // Under a lease: two containers (a deploy's overlap, a second replica)
   // never run this tick at once; without a database it is the plain tick.
-  const runOnce = leased("mpp-reconcile-run", { ttlMs: RUN_LEASE_MS, log: log, failOpen: true }, runOnceUnleased);
+  // The share sits outside the lease: a second call here while a run holds
+  // the lease would otherwise read busy (skipped) instead of its result.
+  const runOnceLeased = leased("mpp-reconcile-run", { ttlMs: RUN_LEASE_MS, log: log, failOpen: true }, runOnceUnleased);
+  let sharedRun = null;
+  const runOnce = (opts) => {
+    if (sharedRun) return sharedRun;
+    const p = runOnceLeased(opts);
+    sharedRun = p;
+    p.then(() => { if (sharedRun === p) sharedRun = null; }, () => { if (sharedRun === p) sharedRun = null; });
+    return p;
+  };
   async function runOnceUnleased({ day = null } = {}) {
     if (running) return running;
     running = (async () => {

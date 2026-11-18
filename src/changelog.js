@@ -1,11 +1,30 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { OFFER_SWEEP_FIRST_MS, OFFER_SWEEP_INTERVAL_MS } from "./mpp-subscription-retention.js";
 import { READBACK_FIRST_MS, READBACK_INTERVAL_MS } from "./card-refund-readback.js";
+import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel as span, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
+import { REVISIT_CAP_MS, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, revisitIntervalMs, probeShareLabel } from "./seller-load.js";
 
 // A timer figure as an entry prints it, read from the module that runs it.
 const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a minute" : `${n} minutes`; };
 
 const ENTRIES = [
+  {
+    date: "2026-11-18",
+    title: "Copyright agent, cancel paths, fetched-host counts and seller docs links",
+    items: [
+      "Site: /terms names the copyright agent for notices about material on the site, with the steps for a notice and for a counter-notice, and says how each subscription rail cancels: the portal link for a card subscription, a POST to the cancel link in the monitor emails or revoking the authorization for an MPP subscription. A canceled subscription stays active until the end of the period already paid for.",
+      "Site: /privacy says that when a tool fetches a URL you name, the host name in it (never the path, the query or who asked) is counted per minute, so a site that asks how often it was called can be answered; the counts are deleted after two days.",
+      "Site: While prepaid credits are on sale, each purchase is a new key holding at most the largest pack (`CREDITS_BALANCE_MAX_USD`), and `POST /api/credits/refund` with the key refunds its unspent balance to the card and disables the key. With sales off, neither is offered.",
+      "Seller index: A seller's rows on `/api/index?seller=` carry `sellerDocsUrl` when the seller's own OpenAPI operation names one (`externalDocs.url`): an unverified https link on the seller's exact host, never fetched, that changes no price, quote, routing or payment.",
+    ],
+  },
+  {
+    date: "2026-11-17",
+    title: "Internal code changes, stricter reading of payment fields",
+    items: [
+      "Internal: Internal code changes; malformed seller payment fields and an explicit `cache: null` are handled more strictly. In the seller index, an empty payTo is no address, an amount that is not whole base units gives way to maxAmountRequired, a catalog entry whose network is not text names no chain, and hex addresses match whatever the case of their 0x prefix. In the buyer client, `cache: null` on a call is a fresh purchase, as `cache: false` is, and a paid answer refused on delivery is reported as that refusal.",
+    ],
+  },
   {
     date: "2026-11-17",
     title: "Ownership, contributor agreement and third-party notices",
@@ -41,6 +60,35 @@ const ENTRIES = [
   },
   {
     date: "2026-11-17",
+    title: "The MCP connector serves protocol revision 2026-07-28",
+    items: [
+      "Surfaces: /mcp serves MCP revision 2026-07-28 (the per-request envelope and server/discover, with no initialize) beside the 2025 revisions on the same URL. A valid request on an older revision is answered as before, and tools, payments over x402 and MPP, tasks and skills answer the same on both revisions.",
+      "Surfaces: A malformed request now gets a clearer refusal: an empty batch is a 400 with -32600, a body with no jsonrpc member is -32600 with its id, a tools/call with no params or with arguments that are not an object is -32602 naming the problem, and an MCP-Protocol-Version header naming an unknown version on a request with no envelope is -32602 naming the missing envelope.",
+      "Surfaces: A 2026-07-28 tasks or skills request meets the same Mcp-Method, Mcp-Name and MCP-Protocol-Version checks as every other 2026-07-28 request, and each tools/call in a 2025-era batch reads the tasks extension its own message declares.",
+      "Surfaces: A tools/call paid over x402 in the call that the connector stops waiting on says it may have been charged, as an MPP-paid one does.",
+    ],
+  },
+  {
+    date: "2026-11-17",
+    title: "Package releases: spending caps, request timeouts, typed APIs",
+    items: [
+      "Packages: agent402-client 0.9.0 keeps every spending cap opt-in (no cap unless the caller sets one) and adds call(slug, params, { maxUsd }), which allows one call up to that amount over the per-call cap the caller set. Each request is given 120 seconds (timeoutMs, the published client timeout for metered calls) and then ends in RequestTimeoutError; a paid request that times out reads paid: \"unknown\" and its amount is held against any caps the caller set.",
+      "Packages: agent402-client 0.9.0 signs a Circle Gateway batched accept only when its verifyingContract is the chain's own GatewayWallet contract (GATEWAY_VERIFYING_CONTRACTS, Circle's published address on each mainnet and testnet Gateway serves); gateway.verifyingContracts adds or replaces entries. agent402-client and agent402-mcp 0.14.0 solve proof-of-work on a worker thread and refuse a challenge above 28 bits.",
+      "Packages: agent402-mcp 0.14.0 refuses a single call above $5 by default ($4 before), which covers every fixed price in the catalog: AGENT402_MAX_PER_CALL set to 0 or off turns the cap off, a value that is not a USD amount keeps the default and is named on stderr, a refused call names the price, the cap and the setting to raise, and the session budget (AGENT402_BUDGET) stays opt-in; it returns at most 25 catalog.search results, takes params as an object or a JSON string of one on catalog.call and router.execute, marks catalog.call, router.execute and memory.write destructive and the catalog lookups read-only as the hosted connector does, names no demand.request in its instructions (it does not list it), names a wallet key that does not parse at start instead of reporting a configured wallet, and runs on MCP SDK v2 (@modelcontextprotocol/server 2.4.0) with the same answers on the 2024-11-05 through 2025-11-25 revisions.",
+      "Packages: agent402-tollbooth 0.12.0 charges every listed AI crawler in strict mode, a browser-like one included; the CLI stops on SIGTERM or SIGINT by letting requests in flight finish and exiting 0 (TOLLBOOTH_SHUTDOWN_GRACE_MS, default 10000, then exit 1); the README settle examples run on Base Sepolia with the x402.org facilitator. agent402-client, agent402-mcp and agent402-tollbooth ship TypeScript declarations.",
+      "Packages: agent402-openai-tools, agent402-anthropic-tools, agent402-llamaindex and agent402-strands 0.2.0 pass agent402-client's spending caps through (maxPerCallUsd, dailyLimitUsd, maxPerHostUsd, x402Client; none by default). elizaos-plugin-agent402 0.3.0, agent402-agentkit 0.2.0 and agent402-openclaw 0.6.0 refuse a single paid call above $5 by default ($1, $1 and $2 before) before signing: 0 or off turns the ceiling off (agent402-openclaw no longer needs allowUncappedPayments for it), a value that is not a USD amount keeps the default and is named on stderr, and a refusal names the price, the ceiling and the setting to raise. The adapters accept agent402-client from 0.8.21 up to the next major, 0.9.0 included.",
+      "MCP: The hosted connector counts each message of a JSON-RPC batch against its per-client request limit.",
+    ],
+  },
+  {
+    date: "2026-11-17",
+    title: "The OpenClaw plugin on OpenClaw 2026.11.5",
+    items: [
+      "Packages: agent402-openclaw 0.6.0 is tested against OpenClaw 2026.11.5 and 2026.11.2. OpenClaw 2026.11.5 installs a bare plugin name from ClawHub, where each release is also published; the README names npm:agent402-openclaw for the npm package on that host, and the real-install test covers the ClawHub and npm installs there.",
+    ],
+  },
+  {
+    date: "2026-11-17",
     title: "An unconfirmed settlement is answered as unconfirmed",
     items: [
       "Payments: When a backup settler ends a settlement on an answer that does not show whether the transfer was sent (an HTTP error, a dropped connection, an unreadable answer, or a failure naming a transaction), the call is answered 402 with reason settlement-unconfirmed: the answer says not to sign a new authorization for that call before the expiry the payment carries (an authorization's validBefore, a time by which a Solana transaction's blockhash has expired, an Algorand lastValid round or a Stellar expiration ledger), or when it carries none, until the paying wallet shows whether the transfer landed, names the transaction to watch and its refund lookup when there is one (retry watch-transaction, otherwise check-wallet), carries no new offer, and its receipt reads settlement_unconfirmed.",
@@ -70,6 +118,14 @@ const ENTRIES = [
     ],
   },
   {
+    date: "2026-11-17",
+    title: "A 402 a small header limit can read",
+    items: [
+      "Payments: A client whose parser caps one header line near 8 KB, such as Python aiohttp at its defaults, can read the 402. A request that sends X-Payment-Compact: 1, or whose User-Agent names aiohttp, gets a PAYMENT-REQUIRED header under 7,500 bytes: the resource, the Bazaar extension and the builder code unchanged, the Base exact accept first, each other exact accept that fits, and a compact field that names the body as the full offer. The 402 body keeps every accept, and a payment signed from the compact header settles the same way. Every other request gets the header it got before, byte for byte, and every 402 that carries it varies on both request headers.",
+      "Surfaces: The 402 body states the PAYMENT-REQUIRED header's size and how to ask for the compact one (paymentRequiredHeader), and /llms-full.txt, /how-to-pay, /x402-test and the wiki say how a client with a small header limit reads the 402: raise aiohttp's max_line_size and max_field_size, or send X-Payment-Compact: 1. The compact header and paymentRequiredHeader are served unless PAYMENT_REQUIRED_COMPACT=off.",
+    ],
+  },
+  {
     date: "2026-11-16",
     title: "Computed market answers replace the DeFi analytics routes",
     items: [
@@ -91,6 +147,31 @@ const ENTRIES = [
       "Tools: seller-dossier names each route's delivery record responseDelivery, as the index's rows do; ourPaidCalls stays beside it with the same value and is deprecated. Its delivery summary says the count includes our router's unpaid non-answers, and its description and flags name the routes our router called rather than routes it paid.",
       "Surfaces: /openapi.json names the service Agent402.tools in its title; the tagline moves into its description.",
       "Surfaces: /api/find reads a query that asks to convert a currency (\"convert currency\", \"convert usd to eur\") as a currency conversion and ranks fx-rate first as a strong match; inside a conversion, currency codes and names count as values, not as the task.",
+    ],
+  },
+  {
+    date: "2026-11-16",
+    title: "Price reads keep their weekly clock, and the router never uses up a seller's crawl",
+    items: [
+      `Index: A paid route priced in a seller's manifest and listed without a price in its /openapi.json is read live once and then again after ${span(LIVE_QUOTE_MAX_AGE_MS)}, as every other route is; until now every crawl asked it again, because the merge of the two documents dropped the mark that the price was the seller's own.`,
+      `Index: A route priced above everything the router buys is asked at most once in ${span(LIVE_QUOTE_MAX_AGE_MS)}, and when its seller registers again; the check that a seller's routes still ask for payment uses its cheapest paid route, and runs at most once in ${span(LIVE_QUOTE_MAX_AGE_MS)} for a seller whose paid routes are all priced that high.`,
+      `Index: Every robots.txt group that names Agent402 or Agent402-Crawler is read as one (RFC 9309): their rules are combined, and the longest rule that matches a path decides it, whichever group it came from.`,
+      `Index: The MPP index's reads of a seller count against the same daily allowance, wait out the same Retry-After holds, and follow the slower cycle (${slowOriginIntervalLabel()}) a site asked for. That cycle is timed by the clock from the last read any of our servers made, in both indexes, so a restart does not read such a site early.`,
+      `Index: A site whose scheduled read we put off (its day spent, a Retry-After, the slower cycle) keeps its last good listing through a read of ours that then does not complete, for the same hold window counted from the last turn we put off, so it never leaves the router because we chose not to read it. Once such a read has failed, the turns the site then waits no longer extend the hold, so a site that stays unreachable leaves after it.`,
+      `Index: One caller's registrations send one site at most ${REGISTRATION_HOURLY_MAX} document reads and paywall checks an hour, whichever origins on it they name; that caller's registration past that is answered 429 with a Retry-After, and nothing is listed or changed. Another caller's registration of the site is never held by it: past ${REGISTRATION_HOST_HOURLY_MAX} such reads of one site in an hour from every caller together, the rest are sent one every ${REGISTRATION_PACE_MS / 1000} seconds. A name under a wildcard or dynamic DNS service is counted on its own allowance, like a site on any other shared hosting, whatever address it points at, so no such name can spend another site's day.`,
+      `Operations: The seller load controls decide from each server's own memory and read the shared store once per crawl cycle, so a slow store no longer slows the crawl or a buyer's purchase. A crawl cycle's health counts the sites waiting on unchanged documents as the cycle's reads of sites last read well came out, so a few dark sites still read as theirs and an outage of ours as ours.`,
+      `Operations: The request log behind /__operator/seller-load.json also counts the catalog's fetches, the site-crawl tool and the router's purchases per host.`,
+    ],
+  },
+  {
+    date: "2026-11-16",
+    title: "Our requests to sellers name themselves and back off",
+    items: [
+      "Index: Each part of the service that sends requests to a seller names itself with its own User-Agent: Agent402-Crawler for the index crawler's document reads, Agent402-Probe for the unpaid price and paywall checks, Agent402-Router for a purchase made for a paying caller (and the request that opens it), and Agent402-Fetch for a tool fetching a URL its caller named. Each keeps the browser-compatible form and links to /crawler, which lists them all; no request to a site in the index or to a URL a caller names carries the older Agent402/1.0 token. robots.txt groups for Agent402 still apply to the crawler.",
+      `Index: When a seller's manifest and /openapi.json come back unchanged (a 304, or the same bytes), the wait before the crawler reads that origin again doubles each time, from ${span(revisitIntervalMs(1))} up to ${span(REVISIT_CAP_MS)}. A changed document, a failed crawl, a purchase that did not deliver, or registering again puts it back on the regular cycle (${crawlIntervalLabel()}); a waiting origin's listing stays as it was.`,
+      `Index: The crawler, the unpaid price checks and the MPP index's scheduled reads keep to about ${DAILY_BUDGET.toLocaleString("en-US")} requests a day to one site on its own account (a crawl already under way finishes its reads), counted per registrable domain or per hostname on shared hosting (a platform subdomain or a cloud API host); the unpaid price checks take at most ${probeShareLabel()} of that, and past it they wait for the next UTC day. The reads a registration of the site asks for are counted apart and never use that allowance. A site whose documents moved to another site is counted on its own allowance. Every request that follows such a move to the other site, a document read or a price check, is held to ${DAILY_BUDGET.toLocaleString("en-US")} more a day there, apart from that site's own allowance: past it those requests are not sent until the next day, and the moved site's listing stays as it was. Sites that moved to the same site are read one after another, the one read longest ago first, so each is refreshed in turn. The router's request before a purchase for a paying caller is counted on its own and always goes through.`,
+      `Index: A 429 or 503 from a seller pauses the crawl and the unpaid price checks for that host until its Retry-After, ${span(THROTTLE_DEFAULT_MS)} when it names none, and never longer than ${span(THROTTLE_MAX_MS)}.`,
+      `Operations: /__operator/seller-load.json counts the revisit waits, resets by reason, requests and refusals per kind, the hosts past their day and the Retry-After holds, without naming a seller; with ?host= it lists the requests we sent that host per component and minute over the last ${span(REQUEST_LOG_KEEP_MS)}.`,
     ],
   },
   {

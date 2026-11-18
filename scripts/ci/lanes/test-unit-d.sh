@@ -4,7 +4,9 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (164 scripts, one process each)
+# @step 1: Offline suites (165 scripts, one process each)
+# Client route discovery and output validation (clean-room behavior test, offline)
+t node scripts/test-cleanroom-client-contract.js
 # Paid scan budget (a public route must not spend without limit)
 t node scripts/test-paid-scan-budget.js
 # A registry listing is not a seller answering (origin-responded)
@@ -61,6 +63,8 @@ t node scripts/test-badge-contrast.js
 t node scripts/test-ga-snippet.js
 # Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
 t node scripts/test-analytics-privacy.js
+# Age, self-hosted fonts, analytics off-switches, recurring-mail stop links, renewal terms after purchase, the copyright agent
+t node scripts/test-compliance-surfaces.js
 t node scripts/test-chain-page-cache.js
 # ?seller= views: unknown sellers never build, one build per listed seller, bounded memo, flat heap
 t node scripts/test-chain-seller-view-memo.js
@@ -84,6 +88,7 @@ t node scripts/test-stripe-subscriptions.js
 t node scripts/test-monitor-manage-link.js
 # Prepaid card credits (mint-once, exact micro-dollar balances, gate debits only on 200, 402 on insufficient, operator view)
 t node scripts/test-credits.js
+t node scripts/test-credits-terms.js
 # CAN-SPAM: every outbound email carries the physical postal address
 t node scripts/test-email-postal-address.js
 # List-Unsubscribe headers reach both email providers (ZeptoMail mime_headers, Resend headers)
@@ -97,6 +102,7 @@ t node scripts/test-stripe-api-version.js
 # Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)
 t node scripts/test-fetch-guard.js
 t node scripts/test-ssrf-literal-ip.js
+t node scripts/test-ssrf-redirect-hops.js
 # Guard lookups run on c-ares, not the thread pool: a full pool and unanswered names never delay a healthy one
 t node scripts/test-dns-pool-starvation.js
 t node scripts/test-dns-name-filter.js
@@ -219,6 +225,8 @@ t node scripts/test-pack-copy-modes.js
 t node scripts/test-content-pipeline-guide.js
 # Every model-backed tool says so in its description, and World Bank and FRED credits survive the listing cap (boots its own FREE_MODE server on port 0)
 t node scripts/test-catalog-honesty-markers.js
+# Each auto-paying package's default per-call ceiling covers the dearest fixed price in /api/pricing (boots its own FREE_MODE server on port 0)
+t node scripts/test-package-cap-defaults.js
 # Refund backfill decides who is OWED money: who is in, who is out, idempotent (offline, temp ledgers)
 t node scripts/test-refund-backfill.js
 # Upstream-spend meter records with PostHog OFF and in exact micro-dollars (offline)

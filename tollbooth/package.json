@@ -1,6 +1,6 @@
 {
   "name": "agent402-tollbooth",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Agent402 tollbooth: open-source, self-hostable pay-per-crawl for x402 AND MPP (the sell side of Agentic Finance): charge AI bots per request (USDC via x402, or MPP - the Machine Payments Protocol - through the same settlement, or USDG on Robinhood Chain, or free proof-of-work) while humans browse free. Drop-in Express middleware or reverse proxy that settles both wires from env alone, on your own server with no account or signup.",
   "type": "module",
   "main": "index.js",
@@ -8,9 +8,18 @@
     "agent402-tollbooth": "index.js"
   },
   "exports": {
-    ".": "./index.js",
-    "./edge": "./edge.js",
-    "./edge.js": "./edge.js",
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./edge": {
+      "types": "./edge.d.ts",
+      "default": "./edge.js"
+    },
+    "./edge.js": {
+      "types": "./edge.d.ts",
+      "default": "./edge.js"
+    },
     "./worker": "./worker.js",
     "./worker.js": "./worker.js",
     "./dashboard.js": "./dashboard.js",
@@ -26,6 +35,8 @@
   "files": [
     "index.js",
     "edge.js",
+    "index.d.ts",
+    "edge.d.ts",
     "worker.js",
     "bots.js",
     "pow.js",
@@ -110,5 +121,6 @@
     "url": "https://github.com/MikeyPetrillo/Agent402.git",
     "directory": "tollbooth"
   },
-  "homepage": "https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth"
+  "homepage": "https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth",
+  "types": "index.d.ts"
 }

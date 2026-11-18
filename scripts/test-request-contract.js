@@ -145,22 +145,18 @@ for (const kw of ["$ref", "allOf", "oneOf", "not"]) {
   for (const junk of [undefined, null, [], ["declared"], ["nope", {}], ["declared", "notanobject"]]) {
     ok(unpackRequestContract({ requestContract: junk }) === null, `malformed cache value reads as no contract (${JSON.stringify(junk)})`);
   }
-
-  const inherited = Object.create({ requestContract: ["declared", { query: ["inherited"] }] });
-  ok(unpackRequestContract(inherited) === null,
-    "an inherited tuple is never promoted to seller OpenAPI evidence");
-  let getterRead = false;
-  const accessor = {};
-  Object.defineProperty(accessor, "requestContract", {
-    get() { getterRead = true; return ["declared", { query: ["getter"] }]; },
-  });
-  ok(unpackRequestContract(accessor) === null && getterRead === false,
-    "an accessor-backed tuple is refused without executing its getter");
-  const hostile = new Proxy({}, {
-    getOwnPropertyDescriptor() { throw new Error("hostile descriptor trap"); },
-  });
-  ok(unpackRequestContract(hostile) === null,
-    "a hostile descriptor trap fails closed without escaping");
+  {
+    const inherited = Object.create({ requestContract: ["declared", { query: ["inherited"] }] });
+    ok(unpackRequestContract(inherited) === null, "an inherited requestContract tuple is never promoted to seller evidence");
+    let ran = false;
+    const accessor = {};
+    Object.defineProperty(accessor, "requestContract", { enumerable: true, get() { ran = true; return ["declared", { query: ["inherited"] }]; } });
+    ok(unpackRequestContract(accessor) === null && !ran, "an accessor-backed requestContract reads as no contract, and its getter never runs");
+    const hostile = new Proxy({}, { getOwnPropertyDescriptor() { throw new Error("trap"); } });
+    let threw = false, got;
+    try { got = unpackRequestContract(hostile); } catch { threw = true; }
+    ok(!threw && got === null, "a proxy whose descriptor trap throws reads as no contract, and nothing escapes");
+  }
 }
 
 // --- ALL THREE SURFACES ------------------------------------------------------

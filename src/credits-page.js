@@ -1,7 +1,8 @@
 // Served pages for prepaid card credits: /credits (buy a pack, how to use the
 // key) and /credits/thanks (claims the key ONCE and shows it). Shared ledger
 // shell + REPORTS_CSS; external JS (site CSP drops inline script).
-import { CREDIT_PACKS } from "./credits.js";
+import { sellablePacks } from "./credits.js";
+import { creditsBalanceMaxCents } from "./credits-sales.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
 
@@ -32,7 +33,8 @@ export function creditsPage(baseUrl, salesEnabled = false, catalog = {}) {
   // the page must not advertise a purchase it will refuse - a buy button that
   // 503s is its own deceptive-practice problem - so it states the position and
   // points at the two ways to pay that are open.
-  const cards = Object.entries(CREDIT_PACKS).map(([key, p]) => `
+  const packs = sellablePacks();
+  const cards = Object.entries(packs).map(([key, p]) => `
     <div class="pcard" data-pack="${esc(key)}" style="text-align:center;">
       <div class="k">${esc(p.label)}</div>
       <div style="font-family:var(--font-mono);font-size:var(--fs-3xl);color:var(--ink);letter-spacing:-.02em;margin:6px 0 2px;">$${(p.cents / 100).toFixed(0)}</div>
@@ -51,16 +53,16 @@ export function creditsPage(baseUrl, salesEnabled = false, catalog = {}) {
   const body = `
 <div class="wrap">
   <section class="hero">
-    <div class="eyebrow">Prepaid credits · ${salesEnabled ? "every tool · no wallet" : "for existing keys"}</div>
-    <h1>${salesEnabled ? "One card, <em>every tool.</em>" : "Prepaid credits, <em>for keys already issued.</em>"}</h1>
+    <div class="eyebrow">Prepaid credits · ${salesEnabled ? "500+ tools · no wallet" : "for existing keys"}</div>
+    <h1>${salesEnabled ? "One card, <em>500+ tools.</em>" : "Prepaid credits, <em>for keys already issued.</em>"}</h1>
     <p class="lede">${salesEnabled
       ? "Buy credits once, get a key, and spend it across the pay-per-call tools and reports - per request, at list price, debited only when a call succeeds. For business and developer use; credits are spent only on Agent402's own services, so wallet-scoped routes (memory, usage) and the router's routes that buy from an outside seller need a wallet and refuse a key. <b>No account, no subscription, no wallet.</b> The card-native twin of paying per call in USDC - and no signature per call either, which is the part that matters once an agent is making thousands of them: paying exact over x402 signs an authorization and waits for a settlement every single request, where this is one header."
       : "This page is for holders of a key already issued. Send the key as a Bearer token on a paid route: it is debited per request at list price, only when the call succeeds. Wallet-scoped routes (memory, usage) need a wallet and refuse a key."}</p>
-    <div class="trust"><span><span class="dot"></span> Debited only on a successful call</span><span><span class="dot"></span> Never expires</span>${salesEnabled ? '<span><span class="dot"></span> Secured by Stripe</span>' : ""}</div>
+    <div class="trust"><span><span class="dot"></span> Debited only on a successful call</span><span><span class="dot"></span> Never expires</span>${salesEnabled ? '<span><span class="dot"></span> No fees</span><span><span class="dot"></span> Unspent balance refunded on request</span><span><span class="dot"></span> Secured by Stripe</span>' : ""}</div>
   </section>
   <section>
     <div class="products">${salesEnabled ? cards : closed}</div>
-    <p class="note">${salesEnabled ? "Your key is shown once on the next page and emailed to you · " : ""}keep it secret · balance at <span style="font-family:var(--font-mono);">GET /api/credits/balance</span> · agents with a wallet pay per call over x402 / MPP</p>
+    <p class="note">${salesEnabled ? `Your key is shown once on the next page and emailed to you · each purchase is a new key holding at most $${(creditsBalanceMaxCents() / 100).toFixed(0)} · refund the unspent balance to your card with <span style="font-family:var(--font-mono);">POST /api/credits/refund</span> and the key · ` : ""}keep it secret · balance at <span style="font-family:var(--font-mono);">GET /api/credits/balance</span> · agents with a wallet pay per call over x402 / MPP</p>
   </section>
   <section>
     <div class="hm-obsidian" style="border-radius:var(--radius);background:var(--obsidian-bg);border:1px solid var(--obsidian-border);color:var(--on-panel);padding:26px 28px;">
@@ -74,7 +76,10 @@ curl -X POST -H "Authorization: Bearer a402_…" -H "content-type: application/j
   -d '{"ticker":"AAPL"}' ${esc(baseUrl)}/v1/dossier
 
 <span style="color:var(--on-panel-faint);"># balance</span>
-curl -H "Authorization: Bearer a402_…" ${esc(baseUrl)}/api/credits/balance</pre></div>
+curl -H "Authorization: Bearer a402_…" ${esc(baseUrl)}/api/credits/balance${salesEnabled ? `
+
+<span style="color:var(--on-panel-faint);"># refund the unspent balance to your card (disables the key)</span>
+curl -X POST -H "Authorization: Bearer a402_…" ${esc(baseUrl)}/api/credits/refund` : ""}</pre></div>
     </div>
   </section>
 </div>
@@ -92,10 +97,16 @@ ${ledgerFooterCompact()}
   });
   return ledgerShell({
     title: "Agent402 Credits: prepaid card credits for 500+ tools",
-    description: "Buy $20, $50 or $100 by card, get a key, spend it on 500+ pay-per-call tools and every report at list price. Debited only on success. No account, no wallet.",
+    description: `Buy ${dollarList(Object.values(packs))} by card, get a key, spend it on 500+ pay-per-call tools and every report at list price. Debited only on success, no fees, unspent balance refunded on request. No account, no wallet.`,
     canonical: `${baseUrl}/credits`, baseUrl, activePath: "/credits", extraCss: REPORTS_CSS, body,
-    jsonLd: { "@context": "https://schema.org", "@type": "Product", "@id": `${baseUrl}/credits#product`, name: "Agent402 prepaid credits", description: "Prepaid card credits for every pay-per-call tool and report, debited per successful call.", image: `${baseUrl}/card.png`, url: `${baseUrl}/credits`, brand: { "@type": "Brand", name: "Agent402" }, offers: Object.entries(CREDIT_PACKS).map(([key, p]) => ({ "@type": "Offer", name: `${p.label} ($${(p.cents / 100).toFixed(0)})`, price: (p.cents / 100).toFixed(2), priceCurrency: "USD", url: `${baseUrl}/credits`, availability: "https://schema.org/InStock", seller: { "@type": "Organization", name: "Havok Holdings LLC" } })) },
+    jsonLd: { "@context": "https://schema.org", "@type": "Product", "@id": `${baseUrl}/credits#product`, name: "Agent402 prepaid credits", description: "Prepaid card credits for every pay-per-call tool and report, debited per successful call.", image: `${baseUrl}/card.png`, url: `${baseUrl}/credits`, brand: { "@type": "Brand", name: "Agent402" }, offers: Object.entries(packs).map(([key, p]) => ({ "@type": "Offer", name: `${p.label} ($${(p.cents / 100).toFixed(0)})`, price: (p.cents / 100).toFixed(2), priceCurrency: "USD", url: `${baseUrl}/credits`, availability: "https://schema.org/InStock", seller: { "@type": "Organization", name: "Havok Holdings LLC" } })) },
   });
+}
+
+// "$20, $50 or $100" from the packs on offer.
+function dollarList(ps) {
+  const d = ps.map((p) => `$${(p.cents / 100).toFixed(0)}`);
+  return d.length > 1 ? `${d.slice(0, -1).join(", ")} or ${d[d.length - 1]}` : d[0] || "";
 }
 
 export function creditsThanksPage(sessionId, baseUrl) {

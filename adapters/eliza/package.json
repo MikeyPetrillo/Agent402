@@ -1,7 +1,7 @@
 {
   "name": "elizaos-plugin-agent402",
-  "version": "0.2.10",
-  "description": "elizaOS plugin for Agent402 (Agentic Finance): find and call pay-per-call web tools on a server that answers x402 and MPP on one 402. Pays in USDC over x402 from an EVM wallet or with an Agent402 prepaid credits key, under per-call and daily ceilings; pure-CPU tools are free via proof-of-work.",
+  "version": "0.3.0",
+  "description": "elizaOS plugin for Agent402 (Agentic Finance): find and call pay-per-call web tools on a server that answers x402 and MPP on one 402. Pays in USDC over x402 from an EVM wallet or with an Agent402 prepaid credits key, under optional per-call and daily ceilings; pure-CPU tools are free via proof-of-work.",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
@@ -40,7 +40,7 @@
   },
   "homepage": "https://agent402.tools/guides/agent-hosts",
   "dependencies": {
-    "agent402-client": "^0.8.21"
+    "agent402-client": ">=0.8.21 <1.0.0"
   },
   "peerDependencies": {
     "@x402/evm": ">=2.0.0 <3",
@@ -82,8 +82,8 @@
       "AGENT402_MAX_PER_CALL_USD": {
         "type": "string",
         "required": false,
-        "default": "1",
-        "description": "Ceiling on a single paid call in USD; a call priced above it is refused before paying."
+        "default": "5",
+        "description": "Ceiling on a single paid call in USD (default 5; 0 or off turns it off); a call priced above it is refused before paying."
       },
       "AGENT402_DAILY_LIMIT_USD": {
         "type": "string",

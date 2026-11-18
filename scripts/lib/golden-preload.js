@@ -7,7 +7,10 @@
 //   public-looking address (so the probe's address check reads it as public)
 //   and every request to it is carried to GOLDEN_SELLER_PORT on loopback with
 //   the host in `x-golden-host`. Any other outside host is refused (offline
-//   preload) and counted.
+//   preload) and counted. A request sent through probePublicUrl (the router's
+//   pre-payment probe) also carries `x-golden-leg: probe`: the probe and the
+//   purchase send a seller the same User-Agent and X-Agent402-Via, so the stub
+//   reads the leg from here.
 // - The buyer's address guard is off for this process (its own test seam).
 // - The trajectory seam in src/tools/route-execute.js is set, and a control
 //   server on loopback (port written to GOLDEN_CTL_FILE) answers what the run
@@ -48,6 +51,7 @@ globalThis.fetch = function goldenFetch(input, init = {}) {
     const { dispatcher, ...rest } = init || {};
     const headers = new Headers(rest.headers || {});
     headers.set("x-golden-host", url.hostname.toLowerCase());
+    if (/\bprobePublicUrl\b/.test(String(new Error().stack))) headers.set("x-golden-leg", "probe");
     return offlineFetch.call(this, `http://127.0.0.1:${SELLER_PORT}${url.pathname}${url.search}`, { ...rest, headers, redirect: "manual" });
   }
   if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname)) egress.push(url.hostname);

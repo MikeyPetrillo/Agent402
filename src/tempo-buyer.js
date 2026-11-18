@@ -39,6 +39,7 @@ import { withDistrust } from "./tls-distrust.js";
 const unguardedDispatcher = new UndiciAgent({ connect: withDistrust() });
 import { readBytesCapped, readTextCapped, decodeUtf8 } from "./capped-body.js";
 import { markNotSellerBody } from "./response-observation.js";
+import { noteHostRequest } from "./seller-load.js"; // the request log /crawler describes
 
 
 /** The tempo/charge challenge this wallet pays: the first one it CAN pay (USDC.e,
@@ -440,6 +441,7 @@ export async function payTempo(url, {
   });
   // 1. Bare request -> the seller's live 402 (their quote is the truth, the
   //    registry price is a hint).
+  noteHostRequest(url, "router-buy");
   const bare = await fetch(url, init());
   if (bare.status === 200) return { result: await readCapped(bare, maxBytes), quote: null, receipt: null };
   if (bare.status !== 402 && bare.status !== 401) throw bad(`Seller answered HTTP ${bare.status} to the unpaid request`, 502);
@@ -544,6 +546,7 @@ export async function payTempo(url, {
   let committed = true;
   try {
     const sentAt = Date.now();
+    noteHostRequest(url, "router-buy");
     const paid = await fetch(url, init({ Authorization: credential }));
     // The request a delivery strike is about, and whether a 500's body names
     // that request as the problem (x402-buyer.js): read only on a failure the

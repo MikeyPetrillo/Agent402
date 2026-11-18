@@ -47,6 +47,19 @@ keeps the challenge under the header ceiling. The field is not signed, so an ech
 carries no `outputSchema`, or one from an earlier 402, still matches when every other term is the
 same: a payment signed just before a release that changed a route's output schema is accepted.
 
+### A small header limit
+
+A client whose parser caps one header line near 8 KB (Python aiohttp's default `max_line_size`
+and `max_field_size` are 8190) reads the 402 one of two ways. Raise the limit:
+`aiohttp.ClientSession(max_line_size=32768, max_field_size=32768)`. Or send
+`X-Payment-Compact: 1` (a User-Agent that names aiohttp gets the same without it) for a PAYMENT-REQUIRED header
+under 7,500 bytes: the resource, the Bazaar extension and the builder code unchanged, the Base exact accept first,
+each other exact accept that fits, and a `compact` field whose `fullOfferIn` names the body,
+which keeps every accept. A payment signed from the compact header settles the same way. The
+paywall's 402 body states the header's size in `paymentRequiredHeader`. The compact header and
+`paymentRequiredHeader` are served when enabled, which is the default; a self-hosted server turns
+both off with `PAYMENT_REQUIRED_COMPACT=off`.
+
 ## JavaScript (x402 v2 SDKs)
 
 ```js
@@ -156,7 +169,7 @@ purl "https://agent402.tools/api/dns?name=example.com&type=A"            # pay +
 Client-side caps belong on the buyer:
 
 - **purl:** `PURL_MAX_AMOUNT` (atomic units; 1000 = $0.001 USDC).
-- **agent402-mcp:** `AGENT402_MAX_PER_CALL` (refuse any single call above this USD price; on by default at 4, `off` disables it) and `AGENT402_BUDGET` (opt-in hard session cap; unset means none). Both are enforced on the payment that is signed, priced from the known decimals of its asset, so a confused model cannot drain the wallet.
+- **agent402-mcp:** `AGENT402_MAX_PER_CALL` (refuse any single call above this USD price; on by default at 5, `0` or `off` disables it) and `AGENT402_BUDGET` (opt-in hard session cap; unset means none). Both are enforced on the payment that is signed, priced from the known decimals of its asset, so a confused model cannot drain the wallet.
 
 ## Verifying you weren't cheated
 

@@ -47,9 +47,12 @@ const own = html.slice(html.indexOf('<div class="tb-wrap">'), html.indexOf("<scr
 ok(own.length > 1000, "found the page's own content block");
 const text = decodeEntities(stripTags(stripInlineTags(own))).replace(/\s+/g, " ");
 
-ok(/if \(mode === "all"\) return true;/.test(pkg) && /if \(mode === "strict"\) return !looksHuman\(req\);/.test(pkg),
-  "the package still defines all = every client, strict = anything not a real browser");
-ok(text.includes("all - charge every client") && text.includes("strict - charge anything not a browser") && !/paywall everyone|everything non-human/.test(text),
+const edge = readFileSync(new URL("../tollbooth/edge.js", import.meta.url), "utf8");
+ok(/if \(mode === "all"\) return true;/.test(pkg)
+  && /if \(mode === "strict"\) return isBot\(req\.headers\["user-agent"\] \|\| ""\) \|\| !looksHuman\(req\);/.test(pkg)
+  && /if \(mode === "strict"\) return isBot\(request\.headers\.get\("user-agent"\) \|\| ""\) \|\| !looksHuman\(request\);/.test(edge),
+  "the middleware and the Worker define all = every client, strict = known AI crawlers plus anything not a real browser");
+ok(text.includes("all - charge every client") && text.includes("strict - charge known AI crawlers and anything not a browser") && !/paywall everyone|everything non-human/.test(text),
   "mode labels say what each mode charges (all charges people too; strict passes real browsers)");
 ok(/observe = config\.observe/.test(pkg) && !/mode: "observe"/.test(own) && text.includes("observe: true"),
   "observe is shown as the boolean option it is, never as a mode value (which would charge)");

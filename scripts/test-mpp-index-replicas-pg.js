@@ -3,14 +3,39 @@
 //   - a save never drops an origin only the other container stored, and an
 //     older probe never replaces a newer one;
 //   - two containers taking submissions at once keep each other's seeds;
-//   - a crawl that did not run here (another container holds its lease) saves nothing.
+//   - a crawl that did not run here (another container holds its lease) saves nothing;
+//   - every check reads after the background saves land, over a slow link.
 //   STATE_DATABASE_URL=postgres://... node scripts/test-mpp-index-replicas-pg.js
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { requireTestPg } from "./lib/test-pg.js";
-requireTestPg({ label: "test-mpp-index-replicas-pg" });
+const { url: pgUrl } = requireTestPg({ label: "test-mpp-index-replicas-pg" });
+
+// The suite talks to Postgres through a link that adds 25 ms each way (a slow
+// runner's database), so a background save is still in flight when the suite
+// reads the row unless the read waits on the save itself. The link runs on a
+// thread of its own, so this process's module loading never stalls it.
+const LINK_DELAY_MS = 25;
+const pgTarget = new URL(pgUrl);
+const slowLink = new Worker(`
+  const net = require("node:net");
+  const { parentPort, workerData: w } = require("node:worker_threads");
+  const srv = net.createServer((c) => {
+    const u = net.connect(w.port, w.host);
+    const pipe = (a, b) => a.on("data", (d) => setTimeout(() => { if (!b.destroyed) b.write(d); }, w.ms));
+    pipe(c, u); pipe(u, c);
+    const end = () => setTimeout(() => { c.destroy(); u.destroy(); }, w.ms);
+    c.on("close", end); u.on("close", end); c.on("error", () => {}); u.on("error", () => {});
+  });
+  srv.listen(0, "127.0.0.1", () => parentPort.postMessage(srv.address().port));
+`, { eval: true, workerData: { host: pgTarget.hostname, port: Number(pgTarget.port) || 5432, ms: LINK_DELAY_MS } });
+const linkPort = await new Promise((r, j) => { slowLink.once("message", r); slowLink.once("error", j); });
+slowLink.unref();
+pgTarget.hostname = "127.0.0.1"; pgTarget.port = String(linkPort);
+process.env.STATE_DATABASE_URL = pgTarget.toString();
 
 const DIR = mkdtempSync(join(tmpdir(), "mpp-index-replicas-pg-"));
 process.env.MPP_INDEX_CACHE_FILE = join(DIR, "mpp-index-cache.json");
@@ -21,7 +46,10 @@ const sdb = await import("../src/state-db.js");
 const { createJsonDocument } = await import("../src/json-document.js");
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const settle = () => new Promise((r) => setTimeout(r, 150));
+// Registrations and crawls save in the background; wait on those saves on both
+// containers (never a fixed delay: a slow database outlasts any guess).
+let A, B;
+const settle = () => Promise.all([A.mppIndexSavesSettled(), B.mppIndexSavesSettled()]);
 const verifiedAt = (t) => async (origin) => ({ origin, name: origin, verified: true, verifiedAt: t, lastProbeAt: t, lastProbeOk: true, offers: [] });
 const listed = (m) => new Set(m.mppIndexSnapshot().sellers.map((s) => s.origin));
 const cacheDoc = createJsonDocument({ file: process.env.MPP_INDEX_CACHE_FILE, log: () => {} });
@@ -30,8 +58,8 @@ const storedOrigins = async () => new Set(((await cacheDoc.read()).body?.entries
 const storedSeeds = async () => new Set(((await seedsDoc.read()).body || []).map((r) => (typeof r === "string" ? r : r.origin)));
 
 try {
-  const A = await import("../src/mpp-index.js?container=a");
-  const B = await import("../src/mpp-index.js?container=b");
+  A = await import("../src/mpp-index.js?container=a");
+  B = await import("../src/mpp-index.js?container=b");
   await A.loadSubmittedSeeds(); await B.loadSubmittedSeeds();
 
   // ---- a registration on A reaches B -----------------------------------------

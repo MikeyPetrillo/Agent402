@@ -20,12 +20,13 @@ import { mppMethodsSummary } from "./mpp-offers.js";
 import { connectorWires } from "./connector-pay.js";
 import { mppFlagshipRows, mppFlagshipSnippet, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
 import { STRIPE_MIN_USD } from "./mpp-stripe.js";
-import { creditsSalesEnabled } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
 import { powCostPhrase, POW_DIFFICULTY, isComputePayable } from "./pow.js";
 import { LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
+import { smallHeaderLimitText } from "./payment-required-compact.js";
 import { listAnd, mono, eyebrow, h2, h3, p, link, code, pre, section, th, thead, td, row, table as sharedTable } from "./page-html.js";
 
 const NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen"];
@@ -189,6 +190,8 @@ ${section("x402", `
 #   "amount":"${probeAmount}","asset":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
 #   "payTo":"0x…","maxTimeoutSeconds":…}, … one entry per chain …]}`)}
   ${p(`${code("amount")} is in the asset's smallest unit (six decimals for USDC), so ${probePrice ? `${esc(probePrice)} reads as ${code(probeAmount)}` : `a price reads as its micro-units`}. Every accept entry names its own ${code("network")}, ${code("asset")} and ${code("payTo")}; a client picks the one it can sign.`)}
+  ${h3("A small header limit")}
+  ${p(smallHeaderLimitText().split("`").map((seg, i) => (i % 2 ? code(seg) : esc(seg))).join(""))}
   ${h3("Pay it")}
   ${pre("JavaScript, EVM chains", `import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
@@ -288,10 +291,10 @@ claude mcp add --transport http agent402 ${baseUrl}/mcp
 
 # npm server with a funded EVM key: every paid tool over x402
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.13.32
+claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.14.0
 
-# a credits key already issued works there too
-claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@0.13.32`)}
+# a credits key${creditsKeyQualifier()} works there too
+claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@0.14.0`)}
   ${p(`Every host's verified config block is in the ${link("/guides/agent-hosts", "agent-hosts guide")}; ${link("/quickstart", "/quickstart")} has the same first call for curl, JavaScript and the model gateway.`)}
 `)}
 

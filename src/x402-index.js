@@ -28,6 +28,7 @@ import { manifestEntryExample, openapiOperationExample, noteProbeExample, probeE
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { gzip, gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { createDocumentCache } from "./json-document.js";
@@ -302,12 +303,23 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 // this is the multiplier.
 // 30 min crawl, 1 hr discovery: defined in src/crawl-cadence.js so the pages
 // that quote the cadence read the same constants without importing this file.
-import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGIN_EVERY_CYCLES } from "./crawl-cadence.js";
+import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
+import { operatorKey } from "./operator-key.js";
+import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
+import { sellerLoad, bodyHash, landingGate, RequestHeld, runAsRegistrant } from "./seller-load.js";
+// Reads made for a registration (anyone may register any origin, with no proof
+// of control) run inside this scope: they are counted on a day count of their
+// own (src/seller-load.js takeBudget `unscheduled`), never on the day the
+// origin's scheduled crawl and its probes read.
+const unscheduledReads = new AsyncLocalStorage();
+const readIsUnscheduled = () => unscheduledReads.getStore() === true;
 import { routeTiebreakLabels } from "./route-order.js";
 import { routeExcludedCategory } from "./route-category.js";
 import { withoutAttributions } from "./data-attribution.js";
 import { stripHiddenCharacters } from "./hidden-chars.js";
 import { looksLikeListingInjection, matchesInjectionPhrase, listingInjectionFinding } from "./listing-screen.js";
+import { sellerDocsUrlFor, sellerDocsFieldOf, storedSellerDocsField, SELLER_DOCS_URL_MAX, SELLER_DOCS_URL_LEGEND } from "./seller-docs-url.js";
+export { sellerDocsUrlFor, SELLER_DOCS_URL_MAX, SELLER_DOCS_URL_LEGEND };
 import { timSortSteps } from "./timsort-steps.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
 import { contained } from "./contained-turn.js";
@@ -465,21 +477,53 @@ export function schemeUpgradeOf(target, location) {
 let probeFetch = (url, opts) => probePublicUrl(url, opts);
 export function __setProbeFetchForTest(fn) { probeFetch = typeof fn === "function" ? fn : (url, opts) => probePublicUrl(url, opts); }
 
+/** Thrown instead of sending a probe the host's load controls hold back
+ *  (src/seller-load.js); a caller reads it as "not asked", never as an answer. */
+export class ProbeSkipped extends Error {
+  constructor(reason) { super(`probe not sent: ${reason}`); this.sellerLoadSkip = reason; }
+}
+// `load` = { kind, gate, chargeTo }: every probe is counted against its host's
+// day, and a scheduled crawl's probe (gate) is not sent while the host is held
+// by a Retry-After or past the day's budget. `chargeTo` is the seller key being
+// crawled: a probe sent to the origin its documents moved to (probeOriginOf) is
+// counted on the key's own day, never on the day of the host it lands on, and
+// is not sent past a day's allowance of such landings on that host. A 429 or
+// 503 answer to a scheduled probe of the host's own origin holds the host; one
+// to a probe sent for another operator's origin holds only that operator's
+// probes there, and one to a registration's probe only that registrant's
+// (src/seller-load.js noteThrottle).
+async function probeOnce(target, opts, load) {
+  const unscheduled = readIsUnscheduled();
+  const chargeTo = load?.chargeTo || null;
+  if (load?.kind) {
+    if (load.gate) {
+      const refusal = await sellerLoad.probeRefusal(target, load.kind, { chargeTo });
+      if (refusal) throw new ProbeSkipped(refusal);
+    } else {
+      const b = await sellerLoad.takeBudget(target, load.kind, { essential: true, chargeTo, unscheduled });
+      if (b?.ok === false) throw new ProbeSkipped("budget");
+    }
+  }
+  const res = await probeFetch(target, opts);
+  if (load?.kind && (res?.status === 429 || res?.status === 503)) await sellerLoad.noteThrottle(target, res.status, res.headers?.get?.("retry-after"), { chargeTo, unscheduled });
+  return res;
+}
+
 /** One unpaid probe of a seller route. An http target answered 301/308 with
  *  the same request over https on the same host is asked once more there,
  *  through the same guard; any other redirect is the answer as given. Returns
  *  the response and the URL that produced it; a thrown error carries the URL
  *  being asked as `probedUrl`. */
-export async function probeSellerRoute(target, opts) {
+export async function probeSellerRoute(target, { load = null, ...opts } = {}) {
   let url = target;
   try {
-    let res = await probeFetch(target, opts);
+    let res = await probeOnce(target, opts, load);
     if (res.status === 301 || res.status === 308) {
       const upgraded = schemeUpgradeOf(target, res.headers.get("location"));
       if (upgraded) {
         await res.body?.cancel?.().catch?.(() => {});
         url = upgraded;
-        res = await probeFetch(upgraded, opts);
+        res = await probeOnce(upgraded, opts, load);
       }
     }
     return { res, url };
@@ -1660,7 +1704,12 @@ async function readMarker(origin, fetchImpl) {
     // `fetchImpl` remains only for tests and is never the network path.
     const res = fetchImpl
       ? await fetchImpl(url).then(async (r) => (r.ok ? { html: await r.text(), finalUrl: r.url || url } : null))
-      : await safeFetch(url, { headers: { accept: "application/json" }, maxBytes: 4096 }).catch(() => null);
+      : await safeFetch(url, {
+        headers: { accept: "application/json" }, maxBytes: 4096, userAgent: CRAWLER_UA,
+        // A marker served from another origin is never a proof (below), so a
+        // redirect that leaves this origin is not followed at all.
+        beforeRedirect: (next) => { if (!sameOrigin(next, origin)) throw new Error("the marker redirects off its origin"); },
+      }).catch(() => null);
     if (!res) return null;
     // THE MARKER MUST BE SERVED BY THE ORIGIN ITSELF.
     //
@@ -1731,14 +1780,16 @@ const registerDeadlineMs = () => { const n = Number(process.env.INDEX_REGISTER_D
 const registrationsInFlight = new Map(); // origin + replaces -> the running verification
 const REGISTER_PENDING = Symbol("register-pending");
 const REGISTER_PENDING_NOTE = "verification of this origin is still running (its discovery lists resources that are slow to answer); the listing completes in the background when it finishes. Check GET /api/index?seller=<origin> in a minute or two; if the origin is not listed then, its x402 surface could not be verified, and registering again retries.";
-export async function registerOrigin(origin, { crawl, replaces = null, deadlineMs = registerDeadlineMs() } = {}) {
+export async function registerOrigin(origin, { crawl, replaces = null, deadlineMs = registerDeadlineMs(), registrant = null } = {}) {
   if (isRemovedOrigin(origin) || (replaces && isRemovedOrigin(replaces))) return { listed: false, origin, removed: true, error: REMOVED_ORIGIN_ERROR };
   if (!removalsKnown()) return { listed: false, origin, notLoaded: true, error: REMOVALS_NOT_LOADED_ERROR };
   const key = `${origin} ${replaces || ""}`;
   let run = registrationsInFlight.get(key);
   if (!run) {
     const t0 = Date.now();
-    run = registerOriginNow(origin, { crawl, replaces, deadlineAt: t0 + deadlineMs });
+    // Its reads are counted for the registrant (src/seller-load.js), so one
+    // caller's registrations never spend another's allowance on a host.
+    run = runAsRegistrant(registrant, () => unscheduledReads.run(true, () => registerOriginNow(origin, { crawl, replaces, deadlineAt: t0 + deadlineMs })));
     registrationsInFlight.set(key, run);
     run.then((r) => {
       const ms = Date.now() - t0;
@@ -1751,6 +1802,14 @@ export async function registerOrigin(origin, { crawl, replaces = null, deadlineM
   const out = await Promise.race([run, deadline]).finally(() => clearTimeout(timer));
   if (out !== REGISTER_PENDING) return out;
   return { listed: false, pending: true, origin, status: "verifying", note: REGISTER_PENDING_NOTE, retryAfterSeconds: 60 };
+}
+
+/** A registration whose reads the host's hourly ceiling held back: nothing
+ *  was listed or changed, and the registrant retries after `secs`. */
+function registrationHeld(origin, secs, heldBy = "registration-hour") {
+  const why = heldBy === "seller-retry-after" ? "this origin answered this caller's last registration read with a Retry-After"
+    : "this caller has had this hour's registration reads of this host";
+  return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `${why}; nothing was listed or changed, register again in ${secs} s` };
 }
 
 async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 0 } = {}) {
@@ -1817,6 +1876,9 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
       // A re-registration is the seller asking us to look again: every route
       // this origin had dropped or was about to drop is re-checked from scratch.
       clearGoneMarks(origin);
+      // Back on the normal crawl cycle (src/seller-load.js), whether or not
+      // the documents are re-read now.
+      await sellerLoad.resetRevisit(origin, "re-registration");
       // The windows another container opened for this origin count here too.
       await refreshOriginCooldowns(origin);
       if (forcedCrawlDue(origin)) {
@@ -1888,10 +1950,20 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
   if (!submittedSeeds.has(origin) && submittedSeeds.size >= submittedSeedsCap) {
     return { listed: false, origin, error: `submission list is full - a slot frees up ${Math.round(RELEASE_AFTER_MS / 86400000)} days after its origin's last successful probe (${Math.round(SETTLED_RELEASE_AFTER_MS / 86400000)} for a seller that has settled payments, ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)} for a quick tunnel); open a GitHub issue to get seeded sooner` };
   }
-  const doCrawl = crawl || (async (o, opts) => { await crawlSeller(o, opts); return cache.get(o); });
+  // One registrant sends a host at most an hour's ceiling of registration
+  // reads (src/seller-load.js), whichever origins on it it registers: past it
+  // that registrant is told when to retry, and nothing is sent.
+  const heldFor = await sellerLoad.registrationHeldFor(origin);
+  if (heldFor > 0) return registrationHeld(origin, heldFor);
+  const doCrawl = crawl || (async (o, opts) => {
+    const read = await crawlSeller(o, opts);
+    if (read?.heldBy && !cache.has(o)) return { error: read.error, registrationHeldFor: read.retryAfterSeconds || 60, heldBy: read.heldBy };
+    return cache.get(o) || (read?.landingHeld ? { error: read.error } : undefined);
+  });
   let v;
   // A first registration reads the paywall on its first crawl, as a re-registration does.
   try { v = await doCrawl(origin, { deadlineAt, forcePaywall: true }); } catch (e) { v = { error: String(e?.message || e) }; }
+  if (v?.registrationHeldFor > 0) return registrationHeld(origin, v.registrationHeldFor, v.heldBy);
   // Injected test crawlers return the entry directly; the real path re-reads cache.
   if (v && !v.error && (v.tools?.length || v.manifest)) {
     submittedSeeds.add(origin);
@@ -2245,7 +2317,7 @@ export function isJunkOrigin(origin) {
 // Accept must say JSON: safeFetch's default Accept prefers text/html, and
 // content-negotiating registries (GoPlausible's) serve their docs page for it.
 async function safeFetchJson(url) {
-  const { html } = await safeFetch(url, { maxBytes: MAX_DISCOVERY_BYTES, headers: { Accept: "application/json" } });
+  const { html } = await safeFetch(url, { maxBytes: MAX_DISCOVERY_BYTES, headers: { Accept: "application/json" }, userAgent: CRAWLER_UA });
   return JSON.parse(html);
 }
 let discoveryFetchJson = safeFetchJson;
@@ -2520,7 +2592,8 @@ function priceRank(p) {
 // per-network price/asset), an optional serviceName, description, and tags.
 // We deliberately keep the price in atomic USDC units → USD here so the router
 // can compare across sellers without a per-network price lookup.
-// Exported for offline merge-contract tests alongside normaliseOpenapiTools.
+// Exported (beside the OpenAPI normaliser) so the merge's offline suites can
+// call it on hand-built registry items.
 // PayAI's open registry (and occasionally others) carries `network` as a bare
 // shorthand string ("base", "solana") instead of proper CAIP-2
 // ("eip155:8453", "solana:5eykt4Us...") on some listings - every downstream
@@ -2610,19 +2683,8 @@ function addSellerPayTo(own, registry, t) {
   }
 }
 
-/**
- * Everything an `accepts` array says about money, in the shape an index row
- * carries it: price, chains, payTo per chain, the EIP-712 domain per chain.
- *
- * Lifted out of `bazaarItemToTool` so the MANIFEST reader can derive the same
- * fields from the same code. A seller who publishes their payment terms inside
- * a catalogue entry (`resources[].accepts`, or `resources[].network` flat) was
- * read for its URL, name and price string and for nothing else, so the row
- * came out chainless and the seller landed on `network_unknown` — listed and
- * unroutable, the same defect class as the single-resource manifest above and
- * the same cost. Sharing the derivation is what keeps a manifest row and a
- * Bazaar row describing one endpoint from disagreeing about what it costs.
- */
+// Scaling an accept's atomic amount: the decimals come from the accept itself
+// when it states them, otherwise from the asset's known identity on its chain.
 // USDC by its identity per chain family, for an accept that states no decimals.
 const SVM_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const AVM_USDC_ASA = "31566704";
@@ -2645,66 +2707,113 @@ export function acceptDecimals(a) {
   return null;
 }
 
+// The chain an accept names, as text, or null: only an object whose
+// `network` is a string has one (a number or an object there names nothing).
+function acceptChainText(a) {
+  return a !== null && typeof a === "object" && typeof a.network === "string" ? a.network : null;
+}
+const USD_COIN_LABEL = /usdc|usd coin/i;
+function labelledUsdCoin(a) {
+  const label = a !== null && typeof a === "object" ? a.extra?.name : undefined;
+  return typeof label === "string" && USD_COIN_LABEL.test(label);
+}
+// Whole base units as text (or a whole number): the only `amount` read
+// before `maxAmountRequired`.
+const WHOLE_BASE_UNITS = /^\d+$/;
+function wholeBaseUnits(v) {
+  if (typeof v === "string") return WHOLE_BASE_UNITS.test(v.trim());
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+}
+// The atomic figure an accept is priced from: a well-formed `amount`, else
+// the v1 `maxAmountRequired` (still common in flat manifests). An `amount`
+// stated as empty text is present and reads as zero, never the fallback.
+function atomicFigureOf(a) {
+  if (a.amount === "") return a.amount;
+  return wholeBaseUnits(a.amount) ? a.amount : a.maxAmountRequired;
+}
+// A receiving address as the accept wrote it; empty text is no address.
+function payToTextOrNull(a) {
+  const p = a.payTo;
+  return p === undefined || p === null || p === "" ? null : p;
+}
+// An own data property, so a network spelled "__proto__" stays a key.
+function putOwn(obj, key, value) {
+  Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
+}
+const BASE_CAIP2 = "eip155:8453";
+const ALGORAND_MAINNET_GENESIS = "algorand:wGHE2Pwd";
+/**
+ * The money fields an index row carries, read from an x402 `accepts` list:
+ * a 402 challenge, a registry item, a manifest entry, or the accepts a
+ * catalogue entry derives. Every source goes through this one reader, so a
+ * manifest row and a registry row for one endpoint agree on price, chains
+ * and receiving addresses. Never throws, and never changes its input.
+ */
 export function paymentFieldsFromAccepts(rawAccepts) {
-  // Normalized ONCE here so every downstream read (the `preferred` accept
-  // below, `networks:`, `stellarPayTo`, `algorandPayTo`, `payToByNetwork`)
-  // sees a real CAIP-2 id without each site needing its own fix.
-  const accepts = (Array.isArray(rawAccepts) ? rawAccepts : []).map((a) =>
-    a && typeof a.network === "string" ? { ...a, network: normalizeNetwork(a.network) } : a
-  );
-  // Prefer the first Base USDC accept; fall back to any USDC; fall back to first.
-  const preferred =
-    accepts.find((a) => a?.network === "eip155:8453" && typeof a?.extra?.name === "string" && /USDC|USD Coin/i.test(a.extra.name)) ||
-    accepts.find((a) => typeof a?.extra?.name === "string" && /USDC|USD Coin/i.test(a.extra.name)) ||
-    accepts[0] ||
-    null;
+  const given = Array.isArray(rawAccepts) ? rawAccepts : [];
+  // Normalized copies (shorthand "base" -> eip155:8453), read by every step
+  // below, the EIP-712 domain reader included.
+  const accepts = new Array(given.length);
+  const networks = [];
+  let pricedOnBase = null, pricedAnywhere = null;
+  let stellarPayTo = null, algorandPayTo = null, stellarFound = false, algorandFound = false;
+  for (let i = 0; i < given.length; i++) {
+    const chain = acceptChainText(given[i]);
+    if (chain === null) { accepts[i] = given[i]; continue; }
+    const a = { ...given[i], network: normalizeNetwork(chain) };
+    accepts[i] = a;
+    const net = a.network;
+    if (net !== "" && !networks.includes(net)) networks.push(net);
+    if (labelledUsdCoin(a)) {
+      if (pricedAnywhere === null) pricedAnywhere = a;
+      if (pricedOnBase === null && net === BASE_CAIP2) pricedOnBase = a;
+    }
+    if (!stellarFound && net.startsWith("stellar") && !net.includes("test")) { stellarFound = true; stellarPayTo = payToTextOrNull(a); }
+    if (!algorandFound && net.startsWith(ALGORAND_MAINNET_GENESIS)) { algorandFound = true; algorandPayTo = payToTextOrNull(a); }
+  }
+  // The accept that prices the row: USDC on Base, else USDC anywhere, else
+  // whatever comes first.
+  const pricing = pricedOnBase ?? pricedAnywhere ?? (accepts.length > 0 ? accepts[0] : null);
+
   let price = null;
-  // `amount` is the x402 v2 field; `maxAmountRequired` is the v1 spelling and
-  // the one most flat-`resources` manifests still publish. Reading only the
-  // first left those rows priceless AND cost the live-402 probe that would
-  // have learned the figure the origin already declared.
-  // Text or a number only: a JSON object here would throw when coerced.
-  const amount = sellerNumText(preferred?.amount) ?? sellerNumText(preferred?.maxAmountRequired);
-  // Atomic units of the accept's own asset: its stated decimals, or a USDC we
-  // know. An asset we cannot scale is left unpriced rather than read as USDC.
-  const decimals = preferred ? acceptDecimals(preferred) : null;
-  if (amount != null && decimals != null) {
-    const n = Number(amount);
-    if (Number.isFinite(n)) price = n / 10 ** decimals;
+  if (pricing !== null && typeof pricing === "object") {
+    const figure = atomicFigureOf(pricing);
+    const decimals = sellerNumText(figure) === undefined ? null : acceptDecimals(pricing);
+    if (decimals !== null) {
+      const usd = Number(figure) / 10 ** decimals;
+      price = Number.isFinite(usd) ? usd : null;
+    }
   }
-  // payTo per network, the priced accept's own address first: the address a
-  // row names on a chain is the one its price was quoted for.
+
+  // One address per network; the pricing accept's own address is recorded
+  // first, so it wins over a sibling on the same chain.
   const payToByNetwork = {};
-  for (const a of [preferred, ...accepts]) {
-    if (typeof a?.network === "string" && typeof a?.payTo === "string" && a.payTo && !payToByNetwork[a.network]) payToByNetwork[a.network] = a.payTo;
-  }
-  return {
-    price,
-    // Every chain this resource's 402 advertises — the signal behind the
-    // router's ?network= filter ("who else settles on Robinhood Chain?").
-    networks: [...new Set(accepts.map((a) => a?.network).filter(Boolean))],
-    // Stellar payTo from the accepts — feeds /stellar's per-seller activity
-    // scan. Kept raw here; the snapshot validates the strkey shape before use.
-    stellarPayTo: accepts.find((a) => typeof a?.network === "string" && a.network.startsWith("stellar") && !a.network.includes("test"))?.payTo || null,
-    // Algorand payTo — same idea, feeds /algorand's per-seller activity scan.
-    // Mainnet-only: the CAIP-2 prefix distinguishes mainnet
-    // (algorand:wGHE2Pwd…) from testnet (algorand:SGO1GKSz…) — an
-    // includes("test") check would miss a testnet id that happens not to
-    // contain the literal substring "test".
-    algorandPayTo: accepts.find((a) => typeof a?.network === "string" && a.network.startsWith("algorand:wGHE2Pwd"))?.payTo || null,
-    // payTo keyed by advertised CAIP-2 network — feeds every market page's
-    // per-seller activity scan (the page looks up the payTo whose network
-    // matches the chain being viewed). Stellar/Algorand keep their dedicated
-    // strkey-validated fields above; this covers the EVM chains + Solana, whose
-    // /base, /polygon, /arbitrum, /solana pages had no per-seller address to
-    // scope to. Shape is validated by getActivityForChain before any RPC call.
-    payToByNetwork,
-    // The EIP-712 domain each EVM accept advertises (asset + extra.name). A
-    // Base accept naming "USDC" where the token signs under "USD Coin" is a
-    // challenge no stock buyer can pay; the router label reads this to say so
-    // (src/evm-usdc-domain.js). Omitted when no EVM accept carries a name.
-    ...(Object.keys(evmDomainsOfAccepts(accepts)).length ? { evmDomainByNetwork: evmDomainsOfAccepts(accepts) } : {}),
+  const remember = (a) => {
+    const chain = acceptChainText(a);
+    if (chain === null || typeof a.payTo !== "string" || a.payTo === "" || Object.hasOwn(payToByNetwork, chain)) return;
+    putOwn(payToByNetwork, chain, a.payTo);
   };
+  remember(pricing);
+  for (let i = 0; i < accepts.length; i++) remember(accepts[i]);
+
+  const fields = { price, networks, stellarPayTo, algorandPayTo, payToByNetwork };
+  const domains = evmDomainsOfAccepts(accepts);
+  if (domains !== null && typeof domains === "object" && Object.keys(domains).length > 0) fields.evmDomainByNetwork = domains;
+  return fields;
+}
+
+/** The chain and payee fields a row copies from a paymentFieldsFromAccepts
+ *  reading (the price is placed by each caller); the EIP-712 domains only
+ *  when the reading has them. */
+function paymentRowFields(pay) {
+  const fields = {
+    networks: pay.networks,
+    stellarPayTo: pay.stellarPayTo,
+    algorandPayTo: pay.algorandPayTo,
+    payToByNetwork: pay.payToByNetwork,
+  };
+  if (pay.evmDomainByNetwork) fields.evmDomainByNetwork = pay.evmDomainByNetwork;
+  return fields;
 }
 
 export function bazaarItemToTool(item, originUrl) {
@@ -2715,6 +2824,8 @@ export function bazaarItemToTool(item, originUrl) {
   // "https://hostile.example/...", nor a path seller "/app/x" own "/app/x2".
   // The host compares case-insensitively (a registry may record "API.Host").
   if (!isUnderSeller(resource, originUrl)) return null;
+  // Price, chains and payees: the shared accepts reader, on whatever the item
+  // carries (a missing list reads as none).
   const pay = paymentFieldsFromAccepts(item.accepts);
   let pathStr = "/";
   try {
@@ -2733,20 +2844,23 @@ export function bazaarItemToTool(item, originUrl) {
     pathStr = scoped;
   }
   const tags = Array.isArray(item.tags) ? item.tags : [];
-  const methodInferred = !(typeof item.method === "string" && item.method);
+  // The verb the item states (non-empty text, upper-cased), or null when it
+  // states none and the row's verb is a guess.
+  const statedVerb = typeof item.method === "string" && item.method !== "" ? item.method.toUpperCase() : null;
   // Bazaar entries don't always carry a method (GoPlausible's do); assume POST
   // if we can't tell. The router treats this as a hint and respects a 405 retry.
   return {
     seller: originUrl,
-    method: methodInferred ? "POST" : item.method.toUpperCase(),
-    methodInferred,
+    method: statedVerb === null ? "POST" : statedVerb,
+    methodInferred: statedVerb === null,
     route: pathStr,
     slug: pathStr.replace(/^\//, "").replace(/\//g, "-") || originUrl.replace(/^https?:\/\//, ""),
     name: item.serviceName || pathStr,
     description: item.description || "",
     category: tags[0] || "other",
     tags,
-    ...pay,
+    price: pay.price,
+    ...paymentRowFields(pay),
     provenance: "bazaar",
     ...(scopedHere ? { [SCOPED_ROW]: true } : {}),
     // Coinbase-measured 30-day usage of THIS resource (null when absent).
@@ -2758,8 +2872,8 @@ export function bazaarItemToTool(item, originUrl) {
   };
 }
 
-// Exported for the offline crawler contract test. Keeping this pure makes the
-// exact OpenAPI -> index row mapping testable without network I/O.
+// normaliseOpenapiTools (below) is exported and does no I/O, so a suite can
+// pin how a document becomes rows without any network.
 /** The path prefix an OpenAPI document's `paths` are relative to.
  *
  *  OpenAPI paths are relative to `servers[].url`, so a document declaring
@@ -2816,9 +2930,14 @@ function isDevServerHost(h) {
     || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
 }
 
+/** Index rows for every listed operation of an OpenAPI or agents document,
+ *  built in one synchronous run of the step generator (the crawl runs the
+ *  same steps in slices and gets the same rows). */
 export function normaliseOpenapiTools(openapi, originUrl) {
-  return scopeRowsToSeller(runSteps(normaliseOpenapiToolsSteps(openapi, originUrl)), originUrl);
+  const unscoped = runSteps(normaliseOpenapiToolsSteps(openapi, originUrl));
+  return scopeRowsToSeller(unscoped, originUrl);
 }
+
 // The crawl's copy: the same rows, built in slices of CRAWL_SLICE_MS. A
 // multi-megabyte document resolves its local refs twice per operation, and
 // one such document held the loop for most of a second in one turn.
@@ -3002,36 +3121,47 @@ function* filterSteps(list, keep) {
 }
 // One step per operation; the document is read only, so a yield between two
 // operations cannot change a row.
+// HTTP verbs a path item can hold an operation under (lower case). Other
+// keys of a path item (parameters, servers, summary, trace, ...) are not
+// operations.
+const OPENAPI_VERB_KEYS = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
+function isOpenapiVerbKey(key) { return OPENAPI_VERB_KEYS.has(String(key).toLowerCase()); }
+// Leading path words and file endings that never name something for sale.
+const UNSOLD_PATH_WORDS = [".well-known", "health", "openapi", "llms", "sitemap", "robots", "favicon", "admin", "internal"];
+const UNSOLD_PATH_ENDINGS = [".png", ".ico", ".svg", ".txt", ".xml"];
+function openapiPathNeverSold(path) {
+  if (typeof path !== "string") return false;
+  const lower = path.toLowerCase();
+  for (const ending of UNSOLD_PATH_ENDINGS) if (lower.endsWith(ending)) return true;
+  if (lower.charCodeAt(0) !== 47 /* "/" */) return false;
+  for (const word of UNSOLD_PATH_WORDS) if (lower.startsWith(word, 1)) return true;
+  return false;
+}
 function* normaliseOpenapiToolsSteps(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
   if (base == null) return [];
+  // One answer for the whole document: if anything in it is sold, rows the
+  // seller left unannotated are stamped free instead of carrying no `paid`.
   const documentDistinguishesPaidOperations = openapiHasPaymentSignal(openapi);
   logUnknownPaymentKeys(openapi, originUrl);
-  const httpMethods = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
-  const nonToolPath =
-    /^\/(\.well-known|health|openapi|llms|sitemap|robots|favicon|admin|internal)|\.(png|ico|svg|txt|xml)$/i;
   const out = [];
   for (const [rawPath, methods] of Object.entries(openapi.paths)) {
     // Apply the basePath unless the document already spells it out (some specs
     // repeat the prefix in every path even though servers declares it).
     const pathStr = base && !rawPath.startsWith(base + "/") && rawPath !== base ? base + rawPath : rawPath;
     for (const [method, op] of Object.entries(methods || {})) {
-      if (!httpMethods.has(method.toLowerCase())) continue;
+      if (!isOpenapiVerbKey(method)) continue;
       if (!op || typeof op !== "object") continue;
-      // A seller that annotates any paid operation is trusted to distinguish
-      // paid from free siblings — but the free siblings are still part of the
-      // curated surface they publish, so they LIST (marked paid:false) rather
-      // than vanish. Hiding them made a 42-operation seller read as 17 while
-      // x402scan showed all 42 (seller escalation, 2026-07-27). What the
-      // annotation gate now controls is the `paid` flag, which in turn gates
-      // paid ROUTING — a free op must never be a buy candidate. Deprecated
-      // operations and obvious discovery/static-asset paths are excluded in
-      // all cases (the junk #478 was aimed at). Zero-annotation documents
-      // retain the legacy inclusive behavior with `paid` unknown, because
-      // many settlement-proven sellers do not use payment extensions yet.
-      if (nonToolPath.test(rawPath) || nonToolPath.test(pathStr)) continue;
+      // Rows are for things a buyer can purchase. An operation flagged
+      // `deprecated: true` is on its way out, so it is left off. So are paths
+      // that serve the site rather than sell (discovery files, health, the
+      // spec, robots and sitemaps, admin or internal areas) and plain files
+      // (.png, .ico, .svg, .txt, .xml). A path is tested as written and again
+      // under its server prefix, since a server such as /internal says the same
+      // thing. The rule does not depend on whether the document is annotated.
       if (op.deprecated === true) continue;
+      if (openapiPathNeverSold(rawPath) || openapiPathNeverSold(pathStr)) continue;
       // One reader for every annotation dialect (see openapiOperationPayment):
       // price, paid/free, the chains and the payTo the operation declares.
       const pay = openapiOperationPayment(op);
@@ -3070,6 +3200,10 @@ function* normaliseOpenapiToolsSteps(openapi, originUrl) {
         })(),
         ...(pay.networks.length ? { networks: pay.networks } : {}),
         ...(Object.keys(pay.payToByNetwork).length ? { payToByNetwork: pay.payToByNetwork } : {}),
+        // The operation's own documentation link (externalDocs.url), kept
+        // only when it passes src/seller-docs-url.js; served on the exact
+        // seller record alone and never fetched.
+        ...sellerDocsFieldOf(op, originUrl),
         // In a document that distinguishes paid operations, an unannotated
         // sibling is free (paid:false) - the seller's own free routes list
         // rather than vanish. An explicit `x-payment-required: false` reads
@@ -3164,37 +3298,45 @@ function mergeManifestToolRows(a, b) {
     price: prefer.price || other.price || null,
     slug: (prefer.slug && prefer.slug !== prefer.route) ? prefer.slug : (other.slug || prefer.slug),
     method: prefer.method || other.method,
-    // Richness is measured on price/description/name, so the row that wins can
-    // easily be the chainless one: two entries for the same method+route where
-    // only the thin one carries `accepts`. Blank-fill the payment fields the
-    // same way, or the merge itself re-creates the network_unknown it just fixed.
-    ...(prefer.networks?.length ? {} : (other.networks?.length ? { networks: other.networks } : {})),
-    ...(Object.keys(prefer.payToByNetwork || {}).length ? {}
-      : (Object.keys(other.payToByNetwork || {}).length ? { payToByNetwork: other.payToByNetwork } : {})),
-    ...(prefer.stellarPayTo ? {} : (other.stellarPayTo ? { stellarPayTo: other.stellarPayTo } : {})),
-    ...(prefer.algorandPayTo ? {} : (other.algorandPayTo ? { algorandPayTo: other.algorandPayTo } : {})),
-    ...(prefer.evmDomainByNetwork ? {} : (other.evmDomainByNetwork ? { evmDomainByNetwork: other.evmDomainByNetwork } : {})),
+    // Payment terms play no part in richness, so the richer row can be the
+    // one without them; each term the winner lacks comes from the other row.
+    ...paymentTermsLackedBy(prefer, other),
     ...(a[MANIFEST_HOST_RELATIVE] || b[MANIFEST_HOST_RELATIVE] ? { [MANIFEST_HOST_RELATIVE]: true } : {}),
   };
 }
 
-/**
- * `amount` / `maxAmountRequired` on an ACCEPT-SHAPED entry are ATOMIC UNITS of
- * the asset, never dollars. Reading them as a scalar price published the
- * seller's own listing at a million times its real figure - measured live
- * 2026-09-15 on one seller, whose $0.10 route read **$100000**
- * in the index (`resources: [{scheme, network, asset, amount: "100000", ...}]`,
- * six-decimal USDC). An entry that names a network, an asset or a scheme is
- * quoting the x402 accept shape and its amount goes through the accepts
- * reader, which divides by the decimals; a manifest that carries a bare
- * `amount` with no payment context still means dollars and is read as before.
- * Same failure direction as the 2026-08-29 price ratchet (#1043): an overquote
- * a seller cannot see, on their own listing.
- */
+// Each payment term of a manifest row, with what counts as having it.
+const hasItems = (v) => Array.isArray(v) && v.length > 0;
+const hasKeys = (v) => v !== null && typeof v === "object" && Object.keys(v).length > 0;
+const MANIFEST_PAYMENT_TERMS = [
+  ["networks", hasItems],
+  ["payToByNetwork", hasKeys],
+  ["stellarPayTo", Boolean],
+  ["algorandPayTo", Boolean],
+  ["evmDomainByNetwork", Boolean],
+];
+/** The terms `winner` does not have and `donor` does, taken by reference. */
+function paymentTermsLackedBy(winner, donor) {
+  const borrowed = {};
+  for (const [term, present] of MANIFEST_PAYMENT_TERMS) {
+    if (!present(winner[term]) && present(donor[term])) borrowed[term] = donor[term];
+  }
+  return borrowed;
+}
+
+// The fields whose text type marks the x402 accept shape.
+const ACCEPT_SHAPE_TEXT_FIELDS = ["network", "asset", "scheme", "payTo", "maxAmountRequired"];
+/** Is this manifest entry (or price object) written as an x402 accept? If so
+ *  its `amount` / `maxAmountRequired` count base units of the asset, priced
+ *  by the accepts reader, and are never read as dollars. A bare `amount`
+ *  with nothing of the accept shape around it still means dollars. */
 function acceptShaped(raw) {
-  return !!raw && typeof raw === "object"
-    && (typeof raw.network === "string" || typeof raw.asset === "string" || typeof raw.scheme === "string"
-      || typeof raw.payTo === "string" || typeof raw.maxAmountRequired === "string" || Array.isArray(raw.accepts));
+  if (raw === null || typeof raw !== "object") return false;
+  if (Array.isArray(raw.accepts)) return true;
+  for (let i = 0; i < ACCEPT_SHAPE_TEXT_FIELDS.length; i++) {
+    if (typeof raw[ACCEPT_SHAPE_TEXT_FIELDS[i]] === "string") return true;
+  }
+  return false;
 }
 
 /** An explicit DOLLAR label (`display`, `amountLabel`) the seller wrote for
@@ -3306,48 +3448,48 @@ export function singleResourceManifestTool(manifest, originUrl) {
   return { ...tool, provenance: "manifest" };
 }
 
-/**
- * The payment terms a CATALOGUE ENTRY declares, as an `accepts` array.
- *
- * Three shapes are published in the wild besides the single-resource one, and
- * the catalogue loop below read none of them — it took the entry's URL, name,
- * description and price string and dropped everything about money:
- *
- *   resources: [{ resource, accepts: [{network, asset, payTo, …}] }]   nested
- *   resources: [{ resource, scheme, network, asset, payTo, amount }]   flat
- *   payment:   { network, asset_address, pay_to, … }                   service-wide
- *
- * The service-wide block is a manifest-level default: it applies to every
- * catalogue row that declares no payment of its own, which is exactly how the
- * sellers publishing it mean it (one service, one chain, many routes).
- *
- * Measured against the live index 2026-09-15: of the 304 sellers the router
- * labelled `network_unknown`, 83 still served a manifest, and 59 of those 83
- * declared a chain in one of these three shapes — 49 of them `eip155:8453`.
- * Each was listed and unroutable: on the marketplace, invisible to the router
- * and to its own chain page.
- */
+// The chain a payment-bearing object names flat. `network` decides when it
+// is present: a non-empty string is the chain, and any other value (a number,
+// an object) names none, so a `chain` beside it is not read. Only an absent
+// or empty `network` leaves the decision to `chain`.
+function flatChainOf(obj) {
+  const network = obj.network;
+  if (typeof network === "string" && network !== "") return network;
+  if (network !== undefined && network !== null && network !== "") return null;
+  return typeof obj.chain === "string" && obj.chain !== "" ? obj.chain : null;
+}
+// The first of `keys` whose value on `obj` is truthy, else undefined.
+function firstTruthyField(obj, keys) {
+  for (const key of keys) if (obj[key]) return obj[key];
+  return undefined;
+}
+// `a` unless it is null or undefined, then `b`.
+const presentOr = (a, b) => (a === null || a === undefined ? b : a);
+const ENTRY_ASSET_FIELDS = ["asset", "asset_address", "assetAddress"];
+const ENTRY_PAYTO_FIELDS = ["payTo", "pay_to"];
+/** The payment terms one catalogue entry declares, as an accepts list. In
+ *  order: its own non-empty `accepts`; its `payment` block; one accept built
+ *  from chain fields written flat on the entry; otherwise `fallback` (the
+ *  manifest-wide terms), which is also the answer for a non-object entry. */
 function catalogueEntryAccepts(raw, fallback) {
-  if (!raw || typeof raw !== "object") return fallback;
-  if (Array.isArray(raw.accepts) && raw.accepts.length) return raw.accepts;
-  // A per-entry `payment` block, the `paths` manifest's shape: its own accepts,
-  // or a `networks` list (CAIP-2) beside one asset and payTo.
-  const own = entryPaymentBlockAccepts(raw.payment);
-  if (own.length) return own;
-  const network = raw.network || raw.chain;
-  if (typeof network === "string" && network) {
-    return [{
-      scheme: raw.scheme || "exact",
-      network,
-      asset: raw.asset || raw.asset_address || raw.assetAddress,
-      payTo: raw.payTo || raw.pay_to,
-      amount: raw.amount ?? raw.maxAmountRequired,
-      maxAmountRequired: raw.maxAmountRequired ?? raw.amount,
-      maxTimeoutSeconds: raw.maxTimeoutSeconds,
-      extra: raw.extra,
-    }];
-  }
-  return fallback;
+  if (raw === null || typeof raw !== "object") return fallback;
+  const own = raw.accepts;
+  if (Array.isArray(own) && own.length > 0) return own;
+  const block = entryPaymentBlockAccepts(raw.payment);
+  if (block.length > 0) return block;
+  const network = flatChainOf(raw);
+  if (network === null) return fallback;
+  const accept = {
+    scheme: raw.scheme || "exact",
+    network,
+    asset: firstTruthyField(raw, ENTRY_ASSET_FIELDS),
+    payTo: firstTruthyField(raw, ENTRY_PAYTO_FIELDS),
+    amount: presentOr(raw.amount, raw.maxAmountRequired),
+    maxAmountRequired: presentOr(raw.maxAmountRequired, raw.amount),
+    maxTimeoutSeconds: raw.maxTimeoutSeconds,
+    extra: raw.extra,
+  };
+  return [accept];
 }
 
 /** The accepts a catalogue entry's own `payment` block declares: its accepts
@@ -3410,7 +3552,7 @@ function manifestPathsCatalogue(manifest) {
 function payToFitsNetwork(network, addr) {
   if (typeof addr !== "string" || !addr.trim()) return false;
   const n = String(network || "").toLowerCase();
-  if (n.startsWith("eip155:")) return /^0x[0-9a-fA-F]{40}$/.test(addr);
+  if (n.startsWith("eip155:")) return HEX_ADDRESS.test(addr);
   if (n.startsWith("solana")) return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
   if (n.startsWith("stellar")) return /^G[A-Z2-7]{55}$/.test(addr);
   if (n.startsWith("algorand")) return /^[A-Z2-7]{58}$/.test(addr);
@@ -3447,26 +3589,32 @@ function manifestX402BlockAccepts(p) {
   }));
 }
 
-/** The service-wide `payment` block, read as accepts. Empty when absent. */
+// A 0x-prefixed 40-hex-digit address, either case in prefix and digits.
+const HEX_ADDRESS = /^0x[0-9a-f]{40}$/i;
+// The block prefers a contract address over a ticker for the asset.
+const BLOCK_ASSET_FIELDS = ["asset_address", "assetAddress", "asset"];
+const BLOCK_PAYTO_FIELDS = ["pay_to", "payTo"];
+/** A manifest's one `payment` block for the whole service, as accepts: the
+ *  terms every catalogue row that names none of its own inherits. A block
+ *  naming no chain flat is read as the `x402` sub-block shape. */
 function manifestPaymentAccepts(manifest) {
-  const p = manifest?.payment;
-  if (!p || typeof p !== "object") return [];
-  const network = p.network || p.chain;
-  if (typeof network !== "string" || !network) return manifestX402BlockAccepts(p);
+  const block = manifest?.payment;
+  if (block === null || typeof block !== "object") return [];
+  const network = flatChainOf(block);
+  if (network === null) return manifestX402BlockAccepts(block);
+  // A ticker ("USDC") in `asset` still gives the EIP-712 reader a name.
+  let extra = block.extra || undefined;
+  if (!extra && typeof block.asset === "string" && !HEX_ADDRESS.test(block.asset)) extra = { name: block.asset };
   return [{
-    scheme: p.scheme || "exact",
+    scheme: block.scheme || "exact",
     network,
-    asset: p.asset_address || p.assetAddress || p.asset,
-    payTo: p.pay_to || p.payTo,
-    amount: p.amount ?? p.maxAmountRequired,
-    maxTimeoutSeconds: p.maxTimeoutSeconds,
-    // `asset` in these manifests is the ticker ("USDC") while `asset_address`
-    // is the contract; the EIP-712 domain reader wants the ticker-ish name, so
-    // pass whichever of the two is NOT an address.
-    extra: p.extra || (typeof p.asset === "string" && !/^0x[0-9a-f]{40}$/i.test(p.asset) ? { name: p.asset } : undefined),
+    asset: firstTruthyField(block, BLOCK_ASSET_FIELDS),
+    payTo: firstTruthyField(block, BLOCK_PAYTO_FIELDS),
+    amount: presentOr(block.amount, block.maxAmountRequired),
+    maxTimeoutSeconds: block.maxTimeoutSeconds,
+    extra,
   }];
 }
-
 export function normaliseManifestTools(manifest, originUrl, { examples = null } = {}) {
   // `examples` (a Map, crawl-local) collects each entry's published example
   // request for the unpaid quote probe and nothing else; see
@@ -3544,6 +3692,57 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
   }
   return rows;
 }
+/** The payment reading for one catalogue entry, or null when it carries no
+ *  terms at all. A bare string entry has only the service-wide terms to
+ *  inherit; an object entry is read through catalogueEntryAccepts, which
+ *  prefers its own terms and falls back to the service-wide ones. */
+function entryPaymentReading(raw, serviceAccepts) {
+  const accepts = typeof raw === "string" ? serviceAccepts : catalogueEntryAccepts(raw, serviceAccepts);
+  if (!Array.isArray(accepts) || accepts.length === 0) return null;
+  return paymentFieldsFromAccepts(accepts);
+}
+/** A row's price text: the seller's own written price when there is one (its
+ *  wording, and the origin-declared stamp is made from it), else the accepts'
+ *  dollar figure as "$" plus the number's default text, else null. */
+function manifestRowPrice(writtenPrice, pay) {
+  if (writtenPrice !== null && writtenPrice !== undefined) return writtenPrice;
+  if (pay === null || pay.price === null || pay.price === undefined) return null;
+  return `$${pay.price}`;
+}
+// A name that says something: not empty, not the path, not path-like.
+const tellingName = (n, path) => Boolean(n) && n !== path && !String(n).startsWith("/");
+const carriesChains = (pay) => Boolean(pay) && Array.isArray(pay.networks) && pay.networks.length > 0;
+/** The per-path record after one more entry on `path`: each field keeps the
+ *  better of what this entry says and what earlier entries said. */
+function pathRecordWith(earlier, entry, path) {
+  let name = entry.name || "";
+  if (!tellingName(entry.name, path)) {
+    if (earlier && tellingName(earlier.name, path)) name = earlier.name;
+    else name = earlier?.name || entry.name || "";
+  }
+  let slug = entry.slug;
+  if (!slug || slug === path) slug = earlier?.slug || entry.slug || "";
+  return {
+    name,
+    description: entry.description || earlier?.description || "",
+    price: entry.price || earlier?.price || null,
+    slug,
+    pay: carriesChains(entry.pay) ? entry.pay : (earlier?.pay || null),
+  };
+}
+const filledObject = (v) => Boolean(v) && Object.keys(v).length > 0;
+/** One path, one set of payment terms: a row that names no chain takes the
+ *  path's terms (each payee field only where the row has none). A row that
+ *  already names a chain keeps its own. */
+function adoptPathPayment(row, pathPay) {
+  if (Array.isArray(row.networks) && row.networks.length > 0) return;
+  if (!carriesChains(pathPay)) return;
+  row.networks = pathPay.networks;
+  if (!filledObject(row.payToByNetwork) && filledObject(pathPay.payToByNetwork)) row.payToByNetwork = pathPay.payToByNetwork;
+  for (const field of ["stellarPayTo", "algorandPayTo", "evmDomainByNetwork"]) {
+    if (!row[field] && pathPay[field]) row[field] = pathPay[field];
+  }
+}
 function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   if (!manifest || typeof manifest !== "object") return [];
   let origin;
@@ -3571,7 +3770,6 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   const metaByPath = new Map();
   // Probe examples by row key, only when the caller collects them.
   const exampleByKey = exampleOf ? new Map() : null;
-  // Manifest-level default, applied only to rows that declare nothing.
   const manifestAccepts = manifestPaymentAccepts(manifest);
   const widePayment = widePriceView(manifest.payment);
   const manifestAcceptsWide = widePayment !== manifest.payment ? manifestPaymentAccepts({ payment: widePayment }) : manifestAccepts;
@@ -3581,34 +3779,14 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   // times too large.
   const manifestAtomic = [...(Array.isArray(manifest.accepts) ? manifest.accepts : []), ...manifestAccepts]
     .find((a) => atomicContext(a) && tokenDecimalsOf(a) != null) || null;
-  const notePathMeta = (path, { name, description, price, slug, pay }) => {
-    if (!path) return;
-    const cur = metaByPath.get(path) || {};
-    const named = name && name !== path && !String(name).startsWith("/");
-    const curNamed = cur.name && cur.name !== path && !String(cur.name).startsWith("/");
-    metaByPath.set(path, {
-      name: (named ? name : null) || (curNamed ? cur.name : null) || cur.name || name || "",
-      description: description || cur.description || "",
-      price: price || cur.price || null,
-      slug: (slug && slug !== path) ? slug : (cur.slug || slug || ""),
-      // One path, one set of payment terms: a rich entry that carries accepts
-      // lends its chain to the sibling methods on that path published as thin
-      // strings, exactly as it already lends them its price and description.
-      pay: (pay && pay.networks?.length) ? pay : (cur.pay || null),
-    });
-  };
+  // metaByPath (above) gathers, per URL path, what every entry on that path
+  // said (see pathRecordWith), so a thin sibling method can borrow it.
 
   for (const list of catalogues) {
     for (const raw of list.slice(0, 1000)) {
       let ref = "", name = "", description = "", price = null, inputSchema = null;
       const methodList = [];
-      // What this entry says about money, from its own accepts / flat payment
-      // fields, falling back to the service-wide block. A thin string entry
-      // inherits the service-wide block and nothing else.
-      const entryAccepts = typeof raw === "string"
-        ? manifestAccepts
-        : catalogueEntryAccepts(raw, manifestAccepts);
-      let pay = entryAccepts.length ? paymentFieldsFromAccepts(entryAccepts) : null;
+      let pay = entryPaymentReading(raw, manifestAccepts);
       if (typeof raw === "string") {
         ref = raw.trim();
       } else if (raw && typeof raw === "object") {
@@ -3662,7 +3840,10 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
       if (!u.pathname || u.pathname === "/" || MANIFEST_NON_TOOL_PATH.test(u.pathname)) continue;
       const pathOnly = u.pathname;
       const slug = cleanListingSlug(name) || u.pathname.replace(/^\//, "").replace(/\//g, "-");
-      notePathMeta(pathOnly, { name, description, price, slug, pay });
+      if (pathOnly !== "") {
+        const fromThisEntry = { name, description, price, slug, pay };
+        metaByPath.set(pathOnly, pathRecordWith(metaByPath.get(pathOnly), fromThisEntry, pathOnly));
+      }
       const methodsToEmit = methodList.length ? [...new Set(methodList)] : [""];
       for (const method of methodsToEmit) {
         // Keyed on method+route INCLUDING the query string: two entries that differ
@@ -3688,14 +3869,9 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
           description: description.slice(0, 400),
           category: "other",
           tags: [],
-          // A price the entry states as a display string ("$0.05") wins over
-          // one derived from atomic units: it is the seller's own wording and
-          // it is what `originDeclaredPrice` is stamped from below.
-          price: price ?? (pay && pay.price != null ? `$${pay.price}` : null),
+          price: manifestRowPrice(price, pay),
           ...(() => { const packed = inputSchema ? packRequestContract(requestContractFromInputSchema(inputSchema, method || "GET")) : null; return packed ? { requestContract: packed } : {}; })(),
-          ...(pay ? { networks: pay.networks, stellarPayTo: pay.stellarPayTo,
-            algorandPayTo: pay.algorandPayTo, payToByNetwork: pay.payToByNetwork,
-            ...(pay.evmDomainByNetwork ? { evmDomainByNetwork: pay.evmDomainByNetwork } : {}) } : {}),
+          ...(pay === null ? {} : paymentRowFields(pay)),
         };
         byKey.set(key, mergeManifestToolRows(byKey.get(key), row));
         if (example && !exampleByKey.has(key)) exampleByKey.set(key, example);
@@ -3713,15 +3889,7 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
     if ((!t.name || t.name === t.route || String(t.name).startsWith("/")) && meta.name) t.name = meta.name;
     if (!t.description && meta.description) t.description = String(meta.description).slice(0, 400);
     if ((!t.slug || t.slug === t.route) && meta.slug) t.slug = meta.slug;
-    if (!(t.networks || []).length && meta.pay?.networks?.length) {
-      t.networks = meta.pay.networks;
-      if (!Object.keys(t.payToByNetwork || {}).length && Object.keys(meta.pay.payToByNetwork || {}).length) {
-        t.payToByNetwork = meta.pay.payToByNetwork;
-      }
-      if (!t.stellarPayTo && meta.pay.stellarPayTo) t.stellarPayTo = meta.pay.stellarPayTo;
-      if (!t.algorandPayTo && meta.pay.algorandPayTo) t.algorandPayTo = meta.pay.algorandPayTo;
-      if (!t.evmDomainByNetwork && meta.pay.evmDomainByNetwork) t.evmDomainByNetwork = meta.pay.evmDomainByNetwork;
-    }
+    adoptPathPayment(t, meta.pay);
   }
   // A price in the seller's OWN manifest is an origin declaration, exactly like
   // one in their openapi.json, and must be marked as such: `originDeclaredPrice`
@@ -3940,6 +4108,14 @@ export function mergeManifestIntoTools(manifestTools = [], existing = []) {
     if (!hit.name || hit.name === hit.route || String(hit.name).startsWith("/")) hit.name = m.name || hit.name;
     if (!hit.description) hit.description = m.description || "";
     if (!hit.price && sellerNumText(m.price) !== undefined && m.price) hit.price = m.price;
+    // The manifest's price is the origin's own declaration (see the stamp in
+    // manifestRowsPass), and it stays one when it reaches a row another
+    // document already listed: a row priced from the manifest here without the
+    // stamp read as a price "from somewhere no read looked at", so the weekly
+    // live re-read (networksNeedLiveVerify, quoteIsStale) found it due on
+    // every crawl. Stamped only where the row's price IS the manifest's.
+    if (!isPricedAboveZero(hit.originDeclaredPrice) && isPricedAboveZero(m.originDeclaredPrice)
+        && priceToMicroUsd(hit.price) === priceToMicroUsd(m.originDeclaredPrice)) hit.originDeclaredPrice = m.originDeclaredPrice;
     if ((!hit.slug || hit.slug === hit.route) && m.slug) hit.slug = m.slug;
     // Settlement terms too, and this is the half that used to be missing. An
     // OpenAPI document carries no payment metadata, so a row sourced from one
@@ -4248,8 +4424,14 @@ function openapiOperationPaymentOnce(op) {
   return out;
 }
 
-function openapiOperationHasPaymentSignal(op) {
-  return openapiOperationPayment(op).paid === true;
+/** True when one value found in a path item is an operation the payment
+ *  reader calls paid; anything that is not an object, or that the reader
+ *  cannot read, sells nothing. */
+function operationSellsSomething(value) {
+  if (value === null || typeof value !== "object") return false;
+  let reading;
+  try { reading = openapiOperationPayment(value); } catch { return false; }
+  return reading?.paid === true;
 }
 
 // Annotation-dialect watch. There is no standard for payment extensions, so
@@ -4299,32 +4481,35 @@ function logUnknownPaymentKeys(openapi, originUrl) {
   }
 }
 
-// Does this openapi document look like a *paid* x402 service rather than any
-// random Swagger site? True when at least one operation carries a payment
-// extension. Gates the openapi-fallback crawl path: without a manifest AND
-// without a Bazaar settlement record, a payment extension is the only signal
-// that the origin actually sells anything.
+// Does this document sell anything? With no manifest and no registry record
+// behind it, an OpenAPI or agents document is taken as a paid seller only when
+// some operation is priced or says payment is required, and the same answer
+// tells the normaliser to stamp unannotated operations free. It reads every
+// value of every path item (array items included) and ignores the listing
+// filters: a priced operation that is deprecated, or on a path never listed,
+// still counts.
 export function openapiHasPaymentSignal(openapi) {
-  if (!openapi || typeof openapi !== "object" || !openapi.paths) return false;
-  for (const methods of Object.values(openapi.paths)) {
-    for (const op of Object.values(methods || {})) {
-      if (openapiOperationHasPaymentSignal(op)) return true;
-    }
+  const paths = openapi !== null && typeof openapi === "object" ? openapi.paths : undefined;
+  if (!paths) return false;
+  try {
+    return Object.values(paths).some((item) =>
+      item !== null && typeof item === "object" && Object.values(item).some(operationSellsSomething));
+  } catch {
+    return false;
   }
-  return false;
 }
 
-// Overlay openapi tool metadata onto Bazaar-derived tools for the same origin.
-// Bazaar entries are payment-proven (price, networks, payTo observed from real
-// 402s) but carry only a path-derived slug and no name — a seller whose routes
-// are short ("/md") is invisible to the router's slug/name scoring even when
-// its openapi.json says exactly what the tool does (operationId → slug,
-// summary → name, tags). Match by method+route (route-only as a fallback,
-// Bazaar guesses POST when the registry omits the method); openapi wins on
-// descriptive fields and the declared HTTP method. Bazaar wins on observed
-// payment truth when it has an amount; otherwise the OpenAPI payment extension
-// fills the unknown price. Openapi-only routes are appended as-is;
-// Bazaar-only routes pass through untouched.
+// How mergeOpenapiIntoBazaar (further down) combines the two sources. The
+// registry row is the payment evidence and the seller's operation is the
+// description: from the operation come the slug (operationId), the name
+// (summary), the description and the tags. A pair is joined on verb and
+// route; joining on the route alone is reserved for a registry row whose verb
+// was a guess. Descriptive fields, and a guessed verb, take the document's
+// value. Price: the registry's observed amount is kept unless the origin
+// declares another, in which case the origin's present figure is used, and a
+// registry row with no amount takes the document's. Operations the registry
+// never saw are added at the end; registry rows with no operation go through
+// as clean copies.
 /** Every operation's {method, route} in a document — NO payment filtering, no
  *  static-asset skip. Used only to COLLAPSE facilitator-registry rows whose
  *  concrete URLs instantiate a templated path (see mergeOpenapiIntoBazaar);
@@ -4333,20 +4518,27 @@ export function openapiAllOperationRoutes(openapi, originUrl) {
   return scopeRowsToSeller(openapiAllOperationRoutesUnscoped(openapi, originUrl), originUrl);
 }
 function openapiAllOperationRoutesUnscoped(openapi, originUrl) {
-  if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
+  const paths = openapi !== null && typeof openapi === "object" ? openapi.paths : null;
+  if (!paths || typeof paths !== "object") return [];
   const base = openapiBasePath(openapi, originUrl);
-  if (base == null) return [];
-  const httpMethods = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
-  const out = [];
-  for (const [rawPath, methods] of Object.entries(openapi.paths)) {
-    const pathStr = base && !rawPath.startsWith(base + "/") && rawPath !== base ? base + rawPath : rawPath;
-    for (const [method, op] of Object.entries(methods || {})) {
-      if (!httpMethods.has(method.toLowerCase())) continue;
-      if (!op || typeof op !== "object") continue;
-      out.push({ method: method.toUpperCase(), route: pathStr });
+  if (base === null || base === undefined) return [];
+  const declared = [];
+  for (const rawPath of Object.keys(paths)) {
+    const item = paths[rawPath];
+    if (item === null || typeof item !== "object") continue;
+    const route = routeUnderBase(base, rawPath);
+    for (const verb of Object.keys(item)) {
+      const op = item[verb];
+      if (isOpenapiVerbKey(verb) && op !== null && typeof op === "object") declared.push({ method: verb.toUpperCase(), route });
     }
   }
-  return out;
+  return declared;
+}
+// A document path under its server prefix, unless the path already spells the
+// prefix out (or is the prefix itself).
+function routeUnderBase(base, rawPath) {
+  if (!base || rawPath === base || rawPath.startsWith(`${base}/`)) return rawPath;
+  return base + rawPath;
 }
 
 // Does `concrete` instantiate the templated `route` ("/a/{id}/b" matches
@@ -4404,44 +4596,67 @@ function* templatesMatching(index, concreteRoute) {
   }
 }
 
-// Bazaar and other registry rows are settlement/discovery evidence, never
-// seller application-contract authority. Build a fresh plain object from own
-// enumerable data fields so contract-shaped own accessors are not invoked and
-// inherited/prototype-carried fields cannot become own published evidence.
-//
-// A row with neither contract key and no symbol key (every row the registry
-// fold builds for an unscoped seller) is copied in one step, so the copy takes
-// its source's shape. Built key by key, 77,000 copies could each end with a
-// shape of their own (measured: about 450 ms for the list, and every later
-// read of those rows slower, against 8 ms copied whole). The key-by-key form
-// stays for the rows that need it: it skips a contract key without reading it
-// and leaves symbol keys behind, as it always has.
-const ownKey = Object.prototype.hasOwnProperty;
+// The two application-contract fields of a row, in the order a merged row
+// carries them. A registry row is settlement and discovery evidence, so a
+// copy the merge publishes never takes them from it.
+const CONTRACT_FIELD_NAMES = ["requestContract", "responseContract"];
+// What a registry row's copy never carries: the contract fields, and a
+// documentation link (only the seller's own operation names one).
+const REGISTRY_DROPPED_FIELDS = [...CONTRACT_FIELD_NAMES, "sellerDocsUrl"];
+// Does copying this row need the slow path: a dropped field of its own to
+// leave out, or a symbol key a spread would carry?
+function needsFieldByFieldCopy(row) {
+  for (const name of REGISTRY_DROPPED_FIELDS) if (Object.hasOwn(row, name)) return true;
+  return Object.getOwnPropertySymbols(row).length > 0;
+}
+/** A fresh copy of a registry row without its contract fields, whose values
+ *  are never read (a getter there does not run). The common row is copied in
+ *  one spread, so the ~77k copies of a large seller share one object shape;
+ *  only a row that needs it is rebuilt field by field. Non-objects come back
+ *  as given. */
 function withoutRegistryContracts(row) {
-  if (!row || typeof row !== "object") return row;
-  if (!ownKey.call(row, "requestContract") && !ownKey.call(row, "responseContract") && Object.getOwnPropertySymbols(row).length === 0) return { ...row };
-  const clean = {};
-  for (const key of Object.keys(row)) {
-    if (key === "requestContract" || key === "responseContract") continue;
-    clean[key] = row[key];
+  if (row === null || typeof row !== "object") return row;
+  if (!needsFieldByFieldCopy(row)) return { ...row };
+  const copy = {};
+  for (const field of Object.keys(row)) {
+    if (REGISTRY_DROPPED_FIELDS.includes(field)) continue;
+    Object.defineProperty(copy, field, { value: row[field], enumerable: true, writable: true, configurable: true });
   }
-  return clean;
+  return copy;
+}
+/** One contract tuple from the seller's own operation row: the value of an
+ *  own data property (never a getter, never the prototype's) that holds an
+ *  array, else null. A row whose property cannot even be inspected gives
+ *  null too. */
+function sellerOperationTuple(opRow, field) {
+  if (opRow === null || typeof opRow !== "object") return null;
+  let descriptor;
+  try { descriptor = Object.getOwnPropertyDescriptor(opRow, field); } catch { return null; }
+  if (descriptor === undefined || !Object.hasOwn(descriptor, "value")) return null;
+  return Array.isArray(descriptor.value) ? descriptor.value : null;
+}
+/** The contract fields a merged row takes from the seller's operation: each
+ *  present only when the operation holds its own tuple. */
+function sellerContractFields(opRow) {
+  const fields = {};
+  for (const name of CONTRACT_FIELD_NAMES) {
+    const tuple = sellerOperationTuple(opRow, name);
+    if (tuple !== null) fields[name] = tuple;
+  }
+  return fields;
 }
 
-// OpenAPI contract tuples may cross the join only as own data properties of
-// the normalized seller operation. Refuse accessors and prototype values.
-function ownContractTuple(row, key) {
-  let descriptor;
-  try {
-    descriptor = row && typeof row === "object"
-      ? Object.getOwnPropertyDescriptor(row, key)
-      : undefined;
-  } catch {
-    return null;
-  }
-  return descriptor && "value" in descriptor && Array.isArray(descriptor.value)
-    ? descriptor.value
-    : null;
+/** The verb a merged row is published with: a guessed registry verb gives way
+ *  to the operation's (when it has one); a stated one is kept. */
+function mergedVerb(registryRow, opRow) {
+  if (!registryRow.methodInferred) return registryRow.method;
+  return opRow.method || registryRow.method;
+}
+/** The slug of a templated route: no leading slash, the other slashes as
+ *  hyphens ("/g/{id}" -> "g-{id}"). */
+function templateRouteSlug(route) {
+  const bare = route.startsWith("/") ? route.slice(1) : route;
+  return bare.split("/").join("-");
 }
 
 export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { allRoutes = [] } = {}) {
@@ -4464,10 +4679,10 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
   const byRoute = new Map();
   for (const o of openapiTools) {
     exact.set(`${o.method} ${o.route}`, o);
-    // A route-only match is safe only when the document declares exactly one
-    // operation for that path. null marks an ambiguous GET+POST-style path.
+    // Route alone names an operation only while it has exactly one: the
+    // first is kept, a second marks the route ambiguous (null) for good.
     if (!byRoute.has(o.route)) byRoute.set(o.route, o);
-    else byRoute.set(o.route, null);
+    else if (byRoute.get(o.route) !== null) byRoute.set(o.route, null);
   }
   // Templated operations, for collapsing per-instance registry rows. A
   // facilitator registry records every settled URL verbatim, so one templated
@@ -4490,12 +4705,11 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
   };
   const used = new Set();
   const enrich = (b, o, route) => {
-    // Bazaar is settlement evidence, never application-contract authority.
-    // Strip contract-shaped fields before carrying only the matched seller
-    // OpenAPI operation's packed tuples below.
+    // What the registry recorded proves a payment settled; it does not speak
+    // for the seller's contract. Its row is copied without one, and the only
+    // contract taken is the one on the seller's own operation.
+    const sellerContracts = sellerContractFields(o);
     const bazaar = withoutRegistryContracts(b);
-    const requestContract = ownContractTuple(o, "requestContract");
-    const responseContract = ownContractTuple(o, "responseContract");
     const bazaarMicro = priceToMicroUsd(b.price);
     const originMicro = priceToMicroUsd(o.price);
     const priceConflict = bazaarMicro != null && originMicro != null && bazaarMicro !== originMicro;
@@ -4519,21 +4733,20 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     else price = b.price == null ? o.price : b.price;
     return ({
     ...bazaar,
-    // Bazaar defaults missing methods to POST. The OpenAPI operation is the
-    // authoritative verb once the route-only fallback finds a match.
-    method: b.methodInferred ? (o.method || b.method) : b.method,
+    method: mergedVerb(b, o),
     route,
     slug: o.slug || b.slug,
     name: o.name && o.name !== o.route ? o.name : b.name,
     description: o.description || b.description,
     tags: o.tags?.length ? o.tags : b.tags,
     category: o.tags?.length ? o.category : b.category,
-    // The seller's OpenAPI operation is the only source of these packed
-    // contract tuples. Carry them across the settlement-evidence join without
-    // reconstructing them from the Bazaar row or letting them affect ranking,
-    // routing, pricing, or payment behavior.
-    ...(requestContract ? { requestContract } : {}),
-    ...(responseContract ? { responseContract } : {}),
+    // Taken from the seller's own operation and nowhere else. They describe
+    // the call to a buyer and are never read for ranking, routing, price or
+    // payment.
+    ...sellerContracts,
+    // The documentation link, from the seller's own operation only and
+    // checked again against this row's seller origin.
+    ...(o.sellerDocsUrl !== undefined ? sellerDocsFieldOf({ externalDocs: { url: o.sellerDocsUrl } }, o.seller ?? b.seller) : {}),
     price,
     // What the ORIGIN itself declared this crawl, kept separately so a later
     // stage cannot quietly overwrite the seller's own current number with an
@@ -4568,13 +4781,17 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     })(),
   });
   };
+  // The seller's operation for registry row `b`, or a falsy value: by verb and
+  // route when the registry states the verb, by route alone (undefined when
+  // unknown, null when ambiguous) when it guessed.
+  const operationFor = (b) => {
+    if (b?.methodInferred) return byRoute.get(b.route);
+    return exact.get(`${b?.method} ${b?.route}`);
+  };
   const mergeRow = (b) => {
-    // Only an inferred Bazaar verb may fall back to a route-only match. An
-    // explicit verb must match exactly: GET and POST on the same path can be
-    // different tools with different descriptions and prices.
-    const o = b.methodInferred
-      ? byRoute.get(b.route)
-      : exact.get(`${b.method} ${b.route}`);
+    // A stated verb joins only on verb plus route; only a guessed verb may
+    // join on the route by itself.
+    const o = operationFor(b);
     if (o) { used.add(o); return enrich(b, o, b.route); }
     // Per-instance collapse, indexed operations first: the first instance
     // becomes the operation's row (templated route, registry payment truth);
@@ -4593,11 +4810,9 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     if (d) {
       const key = `${d.method} ${d.route}`;
       if (collapsedDocRows.has(key)) return null;
-      const row = {
-        ...withoutRegistryContracts(b),
-        route: d.route,
-        slug: d.route.replace(/^\//, "").replace(/\//g, "-"),
-      };
+      const row = withoutRegistryContracts(b);
+      row.route = d.route;
+      row.slug = templateRouteSlug(d.route);
       collapsedDocRows.set(key, row);
       return row;
     }
@@ -4696,9 +4911,12 @@ export function paywallVerdictExpired(pw, now = Date.now(), windowMs = PAYWALL_F
  *  re-registration (bounded upstream by the per-origin forced-crawl window);
  *  an expired failure spends the per-cycle re-check budget; otherwise the
  *  rotation decides. */
-function paywallProbeTurn(prev, { force = false, now = Date.now() } = {}) {
+function paywallProbeTurn(prev, { force = false, now = Date.now(), tools = null } = {}) {
   if (PAYWALL_PROBES_PER_CYCLE === 0) return false;
   if (force) return true;
+  // Read once a week, like its price reads, whatever the rotation or an
+  // expired failure would make due (readThisWeekAboveRouterCaps).
+  if (tools && paywallReadThisWeekAboveRouterCaps(prev, tools, now)) return false;
   if (paywallRecheckBudget > 0 && paywallVerdictExpired(prev?.paywall, now)) { paywallRecheckBudget--; return true; }
   return paywallProbeDue();
 }
@@ -4961,6 +5179,15 @@ function carryLearnedOnto(t, { exact: learnedExact, byRoute: learnedByRoute }) {
       // (An origin-priced row is due through networksNeedLiveVerify instead,
       // and a row already priced carries no age from the hit in any case.)
       if (hit.quoteObservedAt && !withheldRead) t.quoteObservedAt = hit.quoteObservedAt;
+    } else if (fromQuote && isPricedAboveZero(t.price) && !originPricedThisCrawl && Number(hit.quoteObservedAt) > 0 && !withheldRead
+        && priceToMicroUsd(t.price) === priceToMicroUsd(hit.price)) {
+      // A row the rebuild priced from a document that is not the origin's
+      // declaration (a registry's settlement snapshot, a label) at the very
+      // amount the live 402 quoted: the quote confirmed that price, so its age
+      // rides with it. Without the age the row was stamped "live-402" below
+      // with none, which quoteIsStale reads as never observed, so every crawl
+      // asked the route again. A price that differs from the quote stays due.
+      t.quoteObservedAt = hit.quoteObservedAt;
     }
     // Did this row just take its chains from the hit? A row with no chains of
     // its own takes a learned quote's chains through the route fallback (the
@@ -5071,7 +5298,7 @@ const QUOTE_DRIFT_FACTOR = Number(process.env.QUOTE_DRIFT_FACTOR) || 2;
  *  stand forever, which is the same ratchet by a quieter route. An unstamped
  *  quote counts as stale once, so pre-existing rows get one refresh. Budgeted
  *  and backed-off like every other probe. */
-const QUOTE_MAX_AGE_MS = Number(process.env.QUOTE_MAX_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
+const QUOTE_MAX_AGE_MS = LIVE_QUOTE_MAX_AGE_MS; // src/crawl-cadence.js (QUOTE_MAX_AGE_MS)
 export function quoteIsStale(t, now = Date.now()) {
   if (t?.quoteSource !== "live-402") return false;
   if (!isPricedAboveZero(t?.price)) return false;
@@ -5088,7 +5315,7 @@ export function quoteIsStale(t, now = Date.now()) {
 // on issue #1178). One live read, then a weekly one, unions what the 402
 // actually offers into the row. Learned quotes have their own clock
 // (quoteIsStale); this is the manifest-vs-402 consistency check.
-const NETWORKS_VERIFY_AGE_MS = Number(process.env.NETWORKS_VERIFY_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
+// NETWORKS_VERIFY_AGE_MS: src/crawl-cadence.js
 export function networksNeedLiveVerify(t, now = Date.now()) {
   if (!t || t.quoteSource === "live-402") return false;
   if (!isPricedAboveZero(t.price)) return false;
@@ -5108,6 +5335,16 @@ export function networksNeedLiveVerify(t, now = Date.now()) {
   // such a row had no stamp and was read on the next crawl; it still is.
   if (!isPricedAboveZero(t.originDeclaredPrice)) return true;
   return now - at >= NETWORKS_VERIFY_AGE_MS;
+}
+
+/** Is this row's declared price above every route-execute tier (so the router
+ *  never buys it), and was its live 402 read within the quote window? Such a
+ *  row is not asked again by the automatic crawl until the window passes. */
+export function readThisWeekAboveRouterCaps(t, now = Date.now()) {
+  const usd = priceUsdOf(t?.originDeclaredPrice) ?? priceUsdOf(t?.price);
+  if (!(usd > 0) || routeExecuteHint(usd) != null) return false;
+  const lastRead = Math.max(Number(t?.quoteObservedAt) || 0, Number(t?.networksVerifiedAt) || 0, Number(t?.liveProvenAt) || 0);
+  return lastRead > 0 && now - lastRead < QUOTE_MAX_AGE_MS;
 }
 
 export function priceDisagreesWithOrigin(t) {
@@ -5250,7 +5487,7 @@ export function adoptLivePrice(row, livePrice, originUrl = "") {
   delete row.quoteCarriedForward;
 }
 
-export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null, candidatePass = null } = {}) {
+export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null, candidatePass = null, gated = false } = {}) {
   // Requests go to the origin the manifest was redirected to, when the crawl
   // recorded one; every key, mark and log line below stays on the stored key.
   const probeOrigin = probeOriginOf(originUrl, redirectedTo);
@@ -5301,6 +5538,10 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       // A route observed free inside the quote window is left alone by the
       // automatic crawl; an explicit re-registration still re-asks it.
       && (ignoreBudget || !isObservedFree(t))
+      // A route priced above every router tier is never bought by us, so its
+      // live 402 is read once and then once a week (and on a re-registration),
+      // whatever else would make it due: a drift, a stamp from another verb.
+      && (ignoreBudget || !readThisWeekAboveRouterCaps(t))
       && probeMethodsFor(t).length                       // never PUT/PATCH/DELETE
       && probeDue(originUrl, `quote:${t.route}`);
   // The registry fallback hands its pass runner in (`candidatePass`), so a
@@ -5349,6 +5590,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
   // new probe starts; a probe in flight finishes on its own limit. The routes
   // not reached stay candidates for the next crawl.
   const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
+  let loadSkipped = false;
   for (const tool of rotated) {
     if (pastDeadline()) break;
     let learned = null;
@@ -5380,6 +5622,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
           method,
           headers: { Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
           ...(method === "POST" ? { body: reqBody } : {}),
+          load: { kind: "quote", gate: gated, chargeTo: originUrl },
         });
         // A GET that returns 200 has ANSWERED: the route is not paywalled, and
         // there is nothing a POST can add. Following it with an unpaid POST is
@@ -5454,11 +5697,16 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         note(method, mppOnly ? "402-mpp-only" : "402-unreadable");
         if (!mppOnly) sampleUnreadable402(originUrl, tool.route, res.headers.get("payment-required"), body);
       } catch (err) {
+        // Not sent (the host's load controls held it back): nothing was asked,
+        // so nothing is noted, and the pass stops for this origin.
+        if (err?.sellerLoadSkip) { loadSkipped = true; break probe; }
         note(method, probeFailureCode(err));
         (answersByMethod[method] ||= []).push(0);
         /* unreachable, blocked, or malformed - try the next method */
       }
     }
+    // The routes not reached stay candidates for the next crawl, as past a deadline.
+    if (loadSkipped) break;
     if (gone) {
       markRouteGone(originUrl, own, tool.route, { kind: "410" });
       dropped.add(tool);
@@ -5499,11 +5747,12 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         // are relative to its prefix, which URL resolution against the key drops.
         const target = sellerRouteUrl(probeOrigin, tool.route);
         if (!target) throw new Error("route outside the seller");
-        const { res: r } = await probeSellerRoute(target, { method: "GET", headers: { Accept: "application/json" } });
+        const { res: r } = await probeSellerRoute(target, { method: "GET", headers: { Accept: "application/json" }, load: { kind: "quote", gate: gated, chargeTo: originUrl } });
         statusByMethod.GET = r.status;
         await r.body?.cancel?.().catch?.(() => {});
-      } catch { statusByMethod.GET = 0; }
+      } catch (e) { if (e?.sellerLoadSkip) loadSkipped = true; statusByMethod.GET = 0; }
     }
+    if (loadSkipped) break;
     if (missCandidate
         && (!tool.methodInferred || Object.values(statusByMethod).every((st) => MISS.has(st)))) {
       // First sighting: remember it and keep the row. Confirmed only by a
@@ -5631,15 +5880,10 @@ export function isMppChallenge(wwwAuthHeaderValue) {
   return !!wwwAuthHeaderValue && /^Payment\b/i.test(String(wwwAuthHeaderValue).trim());
 }
 
-async function probePaywall(tools, { redirectedTo = null } = {}) {
-  // A cached tool row has NO `url` field — the callable URL is derived as
-  // seller + route, the same way routeQuery builds it (see the `url:` mapping
-  // further down this file). The first version of this filtered on
-  // `typeof t.url === "string"`, which no producer ever sets, so the probe
-  // returned null for every seller and `paywall` was permanently null. It read
-  // as "not probed yet" and was really "never probes anything" — the same
-  // inert-feature defect this module's own header warns about, one field over.
-  const paid = (Array.isArray(tools) ? tools : []).filter(
+/** The routes the paywall probe may ask: this seller's priced, callable,
+ *  never-ourselves routes. */
+function paywallCandidates(tools) {
+  return (Array.isArray(tools) ? tools : []).filter(
     (t) => t
       && typeof t.seller === "string" && t.seller !== LOCAL_SELLER  // never probe ourselves
       && typeof t.route === "string" && t.route.startsWith("/")
@@ -5653,9 +5897,37 @@ async function probePaywall(tools, { redirectedTo = null } = {}) {
       // parameter and files it as a broken paywall.
       && !URL_TEMPLATE_RE.test(t.route)
   );
+}
+/** Is every route the paywall probe could ask priced above every route-execute
+ *  tier (so the router never buys from this seller), and was the stored
+ *  verdict taken within the quote window? Such a seller's paywall is then not
+ *  asked again by the automatic crawl until the window passes, as its price
+ *  reads are not (readThisWeekAboveRouterCaps); a re-registration still asks. */
+export function paywallReadThisWeekAboveRouterCaps(prev, tools, now = Date.now()) {
+  const at = Number(prev?.paywall?.at);
+  if (!(at > 0) || now - at >= QUOTE_MAX_AGE_MS) return false;
+  const paid = paywallCandidates(tools);
+  return paid.length > 0 && paid.every((t) => {
+    const usd = priceUsdOf(t?.originDeclaredPrice) ?? priceUsdOf(t?.price);
+    return usd > 0 && routeExecuteHint(usd) == null;
+  });
+}
+async function probePaywall(tools, { redirectedTo = null, gated = false } = {}) {
+  // A cached tool row has NO `url` field — the callable URL is derived as
+  // seller + route, the same way routeQuery builds it (see the `url:` mapping
+  // further down this file). The first version of this filtered on
+  // `typeof t.url === "string"`, which no producer ever sets, so the probe
+  // returned null for every seller and `paywall` was permanently null. It read
+  // as "not probed yet" and was really "never probes anything" — the same
+  // inert-feature defect this module's own header warns about, one field over.
+  const paid = paywallCandidates(tools);
   // Prefer a GET: no body to guess, and a wrong body shape would produce a 400
-  // that says nothing about the paywall.
-  const pick = paid.find((t) => String(t.method || "GET").toUpperCase() === "GET") || paid[0];
+  // that says nothing about the paywall. Among those, the cheapest: an unpaid
+  // request to a seller's dearest product (a report priced in the thousands)
+  // reads the same paywall as one to its cheapest route, and is the request a
+  // seller least wants from a crawler.
+  const cheapestFirst = (list) => list.reduce((best, t) => (best && (priceUsdOf(best.price) ?? Infinity) <= (priceUsdOf(t.price) ?? Infinity) ? best : t), null);
+  const pick = cheapestFirst(paid.filter((t) => String(t.method || "GET").toUpperCase() === "GET")) || cheapestFirst(paid);
   if (!pick) return null;
   const method = String(pick.method || "GET").toUpperCase();
   // Built from the origin the manifest was redirected to, when one is recorded:
@@ -5671,6 +5943,7 @@ async function probePaywall(tools, { redirectedTo = null } = {}) {
       method,
       headers: { Accept: "application/json", ...(method !== "GET" ? { "Content-Type": "application/json" } : {}) },
       ...(method !== "GET" ? { body: "{}" } : {}),
+      load: { kind: "paywall", gate: gated, chargeTo: pick.seller },
     });
     const res = probed.res;
     url = probed.url;
@@ -5694,10 +5967,21 @@ async function probePaywall(tools, { redirectedTo = null } = {}) {
     // `url` is the URL that answered, which is the upgraded one after a 301/308.
     return { ok: res.status === 402, status: res.status, url, at: Date.now(), mpp };
   } catch (e) {
+    // Not sent (the host's load controls held it back): the stored verdict stands.
+    if (e?.sellerLoadSkip) return PAYWALL_NOT_SENT;
     // No status was read: our time limit, a connection that did not finish,
     // our resolver. That is our probe not completing, not the route failing.
     return paywallUnknown(e?.probedUrl || url, `our unpaid probe did not complete (${String(e?.message || e).slice(0, 100)}); no paywall verdict`, 0);
   }
+}
+// probePaywall's answer when the probe was not sent (src/seller-load.js).
+const PAYWALL_NOT_SENT = Symbol("paywall-not-sent");
+/** The paywall verdict a crawl stores: a fresh probe on this seller's turn,
+ *  else (or when the probe was held back) the last reading carried forward. */
+async function paywallForCrawl(prev, tools, { redirectedTo, force, pastDeadline, gated }) {
+  if (pastDeadline() || !paywallProbeTurn(prev, { force, tools })) return prev?.paywall ?? null;
+  const v = await probePaywall(tools, { redirectedTo, gated });
+  return v === PAYWALL_NOT_SENT ? (prev?.paywall ?? null) : v;
 }
 // The answers to our own malformed probe request, read as no verdict.
 const PAYWALL_PROBE_SHAPE_STATUSES = new Set([400, 415, 422]);
@@ -5965,7 +6249,9 @@ export function crawlBackoffState() {
 const ROBOTS_TTL_MS = 24 * 60 * 60 * 1000;  // robots.txt is not a hot document
 const ROBOTS_MAX_BYTES = 512 * 1024;
 const robotsCache = new Map();               // origin -> { groups, at }
-const ROBOTS_UA = "Agent402";
+// The crawler's own product token; a group for the older "Agent402" token is
+// still matched, since robotsAllows picks a group whose name the token contains.
+const ROBOTS_UA = CRAWLER_TOKEN;
 
 // `fetchText` is injectable so the policy can be tested without a network or a
 // resolvable hostname. The default is the real guarded fetch; a test that
@@ -5983,9 +6269,12 @@ async function robotsGroupsFor(sellerKey, fetchText) {
   try {
     const text = fetchText
       ? await fetchText(`${originUrl}/robots.txt`)
-      : (await crawlFetch(`${originUrl}/robots.txt`, { maxBytes: ROBOTS_MAX_BYTES })).html;
+      : (await crawlRead(`${originUrl}/robots.txt`, { maxBytes: ROBOTS_MAX_BYTES })).html;
     groups = parseRobots(String(text || ""));
-  } catch {
+  } catch (e) {
+    // A read we did not send (its redirect lands on a host past its landed
+    // allowance) is no answer: nothing is cached, and the crawl waits.
+    if (e?.landingHeld) throw e;
     groups = [];   // unreachable, 404, oversize: nothing to honour
   }
   robotsCache.set(originUrl, { groups, at: Date.now() });
@@ -6047,7 +6336,68 @@ export function __resetRobotsCacheForTest() { robotsCache.clear(); }
 // host before it fetches).
 let crawlFetch = (url, opts) => safeFetch(url, opts);
 export function __setCrawlFetchForTest(fn) { crawlFetch = typeof fn === "function" ? fn : (url, opts) => safeFetch(url, opts); }
+/** One crawler read of a seller document: counted against the host's day
+ *  (src/seller-load.js; a read inside a crawl already started is never
+ *  refused), and a 429 or 503 holds the host until its Retry-After. Each
+ *  redirect hop is a request of its own, counted on the same day before it is
+ *  sent; a hop onto another operator's host is also counted on that host's
+ *  landed allowance and is not sent past it (LandingHeld, landingGate). */
+async function crawlRead(url, opts) {
+  const unscheduled = readIsUnscheduled();
+  const b = await sellerLoad.takeBudget(url, "crawler", { essential: true, unscheduled });
+  if (b?.ok === false && b.heldBy) throw new RequestHeld(b.heldBy, b.retryAfterSeconds);
+  try {
+    return await crawlFetch(url, { ...opts, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "crawler", { unscheduled }) });
+  } catch (e) {
+    if (e?.landingHeld) throw e;
+    const st = Number(e?.upstreamStatus);
+    // A registration's read holds only its registrant's reads (seller-load).
+    if (st === 429 || st === 503) await sellerLoad.noteThrottle(url, st, Number(e?.retryAfter || e?.upstreamRetryAfter) || null, { unscheduled });
+    throw e;
+  }
+}
 export async function __crawlSellerForTest(originUrl, opts) { return crawlSeller(originUrl, opts); }
+// Where an origin's read was last held back (LandingHeld): the host its
+// documents redirect to. Its scheduled crawl then waits, without a request to
+// either host, until that host's landed allowance has room (the next UTC day).
+const landingHeldOn = new Map();   // origin -> the landing host's origin
+const LANDING_HELD_CAP = 5_000;
+function noteLandingHeld(origin, host) {
+  if (!host) return;
+  landingHeldOn.delete(origin);
+  landingHeldOn.set(origin, `https://${host}`);
+  while (landingHeldOn.size > LANDING_HELD_CAP) landingHeldOn.delete(landingHeldOn.keys().next().value);
+}
+/** One origin's turn in a scheduled crawl cycle: its load controls
+ *  (src/seller-load.js) decide whether it is read; null when it was, else why
+ *  it waits ("throttled", "budget", "landing" or "unchanged"). "landing": its
+ *  documents are read from another operator's host whose landed allowance for
+ *  the day is spent; the entry stays as the last completed read left it. */
+async function crawlScheduled(origin, outcome = { ours: false }) {
+  const landsOn = [cache.get(origin)?.redirectedTo, landingHeldOn.get(origin)].filter(Boolean);
+  const plan = await sellerLoad.crawlPlan(origin, { landsOn });
+  if (plan.skip) { noteTurnNotRead(origin); return plan.skip; }
+  landingHeldOn.delete(origin);
+  sellerLoad.noteSlowRead(origin, "x402");
+  const read = await crawlSeller(origin, { scheduled: true, revisitIntervalMs: plan.intervalMs }, outcome);
+  if (read?.landingHeld) { noteTurnNotRead(origin); return read.heldBy ? "budget" : "landing"; }
+  return null;
+}
+// When an origin's scheduled turn last passed without a read because of a
+// limit of ours (a spent day, a Retry-After, a landing allowance, the slow
+// cycle, a back-off, a shared turn that ended): the hold of its last good
+// listing (crawlHoldsLastGood) counts from then, so a seller is never dropped
+// from the router because we chose not to read it. Only until a read of it
+// fails: the hold start is then fixed (holdOnOurs in crawlSeller).
+const turnNotReadAt = new Map();   // origin -> ms
+function noteTurnNotRead(origin, at = Date.now()) {
+  turnNotReadAt.delete(origin);
+  turnNotReadAt.set(origin, at);
+  while (turnNotReadAt.size > LANDING_HELD_CAP) turnNotReadAt.delete(turnNotReadAt.keys().next().value);
+}
+export async function __crawlScheduledForTest(originUrl) { return crawlScheduled(originUrl); }
+/** Test seam: one whole crawl cycle (no lease), and the summary it logged. */
+export async function __runCrawlCycleForTest() { await runCrawl(); return lastCycleSummary; }
 
 /** Did this crawl read fail on our side? Our own deadline or abort, our
  *  resolver failing to finish a lookup, our own byte cap on the document, or
@@ -6060,6 +6410,7 @@ export async function __crawlSellerForTest(originUrl, opts) { return crawlSeller
  *  answer near the host can carry) are the seller's host and read false. Exported for the test. */
 export function crawlReadFailureIsOurs(e) {
   if (!e || typeof e !== "object") return false;
+  if (e.landingHeld) return true;                // a hop we did not send (src/seller-load.js LandingHeld)
   if (e.upstreamStatus != null || e.robotsBlocked) return false;
   if (e.hint === "source-timeout") return true;
   if (e.code === "EDNSUNAVAILABLE") return true; // fetch-guard's lookupUnavailable: our resolver
@@ -6092,14 +6443,16 @@ function closeCrawlCycleTally() {
 export function __setLastCycleOursShareForTest(x) { lastCycleOursShare = Number(x) || 0; crawlCycleTally = { done: 0, ours: 0 }; }
 /** May this failed crawl keep `prev` as it was? Only an entry whose last
  *  completed crawl succeeded with a catalog the origin itself served. */
-export function crawlHoldsLastGood(prev, now = Date.now()) {
+/** `holdFromAt`: when the window starts, if later than the last completed
+ *  read (the end of a revisit wait, src/seller-load.js). */
+export function crawlHoldsLastGood(prev, now = Date.now(), holdFromAt = 0) {
   if (!prev || typeof prev !== "object" || prev.error || prev.originResponded === false) return false;
   const h = prev.history;
   if (!Array.isArray(h) || !h.length || h[h.length - 1] !== 1) return false;
   if (!Array.isArray(prev.tools) || !prev.tools.length) return false;
   if (lastCycleOursShare >= CRAWL_OURS_SIDE_SHARE) return true;
-  const at = Number(prev.fetchedAt);
-  return Number.isFinite(at) && now - at <= CRAWL_HOLD_MS;
+  const at = Math.max(Number(prev.fetchedAt) || 0, Number(holdFromAt) || 0);
+  return at > 0 && now - at <= CRAWL_HOLD_MS;
 }
 /** What the ?seller= detail and the index rows say about a read of ours that
  *  did not complete: the time, and that the listing from the last completed
@@ -6147,7 +6500,7 @@ async function probePath(originUrl, path, { manifestPublished = false, condition
     // A fallback document is read unconditionally: that branch keeps no parsed
     // copy, so a 304 would only be followed by a second, full fetch.
     const stored = conditional ? validatorFor(originUrl, path) : null;
-    const res = await crawlFetch(`${originUrl}${path}`, { ...opts, validators: stored, allowNotModified: conditional });
+    const res = await crawlRead(`${originUrl}${path}`, { ...opts, validators: stored, allowNotModified: conditional });
     // A path seller's document must be served from under its own prefix. A
     // redirect to another path on the same host is another app's document,
     // and reading it as this seller's would attribute that app to it.
@@ -6170,6 +6523,8 @@ async function probePath(originUrl, path, { manifestPublished = false, condition
     rememberValidator(originUrl, path, conditional ? res.validators || null : null);
     return res;
   } catch (e) {
+    // A hop we did not send says nothing about this path: no backoff step.
+    if (e?.landingHeld) throw e;
     if (!crawlReadFailureIsOurs(e)) noteProbeOutcome(originUrl, path, false);
     else noteProbeOursFailure(originUrl, path);
     throw e;
@@ -6329,12 +6684,26 @@ function oncePerCrawl() {
   };
 }
 
-async function crawlSeller(originUrl, opts = {}) {
-  const outcome = { ours: false };
+/** One crawl of an origin. A crawl one of whose reads was not sent because
+ *  its redirect lands on a host past its landed allowance (LandingHeld) is not
+ *  a read at all: the entry, its history and its revisit wait stay as they
+ *  were, the cycle's tally does not count it, and `{ landingHeld, error }` is
+ *  returned. The validators kept during it are dropped, so the next read
+ *  derives every document afresh rather than pairing a 304 with an entry this
+ *  crawl never wrote. */
+async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
+  let read = true;
   try { return await crawlSellerOnce(originUrl, opts, outcome); }
-  finally { crawlCycleTally.done++; if (outcome.ours) crawlCycleTally.ours++; }
+  catch (e) {
+    if (!e?.landingHeld) throw e;
+    read = false;
+    clearValidatorsFor(originUrl);
+    noteLandingHeld(originUrl, e.landingHost);
+    return { landingHeld: e.landingHost || true, error: String(e.message || e), ...(e.heldBy ? { heldBy: e.heldBy, retryAfterSeconds: e.retryAfterSeconds || 0 } : {}) };
+  }
+  finally { if (read) { crawlCycleTally.done++; if (outcome.ours) crawlCycleTally.ours++; } }
 }
-async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false } = {}, outcome = { ours: false }) {
+async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false, scheduled = false, revisitIntervalMs = 0 } = {}, outcome = { ours: false }) {
   const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
   const once = oncePerCrawl();
   // `manifestPublished` is set by the well-known branch only: once the seller's
@@ -6357,6 +6726,8 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     const manifestBody = manifestDoc.reused
       ? (prev?.manifestBody ?? null)
       : (validatorFor(originUrl, WELL_KNOWN_PATH) ? await packManifestBody(manifestDoc.body) : null);
+    // For the revisit back-off: undefined = a 304 (the same document), else the body's hash.
+    const manifestHash = manifestDoc.reused ? undefined : bodyHash(manifestDoc.body);
     manifestDoc.body = null;
     // A manifest that arrives from ANOTHER origin (safeFetch followed a 301/308)
     // is that origin's manifest: the seller retired this hostname and pointed it
@@ -6382,6 +6753,8 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // The OpenAPI's probe examples: read from the document, or on a 304 from
     // probeExampleMemo (the document is not kept). null = no OpenAPI read.
     let openapiExamples = null;
+    // null = no OpenAPI read; undefined = a 304; else the body's hash.
+    let openapiHash = null;
     try {
       const res = await fetchOpenapi({ manifestPublished: true });
       const prevRows = res.notModified ? await previousOpenapiRows(prev) : null;
@@ -6390,13 +6763,17 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         openapiRoutes = prevRows.routes;
         openapiPacked = Buffer.isBuffer(prev.openapiPacked) ? prev.openapiPacked : await packOpenapiRows(openapiTools, openapiRoutes);
         tools = openapiTools;
+        openapiHash = undefined;
         openapi = prev.openapiSummary ? { paths: {} } : null; // presence only; summary carried forward below
         openapiExamples = probeExampleMemo.get(originUrl, "openapi") || new Map();
       } else {
-        const body = res.notModified
-          ? (rememberValidator(originUrl, "/openapi.json", null),
-             await parseInCrawlLane((await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES })).html))
-          : await parseInCrawlLane(res.html);
+        let text = res.html;
+        if (res.notModified) {
+          rememberValidator(originUrl, "/openapi.json", null);
+          text = (await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES })).html;
+        }
+        openapiHash = bodyHash(text);
+        const body = await parseInCrawlLane(text);
         openapi = body;
         openapiTools = await normaliseOpenapiToolsSliced(openapi, originUrl);
         openapiRoutes = openapiAllOperationRoutes(openapi, originUrl);
@@ -6404,7 +6781,8 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         tools = openapiTools;
         openapiExamples = openapiProbeExamples(openapi, originUrl, new Map());
       }
-    } catch {
+    } catch (e) {
+      if (e?.landingHeld) throw e;
       /* manifest-only seller — fine */
     }
 
@@ -6439,7 +6817,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // Keep what earlier crawls already learned, THEN spend the probe budget on
     // routes we still know nothing about.
     tools = carryForwardLearnedQuotes(tools, prev);
-    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo, probeExamples });
+    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo, probeExamples, gated: scheduled });
 
     cache.set(originUrl, {
       // Derivation is done: the entry keeps the slim keys its readers use,
@@ -6466,8 +6844,11 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
       fallbackErrors: undefined,
       // Not this seller's turn: carry the last reading forward rather than
       // dropping it — null must mean "never probed", not "not probed today".
-      paywall: !pastDeadline() && paywallProbeTurn(prev, { force: forcePaywall }) ? await probePaywall(tools, { redirectedTo }) : (prev?.paywall ?? null),
+      paywall: await paywallForCrawl(prev, tools, { redirectedTo, force: forcePaywall, pastDeadline, gated: scheduled }),
     });
+    // The revisit back-off (src/seller-load.js): the same manifest and OpenAPI
+    // as the last read doubles the wait before the next crawl; a change resets it.
+    await sellerLoad.noteDiscoveryRead(originUrl, { manifestHash, openapiHash, advance: scheduled });
   } catch (e) {
     // No /.well-known/x402 — two fallback surfaces, richest metadata wins:
     //
@@ -6491,6 +6872,12 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // Outcome recording moved into probePath, which records every path it
     // fetches. Recording again here would double-count the manifest failure
     // and deepen its backoff twice per cycle.
+    // A read that was not sent (LandingHeld) ends the crawl with nothing
+    // changed; crawlSeller answers for it.
+    if (e?.landingHeld) throw e;
+    // No manifest this crawl (or the read failed): the origin is back on the
+    // normal cycle, so a seller who fixes or publishes one is read promptly.
+    await sellerLoad.resetRevisit(originUrl, "listing-failure");
     const bazaarTools = bazaarToolsByOrigin.get(originUrl) || [];
     let openapi = null;
     let openapiTools = [];
@@ -6505,14 +6892,29 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // is kept as it was (crawlHoldsLastGood).
     let oursFailed = crawlReadFailureIsOurs(e);
     const noteFallback = (path, err) => {
+      if (err?.landingHeld) throw err;
       if (crawlReadFailureIsOurs(err)) oursFailed = true;
       fallbackErrors.push({ path, error: String(err?.message || err).slice(0, 160) });
     };
     const holdOnOurs = () => {
       if (!oursFailed) return false;
       outcome.ours = true;
-      if (!crawlHoldsLastGood(prev)) return false;
-      cache.set(originUrl, heldEntry(prev, e?.message || e));
+      // An origin on a revisit back-off was last read up to that long ago by
+      // our own choice, so the hold window counts from the end of that wait,
+      // and keeps counting from there on the failed reads that follow (the
+      // first one put the origin back on the cycle, with no wait of its own).
+      // A scheduled turn we passed over since that read moves the start to
+      // that turn (turnNotReadAt), up to the first read that failed: from
+      // then on the start stays where that read put it, so turns an origin
+      // waits after a failed read never renew its hold, and an origin that
+      // stays dark drops once the hold runs out.
+      const holdFromAt = prev?.readIncomplete
+        ? (Number(prev?.holdFromAt) || 0)
+        : Math.max(revisitIntervalMs > 0
+          ? Math.min(Date.now(), (Number(prev?.fetchedAt) || 0) + revisitIntervalMs)
+          : (Number(prev?.holdFromAt) || 0), Number(turnNotReadAt.get(originUrl)) || 0);
+      if (!crawlHoldsLastGood(prev, Date.now(), holdFromAt)) return false;
+      cache.set(originUrl, { ...heldEntry(prev, e?.message || e), ...(holdFromAt > 0 ? { holdFromAt } : {}) });
       return true;
     };
     try {
@@ -6613,7 +7015,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
       // In memory only, for a re-price; this branch's reads are unconditional.
       probeExampleMemo.set(originUrl, "manifest", null);
       probeExampleMemo.set(originUrl, "openapi", probeExamples);
-      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples,
+      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples, gated: scheduled,
         candidatePass: (gen) => { meter.rows(tools.length); return laned ? meter.lane("quotes", gen) : meter.sync("quotes", gen); } });
       // A cut listing: rows a live probe just dropped are replaced from the
       // rows not yet taken, and the total is the kept rows plus the listed
@@ -6644,6 +7046,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         // (a seller that shrank from 77,000 tools to 6,000 reads 6,000).
         ...freshListBase(prev),
         readIncomplete: undefined,
+        holdFromAt: undefined,
         manifest,
         openapiSummary: openapi ? { paths: Object.keys(openapi.paths || {}).length } : prev?.openapiSummary ?? null,
         tools,
@@ -6689,7 +7092,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         // while never having responded — and the marketplace rendered them
         // "healthy". A crawl completing is not a seller answering.
         originResponded: openapiTools.length > 0,
-        paywall: !pastDeadline() && paywallProbeTurn(prev, { force: forcePaywall }) ? await probePaywall(tools, { redirectedTo: prev?.redirectedTo ?? null }) : (prev?.paywall ?? null),
+        paywall: await paywallForCrawl(prev, tools, { redirectedTo: prev?.redirectedTo ?? null, force: forcePaywall, pastDeadline, gated: scheduled }),
       });
       return;
     }
@@ -6702,6 +7105,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     cache.set(originUrl, {
       ...(prev || {}),
       readIncomplete: undefined,
+      holdFromAt: undefined,
       // Whether a read of ours failed (a timeout, a connection that never
       // completed): the record then says our read did not complete, not that
       // the seller's document failed.
@@ -6796,10 +7200,39 @@ function isRoutable(entry) {
 // key, and a dropped entry's memo goes with it.
 const slugSetMemo = new WeakMap();
 const serviceKeyMemo = new WeakMap();
-// The payees part of the key from allPayTosByNetwork's answer.
-const canonicalPayeesFrom = (byNetwork) => Object.entries(byNetwork)
-  .sort(([a], [b]) => a.localeCompare(b))
-  .map(([network, values]) => [network, [...values].map((value) => String(value).toLowerCase()).sort()]);
+// [network, addresses] pairs for the service key: networks in locale order,
+// each network's addresses as lower-case text in plain sort order.
+const byLocale = (a, b) => a.localeCompare(b);
+function canonicalPayeesFrom(byNetwork) {
+  const nets = Object.keys(byNetwork).sort(byLocale);
+  const pairs = new Array(nets.length);
+  for (let n = 0; n < nets.length; n++) {
+    const lowered = [];
+    for (const addr of byNetwork[nets[n]]) lowered.push(String(addr).toLowerCase());
+    pairs[n] = [nets[n], lowered.sort()];
+  }
+  return pairs;
+}
+// The networks of one tool as a new sorted list of text (none: empty).
+function sortedNetworkText(networks) {
+  if (networks === null || networks === undefined) return [];
+  const text = [];
+  if (Array.isArray(networks)) for (let i = 0; i < networks.length; i++) text.push(String(networks[i]));
+  else if (typeof networks[Symbol.iterator] === "function") for (const n of networks) text.push(String(n));
+  return text.sort();
+}
+// What one tool sells, for the service key: verb, route, slug, price, the
+// free mark and its chains. Name, description, tags and seller stay out.
+function sellableContractOf(t) {
+  return [
+    t.method ? String(t.method).toUpperCase() : "GET",
+    t.route ? String(t.route) : "",
+    t.slug ? String(t.slug) : "",
+    t.price === null || t.price === undefined ? "" : String(t.price),
+    t.paid === false ? "free" : "paid-or-unknown",
+    sortedNetworkText(t.networks),
+  ];
+}
 // The full tool contract + payees of one entry, memoized by identity. Built
 // here rather than inside computeAliasOriginsBaseSteps so the route index can
 // prime it in the background as each re-crawled entry lands.
@@ -6826,9 +7259,19 @@ function* exactServiceKeySteps(v) {
   const tools = v.tools || [];
   // allPayTosByNetwork(tools), folded a step at a time (each row checks up to
   // 200 addresses per network).
+  // Same fold as addPayTos, written as plain loops: this runs once per seller
+  // on every alias build.
   const byNetwork = {};
   for (let i = 0; i < tools.length; i++) {
-    addPayTos(byNetwork, tools[i]);
+    const m = tools[i]?.payToByNetwork;
+    if (m) {
+      const nets = Object.keys(m);
+      for (let j = 0; j < nets.length; j++) {
+        const seen = (byNetwork[nets[j]] ||= []);
+        const addr = m[nets[j]];
+        if (seen.length < 200 && !seen.includes(addr)) seen.push(addr);
+      }
+    }
     if (i % SERVICE_KEY_STEP === SERVICE_KEY_STEP - 1) { serviceKeySteps++; yield; }
   }
   const payees = canonicalPayeesFrom(byNetwork);
@@ -6837,25 +7280,25 @@ function* exactServiceKeySteps(v) {
     const pairs = new Array(tools.length);
     for (let i = 0; i < tools.length; i++) {
       const t = tools[i];
-      const c = [
-        String(t.method || "GET").toUpperCase(),
-        String(t.route || ""),
-        String(t.slug || ""),
-        String(t.price ?? ""),
-        t.paid === false ? "free" : "paid-or-unknown",
-        [...(t.networks || [])].map(String).sort(),
-      ];
+      const c = sellableContractOf(t);
       pairs[i] = JSON.stringify(c);
       if (i % SERVICE_KEY_STEP === SERVICE_KEY_STEP - 1) { serviceKeySteps++; yield; }
     }
-    const sorted = yield* stableSortSteps(pairs, (a, b) => a.localeCompare(b));
-    const parts = [];
-    for (let i = 0; i < sorted.length; i += SERVICE_KEY_STEP) {
-      parts.push(sorted.slice(i, i + SERVICE_KEY_STEP).join(","));
-      serviceKeySteps++;
-      yield;
+    let contracts;
+    if (pairs.length <= SERVICE_KEY_STEP) {
+      // One run: sorted in place and joined in this turn.
+      contracts = pairs.sort(byLocale).join(",");
+    } else {
+      const sorted = yield* stableSortSteps(pairs, byLocale);
+      const parts = [];
+      for (let i = 0; i < sorted.length; i += SERVICE_KEY_STEP) {
+        parts.push(sorted.slice(i, i + SERVICE_KEY_STEP).join(","));
+        serviceKeySteps++;
+        yield;
+      }
+      contracts = parts.join(",");
     }
-    key = `{"payees":${JSON.stringify(payees)},"contracts":[${parts.join(",")}]}`;
+    key = `{"payees":${JSON.stringify(payees)},"contracts":[${contracts}]}`;
   }
   serviceKeyMemo.set(v, key);
   return key;
@@ -6970,39 +7413,51 @@ function* computeAliasOriginsBaseSteps(entries) {
     for (const s of mine) if (!theirs.has(s)) { subset = false; break; }
     if (subset) aliases.add(origin);
   }
-
-  // Some sellers expose the same service on both a durable custom domain and
-  // Railway's generated deployment hostname. Both manifests can be
-  // self-canonical, so the homepage rule above cannot identify the deployment
-  // origin as an alias. Collapse only the measured, fail-closed case: exactly
-  // one non-Railway origin has the same complete tool contract and the same
-  // payees as one or more `*.up.railway.app` origins. Shared wallets alone do
-  // not collapse anything, and two custom origins remain distinct.
-  const exactServiceKey = exactServiceKeyOf;
-  const railwayDeploymentOrigin = (origin) => {
-    try { return new URL(origin).hostname.toLowerCase().endsWith(".up.railway.app"); }
-    catch { return false; }
-  };
-  const exactGroups = new Map();
+  // One service on a durable domain and again on a generated deployment host
+  // (`*.up.railway.app`): both manifests may call themselves the homepage, so
+  // the homepage rule cannot pair them. Only the case that proves itself is
+  // folded: origins whose service keys (payees plus every tool's sellable
+  // contract) are identical text, with exactly one durable origin among them;
+  // the generated hosts beside it become aliases. Paying the same wallet is
+  // not enough on its own, and two durable domains are never folded into one
+  // another.
+  const originsByServiceKey = new Map();
   for (const [origin, v] of entries) {
     if (++walked % ALIAS_YIELD_ENTRIES === 0) yield;
-    if (v?.error || aliases.has(origin)) continue;
-    // A key not yet memoized is built in steps here too.
-    const key = v && typeof v === "object" && !serviceKeyMemo.has(v) ? yield* exactServiceKeySteps(v) : exactServiceKey(v);
-    if (!key) continue;
-    if (!exactGroups.has(key)) exactGroups.set(key, []);
-    exactGroups.get(key).push(origin);
+    if (aliases.has(origin) || v?.error) continue;
+    let key;
+    // An unbuilt key is built in steps: one entry may hold 100k tools.
+    if (v !== null && typeof v === "object" && !serviceKeyMemo.has(v)) key = yield* exactServiceKeySteps(v);
+    else key = exactServiceKeyOf(v);
+    if (key === null || key === undefined) continue;
+    const same = originsByServiceKey.get(key);
+    if (same === undefined) originsByServiceKey.set(key, [origin]);
+    else same.push(origin);
   }
-  for (const origins of exactGroups.values()) {
-    // A key held by one origin folds nothing, so its hostname is never read.
-    if (origins.length < 2) continue;
-    const durable = origins.filter((origin) => !railwayDeploymentOrigin(origin));
-    if (durable.length !== 1) continue;
-    for (const origin of origins) {
-      if (origin !== durable[0] && railwayDeploymentOrigin(origin)) aliases.add(origin);
-    }
+  for (const same of originsByServiceKey.values()) {
+    if (same.length > 1) foldGeneratedDeploymentHosts(same, aliases);
   }
   return aliases;
+}
+// Is this origin on a generated deployment hostname? An origin that does not
+// parse counts as durable.
+const GENERATED_DEPLOYMENT_SUFFIX = ".up.railway.app";
+function onGeneratedDeploymentHost(origin) {
+  let host;
+  try { host = new URL(origin).hostname; } catch { return false; }
+  return host.toLowerCase().endsWith(GENERATED_DEPLOYMENT_SUFFIX);
+}
+// Origins that share one service key: when exactly one is durable, every
+// generated-host origin among them joins `aliases`.
+function foldGeneratedDeploymentHosts(origins, aliases) {
+  const generated = [];
+  let durable = 0;
+  for (let i = 0; i < origins.length; i++) {
+    if (onGeneratedDeploymentHost(origins[i])) generated.push(origins[i]);
+    else if (++durable > 1) return;
+  }
+  if (durable !== 1) return;
+  for (let i = 0; i < generated.length; i++) aliases.add(generated[i]);
 }
 
 // The listing screen lives in src/listing-screen.js (dependency-free, so a
@@ -7225,50 +7680,9 @@ async function runPool(items, limit, worker) {
   await Promise.all(workers);
 }
 
-// Registrable domain, approximately: the last two labels, plus a third for the
-// common multi-part suffixes. It does not need to be a full public-suffix list -
-// getting it wrong groups an operator slightly wider or narrower than ideal, and
-// never causes an origin to be skipped forever.
-const MULTI_PART_TLDS = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "co.jp", "com.au", "com.br", "co.nz", "co.in", "com.cn", "com.mx"]);
-
-// Suffixes where the label BELOW the suffix is a different tenant, not a
-// different host of one operator. Without these, "last two labels" made every
-// Vercel seller one operator, every Workers seller one operator, and so on -
-// they would then have shared a single per-cycle crawl budget, and an attacker
-// could have registered throwaway origins under the same suffix to starve another
-// seller's listing until its learned quote went stale (QUOTE_MAX_AGE_MS).
-// This file already knew better in one place: railwayDeploymentOrigin exists
-// precisely because unrelated sellers publish on *.up.railway.app.
-const SHARED_HOSTING_SUFFIXES = [
-  "workers.dev", "vercel.app", "up.railway.app", "railway.app", "onrender.com",
-  "fly.dev", "pages.dev", "netlify.app", "herokuapp.com", "replit.app",
-  "repl.co", "chatgpt.site", "trycloudflare.com", "ngrok-free.app", "ngrok.app",
-  "deno.dev", "glitch.me", "surge.sh", "web.app", "firebaseapp.com",
-  "azurewebsites.net", "appspot.com", "cloudfunctions.net", "koyeb.app",
-  "vercel.sh", "netlify.com", "render.com", "streamlit.app", "hf.space",
-  // Added from a read of the index (2026-10-20): each of these carried three
-  // or more hosts paying to distinct wallets, so the hosts are different
-  // sellers. A suffix whose hosts all paid to one wallet is one operator and
-  // stays grouped (the cap is what keeps one actor's many hostnames to one
-  // budget), and a suffix whose hosts had no payTo at all is left as it is
-  // until one does.
-  "supabase.co", "run.app", "sslip.io", "deno.net", "duckdns.org",
-  "ngrok-free.dev", "ngrok.dev", "ts.net",
-];
-export function operatorKey(origin) {
-  let host;
-  try { host = new URL(origin).hostname.toLowerCase(); } catch { return String(origin).toLowerCase(); }
-  const parts = host.split(".").filter(Boolean);
-  if (parts.length <= 2) return host;
-  // Multi-tenant hosting: the tenant is the whole hostname. Grouping two tenants
-  // together is not a small inaccuracy - it hands them one budget and lets either
-  // one crowd the other out.
-  for (const suffix of SHARED_HOSTING_SUFFIXES) {
-    if (host === suffix || host.endsWith(`.${suffix}`)) return host;
-  }
-  const lastTwo = parts.slice(-2).join(".");
-  return MULTI_PART_TLDS.has(lastTwo) ? parts.slice(-3).join(".") : lastTwo;
-}
+// operatorKey (the registrable domain, or the whole hostname on shared
+// hosting) lives in src/operator-key.js, a leaf the seller-load budget shares.
+export { operatorKey };
 
 // How many origins of ONE operator we will crawl in a single cycle.
 const CRAWL_ORIGINS_PER_OPERATOR = Math.max(1, Number(process.env.CRAWL_ORIGINS_PER_OPERATOR || 4));
@@ -7276,7 +7690,7 @@ const CRAWL_ORIGINS_PER_OPERATOR = Math.max(1, Number(process.env.CRAWL_ORIGINS_
 /** At most `cap` origins per operator this cycle, rotating by cycle so every
  *  origin comes up in turn instead of the same few always winning. Input order
  *  is preserved, and anyone at or under the cap is unaffected. */
-export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_OPERATOR) {
+export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_OPERATOR, { slowWaiting = (o) => sellerLoad.slowWaiting(o, "x402") } = {}) {
   const byOperator = new Map();
   for (const o of origins) {
     const k = operatorKey(o);
@@ -7289,9 +7703,59 @@ export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_
     const offset = (cycle * cap) % list.length;
     for (let i = 0; i < cap; i++) due.add(list[(offset + i) % list.length]);
   }
-  // A slow origin (its operator asked) is due only on every SLOW_ORIGIN_EVERY_CYCLES-th cycle.
-  const slowWait = (o) => isSlowOrigin(o) && cycle % SLOW_ORIGIN_EVERY_CYCLES !== 0;
-  return origins.filter((o) => due.has(o) && !slowWait(o));
+  // A slow origin (its operator asked) waits SLOW_READ_INTERVAL_MS by the
+  // clock from its last scheduled read, whichever container made it and
+  // however many cycles (a boot runs one) came between (src/seller-load.js).
+  return origins.filter((o) => due.has(o) && !slowWaiting(o));
+}
+
+/** The cycle's turns. Origins whose documents are read from one other
+ *  operator's host share that host's landed allowance for the day
+ *  (src/seller-load.js), and a cycle spends it first come. Such origins take
+ *  one turn together, at the place of the first of them: an array, least
+ *  recently read first (`readAt`, 0 for one never read; equal times keep the
+ *  cycle's order), read one after another. So when the allowance ends before
+ *  the last of them, each is refreshed in turn and none is read again while
+ *  another still waits; read side by side, a later one could finish while an
+ *  earlier one was held at its last request. Every other origin is its own
+ *  turn, in its place. `landingOf(origin)` is the host its documents were last
+ *  read from or held at, null when they are its own operator's. Exported for
+ *  the test. */
+export function landingTurns(due, { landingOf, readAt }) {
+  const groups = new Map();
+  for (const o of due) {
+    const to = landingOf(o);
+    const k = to ? operatorKey(to) : null;
+    if (!k || k === operatorKey(o)) continue;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(o);
+  }
+  const shared = new Map();   // origin -> its group's turn
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const turn = list.map((o, n) => ({ o, at: Number(readAt(o)) || 0, n })).sort((a, b) => a.at - b.at || a.n - b.n).map((x) => x.o);
+    for (const o of list) shared.set(o, turn);
+  }
+  if (!shared.size) return due;
+  const placed = new Set();
+  const turns = [];
+  for (const o of due) {
+    const turn = shared.get(o);
+    if (!turn) turns.push(o);
+    else if (!placed.has(turn)) { placed.add(turn); turns.push(turn); }
+  }
+  return turns;
+}
+
+/** Whether a shared turn reads its member `read` (0-based) of `size`. Read
+ *  side by side, the pool spreads those `size` reads over its
+ *  CRAWL_CONCURRENCY slots, so it spends at least ceil(size / slots) reads'
+ *  time on them: a shared turn always reads that many. Past that it goes on
+ *  only while other turns of the cycle are still open (`othersOpen`), so its
+ *  reads overlap theirs, and the cycle closes at most one read after it would
+ *  have read side by side. Exported for the test. */
+export function groupTurnGoesOn(read, size, othersOpen, slots = CRAWL_CONCURRENCY) {
+  return read < Math.ceil(size / Math.max(1, slots)) || othersOpen > 0;
 }
 
 /** True while a crawl cycle is running (every entry is being replaced). */
@@ -7329,8 +7793,58 @@ async function runCrawl() {
     // seen every 5th cycle (~2.5h) instead of every 30 minutes. Single-host
     // sellers - almost all of them - are untouched.
     const due = originsDueThisCycle(ordered, crawlCycle);
+    // A slow origin left out while it waits its slow cycle is a turn we put
+    // off: the hold of its last good listing counts from here (turnNotReadAt).
+    if (SLOW_ORIGINS.size) { const dueSet = new Set(due); for (const o of ordered) if (!dueSet.has(o) && sellerLoad.slowWaiting(o, "x402")) noteTurnNotRead(o); }
     crawlCycleTally = { done: 0, ours: 0 };
-    await runPool(due, CRAWL_CONCURRENCY, crawlSeller);
+    // Each origin's load controls (src/seller-load.js) decide whether it is
+    // read this cycle: held by its own Retry-After, past its host's daily
+    // budget, or backed off because its documents have not changed. A skipped
+    // origin keeps its entry exactly as it is and casts no vote below.
+    const skipped = new Map();
+    // Which origins' last read was a good one, before this cycle reads any.
+    const prevGood = new Set(due.filter((o) => entryReadGood(cache.get(o))));
+    // What other containers recorded for these origins, read in one batch
+    // before any is decided (bounded: a slow store costs the cycle its wait).
+    await sellerLoad.prefetch(due);
+    const oursByOrigin = new Map();
+    const takeTurn = async (origin) => {
+      const outcome = { ours: false };
+      const skip = await crawlScheduled(origin, outcome);
+      if (skip) skipped.set(origin, skip); else oursByOrigin.set(origin, outcome.ours);
+    };
+    // Origins that share one landing host's allowance are read one after
+    // another, least recently read first (landingTurns): the rotation above
+    // alone handed each day's allowance to the same few of them.
+    const turns = landingTurns(due, {
+      landingOf: (o) => landingHeldOn.get(o) || cache.get(o)?.redirectedTo || null,
+      readAt: (o) => cache.get(o)?.fetchedAt,
+    });
+    // A shared turn ends inside the cycle (groupTurnGoesOn): the members it
+    // does not reach wait for the next cycle, entries as they were and no
+    // vote cast, and being least recently read they go first then.
+    const open = { n: turns.length };   // turns not yet finished (a group's, not yet started)
+    await runPool(turns, CRAWL_CONCURRENCY, async (turn) => {
+      if (!Array.isArray(turn)) { try { return await takeTurn(turn); } finally { open.n--; } }
+      open.n--;
+      for (let i = 0; i < turn.length; i++) {
+        if (!groupTurnGoesOn(i, turn.length, open.n)) { for (const o of turn.slice(i)) { skipped.set(o, "turn"); noteTurnNotRead(o); } break; }
+        try { await takeTurn(turn[i]); } catch { /* one origin's failure does not end the others' turns */ }
+      }
+    });
+    const crawled = skipped.size ? due.filter((o) => !skipped.has(o)) : due;
+    // An origin backed off because its documents did not change votes as the
+    // origins read this cycle whose last read was good: an outage of ours
+    // fails those reads, so a backed-off origin votes failed and failing on
+    // our side; a few dark sellers never read well, so they do not move the
+    // rate, and a backed-off origin votes as it did when every origin was
+    // read. A cycle that read no such origin votes at the last measured rate.
+    const backedOff = skipped.size ? due.filter((o) => skipped.get(o) === "unchanged") : [];
+    const rates = measureBackedOffVote(crawled.filter((o) => prevGood.has(o)), oursByOrigin);
+    if (backedOff.length && rates) {
+      crawlCycleTally.done += backedOff.length;
+      crawlCycleTally.ours += backedOff.length * rates.ours;
+    }
     const oursShare = closeCrawlCycleTally();
     // Each step is guarded on its own: a throw in one used to skip the release
     // silently for every later cycle, and the slots it should have freed stayed
@@ -7338,19 +7852,25 @@ async function runCrawl() {
     try { recordSubmittedSellerObservations(); } catch (e) { console.log(`[x402-index] observation pass failed: ${String(e?.message || e).slice(0, 160)}`); }
     let rowsAdded = 0;
     try { const known = registeredOrigins(); rowsAdded = ensureSellerRegistrations([...submittedSeeds].filter((o) => !known.has(o))); } catch { /* counted as 0 */ }
-    // `due`, not `ordered`: cycleOkFraction's own contract is that it measures
+    // This pass's reads (and the backed-off origins at the rate this pass
+    // measured), not `ordered`: cycleOkFraction's own contract is that it measures
     // THIS pass. Once the per-operator cap made the crawled set a subset, passing
     // the full list let every origin held back this cycle contribute its previous
     // cached verdict - diluting the denominator with stale OKs in the UNSAFE
     // direction, so during an egress outage the fraction could stay above the
     // 0.5 floor and slots would be released anyway.
-    const fraction = cycleOkFraction(due);
+    const okCounts = cycleOkCounts(crawled);
+    const fraction = backedOff.length && rates
+      ? (okCounts.ok + backedOff.length * rates.ok) / (okCounts.seen + backedOff.length)
+      : (okCounts.seen ? okCounts.ok / okCounts.seen : null);
     let release;
     try { release = releaseDeadSubmissions(fraction); } catch (e) { release = { released: 0, reason: `error: ${String(e?.message || e).slice(0, 120)}` }; }
-    lastCycleSummary = { at: new Date().toISOString(), cycle: crawlCycle, due: due.length, okFraction: fraction === null ? null : Number(fraction.toFixed(3)), oursShare: Number(oursShare.toFixed(3)), rowsAdded, ...release };
+    const skippedBy = {};
+    for (const why of skipped.values()) skippedBy[why] = (skippedBy[why] || 0) + 1;
+    lastCycleSummary = { at: new Date().toISOString(), cycle: crawlCycle, due: due.length, crawled: crawled.length, skipped: skippedBy, okFraction: fraction === null ? null : Number(fraction.toFixed(3)), oursShare: Number(oursShare.toFixed(3)), rowsAdded, ...release };
     // One line per cycle (every ~30 min): the only way to tell from the log
     // whether the release ran, freed slots, or why it did not.
-    console.log(`[x402-index] cycle ${crawlCycle}: probed ${due.length}, ok ${fraction === null ? "n/a" : (fraction * 100).toFixed(1) + "%"}, release ${release.released ? `freed ${release.released}` : `none (${release.reason})`}${rowsAdded ? `, ${rowsAdded} registration row(s) added` : ""}`);
+    console.log(`[x402-index] cycle ${crawlCycle}: probed ${crawled.length}${skipped.size ? ` (${skipped.size} waiting: ${Object.entries(skippedBy).map(([k, n]) => `${n} ${k}`).join(", ")})` : ""}, ok ${fraction === null ? "n/a" : (fraction * 100).toFixed(1) + "%"}, release ${release.released ? `freed ${release.released}` : `none (${release.reason})`}${rowsAdded ? `, ${rowsAdded} registration row(s) added` : ""}`);
   } finally {
     crawlInFlight = false;
     crawlsCompleted += 1;
@@ -7479,7 +7999,11 @@ export function selectReleasableOrigins({
 // intended outcome and not an oversight: releasing it frees the slot AND
 // stops us fetching them, which is what their robots.txt asked for.)
 export function cycleOkFraction(visited = [], lookup = (o) => cache.get(o)) {
-  if (!visited.length) return null;
+  const { ok, seen } = cycleOkCounts(visited, lookup);
+  return seen ? ok / seen : null;
+}
+/** cycleOkFraction's votes: `seen` origins with a verdict, `ok` of them good. */
+export function cycleOkCounts(visited = [], lookup = (o) => cache.get(o)) {
   let ok = 0, seen = 0;
   for (const origin of visited) {
     const entry = lookup(origin);
@@ -7487,9 +8011,27 @@ export function cycleOkFraction(visited = [], lookup = (o) => cache.get(o)) {
     if (entry.robotsBlocked) continue;  // their choice, not our outage
     seen++;
     // A held entry (our read did not complete) is not a read that worked.
-    if (!entry.error && !entry.readIncomplete) ok++;
+    if (entryReadGood(entry)) ok++;
   }
-  return seen ? ok / seen : null;
+  return { ok, seen };
+}
+/** Was this entry's last read a good one (a verdict, no error, not held)? */
+function entryReadGood(entry) {
+  return Boolean(entry) && !entry.robotsBlocked && !entry.error && !entry.readIncomplete;
+}
+// The rates a backed-off origin votes at (see runCrawl): of this cycle's reads
+// of origins whose last read was good, the share that read good again and the
+// share that ended on our side. Kept for a cycle that reads none of them.
+let lastBackedOffVote = null;
+function measureBackedOffVote(readAfterGood, oursByOrigin) {
+  if (!readAfterGood.length) return lastBackedOffVote;
+  let ok = 0, ours = 0;
+  for (const o of readAfterGood) {
+    if (entryReadGood(cache.get(o))) ok++;
+    if (oursByOrigin.get(o)) ours++;
+  }
+  lastBackedOffVote = { ok: ok / readAfterGood.length, ours: ours / readAfterGood.length };
+  return lastBackedOffVote;
 }
 
 // The release pass's health floor (see selectReleasableOrigins' outage guard).
@@ -9341,7 +9883,7 @@ function* payToRowSteps(sources, visit) {
 function* payToOriginsSteps(network) {
   const out = new Map();
   const add = (addr, origin) => {
-    if (typeof addr !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(addr)) return;
+    if (typeof addr !== "string" || !HEX_ADDRESS.test(addr)) return;
     const k = addr.toLowerCase();
     let set = out.get(k);
     if (!set) { set = new Set(); out.set(k, set); }
@@ -9365,7 +9907,7 @@ function* payToPricesSteps(network) {
   const out = new Map();
   yield* payToRowSteps(payToScanSources(false), (t) => {
     const addr = t?.payToByNetwork?.[network];
-    if (typeof addr !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(addr) || t.paid === false) return;
+    if (typeof addr !== "string" || !HEX_ADDRESS.test(addr) || t.paid === false) return;
     const micro = priceToMicroUsd(t.price);
     if (!(micro > 0)) return;
     const k = addr.toLowerCase();
@@ -9588,7 +10130,7 @@ export function sellerDetail(originOrHost) {
   if (!key) return null;
   for (const [origin, v] of cache.entries()) {
     if (origin !== key) continue;
-    return {
+    const detail = {
       origin,
       // Present only for a path seller, so a bare origin's detail is unchanged.
       ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
@@ -9737,8 +10279,14 @@ export function sellerDetail(originOrHost) {
         // came from, and when it last answered us live. An undeclared row
         // that stops answering leaves the listing (see stampDeclared).
         ...listingBasisProjection(t),
+        // The seller's documentation link, checked once per stored row and
+        // origin (src/seller-docs-url.js). This record is the only surface
+        // that carries it.
+        ...storedSellerDocsField(t, origin),
       })),
     };
+    if (detail.tools.some((t) => t.sellerDocsUrl)) detail.sellerDocsUrlLegend = SELLER_DOCS_URL_LEGEND;
+    return detail;
   }
   return null;
 }
@@ -9771,6 +10319,8 @@ export function screenSellerDetailForServe(d) {
       const row = { ...t, name: s.name ?? null, description: s.description ? s.description : null };
       if (t.slug !== undefined) row.slug = s.slug ?? null;
       if (t.tags !== undefined) row.tags = s.tags.length ? s.tags : undefined;
+      // A flagged row is served without its documentation link.
+      if (s.finding) delete row.sellerDocsUrl;
       return { ...row, ...untrustedMarker(s.finding) };
     });
   }

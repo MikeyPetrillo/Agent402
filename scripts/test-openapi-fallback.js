@@ -45,13 +45,17 @@ ok(
 );
 ok(!openapiHasPaymentSignal(null) && !openapiHasPaymentSignal({}), "null/empty openapi is not a signal");
 
+// Base units: a fixed price whose currency is the Base USDC contract
+// counts that token's smallest units, so 10000 is $0.01 (six decimals).
 {
-  const [row] = normaliseOpenapiTools({ paths: { "/api/example": { post: {
-    summary: "Example operation",
-    "x-payment-info": { price: { mode: "fixed", currency: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "10000" }, protocols: [{ x402: {} }] },
+  const rows = normaliseOpenapiTools({ paths: { "/api/example": { post: {
+    operationId: "example",
+    summary: "Example paid operation",
+    "x-payment-info": { protocols: [{ x402: {} }], price: { mode: "fixed", amount: "10000", currency: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" } },
   } } } }, "https://seller.example");
-  ok(row.price === "$0.01", "a nested currency contract prices atomic units as dollars");
-  ok(row.originDeclaredPrice === 0.01, "the declared-price anchor uses the same atomic conversion");
+  ok(rows.length === 1, `a single operation lists once (rows: ${rows.length})`);
+  ok(rows[0].price === "$0.01", `10000 base units of USDC read as $0.01, not $10000 (price: ${rows[0].price})`);
+  ok(rows[0].originDeclaredPrice === 0.01, `the origin declared 0.01 (read: ${rows[0].originDeclaredPrice})`);
 }
 
 // ---- 1b. annotated documents list free siblings, flagged, and drop deprecated ----
@@ -60,67 +64,39 @@ ok(!openapiHasPaymentSignal(null) && !openapiHasPaymentSignal({}), "null/empty o
 // they LIST with paid:false (never a buy candidate; routeQuery filters them)
 // instead of vanishing. Deprecated stays excluded.
 {
-  const tools = normaliseOpenapiTools({
-    paths: {
-      "/paid": {
-        post: {
-          operationId: "paid",
-          "x-payment-info": { price: { amount: "0.01" } },
-        },
-      },
-      "/sample": {
-        get: { operationId: "sample" },
-      },
-      "/legacy": {
-        get: {
-          operationId: "legacy",
-          deprecated: true,
-          "x-price": "$0.01",
-        },
-      },
-    },
-  }, "https://seller.example");
-  ok(tools.length === 2, `paid + flagged-free are indexed, deprecated is not (got ${tools.length})`);
-  ok(tools.find((t) => t.slug === "paid")?.paid === true, "the paid operation carries paid:true");
-  ok(tools.find((t) => t.slug === "sample")?.paid === false, "the unannotated sibling lists with paid:false");
-  ok(!tools.some((t) => t.slug === "legacy"), "deprecated operations stay excluded");
+  const listed = normaliseOpenapiTools({ paths: {
+    "/legacy": { get: { operationId: "legacy", summary: "Old", "x-price": "$0.01", deprecated: true } },
+    "/sample": { get: { operationId: "sample", summary: "Free sample" } },
+    "/paid": { post: { operationId: "paid", summary: "Paid", "x-payment-info": { price: { amount: "0.01" } } } },
+  } }, "https://seller.example");
+  const paidBySlug = new Map(listed.map((t) => [t.slug, t.paid]));
+  ok(listed.length === 2, `two rows: the priced op and its free sibling (rows: ${listed.length})`);
+  ok(paidBySlug.get("paid") === true, "paid: the priced operation is marked paid");
+  ok(paidBySlug.get("sample") === false, "sample: listed, marked free");
+  ok(!paidBySlug.has("legacy"), "legacy: deprecated, so not listed even though priced");
 }
 
-// ---- 1c. zero-annotation documents stay inclusive but drop obvious junk ----
+// ---- 1c. an unannotated document lists only real operations ----
+// With no payment annotation anywhere, the listing rules still hold: path-level
+// keys such as `parameters` are not operations, and deprecated operations,
+// static files, robots and health paths are not listed. Rows sit under the
+// server prefix.
 {
-  const tools = normaliseOpenapiTools({
+  const listed = normaliseOpenapiTools({
     servers: [{ url: "/api" }],
     paths: {
-      "/verify": {
-        get: { operationId: "verify", summary: "Verify an artifact" },
-        parameters: [{ name: "trace", in: "header" }],
-      },
-      "/report": {
-        post: { operationId: "report", summary: "Create a report" },
-      },
-      "/legacy": {
-        get: { operationId: "legacy", deprecated: true },
-      },
-      "/logo.png": {
-        get: { operationId: "logo" },
-      },
-      "/assets/mark.SVG": {
-        get: { operationId: "mark" },
-      },
-      "/robots.txt": {
-        get: { operationId: "robots" },
-      },
-      "/healthz": {
-        get: { operationId: "health" },
-      },
+      "/healthz": { get: { operationId: "healthz" } },
+      "/robots.txt": { get: { operationId: "robots" } },
+      "/assets/mark.SVG": { get: { operationId: "mark" } },
+      "/logo.png": { get: { operationId: "logo" } },
+      "/legacy": { get: { operationId: "legacy", deprecated: true } },
+      "/report": { post: { operationId: "report", summary: "Report" } },
+      "/verify": { get: { operationId: "verify", summary: "Verify" }, parameters: [{ name: "id", in: "query" }] },
     },
   }, "https://seller.example");
-  ok(tools.length === 2, `two live API operations remain indexed (got ${tools.length})`);
-  ok(
-    tools.map((tool) => tool.slug).sort().join(",") === "report,verify",
-    "zero-annotation documents retain real operations and exclude metadata, deprecated routes, and static assets",
-  );
-  ok(tools.every((tool) => tool.route.startsWith("/api/")), "base path remains applied");
+  const slugs = listed.map((t) => t.slug).sort();
+  ok(listed.length === 2 && slugs.join(",") === "report,verify", `only report and verify are listed (slugs: ${slugs})`);
+  ok(listed.every((t) => t.route.startsWith("/api/")), "rows sit under the /api server prefix");
 }
 
 // ---- 2. merge: openapi descriptive fields over Bazaar payment truth ----
@@ -180,63 +156,47 @@ const openapiTools = [
 
 // ---- 3. merge matches by route when Bazaar guessed the method wrong ----
 {
-  const guessed = [{ ...bazaarTools[0], method: "POST", methodInferred: true }];
-  const real = [{ ...openapiTools[0], method: "GET" }];
-  const merged = mergeOpenapiIntoBazaar(real, guessed);
-  ok(merged.length === 1, "method mismatch still merges by route (no duplicate listing)");
-  ok(merged[0].slug === "url-to-markdown", "route-only match still overlays metadata");
+  const guessedPost = { ...bazaarTools[0], method: "POST", methodInferred: true };
+  const documentedGet = { ...openapiTools[0], method: "GET" };
+  const rows = mergeOpenapiIntoBazaar([documentedGet], [guessedPost]);
+  ok(rows.length === 1 && rows[0].slug === "url-to-markdown", `a guessed verb joins on the route and takes the operation's slug (rows: ${rows.map((r) => r.slug)})`);
 }
 
-// ---- 3b. OpenAPI keeps the real method and declared price on a weak Bazaar row ----
-// Live regression: Anicca publishes GET /research at $0.003 through
-// x-payment-info. A Bazaar row with no method/accept amount is normalised as
-// POST + null; merging used to keep those guesses and /api/route rendered
-// POST + priceUsd:0 even though the OpenAPI document was authoritative.
+// ---- 3b. the document's verb and price fill what the registry guessed or lacked ----
 {
-  const openapi = {
-    paths: {
-      "/research": {
-        get: {
-          operationId: "research",
-          summary: "web research digest",
-          "x-payment-info": {
-            price: { mode: "fixed", currency: "USD", amount: "0.003" },
-          },
-        },
-      },
-    },
-  };
-  const [documented] = normaliseOpenapiTools(openapi, "https://seller.example");
-  const guessed = [bazaarItemToTool(
-    { resource: "https://seller.example/research", accepts: [] },
-    "https://seller.example",
-  )];
-  const [merged] = mergeOpenapiIntoBazaar([documented], guessed);
-  ok(guessed[0].methodInferred === true, "a missing Bazaar method is marked as inferred");
-  ok(documented.method === "GET", "OpenAPI normalisation keeps the declared GET method");
-  // Since the one-reader change (2026-09-18) every annotation dialect comes out
-  // through parseManifestPrice, so the figure carries the display "$" like a
-  // manifest row's does (it used to be the raw "0.003" amount string).
-  ok(documented.price === "$0.003", "x-payment-info amount is normalised as the tool price");
-  ok(merged.method === "GET", `OpenAPI method replaces Bazaar's guessed POST (got ${merged.method})`);
-  ok(merged.price === "$0.003", `OpenAPI price fills an unknown Bazaar amount (got ${merged.price})`);
+  const [documented] = normaliseOpenapiTools({ paths: { "/research": { get: {
+    operationId: "research",
+    summary: "Research a topic",
+    "x-payment-info": { price: { mode: "fixed", currency: "USD", amount: "0.003" } },
+  } } } }, "https://seller.example");
+  const fromRegistry = bazaarItemToTool({ resource: "https://seller.example/research", accepts: [] }, "https://seller.example");
+  const [merged] = mergeOpenapiIntoBazaar([documented], [fromRegistry]);
+  const expectations = [
+    [fromRegistry.methodInferred === true, "the registry item names no verb, so its verb is a guess"],
+    [documented.method === "GET", `the document declares GET (got ${documented.method})`],
+    // Every dialect now comes out with the display dollar sign.
+    [documented.price === "$0.003", `the document's price reads "$0.003" (got ${documented.price})`],
+    [merged.method === "GET", `the merged row uses the documented GET (got ${merged.method})`],
+    [merged.price === "$0.003", `with no registry amount the document's price is used (got ${merged.price})`],
+  ];
+  for (const [held, what] of expectations) ok(held, what);
 }
 
-// ---- 3c. Explicit Bazaar observations remain payment truth ----
+// ---- 3c. a stated registry verb and a settled amount are kept ----
 {
-  const documented = [{ ...openapiTools[0], method: "GET", price: "0.003" }];
-  const explicit = bazaarItemToTool({
+  const documentedGet = { ...openapiTools[0], method: "GET", price: "0.003" };
+  const statedPost = bazaarItemToTool({
     resource: "https://md.example/md",
     method: "POST",
-    accepts: [{ network: "eip155:8453", amount: "9000", extra: { name: "USDC" } }],
+    accepts: [{ scheme: "exact", network: "eip155:8453", amount: "9000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      payTo: "0x072F3a2bD93bB75b1Eb84a9E45D17a4F90a6D801", extra: { name: "USDC" } }],
   }, "https://md.example");
-  const [merged] = mergeOpenapiIntoBazaar(documented, [explicit]);
-  ok(explicit.methodInferred === false, "an explicit Bazaar method is not marked as inferred");
-  ok(merged.method === "POST", `explicit Bazaar method survives (got ${merged.method})`);
-  ok(merged.price === 0.009, `settlement-observed Bazaar price survives (got ${merged.price})`);
-
-  const [free] = mergeOpenapiIntoBazaar(documented, [{ ...explicit, price: 0 }]);
-  ok(free.price === 0, `explicit free Bazaar price survives (got ${free.price})`);
+  const registryRowOf = (rows) => rows.find((t) => t.provenance === "bazaar");
+  ok(statedPost.methodInferred === false, "a registry item that names POST is not a guess");
+  const kept = registryRowOf(mergeOpenapiIntoBazaar([documentedGet], [statedPost]));
+  ok(kept?.method === "POST" && kept?.price === 0.009, `POST and the settled 0.009 stand (got ${kept?.method} ${kept?.price})`);
+  const zero = registryRowOf(mergeOpenapiIntoBazaar([documentedGet], [{ ...statedPost, price: 0 }]));
+  ok(zero?.price === 0, `a registry price of 0 is kept as 0 (got ${zero?.price})`);
 }
 
 // ---- 3d. Same-route price disagreement stays observable ----
@@ -252,14 +212,14 @@ const openapiTools = [
 // crawler now re-probes that 402, so ground truth arrives within a crawl
 // instead of never.
 {
-  const documented = [{ ...openapiTools[0], method: "GET", price: "0.003" }];
-  const observed = [{ ...bazaarTools[0], method: "GET", price: 0.009 }];
-  const [merged] = mergeOpenapiIntoBazaar(documented, observed);
-  ok(merged.price === 0.003, `a price CUT propagates: the origin's own 0.003 beats a stale settled 0.009 (got ${merged.price})`);
-  ok(merged.originDeclaredPrice === 0.003 && merged.priceResolvedFrom === "origin", "the row says which side won and what the origin declared");
-  ok(merged.priceConflict === true, "a differing current origin price is visible as a conflict");
-  ok(merged.priceObservations?.bazaar === 0.009, "price conflict preserves the Bazaar observation as a number");
-  ok(merged.priceObservations?.origin === 0.003, "price conflict preserves the origin observation as a number");
+  const [cut] = mergeOpenapiIntoBazaar([{ ...openapiTools[0], method: "GET", price: "0.003" }], [{ ...bazaarTools[0], method: "GET", price: 0.009 }]);
+  const seen = cut.priceObservations || {};
+  ok(cut.price === 0.003, `the origin's lower price is used (got ${cut.price})`);
+  ok(cut.originDeclaredPrice === 0.003, `originDeclaredPrice is 0.003 (got ${cut.originDeclaredPrice})`);
+  ok(cut.priceResolvedFrom === "origin", `priceResolvedFrom is origin (got ${cut.priceResolvedFrom})`);
+  ok(cut.priceConflict === true, "priceConflict marks the disagreement");
+  ok(typeof seen.bazaar === "number" && typeof seen.origin === "number" && seen.bazaar === 0.009 && seen.origin === 0.003,
+    `both readings kept as numbers (bazaar ${seen.bazaar}, origin ${seen.origin})`);
 }
 {
   // SameDayDesk shape: stale Bazaar $0.02 vs origin $0.05 — never underquote.
@@ -274,214 +234,100 @@ const openapiTools = [
 
 // ---- 3e. Route-only fallback refuses ambiguous OpenAPI paths ----
 {
-  const documented = [
-    { ...openapiTools[0], method: "GET", slug: "read-md" },
-    { ...openapiTools[0], method: "POST", slug: "write-md" },
+  const twoVerbs = [{ ...openapiTools[0], method: "GET", slug: "read-md" }, { ...openapiTools[0], method: "POST", slug: "write-md" }];
+  const left = mergeOpenapiIntoBazaar(twoVerbs, [{ ...bazaarTools[0], method: "POST", methodInferred: true }]).find((t) => t.provenance === "bazaar");
+  ok(left?.slug === "md" && left?.method === "POST", `GET and POST on /md: the guessed row joins neither (got ${left?.slug} ${left?.method})`);
+}
+// ---- 3e. a stated registry verb never joins an operation of another verb ----
+{
+  const getOnly = { ...openapiTools[0], method: "GET", slug: "read-md", description: "GET-only metadata", price: "0.003" };
+  const statedPost = bazaarItemToTool({ resource: "https://md.example/md", method: "POST", accepts: [] }, "https://md.example");
+  const rows = mergeOpenapiIntoBazaar([getOnly], [statedPost]);
+  const own = rows.find((t) => t.provenance === "bazaar");
+  ok(rows.length === 2, `POST from the registry and GET from the document are two rows (rows: ${rows.length})`);
+  ok(own?.method === "POST" && own?.slug === "md", `the registry row is still POST md (got ${own?.method} ${own?.slug})`);
+  ok(own?.description !== getOnly.description && own?.price === null, `nothing of the GET operation reaches it (description ${JSON.stringify(own?.description)}, price ${own?.price})`);
+}
+
+// ---- 3f. contract tuples cross only from the seller's own operation ----
+// A merged row's request and response contracts are what the seller's own
+// OpenAPI operation promises. Registry rows never supply or keep them, and
+// neither a getter nor a prototype value is ever taken for one.
+{
+  const SITE = "https://contracts.example";
+  const docFor = (verb = "post", operationId = "summarize") => ({ paths: { "/contracted": { [verb]: {
+    operationId,
+    summary: "Summarize text",
+    "x-price": "$0.001",
+    requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["input"], properties: { input: { type: "string" } } } } } },
+    responses: { 200: { content: { "application/json": { schema: { type: "object", required: ["result"], properties: { result: { type: "string" } } } } } } },
+  } } } });
+  const [op] = normaliseOpenapiTools(docFor(), SITE);
+  const { requestContract: reqTuple, responseContract: resTuple, ...opWithout } = op;
+  const reg = { seller: SITE, method: "POST", route: "/contracted", slug: "contracted", name: "/contracted", description: "", category: "other", tags: [], price: 0.002, provenance: "bazaar" };
+  const withTuples = (row, request, response) => ({ ...row, requestContract: request, responseContract: response });
+  const inputOf = (row) => requestContractProjection(row).requestContract?.required?.body?.[0];
+  const resultOf = (row) => responseContractProjection(row).responseContract?.guaranteedPaths?.[0];
+  const projectsNothing = (row) => !requestContractProjection(row).requestContract && !responseContractProjection(row).responseContract;
+  const keyless = (row) => !!row && !Object.hasOwn(row, "requestContract") && !Object.hasOwn(row, "responseContract");
+  const registryOf = (rows) => rows.find((t) => t.provenance === "bazaar");
+  const throwingGetter = (target, key, onRun) => Object.defineProperty(target, key, { enumerable: true, get() { onRun(); throw new Error(`${key} getter ran`); } });
+
+  const cases = [
+    ["exact join: both contracts are the seller's", () => {
+      const [row] = mergeOpenapiIntoBazaar([op], [reg]);
+      return inputOf(row) === "input" && resultOf(row) === "result";
+    }],
+    ["guessed GET joins the POST operation and keeps its request contract", () => {
+      const [row] = mergeOpenapiIntoBazaar([op], [{ ...reg, method: "GET", methodInferred: true }]);
+      return row.method === "POST" && inputOf(row) === "input";
+    }],
+    ["stated GET stays apart and projects no contract", () => {
+      const rows = mergeOpenapiIntoBazaar([op], [{ ...reg, method: "GET", methodInferred: false }]);
+      return rows.length === 2 && projectsNothing(registryOf(rows));
+    }],
+    ["a guessed verb on a two-operation path projects no contract", () => {
+      const [readOp] = normaliseOpenapiTools(docFor("get", "readContracted"), SITE);
+      const rows = mergeOpenapiIntoBazaar([readOp, op], [{ ...reg, methodInferred: true }]);
+      return rows.length === 3 && projectsNothing(registryOf(rows));
+    }],
+    ["malformed seller tuples project nothing", () => projectsNothing(mergeOpenapiIntoBazaar([withTuples(op, ["foreign"], ["foreign"])], [reg])[0])],
+    ["an operation with no tuples gives a row with neither key", () => keyless(mergeOpenapiIntoBazaar([opWithout], [reg])[0])],
+    ["registry tuples do not survive when the operation has none", () => keyless(mergeOpenapiIntoBazaar([opWithout], [withTuples(reg, reqTuple, resTuple)])[0])],
+    ["the seller's tuples replace foreign registry ones", () => {
+      const [row] = mergeOpenapiIntoBazaar([op], [withTuples(reg, ["foreign"], ["foreign"])]);
+      return inputOf(row) === "input" && resultOf(row) === "result";
+    }],
+    ["an unjoined registry row loses its tuples", () => keyless(registryOf(mergeOpenapiIntoBazaar([op], [withTuples({ ...reg, method: "GET", methodInferred: false }, reqTuple, resTuple)])))],
+    ["a passthrough with no document loses its tuples", () => keyless(mergeOpenapiIntoBazaar([], [withTuples(reg, reqTuple, resTuple)])[0])],
+    ["the template representative takes /ghosts/{id} and no tuples", () => {
+      const rows = mergeOpenapiIntoBazaar([], [withTuples({ ...reg, route: "/ghosts/abc123" }, reqTuple, resTuple)], { allRoutes: [{ method: "POST", route: "/ghosts/{id}" }] });
+      return rows.length === 1 && rows[0].route === "/ghosts/{id}" && keyless(rows[0]);
+    }],
+    ["a registry requestContract getter is never run, merged or passed through", () => {
+      let ran = 0;
+      const hostile = throwingGetter({ ...reg }, "requestContract", () => { ran++; });
+      const [merged] = mergeOpenapiIntoBazaar([op], [hostile]);
+      const [passed] = mergeOpenapiIntoBazaar([], [hostile]);
+      return ran === 0 && Object.getOwnPropertyDescriptor(merged, "requestContract")?.get === undefined && !Object.hasOwn(passed, "requestContract");
+    }],
+    ["tuples on a registry row's prototype never cross", () => {
+      const inherited = Object.assign(Object.create({ requestContract: reqTuple, responseContract: resTuple }), reg);
+      return keyless(mergeOpenapiIntoBazaar([opWithout], [inherited])[0]);
+    }],
+    ["tuples on an operation's prototype never cross", () => {
+      const inherited = Object.assign(Object.create({ requestContract: reqTuple, responseContract: resTuple }), opWithout);
+      return keyless(mergeOpenapiIntoBazaar([inherited], [reg])[0]);
+    }],
+    ["an operation's responseContract getter is never run", () => {
+      let ran = 0;
+      const { responseContract: _drop, ...rest } = op;
+      const hostile = throwingGetter({ ...rest }, "responseContract", () => { ran++; });
+      const [row] = mergeOpenapiIntoBazaar([hostile], [reg]);
+      return ran === 0 && !Object.hasOwn(row, "responseContract") && !responseContractProjection(row).responseContract;
+    }],
   ];
-  const inferred = { ...bazaarTools[0], method: "POST", methodInferred: true };
-  const merged = mergeOpenapiIntoBazaar(documented, [inferred]);
-  const bazaar = merged.find((t) => t.provenance === "bazaar");
-  ok(bazaar.slug === "md", `ambiguous route does not pick an arbitrary operation (got ${bazaar.slug})`);
-  ok(bazaar.method === "POST", "ambiguous route keeps the Bazaar hint unchanged");
-}
-
-// ---- 3e. An explicit Bazaar verb requires an exact OpenAPI verb match ----
-// GET and POST on the same path can be different tools. A route-only merge is
-// permitted only for an inferred Bazaar verb; otherwise GET metadata/price can
-// silently contaminate an explicitly observed POST listing.
-{
-  const documented = [{
-    ...openapiTools[0],
-    method: "GET",
-    slug: "read-md",
-    description: "GET-only metadata",
-    price: "0.003",
-  }];
-  const explicit = bazaarItemToTool({
-    resource: "https://md.example/md",
-    method: "POST",
-    accepts: [],
-  }, "https://md.example");
-  const merged = mergeOpenapiIntoBazaar(documented, [explicit]);
-  const bazaar = merged.find((t) => t.provenance === "bazaar");
-  ok(merged.length === 2, `method mismatch stays as two distinct listings (got ${merged.length})`);
-  ok(bazaar.method === "POST", "explicit POST remains POST");
-  ok(bazaar.slug === "md", `GET slug does not contaminate POST (got ${bazaar.slug})`);
-  ok(bazaar.description !== "GET-only metadata", "GET description does not contaminate POST");
-  ok(bazaar.price === null, `GET price does not contaminate POST (got ${bazaar.price})`);
-}
-
-// ---- 3f. seller contracts survive only an exact OpenAPI/Bazaar join ----
-{
-  const operation = (method = "post", operationId = "summarize") => ({
-    openapi: "3.0.0",
-    paths: {
-      "/contracted": {
-        [method]: {
-          operationId,
-          summary: operationId,
-          "x-price": "$0.001",
-          requestBody: {
-            required: true,
-            content: { "application/json": { schema: {
-              type: "object",
-              required: ["input"],
-              properties: { input: { type: "string" } },
-            } } },
-          },
-          responses: { 200: { content: { "application/json": { schema: {
-            type: "object",
-            required: ["result"],
-            properties: { result: { type: "string" } },
-          } } } } },
-        },
-      },
-    },
-  });
-  const [documented] = normaliseOpenapiTools(operation(), "https://contracts.example");
-  const bazaar = {
-    seller: "https://contracts.example",
-    method: "POST",
-    route: "/contracted",
-    price: 0.002,
-    provenance: "bazaar",
-  };
-
-  const [exact] = mergeOpenapiIntoBazaar([documented], [bazaar]);
-  ok(requestContractProjection(exact).requestContract?.required?.body?.[0] === "input",
-    "an exact Bazaar merge preserves the seller's request contract");
-  ok(responseContractProjection(exact).responseContract?.guaranteedPaths?.[0] === "result",
-    "an exact Bazaar merge preserves the seller's response contract");
-
-  const [inferred] = mergeOpenapiIntoBazaar(
-    [documented],
-    [{ ...bazaar, method: "GET", methodInferred: true }],
-  );
-  ok(inferred.method === "POST" && requestContractProjection(inferred).requestContract?.required?.body?.[0] === "input",
-    "a unique inferred-method match preserves the matching operation's contracts");
-
-  const explicitMismatch = mergeOpenapiIntoBazaar(
-    [documented],
-    [{ ...bazaar, method: "GET", methodInferred: false }],
-  );
-  const unmatchedBazaar = explicitMismatch.find((t) => t.provenance === "bazaar");
-  ok(explicitMismatch.length === 2 && requestContractProjection(unmatchedBazaar).requestContract === undefined &&
-    responseContractProjection(unmatchedBazaar).responseContract === undefined,
-  "an explicit method mismatch never copies contracts onto the Bazaar row");
-
-  const [documentedGet] = normaliseOpenapiTools(operation("get", "readContracted"), "https://contracts.example");
-  const ambiguous = mergeOpenapiIntoBazaar(
-    [documented, documentedGet],
-    [{ ...bazaar, method: "POST", methodInferred: true }],
-  );
-  const ambiguousBazaar = ambiguous.find((t) => t.provenance === "bazaar");
-  ok(ambiguous.length === 3 && requestContractProjection(ambiguousBazaar).requestContract === undefined &&
-    responseContractProjection(ambiguousBazaar).responseContract === undefined,
-  "an ambiguous route-only match never copies either operation's contracts");
-
-  const [malformed] = mergeOpenapiIntoBazaar(
-    [{ ...documented, requestContract: ["foreign"], responseContract: ["foreign"] }],
-    [bazaar],
-  );
-  ok(requestContractProjection(malformed).requestContract === undefined &&
-    responseContractProjection(malformed).responseContract === undefined,
-  "malformed packed tuples remain untrusted after the merge and project nothing");
-
-  const { requestContract: _request, responseContract: _response, ...withoutContracts } = documented;
-  const [missing] = mergeOpenapiIntoBazaar([withoutContracts], [bazaar]);
-  ok(!("requestContract" in missing) && !("responseContract" in missing),
-    "an operation with no declared contracts gains no contract fields during the merge");
-
-  const [untrustedBazaar] = mergeOpenapiIntoBazaar(
-    [withoutContracts],
-    [{
-      ...bazaar,
-      requestContract: documented.requestContract,
-      responseContract: documented.responseContract,
-    }],
-  );
-  ok(!("requestContract" in untrustedBazaar) && !("responseContract" in untrustedBazaar),
-    "contract-shaped Bazaar fields are stripped because settlement evidence is not contract authority");
-
-  const [sellerWins] = mergeOpenapiIntoBazaar(
-    [documented],
-    [{ ...bazaar, requestContract: ["foreign"], responseContract: ["foreign"] }],
-  );
-  ok(requestContractProjection(sellerWins).requestContract?.required?.body?.[0] === "input" &&
-    responseContractProjection(sellerWins).responseContract?.guaranteedPaths?.[0] === "result",
-  "the exact matched seller operation replaces hostile Bazaar-shaped contract fields");
-
-  const [unmatchedPoison] = mergeOpenapiIntoBazaar(
-    [documented],
-    [{
-      ...bazaar,
-      method: "GET",
-      methodInferred: false,
-      requestContract: documented.requestContract,
-      responseContract: documented.responseContract,
-    }],
-  );
-  ok(!("requestContract" in unmatchedPoison) && !("responseContract" in unmatchedPoison),
-    "an unmatched Bazaar row cannot publish well-formed contract-shaped fields");
-
-  const [bazaarOnly] = mergeOpenapiIntoBazaar([], [{
-    ...bazaar,
-    requestContract: documented.requestContract,
-    responseContract: documented.responseContract,
-  }]);
-  ok(!("requestContract" in bazaarOnly) && !("responseContract" in bazaarOnly),
-    "the no-OpenAPI passthrough strips registry contract-shaped fields");
-
-  const [collapsed] = mergeOpenapiIntoBazaar(
-    [],
-    [{
-      ...bazaar,
-      route: "/ghosts/abc123",
-      requestContract: documented.requestContract,
-      responseContract: documented.responseContract,
-    }],
-    { allRoutes: [{ method: "POST", route: "/ghosts/{id}" }] },
-  );
-  ok(collapsed.route === "/ghosts/{id}" &&
-    !("requestContract" in collapsed) && !("responseContract" in collapsed),
-  "a document-template representative cannot publish registry contract-shaped fields");
-
-  let accessorRead = false;
-  const accessorBazaar = { ...bazaar };
-  Object.defineProperty(accessorBazaar, "requestContract", {
-    enumerable: true,
-    get() { accessorRead = true; throw new Error("registry contract getter must not run"); },
-  });
-  const [accessorClean] = mergeOpenapiIntoBazaar([withoutContracts], [accessorBazaar]);
-  ok(!accessorRead && !("requestContract" in accessorClean),
-    "stripping a registry contract accessor does not execute it");
-
-  const inheritedBazaar = Object.assign(Object.create({
-    requestContract: documented.requestContract,
-    responseContract: documented.responseContract,
-  }), bazaar);
-  const [inheritedClean] = mergeOpenapiIntoBazaar([withoutContracts], [inheritedBazaar]);
-  ok(!("requestContract" in inheritedClean) && !("responseContract" in inheritedClean),
-    "prototype-carried registry contract tuples do not become published evidence");
-
-  const inheritedSeller = { ...withoutContracts };
-  Object.setPrototypeOf(inheritedSeller, {
-    requestContract: documented.requestContract,
-    responseContract: documented.responseContract,
-  });
-  const [ownOnly] = mergeOpenapiIntoBazaar([inheritedSeller], [bazaar]);
-  ok(!("requestContract" in ownOnly) && !("responseContract" in ownOnly),
-    "only own seller-operation contract tuples can cross the merge");
-
-  let sellerAccessorRead = false;
-  const accessorSeller = { ...withoutContracts };
-  Object.defineProperty(accessorSeller, "responseContract", {
-    enumerable: true,
-    get() { sellerAccessorRead = true; throw new Error("seller contract getter must not run"); },
-  });
-  const [sellerAccessorClean] = mergeOpenapiIntoBazaar([accessorSeller], [bazaar]);
-  ok(!sellerAccessorRead && !("responseContract" in sellerAccessorClean),
-    "an accessor-backed seller tuple is refused without executing it");
+  for (const [what, holds] of cases) ok(holds(), `3f: ${what}`);
 }
 
 // ---- 4. degenerate inputs pass through ----

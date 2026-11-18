@@ -72,6 +72,7 @@ A buyer routed to a dead seller wastes money. The router takes that seriously:
 - **Brand new:** sellers with no history yet *are* routable - benefit of the doubt for newcomers.
 - **Ranked:** at equal match score, healthier sellers rank first, then sellers with more distinct payers over the last 30 days, then the cheaper one (the full order is in the table above).
 - **Snapshot:** `GET /api/index` exposes each seller's `health` (0..1) and `routable` flag, a page at a time. The rolling `history` those are derived from is on the single-origin view, `GET /api/index?seller=<host>`, so an operator can audit the decisions for any seller they name; the bulk listing withholds it deliberately, and says so rather than returning it empty.
+- **Seller docs link:** a tool row on `GET /api/index?seller=<host>` carries `sellerDocsUrl` when the seller's own OpenAPI operation names `externalDocs.url`. It is unverified: kept only as an https link on the seller's exact host, never fetched, and it changes no price, quote, routing or payment (`sellerDocsUrlLegend` says so on the same answer).
 
 The unit tests for these guarantees live in [`scripts/test-router-health.js`](https://github.com/MikeyPetrillo/Agent402/blob/main/scripts/test-router-health.js)
 (eight scenarios, offline - they seed the in-memory cache directly via a test

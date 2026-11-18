@@ -34,6 +34,11 @@ const out = await a.call("hash", { text: "hello world", algo: "sha256" });
 console.log(out.hex);
 ```
 
+The proof-of-work is solved on a worker thread, so your process keeps serving
+while it searches, and a challenge asking for more than 28 bits
+(`MAX_POW_DIFFICULTY`, the most an Agent402 server asks) is refused rather than
+searched (since 0.9.0).
+
 ## Paid tools: x402 or MPP, your choice of wire
 
 Wallet-only tools settle in USDC. The SDK never touches your key: pass a
@@ -123,7 +128,12 @@ const out = await a.call("extract", { url: "https://agent402.tools/guides/x402-i
 `signer` is any EIP-712 signer with `address` and `signTypedData` (a viem
 account). `gateway.networks` (chain names, as `withNetworkPreference` takes, for
 example `["arc"]`) limits which chains' batched accepts are signed; the default
-is any EVM chain the 402 offers one on. The caps are checked against the
+is any EVM chain the 402 offers one on. The accept's `verifyingContract` must be
+the chain's own GatewayWallet contract (`GATEWAY_VERIFYING_CONTRACTS`: Circle's
+published address on each mainnet and testnet Gateway serves); a batched accept
+naming another contract, or on a chain the table does not list, is never signed
+(since 0.9.0), and `gateway.verifyingContracts` (`{ "eip155:<chainId>": "0x..." }`)
+adds or replaces entries. The caps are checked against the
 accept's own amount before anything is signed. A 402 with no batched accept this
 signer may pay (another seller, an identity-bound route, a route with a lasting
 effect) falls back to your payment `fetch` or `creditsKey` exactly as without the
@@ -136,7 +146,7 @@ batched authorization that was sent and refused stays valid until its
 `validBefore` and keeps counting against the caps; only a signer that throws
 before anything is sent releases the amount. The mechanism in full: [wiki: Circle Gateway](https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway).
 Two helpers are exported for a client of your own: `gatewayAcceptOf(accepts,
-networks?)` and `signGatewayPayment(accept, { signer, resource })`.
+networks?, verifyingContracts?)` and `signGatewayPayment(accept, { signer, resource, verifyingContracts? })`.
 
 ## Retries and double charges
 
@@ -144,9 +154,10 @@ Every send carries an `Idempotency-Key`. By default it is derived from the
 client instance plus the operation (slug, params, output validator), so it is
 the same key when the SDK retries inside one `call()` AND when your framework
 calls `client.call(slug, params)` again after a timeout or a dropped connection.
-With `{ cache: false }` on the call, identical calls are treated as distinct
-purchases and the key is fresh per invocation. Pass `idempotencyKey` yourself to
-override either behavior. Keys are scoped to the client instance: two processes
+With `{ cache: false }` or `{ cache: null }` on the call, identical calls are
+treated as distinct purchases: nothing is served from or stored in the cache,
+and the key is fresh per invocation. Pass `idempotencyKey` yourself to override
+either behavior. Keys are scoped to the client instance: two processes
 buying the same thing are two purchases.
 
 What the server does with it depends on how the call was paid:
@@ -198,38 +209,47 @@ const { messages } = await a.getWorkflowPrompt("security-audit", { domain: "stri
 // → feed messages straight to any LLM
 ```
 
-## Cross-seller routing (neutral Smart Order Router)
+## Route a task across sellers
 
-`find()` searches **this host's catalog only**. To rank tools across eligible
-routable seller rows in the host's **current index** (not complete ecosystem
-coverage), use `route()` - free, read-only, no wallet:
+`find()` searches this host's own catalog. `route()` ranks tools for the same
+kind of plain-language task across the eligible, routable seller rows in the
+host's current index: its own tools plus the outside sellers it has indexed and
+holds as routable (not every seller everywhere). It is free and read-only, and
+needs no wallet:
 
 ```js
-const task = "screenshot webpage";
-const { query, include, results } = await a.route(task, {
-  k: 5,
-  include: "external",   // all | external | local
-  network: "robinhood",  // optional chain filter (short name or CAIP-2)
+const { query, include, results } = await a.route("screenshot a webpage", {
+  k: 5,               // rows to return, 1 to 25
+  include: "all",     // "all", "external" or "local"
+  network: "base",    // optional chain filter: a short name or a CAIP-2 id
 });
-// results[]: opaque server rows - { seller, slug, url, priceUsd, routerDispatchEligible, routerDispatchReason,
-//            executeVia? (only when executeViaCallableNow is true) | executeViaWhenEligible?, ... }
+```
 
-// executeVia quotes which route-execute* tier fits a row's underlying price.
-// It does NOT bind that row: the tier re-resolves an eligible match under its
-// cap at execution time (url, route, seller, and identity can differ).
-const hint = results[0]?.executeVia;
-if (hint?.tool) {
+Rows belong to the server and come back unchanged. A typical row carries
+`seller`, `slug`, `url`, `priceUsd`, `routerDispatchEligible` and
+`routerDispatchReason`, plus `executeVia` when a tier can run it now, or
+`executeViaWhenEligible` when one could once the row is eligible.
+
+`executeVia` names the `route-execute*` tier whose cap covers the row's price.
+It does not bind that row: the tier resolves a match again when it runs, so the
+url, route, seller and identity it uses can differ from the row you read.
+
+```js
+const hint = results.find((row) => row.executeVia)?.executeVia;
+if (hint) {
   const { result, receipt } = await a.call(hint.tool, {
-    task: query,
-    include,
-    params: { url: "https://example.com" },  // inputs the chosen operation needs
-  }, { cache: false });  // routed externals can be dynamic; client cache is on by default
+    task: "screenshot a webpage",
+    include: "external",
+    params: { url: "https://example.com" },
+  }, { cache: false });
 }
 ```
 
-`executeVia` is server-reported metadata only. The SDK passes discovery rows
-through unchanged, does not validate seller output, and does not guarantee
-which seller or tool the execution tier will pick.
+Caching is turned off for a routed call because the client cache is on by
+default and an outside seller's answer can change from one call to the next.
+`executeVia` is metadata the server reports: the SDK does not validate a
+seller's output on its own and does not promise which seller or tool the tier
+picks (see buyer-owned output validation below to enforce what you need).
 
 ## Discover the live x402 economy
 
@@ -276,19 +296,34 @@ delivered and settled. Pass `respondAsync: false` (constructor or call) to wait
 on the connection instead, or `respondAsync: true` to use a job on every route
 that runs as one.
 
+## Timeouts
+
+Each request the SDK sends is abandoned after `timeoutMs` (default 120000, the
+client timeout Agent402 publishes for metered calls, so the client never hangs
+up before the server's own deadline) with `RequestTimeoutError`. A paid request
+that times out may already have carried a payment, so its error reads
+`paid: "unknown"` and the amount is held against the caps like any other sent
+payment. Pass `timeoutMs: null` to wait as long as the connection stays open, or
+`call(slug, params, { timeoutMs })` for one call.
+
+## TypeScript
+
+`index.d.ts` ships with the package (`"types"` in package.json) and declares the
+whole API: `Agent402Options`, `CallOptions`, the error classes and the helpers.
+
 ## API
 
 | Method | What |
 |---|---|
-| `new Agent402({ baseUrl?, fetch?, x402Client?, creditsKey?, gateway?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, payNetworks?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, userAgent? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `x402Client` is the `@x402/core` client that `fetch` wraps, so the caps are enforced on the payment that is signed (see below); `payNetworks` (for example `["base"]`, the names `withNetworkPreference` takes) tells the caps which chains a pre-wrapped `fetch` without an `x402Client` pays on, so a call is counted at the dearest option on those chains (when none of a 402's options is on them, the dearest of all counts); `creditsKey` is a prepaid credits key (`a402_...`) used for paid tools when no `fetch` is given; `gateway` (`{ signer, networks? }`) pays the Circle Gateway batched accept where a 402 offers one, from the signer's Gateway deposit (see above); `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above); `userAgent` (`"name/version"`) is a calling package's own product token, sent before `agent402-client/<version>` in the User-Agent |
-| `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools on **this host** (route, price, schema, example) |
-| `await a.route(task, { k?, include?, network? })` | Cross-seller Smart Order Router: rank eligible/routable seller rows from the host's current index (free, read-only; opaque results may include server-reported `executeVia`) |
+| `new Agent402({ baseUrl?, fetch?, x402Client?, creditsKey?, gateway?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, payNetworks?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, userAgent?, timeoutMs? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `x402Client` is the `@x402/core` client that `fetch` wraps, so the caps are enforced on the payment that is signed (see below); `payNetworks` (for example `["base"]`, the names `withNetworkPreference` takes) tells the caps which chains a pre-wrapped `fetch` without an `x402Client` pays on, so a call is counted at the dearest option on those chains (when none of a 402's options is on them, the dearest of all counts); `creditsKey` is a prepaid credits key (`a402_...`) used for paid tools when no `fetch` is given; `gateway` (`{ signer, networks?, verifyingContracts? }`) pays the Circle Gateway batched accept where a 402 offers one, from the signer's Gateway deposit (see above); `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits, none set by default (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above); `userAgent` (`"name/version"`) is a calling package's own product token, sent before `agent402-client/<version>` in the User-Agent; `timeoutMs` (default 120000, `null` to wait without one) abandons a request that has not answered with `RequestTimeoutError` |
+| `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools on this host (route, price, schema, example) |
+| `await a.route(task, { k?, include?, network? })` | Cross-seller router: ranks eligible, routable seller rows from the host's current index; free and read-only; rows come back as the server wrote them and may carry server-reported `executeVia` |
 | `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |
 | `await a.getWorkflowPrompt(slug, args)` | Fetch the rendered prompt messages for a skill pack with arguments substituted in |
 | `await a.topSellers({ limit?, sort?, include? })` | Live x402 leaderboard: which sellers are settling the most USDC (primarily on Base) in the last ~24h (free, no payment) |
-| `await a.call(slug, params, { idempotencyKey?, cache?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress? })` | Call a tool; auto-pays (PoW for free tools; your payment `fetch` or the credits key for wallet-only); a slow route runs as a job and is collected for you; returns the JSON result |
+| `await a.call(slug, params, { idempotencyKey?, cache?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, maxUsd?, timeoutMs? })` | Call a tool; auto-pays (PoW for free tools; your payment `fetch` or the credits key for wallet-only); a slow route runs as a job and is collected for you; returns the JSON result. `maxUsd` allows this call to pay up to that amount when you set a per-call cap (see Spending caps); `timeoutMs` replaces the client's for this call |
 | `await a.collectJob(jobUrl, { timeoutMs?, onProgress? })` | Collect a job link (from `AsyncJobPendingError.jobUrl`) until it has the answer |
-| `Agent402.solvePow(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value |
+| `Agent402.solvePow(pow)` / `await Agent402.solvePowAsync(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value, on the calling thread or on a worker thread; a difficulty above 28 bits is refused |
 | `a.guardX402Client(client)` | Enforce this client's caps on every payment the given `@x402/core` client signs (the same as passing `x402Client`); returns the client |
 | `a.spendingSummary()` | Rolling-24h paid spend so far: `{ dailyUsd, calls, byHost, heldUsd, heldCalls, heldByHost, limits }`; `dailyUsd`, `calls` and `byHost` are settled calls, the `held*` fields are payments sent without a delivered answer |
 | `a.clearCache()` | Drop the in-memory result cache |
@@ -315,38 +350,37 @@ the body arrived, so a refused response is still a spend you made.
 
 ## Buyer-owned output validation
 
-A successful payment and HTTP 200 do not prove that the delivered result is
-useful. Supply a stable contract id and a local callback to enforce the exact
-output your agent needs:
+A settled payment and an HTTP 200 prove the seller answered, not that the
+answer is useful to you. Give the client a delivery contract: a stable id you
+own and a local check of the result you need.
 
 ```js
 const a = new Agent402({
   fetch: payFetch,
   outputValidator: {
-    id: "unemployment-result/v1",
-    validate: (body) =>
-      typeof body.current === "number" &&
-      Array.isArray(body.history) &&
-      typeof body.source === "string",
+    id: "quote-shape/v1",
+    validate: (body) => typeof body.symbol === "string" && Number.isFinite(body.price) && body.price > 0,
   },
 });
 ```
 
-`validate` may return `false` or throw to reject delivery, and may be async.
-Use any local validator you prefer: Ajv, Zod, agent-payment-policy, or ordinary
-application code. The client adds no dependency and never sends the validator
-or its id to the seller.
+`validate` rejects a delivery by returning `false` or by throwing, and it may be
+async. Use plain code or any validation library you already have: the client
+adds no dependency, and neither the validator nor its id is ever sent to the
+seller.
 
-Validation runs after bounded JSON parsing and before cache admission. A
-rejected paid response throws `OutputValidationError` with `paid: true`, stays
-in `spendingSummary()`, and is never cached. Contracted cache entries are
-namespaced by a SHA-256 digest of `id` and revalidated on every hit, so a
-different contract or a caller-mutated cached object cannot bypass the check.
-The caller owns the meaning and stability of `id`; changing validation
-semantics requires a new id. A per-call validator may replace the constructor
-validator, but `null` or omission preserves the constructor policy rather than
-silently weakening it. Use a separate client when a route intentionally has no
-output contract.
+The check runs after the bounded JSON parse and before the result is cached. A
+paid response that fails it throws `OutputValidationError` with `paid: true`;
+its spend still counts in `spendingSummary()`, and it is never cached. Cache
+entries under a contract are kept in a namespace derived from the SHA-256 digest
+of `id` and checked again on every hit, so a different contract, or a cached
+object your own code changed, cannot get around the check.
+
+You own what `id` means and keep it stable; when the meaning of the check
+changes, give it a new id. A per-call `outputValidator` replaces the
+constructor's for that call. Passing `null`, or leaving it out, keeps the
+constructor's policy and never weakens it, so use a separate client for routes
+that should run with no contract.
 
 **Two costs worth knowing.** `validate` is awaited inside `call()`, so it is
 bounded: a validator that has not settled in **5 seconds** rejects delivery with
@@ -365,9 +399,14 @@ Keep it cheap, or accept that cost knowingly.
 
 ## Spending caps (never overpay)
 
-By default the client pays whatever a tool costs. Set optional hard ceilings and a
-call that would exceed one is **refused before any payment is signed** (it throws
-`SpendingLimitError` - no funds move):
+Spending caps are opt-in: by default the client pays whatever a tool costs and
+never refuses a purchase. Set a ceiling and a call that would exceed it is
+**refused before any payment is signed** (it throws `SpendingLimitError` - no
+funds move). `a.call(slug, params, { maxUsd })` allows one call up to that
+amount: it replaces the per-call cap for that call (a `dailyLimitUsd` or
+`maxPerHostUsd` you set still holds). Under a cap, each payment is priced from
+the known-asset table, so a seller that asks for an asset the table does not
+know is refused.
 
 ```js
 import { Agent402, SpendingLimitError } from "agent402-client";

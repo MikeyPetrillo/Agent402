@@ -1,7 +1,8 @@
 # The hosted MCP connector read by an independent client, every 6 hours: the
 # reference @modelcontextprotocol/sdk Client over Streamable HTTP initializes
 # against https://agent402.tools/mcp, lists the tools, and makes a handful of
-# free calls (scripts/mcp-client-check.js). Our own harness posts raw JSON-RPC;
+# free calls (scripts/mcp-client-check.js); then the SDK v2 Client does the same
+# on the 2026-07-28 revision (server/discover, no initialize). Our own harness posts raw JSON-RPC;
 # a real client validates schemas and answer shapes, so this is the view a
 # host gets, and the one a drift in names, descriptions or shapes breaks first.
 #
@@ -53,6 +54,9 @@ jobs:
           set +e
           node scripts/mcp-client-check.js 2>&1 | tee check.log
           code=${PIPESTATUS[0]}
+          MCP_CHECK_PROTOCOL=2026-07-28 MCP_CHECK_OUT=mcp-client-check-2026-07-28.json node scripts/mcp-client-check.js 2>&1 | tee -a check.log
+          modern=${PIPESTATUS[0]}
+          [ "$code" = "0" ] && code=$modern
           echo "exit=$code" >> "$GITHUB_OUTPUT"
           exit 0
       - name: Page (open / update / close the issue)

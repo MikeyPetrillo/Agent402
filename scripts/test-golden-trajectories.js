@@ -111,7 +111,10 @@ const sellerStub = createServer((req, res) => {
     const send = (status, obj, headers = {}) => { if (res.destroyed) return; res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(obj)); };
     if (!s || new URL(req.url, "http://x").pathname !== `/${s.slug}`) return send(404, { error: "no such route" });
     const sig = req.headers["payment-signature"] || req.headers["x-payment"];
-    const kind = sig ? "paid" : req.headers["x-agent402-via"] === "router" ? "bare" : "probe";
+    // The probe and the bare request of a purchase look alike to a seller (the
+    // router's User-Agent and X-Agent402-Via on both); the preload marks which
+    // leg sent it.
+    const kind = sig ? "paid" : req.headers["x-golden-leg"] === "probe" ? "probe" : "bare";
     const search = new URL(req.url, "http://x").search;
     // Every request a seller sees, with the query it was asked for.
     seenRequests.push([s.id, kind, search]);

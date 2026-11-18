@@ -9,7 +9,7 @@ package manifest). Copyright and licensing of Agent402 itself: see NOTICE.
 Server image (Dockerfile, Dockerfile.worker)
 ============================================
 Installed by npm ci --omit=dev from package-lock.json.
-Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2-Clause 7, BSD-3-Clause 7, MIT-0 2, (Apache-2.0 AND BSD-3-Clause) 1, (BSD-2-Clause OR MIT OR Apache-2.0) 1, (MIT AND Zlib) 1, (MIT OR GPL-3.0-or-later) 1, (MIT OR WTFPL) 1, (Unlicense OR Apache-2.0) 1, 0BSD 1, CC0-1.0 1, MIT (from its license file; the manifest names none) 1, PSF-2.0 1, Unlicense 1.
+Packages: 511. Licenses: MIT 408, Apache-2.0 40, ISC 26, BlueOak-1.0.0 10, BSD-2-Clause 7, BSD-3-Clause 7, MIT-0 2, (Apache-2.0 AND BSD-3-Clause) 1, (BSD-2-Clause OR MIT OR Apache-2.0) 1, (MIT AND Zlib) 1, (MIT OR GPL-3.0-or-later) 1, (MIT OR WTFPL) 1, (Unlicense OR Apache-2.0) 1, 0BSD 1, CC0-1.0 1, MIT (from its license file; the manifest names none) 1, PSF-2.0 1, Unlicense 1.
 
   @adraffy/ens-normalize@1.11.1  MIT
   @algorandfoundation/algokit-utils@10.0.0-alpha.46  MIT
@@ -62,7 +62,10 @@ Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2
   @jimp/types@1.6.1  MIT
   @jimp/utils@1.6.1  MIT
   @mixmark-io/domino@2.2.0  BSD-2-Clause
-  @modelcontextprotocol/sdk@1.32.2  MIT
+  @modelcontextprotocol/core@2.4.0  Apache-2.0
+  @modelcontextprotocol/node@2.1.2  Apache-2.0
+  @modelcontextprotocol/sdk@1.32.2  MIT  (optional, platform-specific)
+  @modelcontextprotocol/server@2.4.0  Apache-2.0
   @mozilla/readability@0.6.0  Apache-2.0
   @napi-rs/canvas@0.1.80  MIT
   @napi-rs/canvas-android-arm64@0.1.80  MIT  (optional, platform-specific)
@@ -173,7 +176,7 @@ Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2
   accepts@2.0.0  MIT
   agent-base@6.0.2  MIT
   ajv@8.20.0  MIT
-  ajv-formats@3.0.1  MIT
+  ajv-formats@3.0.1  MIT  (optional, platform-specific)
   algo-msgpack-with-bigint@2.1.1  ISC
   algorand-msgpack@1.1.0  ISC
   algosdk@3.9.0  MIT
@@ -218,15 +221,15 @@ Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2
   compressible@2.0.18  MIT
   compression@1.8.2  MIT
   content-disposition@2.0.1  MIT
-  content-type@1.0.5  MIT
+  content-type@1.0.5  MIT  (optional, platform-specific)
   content-type@2.0.0  MIT
   content-type@2.1.0  MIT
   content-type@3.1.1  MIT
   cookie@0.7.2  MIT
   cookie-signature@1.2.2  MIT
   core-util-is@1.0.3  MIT
-  cors@2.8.6  MIT
-  cross-spawn@7.0.6  MIT
+  cors@2.8.6  MIT  (optional, platform-specific)
+  cross-spawn@7.0.6  MIT  (optional, platform-specific)
   css-tree@3.2.1  MIT
   data-urls@8.0.0  MIT
   debug@2.6.9  MIT
@@ -256,13 +259,13 @@ Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2
   escape-html@1.0.3  MIT
   etag@1.8.1  MIT
   eventemitter3@5.0.1  MIT
-  eventsource@3.0.7  MIT
+  eventsource@3.0.7  MIT  (optional, platform-specific)
   eventsource@4.1.1  MIT
   eventsource-parser@3.1.1  MIT
   exif-parser@0.1.12  MIT (from its license file; the manifest names none)
   expand-template@2.0.3  (MIT OR WTFPL)
   express@5.3.0  MIT
-  express-rate-limit@8.5.2  MIT
+  express-rate-limit@8.5.2  MIT  (optional, platform-specific)
   fast-deep-equal@3.1.3  MIT
   fast-uri@3.1.9  BSD-3-Clause
   feaxios@0.0.23  MIT
@@ -304,7 +307,7 @@ Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2
   immediate@3.0.6  MIT
   inherits@2.0.4  ISC
   ini@1.3.8  ISC
-  ip-address@10.7.4  MIT
+  ip-address@10.7.4  MIT  (optional, platform-specific)
   ipaddr.js@1.9.1  MIT
   is-electron@2.2.2  MIT
   is-fullwidth-code-point@3.0.0  MIT
@@ -313,11 +316,11 @@ Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2
   is-retry-allowed@3.0.0  MIT
   is-url@1.2.4  MIT
   isarray@1.0.0  MIT
-  isexe@2.0.0  ISC
+  isexe@2.0.0  ISC  (optional, platform-specific)
   isows@1.0.7  MIT
   jimp@1.6.1  MIT
   jose@5.10.0  MIT
-  jose@6.2.3  MIT
+  jose@6.2.3  MIT  (optional, platform-specific)
   jpeg-js@0.4.4  BSD-3-Clause
   js-sha256@0.9.0  MIT
   js-sha3@0.13.0  MIT
@@ -327,7 +330,7 @@ Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2
   jsdom@30.1.3  MIT
   json-bigint@1.0.0  MIT
   json-schema-traverse@1.0.0  MIT
-  json-schema-typed@8.0.2  BSD-2-Clause
+  json-schema-typed@8.0.2  BSD-2-Clause  (optional, platform-specific)
   jsqr@1.4.0  Apache-2.0
   jszip@3.10.2  (MIT OR GPL-3.0-or-later), used under MIT
   lie@3.3.0  MIT
@@ -361,7 +364,7 @@ Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2
   negotiator@1.0.0  MIT
   node-abi@3.96.0  MIT
   node-fetch@2.7.0  MIT
-  object-assign@4.1.1  MIT
+  object-assign@4.1.1  MIT  (optional, platform-specific)
   object-inspect@1.13.4  MIT
   omggif@1.0.10  MIT
   on-finished@2.4.1  MIT
@@ -382,7 +385,7 @@ Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2
   parse5@8.0.1  MIT
   parseurl@1.3.3  MIT
   path-exists@4.0.0  MIT
-  path-key@3.1.1  MIT
+  path-key@3.1.1  MIT  (optional, platform-specific)
   path-scurry@3.0.0  BlueOak-1.0.0
   path-to-regexp@8.4.2  MIT
   pdf-lib@1.17.1  MIT
@@ -397,7 +400,7 @@ Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2
   pg-types@2.2.0  MIT
   pgpass@1.0.5  MIT
   pixelmatch@5.3.0  ISC
-  pkce-challenge@5.0.1  MIT
+  pkce-challenge@5.0.1  MIT  (optional, platform-specific)
   platform@1.3.6  MIT
   playwright@1.64.1  Apache-2.0
   playwright-core@1.64.1  Apache-2.0
@@ -440,8 +443,8 @@ Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2
   set-blocking@2.0.0  ISC
   setimmediate@1.0.5  MIT
   setprototypeof@1.2.0  ISC
-  shebang-command@2.0.0  MIT
-  shebang-regex@3.0.0  MIT
+  shebang-command@2.0.0  MIT  (optional, platform-specific)
+  shebang-regex@3.0.0  MIT  (optional, platform-specific)
   side-channel@1.1.1  MIT
   side-channel-list@1.0.1  MIT
   side-channel-map@1.0.1  MIT
@@ -499,7 +502,7 @@ Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2
   whatwg-mimetype@5.0.0  MIT
   whatwg-url@17.2.0  MIT
   whatwg-url@5.0.0  MIT
-  which@2.0.2  ISC
+  which@2.0.2  ISC  (optional, platform-specific)
   which-module@2.0.1  ISC
   win-guid@0.2.1  MIT
   wrap-ansi@6.2.0  MIT
@@ -518,7 +521,7 @@ Packages: 508. Licenses: MIT 408, Apache-2.0 37, ISC 26, BlueOak-1.0.0 10, BSD-2
   yargs-parser@18.1.3  ISC
   zlibjs@0.3.1  MIT
   zod@4.6.7  MIT
-  zod-to-json-schema@3.25.2  ISC
+  zod-to-json-schema@3.25.2  ISC  (optional, platform-specific)
 
 Facilitator image (Dockerfile.facilitator)
 ==========================================
@@ -628,11 +631,11 @@ Packages: 99. Licenses: MIT 88, Apache-2.0 4, ISC 4, BSD-3-Clause 3.
 agent402-mcp (npm package and Dockerfile.mcp)
 =============================================
 Installed by npm ci --omit=dev from mcp/package-lock.json; an npm install of the package resolves the same names within its declared ranges.
-Packages: 165. Licenses: MIT 144, Apache-2.0 11, ISC 7, BSD-3-Clause 2, BSD-2-Clause 1.
+Packages: 75. Licenses: MIT 62, Apache-2.0 13.
 
   @adraffy/ens-normalize@1.11.1  MIT
-  @hono/node-server@2.1.6  MIT
-  @modelcontextprotocol/sdk@1.32.2  MIT
+  @modelcontextprotocol/core@2.4.0  Apache-2.0
+  @modelcontextprotocol/server@2.4.0  Apache-2.0
   @noble/ciphers@1.3.0  MIT
   @noble/curves@1.9.1  MIT
   @noble/curves@2.4.0  MIT
@@ -696,105 +699,15 @@ Packages: 165. Licenses: MIT 144, Apache-2.0 11, ISC 7, BSD-3-Clause 2, BSD-2-Cl
   @x402/fetch@2.30.0  Apache-2.0
   @x402/svm@2.30.0  Apache-2.0
   abitype@1.2.3  MIT
-  accepts@2.0.0  MIT
-  ajv@8.20.0  MIT
-  ajv-formats@3.0.1  MIT
-  body-parser@2.4.0  MIT
-  bytes@3.1.2  MIT
-  call-bind-apply-helpers@1.0.2  MIT
-  call-bound@1.0.4  MIT
   chalk@5.6.2  MIT
   commander@15.0.0  MIT
-  content-disposition@1.1.0  MIT
-  content-type@1.0.5  MIT
-  content-type@2.0.0  MIT
-  content-type@2.1.0  MIT
-  cookie@0.7.2  MIT
-  cookie-signature@1.2.2  MIT
-  cors@2.8.6  MIT
-  cross-spawn@7.0.6  MIT
-  debug@4.4.3  MIT
-  depd@2.0.0  MIT
-  dunder-proto@1.0.1  MIT
-  ee-first@1.1.1  MIT
-  encodeurl@2.0.0  MIT
-  es-define-property@1.0.1  MIT
-  es-errors@1.3.0  MIT
-  es-object-atoms@1.1.2  MIT
-  escape-html@1.0.3  MIT
-  etag@1.8.1  MIT
   eventemitter3@5.0.1  MIT
-  eventsource@3.0.7  MIT
-  eventsource-parser@3.1.0  MIT
-  express@5.2.1  MIT
-  express-rate-limit@8.5.2  MIT
-  fast-deep-equal@3.1.3  MIT
-  fast-uri@3.1.9  BSD-3-Clause
-  finalhandler@2.1.1  MIT
-  forwarded@0.2.0  MIT
-  fresh@2.0.0  MIT
-  function-bind@1.1.2  MIT
-  get-intrinsic@1.3.0  MIT
-  get-proto@1.0.1  MIT
-  gopd@1.2.0  MIT
-  has-symbols@1.1.0  MIT
-  hasown@2.0.4  MIT
-  hono@4.13.16  MIT
-  http-errors@2.0.1  MIT
-  iconv-lite@0.7.3  MIT
-  inherits@2.0.4  ISC
-  ip-address@10.7.4  MIT
-  ipaddr.js@1.9.1  MIT
-  is-promise@4.0.0  MIT
-  isexe@2.0.0  ISC
   isows@1.0.7  MIT
-  jose@6.2.3  MIT
-  json-schema-traverse@1.0.0  MIT
-  json-schema-typed@8.0.2  BSD-2-Clause
-  math-intrinsics@1.1.0  MIT
-  media-typer@1.1.0  MIT
-  merge-descriptors@2.0.0  MIT
-  mime-db@1.54.0  MIT
-  mime-types@3.0.2  MIT
-  ms@2.1.3  MIT
-  negotiator@1.0.0  MIT
-  object-assign@4.1.1  MIT
-  object-inspect@1.13.4  MIT
-  on-finished@2.4.1  MIT
-  once@1.4.0  ISC
   ox@0.14.29  MIT
-  parseurl@1.3.3  MIT
-  path-key@3.1.1  MIT
-  path-to-regexp@8.4.2  MIT
-  pkce-challenge@5.0.1  MIT
-  proxy-addr@2.0.8  MIT
-  qs@6.16.1  BSD-3-Clause
-  range-parser@1.2.1  MIT
-  raw-body@3.0.2  MIT
-  require-from-string@2.0.2  MIT
-  router@2.2.0  MIT
-  safer-buffer@2.1.2  MIT
-  send@1.2.1  MIT
-  serve-static@2.2.1  MIT
-  setprototypeof@1.2.0  ISC
-  shebang-command@2.0.0  MIT
-  shebang-regex@3.0.0  MIT
-  side-channel@1.1.1  MIT
-  side-channel-list@1.0.1  MIT
-  side-channel-map@1.0.1  MIT
-  side-channel-weakmap@1.0.2  MIT
-  statuses@2.0.2  MIT
-  toidentifier@1.0.1  MIT
-  type-is@2.1.0  MIT
   undici-types@8.11.2  MIT
-  unpipe@1.0.0  MIT
-  vary@1.1.2  MIT
   viem@2.52.2  MIT
-  which@2.0.2  ISC
-  wrappy@1.0.2  ISC
   ws@8.21.1  MIT
   zod@4.6.7  MIT
-  zod-to-json-schema@3.25.2  ISC
 
 Other published npm packages
 ============================
@@ -810,7 +723,7 @@ These bundle no third-party code. Their dependencies are installed by the user's
     dependencies: agent402-client >=0.8.21 <1.0.0
     peer dependencies: none
   elizaos-plugin-agent402 (MIT)
-    dependencies: agent402-client ^0.8.21
+    dependencies: agent402-client >=0.8.21 <1.0.0
     peer dependencies: @x402/evm >=2.0.0 <3, @x402/fetch >=2.0.0 <3, viem >=2.0.0 <3
   agent402-google-adk (MIT)
     dependencies: none

@@ -11,7 +11,7 @@ import { KEEP_DAYS as DISCOVERY_REFUSALS_KEEP_DAYS } from "./discovery-refusals.
 import { WISH_STALE_DAYS, wishRetentionDays } from "./wish.js";
 import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
-import { creditsSalesEnabled } from "./credits-sales.js";
+import { creditsSalesEnabled, withCreditsSalesDate } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { WINDOW_MS as LATE_SETTLE_WINDOW_MS, MAX_AGE_MS as LATE_SETTLE_MAX_AGE_MS } from "./late-settlements.js";
 import { WINDOW_MS as SETTLE_FAILURE_WINDOW_MS } from "./gateway-settle-breaker.js";
@@ -102,7 +102,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-17.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-18.</p>
 </section>
 
 <section>
@@ -137,6 +137,9 @@ so every claim below is verifiable in code.</p>
   in memory to compute the response. It is not stored, except in these cases:
   <ul>
     <li>the <code>/api/memory</code> tools, whose purpose <i>is</i> storage (see below);</li>
+    <li>when a tool fetches a URL you name, the host name in it (never the path, the query or who asked)
+    is counted per minute, so we can answer a site that asks how often we called it; the counts are
+    deleted after two days;</li>
     <li>some tools that read public data cache their answer for between one minute and one day, keyed
     by the input that produced it (a domain, a place name, a URL), so a repeat call is faster;
     identical repeat calls to the AI gateway, identical retries carrying an
@@ -249,7 +252,7 @@ so every claim below is verifiable in code.</p>
   billing country, state and postal code, any business tax ID you enter, your answers to the checkout's business-use and
   terms questions, and Stripe's fingerprint of the card (a token, never the card number). We use the billing address to
   apply sales tax, the tax ID to sell to a business in the EU or the UK, and the email and card fingerprint to enforce the
-  daily purchase limit. For a monitor
+  daily purchase limit.${creditsSalesEnabled() ? " When you ask for a key's unspent balance back, the key's record also keeps the amount refunded, when you asked, and Stripe's id for the refund, so the refund is sent once and can be traced." : ""} For a monitor
   we also keep the subject you asked us to watch (a domain, ticker, fund, token or query), your email
   and the most recent 12 reports we generated, for the life of the subscription. The input you give a report (a ticker, a
   domain, a research question) is stored with the paid session so the report can be generated once and
@@ -449,5 +452,5 @@ or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/privacy", extraCss, body: withDirectUpstreamDate(withPublicIndexDate(body)) });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/privacy", extraCss, body: withDirectUpstreamDate(withPublicIndexDate(withCreditsSalesDate(body))) });
 }

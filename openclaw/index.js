@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { buildProvider, setActiveProxy, setCachedRoutes, DEFAULT_PORT, PLUGIN_ID } from "./provider.js";
 import { startProxy, loadRoutes, DEFAULT_UPSTREAM } from "./proxy.js";
 import { stripTrailingSlashes } from "./models.js";
-import { acceptUsd, guardSignedAmount, acceptValidityTooLong, MAX_VALIDITY_SECONDS } from "./known-assets.js";
+import { acceptUsd, acceptAmount, guardSignedAmount, acceptValidityTooLong, MAX_VALIDITY_SECONDS } from "./known-assets.js";
 export { acceptUsd, acceptAmount, signedPaymentProblem, signedValidityProblem, KNOWN_ASSETS, MAX_VALIDITY_SECONDS } from "./known-assets.js";
 
 export const STATE_DIR = () => join(process.env.AGENT402_OPENCLAW_HOME || join(homedir(), ".openclaw"), "agent402");
@@ -53,31 +53,49 @@ export const PERMIT2_READY_MIN = 10n ** 12n; // 1,000,000 USDC (6 decimals): a r
  *  is refused BEFORE anything is signed. @x402/core 2.23+ ships a $1
  *  pegged-assets default on every client; this package turns that off (it would
  *  refuse USDG and gave an opaque vendor error on any metered turn over $1) and
- *  carries its own ceiling under its own name. The default is $2, the gateway's
- *  own metered quote cap (GATEWAY_METERED_MAX_QUOTE_USD), so no call the gateway
- *  would serve is refused here while a runaway quote still stops at the wallet.
- *  `maxPerCallUsd` in the plugin config or AGENT402_MAX_PER_CALL_USD; a
- *  malformed value reads as the default, never as off. `0`/`off` removes the
- *  ceiling only beside an explicit acknowledgment, `allowUncappedPayments:
- *  true` in the plugin config or AGENT402_ALLOW_UNCAPPED_PAYMENTS=true; without
- *  it `off` reads as the default too (uncappedRefused says so for the log). */
-export const DEFAULT_MAX_PER_CALL_USD = 2;
-const capOffRequested = (pluginConfig) => {
-  const raw = String(pluginConfig.maxPerCallUsd ?? process.env.AGENT402_MAX_PER_CALL_USD ?? "").trim().toLowerCase();
-  return raw === "0" || raw === "off";
-};
+ *  carries its own ceiling under its own name. The default is $5, which covers
+ *  every fixed price in the Agent402 catalog and the gateway's metered quote
+ *  cap, so no call the gateway would serve is refused here while a runaway
+ *  quote still stops before the wallet signs. `maxPerCallUsd`
+ *  in the plugin config or AGENT402_MAX_PER_CALL_USD sets another; `0` or
+ *  `off` turns it off. A value that does not read as a USD amount (text, a
+ *  negative number, an empty string) keeps the default, and
+ *  maxPerCallProblem names the setting so the proxy says so on stderr: a typo
+ *  never removes the ceiling. allowUncappedPayments is still read (it once had
+ *  to stand beside `off`) and changes nothing. */
+export const DEFAULT_MAX_PER_CALL_USD = 5;
 export function uncappedAcknowledged(pluginConfig = {}) {
   if (pluginConfig.allowUncappedPayments != null) return pluginConfig.allowUncappedPayments === true || String(pluginConfig.allowUncappedPayments).trim().toLowerCase() === "true";
   return String(process.env.AGENT402_ALLOW_UNCAPPED_PAYMENTS ?? "").trim().toLowerCase() === "true";
 }
-/** True when the config asks for no ceiling without the acknowledgment, so
- *  the default ceiling applies instead. */
-export const uncappedRefused = (pluginConfig = {}) => capOffRequested(pluginConfig) && !uncappedAcknowledged(pluginConfig);
+/** Kept for callers of earlier releases: `off` needs no acknowledgment now. */
+export const uncappedRefused = () => false;
+/** The configured per-call value and where it came from, or null when unset. */
+function capSetting(pluginConfig = {}) {
+  if (pluginConfig.maxPerCallUsd != null) return { name: "maxPerCallUsd", raw: pluginConfig.maxPerCallUsd };
+  if (Object.prototype.hasOwnProperty.call(process.env, "AGENT402_MAX_PER_CALL_USD")) return { name: "AGENT402_MAX_PER_CALL_USD", raw: process.env.AGENT402_MAX_PER_CALL_USD };
+  return null;
+}
+/** Infinity for 0 / off, the amount for a USD number, null when it does not parse. */
+function readCap(raw) {
+  const v = String(raw).trim().toLowerCase();
+  if (v === "off") return Infinity;
+  const n = v === "" ? NaN : Number(v);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n === 0 ? Infinity : n;
+}
 export function maxPerCallUsd(pluginConfig = {}) {
-  if (capOffRequested(pluginConfig)) return uncappedAcknowledged(pluginConfig) ? Infinity : DEFAULT_MAX_PER_CALL_USD;
-  const raw = String(pluginConfig.maxPerCallUsd ?? process.env.AGENT402_MAX_PER_CALL_USD ?? "").trim().toLowerCase();
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_PER_CALL_USD;
+  const set = capSetting(pluginConfig);
+  if (!set) return DEFAULT_MAX_PER_CALL_USD;
+  return readCap(set.raw) ?? DEFAULT_MAX_PER_CALL_USD;
+}
+/** A one-line warning when the configured ceiling does not parse (the default
+ *  then applies), else null. The value is quoted only when short. */
+export function maxPerCallProblem(pluginConfig = {}) {
+  const set = capSetting(pluginConfig);
+  if (!set || readCap(set.raw) != null) return null;
+  const shown = String(set.raw).length <= 16 ? JSON.stringify(String(set.raw)) : "(a long value, not shown)";
+  return `[agent402-openclaw] ${set.name}=${shown} is not a USD amount, 0 or "off"; keeping the default $${DEFAULT_MAX_PER_CALL_USD} per-call ceiling`;
 }
 // The dollar value of an accept's quote is acceptUsd (./known-assets.js):
 // the field the challenge's version signs (`amount` in v2, `maxAmountRequired`
@@ -96,10 +114,15 @@ export function selectAccept(accepts, { preferUpto = true, maxUsd = Infinity, x4
   if (offered.length && !list.length) throw new Error(`agent402-openclaw: every payment option asks to stay valid for more than ${MAX_VALIDITY_SECONDS} seconds; nothing was signed`);
   const pick = (preferUpto && list.find((a) => a?.scheme === "upto" && a?.network === BASE_CAIP2))
     || list.find((a) => a?.scheme === "exact" && a?.network === BASE_CAIP2) || list[0];
+  // An accept with no amount its version signs cannot be paid at all (this is
+  // a malformed offer, not a ceiling), so it is refused before the signer runs.
+  if (pick && x402Version != null && acceptAmount(pick, x402Version) == null) {
+    throw new Error("agent402-openclaw: the payment option names no amount its x402 version signs; nothing was signed");
+  }
   if (pick && Number.isFinite(maxUsd)) {
     const usd = acceptUsd(pick, x402Version);
     if (usd == null || usd > maxUsd) {
-      throw new Error(`agent402-openclaw: quote ${usd == null ? "unreadable" : `$${usd}`} exceeds the per-call ceiling $${maxUsd} (maxPerCallUsd / AGENT402_MAX_PER_CALL_USD; 0 with allowUncappedPayments removes it)`);
+      throw new Error(`agent402-openclaw: quote ${usd == null ? "unreadable" : `$${usd}`} exceeds the per-call ceiling $${maxUsd}; nothing was signed (raise maxPerCallUsd / AGENT402_MAX_PER_CALL_USD, or set it to 0 or \"off\", to allow it)`);
     }
   }
   return pick;
@@ -109,7 +132,8 @@ export const uptoReady = (allowance) => { try { return BigInt(allowance ?? 0) >=
 export async function resolvePayFetch(pluginConfig = {}, log = () => {}) {
   const pk = resolveWalletKey(pluginConfig);
   if (!pk) return null;
-  if (uncappedRefused(pluginConfig)) log(`[agent402-openclaw] maxPerCallUsd "off" needs allowUncappedPayments: true (or AGENT402_ALLOW_UNCAPPED_PAYMENTS=true); keeping the $${DEFAULT_MAX_PER_CALL_USD} per-call ceiling`);
+  const capProblem = maxPerCallProblem(pluginConfig);
+  if (capProblem) console.error(capProblem);
   const maxUsd = maxPerCallUsd(pluginConfig);
   try {
     const [{ wrapFetchWithPayment, x402Client }, { privateKeyToAccount }, { toClientEvmSigner }, { registerExactEvmScheme }] = await Promise.all([

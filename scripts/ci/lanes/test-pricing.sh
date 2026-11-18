@@ -36,6 +36,8 @@ t node scripts/test-x402-v1-accepts.js
 t node scripts/test-payment-required-body.js
 # The 402 asks the catalog price whatever price-shaped fields the caller sends, and a payment on other terms never reaches the facilitator (boots a paid server, offline)
 t node scripts/test-price-from-catalog.js
+# The compact PAYMENT-REQUIRED header (X-Payment-Compact: 1 or an aiohttp User-Agent): under 7,500 bytes on every route, Bazaar extension and resource untouched, a stock client pays from it, the default header byte-identical (boots a paid server twice, offline)
+t node scripts/test-payment-required-compact.js
 # The three-line front door leads /llms.txt, /agents.md, the MCP server.describe answer and the unpaid 402 body
 t node scripts/test-front-door.js
 # HEAD paywall bypass closed (HEAD on paid GET routes 402s with challenges + empty body; free surfaces untouched — offline)

@@ -26,7 +26,7 @@ if (!existsSync(join(stubDir, "package.json"))) {
   `);
 }
 
-const { agent402Actions, agent402ActionProvider, payFetchFor } = await import("./index.js");
+const { agent402Actions, agent402ActionProvider, payFetchFor, resolveMaxPerCallUsd, DEFAULT_MAX_PER_CALL_USD } = await import("./index.js");
 
 const PORT = 3087;
 const BASE = process.env.AGENT402_BASE_URL || `http://localhost:${PORT}`;
@@ -104,12 +104,23 @@ async function main() {
     stub.close();
   }
 
+  // The per-call ceiling: $5 by default, 0 or "off" for none, and a value that
+  // does not parse keeps the default (one warning each), never none.
+  {
+    const w = [];
+    ok(DEFAULT_MAX_PER_CALL_USD === 5 && resolveMaxPerCallUsd(undefined, (m) => w.push(m)) === 5 && resolveMaxPerCallUsd(null, (m) => w.push(m)) === 5 && w.length === 0, "the default per-call ceiling is $5, with no warning");
+    ok(resolveMaxPerCallUsd(0) === null && resolveMaxPerCallUsd("0") === null && resolveMaxPerCallUsd("off") === null && resolveMaxPerCallUsd(" OFF ") === null && resolveMaxPerCallUsd("0.5") === 0.5 && resolveMaxPerCallUsd(7) === 7, "0 or off is no ceiling; a USD number sets it");
+    const bad = ["abc", -1, "-1", Number.NaN, "", " ", "1e999", {}];
+    ok(bad.every((v) => resolveMaxPerCallUsd(v, (m) => w.push(m)) === 5) && w.length === bad.length, `a malformed value keeps the $5 default and warns once each (${w.length} warnings)`);
+  }
+
   // The per-call ceiling holds on the payment that is SIGNED. A stub seller
   // quotes $0.01 to the unpaid preflight and $5 (5000000 base units of USDC,
   // beside a decimals hint of 18) to the request the wallet signs for. The
   // wallet is a throwaway key; the stub records any signature it receives.
   {
     const seen = { unpaid: 0, signed: 0 };
+    let quote = 5000000;
     const offer = (amount) => Buffer.from(JSON.stringify({
       x402Version: 2,
       resource: { url: "http://127.0.0.1/api/dear", description: "dear", mimeType: "application/json" },
@@ -121,16 +132,46 @@ async function main() {
       req.resume();
       if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.signed++; return j(200, { ok: true }); }
       seen.unpaid++;
-      return j(402, {}, { "payment-required": offer(seen.unpaid === 1 ? 10000 : 5000000) });
+      return j(402, {}, { "payment-required": offer(seen.unpaid === 1 ? 10000 : quote) });
     });
     await new Promise((r) => stub.listen(0, "127.0.0.1", r));
     const STUB = `http://127.0.0.1:${stub.address().port}`;
-    const [, callW] = await agent402Actions({ baseUrl: STUB });
+    const [, callW] = await agent402Actions({ baseUrl: STUB, maxPerCallUsd: 1 });
     let refused = null;
     try { await callW.invoke(walletProvider, { slug: "dear", params: { q: "x" } }); } catch (e) { refused = e; }
     ok(seen.unpaid === 2, `the preflight and the paid request each drew a 402 (saw ${seen.unpaid})`);
-    ok(seen.signed === 0, "the $5 payment the paid request asked for was never signed under the default $1 ceiling");
+    ok(seen.signed === 0, "the $5 payment the paid request asked for was never signed under a $1 ceiling the caller set");
     ok(refused?.name === "SpendingLimitError" && refused.atSigning === true, `the refusal is a SpendingLimitError at signing (${refused?.message})`);
+    // The default per-call ceiling is $5: the same $5 payment is signed and
+    // paid with no setting, and a $6 one is refused before signing.
+    const [, callDefault] = await agent402Actions({ baseUrl: STUB });
+    const atCeiling = JSON.parse(await callDefault.invoke(walletProvider, { slug: "dear", params: { q: "y" } }));
+    ok(atCeiling.ok === true && seen.signed === 1, `with no setting a $5 call (at the $5 default) is paid (signed ${seen.signed})`);
+    quote = 6000000;
+    let over = null;
+    try { await callDefault.invoke(walletProvider, { slug: "dear", params: { q: "z" } }); } catch (e) { over = e; }
+    ok(over?.name === "SpendingLimitError" && seen.signed === 1, `the $5 default refuses a $6 payment before signing (signed ${seen.signed}; ${over?.message})`);
+    ok(/\$6\b/.test(over?.message || "") && /maxPerCallUsd/.test(over?.message || "") && /\$5/.test(over?.message || "") && /0 or "off"/.test(over?.message || ""), `the refusal names the price, the ceiling and how to raise or turn it off (${over?.message})`);
+    // 0 and "off" turn the ceiling off: the $6 payment is signed.
+    for (const v of [0, "off"]) {
+      const before = seen.signed;
+      const [, callOff] = await agent402Actions({ baseUrl: STUB, maxPerCallUsd: v });
+      const r = JSON.parse(await callOff.invoke(walletProvider, { slug: "dear", params: { q: String(v) } }));
+      ok(r.ok === true && seen.signed === before + 1, `maxPerCallUsd ${JSON.stringify(v)} turns the ceiling off and the $6 call is paid`);
+    }
+    // A value that does not parse keeps the $5 default and is named once.
+    for (const v of ["abc", -1, Number.NaN, "", "5 usd"]) {
+      const warned = [];
+      const origErr = console.error;
+      console.error = (...a) => warned.push(a.join(" "));
+      let refusedBad = null;
+      try {
+        const [, callBad] = await agent402Actions({ baseUrl: STUB, maxPerCallUsd: v });
+        await callBad.invoke(walletProvider, { slug: "dear", params: { q: "bad" } });
+      } catch (e) { refusedBad = e; } finally { console.error = origErr; }
+      ok(refusedBad?.name === "SpendingLimitError" && seen.signed === 3 && /\$5/.test(refusedBad?.message || ""), `maxPerCallUsd ${JSON.stringify(String(v))} keeps the $5 ceiling (${refusedBad?.message})`);
+      ok(warned.filter((m) => /maxPerCallUsd=.* is not a USD amount, 0 or "off"; keeping the default \$5 per-call ceiling/.test(m)).length === 1, `maxPerCallUsd ${JSON.stringify(String(v))} is named once on stderr (${warned.join(" | ")})`);
+    }
     stub.close();
   }
 

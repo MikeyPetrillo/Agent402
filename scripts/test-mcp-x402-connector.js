@@ -40,7 +40,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -478,12 +478,13 @@ const BASE_NET = "eip155:8453";
 const TMP = mkdtempSync(join(tmpdir(), "mcp-x402-conn-"));
 const SALES_DB = join(TMP, "sales.db");
 const counts = { verify: 0, settle: 0 };
-const stub = { settleFailTx: null, settleRefuse: null, verifyInvalid: null };
+const stub = { settleFailTx: null, settleRefuse: null, verifyInvalid: null, verifyDelayMs: 0 };
 let txN = 0;
 const facilitator = createServer((req, res) => {
   let b = ""; req.on("data", (c) => { b += c; });
-  req.on("end", () => {
+  req.on("end", async () => {
     const reply = (obj) => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+    if (req.url === "/verify" && stub.verifyDelayMs) await sleep(stub.verifyDelayMs);
     if (req.url === "/supported") return reply({ kinds: [{ x402Version: 2, scheme: "exact", network: BASE_NET }], extensions: [], signers: {} });
     if (req.url === "/rpc") return reply({ jsonrpc: "2.0", id: 1, result: "0x0" });
     let parsed = {}; try { parsed = b ? JSON.parse(b) : {}; } catch { /* ignore */ }
@@ -527,28 +528,29 @@ const fallbackFacilitator = createServer((req, res) => {
 });
 await new Promise((r) => fallbackFacilitator.listen(0, "127.0.0.1", r));
 const FAC2 = `http://127.0.0.1:${fallbackFacilitator.address().port}`;
+const PAID_ENV = {
+  FREE_MODE: "", NODE_ENV: "test", BASE_URL: "https://agent402.tools", TRUST_PROXY_HOPS: "1",
+  WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
+  FACILITATOR_URL: FAC, PAYAI_FACILITATOR_URL: FAC, SOLVADOR_FACILITATOR_URL: FAC2, PAYMENT_SETTLE_FALLBACK: "true", AGENT402_BASE_RPC: `${FAC}/rpc`, EVM_RPC_8453: `${FAC}/rpc`, FACILITATOR_GAS_CHECK: "off",
+  CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "test-key", CIRCLE_FACILITATOR_API_KEY: "",
+  MPP_SECRET_KEY: "test-mcp-x402-conn-secret", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", ROBINHOOD_RELAYER_KEY: "", POSTHOG_API_KEY: "",
+  REDIS_URL: "", STATE_DATABASE_URL: "", TARGET_URL: "",
+  STATS_ALLOW_EPHEMERAL: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
+  MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", REVENUE_WARMUP: "off",
+  SALES_LEDGER_DB: SALES_DB, REFUND_DB_DIR: TMP, HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
+  // The free-tier limiter at 2 calls a minute per client, the transport
+  // limiter at 12 requests a minute: each client below has its own address.
+  AGENT402_MCP_MAX_PER_MIN: "2", AGENT402_MCP_MAX_PER_HOUR: "1000",
+  AGENT402_MCP_REQ_PER_MIN: "12", AGENT402_MCP_REQ_PER_HOUR: "100000",
+  AGENT402_MCP_PAID_REQ_PER_MIN: "30", AGENT402_MCP_PAID_REQ_PER_HOUR: "100000",
+};
 let srv = null;
 const clients = [];
 try {
   srv = await bootServer({
     stores: "mcp-x402-conn",
     args: ["--import", "./scripts/lib/loopback-only-preload.js"],
-    env: {
-      FREE_MODE: "", NODE_ENV: "test", BASE_URL: "https://agent402.tools", TRUST_PROXY_HOPS: "1",
-      WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
-      FACILITATOR_URL: FAC, PAYAI_FACILITATOR_URL: FAC, SOLVADOR_FACILITATOR_URL: FAC2, PAYMENT_SETTLE_FALLBACK: "true", AGENT402_BASE_RPC: `${FAC}/rpc`, EVM_RPC_8453: `${FAC}/rpc`, FACILITATOR_GAS_CHECK: "off",
-      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "test-key", CIRCLE_FACILITATOR_API_KEY: "",
-      MPP_SECRET_KEY: "test-mcp-x402-conn-secret", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", ROBINHOOD_RELAYER_KEY: "", POSTHOG_API_KEY: "",
-      REDIS_URL: "", STATE_DATABASE_URL: "", TARGET_URL: "",
-      STATS_ALLOW_EPHEMERAL: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
-      MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", REVENUE_WARMUP: "off",
-      SALES_LEDGER_DB: SALES_DB, REFUND_DB_DIR: TMP, HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
-      // The free-tier limiter at 2 calls a minute per client, the transport
-      // limiter at 12 requests a minute: each client below has its own address.
-      AGENT402_MCP_MAX_PER_MIN: "2", AGENT402_MCP_MAX_PER_HOUR: "1000",
-      AGENT402_MCP_REQ_PER_MIN: "12", AGENT402_MCP_REQ_PER_HOUR: "100000",
-      AGENT402_MCP_PAID_REQ_PER_MIN: "30", AGENT402_MCP_PAID_REQ_PER_HOUR: "100000",
-    },
+    env: PAID_ENV,
   });
   const B = srv.url;
   const connect = async (ip, account = null) => {
@@ -660,6 +662,34 @@ try {
   const again = await sendRaw(payA.raw, once);
   ok(again.isError === true && !again._meta?.[X402_PAYMENT_RESPONSE_META] && counts.settle === c0.settle + 1 && !JSON.stringify(again.content).includes("hello"),
     `the same payment sent again is refused, unsettled, with no output (${JSON.stringify(again.content).slice(0, 200)})`);
+
+  // 4b. The same wires on 2026-07-28: the SDK v2 client pinned to the modern
+  // revision (server/discover, the per-request envelope, no initialize) gets
+  // the same first ask, pays it in the call, and gets the same output and a
+  // settle receipt; an MPP credential the gate refuses is answered exactly as
+  // the 2025-era request is answered.
+  {
+    const v2 = await import("@modelcontextprotocol/client");
+    const m = new v2.Client({ name: "test-mcp-x402-connector-2026", version: "0.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
+    await m.connect(new v2.StreamableHTTPClientTransport(new URL(`${B}/mcp`), { requestInit: { headers: { "X-Forwarded-For": "203.0.113.13" } } }));
+    clients.push(m);
+    ok(m.getProtocolEra() === "modern", "the v2 client settles on 2026-07-28 against the paid boot");
+    const mAsk = await m.callTool({ name: "memory.read", arguments: { key } });
+    ok(mAsk.isError === true && !("structuredContent" in mAsk) && JSON.stringify(PR(mAsk)?.accepts) === JSON.stringify(offer.accepts) && JSON.stringify(mAsk.content.slice(1)) === JSON.stringify(ask.content.slice(1))
+      && Array.isArray(mAsk._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges), "2026-07-28: memory.read's first ask carries the same x402 offer, text and MPP challenges");
+    c0 = { ...counts };
+    const mPaid = await m.callTool({ name: "memory.read", arguments: { key }, _meta: { [X402_PAYMENT_META]: await payA.payments.createPaymentPayload(offer) } });
+    ok(mPaid.isError !== true && JSON.stringify(mPaid.content) === JSON.stringify(first.content) && mPaid._meta?.[X402_PAYMENT_RESPONSE_META]?.success === true
+      && mPaid._meta[X402_PAYMENT_RESPONSE_META].payer?.toLowerCase() === A.address.toLowerCase() && counts.verify === c0.verify + 1 && counts.settle === c0.settle + 1,
+      `2026-07-28: an x402 payment in the call settles once and returns the writer's value with the receipt (${counts.verify - c0.verify}/${counts.settle - c0.settle}) ${mPaid.isError ? JSON.stringify(mPaid.content).slice(0, 200) : ""}`);
+    const badCred = `Payment ${Buffer.from(JSON.stringify({ challenge: { id: "nope", method: "evm", intent: "charge" }, payload: { signature: "0x00" } })).toString("base64url")}`;
+    const outcome = async (fn) => { try { const r = await fn(); return { result: { isError: r.isError, content: r.content } }; } catch (e) { return { code: e.code, data: e.data }; } };
+    const legacyMpp = await outcome(() => plain.raw.callTool({ name: "memory.read", arguments: { key }, _meta: { [MCP_CREDENTIAL_META]: badCred } }));
+    const modernMpp = await outcome(() => m.callTool({ name: "memory.read", arguments: { key }, _meta: { [MCP_CREDENTIAL_META]: badCred } }));
+    // Each refusal carries fresh challenges: their ids and expiries differ, the rest is the same.
+    const fresh = (o) => JSON.stringify(o, (k, v) => (k === "id" || k === "expires" ? "<fresh>" : v));
+    ok(fresh(modernMpp) === fresh(legacyMpp) && legacyMpp.code === -32043 && legacyMpp.data?.challenges?.length > 0, `2026-07-28: an MPP credential the gate refuses is answered as on 2025-11-25 (${fresh(modernMpp).slice(0, 160)})`);
+  }
 
   // 5. A settle that fails naming a transaction (it may have landed): the
   // route's 402 through the real paywall is answered with no offer, the
@@ -848,6 +878,34 @@ try {
   const writeRow = rows.find((r) => r.slug === "memory-write");
   ok(twinRow?.via === "x402-mcp" && twinRow.wire === "x402" && String(twinRow.payer).toLowerCase() === A.address.toLowerCase(), `memory.read paid on the twin books slug memory-read, wire x402, path x402-mcp (${JSON.stringify(twinRow)})`);
   ok(writeRow && writeRow.via !== "x402-mcp", `memory.write paid on its HTTP route books its own path (${JSON.stringify(writeRow)})`);
+
+  // 11. The transport deadline on an x402-paid call: a second boot whose
+  // deadline is shorter than the paid loopback's bound, so the deadline wins
+  // while the facilitator's verify is still out. The answer is the paid
+  // cut-off (as the loopback's own timeout answers it), never "No payment
+  // was presented".
+  {
+    const DL_DIR = join(TMP, "dl");
+    mkdirSync(DL_DIR, { recursive: true });
+    const dl = await bootServer({
+      stores: "mcp-x402-conn-deadline",
+      args: ["--import", "./scripts/lib/loopback-only-preload.js"],
+      env: { ...PAID_ENV, SALES_LEDGER_DB: join(TMP, "sales-dl.db"), REFUND_DB_DIR: DL_DIR, HANGUP_FORGIVE_FILE: join(TMP, "hangup-dl.json"), AGENT402_MCP_REQ_DEADLINE_MS: "800" },
+    });
+    try {
+      const raw = new Client({ name: "test-mcp-x402-connector-deadline", version: "0.0.0" });
+      await raw.connect(new StreamableHTTPClientTransport(new URL(`${dl.url}/mcp`), { requestInit: { headers: { "X-Forwarded-For": "203.0.113.71" } } }));
+      clients.push(raw);
+      stub.verifyDelayMs = 2500;
+      let cut = null, cutErr = null;
+      try { cut = await raw.callTool({ name: "memory.read", arguments: { key }, _meta: { [X402_PAYMENT_META]: await payA.payments.createPaymentPayload(offer) } }); } catch (e) { cutErr = e; }
+      stub.verifyDelayMs = 0;
+      const cutText = JSON.stringify(cut?.content || "");
+      ok(!cutErr && cut?.isError === true && /did not finish within \d+s on this connector/.test(cutText), `the transport deadline on an x402-paid call is a tool result naming the deadline (${cutErr ? cutErr.message : cutText.slice(0, 160)})`);
+      ok(/may still have completed and been charged/.test(cutText) && !/No payment was presented/.test(cutText), `the x402-paid cut-off never says no payment was presented (${cutText.slice(0, 240)})`);
+      await sleep(3000); // let the stopped call's slow verify drain before teardown
+    } finally { await dl.stop(); }
+  }
 } catch (e) {
   ok(false, e?.stack || String(e));
   if (srv) console.error(srv.log().slice(-3000));
