@@ -187,7 +187,6 @@ export function makeAuditReportHandler(deps = {}) {
       const pick = list.find((x) => !x.replay) || list[0] || null;
       let rec = null;
       if (pick) { try { rec = JSON.parse(Buffer.from(pick.jws.split(".")[1], "base64url").toString("utf8")); } catch { rec = null; } }
-      if (rec && rec.settlement !== r.tx) rec = null;
       if (rec) withReceipt++;
       const priv = isPrivateRail(r.rail);
       return {

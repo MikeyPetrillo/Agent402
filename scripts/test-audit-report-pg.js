@@ -31,7 +31,7 @@ const pemB64 = (k) => Buffer.from(k.export({ format: "pem", type: "pkcs8" })).to
 const { signer, keys } = loadReceiptKeys({ RECEIPT_SIGNING_KEY: pemB64(generateKeyPairSync("ed25519").privateKey), RECEIPT_SIGNING_KEY_ID: "p1" });
 const A = "0xaaaa00000000000000000000000000000000000a";
 const B = "0xbbbb00000000000000000000000000000000000b";
-const rec = (payer, settlement, now = Date.now(), rail = "x402") => buildReceiptRecord({ method: "POST", path: "/api/hash", slug: "hash", requestSha256: "a".repeat(64), responseSha256: "b".repeat(64), priceUsd: 0.001, rail, network: "eip155:8453", payer, settlement, now });
+const rec = (payer, settlement, now = Date.now(), rail = "x402", resp = "b") => buildReceiptRecord({ method: "POST", path: "/api/hash", slug: "hash", requestSha256: "a".repeat(64), responseSha256: resp.repeat(64), priceUsd: 0.001, rail, network: "eip155:8453", payer, settlement, now });
 
 try {
   ok(store.receiptStoreBackend === "pg", "the store is on the database");
@@ -45,11 +45,12 @@ try {
   await store.receiptStoreFlush();
   ok((await count()) === 2, "the same receipt offered twice is one row (its id is unique)");
   // Another payer's receipt under A's settlement, and a Tempo one with no payer yet.
-  const rb = rec(B, "0xp1");
+  const rb = rec(B, "0xp1", Date.now() - 1000, "x402", "c");
   const rt = rec(null, "0xp3", Date.now(), "mpp-tempo");
   await store.storeIssuedReceipt(signReceipt(rb, signer), rb);
   await store.storeIssuedReceipt(signReceipt(rt, signer), rt);
   await store.receiptStoreFlush();
+  ok((await count()) === 4, "another payer's receipt under the same settlement is its own row");
   const got = await store.receiptsForSettlements(A, ["0xp1", "0xp2", "0xp3"]);
   ok(got.get("0xp1").length === 1 && got.get("0xp1")[0].payer === A && got.get("0xp2").length === 1 && got.get("0xp3")[0].payer === null, "a lookup returns this payer's receipts and the payer-less Tempo one, never another payer's under the same settlement");
   ok((await store.receiptsForSettlements(B, ["0xp2"])).size === 0, "another payer reads none of A's");
