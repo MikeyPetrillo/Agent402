@@ -8,6 +8,7 @@ import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread, UNPAI
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, retiredEntryForSlug, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
+import { createFunnel, funnelEventOf, emptyFunnelRow, ARRIVALS as FUNNEL_ARRIVALS } from "./funnel.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf, workerEgressAddressKeyOf } from "./unpaid-quote-budget.js";
 import { createPaidQuoteTrust, paidAndSettled } from "./paid-quote-trust.js";
 import { stripMcpMarker } from "./mcp-loopback.js";
@@ -423,8 +424,11 @@ import { agenticFinancePage } from "./agentic-finance.js";
 import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
 import { trustPage } from "./trust-page.js";
+import { markGateMounted } from "./gate-mounts.js";
+import { conformanceDocumentCached, resetConformanceCache, CONFORMANCE_PATH } from "./conformance.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
+import { pressPage } from "./press-page.js";
 import { sampleJson, sampleMeta, midSentence } from "./sample-reports.js";
 import { createFreeAlerts, alertFormHtml, ALERT_KIND_FOR_REPORT_KIND, hostnameShapedToken } from "./free-alerts.js";
 import { refundLookup, lookupKeys } from "./refund-lookup.js";
@@ -471,7 +475,7 @@ import { submissionSlotStatus } from "./x402-index.js";
 import { sellerLoad, sellerLoadStatus, sendRouterProbe } from "./seller-load.js";
 import { ROUTER_UA } from "./user-agents.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
+import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, removalPreview, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
 import { crawlSwitch } from "./crawl-switch.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
@@ -703,7 +707,7 @@ import { badgeSvg } from "./badges.js";
 import { adapterDocsIndex, adapterRedirectTarget } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
 import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore, ASSET_VERSION } from "./ledger-chrome.js";
-import { ledgerHomePage } from "./ledger-home.js";
+import { ledgerHomePage, socialCardText } from "./ledger-home.js";
 import { proofCell, homeProofFigures } from "./home-proof.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
@@ -744,7 +748,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -1009,7 +1013,7 @@ const CATALOG = {
         example: {
           url: "https://agent402.tools/",
           title: "Agent402: 500+ pay-per-call tools for AI agents over x402 and MPP",
-          description: "Agentic Finance for AI agents: 500+ pay-per-call tools, metered models and finished reports over x402 and MPP, or by card.",
+          description: "Agentic Finance for AI agents: 500+ pay-per-call tools, metered models and finished reports over x402 and MPP; reports and monitors also by card.",
           canonical: "https://agent402.tools/",
           og: { type: "website", site_name: "Agent402", title: "Agent402: 500+ pay-per-call tools for AI agents over x402 and MPP" },
           twitter: { card: "summary_large_image" },
@@ -2993,6 +2997,19 @@ app.use((req, res, next) => {
 const TRAFFIC = createTrafficStore();
 TRAFFIC.load();
 app.use(trafficMiddleware(TRAFFIC, { payerOf: (req, res) => payerFromRequest(req) || payerFromPaymentResponse(String(res.getHeader("payment-response") || "")) }));
+// The paid-call funnel (src/funnel.js): per day and arrival path, probes,
+// 402s served, payment attempts, settlements and why a 402 did not become a
+// payment, counted on the traffic store's day rollups (counts only). Fed by
+// the catalog routes' finish hook and the marketplace copies under /ref;
+// read at /__operator/funnel.json.
+const FUNNEL = createFunnel({ bump: (day, arrival, field, n, sub) => TRAFFIC.bumpFunnel(day, arrival, field, n, sub) });
+function noteFunnelOnFinish(req, res) {
+  if (Object.hasOwn(req, "__a402FunnelNoted")) return;
+  req.__a402FunnelNoted = true;
+  res.once("finish", () => {
+    try { FUNNEL.record(funnelEventOf(req, res, { ours: callIsOurs(req) }), { ip: clientIp(req) }); } catch { /* counting never fails a response */ }
+  });
+}
 const CANONICAL_HOST = (() => { try { return new URL(BASE_URL).host.toLowerCase(); } catch { return ""; } })();
 app.use((req, res, next) => {
   const host = String(req.hostname || "").toLowerCase();
@@ -4557,6 +4574,9 @@ for (const p of A2A_WELL_KNOWN_PATHS) {
     }));
   });
 }
+// Per payment rail, the protocol features this server implements and the
+// refund terms as data, computed at each request (src/conformance.js).
+app.get(CONFORMANCE_PATH, (_req, res) => res.set("Cache-Control", "public, max-age=300").json(conformanceDocumentCached(BASE_URL, { freeMode: FREE_MODE })));
 app.get("/.well-known/glama.json", (_req, res) => {
   const email = process.env.GLAMA_MAINTAINER_EMAIL || "mike@agent402.tools";
   res.set("Cache-Control", "public, max-age=86400").json({
@@ -4611,6 +4631,9 @@ mountShortlinks(app, BASE_URL);
 app.get("/security", (_req, res) => htmlCache(res, 300, 900).send(securityPage(BASE_URL)));
 app.get("/trust", (_req, res) => htmlCache(res, 300, 900).send(trustPage(BASE_URL)));
 app.get("/company", (_req, res) => htmlCache(res, 300, 900).send(companyPage(BASE_URL)));
+// /company is the entity page, so /about answers there rather than as a second, thinner page.
+app.get("/about", (req, res) => { const q = req.originalUrl.indexOf("?"); res.redirect(301, `/company${q >= 0 ? req.originalUrl.slice(q) : ""}`); });
+app.get("/press", (_req, res) => htmlCache(res, 300, 900).send(pressPage(BASE_URL)));
 // Who our crawler is, what it reads, and how to be removed. The crawler's own
 // User-Agent points here (src/tools/fetch-guard.js), so an operator who finds
 // it in their logs lands on the answer rather than on a source tree.
@@ -5611,6 +5634,81 @@ app.get("/__operator/cohorts.json", (req, res) => {
   res.set("Cache-Control", "no-store");
   try {
     res.json(salesCohorts({ days: req.query.days, toolsPerDay: req.query.toolsPerDay, callsPerHour: req.query.callsPerHour }));
+  } catch (err) {
+    res.status(500).json({ error: redactSecrets(err?.message) });
+  }
+});
+
+// The paid-call funnel and the weekly figures (operator only, counts only:
+// no wallet, address or hash in the answer). Two halves per UTC day and
+// arrival path: `requests` from the funnel counters (src/funnel.js, on the
+// traffic store's day rollups: probes, 402s served, attempts, settlements,
+// refusal classes, callers that never came back) and `sales` from the sales
+// ledger (outside sales, dollars and paying wallets). `week` holds the
+// scoreboard figures the ledger can compute. ?days= (default 14, max 30).
+// Read once a minute per window at most; the ledger half yields between pages.
+let funnelCache = null; // { key, at, value }
+const FUNNEL_CACHE_MS = 60_000;
+async function funnelView(days) {
+  const now = Date.now();
+  if (funnelCache && funnelCache.key === days && now - funnelCache.at < FUNNEL_CACHE_MS) return funnelCache.value;
+  const ledger = await funnelLedgerAsync({ days, weekDays: 7, now });
+  const counted = new Map(TRAFFIC.funnelDays(FUNNEL_MAX_DAYS + 1).map((r) => [r.day, r.funnel]));
+  const sum = (rows) => rows.reduce((t, r) => {
+    for (const [k, v] of Object.entries(r)) {
+      if (typeof v === "number") t[k] = (t[k] || 0) + v;
+      else for (const [kk, vv] of Object.entries(v || {})) { const g = t[k] || (t[k] = {}); g[kk] = (g[kk] || 0) + (Number(vv) || 0); }
+    }
+    return t;
+  }, emptyFunnelRow());
+  const rowOf = (f) => { const e = emptyFunnelRow(); for (const [k, v] of Object.entries(f || {})) { if (typeof v === "number") e[k] = v; else if (v && typeof v === "object") e[k] = { ...(e[k] || {}), ...v }; } return e; };
+  const byDay = ledger.byDay.map((d) => {
+    const f = counted.get(d.day) || {};
+    const byArrival = Object.fromEntries(FUNNEL_ARRIVALS.filter((a) => a !== "unknown").map((a) => [a, rowOf(f[a])]));
+    return { day: d.day, partial: d.partial, requests: { ...sum(Object.values(byArrival)), byArrival }, sales: { sales: d.sales, revenueUsd: d.revenueUsd, unknownShare: d.unknownShare, byArrival: d.byArrival } };
+  });
+  const conversion = {};
+  for (const a of FUNNEL_ARRIVALS.filter((x) => x !== "unknown")) {
+    const t = sum(byDay.map((d) => d.requests.byArrival[a]));
+    const closed = t.probedCallers - t.untracked;
+    conversion[a] = {
+      probes: t.probes, challenges: t.challenges, attempts: t.attempts, settled: t.settled,
+      settledPerProbe: t.probes ? +(t.settled / t.probes).toFixed(4) : null,
+      probedCallers: t.probedCallers, paidAfterProbe: t.paidAfterProbe,
+      callerConversion: closed > 0 ? +(t.paidAfterProbe / closed).toFixed(4) : null,
+      neverRetried: t.neverRetried,
+    };
+  }
+  const value = {
+    generatedAt: new Date(now).toISOString(),
+    window: ledger.window,
+    countingSince: [...counted.keys()].sort()[0] || null,
+    definitions: {
+      arrival: "marketplace: /ref copies; mcp: the hosted connector or our MCP package; bazaar: a User-Agent naming the Bazaar; direct: every other request. A request carries no sign of where its caller found the URL, so a buyer who read a listing and calls with a plain client reads direct. unknown (sales only): a sale booked with no arrival path.",
+      probes: "requests to a paid route with no payment credential and no proof of work",
+      challenges: "402 answers served, to probes and to refused credentials",
+      attempts: "requests that carried a payment credential",
+      settled: "attempts answered 2xx with a settlement receipt",
+      errorAnswered: "attempts answered a 4xx other than 402, or a 5xx (on a Tempo push credential the transfer was final before the call and is booked owed)",
+      refusal: "why an attempt got a 402: unfundedWallet, wrongNetwork, verifyRefused (payload or authorization faults), ourSide (not checked, quota, unconfirmed), unclassified, noReason",
+      neverRetried: "callers whose first probe in a 30-minute window was followed by no credential from them inside it (per replica)",
+      sales: "outside sales from the sales ledger (our own wallets and signed probes excluded), dollars at the buyer's price",
+      week: "the 7 whole UTC days before today; wallets, not operators",
+    },
+    byDay,
+    conversion,
+    week: ledger.week,
+  };
+  funnelCache = { key: days, at: now, value };
+  return value;
+}
+app.get("/__operator/funnel.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.vary("X-Operator-Token");
+  res.set("Cache-Control", "private, no-store");
+  try {
+    const days = Math.max(1, Math.min(FUNNEL_MAX_DAYS, parseInt(req.query.days, 10) || 14));
+    res.json(await funnelView(days));
   } catch (err) {
     res.status(500).json({ error: redactSecrets(err?.message) });
   }
@@ -7118,14 +7216,23 @@ app.post("/__operator/seller-funding", express.json(), async (req, res) => {
 });
 // Remove ONE seller origin from the index and the router, permanently (until
 // restored). Exact origin only - no name matching, no wildcards - so a typo
-// cannot take out a neighbour. Restore only lifts the block; the owner can
-// then register again.
+// cannot take out a neighbour. Restore only lifts the block; how the origin
+// comes back depends on where the index knew it from (`returnsBy`): a seed or
+// a registry listing returns by itself, an owner's submission when the owner
+// registers again. `dryRun: true` answers the same reading and removes nothing.
 app.post("/__operator/sellers/remove", express.json(), (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
+  // A preview typed as "true" or 1 must not remove: only a JSON boolean is read.
+  if (req.body && "dryRun" in req.body && typeof req.body.dryRun !== "boolean") return res.status(400).json({ error: "dryRun must be true or false (a JSON boolean); nothing was removed" });
+  if (req.body?.dryRun === true) {
+    const p = removalPreview(req.body?.origin);
+    if (p.error) return res.status(400).json({ error: p.error });
+    return res.set("Cache-Control", "no-store").json({ dryRun: true, ...p, removed: false, alreadyRemoved: p.removed });
+  }
   const r = removeOrigin(req.body?.origin, { note: typeof req.body?.note === "string" ? req.body.note : "" });
   if (r.error) return res.status(400).json({ error: r.error });
-  res.set("Cache-Control", "no-store").json({ removed: true, origin: r.origin, removedAt: r.removedAt });
+  res.set("Cache-Control", "no-store").json({ removed: true, origin: r.origin, removedAt: r.removedAt, knownFrom: r.knownFrom, returnsBy: r.returnsBy, afterRestore: r.afterRestore });
 });
 // Operator bulk seed: origins read from another registry are
 // submitted through the SAME registerOrigin path a seller's own /sell call
@@ -7183,7 +7290,7 @@ app.post("/__operator/sellers/restore", express.json(), (req, res) => {
   // retry is the remedy, so say 503 with when to try, not a bad request.
   if (r.notLoaded) return res.status(503).set("Retry-After", "30").set("Cache-Control", "no-store").json({ error: r.error, origin: r.origin, notLoaded: true });
   if (r.error) return res.status(400).json({ error: r.error });
-  res.set("Cache-Control", "no-store").json({ ...r, note: r.restored ? "the owner can register the origin again" : "that origin was not removed" });
+  res.set("Cache-Control", "no-store").json({ ...r, ...(r.restored ? {} : { returnsBy: null }), note: r.restored ? r.afterRestore : "that origin was not removed" });
 });
 // What settlement evidence do we hold for ONE origin, per source, free.
 // Runs the seller-dossier tool's own handler so the operator answer and the
@@ -9767,6 +9874,7 @@ const cardSvg = (width = 1200, height = 630) => {
   const ty = (height - 630 * s) / 2;
   const mono = JSON.stringify(BRAND.mono);
   const display = JSON.stringify(BRAND.display);
+  const { subtitle, railsTag } = socialCardText(n);
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${BRAND_FONT_STYLE}${BRAND_DEFS}
   <rect width="${width}" height="${height}" fill="${BRAND.paper}"/>
   <g transform="translate(${tx},${ty}) scale(${s})">
@@ -9777,17 +9885,21 @@ const cardSvg = (width = 1200, height = 630) => {
   <!-- headline -->
   <text x="72" y="238" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.ink}">The web's paid door,</text>
   <text x="72" y="330" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.faint}">finally open.</text>
-  <text x="72" y="392" font-size="23" font-family=${display} fill="${BRAND.muted}">${n.toLocaleString("en-US")} tools priced in cents. Reports priced in dollars. USDC over x402 / MPP, or card.</text>
+  <text x="72" y="392" font-size="23" font-family=${display} fill="${BRAND.muted}">${subtitle}</text>
   <!-- handshake panel -->
   <rect x="72" y="430" width="1056" height="140" rx="16" fill="url(#panel)" stroke="${BRAND.hairline}" stroke-width="1.5"/>
   <text x="100" y="472" font-size="19" font-family=${mono} fill="${BRAND.faint}">$ curl agent402.tools/api/whois?domain=example.com</text>
   <text x="100" y="506" font-size="19" font-family=${mono} fill="${BRAND.amber}">HTTP/2 402  <tspan fill="${BRAND.muted}">payment-required: usdc · base · 0.001</tspan></text>
   <text x="100" y="540" font-size="19" font-family=${mono} fill="${BRAND.accent}">HTTP/2 200  <tspan fill="${BRAND.muted}">payment-response: settled · tx 0x9ec4…</tspan></text>
-  <text x="1100" y="472" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">x402 · MPP · card</text>
+  <text x="1100" y="472" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">${railsTag}</text>
   <text x="1100" y="506" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">${RAILS.length} rails · USDC · USDG</text>
   </g>
 </svg>`;
 };
+// The card URL's version (set at boot by tool count, above) also carries a
+// short hash of the card itself, so a crawler refetches when its text changes
+// (the card clause follows the sales switches) and not only its count.
+setOgImageVersion(`${Object.keys(CATALOG).length}.${createHash("sha256").update(cardSvg()).digest("hex").slice(0, 8)}`);
 // X (Twitter) profile header, 1500x500 - the platform's own spec. Designed for
 // how X actually crops it: the avatar sits over the BOTTOM-LEFT, the sides are
 // shaved on narrow viewports, and the bottom strip is covered by profile text
@@ -10399,7 +10511,7 @@ const mcpMountOpts = {
     capturePostHogToolCall({ slug, latencyMs, cached: false, errored, status, synthetic: false, probe: isProbe });
   },
 };
-mountMcp(app, CATALOG, mcpMountOpts);
+mountMcp(app, CATALOG, { ...mcpMountOpts, serverCardAliases: ["/.well-known/mcp/server-card.json"] });
 // ONE-PRODUCT MCP ENDPOINT (2026-09-10): /mcp/sec serves the SEC filings
 // products only - the EDGAR reads and the three filing reports - under their
 // own dotted names, with the catalog meta tools hidden. Same connector, same
@@ -10903,6 +11015,7 @@ if (REFERRAL_GATE) {
   // Every answer the copy sends (a 200) is tallied per slug and day: the
   // "served" side of the operator's reconciliation (below).
   const referralRoute = (req, res) => {
+    noteFunnelOnFinish(req, res);
     res.once("finish", () => { if (res.statusCode === 200) { try { recordReferralAnswer(req.params?.slug); } catch { /* a tally never fails a call */ } } });
     return REFERRAL_GATE.handler(req, res);
   };
@@ -11024,6 +11137,7 @@ if (!FREE_MODE) {
   // that buffers writeHead restores the function it found.
   app.use(answerHeadersGuard());
   app.use(createHangupSettlementHook({ onUndelivered: recordHangupOutcome }));
+  markGateMounted("hangupHook");
 
   // Tempo support for MPP (src/mpp-tempo.js) — a SECOND, independent
   // settlement path alongside the evm shim below: Tempo's TIP-1034/TIP-20
@@ -11100,6 +11214,7 @@ if (!FREE_MODE) {
   });
   if (mppShim) {
     app.use(mppShim);
+    markGateMounted("mppShim");
     console.log("MPP dual-stack shim enabled (WWW-Authenticate/Authorization Payment ↔ x402 headers)");
   }
   // Dedicated replay guard for Tempo credentials — never shared with the
@@ -11177,6 +11292,7 @@ if (!FREE_MODE) {
   if (tempoGate) {
     app.use(tempoGate);
     tempoGateMounted = true;
+    markGateMounted("tempo");
     // A claimed push credential is served only once its owed debt (an
     // earlier input refusal) is voided, in one statement a refund send's
     // claim cannot interleave with (tempoPushDebts.claimForServe). A debt
@@ -11217,6 +11333,7 @@ if (!FREE_MODE) {
   });
   if (stripeGate) {
     app.use(stripeGate);
+    markGateMounted("stripe");
     console.log("Stripe MPP settlement enabled (stripe/charge cards via Shared Payment Tokens)");
   }
   // Prepaid credits gate: `Authorization: Bearer a402_…` on a priced catalog
@@ -11230,6 +11347,7 @@ if (!FREE_MODE) {
       const priceUsd = quotedPriceUsd(def, req);
       return priceUsd ? { priceUsd, slug: def.slug, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def) } : null;
     }));
+    markGateMounted("credits");
     console.log("Prepaid card credits enabled (Bearer a402_ keys)");
   }
 }
@@ -11322,6 +11440,7 @@ app.use(createIdempotency({
     } };
   },
 }));
+markGateMounted("idempotency");
 
 // x402 paywall for the catalog routes
 if (FREE_MODE) {
@@ -11455,6 +11574,7 @@ if (FREE_MODE) {
   app.use((req, res, next) => {
     const def = CATALOG[`${req.method} ${req.path}`];
     if (def) {
+      noteFunnelOnFinish(req, res);
       // Make the free tier DISCOVERABLE at the moment of rejection: PostHog
       // showed 2.1M 402 challenges vs 235 PoW challenges issued in 14 days —
       // the on-ramp exists but nothing at the paywall points to it. For
@@ -11969,6 +12089,7 @@ if (FREE_MODE) {
     // (src/settle-preference.js).
     return settlePreference(req, res, () => x402mw(req, res, (...args) => (args.length ? next(...args) : x402PayerScreen(req, res, next))));
   });
+  markGateMounted("x402", "x402PayerScreen", "replayGuard", "pow");
   console.log(`x402 payments enabled: ${NETWORK} -> ${WALLET_ADDRESS}; proof-of-work tier on ${POW_SLUGS.size} tools (difficulty ${POW_DIFFICULTY} bits)`);
 }
 
@@ -13316,6 +13437,8 @@ await Promise.race([ledgerFiguresBoot, new Promise((ok) => setTimeout(ok, LEDGER
 void loadDiscoveryRefusals();
 const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
+  // Every gate is mounted by now: a conformance document built earlier is dropped.
+  resetConformanceCache();
   // The deploy overlap window (src/replay-topology.js) is counted from here,
   // not from the first import: a slow store load must not spend it.
   markListening(listenedAt);

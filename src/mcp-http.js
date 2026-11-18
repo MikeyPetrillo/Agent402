@@ -25,6 +25,8 @@ const reportLadder = () => (_ladder ||= reportLadderProse({ humanProducts: HUMAN
 // stdio package by design.
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/sdk/types.js";
+import { REPO_URL, REPO_NAMESPACE } from "./repo-link.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -87,6 +89,7 @@ import {
   FLAGSHIP_OUTPUT_SCHEMAS,
   META_OUTPUT_SCHEMAS,
   mcpServerDescription,
+  mcpShortDescription,
   MCP_SERVER_WEBSITE,
   mcpInstallHints,
   mcpInitializeInstructions,
@@ -313,7 +316,31 @@ export function mcpPaymentMethods() {
   };
 }
 
-export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS, offerCacheMax = OFFER_CACHE_MAX }) {
+// MCP Server Card (experimental extension, SEP-2127): the static document a
+// client or directory reads before it connects. Built from the values the
+// connector reports at initialize (serverInfo version and title, the wires,
+// the endpoint), so the card and the live server cannot disagree. The card
+// lists no primitives by design; the tool count rides in our own _meta key.
+export const SERVER_CARD_SCHEMA = "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json";
+export const SERVER_CARD_MEDIA_TYPE = "application/mcp-server-card+json";
+export const SERVER_CARD_META_KEY = "tools.agent402/catalog";
+export function mcpServerCard({ baseUrl, path = "/mcp", serverName = "agent402", toolCount, mpp = mppMethodsSummary().enabled }) {
+  const site = baseUrl || MCP_SERVER_WEBSITE;
+  return {
+    $schema: SERVER_CARD_SCHEMA,
+    name: `${REPO_NAMESPACE}/${serverName}`,
+    version: VERSION,
+    title: "Agent402",
+    description: mcpShortDescription({ mpp }),
+    websiteUrl: site,
+    repository: { url: REPO_URL, source: "github" },
+    icons: [{ src: `${site}/logo.svg`, mimeType: "image/svg+xml", sizes: ["any"] }, { src: `${site}/logo.png`, mimeType: "image/png", sizes: ["512x512"] }],
+    remotes: [{ type: "streamable-http", url: `${site}${path}`, supportedProtocolVersions: [...SUPPORTED_PROTOCOL_VERSIONS] }],
+    _meta: { [SERVER_CARD_META_KEY]: { tools: toolCount } },
+  };
+}
+
+export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS, serverCardAliases = [], offerCacheMax = OFFER_CACHE_MAX }) {
   // The wires this mount takes in the call. `payWires` is the boot's own
   // account (src/connector-pay.js connectorWires, the source the pages read):
   // a wire it denies has no loopback here, so the capability advertisement,
@@ -2105,6 +2132,18 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       mcpInFlight--;
     }
   });
+
+  // The server card at the location the extension reserves (<endpoint>/server-card),
+  // plus any alias a caller names (the main connector's /.well-known path). A
+  // scoped profile (/mcp/sec) has no card: its description would be the catalog's.
+  if (!profile) {
+    const sendCard = (mediaType) => (_req, res) => {
+      const card = mcpServerCard({ baseUrl, path, toolCount: tools.size, mpp: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled });
+      res.set("Cache-Control", "public, max-age=300").set("Access-Control-Allow-Origin", "*").type(mediaType).send(JSON.stringify(card, null, 2));
+    };
+    app.get(`${path}/server-card`, sendCard(SERVER_CARD_MEDIA_TYPE));
+    for (const alias of serverCardAliases) app.get(alias, sendCard("application/json"));
+  }
 
   // Stateless servers have no notification stream or session to manage.
   app.get(path, (_req, res) => res.status(405).json({

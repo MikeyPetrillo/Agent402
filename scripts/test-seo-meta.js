@@ -14,7 +14,7 @@ import { guidePage, guideSlugs } from "../src/guides.js";
 import { sampleMeta, SAMPLES } from "../src/sample-reports.js";
 import { categoryPage, CATEGORIES } from "../src/pages.js";
 import { docsPage } from "../src/docs.js";
-import { ORG_SAME_AS } from "../src/repo-link.js";
+import { ORG_SAME_AS } from "../src/org-profiles.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };

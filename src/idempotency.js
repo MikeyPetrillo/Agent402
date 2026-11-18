@@ -121,6 +121,12 @@ function signatureDigestOf(req, cred) {
  *  answer implicitly (src/server.js mounts it as `implicitReplay`): never on a
  *  route whose effect outlives the answer, never on an identity-bound route,
  *  never for a streamed call. The two predicates are the server's own. */
+/** The credentials an Idempotency-Key binds to: an x402 payment (the MPP evm
+ *  wire arrives translated into one), a prepaid credits key, a solved
+ *  proof-of-work challenge. A Tempo or card credential is answered by its own
+ *  gate's replay guard instead. Read by the conformance document. */
+export const IDEMPOTENCY_CREDENTIALS = Object.freeze(["x402", "credits", "pow"]);
+
 export function implicitReplayAllowed(def, req, { hasLastingEffect, isIdentityBound }) {
   return Boolean(def) && !hasLastingEffect(def.slug) && !isIdentityBound(def) && req?.body?.stream !== true;
 }
@@ -231,6 +237,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     // Which presented credential the key is bound to, so the store step can
     // require that it is the one the gate actually verified.
     const kind = cred === x402Cred ? "x402" : cred === creditsCred ? "credits" : "pow";
+    if (!IDEMPOTENCY_CREDENTIALS.includes(kind)) return null;
     // Bind to the exact route AND the request body, so the same key+credential
     // can't be used to retrieve a cached response from a different payload or
     // different endpoint. Body is hashed (not stored) so the key stays compact.

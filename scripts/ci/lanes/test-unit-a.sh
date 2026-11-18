@@ -29,13 +29,17 @@ t node scripts/test-ci-apt-bounded.js
 # Gateway settle-failure breaker (per-payer + global refusal before any upstream call, finish-listener outcomes, source pins - offline)
 t node scripts/test-gateway-settle-breaker.js
 
-# @step 2: Offline suites (5 scripts, one process each)
+# @step 2: Offline suites (7 scripts, one process each)
 # Economy history unit tests (daily upsert idempotency + week-over-week math — offline)
 t node scripts/test-x402-economy.js
 # /sitemap.xml coverage (every skill pack, sample tools, static surfaces, per-URL lastmod stable across boots)
 t node scripts/test-sitemap-coverage.js
 # Sitemap URLs are their own canonical; breadcrumb trails match their BreadcrumbList; one site entity in JSON-LD
 t node scripts/test-seo-structure.js
+# One sameAs profile list for every Organization in JSON-LD; the site entity names what it is
+t node scripts/test-org-same-as.js
+# Canonical host: canonical, og:url, JSON-LD, sitemap and the MCP server card all name BASE_URL's host; /about and /press
+t node scripts/test-canonical-host.js
 # The sitemap lastmod table matches git history (needs the full-depth checkout above)
 t node scripts/test-page-dates.js
 # Bing sitemap registration script: lists then submits only the missing feeds (stubbed, offline)
