@@ -34,6 +34,8 @@ import { KIT2 } from "../src/tools/kit2.js";
 import { DATA_TOOLS } from "../src/tools/data-kit.js";
 import { CHAIN_TOOLS } from "../src/tools/chain-kit.js";
 import { TOOLS as CANARY_LEGS } from "./paid-canary.js";
+import { STOCK_SLUGS } from "../src/tools/stock-provider.js";
+import { STOCK_CORE_PACK_SLUGS } from "../src/skills.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -117,7 +119,16 @@ if (xt) {
 }
 if (xt) ok(xt.priceUsd === advertised(X_DATA_TOOLS, "x-tweet"), `x-tweet leg priceUsd (${xt?.priceUsd}) matches the kit's advertised price ($${advertised(X_DATA_TOOLS, "x-tweet")})`);
 const sq = legFor("/api/stock-quote");
-ok(!!sq, "canary has a stock-quote leg");
+ok(!!sq && sq.whenListed === true, "canary has a stock-quote leg, bought only while prod lists the route (listed only with an active stock provider)");
+// Every leg on a route listed only with an active stock provider (a stock
+// tool, or a pack whose stock step is its answer) buys only while listed: a
+// production with no provider answers those routes 503, and an unlisted leg
+// would fail every canary run.
+{
+  const stockOnly = new Set([...[...STOCK_SLUGS].map((s) => `/api/${s}`), ...[...STOCK_CORE_PACK_SLUGS].map((s) => `/api/skill/${s}`)]);
+  const unguarded = CANARY_LEGS.filter((l) => stockOnly.has(String(l.path).split("?")[0]) && l.whenListed !== true).map((l) => l.path);
+  ok(STOCK_CORE_PACK_SLUGS.size > 0 && unguarded.length === 0, `every canary leg on a stock-only route is whenListed (${unguarded.join(", ") || "none unguarded"})`);
+}
 if (sq) ok(sq.priceUsd === advertised(FINANCE_TOOLS, "stock-quote"), `stock-quote leg priceUsd (${sq?.priceUsd}) matches the kit's advertised price ($${advertised(FINANCE_TOOLS, "stock-quote")}) — no stale display price`);
 const tr = CANARY_LEGS.find((l) => l.kit === "transcribe");
 const STT_EXAMPLE_URL = STT_TOOLS.find((t) => t.slug === "transcribe")?.discovery?.input?.url;

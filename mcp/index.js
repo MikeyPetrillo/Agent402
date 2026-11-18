@@ -765,8 +765,12 @@ function rankWorkflows(query, k = 2) {
 // MCP wiring
 // Initialize instructions mirror src/mcp-flagship.js mcpInitializeInstructions
 // (stdio package cannot import src/ when published). Keep tool names listed-only.
-// This server lists no demand.request, so its instructions do not name it.
-const INIT_INSTRUCTIONS = mcpInitializeInstructions(BASE, { ...hostedConnectorWiresFor(BASE), demand: false });
+// This server lists no demand.request, so its instructions do not name it;
+// market.quote is named only while it is listed (the catalog lists
+// stock-quote and it is first-class here), so the text is rebuilt after each
+// catalog read (syncInstructions) and before the first initialize.
+const instructionsFor = (stock) => mcpInitializeInstructions(BASE, { ...hostedConnectorWiresFor(BASE), demand: false, stock });
+const INIT_INSTRUCTIONS = instructionsFor(false);
 
 const server = new Server(
   {
@@ -778,6 +782,10 @@ const server = new Server(
   },
   { capabilities: { tools: {}, prompts: {} }, instructions: INIT_INSTRUCTIONS },
 );
+/** Point the initialize instructions at what tools/list lists now. */
+function syncInstructions() {
+  server._instructions = instructionsFor(curated.some((t) => t.slug === "stock-quote"));
+}
 
 // Skill packs are exposed as MCP prompts, discoverable in slash menus on any
 // MCP-aware client. The list is fetched once at boot in loadCatalog(); the
@@ -834,6 +842,7 @@ async function ensureCatalog() {
   try {
     pricingInfo = await loadCatalog();
     curated = requested.map((slug) => catalog.get(slug)).filter(Boolean);
+    syncInstructions();
     log(`catalog: ${catalog.size} tools from ${BASE} on a later read; ${curated.length} first-class`);
   } catch (err) {
     log(`Could not load the catalog from ${BASE}: ${err.message}: next read in ${CATALOG_RETRY_MS / 1000}s`);
@@ -906,7 +915,7 @@ server.setRequestHandler("tools/list", redacted(withCatalog(async () => {
       title: "Run an Agent402 tool",
       annotations: { title: "Run an Agent402 tool", ...CALL_PAID },
       description:
-        "Call any Agent402 tool by slug (find slugs with catalog.find or catalog.search). Payment is handled automatically: USDC via x402 if this server has a wallet key, otherwise free proof-of-work on eligible pure-CPU tools (no wallet needed). Wallet-keyed highlights: live search/answer, stock-quote, render, transcribe, memory, and the /v1 LLM gateway tiers.",
+        "Call any Agent402 tool by slug (find slugs with catalog.find or catalog.search). Payment is handled automatically: USDC via x402 if this server has a wallet key, otherwise free proof-of-work on eligible pure-CPU tools (no wallet needed). Wallet-keyed highlights: live search/answer, render, transcribe, memory, and the /v1 LLM gateway tiers.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1270,6 +1279,7 @@ try {
 const requested = (process.env.AGENT402_TOOLS || DEFAULT_CURATED.join(","))
   .split(",").map((s) => s.trim()).filter(Boolean);
 curated = requested.map((slug) => catalog.get(slug)).filter(Boolean);
+syncInstructions();
 log(`catalog: ${catalog.size} tools from ${BASE}; ${curated.length} first-class, rest via catalog.search/catalog.call`);
 // A key is reported configured only once it parses: a key that does not
 // parse is named (never printed) so the operator sees it before the first

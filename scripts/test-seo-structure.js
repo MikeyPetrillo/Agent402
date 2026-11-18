@@ -178,8 +178,8 @@ try {
   }
   // An alias page still answers, canonical to its pack page (the reason it is left out).
   {
-    const html = await (await fetch(`${BASE}/tools/skill-earnings-deep-dive`)).text();
-    ok(html.includes(`<link rel="canonical" href="${BASE}/skills/earnings-deep-dive">`), "control: /tools/skill-earnings-deep-dive is canonical to /skills/earnings-deep-dive");
+    const html = await (await fetch(`${BASE}/tools/skill-sec-filings-deep-dive`)).text();
+    ok(html.includes(`<link rel="canonical" href="${BASE}/skills/sec-filings-deep-dive">`), "control: /tools/skill-sec-filings-deep-dive is canonical to /skills/sec-filings-deep-dive");
   }
 
   // Every /tools and /skills URL, and up to four of every other page type.
@@ -212,7 +212,7 @@ try {
   }));
   ok(seen.html >= 600 && seen.crumbs >= 600, `read ${seen.html} sitemap pages (${seen.crumbs} with a BreadcrumbList) across ${byType.size} page types`);
   ok(bad.length === 0, `every page read is its own canonical, its trail matches its BreadcrumbList, and it names one site entity${bad.length ? `:\n  ${bad.slice(0, 15).join("\n  ")}${bad.length > 15 ? `\n  ... ${bad.length - 15} more` : ""}` : ""}`);
-  for (const p of ["/skills/earnings-deep-dive", "/blog", "/guides", "/tools/category/crypto", "/reports/sample/dossier", "/docs/webhooks", "/base"]) {
+  for (const p of ["/skills/sec-filings-deep-dive", "/blog", "/guides", "/tools/category/crypto", "/reports/sample/dossier", "/docs/webhooks", "/base"]) {
     const html = await (await fetch(`${BASE}${p}`)).text();
     if (p === "/blog" || p === "/guides") {
       // An index page: its first post or guide carries the trail.

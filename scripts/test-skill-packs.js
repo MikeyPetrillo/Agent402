@@ -14,8 +14,10 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { SKILL_PACKS, buildPromptMessages } from "../src/skills.js";
-import { PACK_STEPS } from "../src/tools/skill-runner.js";
+import { SKILL_PACKS, buildPromptMessages, STOCK_TRIMMED_PACK_SLUGS } from "../src/skills.js";
+import { stockDataEnabled } from "../src/tools/stock-provider.js";
+import { PACK_STEPS, __test as runnerTest } from "../src/tools/skill-runner.js";
+const { getStepConfig } = runnerTest;
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -45,7 +47,10 @@ try {
   for (const pack of SKILL_PACKS) {
     ok(typeof pack.slug === "string" && /^[a-z0-9-]+$/.test(pack.slug), `${pack.slug}: slug is kebab-case`);
     ok(pack.title && pack.tagline && pack.useCase, `${pack.slug}: title/tagline/useCase present`);
-    ok(Array.isArray(pack.toolSlugs) && pack.toolSlugs.length >= 3, `${pack.slug}: >=3 toolSlugs`);
+    // A pack listed without its stock step (no stock provider, src/skills.js
+    // STOCK_TRIMMED_PACK_SLUGS) may run two tools; every other pack runs three or more.
+    const minTools = STOCK_TRIMMED_PACK_SLUGS.has(pack.slug) && !stockDataEnabled() ? 2 : 3;
+    ok(Array.isArray(pack.toolSlugs) && pack.toolSlugs.length >= minTools, `${pack.slug}: >=${minTools} toolSlugs`);
     ok(Array.isArray(pack.workflow) && pack.workflow.length >= 3, `${pack.slug}: >=3 workflow steps`);
     ok(typeof pack.claudePrompt === "string" && pack.claudePrompt.length > 50, `${pack.slug}: claudePrompt non-trivial`);
     ok(Array.isArray(pack.promptArgs), `${pack.slug}: promptArgs is an array (possibly empty)`);
@@ -115,7 +120,7 @@ try {
   // leak. We union both sources so drift in either one is caught.
   for (const pack of SKILL_PACKS) {
     const declared = pack.toolSlugs || [];
-    const executed = (PACK_STEPS[pack.slug]?.steps || []).map((st) => st.slug);
+    const executed = (getStepConfig(pack.slug)?.steps || []).map((st) => st.slug);
     const members = [...new Set([...declared, ...executed])];
     const walletMembers = members.filter((s2) => WALLET_ONLY_SLUGS.has(s2));
     if (walletMembers.length) {

@@ -82,6 +82,7 @@ import { paidPriceUsd } from "./paid-price.js";
 import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
 import { attributionOf, notCallersInput, faultAdvice } from "./tool-error-fields.js";
 import { redactSecrets } from "./tools/redact.js";
+import { STOCK_SLUGS, stockNotOffered } from "./tools/stock-provider.js";
 import {
   FLAGSHIP_SLUGS,
   FLAGSHIP_MCP_NAMES,
@@ -716,7 +717,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // paid call here cannot be settled at all.
           ...(mppLoopback ? { experimental: { payment: { methods: mcpPaymentMethods() } } } : {}),
         },
-        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], mpp: payMpp, x402: payX402, mppOffered: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed() }),
+        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], stock: flagshipSet.has("stock-quote"), mpp: payMpp, x402: payX402, mppOffered: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled, receipts: receiptsServed() }),
       },
     );
 
@@ -1812,6 +1813,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         const { isNamed, resolvedSlug, entry } = callTargetOf(name, args);
         // After resolveListedName, catalog.call is the envelope path; everything
         // else must be a named flagship (or legacy alias mapped above).
+        // A stock tool this server does not list (no stock data provider):
+        // the same not-offered answer its HTTP route gives, never "unknown".
+        const unlistedStock = !isNamed && name !== "catalog.call"
+          ? [...STOCK_SLUGS].find((slug) => FLAGSHIP_MCP_NAMES[slug] === name && !tools.has(slug))
+          : (!entry && STOCK_SLUGS.has(resolvedSlug) ? resolvedSlug : null);
+        if (unlistedStock) {
+          return { content: [{ type: "text", text: `${stockNotOffered().message} (${unlistedStock})` }], isError: true };
+        }
         if (name !== "catalog.call" && !isNamed) {
           return { content: [{ type: "text", text: `Unknown tool ${quotedEcho(rawName)}.` }], isError: true };
         }

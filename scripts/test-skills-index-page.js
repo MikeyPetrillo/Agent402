@@ -3,7 +3,7 @@
 // data, since the page has no fixture-able inputs of its own (unlike the
 // other revamped pages, it takes only baseUrl).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { skillsIndex, SKILL_PACKS, PACK_PRICES, skillPackPage, skillPacksJson, PACK_PRICE_RANGE } from "../src/skills.js";
+import { skillsIndex, SKILL_PACKS, ALL_SKILL_PACKS, PACK_PRICES, skillPackPage, skillPacksJson, PACK_PRICE_RANGE } from "../src/skills.js";
 import { pageCtaHrefs, inPageHtml } from "./lib/page-ctas.js";
 
 let pass = 0, fail = 0;
@@ -35,7 +35,8 @@ ok(/failure paths<\/th><td[^>]*>7<\/td><td[^>]*>1 envelope</.test(html), "a pack
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/skills.js", import.meta.url), "utf8");
   const rows = [...src.matchAll(/^\s+"([a-z0-9-]+)": ([0-9.]+), \/\/ \d+ tools?, parts \$([0-9.]+)/gm)];
-  ok(rows.length === SKILL_PACKS.length, `every pack price row carries its parts sum (${rows.length}/${SKILL_PACKS.length})`);
+  // The table prices every pack, listed or not (ALL_SKILL_PACKS).
+  ok(rows.length === ALL_SKILL_PACKS.length, `every pack price row carries its parts sum (${rows.length}/${ALL_SKILL_PACKS.length})`);
   const over = rows.filter(([, , price, parts]) => Number(price) > Number(parts));
   ok(over.length === 0, `no pack is priced above the sum of its tools${over.length ? `: ${over.map((r) => r[1]).join(", ")}` : ""}`);
   const atSum = rows.filter(([, , price, parts]) => Number(price) === Number(parts)).length;

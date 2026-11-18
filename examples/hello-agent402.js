@@ -23,4 +23,4 @@ console.log(`$1,000 at 5% for 10 years → $${r.futureValue} (${r.periods} perio
 //
 //   import { wrapFetchWithPayment } from "@x402/fetch";
 //   const a = new Agent402({ fetch: wrapFetchWithPayment(fetch, x402Client), maxPerCallUsd: 0.05 });
-//   const quote = await a.call("stock-quote", { symbol: "AAPL" });
+//   const quote = await a.call("crypto-price", { coins: "bitcoin" });

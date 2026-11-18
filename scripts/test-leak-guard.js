@@ -48,6 +48,7 @@ delete process.env.WARPCAST_API_KEY;
 process.env.FRED_API_KEY = "fred-LEAKCANARY0000";
 process.env.FRED_API_KEY_V2 = "fredv2-LEAKCANARY0000";
 process.env.DATABENTO_API_KEY = "db-LEAKCANARY00000000000000000000"; // public-IP literal → no DNS
+process.env.STOCK_DATA_PROVIDER = "databento";
 
 process.env.ALCHEMY_API_KEY = "alchemy-LEAKCANARY0000";
 process.env.E2B_API_KEY = "e2b_LEAKCANARY0000"; // code-run-kit (E2B sandbox)

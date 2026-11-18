@@ -92,8 +92,9 @@ Set these on your host. None are committed to the repo.
 | `JEV_MODEL` | No | The Jev version the judgment routes pin to (default `jev-1.14.0`); `TYPESAFE_MODEL` overrides it for the internal callers |
 | `DECISION_ONE`, `GEMINI_DECISION`, `JEV_OPENROUTER` | No | `off` turns off one judgment model reached over OpenRouter (Decision-1, Gemini Decision-1, the pinned Jev version); each is on whenever `OPENROUTER_API_KEY` is set |
 | `E2B_MAX_CONCURRENT` | No | Sandboxes running at once for the whole service (default 8), split across replicas |
-| `DATABENTO_SUMMARY` | No | `off` makes the stock tools read the three-venue feed instead of the end-of-day summary dataset |
-| `MARKET_TICK` | No | `on` lists `GET /api/market/tick`, a cached per-symbol read of the figures `crypto-price` and `stock-quote` already serve (no source of its own; `MARKET_TICK_CACHE_MS` sets the window, default 15000). Off by default |
+| `STOCK_DATA_PROVIDER` | No | The stock data provider behind `stock-quote`, `stock-history` and the packs that run them: `off` (default) or `databento`, which is active only with `DATABENTO_API_KEY` set. With no active provider those routes are not listed and answer 503. A new provider is one adapter file in `src/tools/` (see `src/tools/stock-provider.js`), its key and this setting |
+| `DATABENTO_SUMMARY` | No | `off` makes the `databento` provider read the three-venue feed instead of the end-of-day summary dataset |
+| `MARKET_TICK` | No | `on` lists `GET /api/market/tick`, a cached per-symbol read of the figures `crypto-price` and `stock-quote` already serve (no source of its own; `MARKET_TICK_CACHE_MS` sets the window, default 15000), while a stock provider is active. Off by default |
 | `GATEWAY_NANOPAYMENTS` | No | `on` adds the Circle Gateway batched option (below). Off by default |
 | `GATEWAY_NANOPAYMENT_NETWORKS` | No | Which networks carry the batched option: `arc`, `base` or both (default `arc,base`); a network must also be in the plain offer |
 | `GATEWAY_WITHDRAW_ALERT_USD` | No | Gateway balance, in USD, at which `gatewayBalance` reads `withdraw` (default 25) |

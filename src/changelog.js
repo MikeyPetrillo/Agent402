@@ -10,6 +10,15 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-18",
+    title: "Stock data tools not offered",
+    items: [
+      "Tools: stock-quote and stock-history are not offered for now, and neither are the skill packs built on them: options-analytics, price-monitor and financial-analysis. Their routes answer 503 with no payment asked, and the catalog, /api/pricing, /openapi.json, llms.txt, the MCP tool lists and the sitemap do not list them.",
+      "Skill packs: earnings-deep-dive, financial-research, company-dossier, earnings-watch, insider-alert, trend-analysis and forecasting-bake-off run without their stock step, each priced by the pack rule over the tools it keeps; trend-analysis and forecasting-bake-off take a FRED series id.",
+      "Reports: The company dossier is built from SEC filings, Form 4 insider filings and web research, with no quote step.",
+    ],
+  },
+  {
+    date: "2026-11-18",
     title: "Signed receipts",
     items: [
       "Payments: A server run with a receipt signing key (`RECEIPT_SIGNING_KEY`) sends an `Agent402-Receipt` header on each settled paid answer that is not streamed: a compact JWS (EdDSA, Ed25519) over the route, the request digest, the sha256 of the answer, the price, the rail, the network, the payer and the settlement. The public keys are published at `/.well-known/agent402-receipt-key.json`, and `POST /api/receipts/verify` checks a receipt for free. The `signedReceipt` cell of each conformance row reads true only while the server signs.",
