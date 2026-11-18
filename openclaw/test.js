@@ -24,7 +24,7 @@ const run = (cliArgs, env) => new Promise((resolve) => {
 });
 import { startProxy } from "./proxy.js";
 import { routesFromCatalog, openclawModels, AUTO_ID, defaultPrimary, METERED_MAX_INPUT_CHARS, METERED_MAX_TOKENS } from "./models.js";
-import plugin, { resolveCreditsKey, resolveWalletKey, resolvePayFetch, selectAccept, uptoReady, PERMIT2_READY_MIN, maxPerCallUsd, uncappedAcknowledged, uncappedRefused, acceptUsd, DEFAULT_MAX_PER_CALL_USD } from "./index.js";
+import plugin, { resolveCreditsKey, resolveWalletKey, resolvePayFetch, selectAccept, uptoReady, PERMIT2_READY_MIN, maxPerCallUsd, maxPerCallProblem, uncappedAcknowledged, uncappedRefused, acceptUsd, DEFAULT_MAX_PER_CALL_USD } from "./index.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
@@ -95,15 +95,25 @@ const upstream = `http://127.0.0.1:${stub.address().port}`;
   const odd = { scheme: "exact", network: "eip155:8453", amount: "1", asset: "0x000000000000000000000000000000000000bEEF", extra: { decimals: 18 } };
   let oddRefused = null; try { selectAccept([odd], { maxUsd: 1 }); } catch (e) { oddRefused = String(e.message); }
   ok(acceptUsd(odd) === null && /unreadable/.test(oddRefused || ""), "an accept in an unknown asset cannot be priced and is refused under a finite ceiling");
-  // The per-call ceiling is opt-in: none unless a positive value is set.
+  // The per-call ceiling is on by default ($5); 0 or off turns it off; a value
+  // that does not parse keeps the default and is named for stderr.
   {
     const prevCap = process.env.AGENT402_MAX_PER_CALL_USD;
     delete process.env.AGENT402_MAX_PER_CALL_USD;
-    ok(maxPerCallUsd({}) === Infinity && DEFAULT_MAX_PER_CALL_USD === Infinity, "no ceiling by default");
-    ok(maxPerCallUsd({ maxPerCallUsd: "0.5" }) === 0.5 && maxPerCallUsd({ maxPerCallUsd: 4 }) === 4, "a positive value sets the ceiling");
-    ok([ "off", 0, "0", "abc", -3 ].every((v) => maxPerCallUsd({ maxPerCallUsd: v }) === Infinity) && !uncappedRefused({ maxPerCallUsd: "off" }), "off, 0, malformed or negative is no ceiling, with no acknowledgment needed");
+    ok(maxPerCallUsd({}) === 5 && DEFAULT_MAX_PER_CALL_USD === 5 && maxPerCallProblem({}) === null, "default ceiling is $5, with no warning");
+    ok(maxPerCallUsd({ maxPerCallUsd: "0.5" }) === 0.5 && maxPerCallUsd({ maxPerCallUsd: 4 }) === 4 && maxPerCallProblem({ maxPerCallUsd: 4 }) === null, "a positive value sets the ceiling");
+    ok(["off", " OFF ", 0, "0"].every((v) => maxPerCallUsd({ maxPerCallUsd: v }) === Infinity && maxPerCallProblem({ maxPerCallUsd: v }) === null) && !uncappedRefused({ maxPerCallUsd: "off" }), "off or 0 is no ceiling, with no acknowledgment needed");
+    const bad = ["abc", -3, "-1", "NaN", "", " ", "1e999", {}];
+    ok(bad.every((v) => maxPerCallUsd({ maxPerCallUsd: v }) === DEFAULT_MAX_PER_CALL_USD), "malformed, negative, NaN or empty keeps the default ceiling, never none");
+    ok(bad.every((v) => /maxPerCallUsd=.* is not a USD amount, 0 or "off"; keeping the default \$5 per-call ceiling/.test(maxPerCallProblem({ maxPerCallUsd: v }) || "")), "each malformed value gets a warning naming the setting");
     process.env.AGENT402_MAX_PER_CALL_USD = "3";
     ok(maxPerCallUsd({}) === 3 && maxPerCallUsd({ maxPerCallUsd: "1" }) === 1, "AGENT402_MAX_PER_CALL_USD sets it; the plugin config wins");
+    process.env.AGENT402_MAX_PER_CALL_USD = "off";
+    ok(maxPerCallUsd({}) === Infinity, "AGENT402_MAX_PER_CALL_USD=off turns it off");
+    process.env.AGENT402_MAX_PER_CALL_USD = "";
+    ok(maxPerCallUsd({}) === 5 && /AGENT402_MAX_PER_CALL_USD="" is not a USD amount/.test(maxPerCallProblem({}) || ""), "AGENT402_MAX_PER_CALL_USD set empty keeps the default and is named");
+    process.env.AGENT402_MAX_PER_CALL_USD = "two dollars";
+    ok(maxPerCallUsd({}) === 5 && /AGENT402_MAX_PER_CALL_USD=/.test(maxPerCallProblem({}) || ""), "a malformed AGENT402_MAX_PER_CALL_USD keeps the default and is named");
     if (prevCap == null) delete process.env.AGENT402_MAX_PER_CALL_USD; else process.env.AGENT402_MAX_PER_CALL_USD = prevCap;
   }
   // The price is read from the field the challenge's version signs.
@@ -187,14 +197,30 @@ const upstream = `http://127.0.0.1:${stub.address().port}`;
     ExactEvmScheme.prototype.createPaymentPayload = async function (v, r, ctx) { return orig.call(this, v, { ...r, maxTimeoutSeconds: 10 * 365 * 24 * 3600 }, ctx); };
     const errLong = await pay({});
     ok(values.length === 1 && /86400-second ceiling/.test(errLong || ""), `a payload signed for ten years is not sent (${errLong})`);
-    // A default plugin pays a $3.30 quote and one above $4: no ceiling unless set.
+    // A default plugin pays a $5 quote and refuses a $6 one before signing
+    // (the $5 default); 0 or off pays it; a malformed value keeps the
+    // default and says so on stderr.
     ExactEvmScheme.prototype.createPaymentPayload = orig;
-    quoteAmount = "3300000";
-    ok(await pay({}) === null && values.at(-1) === "3300000", "a default plugin pays a $3.30 quote");
+    const prevCap = process.env.AGENT402_MAX_PER_CALL_USD;
+    delete process.env.AGENT402_MAX_PER_CALL_USD;
     quoteAmount = "5000000";
-    ok(await pay({}) === null && values.at(-1) === "5000000", "a default plugin pays a $5 quote, above $4");
+    ok(await pay({}) === null && values.at(-1) === "5000000", "a default plugin pays a $5 quote, at the ceiling");
+    quoteAmount = "6000000";
+    const sentBefore = values.length;
+    const refused = await pay({});
+    ok(/\$6 exceeds the per-call ceiling \$5; nothing was signed/.test(refused || "") && /maxPerCallUsd/.test(refused || "") && /"off"/.test(refused || "") && values.length === sentBefore, `the default ceiling refuses a $6 quote before signing, naming the price, the ceiling and how to raise or turn it off (${refused})`);
+    ok(await pay({ maxPerCallUsd: 0 }) === null && values.at(-1) === "6000000", "maxPerCallUsd 0 pays it");
+    ok(await pay({ maxPerCallUsd: "off" }) === null && values.at(-1) === "6000000", "maxPerCallUsd off pays it");
+    const warned = [];
+    const origErr = console.error;
+    console.error = (...a) => warned.push(a.join(" "));
+    let malformed;
+    try { malformed = await pay({ maxPerCallUsd: "abc" }); } finally { console.error = origErr; }
+    ok(/exceeds the per-call ceiling \$5/.test(malformed || "") && warned.filter((m) => /maxPerCallUsd="abc" is not a USD amount/.test(m)).length === 1, `a malformed ceiling keeps the $5 default and warns once on stderr (${malformed}; ${warned.join(" | ")})`);
+    quoteAmount = "5000000";
     const capped = await pay({ maxPerCallUsd: 4 });
-    ok(/exceeds the per-call ceiling \$4/.test(capped || "") && values.at(-1) === "5000000" && /AGENT402_MAX_PER_CALL_USD/.test(capped || ""), `a $4 ceiling the operator sets refuses it and names the setting (${capped})`);
+    ok(/exceeds the per-call ceiling \$4/.test(capped || "") && values.at(-1) === "6000000" && /AGENT402_MAX_PER_CALL_USD/.test(capped || ""), `a $4 ceiling the operator sets refuses a $5 quote and names the setting (${capped})`);
+    if (prevCap == null) delete process.env.AGENT402_MAX_PER_CALL_USD; else process.env.AGENT402_MAX_PER_CALL_USD = prevCap;
   } finally {
     ExactEvmScheme.prototype.createPaymentPayload = orig;
     seller.close();

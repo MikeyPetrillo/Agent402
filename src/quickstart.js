@@ -180,7 +180,7 @@ console.log(result);</code></pre></div>
 <span class="qs-label">Run the local wallet proxy (pays each call from your wallet over x402)</span>
 <div class="ml-code" style="margin:0 0 20px"><pre><code>npm i agent402-openclaw @x402/fetch @x402/evm viem   # in one folder
 export AGENT402_WALLET_KEY=0x...      # an EVM key holding USDC on Base
-export AGENT402_MAX_PER_CALL_USD=2    # per-call ceiling checked before signing
+export AGENT402_MAX_PER_CALL_USD=5    # per-call ceiling checked before signing (the default; 0 or off turns it off)
 npx agent402-openclaw proxy           # run from that folder; serves http://127.0.0.1:8412/v1</code></pre></div>
 
 <span class="qs-label">Point any OpenAI SDK at it</span>

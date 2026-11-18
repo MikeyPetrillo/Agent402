@@ -225,6 +225,8 @@ t node scripts/test-pack-copy-modes.js
 t node scripts/test-content-pipeline-guide.js
 # Every model-backed tool says so in its description, and World Bank and FRED credits survive the listing cap (boots its own FREE_MODE server on port 0)
 t node scripts/test-catalog-honesty-markers.js
+# Each auto-paying package's default per-call ceiling covers the dearest fixed price in /api/pricing (boots its own FREE_MODE server on port 0)
+t node scripts/test-package-cap-defaults.js
 # Refund backfill decides who is OWED money: who is in, who is out, idempotent (offline, temp ledgers)
 t node scripts/test-refund-backfill.js
 # Upstream-spend meter records with PostHog OFF and in exact micro-dollars (offline)

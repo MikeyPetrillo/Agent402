@@ -114,7 +114,7 @@ Surfaces:
 - A tools/call paid over x402 in the call that the connector stops waiting on
   says it may have been charged, as an MPP-paid one does.
 
-### 2026-11-17 (package releases: opt-in spending caps, request timeouts, typed APIs)
+### 2026-11-17 (package releases: spending caps, request timeouts, typed APIs)
 Packages:
 - agent402-client 0.9.0 keeps every spending cap opt-in (no cap unless the
   caller sets one) and adds call(slug, params, { maxUsd }), which allows one
@@ -129,17 +129,19 @@ Packages:
   testnet Gateway serves); gateway.verifyingContracts adds or replaces
   entries. agent402-client and agent402-mcp 0.14.0 solve proof-of-work on a
   worker thread and refuse a challenge above 28 bits.
-- agent402-mcp 0.14.0 sets no spending cap of its own: the per-call cap
-  (AGENT402_MAX_PER_CALL, $4 by default before) and the session budget
-  (AGENT402_BUDGET) are both opt-in, and a call either refuses names the
-  setting to raise; it returns at most 25 catalog.search results, takes params
-  as an object or a JSON string of one on catalog.call and router.execute,
-  marks catalog.call, router.execute and memory.write destructive and the
-  catalog lookups read-only as the hosted connector does, names no
-  demand.request in its instructions (it does not list it), names a wallet key
-  that does not parse at start instead of reporting a configured wallet, and
-  runs on MCP SDK v2 (@modelcontextprotocol/server 2.4.0) with the same
-  answers on the 2024-11-05 through 2025-11-25 revisions.
+- agent402-mcp 0.14.0 refuses a single call above $5 by default ($4 before),
+  which covers every fixed price in the catalog: AGENT402_MAX_PER_CALL set to
+  0 or off turns the cap off, a value that is not a USD amount keeps the
+  default and is named on stderr, a refused call names the price, the cap and
+  the setting to raise, and the session budget (AGENT402_BUDGET) stays opt-in;
+  it returns at most 25 catalog.search results, takes params as an object
+  or a JSON string of one on catalog.call and router.execute, marks
+  catalog.call, router.execute and memory.write destructive and the catalog
+  lookups read-only as the hosted connector does, names no demand.request in
+  its instructions (it does not list it), names a wallet key that does not
+  parse at start instead of reporting a configured wallet, and runs on MCP SDK
+  v2 (@modelcontextprotocol/server 2.4.0) with the same answers on the
+  2024-11-05 through 2025-11-25 revisions.
 - agent402-tollbooth 0.12.0 charges every listed AI crawler in strict mode, a
   browser-like one included; the CLI stops on SIGTERM or SIGINT by letting
   requests in flight finish and exiting 0 (TOLLBOOTH_SHUTDOWN_GRACE_MS,
@@ -149,11 +151,13 @@ Packages:
 - agent402-openai-tools, agent402-anthropic-tools, agent402-llamaindex and
   agent402-strands 0.2.0 pass agent402-client's spending caps through
   (maxPerCallUsd, dailyLimitUsd, maxPerHostUsd, x402Client; none by default).
-  elizaos-plugin-agent402 0.3.0 and agent402-agentkit 0.2.0 set no per-call
-  cap unless one is set ($1 by default before), and agent402-openclaw 0.6.0
-  sets no per-call ceiling unless maxPerCallUsd or AGENT402_MAX_PER_CALL_USD
-  is set ($2 by default before; off needs no acknowledgment). The adapters
-  accept agent402-client from 0.8.21 up to the next major, 0.9.0 included.
+  elizaos-plugin-agent402 0.3.0, agent402-agentkit 0.2.0 and agent402-openclaw
+  0.6.0 refuse a single paid call above $5 by default ($1, $1 and $2 before)
+  before signing: 0 or off turns the ceiling off (agent402-openclaw no longer
+  needs allowUncappedPayments for it), a value that is not a USD amount keeps
+  the default and is named on stderr, and a refusal names the price, the
+  ceiling and the setting to raise. The adapters accept agent402-client from
+  0.8.21 up to the next major, 0.9.0 included.
 MCP:
 - The hosted connector counts each message of a JSON-RPC batch against its
   per-client request limit.

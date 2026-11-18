@@ -82,7 +82,8 @@
       "AGENT402_MAX_PER_CALL_USD": {
         "type": "string",
         "required": false,
-        "description": "Optional ceiling on a single paid call in USD (no cap unless set); a call priced above it is refused before paying."
+        "default": "5",
+        "description": "Ceiling on a single paid call in USD (default 5; 0 or off turns it off); a call priced above it is refused before paying."
       },
       "AGENT402_DAILY_LIMIT_USD": {
         "type": "string",

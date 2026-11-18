@@ -43,10 +43,10 @@ A route with an `async` block takes `Prefer: respond-async`: 202 and a `Location
 | Package | Per call | Across calls | Source |
 |---|---|---|---|
 | agent402-client | `maxPerCallUsd` (opt-in; `call(..., { maxUsd })` allows one call above it) | `dailyLimitUsd`, `maxPerHostUsd` (opt-in, rolling 24 hours, per instance) | `client/index.js` |
-| agent402-mcp | `AGENT402_MAX_PER_CALL` (opt-in) | `AGENT402_BUDGET` (whole session, opt-in) | `mcp/index.js` |
-| agent402-openclaw | `maxPerCallUsd` (opt-in) | none | `openclaw/index.js` |
+| agent402-mcp | `AGENT402_MAX_PER_CALL` ($5 default, 0 or off disables) | `AGENT402_BUDGET` (whole session, opt-in) | `mcp/index.js` |
+| agent402-openclaw | `maxPerCallUsd` ($5 default, 0 or off disables) | none | `openclaw/index.js` |
 
-Every cap is checked before a payment is signed. All three packages refuse an accept asking for a signing validity longer than a day (`MAX_VALIDITY_SECONDS` in each `known-assets.js`). `AGENT402_NETWORKS` (agent402-mcp) restricts and orders the chains a wallet pays on.
+Every cap is checked before a payment is signed. The $5 defaults protect your own wallet and cover every fixed price in the catalog; a value that is not a USD amount keeps the default. All three packages refuse an accept asking for a signing validity longer than a day (`MAX_VALIDITY_SECONDS` in each `known-assets.js`). `AGENT402_NETWORKS` (agent402-mcp) restricts and orders the chains a wallet pays on.
 
 ## Rails
 

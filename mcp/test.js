@@ -733,6 +733,7 @@ try {
     // request is counted, and a request carrying a signature is counted and
     // answered 200.
     const switchRow = { slug: "switch", method: "POST", path: "/api/switch", price: "$0.01", description: "switch", category: "util", computePayable: false };
+    const bigRow = { slug: "big", method: "POST", path: "/api/big", price: "$0.01", description: "big", category: "util", computePayable: false };
     const fixedRow = { slug: "fixed", method: "POST", path: "/api/fixed", price: "$0.01", description: "fixed", category: "util", computePayable: false };
     const hintedRow = { slug: "hinted", method: "POST", path: "/api/hinted", price: "$0.01", description: "hinted", category: "util", computePayable: false };
     const proRow = { slug: "pro", method: "POST", path: "/api/pro", price: "$3.30", description: "pro", category: "util", computePayable: false };
@@ -803,7 +804,7 @@ try {
     seen.failsPaidSigned = 0;
     const stub = createServer((req, res) => {
       const send = (status, obj, headers = {}) => { res.writeHead(status, { "Content-Type": "application/json", ...headers }); res.end(JSON.stringify(obj)); };
-      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, proRow, fixedRow, ...redirRows, flooredRow, failsPaidRow, ...validityRows], payment: { network: "base" } });
+      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, proRow, bigRow, fixedRow, ...redirRows, flooredRow, failsPaidRow, ...validityRows], payment: { network: "base" } });
       if (req.url.startsWith("/api/floored")) {
         req.resume();
         if (req.headers.authorization) { seen.flooredPaid++; return send(200, { ok: true }); }
@@ -828,13 +829,14 @@ try {
       }
       const plain = PLAIN[req.url.split("?")[0]];
       if (plain) { req.resume(); res.writeHead(plain[0], { "Content-Type": "application/json" }); return res.end(plain[1]); }
-      if (req.url.startsWith("/api/switch") || req.url.startsWith("/api/hinted") || req.url.startsWith("/api/fixed") || req.url.startsWith("/api/pro")) {
+      if (req.url.startsWith("/api/switch") || req.url.startsWith("/api/hinted") || req.url.startsWith("/api/fixed") || req.url.startsWith("/api/pro") || req.url.startsWith("/api/big")) {
         req.resume();
         if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.signed++; return send(200, { ok: true }); }
         const path = req.url.split("?")[0];
         seen.switchUnpaid++;
         if (path === "/api/hinted") return send(402, {}, { "PAYMENT-REQUIRED": signable(path, 5000000, { decimals: 18 }) });
         if (path === "/api/pro") return send(402, {}, { "PAYMENT-REQUIRED": signable(path, 3300000) });
+        if (path === "/api/big") return send(402, {}, { "PAYMENT-REQUIRED": signable(path, 6000000) });
         return send(402, {}, { "PAYMENT-REQUIRED": signable(path, path === "/api/fixed" ? 10000 : 5000000) });
       }
       if (req.url.startsWith("/api/refused")) {
@@ -1085,36 +1087,77 @@ globalThis.fetch = async (input, init) => {
       } finally { rmSync(dir, { recursive: true, force: true }); }
     }
 
-    // Defaults: with neither variable set there is no cap of any kind. A $5
-    // quote (above the $4 a call this server once capped by default) is
-    // signed and paid, a $3.30 one too, and payment.info reports no cap.
+    // Defaults: the per-call ceiling is $5 unless set, and there is no session
+    // budget. A $3.30 quote and a $5 quote are paid; a $6 quote (on a route
+    // listed at $0.01) is refused before anything is signed, naming the price,
+    // the ceiling and how to raise or turn it off.
+    const pay = (c, slug) => c.callTool({ name: "catalog.call", arguments: { slug, params: { text: "x" } } });
     {
-      const defaults = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "", AGENT402_BUDGET: "" });
+      const defaults = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_BUDGET: "" });
       try {
         seen.signed = 0;
-        const pro = await defaults.callTool({ name: "catalog.call", arguments: { slug: "pro", params: { text: "x" } } });
+        const pro = await pay(defaults, "pro");
         if (pro.isError || seen.signed !== 1) fail(`a default server pays a $3.30 call: ${text(pro).slice(0, 300)}`);
-        const r = await defaults.callTool({ name: "catalog.call", arguments: { slug: "hinted", params: { text: "x" } } });
-        if (r.isError || seen.signed !== 2) fail(`a default server pays a $5 quote, above $4: ${text(r).slice(0, 300)}`);
+        const five = await pay(defaults, "hinted");
+        if (five.isError || seen.signed !== 2) fail(`a default server pays a $5 quote, at the ceiling: ${text(five).slice(0, 300)}`);
+        const r = await pay(defaults, "big");
+        const t = text(r);
+        if (seen.signed !== 2 || !r.isError || !/\$6/.test(t) || !/AGENT402_MAX_PER_CALL \$5/.test(t) || !/0 or off/.test(t) || !/Nothing was signed/.test(t)) fail(`the default $5 ceiling refuses a $6 quote before signing and names the price, the ceiling and how to raise or turn it off: ${t.slice(0, 400)}`);
         const info = JSON.parse(text(await defaults.callTool({ name: "get_payment_info", arguments: {} })));
         const sc = info.spendControls;
-        if (!(sc?.maxPerCallUsd === "unlimited" && sc?.sessionBudgetUsd === "unlimited" && sc?.remainingUsd === "unlimited")) fail(`no default cap of any kind expected: ${JSON.stringify(sc)}`);
-        console.log("default caps: none; a $3.30 call and a $5 call are paid ✓");
+        if (!(sc?.maxPerCallUsd === 5 && sc?.sessionBudgetUsd === "unlimited" && sc?.remainingUsd === "unlimited")) fail(`a $5 default per-call ceiling and no default session budget expected: ${JSON.stringify(sc)}`);
+        console.log("default caps: $5 per call (a $5 quote paid, a $6 quote refused before signing), no session budget ✓");
       } finally { await defaults.close().catch(() => {}); }
+      // 0 and off turn the per-call ceiling off: the $6 quote is paid.
+      for (const v of ["0", "off", " OFF "]) {
+        const c = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: v, AGENT402_BUDGET: "" });
+        try {
+          const before = seen.signed;
+          const r = await pay(c, "big");
+          if (r.isError || seen.signed !== before + 1) fail(`AGENT402_MAX_PER_CALL=${JSON.stringify(v)} turns the ceiling off and pays a $6 quote: ${text(r).slice(0, 300)}`);
+          const info = JSON.parse(text(await c.callTool({ name: "get_payment_info", arguments: {} })));
+          if (info.spendControls?.maxPerCallUsd !== "unlimited") fail(`AGENT402_MAX_PER_CALL=${JSON.stringify(v)} reads as no per-call cap: ${JSON.stringify(info.spendControls)}`);
+        } finally { await c.close().catch(() => {}); }
+      }
+      console.log("AGENT402_MAX_PER_CALL=0 or off turns the per-call ceiling off ✓");
+      // A value that does not parse keeps the $5 default (fail closed) and
+      // names the variable once on stderr.
+      for (const v of ["abc", "-1", "NaN", "", "  ", "5usd"]) {
+        const c = new Client({ name: "agent402-mcp-captest", version: "0.0.0" });
+        const t = new StdioClientTransport({ command: process.execPath, args: [join(ROOT, "mcp", "index.js")], env: { ...process.env, AGENT402_URL: STUB, AGENT_KEY: "0x" + "11".repeat(32), SOLANA_AGENT_KEY: "", AGENT402_CREDITS_KEY: "", AGENT402_BUDGET: "", AGENT402_MAX_PER_CALL: v }, stderr: "pipe" });
+        let err = "";
+        t.stderr.on("data", (d) => { err += d; });
+        await c.connect(t);
+        try {
+          const before = seen.signed;
+          const r = await pay(c, "big");
+          if (!r.isError || seen.signed !== before || !/AGENT402_MAX_PER_CALL \$5/.test(text(r))) fail(`AGENT402_MAX_PER_CALL=${JSON.stringify(v)} keeps the $5 ceiling: ${text(r).slice(0, 300)}`);
+          const warnings = err.split("\n").filter((l) => /AGENT402_MAX_PER_CALL=.* is not a USD amount, 0 or "off"; keeping the default \(\$5 per call\)/.test(l));
+          if (warnings.length !== 1) fail(`AGENT402_MAX_PER_CALL=${JSON.stringify(v)} is named once on stderr: ${err.slice(0, 400)}`);
+        } finally { await c.close().catch(() => {}); }
+      }
+      console.log("a malformed AGENT402_MAX_PER_CALL keeps the $5 ceiling and warns once on stderr ✓");
       // A per-call cap the operator sets refuses and names the setting.
       const capped = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "4", AGENT402_BUDGET: "" });
       try {
         const before = seen.signed;
-        const r = await capped.callTool({ name: "catalog.call", arguments: { slug: "hinted", params: { text: "x" } } });
+        const r = await pay(capped, "hinted");
         if (seen.signed !== before || !r.isError || !/AGENT402_MAX_PER_CALL/.test(text(r))) fail(`a $4 cap the operator set refuses a $5 quote and names the setting: ${text(r).slice(0, 300)}`);
         console.log("a per-call cap the operator sets refuses a $5 quote and names AGENT402_MAX_PER_CALL ✓");
       } finally { await capped.close().catch(() => {}); }
-      const off = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "", AGENT402_BUDGET: "off" });
+      const off = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_BUDGET: "off" });
       try {
         const info = JSON.parse(text(await off.callTool({ name: "get_payment_info", arguments: {} })));
         if (info.spendControls?.sessionBudgetUsd !== "unlimited" || info.spendControls?.remainingUsd !== "unlimited") fail(`AGENT402_BUDGET=off turns the session budget off: ${JSON.stringify(info.spendControls)}`);
         console.log("AGENT402_BUDGET=off turns the default session budget off ✓");
       } finally { await off.close().catch(() => {}); }
+      // The default covers every fixed price in the catalog the e2e server
+      // serves (/api/pricing), so a pricier tool forces a decision here.
+      const pricing = await (await fetch(`${API}/api/pricing`)).json();
+      const fixed = pricing.endpoints.map((e) => (/^\$\d+(\.\d+)?$/.test(String(e.price).trim()) ? Number(String(e.price).trim().slice(1)) : 0));
+      const dearest = Math.max(...fixed);
+      if (!(dearest > 0 && dearest <= 5)) fail(`the $5 default per-call ceiling must cover the dearest fixed catalog price $${dearest}`);
+      console.log(`the $5 default covers the dearest fixed catalog price ($${dearest}) ✓`);
     }
     await new Promise((r) => stub.close(r));
   }

@@ -13,7 +13,7 @@ export interface Agent402McpEnv {
   SOLANA_AGENT_KEY?: string;
   /** Comma-separated slugs listed first-class (replaces the default set). */
   AGENT402_TOOLS?: string;
-  /** Optional: refuse a single call above this many USD (no cap unless set; "off" means none). */
+  /** Refuse a single call above this many USD (default "5"; "0" or "off" means none). */
   AGENT402_MAX_PER_CALL?: string;
   /** Optional cap on USD spent this session (no cap unless set; "off" means none). */
   AGENT402_BUDGET?: string;
