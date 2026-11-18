@@ -1,7 +1,7 @@
 {
   "name": "agent402",
   "version": "2.8.2",
-  "description": "Open-source MCP server: 500+ tools AI agents call and pay for per request over x402 or MPP, or free via proof-of-work for pure-compute tools.",
+  "description": "Open-source MCP server for the payment and trust layer of agent commerce: agents find, pay for and verify every paid call over x402 and MPP, with 500+ ready tools on the same rails, or free via proof-of-work for pure-compute tools.",
   "author": {
     "name": "Havok Holdings LLC",
     "url": "https://agent402.tools/company"
@@ -20,7 +20,7 @@
   "interface": {
     "type": "mcp",
     "displayName": "Agent402.Tools",
-    "shortDescription": "500+ pay-per-call tools for AI agents over x402 or MPP",
+    "shortDescription": "Payment and trust layer for agent calls on x402 and MPP",
     "longDescription": "One MCP server with 500+ tools: web search and rendering, PDFs and OCR, SEC filings, market and crypto data, and utilities. The agent finds a tool with catalog.find and pays for that one call in USDC over x402 or MPP, by card, or free via proof-of-work for pure-compute tools. A failed x402 call is not charged; a payment that lands late is repaid after on-chain proof. Most tools are deterministic code; model-backed tools are marked as such.",
     "developerName": "Havok Holdings LLC",
     "category": "Developer Tools",

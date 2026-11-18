@@ -1,6 +1,6 @@
 # Agent402 plugin for Claude Code
 
-The Agent402 plugin connects Claude Code to Agent402.Tools, a catalog of 500+ web tools that AI agents call one request at a time. It adds one MCP server, so Claude can search the catalog and call any tool in it: web search and answers, page rendering, SEC filings, market data, conversions, and utilities.
+The Agent402 plugin connects Claude Code to Agent402, the payment and trust layer for agent commerce, and the 500+ ready tools on its rails, each called one request at a time. It adds one MCP server, so Claude can search the catalog and call any tool in it: web search and answers, page rendering, SEC filings, market data, conversions, and utilities.
 
 ## What it does
 

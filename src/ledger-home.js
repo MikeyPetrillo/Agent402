@@ -25,7 +25,8 @@ import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
 import { REPO_URL } from "./repo-link.js";
 import { powCostPhrase } from "./pow.js";
 import { METERED_WIRES, meteredQuoteSentence, flatTiersLine } from "./metered-lead.js";
-import { CATEGORY_LINE, leadSentence } from "./positioning.js";
+import { CATEGORY_LINE, leadSentence, SUPPORT_LINE } from "./positioning.js";
+import { receiptsServed } from "./receipt-signing.js";
 // PRICES IN COPY ARE DERIVED, NEVER TYPED.
 //
 // These chips were hardcoded and went stale at the 2026-08-23 repricing: the
@@ -113,10 +114,10 @@ export function cardPayClause({ credits = creditsSalesEnabled(), storefront = hu
  *  clause is scoped by cardPayClause, like the meta description. */
 export function socialCardText(toolCount, opts) {
   const card = cardPayClause(opts);
-  const pay = card === "or by card" ? ", or by card" : card ? `; ${card}` : "";
   return {
-    subtitle: `${Number(toolCount).toLocaleString("en-US")} tools priced in cents. USDC over x402 / MPP${pay}.`,
-    railsTag: card ? "x402 · MPP · card" : "x402 · MPP",
+    subtitle: "Agents find, pay for and verify every paid call over x402 and MPP.",
+    railsTag: card === "or by card" ? "x402 · MPP · card" : card ? "x402 · MPP · reports by card" : "x402 · MPP",
+    toolsTag: `${Number(toolCount).toLocaleString("en-US")} tools on the same rails`,
   };
 }
 
@@ -124,11 +125,12 @@ export function socialCardText(toolCount, opts) {
  *  clause is scoped by cardPayClause. */
 export function homeDescription(opts) {
   const card = cardPayClause(opts);
-  const pay = card === "or by card" ? ", or by card" : card ? `; ${card}` : "";
-  return `Agentic Finance for AI agents: 500+ pay-per-call tools, metered models and finished reports over x402 and MPP${pay}. No signup, no API keys. Sell your API for USDC per call.`;
+  const pay = card === "or by card" ? "; any tool also by card" : card ? `; ${card}` : "";
+  const receipts = opts && "receipts" in opts ? Boolean(opts.receipts) : receiptsServed();
+  return `Find, pay for and verify every paid call over x402 and MPP${receipts ? ", each with a signed receipt" : ""}. 500+ tools on the same rails${pay}.`;
 }
 
-export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null, proof = [], chainsOffered, mpp = true } = {}) {
+export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null, proof = [], chainsOffered, mpp = true, receipts = receiptsServed() } = {}) {
   const tools = toolList(catalog);
   const count = tools.length;
   const packCount = Array.isArray(skillPacks) ? skillPacks.length : 42;
@@ -154,11 +156,12 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
           ${heroFootnote}</div>`
     : "";
   // The lead sentence (src/positioning.js) with the wires this server offers
-  // (the "/" route passes the MPP switch), each wire name linked.
+  // (the "/" route passes the MPP switch) and the signed-receipt clause only
+  // while receipts are signed; each wire name and "verify" linked.
   const wireLink = (href, t) => `<a href="${href}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">${t}</a>`;
-  const leadHtml = mpp
-    ? esc(leadSentence({ mpp: true })).replace("x402 or MPP", `${wireLink("/what-is-x402", "x402")} or ${wireLink("/what-is-mpp", "MPP")}`)
-    : esc(leadSentence({ mpp: false })).replace("over x402,", `over ${wireLink("/what-is-x402", "x402")},`);
+  const leadHtml = esc(leadSentence({ mpp, receipts }))
+    .replace("verify every", `${wireLink("/trust#verify", "verify")} every`)
+    .replace(mpp ? "across x402 and MPP" : "across x402", `across ${wireLink("/what-is-x402", "x402")}${mpp ? ` and ${wireLink("/what-is-mpp", "MPP")}` : ""}`);
   const viaPow = Number(served.viaProofOfWork) || 0;
   const rails = railsByVolume(stats);
   // One noun on every surface: the x402 chains, plus Tempo over MPP when it is
@@ -176,13 +179,13 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   const canonical = baseUrl + "/";
   // Title <= 70 and description <= 155 (the shell trims, but the homepage
   // snippet is written to fit so nothing is cut). Counts stay evergreen.
-  const title = `Agent402: 500+ pay-per-call tools for AI agents over x402 and MPP`;
+  const title = `Agent402: payment and trust layer for agent commerce on x402 and MPP`;
   // The exact live count (fmtNum(count)) stays out of the snippet on purpose: marketing counts are evergreen.
-  const description = homeDescription();
+  const description = homeDescription({ receipts });
 
   const orgLd = siteOrgLd(baseUrl);
   const websiteLd = { "@type": "WebSite", "@id": `${baseUrl}/#website`, name: "Agent402", alternateName: ["Agent402.Tools", "Agent402 Tools", "Agent402 - applied layer of Agentic Finance"], url: baseUrl, publisher: { "@id": `${baseUrl}/#organization` }, description: "The applied layer of Agentic Finance: open index, Smart Order Router and on-chain ranking for agents paying and getting paid over x402 and MPP.", about: { "@type": "DefinedTerm", name: "Agentic Finance", alternateName: "AIFI", url: `${baseUrl}/agentic-finance` }, potentialAction: { "@type": "SearchAction", target: `${baseUrl}/api/find?q={search_term_string}`, "query-input": "required name=search_term_string" } };
-  const appLd = { "@type": "SoftwareApplication", "@id": `${baseUrl}/#app`, name: "Agent402", url: baseUrl, applicationCategory: "DeveloperApplication", operatingSystem: RAILS.map((r) => r.name).join(", "), license: "https://www.gnu.org/licenses/agpl-3.0.html", description: `Open-source, self-hostable Agentic Finance server for x402 + MPP: ${fmtNum(count)} pay-per-call tools for AI agents (${packCount} of them multi-tool skill packs), plus an open index, Smart Order Router and on-chain seller leaderboard.`, offers: { "@type": "AggregateOffer", offerCount: String(count), lowPrice: String(minPriceUsd(catalog)), highPrice: maxPriceUsd(catalog).toFixed(2), priceCurrency: "USD", description: `Per-call micropayments in USDC and USDG across ${RAILS.length} chains, free with proof-of-work, or by card: finished reports ${usd0(CARD_LO)} to ${usd0(CARD_HI)}, monitors ${usd0(MON_USD)} a month` } };
+  const appLd = { "@type": "SoftwareApplication", "@id": `${baseUrl}/#app`, name: "Agent402", url: baseUrl, applicationCategory: "DeveloperApplication", operatingSystem: RAILS.map((r) => r.name).join(", "), license: "https://www.gnu.org/licenses/agpl-3.0.html", description: `Open-source, self-hostable payment and trust layer for agent commerce over x402 and MPP: x402 settlement after a successful answer, refunds on chain proof, an open index of outside x402 sellers and a Smart Order Router, with ${fmtNum(count)} tools on the same rails (${packCount} of them multi-tool skill packs).`, offers: { "@type": "AggregateOffer", offerCount: String(count), lowPrice: String(minPriceUsd(catalog)), highPrice: maxPriceUsd(catalog).toFixed(2), priceCurrency: "USD", description: `Per-call micropayments in USDC and USDG across ${RAILS.length} chains, free with proof-of-work, or by card: finished reports ${usd0(CARD_LO)} to ${usd0(CARD_HI)}, monitors ${usd0(MON_USD)} a month` } };
   const surfacesLd = { "@type": "ItemList", "@id": `${baseUrl}/#surfaces`, name: "Free x402 discovery primitives", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Find - resolve a task to the best-matching tool", url: `${baseUrl}/api/find` },
     { "@type": "ListItem", position: 2, name: "Route - neutral Smart Order Router across every x402 seller", url: `${baseUrl}/api/route` },
@@ -268,7 +271,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
       <div class="ml-stagger" style="display:flex;flex-direction:column;gap:26px;">
         <h1 class="ml-hero-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-hero);line-height:.98;margin:0;color:var(--ink);text-wrap:balance;">${esc(CATEGORY_LINE)}</h1>
         <p class="hm-lede" style="margin:0;text-wrap:pretty;">${leadHtml}</p>
-        <p style="margin:0;font-size:var(--fs-base);line-height:1.55;color:var(--muted);text-wrap:pretty;">Web search, browser rendering, SEC filings, market data and more: an agent sends a request, gets a price back in the <span style="font-family:var(--font-mono);color:var(--ink);">402</span>, pays it from its own wallet, and gets the answer with a receipt it can <a href="/trust#verify" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">verify</a>.</p>
+        <p class="hm-support" style="margin:0;font-size:var(--fs-base);line-height:1.55;color:var(--muted);text-wrap:pretty;">Pay over x402${mpp ? ", MPP" : ""} or proof of work: an x402 payment settles after a successful answer, and a charged failure is booked and repaid against the chain record. ${esc(SUPPORT_LINE.replace(/\.$/, ""))}, beside an <a href="/marketplace" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">index of outside x402 sellers</a> and a router that buys from proven ones.</p>
         <div class="ml-hero-ctas" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
           <a class="btn btn-primary" href="/docs#add">Add to your agent</a>
           <a class="btn btn-secondary" href="/tools">Browse tools</a>

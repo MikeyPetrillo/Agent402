@@ -10012,7 +10012,7 @@ const cardSvg = (width = 1200, height = 630) => {
   const ty = (height - 630 * s) / 2;
   const mono = JSON.stringify(BRAND.mono);
   const display = JSON.stringify(BRAND.display);
-  const { subtitle, railsTag } = socialCardText(n);
+  const { subtitle, railsTag, toolsTag } = socialCardText(n);
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${BRAND_FONT_STYLE}${BRAND_DEFS}
   <rect width="${width}" height="${height}" fill="${BRAND.paper}"/>
   <g transform="translate(${tx},${ty}) scale(${s})">
@@ -10021,8 +10021,8 @@ const cardSvg = (width = 1200, height = 630) => {
   <text x="132" y="96" font-size="30" font-weight="600" font-family=${display} letter-spacing="-0.5" fill="${BRAND.ink}">Agent402</text>
   <text x="1128" y="95" font-size="20" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">agent402.tools</text>
   <!-- headline -->
-  <text x="72" y="238" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.ink}">The web's paid door,</text>
-  <text x="72" y="330" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.faint}">finally open.</text>
+  <text x="72" y="238" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.ink}">Payment and trust</text>
+  <text x="72" y="330" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.faint}">for agent commerce.</text>
   <text x="72" y="392" font-size="23" font-family=${display} fill="${BRAND.muted}">${subtitle}</text>
   <!-- handshake panel -->
   <rect x="72" y="430" width="1056" height="140" rx="16" fill="url(#panel)" stroke="${BRAND.hairline}" stroke-width="1.5"/>
@@ -10031,6 +10031,7 @@ const cardSvg = (width = 1200, height = 630) => {
   <text x="100" y="540" font-size="19" font-family=${mono} fill="${BRAND.accent}">HTTP/2 200  <tspan fill="${BRAND.muted}">payment-response: settled · tx 0x9ec4…</tspan></text>
   <text x="1100" y="472" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">${railsTag}</text>
   <text x="1100" y="506" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">${RAILS.length} rails · USDC · USDG</text>
+  <text x="1100" y="540" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">${toolsTag}</text>
   </g>
 </svg>`;
 };
