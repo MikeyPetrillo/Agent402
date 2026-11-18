@@ -23,7 +23,7 @@ import { ownStoreEnv } from "./lib/own-stores.js";
 import { makeEscrowFacilitator, makeChannelBuyer, encodePayment, BASE, RECEIVER_AUTHORIZER } from "./lib/batch-channel-rig.js";
 import { newBatchScheme, makeBatchStores, selectBatchNetworks, runBatchPass, creditBatchChannel, batchNetworksWanted, batchStoreMode, batchAcceptEligible, isBatchSettlementRequest, batchChannelIdOf } from "../src/batch-settlement.js";
 import { isMeterable, mediaMeterEnabled } from "../src/gateway-meter.js";
-import { BATCH_ACCEPT_JSON_BYTES } from "../src/payments.js";
+import { BATCH_ACCEPT_JSON_BYTES, acceptsForItem } from "../src/payments.js";
 import { setBatchOffer, creditHungUpBatchCall } from "../src/batch-settlement.js";
 
 let pass = 0, fail = 0;
@@ -50,6 +50,23 @@ const PAY_TO = "0x000000000000000000000000000000000000dEaD";
   ok(isMeterable(hdr("batch-settlement")) && isMeterable(hdr("upto")) && !isMeterable(hdr("exact")), "the meter names the amount for upto and channel payments, never exact");
   ok(isBatchSettlementRequest(hdr("batch-settlement")) && !isBatchSettlementRequest(hdr("exact")), "a channel payment is recognized from its own header");
   ok(batchChannelIdOf(hdr("batch-settlement")) === `0x${"ab".repeat(32)}` && batchChannelIdOf(hdr("upto")) === null, "the channel id is read from a channel payment only");
+}
+
+// The accept builder itself: where the channel accept goes, and where not.
+{
+  const rails = { evmCaip2: [BASE], svmCaip2: [], stellarCaip2: [], avmCaip2: [], walletAddress: PAY_TO, uptoCaip2: [], gatewayKinds: null };
+  const kinds = (item, r = rails) => acceptsForItem(item, r).map((a) => a.scheme);
+  ok(JSON.stringify(kinds({ slug: "uuid", price: "$0.001" })) === JSON.stringify(["exact"]), "no batchCaip2 on the rails: the accepts are exactly what they were");
+  const on = { ...rails, batchCaip2: [BASE] };
+  ok(JSON.stringify(kinds({ slug: "uuid", price: "$0.001" }, on)) === JSON.stringify(["exact", "batch-settlement"]), "a plain route gets the channel accept last");
+  ok(!kinds({ slug: "seller-payability", price: "$0.10", spendsOwnWallet: true }, on).includes("batch-settlement"), "a lasting-effect route gets none");
+  ok(!kinds({ slug: "flight-status", price: "$0.05" }, on).includes("batch-settlement"), "a listed lasting-effect slug gets none");
+  ok(!kinds({ slug: "memory-read", price: "$0.001", identityBound: true }, on).includes("batch-settlement"), "an identity-bound route gets none");
+  ok(!kinds({ slug: "report", price: "$1", longRunning: true }, on).includes("batch-settlement"), "a long-running report gets none");
+  ok(!kinds({ slug: "x", price: "$0.001", onlyNetworks: ["eip155:10"] }, { ...on, evmCaip2: [BASE, "eip155:10"] }).includes("batch-settlement"), "a route limited to other networks gets none");
+  ok(!kinds({ slug: "uuid", price: "$0.001" }, { ...on, walletAddress: null }).includes("batch-settlement"), "no EVM payTo, no channel accept");
+  const ch = acceptsForItem({ slug: "uuid", price: "$0.001" }, on).find((a) => a.scheme === "batch-settlement");
+  ok(ch.payTo === PAY_TO && ch.network === BASE, "the channel accept pays the treasury on its network");
 }
 
 // The work meter on media (METERED_MEDIA): embeddings report the tokens used
