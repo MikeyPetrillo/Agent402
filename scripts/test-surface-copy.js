@@ -93,7 +93,11 @@ ok(hi === si, "hosted and stdio initialize instructions are byte-identical");
   ok(HOSTED_CONNECTOR_WIRES.x402 === true && HOSTED_CONNECTOR_WIRES.mpp === true, "the package names both wires for the hosted service");
   const published = hostedLine(stdioInstructions("https://example.test", HOSTED_CONNECTOR_WIRES));
   ok(published.includes("other tools paid in the call over x402 or MPP from a wallet)") && !/wallet on the npm package/.test(published), `the published hosted line names both wires (${published.slice(0, 100)})`);
-  ok(/const INIT_INSTRUCTIONS = mcpInitializeInstructions\(BASE, \{ \.\.\.hostedConnectorWiresFor\(BASE\), demand: false \}\);/.test(read("mcp/index.js")), "the stdio server renders its instructions with the wires of the server it points at, and without demand.request (it does not list it)");
+  ok(/const instructionsFor = \(stock\) => mcpInitializeInstructions\(BASE, \{ \.\.\.hostedConnectorWiresFor\(BASE\), demand: false, stock \}\);/.test(read("mcp/index.js")), "the stdio server renders its instructions with the wires of the server it points at, and without demand.request (it does not list it)");
+  // market.quote is named only while it is listed: the text is rebuilt from
+  // the first-class list after every catalog read (mcp/test.js reads both states).
+  ok((read("mcp/index.js").match(/curated = requested\.map\(\(slug\) => catalog\.get\(slug\)\)\.filter\(Boolean\);\n\s*syncInstructions\(\);/g) || []).length === 2, "the stdio server rebuilds its instructions after each catalog read");
+  ok(!/market\.quote/.test(stdioInstructions("https://example.test")) && /market\.quote/.test(stdioInstructions("https://example.test", { stock: true })), "the stdio instructions name market.quote only with the stock flag");
   ok(!/demand\.request/.test(stdioInstructions("https://example.test", { demand: false })) && /demand\.request/.test(stdioInstructions("https://example.test")) && hostedInstructions("https://example.test", { demand: false }) === stdioInstructions("https://example.test", { demand: false }), "demand: false drops demand.request from both copies alike");
   const { hostedConnectorWiresFor, HOSTED_SERVICE_URL } = await import("../mcp/output-schemas.js");
   ok(HOSTED_SERVICE_URL === "https://agent402.tools" && hostedConnectorWiresFor("https://agent402.tools") === HOSTED_CONNECTOR_WIRES && hostedConnectorWiresFor("https://agent402.tools/") === HOSTED_CONNECTOR_WIRES,

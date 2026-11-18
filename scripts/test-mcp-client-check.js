@@ -207,10 +207,15 @@ for (const [label, mppKey] of [["FREE_MODE", ""], ["FREE_MODE with MPP_SECRET_KE
         const r = await runCheck(srv.url, `paid-${mppKey ? "both" : "x402"}.json`, protocol);
         const tag = `paid boot (${label}, ${protocol})`;
         ok(r.status === 0, `${tag}: the check exits 0${r.status === 0 ? "" : `\n${r.stdout}\n${r.stderr}`}`);
+        // market.quote is a flagship only where the catalog lists stock-quote
+        // (this boot has no stock provider, so seven flagships and catalog.call).
+        const stockListed = (r.summary?.checks || []).some((c) => c.name.startsWith("catalog: /api/pricing") && c.ok && c.detail === "stock-quote listed");
+        const want = stockListed ? 9 : 8;
+        ok(!stockListed, `${tag}: the catalog of a boot with no stock provider does not list stock-quote`);
         const unpaid = (r.summary?.checks || []).filter((c) => / without payment: /.test(c.name));
-        ok(unpaid.length === 9 && unpaid.every((c) => c.ok), `${tag}: all eight flagships and catalog.call answer an unpaid ask the client reads (${unpaid.filter((c) => c.ok).length} of ${unpaid.length})`);
+        ok(unpaid.length === want && unpaid.every((c) => c.ok), `${tag}: every listed flagship and catalog.call answer an unpaid ask the client reads (${unpaid.filter((c) => c.ok).length} of ${unpaid.length}, want ${want})`);
         const offers = r.stdout.split("\n").filter((l) => / without payment: /.test(l));
-        ok(offers.length === 9, `${tag}: one line per unpaid ask`);
+        ok(offers.length === want, `${tag}: one line per unpaid ask`);
       }
     } catch (err) {
       ok(false, `paid boot (${label}): ${err?.stack || err}`);
@@ -225,14 +230,21 @@ for (const [label, mppKey] of [["FREE_MODE", ""], ["FREE_MODE with MPP_SECRET_KE
 // ------------------------------------------------------------ stub control
 
 const META_TOOLS = ["catalog.search", "catalog.find", "catalog.call", "payment.info", "server.describe", "sellers.list", "demand.request"];
-const FLAGSHIP_TOOLS = ["web.search", "web.answer", "web.news", "browser.render", "market.quote", "audio.transcribe", "memory.read", "memory.write"];
+const CORE_FLAGSHIP_TOOLS = ["web.search", "web.answer", "web.news", "browser.render", "audio.transcribe", "memory.read", "memory.write"];
 const text = (obj, extra = {}) => ({ content: [{ type: "text", text: JSON.stringify(obj) }], ...extra });
 
 /** A connector that answers exactly the shapes the check reads, on both
  *  protocol revisions (SDK v2 createMcpHandler: 2026-07-28, and 2025-era
- *  traffic served stateless). `brk` names one deliberate drift. */
-function stubConnector(brk = null) {
+ *  traffic served stateless). `brk` names one deliberate drift; `stock` is
+ *  whether its catalog lists stock-quote (and so market.quote). */
+function stubConnector(brk = null, { stock = true } = {}) {
+  // The drifts in the stock listing: market.quote listed while the catalog
+  // does not list stock-quote, and the reverse.
+  const catalogStock = brk === "stock-listed-off" ? false : brk === "stock-unlisted-on" ? true : stock;
+  const toolStock = brk === "stock-listed-off" ? true : brk === "stock-unlisted-on" ? false : stock;
+  const FLAGSHIP_TOOLS = toolStock ? [...CORE_FLAGSHIP_TOOLS.slice(0, 4), "market.quote", ...CORE_FLAGSHIP_TOOLS.slice(4)] : CORE_FLAGSHIP_TOOLS;
   const app = express();
+  app.get("/api/pricing", (_req, res) => res.json({ endpoints: [{ slug: "hash" }, { slug: "unit-convert" }, ...(catalogStock ? [{ slug: "stock-quote" }] : [])] }));
   app.use(express.json({ limit: "1mb" }));
   const handler = createMcpHandler(() => {
     const server = new Server({ name: "agent402", version: "stub" }, {
@@ -248,7 +260,7 @@ function stubConnector(brk = null) {
           inputSchema: { type: "object", properties: {}, additionalProperties: true },
           // The drift that reached review: a tool that lists an outputSchema
           // and answers its payment ask as structuredContent.
-          ...(brk === "ask-in-structured" && name === "market.quote" ? { outputSchema: { type: "object", properties: { symbol: { type: "string" } }, required: ["symbol"], additionalProperties: false } } : {}),
+          ...(brk === "ask-in-structured" && name === "browser.render" ? { outputSchema: { type: "object", properties: { symbol: { type: "string" } }, required: ["symbol"], additionalProperties: false } } : {}),
         })),
     }));
     server.setRequestHandler("tools/call", async (req) => {
@@ -266,7 +278,7 @@ function stubConnector(brk = null) {
       if (name === "catalog.call" && args.slug === "search" && brk === "paid-runs") return text({ results: [{ title: "ran unpaid" }] });
       if (FLAGSHIP_TOOLS.includes(name) || name === "catalog.call") {
         const offer = { x402Version: 2, error: "Payment required", resource: { url: "http://stub/mcp" }, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 60 }] };
-        return { content: [{ type: "text", text: JSON.stringify(offer) }, { type: "text", text: `${name} needs per-call payment: run npx agent402-mcp with AGENT_KEY.` }], isError: true, ...(brk === "ask-in-structured" && name === "market.quote" ? { structuredContent: offer } : {}) };
+        return { content: [{ type: "text", text: JSON.stringify(offer) }, { type: "text", text: `${name} needs per-call payment: run npx agent402-mcp with AGENT_KEY.` }], isError: true, ...(brk === "ask-in-structured" && name === "browser.render" ? { structuredContent: offer } : {}) };
       }
       return { content: [{ type: "text", text: `Unknown tool "${name}".` }], isError: true };
     });
@@ -283,15 +295,23 @@ const EXPECTED_FAILS = {
   "missing-tool": /^FAIL - tools\/list: .*missing: demand\.request/m,
   "empty-description": /^FAIL - tools\/list: .*catalog\.find: empty description/m,
   "wrong-answer": /^FAIL - catalog\.call: /m,
-  "ask-in-structured": /^FAIL - market\.quote without payment: .*the client could not read the answer/m,
+  "ask-in-structured": /^FAIL - browser\.render without payment: .*the client could not read the answer/m,
+  "stock-listed-off": /^FAIL - tools\/list: .*market\.quote is listed but the catalog does not list stock-quote/m,
+  "stock-unlisted-on": /^FAIL - tools\/list: .*missing: market\.quote/m,
   "paid-runs": /^FAIL - catalog\.call search without payment: /m,
 };
 
 for (const protocol of PROTOCOLS) {
-  const stub = await stubConnector(null);
-  const r = await runCheck(`http://127.0.0.1:${stub.port}`, "stub-control.json", protocol);
-  ok(r.status === 0, `control (${protocol}): the unchanged stub connector passes the check${r.status === 0 ? "" : `\n${r.stdout}\n${r.stderr}`}`);
-  stub.listener.close();
+  for (const stock of [true, false]) {
+    const stub = await stubConnector(null, { stock });
+    const r = await runCheck(`http://127.0.0.1:${stub.port}`, `stub-control-${stock}.json`, protocol);
+    const tag = `control (${protocol}, stock ${stock ? "listed" : "not listed"})`;
+    ok(r.status === 0, `${tag}: the unchanged stub connector passes the check${r.status === 0 ? "" : `\n${r.stdout}\n${r.stderr}`}`);
+    const quoteAsk = (r.summary?.checks || []).some((c) => c.name.startsWith("market.quote without payment") && c.ok);
+    const quoteRefused = (r.summary?.checks || []).some((c) => c.name.startsWith("market.quote unlisted") && c.ok);
+    ok(stock ? quoteAsk && !quoteRefused : quoteRefused && !quoteAsk, `${tag}: market.quote is asked to pay exactly when the catalog lists stock-quote, and checked refused otherwise`);
+    stub.listener.close();
+  }
 }
 // The SDK v2 client checks structuredContent against the outputSchema only on a
 // result that is not an error, so a payment ask carried that way still reads
