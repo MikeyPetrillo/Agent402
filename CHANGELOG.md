@@ -6,6 +6,28 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-18 (copyright agent, cancel paths, fetched-host counts and seller docs links)
+Site:
+- /terms names the copyright agent for notices about material on the site,
+  with the steps for a notice and for a counter-notice, and says how each
+  subscription rail cancels: the portal link for a card subscription, a POST
+  to the cancel link in the monitor emails or revoking the authorization for
+  an MPP subscription. A canceled subscription stays active until the end of
+  the period already paid for.
+- /privacy says that when a tool fetches a URL you name, the host name in it
+  (never the path, the query or who asked) is counted per minute, so a site
+  that asks how often it was called can be answered; the counts are deleted
+  after two days.
+- While prepaid credits are on sale, each purchase is a new key holding at
+  most the largest pack (`CREDITS_BALANCE_MAX_USD`), and
+  `POST /api/credits/refund` with the key refunds its unspent balance to the
+  card and disables the key. With sales off, neither is offered.
+Seller index:
+- A seller's rows on `/api/index?seller=` carry `sellerDocsUrl` when the
+  seller's own OpenAPI operation names one (`externalDocs.url`): an unverified
+  https link on the seller's exact host, never fetched, that changes no price,
+  quote, routing or payment.
+
 ### 2026-11-17 (internal code changes, stricter reading of payment fields)
 Internal:
 - Internal code changes; malformed seller payment fields and an explicit
@@ -138,7 +160,7 @@ MCP:
 
 ### 2026-11-17 (the OpenClaw plugin on OpenClaw 2026.11.5)
 Packages:
-- agent402-openclaw 0.5.12 is tested against OpenClaw 2026.11.5 and 2026.11.2.
+- agent402-openclaw 0.6.0 is tested against OpenClaw 2026.11.5 and 2026.11.2.
   OpenClaw 2026.11.5 installs a bare plugin name from ClawHub, where each
   release is also published; the README names `npm:agent402-openclaw` for the
   npm package on that host, and the real-install test covers the ClawHub and
