@@ -109,6 +109,8 @@ try {
   const described = JSON.parse((await rpc("tools/call", { name: "server.describe", arguments: {} }))?.content?.[0]?.text || "{}");
   ok(c.version === info.version && c.title === info.title && c.name.endsWith(`/${info.name}`), `the card's name, version and title are the ones /mcp reports (${c.name} ${c.version})`);
   ok(c.remotes?.length === 1 && c.remotes[0].type === "streamable-http" && c.remotes[0].url === `${BASE}/mcp` && c.websiteUrl === BASE, "the card's one remote is streamable-http at /mcp on the canonical host");
+  const versions = c.remotes?.[0]?.supportedProtocolVersions || [];
+  ok(versions.includes("2026-07-28") && versions.includes("2025-06-18") && new Set(versions).size === versions.length, `the card lists the per-request revision and the initialize-negotiated ones /mcp serves (${versions.join(", ")})`);
   // The extension's own constraints (ext-server-card schema.ts), and the
   // registry entry and the card describing the server in the same words.
   const registry = JSON.parse(readFileSync(join(ROOT, "mcp", "server.json"), "utf8"));

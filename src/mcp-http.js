@@ -381,6 +381,9 @@ export function mcpPaymentMethods() {
 export const SERVER_CARD_SCHEMA = "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json";
 export const SERVER_CARD_MEDIA_TYPE = "application/mcp-server-card+json";
 export const SERVER_CARD_META_KEY = "tools.agent402/catalog";
+// The per-request revision /mcp serves beside the 2025-era ones the SDK lists
+// (SUPPORTED_PROTOCOL_VERSIONS, negotiated at initialize).
+export const MODERN_PROTOCOL_VERSION = "2026-07-28";
 export function mcpServerCard({ baseUrl, path = "/mcp", serverName = "agent402", toolCount, mpp = mppMethodsSummary().enabled }) {
   const site = baseUrl || MCP_SERVER_WEBSITE;
   return {
@@ -392,7 +395,7 @@ export function mcpServerCard({ baseUrl, path = "/mcp", serverName = "agent402",
     websiteUrl: site,
     repository: { url: REPO_URL, source: "github" },
     icons: [{ src: `${site}/logo.svg`, mimeType: "image/svg+xml", sizes: ["any"] }, { src: `${site}/logo.png`, mimeType: "image/png", sizes: ["512x512"] }],
-    remotes: [{ type: "streamable-http", url: `${site}${path}`, supportedProtocolVersions: [...SUPPORTED_PROTOCOL_VERSIONS] }],
+    remotes: [{ type: "streamable-http", url: `${site}${path}`, supportedProtocolVersions: [MODERN_PROTOCOL_VERSION, ...SUPPORTED_PROTOCOL_VERSIONS] }],
     _meta: { [SERVER_CARD_META_KEY]: { tools: toolCount } },
   };
 }
@@ -2151,7 +2154,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     const claimsModern = () => {
       const meta = req.body?.params?._meta;
       const header = req.headers["mcp-protocol-version"];
-      return (meta && typeof meta === "object" && !Array.isArray(meta) && Object.hasOwn(meta, PROTOCOL_VERSION_META_KEY)) || (typeof header === "string" && header.trim() >= "2026-07-28");
+      return (meta && typeof meta === "object" && !Array.isArray(meta) && Object.hasOwn(meta, PROTOCOL_VERSION_META_KEY)) || (typeof header === "string" && header.trim() >= MODERN_PROTOCOL_VERSION);
     };
     if (modern && ((tasks && isTaskMethod(req.body?.method)) || (skillSet && isSkillMethod(req.body?.method))) && claimsModern()) {
       const lac = new AbortController();
