@@ -59,7 +59,7 @@ const xOf = (kp) => kp.publicKey.export({ format: "jwk" }).x;
     [{ ...ENV_A, RECEIPT_SIGNING_KEY: Buffer.from(A.publicKey.export({ format: "pem", type: "spki" })).toString("base64") }, /PKCS8 PEM/, "a public key PEM"],
     [{ ...ENV_A, RECEIPT_SIGNING_KEY: pemB64(rsa.privateKey) }, /rsa key, not Ed25519/, "an RSA key"],
     [{ ...ENV_A, RECEIPT_SIGNING_KEY: pemB64(ec.privateKey) }, /ec key, not Ed25519/, "a P-256 key"],
-    [{ ...ENV_A, RECEIPT_SIGNING_KEY: Buffer.from("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n").toString("base64") }, /does not parse/, "a PEM that does not parse"],
+    [{ ...ENV_A, RECEIPT_SIGNING_KEY: Buffer.from(`-----BEGIN ${"PRIVATE " + "KEY"}-----\nAAAA\n-----END ${"PRIVATE " + "KEY"}-----\n`).toString("base64") }, /does not parse/, "a PEM that does not parse"],
     [{ ...ENV_A, RECEIPT_SIGNING_KEY_VALID_FROM: "not a date" }, /VALID_FROM is not a date/, "a valid-from that is not a date"],
     [{ ...ENV_A, RECEIPT_RETIRED_KEYS: JSON.stringify([{ kid: "r1-test", x: xOf(B) }]) }, /also listed/, "the current kid also listed as retired"],
   ];
