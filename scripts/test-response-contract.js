@@ -216,13 +216,13 @@ for (const kw of ["$ref", "allOf", "anyOf", "oneOf", "not", "if", "patternProper
     /^import \{.*\} from ".\/response-contract.js";$/,
     /^const packed = packResponseContract\(responseContractOf\(resolveLocalRefs\(op, openapi\)\)\);$/,
     /^return packed \? \{ responseContract: packed \} : \{\};$/,
-    // Copying a row's fields skips both contract keys.
-    /^.*"requestContract".*"responseContract".*continue;.*$/,
+    // The two contract field names a registry-row copy leaves out and a
+    // merged row reads from the seller's own operation only.
+    /^const CONTRACT_FIELD_NAMES = \["requestContract", "responseContract"\];$/,
     // The crawl-side store's copy: a row with neither contract is copied whole.
     /^if \(!ownKey\.call\(row, "requestContract"\) && !ownKey\.call\(row, "responseContract"\) && Object\.getOwnPropertySymbols\(row\)\.length === 0\) return \{ \.\.\.row \};$/,
-    // A row's own responseContract tuple, read and carried only when present.
-    /^const responseContract = \w+\(\w+, "responseContract"\);$/,
-    /^\.\.\.\(responseContract \? \{ responseContract \} : \{\}\),$/,
+    // (The merge reads the seller's tuples by that list of names, so no line
+    // of its own names the field.)
     /^\.\.\.responseContractProjection\(t\),$/,
     /^\.\.\.\(external \? responseContractProjection\(t\) : \{\}\),$/,
   ];

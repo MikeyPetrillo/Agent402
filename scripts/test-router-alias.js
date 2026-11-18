@@ -106,41 +106,43 @@ seed("https://rival.example", "https://rival.example", ["url-to-markdown-fast"])
   ok(perSeller["https://rival.example"] >= 1, "rival gets a slot instead of the operator's duplicate");
 }
 
-// ---- 8. a generated deployment hostname serving the same service folds ----
-const PAYEE = "0x" + "7a".repeat(20);
-const OTHER_PAYEE = "0x" + "8b".repeat(20);
-function paidTool(seller, slug, payTo) {
-  return { ...tool(seller, slug), price: 0.01, networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": payTo } };
+// ---- 8 and 9. generated deployment hostnames (*.up.railway.app) ----
+// A healthy, self-canonical origin whose tools are all paid on Base mainnet
+// to `wallet`; each tool is the shared `tool` fixture with a price and payee.
+const WALLET_A = `0x${"7a".repeat(20)}`;
+const WALLET_B = `0x${"8b".repeat(20)}`;
+const CUSTOM = "https://agents.example.com";
+function seedHealthyOrigin(origin, slugs, wallet) {
+  const tools = slugs.map((s) => Object.assign(tool(origin, s), {
+    price: 0.01, networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": wallet },
+  }));
+  cache.set(origin, { manifest: { name: "seller", homepage: origin }, tools, fetchedAt: Date.now(), error: null, history: [1, 1, 1, 1, 1] });
 }
-function seedPaid(origin, slugs, payTo) {
-  cache.set(origin, {
-    manifest: { name: "seller", homepage: origin },
-    tools: slugs.map((s) => paidTool(origin, s, payTo)),
-    fetchedAt: Date.now(),
-    error: null,
-    history: [1, 1, 1, 1, 1],
-  });
-}
+const SAME_TOOLS = ["url-to-markdown", "extract-web-data"];
+
+// 8. The same service, payee and tools on a generated host: that host folds.
 cache.clear();
-seedPaid("https://agents.example.com", ["url-to-markdown", "extract-web-data"], PAYEE);
-seedPaid("https://seller-production.up.railway.app", ["url-to-markdown", "extract-web-data"], PAYEE);
+seedHealthyOrigin("https://seller-production.up.railway.app", SAME_TOOLS, WALLET_A);
+seedHealthyOrigin(CUSTOM, SAME_TOOLS, WALLET_A);
 {
-  const aliases = computeAliasOrigins(cache);
-  ok(aliases.has("https://seller-production.up.railway.app"), "deployment hostname with the same service is an alias");
-  ok(!aliases.has("https://agents.example.com"), "the custom domain is not an alias");
-  const r = routeQuery({ query: "url to markdown", top: 10, include: "external", ...ctx });
-  ok(!r.results.some((x) => x.seller === "https://seller-production.up.railway.app"), "the deployment alias produces no route rows");
+  const folded = computeAliasOrigins(cache);
+  ok(folded.has("https://seller-production.up.railway.app"), "8: the generated host serving the custom domain's service is folded");
+  ok(!folded.has(CUSTOM), "8: the custom domain itself stays listed");
+  const { results } = routeQuery({ query: "url to markdown", top: 10, include: "external", ...ctx });
+  ok(results.every((x) => x.seller !== "https://seller-production.up.railway.app"), "8: no route row comes from the folded host");
 }
 
-// ---- 9. a shared wallet or shared routes alone never fold ----
+// 9. Sharing only the wallet, or only the tools, folds nothing.
 cache.clear();
-seedPaid("https://agents.example.com", ["url-to-markdown", "extract-web-data"], PAYEE);
-seedPaid("https://other-production.up.railway.app", ["url-to-markdown", "summarize-page"], PAYEE);
-seedPaid("https://third-production.up.railway.app", ["url-to-markdown", "extract-web-data"], OTHER_PAYEE);
+seedHealthyOrigin(CUSTOM, SAME_TOOLS, WALLET_A);
+const loneMatches = {
+  "https://other-production.up.railway.app": [["url-to-markdown", "summarize-page"], WALLET_A, "same wallet, other tools"],
+  "https://third-production.up.railway.app": [SAME_TOOLS, WALLET_B, "same tools, other wallet"],
+};
+for (const [origin, [slugs, wallet]] of Object.entries(loneMatches)) seedHealthyOrigin(origin, slugs, wallet);
 {
-  const aliases = computeAliasOrigins(cache);
-  ok(!aliases.has("https://other-production.up.railway.app"), "same payee with a different tool set does not fold");
-  ok(!aliases.has("https://third-production.up.railway.app"), "same tools with a different payee do not fold");
+  const folded = computeAliasOrigins(cache);
+  for (const [origin, [, , why]] of Object.entries(loneMatches)) ok(!folded.has(origin), `9: ${why} is not a deployment alias`);
 }
 
 cache.clear();

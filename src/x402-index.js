@@ -2445,8 +2445,8 @@ function priceRank(p) {
 // per-network price/asset), an optional serviceName, description, and tags.
 // We deliberately keep the price in atomic USDC units → USD here so the router
 // can compare across sellers without a per-network price lookup.
-// It is exported so offline tests of the registry/OpenAPI merge can build rows
-// directly, next to the OpenAPI normaliser.
+// Exported (beside the OpenAPI normaliser) so the merge's offline suites can
+// call it on hand-built registry items.
 // PayAI's open registry (and occasionally others) carries `network` as a bare
 // shorthand string ("base", "solana") instead of proper CAIP-2
 // ("eip155:8453", "solana:5eykt4Us...") on some listings - every downstream
@@ -2560,63 +2560,111 @@ export function acceptDecimals(a) {
   return null;
 }
 
-const USDC_NAME_RE = /usdc|usd coin/i;
-const BASE_MAINNET = "eip155:8453";
-const ALGORAND_MAINNET_PREFIX = "algorand:wGHE2Pwd";
+// The chain an accept names, as text, or null: only an object whose
+// `network` is a string has one (a number or an object there names nothing).
+function acceptChainText(a) {
+  return a !== null && typeof a === "object" && typeof a.network === "string" ? a.network : null;
+}
+const USD_COIN_LABEL = /usdc|usd coin/i;
+function labelledUsdCoin(a) {
+  const label = a !== null && typeof a === "object" ? a.extra?.name : undefined;
+  return typeof label === "string" && USD_COIN_LABEL.test(label);
+}
+// Whole base units as text (or a whole number): the only `amount` read
+// before `maxAmountRequired`.
+const WHOLE_BASE_UNITS = /^\d+$/;
+function wholeBaseUnits(v) {
+  if (typeof v === "string") return WHOLE_BASE_UNITS.test(v.trim());
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+}
+// The atomic figure an accept is priced from: a well-formed `amount`, else
+// the v1 `maxAmountRequired` (still common in flat manifests).
+function atomicFigureOf(a) {
+  return wholeBaseUnits(a.amount) ? a.amount : a.maxAmountRequired;
+}
+// A receiving address as the accept wrote it; empty text is no address.
+function payToTextOrNull(a) {
+  const p = a.payTo;
+  return p === undefined || p === null || p === "" ? null : p;
+}
+// An own data property, so a network spelled "__proto__" stays a key.
+function putOwn(obj, key, value) {
+  Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
+}
+const BASE_CAIP2 = "eip155:8453";
+const ALGORAND_MAINNET_GENESIS = "algorand:wGHE2Pwd";
 /**
- * The money fields an index row carries, read from an x402 `accepts` list
- * (a 402 challenge, a registry item, a manifest entry or a catalogue entry's
- * derived accepts). One reader for every source, so two rows that describe
- * the same endpoint agree on price, chains and receiving addresses.
- * Pure: the input list and its elements are never changed.
+ * The money fields an index row carries, read from an x402 `accepts` list:
+ * a 402 challenge, a registry item, a manifest entry, or the accepts a
+ * catalogue entry derives. Every source goes through this one reader, so a
+ * manifest row and a registry row for one endpoint agree on price, chains
+ * and receiving addresses. Never throws, and never changes its input.
  */
 export function paymentFieldsFromAccepts(rawAccepts) {
-  const list = (Array.isArray(rawAccepts) ? rawAccepts : []).map((a) =>
-    (a && typeof a === "object" && typeof a.network === "string")
-      ? { ...a, network: normalizeNetwork(a.network) }
-      : a);
-  const isObj = (a) => !!a && typeof a === "object";
-  const namesUsdc = (a) => isObj(a) && typeof a.extra?.name === "string" && USDC_NAME_RE.test(a.extra.name);
-  const preferred = list.find((a) => namesUsdc(a) && a.network === BASE_MAINNET)
-    || list.find(namesUsdc)
-    || (list.length ? list[0] : undefined);
+  const given = Array.isArray(rawAccepts) ? rawAccepts : [];
+  // Normalized copies (shorthand "base" -> eip155:8453), read by every step
+  // below, the EIP-712 domain reader included.
+  const accepts = new Array(given.length);
+  const networks = [];
+  let pricedOnBase = null, pricedAnywhere = null;
+  let stellarPayTo = null, algorandPayTo = null, stellarFound = false, algorandFound = false;
+  for (let i = 0; i < given.length; i++) {
+    const chain = acceptChainText(given[i]);
+    if (chain === null) { accepts[i] = given[i]; continue; }
+    const a = { ...given[i], network: normalizeNetwork(chain) };
+    accepts[i] = a;
+    const net = a.network;
+    if (net !== "" && !networks.includes(net)) networks.push(net);
+    if (labelledUsdCoin(a)) {
+      if (pricedAnywhere === null) pricedAnywhere = a;
+      if (pricedOnBase === null && net === BASE_CAIP2) pricedOnBase = a;
+    }
+    if (!stellarFound && net.startsWith("stellar") && !net.includes("test")) { stellarFound = true; stellarPayTo = payToTextOrNull(a); }
+    if (!algorandFound && net.startsWith(ALGORAND_MAINNET_GENESIS)) { algorandFound = true; algorandPayTo = payToTextOrNull(a); }
+  }
+  // The accept that prices the row: USDC on Base, else USDC anywhere, else
+  // whatever comes first.
+  const pricing = pricedOnBase ?? pricedAnywhere ?? (accepts.length > 0 ? accepts[0] : null);
 
   let price = null;
-  if (isObj(preferred)) {
-    const figure = preferred.amount != null ? preferred.amount : preferred.maxAmountRequired;
-    if (sellerNumText(figure) !== undefined) {
-      const decimals = acceptDecimals(preferred);
-      if (decimals != null) {
-        const usd = Number(figure) / 10 ** decimals;
-        if (Number.isFinite(usd)) price = usd;
-      }
+  if (pricing !== null && typeof pricing === "object") {
+    const figure = atomicFigureOf(pricing);
+    const decimals = sellerNumText(figure) === undefined ? null : acceptDecimals(pricing);
+    if (decimals !== null) {
+      const usd = Number(figure) / 10 ** decimals;
+      price = Number.isFinite(usd) ? usd : null;
     }
   }
 
-  const networks = [];
-  for (const a of list) {
-    if (isObj(a) && typeof a.network === "string" && a.network && !networks.includes(a.network)) networks.push(a.network);
-  }
-
-  const firstPayTo = (match) => {
-    const hit = list.find((a) => isObj(a) && typeof a.network === "string" && match(a.network));
-    return hit ? (hit.payTo ?? null) : null;
-  };
-  const stellarPayTo = firstPayTo((n) => n.startsWith("stellar") && !n.includes("test"));
-  const algorandPayTo = firstPayTo((n) => n.startsWith(ALGORAND_MAINNET_PREFIX));
-
+  // One address per network; the pricing accept's own address is recorded
+  // first, so it wins over a sibling on the same chain.
   const payToByNetwork = {};
-  const record = (a) => {
-    if (!isObj(a) || typeof a.network !== "string" || typeof a.payTo !== "string" || !a.payTo) return;
-    if (!Object.hasOwn(payToByNetwork, a.network)) payToByNetwork[a.network] = a.payTo;
+  const remember = (a) => {
+    const chain = acceptChainText(a);
+    if (chain === null || typeof a.payTo !== "string" || a.payTo === "" || Object.hasOwn(payToByNetwork, chain)) return;
+    putOwn(payToByNetwork, chain, a.payTo);
   };
-  record(preferred);
-  for (const a of list) record(a);
+  remember(pricing);
+  for (let i = 0; i < accepts.length; i++) remember(accepts[i]);
 
-  const out = { price, networks, stellarPayTo, algorandPayTo, payToByNetwork };
-  const domains = evmDomainsOfAccepts(list);
-  if (domains && typeof domains === "object" && Object.keys(domains).length) out.evmDomainByNetwork = domains;
-  return out;
+  const fields = { price, networks, stellarPayTo, algorandPayTo, payToByNetwork };
+  const domains = evmDomainsOfAccepts(accepts);
+  if (domains !== null && typeof domains === "object" && Object.keys(domains).length > 0) fields.evmDomainByNetwork = domains;
+  return fields;
+}
+
+/** The chain and payee fields a row copies from a paymentFieldsFromAccepts
+ *  reading (the price is placed by each caller); the EIP-712 domains only
+ *  when the reading has them. */
+function paymentRowFields(pay) {
+  const fields = {
+    networks: pay.networks,
+    stellarPayTo: pay.stellarPayTo,
+    algorandPayTo: pay.algorandPayTo,
+    payToByNetwork: pay.payToByNetwork,
+  };
+  if (pay.evmDomainByNetwork) fields.evmDomainByNetwork = pay.evmDomainByNetwork;
+  return fields;
 }
 
 export function bazaarItemToTool(item, originUrl) {
@@ -2627,7 +2675,8 @@ export function bazaarItemToTool(item, originUrl) {
   // "https://hostile.example/...", nor a path seller "/app/x" own "/app/x2".
   // The host compares case-insensitively (a registry may record "API.Host").
   if (!isUnderSeller(resource, originUrl)) return null;
-  // The money fields come from the item's accepts, through the shared reader.
+  // Price, chains and payees: the shared accepts reader, on whatever the item
+  // carries (a missing list reads as none).
   const pay = paymentFieldsFromAccepts(item.accepts);
   let pathStr = "/";
   try {
@@ -2646,14 +2695,15 @@ export function bazaarItemToTool(item, originUrl) {
     pathStr = scoped;
   }
   const tags = Array.isArray(item.tags) ? item.tags : [];
-  // A verb counts as stated only when the item names one as non-empty text.
-  const methodInferred = !(typeof item.method === "string" && item.method.length > 0);
+  // The verb the item states (non-empty text, upper-cased), or null when it
+  // states none and the row's verb is a guess.
+  const statedVerb = typeof item.method === "string" && item.method !== "" ? item.method.toUpperCase() : null;
   // Bazaar entries don't always carry a method (GoPlausible's do); assume POST
   // if we can't tell. The router treats this as a hint and respects a 405 retry.
   return {
     seller: originUrl,
-    method: methodInferred ? "POST" : item.method.toUpperCase(),
-    methodInferred,
+    method: statedVerb === null ? "POST" : statedVerb,
+    methodInferred: statedVerb === null,
     route: pathStr,
     slug: pathStr.replace(/^\//, "").replace(/\//g, "-") || originUrl.replace(/^https?:\/\//, ""),
     name: item.serviceName || pathStr,
@@ -2661,11 +2711,7 @@ export function bazaarItemToTool(item, originUrl) {
     category: tags[0] || "other",
     tags,
     price: pay.price,
-    networks: pay.networks,
-    stellarPayTo: pay.stellarPayTo,
-    algorandPayTo: pay.algorandPayTo,
-    payToByNetwork: pay.payToByNetwork,
-    ...(pay.evmDomainByNetwork ? { evmDomainByNetwork: pay.evmDomainByNetwork } : {}),
+    ...paymentRowFields(pay),
     provenance: "bazaar",
     ...(scopedHere ? { [SCOPED_ROW]: true } : {}),
     // Coinbase-measured 30-day usage of THIS resource (null when absent).
@@ -2677,8 +2723,8 @@ export function bazaarItemToTool(item, originUrl) {
   };
 }
 
-// The OpenAPI normaliser is exported and kept pure (no fetch, no state) so the
-// exact document-to-row mapping can be tested offline.
+// normaliseOpenapiTools (below) is exported and does no I/O, so a suite can
+// pin how a document becomes rows without any network.
 /** The path prefix an OpenAPI document's `paths` are relative to.
  *
  *  OpenAPI paths are relative to `servers[].url`, so a document declaring
@@ -2735,10 +2781,12 @@ function isDevServerHost(h) {
     || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
 }
 
-/** An OpenAPI (or agents) document's operations as index rows, in one
- *  synchronous call: the same rows the crawl's sliced copy builds. */
+/** Index rows for every listed operation of an OpenAPI or agents document,
+ *  built in one synchronous run of the step generator (the crawl runs the
+ *  same steps in slices and gets the same rows). */
 export function normaliseOpenapiTools(openapi, originUrl) {
-  return scopeRowsToSeller(runSteps(normaliseOpenapiToolsSteps(openapi, originUrl)), originUrl);
+  const unscoped = runSteps(normaliseOpenapiToolsSteps(openapi, originUrl));
+  return scopeRowsToSeller(unscoped, originUrl);
 }
 
 // The crawl's copy: the same rows, built in slices of CRAWL_SLICE_MS. A
@@ -2924,39 +2972,47 @@ function* filterSteps(list, keep) {
 }
 // One step per operation; the document is read only, so a yield between two
 // operations cannot change a row.
-// The path item keys that name an operation; anything else in a path item
-// (parameters, servers, summary, trace, ...) is not one.
-const OPENAPI_OPERATION_METHODS = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
-// Paths that are never a tool: housekeeping prefixes and static file types.
-const OPENAPI_NON_TOOL_PATH =
-  /^\/(\.well-known|health|openapi|llms|sitemap|robots|favicon|admin|internal)|\.(png|ico|svg|txt|xml)$/i;
+// HTTP verbs a path item can hold an operation under (lower case). Other
+// keys of a path item (parameters, servers, summary, trace, ...) are not
+// operations.
+const OPENAPI_VERB_KEYS = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
+function isOpenapiVerbKey(key) { return OPENAPI_VERB_KEYS.has(String(key).toLowerCase()); }
+// Leading path words and file endings that never name something for sale.
+const UNSOLD_PATH_WORDS = [".well-known", "health", "openapi", "llms", "sitemap", "robots", "favicon", "admin", "internal"];
+const UNSOLD_PATH_ENDINGS = [".png", ".ico", ".svg", ".txt", ".xml"];
+function openapiPathNeverSold(path) {
+  if (typeof path !== "string") return false;
+  const lower = path.toLowerCase();
+  for (const ending of UNSOLD_PATH_ENDINGS) if (lower.endsWith(ending)) return true;
+  if (lower.charCodeAt(0) !== 47 /* "/" */) return false;
+  for (const word of UNSOLD_PATH_WORDS) if (lower.startsWith(word, 1)) return true;
+  return false;
+}
 function* normaliseOpenapiToolsSteps(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
   if (base == null) return [];
-  // Asked once per document: when any operation is priced, unannotated
-  // siblings are listed as free rather than left without a `paid` field.
+  // One answer for the whole document: if anything in it is sold, rows the
+  // seller left unannotated are stamped free instead of carrying no `paid`.
   const documentDistinguishesPaidOperations = openapiHasPaymentSignal(openapi);
   logUnknownPaymentKeys(openapi, originUrl);
-  const isOperationKey = (k) => OPENAPI_OPERATION_METHODS.has(String(k).toLowerCase());
-  const neverATool = (p) => typeof p === "string" && OPENAPI_NON_TOOL_PATH.test(p);
   const out = [];
   for (const [rawPath, methods] of Object.entries(openapi.paths)) {
     // Apply the basePath unless the document already spells it out (some specs
     // repeat the prefix in every path even though servers declares it).
     const pathStr = base && !rawPath.startsWith(base + "/") && rawPath !== base ? base + rawPath : rawPath;
     for (const [method, op] of Object.entries(methods || {})) {
-      if (!isOperationKey(method)) continue;
+      if (!isOpenapiVerbKey(method)) continue;
       if (!op || typeof op !== "object") continue;
-      // Not every operation is a tool. Discovery and housekeeping paths
-      // (well-known files, health checks, the spec itself, robots, sitemaps,
-      // admin and internal areas) and static files (images, text, XML) are
-      // never sold, and an operation the seller marked deprecated is being
-      // withdrawn. The path is checked both as the document wrote it and with
-      // the server prefix applied, so a prefix such as /internal excludes too.
-      // This holds in every document, annotated or not.
-      if (neverATool(rawPath) || neverATool(pathStr)) continue;
+      // Rows are for things a buyer can purchase. An operation flagged
+      // `deprecated: true` is on its way out, so it is left off. So are paths
+      // that serve the site rather than sell (discovery files, health, the
+      // spec, robots and sitemaps, admin or internal areas) and plain files
+      // (.png, .ico, .svg, .txt, .xml). A path is tested as written and again
+      // under its server prefix, since a server such as /internal says the same
+      // thing. The rule does not depend on whether the document is annotated.
       if (op.deprecated === true) continue;
+      if (openapiPathNeverSold(rawPath) || openapiPathNeverSold(pathStr)) continue;
       // One reader for every annotation dialect (see openapiOperationPayment):
       // price, paid/free, the chains and the payTo the operation declares.
       const pay = openapiOperationPayment(op);
@@ -3089,31 +3145,45 @@ function mergeManifestToolRows(a, b) {
     price: prefer.price || other.price || null,
     slug: (prefer.slug && prefer.slug !== prefer.route) ? prefer.slug : (other.slug || prefer.slug),
     method: prefer.method || other.method,
-    // Richness ignores payment terms, so the winner may carry none while the
-    // other row does: keep the winner's own, else take the other's.
-    ...fillFrom(prefer, other, "networks", (v) => Array.isArray(v) && v.length > 0),
-    ...fillFrom(prefer, other, "payToByNetwork", (v) => !!v && typeof v === "object" && Object.keys(v).length > 0),
-    ...fillFrom(prefer, other, "stellarPayTo", Boolean),
-    ...fillFrom(prefer, other, "algorandPayTo", Boolean),
-    ...fillFrom(prefer, other, "evmDomainByNetwork", Boolean),
+    // Payment terms play no part in richness, so the richer row can be the
+    // one without them; each term the winner lacks comes from the other row.
+    ...paymentTermsLackedBy(prefer, other),
     ...(a[MANIFEST_HOST_RELATIVE] || b[MANIFEST_HOST_RELATIVE] ? { [MANIFEST_HOST_RELATIVE]: true } : {}),
   };
 }
 
-/** `{ [key]: other[key] }` when the winner has no usable value there and the
- *  other row does; otherwise nothing (the winner's own value stays). */
-function fillFrom(prefer, other, key, usable) {
-  if (usable(prefer[key])) return {};
-  return usable(other[key]) ? { [key]: other[key] } : {};
+// Each payment term of a manifest row, with what counts as having it.
+const hasItems = (v) => Array.isArray(v) && v.length > 0;
+const hasKeys = (v) => v !== null && typeof v === "object" && Object.keys(v).length > 0;
+const MANIFEST_PAYMENT_TERMS = [
+  ["networks", hasItems],
+  ["payToByNetwork", hasKeys],
+  ["stellarPayTo", Boolean],
+  ["algorandPayTo", Boolean],
+  ["evmDomainByNetwork", Boolean],
+];
+/** The terms `winner` does not have and `donor` does, taken by reference. */
+function paymentTermsLackedBy(winner, donor) {
+  const borrowed = {};
+  for (const [term, present] of MANIFEST_PAYMENT_TERMS) {
+    if (!present(winner[term]) && present(donor[term])) borrowed[term] = donor[term];
+  }
+  return borrowed;
 }
 
-/** Is this entry (or price object) written in the x402 accept shape? Its
- *  `amount` / `maxAmountRequired` are then atomic units priced through the
- *  accepts reader, never a dollar figure. */
+// The fields whose text type marks the x402 accept shape.
+const ACCEPT_SHAPE_TEXT_FIELDS = ["network", "asset", "scheme", "payTo", "maxAmountRequired"];
+/** Is this manifest entry (or price object) written as an x402 accept? If so
+ *  its `amount` / `maxAmountRequired` count base units of the asset, priced
+ *  by the accepts reader, and are never read as dollars. A bare `amount`
+ *  with nothing of the accept shape around it still means dollars. */
 function acceptShaped(raw) {
-  if (!raw || typeof raw !== "object") return false;
-  return typeof raw.network === "string" || typeof raw.asset === "string" || typeof raw.scheme === "string"
-    || typeof raw.payTo === "string" || typeof raw.maxAmountRequired === "string" || Array.isArray(raw.accepts);
+  if (raw === null || typeof raw !== "object") return false;
+  if (Array.isArray(raw.accepts)) return true;
+  for (let i = 0; i < ACCEPT_SHAPE_TEXT_FIELDS.length; i++) {
+    if (typeof raw[ACCEPT_SHAPE_TEXT_FIELDS[i]] === "string") return true;
+  }
+  return false;
 }
 
 /** An explicit DOLLAR label (`display`, `amountLabel`) the seller wrote for
@@ -3225,26 +3295,48 @@ export function singleResourceManifestTool(manifest, originUrl) {
   return { ...tool, provenance: "manifest" };
 }
 
-/** The payment terms one catalogue entry declares, as an accepts list: its
- *  own accepts, its `payment` block, or flat chain fields on the entry; when it
- *  declares none, the manifest-level `fallback`. */
+// The chain a payment-bearing object names flat. `network` decides when it
+// is present: a non-empty string is the chain, and any other value (a number,
+// an object) names none, so a `chain` beside it is not read. Only an absent
+// or empty `network` leaves the decision to `chain`.
+function flatChainOf(obj) {
+  const network = obj.network;
+  if (typeof network === "string" && network !== "") return network;
+  if (network !== undefined && network !== null && network !== "") return null;
+  return typeof obj.chain === "string" && obj.chain !== "" ? obj.chain : null;
+}
+// The first of `keys` whose value on `obj` is truthy, else undefined.
+function firstTruthyField(obj, keys) {
+  for (const key of keys) if (obj[key]) return obj[key];
+  return undefined;
+}
+// `a` unless it is null or undefined, then `b`.
+const presentOr = (a, b) => (a === null || a === undefined ? b : a);
+const ENTRY_ASSET_FIELDS = ["asset", "asset_address", "assetAddress"];
+const ENTRY_PAYTO_FIELDS = ["payTo", "pay_to"];
+/** The payment terms one catalogue entry declares, as an accepts list. In
+ *  order: its own non-empty `accepts`; its `payment` block; one accept built
+ *  from chain fields written flat on the entry; otherwise `fallback` (the
+ *  manifest-wide terms), which is also the answer for a non-object entry. */
 function catalogueEntryAccepts(raw, fallback) {
-  if (!raw || typeof raw !== "object") return fallback;
-  if (Array.isArray(raw.accepts) && raw.accepts.length) return raw.accepts;
-  const fromBlock = entryPaymentBlockAccepts(raw.payment);
-  if (fromBlock.length) return fromBlock;
-  const chain = [raw.network, raw.chain].find((v) => typeof v === "string" && v);
-  if (!chain) return fallback;
-  return [{
+  if (raw === null || typeof raw !== "object") return fallback;
+  const own = raw.accepts;
+  if (Array.isArray(own) && own.length > 0) return own;
+  const block = entryPaymentBlockAccepts(raw.payment);
+  if (block.length > 0) return block;
+  const network = flatChainOf(raw);
+  if (network === null) return fallback;
+  const accept = {
     scheme: raw.scheme || "exact",
-    network: chain,
-    asset: raw.asset || raw.asset_address || raw.assetAddress,
-    payTo: raw.payTo || raw.pay_to,
-    amount: raw.amount != null ? raw.amount : raw.maxAmountRequired,
-    maxAmountRequired: raw.maxAmountRequired != null ? raw.maxAmountRequired : raw.amount,
+    network,
+    asset: firstTruthyField(raw, ENTRY_ASSET_FIELDS),
+    payTo: firstTruthyField(raw, ENTRY_PAYTO_FIELDS),
+    amount: presentOr(raw.amount, raw.maxAmountRequired),
+    maxAmountRequired: presentOr(raw.maxAmountRequired, raw.amount),
     maxTimeoutSeconds: raw.maxTimeoutSeconds,
     extra: raw.extra,
-  }];
+  };
+  return [accept];
 }
 
 /** The accepts a catalogue entry's own `payment` block declares: its accepts
@@ -3307,7 +3399,7 @@ function manifestPathsCatalogue(manifest) {
 function payToFitsNetwork(network, addr) {
   if (typeof addr !== "string" || !addr.trim()) return false;
   const n = String(network || "").toLowerCase();
-  if (n.startsWith("eip155:")) return /^0x[0-9a-fA-F]{40}$/.test(addr);
+  if (n.startsWith("eip155:")) return HEX_ADDRESS.test(addr);
   if (n.startsWith("solana")) return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
   if (n.startsWith("stellar")) return /^G[A-Z2-7]{55}$/.test(addr);
   if (n.startsWith("algorand")) return /^[A-Z2-7]{58}$/.test(addr);
@@ -3344,22 +3436,30 @@ function manifestX402BlockAccepts(p) {
   }));
 }
 
-/** A manifest's service-wide `payment` block as accepts: the default for every
- *  catalogue row that declares no payment of its own. */
+// A 0x-prefixed 40-hex-digit address, either case in prefix and digits.
+const HEX_ADDRESS = /^0x[0-9a-f]{40}$/i;
+// The block prefers a contract address over a ticker for the asset.
+const BLOCK_ASSET_FIELDS = ["asset_address", "assetAddress", "asset"];
+const BLOCK_PAYTO_FIELDS = ["pay_to", "payTo"];
+/** A manifest's one `payment` block for the whole service, as accepts: the
+ *  terms every catalogue row that names none of its own inherits. A block
+ *  naming no chain flat is read as the `x402` sub-block shape. */
 function manifestPaymentAccepts(manifest) {
-  const p = manifest?.payment;
-  if (!p || typeof p !== "object") return [];
-  const chain = p.network || p.chain;
-  if (typeof chain !== "string" || !chain) return manifestX402BlockAccepts(p);
-  const tickerOnly = typeof p.asset === "string" && !/^0x[0-9a-fA-F]{40}$/.test(p.asset);
+  const block = manifest?.payment;
+  if (block === null || typeof block !== "object") return [];
+  const network = flatChainOf(block);
+  if (network === null) return manifestX402BlockAccepts(block);
+  // A ticker ("USDC") in `asset` still gives the EIP-712 reader a name.
+  let extra = block.extra || undefined;
+  if (!extra && typeof block.asset === "string" && !HEX_ADDRESS.test(block.asset)) extra = { name: block.asset };
   return [{
-    scheme: p.scheme || "exact",
-    network: chain,
-    asset: p.asset_address || p.assetAddress || p.asset,
-    payTo: p.pay_to || p.payTo,
-    amount: p.amount != null ? p.amount : p.maxAmountRequired,
-    maxTimeoutSeconds: p.maxTimeoutSeconds,
-    extra: p.extra ? p.extra : (tickerOnly ? { name: p.asset } : undefined),
+    scheme: block.scheme || "exact",
+    network,
+    asset: firstTruthyField(block, BLOCK_ASSET_FIELDS),
+    payTo: firstTruthyField(block, BLOCK_PAYTO_FIELDS),
+    amount: presentOr(block.amount, block.maxAmountRequired),
+    maxTimeoutSeconds: block.maxTimeoutSeconds,
+    extra,
   }];
 }
 export function normaliseManifestTools(manifest, originUrl, { examples = null } = {}) {
@@ -3439,6 +3539,57 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
   }
   return rows;
 }
+/** The payment reading for one catalogue entry, or null when it carries no
+ *  terms at all. A bare string entry has only the service-wide terms to
+ *  inherit; an object entry is read through catalogueEntryAccepts, which
+ *  prefers its own terms and falls back to the service-wide ones. */
+function entryPaymentReading(raw, serviceAccepts) {
+  const accepts = typeof raw === "string" ? serviceAccepts : catalogueEntryAccepts(raw, serviceAccepts);
+  if (!Array.isArray(accepts) || accepts.length === 0) return null;
+  return paymentFieldsFromAccepts(accepts);
+}
+/** A row's price text: the seller's own written price when there is one (its
+ *  wording, and the origin-declared stamp is made from it), else the accepts'
+ *  dollar figure as "$" plus the number's default text, else null. */
+function manifestRowPrice(writtenPrice, pay) {
+  if (writtenPrice !== null && writtenPrice !== undefined) return writtenPrice;
+  if (pay === null || pay.price === null || pay.price === undefined) return null;
+  return `$${pay.price}`;
+}
+// A name that says something: not empty, not the path, not path-like.
+const tellingName = (n, path) => Boolean(n) && n !== path && !String(n).startsWith("/");
+const carriesChains = (pay) => Boolean(pay) && Array.isArray(pay.networks) && pay.networks.length > 0;
+/** The per-path record after one more entry on `path`: each field keeps the
+ *  better of what this entry says and what earlier entries said. */
+function pathRecordWith(earlier, entry, path) {
+  let name = entry.name || "";
+  if (!tellingName(entry.name, path)) {
+    if (earlier && tellingName(earlier.name, path)) name = earlier.name;
+    else name = earlier?.name || entry.name || "";
+  }
+  let slug = entry.slug;
+  if (!slug || slug === path) slug = earlier?.slug || entry.slug || "";
+  return {
+    name,
+    description: entry.description || earlier?.description || "",
+    price: entry.price || earlier?.price || null,
+    slug,
+    pay: carriesChains(entry.pay) ? entry.pay : (earlier?.pay || null),
+  };
+}
+const filledObject = (v) => Boolean(v) && Object.keys(v).length > 0;
+/** One path, one set of payment terms: a row that names no chain takes the
+ *  path's terms (each payee field only where the row has none). A row that
+ *  already names a chain keeps its own. */
+function adoptPathPayment(row, pathPay) {
+  if (Array.isArray(row.networks) && row.networks.length > 0) return;
+  if (!carriesChains(pathPay)) return;
+  row.networks = pathPay.networks;
+  if (!filledObject(row.payToByNetwork) && filledObject(pathPay.payToByNetwork)) row.payToByNetwork = pathPay.payToByNetwork;
+  for (const field of ["stellarPayTo", "algorandPayTo", "evmDomainByNetwork"]) {
+    if (!row[field] && pathPay[field]) row[field] = pathPay[field];
+  }
+}
 function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   if (!manifest || typeof manifest !== "object") return [];
   let origin;
@@ -3475,31 +3626,14 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   // times too large.
   const manifestAtomic = [...(Array.isArray(manifest.accepts) ? manifest.accepts : []), ...manifestAccepts]
     .find((a) => atomicContext(a) && tokenDecimalsOf(a) != null) || null;
-  // One record per URL path, merged across every entry on it, so a thin
-  // sibling method can borrow the path's name, description, price and terms.
-  const realName = (n, path) => !!n && n !== path && !String(n).startsWith("/");
-  const notePathMeta = (path, entry) => {
-    if (!path) return;
-    const was = metaByPath.get(path);
-    const hasTerms = (p) => !!p && Array.isArray(p.networks) && p.networks.length > 0;
-    metaByPath.set(path, {
-      name: realName(entry.name, path) ? entry.name
-        : (was && realName(was.name, path) ? was.name : (was?.name || entry.name || "")),
-      description: entry.description || was?.description || "",
-      price: entry.price || was?.price || null,
-      slug: (entry.slug && entry.slug !== path) ? entry.slug : (was?.slug || entry.slug || ""),
-      pay: hasTerms(entry.pay) ? entry.pay : (was?.pay || null),
-    });
-  };
+  // metaByPath (above) gathers, per URL path, what every entry on that path
+  // said (see pathRecordWith), so a thin sibling method can borrow it.
 
   for (const list of catalogues) {
     for (const raw of list.slice(0, 1000)) {
       let ref = "", name = "", description = "", price = null, inputSchema = null;
       const methodList = [];
-      // A bare string entry inherits only the service-wide block; an object
-      // entry uses its own terms when it declares any.
-      const entryAccepts = typeof raw === "string" ? manifestAccepts : catalogueEntryAccepts(raw, manifestAccepts);
-      let pay = Array.isArray(entryAccepts) && entryAccepts.length ? paymentFieldsFromAccepts(entryAccepts) : null;
+      let pay = entryPaymentReading(raw, manifestAccepts);
       if (typeof raw === "string") {
         ref = raw.trim();
       } else if (raw && typeof raw === "object") {
@@ -3553,7 +3687,10 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
       if (!u.pathname || u.pathname === "/" || MANIFEST_NON_TOOL_PATH.test(u.pathname)) continue;
       const pathOnly = u.pathname;
       const slug = cleanListingSlug(name) || u.pathname.replace(/^\//, "").replace(/\//g, "-");
-      notePathMeta(pathOnly, { name, description, price, slug, pay });
+      if (pathOnly !== "") {
+        const fromThisEntry = { name, description, price, slug, pay };
+        metaByPath.set(pathOnly, pathRecordWith(metaByPath.get(pathOnly), fromThisEntry, pathOnly));
+      }
       const methodsToEmit = methodList.length ? [...new Set(methodList)] : [""];
       for (const method of methodsToEmit) {
         // Keyed on method+route INCLUDING the query string: two entries that differ
@@ -3579,16 +3716,9 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
           description: description.slice(0, 400),
           category: "other",
           tags: [],
-          // The seller's own display price wins; else the accepts' figure.
-          price: price != null ? price : (pay && pay.price != null ? `$${pay.price}` : null),
+          price: manifestRowPrice(price, pay),
           ...(() => { const packed = inputSchema ? packRequestContract(requestContractFromInputSchema(inputSchema, method || "GET")) : null; return packed ? { requestContract: packed } : {}; })(),
-          ...(pay ? {
-            networks: pay.networks,
-            stellarPayTo: pay.stellarPayTo,
-            algorandPayTo: pay.algorandPayTo,
-            payToByNetwork: pay.payToByNetwork,
-            ...(pay.evmDomainByNetwork ? { evmDomainByNetwork: pay.evmDomainByNetwork } : {}),
-          } : {}),
+          ...(pay === null ? {} : paymentRowFields(pay)),
         };
         byKey.set(key, mergeManifestToolRows(byKey.get(key), row));
         if (example && !exampleByKey.has(key)) exampleByKey.set(key, example);
@@ -3606,16 +3736,7 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
     if ((!t.name || t.name === t.route || String(t.name).startsWith("/")) && meta.name) t.name = meta.name;
     if (!t.description && meta.description) t.description = String(meta.description).slice(0, 400);
     if ((!t.slug || t.slug === t.route) && meta.slug) t.slug = meta.slug;
-    // One path, one set of payment terms: a sibling with no chain takes the
-    // path's.
-    const mp = meta.pay;
-    if ((!Array.isArray(t.networks) || !t.networks.length) && mp && Array.isArray(mp.networks) && mp.networks.length) {
-      t.networks = mp.networks;
-      if ((!t.payToByNetwork || !Object.keys(t.payToByNetwork).length) && mp.payToByNetwork && Object.keys(mp.payToByNetwork).length) t.payToByNetwork = mp.payToByNetwork;
-      if (!t.stellarPayTo && mp.stellarPayTo) t.stellarPayTo = mp.stellarPayTo;
-      if (!t.algorandPayTo && mp.algorandPayTo) t.algorandPayTo = mp.algorandPayTo;
-      if (!t.evmDomainByNetwork && mp.evmDomainByNetwork) t.evmDomainByNetwork = mp.evmDomainByNetwork;
-    }
+    adoptPathPayment(t, meta.pay);
   }
   // A price in the seller's OWN manifest is an origin declaration, exactly like
   // one in their openapi.json, and must be marked as such: `originDeclaredPrice`
@@ -4142,10 +4263,14 @@ function openapiOperationPaymentOnce(op) {
   return out;
 }
 
-/** Does the payment reader judge this one path item value a paid operation? */
-function isPaidOperation(op) {
-  if (!op || typeof op !== "object") return false;
-  try { return openapiOperationPayment(op).paid === true; } catch { return false; }
+/** True when one value found in a path item is an operation the payment
+ *  reader calls paid; anything that is not an object, or that the reader
+ *  cannot read, sells nothing. */
+function operationSellsSomething(value) {
+  if (value === null || typeof value !== "object") return false;
+  let reading;
+  try { reading = openapiOperationPayment(value); } catch { return false; }
+  return reading?.paid === true;
 }
 
 // Annotation-dialect watch. There is no standard for payment extensions, so
@@ -4195,33 +4320,35 @@ function logUnknownPaymentKeys(openapi, originUrl) {
   }
 }
 
-// Whether a document sells anything at all. A document found without a
-// manifest or a registry record is read as a paid seller only when at least
-// one of its operations is priced or declared payment-required; the same
-// answer decides whether unannotated operations are stamped free. Every value
-// in every path item is checked, ignoring the listing filters.
+// Does this document sell anything? With no manifest and no registry record
+// behind it, an OpenAPI or agents document is taken as a paid seller only when
+// some operation is priced or says payment is required, and the same answer
+// tells the normaliser to stamp unannotated operations free. It reads every
+// value of every path item (array items included) and ignores the listing
+// filters: a priced operation that is deprecated, or on a path never listed,
+// still counts.
 export function openapiHasPaymentSignal(openapi) {
-  if (!openapi || typeof openapi !== "object" || !openapi.paths) return false;
+  const paths = openapi !== null && typeof openapi === "object" ? openapi.paths : undefined;
+  if (!paths) return false;
   try {
-    for (const item of Object.values(openapi.paths)) {
-      if (!item || typeof item !== "object") continue;
-      for (const v of Object.values(item)) if (isPaidOperation(v)) return true;
-    }
-  } catch { return false; }
-  return false;
+    return Object.values(paths).some((item) =>
+      item !== null && typeof item === "object" && Object.values(item).some(operationSellsSomething));
+  } catch {
+    return false;
+  }
 }
 
-// Merging a seller's OpenAPI document into its registry rows
-// (mergeOpenapiIntoBazaar, below). A registry row proves payments settled but
-// says little about the tool; the seller's operation supplies the slug (its
-// operationId), the name (summary), the description and the tags. Rows join
-// on method plus route; a join on the route alone is allowed only when the
-// registry had to guess the verb. The document wins on descriptive fields and,
-// when the verb was guessed, on the method. For price, the registry's observed
-// amount stands unless the origin declares a different one, in which case the
-// origin's current declaration wins; an OpenAPI price fills a missing amount.
-// Operations only the document lists are appended, and rows only the registry
-// lists pass through as clean copies.
+// How mergeOpenapiIntoBazaar (further down) combines the two sources. The
+// registry row is the payment evidence and the seller's operation is the
+// description: from the operation come the slug (operationId), the name
+// (summary), the description and the tags. A pair is joined on verb and
+// route; joining on the route alone is reserved for a registry row whose verb
+// was a guess. Descriptive fields, and a guessed verb, take the document's
+// value. Price: the registry's observed amount is kept unless the origin
+// declares another, in which case the origin's present figure is used, and a
+// registry row with no amount takes the document's. Operations the registry
+// never saw are added at the end; registry rows with no operation go through
+// as clean copies.
 /** Every operation's {method, route} in a document — NO payment filtering, no
  *  static-asset skip. Used only to COLLAPSE facilitator-registry rows whose
  *  concrete URLs instantiate a templated path (see mergeOpenapiIntoBazaar);
@@ -4230,20 +4357,27 @@ export function openapiAllOperationRoutes(openapi, originUrl) {
   return scopeRowsToSeller(openapiAllOperationRoutesUnscoped(openapi, originUrl), originUrl);
 }
 function openapiAllOperationRoutesUnscoped(openapi, originUrl) {
-  if (!openapi || typeof openapi !== "object" || !openapi.paths || typeof openapi.paths !== "object") return [];
+  const paths = openapi !== null && typeof openapi === "object" ? openapi.paths : null;
+  if (!paths || typeof paths !== "object") return [];
   const base = openapiBasePath(openapi, originUrl);
-  if (base == null) return [];
-  const out = [];
-  for (const [rawPath, item] of Object.entries(openapi.paths)) {
-    if (!item || typeof item !== "object") continue;
-    const route = base && !rawPath.startsWith(base + "/") && rawPath !== base ? base + rawPath : rawPath;
-    for (const [key, op] of Object.entries(item)) {
-      if (!OPENAPI_OPERATION_METHODS.has(key.toLowerCase())) continue;
-      if (!op || typeof op !== "object") continue;
-      out.push({ method: key.toUpperCase(), route });
+  if (base === null || base === undefined) return [];
+  const declared = [];
+  for (const rawPath of Object.keys(paths)) {
+    const item = paths[rawPath];
+    if (item === null || typeof item !== "object") continue;
+    const route = routeUnderBase(base, rawPath);
+    for (const verb of Object.keys(item)) {
+      const op = item[verb];
+      if (isOpenapiVerbKey(verb) && op !== null && typeof op === "object") declared.push({ method: verb.toUpperCase(), route });
     }
   }
-  return out;
+  return declared;
+}
+// A document path under its server prefix, unless the path already spells the
+// prefix out (or is the prefix itself).
+function routeUnderBase(base, rawPath) {
+  if (!base || rawPath === base || rawPath.startsWith(`${base}/`)) return rawPath;
+  return base + rawPath;
 }
 
 // Does `concrete` instantiate the templated `route` ("/a/{id}/b" matches
@@ -4301,31 +4435,64 @@ function* templatesMatching(index, concreteRoute) {
   }
 }
 
-// Registry rows are evidence of settlement and discovery, never of the
-// seller's application contract: a copy of one that the merge may publish
-// leaves the contract keys behind. A row without them (and without symbol
-// keys) is copied in one spread, so the copies share one object shape; only
-// the rest are copied key by key, never reading a contract value.
-const ownKey = Object.prototype.hasOwnProperty;
+// The two application-contract fields of a row, in the order a merged row
+// carries them. A registry row is settlement and discovery evidence, so a
+// copy the merge publishes never takes them from it.
+const CONTRACT_FIELD_NAMES = ["requestContract", "responseContract"];
+// Does copying this row need the slow path: a contract field of its own to
+// leave out, or a symbol key a spread would carry?
+function needsFieldByFieldCopy(row) {
+  for (const name of CONTRACT_FIELD_NAMES) if (Object.hasOwn(row, name)) return true;
+  return Object.getOwnPropertySymbols(row).length > 0;
+}
+/** A fresh copy of a registry row without its contract fields, whose values
+ *  are never read (a getter there does not run). The common row is copied in
+ *  one spread, so the ~77k copies of a large seller share one object shape;
+ *  only a row that needs it is rebuilt field by field. Non-objects come back
+ *  as given. */
 function withoutRegistryContracts(row) {
-  if (!row || typeof row !== "object") return row;
-  if (!ownKey.call(row, "requestContract") && !ownKey.call(row, "responseContract") && Object.getOwnPropertySymbols(row).length === 0) return { ...row };
+  if (row === null || typeof row !== "object") return row;
+  if (!needsFieldByFieldCopy(row)) return { ...row };
   const copy = {};
-  for (const k of Object.keys(row)) {
-    if (k === "requestContract" || k === "responseContract") continue;
-    copy[k] = row[k];
+  for (const field of Object.keys(row)) {
+    if (CONTRACT_FIELD_NAMES.includes(field)) continue;
+    Object.defineProperty(copy, field, { value: row[field], enumerable: true, writable: true, configurable: true });
   }
   return copy;
 }
-/** The seller operation's own contract tuple under `key`, or null: only an
- *  own data property holding an array counts, and no getter is ever run. */
-function ownContractTuple(row, key) {
-  if (!row || typeof row !== "object") return null;
-  try {
-    const d = Object.getOwnPropertyDescriptor(row, key);
-    if (!d || !("value" in d)) return null;
-    return Array.isArray(d.value) ? d.value : null;
-  } catch { return null; }
+/** One contract tuple from the seller's own operation row: the value of an
+ *  own data property (never a getter, never the prototype's) that holds an
+ *  array, else null. A row whose property cannot even be inspected gives
+ *  null too. */
+function sellerOperationTuple(opRow, field) {
+  if (opRow === null || typeof opRow !== "object") return null;
+  let descriptor;
+  try { descriptor = Object.getOwnPropertyDescriptor(opRow, field); } catch { return null; }
+  if (descriptor === undefined || !Object.hasOwn(descriptor, "value")) return null;
+  return Array.isArray(descriptor.value) ? descriptor.value : null;
+}
+/** The contract fields a merged row takes from the seller's operation: each
+ *  present only when the operation holds its own tuple. */
+function sellerContractFields(opRow) {
+  const fields = {};
+  for (const name of CONTRACT_FIELD_NAMES) {
+    const tuple = sellerOperationTuple(opRow, name);
+    if (tuple !== null) fields[name] = tuple;
+  }
+  return fields;
+}
+
+/** The verb a merged row is published with: a guessed registry verb gives way
+ *  to the operation's (when it has one); a stated one is kept. */
+function mergedVerb(registryRow, opRow) {
+  if (!registryRow.methodInferred) return registryRow.method;
+  return opRow.method || registryRow.method;
+}
+/** The slug of a templated route: no leading slash, the other slashes as
+ *  hyphens ("/g/{id}" -> "g-{id}"). */
+function templateRouteSlug(route) {
+  const bare = route.startsWith("/") ? route.slice(1) : route;
+  return bare.split("/").join("-");
 }
 
 export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { allRoutes = [] } = {}) {
@@ -4348,8 +4515,10 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
   const byRoute = new Map();
   for (const o of openapiTools) {
     exact.set(`${o.method} ${o.route}`, o);
-    // A route-only answer exists only for a route with a single operation.
-    byRoute.set(o.route, byRoute.has(o.route) ? null : o);
+    // Route alone names an operation only while it has exactly one: the
+    // first is kept, a second marks the route ambiguous (null) for good.
+    if (!byRoute.has(o.route)) byRoute.set(o.route, o);
+    else if (byRoute.get(o.route) !== null) byRoute.set(o.route, null);
   }
   // Templated operations, for collapsing per-instance registry rows. A
   // facilitator registry records every settled URL verbatim, so one templated
@@ -4372,12 +4541,11 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
   };
   const used = new Set();
   const enrich = (b, o, route) => {
-    // The registry row is evidence that payments settled, not authority on the
-    // seller's contract: copy it without contracts, and read the tuples from
-    // the seller's own operation only.
+    // What the registry recorded proves a payment settled; it does not speak
+    // for the seller's contract. Its row is copied without one, and the only
+    // contract taken is the one on the seller's own operation.
+    const sellerContracts = sellerContractFields(o);
     const bazaar = withoutRegistryContracts(b);
-    const requestContract = ownContractTuple(o, "requestContract");
-    const responseContract = ownContractTuple(o, "responseContract");
     const bazaarMicro = priceToMicroUsd(b.price);
     const originMicro = priceToMicroUsd(o.price);
     const priceConflict = bazaarMicro != null && originMicro != null && bazaarMicro !== originMicro;
@@ -4401,17 +4569,17 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     else price = b.price == null ? o.price : b.price;
     return ({
     ...bazaar,
-    method: b.methodInferred ? (o.method || b.method) : b.method,
+    method: mergedVerb(b, o),
     route,
     slug: o.slug || b.slug,
     name: o.name && o.name !== o.route ? o.name : b.name,
     description: o.description || b.description,
     tags: o.tags?.length ? o.tags : b.tags,
     category: o.tags?.length ? o.category : b.category,
-    // Contract tuples cross only from the seller's own operation; they play
-    // no part in ranking, routing, pricing or payment.
-    ...(requestContract ? { requestContract } : {}),
-    ...(responseContract ? { responseContract } : {}),
+    // Taken from the seller's own operation and nowhere else. They describe
+    // the call to a buyer and are never read for ranking, routing, price or
+    // payment.
+    ...sellerContracts,
     price,
     // What the ORIGIN itself declared this crawl, kept separately so a later
     // stage cannot quietly overwrite the seller's own current number with an
@@ -4446,10 +4614,17 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     })(),
   });
   };
+  // The seller's operation for registry row `b`, or a falsy value: by verb and
+  // route when the registry states the verb, by route alone (undefined when
+  // unknown, null when ambiguous) when it guessed.
+  const operationFor = (b) => {
+    if (b?.methodInferred) return byRoute.get(b.route);
+    return exact.get(`${b?.method} ${b?.route}`);
+  };
   const mergeRow = (b) => {
-    // An inferred verb may fall back to the route alone; a stated verb must
-    // match exactly.
-    const o = b?.methodInferred ? byRoute.get(b.route) : exact.get(`${b?.method} ${b?.route}`);
+    // A stated verb joins only on verb plus route; only a guessed verb may
+    // join on the route by itself.
+    const o = operationFor(b);
     if (o) { used.add(o); return enrich(b, o, b.route); }
     // Per-instance collapse, indexed operations first: the first instance
     // becomes the operation's row (templated route, registry payment truth);
@@ -4468,7 +4643,9 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     if (d) {
       const key = `${d.method} ${d.route}`;
       if (collapsedDocRows.has(key)) return null;
-      const row = { ...withoutRegistryContracts(b), route: d.route, slug: d.route.replace(/^\//, "").replace(/\//g, "-") };
+      const row = withoutRegistryContracts(b);
+      row.route = d.route;
+      row.slug = templateRouteSlug(d.route);
       collapsedDocRows.set(key, row);
       return row;
     }
@@ -6667,12 +6844,38 @@ function isRoutable(entry) {
 // key, and a dropped entry's memo goes with it.
 const slugSetMemo = new WeakMap();
 const serviceKeyMemo = new WeakMap();
-// Payees per network in one canonical order: networks by locale order,
-// addresses lower-cased and sorted.
+// [network, addresses] pairs for the service key: networks in locale order,
+// each network's addresses as lower-case text in plain sort order.
+const byLocale = (a, b) => a.localeCompare(b);
 function canonicalPayeesFrom(byNetwork) {
-  return Object.keys(byNetwork)
-    .sort((a, b) => a.localeCompare(b))
-    .map((net) => [net, Array.from(byNetwork[net], (a) => String(a).toLowerCase()).sort()]);
+  const nets = Object.keys(byNetwork).sort(byLocale);
+  const pairs = new Array(nets.length);
+  for (let n = 0; n < nets.length; n++) {
+    const lowered = [];
+    for (const addr of byNetwork[nets[n]]) lowered.push(String(addr).toLowerCase());
+    pairs[n] = [nets[n], lowered.sort()];
+  }
+  return pairs;
+}
+// The networks of one tool as a new sorted list of text (none: empty).
+function sortedNetworkText(networks) {
+  if (networks === null || networks === undefined) return [];
+  const text = [];
+  if (Array.isArray(networks)) for (let i = 0; i < networks.length; i++) text.push(String(networks[i]));
+  else if (typeof networks[Symbol.iterator] === "function") for (const n of networks) text.push(String(n));
+  return text.sort();
+}
+// What one tool sells, for the service key: verb, route, slug, price, the
+// free mark and its chains. Name, description, tags and seller stay out.
+function sellableContractOf(t) {
+  return [
+    t.method ? String(t.method).toUpperCase() : "GET",
+    t.route ? String(t.route) : "",
+    t.slug ? String(t.slug) : "",
+    t.price === null || t.price === undefined ? "" : String(t.price),
+    t.paid === false ? "free" : "paid-or-unknown",
+    sortedNetworkText(t.networks),
+  ];
 }
 // The full tool contract + payees of one entry, memoized by identity. Built
 // here rather than inside computeAliasOriginsBaseSteps so the route index can
@@ -6700,9 +6903,19 @@ function* exactServiceKeySteps(v) {
   const tools = v.tools || [];
   // allPayTosByNetwork(tools), folded a step at a time (each row checks up to
   // 200 addresses per network).
+  // Same fold as addPayTos, written as plain loops: this runs once per seller
+  // on every alias build.
   const byNetwork = {};
   for (let i = 0; i < tools.length; i++) {
-    addPayTos(byNetwork, tools[i]);
+    const m = tools[i]?.payToByNetwork;
+    if (m) {
+      const nets = Object.keys(m);
+      for (let j = 0; j < nets.length; j++) {
+        const seen = (byNetwork[nets[j]] ||= []);
+        const addr = m[nets[j]];
+        if (seen.length < 200 && !seen.includes(addr)) seen.push(addr);
+      }
+    }
     if (i % SERVICE_KEY_STEP === SERVICE_KEY_STEP - 1) { serviceKeySteps++; yield; }
   }
   const payees = canonicalPayeesFrom(byNetwork);
@@ -6711,26 +6924,25 @@ function* exactServiceKeySteps(v) {
     const pairs = new Array(tools.length);
     for (let i = 0; i < tools.length; i++) {
       const t = tools[i];
-      // The sellable contract only; descriptive fields stay out of the key.
-      const c = [
-        String(t.method || "GET").toUpperCase(),
-        t.route ? String(t.route) : "",
-        t.slug ? String(t.slug) : "",
-        t.price == null ? "" : String(t.price),
-        t.paid === false ? "free" : "paid-or-unknown",
-        Array.from(t.networks || [], (n) => String(n)).sort(),
-      ];
+      const c = sellableContractOf(t);
       pairs[i] = JSON.stringify(c);
       if (i % SERVICE_KEY_STEP === SERVICE_KEY_STEP - 1) { serviceKeySteps++; yield; }
     }
-    const sorted = yield* stableSortSteps(pairs, (a, b) => a.localeCompare(b));
-    const parts = [];
-    for (let i = 0; i < sorted.length; i += SERVICE_KEY_STEP) {
-      parts.push(sorted.slice(i, i + SERVICE_KEY_STEP).join(","));
-      serviceKeySteps++;
-      yield;
+    let contracts;
+    if (pairs.length <= SERVICE_KEY_STEP) {
+      // One run: sorted in place and joined in this turn.
+      contracts = pairs.sort(byLocale).join(",");
+    } else {
+      const sorted = yield* stableSortSteps(pairs, byLocale);
+      const parts = [];
+      for (let i = 0; i < sorted.length; i += SERVICE_KEY_STEP) {
+        parts.push(sorted.slice(i, i + SERVICE_KEY_STEP).join(","));
+        serviceKeySteps++;
+        yield;
+      }
+      contracts = parts.join(",");
     }
-    key = `{"payees":${JSON.stringify(payees)},"contracts":[${parts.join(",")}]}`;
+    key = `{"payees":${JSON.stringify(payees)},"contracts":[${contracts}]}`;
   }
   serviceKeyMemo.set(v, key);
   return key;
@@ -6845,34 +7057,51 @@ function* computeAliasOriginsBaseSteps(entries) {
     for (const s of mine) if (!theirs.has(s)) { subset = false; break; }
     if (subset) aliases.add(origin);
   }
-  // Generated deployment hostnames. A seller may serve one service on its own
-  // domain and again on a generated `.up.railway.app` host, each naming itself
-  // as homepage, so the rule above cannot see it. Fold only the proven case:
-  // the exact same service key (payees and every tool's contract) and exactly
-  // one durable origin in the group. A shared wallet alone never folds
-  // anything, and two custom origins always stay distinct.
-  const byKey = new Map();
+  // One service on a durable domain and again on a generated deployment host
+  // (`*.up.railway.app`): both manifests may call themselves the homepage, so
+  // the homepage rule cannot pair them. Only the case that proves itself is
+  // folded: origins whose service keys (payees plus every tool's sellable
+  // contract) are identical text, with exactly one durable origin among them;
+  // the generated hosts beside it become aliases. Paying the same wallet is
+  // not enough on its own, and two durable domains are never folded into one
+  // another.
+  const originsByServiceKey = new Map();
   for (const [origin, v] of entries) {
     if (++walked % ALIAS_YIELD_ENTRIES === 0) yield;
-    if (v?.error || aliases.has(origin)) continue;
-    const key = v && typeof v === "object" && !serviceKeyMemo.has(v)
-      ? yield* exactServiceKeySteps(v)
-      : exactServiceKeyOf(v);
-    if (key == null) continue;
-    let group = byKey.get(key);
-    if (!group) byKey.set(key, (group = []));
-    group.push(origin);
+    if (aliases.has(origin) || v?.error) continue;
+    let key;
+    // An unbuilt key is built in steps: one entry may hold 100k tools.
+    if (v !== null && typeof v === "object" && !serviceKeyMemo.has(v)) key = yield* exactServiceKeySteps(v);
+    else key = exactServiceKeyOf(v);
+    if (key === null || key === undefined) continue;
+    const same = originsByServiceKey.get(key);
+    if (same === undefined) originsByServiceKey.set(key, [origin]);
+    else same.push(origin);
   }
-  const isDeploymentHost = (origin) => {
-    try { return new URL(origin).hostname.toLowerCase().endsWith(".up.railway.app"); } catch { return false; }
-  };
-  for (const group of byKey.values()) {
-    if (group.length < 2) continue;
-    const durable = group.filter((o) => !isDeploymentHost(o));
-    if (durable.length !== 1) continue;
-    for (const o of group) if (isDeploymentHost(o)) aliases.add(o);
+  for (const same of originsByServiceKey.values()) {
+    if (same.length > 1) foldGeneratedDeploymentHosts(same, aliases);
   }
   return aliases;
+}
+// Is this origin on a generated deployment hostname? An origin that does not
+// parse counts as durable.
+const GENERATED_DEPLOYMENT_SUFFIX = ".up.railway.app";
+function onGeneratedDeploymentHost(origin) {
+  let host;
+  try { host = new URL(origin).hostname; } catch { return false; }
+  return host.toLowerCase().endsWith(GENERATED_DEPLOYMENT_SUFFIX);
+}
+// Origins that share one service key: when exactly one is durable, every
+// generated-host origin among them joins `aliases`.
+function foldGeneratedDeploymentHosts(origins, aliases) {
+  const generated = [];
+  let durable = 0;
+  for (let i = 0; i < origins.length; i++) {
+    if (onGeneratedDeploymentHost(origins[i])) generated.push(origins[i]);
+    else if (++durable > 1) return;
+  }
+  if (durable !== 1) return;
+  for (let i = 0; i < generated.length; i++) aliases.add(generated[i]);
 }
 
 // The listing screen lives in src/listing-screen.js (dependency-free, so a
@@ -9211,7 +9440,7 @@ function* payToRowSteps(sources, visit) {
 function* payToOriginsSteps(network) {
   const out = new Map();
   const add = (addr, origin) => {
-    if (typeof addr !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(addr)) return;
+    if (typeof addr !== "string" || !HEX_ADDRESS.test(addr)) return;
     const k = addr.toLowerCase();
     let set = out.get(k);
     if (!set) { set = new Set(); out.set(k, set); }
@@ -9235,7 +9464,7 @@ function* payToPricesSteps(network) {
   const out = new Map();
   yield* payToRowSteps(payToScanSources(false), (t) => {
     const addr = t?.payToByNetwork?.[network];
-    if (typeof addr !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(addr) || t.paid === false) return;
+    if (typeof addr !== "string" || !HEX_ADDRESS.test(addr) || t.paid === false) return;
     const micro = priceToMicroUsd(t.price);
     if (!(micro > 0)) return;
     const k = addr.toLowerCase();

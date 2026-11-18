@@ -6,11 +6,15 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-17 (internal reimplementation, no behavior change)
+### 2026-11-17 (internal code changes, stricter reading of payment fields)
 Internal:
-- Parts of the seller index, the payment and contract checks, the smoke buy
-  and the buyer client were reimplemented from written specifications;
-  internal reimplementation, no behavior change.
+- Internal code changes; malformed seller payment fields and an explicit
+  `cache: null` are handled more strictly. In the seller index, an empty
+  payTo is no address, an amount that is not whole base units gives way to
+  maxAmountRequired, a catalogue entry whose network is not text names no
+  chain, and hex addresses match whatever the case of their 0x prefix. In the
+  buyer client, `cache: null` on a call is a fresh purchase, as `cache: false`
+  is, and a paid answer refused on delivery is reported as that refusal.
 
 ### 2026-11-17 (an unconfirmed settlement is answered as unconfirmed)
 Payments:

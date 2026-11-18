@@ -144,9 +144,10 @@ Every send carries an `Idempotency-Key`. By default it is derived from the
 client instance plus the operation (slug, params, output validator), so it is
 the same key when the SDK retries inside one `call()` AND when your framework
 calls `client.call(slug, params)` again after a timeout or a dropped connection.
-With `{ cache: false }` on the call, identical calls are treated as distinct
-purchases and the key is fresh per invocation. Pass `idempotencyKey` yourself to
-override either behavior. Keys are scoped to the client instance: two processes
+With `{ cache: false }` or `{ cache: null }` on the call, identical calls are
+treated as distinct purchases: nothing is served from or stored in the cache,
+and the key is fresh per invocation. Pass `idempotencyKey` yourself to override
+either behavior. Keys are scoped to the client instance: two processes
 buying the same thing are two purchases.
 
 What the server does with it depends on how the call was paid:

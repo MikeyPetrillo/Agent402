@@ -452,22 +452,22 @@ export class Agent402 {
   }
 
   /**
-   * Rank tools for a plain-language task across this host's current index:
-   * its own catalog plus the outside sellers it holds as routable. Free and
-   * read-only: no payment, no wallet, no proof-of-work. Coverage is what the
-   * host's index holds when it is asked, not every seller everywhere.
+   * Ask the host's free router which tools fit a task written in plain words.
+   * The ranking spans whatever the host has indexed at the moment of the
+   * call: its own tools and the outside sellers it treats as routable, and
+   * nothing beyond that. Nothing is paid or signed and no proof-of-work is
+   * solved; it is one read.
    *
-   * Rows come back exactly as the server wrote them. A row may carry
-   * `executeVia`, reported by the server, naming the `route-execute*` tier
-   * whose cap covers that row's price; calling that tier resolves a match
-   * again when it runs, and does not bind the row's url, route, seller or
-   * identity.
+   * The answer is handed back untouched. When the server adds `executeVia`
+   * to a row, that names the `route-execute*` tier whose cap is high enough
+   * for the row's price. Buying through that tier looks for a match afresh
+   * at run time: the row's url, route, seller and identity are not locked in.
    *
-   * @param {string} task
+   * @param {string} task                 what the caller wants done
    * @param {object} [opts]
-   * @param {number} [opts.k=5]                          rows to return (1-25)
-   * @param {"all"|"external"|"local"} [opts.include="all"] which sellers to rank
-   * @param {string} [opts.network]                      a chain filter (short name or CAIP-2 id)
+   * @param {number} [opts.k=5]           how many rows, clamped to 1..25
+   * @param {"all"|"external"|"local"} [opts.include="all"] sellers to rank: all, outside only, or this host's only
+   * @param {string} [opts.network]       keep one chain (a short name or a CAIP-2 id)
    * @returns {Promise<{query:string, include:string, count:number, sellers:number, results:Array<object>}>}
    */
   async route(task, { k = 5, include = "all", network } = {}) {
@@ -575,7 +575,10 @@ export class Agent402 {
     if (!tool) throw new Error(`unknown tool "${slug}" - use client.find(task) to discover one`);
 
     const cacheKey = resultCacheKey(slug, params, validator);
-    if (this._cache && cache !== false && this._cache.has(cacheKey)) {
+    // Only an explicit truthy `cache` (or the option left out) reads and fills
+    // the result cache; false or null asks for a fresh purchase.
+    const caching = Boolean(cache);
+    if (this._cache && caching && this._cache.has(cacheKey)) {
       const hit = this._cache.get(cacheKey);
       // A cached object is handed out by reference and may have been changed
       // since, so the contract is checked again on every hit.
@@ -591,10 +594,10 @@ export class Agent402 {
     // caching is on: the SDK already treats that tuple as one operation (a
     // second identical call is served from cache without payment), so the
     // idempotency key agrees with the cache key instead of contradicting it.
-    // With { cache: false } the caller has said identical calls are distinct
+    // With { cache: false } (or null) the caller has said identical calls are distinct
     // purchases, so the key is fresh per invocation, as before. An explicit
     // idempotencyKey always wins.
-    const idem = idempotencyKey || (cache
+    const idem = idempotencyKey || (caching
       ? `a402-${createHash("sha256").update(`${this._idemSalt}:${cacheKey}`).digest("hex").slice(0, 24)}`
       : `a402-${createHash("sha256").update(`${cacheKey}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`);
     const send = async (extraHeaders = {}, useFetch = this.f, { paid = false } = {}) => {
@@ -635,7 +638,7 @@ export class Agent402 {
       // The Circle Gateway batched accept, when this client signs for it and
       // the 402 offers one; otherwise the paths below, as without the option.
       if (this.gateway) {
-        const paid = await this._gatewayCall(slug, tool, { paidSend, asyncHeaders, collect, cacheKey, cache, validator, maxResponseBytes });
+        const paid = await this._gatewayCall(slug, tool, { paidSend, asyncHeaders, collect, cacheKey, cache: caching, validator, maxResponseBytes });
         if (paid !== NO_GATEWAY_ACCEPT) return paid;
         if (!this.payFetch && !this.creditsKey) {
           throw Object.assign(new Error(`call "${slug}" failed: HTTP 402 - the seller offers no Circle Gateway batched accept${this.gateway.networks ? ` on ${this.gateway.networks.join(", ")}` : ""} for this route, so the gateway signer cannot pay it; construct with { fetch: payFetch } to pay a plain accept`), { status: 402, slug, paid: false });
@@ -673,7 +676,7 @@ export class Agent402 {
           if (!sentPayment()) this._spendRelease(reservation);
           else this._spendHold(reservation, guarded ? ctx.sent : null, { settleLast: true });
           settled = true;
-          return await this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
+          return await this._deliverResponse(slug, r, cacheKey, caching, validator, { maxResponseBytes, paid: true });
         } catch (e) {
           // Once a 2xx answer has been accepted the money has moved: a body
           // refused after that (oversized, unparseable, or failing the buyer's
@@ -685,7 +688,11 @@ export class Agent402 {
             if (sentPayment()) markOutcomeUnknown(e, slug, this._spendHold(reservation, guarded ? ctx.sent : null, { ownHost: this._unsettledAnswer(e) }), { seen: guarded });
             else this._spendRelease(reservation);
           }
-          if (ctx.refusal) {
+          // A refusal recorded while signing explains a payment that did not
+          // go through. Once the answer was accepted (settled), the error is
+          // the delivery's own (an oversized or invalid body, or the buyer
+          // validator's verdict) and is thrown as it is.
+          if (ctx.refusal && !settled) {
             const d = ctx.refusal;
             throw new SpendingLimitError(d.reason === "unknown-asset"
               ? `refusing to pay for "${slug}" - no payment option it asked to sign is in a known asset, so none can be priced`
@@ -721,7 +728,7 @@ export class Agent402 {
           if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
           this._spendSettle(reservation);
           settled = true;
-          return await this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
+          return await this._deliverResponse(slug, r, cacheKey, caching, validator, { maxResponseBytes, paid: true });
         } catch (e) {
           // A job still running may yet be debited, so its amount is held.
           if (e instanceof AsyncJobPendingError) markOutcomeUnknown(e, slug, this._spendHold(reservation));
@@ -730,7 +737,7 @@ export class Agent402 {
         }
       }
       const r = await send(); // no wallet - succeeds only on a FREE_MODE instance
-      if (r.ok) return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
+      if (r.ok) return this._deliverResponse(slug, r, cacheKey, caching, validator, { maxResponseBytes, paid: false });
       throw this._fail(slug, r, `call "${slug}" failed: HTTP ${r.status} - wallet-only tool; construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch) or { creditsKey } (a prepaid credits key; routes that buy from an outside seller need a wallet)`);
     }
 
@@ -743,7 +750,7 @@ export class Agent402 {
       r = await send({ "X-Pow-Solution": Agent402.solvePow(chal) });
     }
     if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r, " after proof-of-work"));
-    return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
+    return this._deliverResponse(slug, r, cacheKey, caching, validator, { maxResponseBytes, paid: false });
   }
 
   /**
@@ -843,9 +850,9 @@ export class Agent402 {
     let cause = null;
     try {
       const verdict = await withinMs(() => validator.validate(body), limit, validator.id);
-      if (verdict === false) cause = new Error(`validator "${validator.id}" returned false`);
+      if (verdict === false) cause = new Error(`buyer validator "${validator.id}" answered false`);
     } catch (e) {
-      cause = e === undefined ? new Error(`validator "${validator.id}" threw`) : e;
+      cause = e === undefined ? new Error(`buyer validator "${validator.id}" threw with no error value`) : e;
     }
     if (cause === null) return body;
     throw new OutputValidationError(
@@ -1320,7 +1327,7 @@ function normalizeOutputValidator(value, where) {
 /** Await fn() (sync or async) for at most `ms`; a timeout rejects. */
 function withinMs(fn, ms, id) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`validator "${id}" did not finish within ${ms} ms`)), ms);
+    const timer = setTimeout(() => reject(new Error(`buyer validator "${id}" gave no verdict within ${ms} ms`)), ms);
     Promise.resolve().then(fn).then(
       (v) => { clearTimeout(timer); resolve(v); },
       (e) => { clearTimeout(timer); reject(e); });

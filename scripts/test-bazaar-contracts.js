@@ -148,9 +148,9 @@ try {
   const microOf = (usd) => Math.round(Number(String(usd ?? "").replace(/[^0-9.]/g, "")) * 1e6);
   let fixedPriced = 0;
   let quotedPriced = 0;
-  let requiredRoutes = 0;
-  let variableRoutes = 0;
-  let rawRoutes = 0;
+  // Output-schema tallies: routes whose published fields are all required,
+  // happy-path-only routes, and routes whose example is not an object.
+  const schemaTally = { fullyRequired: 0, happyPathOnly: 0, nonObject: 0 };
   let largestHeader = { route: "", bytes: 0 };
   let largestBody = { route: "", bytes: 0 };
   let largestOwn = { route: "", bytes: 0 };
@@ -360,15 +360,15 @@ try {
       const required = Array.isArray(outputSchema.required) ? outputSchema.required : [];
       const published = Object.keys(outputSchema.properties || {}).filter((k) => example[k] !== null && example[k] !== undefined);
       if (SHAPE_HAPPY_PATH_ONLY.has(endpoint.path)) {
-        variableRoutes++;
+        schemaTally.happyPathOnly++;
         if (required.length) fail(route, `variable route invents required fields: ${required.join(",")}`);
       } else if (published.length) {
-        requiredRoutes++;
+        schemaTally.fullyRequired++;
         const missing = published.filter((k) => !required.includes(k));
         if (missing.length) fail(route, `published fields not required: ${missing.join(",")}`);
       }
     } else {
-      rawRoutes++;
+      schemaTally.nonObject++;
       const declared = outputSchema.type;
       if (!(declared === exampleType || (exampleType === "integer" && declared === "number"))) fail(route, `raw ${exampleType} example is declared ${declared || "without a type"}`);
     }
@@ -404,7 +404,7 @@ try {
   if (!extractTagSeen) fail("POST /api/extract", "the route-specific tag never survived sanitization");
   console.log(`catalog routes: ${endpoints.length}`);
   console.log(`402 examples shortened by the byte budget (replayed from /openapi.json): ${shortenedExamples}`);
-  console.log(`output schemas: ${requiredRoutes} with a required list, ${variableRoutes} variable, ${rawRoutes} raw`);
+  console.log(`output schemas: ${schemaTally.fullyRequired} with a required list, ${schemaTally.happyPathOnly} variable, ${schemaTally.nonObject} raw`);
   console.log(`402 amount vs price list: ${fixedPriced} fixed routes at list price, ${quotedPriced} quoted routes inside their published range`);
   // The rollout switch: with X402_BINARY_LISTINGS=off every binary route
   // lists what it listed before it named its bytes: application/json, output

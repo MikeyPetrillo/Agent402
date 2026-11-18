@@ -1,10 +1,8 @@
-// Behavior checks for the OpenAPI operation filter, the registry-row copy in
-// the OpenAPI/registry merge, the full-route listing used for template
-// collapse, and the deployment-hostname alias rule of the seller index.
-// Written from the behavior specification, not from any implementation.
-//
-// Offline, no server, no network.
-import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+// Seller-index behavior with no network: which OpenAPI operations are listed,
+// when a document counts as selling, the unfiltered operation list used for
+// template collapse, how the registry merge copies and joins rows, and when a
+// generated deployment hostname is folded into a durable domain as an alias.
+import "./lib/offline-stores.js"; // pins per-process stores before any src/ import (see the file)
 import {
   normaliseOpenapiTools,
   mergeOpenapiIntoBazaar,
@@ -14,167 +12,167 @@ import {
   _cacheForTests,
 } from "../src/x402-index.js";
 
-let failures = 0;
-const check = (cond, label) => {
-  if (cond) return;
-  failures++;
-  console.error("FAIL:", label);
-};
-const routesOf = (rows) => rows.map((r) => `${r.method} ${r.route}`).sort();
-const SELLER = "https://seller.example";
+const SITE = "https://seller.example";
+const problems = [];
+const want = (ok, what) => { if (!ok) problems.push(what); };
+const asText = (v) => JSON.stringify(v);
+const verbRoutes = (rows) => rows.map((r) => `${r.method} ${r.route}`).sort();
+const sameList = (a, b) => asText(a) === asText([...b].sort());
 
-// ---- A. which operations of a document become rows ----
+// ---- part A: operations that are listed ----
 {
-  const doc = { paths: {} };
-  const add = (p, ops) => { doc.paths[p] = ops; };
-  add("/admin/users", { get: {} });
-  add("/Internal/jobs", { get: {} });
-  add("/.well-known/thing", { get: {} });
-  add("/sitemap", { get: {} });
-  add("/favicon", { get: {} });
-  add("/llms-full", { get: {} });
-  add("/openapi-v2", { get: {} });
-  add("/feed.XML", { get: {} });
-  add("/icon.ico", { get: {} });
-  add("/v1/admin", { get: {} });
-  add("/convert", { HEAD: {}, Options: {}, trace: {}, connect: {}, post: null, summary: "not an operation" });
-  add("/kept", { get: { deprecated: "true" } });
-  add("/gone", { get: { deprecated: true } });
-  const got = routesOf(normaliseOpenapiTools(doc, SELLER));
-  check(JSON.stringify(got) === JSON.stringify(["GET /kept", "GET /v1/admin", "HEAD /convert", "OPTIONS /convert"].sort()),
-    `operation filter keeps real operations only (got ${JSON.stringify(got)})`);
+  // [path, path item, listed as]; listed as null means no row.
+  const table = [
+    ["/admin/users", { get: {} }, null],
+    ["/Internal/jobs", { get: {} }, null],
+    ["/.well-known/thing", { get: {} }, null],
+    ["/sitemap", { get: {} }, null],
+    ["/favicon", { get: {} }, null],
+    ["/llms-full", { get: {} }, null],
+    ["/openapi-v2", { get: {} }, null],
+    ["/healthz", { get: {} }, null],
+    ["/robotsx", { get: {} }, null],
+    ["/feed.XML", { get: {} }, null],
+    ["/icon.ico", { get: {} }, null],
+    ["/assets/mark.SVG", { get: {} }, null],
+    ["/v1/admin", { get: {} }, ["GET /v1/admin"]],
+    ["/convert", { HEAD: {}, Options: {}, trace: {}, connect: {}, post: null, summary: "text" }, ["HEAD /convert", "OPTIONS /convert"]],
+    ["/kept", { get: { deprecated: "true" } }, ["GET /kept"]],
+    ["/gone", { get: { deprecated: true } }, null],
+  ];
+  const doc = { paths: Object.fromEntries(table.map(([p, item]) => [p, item])) };
+  const listed = verbRoutes(normaliseOpenapiTools(doc, SITE));
+  const expected = table.flatMap(([, , as]) => as || []);
+  want(sameList(listed, expected), `listed operations ${asText(listed)} should be ${asText(expected.sort())}`);
+
+  const under = (server, path) => normaliseOpenapiTools({ servers: [{ url: server }], paths: { [path]: { get: {} } } }, SITE);
+  want(under("/internal", "/report").length === 0, "a server prefix of /internal hides /report");
+  const api = under("/api", "/report");
+  want(api.length === 1 && api[0].route === "/api/report", "a server prefix of /api lists /api/report");
 }
 {
-  // The exclusion also reads the path after the server prefix is applied.
-  const rows = normaliseOpenapiTools({ servers: [{ url: "/internal" }], paths: { "/report": { get: {} } } }, SELLER);
-  check(rows.length === 0, "a path that becomes a non-tool path under its server prefix is excluded");
-  const kept = normaliseOpenapiTools({ servers: [{ url: "/api" }], paths: { "/report": { get: {} } } }, SELLER);
-  check(kept.length === 1 && kept[0].route === "/api/report", "an ordinary prefixed path is kept with the prefix applied");
-}
-{
-  // Annotated document: unannotated sibling is listed free; zero-priced op is free.
-  const rows = normaliseOpenapiTools({ paths: {
+  const annotated = normaliseOpenapiTools({ paths: {
     "/priced": { post: { "x-price": "$0.02" } },
     "/plain": { get: {} },
     "/zero": { get: { "x-price": "$0" } },
     "/declared-free": { get: { "x-payment-required": false } },
-  } }, SELLER);
-  const paidOf = (route) => rows.find((r) => r.route === route)?.paid;
-  check(paidOf("/priced") === true, "a priced operation in an annotated document is paid");
-  check(paidOf("/plain") === false, "an unannotated sibling in an annotated document is listed with paid false");
-  check(paidOf("/zero") === false, "a zero price alone reads free");
-  check(paidOf("/declared-free") === false, "an explicit payment-not-required reads free");
-  // Unannotated document: no paid field at all.
-  const plain = normaliseOpenapiTools({ paths: { "/a": { get: {} }, "/b": { post: {} } } }, SELLER);
-  check(plain.length === 2 && plain.every((r) => !("paid" in r)), "a document with no payment annotation lists rows without a paid field");
+  } }, SITE);
+  const paid = Object.fromEntries(annotated.map((r) => [r.route, r.paid]));
+  want(asText(paid) === asText({ "/priced": true, "/plain": false, "/zero": false, "/declared-free": false }),
+    `paid flags in an annotated document: ${asText(paid)}`);
+  const bare = normaliseOpenapiTools({ paths: { "/a": { get: {} }, "/b": { post: {} } } }, SITE);
+  want(bare.length === 2 && bare.every((r) => !Object.hasOwn(r, "paid")), "rows of an unannotated document carry no paid field");
 }
 
-// ---- B. document-level payment signal ----
-check(openapiHasPaymentSignal({ paths: { "/a": { get: { "x-payment-required": "TRUE" } } } }) === true, "a textual true payment-required is a signal");
-check(openapiHasPaymentSignal({ paths: { "/a": { get: { "x-price": "$0" } } } }) === false, "a zero price alone is not a signal");
-check(openapiHasPaymentSignal({ paths: { "/a": { get: { "x-payment-required": false } } } }) === false, "payment declared not required is not a signal");
-check(openapiHasPaymentSignal({ paths: { "/health": { get: { "x-price": "$0.01", deprecated: true } } } }) === true,
-  "the signal counts a priced operation even where the row filter would drop it");
-check(openapiHasPaymentSignal({ paths: "nope" }) === false && openapiHasPaymentSignal({ paths: { "/a": null } }) === false && openapiHasPaymentSignal("x") === false,
-  "malformed documents are not a signal and do not throw");
+// ---- part B: does the document sell anything ----
+for (const [doc, expected, why] of [
+  [{ paths: { "/a": { get: { "x-payment-required": "TRUE" } } } }, true, "payment-required written as TRUE"],
+  [{ paths: { "/health": { get: { "x-price": "$0.01", deprecated: true } } } }, true, "a priced operation the listing would drop"],
+  [{ paths: { "/a": [{ "x-price": "$0.01" }] } }, true, "a path item given as an array"],
+  [{ paths: { "/a": { get: { "x-price": "$0" } } } }, false, "a zero price alone"],
+  [{ paths: { "/a": { get: { "x-payment-required": false } } } }, false, "payment-required false"],
+  [{ paths: "nope" }, false, "paths as text"],
+  [{ paths: { "/a": null, "/b": { get: null, post: "x" } } }, false, "null and text operations"],
+  ["x", false, "a document that is text"],
+  [null, false, "null"],
+  [{}, false, "no paths"],
+]) {
+  want(openapiHasPaymentSignal(doc) === expected, `payment signal for ${why} should be ${expected}`);
+}
 
-// ---- C. every declared operation, with no payment or asset filtering ----
+// ---- part C: every declared operation, unfiltered ----
 {
-  const all = routesOf(openapiAllOperationRoutes({ servers: [{ url: "/api" }], paths: {
+  const doc = { servers: [{ url: "/api" }], paths: {
     "/logo.png": { get: {} },
     "/old": { post: { deprecated: true } },
     "/api/already": { put: {} },
     "/x": { trace: {}, Delete: {} },
-  } }, SELLER));
-  check(JSON.stringify(all) === JSON.stringify(["DELETE /api/x", "GET /api/logo.png", "POST /api/old", "PUT /api/already"].sort()),
-    `full route list keeps deprecated and static operations, applies the prefix once (got ${JSON.stringify(all)})`);
-  check(openapiAllOperationRoutes(null, SELLER).length === 0 && openapiAllOperationRoutes({}, SELLER).length === 0, "no paths, no routes");
-  check(openapiAllOperationRoutes({ servers: [{ url: "https://elsewhere.example" }], paths: { "/a": { get: {} } } }, SELLER).length === 0,
-    "a document that only names another public host contributes no routes");
-}
-
-// ---- D. registry rows are copied, never shared, and carry no contract or symbol keys ----
-{
-  const mark = Symbol("mark");
-  const row = { seller: SELLER, method: "POST", route: "/r", slug: "r", price: 0.01, [mark]: true };
-  const [copy] = mergeOpenapiIntoBazaar([], [row]);
-  check(copy !== row, "a passed-through registry row is a fresh object");
-  check(copy.route === "/r" && copy.price === 0.01 && copy.slug === "r", "a passed-through registry row keeps its string-keyed fields");
-  check(copy[mark] === undefined, "a symbol-keyed property of a registry row is not carried");
-  const plain = { seller: SELLER, method: "GET", route: "/p" };
-  const [plainCopy] = mergeOpenapiIntoBazaar([], [plain]);
-  check(plainCopy !== plain && JSON.stringify(plainCopy) === JSON.stringify(plain), "a plain registry row is copied with the same fields in the same order");
-  const [matched] = mergeOpenapiIntoBazaar([{ method: "POST", route: "/r", slug: "doc-slug" }], [row]);
-  check(matched !== row && matched[mark] === undefined && matched.slug === "doc-slug", "a matched registry row is a fresh enriched object without symbol keys");
-}
-{
-  // Inferred verb: a path with two declared operations is ambiguous, a third keeps it ambiguous.
-  const ops = [
-    { method: "GET", route: "/x", slug: "g" },
-    { method: "POST", route: "/x", slug: "p" },
-    { method: "PUT", route: "/x", slug: "u" },
-  ];
-  const out = mergeOpenapiIntoBazaar(ops, [{ method: "POST", route: "/x", methodInferred: true, slug: "registry" }]);
-  check(out.length === 4 && out.some((r) => r.slug === "registry" && r.method === "POST"), "an inferred verb on an ambiguous path matches nothing");
-  const one = mergeOpenapiIntoBazaar([{ route: "/y", slug: "nomethod" }], [{ method: "POST", route: "/y", methodInferred: true, slug: "registry" }]);
-  check(one.length === 1 && one[0].method === "POST" && one[0].slug === "nomethod", "an inferred verb keeps the registry verb when the operation names none");
-}
-
-// ---- E. deployment-hostname aliases ----
-const cache = _cacheForTests();
-const PAYEE = `0x${"a".repeat(40)}`;
-const OTHER = `0x${"b".repeat(40)}`;
-function entry(origin, tools, extra = {}) {
-  cache.set(origin, { manifest: { name: "s", homepage: origin }, tools, fetchedAt: Date.now(), error: null, history: [1, 1, 1], ...extra });
-}
-function tools(origin, slugs, payTo, over = {}) {
-  return slugs.map((slug) => ({
-    seller: origin, method: "POST", route: `/${slug}`, slug, name: slug, price: 0.004,
-    networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": payTo }, ...over,
-  }));
-}
-function aliasesWith(build) {
-  cache.clear();
-  build();
-  const set = computeAliasOrigins(cache);
-  return [...set].sort();
-}
-{
-  const DUR = "https://shop.example", RW = "https://shop-production.up.railway.app";
-  let a = aliasesWith(() => { entry(DUR, tools(DUR, ["one", "two"], PAYEE)); entry(RW, tools(RW, ["two", "one"], PAYEE.toUpperCase().replace("0X", "0x"))); });
-  check(JSON.stringify(a) === JSON.stringify([RW]), `identical service and payees (order and address case aside) fold the deployment host (got ${a})`);
-
-  a = aliasesWith(() => { entry(DUR, tools(DUR, ["one"], PAYEE)); entry("https://b.example", tools("https://b.example", ["one"], PAYEE)); entry(RW, tools(RW, ["one"], PAYEE)); });
-  check(a.length === 0, "two durable origins with the same service leave the deployment host alone");
-
-  a = aliasesWith(() => { entry(DUR, tools(DUR, ["one"], PAYEE)); entry("https://r1.up.railway.app", tools("https://r1.up.railway.app", ["one"], PAYEE)); entry("https://R2.UP.RAILWAY.APP", tools("https://R2.UP.RAILWAY.APP", ["one"], PAYEE)); });
-  check(JSON.stringify(a) === JSON.stringify(["https://R2.UP.RAILWAY.APP", "https://r1.up.railway.app"].sort()), `every matching deployment host folds, hostname case aside (got ${a})`);
-
-  a = aliasesWith(() => { entry("https://r1.up.railway.app", tools("https://r1.up.railway.app", ["one"], PAYEE)); entry("https://r2.up.railway.app", tools("https://r2.up.railway.app", ["one"], PAYEE)); });
-  check(a.length === 0, "deployment hosts with no durable origin fold nothing");
-
-  a = aliasesWith(() => { entry(DUR, tools(DUR, ["one"], PAYEE)); entry(RW, tools(RW, ["one"], PAYEE), { error: "fetch failed" }); });
-  check(a.length === 0, "an errored deployment host is not folded");
-  a = aliasesWith(() => { entry(DUR, tools(DUR, ["one"], PAYEE), { error: "fetch failed" }); entry(RW, tools(RW, ["one"], PAYEE)); });
-  check(a.length === 0, "an errored durable origin folds nothing");
-
-  for (const [label, over] of [["price", { price: 0.005 }], ["paid flag", { paid: false }], ["networks", { networks: ["eip155:8453", "eip155:1"] }], ["route", { route: "/elsewhere" }]]) {
-    a = aliasesWith(() => { entry(DUR, tools(DUR, ["one"], PAYEE)); entry(RW, tools(RW, ["one"], PAYEE, over)); });
-    check(a.length === 0, `a difference in ${label} keeps the deployment host independent`);
+    "/null": { get: null },
+  } };
+  const all = verbRoutes(openapiAllOperationRoutes(doc, SITE));
+  want(sameList(all, ["GET /api/logo.png", "POST /api/old", "PUT /api/already", "DELETE /api/x"]), `unfiltered operations: ${asText(all)}`);
+  const shapes = openapiAllOperationRoutes(doc, SITE).map((r) => Object.keys(r).sort().join(","));
+  want(shapes.every((s) => s === "method,route"), "each listed operation is just { method, route }");
+  for (const [doc2, why] of [[null, "null"], [{}, "no paths"], [{ servers: [{ url: "https://elsewhere.example" }], paths: { "/a": { get: {} } } }, "another public host only"]]) {
+    want(openapiAllOperationRoutes(doc2, SITE).length === 0, `no operations for ${why}`);
   }
-  a = aliasesWith(() => { entry(DUR, tools(DUR, ["one"], PAYEE)); entry(RW, tools(RW, ["one"], PAYEE, { paid: true, method: "post", name: "other name", description: "other" })); });
-  check(JSON.stringify(a) === JSON.stringify([RW]), "verb case, paid true versus unknown, and descriptive fields do not separate two copies");
+}
 
-  a = aliasesWith(() => { entry(DUR, tools(DUR, ["one"], PAYEE)); entry(RW, tools(RW, ["one"], OTHER)); });
-  check(a.length === 0, "a different payee keeps the deployment host independent");
+// ---- part D: the registry merge copies rows and joins carefully ----
+{
+  const tag = Symbol("tag");
+  const registryRow = { seller: SITE, method: "POST", route: "/r", slug: "r", price: 0.01, [tag]: true };
+  const [passed] = mergeOpenapiIntoBazaar([], [registryRow]);
+  want(passed !== registryRow, "a passthrough is a new object");
+  want(passed[tag] === undefined, "a symbol key is not carried through");
+  want(passed.route === "/r" && passed.slug === "r" && passed.price === 0.01, "a passthrough keeps the string-keyed fields");
+  const ordered = { seller: SITE, method: "GET", route: "/p", slug: "p" };
+  const [copy] = mergeOpenapiIntoBazaar([], [ordered]);
+  want(copy !== ordered && asText(Object.keys(copy)) === asText(Object.keys(ordered)), "a plain copy keeps the field order");
+  const [joined] = mergeOpenapiIntoBazaar([{ method: "POST", route: "/r", slug: "doc-slug" }], [registryRow]);
+  want(joined !== registryRow && joined[tag] === undefined && joined.slug === "doc-slug", "a joined row is new, enriched and symbol-free");
+  want(registryRow.slug === "r" && registryRow[tag] === true, "the registry row itself is unchanged");
+}
+{
+  const guessed = { method: "POST", route: "/x", methodInferred: true, slug: "registry" };
+  const threeVerbs = ["GET", "POST", "PUT"].map((method, i) => ({ method, route: "/x", slug: `op${i}` }));
+  const out = mergeOpenapiIntoBazaar(threeVerbs, [guessed]);
+  want(out.length === 4, `three operations on one path leave a guessed verb unjoined (rows: ${out.length})`);
+  want(out.some((r) => r.slug === "registry" && r.method === "POST"), "the unjoined registry row keeps its slug and verb");
+  const [single] = mergeOpenapiIntoBazaar([{ route: "/y", slug: "nomethod" }], [{ ...guessed, route: "/y" }]);
+  want(single?.slug === "nomethod" && single.method === "POST", "a single verbless operation enriches a guessed row and keeps its verb");
+  const [byVerb] = mergeOpenapiIntoBazaar([{ method: "GET", route: "/z", slug: "reader" }], [{ ...guessed, route: "/z" }]);
+  want(byVerb?.method === "GET" && byVerb.slug === "reader", "a single operation sets the verb of a guessed row");
+}
 
-  a = aliasesWith(() => {
-    const noPay = (o) => [{ seller: o, method: "POST", route: "/one", slug: "one", price: 0.004, networks: ["eip155:8453"] }];
-    entry(DUR, noPay(DUR)); entry(RW, noPay(RW));
-  });
-  check(a.length === 0, "rows that name no payee never fold");
+// ---- part E: generated deployment hostnames ----
+const cache = _cacheForTests();
+const WALLET = `0x${"a".repeat(40)}`;
+const OTHER_WALLET = `0x${"b".repeat(40)}`;
+const DURABLE = "https://shop.example";
+const GENERATED = "https://shop-production.up.railway.app";
+const listing = (origin, slugs, payTo, changes = {}) => slugs.map((slug) => ({
+  seller: origin, method: "POST", route: `/${slug}`, slug, name: slug, price: 0.004,
+  networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": payTo }, ...changes,
+}));
+// Each origin: [origin, slugs, wallet, tool changes, entry changes].
+function aliasesOf(origins) {
+  cache.clear();
+  for (const [origin, slugs, payTo, changes = {}, entryChanges = {}] of origins) {
+    cache.set(origin, { manifest: { name: "s", homepage: origin }, tools: listing(origin, slugs, payTo, changes), fetchedAt: Date.now(), error: null, history: [1, 1, 1], ...entryChanges });
+  }
+  return [...computeAliasOrigins(cache)].sort();
+}
+const aliasCases = [
+  ["same tools in another order and the wallet in another case fold the generated host",
+    [[DURABLE, ["one", "two"], WALLET], [GENERATED, ["two", "one"], WALLET.toUpperCase().replace("0X", "0x")]], [GENERATED]],
+  ["two durable origins keep a generated copy separate",
+    [[DURABLE, ["one"], WALLET], ["https://b.example", ["one"], WALLET], [GENERATED, ["one"], WALLET]], []],
+  ["every generated copy folds into the one durable origin, hostname case aside",
+    [[DURABLE, ["one"], WALLET], ["https://r1.up.railway.app", ["one"], WALLET], ["https://R2.UP.RAILWAY.APP", ["one"], WALLET]],
+    ["https://R2.UP.RAILWAY.APP", "https://r1.up.railway.app"]],
+  ["generated hosts with no durable origin fold nothing",
+    [["https://r1.up.railway.app", ["one"], WALLET], ["https://r2.up.railway.app", ["one"], WALLET]], []],
+  ["an errored generated host is not folded",
+    [[DURABLE, ["one"], WALLET], [GENERATED, ["one"], WALLET, {}, { error: "fetch failed" }]], []],
+  ["an errored durable origin folds nothing",
+    [[DURABLE, ["one"], WALLET, {}, { error: "fetch failed" }], [GENERATED, ["one"], WALLET]], []],
+  ["another price keeps them apart", [[DURABLE, ["one"], WALLET], [GENERATED, ["one"], WALLET, { price: 0.005 }]], []],
+  ["paid false keeps them apart", [[DURABLE, ["one"], WALLET], [GENERATED, ["one"], WALLET, { paid: false }]], []],
+  ["another network list keeps them apart", [[DURABLE, ["one"], WALLET], [GENERATED, ["one"], WALLET, { networks: ["eip155:8453", "eip155:1"] }]], []],
+  ["another route keeps them apart", [[DURABLE, ["one"], WALLET], [GENERATED, ["one"], WALLET, { route: "/elsewhere" }]], []],
+  ["verb case, paid true and descriptions do not keep them apart",
+    [[DURABLE, ["one"], WALLET], [GENERATED, ["one"], WALLET, { paid: true, method: "post", name: "other", description: "other" }]], [GENERATED]],
+  ["another wallet keeps them apart", [[DURABLE, ["one"], WALLET], [GENERATED, ["one"], OTHER_WALLET]], []],
+  ["rows that name no payee never fold",
+    [[DURABLE, ["one"], WALLET, { payToByNetwork: undefined }], [GENERATED, ["one"], WALLET, { payToByNetwork: undefined }]], []],
+];
+for (const [what, origins, expected] of aliasCases) {
+  const got = aliasesOf(origins);
+  want(sameList(got, expected), `${what}: aliases ${asText(got)}`);
 }
 cache.clear();
 
-if (failures) { console.error(`${failures} check(s) failed`); process.exit(1); }
-console.log("cleanroom openapi/alias behavior tests passed");
+for (const p of problems) console.error(`FAIL - ${p}`);
+console.log(problems.length ? `${problems.length} problem(s)` : "openapi listing, merge and deployment alias checks: all good");
+process.exit(problems.length ? 1 : 0);
