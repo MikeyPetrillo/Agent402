@@ -152,8 +152,18 @@ export function isMeterable(req) {
   // A prepaid-credits call is ours to name too: the credits gate HOLDS the
   // quote and settles what this meter reports (2026-08-26; before this a card
   // buyer on the metered route paid the worst-case quote, not usage).
-  return paymentSchemeOf(req) === "upto" || req?.creditsSettled === true;
+  // A batch-settlement voucher (x402 payment channels) is ours to name the
+  // same way: the channel is charged the settled amount, never more than the
+  // voucher signed (src/batch-settlement.js).
+  const scheme = paymentSchemeOf(req);
+  return scheme === "upto" || scheme === "batch-settlement" || req?.creditsSettled === true;
 }
+
+/** METERED_MEDIA=on: speech, transcription and embeddings report what the
+ *  served call used, so an upto, channel or credits buyer settles that under
+ *  the ceiling (the route binder still requires GATEWAY_METERED_BILLING=on).
+ *  Off, they report nothing and every buyer settles the price. */
+export const mediaMeterEnabled = (env = process.env) => String(env.METERED_MEDIA || "").trim().toLowerCase() === "on";
 
 /**
  * Apply metered settlement to a response, or leave it settling at the ceiling.

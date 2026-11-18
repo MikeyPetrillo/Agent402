@@ -11,6 +11,7 @@
 - [[Arc (USDC)|Arc]]
 - [[Ink (USDC)|Ink]]
 - [[Circle Gateway (batched USDC)|Circle-Gateway]]
+- [[Sessions and Channels|Sessions-and-Channels]]
 - [[Paying with Compute]]
 - [[Buying at Volume|Buying-at-Volume]]
 - [[Content Pipeline|Content-Pipeline]]

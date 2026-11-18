@@ -66,6 +66,7 @@ import { createRailRecheck, railRecheckSettings } from "./rail-recheck.js";
 import { bootReadSettings, readSupportedAtBoot } from "./boot-supported-read.js";
 import { svmPaymentAuthority, isSvmNetwork } from "./svm-payer.js";
 import { mcpX402Dispatch, mcpX402Knows } from "./mcp-x402-routes.js";
+import { batchSettlementRequested, batchNetworksWanted, batchStoreMode, makeBatchStores, selectBatchNetworks, newBatchScheme, setBatchOffer, startBatchManagers, batchIntervals } from "./batch-settlement.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -785,6 +786,17 @@ export function acceptsForItem(item, rails) {
   // The batched accept is an EVM exact authorization with a longer window, so
   // it stays on these routes.
   if (x402EvmOnly(item)) return [...evm, ...batched];
+  // x402 `batch-settlement` (src/batch-settlement.js, off unless
+  // X402_BATCH_SETTLEMENT_NETWORKS lists a network the boot gate kept): a
+  // channel accept on each kept network, at the same price, to the treasury
+  // payTo (the scheme's receiver). LAST, after every rail and the Gateway
+  // batched accept, so a stock client keeps the accept it always took. Not on
+  // a route whose effect outlives the answer (above: identity-bound and the
+  // long-running reports already returned).
+  const channelNets = Array.isArray(rails.batchCaip2) && rails.batchCaip2.length && !defHasLastingEffect(item) && rails.walletAddress
+    ? rails.batchCaip2.filter((caip2) => evmCaip2.includes(caip2) && (!allowed || allowed.has(caip2)))
+    : [];
+  const channel = channelNets.map((caip2) => ({ scheme: "batch-settlement", payTo: rails.walletAddress, price: priceOf(caip2), network: caip2 }));
   return [
     ...evm,
     ...upto,
@@ -797,6 +809,7 @@ export function acceptsForItem(item, rails) {
     // fields (decimals/feePayer) are merged in by the facilitator downstream.
     ...(algorandWallet ? avmCaip2.map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2, extra: { tag: "x402-global-challenge" } })) : []),
     ...batched,
+    ...channel,
   ];
 }
 
@@ -866,6 +879,13 @@ export const CHALLENGE_SHORT_DESCRIPTION_MAX = 300;
 // address): 327 to 330 JSON bytes measured on Base and Arc, with its comma,
 // rounded up (scripts/test-upto-gas-sponsoring.js reads the real ones).
 export const UPTO_ACCEPT_JSON_BYTES = 340;
+// One batch-settlement requirement as the 402 carries it (scheme, network,
+// amount, asset, payTo, maxTimeoutSeconds and extra with the EIP-712 name and
+// version, the receiver authorizer, the withdraw delay and the minimum deposit
+// hint), with its comma, rounded up (scripts/test-batch-settlement.js reads
+// the real one). Never charged to a listing: a route whose listing leaves no
+// room for it is not offered the channel accept (batchWithheld).
+export const BATCH_ACCEPT_JSON_BYTES = 360;
 /** The bytes a route's upto offer adds past what the per-route budget was
  *  set against: the fixed offer (every exact accept, and production's one
  *  upto network) is measured with test-challenge-size's total, so only an
@@ -2403,6 +2423,46 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   })();
   const uptoGasDeclarations = uptoGasKeys.length ? gasSponsoringDeclarations(uptoGasKeys) : null;
 
+  // x402 `batch-settlement` (payment channels; src/batch-settlement.js).
+  // Unset X402_BATCH_SETTLEMENT_NETWORKS registers nothing and every 402 is
+  // byte-identical. Set, a network is offered only when a routing
+  // facilitator lists the kind, the scheme accepts that kind (validated HERE:
+  // a kind @x402/core finds invalid at initialize() would refuse every rail),
+  // the network has no floor or premium, a durable store is available and the
+  // asset prices.
+  let batchCaip2 = [];
+  let batchNetworks = [];
+  if (batchSettlementRequested(process.env)) {
+    const wanted = batchNetworksWanted(process.env, evmCaip2);
+    const storeMode = batchStoreMode(process.env);
+    let stores = null;
+    try { stores = storeMode ? await makeBatchStores(storeMode) : null; } catch (e) { console.warn(`x402 batch-settlement: store unavailable (${String(e?.message || e).slice(0, 120)})`); }
+    let refused = [];
+    if (!walletAddress) {
+      refused = wanted.map((caip2) => ({ caip2, word: "config", why: "no EVM payTo" }));
+    } else if (!stores) {
+      refused = wanted.map((caip2) => ({ caip2, word: "no-store", why: storeMode ? "store unavailable" : "no durable store (REDIS_URL unset; X402_BATCH_SETTLEMENT_STORE=memory names the single-process store)" }));
+    } else {
+      const reads = await Promise.all(facilitatorClients.map(async (client) => {
+        try { return await client.getSupported(); } catch { return null; }
+      }));
+      const r = await selectBatchNetworks({
+        wanted, clients: facilitatorClients, reads,
+        floored: (c) => NETWORK_FLOORS.has(c),
+        premium: (c) => NETWORK_PREMIUMS.get(c) || 0,
+        makeScheme: (caip2) => withMoney(newBatchScheme(walletAddress, stores), caip2),
+        canPrice: (scheme, caip2) => scheme.parsePrice(0.001, caip2),
+      });
+      batchNetworks = r.networks;
+      refused = r.refused;
+    }
+    const listed = String(process.env.X402_BATCH_SETTLEMENT_NETWORKS || "").split(",").map((x) => x.trim()).filter(Boolean);
+    for (const c of listed) if (!wanted.includes(c)) refused.push({ caip2: c, word: "not-in-offer", why: "not in the plain EVM offer" });
+    batchCaip2 = batchNetworks.map((n) => n.caip2);
+    for (const { caip2, why } of refused) console.warn(`x402 batch-settlement: REFUSING ${caip2}, ${why}.`);
+    setBatchOffer({ requested: true, networks: batchCaip2, refused, store: stores?.mode || null, stores });
+  }
+
   // accepts[0].outputSchema (src/accept-output-schema.js): the accept below
   // declares it, this patch carries it onto the requirement the core builds -
   // the one object that is both the 402 and what verify matches against.
@@ -2472,6 +2532,15 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   for (const caip2 of uptoCaip2) {
     server = server.register(caip2, withMoney(new UptoEvmScheme(), caip2));
     console.log(`x402 upto: variable-amount settlement offered on ${caip2}`);
+  }
+  // Channel accepts (batch-settlement), registered beside exact on the
+  // networks the gate above kept. Additive, like upto: exact is untouched.
+  for (const n of batchNetworks) {
+    server = server.register(n.caip2, n.scheme);
+    console.log(`x402 batch-settlement: payment channels offered on ${n.caip2}`);
+  }
+  if (batchNetworks.length && syncOnStart) {
+    startBatchManagers({ networks: batchNetworks, payTo: walletAddress, intervals: batchIntervals(process.env), withLease: async (name, opts, fn) => (await import("./state-db.js")).withLease(name, opts, fn) });
   }
   for (const caip2 of svmCaip2) server = server.register(caip2, new ExactSvmScheme());
   // Stellar/Algorand clients were constructed above (pre-probe); only their
@@ -2631,14 +2700,18 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // cut once for the whole catalog, so two tools whose names differ (a tier
   // family) keep listings that differ (x402ServiceNames).
   const serviceNameFor = catalogServiceNameFor(catalog);
-  const railsNow = () => ({ evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2, gatewayKinds });
+  const railsNow = () => ({ evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2, gatewayKinds, ...(batchCaip2.length ? { batchCaip2 } : {}) });
   // Routes whose 402 could not fit an upto accept past the first one (or the
   // gas sponsoring declaration) inside the per-route budget: they keep every
   // exact accept and one upto accept (uptoNetworkKept: Base before Arc), and
   // offer no more upto than that.
   const uptoWithheld = new WeakSet();
+  // Routes whose 402 leaves no room for the channel accept beside their
+  // listing (batch-settlement): offered everything else, never the channel.
+  const batchWithheld = new WeakSet();
   const acceptsFor = (item) => {
-    const rails = railsNow();
+    let rails = railsNow();
+    if (batchWithheld.has(item)) { const { batchCaip2: _withheld, ...rest } = rails; rails = rest; }
     if (!uptoWithheld.has(item)) return acceptsForItem(item, rails);
     const kept = uptoNetworkKept(rails.uptoCaip2);
     return acceptsForItem(item, { ...rails, uptoCaip2: kept ? [kept] : [] });
@@ -2749,6 +2822,13 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         uptoWithheldRoutes.push(route);
         declareGas = false;
         fitted = fitChallenge(slimmed, listingText, declareFor, undefined, fitOpts);
+      }
+      // The channel accept fits beside the listing as fitted, or is not
+      // offered on this route; it never shrinks a listing.
+      const channelNets = batchCaip2.length ? acceptsFor(item).filter((a) => a.scheme === "batch-settlement").length : 0;
+      if (channelNets > 0) {
+        const spent = fitted.bytes + (uptoWithheld.has(item) ? 0 : uptoBytes);
+        if (spent + channelNets * BATCH_ACCEPT_JSON_BYTES > CHALLENGE_VARIABLE_MAX_BYTES) batchWithheld.add(item);
       }
       if (fitted.slim) Object.assign(ext, declareFor(fitted.slim));
       const listingDescription = fitted.description;
