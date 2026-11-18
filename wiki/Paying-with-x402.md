@@ -169,7 +169,7 @@ purl "https://agent402.tools/api/dns?name=example.com&type=A"            # pay +
 Client-side caps belong on the buyer:
 
 - **purl:** `PURL_MAX_AMOUNT` (atomic units; 1000 = $0.001 USDC).
-- **agent402-mcp:** `AGENT402_MAX_PER_CALL` (opt-in: refuse any single call above this USD price) and `AGENT402_BUDGET` (opt-in hard session cap; unset means none). Both are enforced on the payment that is signed, priced from the known decimals of its asset, so a confused model cannot drain the wallet.
+- **agent402-mcp:** `AGENT402_MAX_PER_CALL` (opt-in: refuse any single call above this USD price) and `AGENT402_BUDGET` (opt-in hard session cap; unset means none). Both are enforced on the payment that is signed, priced from the known decimals of its asset, so when set, a confused model cannot spend past them.
 
 ## Verifying you weren't cheated
 

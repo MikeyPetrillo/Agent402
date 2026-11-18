@@ -265,7 +265,7 @@ export const callAction = {
   description:
     "Call an Agent402 tool by slug with its input and return the tool's JSON result. Free-tier tools cost nothing " +
     "(proof-of-work); wallet-only tools are paid with the configured credits key or x402 wallet, typically $0.001 to " +
-    "$0.05 per call and never above AGENT402_MAX_PER_CALL_USD or the rolling AGENT402_DAILY_LIMIT_USD. If no slug is " +
+    "$0.05 per call and, when set, never above AGENT402_MAX_PER_CALL_USD or the rolling AGENT402_DAILY_LIMIT_USD. If no slug is " +
     "given the tool is chosen from the message and the last AGENT402_FIND result.",
   parameters: [
     { name: "slug", description: "Tool slug from AGENT402_FIND (for example: hash, search, extract, stock-quote)", required: false, schema: { type: "string" } },

@@ -421,7 +421,7 @@ await agent402ActionProvider({
     ],
     payment: [
       "x402 in USDC on Base, signed by the AgentKit wallet provider. The key never leaves the provider.",
-      "`maxPerCallUsd` (default 1), `dailyLimitUsd` and `maxPerHostUsd` are measured against one client per wallet provider, so the daily ceiling holds across calls.",
+      "`maxPerCallUsd`, `dailyLimitUsd` and `maxPerHostUsd` are opt-in, with none applied unless set; each one set is measured against one client per wallet provider, so a daily ceiling holds across calls.",
       `\`creditsKey\`: ${CREDITS_HELD} (\`a402_...\`) pays wallet-only tools without a wallet.`,
     ],
     tools: ["crypto-price", "search", "answer", "hash", "route-execute"],
@@ -429,12 +429,12 @@ await agent402ActionProvider({
   },
   {
     slug: "eliza",
-    meta: `An elizaOS plugin to find and call Agent402 tools, paid in USDC over x402${CREDITS_ON ? " or by prepaid credits" : ""}, inside per-call and daily spend ceilings.`,
+    meta: `An elizaOS plugin to find and call Agent402 tools, paid in USDC over x402${CREDITS_ON ? " or by prepaid credits" : ""}, inside optional per-call and daily spend ceilings.`,
     name: "elizaOS plugin",
     short: "elizaOS",
     pkg: "elizaos-plugin-agent402",
     dir: "adapters/eliza",
-    what: `An elizaOS plugin with three actions and a provider, installed from npm into the agent project and named in the character's \`plugins\` list. The agent can find a tool from a plain-language task and call it, paying in USDC over x402 or with ${CREDITS_HELD}, inside per-call and daily ceilings you set in the character config.`,
+    what: `An elizaOS plugin with three actions and a provider, installed from npm into the agent project and named in the character's \`plugins\` list. The agent can find a tool from a plain-language task and call it, paying in USDC over x402 or with ${CREDITS_HELD}, inside any per-call and daily ceilings you set in the character config.`,
     install: "npm install elizaos-plugin-agent402",
     lang: "json",
     example: CREDITS_ON ? `{
@@ -465,7 +465,7 @@ bun add @x402/fetch @x402/evm viem
       `\`AGENT402_CREDITS_KEY\`: ${CREDITS_HELD}; wallet-only tools are debited only on a successful call.`,
       "`AGENT402_WALLET_KEY`: an EVM key paying USDC over x402 (optional peers `@x402/fetch @x402/evm viem`).",
       "Neither set: the proof-of-work free tier still works.",
-      "`AGENT402_MAX_PER_CALL_USD` (default 1) and `AGENT402_DAILY_LIMIT_USD` are enforced per runtime before any request is sent; every paid call carries an `Idempotency-Key`.",
+      "`AGENT402_MAX_PER_CALL_USD` and `AGENT402_DAILY_LIMIT_USD` are opt-in, with none applied unless set; when set, they are enforced per runtime before any request is sent; every paid call carries an `Idempotency-Key`.",
     ],
     tools: ["search", "render", "stock-quote", "dns-lookup", "tls-cert"],
     guides: ["agent-hosts", "x402-and-mpp"],
