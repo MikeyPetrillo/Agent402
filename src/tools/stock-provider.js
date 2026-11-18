@@ -50,6 +50,20 @@ export function stockDataEnabled(env = process.env) {
   return !entry.keyEnv || String(env[entry.keyEnv] || "").trim() !== "";
 }
 
+/** The one boot warning for a selection that leaves no provider active: an
+ *  unknown name, or a known one whose key is missing. Null when the switch is
+ *  off or the provider is active. Names the variable, never its value. */
+export function stockProviderWarning(env = process.env) {
+  const name = selectedStockProvider(env);
+  if (name === "off") return null;
+  const entry = REGISTRY.get(name);
+  // The name is echoed bounded and reduced to plain characters: it is config, not a key.
+  const shown = JSON.stringify(name.replace(/[^a-z0-9_.-]/g, "?").slice(0, 40));
+  if (!entry) return `[stock-provider] STOCK_DATA_PROVIDER=${shown} names no registered provider (${[...REGISTRY.keys()].join(", ")} or off): stock tools stay unlisted`;
+  if (entry.keyEnv && String(env[entry.keyEnv] || "").trim() === "") return `[stock-provider] STOCK_DATA_PROVIDER=${shown} is selected but ${entry.keyEnv} is not set: stock tools stay unlisted`;
+  return null;
+}
+
 /** Registered provider names (for docs and the boot log). */
 export const stockProviderNames = () => [...REGISTRY.keys()];
 

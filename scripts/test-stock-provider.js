@@ -20,6 +20,18 @@ ok(SP.stockDataEnabled({ STOCK_DATA_PROVIDER: "databento" }) === false && SP.sto
 ok(SP.stockDataEnabled({ STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "k" }) === true, "control: selected AND keyed is active");
 ok(SP.stockDataEnabled({ STOCK_DATA_PROVIDER: "nope", DATABENTO_API_KEY: "k" }) === false, "an unregistered name is not active");
 ok(SP.stockProviderNames().includes("databento"), "databento is registered");
+// The one boot warning: an unknown name or a missing key, never a key's value.
+{
+  const SECRET = "sk-live-ShouldNeverPrint-1234";
+  ok(SP.stockProviderWarning({}) === null && SP.stockProviderWarning({ STOCK_DATA_PROVIDER: "off" }) === null, "no warning with the switch off");
+  ok(SP.stockProviderWarning({ STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: SECRET }) === null, "control: no warning for an active provider");
+  const unknown = SP.stockProviderWarning({ STOCK_DATA_PROVIDER: "polygon", DATABENTO_API_KEY: SECRET });
+  ok(/names no registered provider/.test(unknown || "") && /"polygon"/.test(unknown) && /databento/.test(unknown) && !unknown.includes(SECRET), `an unknown name warns, naming the registered ones (${unknown})`);
+  const keyless = SP.stockProviderWarning({ STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: " " });
+  ok(/DATABENTO_API_KEY is not set/.test(keyless || ""), `a selected provider without its key warns, naming the variable (${keyless})`);
+  const odd = SP.stockProviderWarning({ STOCK_DATA_PROVIDER: `x\u001b[31m${"y".repeat(200)}` }) || "";
+  ok(!/\u001b/.test(odd) && odd.length < 300, "a strange name is echoed bounded, control characters replaced");
+}
 ok(await SP.activeStockAdapter({}) === null, "no active adapter with the switch off");
 for (const [name, fn] of [["quote", () => SP.quote("AAPL")], ["dailyBars", () => SP.dailyBars("AAPL", { sessions: 5 })]]) {
   try { await fn(); ok(false, `${name} refuses with no provider`); }

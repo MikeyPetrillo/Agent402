@@ -412,7 +412,7 @@ import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
 import { quoteWarmerStatus } from "./tools/databento.js";
-import { activeStockAdapter, stockDataEnabled, selectedStockProvider, STOCK_SLUGS, stockNotOffered } from "./tools/stock-provider.js";
+import { activeStockAdapter, stockDataEnabled, selectedStockProvider, STOCK_SLUGS, stockNotOffered, stockProviderWarning } from "./tools/stock-provider.js";
 import { phaseArrivalMiddleware, markPaidHandlerStart, markCoverRefusalLine, paidPhaseSummary, hangupWaitOf } from "./paid-phase-timing.js";
 import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-paid-calls.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
@@ -13835,7 +13835,9 @@ bootStep("startDatasetScheduler", () => startDatasetScheduler(datasetSources()))
 // The active stock provider's background work (the databento adapter's quote
 // warmer keeps the session boundary and the most-requested symbols' bars off
 // the request path, under its own daily ceiling). Started here, never from
-// inside a request. No active provider: nothing starts.
+// inside a request. No active provider: nothing starts (a selection that
+// cannot be active warns once here).
+{ const w = stockProviderWarning(); if (w) console.warn(w); }
 activeStockAdapter().then((a) => {
   if (a?.start && bootStep("startStockProvider", () => a.start())) console.log(`[stock-provider] ${selectedStockProvider()} background reads on`);
 }).catch((e) => console.warn(`[stock-provider] start failed: ${String(e?.message || e).slice(0, 120)}`));

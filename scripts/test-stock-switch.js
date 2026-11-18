@@ -37,8 +37,20 @@ const BASE_ENV = { X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_SYNC_ON
 async function boot(label, env, args = []) {
   const srv = await bootServer({ env: { ...BASE_ENV, ...env }, stores: label, args, timeoutMs: 180_000 });
   servers.push(srv);
-  return { base: srv.url, child: srv.child };
+  return { base: srv.url, child: srv.child, log: srv.log };
 }
+/** A script run against a boot (asynchronous: the boot lives in a child). */
+function runAgainst(script, base, env = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [script], { env: { ...process.env, TARGET_URL: base, MCP_CHECK_TARGET: "", ...env }, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { out += d; });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 240_000);
+    child.on("exit", (status) => { clearTimeout(timer); resolve({ status, out }); });
+  });
+}
+const failLines = (out) => out.split("\n").filter((l) => /^(FAIL|  (price|dead|exact|first))/.test(l)).slice(0, 8).join(" | ");
 const mcp = async (base, method, params = {}) => (await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) })).text();
 
 const TOOL_RE = new RegExp(`\\b(${[...STOCK_SLUGS].join("|")})\\b`);
@@ -88,6 +100,13 @@ try {
       if (!(r.status === 503 && b.error === "not-offered" && /not currently offered/.test(b.message || ""))) routes.push(`${path} ${r.status}`);
     }
     ok(routes.length === 0, `no provider: every stock route and pack answers 503 not-offered (${routes.join(", ") || "all"})`);
+    // The static docs read true against this state (two-state pack prices
+    // read at their no-provider figure), and the independent MCP client
+    // expects no market.quote.
+    const docs = await runAgainst("scripts/test-docs-truth.js", base);
+    ok(docs.status === 0 && /two-state pack prices are read against this server's state \(\d+ lines, stock data provider off\)/.test(docs.out), `no provider: test-docs-truth passes against this boot (${failLines(docs.out) || docs.status})`);
+    const cc = await runAgainst("scripts/mcp-client-check.js", base);
+    ok(cc.status === 0 && /ok - catalog: .*stock-quote/.test(cc.out) && /ok - market\.quote unlisted/.test(cc.out), `no provider: mcp-client-check passes and checks market.quote refused (${failLines(cc.out) || cc.status})`);
     child.kill("SIGTERM");
   }
 
@@ -103,7 +122,8 @@ try {
     });
     await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
     const FAC_PORT = facilitator.address().port;
-    const { base, child } = await boot("stock-paid", { FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
+    // The provider is SELECTED with no key: it stays off, and the boot says so once.
+    const { base, child, log } = await boot("stock-paid", { STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "", FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
       // The x402 middleware reads the facilitator's kinds at start.
       X402_SYNC_ON_START: "",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, TRUST_PROXY_HOPS: "1", CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "" });
@@ -121,6 +141,8 @@ try {
       }
     }
     ok(bad.length === 0, `paid mode, no provider: the routes answer 503 with no payment challenge (${bad.join(", ") || "all"})`);
+    const warned = log().split("\n").filter((l) => l.includes("[stock-provider]") && l.includes("DATABENTO_API_KEY is not set"));
+    ok(warned.length === 1, `a provider selected without its key warns once at boot, naming the variable (${warned.length})`);
     child.kill("SIGTERM");
   }
 
@@ -165,6 +187,11 @@ try {
     }
     const page = await fetch(`${base}/tools/stock-quote`);
     ok(page.status === 200, `provider on: the tool page is served (${page.status})`);
+    ok(/Flagship tools: [^"]*market\.quote/.test(await mcp(base, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } })), "provider on: the connector's instructions name market.quote");
+    const docs = await runAgainst("scripts/test-docs-truth.js", base);
+    ok(docs.status === 0 && /two-state pack prices are read against this server's state \(\d+ lines, stock data provider on\)/.test(docs.out), `provider on: test-docs-truth passes against this boot (${failLines(docs.out) || docs.status})`);
+    const cc = await runAgainst("scripts/mcp-client-check.js", base);
+    ok(cc.status === 0 && /ok - market\.quote without payment/.test(cc.out), `provider on: mcp-client-check expects market.quote and reads its unpaid ask (${failLines(cc.out) || cc.status})`);
     child.kill("SIGTERM");
   }
 } catch (e) {
