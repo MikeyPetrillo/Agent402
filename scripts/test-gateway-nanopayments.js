@@ -54,7 +54,8 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { randomBytes } from "node:crypto";
+import { randomBytes, generateKeyPairSync } from "node:crypto";
+import { verifyReceipt, RECEIPT_HEADER, RECEIPT_KEYS_PATH } from "../src/receipt-signing.js";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { shortPayer } from "../src/verify-failure-log.js";
 import Database from "better-sqlite3";
@@ -1732,9 +1733,11 @@ await check("every catalog route's 402 stays under the challenge ceiling with th
   } finally { proc.kill("SIGKILL"); }
 });
 
-await check("a batched payment on Base and on Arc is served, settled by Gateway after the handler, and booked under the gateway-batched wire", async () => {
-  const { base, log, proc, port } = await boot();
+await check("a batched payment on Base and on Arc is served, settled by Gateway after the handler, booked under the gateway-batched wire, and carries a signed receipt naming Gateway's transaction", async () => {
+  const receiptKey = Buffer.from(generateKeyPairSync("ed25519").privateKey.export({ format: "pem", type: "pkcs8" })).toString("base64");
+  const { base, log, proc, port } = await boot({ RECEIPT_SIGNING_KEY: receiptKey, RECEIPT_SIGNING_KEY_ID: "r1-gateway", RECEIPT_RETIRED_KEYS: "" });
   try {
+    const { keys } = await (await fetch(`${base}${RECEIPT_KEYS_PATH}`)).json();
     const { env } = await read402(base);
     st.gwHits.length = 0; st.payaiHits.length = 0; st.circleHits.length = 0;
     for (const [network, chainId] of [["eip155:8453", 8453], ["eip155:5042", 5042]]) {
@@ -1748,6 +1751,12 @@ await check("a batched payment on Base and on Arc is served, settled by Gateway 
       assert.equal(receipt.network, network);
       assert.match(receipt.transaction, /^[0-9a-f-]{36}$/, "the receipt names Gateway's transaction id");
       assert.equal(receipt.payer.toLowerCase(), acct.address.toLowerCase());
+      const signedReceipt = verifyReceipt(r.headers.get(RECEIPT_HEADER) || "", { keys, responseBody: body, request: { method: "GET", path: PATH } });
+      assert.ok(signedReceipt.valid, `the signed receipt verifies against the published keys, the bytes served and the request sent (${signedReceipt.reason})`);
+      assert.equal(signedReceipt.record.rail, "gateway-batched");
+      assert.equal(signedReceipt.record.network, network);
+      assert.equal(signedReceipt.record.settlement, receipt.transaction, "the signed receipt names Gateway's transaction id");
+      assert.equal(String(signedReceipt.record.payer).toLowerCase(), acct.address.toLowerCase());
       const v = st.gwHits.find((h) => h.url === "/v1/x402/verify" && h.body.paymentRequirements.network === network);
       const s = st.gwHits.find((h) => h.url === "/v1/x402/settle" && h.body.paymentRequirements.network === network);
       assert.ok(v && s, "Gateway verified and settled it");
