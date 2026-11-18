@@ -629,6 +629,9 @@ export const TOOLS = [
   },
   {
     kit: "skill-pack",
+    // Listed only with an active stock provider (it runs stock-quote): bought
+    // only while prod lists the route.
+    whenListed: true,
     path: "/api/skill/company-dossier",
     method: "POST",
     body: { ticker: "AAPL" },

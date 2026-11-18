@@ -3,14 +3,18 @@
 // data, since the page has no fixture-able inputs of its own (unlike the
 // other revamped pages, it takes only baseUrl).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { skillsIndex, SKILL_PACKS, PACK_PRICES, skillPackPage, skillPacksJson, PACK_PRICE_RANGE } from "../src/skills.js";
+import { skillsIndex, SKILL_PACKS, ALL_SKILL_PACKS, PACK_PRICES, skillPackPage, skillPacksJson, PACK_PRICE_RANGE } from "../src/skills.js";
 import { pageCtaHrefs, inPageHtml } from "./lib/page-ctas.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
 
 const BASE_URL = "https://agent402.tools";
-const FLAGSHIP = ["security-audit", "trend-analysis", "structured-scrape", "document-intel", "decode-blob", "forecasting-bake-off"];
+// The six featured packs; a featured pack that is not listed on this boot (the
+// two series packs run stock-history, listed only with a stock provider) gives
+// its place to a standby, in order.
+const FLAGSHIP = [...["security-audit", "trend-analysis", "structured-scrape", "document-intel", "decode-blob", "forecasting-bake-off"], ...["status-snapshot", "number-crunch"]]
+  .filter((slug) => SKILL_PACKS.some((p) => p.slug === slug)).slice(0, 6);
 
 const html = skillsIndex(BASE_URL);
 
@@ -35,7 +39,8 @@ ok(/failure paths<\/th><td[^>]*>7<\/td><td[^>]*>1 envelope</.test(html), "a pack
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/skills.js", import.meta.url), "utf8");
   const rows = [...src.matchAll(/^\s+"([a-z0-9-]+)": ([0-9.]+), \/\/ \d+ tools?, parts \$([0-9.]+)/gm)];
-  ok(rows.length === SKILL_PACKS.length, `every pack price row carries its parts sum (${rows.length}/${SKILL_PACKS.length})`);
+  // The table prices every pack, listed or not (ALL_SKILL_PACKS).
+  ok(rows.length === ALL_SKILL_PACKS.length, `every pack price row carries its parts sum (${rows.length}/${ALL_SKILL_PACKS.length})`);
   const over = rows.filter(([, , price, parts]) => Number(price) > Number(parts));
   ok(over.length === 0, `no pack is priced above the sum of its tools${over.length ? `: ${over.map((r) => r[1]).join(", ")}` : ""}`);
   const atSum = rows.filter(([, , price, parts]) => Number(price) === Number(parts)).length;
@@ -70,7 +75,7 @@ for (const slug of FLAGSHIP) {
 // the "forecast-" prefix on four slugs (naive/ses/holt/holt-winters), which
 // aren't real catalog slugs - a reader following that link would 404. Lock
 // that the corrected, real slugs render instead.
-ok(html.includes("forecast-naive") && html.includes("forecast-ses") && html.includes("forecast-holt") && html.includes("forecast-holt-winters"), "forecasting-bake-off renders the REAL forecast-* slugs, not the design's abbreviated (404-prone) versions");
+if (FLAGSHIP.includes("forecasting-bake-off")) ok(html.includes("forecast-naive") && html.includes("forecast-ses") && html.includes("forecast-holt") && html.includes("forecast-holt-winters"), "forecasting-bake-off renders the REAL forecast-* slugs, not the design's abbreviated (404-prone) versions");
 ok(!/[^-]\bnaive\b/.test(html.split("forecasting-bake-off")[1]?.split("</a>")[0] || ""), "forecasting-bake-off's card never renders the bare (non-prefixed) 'naive' slug");
 
 // --- pricing honesty: real range, not invented -------------------------------

@@ -4,7 +4,7 @@
 // which is why we can't just do a direct transfer. Used to retire a burner
 // (rotation) or empty a wallet whose key has been exposed.
 //
-// Denomination: one $0.50 tool (skill-company-dossier), bought repeatedly. The
+// Denomination: one pack (skill-sec-filings-deep-dive, a ticker per call), bought repeatedly. The
 // balance is swept ~$0.50 at a time; whatever is left UNDER $0.50 on each chain
 // is stranded by design (draining the last few cents isn't worth the calls).
 //
@@ -53,7 +53,7 @@ const CHAINS = [
   { key: "robinhood", caip2: "eip155:4663" },
 ];
 const TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "JPM"];
-const DENOM_URL = `${TARGET}/api/skill/company-dossier`; // $0.50, returns 402 with a valid ticker
+const DENOM_URL = `${TARGET}/api/skill/sec-filings-deep-dive`; // returns 402 with a valid ticker
 const denomInit = (i) => ({
   method: "POST",
   headers: { "Content-Type": "application/json" },
