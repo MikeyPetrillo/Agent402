@@ -86,7 +86,7 @@ export function tollboothLandingPage(baseUrl) {
     <select id="mode">
       <option value="observe" selected>observe: true - count, never charge</option>
       <option value="bots">bots - charge known AI crawlers</option>
-      <option value="strict">strict - charge anything not a browser</option>
+      <option value="strict">strict - charge known AI crawlers and anything not a browser</option>
       <option value="all">all - charge every client</option>
     </select>
   </label>

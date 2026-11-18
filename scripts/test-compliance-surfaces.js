@@ -15,6 +15,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -41,7 +42,7 @@ ok(/18 and older/.test(privacyText) && /under 13/.test(privacyText) && /we will 
 
 // 2. Externally loaded fonts and stylesheets
 const FONT_HOSTS = /fonts\.googleapis\.com|fonts\.gstatic\.com|use\.typekit\.net|p\.typekit\.net|fonts\.bunny\.net|use\.fontawesome\.com|@import\s+url\(\s*["']?https?:/i;
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const files = [];
 (function walk(d) {
   for (const n of readdirSync(d)) {

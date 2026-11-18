@@ -139,10 +139,9 @@ export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = glob
     }),
     invoke: async (walletProvider, { slug, params = {} }) => {
       // Spend bounds ride with every paid call and are checked on the payment
-      // that is signed: a per-call ceiling (default $1, the same default
-      // AgentKit's own x402 provider uses), optional rolling daily and
-      // per-host ceilings, and an optional payee allowlist. With a per-call
-      // ceiling set (the default), no single payment is signed above it,
+      // that is signed: optional per-call, rolling daily and per-host
+      // ceilings (none applies unless set) and an optional payee allowlist.
+      // With maxPerCallUsd set, no single payment is signed above it,
       // whatever baseUrl is set to; set dailyLimitUsd to bound the total too.
       const client = await clientFor(walletProvider);
       const out = await client.call(slug, params);

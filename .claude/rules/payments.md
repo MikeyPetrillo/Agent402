@@ -10,6 +10,7 @@ paths:
   - "src/network-floors.js"
   - "src/paid-price.js"
   - "src/credits.js"
+  - "src/credits-sales.js"
   - "src/rails.js"
   - "src/idempotency-store.js"
   - "src/composite-spend-guard.js"
@@ -57,6 +58,11 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `CREDITS_ABANDONED_HOLD_MS` (default 10 minutes). A running request keeps its hold fresh against
   that sweep for at most `CREDITS_HOLD_REFRESH_MAX_MS` (default 6 hours, never under the abandoned
   window) (`src/credits.js`).
+- **Credits key balance cap:** `CREDITS_BALANCE_MAX_USD` (default 100, the largest pack;
+  `src/credits-sales.js`) is the most one key may hold: every purchase issues a new key, a pack above
+  the cap is not offered, a checkout for it is refused, and a paid session above it is refunded in full
+  with no key issued. `POST /api/credits/refund` (the key as Bearer) refunds a key's unspent balance
+  and disables it; it is served only while `CREDITS_SALES` is on.
 - **Card store directories:** with no state database, `CREDITS_DIR` (default `<data root>/credits`,
   `src/credits.js`) and `HUMAN_CHECKOUT_DIR` (default `<data root>/human-checkout`, `src/human-checkout.js`;
   the legacy `human-checkout.json` is read beside it) hold the card stores' files; the data root is `/data`,
@@ -554,6 +560,11 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   no `error`, so `error`-first clients read the explanation. Keyed on the header, so
   settle-failure, credits and Tempo/Stripe direct 402s are untouched. It wraps `res.send`, so it
   is mounted before the MPP shim and the Tempo/Stripe gates.
+- **Compact PAYMENT-REQUIRED header:** `src/payment-required-compact.js` serves a header under
+  8 KB to a request that sends `X-Payment-Compact: 1` (or an aiohttp user agent) while the body
+  mirror keeps the full offer; each accept is copied unchanged. On by default;
+  `PAYMENT_REQUIRED_COMPACT=off` (or `PAYMENT_REQUIRED_BODY=off`) turns it off, and every text
+  surface that describes it reads the same switch (`paymentRequiredCompactEnabled`).
 - **402 `payment` block:** `src/payment-guide.js`: a first-contact 402 body carries `payment`
   (this request's dollar price on the primary network through `priceForNetwork`, or on the first
   network offered when the route does not offer the primary; one sentence on paying; `noWallet`

@@ -3,6 +3,7 @@ paths:
   - "src/x402-index.js"
   - "src/index-parts.js"
   - "src/seller-tool-cap.js"
+  - "src/seller-docs-url.js"
   - "src/router-*.js"
   - "src/tools/route-execute.js"
   - "src/*-buyer.js"
@@ -246,3 +247,8 @@ Loaded when an index, discovery, router or buyer file is read.
   Its phrase rules are a mitigation; the primary defense is each prompt's own rule that seller
   text is quoted data, never instructions. A paraphrase the rules miss is expected: add it to
   `scripts/redteam-corpus.json` and extend the rule, rather than treat each one as a blocker.
+- **Seller docs link:** `src/seller-docs-url.js`. A tool row on `/api/index?seller=<host>` carries
+  `sellerDocsUrl` when the seller's own OpenAPI operation names `externalDocs.url`, kept only as an
+  https link on the seller's exact host (under its own path for a seller listed with a path) and
+  dropped on a row the listing screen flags; the detail then carries `sellerDocsUrlLegend`. The index
+  never fetches it, and it changes no price, quote, routing or payment. `?seller=` is its only surface.
