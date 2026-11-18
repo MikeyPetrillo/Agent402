@@ -332,7 +332,11 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   /trust and llms-full.txt offer receipts only under the same switch (`scripts/test-receipt-signing.js`).
 - **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
   in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
-  route that outlives the claim's expiry cannot run twice on one payment. With Redis configured
+  route that outlives the claim's expiry cannot run twice on one payment. Every command the guard
+  and the mppx replay store (`src/mppx-store.js`) send is bounded (`boundedRedisClient` in
+  `src/shared-limits.js`, `SHARED_LIMITS_OP_MS`, loop time), so a connected Redis that stops
+  answering reads as unreachable instead of holding the call (a paid x402 call answered in about
+  6 s with Redis stopped, where it waited past 30 s before). With Redis configured
   but unreachable, a paid call is refused 503 with `Retry-After` before any payment is taken (x402
   dispatcher, Tempo gate and card gate, each through `sharedClaimRequired`) on a long-running or
   composite route (`isLongRunningSlug`), and on any route while another container may be serving

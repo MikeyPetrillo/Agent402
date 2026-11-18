@@ -288,6 +288,28 @@ return out`;
 function withTimeout(p, ms) {
   return withLoopTimeout(p, ms, () => new Error("shared-limits: command timed out"));
 }
+/**
+ * The shared Redis client with every command bounded: a method that answers a
+ * promise rejects "command timed out" when no answer came within `ms` of loop
+ * time (default OP_MS), so a connected Redis that stops answering fails the
+ * caller's command instead of holding it for as long as the socket lives.
+ * Anything else (a property, a method that answers no promise) passes
+ * through. Null stays null.
+ */
+export function boundedRedisClient(c, ms = OP_MS) {
+  if (!c || typeof c !== "object") return c ?? null;
+  const limit = () => (typeof ms === "function" ? ms() : ms);
+  return new Proxy(c, {
+    get(target, prop) {
+      const v = Reflect.get(target, prop, target);
+      if (typeof v !== "function") return v;
+      return function boundedCommand(...args) {
+        const out = v.apply(target, args);
+        return out && typeof out.then === "function" ? withTimeout(out, limit()) : out;
+      };
+    },
+  });
+}
 const parseSummary = (r) => {
   const count = Number(r?.[0]) || 0, sum = Number(r?.[1]) || 0;
   return { count, sum, entries: Array.isArray(r?.[2]) ? parseEntries(r[2]) : null };
