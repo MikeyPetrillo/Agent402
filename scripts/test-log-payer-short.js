@@ -55,6 +55,9 @@ const ALLOW = {
     'r.signer || "(unknown)"': "a facilitator's signer wallet, not a buyer",
     "owner": "our own Solana payTo, not a buyer",
   },
+  "src/server.js": {
+    "rk.signer.kid": "the receipt signing key's public id (published at the receipt key document), not a wallet",
+  },
 };
 
 const CALL = /(?<![\w$.])(?:console\.(?:log|warn|error|info|debug)|log|warn|alarm)\s*\(/g;
