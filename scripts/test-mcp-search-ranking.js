@@ -16,6 +16,7 @@
 //
 //   node scripts/test-mcp-search-ranking.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { STOCK_SLUGS, stockDataEnabled } from "../src/tools/stock-provider.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -116,7 +117,8 @@ try {
   const names = (list.result?.tools ?? []).map((t) => t.name);
   ok(names.includes("catalog.search"), `tools/list exposes catalog.search (got ${names.join(",")})`);
 
-  for (const [q, expected] of TOP1) {
+  // A stock tool is listed only with an active stock provider (this boot's env).
+  for (const [q, expected] of TOP1.filter(([, slug]) => stockDataEnabled() || !STOCK_SLUGS.has(slug))) {
     const found = await searchSlugs(q, 3);
     ok(found[0] === expected, `mcp top-1 for "${q}" is ${expected} (got ${found.join(",") || "none"})`);
   }

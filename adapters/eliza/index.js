@@ -291,7 +291,7 @@ export const callAction = {
     "$0.05 per call and never above AGENT402_MAX_PER_CALL_USD ($5 unless set) or, when set, the rolling AGENT402_DAILY_LIMIT_USD. If no slug is " +
     "given the tool is chosen from the message and the last AGENT402_FIND result.",
   parameters: [
-    { name: "slug", description: "Tool slug from AGENT402_FIND (for example: hash, search, extract, stock-quote)", required: false, schema: { type: "string" } },
+    { name: "slug", description: "Tool slug from AGENT402_FIND (for example: hash, search, extract, crypto-price)", required: false, schema: { type: "string" } },
     { name: "params", description: "The tool's input object, in the shape of the example AGENT402_FIND returned", required: false, schema: { type: "object", additionalProperties: true } },
   ],
   examples: [[

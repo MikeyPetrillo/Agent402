@@ -259,7 +259,11 @@ await new Promise((r) => facilitator.close(r));
     "the MCP Connector wiki page has the x402 paragraph: where the payment and the receipt ride, and the FREE_MODE scope");
   const { MCP_X402_SLUGS } = await import("../src/mcp-x402-routes.js");
   const { FLAGSHIP_MCP_NAMES } = await import("../src/mcp-flagship.js");
-  const listed = MCP_X402_SLUGS.map((s) => FLAGSHIP_MCP_NAMES[s]);
+  // The wiki is static and names the twins every server lists: a stock twin
+  // is listed only with a stock data provider (src/tools/stock-provider.js),
+  // so it is not named there.
+  const { STOCK_SLUGS } = await import("../src/tools/stock-provider.js");
+  const listed = MCP_X402_SLUGS.filter((s) => !STOCK_SLUGS.has(s)).map((s) => FLAGSHIP_MCP_NAMES[s]);
   const para = wiki.split("\n").find((l) => l.startsWith("**x402 on `/mcp`.**")) || "";
   const named = (para.match(/called by its listed name \(([^)]*)\)/) || [])[1] || "";
   ok(named.split(", ").map((x) => x.replace(/`/g, "")).sort().join() === [...listed].sort().join(), `the tools it says quote the resource /mcp are the server's twins (${named})`);

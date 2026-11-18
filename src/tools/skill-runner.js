@@ -27,7 +27,8 @@
 //   standard ($0.06–$0.30)  network/render mix
 //   light    ($0.05 floor)  pure-CPU bundles, PoW-eligible
 //
-import { SKILL_PACKS, PACK_PRICES } from "../skills.js";
+import { SKILL_PACKS, PACK_PRICES, STOCK_TRIMMED_PACK_SLUGS } from "../skills.js";
+import { STOCK_SLUGS, stockDataEnabled } from "./stock-provider.js";
 import { packAttributions, withAttributions } from "../data-attribution.js";
 import { safeFetch } from "./fetch-guard.js";
 import { capturePostHogPackStep } from "../posthog.js";
@@ -2030,8 +2031,13 @@ async function fetchAsBase64(url) {
 // HTTP 200 with 0/N steps and was charged for it (2026-07 to 2026-08). A pack
 // with no entry is refused (500, never charged); test-skill-pack-steps
 // requires every SKILL_PACKS slug to have one, so this cannot reach a sold pack.
-function getStepConfig(packSlug) {
-  return PACK_STEPS[packSlug] || null;
+// With no stock provider active a pack listed without its stock step
+// (src/skills.js STOCK_TRIMMED_PACK_SLUGS) runs without it: the step is
+// removed, never run to fail, so the envelope reports only what it sells.
+function getStepConfig(packSlug, { stock = stockDataEnabled() } = {}) {
+  const cfg = PACK_STEPS[packSlug] || null;
+  if (!cfg || stock || !STOCK_TRIMMED_PACK_SLUGS.has(packSlug)) return cfg;
+  return { ...cfg, steps: cfg.steps.filter((st) => !STOCK_SLUGS.has(st.slug)) };
 }
 
 // Look up a handler for a tool slug. Tries inline handlers first (for routes

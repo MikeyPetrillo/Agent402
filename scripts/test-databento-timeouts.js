@@ -5,6 +5,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
+process.env.STOCK_DATA_PROVIDER = "databento";
 const { dailyBars, availableEnd, DATABENTO_TIMEOUTS_MS } = await import("../src/tools/databento.js");
 
 let pass = 0, fail = 0;

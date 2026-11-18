@@ -17,6 +17,8 @@ t node scripts/test-gateway-nanopayments.js
 t node scripts/test-gateway-withdraw.js
 # Per-phase timing of paid calls: verify, handler and settle measured against injected stub delays, filed under the right rail (x402 vs mpp-evm), a hang-up marked gone, summary
 t node scripts/test-paid-phase-timing.js
+# Stock-data switch on real boots: off hides the tools and packs from every surface and their routes answer 503 with no payment challenge (paid boot, stub facilitator); on (stubbed upstream) restores them and their published examples answer - offline
+t node scripts/test-stock-switch.js
 # A paid run that never gets paid meets a bound
 t node scripts/test-paytime-bounds.js
 # A wallet's runs in flight are covered by its balance together on every wire that settles after the handler, and the breaker's hard count holds for calls that arrive together (boots paid servers against chain-like stubs - offline)

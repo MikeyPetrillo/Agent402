@@ -45,6 +45,22 @@ Packages:
   `splitStreamedReceipt`, which check the receipt event that ends a streamed
   answer against the bytes streamed before it.
 
+### 2026-11-18 (stock data tools not offered)
+Tools:
+- stock-quote and stock-history are not offered for now, and neither are the
+  skill packs built on them: options-analytics, price-monitor and
+  financial-analysis. Their routes answer 503 with no payment asked, and the
+  catalog, /api/pricing, /openapi.json, llms.txt, the MCP tool lists and the
+  sitemap do not list them.
+Skill packs:
+- earnings-deep-dive, financial-research, company-dossier, earnings-watch,
+  insider-alert, trend-analysis and forecasting-bake-off run without their
+  stock step, each priced by the pack rule over the tools it keeps;
+  trend-analysis and forecasting-bake-off take a FRED series id.
+Reports:
+- The company dossier is built from SEC filings, Form 4 insider filings and
+  web research, with no quote step.
+
 ### 2026-11-18 (signed receipts)
 Payments:
 - A server run with a receipt signing key (`RECEIPT_SIGNING_KEY`) sends an
