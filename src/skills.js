@@ -28,7 +28,7 @@ export const PACK_PRICES = {
   "earnings-deep-dive": 0.033, // 4 tools, parts $0.036
   "options-analytics": 0.017, // 4 tools, parts $0.018
   "fixed-income-desk": 0.017, // 5 tools, parts $0.018
-  "defi-protocol-scanner": 0.025, // 4 tools, parts $0.027
+  "defi-protocol-scanner": 0.031, // 4 tools, parts $0.034
   "security-audit": 0.017, // 7 tools, parts $0.018
   "email-deliverability": 0.009, // 6 tools, parts $0.009
   "market-brief": 0.009, // 3 tools, parts $0.01
@@ -48,9 +48,9 @@ export const PACK_PRICES = {
   "document-brief": 0.031, // 3 tools, parts $0.034
   "fraud-signals": 0.027, // 7 tools, parts $0.029
   "api-investigation": 0.017, // 7 tools, parts $0.018
-  "location-intel": 0.008, // 6 tools, parts $0.008
+  "location-intel": 0.009, // 5 tools, parts $0.01
   "user-onboarding": 0.008, // 7 tools, parts $0.008
-  "trip-planner": 0.006, // 6 tools, parts $0.006
+  "trip-planner": 0.007, // 6 tools, parts $0.007
   "macro-context": 0.036, // 8 tools, parts $0.04
   "regulatory-watch": 0.023, // 5 tools, parts $0.025
   "search-and-cite": 0.101, // 5 tools, parts $0.112
@@ -74,7 +74,7 @@ export const PACK_PRICES = {
   "yield-dashboard": 0.014, // 3 tools, parts $0.015
   "inflation-check": 0.018, // 4 tools, parts $0.02
   "fx-monitor": 0.009, // 3 tools, parts $0.009
-  "defi-dashboard": 0.014, // 4 tools, parts $0.015
+  "defi-dashboard": 0.018, // 4 tools, parts $0.019
   "nft-portfolio": 0.005, // 3 tools, parts $0.005
   "wallet-audit": 0.005, // 3 tools, parts $0.005
   "gas-optimizer": 0.007, // 3 tools, parts $0.007
@@ -194,21 +194,21 @@ export const SKILL_PACKS = [
     slug: "defi-protocol-scanner",
     title: "DeFi protocol scanner",
     tagline:
-      "Due-diligence a DeFi protocol in one workflow: live token price, market context, protocol TVL across chains, and recent news - the on-chain and off-chain picture together.",
+      "Due-diligence a DeFi protocol in one workflow: live token price, market context, the token's fundamentals (supply, valuation, all-time high and low, links), and recent news - the market and off-chain picture together.",
     useCase:
-      "Evaluating a DeFi protocol or its token before allocating - you want the token price, its scale in the broader market, the protocol's total value locked (the real usage signal), and the latest news, without hopping between explorers and aggregators.",
+      "Evaluating a DeFi protocol or its token before allocating - you want the token price, its scale in the broader market, the token's supply and valuation profile, and the latest news, without hopping between explorers and aggregators.",
     promptArgs: [
-      { name: "protocol", description: "DeFi protocol slug (e.g. aave, uniswap)", required: true, substitute: "aave" },
+      { name: "protocol", description: "The protocol token's coin id (e.g. aave, uniswap)", required: true, substitute: "aave" },
     ],
-    toolSlugs: ["crypto-price", "crypto-market", "defi-tvl", "search"],
+    toolSlugs: ["crypto-price", "crypto-market", "coin-profile", "search"],
     workflow: [
       "Get the token's live price with crypto-price - the current quote and 24h move.",
       "Pull crypto-market for market cap, volume, and rank so you know the token's scale and liquidity.",
-      "Get the protocol's total value locked from defi-tvl - headline TVL across chains is the clearest real-usage signal for a DeFi protocol.",
-      "Search the web for recent news, audits, or incidents the price and TVL don't yet reflect.",
+      "Read the token's fundamentals from coin-profile - circulating, total and max supply, fully diluted value, all-time high and low, categories and project links.",
+      "Search the web for recent news, audits, or incidents the price and the profile don't yet reflect.",
     ],
     claudePrompt:
-      "Scan the aave DeFi protocol using Agent402's defi-protocol-scanner skill pack. (1) Get the token's live price, (2) pull market cap and volume, (3) get the protocol TVL across chains, (4) search for recent news or security incidents. Summarize as a due-diligence note: price and momentum, market scale, real usage (TVL), and any risk flags from the news.",
+      "Scan the aave DeFi protocol using Agent402's defi-protocol-scanner skill pack. (1) Get the token's live price, (2) pull market cap and volume, (3) read the token's supply and valuation profile, (4) search for recent news or security incidents. Summarize as a due-diligence note: price and momentum, market scale, token fundamentals, and any risk flags from the news.",
   },
   {
     slug: "security-audit",
@@ -885,39 +885,34 @@ export const SKILL_PACKS = [
     slug: "location-intel",
     title: "Location intel",
     tagline:
-      "Location intel skill: one call turns an address or place name into a situational brief: coordinates, the postal address, restaurants in the area, the weather forecast, active hazard alerts, and the past week's magnitude 2.5 and larger earthquakes worldwide.",
+      "Location intel skill: one call turns a place name into a situational brief: coordinates, country, region and timezone, the US county and state when the place is in the United States, a three-day weather forecast anywhere on Earth, active US hazard alerts, and the past week's magnitude 2.5 and larger earthquakes worldwide.",
     useCase:
-      "A field-ops agent (sales rep about to visit a customer, contractor scoping a job site, traveler arriving in a new city, emergency-response coordinator) hands the pack an address and needs the full pre-arrival brief in one workup. Geocode pins the spot, reverse-geocode confirms the canonical postal form (catches stale addresses where the building number changed), place-search surfaces nearby POIs (gas, coffee, hospital, supplies), weather-forecast covers the next 24-48h conditions, weather-alerts surfaces any active NWS warning (red flag / flood / heat / tornado), and earthquakes filters recent seismic activity in the region. US-centric for hazards/forecast; geocoding works globally.",
+      "A field-ops agent (sales rep about to visit a customer, contractor scoping a job site, traveler arriving in a new city, emergency-response coordinator) hands the pack a city, town or region name and needs the pre-arrival brief in one workup. place-lookup pins the place and names its country, region and timezone, geo-lookup adds the US county and state, weather-daily covers the next three days anywhere in the world, weather-alerts surfaces any active NWS warning for the state (red flag / flood / heat / tornado), and earthquakes lists recent seismic activity. Place names only: a street address is not resolved. The county and alert steps apply to US places and are skipped elsewhere.",
     promptArgs: [
-      { name: "address", description: "Address or place name (e.g. '1600 Pennsylvania Ave NW Washington DC' or 'Joshua Tree National Park')", required: true, substitute: "1600 Pennsylvania Ave NW Washington DC" },
+      { name: "place", description: "Place name: a city, town or region, optionally qualified after a comma (e.g. 'Washington, DC' or 'Lyon, France'). Not a street address", required: true, substitute: "Washington, DC" },
     ],
-    // Six tools, ordered as the standard situational-brief workup: pin
-    // (geocode) → verify (reverse-geocode catches typos and stale addresses
-    // by round-tripping back to canonical form) → context (place-search for
-    // POIs) → conditions (weather-forecast) → hazards (weather-alerts for
-    // active warnings, earthquakes for recent seismic activity in the
-    // region). geocode/reverse-geocode/place-search work globally (OSM /
-    // Nominatim); weather-forecast + weather-alerts are US-only (NWS);
-    // earthquakes is global (USGS). Composes geo-kit + data-kit + gov-kit.
-    // All six tools touch external egress, wallet-only / not PoW-eligible.
+    // Five tools, ordered as the standard situational-brief workup: pin
+    // (place-lookup) -> US jurisdiction (geo-lookup: county and state, which
+    // feeds the alerts step) -> conditions (weather-daily, global) -> hazards
+    // (weather-alerts for active US warnings, earthquakes for recent seismic
+    // activity). geo-lookup and weather-alerts run only for a US place.
+    // All five tools touch external egress, wallet-only / not PoW-eligible.
     toolSlugs: [
-      "geocode",
-      "reverse-geocode",
-      "place-search",
-      "weather-forecast",
+      "place-lookup",
+      "geo-lookup",
+      "weather-daily",
       "weather-alerts",
       "earthquakes",
     ],
     workflow: [
-      "Pin the location with geocode. Free-form input ('1600 Penn Ave', 'Joshua Tree', 'Eiffel Tower') resolves to lat/lon + display name + bounding box from open map data. The bounding box matters: a query like 'New York' resolves to a city-sized box, whereas '1600 Penn Ave' resolves to a building-sized box. The box size tells you immediately whether the next steps will return city-wide or building-specific results.",
-      "Round-trip with reverse-geocode using the lat/lon from step 1. This is the verification step - if you got the wrong place (an obscure 'Springfield' in a different state, a homonym match in another country) the canonical postal address surfaced here won't match what the user expected, and the agent should stop and ask rather than confidently brief on the wrong location. It also returns the structured ISO country code, which gates whether the US-only steps (4 and 5) will work at all.",
-      "Pull nearby POIs with place-search around the lat/lon. Useful pre-arrival categories: gas stations, coffee, ATM, hospital, hardware store, supplies. Each result includes distance + bearing, so the agent can render directional context ('coffee 200m N'). For pure tourism arrivals this surfaces sights; for emergency contexts this surfaces critical infrastructure (hospital, police, fire). For sales/customer-visit contexts, surface restaurants near the customer site for the post-meeting lunch suggestion.",
-      "Layer current conditions with weather-forecast. US-only (api.weather.gov / NWS) - takes the lat/lon and returns a 7-day forecast in 12-hour blocks. If reverse-geocode in step 2 returned a non-US country code, skip this step and surface in the writeup. Pre-arrival you want the next 24-48h: temp range, precip probability, wind, hazards (ice/snow/heat). For multi-day deployments include the full 7-day window so the team can pack accordingly.",
-      "Check for active hazards with weather-alerts using the two-letter US state code from step 2's reverse-geocode result. Active NWS alerts cover everything from severe thunderstorms to red flag (fire-weather) warnings to coastal flood watches. Even if the forecast looks calm, an active alert in the state is critical: 'no rain at this address tomorrow but a red flag warning means an avoidable burn restriction'. Skip with a note if the location isn't in the US.",
-      "Survey recent seismic activity with earthquakes (USGS, global). Filter the result list by proximity to the lat/lon from step 1 - recent activity within ~200km matters; a 5.0 across the planet doesn't. For non-seismic regions (most of the Midwest, most of Europe) the result is reassuringly empty. For Pacific Rim regions / California / Japan / New Zealand / Italy the historical baseline isn't zero, so the framing is 'is recent activity within 200km elevated vs. the regional baseline?' Composes nicely with the structured-scrape pack if the user wants to chase a quake into a deeper bulletin.",
+      "Pin the place with place-lookup. A city, town or region name ('Joshua Tree', 'Lyon, France', 'Springfield, IL') resolves to lat/lon, country, region, timezone and population, best match first. Names repeat around the world, so read the country and region back to the user before going on; add a qualifier after a comma or a country filter when the first match is the wrong one. Street addresses are not resolved: use the nearest town.",
+      "For a US place, add the jurisdiction with geo-lookup using the lat/lon from step 1: county, two-letter state code and census block. The state code is what the alerts step needs. Skip this step for a place outside the United States.",
+      "Layer the conditions with weather-daily at the lat/lon. It covers any location on Earth: daily high and low, precipitation sum and probability, wind and gusts, UV index, sunrise and sunset. Pre-arrival you want the next two or three days; for multi-day deployments ask for up to 16 so the team can pack accordingly.",
+      "Check for active hazards with weather-alerts using the two-letter US state code from step 2. Active NWS alerts cover everything from severe thunderstorms to red flag (fire-weather) warnings to coastal flood watches. Even if the forecast looks calm, an active alert in the state matters. Skip with a note if the place is not in the US.",
+      "Survey recent seismic activity with earthquakes (USGS, global). Filter the result list by proximity to the lat/lon from step 1 - recent activity within ~200km matters; a 5.0 across the planet does not. For non-seismic regions the filtered list is reassuringly empty. For Pacific Rim regions / California / Japan / New Zealand / Italy the baseline is not zero, so the framing is 'is recent activity within 200km elevated against the regional baseline?'",
     ],
     claudePrompt:
-      "Build a location situational brief for: 1600 Pennsylvania Ave NW Washington DC. (1) geocode 'q=1600 Pennsylvania Ave NW Washington DC&limit=1'. Record the lat / lon / display name / bounding-box size. Flag if bounding box is city-sized when the user clearly asked for a specific building. (2) reverse-geocode with the lat/lon from step 1. Confirm the canonical postal address matches what the user asked for. Extract the two-letter US state code (e.g. DC) and the country code (e.g. US) - these gate the next steps. (3) place-search around the lat/lon at a 1km radius. Categorize results into: food (cafes/restaurants), services (gas/ATM/pharmacy), and critical (hospital/police/fire). Top 5 in each category by distance. (4) IF country == US: weather-forecast for lat/lon. Surface next-24h temp range, precip probability, wind, any in-period hazards (NWS sometimes embeds advisory text in the forecast itself). Otherwise note 'weather-forecast US-only, skipped'. (5) IF country == US: weather-alerts for the state code from step 2. List active alerts: event, severity, headline, area, onset/expires. Flag severity in (Severe, Extreme) as a hard 'do not travel' signal. (6) earthquakes for period=week, minMag=2.5. Filter to events within ~200km of the lat/lon from step 1 - use the haversine of (lat,lon) vs each quake's (lat,lon). If the filtered list is non-empty, sort by magnitude desc and report the top 3. If empty for a non-seismic region, report 'baseline quiet'. Final return: {location: {displayName, lat, lon, country, state}, nearby: {food, services, critical}, weather: {next24h, precipProbability, hazards}, activeAlerts: [{event, severity, headline}], seismic: {recentNear, status}, travelRecommendation: 'green'|'yellow'|'red', oneLineBrief}. All six tools touch external APIs (egress) - wallet-only, budget ≤ $0.02 per address.",
+      "Build a location situational brief for: Washington, DC. (1) place-lookup 'q=Washington, DC&count=1'. Record the name, lat / lon, country, region and timezone. Confirm the country and region match what the user meant - flag a homonym. (2) IF country == US: geo-lookup with the lat/lon from step 1. Record the county and the two-letter state code (e.g. DC). Otherwise note 'geo-lookup US-only, skipped'. (3) weather-daily for lat/lon with days=3. Surface each day's high and low, precipitation probability, wind and gusts. (4) IF country == US: weather-alerts for the state code from step 2. List active alerts: event, severity, headline, area, onset/expires. Report any alert with severity Severe or Extreme first. Otherwise note 'weather-alerts US-only, skipped'. (5) earthquakes for period=week, minMag=2.5. Filter to events within ~200km of the lat/lon from step 1 - use the haversine of (lat,lon) against each quake's (lat,lon). If the filtered list is non-empty, sort by magnitude desc and report the top 3. If empty, report 'baseline quiet'. Final return: {location: {name, lat, lon, country, region, timezone, county, state}, weather: {days: [{date, high, low, precipProbability, windMax}]}, activeAlerts: [{event, severity, headline}], seismic: {recentNear, status}, oneLineBrief}. All five tools touch external APIs (egress) - wallet-only.",
   },
 
 
@@ -983,27 +978,27 @@ export const SKILL_PACKS = [
     slug: "trip-planner",
     title: "Multi-stop trip planner",
     tagline:
-      "Plan a multi-stop journey deterministically: geocode each stop, sum the pairwise haversine distances, estimate arrival times by adding driving hours per leg, count business days from today to each arrival, and pull the weather forecast at every US stop. Six tools - three pure-CPU (math + time), three egress (geocoding + weather) - covering the deterministic skeleton of every road-trip / sales-tour / delivery-route planning problem.",
+      "Plan a multi-stop journey deterministically: resolve each stop to coordinates, sum the pairwise haversine distances, estimate arrival times by adding driving hours per leg, count business days from today to each arrival, and pull the daily weather forecast at every stop, anywhere in the world. Six tools - four pure-CPU (math + time), two egress (place lookup + weather) - covering the deterministic skeleton of every road-trip / sales-tour / delivery-route planning problem.",
     useCase:
-      "Trip planning bounces between three or four single-purpose apps: a maps tool for distance, a calendar for business-day windows, a weather site per stop, a spreadsheet to add it all up. Each handoff is a place to copy a wrong number. This pack does the whole skeleton - locate, measure, time-shift, weather-check - as a single round-trip of tool calls so the final itinerary is reproducible and the agent can re-run a single step (e.g. shift the start date by a day) without re-doing the rest. Weather is US-only via NWS; geocoding is global from open map data.",
+      "Trip planning bounces between three or four single-purpose apps: a maps tool for distance, a calendar for business-day windows, a weather site per stop, a spreadsheet to add it all up. Each handoff is a place to copy a wrong number. This pack does the whole skeleton - locate, measure, time-shift, weather-check - as a single round-trip of tool calls so the final itinerary is reproducible and the agent can re-run a single step (e.g. shift the start date by a day) without re-doing the rest. Stops are city or town names, resolved worldwide; the weather forecast is global too.",
     toolSlugs: [
-      "geocode",
+      "place-lookup",
       "geo-distance",
       "add-time",
       "business-days",
       "time-convert",
-      "weather-forecast",
+      "weather-daily",
     ],
     workflow: [
-      "Resolve every stop to coordinates with geocode. One call per stop name: 'New York, NY' → {lat: 40.7128, lng: -74.006}. The geocoder is global and keyless. Watch for ambiguous names ('Portland' returns Maine before Oregon by default unless you pass a countryCodes filter or a more specific query) - surface the resolved display_name back to the user so they can confirm. This is one of two egress tools in the pack - it counts toward the wallet/paid budget; the other four pure-CPU steps run free via proof-of-work.",
-      "Sum the pairwise great-circle distances with geo-distance. One call per consecutive pair of stops: (stop[0], stop[1]) → km/miles, (stop[1], stop[2]) → km/miles, etc. The haversine formula gives the as-the-crow-flies distance on a sphere; real driving distance is typically 1.2–1.4x this (winding roads, no straight-line bridges). The writeup should multiply by 1.3 as a reasonable driving-distance estimate and label it as such - don't pretend haversine is road distance. Total trip distance = sum of legs × ~1.3.",
+      "Resolve every stop to coordinates with place-lookup. One call per stop name: 'New York NY' -> {lat: 40.71, lon: -74.01} with its country, region and timezone. Stops are city or town names (not street addresses). Watch for ambiguous names ('Portland' is in Oregon and in Maine): add the state or country after the name, and surface the resolved name and region back to the user so they can confirm. This is one of two egress tools in the pack - it counts toward the wallet/paid budget; the four pure-CPU steps run free via proof-of-work.",
+      "Sum the pairwise great-circle distances with geo-distance. One call per consecutive pair of stops: (stop[0], stop[1]) -> km/miles, (stop[1], stop[2]) -> km/miles, etc. The haversine formula gives the as-the-crow-flies distance on a sphere; real driving distance is typically 1.2-1.4x this (winding roads, no straight-line bridges). The writeup should multiply by 1.3 as a reasonable driving-distance estimate and label it as such - don't pretend haversine is road distance. Total trip distance = sum of legs x ~1.3.",
       "Estimate arrival timestamps with add-time. Start from the user-supplied start ISO; for each leg, add (legDistanceKm / averageSpeedKph) + a buffer (lunch break, fuel, traffic). Conventional defaults: 80 km/h average highway speed, 30 min buffer per stop. This gives you a per-stop arrival ISO. The compounding here is important: a 30-min buffer per stop on a 6-stop trip is 3 hours of cumulative delay that a naive 'distance / speed' calc would miss. add-time also handles cross-day rollover so multi-day trips don't silently wrap timestamps.",
       "Count business days to each arrival with business-days. From today to the arrival date for each stop. Two purposes: (a) staffing - if a stop arrives on weekend day, the agent flags it for the user ('your Tuesday Chicago stop falls on Memorial Day Monday'); (b) deadline check - if the arrival is fewer business days away than tasks-to-complete-before-arrival, the agent surfaces the conflict. business-days respects weekends by default; passing the `holidays` array adds the US federal calendar.",
-      "Render arrival times in local timezone with time-convert. Driving across time zones (EST → CST → MST → PST is common on a US trip) silently breaks naive itinerary printouts. time-convert turns each arrival ISO into the local clock time at each stop's coordinates. The agent should also flag the timezone-crossing legs explicitly ('you gain an hour entering CST') so the user understands the lived experience of the schedule, not just the UTC math.",
-      "Pull weather at each stop with weather-forecast. NWS-backed, US-only - one call per stop on the arrival date. Returns hourly + daily forecast: temperature, precipitation probability, wind. The writeup should flag any stop with rain probability > 60% (delay risk), high winds > 25 mph (bridge/RV risk), or extreme temperatures (heat advisory or freeze). For non-US stops, skip this step with a one-line note - the pack stays deterministic on the parts that work and is honest about the parts that don't, rather than falling back to a fabricated forecast.",
+      "Render arrival times in local timezone with time-convert. Driving across time zones (EST -> CST -> MST -> PST is common on a US trip) silently breaks naive itinerary printouts. time-convert turns each arrival ISO into the local clock time, using the timezone place-lookup returned for the stop. The agent should also flag the timezone-crossing legs explicitly ('you gain an hour entering CST') so the user understands the lived experience of the schedule, not just the UTC math.",
+      "Pull weather at each stop with weather-daily. It covers any location on Earth - one call per stop, up to 16 days ahead. Returns the daily high and low, precipitation sum and probability, wind and gusts. The writeup should flag any stop with rain probability > 60% (delay risk), high winds (bridge/RV risk), or extreme temperatures. An arrival more than 16 days out has no forecast yet: say so, never fill in a made-up one.",
     ],
     claudePrompt:
-      "Plan this multi-stop trip using Agent402.\n\nStops (in order): New York NY, Pittsburgh PA, Cleveland OH, Chicago IL.\nStart: 2026-07-20T08:00:00Z (8am UTC, ~4am ET local Monday morning).\nAverage driving speed: 80 km/h. Stop buffer: 30 min per stop.\n\n(1) geocode each of the 4 stops. Return display_name + {lat, lng} per stop. Confirm 'Pittsburgh' resolves to PA, not Kansas - flag ambiguous resolutions. (2) geo-distance for each consecutive leg: NY→PIT, PIT→CLE, CLE→CHI. Multiply each leg by 1.3 to estimate driving distance and label as such. Total trip distance = sum. (3) add-time to compute arrival ISO per stop: leg duration = (km_driving / 80) hours + 0.5 hour buffer. Start from 2026-07-20T08:00:00Z; chain the deltas. (4) business-days from today (use 2026-06-22 as 'today' since that's the demo date) to each arrival date. Report business days remaining per stop. Flag any arrival that lands on a Saturday or Sunday. (5) time-convert each arrival ISO to local time: New York/Pittsburgh/Cleveland = America/New_York; Chicago = America/Chicago. Flag the CST entry: 'you gain an hour entering Chicago'. (6) weather-forecast for each stop on its arrival date. Surface high temp, low temp, precipitation %, wind. Flag any stop with precipitation > 60% (delay risk) or wind > 25 mph. Final return: {stops: [{name, coords, arrivalUtc, arrivalLocal, businessDaysUntil, weather: {high, low, precipPct, wind, flags: []}}], legs: [{from, to, km, drivingKmEstimate, hours}], total: {km, drivingKmEstimate, hours, businessDaysUsed}, warnings: [...], oneLineSummary: '4-stop trip, ~1380 driving km, 17 driving hours, all weekday arrivals, 1 weather warning (Cleveland 70% rain Tuesday)'}. Two egress tools (geocode, weather-forecast) - budget ~$0.05. Four pure-CPU tools - free via proof-of-work.",
+      "Plan this multi-stop trip using Agent402.\n\nStops (in order): New York NY, Pittsburgh PA, Cleveland OH, Chicago IL.\nStart: 2026-07-20T08:00:00Z (8am UTC, ~4am ET local Monday morning).\nAverage driving speed: 80 km/h. Stop buffer: 30 min per stop.\n\n(1) place-lookup each of the 4 stops. Return name, region + {lat, lon} + timezone per stop. Confirm 'Pittsburgh' resolves to Pennsylvania, not Kansas - flag ambiguous resolutions. (2) geo-distance for each consecutive leg: NY->PIT, PIT->CLE, CLE->CHI. Multiply each leg by 1.3 to estimate driving distance and label as such. Total trip distance = sum. (3) add-time to compute arrival ISO per stop: leg duration = (km_driving / 80) hours + 0.5 hour buffer. Start from 2026-07-20T08:00:00Z; chain the deltas. (4) business-days from today (use 2026-06-22 as 'today' since that's the demo date) to each arrival date. Report business days remaining per stop. Flag any arrival that lands on a Saturday or Sunday. (5) time-convert each arrival ISO to local time using each stop's timezone from step 1: New York/Pittsburgh/Cleveland = America/New_York; Chicago = America/Chicago. Flag the CST entry: 'you gain an hour entering Chicago'. (6) weather-daily for each stop, reading the row for its arrival date. Surface high temp, low temp, precipitation %, wind. Flag any stop with precipitation > 60% (delay risk). Final return: {stops: [{name, coords, arrivalUtc, arrivalLocal, businessDaysUntil, weather: {high, low, precipPct, wind, flags: []}}], legs: [{from, to, km, drivingKmEstimate, hours}], total: {km, drivingKmEstimate, hours, businessDaysUsed}, warnings: [...], oneLineSummary: '4-stop trip, ~1380 driving km, 17 driving hours, all weekday arrivals, 1 weather warning (Cleveland 70% rain Tuesday)'}. Two egress tools (place-lookup, weather-daily) are wallet-only. Four pure-CPU tools - free via proof-of-work.",
     promptArgs: [
       {
         name: "stops",
@@ -1756,24 +1751,24 @@ export const SKILL_PACKS = [
     slug: "defi-dashboard",
     title: "DeFi dashboard",
     tagline:
-      "DeFi market overview: total TVL, ETH price, Base gas, and global crypto stats in one call.",
+      "DeFi market overview: DeFi market cap and dominance, ETH price, Base gas, and global crypto stats in one call.",
     useCase:
-      "Quick DeFi health check - TVL trends, ETH price context, gas costs, and market-wide metrics.",
+      "Quick DeFi health check - DeFi market cap, its share of the whole market and 24h volume, ETH price context, gas costs, and market-wide metrics.",
     promptArgs: [],
     toolSlugs: [
-      "defi-tvl",
+      "global-defi",
       "crypto-price",
       "gas-snapshot",
       "crypto-global",
     ],
     workflow: [
-      "Pull total DeFi TVL across all chains.",
+      "Pull the DeFi market cap, its dominance of the whole market and 24h DeFi volume.",
       "Get the live ETH price as the reference asset for DeFi.",
       "Check Base gas for current transaction costs.",
       "Pull global crypto market stats for total cap and dominance context.",
     ],
     claudePrompt:
-      "Give me a DeFi market overview using Agent402's defi-dashboard skill pack. Get (1) total DeFi TVL, (2) ETH price, (3) Base gas tiers, (4) global crypto stats. Summarize the health of DeFi right now.",
+      "Give me a DeFi market overview using Agent402's defi-dashboard skill pack. Get (1) DeFi market cap, dominance and 24h volume, (2) ETH price, (3) Base gas tiers, (4) global crypto stats. Summarize the health of DeFi right now.",
   },
 
   {

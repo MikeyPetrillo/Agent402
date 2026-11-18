@@ -18,7 +18,7 @@ export const MPP_FLAGSHIP = [
   { slug: "crypto-price", group: "Crypto and markets", why: "Spot price, 24h change, volume and market cap for several coins in one call." },
   { slug: "sol-price", group: "Crypto and markets", why: "USD price for up to 50 Solana token mints, with liquidity and the block read." },
   { slug: "perp-funding", group: "Crypto and markets", why: "Current perpetual funding rate, annualized, plus recent hourly prints." },
-  { slug: "defi-yields", group: "Crypto and markets", why: "DeFi yield pools filtered by chain, project, token and TVL, sorted by APY or TVL." },
+  { slug: "lending-rates", group: "Crypto and markets", why: "Aave v3 and Compound v3 supply and borrow rates read from the contracts, with the gap between the two per asset." },
   { slug: "kalshi-markets", group: "Crypto and markets", why: "Open prediction markets with yes/no prices, volume and resting size at the best price." },
   { slug: "fx-rate", group: "Crypto and markets", why: "Convert an amount between two currencies at the reference rate, with its date." },
   { slug: "treasury-yield-curve", group: "Macro and filings", why: "The latest US Treasury yield curve, eleven tenors in percent." },

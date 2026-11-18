@@ -200,6 +200,51 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
   }
 }
 
+// A buyer that shares an address with a caller holding the slot and every
+// queued place under its own credential is a newcomer: it takes that caller's
+// newest queued place. An unproven, unsigned request shares no holding key.
+{
+  const { measureAudio, MEASURE_QUEUE_PER_SLOT, __measurePoolForTest } = await import("../src/tools/media-kit.js");
+  const { admissionCallerOf } = await import("../src/dispatch-caller.js");
+  const hadSlots = process.env.AUDIO_DECODE_SLOTS;
+  process.env.AUDIO_DECODE_SLOTS = "1";
+  const held = [];
+  __setExecFileForTest((bin, args, opts, cb) => { held.push(cb); });
+  const done = (cb) => cb(null, "out_time_us=1000000\n");
+  const mp3 = Buffer.concat([Buffer.from("ID3\x04\0\0\0\0\0\0", "latin1"), Buffer.alloc(64)]);
+  const keep = setInterval(() => {}, 1_000);
+  const tick = () => new Promise((r) => setTimeout(r, 30));
+  const X = "198.51.100.140";
+  const paid = (n, ip = X) => admissionCallerOf({ ip, headers: {}, creditsKeyId: `m${n}` });
+  const anon = (edge) => admissionCallerOf({ ip: edge, headers: {}, cdnUnproven: true });
+  const fill = async (who) => {
+    const settled = new Map();
+    const runs = [];
+    for (let i = 0; i <= MEASURE_QUEUE_PER_SLOT; i++) runs.push(measureAudio(mp3, { format: "mp3", who: who() }).then((v) => { settled.set(i, v); return v; }));
+    await tick();
+    return { settled, runs };
+  };
+  const drain = async (all) => { __setExecFileForTest((bin, args, opts, cb) => setImmediate(() => done(cb))); while (held.length) done(held.shift()); await Promise.all(all); __setExecFileForTest((bin, args, opts, cb) => { held.push(cb); }); };
+  try {
+    const a = await fill(() => paid(1));
+    let got = null;
+    const b = measureAudio(mp3, { format: "mp3", who: paid(2) }).then((v) => { got = v; return v; });
+    await tick();
+    ok(got === null && a.settled.get(MEASURE_QUEUE_PER_SLOT)?.busy === true && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, `a buyer sharing an address with a caller that holds every place is queued in that caller's newest place (${JSON.stringify(got)})`);
+    await drain([...a.runs, b]);
+    const u = await fill(() => anon("203.0.113.80"));
+    let got2 = null;
+    const v = measureAudio(mp3, { format: "mp3", who: anon("203.0.113.81") }).then((x) => { got2 = x; return x; });
+    await tick();
+    ok(got2 === null && u.settled.get(MEASURE_QUEUE_PER_SLOT)?.busy === true, `an unproven request is not refused because another holds every place (${JSON.stringify(got2)})`);
+    await drain([...u.runs, v]);
+    ok(__measurePoolForTest().active === 0 && __measurePoolForTest().waiting === 0 && __measurePoolForTest().callers === 0, `the pool drains (${JSON.stringify(__measurePoolForTest())})`);
+  } finally {
+    clearInterval(keep);
+    if (hadSlots === undefined) delete process.env.AUDIO_DECODE_SLOTS; else process.env.AUDIO_DECODE_SLOTS = hadSlots;
+  }
+}
+
 // The transcription routes hold their decode place for the request's caller:
 // the identity payer (never a typed x-payment, which nothing verified in
 // FREE_MODE), else the address with an IPv6 one folded to its /64; a step run

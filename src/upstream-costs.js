@@ -17,7 +17,7 @@
 //     sttPerMinute: { model: usdPerMinute },
 //     media: { model: { worstCaseUsd, listedMaxUsd } },
 //     meter: { markup },
-//     vendor: { exa: { search, instant, answer, content }, x: { postRead, userRead },
+//     vendor: { x: { postRead, userRead },
 //               decisions: { luna, decisionOne, gemini, jev, maxShare }, luna, decisionOne, gemini, jev: USD per 1M input tokens; maxShare: largest share of the price a call may cost
 //               cdp: { sqlQuery },                                    USD per query sent to the SQL query service
 //               direct: { minSaving? } } }                            optional: the price-guard margin, a fraction from 0
@@ -47,7 +47,6 @@ let dropped = [];
 // so both count as gaps.
 const REQUIRED = [
   ["fees", "webSearchPerUse"], ["fees", "groundedPerCall"], ["fees", "rerankPerUnit"], ["meter", "markup"],
-  ["vendor", "exa", "search"], ["vendor", "exa", "instant"], ["vendor", "exa", "lite"], ["vendor", "exa", "answer"], ["vendor", "exa", "content"],
   ["vendor", "x", "postRead"], ["vendor", "x", "userRead"], ["vendor", "decisions", "luna"], ["vendor", "decisions", "maxShare"],
   ["vendor", "decisions", "decisionOne"], ["vendor", "decisions", "gemini"], ["vendor", "decisions", "jev"],
   // The direct image models (USD per 1M tokens: prompt for text input,

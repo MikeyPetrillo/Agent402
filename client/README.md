@@ -255,8 +255,8 @@ minutes, longer than many HTTP clients wait. Their `/api/pricing` row carries
 `202` with a job link at once, and the SDK polls `GET /api/jobs/{id}` (free),
 waiting `Retry-After` seconds between polls, until the job has succeeded or
 failed (it reads the job's `state` and falls back to its `status`, working,
-completed or failed, on a server that sends only that). Payment settles only on
-the delivered answer, so a failed job is a failed call; the payment it carried
+completed or failed, on a server that sends only that). The x402 payment settles
+only on the delivered answer, so a failed job is a failed call; the payment it carried
 stays held against the caps (see Spending caps), since only the seller knows
 it was not redeemed.
 
@@ -405,7 +405,12 @@ more than a day (`MAX_VALIDITY_SECONDS`) is refused before anything is signed,
 and a payload signed for longer is refused before it is sent, so no hold
 outlives a day after the send (seven days and an hour for a batched payment). Pass your `x402Client` so the client sees exactly which
 payments were signed; through a pre-wrapped `fetch` alone it cannot tell, so any
-failed paid call is held. A paid HTTP-success response that later fails byte,
+failed paid call is held. A refused payment's body names a `retry` verb: `watch-transaction`
+or `check-wallet` (`reason: "settlement-unconfirmed"`) means the settlement is not confirmed and the
+transfer may still land, so do not pay for that call again before the `authorizationValidBefore` time
+when the body names one (the hold covers that payment until then); `transactions` lists any transaction
+to watch and `refundStatusUrl` is a free refund lookup when the body has one. `same-payment` means send
+the same payment again, and `fresh-authorization` means sign a new one. A paid HTTP-success response that later fails byte,
 JSON, or output validation remains settled spend. Free proof-of-work calls are
 never counted. Omit a cap (or leave it `null`) for no limit; with none set,
 behavior is unchanged.

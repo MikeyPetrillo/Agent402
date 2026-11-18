@@ -17,8 +17,8 @@ import { createHash } from "node:crypto";
 const PINS = {
   // The refund sentences /terms prints live in src/refund-terms.js (the
   // conformance document reads them too), so that file is hashed with it.
-  "src/terms.js": { date: "2026-11-17", sha: "8aea4574d7e9ab7a", with: ["src/refund-terms.js"] },
-  "src/privacy.js": { date: "2026-11-17", sha: "0d3ff6a7d69851fd" },
+  "src/terms.js": { date: "2026-11-17", sha: "1852777d5f57f217", with: ["src/refund-terms.js"] },
+  "src/privacy.js": { date: "2026-11-17", sha: "b9fb037f778206b4" },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);

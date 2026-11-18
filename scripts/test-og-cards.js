@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { JSDOM } from "jsdom";
 import { ogSectionFor, ogSectionIds, sectionCardSvg } from "../src/og-cards.js";
 import { getFreePort } from "./lib/free-port.js";
+import { createHash } from "node:crypto";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0; let proc;
@@ -52,7 +53,7 @@ ok(sectionCardSvg("tools", ctx).includes("600 tools"), "the tool count comes fro
 // ---- booted: the shell serves the derived card, the route renders it -------
 const PORT = await getFreePort();
 const BASE = `http://127.0.0.1:${PORT}`;
-proc = spawn("node", ["src/server.js"], { cwd: ROOT, env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" }, stdio: ["ignore", "ignore", "inherit"] });
+proc = spawn("node", ["src/server.js"], { cwd: ROOT, env: { ...process.env, FREE_MODE: "true", STRIPE_SECRET_KEY: "", CREDITS_SALES: "", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" }, stdio: ["ignore", "ignore", "inherit"] });
 let up = false;
 for (let i = 0; i < 120 && !up; i++) { await new Promise((r) => setTimeout(r, 500)); try { up = (await fetch(`${BASE}/health`)).ok; } catch {} }
 if (!up) fail("server did not boot");
@@ -63,6 +64,13 @@ ok(/\/og\/chain-base\.png/.test(await og("/base")), "/base serves the chain card
 ok(/\/og\/reports\.png/.test(await og("/reports/sample/dossier")), "a sample report page serves the reports card");
 ok(/\/tools\/attest\/card\.png/.test(await og("/tools/attest")), "a tool page keeps its own card (explicit ogImage wins)");
 ok(/\/card\.png\?v=/.test(await og("/company")), "a page with no section keeps the homepage card");
+{ // The home card follows the card switch, and its URL version carries a hash of the card itself.
+  const cardSvgBody = await (await fetch(`${BASE}/card.svg`)).text();
+  ok(!/by card/.test(cardSvgBody) && !/MPP · card/.test(cardSvgBody) && /USDC over x402 \/ MPP\./.test(cardSvgBody), "no card sale on this boot: the social card offers no card");
+  const v = (/\/card\.png\?v=([^"&]+)/.exec(await og("/company")) || [])[1] || "";
+  const sha = createHash("sha256").update(cardSvgBody).digest("hex").slice(0, 8);
+  ok(new RegExp(`^\\d+\\.${sha}$`).test(v), `the card URL version is the tool count and a hash of the card (${v}, card ${sha})`);
+}
 ok(/\/og\/agentic-finance\.png/.test(await og("/agentic-finance")), "the pre-existing explicit card is untouched");
 const svgRes = await fetch(`${BASE}/og/markets.svg`);
 ok(svgRes.status === 200 && /svg\+xml/.test(svgRes.headers.get("content-type")), "/og/markets.svg answers 200 image/svg+xml");

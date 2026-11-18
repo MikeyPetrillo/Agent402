@@ -210,7 +210,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The OpenRouter balance behind the /v1 gateway is below its configured low-water mark (OPENROUTER_LOW_CREDITS_USD) OR the production key's own monthly limit is nearly used (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is cancelled, so buyers are NOT charged but every /v1 sale is lost until it is topped up. Auto top-up is on for this account, so a low balance means a refill did not land (declined card, or auto top-up switched off): check https://openrouter.ai/settings/credits. Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402)."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The OpenRouter balance behind the /v1 gateway is below its configured low-water mark (OPENROUTER_LOW_CREDITS_USD) OR the production key's own monthly limit is nearly used (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is canceled, so x402 buyers are NOT charged but every /v1 sale is lost until it is topped up. Auto top-up is on for this account, so a low balance means a refill did not land (declined card, or auto top-up switched off): check https://openrouter.ai/settings/credits. Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402)."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -445,7 +445,7 @@ jobs:
 
       # x402 spending-wallet check - same pattern as gateway credits above:
       # when the upstream buyer wallet (src/upstream-buyer-status.js) runs dry
-      # the paths that spend from it refuse quietly (buyers never charged), so
+      # the paths that spend from it refuse quietly (x402 buyers not charged), so
       # alarm on "low" first.
       # "unknown"/"unconfigured" never page.
       - name: Upstream buyer wallet check (alarm on low x402 spending balance)
@@ -458,7 +458,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 upstream spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD). When it empties, route-execute external buys and seller-payability refuse (buyers are never charged, but those paths go dark). attest signs from the same wallet but pays Base gas in ETH, which this alarm reads nothing about. Top up: send USDC on Base to the upstream buyer address."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 upstream spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD). When it empties, route-execute external buys and seller-payability refuse (x402 buyers are not charged, but those paths go dark). attest signs from the same wallet but pays Base gas in ETH, which this alarm reads nothing about. Top up: send USDC on Base to the upstream buyer address."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -500,7 +500,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # A pay-as-you-go upstream reached its hard daily ceiling, so calls
-          # to it are being refused (uncharged) until 00:00 UTC.
+          # to it are being refused (not charged on x402) until 00:00 UTC.
           BODY=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
           STATUS=$(echo "$BODY" | jq -r '.upstreamHardCaps.status // "unknown"' 2>/dev/null || echo unknown)
           TITLE="Upstream hard ceiling REACHED"
@@ -508,32 +508,10 @@ jobs:
           if [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.upstreamHardCaps\` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (uncharged) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable."
+                --body "\`/api/gateway-status.upstreamHardCaps\` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (not charged on x402) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable."
             fi
           elif [ -n "$EXISTING" ] && [ "$STATUS" = "ok" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "upstreamHardCaps is ok; closing." || true
-          fi
-
-      - name: Exa prepaid allowance low
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Exa publishes NO balance endpoint (42 endpoints in their public
-          # OpenAPI, none for credits), so this alarms on OUR OWN cumulative
-          # spend against EXA_CREDITS_USD. The count is in memory and resets on
-          # deploy, so it under-reports - which is why the threshold is a
-          # fraction remaining and not "near zero".
-          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.exaAllowance.status // "unknown"' 2>/dev/null || echo unknown)
-          TITLE="Exa prepaid allowance LOW"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
-          if [ "$STATUS" = "low" ]; then
-            if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.exaAllowance\` reports **low**: cumulative spend on that upstream has passed the configured share of its funded total. Top up in the upstream's console and raise \`EXA_CREDITS_USD\` on Railway to the new funded total. Note the counter is in memory and resets on deploy, so real remaining credit is at or below what is reported."
-            fi
-          elif [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "exaAllowance is ${STATUS}; closing." || true
           fi
 
       # X data daily spend (src/tools/x-data-kit.js): over = past the alarm
@@ -552,7 +530,7 @@ jobs:
           if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.xDataSpend\` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed \`X_DATA_DAILY_MAX_USD\` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past \`X_DATA_DAILY_HARD_MAX_USD\` was refused 503 (uncharged) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under \`X_DATA_DAILY_MAX_USD\`, otherwise the next UTC day."
+                --body "\`/api/gateway-status.xDataSpend\` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed \`X_DATA_DAILY_MAX_USD\` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past \`X_DATA_DAILY_HARD_MAX_USD\` was refused 503 (not charged on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under \`X_DATA_DAILY_MAX_USD\`, otherwise the next UTC day."
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "xDataSpend is ${STATUS}; closing." || true
@@ -622,7 +600,7 @@ jobs:
           if [ "$STATUS" = "alert" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports onchainSqlBusy.status=alert: one of our top outside payers by paid spend over the last week got the busy refusal of the onchain query tool (the server-wide limit on queries in flight; never charged, told to retry in a few seconds) inside TOP_BUYER_FAIL_HOLD_MS. The payer's short id, its spend rank and the refusal times are on the operator view of /api/gateway-status (onchainSqlBusy, operator token); the daily busy counts by caller are on /__operator/tool-failures.json (onchainSqlQueries, operator token). Read them and decide whether the in-flight limit should rise. Nothing is refused for this alarm. Auto-closes when the word reads ok." || true
+                --body "/api/gateway-status reports onchainSqlBusy.status=alert: one of our top outside payers by paid spend over the last week got the busy refusal of the onchain query tool (the server-wide limit on queries in flight; refused before settlement, told to retry in a few seconds) inside TOP_BUYER_FAIL_HOLD_MS. The payer's short id, its spend rank and the refusal times are on the operator view of /api/gateway-status (onchainSqlBusy, operator token); the daily busy counts by caller are on /__operator/tool-failures.json (onchainSqlQueries, operator token). Read them and decide whether the in-flight limit should rise. Nothing is refused for this alarm. Auto-closes when the word reads ok." || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "onchainSqlBusy is ok; closing." || true
@@ -1029,25 +1007,28 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "openMeteo is ${STATUS}; closing." || true
           fi
 
-      # Exa daily spend (src/tools/exa-kit.js): the same words as xDataSpend.
-      # Apart from the prepaid allowance step above, which reads exaAllowance.
-      - name: Exa daily spend over its ceiling
+      # The MPP reconciler's own run word (mppReconcile.run,
+      # src/mpp-reconcile.js): stale pages (no run has finished inside its
+      # gap, so the mismatch words read unknown and page nothing); ok and
+      # off clear; unknown (no run yet) and absent do neither.
+      # The status Worker runs the same check under the same title.
+      - name: MPP reconciliation run check (alarm when the daily reconciliation stops running)
         if: always()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.exaSpend.status // "unknown"' 2>/dev/null || echo unknown)
-          echo "exa spend: $STATUS"
-          TITLE="Exa daily spend OVER its ceiling"
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.mppReconcile.run // "unknown"' 2>/dev/null || echo unknown)
+          echo "mppReconcile.run: $STATUS"
+          TITLE="MPP daily reconciliation is NOT RUNNING"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
-          if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
+          if [ "$STATUS" = "stale" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.exaSpend\` reports **over** or **capped**. On **over** the day's booked spend on the Exa tools passed \`EXA_DAILY_MAX_USD\` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past \`EXA_DAILY_HARD_MAX_USD\` was refused 503 (uncharged) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; \`exaAllowance\` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under \`EXA_DAILY_MAX_USD\`, otherwise the next UTC day."
+                --body "/api/gateway-status reports mppReconcile.run=stale: the daily MPP reconciliation (src/mpp-reconcile.js) has not finished a run inside its allowed gap, so MPP sales are not being checked against the chain and the mismatch alarms read unknown. Read /__operator/mpp-reconcile.json (operator token) and the [mpp-reconcile] lines in the server log on Railway. A run that failed is tried again on the hourly check and can be started from the operator endpoint. A run that never ended holds every later one, an operator's included (it joins the run in flight): restart the service. Auto-closes when the word reads ok or off." || true
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "exaSpend is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "mppReconcile.run is ${STATUS}; closing." || true
           fi
 
       # The router's per-minute holds for outside sellers
@@ -1084,7 +1065,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD), or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD), or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (x402 buyers are not charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -1105,7 +1086,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Solana x402 spending wallet (SOLANA_UPSTREAM_BUYER_KEY) behind the SOR's Solana external routing is below the low-water mark (SOLANA_UPSTREAM_BUYER_LOW_USD). When it empties, Solana external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Solana to the SVM spending wallet address."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Solana x402 spending wallet (SOLANA_UPSTREAM_BUYER_KEY) behind the SOR's Solana external routing is below the low-water mark (SOLANA_UPSTREAM_BUYER_LOW_USD). When it empties, Solana external routing fails 502 (x402 buyers are not charged, but the path goes dark). Top up: send USDC on Solana to the SVM spending wallet address."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -1132,7 +1113,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD_<CHAIN>, else UPSTREAM_BUYER_LOW_USD) on: $LOW. External routing on that chain refuses 503 while it reads low (buyers are never charged). Top up: send that chain's stablecoin to the spending wallet address on that chain."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD_<CHAIN>, else UPSTREAM_BUYER_LOW_USD) on: $LOW. External routing on that chain refuses 503 while it reads low (x402 buyers are not charged). Top up: send that chain's stablecoin to the spending wallet address on that chain."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ) on: $LOW."
             fi
@@ -1169,7 +1150,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Tempo spending wallet (TEMPO_UPSTREAM_BUYER_KEY) behind the SOR's MPP external routing is below the low-water mark (TEMPO_UPSTREAM_BUYER_LOW_USD) in USDC.e on Tempo. When it empties, MPP external routing fails (buyers are never charged, but the path goes dark). Top up: send USDC on Tempo (0x20C0...8b50) to the Tempo spending wallet address."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Tempo spending wallet (TEMPO_UPSTREAM_BUYER_KEY) behind the SOR's MPP external routing is below the low-water mark (TEMPO_UPSTREAM_BUYER_LOW_USD) in USDC.e on Tempo. When it empties, MPP external routing fails and the path goes dark (a pull buyer is not charged on Tempo; a push transfer sent before the call is recorded as owed and repaid). Top up: send USDC on Tempo (0x20C0...8b50) to the Tempo spending wallet address."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -1258,7 +1239,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The self-hosted Stellar facilitator's signing account is below its low-water mark (FACILITATOR_LOW_BALANCE_XLM on the agent402-facilitator service). That account pays the transaction fee on every Stellar settlement, so when it empties, Stellar settlements stop landing - buyers are never charged, but the rail goes dark and the paid canary reports it as a rail failure rather than as an empty wallet. Top up: send XLM to the address on the facilitator's GET /health (signerAddress). Auto-closes when the balance recovers."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The self-hosted Stellar facilitator's signing account is below its low-water mark (FACILITATOR_LOW_BALANCE_XLM on the agent402-facilitator service). That account pays the transaction fee on every Stellar settlement, so when it empties, Stellar settlements stop landing - x402 buyers are not charged, but the rail goes dark and the paid canary reports it as a rail failure rather than as an empty wallet. Top up: send XLM to the address on the facilitator's GET /health (signerAddress). Auto-closes when the balance recovers."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -1468,8 +1449,8 @@ jobs:
               ;;
           esac
 
-      # EVM settlements that failed naming a transaction or an authorization
-      # (src/late-settlements.js): one word on /api/gateway-status. A landed,
+      # Settlements that failed naming a transaction or an authorization, on an
+      # EVM chain, Solana or Algorand (src/late-settlements.js): one word on /api/gateway-status. A landed,
       # unserved one becomes an owed debt (refundsOwed covers it).
       # unresolved / full page; ok and near_capacity close; unknown does neither.
       - name: Late settlements check (alarm when one needs an operator)
@@ -1483,7 +1464,7 @@ jobs:
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports lateSettlements.status=$WORD. unresolved: an EVM settlement that failed naming a transaction or an authorization could not be proven landed or absent within a day (or the reads kept failing) and is kept, never dropped; or a booking sits in the journal outside the book; or a booking could not be recorded anywhere in the last day. Unresolved entries are read on chain again every few hours and close themselves once the chain answers. Read them on /__operator/refunds.json (unconfirmedSettlements) and look each transaction up on the chain's explorer, then clear each one with POST /__operator/late-settlements: action resolve, the entry key, an outcome (booked_owed writes the refund debt, paid needs the refund transaction, dismissed when nothing moved to us) and a note saying what was checked. An unrecorded booking (the server log names it) is cleared with action acknowledge_unrecorded and a note. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok or near_capacity." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports lateSettlements.status=$WORD. unresolved: a failed settlement that named a transaction or an authorization, on an EVM chain, Solana or Algorand, could not be proven landed or absent within a day (or the reads kept failing) and is kept, never dropped; or a booking sits in the journal outside the book; or a booking could not be recorded anywhere in the last day. Unresolved entries are read on chain again every few hours and close themselves once the chain answers. Read them on /__operator/refunds.json (unconfirmedSettlements) and look each transaction up on the chain's explorer, then clear each one with POST /__operator/late-settlements: action resolve, the entry key, an outcome (booked_owed writes the refund debt, paid needs the refund transaction, dismissed when nothing moved to us) and a note saying what was checked. An unrecorded booking (the server log names it) is cleared with action acknowledge_unrecorded and a note. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok or near_capacity." >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
               fi
@@ -2024,7 +2005,7 @@ jobs:
           esac
 
       # Private upstream-cost table (src/upstream-costs.js). Without it the
-      # metered tier, embeddings, images, Exa and X reads refuse and the flat
+      # metered tier, embeddings, images and X reads refuse and the flat
       # tiers price at their caps. "partial" means it loaded without a key some
       # path reads (that path refuses) or with a model row that did not parse.
       # One word only, never a value. Two readings 30 s apart, because a

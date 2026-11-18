@@ -46,7 +46,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   that page covered are read one at a time, then full pages resume.
 - **Store deadlines:** `src/loop-deadline.js` (`withLoopTimeout`, `withLoopDeadline`, `loopDeadline`)
   bounds every Redis wait (shared limits, the hang-up ticket, the spend reserve, journals,
-  idempotency, the first-call allowance, the shared Databento and Nominatim reads, the cache, the
+  idempotency, the first-call allowance, the shared Databento read, the cache, the
   database ping, lease release) in loop time: a deadline re-arms once for time the loop was held
   and expires only after a poll phase, so an answer that landed during boot work is read, not
   booked as a store that did not answer (`scripts/test-loop-deadline.js`, `test-loop-deadline-sites.js`).
@@ -122,7 +122,12 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   mppx with no subscription method; `buildMppSubscriptionsEngine` in `src/mpp-subscriptions.js`;
   `subscriptionRenewals` then reads unknown), `openMeteo` refused (ok, off: a keyed Open-Meteo request was
   refused, by 401, 403 or a 400 whose reason names the key or a plan, in the last 15 minutes;
-  `openMeteoStatus` in `src/tools/weather-kit.js`; buyers got an uncharged 503). `coverageReads` pages like `sharedLimits`, on its
+  `openMeteoStatus` in `src/tools/weather-kit.js`; buyers got an uncharged 503), `mppReconcile.run`
+  stale (the daily MPP reconciliation has not finished a run for 36 hours, a run that throws not
+  counting, so `mppReconcile.status` reads unknown and its mismatch pagers are blind; ok and off
+  close, off being `MPP_RECONCILE=off`; unknown, before a first run and from boot until the first
+  check has finished, does neither; a run that never ends holds every later one, so the remedy is
+  a restart; one issue, "MPP daily reconciliation is NOT RUNNING"). `coverageReads` pages like `sharedLimits`, on its
   second word only: `alert: sustained` (paid calls started or refused without a balance read made
   for them in 3 or more separate minutes of the last 10, for 3 or more accounts;
   `coverageReadsVerdict` in `src/inflight-cover.js`). `status` ok and off close; `status: degraded`
@@ -276,13 +281,6 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `unknown` when the stored day cannot be read. One store read per status answer, reused 30 s.
   An alarm only: no call is refused or capped for it. Paged under "X search author reads OVER the
   daily alert", closed on `ok` (`scripts/test-x-search-stats.js`, `scripts/test-status-word-pagers.js`).
-- **Exa ceilings:** the same two ceilings and words, read the same way (`src/daily-ceilings.js`): `EXA_DAILY_MAX_USD`
-  (default 1; `0` refuses every call) is the alarm and `exaSpend` reads `over` past it while the
-  Exa tools keep serving; `EXA_DAILY_HARD_MAX_USD` (default 5 times the alarm ceiling; never
-  under it) refuses 503 and reads `capped`. Paged under "Exa daily spend OVER its ceiling",
-  closed on `ok` or `off` (`scripts/test-exa-ceilings.js`). `exaAllowance` and `EXA_CREDITS_USD`
-  are separate and unchanged: with the prepaid balance spent the upstream refuses and the tools
-  answer 503 whatever the ceilings say.
 - **Router per-minute spend word:** `routerSpendWindow` carries the same words (`over` serves,
   `capped` refuses, `off` is the switch) for `SOR_SPEND_CAP_ATOMIC` and
   `SOR_SPEND_HARD_CAP_ATOMIC`, each held an hour; paged under "Router spend per minute OVER its

@@ -19,8 +19,9 @@ t node scripts/test-paid-canary.js
 t node scripts/test-derivatives-kit.js
 # solana-intel kit (offline)
 t node scripts/test-solana-intel-kit.js
-# defi kit (offline)
-t node scripts/test-defi-kit.js
+# computed crypto answers and the lending-rate contract reads (offline, stubbed)
+t node scripts/test-crypto-screens-kit.js
+t node scripts/test-lending-rates-kit.js
 # market tick: stubbed sources, the per-symbol cache, partial marking, and the MARKET_TICK switch (offline)
 t node scripts/test-market-tick.js
 t node scripts/test-cve-kit.js

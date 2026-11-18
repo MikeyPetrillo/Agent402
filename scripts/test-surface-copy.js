@@ -80,6 +80,28 @@ ok(hi === si, "hosted and stdio initialize instructions are byte-identical");
   ok(hd === sd && /decide\.plan/.test(hd) && /decide\.execute/.test(hd), "with the decide tools listed, both instruction copies name decide.plan and decide.execute, identically");
   ok(!/decide\.plan/.test(hi), "without them, the instructions never name a tool the connector does not list");
 }
+// The published package describes the hosted service: its hosted line is the
+// one the hosted connector renders for the same wires, and the package renders
+// it with the wires the hosted service takes in the call (both).
+{
+  const { HOSTED_CONNECTOR_WIRES } = await import("../mcp/output-schemas.js");
+  const hostedLine = (t) => t.split("\n").find((l) => l.startsWith("Hosted connector")) || "";
+  for (const x402 of [false, true]) for (const mpp of [false, true]) {
+    ok(hostedLine(hostedInstructions("https://example.test", { x402, mpp })) === hostedLine(stdioInstructions("https://example.test", { x402, mpp })),
+      `the stdio package's hosted line matches the hosted connector's with x402 ${x402 ? "on" : "off"} and MPP ${mpp ? "on" : "off"}`);
+  }
+  ok(HOSTED_CONNECTOR_WIRES.x402 === true && HOSTED_CONNECTOR_WIRES.mpp === true, "the package names both wires for the hosted service");
+  const published = hostedLine(stdioInstructions("https://example.test", HOSTED_CONNECTOR_WIRES));
+  ok(published.includes("other tools paid in the call over x402 or MPP from a wallet)") && !/wallet on the npm package/.test(published), `the published hosted line names both wires (${published.slice(0, 100)})`);
+  ok(/const INIT_INSTRUCTIONS = mcpInitializeInstructions\(BASE, hostedConnectorWiresFor\(BASE\)\);/.test(read("mcp/index.js")), "the stdio server renders its instructions with the wires of the server it points at");
+  const { hostedConnectorWiresFor, HOSTED_SERVICE_URL } = await import("../mcp/output-schemas.js");
+  ok(HOSTED_SERVICE_URL === "https://agent402.tools" && hostedConnectorWiresFor("https://agent402.tools") === HOSTED_CONNECTOR_WIRES && hostedConnectorWiresFor("https://agent402.tools/") === HOSTED_CONNECTOR_WIRES,
+    "the hosted service's URL gets both wires");
+  for (const self of ["https://my-agent402.example", "http://127.0.0.1:3000", "https://agent402.tools.evil.example", ""]) {
+    const line = hostedLine(stdioInstructions(self || "https://x.example", hostedConnectorWiresFor(self)));
+    ok(!/x402|MPP/.test(line) && /others need a wallet on the npm package/.test(line), `a self-host URL's hosted line names no wire (${self || "empty"}: ${line.slice(0, 90)})`);
+  }
+}
 ok(/positioning: `\$\{leadSentence\(\{ mpp: mppMethodsSummary\(\)\.enabled \}\)\} It is the applied layer of Agentic Finance/.test(read("src/mcp-http.js")), "hosted describe_server carries a positioning field that leads with the lead sentence and names Agentic Finance");
 ok((read("mcp/index.js").match(/positioning: `[^`]*Agentic Finance[^`]*MPP/g) || []).length >= 2, "stdio describe payloads (both aliases) carry Agentic Finance + MPP positioning");
 
@@ -90,7 +112,13 @@ ok((read("mcp/index.js").match(/positioning: `[^`]*Agentic Finance[^`]*MPP/g) ||
   const home = read("src/ledger-home.js");
   ok(/const title = `Agent402: /.test(home) && !/const title = `[^`]*AIFI/.test(home), "homepage <title> leads with the brand word Agent402 (the entity Google must tie to this domain) and carries no AIFI acronym");
   ok(!/<h1[^>]*>[^<]*Agentic Finance/.test(home), "homepage hero H1 is not the category name");
-  ok(/title: "Agent402: /.test(read("src/pages.js")), "openapi.json title leads with the brand word Agent402");
+  ok(/title: "Agent402\.tools",/.test(read("src/pages.js")), "openapi.json title is the plain product name Agent402.tools");
+  ok(/Agent402\.tools: 500\+ pay-per-call tools for AI agents over x402 \+ MPP\./.test(read("src/pages.js")), "openapi.json description keeps the tagline");
+  {
+    const line = read("src/pages.js").split("\n").find((l) => l.includes("Agent402.tools: 500+ pay-per-call tools")) || "";
+    const n = (line.match(/500\+/g) || []).length;
+    ok(n === 1, `openapi.json description says "500+" once (${n})`);
+  }
   ok(!/AIFI/.test(HOSTED_DESC) && HOSTED_DESC.startsWith("Agent402"), "MCP serverInfo.description leads with Agent402, no acronym");
   for (const d of pkgDirs) ok(!/AIFI/.test(JSON.parse(read(`${d}/package.json`)).description), `${d} description carries no AIFI acronym`);
   ok(!/AIFI/.test(serverJson.description), "mcp/server.json description carries no AIFI acronym");

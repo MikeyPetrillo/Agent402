@@ -54,7 +54,7 @@
 import Stripe from "stripe";
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, unlinkSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
 import { sendReportReadyEmail } from "./email.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady, leased } from "./state-db.js";
 import { READBACK_FIRST_MS, READBACK_INTERVAL_MS, READBACK_MAX_PER_PASS, READBACK_CALL_TIMEOUT_MS, READBACK_LEASE_TTL_MS } from "./card-refund-readback.js";
@@ -279,8 +279,10 @@ const MEM_CACHE_MAX = 500;
 const SESSION_RE = /^cs_[A-Za-z0-9_]+$/;
 
 const DATA_ROOT = () => (existsSync("/data") ? "/data" : "/tmp");
-const DEFAULT_DIR = () => join(DATA_ROOT(), "human-checkout");
-const LEGACY_FILE = () => join(DATA_ROOT(), "human-checkout.json");
+// HUMAN_CHECKOUT_DIR points the record files elsewhere (a test server keeps its
+// own); the legacy single-file store is read beside that directory.
+const DEFAULT_DIR = () => String(process.env.HUMAN_CHECKOUT_DIR || "").trim() || join(DATA_ROOT(), "human-checkout");
+const LEGACY_FILE = () => join(dirname(DEFAULT_DIR()), "human-checkout.json");
 
 function readJson(path) {
   try { return JSON.parse(readFileSync(path, "utf8")); } catch { return null; }

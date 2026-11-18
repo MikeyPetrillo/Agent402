@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { OPENROUTER_ATTRIBUTION } from "../../src/openrouter-attribution.js";
-import { judgeReadableName, judgeReadableText } from "../../src/listing-screen.js";
+import { adjacentFieldReader, judgeReadableName, judgeReadableText } from "../../src/listing-screen.js";
 
 const URL_ = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -95,6 +95,99 @@ export function judgeText(desc, max = 300) {
   return judgeReadableText(desc, { max });
 }
 
+// EVERY seller-written string a prompt reads goes through that screen, not
+// only the fit judge's: the tool's name, its parameter names, the text in its
+// input schema and its output fields. The helpers below are the one way a
+// prompt builder reads them (here and in jev.js).
+const NAME_OPTS = { max: 120, links: true };
+/** A tool's name as a prompt reads it: screened; its slug, screened, when the
+ *  name is withheld; "" when both are. */
+export function promptName(row) {
+  return judgeReadableName(row?.name, NAME_OPTS) || judgeReadableName(row?.slug, NAME_OPTS) || "";
+}
+// A prompt writes those strings side by side, so each is also read with the
+// ones written before it (adjacentFieldReader, src/listing-screen.js): a
+// sentence written across a name and a description, or across parameter
+// names, passes field by field and reads as one in the prompt. The later
+// field is the one withheld; the name, read first, is kept.
+/** A fresh reader for one tool's fields, taken in the order a prompt writes
+ *  them. */
+export const promptFields = () => adjacentFieldReader();
+/** A tool's name and description as a prompt reads them side by side: each
+ *  screened alone, and the description withheld when the two read together
+ *  address the reader. `read` is the tool's field reader, so what a prompt
+ *  writes after them (parameter names, a schema) is read against them too. */
+export function promptTool(row, textOf = judgeText, read = promptFields()) {
+  const name = promptName(row);
+  read(name);
+  const description = textOf(row?.description);
+  return { name, description: read(description) ? description : "" };
+}
+/** Identifiers a prompt writes as a list (parameter names, output fields):
+ *  the ones that pass alone and do not complete a sentence with the fields
+ *  before them. */
+export const promptIdents = (list, read = promptFields()) => (Array.isArray(list) ? list : []).filter((s) => promptIdentOk(s) && read(s, { ident: true }));
+/** True when an identifier a seller chose (a parameter name, an enum member,
+ *  an output field) may be handed on as written. */
+export const promptIdentOk = (s) => typeof s === "string" && s.length <= 200 && judgeReadableName(s, { links: true }) !== "";
+const SCHEMA_PROSE = new Set(["description", "title", "default", "example", "$comment"]);
+const SCHEMA_DEPTH = 8;
+// Keywords whose value is a token of the schema language or of the request
+// (a type, a format, where a parameter goes), not seller prose.
+const SCHEMA_KEYWORD_VALUES = new Set(["type", "format", "in", "$schema", "$ref", "$id"]);
+const READ_ALL = () => true;
+/** An input schema as a prompt reads it: prose (description, title, default,
+ *  example) screened sentence by sentence; a property, an enum member or any
+ *  other string that reads as addressed to the reader left out, and a
+ *  left-out property dropped from `required`. Structure and types are kept.
+ *  Every string kept is also read against the ones kept before it (`read`,
+ *  the tool's field reader), in the order the prompt writes them: a property
+ *  name beside its description, one property after another, the members of
+ *  an enum. A keyword's own value (a type, a format, where a parameter
+ *  goes) sits between two seller fields in the prompt and is not seller
+ *  prose: it is read against the text before it and is not added to that
+ *  text, so it neither finishes a sentence nor parts two fields that read as
+ *  one ("send_all_requests", then "here", each with a type between). */
+export function promptSchema(schema, depth = 0, read = promptFields()) {
+  if (typeof schema === "string") return promptIdentOk(schema) && read(schema, { ident: true }) ? schema : undefined;
+  if (schema === null || typeof schema !== "object") return schema;
+  if (depth >= SCHEMA_DEPTH) return undefined;
+  if (Array.isArray(schema)) return schema.slice(0, 200).map((v) => promptSchema(v, depth + 1, read)).filter((v) => v !== undefined);
+  const out = {};
+  for (const [k, v] of Object.entries(schema).slice(0, 200)) {
+    if (k === "properties" && v && typeof v === "object" && !Array.isArray(v)) {
+      const props = {};
+      for (const [name, sub] of Object.entries(v).slice(0, 200)) {
+        if (!promptIdentOk(name) || !read(name, { ident: true })) continue;
+        const kept = promptSchema(sub, depth + 1, read);
+        if (kept !== undefined) props[name] = kept;
+      }
+      out.properties = props;
+    } else if (SCHEMA_PROSE.has(k) && typeof v === "string") {
+      const kept = judgeText(v);
+      if (kept && read(kept)) out[k] = kept;
+    } else if (k === "examples" && Array.isArray(v)) {
+      out[k] = v.slice(0, 20).map((x) => (typeof x === "string" ? ((t) => (t && read(t) ? t : ""))(judgeText(x)) : promptSchema(x, depth + 1, read))).filter((x) => x !== undefined && x !== "");
+    } else if (typeof k === "string" && !promptIdentOk(k) && !/^\$/.test(k)) {
+      continue;
+    } else {
+      // `required` repeats property names already read above.
+      const kept = promptSchema(v, depth + 1, k === "required" ? READ_ALL : SCHEMA_KEYWORD_VALUES.has(k) ? (f, o) => read(f, { ...o, keep: false }) : read);
+      if (kept !== undefined) out[k] = kept;
+    }
+  }
+  if (Array.isArray(out.required) && out.properties) out.required = out.required.filter((n) => Object.hasOwn(out.properties, n));
+  return out;
+}
+
+/** A tool's parameter names as a prompt that picks between tools reads them:
+ *  the ones that may be handed on as written, at most 200. */
+export function promptInputNames(row, read = promptFields()) {
+  const props = row?.inputSchema?.properties;
+  if (!props || typeof props !== "object" || Array.isArray(props)) return [];
+  return promptIdents(Object.keys(props).slice(0, 200), read);
+}
+
 /** Candidates carry short keys ("s1c3" = step 1, candidate 3); the planner
  *  maps them back to row ids, so a model can neither invent nor misplace one. */
 export function judgePrompt(task, steps, { guidance = "" } = {}) {
@@ -105,7 +198,8 @@ export function judgePrompt(task, steps, { guidance = "" } = {}) {
     candidates: s.candidates.map((c, j) => {
       const key = `s${i + 1}c${j + 1}`;
       keyToId[key] = c.row.id;
-      return { key, name: judgeReadableName(c.row.name, { max: 120, links: true }), description: judgeText(c.row.description), inputs: Object.keys(c.row.inputSchema?.properties || {}) };
+      const read = promptFields();
+      return { key, ...promptTool(c.row, judgeText, read), inputs: promptInputNames(c.row, read) };
     }),
   }));
   return {
@@ -117,7 +211,16 @@ export function judgePrompt(task, steps, { guidance = "" } = {}) {
 }
 
 export function paramsPrompt(task, picks, { note = "" } = {}) {
-  const listing = picks.map((p) => ({ key: p.key ?? String(p.step), step: p.step, ...(p.backup ? { backup: true } : {}), purpose: p.purpose, dependsOn: p.dependsOn || [], name: p.row.name, inputSchema: p.row.inputSchema, ...(p.row.outputFields?.length ? { outputFields: p.row.outputFields } : {}) }));
+  const listing = picks.map((p) => {
+    // One reader per tool, in the order the entry is written: the name, the
+    // schema, the output fields.
+    const read = promptFields();
+    const name = promptName(p.row);
+    read(name);
+    const inputSchema = promptSchema(p.row.inputSchema, 0, read);
+    const outputFields = promptIdents(p.row?.outputFields, read);
+    return { key: p.key ?? String(p.step), step: p.step, ...(p.backup ? { backup: true } : {}), purpose: p.purpose, dependsOn: p.dependsOn || [], name, inputSchema, ...(outputFields.length ? { outputFields } : {}) };
+  });
   return {
     system: `For each step, write the input parameters the agent should send to the chosen tool for this task, matching its inputSchema (property names and types; respect enums). Use values the task states. When a value is not in the task but an earlier step produces it (see that step's purpose and outputFields), write exactly "{{step N}}" for it, never an example value. When the call needs a value that neither the task nor an earlier step gives (no URL was given, say), write "<name>" for it so the agent knows to supply it. ${DATA_RULE} Each listing entry is one tool for one step; backups are other tools for the same step and need the same values in their own field names. Key the answer by each entry's key. Return JSON: {"params":{"1":{...},"1.2":{...},"2":{"address":"{{step 1}}"}}}.`,
     user: `Task: ${task}\n${note ? `${note}\n` : ""}<listings>${JSON.stringify(listing)}</listings>`,

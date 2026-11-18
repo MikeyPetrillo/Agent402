@@ -16,6 +16,7 @@ import { priceUsdFor } from "./report-tiers.js";
 import { INSIDER_TIERS, INSIDER_DEFAULT_DAYS } from "./tools/insider-flow-kit.js";
 import { RECALL_TIERS } from "./tools/recall-report-kit.js";
 import { REPORT_MODEL_NOTE, CODE_WRITTEN_REPORT_KINDS } from "./report-disclosure.js";
+import { reportDoneHtml } from "./report-prerender.js";
 
 // One field of a product card (DESIGN.md "Forms"): a visible label tied to its
 // input, the input tied to its error line by aria-describedby, and the error
@@ -288,16 +289,22 @@ ${ledgerFooterCompact()}
   });
 }
 
-// Delivery page: polls /api/r/:id (or `api`) and renders the report client-side.
+// Delivery page: polls /api/r/:id (or `api`) and renders the report client-side,
+// or, given the finished `record` (a sample), serves it already drawn by the
+// viewer's own markup function; the script then only wires its buttons.
 const sampleLink = (slug) => { const p = sampleLinkFor(slug); return p ? `<a href="${esc(p)}" style="margin-right:10px;">See a real sample →</a>` : ""; };
 
 // #app reserves a viewport of height while the report loads client-side, so
 // the blocks below it (alert form, note, footer) do not jump when it lands.
-export function reportDeliveryPage(sessionId, { api = "/api/r/", waitCopy = `Reports take ${REPORT_TURNAROUND}. Keep this page open, it appears here automatically.`, baseUrl = "https://agent402.tools", robots = "noindex, nofollow", title = "Your report - Agent402", description = "Your Agent402 report.", canonical = `${baseUrl}/reports`, note = "Your report is yours to keep - bookmark this page or use the link we emailed you.", jsonLd, extraHtml = "", extraScripts = "" } = {}) {
+export function reportDeliveryPage(sessionId, { api = "/api/r/", waitCopy = `Reports take ${REPORT_TURNAROUND}. Keep this page open, it appears here automatically.`, baseUrl = "https://agent402.tools", robots = "noindex, nofollow", title = "Your report - Agent402", description = "Your Agent402 report.", canonical = `${baseUrl}/reports`, note = "Your report is yours to keep - bookmark this page or use the link we emailed you.", jsonLd, extraHtml = "", extraScripts = "", record = null } = {}) {
+  const monitors = monitorMapJson();
+  const drawn = record && record.status === "done"
+    ? reportDoneHtml(record, { modelNote: REPORT_MODEL_NOTE, codeKinds: CODE_WRITTEN_REPORT_KINDS, monitors: JSON.parse(monitors), origin: baseUrl })
+    : null;
   const body = `
 <div class="wrap" style="padding-top:28px;">
   ${jsonLd ? breadcrumbNavFromLd(baseUrl, jsonLd) : ""}
-  <div id="app" data-session="${esc(sessionId)}" data-api="${esc(api)}" data-monitors="${esc(monitorMapJson())}" data-model-note="${esc(REPORT_MODEL_NOTE)}" data-code-kinds="${esc(CODE_WRITTEN_REPORT_KINDS.join(","))}"><div class="status">${/^index/.test(robots) ? `<h1>${esc(title)}</h1><p><span class="spin"></span>${esc(waitCopy)}</p>` : `<h2><span class="spin"></span>Preparing your report…</h2><p>${esc(waitCopy)}</p>`}<p id="rv-elapsed" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);"></p></div></div>
+  <div id="app" data-session="${esc(sessionId)}" data-api="${esc(api)}" data-monitors="${esc(monitors)}" data-model-note="${esc(REPORT_MODEL_NOTE)}" data-code-kinds="${esc(CODE_WRITTEN_REPORT_KINDS.join(","))}"${drawn ? ` data-rendered="1">${drawn}</div>` : `><div class="status">${/^index/.test(robots) ? `<h1>${esc(title)}</h1><p><span class="spin"></span>${esc(waitCopy)}</p>` : `<h2><span class="spin"></span>Preparing your report…</h2><p>${esc(waitCopy)}</p>`}<p id="rv-elapsed" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);"></p></div></div>`}
   ${extraHtml}
   ${note ? `<p class="note no-print">${esc(note)}</p>` : ""}
 </div>

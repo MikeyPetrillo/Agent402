@@ -61,6 +61,14 @@ export function refundClauses({ gatewayBatched = false } = {}) {
       repaidTo: "paying-wallet",
     },
     {
+      id: "unconfirmed-eip3009",
+      section: "Payments",
+      text: "If an x402 payment signed as an EIP-3009 authorization on an EVM chain is answered settlement-unconfirmed (its settlement ended without showing whether the transfer was sent), that answer says when the payment was recorded for an on-chain check (it says so only then); when it was and its transfer then lands on chain, we record the amount as owed back to the paying wallet and repay it the same way.",
+      appliesTo: ["x402-evm-eip3009-unconfirmed"],
+      owed: true,
+      repaidTo: "paying-wallet",
+    },
+    {
       id: "finality",
       section: "Payments",
       text: "Micropayments are per call and, once settled on-chain, are final and non-refundable except as described in these terms or where required by law.",
@@ -81,7 +89,7 @@ export function refundClauses({ gatewayBatched = false } = {}) {
     {
       id: "ordinary-failure",
       section: "Refunds on-chain",
-      text: "Because settlement happens only after a call succeeds, the ordinary failure case costs nothing and needs no refund.",
+      text: "Because an x402 payment settles only after a call succeeds, the ordinary failure case costs nothing and needs no refund.",
       owed: false,
     },
     {

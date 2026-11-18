@@ -11,7 +11,8 @@
 // The bound is ALERT_SLOW_PAID_MS (default 20000, "off" disables). A route
 // declared slow in src/slow-routes.js is sold as one that runs long, so the
 // shared bound does not apply to it; its own run budget does. A chat tier is
-// held to one model attempt's bound.
+// held to one model attempt's bound: the deadline the gateway computed for
+// that call, else 90 s.
 //
 // A row holds the slug, the handler ms, the time, the status, whether a stall
 // overlapped the handler and whether the call is our own traffic. Never a
@@ -39,7 +40,8 @@ export function safeSlug(slug) {
 /**
  * The handler bound that applies to `slug`: its run budget when the route is
  * declared slow, the larger of the shared bound and one model attempt for a
- * chat tier, the larger of the shared bound and its own ceiling when it can
+ * chat tier (the call's own attempt deadline when the gateway recorded one,
+ * else 90 s), the larger of the shared bound and its own ceiling when it can
  * run as a job, the shared bound otherwise; 0 when the alarm is off.
  */
 // SOR_EXTERNAL_DEADLINE_MS's default in src/tools/route-execute.js.
@@ -51,12 +53,26 @@ const ASYNC_CAPABLE_BOUND_MS = 240_000;
 export const CHAT_ATTEMPT_BOUND_MS = 90_000;
 const isChatTier = (slug) => /^v1-chat(-|$)/.test(String(slug || ""));
 
-export function slowPaidBoundMs(slug, sharedMs = slowPaidMsFromEnv()) {
+// The attempt deadline the gateway computed for this call (bufferedAttemptMs
+// in src/tools/llm-gateway-kit.js: longer than 90 s only under an EVM payment
+// window), so a chat call reads as slow only past its own deadline.
+const chatBounds = new WeakMap();
+/** Record `ms` as this request's model-attempt deadline (the largest wins). */
+export function noteChatAttemptBound(req, ms) {
+  if (!req || typeof req !== "object" || !(Number(ms) > 0)) return;
+  chatBounds.set(req, Math.max(chatBounds.get(req) || 0, Number(ms)));
+}
+/** The recorded model-attempt deadline for `req`, or null. */
+export function chatAttemptBoundOf(req) {
+  return req && typeof req === "object" ? (chatBounds.get(req) ?? null) : null;
+}
+
+export function slowPaidBoundMs(slug, sharedMs = slowPaidMsFromEnv(), ownBoundMs = null) {
   if (!(sharedMs > 0)) return 0;
   let profile = null;
   try { profile = asyncProfileOf({ slug }); } catch { profile = null; }
   if (profile?.slow && profile.maxSeconds > 0) return profile.maxSeconds * 1000;
-  if (isChatTier(slug)) return Math.max(sharedMs, CHAT_ATTEMPT_BOUND_MS);
+  if (isChatTier(slug)) return Math.max(sharedMs, Number(ownBoundMs) > 0 ? Number(ownBoundMs) : CHAT_ATTEMPT_BOUND_MS);
   // A route that can run as a job but is not declared slow (the router tiers
   // wait on outside sellers; the image tiers on a model) is held to its own
   // ceiling when it has one, else to the router's outside-seller deadline.
@@ -70,13 +86,13 @@ export function slowPaidBoundMs(slug, sharedMs = slowPaidMsFromEnv()) {
  * `elapsedMs` is how long it had run). `endEpochMs` is the wall time of the
  * handler's end (or of the record). Returns the stored row, or null.
  */
-export function noteSlowPaidCall({ slug, handlerMs = null, elapsedMs = null, endEpochMs = Date.now(), status = null, synthetic = false } = {}, sharedMs = slowPaidMsFromEnv()) {
+export function noteSlowPaidCall({ slug, handlerMs = null, elapsedMs = null, endEpochMs = Date.now(), status = null, synthetic = false, ownBoundMs = null } = {}, sharedMs = slowPaidMsFromEnv()) {
   const s = safeSlug(slug);
   if (!s) return null;
   const unfinished = handlerMs == null;
   const ms = Math.round(Number(unfinished ? elapsedMs : handlerMs));
   if (!Number.isFinite(ms) || ms <= 0) return null;
-  const bound = slowPaidBoundMs(s, sharedMs);
+  const bound = slowPaidBoundMs(s, sharedMs, ownBoundMs);
   if (!(bound > 0) || ms < bound) return null;
   let stalled = false;
   try { stalled = stallOverlapping(endEpochMs - ms, endEpochMs); } catch { stalled = false; }

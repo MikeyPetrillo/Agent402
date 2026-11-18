@@ -27,6 +27,40 @@ ok(files.length >= 4, `at least four sample fixtures exist (${files.length})`);
 // RUGCHECK_TOOLS=on) is not served; every other fixture loads.
 const onSale = files.filter((f) => Object.hasOwn(HUMAN_PRODUCTS, f.replace(/\.json$/, "")));
 ok(SAMPLE_PRODUCTS.length === onSale.length, `every fixture for a product on sale loads (${SAMPLE_PRODUCTS.length} of ${onSale.length})`);
+
+// ---- hostile record fields through the server-side draw (offline) ----
+// The sample page's report is drawn on the server by the viewer's own
+// renderer (src/report-prerender.js). Every record field it prints and the
+// markdown body must arrive as text: no tag, event attribute or script URL.
+{
+  const { reportDoneHtml } = await import("../src/report-prerender.js");
+  const tag = '"><script>alert(1)</script><img src=x onerror=alert(2)>';
+  const hostile = {
+    status: "done", sample: true, kind: "research", priceUsd: 5, at: "2026-11-17T00:00:00Z",
+    title: `Title ${tag}`,
+    input: `input ${tag}`,
+    disclaimer: `note ${tag}`,
+    report: [
+      `## Heading ${tag}`,
+      "",
+      `Body <script>alert(3)</script> and <img src=x onerror=alert(4)> [x](https://evil.example/"onmouseover=alert(5)) [y](javascript:alert(6)) [1]`,
+      "",
+      "- item <svg onload=alert(7)>",
+      "",
+      "| head <b onclick=alert(8)> | b |",
+      "|---|---|",
+      "| <img src=x onerror=alert(9)> | d |",
+    ].join("\n"),
+    sources: [{ url: "https://evil.example/", title: `src ${tag}` }],
+    tables: [{ label: `Rows: label ${tag}`, rows: [{ a: 1 }] }],
+  };
+  const html = reportDoneHtml(hostile, { origin: "https://agent402.tools" });
+  const bad = [/<script/i, /<img\b/i, /<svg\b/i, /<b onclick/i, /<[^>]*\son[a-z]+\s*=/i, /href\s*=\s*["']?\s*javascript:/i];
+  const hit = bad.filter((re) => re.test(html)).map(String);
+  ok(hit.length === 0, `a hostile record draws no tag, event attribute or script URL (${hit.join(", ") || "none"})`);
+  ok(html.includes("Title &quot;&gt;&lt;script&gt;") && html.includes("Body &lt;script&gt;alert(3)&lt;/script&gt;") && html.includes("&lt;img src=x onerror=alert(9)&gt;"), "control: the hostile title, body and table cell are drawn as escaped text");
+  ok(/<a href="https:\/\/evil\.example\/&quot;onmouseover=alert\(5"/.test(html), "control: a cited-host link is drawn with its quote escaped inside href");
+}
 for (const product of SAMPLE_PRODUCTS) {
   const s = SAMPLES[product];
   const raw = JSON.parse(readFileSync(`assets/samples/${product}.json`, "utf8"));
@@ -65,6 +99,7 @@ ok(sampleLinkFor("dossier") === "/reports/sample/dossier" && sampleLinkFor("rese
 ok(samplePaths().every((p) => p.startsWith("/reports/sample/")), "sample paths live under /reports/sample/");
 
 // ---- booted server ----
+let drawnPage = null;
 const PORT = await getFreePort();
 const B = `http://127.0.0.1:${PORT}`;
 proc = spawn("node", ["src/server.js"], { env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", STRIPE_SECRET_KEY: "" }, stdio: "ignore" });
@@ -84,6 +119,42 @@ try {
     ok(!/<meta name="robots" content="noindex/.test(html), `${product}: meta robots allows indexing`);
     const j = await (await fetch(`${B}/api/reports/sample/${product}`)).json();
     ok(j.status === "done" && j.sample === true && j.report === s.report && j.product === product, `${product}: JSON is the done bundle the viewer expects`);
+    // Served already drawn: the report's own title as the page's one h1, its body, no loading spinner.
+    const firstHeading = (String(s.report).match(/^## +(.+)$/m) || [])[1];
+    ok(/<div id="app"[^>]*data-rendered="1">/.test(html) && !/class="spin"/.test(html) && (html.match(/<h1[\s>]/g) || []).length === 1 && html.includes(`<h1 class="rpt-title">${escapeHtml(s.title)}</h1>`), `${product}: served drawn, with the report title as its one h1 and no spinner`);
+    ok(!firstHeading || html.includes(">" + escapeHtml(firstHeading).replace(/\*\*/g, "").slice(0, 20)), `${product}: the report body is in the served HTML ("${String(firstHeading).slice(0, 40)}")`);
+    if (product === SAMPLE_PRODUCTS[0]) drawnPage = { product, html, j };
+  }
+  // The browser on a served-drawn page: the viewer keeps the markup as served
+  // and wires its buttons; drawing the same record itself gives the same markup.
+  {
+    const { JSDOM } = await import("jsdom");
+    const viewerJs = readFileSync("assets/js/report-view.js", "utf8");
+    const run = async (html, prep = () => {}) => {
+      const calls = [];
+      // Drop every external script (any case, any closing-tag form) until none is left, so a nested tag cannot reassemble.
+      let page = html, prev;
+      do { prev = page; page = page.replace(/<script\b[^>]*\bsrc\s*=[^>]*>[\s\S]*?<\/script[^>]*>/gi, ""); } while (page !== prev);
+      const dom = new JSDOM(page, { runScripts: "outside-only", url: `${B}/reports/sample/${drawnPage.product}` });
+      prep(dom.window.document.getElementById("app"));
+      dom.window.fetch = async (u, o) => { calls.push([String(u), o && o.method]); return { ok: true, json: async () => (String(u).includes("/api/buy") ? {} : drawnPage.j) }; };
+      dom.window.eval(viewerJs);
+      for (let i = 0; i < 20 && calls.length === 0; i++) await sleep(10);
+      await sleep(30);
+      return { dom, calls, app: dom.window.document.getElementById("app") };
+    };
+    const served = await run(drawnPage.html);
+    const drawnHtml = served.app.innerHTML;
+    ok(served.calls.length === 1 && served.calls[0][0].endsWith(`/api/reports/sample/${drawnPage.product}`) && served.app.querySelector(".rpt-title") && served.app.getAttribute("data-rendered") === "1", `the viewer reads the record once on a served-drawn page (${JSON.stringify(served.calls)})`);
+    const form = served.dom.window.document.getElementById("sample-buy");
+    served.dom.window.document.getElementById("sample-input").value = "AAPL";
+    form.dispatchEvent(new served.dom.window.Event("submit", { cancelable: true }));
+    await sleep(30);
+    ok(served.calls.some(([u, m]) => u === "/api/buy" && m === "POST"), "the served-drawn page's buy box is wired (a submit asks /api/buy)");
+    // Control: the same page as a client-drawn one (spinner, no data-rendered) draws the same markup.
+    const client = await run(drawnPage.html, (app) => { app.removeAttribute("data-rendered"); app.innerHTML = '<div class="status"><span class="spin"></span></div>'; });
+    const norm = (h) => h.replace(/(January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}/g, "DATE");
+    ok(client.app.getAttribute("data-rendered") === null && client.app.querySelector(".rpt-title") && norm(client.app.innerHTML) === norm(drawnHtml), "the server's markup is the viewer's own: a client-drawn copy of the same record matches it");
   }
   const nf = await fetch(`${B}/reports/sample/not-a-product`);
   ok(nf.status === 404 && (await fetch(`${B}/api/reports/sample/not-a-product`)).status === 404, "unknown product -> 404 on both routes");

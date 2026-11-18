@@ -222,6 +222,48 @@ await check("a booking whose store write fails is kept in the journal, logged, a
   assert.ok(logs.some((m) => /^ALARM .*could NOT be recorded/.test(m)), "an unrecordable booking raises an alarm");
 });
 
+await check("a second booking of the same authorization (again, or landed from the journal) neither writes nor reopens it", async () => {
+  const { writeFileSync, readFileSync } = await import("node:fs");
+  const nonce = txh(9420);
+  const auth = (over = {}) => entry(60, { tx: undefined, nonce, unconfirmed: true, ...over });
+  // The first copy is refused by its store and kept in the journal.
+  const blocker = join(dir, `blocker-again-${Date.now()}`);
+  writeFileSync(blocker, "not a directory");
+  const held = [];
+  const journal = {
+    add: (kind, payload) => { held.push({ id: held.length + 1, kind, payload }); return held.length; },
+    size: () => held.length,
+    drain: async (apply) => { let n = 0; for (const e of [...held]) { const r = await apply(e); if (r === "stop") break; if (r === "landed" || r === "drop") { held.splice(held.indexOf(e), 1); if (r === "landed") n++; } } return n; },
+  };
+  const broken = createLateSettleBook({ file: join(blocker, "late.json"), now, log: () => {}, fetchImpl, rpcFor: (net) => (net === RH ? RPC : null), journal });
+  assert.equal(await broken.book(auth({ via: "journaled copy" })), true);
+  assert.equal(held.length, 1);
+  // Another replica books the same authorization in the shared store, and a
+  // check moves it on (an unreadable read: checked once, next check later).
+  clock += 1_000;
+  const file = bookFile();
+  const a = createLateSettleBook({ file, now, log: () => {}, fetchImpl, rpcFor: (net) => (net === RH ? RPC : null) });
+  assert.equal(await a.book(auth({ via: "stored copy" })), true);
+  authState.set(nonce, "fail");
+  clock += 2 * 60_000;
+  await a.reconcile();
+  const [moved] = a.list();
+  assert.ok(moved && moved.checks >= 1 && moved.via === "stored copy", "the stored entry has been checked");
+  const bytes = readFileSync(file, "utf8");
+  // Booked again on the same replica: answered as booked, nothing written.
+  assert.equal(await a.book(auth({ via: "again", amount: "9999" })), true);
+  assert.equal(readFileSync(file, "utf8"), bytes, "a repeat booking writes nothing");
+  // The journaled copy lands on a replica sharing the store: dropped from the
+  // journal, the stored entry kept as it was (not reset to a fresh one).
+  const healed = createLateSettleBook({ file, now, log: () => {}, fetchImpl, rpcFor: (net) => (net === RH ? RPC : null), journal });
+  const r = await healed.reconcile();
+  assert.equal(r.journaled, 1);
+  assert.equal(held.length, 0);
+  assert.equal(readFileSync(file, "utf8"), bytes, "the journaled copy writes nothing over the stored entry");
+  assert.deepEqual(healed.list(), [moved], "the entry keeps its checks, schedule and fields");
+  authState.delete(nonce);
+});
+
 await check("an RPC that never answers keeps the entry, then marks it unresolved for a human (never dropped)", async () => {
   const book = makeBook();
   await book.book(entry(8));
@@ -380,6 +422,36 @@ await check("our relayer settled first (the facilitator read dry) and answered p
   // Control: the facilitator's own pending answer still reads primary.
   await fail(ctxFor(20, pendingErr(txh(20))));
   assert.deepEqual(book.list().filter((e) => e.tx === txh(20)).map((e) => e.via), ["primary"]);
+});
+
+await check("a booking neither the store nor the journal takes leaves the payment unbooked: the unconfirmed answer promises no owed record, and the terms promise one only when the answer says so", async () => {
+  const { join: pj } = await import("node:path");
+  const { writeFileSync: wf, readFileSync: rf } = await import("node:fs");
+  const { unconfirmedSettleRefusal } = await import("../src/payment-reject.js");
+  const blocker = pj(dir, `blocker-unbooked-${Date.now()}`);
+  wf(blocker, "not a directory");
+  const alarms = [];
+  const none = createLateSettleBook({ file: pj(blocker, "late.json"), now, log: () => {}, alarm: (m) => alarms.push(m), fetchImpl, rpcFor: (net) => (net === RH ? RPC : null), journal: { add: () => null, size: () => 0, drain: async () => 0 } });
+  const { server, fail } = hookHost();
+  registerLateSettleHook(server, async () => none);
+  const ctx = ctxFor(23, Object.assign(new Error("settle timed out"), { name: "SettleError", statusCode: 504, errorReason: "unexpected_settle_error", transaction: txh(23) }));
+  await fail(ctx);
+  assert.equal(ctx.__a402LateBooked, false, "the hook records that nothing was booked");
+  assert.ok(alarms.some((m) => /could NOT be recorded/.test(m)), "and raises the alarm");
+  const answer = unconfirmedSettleRefusal({ network: RH, transactions: [txh(23)], booked: ctx.__a402LateBooked === true });
+  assert.ok(!/booked as owed/.test(answer.detail), "the answer does not promise an owed record");
+  // Control: a book that takes it marks it booked, and the answer says so.
+  const ok2 = makeBook();
+  const h2 = hookHost();
+  registerLateSettleHook(h2.server, async () => ok2);
+  const ctx2 = ctxFor(24, Object.assign(new Error("settle timed out"), { name: "SettleError", statusCode: 504, errorReason: "unexpected_settle_error", transaction: txh(24) }));
+  await h2.fail(ctx2);
+  assert.equal(ctx2.__a402LateBooked, true, "control: a booking that lands is marked booked");
+  assert.ok(/booked as owed/.test(unconfirmedSettleRefusal({ network: RH, transactions: [txh(24)], booked: true }).detail), "control: the booked answer promises the owed record");
+  // The sentence lives in src/refund-terms.js (the clause /terms renders).
+  const terms = ["../src/terms.js", "../src/refund-terms.js"].map((f) => rf(new URL(f, import.meta.url), "utf8")).join("\n").replace(/\s+/g, " ");
+  assert.ok(/settlement-unconfirmed \(its settlement ended without showing whether the transfer was sent\), that answer says when the payment was recorded for an on-chain check \(it says so only then\); when it was and its transfer then lands/.test(terms),
+    "the terms promise the owed record for an unconfirmed EIP-3009 payment only when its answer says it was recorded");
 });
 
 await check("a recovered settlement (a fallback settled it) books nothing", async () => {
@@ -731,6 +803,7 @@ const solTxs = new Map(); // sig -> getTransaction result | "fail"
 const blockhashValid = new Map();
 const algoTxs = new Map(); // id -> indexer transaction | "fail"
 let algoRound = 1000; // the indexer's own indexed round
+let algoHealth = "ok"; // the indexer's /health: "ok", "fail" (HTTP 503) or "garbage" (no readable round)
 // Each stub is matched on its parsed host, never on a string prefix.
 const hostOf = (x) => new URL(x).host;
 const railFetch = async (url, opts) => {
@@ -752,7 +825,11 @@ const railFetch = async (url, opts) => {
     if (t === "fail") return json(503, {});
     return t ? json(200, { transaction: t }) : json(404, { message: "no transaction found" });
   }
-  if (at.host === hostOf(IDX) && at.pathname === "/health") return json(200, { round: algoRound, "is-migrating": false });
+  if (at.host === hostOf(IDX) && at.pathname === "/health") {
+    if (algoHealth === "fail") return json(503, {});
+    if (algoHealth === "garbage") return json(200, { round: "soon" });
+    return json(200, { round: algoRound, "is-migrating": false });
+  }
   return fetchImpl(url, opts);
 };
 const railBook = (over = {}) => makeBook({ fetchImpl: railFetch, svmRpcs: [SOL_RPC], avmIndexers: [IDX], recordOwed: recordRefundOwed, owedRecorded: async (tx) => !!(await refundByEvidenceFresh(tx)), ...over });
@@ -831,6 +908,27 @@ await check("an Algorand transaction an indexer still lagging behind its lastVal
   r = await book.reconcile();
   assert.equal(r.owed, 1);
   assert.equal((await owedFor(algoId(74))).length, 1, "owed exactly once");
+});
+
+await check("an unreadable Algorand indexer keeps a late entry open: a not found it cannot place against lastValid never closes it", async () => {
+  const book = railBook({ recordOwed: async () => { throw new Error("nothing is owed"); } });
+  await book.book(algoEntry(76, { lastValid: 1500 }));
+  await book.book(algoEntry(77, { lastValid: 1500 }));
+  algoRound = 2000; // the round the indexer WOULD report is past lastValid
+  clock += WINDOW_MS + 2 * 60_000;
+  for (const health of ["fail", "garbage"]) {
+    algoHealth = health;
+    const r = await book.reconcile();
+    assert.equal(r.absent, 0, `an indexer whose health read is ${health} never proves absence`);
+    assert.equal(r.unreadable, 2, `both entries are counted unreadable (${health})`);
+    assert.deepEqual(book.list().map((e) => e.tx).sort(), [algoId(76), algoId(77)].sort(), `both entries stay open (${health})`);
+    clock += 30 * 60_000;
+  }
+  // Control: the same entries close once the indexer's round reads past lastValid.
+  algoHealth = "ok";
+  const r = await book.reconcile();
+  assert.equal(r.absent, 2, "control: a readable indexer past lastValid closes them as not landed");
+  assert.equal(book.list().length, 0);
 });
 
 await check("the rail stubs answer only their own host: a look-alike host is not served as the Solana RPC", async () => {

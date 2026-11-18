@@ -28,6 +28,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { bootServer } from "./lib/boot-server.js";
+import { childJson } from "./lib/child-json.js";
 
 const SELF = fileURLToPath(import.meta.url);
 const DAY = 86_400_000;
@@ -128,7 +129,7 @@ const sl = await import("../src/sales-ledger.js");
   const e3 = fn.funnelEventOf(req({ "payment-signature": "abc" }), res(200, { "payment-response": "x" }));
   ok(e3.outcome === "attempt" && e3.settled === true, "a credential answered 200 with a receipt -> settled");
   const e4 = fn.funnelEventOf(req({ authorization: "Payment abc" }), res(400));
-  ok(e4.outcome === "attempt" && !e4.settled && e4.reason === null, "an MPP credential answered 400 -> attempt, not charged");
+  ok(e4.outcome === "attempt" && !e4.settled && e4.reason === null, "an MPP credential answered 400 -> attempt, not settled");
   ok(fn.funnelEventOf(req({}, { __paymentHeaderAsSent: "!!" }), res(402)).outcome === "attempt", "a header removed at intake still counts as an attempt");
   ok(fn.funnelEventOf(req({ "x-pow-solution": "s" }), res(200)).outcome === "free", "proof of work -> free");
   ok(fn.funnelEventOf(req(), res(200)).outcome === "free", "a 200 with no credential (trial) -> free");
@@ -160,7 +161,7 @@ const sl = await import("../src/sales-ledger.js");
   const d = row.funnel.direct, bz = row.funnel.bazaar;
   ok(row.day === day, `counts land on the request's UTC day (${row.day})`);
   ok(d.probes === 4 && d.challenges === 6, `direct: 4 probes, 6 challenges (4 unpaid 402s + 2 refused) (${d.probes}, ${d.challenges})`);
-  ok(d.attempts === 4 && d.settled === 1 && d.refused === 2 && d.notCharged === 1, `direct: 4 attempts, 1 settled, 2 refused, 1 not charged (${JSON.stringify({ a: d.attempts, s: d.settled, r: d.refused, n: d.notCharged })})`);
+  ok(d.attempts === 4 && d.settled === 1 && d.refused === 2 && d.errorAnswered === 1 && !("notCharged" in d), `direct: 4 attempts, 1 settled, 2 refused, 1 answered an error (${JSON.stringify({ a: d.attempts, s: d.settled, r: d.refused, n: d.errorAnswered })})`);
   ok(d.refusal.unfundedWallet === 1 && d.refusal.wrongNetwork === 1 && d.reasons["insufficient-funds"] === 1 && d.reasons["unsupported-network"] === 1, `refusal classes and reasons (${JSON.stringify(d.refusal)} ${JSON.stringify(d.reasons)})`);
   ok(d.probedCallers === 3 && d.retried === 1 && d.paidAfterProbe === 1, `direct callers: 3 probed, 1 retried, 1 paid after its probe (${d.probedCallers}, ${d.retried}, ${d.paidAfterProbe})`);
   ok(d.neverRetried === 2 && !d.untracked, `the two callers that never came back are never retried; an early close of one that did is not untracked (${d.neverRetried}, untracked ${d.untracked})`);
@@ -233,7 +234,7 @@ const sl = await import("../src/sales-ledger.js");
 {
   const file = join(TMP, "perf.db");
   const r = spawnSync(process.execPath, ["--expose-gc", SELF, "--perf", file], { env: { ...process.env, SALES_LEDGER_DB: file }, encoding: "utf8", timeout: 300_000 });
-  let m = null; try { m = JSON.parse(String(r.stdout).trim().split("\n").pop()); } catch { m = null; }
+  let m = null; try { m = childJson(r.stdout); } catch { m = null; }
   ok(r.status === 0 && m, `the 400k-row read ran (${m ? JSON.stringify(m) : String(r.stderr).slice(-400)})`);
   if (m) {
     ok(m.rows === 400_000 && m.days === 30 && m.wallets > 0, "it read 30 days of the 400k rows");

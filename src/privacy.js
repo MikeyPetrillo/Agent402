@@ -13,6 +13,7 @@ import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
+import { WINDOW_MS as LATE_SETTLE_WINDOW_MS, MAX_AGE_MS as LATE_SETTLE_MAX_AGE_MS } from "./late-settlements.js";
 import { WINDOW_MS as SETTLE_FAILURE_WINDOW_MS } from "./gateway-settle-breaker.js";
 import { settledHoldText, settledValidityHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
@@ -137,7 +138,7 @@ so every claim below is verifiable in code.</p>
   <ul>
     <li>the <code>/api/memory</code> tools, whose purpose <i>is</i> storage (see below);</li>
     <li>some tools that read public data cache their answer for between one minute and one day, keyed
-    by the input that produced it (a domain, an address to geocode, a URL), so a repeat call is faster;
+    by the input that produced it (a domain, a place name, a URL), so a repeat call is faster;
     identical repeat calls to the AI gateway, identical retries carrying an
     <code>Idempotency-Key</code> (or the x402 payment-identifier), and the JSON answer of a call paid
     with a signed EVM x402 payment (keyed by that payment's nonce, so a re-sent copy is answered without
@@ -294,6 +295,20 @@ ${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can 
   as a keyed hash), the source address of a Tempo credential, a Tempo pull credential answered 402 after its
   broadcast failed (kept with its route, amount and payer until the check for a late landing ends: minutes,
   at most 24 hours while the chain cannot be read, so a transfer that lands after the 402 is booked as owed),
+  an EIP-3009 authorization on an EVM chain whose settlement was answered unconfirmed (its payer, nonce,
+  route, amount and validBefore, kept until the check for a late landing ends: at least ${Math.round(LATE_SETTLE_WINDOW_MS / 60000)} minutes, and
+  never before its validBefore has passed; one still open after ${Math.round(LATE_SETTLE_MAX_AGE_MS / 3600000)} hours, because the chain cannot be read
+  or the authorization is still valid, is kept until it closes or we resolve it by hand; past a per-wallet bound on open
+  records it waits in our journal until it fits; a transfer that lands is booked as owed), the 402 answer
+  and settle receipt of any x402 payment whose settlement was answered unconfirmed${gatewayBatched ? " (other than a batched payment)" : ""},
+  kept under a digest of the payment's identity (network, signed payer and nonce on an EVM chain,
+  the transaction its chain consumes on any other) with a digest of the payer's signature (on Solana,
+  Stellar and Algorand, of the signed transaction), until the authorization's validBefore plus one minute (at
+  least one minute, at most ${settledValidityHoldText()}), or a day for a payment off an EVM chain or one that names no validBefore, so the same payment
+  sent again gets that answer back, the expiry a payment names (an EVM authorization's validBefore or a Permit2
+  deadline, an Algorand transaction's lastValid round, the expiration ledger of a Stellar payer's signed
+  authorization entries), read when its settlement is answered unconfirmed so the answer can say when a new
+  payment is safe,
   the payer the settlement receipt names,${referralOn ? " on a referral link the referral token and the buyer agent id (see referral links above)," : ""} and,
   on a refused payment, the resource URL it names (see telemetry above). When a served call's settlement
   fails, we count it per signed authorization (its payer, network and nonce) in our shared store for
@@ -337,8 +352,8 @@ ${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can 
   contact those sites from our server with the URL you provided. Tools that read a third-party data
   source send it what the lookup needs (a ticker, a token or wallet address, a domain, a query).</li>
   <li><code>/api/search</code> and the other web search tools forward the query to the Brave Search API to produce results.
-  <code>/api/exa-search</code>, <code>/api/exa-answer</code> and <code>/api/exa-contents</code> send it to Exa, whose model
-  writes the <code>/api/exa-answer</code> response. The <code>/api/x-*</code> tools send the handle, post id or query to the X API.</li>
+  The <code>/api/x-*</code> tools send the handle, post id or query to the X API.
+  Report products and <code>/v1</code> calls that search the web send their search queries to Exa, through OpenRouter's web search.</li>
   <li>The <code>/api/code-run</code> tools run the code you send in a sandbox operated by E2B.</li>
   <li><code>/api/route</code>, <code>/api/route/execute</code> and <code>/api/decide</code> may send the
   task text you give them to a judgment model operated by TypeSafe to choose among candidate tools;

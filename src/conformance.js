@@ -33,6 +33,7 @@ import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { IDEMPOTENCY_CREDENTIALS } from "./idempotency.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { refundClauses, REPAYMENT_FAMILIES } from "./refund-terms.js";
+import { sanctionsScreenStatus } from "./sanctions-screen.js";
 
 export { CONFORMANCE_PATH };
 export const CONFORMANCE_VERSION = 1;
@@ -40,7 +41,7 @@ const TEMPO_CAIP2 = "eip155:4217";
 
 /** The features, in column order. */
 export const FEATURES = Object.freeze([
-  { id: "settleAfterAnswer", title: "Settle after a successful answer", description: "The payment is settled only after the route answered below 400; an error answer is not charged on x402 (a Tempo push transfer is final before the call; see its row)." },
+  { id: "settleAfterAnswer", title: "Settle after a successful answer", description: "An x402 payment is settled only after the route answered below 400; an error answer is not charged on x402 (a Tempo push transfer is final before the call; see its row)." },
   { id: "idempotencyKey", title: "Idempotency key", description: "An Idempotency-Key header bound to the credential, route and body replays a served answer without a second charge." },
   { id: "paymentIdentifier", title: "x402 payment-identifier", description: "The x402 payment-identifier extension is honored as an idempotency key under the same binding." },
   { id: "replayGuard", title: "Replay guard", description: "A credential already used, or in use, is refused before it can pay for a second run." },
@@ -83,6 +84,9 @@ function liveState() {
     rails: paymentRailsLive(),
     x402: gateMounted("x402"),
     payerScreen: gateMounted("x402PayerScreen"),
+    // fresh | stale | missing: while no list is loaded the x402 screen fails
+    // open (src/x402-payer-screen.js) and the cell says so.
+    screenList: sanctionsScreenStatus(),
     replayGuard: gateMounted("replayGuard"),
     idempotency: gateMounted("idempotency"),
     hangupHook: gateMounted("hangupHook"),
@@ -106,8 +110,8 @@ function idempotencyCell(L, credential) {
 }
 function hangupCell(L, how) {
   return L.hangupOn
-    ? cell(true, `${how} Within a per-wallet, per-IP and service-wide budget; a route whose effect outlives the answer is settled and the undelivered charge recorded as owed.`, "src/hangup-settlement.js")
-    : cell(false, L.hangupHook ? "Off on this server (HANGUP_FORGIVE=off): a charge whose answer was not delivered is recorded as owed." : "No paid gate is mounted on this server.", "src/hangup-forgiveness.js");
+    ? cell(true, `${how} Within a per-wallet, per-IP and service-wide budget; a route whose effect outlives the answer is settled and the undelivered charge recorded as owed; refundOnChargedFailure says how it is repaid.`, "src/hangup-settlement.js")
+    : cell(false, L.hangupHook ? "Off on this server (HANGUP_FORGIVE=off): a charge whose answer was not delivered is recorded as owed; refundOnChargedFailure says how it is repaid." : "No paid gate is mounted on this server.", "src/hangup-forgiveness.js");
 }
 function refundCell(network, how) {
   const family = repaymentFamilyOf(network);
@@ -122,7 +126,7 @@ function x402Row(L, { scheme, network, batched, offered }) {
   const kind = batched ? "gateway-batched" : scheme;
   const settle = batched
     ? cell(true, "Settled at Circle Gateway after the answer; an answer whose payment Gateway has not confirmed is withheld (402 settlement_pending) and served on the resend of the same payment.", "src/gateway-nanopayments.js")
-    : cell(true, "The paywall runs the route first and settles only an answer below 400; a 4xx or 5xx cancels settlement.", "src/payments.js");
+    : cell(true, "The x402 paywall runs the route first and settles only an answer below 400; a 4xx or 5xx cancels settlement.", "src/payments.js");
   return {
     id: `x402:${kind}:${network}`,
     protocol: "x402",
@@ -143,9 +147,11 @@ function x402Row(L, { scheme, network, batched, offered }) {
         : cell(false, "The x402 paywall is not mounted on this server.", "src/replay-guard.js"),
       refundOnChargedFailure: refundCell(network, batched ? "A Gateway payment settled for a request never served:" : "A charge that did not deliver:"),
       hangupForgiveness: hangupCell(L, "Settlement is aborted before any facilitator call (client_disconnected)."),
-      sanctionsScreening: L.payerScreen
-        ? cell(true, network.startsWith("eip155:") ? "The signed EVM payer (authorization.from, or the Permit2 signer) is checked after verification and before the route runs; a listed payer is refused 403 and not charged." : "The transaction's signers are checked after verification and before the route runs; a listed signer is refused 403 and not charged.", "src/x402-payer-screen.js")
-        : cell(false, "The x402 payer screen is not mounted on this server.", "src/x402-payer-screen.js"),
+      sanctionsScreening: !L.payerScreen
+        ? cell(false, "The x402 payer screen is not mounted on this server.", "src/x402-payer-screen.js")
+        : L.screenList === "missing"
+        ? cell(false, "The x402 payer screen is mounted but no sanctions list is loaded right now, so it fails open: payers are served unscreened until the list loads.", "src/x402-payer-screen.js")
+        : cell(true, network.startsWith("eip155:") ? "The signed EVM payer (authorization.from, or the Permit2 signer) is checked after verification and before the route runs; a listed payer is refused 403 and not charged. While no list is loaded the screen fails open (served unscreened)." : "The transaction's signers are checked after verification and before the route runs; a listed signer is refused 403 and not charged. While no list is loaded the screen fails open (served unscreened).", "src/x402-payer-screen.js"),
       receipt: cell(true, "PAYMENT-RESPONSE: the settlement result, with the transaction.", "src/payments.js"),
       signedReceipt: NOT_SIGNED("PAYMENT-RESPONSE"),
     },
@@ -182,7 +188,7 @@ function tempoRow(L, push) {
     offered: L.tempo,
     features: {
       settleAfterAnswer: push
-        ? cell(false, "A push credential names a transfer already final before the route runs; if the route then fails, the amount is recorded as owed.", "src/mpp-tempo.js")
+        ? cell(false, "A push credential names a transfer already final before the route runs; if the route then fails, the amount is recorded as owed; refundOnChargedFailure says how it is repaid.", "src/mpp-tempo.js")
         : cell(true, "The signed transaction is broadcast only after the route answered below 400.", "src/mpp-tempo.js"),
       idempotencyKey: idempotencyCell(L, "mpp-tempo"),
       paymentIdentifier: NA("An x402 extension; an MPP credential carries none."),
@@ -191,7 +197,7 @@ function tempoRow(L, push) {
         : cell(false, "The Tempo gate is not mounted on this server.", "src/mpp-tempo.js"),
       refundOnChargedFailure: refundCell(TEMPO_CAIP2, push ? "A transfer whose route failed, or whose answer was not delivered:" : "A charge that did not deliver:"),
       hangupForgiveness: push
-        ? cell(false, "The transfer is final before the route runs; an answer not delivered is recorded as owed.", "src/hangup-settlement.js")
+        ? cell(false, "The transfer is final before the route runs; an answer not delivered is recorded as owed; refundOnChargedFailure says how it is repaid.", "src/hangup-settlement.js")
         : hangupCell(L, "The transaction is not broadcast (499, nothing spent)."),
       sanctionsScreening: screened
         ? cell(true, "Direct settlement (TEMPO_RELAY=off) checks every payment party, and the paying wallet's recent funders, before any money moves; no Tempo challenge is offered while the list is not loaded.", "src/mpp-tempo.js")
@@ -304,15 +310,33 @@ export function refundTermsDocument(baseUrl = "") {
   };
 }
 
-export function conformanceDocument(baseUrl = "") {
+export function conformanceDocument(baseUrl = "", { freeMode = false } = {}) {
   return {
     document: "agent402-conformance",
     version: CONFORMANCE_VERSION,
     url: `${baseUrl}${CONFORMANCE_PATH}`,
     generatedAt: new Date().toISOString(),
-    legend: { supported: "true: implemented on this rail; false: not implemented; null: does not apply to this rail", offered: "true while this server accepts payment on the rail" },
+    // FREE_MODE answers every tool without payment, so every rail (proof of
+    // work included) reads offered:false; this flag says why.
+    freeMode: !!freeMode,
+    legend: { supported: "true: implemented on this rail; false: not implemented; null: does not apply to this rail", offered: "true while this server accepts payment on the rail", freeMode: "true when this server answers every tool without payment or proof of work, so no rail is offered" },
     features: FEATURES,
     rails: conformanceRails(),
     refundTerms: refundTermsDocument(baseUrl),
   };
+}
+
+// The document is built once per CONFORMANCE_CACHE_MS (the gates are fixed
+// once the server listens; a rail dropped by the boot check or a list that
+// loads shows within the window, and the list status is part of the key).
+// src/server.js clears it when the server starts listening.
+export const CONFORMANCE_CACHE_MS = 60_000;
+let docCache = null; // { key, at, value }
+export function resetConformanceCache() { docCache = null; }
+export function conformanceDocumentCached(baseUrl = "", { freeMode = false, now = Date.now() } = {}) {
+  const key = `${baseUrl}|${!!freeMode}|${sanctionsScreenStatus(now)}`;
+  if (docCache && docCache.key === key && now - docCache.at >= 0 && now - docCache.at < CONFORMANCE_CACHE_MS) return docCache.value;
+  const value = conformanceDocument(baseUrl, { freeMode });
+  docCache = { key, at: now, value };
+  return value;
 }

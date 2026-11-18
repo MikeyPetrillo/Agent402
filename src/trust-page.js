@@ -31,7 +31,9 @@ export function trustSubprocessors() {
     { category: "AI models", name: "OpenAI, and model operators via OpenRouter", providers: ["OpenAI", "OpenRouter"], gets: "Prompts and inputs to the /v1 endpoints, model-backed tools and report synthesis" },
     // The same switch that prints the privacy policy's Third parties item.
     ...(directUpstreamConfigured() ? [directInferenceRow(directUpstreamName())] : []),
-    { category: "Web search and data", name: "Brave Search API, Exa, the X API", providers: ["Brave Search API", "Exa", "X API"], gets: "The query, URL, handle or post id a search tool is given" },
+    { category: "Web search and data", name: "Brave Search API, the X API", providers: ["Brave Search API", "X API"], gets: "The query, URL, handle or post id a search tool is given" },
+    // Not a tool of its own: the search behind report products and /v1 web searches (the web plugin's engine).
+    { category: "Report and model web search", name: "Exa, through OpenRouter", providers: ["Exa", "OpenRouter"], gets: "The search queries a report product or a /v1 call that searches the web makes" },
     { category: "Code sandbox", name: "E2B", providers: ["E2B"], gets: "The code sent to the code-run tools" },
     { category: "Tool routing", name: "TypeSafe", providers: ["TypeSafe"], gets: "The task text given to route and decide" },
     { category: "Payment verification", name: "Coinbase CDP and per-chain facilitators, Tempo's relay", providers: ["Coinbase CDP", "Tempo's relay"], gets: "The signed payment, to verify and settle it" },

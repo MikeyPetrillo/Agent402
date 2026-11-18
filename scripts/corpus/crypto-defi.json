@@ -1,5 +1,5 @@
 {
- "about": "Tier 1: chain reads, CoinGecko demo, DefiLlama, Hyperliquid, Deribit, Solana public APIs, RWAs. pace: CoinGecko's demo plan is a 30/min shared bucket, so cases from this file start no closer than 3 s apart.",
+ "about": "Tier 1: chain reads, CoinGecko demo, Hyperliquid, Deribit, Solana public APIs, RWAs. pace: CoinGecko's demo plan is a 30/min shared bucket, so cases from this file start no closer than 3 s apart.",
  "cases": [
   {
    "slug": "block-info",
@@ -412,168 +412,6 @@
    }
   },
   {
-   "slug": "crypto-orderbook",
-   "name": "ETH-USD depth 3",
-   "input": {
-    "pair": "ETH-USD",
-    "depth": 3
-   },
-   "expect": {
-    "gt": {
-     "bestBid": 100,
-     "midPrice": 100
-    },
-    "count": {
-     "bids": 3
-    }
-   },
-   "paceKey": "coingecko",
-   "pace": 5000
-  },
-  {
-   "slug": "crypto-orderbook",
-   "name": "unknown pair is a self-explaining 422",
-   "input": {
-    "pair": "ZZQ-USD"
-   },
-   "expect": {
-    "status": 422
-   },
-   "paceKey": "coingecko",
-   "pace": 5000
-  },
-  {
-   "slug": "defi-chain-tvl-history",
-   "name": "30 days of arbitrum",
-   "input": {
-    "chain": "Arbitrum",
-    "days": 30
-   },
-   "expect": {
-    "equals": {
-     "count": 30
-    },
-    "populated": [
-     "summary",
-     "points[0]"
-    ]
-   }
-  },
-  {
-   "slug": "defi-chains",
-   "name": "search base",
-   "input": {
-    "search": "base",
-    "limit": 3
-   },
-   "expect": {
-    "gte": {
-     "count": 1
-    },
-    "matches": {
-     "chains[0].name": "base"
-    }
-   }
-  },
-  {
-   "slug": "defi-dex-volume",
-   "name": "ethereum dexs",
-   "input": {
-    "chain": "Ethereum",
-    "limit": 3
-   },
-   "expect": {
-    "equals": {
-     "count": 3
-    },
-    "populated": [
-     "dexs[0]",
-     "totals",
-     "unit"
-    ]
-   }
-  },
-  {
-   "slug": "defi-fees",
-   "name": "revenue metric",
-   "input": {
-    "metric": "revenue",
-    "limit": 3
-   },
-   "expect": {
-    "equals": {
-     "metric": "revenue",
-     "count": 3
-    },
-    "populated": [
-     "protocols[0]"
-    ]
-   }
-  },
-  {
-   "slug": "defi-fees",
-   "name": "unknown metric is a 400",
-   "input": {
-    "metric": "profit"
-   },
-   "expect": {
-    "status": 400
-   }
-  },
-  {
-   "slug": "defi-protocol",
-   "name": "lido",
-   "input": {
-    "protocol": "lido"
-   },
-   "expect": {
-    "populated": [
-     "protocol.category",
-     "protocol.tvlUsd"
-    ],
-    "gt": {
-     "protocol.tvlUsd": 1000000000
-    }
-   }
-  },
-  {
-   "slug": "defi-protocol",
-   "name": "unknown slug is a 422 with suggestions",
-   "input": {
-    "protocol": "uniswapp"
-   },
-   "expect": {
-    "status": 422
-   }
-  },
-  {
-   "slug": "defi-protocols",
-   "name": "dexs on base",
-   "input": {
-    "category": "Dexs",
-    "chain": "Base",
-    "limit": 3
-   },
-   "expect": {
-    "equals": {
-     "count": 3
-    },
-    "populated": [
-     "protocols[0].slug"
-    ]
-   }
-  },
-  {
-   "slug": "defi-yield-history",
-   "name": "unknown pool is a self-explaining 422",
-   "input": {
-    "pool": "00000000-0000-0000-0000-000000000000"
-   },
-   "expect": {
-    "status": 422
-   }
-  },
-  {
    "slug": "eas-attestations",
    "name": "our own attester on base",
    "input": {
@@ -752,22 +590,6 @@
     "populated": [
      "ticker",
      "resolvedFrom"
-    ]
-   }
-  },
-  {
-   "slug": "options-volume",
-   "name": "top 3",
-   "input": {
-    "limit": 3
-   },
-   "expect": {
-    "equals": {
-     "count": 3
-    },
-    "populated": [
-     "totals",
-     "protocols[0]"
     ]
    }
   },
@@ -1247,39 +1069,6 @@
    "pace": 5000
   },
   {
-   "slug": "stablecoin-supply-history",
-   "name": "ethereum 30 days",
-   "input": {
-    "chain": "Ethereum",
-    "days": 30
-   },
-   "expect": {
-    "equals": {
-     "count": 30
-    },
-    "populated": [
-     "summary",
-     "points[0]"
-    ]
-   }
-  },
-  {
-   "slug": "stablecoins",
-   "name": "search by name",
-   "input": {
-    "search": "tether",
-    "limit": 3
-   },
-   "expect": {
-    "gte": {
-     "count": 1
-    },
-    "matches": {
-     "stablecoins[0].name": "tether"
-    }
-   }
-  },
-  {
    "slug": "tx-simulate",
    "name": "a reverting call reports revertReason",
    "input": {
@@ -1410,6 +1199,299 @@
      "atOiCap.count"
     ]
    }
+  },
+  {
+   "slug": "funding-screener",
+   "name": "BTC across venues, a higher open-interest floor",
+   "input": {
+    "coin": "btc",
+    "minOpenInterestUsd": 5000000,
+    "limit": 3
+   },
+   "expect": {
+    "equals": {
+     "mode": "coin",
+     "coin": "BTC",
+     "minOpenInterestUsd": 5000000
+    },
+    "gt": {
+     "venues": 3,
+     "openInterest.totalUsd": 1000000000
+    },
+    "maxCount": {
+     "highest": 3,
+     "lowest": 3
+    },
+    "populated": [
+     "funding.oiWeightedPct",
+     "funding.dispersionPct",
+     "highest[0].venue",
+     "credit"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "funding-screener",
+   "name": "board of coins by dispersion",
+   "input": {
+    "sort": "dispersion",
+    "limit": 4
+   },
+   "expect": {
+    "equals": {
+     "mode": "board",
+     "sort": "dispersion",
+     "returned": 4,
+     "truncated": true
+    },
+    "count": {
+     "coins": 4
+    },
+    "gt": {
+     "matched": 4,
+     "coins[0].venues": 2
+    },
+    "populated": [
+     "coins[0].coin",
+     "coins[0].dispersionPct"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "funding-screener",
+   "name": "an unlisted ticker is a self-explaining 422",
+   "input": {
+    "coin": "ZZQQZZ"
+   },
+   "expect": {
+    "status": 422
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "stablecoin-depeg-watch",
+   "name": "a billion-dollar floor and a tight threshold",
+   "input": {
+    "minMarketCapUsd": 1000000000,
+    "thresholdBps": 5,
+    "limit": 5
+   },
+   "expect": {
+    "equals": {
+     "peg": "USD $1.00",
+     "minMarketCapUsd": 1000000000,
+     "thresholdBps": 5
+    },
+    "gt": {
+     "assessed": 5,
+     "onPegMarketCapSharePct": 0
+    },
+    "maxCount": {
+     "coins": 5
+    },
+    "populated": [
+     "coins[0].symbol",
+     "coins[0].status",
+     "worstNow.symbol",
+     "notAssessed.reason",
+     "credit"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "stablecoin-depeg-watch",
+   "name": "a floor under the minimum is a 400 naming the field",
+   "input": {
+    "minMarketCapUsd": 5
+   },
+   "expect": {
+    "status": 400
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "exchange-spread",
+   "name": "bitcoin against USDT only",
+   "input": {
+    "coin": "bitcoin",
+    "quote": "usdt",
+    "limit": 5
+   },
+   "expect": {
+    "equals": {
+     "coin": "bitcoin",
+     "quote": "USDT"
+    },
+    "gt": {
+     "venuesCompared": 5,
+     "medianPriceUsd": 1000
+    },
+    "maxCount": {
+     "venues": 5
+    },
+    "populated": [
+     "spread.highLowBps",
+     "highest.venue",
+     "lowest.venue",
+     "venues[0].pair",
+     "credit"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "exchange-spread",
+   "name": "unknown coin is a self-explaining 422",
+   "input": {
+    "coin": "zzq-not-a-coin"
+   },
+   "expect": {
+    "status": 422
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "defi-screener",
+   "name": "deepest drawdowns among large tokens",
+   "input": {
+    "sort": "ath_drawdown",
+    "minMarketCapUsd": 500000000,
+    "limit": 4
+   },
+   "expect": {
+    "equals": {
+     "sort": "ath_drawdown",
+     "category": "decentralized-finance-defi"
+    },
+    "gt": {
+     "screened": 100,
+     "matched": 3,
+     "categoryTotals.marketCapUsd": 1000000000
+    },
+    "maxCount": {
+     "tokens": 4
+    },
+    "populated": [
+     "tokens[0].id",
+     "tokens[0].capSharePct",
+     "tokens[0].athDrawdownPct",
+     "credit"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "defi-screener",
+   "name": "an unknown sort is a 400 naming the choices",
+   "input": {
+    "sort": "tvl"
+   },
+   "expect": {
+    "status": 400
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "chain-board",
+   "name": "native assets by chain count",
+   "input": {
+    "sort": "chains",
+    "limit": 3
+   },
+   "expect": {
+    "equals": {
+     "sort": "chains",
+     "returned": 3
+    },
+    "count": {
+     "assets": 3
+    },
+    "gt": {
+     "chainsTracked": 100,
+     "chainsRanked": 20,
+     "assets[0].chainCount": 5
+    },
+    "populated": [
+     "assets[0].nativeCoin",
+     "assets[0].chains[0].name",
+     "market.nativeAssetsCapSharePct",
+     "credit"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "dex-volume-board",
+   "name": "ethereum, top 20 pools",
+   "input": {
+    "network": "eth",
+    "pools": 20,
+    "limit": 3
+   },
+   "expect": {
+    "equals": {
+     "network": "eth"
+    },
+    "gt": {
+     "poolsRead": 10,
+     "totals.volume24hUsd": 1000000,
+     "totals.dexes": 1
+    },
+    "maxCount": {
+     "dexes": 3
+    },
+    "populated": [
+     "dexes[0].name",
+     "dexes[0].volumeSharePct",
+     "dexes[0].topPool.address",
+     "credit"
+    ]
+   },
+   "requires": "COINGECKO_API_KEY",
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "dex-pool-health",
+   "name": "a Base pool",
+   "input": {
+    "network": "base",
+    "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224"
+   },
+   "expect": {
+    "equals": {
+     "network": "base",
+     "pool": "0xd0b53d9277642d899df5c87a3966a349a798f224"
+    },
+    "gt": {
+     "liquidityUsd": 100000,
+     "ageDays": 100,
+     "recentTrades.count": 10
+    },
+    "populated": [
+     "name",
+     "dex",
+     "priceImpactEstimate.per10kUsdPct",
+     "activity24h.trades",
+     "credit"
+    ]
+   },
+   "requires": "COINGECKO_API_KEY",
+   "paceKey": "coingecko",
+   "pace": 5000
   }
  ],
  "pace": 3000

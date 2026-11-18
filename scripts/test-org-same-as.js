@@ -43,7 +43,7 @@ const server = JSON.parse(readFileSync(join(ROOT, "mcp", "server.json"), "utf8")
 if (!process.env.AGENT402_REPO_URL) ok(MCP_REGISTRY_NAME === server.name, `the MCP Registry name is the one mcp/server.json publishes (${MCP_REGISTRY_NAME})`);
 ok(new URL(MCP_REGISTRY_ENTRY_URL).hostname === "registry.modelcontextprotocol.io" && decodeURIComponent(MCP_REGISTRY_ENTRY_URL).includes(`/servers/${server.name}/`), "the registry URL reads our own entry");
 const PACKAGES = ["mcp", "client", "tollbooth"].map((d) => JSON.parse(readFileSync(join(ROOT, d, "package.json"), "utf8")).name);
-for (const u of ORG_SAME_AS.filter((x) => x.includes("npmjs.com"))) ok(PACKAGES.includes(u.split("/package/")[1]), `${u} is a package this repository publishes`);
+for (const u of ORG_SAME_AS.filter((x) => { const h = new URL(x).hostname; return h === "npmjs.com" || h === "www.npmjs.com"; })) ok(PACKAGES.includes(u.split("/package/")[1]), `${u} is a package this repository publishes`);
 
 // 4. no served module keeps its own list
 const PROFILE = /(?:npmjs\.com\/package\/agent402|x\.com\/Agent402Tools|pypi\.org\/project\/agent402|registry\.modelcontextprotocol\.io\/v0\.1\/servers)/;

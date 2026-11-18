@@ -26,7 +26,7 @@
 //   node scripts/mint-bazaar-rows.js                  # dry run, prices only
 //   node scripts/mint-bazaar-rows.js --live           # buys the cheap set
 //   node scripts/mint-bazaar-rows.js --live --expensive
-//   node scripts/mint-bazaar-rows.js --live --only token-safety,exa-search
+//   node scripts/mint-bazaar-rows.js --live --only token-safety,search
 //   node scripts/mint-bazaar-rows.js --live --out pass-mint.json
 //
 // --out FILE writes one record per buy (registry bazaar, chain base, method,
@@ -138,19 +138,6 @@ const LEGS = [
     // the honest shape. A tool that silently treated unknown as safe would pass
     // a laxer check than this one.
     check: (r) => (typeof r.verdict === "string" && r.verdict.length > 0 && typeof r.because === "string" && Array.isArray(r.unknown)) || `expected a verdict, a reason and an explicit unknown list, got ${JSON.stringify(r).slice(0, 220)}` },
-
-  // ---- Exa (only present once EXA_KEY is live in prod) ------------------
-  { slug: "exa-search", priceUsd: 0.012, method: "POST",
-    path: "/api/exa-search", body: { query: "x402 payment protocol", numResults: 3 },
-    check: (r) => (r.count > 0 && Array.isArray(r.results) && typeof r.results[0]?.url === "string") || `expected at least one result with a url, got ${JSON.stringify(r).slice(0, 200)}` },
-
-  { slug: "exa-answer", priceUsd: 0.010, method: "POST",
-    path: "/api/exa-answer", body: { query: "What is the x402 payment protocol?" },
-    check: (r) => (typeof r.answer === "string" && r.answer.length > 40 && r.citationCount > 0) || `expected a written answer with citations, got ${JSON.stringify(r).slice(0, 200)}` },
-
-  { slug: "exa-contents", priceUsd: 0.02, method: "POST",
-    path: "/api/exa-contents", body: { urls: ["https://x402.org/"] },
-    check: (r) => (r.count > 0 && typeof r.results?.[0]?.text === "string" && r.results[0].text.length > 50) || `expected page text, got ${JSON.stringify(r).slice(0, 200)}` },
 
   // ---- identity-bound: must run AFTER the buys above -------------------
   { slug: "receipts", priceUsd: 0.005, method: "POST", path: "/api/receipts", body: {}, after: true,

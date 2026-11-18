@@ -7,7 +7,9 @@
 //   attempt    the request carried a payment credential
 //   settled    an attempt answered 2xx with a settlement receipt
 //   refused    an attempt answered 402; its refusal class is counted
-//   notCharged an attempt answered another 4xx or a 5xx (never charged)
+//   errorAnswered an attempt answered another 4xx or a 5xx (settlement is
+//              canceled on x402, MPP evm and credits; a Tempo push transfer
+//              is final before the call, so there the call is booked owed)
 //   free       answered 2xx without a credential (proof of work, a trial)
 // and our own traffic (signed probes, our wallets) is counted apart as `ours`.
 //
@@ -179,7 +181,7 @@ export function createFunnel({ bump, retryWindowMs = FUNNEL_DEFAULTS.retryWindow
       bump(day, a, "refused", 1);
       bump(day, a, `refusal.${refusalClassOf(event.reason)}`, 1);
       bump(day, a, "reasons", 1, refusalReasonKey(event.reason));
-    } else bump(day, a, "notCharged", 1);
+    } else bump(day, a, "errorAnswered", 1);
     const open = k ? callers.get(k) : null;
     if (open && now - open.at < retryWindowMs) {
       if (!open.retried) { open.retried = true; close(open, "retried"); }
@@ -192,7 +194,7 @@ export function createFunnel({ bump, retryWindowMs = FUNNEL_DEFAULTS.retryWindow
 /** A zero-filled funnel row (the fields one arrival carries per day). */
 export function emptyFunnelRow() {
   return {
-    probes: 0, challenges: 0, attempts: 0, settled: 0, refused: 0, notCharged: 0, free: 0, ours: 0,
+    probes: 0, challenges: 0, attempts: 0, settled: 0, refused: 0, errorAnswered: 0, free: 0, ours: 0,
     refusal: Object.fromEntries(REFUSAL_CLASSES.map((c) => [c, 0])), reasons: {},
     probedCallers: 0, retried: 0, paidAfterProbe: 0, neverRetried: 0, untracked: 0,
   };

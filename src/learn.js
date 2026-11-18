@@ -6,7 +6,7 @@
 // accepted chain. Each entry's `summary` is reused verbatim by /llms-full.txt.
 import { siteOrgRef } from "./site-org.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
-import { LATE_SETTLE_EXCEPTION } from "./front-door.js";
+import { LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-door.js";
 import { connectorWires, connectorPayText, connectorLongCallText, X402_MCP_PAYMENT_KEY, X402_MCP_RECEIPT_KEY } from "./connector-pay.js";
 // Copy that names a prepaid key as a way in reads the switch that sells it:
 // while sales are off, a key is something a buyer already holds.
@@ -210,7 +210,7 @@ export const LEARN = [
         P(`Reading a 402 is free. It is a quote, not a charge, and no payment is taken until a request arrives carrying a signed payment that matches one of the offers. That makes the 402 a useful discovery step: an agent can learn the price of any route before deciding to buy.`),
       ]],
       ["Was I charged?", [
-        P(`On this server settlement runs after the tool, and only for a successful response. So for a wallet payment the answer you hold tells you: a 200 with a ${C("PAYMENT-RESPONSE")} header (x402) or a ${C("Payment-Receipt")} header (MPP) was paid; a failed call is answered with no receipt header, or with an x402 receipt that reads ${C("success: false")}, and is not charged. ${LATE_SETTLE_EXCEPTION} A Tempo push payment is sent before the call runs, so one that is not served is recorded as a refund owed and the 402 says so (${C("refundOwed")}). A payment that is refused comes back as another 402, and when the refusal is about the credential the body says why in plain words.`),
+        P(`On this server settlement runs after the tool, and only for a successful response. So for a wallet payment the answer you hold tells you: a 200 with a ${C("PAYMENT-RESPONSE")} header (x402) or a ${C("Payment-Receipt")} header (MPP) was paid; a failed call is answered with no receipt header, or with an x402 receipt that reads ${C("success: false")}, and is not charged. ${LATE_SETTLE_EXCEPTION} ${UNCONFIRMED_RECEIPT_EXCEPTION} A Tempo push payment is sent before the call runs, so one that is not served is recorded as a refund owed and the 402 says so (${C("refundOwed")}). A payment that is refused comes back as another 402, and when the refusal is about the credential the body says why in plain words.`),
       ]],
     ],
     links: [["/x402-test", "See why a payment was refused"], ["/learn/x402", "x402"], ["/learn/mpp", "MPP"], ["/integrations/tollbooth", "Answer 402s on your own site"], ["/tools", "Every priced route"]],
@@ -292,7 +292,7 @@ export const LEARN = [
         P(`Some routes price a request by its size rather than a flat fee. The metered model routes quote each request from its body, and a buyer paying through a Permit2 allowance (or ${PREPAID}) settles at actual usage under that quote.`),
       ]],
       ["What is charged, and what is not", [
-        `<ul><li>A successful answer is charged once, and carries a receipt.</li><li>A failed call (an error, a timeout, an upstream outage) is not charged on x402, because settlement runs after the tool and only on success; a Tempo transfer sent before the call is recorded as owed.</li><li>A retry with the same ${C("Idempotency-Key")} and the same credential replays the first answer instead of paying again.</li><li>Reading the 402 quote is free.</li></ul>`,
+        `<ul><li>A successful answer is charged once, and carries a receipt.</li><li>A failed call (an error, a timeout, an upstream outage) is not charged on x402, because settlement runs after the tool and only on success; a Tempo transfer sent before the call is recorded as owed and repaid after on-chain proof.</li><li>A retry with the same ${C("Idempotency-Key")} and the same credential replays the first answer instead of paying again.</li><li>Reading the 402 quote is free.</li></ul>`,
       ]],
       ["Paying at volume", [
         P(`Signing and settling every request on chain is the right shape for occasional calls and the wrong one for thousands. ${creditsSalesEnabled() ? "Two options avoid it: a prepaid credits key (one card purchase, then a Bearer header on each call, debited per success) or, with a wallet on Base, a one-time Permit2 approval so metered calls settle at actual usage. Both keep the per-request price; only the settlement changes." : "With a wallet on Base, a one-time Permit2 approval lets metered calls settle at actual usage under the quoted ceiling; the per-request price stays the same, only the settlement changes. A prepaid credits key bought earlier also avoids per-call signing (new keys are not on sale)."}`),

@@ -182,7 +182,9 @@ export function parseTreasuryYieldCsv(csv) {
 //     shortly after boot in production; startTreasuryYieldRefresh), one read
 //     at a time, never awaited by a request. A request that finds it older
 //     than 30 minutes serves what is held and starts the same single read
-//     without waiting for it.
+//     without waiting for it. After a failed read it waits
+//     TREASURY_YIELD_FAIL_BACKOFF_MS before starting another, serving what is
+//     held meanwhile, so a fast-failing host is not read once per request.
 //   - An earlier year's file is kept a day; the timer reads last year's too.
 //   - When the latest refresh failed, or the held copy is past two refresh
 //     periods, the answer is served marked stale (stale, staleAsOf), the
@@ -201,10 +203,15 @@ const TREASURY_YIELD_REFRESH_MS = 30 * 60 * 1000;
 const TREASURY_YIELD_PAST_TTL_MS = 24 * 3600 * 1000;
 const TREASURY_YIELD_STALE_MS = 2 * TREASURY_YIELD_REFRESH_MS + 5 * 60 * 1000;
 const TREASURY_YIELD_RETRY_AFTER_S = 30;
+const TREASURY_YIELD_FAIL_BACKOFF_MS = 60_000;
 const treasuryYieldYears = new Map(); // year -> { at, rows, failedAt }
 const treasuryYieldReads = new Map(); // year -> in-flight read (single flight)
 const treasuryYieldTimer = { interval: null, boot: null };
 export function _resetTreasuryYieldCacheForTest() { stopTreasuryYieldRefresh(); treasuryYieldYears.clear(); treasuryYieldReads.clear(); }
+// Moves every held year's read and failure times `ms` into the past.
+export function _ageTreasuryYieldCacheForTest(ms) {
+  for (const e of treasuryYieldYears.values()) { e.at -= ms; if (e.failedAt) e.failedAt -= ms; }
+}
 
 const treasuryYieldBudgetMs = () => {
   const n = Number(process.env.TREASURY_YIELD_BUDGET_MS);
@@ -304,7 +311,8 @@ async function fetchTreasuryYields(count = 1) {
   const now = Date.now();
   const year = new Date(now).getUTCFullYear();
   const cur = treasuryYieldYears.get(year);
-  if (cur && now - cur.at >= TREASURY_YIELD_REFRESH_MS) readTreasuryYear(year); // refresh, not awaited
+  // Refresh, not awaited; held off for a while after a failed read.
+  if (cur && now - cur.at >= TREASURY_YIELD_REFRESH_MS && !(cur.failedAt > cur.at && now - cur.failedAt < TREASURY_YIELD_FAIL_BACKOFF_MS)) readTreasuryYear(year);
   const budget = Math.max(1, Math.min(treasuryYieldBudgetMs(), ceilingLeftMs()));
   let timer = null, deadline = null;
   try {

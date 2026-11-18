@@ -50,7 +50,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import express from "express";
-import { encodePaymentRequiredHeader, encodePaymentResponseHeader } from "@x402/core/http";
+import { encodePaymentRequiredHeader, encodePaymentResponseHeader, encodePaymentSignatureHeader } from "@x402/core/http";
 import { bootServer } from "./lib/boot-server.js";
 
 const MCP_CLIENT_VERSION = "2.30.0";
@@ -64,7 +64,7 @@ try {
   process.exit(1);
 }
 
-const { carriesPayment } = await import("../src/mcp-http.js");
+const { carriesPayment, MPP_CREDENTIAL_MAX_BYTES } = await import("../src/mcp-http.js");
 const { X402_PAYMENT_META, X402_PAYMENT_RESPONSE_META, SETTLEMENT_PENDING_META, paymentRequiredOfResult: PR } = await import("../src/mcp-x402.js");
 const { MCP_PAYMENT_REQUIRED_META, MCP_CREDENTIAL_META, createMcpMppLoopback } = await import("../src/mcp-mpp.js");
 const { registerOfferedNetworks } = await import("../src/payment-attempt.js");
@@ -93,6 +93,31 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const hostile = call({});
   Object.defineProperty(hostile.params._meta, X402_PAYMENT_META, { enumerable: true, get() { throw new Error("boom"); } });
   ok(carriesPayment(hostile) === false, "a getter that throws reads as no payment");
+  // An MPP credential is replayed to the gate as its Authorization header:
+  // one past the gate's header limit is never plausible, and is refused on
+  // its size before it is serialized or decoded.
+  {
+    const { maxHeaderSize } = await import("node:http");
+    ok(MPP_CREDENTIAL_MAX_BYTES === maxHeaderSize && MPP_CREDENTIAL_MAX_BYTES >= 8192, `the credential cap is the HTTP parser's header limit (${MPP_CREDENTIAL_MAX_BYTES})`);
+    const credOf = (pad) => ({ challenge: { id: "c1", method: "evm", intent: "charge" }, payload: { signature: "0x00", pad } });
+    const asString = (o) => `Payment ${Buffer.from(JSON.stringify(o)).toString("base64url")}`;
+    const fits = credOf("p".repeat(4000));
+    ok(carriesPayment(call({ [MCP_CREDENTIAL_META]: asString(fits) })) && carriesPayment(call({ [MCP_CREDENTIAL_META]: fits })), "control: a credential under the cap, string or object, carries a payment");
+    const big = credOf("p".repeat(90_000));
+    ok(!carriesPayment(call({ [MCP_CREDENTIAL_META]: asString(big) })), "a credential string past the cap does not");
+    ok(!carriesPayment(call({ [MCP_CREDENTIAL_META]: big })), "a credential object past the cap does not");
+    // An object past the cap is never serialized: a field after the padding
+    // is read by the serializer, and the size walk stops before it.
+    let serialized = 0;
+    const watched = { challenge: { id: "c1", method: "evm", intent: "charge" }, payload: { pad: "p".repeat(90_000), get late() { serialized++; return 1; } } };
+    ok(!carriesPayment(call({ [MCP_CREDENTIAL_META]: watched })) && serialized === 0, `an object past the cap is not serialized (${serialized} reads past the padding)`);
+    // Control: under the cap the same field is read when the credential is serialized.
+    const small = { challenge: { id: "c1", method: "evm", intent: "charge" }, payload: { pad: "p", get late() { serialized++; return 1; } } };
+    carriesPayment(call({ [MCP_CREDENTIAL_META]: small }));
+    ok(serialized > 0, `control: a credential under the cap is serialized, reading that field (${serialized} reads)`);
+    const near = credOf("p".repeat(14_000)); // under the cap as an object, past it once base64url-encoded
+    ok(!carriesPayment(call({ [MCP_CREDENTIAL_META]: near })), "an object whose header form is past the cap does not");
+  }
 }
 
 // ---- in-process half: a settle the paid route left pending -------------------------
@@ -139,6 +164,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // The paid route answered 5xx after the payment was presented.
     route500: { status: 500, settle: null, body: { error: "upstream_failed", hint: "ROUTE-500-HINT" } },
     route503Tx: { status: 503, settle: null, body: { error: "unavailable", transactions: [TX] } },
+    // A settle chain that ended unconfirmed (src/payment-reject.js
+    // unconfirmedSettleRefusal): naming no transaction (check-wallet), and
+    // naming a Solana signature with no expiry but a lastValid-style bound.
+    unconfirmedWallet: { settle: { success: false, errorReason: "settlement_unconfirmed", transaction: "", network: "eip155:8453", payer: payer1 }, body: { reason: "settlement-unconfirmed", retry: "check-wallet", network: "eip155:8453", authorizationValidBefore: "2031-01-02T03:04:05Z", hint: "UNCONFIRMED-WALLET-HINT: the transfer may still land." } },
+    unconfirmedSol: { settle: { success: false, errorReason: "settlement_unconfirmed", transaction: SOL_SIG, network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", payer: payer1 }, body: { reason: "settlement-unconfirmed", retry: "watch-transaction", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", transactions: [SOL_SIG], authorizationValidBefore: "2031-01-02T03:04:05Z", hint: "UNCONFIRMED-SOL-HINT" } },
     // Control: a payment the route's verify refused. Never settled, no receipt.
     verifyRefused: { settle: null, body: { error: "invalid_exact_evm_payload_signature" } },
   });
@@ -226,6 +256,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const mText = JSON.stringify(m1?.content || "");
       ok(!mErr && m1?.isError === true && !PR(m1) && !/"accepts"/.test(mText) && !m1._meta?.[MCP_PAYMENT_REQUIRED_META] && /Do not sign a new authorization/.test(mText) && (tx ? mText.includes(tx) : true),
         `${m} over MPP: a credential whose settle failed answers no challenge and no offer${tx ? ", and names the transaction" : ""} (${mErr ? mErr.message : mText.slice(0, 200)})`);
+    }
+    // A settle chain the route answered unconfirmed: the pending result with
+    // the route's verb and expiry over x402 and over MPP, never "did not
+    // settle", never an offer or a challenge.
+    for (const [m, verb, tx] of [["unconfirmedWallet", "check-wallet", null], ["unconfirmedSol", "watch-transaction", SOL_SIG]]) {
+      mode = m;
+      const cred = `Payment ${Buffer.from(JSON.stringify({ challenge: { id: "c1", method: "evm", intent: "charge" }, payload: { signature: "0x00" } })).toString("base64url")}`;
+      for (const [wire, send] of [["x402", call], ["MPP", () => raw.callTool({ name: "catalog.call", arguments: { slug: "paid-x", params: {} }, _meta: { [MCP_CREDENTIAL_META]: cred } })]]) {
+        const u = await send();
+        const um = u._meta?.[SETTLEMENT_PENDING_META] || {};
+        const t = JSON.stringify(u.content || "");
+        ok(u.isError === true && !PR(u) && !/"accepts"|x402Version/.test(t + JSON.stringify(u._meta || {})) && !u._meta?.[MCP_PAYMENT_REQUIRED_META]
+          && um.reason === "settlement-unconfirmed" && um.retry === verb && um.authorizationValidBefore === "2031-01-02T03:04:05Z" && (tx ? um.transactions?.[0] === tx && t.includes(tx) : !um.transactions)
+          && !/did not settle/.test(t) && t.includes(variants[m].body.hint.split(":")[0]) && u._meta?.[X402_PAYMENT_RESPONSE_META]?.errorReason === "settlement_unconfirmed",
+          `${m} over ${wire}: the route's unconfirmed answer keeps reason, retry ${verb}, authorizationValidBefore${tx ? " and the signature as written" : ""} in _meta, no offer, never "did not settle" (${JSON.stringify(um).slice(0, 240)})`);
+      }
     }
     // The official client: one payment for the call, and no second signature.
     {
@@ -350,6 +396,83 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }
 }
 
+// ---- in-process half: the fixed-price offer cache -----------------------------------
+// A twin's first ask and a free tool's offer at its limit are fixed-price and
+// the same for every caller: each is read over the loopback once per route
+// and reused for 30 s. A route priced per request is read every time, and the
+// cache holds a bounded number of routes.
+{
+  const { mountMcp } = await import("../src/mcp-http.js");
+  const { MCP_X402_PREFIX } = await import("../src/mcp-x402-routes.js");
+  const accepted = { scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } };
+  const reads = new Map();
+  const fetchCounting = async (url) => {
+    const path = new URL(String(url)).pathname;
+    reads.set(path, (reads.get(path) || 0) + 1);
+    const offer = { x402Version: 2, error: "Payment required", resource: { url: `http://localhost${path}`, description: path, mimeType: "application/json" }, accepts: [accepted] };
+    return new Response(JSON.stringify({ error: "Payment required" }), { status: 402, headers: { "content-type": "application/json", "payment-required": encodePaymentRequiredHeader(offer) } });
+  };
+  const tool = (route, slug, extra = {}) => ({ route, slug, name: slug, category: "test", price: "$0.001", description: `${slug} test tool`, tags: [slug], discovery: { inputSchema: { properties: {} }, input: {} }, handler: async () => ({ ok: true }), ...extra });
+  const MANY = 6, CACHE_MAX = 4;
+  const CAT = {
+    "GET /api/search": tool("GET /api/search", "search"),
+    "POST /api/free-x": tool("POST /api/free-x", "free-x"),
+    "POST /api/free-q": tool("POST /api/free-q", "free-q", { quote: () => ({ price: "$0.001" }) }),
+  };
+  for (let i = 0; i < MANY; i++) CAT[`POST /api/free-${i}`] = tool(`POST /api/free-${i}`, `free-${i}`);
+  const app = express();
+  app.use(express.json({ limit: "1mb" }));
+  // Each client its own address (one trusted hop), so the transport limit of one never meets the other's calls.
+  app.set("trust proxy", 1);
+  mountMcp(app, CAT, { baseUrl: "http://localhost", isComputePayable: (def) => def.slug.startsWith("free-"), x402Loopback: createMcpMppLoopback({ port: 1, fetchImpl: fetchCounting }), mppLoopback: null, offerCacheMax: CACHE_MAX });
+  const httpSrv = app.listen(0, "127.0.0.1");
+  await new Promise((r) => httpSrv.once("listening", r));
+  const clientAt = async (ip) => {
+    const c = new Client({ name: `offer-cache-${ip}`, version: "0.0.0" });
+    await c.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${httpSrv.address().port}/mcp`), { requestInit: { headers: { "X-Forwarded-For": ip } } }));
+    return c;
+  };
+  let raw = null, rawB = null;
+  const realNow = Date.now;
+  try {
+    raw = await clientAt("198.51.100.41");
+    rawB = await clientAt("198.51.100.42");
+    const twinPath = `${MCP_X402_PREFIX}search`;
+    const ask = () => raw.callTool({ name: "web.search", arguments: { query: "x" } });
+    const a1 = await ask(), a2 = await ask(), a3 = await ask();
+    ok([a1, a2, a3].every((r) => r.isError === true && Array.isArray(PR(r)?.accepts)) && reads.get(twinPath) === 1,
+      `a twin's first ask reads the offer once and reuses it (${reads.get(twinPath)} reads for 3 asks)`);
+    ok(JSON.stringify(PR(a3)) === JSON.stringify(PR(a1)) && PR(a3) !== PR(a1), "each reuse answers the same offer");
+    // Past the reuse window the offer is read again.
+    Date.now = () => realNow() + 31_000;
+    try { await ask(); } finally { Date.now = realNow; }
+    ok(reads.get(twinPath) === 2, `past 30 s the twin's offer is read again (${reads.get(twinPath)} reads)`);
+    // A free tool at its limit: its offer is read once, then reused.
+    const call = (slug) => rawB.callTool({ name: "catalog.call", arguments: { slug, params: {} } });
+    let limited = null;
+    for (let i = 0; i < 60 && !limited; i++) { const r = await call("free-x"); if (/rate limit reached/i.test(JSON.stringify(r.content))) limited = r; }
+    ok(limited && Array.isArray(PR(limited)?.accepts), "control: the free tool reaches its limit and offers x402");
+    const before = reads.get("/api/free-x") || 0;
+    for (let i = 0; i < 5; i++) await call("free-x");
+    ok(before === 1 && reads.get("/api/free-x") === 1, `a free tool's offer at its limit is read once for 6 calls past the limit (${reads.get("/api/free-x")} reads)`);
+    // A route priced per request is never reused.
+    for (let i = 0; i < 3; i++) await call("free-q");
+    ok(reads.get("/api/free-q") === 3, `a route priced per request is read on every call (${reads.get("/api/free-q")} reads for 3)`);
+    // Bounded: past the cache's size the oldest route is read again.
+    for (let i = 0; i < MANY; i++) await call(`free-${i}`);
+    await call("free-0");
+    await call(`free-${MANY - 1}`);
+    ok(reads.get("/api/free-0") === 2 && reads.get(`/api/free-${MANY - 1}`) === 1, `the cache is bounded: the oldest of ${MANY} routes is read again, the newest is not (${reads.get("/api/free-0")}, ${reads.get(`/api/free-${MANY - 1}`)})`);
+  } catch (e) {
+    ok(false, `offer cache: ${e?.stack || String(e)}`);
+  } finally {
+    Date.now = realNow;
+    for (const c of [raw, rawB]) { try { await c?.close(); } catch { /* closed */ } }
+    httpSrv.closeAllConnections?.();
+    await new Promise((r) => httpSrv.close(r));
+  }
+}
+
 // ---- booted half -------------------------------------------------------------------
 const BASE_NET = "eip155:8453";
 const TMP = mkdtempSync(join(tmpdir(), "mcp-x402-conn-"));
@@ -395,6 +518,7 @@ const fallbackFacilitator = createServer((req, res) => {
     if (req.url === "/settle") {
       fallback.settles++;
       if (fallback.mode === "500") return reply({ error: "internal error" }, 500);
+      if (fallback.mode === "failtx") return reply({ success: false, errorReason: "transaction_failed", transaction: `0x${"fd".repeat(28)}${(++txN).toString(16).padStart(8, "0")}`, network: BASE_NET, payer });
       if (fallback.mode === "ok") return reply({ success: true, transaction: `0x${"fb".repeat(28)}${(++txN).toString(16).padStart(8, "0")}`, network: BASE_NET, payer });
       return reply({ success: false, errorReason: "free_tier_exhausted", transaction: "", network: BASE_NET, payer });
     }
@@ -591,6 +715,38 @@ try {
     const receipt = recovered._meta?.[X402_PAYMENT_RESPONSE_META];
     ok(recovered.isError !== true && JSON.stringify(recovered.content).includes("hello") && receipt?.success === true && /^0xfb/.test(String(receipt.transaction)) && fallback.settles === f0 + 1,
       `control: the same refusal completed by the fallback is served with the fallback's receipt in _meta (${JSON.stringify(receipt)})`);
+  }
+  // A settle chain that ended unconfirmed (the primary's refusal, then a
+  // fallback's 500 or a failure naming a transaction): over /mcp the result
+  // means what the HTTP route's 402 means. Reason settlement-unconfirmed, the
+  // retry verb (check-wallet with no transaction, watch-transaction with one),
+  // the authorization's validBefore and, for a named transaction, the refund
+  // lookup; never "did not settle", never an offer.
+  {
+    const httpReq = PR(await plain.client.callTool({ name: "catalog.call", arguments: { slug: "memory-read", params: { key } } }));
+    for (const [mode, verb] of [["500", "check-wallet"], ["failtx", "watch-transaction"]]) {
+      stub.settleRefuse = "free_tier_exhausted";
+      fallback.mode = mode;
+      c0 = { ...counts };
+      const paid = await payA.payments.createPaymentPayload(offer);
+      const r = await sendRaw(payA.raw, paid);
+      const hp = await payA.payments.createPaymentPayload(httpReq);
+      const hr = await fetch(`${B}/api/memory?key=${encodeURIComponent(key)}`, { headers: { "payment-signature": encodePaymentSignatureHeader(hp), "X-Forwarded-For": "203.0.113.11" } });
+      const hb = await hr.json().catch(() => ({}));
+      stub.settleRefuse = null;
+      fallback.mode = "refuse";
+      const m = r._meta?.[SETTLEMENT_PENDING_META] || {};
+      const t = (r.content || []).map((c) => c.text || "").join("\n");
+      const vbOf = (p) => new Date(Number(p.payload.authorization.validBefore) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+      ok(hr.status === 402 && hb.reason === "settlement-unconfirmed" && hb.retry === verb && hb.authorizationValidBefore === vbOf(hp) && (verb === "watch-transaction") === Boolean(hb.refundStatusUrl),
+        `control: the HTTP route answers a fallback ${mode} with settlement-unconfirmed, retry ${verb}, the validBefore${verb === "watch-transaction" ? " and refundStatusUrl" : ""} (${JSON.stringify(hb).slice(0, 300)})`);
+      ok(noOffer(r) && m.reason === "settlement-unconfirmed" && m.retry === verb && m.authorizationValidBefore === vbOf(paid)
+        && (verb === "watch-transaction" ? /^https:\/\/agent402\.tools\/api\/refunds\?tx=0xfd/.test(String(m.refundStatusUrl)) && /^0xfd/.test(String(m.transactions?.[0])) : !m.refundStatusUrl && !m.transactions),
+        `over /mcp a fallback ${mode} carries reason settlement-unconfirmed, retry ${verb}, authorizationValidBefore${verb === "watch-transaction" ? ", the transaction and refundStatusUrl" : ""} in _meta, no offer (${JSON.stringify(m).slice(0, 400)})`);
+      ok(!/did not settle/.test(t) && /may still land/.test(t) && t.includes(vbOf(paid)) && (verb === "check-wallet" ? /paying wallet/.test(t) : t.includes(m.transactions?.[0] || "-")),
+        `its text says the transfer may still land and names the expiry${verb === "watch-transaction" ? " and the transaction" : " and the wallet check"}, never "did not settle" (${t.slice(0, 300)})`);
+      ok(counts.settle === c0.settle + 2, `one primary settle per payment, MCP and HTTP (${counts.settle - c0.settle})`);
+    }
   }
 
   // 6. Invalid payments: the reader's refusal and the facilitator's.

@@ -8,6 +8,7 @@
 // exercised but tolerant of upstream/sandbox failures (they need real egress;
 // CI has it). Memory tools get a demo namespace and accept their valid 4xx.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { shedWaitMs, SHED_MAX_ASKS, SHED_MAX_WAIT_MS } from "./lib/shed-answer.js";
 import { missingDocumentedKeys, emptyPromisedArrays } from "./sweep-shape.js";
 import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
 
@@ -81,15 +82,17 @@ const NETWORK = new Set([
   "/api/sanctions/wallet",
   "/api/sanctions/name",
   "/api/cve-lookup",  // cve-kit.js (NVD + EPSS + CISA KEV)
-  "/api/defi-yields", "/api/defi-yield-history", "/api/defi-protocols", "/api/defi-protocol", "/api/defi-chains", "/api/defi-chain-tvl-history", "/api/stablecoins", "/api/stablecoin-supply-history", "/api/defi-fees", "/api/defi-dex-volume",  // defi-kit.js
+  // crypto-screens-kit.js: keyless public market data (a shared per-IP limit);
+  // the two pool tools read endpoints that answer only to a key (503 without).
+  "/api/funding-screener", "/api/stablecoin-depeg-watch", "/api/exchange-spread", "/api/defi-screener", "/api/chain-board", "/api/dex-volume-board", "/api/dex-pool-health",
+  "/api/lending-rates",  // lending-rates-kit.js (contract reads over keyless public nodes)
   "/api/crypto-news", "/api/crypto-indicators", "/api/crypto-market-pulse",  // crypto-signals-kit.js
   "/api/site-map", "/api/site-crawl",  // crawl-kit.js
   "/api/perp-markets", "/api/perp-funding", "/api/perp-funding-screener", "/api/perp-open-interest", "/api/perp-klines", "/api/perp-orderbook", "/api/perp-basis",
   "/api/perp-dexs", "/api/perp-dex-markets", "/api/perp-dex-limits",
-  "/api/options-summary", "/api/crypto-options-chain", "/api/options-ticker", "/api/options-volume",
+  "/api/options-summary", "/api/crypto-options-chain", "/api/options-ticker",
   "/api/token-safety", "/api/sol-token-safety", "/api/sol-token-report", "/api/sol-token-holders", "/api/sol-token-pairs", "/api/sol-token-search", "/api/sol-trending", "/api/sol-price", "/api/sol-swap-quote", "/api/sol-token-lookup",
   "/api/x-search-recent", "/api/x-user", "/api/x-user-tweets", "/api/x-tweet", "/api/x-users-lookup",
-  "/api/exa-search", "/api/exa-answer", "/api/exa-contents",
   "/api/hunter-domain-search", "/api/hunter-email-finder", "/api/hunter-email-verify", "/api/hunter-company", "/api/apollo-people-search", "/api/apollo-org-enrich", "/api/apollo-person-match",
   "/api/extract", "/api/meta", "/api/dns", "/api/render", "/api/screenshot", "/api/pdf",
   "/api/http-check", "/api/fetch-json", "/api/tls-cert", "/api/whois", "/api/robots-check", "/api/sitemap",
@@ -98,8 +101,9 @@ const NETWORK = new Set([
   // Web-content kit: archive.org (archive-snapshot), caller feed URLs
   // (feed-parse), caller redirect chains (unshorten-url) — all live egress.
   "/api/archive-snapshot", "/api/feed-parse", "/api/unshorten-url",
-  // a2a-card-fetch: its example fetches the static sample card on PROD, which
-  // 404s on the CI run that first ships the route — lenient until deployed.
+  // a2a-card-fetch: its example names the static sample card on production;
+  // the CI sweeps' server answers it from itself (own-examples-preload.js),
+  // a local boot without that preload still fetches production - lenient.
   "/api/a2a-card-fetch",
   // seller-payability pays an external seller's probe from the spending
   // wallet - 503 without X402_UPSTREAM_BUYER_KEY (CI boots keyless).
@@ -128,7 +132,6 @@ const NETWORK = new Set([
   "/api/device-recalls", "/api/college-lookup", "/api/fec-candidates",
   "/api/drug-label", "/api/drug-ndc", "/api/device-510k", "/api/device-adverse-events",
   "/api/federal-awards", "/api/geo-lookup", "/api/fema-disasters",
-  "/api/geocode", "/api/reverse-geocode", "/api/place-search",
   "/api/image-ocr",
   // Image-kit URL tools: the examples fetch sample-photo.jpg from our own
   // /fixtures/ on production over live egress, so a network failure on the
@@ -141,6 +144,8 @@ const NETWORK = new Set([
   // must not hard-block the deploy gate).
   "/api/weather-current", "/api/weather-daily", "/api/weather-hourly",
   "/api/weather-history", "/api/weather-air-quality",
+  "/api/place-lookup", "/api/weather-probability", "/api/weather-market-brackets", "/api/weather-market-board",
+  "/api/weather-window", "/api/weather-thresholds",
   // B20 log scans: chunked eth_getLogs against public Base RPCs — flappy in CI.
   "/api/b20-new-tokens", "/api/b20-memos",
   // B20 eth_call tools: the SAME public-RPC egress (15s abort x 3 RPCs x 2
@@ -177,9 +182,8 @@ const NETWORK = new Set([
   "/api/options-chain", "/api/premarket-quote", "/api/stock-dividends",
   // Crypto-kit: CoinGecko public API — keyless, ~30 req/min from a single IP.
   // Tolerate transient 429/502/503/504 (rate limit + Cloudflare hiccups).
-  // crypto-orderbook rides Coinbase Exchange's public API (same lenient posture).
   "/api/crypto-price", "/api/crypto-market", "/api/crypto-history", "/api/crypto-trending", "/api/crypto-global",
-  "/api/crypto-orderbook", "/api/stablecoin-peg",
+  "/api/stablecoin-peg",
   // market-tick reads crypto-price and stock-quote in-process (listed only with MARKET_TICK=on).
   "/api/market/tick",
   // Network-kit: live DNS resolution against 1.1.1.1/8.8.8.8/9.9.9.9. Public
@@ -214,20 +218,20 @@ const NETWORK = new Set([
   // can 403→503 in CI), favicon fetch against a live site (favicon-grab).
   "/api/lei-lookup", "/api/wikidata-entity", "/api/gravatar-check",
   "/api/github-repo", "/api/favicon-grab",
-  // Price-feed-kit: keyless public upstreams (Pyth Hermes, CoinGecko, DeFiLlama).
+  // Price-feed-kit: a keyless public upstream (CoinGecko).
   // CoinGecko's free tier shares a per-IP ~30 rpm limit; tolerate 429/502/503/504.
-  "/api/price-coingecko", "/api/defi-tvl",
+  "/api/price-coingecko",
   // Dex-kit: dex-pair / dex-pool / dex-quote read chain-kit's RPC transport
-  // (Alchemy, then keyless public nodes). dex-top-pools hits DeFiLlama keylessly.
-  "/api/dex-pair", "/api/dex-pool", "/api/dex-quote", "/api/dex-top-pools",
+  // (Alchemy, then keyless public nodes).
+  "/api/dex-pair", "/api/dex-pool", "/api/dex-quote",
   // Prediction-market-kit: Kalshi's keyless public API. Per-IP rate-limited;
   // tolerate transient 429/502/503/504.
   "/api/kalshi-markets", "/api/kalshi-event", "/api/kalshi-live-data", "/api/kalshi-weather-index",
-  // MEV + L2 kit: Flashbots relay (keyless), DeFiLlama (keyless), and Alchemy
+  // MEV + L2 kit: Flashbots relay (keyless) and Alchemy
   // (503 without key). Tolerate transient upstream errors + 4xx from
   // placeholder example inputs (e.g. specific block-number lookups may miss).
   "/api/mev-recent-blocks", "/api/mev-builder-share", "/api/mev-block-payment",
-  "/api/l2-tvl", "/api/l2-gas-comparison",
+  "/api/l2-gas-comparison",
   // Onchain-identity-kit: keyless public APIs (ensideas, Warpcast, EAS
   // indexers). Tolerate transient upstream errors + 4xx from placeholder
   // example inputs (0x000…0 may return null/empty).
@@ -357,6 +361,7 @@ const NETWORK = new Set([
   "/api/moderate",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
+const MEMORY_NS = `smoke-all-${process.pid}-${Date.now().toString(36)}`;
 // Wallet-keyed tools (payment = identity): in free mode there is no payment,
 // so their documented "pay to unlock" 4xx is the CORRECT answer, not a bug —
 // same leniency class as the memory tools.
@@ -508,7 +513,10 @@ for (const [path, methods] of paths) {
         : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(example) };
     }
     // Memory tools need an identity in free mode; give them a demo namespace.
-    if (isMemory(path)) url += (url.includes("?") ? "&" : "?") + "ns=smoke-all";
+    // One per run: the compare-and-swap example takes a 30 s lease, and a
+    // second run against the same server inside it would be refused the lease
+    // (swapped: false, no expiresAt) under a namespace both runs shared.
+    if (isMemory(path)) url += (url.includes("?") ? "&" : "?") + `ns=${MEMORY_NS}`;
 
     tasks.push({ path, method, op, cat, url, init });
   }
@@ -520,15 +528,7 @@ for (const [path, methods] of paths) {
 // (correctly) read as a failure.
 const CONCURRENCY = Math.max(1, Number(process.env.TEST_ALL_CONCURRENCY) || 8);
 let speechFixture = null;
-const SHED_MAX_ASKS = 3, SHED_MAX_WAIT_MS = 10_000;
-/** How long a load-shed answer asks the caller to wait (ms), or null when the
- *  answer is not one: read from its fields, never from its sentence. */
-function shedWaitMs(status, retryAfterHeader, body) {
-  if (status !== 503 || !body || typeof body !== "object") return null;
-  const header = Number(retryAfterHeader);
-  if (!Number.isFinite(header) || header <= 0 || typeof body.retryAfterSeconds !== "number" || body.retryAfterSeconds !== header) return null;
-  return Math.min(SHED_MAX_WAIT_MS, Math.ceil(header * 1000));
-}
+// The load-shed answer is matched whole, sentence and fields (scripts/lib/shed-answer.js).
 async function runTask(t) {
   let status = 0, body = null, threw = null, shed = 0, stillShed = false;
   const _t0 = Date.now();
@@ -540,7 +540,8 @@ async function runTask(t) {
     }
     // A LOAD-SHED answer is admission control, not a wrong example: the
     // server pauses free requests briefly while it is busy (src/load-shed.js:
-    // 503, Retry-After, and the same figure in the body's retryAfterSeconds).
+    // 503, Retry-After, and its own body with the same figure in
+    // retryAfterSeconds; an upstream 503 is not one).
     // The sweep waits that long and asks again, at most SHED_MAX_ASKS asks and
     // SHED_MAX_WAIT_MS of waiting for one route. Any other 503, and a shed
     // that is still there at the bound, is judged as before.

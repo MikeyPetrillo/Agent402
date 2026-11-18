@@ -38,7 +38,7 @@ import {
   ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
-  MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, MCP_PAYMENT_REQUIRED_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, settleReceiptFromHeader, tempoSettleProof, credentialSignedUsd, challengeIdFromMeta,
+  MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, MCP_PAYMENT_REQUIRED_META, MCP_CREDENTIAL_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, settleReceiptFromHeader, tempoSettleProof, credentialSignedUsd, challengeIdFromMeta,
   mcpBinaryResult,
 } from "./mcp-mpp.js";
 import {
@@ -109,9 +109,10 @@ import { decodePaymentResponseHeader } from "@x402/core/http";
 import {
   readPaymentFromMeta, paymentSignatureHeader, paymentRequiredFromHeader,
   buildPaymentRequiredResult, buildInvalidPaymentResult, withPaymentResponse,
-  buildSettlementPendingResult, buildSettlementUnprovenResult, buildPaidRouteFailedResult, isSettlementUndecided,
+  buildSettlementPendingResult, buildSettlementUnprovenResult, buildPaidRouteFailedResult, isSettlementUndecided, jsonWithin,
 } from "./mcp-x402.js";
-import { mcpX402Entries, mcpX402PathOf, MCP_X402_PREFIX } from "./mcp-x402-routes.js";
+import { maxHeaderSize } from "node:http";
+import { mcpX402Entries, mcpX402PathOf, MCP_X402_PREFIX, isFixedPriceDef } from "./mcp-x402-routes.js";
 import { decodesAsMppCredential, decodesAsX402Payment } from "./payment-attempt.js";
 
 // serverInfo reports the agent402-mcp package version in the deployed build
@@ -174,9 +175,11 @@ const mcpReqLimiter = createLimiter("mcp-transport", { perMin: MCP_REQ_PER_MIN, 
 const MCP_PAID_REQ_PER_MIN = Number(process.env.AGENT402_MCP_PAID_REQ_PER_MIN) || MCP_REQ_PER_MIN * 5;
 const MCP_PAID_REQ_PER_HOUR = Number(process.env.AGENT402_MCP_PAID_REQ_PER_HOUR) || MCP_REQ_PER_HOUR * 5;
 const mcpPaidReqLimiter = createLimiter("mcp-transport-paid", { perMin: MCP_PAID_REQ_PER_MIN, perHour: MCP_PAID_REQ_PER_HOUR });
-// How long a twin's PaymentRequired is reused for a first ask: it changes
-// only with a price or a rail restored at runtime.
-const TWIN_OFFER_TTL_MS = 30_000;
+// How long a fixed-price PaymentRequired (a twin's first ask, a free tool's
+// offer at its limit) is reused: it changes only with a price or a rail
+// restored at runtime. At most OFFER_CACHE_MAX routes are kept.
+const OFFER_CACHE_TTL_MS = 30_000;
+const OFFER_CACHE_MAX = 256;
 const reqLimitText = (path, retryAfterSeconds) => `Too many requests to ${path} - slow down and retry in about ${retryAfterSeconds} s.`;
 const MCP_MAX_CONCURRENT = Number(process.env.AGENT402_MCP_MAX_CONCURRENT) || 64;
 const MCP_REQ_DEADLINE_MS = Number(process.env.AGENT402_MCP_REQ_DEADLINE_MS) || 30_000;
@@ -248,17 +251,26 @@ const TASK_GATE_MS = Number(process.env.AGENT402_MCP_TASK_GATE_MS) || 8_000;
 export const TASK_PROGRESS_META = "org.agent402/progress";
 let mcpInFlight = 0;
 
+/** The largest MPP credential a call can carry plausibly: it is replayed to
+ *  the MPP gate as its Authorization header, and the gate's HTTP parser takes
+ *  no header block past this, so a larger one could never be verified. */
+export const MPP_CREDENTIAL_MAX_BYTES = maxHeaderSize;
+
 /** True when a call's _meta holds a PLAUSIBLE payment, read the way the HTTP
  *  limiters read a payment header (src/payment-attempt.js, the rule
- *  looksLikePayment applies): an MPP credential that decodes, or an x402
+ *  looksLikePayment applies): an MPP credential that decodes, no larger than
+ *  MPP_CREDENTIAL_MAX_BYTES, or an x402
  *  payment the reader accepts whose network this server offers. When an MPP
  *  credential rides along it alone decides (the dispatch uses MPP then).
  *  Shape, not validity: the paywall verifies. Never throws. */
 export function metaCarriesPayment(meta) {
   try {
     if (!meta || typeof meta !== "object") return false;
+    // Its size first: nothing past the gate's header limit is serialized or decoded.
+    const rawCred = meta[MCP_CREDENTIAL_META];
+    if (rawCred && (typeof rawCred === "string" ? rawCred.length > MPP_CREDENTIAL_MAX_BYTES : !jsonWithin(rawCred, MPP_CREDENTIAL_MAX_BYTES))) return false;
     const cred = credentialHeaderFromMeta(meta);
-    if (cred) return decodesAsMppCredential(cred);
+    if (cred) return cred.length <= MPP_CREDENTIAL_MAX_BYTES && decodesAsMppCredential(cred);
     const read = readPaymentFromMeta(meta);
     return read.ok === true && !!read.payment && decodesAsX402Payment(paymentSignatureHeader(read.payment));
   } catch { return false; }
@@ -328,7 +340,7 @@ export function mcpServerCard({ baseUrl, path = "/mcp", serverName = "agent402",
   };
 }
 
-export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS, serverCardAliases = [] }) {
+export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS, serverCardAliases = [], offerCacheMax = OFFER_CACHE_MAX }) {
   // The wires this mount takes in the call. `payWires` is the boot's own
   // account (src/connector-pay.js connectorWires, the source the pages read):
   // a wire it denies has no loopback here, so the capability advertisement,
@@ -434,8 +446,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // this boot, is paid on the slug's own HTTP route and challenge. Either way
   // the loopback carries the payment as PAYMENT-SIGNATURE and the route's x402
   // paywall verifies, runs and settles it (settle after a <400 answer only).
-  // The twins' unpaid offers (x402Offer): at most one entry per twin route.
-  const twinOfferCache = new Map();
+  // Fixed-price unpaid offers (x402Offer): the twins', and a free tool's at
+  // its limit. One entry per route, `offerCacheMax` routes at most.
+  const offerCache = new Map();
   const x402TwinSlugs = new Set(x402Loopback ? mcpX402Entries(catalog).map((e) => e.slug) : []);
   // The wires a paid tool is payable over in the call on this mount, for the
   // listed descriptions: "x402 or MPP", "x402", "MPP" or "".
@@ -973,18 +986,25 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     /** The x402 PaymentRequired a route answers an unpaid call with (its
      *  PAYMENT-REQUIRED header), read over the loopback; null when the route
      *  answers anything else or the read fails. Never throws. */
-    async function x402Offer(def, params, ip, signal) {
+    async function x402Offer(def, params, ip, signal, { reuse = false } = {}) {
       if (!x402Loopback) return null;
-      // A twin's offer is fixed-price and the same for every caller: it is
-      // kept per twin route for TWIN_OFFER_TTL_MS, so a flagship's first ask
-      // costs one loopback (the MPP ask), not two.
-      const twin = String(def.route || "").includes(MCP_X402_PREFIX);
-      const hit = twin ? twinOfferCache.get(def.route) : null;
-      if (hit && Date.now() - hit.at < TWIN_OFFER_TTL_MS) return structuredClone(hit.offer);
+      // A twin's offer is fixed-price and the same for every caller, and so is
+      // a fixed-price free tool's at its limit (`reuse`): each is kept per
+      // route for OFFER_CACHE_TTL_MS, so a flagship's first ask costs one
+      // loopback (the MPP ask), not two, and a client calling past its limit
+      // costs no loopback per call. A priced-per-request route is never kept.
+      const cacheable = (String(def.route || "").includes(MCP_X402_PREFIX) || reuse) && isFixedPriceDef(def);
+      const hit = cacheable ? offerCache.get(def.route) : null;
+      if (hit && Date.now() - hit.at < OFFER_CACHE_TTL_MS) return structuredClone(hit.offer);
+      if (hit) offerCache.delete(def.route);
       try {
         const r = await x402Loopback({ def, params, ip, signal, timeoutMs: PAID_LOOPBACK_TIMEOUT_MS, heartbeatToken });
         const offer = r.status === 402 ? paymentRequiredFromHeader(r.headers.get("payment-required")) : null;
-        if (twin && offer) twinOfferCache.set(def.route, { at: Date.now(), offer: structuredClone(offer) });
+        if (cacheable && offer) {
+          // Bounded: the oldest entry goes first.
+          if (offerCache.size >= offerCacheMax) offerCache.delete(offerCache.keys().next().value);
+          offerCache.set(def.route, { at: Date.now(), offer: structuredClone(offer) });
+        }
         return offer;
       } catch { return null; }
     }
@@ -1046,6 +1066,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const failed = Boolean(settle) && typeof settle === "object" && settle.success === false;
       const bare = !settle && !r.headers.get("payment-required") && body?.error === "settlement_failed";
       if (!failed && !bare) return null;
+      // A settle chain the route answered as not confirmed (retry
+      // watch-transaction or check-wallet): the transfer may still land, so
+      // it is the pending result with the route's verb and expiry, never
+      // "did not settle".
+      if (isSettlementUndecided(body, null) && body?.reason === "settlement-unconfirmed") {
+        return buildSettlementPendingResult({ label: `Agent402 (${def.slug})`, refusal: body, retryAfterSeconds: r.headers.get("retry-after"), settleResponse: failed ? settle : null });
+      }
       return buildSettlementUnprovenResult({ label: `Agent402 (${def.slug})`, refusal: body, settleResponse: failed ? settle : null });
     }
 
@@ -1731,7 +1758,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             const rep = gone.replacement ? tools.get(gone.replacement) : null;
             try { capturePostHogToolGone({ route: gone.route, replacement: rep ? rep.def.route : "GET /api/find", source: toolGoneSourceOf({ headers: reqHeaders, surface: "mcp" }) }); } catch { /* telemetry never breaks a response */ }
             const what = gone.kind === "pack" ? "Skill pack" : "Tool";
-            return { content: [{ type: "text", text: `${what} ${gone.slug} was retired on ${gone.retiredAt}. ${rep ? `Use slug ${rep.def.slug} instead (${rep.def.route}).` : "There is no direct replacement; use catalog.search to find the closest live tool."}` }], isError: true };
+            return { content: [{ type: "text", text: `${what} ${gone.slug} was retired on ${gone.retiredAt}. ${rep ? `Use slug ${rep.def.slug} instead (${rep.def.route}).` : "There is no direct replacement; use catalog.search to find the closest live tool."}${!rep && gone.note ? ` ${gone.note}` : ""}` }], isError: true };
           }
           return { content: [{ type: "text", text: `Unknown slug ${quotedEcho(resolvedSlug)}. Use catalog.search to find the right slug.` }], isError: true };
         }
@@ -1765,7 +1792,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // A free tool at its limit offers its own x402 challenge (the HTTP
           // route's), so a client that can pay is served now: it pays in
           // _meta["x402/payment"] and the call skips this limiter.
-          const offer = isLongCall(entry.def) ? null : await x402Offer(entry.def, paidParamsOf(args, isNamed), ip, signal);
+          const offer = isLongCall(entry.def) ? null : await x402Offer(entry.def, paidParamsOf(args, isNamed), ip, signal, { reuse: true });
           return (offer && buildPaymentRequiredResult(offer, { message: `${limitText} To be served now, pay this call over x402: sign one of the accepts in this result's PaymentRequired and call again with the payment in _meta["x402/payment"] (an x402 MCP client does this automatically). Or pay per call from the npm server: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }))
             || { content: [{ type: "text", text: `${limitText} For unmetered access pay per call via x402: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }], isError: true };
         }

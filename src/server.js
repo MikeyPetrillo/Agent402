@@ -425,7 +425,7 @@ import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
 import { trustPage } from "./trust-page.js";
 import { markGateMounted } from "./gate-mounts.js";
-import { conformanceDocument, CONFORMANCE_PATH } from "./conformance.js";
+import { conformanceDocumentCached, resetConformanceCache, CONFORMANCE_PATH } from "./conformance.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
 import { pressPage } from "./press-page.js";
@@ -507,6 +507,7 @@ import { fromUsdOf } from "./quoted-from.js";
 import { NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, gatewayBatchedRailStatus, onRailRestored, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
+import { isSettlementUnconfirmedReceipt } from "./payment-reject.js";
 import { networkFloorUsd } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential, configureTempoLateWatches } from "./mpp-tempo.js";
@@ -542,7 +543,6 @@ const BROWSER_MEASURE_TOOLS = BROWSER_MEASURE_TOOLS_RAW.map((t) => {
   return { ...t, handler: t.slug === "html-frames" ? withHtmlFramesFailureBound(run, (req) => payerFromRequest(req) || req?.ip) : run };
 });
 import { GOV_TOOLS } from "./tools/gov-kit.js";
-import { GEO_TOOLS } from "./tools/geo-kit.js";
 import { OCR_TOOLS } from "./tools/ocr-kit.js";
 import { AGENT_TOOLS } from "./tools/agent-kit.js";
 import { SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration, erc8004AgentId } from "./tools/a2a-card.js";
@@ -594,6 +594,9 @@ import { MEV_AND_L2_TOOLS } from "./tools/mev-and-l2-kit.js";
 import { ONCHAIN_IDENTITY_TOOLS } from "./tools/onchain-identity-kit.js";
 import { NFT_MARKET_TOOLS } from "./tools/nft-market-kit.js";
 import { WEATHER_TOOLS, openMeteoStatus } from "./tools/weather-kit.js";
+import { WEATHER_PROBABILITY_TOOLS } from "./tools/weather-probability-kit.js";
+import { WEATHER_PLAN_TOOLS } from "./tools/weather-plan-kit.js";
+import { WEATHER_CALC_TOOLS } from "./tools/weather-calc-kit.js";
 import { DATE_TIME_TOOLS } from "./tools/date-time-kit.js";
 import { TEXT_ANALYSIS_TOOLS } from "./tools/text-analysis-kit.js";
 import { VALIDATION_TOOLS } from "./tools/validation-kit.js";
@@ -660,7 +663,8 @@ import { FARCASTER_SOCIAL_TOOLS, farcasterSocialEnabled } from "./tools/farcaste
 const FARCASTER_SOCIAL_TOOLS_ENABLED = farcasterSocialEnabled() ? FARCASTER_SOCIAL_TOOLS : [];
 import { CRYPTO_MARKETS_TOOLS } from "./tools/crypto-markets-kit.js";
 import { ATTEST_TOOLS, setIdentityBoundSlugs } from "./tools/attest-kit.js";
-import { DEFI_TOOLS } from "./tools/defi-kit.js";
+import { CRYPTO_SCREENS_TOOLS } from "./tools/crypto-screens-kit.js";
+import { LENDING_TOOLS } from "./tools/lending-rates-kit.js";
 import { CVE_TOOLS } from "./tools/cve-kit.js";
 import { MCP_PACKAGE_TOOLS } from "./tools/mcp-package-kit.js";
 import { CRYPTO_SIGNALS_TOOLS } from "./tools/crypto-signals-kit.js";
@@ -669,17 +673,10 @@ import { spendWindowStatus, refreshSpendWindowShared } from "./router-spend-wind
 import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus, refreshXDataSpendShared } from "./tools/x-data-kit.js";
 import { jevSpendStatus, refreshJevSpendShared, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
-import { EXA_TOOLS, exaEnabled, exaSpendStatus, refreshExaSpendShared, exaAllowanceStatus, exaCallsToday } from "./tools/exa-kit.js";
-import { upstreamBudgetStatus, registerUpstreamCounter } from "./upstream-budgets.js";
+import { upstreamBudgetStatus } from "./upstream-budgets.js";
 import { hardCapStatus, startHardCapSync } from "./upstream-hard-caps.js";
-// Exa is also an indexed seller the crawlers read unpaid; its budget counts only
-// the calls our Exa tools make.
-registerUpstreamCounter("exa", exaCallsToday);
 import { b2bEnrichEnabled } from "./tools/b2b-enrich-kit.js";
 const X_DATA_TOOLS_ENABLED = xDataEnabled() ? X_DATA_TOOLS : [];
-// Env-gated on EXA_API_KEY: unkeyed deployments list nothing rather than
-// advertising routes that can only 503.
-const EXA_TOOLS_ENABLED = exaEnabled() ? EXA_TOOLS : [];
 const B2B_ENRICH_TOOLS_ENABLED = b2bEnrichEnabled();
 import { STT_TOOLS, sttUnmeasuredSinceBoot } from "./tools/stt-kit.js";
 import { EMBED_TOOLS } from "./tools/embed-kit.js";
@@ -708,7 +705,7 @@ import { badgeSvg } from "./badges.js";
 import { adapterDocsIndex, adapterRedirectTarget } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
 import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore, ASSET_VERSION } from "./ledger-chrome.js";
-import { ledgerHomePage } from "./ledger-home.js";
+import { ledgerHomePage, socialCardText } from "./ledger-home.js";
 import { proofCell, homeProofFigures } from "./home-proof.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
@@ -774,7 +771,7 @@ const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePr
 // status probe's mark) or a payer that is one of our wallets. Stats only.
 const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...EXA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -800,7 +797,7 @@ const MODEL_BACKED_KITS = [
 ];
 const MODEL_BACKED_SLUGS = new Set(MODEL_BACKED_KITS.map((t) => t.slug).filter(Boolean));
 // A tool that runs a model inside a kit of deterministic tools (`answer` in the
-// search kit, `exa-answer` in the Exa kit) declares `modelBacked: true` on its
+// search kit) declares `modelBacked: true` on its
 // own definition. Skill packs are added below, once their tools exist: a pack
 // that runs any model-backed step is model-backed.
 for (const def of ALL_KIT) if (def?.modelBacked === true && def.slug) MODEL_BACKED_SLUGS.add(def.slug);
@@ -3996,7 +3993,7 @@ function retiredPage(res, gone) {
   const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
       <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">410</div>
       <h1 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${escHtml(what)} retired</h1>
-      <p style="color:var(--muted);margin:0 0 28px;font-weight:300;"><code>${escHtml(gone.slug)}</code> was retired on ${escHtml(gone.retiredAt)}.${rep ? ` ${escHtml(rep.name)} answers the nearest question.` : ""}</p>
+      <p style="color:var(--muted);margin:0 0 28px;font-weight:300;"><code>${escHtml(gone.slug)}</code> was retired on ${escHtml(gone.retiredAt)}.${rep ? ` ${escHtml(rep.name)} answers the nearest question.` : gone.note ? ` ${escHtml(gone.note)}` : ""}</p>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
         ${rep ? `<a class="btn btn-secondary" href="${escHtml(repHref)}">${escHtml(rep.name)}</a>` : ""}
         <a class="btn btn-secondary" href="${all.href}">${all.label}</a>
@@ -4227,12 +4224,12 @@ app.get("/api/gateway-status", async (req, res) => {
   const full = operatorView(req, res);
   // The wrong-credential and unauthenticated-CDN-peer counts every replica
   // contributed to, when shared.
-  // Also the shared day behind xDataSpend, exaSpend and jevSpend: a new
+  // Also the shared day behind xDataSpend and jevSpend: a new
   // process's own counters start empty, so each word is built from the larger
   // of the two (one bounded read each, reused for a few seconds; never
   // rejects). jevSpend reads unknown until its shared day has been read once.
-  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared(), refreshJevSpendShared(), refreshSpendWindowShared(), refreshDirectSpendShared()]);
-  const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
+  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshJevSpendShared(), refreshSpendWindowShared(), refreshDirectSpendShared()]);
+  const spend = { xDataSpend: xDataSpendStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   // The global unsettled external-spend ceiling: one word, never a figure.
   const externalSpendGlobal = await globalUnsettledStatus().catch(() => ({ status: "unknown" }));
@@ -4242,8 +4239,6 @@ app.get("/api/gateway-status", async (req, res) => {
     // one word for all of them and one per chain ("off" with none enabled).
     upstreamBuyerEvm,
     xDataSpend: full ? spend.xDataSpend : publicBucket(spend.xDataSpend),
-    exaSpend: full ? spend.exaSpend : publicBucket(spend.exaSpend),
-    exaAllowance: full ? spend.exaAllowance : publicBucket(spend.exaAllowance),
     jevSpend: full ? spend.jevSpend : publicBucket(spend.jevSpend),
     // x-search-recent's expanded-author reads today (src/x-search-stats.js):
     // ok / alert past X_SEARCH_AUTHOR_DAILY_ALERT / unknown. An alarm only,
@@ -4285,7 +4280,7 @@ app.get("/api/gateway-status", async (req, res) => {
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
     // Daily MPP reconciliation (src/mpp-reconcile.js): status words + counts,
     // never an address; the itemized rows are /__operator/mpp-reconcile.json.
-    mppReconcile: await mppReconciler.status({ full }).catch(() => ({ status: "unknown", chargedFailedStatus: "unknown" })),
+    mppReconcile: await mppReconciler.status({ full }).catch(() => ({ status: "unknown", chargedFailedStatus: "unknown", run: "unknown" })),
     // The server tweet queue (src/tweet-queue.js): one word publicly, so the
     // status Worker can page on halted / no_credentials / refused / in_doubt;
     // the operator also gets the mode and counts. Never an id or text.
@@ -4573,7 +4568,7 @@ for (const p of A2A_WELL_KNOWN_PATHS) {
 }
 // Per payment rail, the protocol features this server implements and the
 // refund terms as data, computed at each request (src/conformance.js).
-app.get(CONFORMANCE_PATH, (_req, res) => res.set("Cache-Control", "public, max-age=300").json(conformanceDocument(BASE_URL)));
+app.get(CONFORMANCE_PATH, (_req, res) => res.set("Cache-Control", "public, max-age=300").json(conformanceDocumentCached(BASE_URL, { freeMode: FREE_MODE })));
 app.get("/.well-known/glama.json", (_req, res) => {
   const email = process.env.GLAMA_MAINTAINER_EMAIL || "mike@agent402.tools";
   res.set("Cache-Control", "public, max-age=86400").json({
@@ -4648,7 +4643,8 @@ app.get("/reports/sample/:product", (req, res) => {
   if (!meta) return notFoundPage(res, { what: "Sample report", href: "/reports", label: "All reports" });
   htmlCache(res, 300, 900).send(reportDeliveryPage(product, {
     api: "/api/reports/sample/", baseUrl: BASE_URL, robots: "index, follow, max-image-preview:large",
-    waitCopy: "Loading the sample report.", note: "",
+    // Served already drawn: a reader, a crawler and a page check get the report with no API round trip.
+    record: sampleJson(product), note: "",
     title: meta.title, description: meta.description, canonical: meta.canonical, jsonLd: meta.jsonLd,
     // The free alert for the sample's own target (dossier -> filing watch, etc.)
     extraHtml: alertFormHtml({ kind: ALERT_KIND_FOR_REPORT_KIND[sampleJson(product)?.kind], target: sampleJson(product)?.input, source: `/reports/sample/${product}` }),
@@ -5592,12 +5588,12 @@ app.get("/api/sales", async (_req, res) => {
 // payment that never lands is silent by construction — the buyer got their
 // answer and nobody complains — so it needs a monitor, not a bug report.
 // Operator-gated: it names our own revenue shortfall per rail.
-app.get("/__operator/settlement-reconciliation.json", (req, res) => {
+app.get("/__operator/settlement-reconciliation.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store");
   try {
     const days = Math.min(Math.max(parseInt(req.query?.days, 10) || 7, 1), 60);
-    res.json(reconcileSettlements({ days }));
+    res.json(await reconcileSettlements({ days }));
   } catch (err) {
     res.status(500).json({ error: redactSecrets(err?.message) });
   }
@@ -5685,6 +5681,7 @@ async function funnelView(days) {
       challenges: "402 answers served, to probes and to refused credentials",
       attempts: "requests that carried a payment credential",
       settled: "attempts answered 2xx with a settlement receipt",
+      errorAnswered: "attempts answered a 4xx other than 402, or a 5xx (on a Tempo push credential the transfer was final before the call and is booked owed)",
       refusal: "why an attempt got a 402: unfundedWallet, wrongNetwork, verifyRefused (payload or authorization faults), ourSide (not checked, quota, unconfirmed), unclassified, noReason",
       neverRetried: "callers whose first probe in a 30-minute window was followed by no credential from them inside it (per replica)",
       sales: "outside sales from the sales ledger (our own wallets and signed probes excluded), dollars at the buyer's price",
@@ -7207,6 +7204,8 @@ app.post("/__operator/seller-funding", express.json(), async (req, res) => {
 app.post("/__operator/sellers/remove", express.json(), (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
+  // A preview typed as "true" or 1 must not remove: only a JSON boolean is read.
+  if (req.body && "dryRun" in req.body && typeof req.body.dryRun !== "boolean") return res.status(400).json({ error: "dryRun must be true or false (a JSON boolean); nothing was removed" });
   if (req.body?.dryRun === true) {
     const p = removalPreview(req.body?.origin);
     if (p.error) return res.status(400).json({ error: p.error });
@@ -8044,7 +8043,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
   try {
     let cacheKey = null;
     if (policy && cacheEnabled()) {
-      cacheKey = cacheKeyFor(path, input, policy.keyFields || []);
+      cacheKey = cacheKeyFor(path, input, policy.keyFields || [], { clockSlotSeconds: policy.clockSlotSeconds });
       const hit = await cacheGet(cacheKey);
       if (hit !== null) {
         cached = true;
@@ -9845,6 +9844,7 @@ const cardSvg = (width = 1200, height = 630) => {
   const ty = (height - 630 * s) / 2;
   const mono = JSON.stringify(BRAND.mono);
   const display = JSON.stringify(BRAND.display);
+  const { subtitle, railsTag } = socialCardText(n);
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${BRAND_FONT_STYLE}${BRAND_DEFS}
   <rect width="${width}" height="${height}" fill="${BRAND.paper}"/>
   <g transform="translate(${tx},${ty}) scale(${s})">
@@ -9855,17 +9855,21 @@ const cardSvg = (width = 1200, height = 630) => {
   <!-- headline -->
   <text x="72" y="238" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.ink}">The web's paid door,</text>
   <text x="72" y="330" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.faint}">finally open.</text>
-  <text x="72" y="392" font-size="23" font-family=${display} fill="${BRAND.muted}">${n.toLocaleString("en-US")} tools priced in cents. USDC over x402 / MPP; reports and monitors also by card.</text>
+  <text x="72" y="392" font-size="23" font-family=${display} fill="${BRAND.muted}">${subtitle}</text>
   <!-- handshake panel -->
   <rect x="72" y="430" width="1056" height="140" rx="16" fill="url(#panel)" stroke="${BRAND.hairline}" stroke-width="1.5"/>
   <text x="100" y="472" font-size="19" font-family=${mono} fill="${BRAND.faint}">$ curl agent402.tools/api/whois?domain=example.com</text>
   <text x="100" y="506" font-size="19" font-family=${mono} fill="${BRAND.amber}">HTTP/2 402  <tspan fill="${BRAND.muted}">payment-required: usdc · base · 0.001</tspan></text>
   <text x="100" y="540" font-size="19" font-family=${mono} fill="${BRAND.accent}">HTTP/2 200  <tspan fill="${BRAND.muted}">payment-response: settled · tx 0x9ec4…</tspan></text>
-  <text x="1100" y="472" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">x402 · MPP · card</text>
+  <text x="1100" y="472" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">${railsTag}</text>
   <text x="1100" y="506" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">${RAILS.length} rails · USDC · USDG</text>
   </g>
 </svg>`;
 };
+// The card URL's version (set at boot by tool count, above) also carries a
+// short hash of the card itself, so a crawler refetches when its text changes
+// (the card clause follows the sales switches) and not only its count.
+setOgImageVersion(`${Object.keys(CATALOG).length}.${createHash("sha256").update(cardSvg()).digest("hex").slice(0, 8)}`);
 // X (Twitter) profile header, 1500x500 - the platform's own spec. Designed for
 // how X actually crops it: the avatar sits over the BOTTOM-LEFT, the sides are
 // shaved on narrow viewports, and the bottom strip is covered by profile text
@@ -12945,9 +12949,14 @@ for (const tool of ALL_KIT) {
             // A Circle Gateway batched payment Gateway is still settling is
             // not the buyer's failure (they were told to resend the same
             // payment): it still feeds the burst alarm, never the payer's count.
+            // Nor is a settle chain that ended unconfirmed
+            // (settlement_unconfirmed, src/payments.js): the transfer may
+            // still land and the buyer was told not to pay again, so it
+            // feeds the burst alarm and never the payer's count.
             const st = res.statusCode;
+            const receipt402 = st === 402 ? decodeSettleReceipt(res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE")) : null;
             if (st === 200) recordCompositeSpendSuccess(guardKey);
-            else if (st === 402 && isGatewayPendingAnswer(req, decodeSettleReceipt(res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE")))) recordCompositeSpendFailure(null, { global: !ownGlobalBound });
+            else if (st === 402 && (isGatewayPendingAnswer(req, receipt402) || isSettlementUnconfirmedReceipt(receipt402))) recordCompositeSpendFailure(null, { global: !ownGlobalBound });
             else if (st === 402 || st >= 500) recordCompositeSpendFailure(guardKey, { global: !ownGlobalBound });
           } catch { /* never break a response */ }
         });
@@ -12955,7 +12964,7 @@ for (const tool of ALL_KIT) {
 
       let cacheKey = null;
       if (cachePolicy && cacheEnabled()) {
-        cacheKey = cacheKeyFor(path, input, cachePolicy.keyFields || []);
+        cacheKey = cacheKeyFor(path, input, cachePolicy.keyFields || [], { clockSlotSeconds: cachePolicy.clockSlotSeconds });
         const hit = await cacheGet(cacheKey);
         if (hit !== null) {
           cached = true;
@@ -13302,7 +13311,7 @@ app.use((req, res) => {
         res.set(retirementHeaders(gone.retiredAt, replacement?.url));
         return res.status(410).json({
           ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement,
-          hint: `${gone.kind === "pack" ? "Skill pack" : "Tool"} ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : " There is no direct replacement; the closest live tools are listed, or ask /api/find?q=<task>."}`,
+          hint: `${gone.kind === "pack" ? "Skill pack" : "Tool"} ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : " There is no direct replacement; the closest live tools are listed, or ask /api/find?q=<task>."}${!replacement && gone.note ? ` ${gone.note}` : ""}`,
           find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions,
         });
       }
@@ -13398,6 +13407,8 @@ await Promise.race([ledgerFiguresBoot, new Promise((ok) => setTimeout(ok, LEDGER
 void loadDiscoveryRefusals();
 const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
+  // Every gate is mounted by now: a conformance document built earlier is dropped.
+  resetConformanceCache();
   // The deploy overlap window (src/replay-topology.js) is counted from here,
   // not from the first import: a slow store load must not spend it.
   markListening(listenedAt);

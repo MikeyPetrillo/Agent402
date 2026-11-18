@@ -198,7 +198,10 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const res = { on() {}, once() {}, setHeader() {}, getHeader() {}, json() {}, send() {}, end() {}, write() {}, writeHead() {}, status() { return this; } };
   await idem(paidReq(false), res, () => {});
   await idem(paidReq(true), res, () => {});
-  ok(keys.length === 2 && keys[0] !== keys[1], `the same payment on the twin and the HTTP route reads two idempotency keys (${keys.length})`);
+  // Each request also reads the payment's unconfirmed-settle answer, keyed on
+  // the payment header alone (src/idempotency.js): one authorization is one
+  // payment on any route, so that key is the same on both.
+  ok(keys.length === 4 && keys[1] !== keys[3] && keys[0] === keys[2] && keys[0] !== keys[1], `the same payment on the twin and the HTTP route reads two idempotency keys, and one shared unconfirmed-settle key (${keys.length} reads)`);
 }
 
 // ---- booted half -------------------------------------------------------------------

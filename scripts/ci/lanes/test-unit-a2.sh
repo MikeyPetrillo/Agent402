@@ -56,7 +56,7 @@ t node scripts/test-timsort-steps.js
 # @step 3: Shared limits (REAL redis: the counter primitive on both backends, two Redis instances read one count, a store that does not answer is a miss and never an exception; then two servers and two control replicas on one Redis: a breaker, a money guard and a budget counted on A refuse on B, an operator session minted on A is honoured and revoked on B, the judge's token ceiling and a wallet's in-flight runs are summed across A and B)
 t node scripts/test-shared-limits.js
 t node scripts/test-shared-limits-crossprocess.js
-# exaSpend, xDataSpend and routerSpendWindow in a new process
+# xDataSpend and routerSpendWindow in a new process
 t node scripts/test-spend-words-shared-redis.js
 # topBuyerFailures read the same on a container that served none of the failures; a refusing store leaves this process's own word.
 t node scripts/test-top-buyer-failures-redis.js
@@ -115,6 +115,8 @@ t node scripts/test-lease-fencing-pg.js
 # A paid monitor run is claimed on its record; saves merge, never erase.
 t node scripts/test-monitor-scheduler-pg.js
 t node scripts/test-idempotency-store.js
+# The answer kept for a payment whose settlement ended unconfirmed: keyed on the payment, kept to its validBefore (REAL redis TTL).
+t node scripts/test-idempotency-unconfirmed.js
 # Every store that left the volume: file imported once, rows win, invariant on Postgres.
 t node scripts/test-stats-pg.js
 t node scripts/test-status-store-pg.js
@@ -287,7 +289,6 @@ t node scripts/test-market-pulse-slices.js
 # "Cache hygiene (M5 — Attack III: paid responses no-store, free discovery stays cacheable)"
 t node scripts/test-cache-hygiene.js
 t node scripts/test-cache-keys.js
-t node scripts/test-nominatim-pace.js
 # "SOR external leg for MPP sellers on Tempo (catalog from the verified MPP index, asset pin, live-quote cap, proven-seller gate fail-closed, chain mapping — offline)"
 t node scripts/test-tempo-router.js
 # MPP request bodies shaped from the seller's llms.txt example (bounded parse, lossless url/query/id cases only; x402 bodies untouched)

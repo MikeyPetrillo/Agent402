@@ -24,6 +24,18 @@
 // the facilitator's own hint (src/verify-hint.js) is the better answer whenever
 // the payment actually reached it.
 
+/** The retry verbs a 402 body carries while the payment's settlement is not
+ *  decided: same-payment (a payment not checked, a Gateway batched payment
+ *  still settling: send the same payment again), watch-transaction and
+ *  check-wallet (a settlement not confirmed: the transfer may still land).
+ *  The one list every writer and reader shares (src/gateway-wire.js,
+ *  src/verify-hint.js, src/mcp-x402.js isSettlementUndecided): a payment
+ *  answered with one of these is never offered for a new signature. */
+export const RETRY_SAME_PAYMENT = "same-payment";
+export const RETRY_WATCH_TRANSACTION = "watch-transaction";
+export const RETRY_CHECK_WALLET = "check-wallet";
+export const UNDECIDED_RETRY_VERBS = Object.freeze([RETRY_SAME_PAYMENT, RETRY_WATCH_TRANSACTION, RETRY_CHECK_WALLET]);
+
 /** Decode a base64(url) JSON header. Null on anything unreadable. Shared
  *  with src/payment-required-body.js, so the 402 body mirror reads the header
  *  with the same decoder the classifier uses. */
@@ -68,7 +80,7 @@ export const REJECTION_REASONS = Object.freeze([
   { reason: "unclassified", means: "It decoded and still matched nothing, in a way this server has no name for. The refusal lists the field NAMES received so you can compare them yourself, and we would like to hear about it: an unclassified refusal is as likely to be our defect as yours." },
   { reason: "not-checked", means: "The payment never got a verdict: this server's verify request to the facilitator did not complete (a connection error or this server's own time limit), the facilitator answered with an HTTP error, or an on-chain signature check could not finish. Nothing was charged and nothing is known to be wrong with the payment. retry is same-payment: send the same payment again after Retry-After, with no new signature, while its authorization is still valid." },
   { reason: "facilitator-quota", means: "The payment verified and the call ran, then the facilitator for that network refused to settle it under a billing quota on this server's own account. Nothing was charged and nothing is wrong with your wallet. Ask the route for a fresh 402 without paying and pay on another network it lists." },
-  { reason: "settlement-unconfirmed", means: "A facilitator broadcast the transfer and answered that it was still pending, and the transaction listed in `transactions` was not confirmed on chain within this server's wait, so the answer was withheld. The transfer may still land. If it does, the amount is booked as owed to the paying wallet and repaid after on-chain proof. Watch the listed transaction; a new authorization for the same call is a new payment, not a step in that repayment." },
+  { reason: "settlement-unconfirmed", means: "The payment's settlement is not confirmed, so the answer was withheld, and the transfer may still land. Two cases. A facilitator broadcast the transfer and answered that it was still pending, and the transaction listed in `transactions` was not confirmed on chain within this server's wait: retry is watch-transaction, and if it lands the amount is booked as owed to the paying wallet and repaid after on-chain proof. Or a settle attempt ended on an answer that does not show whether a transfer was sent (a facilitator's HTTP error, a dropped connection, an unreadable answer, or a failure naming a transaction): retry is watch-transaction when `transactions` names one and check-wallet when none is named, the receipt's errorReason is settlement_unconfirmed, and the payment's own expiry is named when it carries one: `authorizationValidBefore` is the time after which the signed authorization can no longer move money (an EVM authorization's validBefore, or on Solana a time by which the transaction's recent blockhash has expired), `lastValidRound` an Algorand transaction's lastValid round and `expirationLedger` the ledger a Stellar authorization expires at; a new payment is safe once it has passed. `refundStatusUrl` is the free refund lookup for a named EVM transaction. In that second case the hint says whether the payment is recorded for the on-chain read (an EIP-3009 authorization on an EVM chain, or a transaction named on an EVM chain, Solana or Algorand); only then is a transfer that lands booked as owed. Either way, do not sign a new authorization for the same call before that point, or, when none is named, before the paying wallet shows whether the transfer landed: it is a second payment. The same payment sent again, in any encoding, is answered the same way without the call running." },
 ]);
 
 // A verify failure that carries no verdict on the payment. Read from the
@@ -97,7 +109,7 @@ export function notCheckedRefusal(reason, { chain = "" } = {}) {
   if (!r) return null;
   const on = typeof chain === "string" && chain ? ` on ${chain}` : "";
   const again = "Nothing was charged. Send the same payment again in a few seconds; it needs no new signature while its authorization is still valid.";
-  const out = (why) => ({ reason: "not-checked", retry: "same-payment", retryAfterSeconds: NOT_CHECKED_RETRY_AFTER_SECONDS, detail: `${why}, so the payment was not checked. ${again}` });
+  const out = (why) => ({ reason: "not-checked", retry: RETRY_SAME_PAYMENT, retryAfterSeconds: NOT_CHECKED_RETRY_AFTER_SECONDS, detail: `${why}, so the payment was not checked. ${again}` });
   if (NOT_CHECKED_UNVERIFIABLE.test(r)) return out(`This server could not finish its own on-chain check of the payment's signature${on}`);
   const m = NOT_CHECKED_STATUS.exec(r);
   const status = m ? Number(m[1] || m[2] || m[3]) : 0;
@@ -135,7 +147,7 @@ export function pendingSettleRefusal({ network = null, transactions = [] } = {})
   const one = txs.length === 1;
   return {
     reason: "settlement-unconfirmed",
-    retry: "watch-transaction",
+    retry: RETRY_WATCH_TRANSACTION,
     network: net,
     transactions: txs,
     detail:
@@ -152,8 +164,151 @@ export function pendingSettleRefusal({ network = null, transactions = [] } = {})
  *  explanation of the primary's refusal would say nothing was charged). */
 export function withPendingSettleRefusal(body, refusal) {
   if (!refusal || !body || typeof body !== "object" || Array.isArray(body)) return body;
-  const { error: _error, reason: _reason, retry: _retry, hint: _hint, network: _network, transactions: _txs, ...rest } = body;
-  return { ...rest, reason: refusal.reason, retry: refusal.retry, ...(refusal.network ? { network: refusal.network } : {}), transactions: refusal.transactions, hint: refusal.detail };
+  const { error: _error, reason: _reason, retry: _retry, hint: _hint, network: _network, transactions: _txs, authorizationValidBefore: _vb, lastValidRound: _lvr, expirationLedger: _el, refundStatusUrl: _rs, ...rest } = body;
+  return {
+    ...rest, reason: refusal.reason, retry: refusal.retry, ...(refusal.network ? { network: refusal.network } : {}),
+    ...(Array.isArray(refusal.transactions) ? { transactions: refusal.transactions } : {}),
+    ...(refusal.authorizationValidBefore ? { authorizationValidBefore: refusal.authorizationValidBefore } : {}),
+    ...(refusal.lastValidRound ? { lastValidRound: refusal.lastValidRound } : {}),
+    ...(refusal.expirationLedger ? { expirationLedger: refusal.expirationLedger } : {}),
+    ...(refusal.refundStatusUrl ? { refundStatusUrl: refusal.refundStatusUrl } : {}),
+    hint: refusal.detail,
+  };
+}
+
+/** The settle receipt's errorReason once a settle chain ended on an answer
+ *  that does not show whether a transfer was sent (src/payments.js
+ *  markUnconfirmedStop). Not a billing refusal and not a verdict about the
+ *  payment: the settle breaker reads it as not the buyer's
+ *  (src/settle-fault.js), and no reader takes it for a refusal made before
+ *  sending. */
+export const SETTLEMENT_UNCONFIRMED = "settlement_unconfirmed";
+
+/** True for a settle receipt (decoded PAYMENT-RESPONSE) restated as
+ *  settlement_unconfirmed: the transfer may still land, so no per-payer
+ *  bound counts it against the wallet. */
+export function isSettlementUnconfirmedReceipt(receipt) {
+  return !!receipt && typeof receipt === "object" && receipt.success === false && receipt.errorReason === SETTLEMENT_UNCONFIRMED;
+}
+
+/** An authorization's validBefore (unix seconds) as an ISO time, or null when
+ *  it is missing, unreadable or past any date a clock reaches. */
+export function validBeforeIso(v) {
+  let n;
+  const t = typeof v === "string" ? v.trim() : typeof v === "number" || typeof v === "bigint" ? String(v) : "";
+  if (!/^[0-9]{1,20}$/.test(t)) return null;
+  try { n = BigInt(t); } catch { return null; }
+  if (n <= 0n || n > 10_000_000_000n) return null;
+  return new Date(Number(n) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** The free refund lookup for one EVM transaction on this server, or null. */
+export function refundStatusUrlOf(origin, tx) {
+  const o = typeof origin === "string" ? origin.replace(/\/+$/, "") : "";
+  return /^https?:\/\/[^\s/?#]+$/.test(o) && typeof tx === "string" && TX_HASH.test(tx) ? `${o}/api/refunds?tx=${tx.toLowerCase()}` : null;
+}
+
+/** A transaction id as its rail names it, or null: an EVM hash (0x and 64
+ *  hex) and a Stellar hash (64 hex) are case-insensitive and lowercased; a
+ *  Solana signature (base58) and an Algorand transaction id (base32) are kept
+ *  exactly as written, never case-folded. With no network, only an EVM hash. */
+export function railTxOf(network, tx) {
+  const t = typeof tx === "string" ? tx.trim() : "";
+  if (!t) return null;
+  const n = typeof network === "string" ? network : "";
+  if (TX_HASH.test(t)) return n && !n.startsWith("eip155:") ? null : t.toLowerCase();
+  if (n.startsWith("solana:")) return /^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(t) ? t : null;
+  if (n.startsWith("stellar:")) return /^[0-9a-fA-F]{64}$/.test(t) ? t.toLowerCase() : null;
+  if (n.startsWith("algorand:")) return /^[A-Z2-7]{52}$/.test(t) ? t : null;
+  return null;
+}
+
+/** An Algorand round or Stellar ledger number, or null. */
+const roundOf = (v) => {
+  const s = typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "";
+  return /^[1-9][0-9]{0,14}$/.test(s) ? Number(s) : null;
+};
+
+/**
+ * The 402 a buyer gets when the settle chain stopped on an answer that does
+ * not show whether a transfer was sent: a fallback's HTTP error, a dropped
+ * connection, a time limit, an unreadable answer, a failure naming a
+ * transaction (src/payments.js markUnconfirmedStop). The refusal made before
+ * sending that opened the chain (a billing quota on this server's account) no
+ * longer describes the payment, so this never says nothing was charged and
+ * never points at another way to pay. `transactions`: the ones a settle
+ * answer named, in the rail's own format (railTxOf). `booked`: the
+ * authorization or a named transaction is recorded for the late-settlement
+ * read (src/late-settlements.js), the only case in which the owed sentence is
+ * said. The payment's own expiry, when it carries one, is named as the point
+ * a new payment is safe: `validBefore` (unix seconds: an EIP-3009 or Permit2
+ * authorization's, or the time a Solana transaction's recent blockhash has
+ * expired by), `lastValidRound` (an Algorand transaction's lastValid round)
+ * or `expirationLedger` (the ledger a Stellar payer's signed authorization
+ * expires at). With none, the answer makes no time promise: check the paying
+ * wallet first. `origin`: this server's public origin, for the refund lookup
+ * of a named EVM transaction.
+ */
+export function unconfirmedSettleRefusal({ network = null, transactions = [], booked = false, validBefore = null, lastValidRound = null, expirationLedger = null, origin = null } = {}) {
+  const net = typeof network === "string" && /^[a-z0-9-]{1,32}:[A-Za-z0-9-]{1,64}$/.test(network) ? network : null;
+  const txs = [];
+  for (const t of Array.isArray(transactions) ? transactions : []) {
+    const tx = railTxOf(typeof network === "string" ? network : null, t);
+    if (tx && !txs.includes(tx)) txs.push(tx);
+    if (txs.length >= PENDING_REFUSAL_MAX_TXS) break;
+  }
+  const one = txs.length === 1;
+  const until = validBeforeIso(validBefore);
+  const round = until ? null : roundOf(lastValidRound);
+  const ledger = until || round ? null : roundOf(expirationLedger);
+  const refundStatusUrl = txs.length ? refundStatusUrlOf(origin, txs[0]) : null;
+  const on = net ? ` on ${net}` : "";
+  const doNotSign = until
+    ? `Do not sign a new authorization for this call before ${until}: until then the signed authorization can still move money, and a second one is a second payment. After that time it can no longer land, and a new payment is safe. `
+    : round
+      ? `Do not sign a new authorization for this call until ${net || "the network"} has passed round ${round}, the transaction's lastValid round: until then it can still land, and a second one is a second payment. After that round it can no longer land, and a new payment is safe. `
+      : ledger
+        ? `Do not sign a new authorization for this call until ${net || "the network"} has passed ledger ${ledger}, where the signed authorization expires: until then it can still move money, and a second one is a second payment. After that ledger it can no longer land, and a new payment is safe. `
+        : `Check the paying wallet${on} first. Do not sign a new authorization for this call until it shows whether this transfer landed: a second one is a second payment.`;
+  const expiry = !!(until || round || ledger);
+  return {
+    reason: "settlement-unconfirmed",
+    retry: txs.length ? RETRY_WATCH_TRANSACTION : RETRY_CHECK_WALLET,
+    network: net,
+    ...(txs.length ? { transactions: txs } : {}),
+    ...(until ? { authorizationValidBefore: until } : {}),
+    ...(round ? { lastValidRound: round } : {}),
+    ...(ledger ? { expirationLedger: ledger } : {}),
+    ...(refundStatusUrl ? { refundStatusUrl } : {}),
+    detail:
+      "This payment's settlement is not confirmed, so the answer was withheld. "
+      + (txs.length
+        ? `A settle answer named ${one ? "a transaction" : "transactions"} without showing a completed transfer. `
+        : "A settle attempt ended without showing whether the transfer was sent. ")
+      + "The transfer may still land. "
+      + (booked ? "If it does, the amount is booked as owed to the paying wallet and repaid after on-chain proof, with nothing more for you to send. " : "")
+      + doNotSign
+      + (txs.length
+        ? `${expiry ? "" : " "}Watch the transaction${one ? "" : "s"} listed in transactions${on}${refundStatusUrl ? "; refundStatusUrl shows any repayment recorded for it." : "."}`
+        : expiry ? `Check the paying wallet${on} before paying for this call again.` : ""),
+  };
+}
+
+/** A failed settle receipt restated for a chain that stopped unconfirmed:
+ *  payer and network kept, errorReason SETTLEMENT_UNCONFIRMED, the named
+ *  transaction (or none). Null when `receipt` is not a failed receipt. */
+export function unconfirmedSettleReceipt(receipt, { transaction = null, network = null } = {}) {
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt) || receipt.success !== false) return null;
+  const net = typeof receipt.network === "string" && receipt.network ? receipt.network : (typeof network === "string" && network ? network : undefined);
+  const tx = railTxOf(net || null, transaction) || "";
+  return {
+    success: false,
+    errorReason: SETTLEMENT_UNCONFIRMED,
+    errorMessage: SETTLEMENT_UNCONFIRMED,
+    ...(typeof receipt.payer === "string" && receipt.payer ? { payer: receipt.payer } : {}),
+    ...(net ? { network: net } : {}),
+    transaction: tx,
+  };
 }
 
 /**

@@ -47,15 +47,25 @@
 //                         beside the routes. One that has never been seen in
 //                         the listing is not yet listed: it is logged and
 //                         counts as nothing. Once seen (the state remembers
-//                         the tool names), a listing that leaves is missing
-//                         like a route and pages on the second check; it is
+//                         the tool names), a listing that leaves is missing:
+//                         the log names it on every check, and on the second
+//                         check in a row ONE issue of its own opens
+//                         (MCP_ISSUE_TITLE, fixed text, never edited; the
+//                         route issue never lists a listing), whether or not
+//                         the scheduled MCP listings pass is on
+//                         (BAZAAR_MCP_KEEPALIVE). It closes on a readable check
+//                         with no listing missing twice in a row. A listing is
 //                         never bought here (a payment on the HTTP route does
 //                         not restore it; scripts/refresh-bazaar.js MODE=mcp
-//                         does, through the connector).
+//                         does, through the connector, on its schedule only
+//                         while that switch is on).
 //   lost state            With no saved state and an issue open, a route the
 //                         issue already lists counts as a repeat miss (never
 //                         bought again, the issue updated), and the issue is
-//                         never closed while any route is missing.
+//                         never closed while any route is missing. With the MCP
+//                         listing issue open, that check holds it as is and
+//                         records no absent listing as seen or missing; only a
+//                         listing observed in the reading becomes seen.
 //
 // Reads only: /api/pricing and the listing. The buy is scripts/refresh-bazaar.js
 // MODE=missing with the slugs this writes (REQUIRE_SLUGS=1), which reads the
@@ -67,7 +77,11 @@
 // Env: TARGET_URL (default https://agent402.tools), BAZAAR_REGISTRY_URL,
 // STATE_FILE (read and rewritten), OUT_DIR (body.md), OPEN_ISSUE (the number
 // of the open issue, empty when none), OPEN_ISSUE_BODY_FILE (its body),
-// HOLD_BUY, MAX_SPEND_USD, MAX_ROUTES, UNREADABLE_PAGE_AFTER, READ_DEADLINE_MS. Writes slugs=, max_price=, action= to $GITHUB_OUTPUT.
+// MCP_OPEN_ISSUE (the open MCP listing issue's number), HOLD_BUY,
+// MAX_SPEND_USD, MAX_ROUTES, UNREADABLE_PAGE_AFTER, READ_DEADLINE_MS,
+// BAZAAR_MCP_KEEPALIVE ("on": the scheduled MCP listings pass runs; the log
+// says so). Writes out/body.md and out/mcp-body.md, and slugs=, max_price=,
+// action=, mcp_action= to $GITHUB_OUTPUT.
 // Exit: 0 (a refusal and an unreadable listing included), 2 bad usage.
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -82,6 +96,8 @@ export const DEFAULT_MAX_ROUTES = 10;
 export const DEFAULT_MAX_SPEND_USD = 2;
 export const UNREADABLE_PAGE_AFTER = 3;
 export const ISSUE_TITLE = "Bazaar presence check";
+// The MCP tool listings page under their own issue, never the route issue.
+export const MCP_ISSUE_TITLE = "Bazaar MCP listing presence check";
 // One page of the listing or the catalog waits this long; the whole reading
 // (two or three passes) this long. The workflow's step and job timeouts are
 // set above both (scripts/test-bazaar-presence.js reads them).
@@ -161,35 +177,52 @@ export function missingFromEveryPass(catalog, passes) {
  *  catalog could not be read, else { pricing, passes }. `prev` is the state the
  *  last check left ({ missing: { "METHOD path": note }, unreadable }), or null
  *  when none was saved. `issueListed` is the set of keys the open issue lists,
- *  or null when its body could not be read. `hold` buys nothing. */
-export function decide({ reading, prev, openIssue = false, issueListed = new Set(), hold = false, maxSpendUsd = DEFAULT_MAX_SPEND_USD, maxRoutes = DEFAULT_MAX_ROUTES, unreadablePageAfter = UNREADABLE_PAGE_AFTER }) {
+ *  or null when its body could not be read. `hold` buys nothing. The MCP tool
+ *  listings are decided apart (`mcpMissing`, `mcpRepeat`, `mcpAction` for
+ *  their own issue, `mcpOpenIssue` whether it is open); `mcpKeepalive` (the
+ *  scheduled MCP pass is on) changes only what the log says, never whether a
+ *  listing counts. */
+export function decide({ reading, prev, openIssue = false, issueListed = new Set(), mcpOpenIssue = false, hold = false, mcpKeepalive = false, maxSpendUsd = DEFAULT_MAX_SPEND_USD, maxRoutes = DEFAULT_MAX_ROUTES, unreadablePageAfter = UNREADABLE_PAGE_AFTER }) {
   const lost = !prev || typeof prev !== "object";
   const prevMissing = prev && prev.missing && typeof prev.missing === "object" ? prev.missing : {};
   const prevStreak = Number.isInteger(prev?.unreadable) && prev.unreadable > 0 ? prev.unreadable : 0;
   const prevSeen = Array.isArray(prev?.mcpSeen) ? prev.mcpSeen.filter((t) => typeof t === "string") : [];
+  const prevMcpMissing = Array.isArray(prev?.mcpMissing) ? prev.mcpMissing.filter((k) => typeof k === "string") : [];
   if (!reading) {
     const streak = prevStreak + 1;
     const page = streak >= unreadablePageAfter;
     return {
-      readable: false, buy: [], refused: null, repeat: [], exempt: [], newlyMissing: [], notYetListed: [],
-      state: { missing: prevMissing, unreadable: streak, mcpSeen: prevSeen },
+      readable: false, buy: [], refused: null, repeat: [], exempt: [], newlyMissing: [], notYetListed: [], mcpMissing: [], mcpRepeat: [], mcpAction: "none", mcpKeepalive,
+      state: { missing: prevMissing, unreadable: streak, mcpSeen: prevSeen, mcpMissing: prevMcpMissing },
       action: page && !openIssue ? "open" : "none", cause: page ? "unreadable" : null,
     };
   }
   const mcpRows = mcpCatalogRows(reading.pricing);
-  const catalog = [...catalogRows(reading.pricing), ...mcpRows];
+  const catalog = catalogRows(reading.pricing);
   const tailSlugs = new Set(aboveCeilingRoutes(reading.pricing).map((r) => r.slug));
   // State lost with an issue open: what the issue lists was missing before.
   const inherited = lost && openIssue && issueListed instanceof Set ? issueListed : new Set();
   const wasMissing = (m) => Object.hasOwn(prevMissing, m.key) || inherited.has(m.key);
-  const absent = missingFromEveryPass(catalog, reading.passes);
-  // An MCP tool listing counts as missing only once it has been listed: seen
-  // by a check before, or missing before (a state or an issue that names it).
-  const absentKeys = new Set(absent.map((m) => m.key));
+  const missing = missingFromEveryPass(catalog, reading.passes);
+  // The MCP tool listings, apart from the routes. One counts as missing only
+  // once it has been listed: seen by a check before, or missing before (the
+  // state names it). An older state kept them in `missing` beside the routes;
+  // that still counts. Only a listing observed in a reading becomes seen, so a
+  // lost state never turns a listing that was never listed into a miss.
+  const mcpAbsent = missingFromEveryPass(mcpRows, reading.passes);
+  const absentKeys = new Set(mcpAbsent.map((m) => m.key));
+  const mcpWasMissing = (m) => prevMcpMissing.includes(m.key) || Object.hasOwn(prevMissing, m.key);
   const seen = new Set(prevSeen);
   for (const m of mcpRows) if (!absentKeys.has(m.key)) seen.add(m.mcp);
-  const notYetListed = absent.filter((m) => m.mcp && !seen.has(m.mcp) && !wasMissing(m));
-  const missing = absent.filter((m) => !notYetListed.includes(m));
+  const notYetListed = mcpAbsent.filter((m) => !seen.has(m.mcp) && !mcpWasMissing(m));
+  const mcpMissing = mcpAbsent.filter((m) => !notYetListed.includes(m));
+  for (const m of mcpMissing) seen.add(m.mcp);
+  const mcpRepeat = mcpMissing.filter(mcpWasMissing);
+  // Opened once, never edited while open (its text is fixed; the log names
+  // the listings); closed on a readable check with no repeat miss, never on
+  // lost state while a listing is absent: that check holds the issue as is
+  // and records no absent listing, so the next readable check decides.
+  const mcpAction = mcpRepeat.length ? (mcpOpenIssue ? "none" : "open") : !mcpOpenIssue ? "none" : lost && mcpAbsent.length ? "none" : "close";
   const repeat = missing.filter(wasMissing);
   const newlyMissing = missing.filter((m) => !wasMissing(m));
   // State lost and the open issue unreadable: no way to tell a repeat, so no buy.
@@ -210,7 +243,7 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
     else if (!spend.ok) refused = spend.reason;
     if (refused) buy = [];
   }
-  const state = { missing: {}, unreadable: 0, mcpSeen: [...seen].sort() };
+  const state = { missing: {}, unreadable: 0, mcpSeen: [...seen].sort(), mcpMissing: mcpMissing.map((m) => m.key).sort() };
   for (const m of repeat) state.missing[m.key] = Object.hasOwn(prevMissing, m.key) ? prevMissing[m.key] : "listed";
   for (const m of exempt) state.missing[m.key] = m.why;
   // A held route is not remembered: the next check sees it as new and may buy it.
@@ -218,7 +251,7 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
   if (refused) for (const m of newlyMissing) if (!Object.hasOwn(state.missing, m.key) && !heldBuy.includes(m)) state.missing[m.key] = "refused";
   // Never close on lost state while a route is missing: the issue may be about it.
   const action = repeat.length ? (openIssue ? "update" : "open") : !openIssue ? "none" : lost && missing.length ? "none" : "close";
-  return { readable: true, buy, refused, held: heldBuy, repeat, exempt, newlyMissing, notYetListed, state, action, cause: repeat.length ? "missing" : null };
+  return { readable: true, buy, refused, held: heldBuy, repeat, exempt, newlyMissing, notYetListed, mcpMissing, mcpRepeat, mcpAction, mcpKeepalive, state, action, cause: repeat.length ? "missing" : null };
 }
 
 const NOTE = {
@@ -230,14 +263,13 @@ const NOTE = {
   "route-execute": "not bought here: route-execute tier",
   "lasting-effect": "not bought here: its effect outlives the answer",
   "above the ceiling": "not bought here: the pass above the ceiling buys it",
-  "mcp listing": "not bought here: an MCP tool listing, bought through the connector by the MCP listings pass",
   unpriced: "not bought here: unpriced",
   "unreadable slug": "not bought here: unreadable slug",
 };
 
 /** The catalog slug the MCP listings pass takes for a missing MCP tool
- *  listing (its line names `MCP /mcp#<tool>`), else null. */
-function mcpRerunSlug(m) {
+ *  listing (`MCP /mcp#<tool>`), else null. */
+export function mcpRerunSlug(m) {
   if (m?.method !== "MCP") return null;
   const tool = String(m.path || "").split("#")[1] || "";
   return mcpListingSlugOf(tool);
@@ -251,13 +283,24 @@ export function issueBody(decision, runUrl = "") {
   }
   const lines = decision.repeat
     .filter((m) => PATH_RE.test(m.path))
-    .map((m) => `- \`${m.method} ${m.path}\`: ${NOTE[decision.state.missing[m.key]] || "not bought here"}${mcpRerunSlug(m) ? ` (catalog slug \`${mcpRerunSlug(m)}\`)` : ""}`);
+    .map((m) => `- \`${m.method} ${m.path}\`: ${NOTE[decision.state.missing[m.key]] || "not bought here"}`);
   return [
     "These routes of ours were observed to leave the Bazaar discovery listing and were still missing on the next check (each check reads the listing in two full passes at least, and a route counts as missing only when every pass lacks it).",
     "",
     ...lines,
     "",
-    "A route the check may buy is bought once per absence (scripts/bazaar-presence.js, then scripts/refresh-bazaar.js MODE=missing). A route still missing after that, or one of a kind the check never buys, needs a hand pass: `gh workflow run bazaar-keepalive.yml --ref main -f slugs=<slug>` for a route at or under the ceiling, `gh workflow run bazaar-keepalive-tail.yml --ref main` for one above it, `gh workflow run bazaar-mcp-listings.yml --ref main -f slugs=<slug>` for an MCP tool listing (`MCP /mcp#<tool>`: the catalog slug named on its line, or the tool name itself). This issue closes on the next readable check with no route missing twice in a row.",
+    "A route the check may buy is bought once per absence (scripts/bazaar-presence.js, then scripts/refresh-bazaar.js MODE=missing). A route still missing after that, or one of a kind the check never buys, needs a hand pass: `gh workflow run bazaar-keepalive.yml --ref main -f slugs=<slug>` for a route at or under the ceiling, `gh workflow run bazaar-keepalive-tail.yml --ref main` for one above it. MCP tool listings page under their own issue. This issue closes on the next readable check with no route missing twice in a row.",
+  ].join("\n") + run;
+}
+
+/** The MCP listing issue's body: fixed text only (it is never edited while
+ *  open, so it names no listing; each check's log does), no figure. */
+export function mcpIssueBody(runUrl = "") {
+  const run = runUrl && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+$/.test(runUrl) ? `\n\nRun: ${runUrl}` : "";
+  return [
+    "An MCP tool listing of ours (`MCP /mcp#<tool>`) that was seen in the Bazaar discovery listing was missing on two checks in a row (each check reads the listing in two full passes at least, and a listing counts as missing only when every pass lacks it).",
+    "",
+    "Every presence check's log names each missing MCP tool listing and its catalog slug. The presence check never buys one: `gh workflow run bazaar-mcp-listings.yml --ref main -f slugs=<slug>` buys it through the connector, and that workflow's schedule does while the repo variable `BAZAAR_MCP_KEEPALIVE` is on. This issue closes on the next readable check with no MCP tool listing missing twice in a row.",
   ].join("\n") + run;
 }
 
@@ -271,6 +314,16 @@ export function logLines(d) {
     out.push(`  missing ${m.method} ${m.path}${ex ? ` (not bought: ${ex.why})` : (d.held || []).includes(m) ? " (held: a keep-alive pass is running or queued, or the open issue could not be read)" : ""}`);
   }
   for (const m of d.repeat) if (PATH_RE.test(m.path)) out.push(`  still missing ${m.method} ${m.path}`);
+  const mcpMissing = d.mcpMissing || [];
+  if (mcpMissing.length) {
+    out.push(`MCP tool listings missing from every pass: ${mcpMissing.length} (missing on the check before too ${(d.mcpRepeat || []).length}); never bought here, ${d.mcpKeepalive ? "the scheduled MCP listings pass is on" : "and the scheduled MCP listings pass is off (BAZAAR_MCP_KEEPALIVE), so nothing re-buys them"}.`);
+    for (const m of mcpMissing) {
+      if (!PATH_RE.test(m.path)) continue;
+      const slug = mcpRerunSlug(m);
+      out.push(`${(d.mcpRepeat || []).includes(m) ? "  still missing" : "  missing"} ${m.method} ${m.path}${slug ? ` (catalog slug ${slug})` : ""}`);
+    }
+    out.push(`::warning::MCP tool listings missing from the Bazaar listing: ${mcpMissing.filter((m) => PATH_RE.test(m.path)).map((m) => m.path).join(", ")}`);
+  }
   if ((d.notYetListed || []).length) out.push(`MCP tool listings not yet listed (never seen in the listing, so not counted as missing): ${d.notYetListed.length}.`);
   if (d.refused) out.push(`Refusing the buy: ${d.refused}. Nothing bought.`);
   else out.push(`Routes to buy: ${d.buy.length}.`);
@@ -340,6 +393,7 @@ export async function run({ env = process.env, log = console.log, fetchJson = ge
   const deadlineMs = Math.max(1, parseInt(env.READ_DEADLINE_MS || "", 10) || DEFAULT_READ_DEADLINE_MS);
   const prev = readState(env.STATE_FILE);
   const openIssue = /^\d+$/.test(String(env.OPEN_ISSUE || ""));
+  const mcpOpenIssue = /^\d+$/.test(String(env.MCP_OPEN_ISSUE || ""));
   let issueListed = new Set();
   if (openIssue) {
     try { issueListed = issueListedKeys(readFileSync(env.OPEN_ISSUE_BODY_FILE || "", "utf8")); } catch { issueListed = null; }
@@ -348,17 +402,20 @@ export async function run({ env = process.env, log = console.log, fetchJson = ge
   const hold = env.HOLD_BUY === "1";
   if (hold) log("A keep-alive pass is running or queued: this check buys nothing.");
   const reading = await readListing({ target, registryUrl: env.BAZAAR_REGISTRY_URL || BAZAAR_REGISTRY_URL, fetchJson, log, deadlineMs });
-  const d = decide({ reading, prev, openIssue, issueListed, hold, maxSpendUsd, maxRoutes, unreadablePageAfter: pageAfter });
+  const mcpKeepalive = String(env.BAZAAR_MCP_KEEPALIVE || "").trim() === "on";
+  const d = decide({ reading, prev, openIssue, issueListed, mcpOpenIssue, hold, mcpKeepalive, maxSpendUsd, maxRoutes, unreadablePageAfter: pageAfter });
   for (const l of logLines(d)) log(l);
   log(`Issue: ${d.action}.`);
+  log(`MCP listing issue: ${d.mcpAction}.`);
   if (env.STATE_FILE) writeFileSync(env.STATE_FILE, JSON.stringify({ v: 1, ...d.state }));
   if (env.OUT_DIR) {
     mkdirSync(env.OUT_DIR, { recursive: true });
     writeFileSync(join(env.OUT_DIR, "body.md"), issueBody(d, env.RUN_URL || ""));
+    writeFileSync(join(env.OUT_DIR, "mcp-body.md"), mcpIssueBody(env.RUN_URL || ""));
   }
   if (env.GITHUB_OUTPUT) {
     const max = d.buy.reduce((m, r) => Math.max(m, r.micros), 0);
-    appendFileSync(env.GITHUB_OUTPUT, `slugs=${d.buy.map((r) => r.slug).join(",")}\nmax_price=${d.buy.length ? microsToUsd(max) : ""}\naction=${d.action}\n`);
+    appendFileSync(env.GITHUB_OUTPUT, `slugs=${d.buy.map((r) => r.slug).join(",")}\nmax_price=${d.buy.length ? microsToUsd(max) : ""}\naction=${d.action}\nmcp_action=${d.mcpAction}\n`);
   }
   return 0;
 }

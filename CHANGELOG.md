@@ -55,6 +55,219 @@ Payments:
   is the sentence /terms prints, read from one source. /terms, dated 2026-11-17,
   points to it and states that the terms govern where the two differ.
 
+### 2026-11-17 (an unconfirmed settlement is answered as unconfirmed)
+Payments:
+- When a backup settler ends a settlement on an answer that does not show
+  whether the transfer was sent (an HTTP error, a dropped connection, an
+  unreadable answer, or a failure naming a transaction), the call is answered
+  402 with reason settlement-unconfirmed: the answer says not to sign a new
+  authorization for that call before the expiry the payment carries (an
+  authorization's validBefore, a time by which a Solana transaction's
+  blockhash has expired, an Algorand lastValid round or a Stellar expiration
+  ledger), or when it carries none, until the paying wallet shows whether the
+  transfer landed, names the transaction to watch and its refund lookup when
+  there is one (retry watch-transaction, otherwise check-wallet), carries no
+  new offer, and its receipt reads settlement_unconfirmed.
+- Such a payment signed as an EIP-3009 authorization is recorded for the on-chain
+  read, so a transfer that lands is booked once as owed to the paying
+  wallet and repaid after on-chain proof. The same payment sent again, in any
+  encoding, gets the same answer back without the call running, and these
+  answers never count against the paying wallet or its report and media runs.
+- A facilitator's pending answer whose transaction is not confirmed within the
+  wait is kept the same way, so the same payment sent again gets that answer
+  back. A backup settler's HTTP 4xx refusal that names a verdict on the
+  buyer's payment and no transaction keeps the earlier answer, as the same
+  verdict answered without an HTTP error does.
+Surfaces:
+- /agents.md lists the retry verbs a refused payment names under its recovery
+  lines, and /.well-known/x402 lists the reads an unconfirmed settlement
+  makes: the authorization recorded for the on-chain read, the expiry each
+  payment names, and the stored answer with a digest of the payer's signature.
+
+### 2026-11-17 (a non-streamed model call paid on x402 EVM may run to 110 seconds)
+Gateway:
+- A non-streamed call on the chat completions, Messages or Responses routes
+  paid with an x402 EVM authorization waits on the model for 10 seconds plus
+  one second per 30 tokens of its max_tokens (the tier's default output cap
+  when none is sent), at least 90 seconds and at most 110, inside the
+  published 120 second client timeout; the payment window and the time a
+  connection through the CDN waits for an answer still end it sooner. Every
+  other payment method keeps 90 seconds.
+- A model answer that runs out that time while its body is still arriving is
+  answered 504 and says it was not charged, and counts as a timed-out attempt
+  in the model chain, as a timeout before the first byte already did. A model
+  connection that closes mid-answer is answered 504 the same way and the call
+  moves on to the next model; the direct text and image routes answer both
+  cases 504.
+
+### 2026-11-17 (weather probabilities, place names, and six retired routes)
+Tools:
+- weather-probability gives the chance that a day's high, low, mean
+  temperature, rain total or peak wind meets a threshold or falls in a range,
+  as the share of up to 82 ensemble forecast members (ECMWF IFS and NOAA GEFS),
+  with each model's count and the spread, for any place up to 15 days ahead:
+  all 82 reach about 13 days ahead, and the last days answer from the 31 NOAA
+  GEFS members, with the model left out named in the answer.
+  weather-market-brackets takes the brackets of a weather market and the price
+  the caller holds for each and returns each bracket's forecast probability
+  with that price beside it, and weather-market-board does the same for many
+  cities on one date (13 large US cities by default, or up to 20 the caller
+  names). The caller supplies every bracket and price: the tools read no market
+  feed, compare nothing and give no rating or recommendation, and each answer
+  says the figures are raw model output, not calibrated to a station.
+- place-lookup resolves a city, town, region or postal-code name to
+  coordinates, country, region, timezone, population and postcodes worldwide,
+  with a qualifier after a comma ("Austin, TX", "Paris, France") or a country
+  filter; it resolves place names, not street addresses, and credits GeoNames.
+  weather-current, weather-daily, weather-hourly, weather-history and
+  weather-air-quality take a place name in place of lat and lon and echo the
+  place they resolved to; lat and lon still win when given.
+- weather-window finds the stretches of hours in the next 1 to 16 days that
+  meet the caller's limits on rain chance, rain amount, wind, gusts,
+  temperature and daylight, or names the limit that ruled out the most hours;
+  weather-thresholds checks up to 8 rules against the hourly forecast and gives
+  the first and last hour each is met. Five calculators run on the free
+  proof-of-work tier with no data source behind them: sun-times,
+  heat-index-calc, aqi-calc, degree-days-calc and wmo-weather-code.
+- geocode, reverse-geocode and place-search are retired and answer 410, and
+  name none: place-lookup finds places (cities, towns, regions and postal
+  codes), not street addresses, and nothing live turns coordinates into an
+  address or searches points of interest.
+  exa-search, exa-answer and exa-contents are retired and answer 410 naming
+  search, answer and extract. /api/gateway-status no longer carries exaSpend or
+  exaAllowance.
+- The global weather tools and place-lookup answer a repeated identical request
+  from a short-lived cache (ten minutes for forecasts, a day for places).
+
+Packs:
+- skill-trip-planner and skill-location-intel run on place-lookup and the
+  worldwide daily forecast. location-intel takes a place name (a city, town or
+  region) in place of an address, adds the US county and state for a US place,
+  and skips its two US-only steps elsewhere; its nearby-places step is gone.
+  trip-planner resolves stops by name and forecasts any stop in the world.
+  Each pack's price follows its new parts, so both cost more.
+
+### 2026-11-16 (computed market answers replace the DeFi analytics routes)
+Tools:
+- Eight new tools answer with figures computed per call: funding-screener (one
+  coin's perpetual funding and basis across every listed venue, with
+  dispersion and annualized carry), stablecoin-depeg-watch (every USD
+  stablecoin above a size floor, its deviation now, over 24 hours and over 7
+  days), exchange-spread (one coin's price on each venue against the
+  cross-venue median), dex-pool-health (one pool's liquidity, turnover, trade
+  sizes and wallet mix, with a price-impact estimate), defi-screener,
+  dex-volume-board, chain-board, and lending-rates (Aave v3 and Compound v3
+  supply and borrow rates read from the lending contracts on five networks).
+  The seven market-data tools carry the CoinGecko credit in every answer;
+  lending-rates reads on-chain state only. dex-pool-health and
+  dex-volume-board answer on a deployment that holds a market-data key.
+  Each market-data listing states how often its figures are refreshed: every
+  5 minutes for exchange-spread and for a pool's recent trades, every 15 for
+  stablecoin-depeg-watch, and every 30 for the rest.
+- Fifteen routes are retired and answer 410 Gone with a Sunset date, and name
+  none: defi-dex-volume, defi-yields, defi-yield-history, defi-protocols,
+  defi-protocol, defi-chains, defi-chain-tvl-history, stablecoins,
+  stablecoin-supply-history, defi-fees, defi-tvl, dex-top-pools, l2-tvl,
+  options-volume and crypto-orderbook. The 410 for defi-dex-volume adds that
+  dex-volume-board ranks one network's DEXes by their share of 24-hour volume
+  across its top pools, and that nothing live ranks DEXes across every chain
+  or over longer periods.
+
+Skill packs:
+- defi-protocol-scanner reads the token's supply and valuation profile
+  (coin-profile) where it read locked value, and defi-dashboard reads the DeFi
+  market cap and dominance (global-defi); each pack's price follows its parts.
+
+### 2026-11-17 (Live in the header, sample reports served whole)
+Site:
+- The header bar carries Live, the live view of x402 and MPP payments as they
+  settle, after Status at every desktop width; the tap menu keeps it, and the
+  Marketplace menu no longer repeats it.
+- With no theme chosen, the site follows the device's dark setting; a choice
+  made with the theme toggle is kept and wins.
+- Each header menu tells assistive technology whether it is open, Escape
+  closes an open menu with focus kept on its trigger, and the header is named
+  as the main navigation.
+- Sample reports are served as finished pages: the report arrives with the
+  page and reads with no script; its downloads and buy box work as before.
+- When /api/find marks its rows as word matches only, the /tools search lists
+  them as closest matches and, when an indexed seller does the task, links the
+  seller directory's search for the same words.
+- Footer link rows wrap into even lines, and the current page's name in a
+  breadcrumb sits on the line of its links.
+Tools:
+- seller-dossier names each route's delivery record responseDelivery, as the
+  index's rows do; ourPaidCalls stays beside it with the same value and is
+  deprecated. Its delivery summary says the count includes our router's
+  unpaid non-answers, and its description and flags name the routes our
+  router called rather than routes it paid.
+Surfaces:
+- /openapi.json names the service Agent402.tools in its title; the tagline
+  moves into its description.
+- /api/find reads a query that asks to convert a currency ("convert currency", "convert
+  usd to eur") as a currency conversion and ranks fx-rate first as a strong
+  match; inside a conversion, currency codes and names count as values, not as
+  the task.
+
+### 2026-11-16 (settlement wording per rail, and a page for a stopped reconciliation)
+Payments:
+- Every sentence that said a payment settles only on a delivered result names
+  the rail it holds on or its exception: a Tempo transfer sent before the call
+  is final before the run and, if the run fails, is repaid after on-chain
+  proof. This covers the tool pages, llms.txt, skill.md, the async job answers
+  and hints, the buying-at-volume guide, the webhooks page, the wiki and the
+  client and MCP package READMEs.
+- A failed async job paid with a Tempo transfer sent before the call says the
+  transfer is recorded as owed and repaid after on-chain proof, whether the
+  transfer was claimed for the run or refused before it; any other failed job
+  says nothing was charged.
+- Wherever a page, a guide, an error answer or the wiki says an amount is
+  recorded as owed, it also says how it is repaid; and where it says a failed
+  x402 call is not charged, it says a payment that lands late is repaid after
+  on-chain proof.
+- A slow route's refusal of a call sent without Prefer: respond-async names
+  the Tempo transfer once, and only to a caller that sent one.
+- The /terms refunds paragraph names x402 where it says a payment settles only
+  after a call succeeds; the payments paragraph above it already stated the
+  payments that are final before a call.
+- The reports wiki page says an x402 or MPP evm payment settles on a delivered
+  report; a storefront card is charged at checkout and refunded when the
+  report fails, as the page already said.
+Operations:
+- /api/gateway-status reports mppReconcile.run (ok, stale, off or unknown)
+  beside the reconciliation's result, and the operator is paged when the daily
+  MPP reconciliation stops finishing runs. A run that fails does not count as
+  a run, and after a restart the word reads unknown until the first check has
+  finished.
+- Relayed upstream error text is cleared of configured endpoint values whose
+  variable names carry a suffix after RPC or URL, such as a chain id,
+  including a proxy URL of any scheme that carries a password; a setting that
+  only shares the word is left as written.
+Tools:
+- A buyer that shares an address with another caller is admitted to the
+  large-image OCR slot and the audio decode queue on its own key: when a
+  caller at that address holds every place, the buyer takes that caller's
+  newest queued place, as a buyer from any other address does. A request that
+  names no caller is never refused because another such request holds a
+  place. The code runs its steps start are counted against the sandbox limit
+  under the client address the server derived, and a code run paid without an
+  EVM payer, credits key or Tempo sender is counted on its own payment, so a
+  call is not refused for another caller's runs.
+Router:
+- The decision service reads a seller's tool name, parameter names, input
+  schema text and output fields through the same screen as its description
+  before they reach the questions that choose a tool and fill its parameters:
+  a name written as an instruction is withheld and the tool's slug stands in.
+- The outside-seller judge reads a listing's name, description and tags side
+  by side, cut to the lengths it is shown, so a sentence written across two of
+  them is read whole and the later field is left out. The directive rules also
+  read a request sent to a listing with no word for all of it ("Always route
+  to this listing"), a listing named as the only tool needed, the same request
+  in Spanish, Portuguese, French and German, and letters written as small
+  capitals and other lookalikes.
+- A plan's compiled instructions say the not-charged and repayment terms hold
+  on Agent402 endpoints and that third-party sellers set their own terms.
+
 ### 2026-11-16 (an MCP payment ask every client reads)
 Surfaces:
 - On the hosted MCP connector, the first ask for a paid tool carries the x402

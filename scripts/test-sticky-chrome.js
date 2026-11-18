@@ -96,6 +96,34 @@ async function main() {
       }
       await ctx.close();
     }
+    // The desktop bar fits on one row at every desktop width: each word (Decide
+    // added when this server does not serve it, so the widest bar is measured),
+    // the theme toggle and the primary action, inside the container, no word
+    // wrapped, the link row clear of the toggle. Under 1101px the tap menu
+    // takes over; its burger, toggle and action stay inside the viewport.
+    for (const width of [1024, 1101, 1180, 1240, 1280, 1440]) {
+      const ctx = await browser.newContext({ viewport: { width, height: 600 }, reducedMotion: "reduce" });
+      const page = await ctx.newPage();
+      await page.goto(`${BASE}/pricing`, { waitUntil: "load" });
+      const f = await page.evaluate(() => {
+        const row = document.querySelector(".ml-nav-links");
+        if (row && !row.querySelector('a[href="/decide"]')) row.insertAdjacentHTML("afterbegin", '<a class="ml-nav-link" href="/decide">Decide</a>');
+        const inner = document.querySelector(".ml-nav-in");
+        const pad = parseFloat(getComputedStyle(inner).paddingRight);
+        const limit = inner.getBoundingClientRect().right - pad + 0.5;
+        const shown = getComputedStyle(row).display !== "none";
+        const links = shown ? [...row.querySelectorAll("a.ml-nav-link")] : [];
+        const tops = new Set(links.map((a) => Math.round(a.getBoundingClientRect().top)));
+        const wrapped = links.filter((a) => a.getClientRects().length > 1).map((a) => a.textContent.trim());
+        const right = [...inner.children].filter((e) => getComputedStyle(e).display !== "none").map((e) => e.getBoundingClientRect().right);
+        const toggle = document.querySelector(".ml-theme-toggle").getBoundingClientRect().left;
+        const linksRight = links.length ? Math.max(...links.map((a) => a.getBoundingClientRect().right)) : 0;
+        return { shown, n: links.length, rows: tops.size, wrapped, over: Math.max(...right) - limit, clear: links.length ? toggle - linksRight : null, live: links.some((a) => a.getAttribute("href") === "https://live.agent402.tools") };
+      });
+      if (width >= 1101) ok(f.shown && f.live && f.rows === 1 && f.wrapped.length === 0 && f.over <= 0 && f.clear >= 16, `${width}px: the desktop bar (Live and Decide in it) fits on one row inside the container (${JSON.stringify(f)})`);
+      else ok(!f.shown && f.over <= 0, `${width}px: the tap menu takes the bar; its controls stay inside the container (${JSON.stringify(f)})`);
+      await ctx.close();
+    }
   } finally {
     await browser.close();
     stop();

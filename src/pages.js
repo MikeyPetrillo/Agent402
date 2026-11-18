@@ -3,6 +3,7 @@
 import { siteOrgRef } from "./site-org.js";
 import { usdToBaseUnits } from "./base-units.js";
 import { frontDoorOneLine } from "./front-door.js";
+import { PAYMENT_RETRY_VERBS_NOTE } from "./tool-error-fields.js";
 import { openapiRequestBody } from "./openapi-request.js";
 import { asyncAdvice } from "./slow-routes.js";
 import { leaderboardCadence } from "./refresh-cadence.js";
@@ -20,6 +21,7 @@ import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly } from "./rails.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
+import { JOB_PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumUsdByNetwork as premiumUsdByNetworkName } from "./public-networks.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { defHasLastingEffect } from "./hangup-forgiveness.js";
@@ -291,6 +293,21 @@ function curlExample(baseUrl, tool) {
   return `curl -i -X ${tool.method} ${baseUrl}${tool.path} \\\n  -H "Content-Type: application/json" \\\n  -d '${body}'`;
 }
 
+/** How an object in a tool's example is described in the response table: its
+ *  field count and its first names, each whole. At most six names, and as many
+ *  as keep the text within 80 characters (the first is always given); the rest
+ *  are counted ("and 2 more"), three short words a narrow cell keeps together
+ *  on its last line, where a name cut mid-word left one fragment alone. */
+export function objectFieldsSample(v, max = 80) {
+  const keys = Object.keys(v);
+  const head = `${keys.length} field${keys.length === 1 ? "" : "s"}`;
+  if (!keys.length) return head;
+  const tail = (shown) => (shown < keys.length ? ` and ${keys.length - shown} more` : "");
+  let shown = 1;
+  while (shown < Math.min(keys.length, 6) && `${head}: ${keys.slice(0, shown + 1).join(", ")}${tail(shown + 1)}`.length <= max) shown += 1;
+  return `${head}: ${keys.slice(0, shown).join(", ")}${tail(shown)}`;
+}
+
 export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0, cacheTtl = null, otherMethodRouted = false, mpp = true } = {}) {
   // MPP rides the shim, which mounts only with MPP_SECRET_KEY: a self-host
   // without it offers x402 alone, so the page names only the rails it has.
@@ -378,8 +395,9 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const optionalOut = !binaryTypes && tool.discovery?.output?.optional && typeof tool.discovery.output.optional === "object" ? Object.entries(tool.discovery.output.optional).filter(([k]) => !outKeys.includes(k)) : [];
   const respRows = [...outKeys.map((k) => {
     const v = example[k];
-    let sample = typeof v === "string" ? v : v === null || typeof v !== "object" ? JSON.stringify(v) : Array.isArray(v) ? `${v.length} item${v.length === 1 ? "" : "s"} in the example` : `${Object.keys(v).length} field${Object.keys(v).length === 1 ? "" : "s"}: ${Object.keys(v).slice(0, 6).join(", ")}`;
-    if (sample && sample.length > 80) sample = sample.slice(0, 77) + "...";
+    let sample = typeof v === "string" ? v : v === null || typeof v !== "object" ? JSON.stringify(v) : Array.isArray(v) ? `${v.length} item${v.length === 1 ? "" : "s"} in the example` : null;
+    if (sample === null) sample = objectFieldsSample(v);
+    else if (sample && sample.length > 80) sample = sample.slice(0, 77) + "...";
     return `<tr><td><code>${e(k)}</code></td><td>${e(exampleValueType(v))}</td><td>${respRequired.has(k) ? "yes" : "no"}</td><td>${e(sample ?? "")}</td></tr>`;
   }), ...optionalOut.map(([k, v]) => `<tr><td><code>${e(k)}</code></td><td>${e(String(v?.type || ""))}</td><td>no</td><td>${e(String(v?.description || ""))}</td></tr>`)].join("\n");
 
@@ -416,8 +434,8 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
     facts.push(`Long-running: payment settles after the work finishes, so x402 is offered on EVM chains only${lrMpp ? ` and MPP on ${e(lrMpp)}` : ""}; Tempo is not offered.`);
   }
   if (tool.judgedChoice && toolJudgeEnabled()) facts.push(`A judgment model picks among the shortlisted tools; the chosen tool runs unchanged, so the answer itself is the tool's own.`);
-  if (tool.runSeconds) facts.push(`${tool.asyncProfile?.expectedSeconds ? `Usually answers in about ${e(String(tool.asyncProfile.expectedSeconds))} seconds and takes` : "Takes"} up to ${e(String(tool.runSeconds))} seconds. Send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link at once, then poll <code>GET /api/jobs/{id}</code> for its stage, progress and ETA until it has the answer; payment still settles only when the answer is ready.${needsAsyncOrWait(tool.asyncProfile) ? ` To wait on the connection instead, send <code>Prefer: wait=${e(String(tool.runSeconds))}</code> and keep it open that long. A paid call with neither header is answered <code>400</code> before any payment is taken.` : " Or keep the connection open that long."}`);
-  else if (tool.asyncProfile) facts.push(`Runs as a job on request: send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link instead of waiting on the connection, then poll <code>GET /api/jobs/{id}</code> until it has the answer; payment still settles only when the answer is ready.`);
+  if (tool.runSeconds) facts.push(`${tool.asyncProfile?.expectedSeconds ? `Usually answers in about ${e(String(tool.asyncProfile.expectedSeconds))} seconds and takes` : "Takes"} up to ${e(String(tool.runSeconds))} seconds. Send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link at once, then poll <code>GET /api/jobs/{id}</code> for its stage, progress and ETA until it has the answer; payment still settles only when the answer is ready${JOB_PUSH_EXCEPTION}.${needsAsyncOrWait(tool.asyncProfile) ? ` To wait on the connection instead, send <code>Prefer: wait=${e(String(tool.runSeconds))}</code> and keep it open that long. A paid call with neither header is answered <code>400</code> before any payment is taken.` : " Or keep the connection open that long."}`);
+  else if (tool.asyncProfile) facts.push(`Runs as a job on request: send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link instead of waiting on the connection, then poll <code>GET /api/jobs/{id}</code> until it has the answer; payment still settles only when the answer is ready${JOB_PUSH_EXCEPTION}.`);
   if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(displayPrice(fromPriceLabel(tool)))} and $${e(String(tool.quoteRange.maxUsd))}.${tool.quoteFormula ? ` The quote is ${e(tool.quoteFormula)}.` : ""}`);
   if (isMeteredChatSlug(tool.slug)) facts.push(e(meteredTimeoutSentence()));
   if (typeof tool.tierQuote === "function") facts.push(e(PRICED_BY_MODEL_NOTE));
@@ -763,7 +781,7 @@ ${ledgerFooterCompact()}`;
 const QUERY_PARAM_TYPES = new Set(["number", "integer", "boolean"]);
 // The 429 every catalog operation can answer: the unpaid-request limits, and
 // the in-flight coverage check on paid calls (src/inflight-cover.js).
-const OPENAPI_429 = Object.freeze({ description: "Refused before the tool runs: one of the documented limits, such as a rate limit or a wallet whose balance does not cover its paid calls in flight. Not charged on x402; a Tempo transfer sent before the call is recorded as owed. Retry after Retry-After when present." });
+const OPENAPI_429 = Object.freeze({ description: "Refused before the tool runs: one of the documented limits, such as a rate limit or a wallet whose balance does not cover its paid calls in flight. Not charged on x402; a Tempo transfer sent before the call is recorded as owed and repaid after on-chain proof. Retry after Retry-After when present." });
 
 // Inlined, not a $ref: naive dereferencers that crawl this document resolve
 // every pointer from the root (see the components note below).
@@ -870,7 +888,7 @@ export function openapiSpec(baseUrl, catalog) {
             ? { schema: responseSchemaFor(path, discovery?.output?.example, discovery?.output?.optional), example: discovery?.output?.example ?? {}, ...(discovery?.output?.captured ? { "x-example-source": { kind: "captured-paid-answer", capturedAt: discovery.output.captured.capturedAt, modelBacked: discovery.output.captured.modelBacked === true } } : {}) }
             : { schema: { type: "string", format: "binary" } }])),
         },
-        402: { description: "Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment). A first-contact body also carries payment: this request's price in dollars on the named network, how to pay, the proof-of-work path on a free-tier tool (noWallet), the caller's own inputs on a route quoted from its body (quote), and links to /llms.txt, the pay section of /agents.md and the MCP connector" },
+        402: { description: `Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment). A first-contact body also carries payment: this request's price in dollars on the named network, how to pay, the proof-of-work path on a free-tier tool (noWallet), the caller's own inputs on a route quoted from its body (quote), and links to /llms.txt, the pay section of /agents.md and the MCP connector. ${PAYMENT_RETRY_VERBS_NOTE}` },
         400: { description: "Invalid input - the JSON body names the tool's input schema (expected, required), its example, and howToCall: the same example as a ready-to-run request (method, url, and a JSON body, or form parts for a multipart tool), with the other method under alternate where it is served; a call over 1024 bytes carries only method and url" },
         // One shared object (the description is the same on every route).
         429: OPENAPI_429,
@@ -958,7 +976,7 @@ export function openapiSpec(baseUrl, catalog) {
         name: "Prefer",
         in: "header",
         required: false,
-        description: `respond-async: a paid call gets 202 and a job link at once (Location, statusUrl) instead of waiting${tool.asyncProfile.maxSeconds ? ` up to ${tool.asyncProfile.maxSeconds} s` : " on the connection"}; or send wait=${tool.asyncProfile.maxSeconds} to hold the connection and get the answer in the same response (a plain call with no Prefer header is refused with 400 before payment); poll GET /api/jobs/{id} (free, honor Retry-After) until status is completed or failed (state succeeded or failed).${tool.asyncProfile.slow ? " Recommended on this route." : ""} Payment settles only when the answer is ready.${needsAsyncOrWait(tool.asyncProfile) ? ` wait=${tool.asyncProfile.maxSeconds}: wait on this connection for the answer instead. A paid call with neither is answered 400 before any payment is taken.` : ""}`,
+        description: `respond-async: a paid call gets 202 and a job link at once (Location, statusUrl) instead of waiting${tool.asyncProfile.maxSeconds ? ` up to ${tool.asyncProfile.maxSeconds} s` : " on the connection"}; or send wait=${tool.asyncProfile.maxSeconds} to hold the connection and get the answer in the same response (a plain call with no Prefer header is refused with 400 before payment); poll GET /api/jobs/{id} (free, honor Retry-After) until status is completed or failed (state succeeded or failed).${tool.asyncProfile.slow ? " Recommended on this route." : ""} Payment settles only when the answer is ready${JOB_PUSH_EXCEPTION}.${needsAsyncOrWait(tool.asyncProfile) ? ` wait=${tool.asyncProfile.maxSeconds}: wait on this connection for the answer instead. A paid call with neither is answered 400 before any payment is taken.` : ""}`,
         schema: needsAsyncOrWait(tool.asyncProfile)
           ? { type: "string", examples: ["respond-async", `wait=${tool.asyncProfile.maxSeconds}`] }
           : { type: "string", enum: ["respond-async"] },
@@ -1093,16 +1111,16 @@ export function openapiSpec(baseUrl, catalog) {
   return {
     openapi: "3.1.0",
     info: {
-      // The title/description here are what x402scan, MPPScan and every
-      // OpenAPI-reading directory display as OUR NAME - keep them aligned with
-      // the homepage: both wires (x402 + MPP), not "x402 server".
-      title: "Agent402: 500+ pay-per-call tools for AI agents over x402 + MPP",
+      // The title is what x402scan, MPPScan and every OpenAPI-reading
+      // directory display as OUR NAME, so it is the plain product name; the
+      // tagline (both wires, x402 + MPP) lives in the description below.
+      title: "Agent402.tools",
       version: "2.1.0",
       description:
         // Template literal, not a plain string: this is the spec description
         // every crawler and directory reads, and as a quoted string it shipped
         // a literal ${RAILS_OR} to production.
-        `${frontDoorOneLine(catalog)} The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: 500+ machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Each priced operation is paid per call over x402 (${RAILS_OR}; identity-bound and long-running operations take EVM chains only, and each operation's description names its own rails)${mppShort ? `, or over MPP (Machine Payments Protocol: ${mppShort})` : ""} - no signup, no API keys - the first request returns HTTP 402 carrying ${mppShort ? "both offers, an x402 or mppx client pays" : "the offer, an x402 client pays"} and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
+        `${frontDoorOneLine(catalog)} Agent402.tools: 500+ pay-per-call tools for AI agents over x402 + MPP. The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Each priced operation is paid per call over x402 (${RAILS_OR}; identity-bound and long-running operations take EVM chains only, and each operation's description names its own rails)${mppShort ? `, or over MPP (Machine Payments Protocol: ${mppShort})` : ""} - no signup, no API keys - the first request returns HTTP 402 carrying ${mppShort ? "both offers, an x402 or mppx client pays" : "the offer, an x402 client pays"} and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
       // Email doubles as x402scan's ownership-verification signal; it is the
       // same public maintainer contact the /.well-known/x402 manifest names.
       contact: { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: baseUrl },

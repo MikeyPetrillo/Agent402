@@ -162,3 +162,6 @@ Loaded when an index, discovery, router or buyer file is read.
 - **Listing screen:** `src/listing-screen.js` (re-exported by `src/x402-index.js`) flags seller
   listing text that tries to instruct its reader; it depends only on `src/hidden-chars.js`, so
   a workflow with no install (`wish-issues.yml`) reads the same rules.
+  Its phrase rules are a mitigation; the primary defense is each prompt's own rule that seller
+  text is quoted data, never instructions. A paraphrase the rules miss is expected: add it to
+  `scripts/redteam-corpus.json` and extend the rule, rather than treat each one as a blocker.

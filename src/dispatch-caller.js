@@ -13,13 +13,21 @@
 // packs run every handler that way, so a tool that calls other tools'
 // handlers in-process passes its caller on.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { identityPayerOf } from "./payer.js";
+import { createHash } from "node:crypto";
+import { identityPayerOf, paymentHeaderOf, freeModeOn } from "./payer.js";
 import { limiterKey } from "./rate-limit.js";
 
 const scope = new AsyncLocalStorage();
 /** The key every request-less call with no caller of its own shares, so its
  *  places are still counted (and one caller's run of them stays visible). */
 export const IN_PROCESS_CALLER = "in-process";
+/** The key of a request that names no caller: no signed key, and an address
+ *  that is the CDN edge's, not its client's. Its places and runs are counted
+ *  under this key, but it identifies no one: a per-caller admission rule
+ *  treats each such request as a newcomer (src/caller-places.js), so one of
+ *  them holding places never locks the others out. */
+export const ANONYMOUS_CALLER = "anonymous";
+const isRequest = (req) => !!req && typeof req === "object";
 
 /** Every caller key a request carries, strongest first: the identity payer
  *  (identityPayerOf: null in FREE_MODE, where no payment header is verified,
@@ -46,36 +54,64 @@ function keysOf(req, withUnprovenAddress) {
   return keys;
 }
 
-/** The caller key of a request (its strongest), or null when it names none.
- *  A concurrency cap keyed on it (src/tools/code-run-kit.js) still counts an
- *  unproven CDN request under the edge's address, never under no key. */
+/** The key a concurrency cap counts one call under (src/tools/code-run-kit.js),
+ *  or null when the request carries nothing to key on. Never one bucket for
+ *  unrelated callers: the request's signed key (identity payer, credits key,
+ *  Tempo sender); else, for a call that carries a payment (one that signs no
+ *  EVM authorization, so names no identity payer), that payment itself, so a
+ *  paid call is never refused because of other callers; else the client
+ *  address the server derived (the edge's for an unproven CDN request), so
+ *  two addresses never share a count. */
 export function callerKeyOf(req) {
-  return keysOf(req, true)[0] || null;
+  const [first] = keysOf(req, true);
+  if (first && !first.startsWith("ip:")) return first;
+  return paidCallKeyOf(req) || first || null;
+}
+// A payment credential reaches a handler only past the paywall's verify; in
+// FREE_MODE nothing is verified, so a header there keys nothing.
+function paidCallKeyOf(req) {
+  if (!isRequest(req) || freeModeOn()) return null;
+  const header = paymentHeaderOf(req);
+  return header ? `paid:${createHash("sha256").update(String(header)).digest("hex").slice(0, 32)}` : null;
 }
 
-/** The caller key the current request-less call runs for, or null. */
+/** The cap key the current request-less call runs for (callerKeyOf of the
+ *  dispatching request), or null. */
 export function currentDispatchCaller() {
-  return scope.getStore()?.[0] || null;
+  return scope.getStore()?.capKey || null;
 }
 
 /** Every caller key the current request-less call runs for, or null. */
 export function currentDispatchCallerKeys() {
-  return scope.getStore() || null;
+  return scope.getStore()?.keys || null;
 }
 
 /** The keys a per-caller admission rule holds a place under: the request's
- *  (callerKeysOf), else those an in-process executor runs this call for,
- *  else the one shared key, so a place is never held uncounted. */
+ *  (callerKeysOf); for a request that names no caller, the anonymous key;
+ *  with no request, those an in-process executor runs this call for, else
+ *  the one shared key, so a place is never held uncounted. */
 export function admissionCallerOf(req) {
   const keys = callerKeysOf(req);
   if (keys.length) return keys;
+  if (isRequest(req)) return [ANONYMOUS_CALLER];
   return currentDispatchCallerKeys() || [IN_PROCESS_CALLER];
 }
 
-/** Run `fn` with the caller of `req` (or the enclosing dispatch's caller)
- *  held for the request-less handler calls inside it. */
+const ANONYMOUS_KEYS = Object.freeze([ANONYMOUS_CALLER]);
+const IN_PROCESS_SCOPE = Object.freeze({ keys: Object.freeze([IN_PROCESS_CALLER]), capKey: IN_PROCESS_CALLER });
+let anonymousRequests = 0;
+/** Run `fn` with the caller of `req` held for the request-less handler calls
+ *  inside it. The admission keys (currentDispatchCallerKeys) are the
+ *  request's keys, or the anonymous key for a request that names no caller;
+ *  the cap key (currentDispatchCaller) is callerKeyOf(req), and a request
+ *  with nothing to key on gets a key of its own, never one shared with
+ *  another request. With no request, the enclosing dispatch's scope, else the
+ *  shared in-process one. A scope is always open, so a per-caller cap a
+ *  request-less step reads (src/tools/code-run-kit.js) always has a key. */
 export function runAsCallerOf(req, fn) {
+  if (!isRequest(req)) return scope.run(scope.getStore() || IN_PROCESS_SCOPE, fn);
   const own = callerKeysOf(req);
-  const keys = own.length ? Object.freeze(own) : currentDispatchCallerKeys();
-  return keys ? scope.run(keys, fn) : fn();
+  const keys = own.length ? Object.freeze(own) : ANONYMOUS_KEYS;
+  const capKey = callerKeyOf(req) || `${ANONYMOUS_CALLER}:${++anonymousRequests}`;
+  return scope.run(Object.freeze({ keys, capKey }), fn);
 }
