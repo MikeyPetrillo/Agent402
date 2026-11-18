@@ -247,9 +247,9 @@ Index:
   listed or changed. Another caller's registration of the site is never held
   by it: past 200 such reads of one site in an hour from every caller
   together, the rest are sent one every 30 seconds. A name under a
-  wildcard or dynamic DNS service, which points wherever its owner sets, is
-  also counted per address it resolves to: every such name on one address
-  shares one allowance of about 200 requests a day.
+  wildcard or dynamic DNS service is counted on its own allowance, like a
+  site on any other shared hosting, whatever address it points at, so no
+  such name can spend another site's day.
 Operations:
 - The seller load controls decide from each server's own memory and read the
   shared store once per crawl cycle, so a slow store no longer slows the crawl

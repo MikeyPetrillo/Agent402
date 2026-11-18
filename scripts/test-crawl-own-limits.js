@@ -276,46 +276,38 @@ const entry = (o) => idx._cacheForTests().get(o);
   ok((await sellerLoad.throttledUntil(R)) > clock, "control: a 429 to the seller's own scheduled probe holds its host");
 }
 
-// ---- names that resolve to one address share its day -------------------------------
+// ---- a dynamic DNS name on another seller's address never touches that seller -------
 {
-  // Names under a suffix whose owners point them anywhere (sslip.io): each is
-  // its own operator, so each has its own day, but the requests to one
-  // address are counted together, from the address the SSRF check read.
-  const A = "https://alpha.sslip.io", B = "https://beta.sslip.io", C = "https://gamma.sslip.io";
-  for (const o of [A, B, C]) serve(o);
-  const sentTo = (o) => readsOf(o) + probesOf(o);
-  const s0 = { A: sentTo(A), B: sentTo(B), C: sentTo(C) };
+  // Anyone can point a name under sslip.io or duckdns.org at any address. A
+  // rival who points many such names at a seller's address, registers them
+  // and has them crawled spends only those names' own days: the seller's
+  // scheduled crawl, its listing and its probes are untouched.
+  const V = "https://victim.sslip.io";
+  const rivals = Array.from({ length: 30 }, (_, i) => `https://rival${i}.${i % 3 ? "sslip.io" : "duckdns.org"}`);
+  for (const o of [V, ...rivals]) { serve(o); ADDRESS.set(new URL(o).hostname, "203.0.113.7"); }
   const start = Date.parse("2026-12-05T00:00:00Z");
+  const sentToRivals = () => rivals.reduce((n, o) => n + readsOf(o) + probesOf(o), 0);
+  const r0 = sentToRivals();
   const answers = [];
-  for (let h = 0; h < 12; h++) {
+  for (let h = 0; h < 4; h++) {
     clock = start + h * H;
-    for (let i = 0; i < 6; i++) {
-      answers.push(await idx.registerOrigin(`${A}/h${h}p${i}`));
-      answers.push(await idx.registerOrigin(`${B}/h${h}p${i}`));
-    }
+    for (const o of rivals) for (let i = 0; i < 3; i++) answers.push(await idx.registerOrigin(`${o}/h${h}p${i}`).catch(() => null));
   }
-  const a = sentTo(A) - s0.A, b = sentTo(B) - s0.B;
-  ok(a > 0 && b > 0 && a + b <= 60, `two names on one address share its day: ${a} + ${b} requests of 60`);
-  const held = answers.filter((r) => r?.held && /address this host resolves to/.test(r.error));
-  ok(held.length > 0 && held.every((r) => r.retryAfterSeconds > 0 && r.retryAfterSeconds <= 86_400), `a registration past it is told when to retry (${held.length} held by the address)`);
-  // Registrations have a day of their own per address: the scheduled crawl
-  // of a name on it keeps the scheduled reads' day.
-  const b0 = sentTo(B);
-  ok((await turn(B)) === null && sentTo(B) > b0, "registrations never spend the address's day for a scheduled turn");
-  // The scheduled reads meet their own day: past it a name's turn waits.
-  const D = "https://delta.sslip.io";
-  serve(D);
-  for (let i = 0; i < 60; i++) await sellerLoad.takeAddressBudget(`${A}/x`, [{ address: "203.0.113.7", family: 4 }], "crawler");
-  const d0 = sentTo(D);
-  const r = await turn(D);
-  ok(sentTo(D) === d0 && r === "budget", `a scheduled turn past the address's scheduled day sends nothing (${r})`);
-  const c0 = sentTo(C);
-  const other = await idx.registerOrigin(`${C}/x`);
-  ok(sentTo(C) > c0 && !other?.held, "a name on another address keeps its own day");
-  clock = start + 24 * H;
-  const a0 = sentTo(A);
-  await idx.registerOrigin(`${A}/nextday`);
-  ok(sentTo(A) > a0, "the next UTC day the address is read again");
+  for (const o of rivals) await turn(o);
+  const spent = sentToRivals() - r0;
+  ok(spent > 60, `control: the rival names on the seller's address were sent well past one day's budget (${spent} requests)`);
+  ok(!answers.some((r) => r?.held && /address/.test(r.error || "")), "no registration is held by the address its name points at");
+  const v0 = { reads: readsOf(V), probes: probesOf(V) };
+  ok((await turn(V)) === null && readsOf(V) > v0.reads && entry(V)?.tools?.length === 1, "the seller's own scheduled crawl runs and lists it");
+  ok(probesOf(V) > v0.probes, "its probes are sent");
+  const p0 = probesOf(V);
+  await idx.probeSellerRoute(`${V}/api/thing`, { load: { kind: "quote", gate: true, chargeTo: V } }).catch(() => null);
+  ok(probesOf(V) > p0, "a quote probe of its route goes out");
+  ok((await sellerLoad.budgetSpent(V)).used < 60, "its day counts only its own requests");
+  // Control: a name's own day still holds it.
+  for (let i = 0; i < 70; i++) await sellerLoad.takeBudget(`${rivals[1]}/openapi.json`, "crawler", { essential: true });
+  clock += CYCLE;
+  ok((await turn(rivals[1])) === "budget", "control: a rival name past its own day waits");
 }
 
 Date.now = realNow;

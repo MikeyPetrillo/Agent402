@@ -115,9 +115,9 @@ Loaded when an index, discovery, router or buyer file is read.
   (`RequestHeld` "registration-hour"; the register routes answer 429 with Retry-After), so one
   registrant never spends another's. Across registrants, past `SELLER_REGISTRATION_HOST_HOURLY_MAX`
   (default 200) per host-hour the reads are paced one per `REGISTRATION_PACE_MS` (30 s), never
-  refused. Names under `OWNER_ADDRESSED_SUFFIXES` (src/operator-key.js) are also
-  counted per resolved address per day (`takeAddressBudget`, fed by safeFetch/probePublicUrl
-  `onResolved` from the SSRF check; "address-day").
+  refused. Names under wildcard or dynamic DNS suffixes (sslip.io, duckdns.org) are shared-hosting
+  tenants, each counted on its own hostname's day like any other; never pool them by the address
+  they resolve to, since anyone can point such a name at another seller's address.
   `CRAWL_SLOW_ORIGINS` is by the clock: a slow origin's scheduled read sets a per-lane flag
   (`noteSlowRead`, x402 and mpp) in the shared store, merged at prefetch, and `slowWaiting` /
   `crawlPlan` skip "slow" until `SLOW_READ_INTERVAL_MS` has passed, so boots and extra cycles do not

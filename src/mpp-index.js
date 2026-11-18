@@ -32,7 +32,7 @@ const { docs, docFor } = createDocumentCache();
 import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { CRAWLER_UA } from "./user-agents.js";
-import { sellerLoad, landingGate, addressGate, RequestHeld, SLOW_READ_INTERVAL_MS, runAsRegistrant } from "./seller-load.js";
+import { sellerLoad, landingGate, RequestHeld, SLOW_READ_INTERVAL_MS, runAsRegistrant } from "./seller-load.js";
 import { isSlowOrigin } from "./crawl-cadence.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";
 import { registerMemoryStore } from "./memory-stores.js";
@@ -386,7 +386,7 @@ function noteHold(url, status, retryAfter, gate) {
 }
 // A redirect hop is counted before it is sent, and one onto another operator's
 // host is not sent past that host's landed allowance (landingGate).
-const fetchDiscoveryDoc = (url, { unscheduled = false } = {}) => safeFetch(url, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "mpp-crawler", { unscheduled }), onResolved: addressGate("mpp-crawler", { unscheduled }) });
+const fetchDiscoveryDoc = (url, { unscheduled = false } = {}) => safeFetch(url, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "mpp-crawler", { unscheduled }) });
 
 /** Fetch `${origin}/openapi.json` (guarded, capped, cached 1h) and derive a
  *  probe target. null on any failure; throws only when the load controls held
@@ -488,7 +488,6 @@ async function probeMppChallenge({ method, url }) {
       headers: { Accept: "application/json", ...(method !== "GET" ? { "Content-Type": "application/json" } : {}) },
       ...(method !== "GET" ? { body: "{}" } : {}),
       timeoutMs: PROBE_TIMEOUT_MS,
-      onResolved: addressGate("mpp-probe"),
     });
     const challenge = res.headers.get("www-authenticate");
     const mpp = isMppChallenge(challenge);
@@ -653,9 +652,8 @@ async function registerMppOriginNow(origin, { verify, path, method } = {}) {
 }
 
 function mppRegistrationHeld(origin, secs, heldBy = "registration-hour") {
-  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests"
-    : heldBy === "seller-retry-after" ? "this origin answered this caller's last registration read with a Retry-After"
-      : "this caller has had this hour's registration reads of this host";
+  const why = heldBy === "seller-retry-after" ? "this origin answered this caller's last registration read with a Retry-After"
+    : "this caller has had this hour's registration reads of this host";
   return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `${why}; nothing was listed or changed, register again in ${secs} s` };
 }
 

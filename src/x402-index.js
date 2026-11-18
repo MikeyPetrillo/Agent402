@@ -306,7 +306,7 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
-import { sellerLoad, bodyHash, landingGate, addressGate, RequestHeld, runAsRegistrant } from "./seller-load.js";
+import { sellerLoad, bodyHash, landingGate, RequestHeld, runAsRegistrant } from "./seller-load.js";
 // Reads made for a registration (anyone may register any origin, with no proof
 // of control) run inside this scope: they are counted on a day count of their
 // own (src/seller-load.js takeBudget `unscheduled`), never on the day the
@@ -490,14 +490,6 @@ export class ProbeSkipped extends Error {
 // to a probe sent for another operator's origin holds only that operator's
 // probes there, and one to a registration's probe only that registrant's
 // (src/seller-load.js noteThrottle).
-// A probe whose host's address has had its day (seller-load addressGate) is
-// not sent, as a probe past the host's own day is not.
-const probeAddressGate = (kind, unscheduled = false) => {
-  const gate = addressGate(kind, { unscheduled });
-  return async (addresses, url) => {
-    try { await gate(addresses, url); } catch (e) { if (e?.requestHeld) throw new ProbeSkipped("budget"); throw e; }
-  };
-};
 async function probeOnce(target, opts, load) {
   const unscheduled = readIsUnscheduled();
   const chargeTo = load?.chargeTo || null;
@@ -510,7 +502,7 @@ async function probeOnce(target, opts, load) {
       if (b?.ok === false) throw new ProbeSkipped("budget");
     }
   }
-  const res = await probeFetch(target, load?.kind ? { ...opts, onResolved: probeAddressGate(load.kind, unscheduled) } : opts);
+  const res = await probeFetch(target, opts);
   if (load?.kind && (res?.status === 429 || res?.status === 503)) await sellerLoad.noteThrottle(target, res.status, res.headers?.get?.("retry-after"), { chargeTo, unscheduled });
   return res;
 }
@@ -1813,9 +1805,8 @@ export async function registerOrigin(origin, { crawl, replaces = null, deadlineM
 /** A registration whose reads the host's hourly ceiling held back: nothing
  *  was listed or changed, and the registrant retries after `secs`. */
 function registrationHeld(origin, secs, heldBy = "registration-hour") {
-  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests"
-    : heldBy === "seller-retry-after" ? "this origin answered this caller's last registration read with a Retry-After"
-      : "this caller has had this hour's registration reads of this host";
+  const why = heldBy === "seller-retry-after" ? "this origin answered this caller's last registration read with a Retry-After"
+    : "this caller has had this hour's registration reads of this host";
   return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `${why}; nothing was listed or changed, register again in ${secs} s` };
 }
 
@@ -6219,7 +6210,7 @@ async function crawlRead(url, opts) {
   const b = await sellerLoad.takeBudget(url, "crawler", { essential: true, unscheduled });
   if (b?.ok === false && b.heldBy) throw new RequestHeld(b.heldBy, b.retryAfterSeconds);
   try {
-    return await crawlFetch(url, { ...opts, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "crawler", { unscheduled }), onResolved: addressGate("crawler", { unscheduled }) });
+    return await crawlFetch(url, { ...opts, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "crawler", { unscheduled }) });
   } catch (e) {
     if (e?.landingHeld) throw e;
     const st = Number(e?.upstreamStatus);

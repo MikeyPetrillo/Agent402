@@ -373,19 +373,19 @@ function fresh(opts = {}) {
   ok(waits.every((ms) => ms > 0 && ms <= 30_000), "each wait is at most one pace interval after the read before it");
 }
 
-// ---- names that resolve to one address share its day -------------------------------
+// ---- a dynamic DNS name is its own operator, whatever address it points at ----------
 {
-  const { load, step } = fresh({ dailyBudget: 4 });
-  const ip = [{ address: "203.0.113.7", family: 4 }];
-  const sent = [];
-  for (let i = 0; i < 4; i++) sent.push(await load.takeAddressBudget(`https://n${i}.sslip.io/.well-known/x402`, ip, "crawler"));
-  ok(sent.every((b) => b.ok), "names on one address are read up to its day");
-  const over = await load.takeAddressBudget("https://n9.duckdns.org/.well-known/x402", ip, "crawler");
-  ok(over.ok === false && over.heldBy === "address-day" && over.retryAfterSeconds > 0, "another such name on the same address is held past it");
-  ok((await load.takeAddressBudget("https://n9.sslip.io/x", [{ address: "203.0.113.8", family: 4 }], "crawler")).ok, "a name on another address keeps its own day");
-  ok((await load.takeAddressBudget("https://shop.example/x", ip, "crawler")).ok, "a name on its own registrable domain is not counted per address");
-  step(24 * 3_600_000);
-  ok((await load.takeAddressBudget("https://n0.sslip.io/x", ip, "crawler")).ok, "the next UTC day the address is read again");
+  // Anyone can point a name under sslip.io or duckdns.org at any address, a
+  // rival seller's included, so such a name is counted on its own hostname's
+  // day like any other shared-hosting tenant and never pooled by address.
+  const { load } = fresh({ dailyBudget: 4 });
+  ok(load.takeAddressBudget === undefined, "no day is kept per resolved address");
+  for (let i = 0; i < 6; i++) for (let j = 0; j < 5; j++) await load.takeBudget(`https://rival${i}.${i % 2 ? "duckdns.org" : "sslip.io"}/.well-known/x402`, "crawler", { essential: true });
+  ok((await load.crawlPlan("https://rival0.sslip.io")).skip === "budget" && (await load.crawlPlan("https://rival1.duckdns.org")).skip === "budget", "control: each rival name stops at its own day");
+  ok((await load.crawlPlan("https://victim.sslip.io")).skip === null, "a name the rivals never named keeps its whole day");
+  const own = [];
+  for (let i = 0; i < 4; i++) own.push(await load.takeBudget("https://victim.sslip.io/.well-known/x402", "crawler", { essential: true }));
+  ok(own.every((b) => b.ok), "its own reads go up to its own day, however many names spent theirs");
 }
 
 // ---- reads for a registration never spend the origin's day -------------------------
@@ -450,20 +450,6 @@ function fresh(opts = {}) {
   ok((await load.probeRefusal(`${B}/api/x`, "quote", { chargeTo: A2 })) === null, "and no other operator's");
   await load.noteThrottle("https://api.samehost.example/x", 429, 60, { chargeTo: "https://www.samehost.example" });
   ok((await load.crawlPlan("https://api.samehost.example")).skip === "throttled", "control: a move inside one operator's domain holds the host as before");
-}
-
-// ---- registrations never spend an address's scheduled day ---------------------------
-{
-  const { load } = fresh({ dailyBudget: 4 });
-  const ip = [{ address: "203.0.113.20", family: 4 }];
-  const regs = [];
-  for (let i = 0; i < 6; i++) regs.push(await runAsRegistrant(`198.51.100.${i}`, () => load.takeAddressBudget(`https://r${i}.sslip.io/.well-known/x402`, ip, "crawler")));
-  ok(regs.filter((b) => b.ok).length === 4 && regs[5].heldBy === "address-day", "registration reads of names on one address stop at a day of their own");
-  ok((await load.takeAddressBudget("https://r9.sslip.io/x", ip, "crawler", { unscheduled: true })).ok === false, "one flagged unscheduled is counted on it too");
-  const own = [];
-  for (let i = 0; i < 4; i++) own.push(await load.takeAddressBudget("https://victim.sslip.io/.well-known/x402", ip, "crawler"));
-  ok(own.every((b) => b.ok), "the scheduled reads of a name on that address keep their whole day");
-  ok((await load.takeAddressBudget("https://victim.sslip.io/openapi.json", ip, "crawler")).ok === false, "control: the scheduled reads still stop at theirs");
 }
 
 // ---- shared hosting: each tenant has its own day ------------------------------------

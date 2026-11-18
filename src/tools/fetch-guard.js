@@ -673,9 +673,8 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
   const sink = {};
   const url = await assertPublicUrl(rawUrl, { sink }).catch((err) => { throw ownUpstream ? asOwnUpstreamRefusal(err) : err; });
   // `onResolved(addresses, url)`: the addresses the check above read for the
-  // host (the index crawler counts its requests per address,
-  // src/seller-load.js takeAddressBudget), before anything is sent; whatever
-  // it throws is thrown as it is, with nothing sent.
+  // host, before anything is sent; whatever it throws is thrown as it is,
+  // with nothing sent.
   if (typeof onResolved === "function") await onResolved(sink.addresses || [], String(url));
   // `ownUpstream`: the URL is one this server chose (a kit's fixed API host),
   // not one the caller supplied, so a host that does not resolve is our 503.
