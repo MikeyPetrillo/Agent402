@@ -133,6 +133,24 @@ ok(/maxTimeoutSeconds/.test(classify(withMissing)?.detail || ""), "a MISSING fie
   ok(Buffer.byteLength(JSON.stringify(body)) <= 2048, `the merged body stays small (${Buffer.byteLength(JSON.stringify(body))} bytes with ${many.transactions.length} transactions)`);
 }
 
+// A settle whose transfer the late-settlement book already booked owed: the
+// transfer, its refund lookup and a fresh authorization; never "not charged";
+// never the buyer's fault.
+{
+  const { settledRefundOwedRefusal, SETTLED_REFUND_OWED } = await import("../src/payment-reject.js");
+  const { settleFailureFault } = await import("../src/settle-fault.js");
+  const TX = "0x" + "EF".repeat(32);
+  const receipt = { success: false, errorReason: SETTLED_REFUND_OWED, network: "eip155:8453", transaction: TX };
+  const r = settledRefundOwedRefusal(receipt, { origin: "https://agent402.tools/" });
+  ok(r?.reason === "settled-refund-owed" && r.retry === "fresh-authorization" && r.network === "eip155:8453" && JSON.stringify(r.transactions) === JSON.stringify([TX.toLowerCase()])
+    && r.refundStatusUrl === `https://agent402.tools/api/refunds?tx=${TX.toLowerCase()}`, `the owed answer names the transfer and its refund lookup (${JSON.stringify(r)})`);
+  ok(/owed/.test(r.detail) && /on-chain proof/.test(r.detail) && !/not charged|nothing (?:was|is) charged|never charged/i.test(r.detail) && !/—/.test(r.detail), "the hint says owed and repaid after proof, never not charged");
+  ok(settledRefundOwedRefusal({ ...receipt, errorReason: "settlement_failed" }) === null && settledRefundOwedRefusal({ ...receipt, success: true }) === null && settledRefundOwedRefusal(null) === null, "any other receipt is not this answer");
+  ok(!("refundStatusUrl" in settledRefundOwedRefusal(receipt, { origin: null })), "no origin, no refund link");
+  ok(REJECTION_REASONS.some((x) => x.reason === "settled-refund-owed" && !/not charged|nothing (?:was|is) charged/i.test(x.means)), "the class is documented, without a not-charged claim");
+  ok(settleFailureFault({ receipt }) === "not-buyer" && settleFailureFault({ receipt: { success: false, errorReason: "settlement_failed" }, raw: { errorReason: SETTLED_REFUND_OWED } }) === "not-buyer", "never counted against the paying wallet");
+}
+
 // When we refuse but cannot say why, record the SHAPE - key names only. Three
 // classifier revisions each reproduced a live 402 loop's symptom and none was
 // the client's real payload, so the next unclassified refusal has to answer

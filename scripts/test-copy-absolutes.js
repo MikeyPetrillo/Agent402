@@ -1056,7 +1056,8 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
 
 // A success:false receipt is not always "not charged, safe to retry": a
 // settle chain that ended unconfirmed (settlement_unconfirmed) may still
-// move money. Every copy surface that says such a receipt was not
+// move money, and a settle whose transfer was already booked owed
+// (settled_refund_owed) was charged. Every copy surface that says such a receipt was not
 // charged, moved nothing or is safe to retry carries the shared clause
 // (src/front-door.js UNCONFIRMED_RECEIPT_EXCEPTION) right after the claim: by
 // interpolation in a module, word for word in markdown.
@@ -1073,7 +1074,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
       const line = text.slice(text.lastIndexOf("\n", m.index) + 1, m.index);
       if (/^\s*(?:\/\/|\/?\*)/.test(line)) continue;
       claims++;
-      const after = text.slice(m.index, m.index + m[0].length + 900).replace(/\\?\n\s*/g, " ");
+      const after = text.slice(m.index, m.index + m[0].length + 1300).replace(/\\?\n\s*/g, " ");
       if (!carries(after)) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
     }
   }
@@ -1081,8 +1082,9 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   // (src/settlement-claims.js), and a re-sent unconfirmed payment is answered
   // from its stored answer before it could reach that refusal.
   ok(/settlement_unconfirmed/.test(UNC) && !/duplicate_authorization/.test(UNC) && /do not sign a new authorization/.test(UNC) && /check-wallet/.test(UNC) && /watch-transaction/.test(UNC)
-    && /authorizationValidBefore/.test(UNC) && /lastValidRound/.test(UNC) && /expirationLedger/.test(UNC) && /names none, before the paying wallet shows/.test(UNC),
-    "the shared clause names the unconfirmed receipt only, the instruction scoped to the answer's expiry or the wallet, and both retry verbs");
+    && /authorizationValidBefore/.test(UNC) && /lastValidRound/.test(UNC) && /expirationLedger/.test(UNC) && /names none, before the paying wallet shows/.test(UNC)
+    && /settled_refund_owed was charged/.test(UNC) && /booked as owed/.test(UNC) && /refundStatusUrl/.test(UNC),
+    "the shared clause names the unconfirmed and the owed receipts, the instruction scoped to the answer's expiry or the wallet, and both retry verbs");
   ok(claims >= 8, `the success:false not-charged claim is found where it is made (${claims} places)`);
   ok(bare.length === 0, `every success:false not-charged claim carries the unconfirmed-receipt clause${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
   ok("a PAYMENT-RESPONSE with success: false means settlement was refused, you were not charged on x402.".match(CLAIM) && !carries("receipt success:false, safe to retry."),

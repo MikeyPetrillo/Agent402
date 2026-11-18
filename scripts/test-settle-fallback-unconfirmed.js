@@ -297,6 +297,7 @@ const NOT_CHARGED = /not charged|nothing (?:was|is) charged|never charged/i;
 const TMP = mkdtempSync(join(tmpdir(), "settle-fallback-unconfirmed-"));
 const LATE = join(TMP, "late.json");
 const failTxOf = (nonce) => `0x${createHash("sha256").update(`fallback:${String(nonce).toLowerCase()}`).digest("hex")}`;
+const landTxOf = (nonce) => `0x${createHash("sha256").update(`land:${String(nonce).toLowerCase()}`).digest("hex")}`;
 const st = { primary: "billing", fallback: "500" };
 // The chain the late-settlement pass reads. dark: nothing can be read.
 const chain = { dark: true, used: new Map(), decimalsDelayMs: 0 };
@@ -348,7 +349,21 @@ const stub = (name) => createServer((req, res) => {
     if (mode === "verdict400") return reply(400, refuse("insufficient_funds"));
     if (mode === "undecided400") return reply(400, refuse("unexpected_settle_error"));
     if (mode === "pending") return reply(500, refuse("settlement_pending", { transaction: failTxOf(parsed.paymentPayload?.payload?.authorization?.nonce) }));
-    return reply(200, { success: true, transaction: `0x${(++txN).toString(16).padStart(64, "0")}`, network: BASE_NET, payer });
+    // The transfer lands on chain at once, and the settle answer (success,
+    // naming it) comes back only once `st.landRelease()` reads true: the
+    // late-settlement pass can read the landed transfer meanwhile.
+    if (mode === "land") {
+      const nonce = String(parsed.paymentPayload?.payload?.authorization?.nonce || "").toLowerCase();
+      const tx = landTxOf(nonce);
+      st.onLand?.(nonce, tx);
+      const end = Date.now() + 75_000;
+      const tick = () => (st.landRelease?.() || Date.now() > end ? reply(200, { success: true, transaction: tx, network: BASE_NET, payer }) : setTimeout(tick, 100));
+      return tick();
+    }
+    // A settler asked again for an authorization whose transfer already
+    // landed answers its cached result: the same transaction.
+    const landed = chain.used.get(String(parsed.paymentPayload?.payload?.authorization?.nonce || "").toLowerCase());
+    return reply(200, { success: true, transaction: landed?.tx || `0x${(++txN).toString(16).padStart(64, "0")}`, network: BASE_NET, payer });
   });
 });
 const servers = { primary: stub("primary"), fallback: stub("fallback") };
@@ -656,6 +671,58 @@ try {
     const owedLines = srv.log().split("\n").filter((l) => l.includes(`tx ${T} landed after a 402; booked owed`));
     const look = await (await fetch(`${B}/api/refunds?tx=${T}`)).json().catch(() => ({}));
     ok(owedLines.length === 0 && !/"owed"/i.test(JSON.stringify(look)), `the served settlement is never also owed (${owedLines.length} owed lines; ${JSON.stringify(look).slice(0, 160)})`);
+  }
+
+  // 8. The store lost, the same payment takes the normal path, and its
+  // transfer lands while that settle is still in flight: the
+  // late-settlement pass reads it first and books it owed. The settle then
+  // answers success naming the same transaction, from the primary (the
+  // normal settle) or from the fallback (a recovered settle): it is never
+  // also served. The buyer gets settled-refund-owed (the transfer, the
+  // refund lookup, a fresh authorization to make the call), never "nothing
+  // was charged", never counted against the wallet.
+  for (const at of ["primary", "fallback"]) {
+    st.primary = "billing"; st.fallback = "500";
+    const lost = await pay();
+    ok(lost.status === 402 && lost.body?.reason === "settlement-unconfirmed" && await waitFor(() => !!bookedFor(lost)), `${at}: a payment answered unconfirmed and booked by its authorization`);
+    const e = bookedFor(lost);
+    await srv.stop();
+    srv = await bootServer(bootOpts);
+    B = srv.url;
+    const topic = (a) => `0x${String(a).slice(2).toLowerCase().padStart(64, "0")}`;
+    let T = null;
+    st.onLand = (nonce, tx) => {
+      T = tx;
+      chain.used.set(nonce, { tx, receipt: { status: "0x1", blockNumber: "0x3e0", transactionHash: tx, logs: [
+        { address: e.asset, topics: ["0x98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5", topic(e.payer), nonce], data: "0x" },
+        { address: e.asset, topics: ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef", topic(e.payer), topic(e.payTo)], data: word(e.amount) },
+      ] } });
+      chain.dark = false;
+    };
+    st.landRelease = () => !!T && srv.log().includes(`tx ${T} landed after a 402; booked owed`);
+    if (at === "primary") st.primary = "land"; else st.fallback = "land";
+    const c0 = snap();
+    const again = await send(lost.header);
+    st.onLand = null; st.landRelease = null; st.primary = "billing"; st.fallback = "ok";
+    ok(T === landTxOf(lost.nonce) && srv.log().includes(`tx ${T} landed after a 402; booked owed`), `${at}: the transfer landed during the settle and the late-settlement pass booked it owed first (${T})`);
+    ok(again.status === 402 && again.replayed !== "1" && asked(c0) === (at === "primary" ? "1/0" : "1/1"),
+      `${at}: its settle answers success afterwards: never served for that transfer (${again.status} ${asked(c0)} ${again.text.slice(0, 160)})`);
+    ok(again.receipt?.success === false && again.receipt.errorReason === "settled_refund_owed" && String(again.receipt.transaction || "").toLowerCase() === T,
+      `${at}: the receipt reads settled_refund_owed and names the transfer (${JSON.stringify(again.receipt).slice(0, 200)})`);
+    ok(again.body?.reason === "settled-refund-owed" && again.body.retry === "fresh-authorization" && JSON.stringify(again.body.transactions) === JSON.stringify([T])
+      && again.body.refundStatusUrl === `https://agent402.tools/api/refunds?tx=${T}` && !NOT_CHARGED.test(again.text) && /owed/.test(String(again.body.hint)) && !again.offered,
+      `${at}: the body: settled-refund-owed, fresh-authorization, the transfer and its refund lookup, never "not charged" (${again.text.slice(0, 300)})`);
+    await sleep(1500);
+    const owedLines = srv.log().split("\n").filter((l) => l.includes(`tx ${T} landed after a 402; booked owed`));
+    const look = await (await fetch(`${B}/api/refunds?tx=${T}`)).json().catch(() => ({}));
+    ok(owedLines.length === 1 && /"owed"/i.test(JSON.stringify(look)), `${at}: owed exactly once (${owedLines.length} owed lines; ${JSON.stringify(look).slice(0, 160)})`);
+    const c1 = snap();
+    const resent = [await send(lost.header), await send(lost.header, bodyOf(5))];
+    ok(resent.every((r) => r.status === 402 && r.replayed === "1" && r.body?.reason === "settled-refund-owed" && JSON.stringify(r.body.transactions) === JSON.stringify([T]) && r.receipt?.errorReason === "settled_refund_owed")
+      && counts.verify === c1.verify && asked(c1) === "0/0",
+      `${at}: the same payment sent again (two bodies): the owed answer back, no verify, no handler run, no settle (${resent.map((r) => `${r.status}/${r.replayed}/${r.body?.reason}`).join(" ")}; ${counts.verify - c1.verify} verifies, ${asked(c1)} settles)`);
+    const fresh = await pay();
+    ok(fresh.status === 200, `${at}: a new payment is served (${fresh.status})`);
   }
 } catch (e) {
   ok(false, e?.stack || String(e));
