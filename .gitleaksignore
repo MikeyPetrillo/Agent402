@@ -32,3 +32,5 @@ e00b2d19c697b9e6a2fd4ae2ef419b69f8a310cd:scripts/test-receipt-signing.js:private
 e00b2d19c697b9e6a2fd4ae2ef419b69f8a310cd:src/receipt-signing.js:private-key:50
 065904c2f0ba4e3378dc517871347f2e358af8ec:scripts/test-receipt-signing.js:private-key:58
 065904c2f0ba4e3378dc517871347f2e358af8ec:src/receipt-signing.js:private-key:49
+87de2ed04816f54711fac9048900e25dbbf56870:scripts/test-receipt-signing.js:private-key:58
+87de2ed04816f54711fac9048900e25dbbf56870:src/receipt-signing.js:private-key:49
