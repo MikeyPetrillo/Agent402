@@ -114,9 +114,16 @@ function signed({ path = "/api/pricing", host = "agent402.example.test", agent =
   ok(calls === 4, `at most 4 directory fetches at once (${calls})`);
   release();
   await new Promise((r) => setTimeout(r, 20));
-  for (let i = 4; i < 80; i++) v.check(signed({ agent: `"https://b${i}.example.test"` }));
-  await new Promise((r) => setTimeout(r, 20));
-  ok(calls <= 30, `at most 30 directory fetches a minute (${calls})`);
+  // Rounds that let each fetch finish, so only the per-minute budget can stop them.
+  for (let round = 0; round < 20; round++) {
+    for (let i = 0; i < 4; i++) v.check(signed({ agent: `"https://b${round}-${i}.example.test"` }));
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  ok(calls === 30, `at most 30 directory fetches a minute (${calls})`);
+  clock += 61_000;
+  v.check(signed({ agent: '"https://next-minute.example.test"' }));
+  await new Promise((r) => setTimeout(r, 5));
+  ok(calls === 31, "the budget renews the next minute");
   const bad = wba.createWebBotAuth({ now, fetchDirectory: async () => { throw new Error("nope"); }, note: () => {} });
   bad.check(signed());
   await new Promise((r) => setTimeout(r, 10));
