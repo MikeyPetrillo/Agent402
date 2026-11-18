@@ -5,17 +5,13 @@
 // page served the same /card.png, so every link preview looked identical.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { leastOurs } from "./lib/ours-clock.js";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { JSDOM } from "jsdom";
 import { ogSectionFor, ogSectionIds, sectionCardSvg } from "../src/og-cards.js";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { createHash } from "node:crypto";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-let pass = 0; let proc;
-const fail = (m) => { console.error("FAIL:", m); try { proc?.kill("SIGKILL"); } catch {} process.exit(1); };
+let pass = 0; let srv;
+const fail = (m) => { console.error("FAIL:", m); try { srv?.child.kill("SIGKILL"); } catch {} process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 
 // ---- pure: the path -> section rule -------------------------------------
@@ -51,12 +47,8 @@ ok(sectionCardSvg("chain-base", ctx).includes("0.001") && sectionCardSvg("report
 ok(sectionCardSvg("tools", ctx).includes("600 tools"), "the tool count comes from ctx, not typed");
 
 // ---- booted: the shell serves the derived card, the route renders it -------
-const PORT = await getFreePort();
-const BASE = `http://127.0.0.1:${PORT}`;
-proc = spawn("node", ["src/server.js"], { cwd: ROOT, env: { ...process.env, FREE_MODE: "true", STRIPE_SECRET_KEY: "", CREDITS_SALES: "", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" }, stdio: ["ignore", "ignore", "inherit"] });
-let up = false;
-for (let i = 0; i < 120 && !up; i++) { await new Promise((r) => setTimeout(r, 500)); try { up = (await fetch(`${BASE}/health`)).ok; } catch {} }
-if (!up) fail("server did not boot");
+srv = await bootServer({ stores: "og-cards", env: { FREE_MODE: "true", STRIPE_SECRET_KEY: "", CREDITS_SALES: "", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" } }).catch((e) => fail(`server did not boot: ${e.message}`));
+const BASE = srv.url;
 const og = async (p) => (/property="og:image" content="([^"]+)"/.exec(await (await fetch(BASE + p)).text()) || [])[1] || "";
 ok(/\/og\/docs\.png\?v=/.test(await og("/docs")), "/docs serves /og/docs.png as its og:image");
 ok(!ids.includes("why"), "no section card for /why (it redirects to /#why)");
@@ -78,5 +70,5 @@ const missing = await fetch(`${BASE}/og/nope.png`);
 ok(missing.status === 404, "an unknown section id is a 404, not a card");
 const png = await fetch(`${BASE}/og/docs.png`, { redirect: "manual" });
 ok(png.status === 200 || png.status === 302, `/og/docs.png renders (${png.status}: png when Chromium is present, svg redirect otherwise)`);
-proc.kill("SIGKILL");
+await srv.stop();
 console.log(`\n${pass} passed`);

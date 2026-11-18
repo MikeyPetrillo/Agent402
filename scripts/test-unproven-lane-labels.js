@@ -5,11 +5,10 @@
 // to carry only the seller-level verdict, where a price-less row can never show
 // the tier). Two sellers read the seller row, saw "not eligible", and asked.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { BASE_UNPROVEN_DEFAULT_USD } from "../src/base-unproven.js";
 
 let pass = 0;
@@ -25,13 +24,12 @@ const entry = {
 const dir = mkdtempSync(join(tmpdir(), "a402-unproven-"));
 const file = join(dir, "x402-index-cache.json");
 writeFileSync(join(dir, "x402-index-cache.ndjson"), [JSON.stringify({ savedAt: now, format: "ndjson-v1", origins: 1 }), JSON.stringify([origin, entry])].join("\n") + "\n");
-const port = await getFreePort();
-const proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: file, INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"), SOR_BASE_UNPROVEN_MAX_USD: "" },
-  stdio: ["ignore", "ignore", "inherit"],
+const srv = await bootServer({
+  stores: "unproven-lanes",
+  env: { FREE_MODE: "true", INDEX_CACHE_FILE: file, INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"), SOR_BASE_UNPROVEN_MAX_USD: "" },
 });
 try {
-  const base = `http://127.0.0.1:${port}`;
+  const base = srv.url;
   let detail = null;
   for (let i = 0; i < 120; i++) {
     try { const r = await fetch(`${base}/api/index?seller=${encodeURIComponent(origin)}`); if (r.ok) { detail = await r.json(); break; } } catch {}
@@ -47,5 +45,5 @@ try {
   ok(row, "the route row is returned");
   ok(row.executeVia && row.executeViaCallableNow === true && row.executeViaLane === "unproven" && row.executeViaWhenEligible === undefined, `the route row is callable now in the unproven lane (${JSON.stringify({ executeVia: !!row.executeVia, now: row.executeViaCallableNow, lane: row.executeViaLane })})`);
   ok(row.routerDispatchEligible === false && row.routerDispatchReason === "settlement_required", "it is still not a proven seller");
-} finally { proc.kill("SIGTERM"); }
+} finally { await srv.stop(); }
 console.log(`OK: ${pass} passed`);

@@ -9,15 +9,12 @@
 //     body the rule recognizes; with Jupiter answering garbage, the tool's
 //     own 502 is NOT recognized, so the sweep fails it.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { upstreamRefusalOf, SHARED_IP_LIMITED_UPSTREAMS } from "./test-non-metered-examples.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PRELOAD = fileURLToPath(new URL("./lib/stub-jupiter-fetch.mjs", import.meta.url));
 
 ok(SHARED_IP_LIMITED_UPSTREAMS.has("Jupiter") && SHARED_IP_LIMITED_UPSTREAMS.size <= 3, `the list is short and names Jupiter (${[...SHARED_IP_LIMITED_UPSTREAMS].join(", ")})`);
@@ -28,22 +25,17 @@ ok(upstreamRefusalOf(502, { error: "Jupiter upstream error (HTTP 404)" }) === nu
 ok(upstreamRefusalOf(502, { error: "DexScreener upstream error (HTTP 503)" }) === null, "an unlisted upstream is not");
 
 async function callWith(mode) {
-  const [port] = await getFreePorts(1);
-  const child = spawn(process.execPath, ["--import", PRELOAD, "src/server.js"], {
-    cwd: ROOT,
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", STATE_DATABASE_URL: "", STUB_JUPITER_MODE: mode, JUPITER_API_BASE: "", POSTHOG_API_KEY: "" },
-    stdio: ["ignore", "pipe", "pipe"],
+  const srv = await bootServer({
+    stores: "sweep-refusal",
+    args: ["--import", PRELOAD],
+    env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", STATE_DATABASE_URL: "", STUB_JUPITER_MODE: mode, JUPITER_API_BASE: "", POSTHOG_API_KEY: "" },
   });
-  let log = "";
-  child.stdout.on("data", (d) => { log += d; }); child.stderr.on("data", (d) => { log += d; });
-  const base = `http://127.0.0.1:${port}`;
+  const base = srv.url;
   try {
-    for (let i = 0; i < 120; i++) { try { if ((await fetch(`${base}/health`)).ok) break; } catch { /* booting */ } await sleep(250); }
     const res = await fetch(`${base}/api/sol-swap-quote`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ inputMint: "So11111111111111111111111111111111111111112", outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", amount: "1000000000", slippageBps: 50 }) });
     return { status: res.status, body: await res.json().catch(() => null) };
   } finally {
-    child.kill("SIGTERM");
-    await new Promise((r) => { child.once("exit", r); setTimeout(r, 5000); });
+    await srv.stop();
   }
 }
 

@@ -64,7 +64,7 @@ const added = reserving.filter((f) => !baseline.has(f));
 const stale = [...baseline].filter((f) => !reserving.includes(f));
 ok(added.length === 0, `no new test boots src/server.js on a reserved port (use bootServer from scripts/lib/boot-server.js)${added.length ? `:\n  ${added.join("\n  ")}` : ""}`);
 ok(stale.length === 0, `the port-reservation baseline lists only files that still reserve (delete moved ones)${stale.length ? `:\n  ${stale.join("\n  ")}` : ""}`);
-ok(baseline.size <= 143, `the port-reservation baseline never grows past its frozen size (${baseline.size} of 143)`);
+ok(baseline.size <= 134, `the port-reservation baseline never grows past its frozen size (${baseline.size} of 134)`);
 ok(BOOTS_SERVER.test('spawn(process.execPath, ["src/server.js"])') && RESERVES.test("const [PORT] = await getFreePorts(1);"), "control: a planted reserved-port boot would be seen");
 
 // The scan must be able to see an offender at all.
