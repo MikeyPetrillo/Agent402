@@ -63,6 +63,8 @@ export async function envGatedSegments() {
     import("../src/tools/token-brief-kit.js").then((m) => m.TOKEN_BRIEF_TOOLS),
     // Listed only with MARKET_TICK=on.
     import("../src/tools/market-tick-kit.js").then((m) => m.MARKET_TICK_TOOLS),
+    // Listed only with an active stock provider (STOCK_DATA_PROVIDER and its key).
+    import("../src/tools/finance-kit.js").then((m) => m.FINANCE_TOOLS),
     // Listed only when FLIGHT_SELLERS_JSON names sellers; built here with a
     // placeholder seller per kind just to read the route names.
     import("../src/tools/flights-kit.js").then((m) => m.buildFlightTools({
@@ -70,7 +72,11 @@ export async function envGatedSegments() {
       pay: async () => { throw new Error("route listing only"); },
     })),
   ]);
-  return segmentsOf(kits.flat().map((t) => t.route));
+  const gated = segmentsOf(kits.flat().map((t) => t.route));
+  // The packs that run a stock tool are listed under the same switch.
+  const { STOCK_PACK_SLUGS } = await import("../src/skills.js");
+  for (const p of STOCK_PACK_SLUGS) gated.packs.add(p);
+  return gated;
 }
 
 export function loadSnapshot() {
@@ -115,10 +121,10 @@ export async function liveSegments() {
 export function accountFor({ snapshot, live, gated, retiredTools = RETIRED_TOOLS, retiredPacks = RETIRED_PACKS }) {
   const unaccounted = [];
   for (const t of snapshot.tools) if (!live.tools.has(t) && !gated.tools.has(t) && !Object.hasOwn(retiredTools, t)) unaccounted.push(`tool ${t}`);
-  for (const p of snapshot.packs) if (!live.packs.has(p) && !Object.hasOwn(retiredPacks, p)) unaccounted.push(`pack ${p}`);
+  for (const p of snapshot.packs) if (!live.packs.has(p) && !gated.packs?.has(p) && !Object.hasOwn(retiredPacks, p)) unaccounted.push(`pack ${p}`);
   const missingFromSnapshot = [
     ...[...live.tools, ...gated.tools].filter((t) => !snapshot.tools.has(t)).map((t) => `tool ${t}`),
-    ...[...live.packs].filter((p) => !snapshot.packs.has(p)).map((p) => `pack ${p}`),
+    ...[...live.packs, ...(gated.packs || [])].filter((p) => !snapshot.packs.has(p)).map((p) => `pack ${p}`),
     ...Object.keys(retiredTools).filter((t) => !snapshot.tools.has(t)).map((t) => `retired tool ${t}`),
     ...Object.keys(retiredPacks).filter((p) => !snapshot.packs.has(p)).map((p) => `retired pack ${p}`),
   ];
@@ -135,7 +141,7 @@ async function main() {
     try { prior = loadSnapshot(); } catch { /* first write */ }
     const hist = withHistory ? historySegments() : { tools: new Set(), packs: new Set() };
     const tools = new Set([...prior.tools, ...live.tools, ...gated.tools, ...hist.tools, ...Object.keys(RETIRED_TOOLS)]);
-    const packs = new Set([...prior.packs, ...live.packs, ...hist.packs, ...Object.keys(RETIRED_PACKS)]);
+    const packs = new Set([...prior.packs, ...live.packs, ...gated.packs, ...hist.packs, ...Object.keys(RETIRED_PACKS)]);
     const out = {
       _note: "Every /api tool route segment and skill pack ever published. Regenerate with `node scripts/published-slugs.js --write`; entries are never removed. See the script header.",
       tools: [...tools].sort(),

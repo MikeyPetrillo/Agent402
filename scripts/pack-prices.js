@@ -19,7 +19,9 @@
 //   TARGET_URL=http://127.0.0.1:PORT node scripts/pack-prices.js [--write] [--quiet]
 import { pathToFileURL } from "node:url";
 import { readFileSync, writeFileSync } from "node:fs";
-import { SKILL_PACKS, PACK_PRICES } from "../src/skills.js";
+import { ALL_SKILL_PACKS as SKILL_PACKS, PACK_PRICES } from "../src/skills.js";
+import { FINANCE_TOOLS } from "../src/tools/finance-kit.js";
+import { STOCK_SLUGS } from "../src/tools/stock-provider.js";
 
 export const PACK_DISCOUNT = 0.10;
 export const PACK_FLOOR_USD = 0.001;
@@ -44,6 +46,10 @@ async function main() {
   const quiet = process.argv.includes("--quiet");
   const pricing = await (await fetch(`${TARGET}/api/pricing`)).json();
   const tools = new Map((pricing.tools || pricing.endpoints || []).map((t) => [t.slug, t.price]));
+  // Every pack is priced, listed or not: a stock tool absent from a boot with
+  // no stock provider is priced from its kit, so the packs that run one keep
+  // the rule while they are not listed.
+  for (const t of FINANCE_TOOLS) if (STOCK_SLUGS.has(t.slug) && !tools.has(t.slug)) tools.set(t.slug, t.price);
   const priceOf = (slug) => tools.get(slug);
   const rows = [];
   let drift = 0, unknown = 0;

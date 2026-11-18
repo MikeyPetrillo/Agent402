@@ -906,7 +906,7 @@ server.setRequestHandler("tools/list", redacted(withCatalog(async () => {
       title: "Run an Agent402 tool",
       annotations: { title: "Run an Agent402 tool", ...CALL_PAID },
       description:
-        "Call any Agent402 tool by slug (find slugs with catalog.find or catalog.search). Payment is handled automatically: USDC via x402 if this server has a wallet key, otherwise free proof-of-work on eligible pure-CPU tools (no wallet needed). Wallet-keyed highlights: live search/answer, stock-quote, render, transcribe, memory, and the /v1 LLM gateway tiers.",
+        "Call any Agent402 tool by slug (find slugs with catalog.find or catalog.search). Payment is handled automatically: USDC via x402 if this server has a wallet key, otherwise free proof-of-work on eligible pure-CPU tools (no wallet needed). Wallet-keyed highlights: live search/answer, render, transcribe, memory, and the /v1 LLM gateway tiers.",
       inputSchema: {
         type: "object",
         properties: {

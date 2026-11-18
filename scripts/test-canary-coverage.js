@@ -117,7 +117,7 @@ if (xt) {
 }
 if (xt) ok(xt.priceUsd === advertised(X_DATA_TOOLS, "x-tweet"), `x-tweet leg priceUsd (${xt?.priceUsd}) matches the kit's advertised price ($${advertised(X_DATA_TOOLS, "x-tweet")})`);
 const sq = legFor("/api/stock-quote");
-ok(!!sq, "canary has a stock-quote leg");
+ok(!!sq && sq.whenListed === true, "canary has a stock-quote leg, bought only while prod lists the route (listed only with an active stock provider)");
 if (sq) ok(sq.priceUsd === advertised(FINANCE_TOOLS, "stock-quote"), `stock-quote leg priceUsd (${sq?.priceUsd}) matches the kit's advertised price ($${advertised(FINANCE_TOOLS, "stock-quote")}) — no stale display price`);
 const tr = CANARY_LEGS.find((l) => l.kit === "transcribe");
 const STT_EXAMPLE_URL = STT_TOOLS.find((t) => t.slug === "transcribe")?.discovery?.input?.url;

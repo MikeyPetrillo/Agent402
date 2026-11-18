@@ -24,7 +24,6 @@ It exposes a **flagship-first** tools/list (~15 tools, each with titles + safety
 | `web.answer` | Cited answer grounded in live web search |
 | `web.news` | News search |
 | `browser.render` | Headless Chromium render → markdown |
-| `market.quote` | Live stock quote |
 | `audio.transcribe` | Speech-to-text |
 | `memory.read` / `memory.write` | Durable wallet-keyed memory |
 | `catalog.find` | Describe a task in plain language; returns the best-matching tool(s) **ready to call** - slug, price, input schema, an example, and the exact `catalog.call` invocation |

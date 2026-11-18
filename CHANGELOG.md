@@ -6,6 +6,19 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-18 (stock data tools not offered)
+Tools:
+- stock-quote and stock-history are not offered for now, and neither are the
+  skill packs that run them (earnings-deep-dive, options-analytics,
+  financial-analysis, financial-research, trend-analysis,
+  forecasting-bake-off, price-monitor, company-dossier, earnings-watch and
+  insider-alert). Their routes answer 503 with no payment asked, and the
+  catalog, /api/pricing, /openapi.json, llms.txt, the MCP tool lists and the
+  sitemap do not list them.
+Reports:
+- The company dossier is built from SEC filings, Form 4 insider filings and
+  web research, with no quote step.
+
 ### 2026-11-18 (signed receipts)
 Payments:
 - A server run with a receipt signing key (`RECEIPT_SIGNING_KEY`) sends an

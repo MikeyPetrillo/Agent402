@@ -153,7 +153,10 @@ export const TOOLS = [
     check: (r) => (r.county === "Los Angeles County" && r.state === "CA") || `expected Los Angeles County/CA, got ${JSON.stringify(r).slice(0, 100)}`,
   },
   {
+    // Listed only with an active stock provider (src/tools/stock-provider.js):
+    // bought only while prod lists the route.
     kit: "finance",
+    whenListed: true,
     path: "/api/stock-quote?symbol=AAPL",
     method: "GET",
     priceUsd: 0.001,
@@ -1036,7 +1039,7 @@ async function main() {
     catch (e) { console.warn(`WARN  preflight: GET ${TARGET}/api/pricing failed: ${(e?.message || String(e)).slice(0, 120)}`); }
   }
   for (const t of TOOLS) {
-    if (t.whenListed && listedPaths && !listedPaths.has(t.path)) {
+    if (t.whenListed && listedPaths && !listedPaths.has(t.path.split("?")[0])) {
       console.log(`SKIP  ${t.kit.padEnd(10)} ${t.path}  (not listed on this server)`);
       continue;
     }

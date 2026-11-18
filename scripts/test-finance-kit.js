@@ -14,8 +14,11 @@
 // open/close taken from the venue that actually traded the most. Getting that
 // wrong produces a confident-looking quote built on one thin venue.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { FINANCE_TOOLS, stockAnalysis } from "../src/tools/finance-kit.js";
-import { consolidate, databentoEnabled } from "../src/tools/databento.js";
+// The tools read through the stock-provider seam; select the databento adapter
+// (active only with its key) before the kit loads its copy.
+process.env.STOCK_DATA_PROVIDER = "databento";
+const { FINANCE_TOOLS, stockAnalysis } = await import("../src/tools/finance-kit.js");
+const { consolidate, databentoEnabled } = await import("../src/tools/databento.js");
 
 const h = (slug) => FINANCE_TOOLS.find((t) => t.slug === slug).handler;
 let assertFail = 0, liveOk = 0, liveErr = 0;
@@ -121,8 +124,8 @@ if (!databentoEnabled()) {
   for (const [slug, args] of [["stock-quote", { symbol: "AAPL" }], ["stock-history", { symbol: "AAPL", days: 5 }]]) {
     try { await h(slug)(args); ok(false, `${slug} 503s with no key`); }
     catch (e) {
-      ok(e.statusCode === 503 && /not configured/i.test(e.message),
-        `${slug} 503s "not configured" with no key (got ${e.statusCode}: ${e.message})`);
+      ok(e.statusCode === 503 && /not currently offered/i.test(e.message),
+        `${slug} 503s "not currently offered" with no key (got ${e.statusCode}: ${e.message})`);
     }
   }
   console.log("\nlive calls skipped: DATABENTO_API_KEY unset (CI holds no market-data key by design)");

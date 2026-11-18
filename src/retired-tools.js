@@ -21,6 +21,10 @@
 // listed only with a key, or listed here. Retiring a route without an entry
 // here fails that test.
 
+import { stockDataEnabled } from "./tools/stock-provider.js";
+
+const STOCK_ON = stockDataEnabled();
+
 /** Tools: /api/<slug>. `replacement` is a live catalog slug or null; an
  *  optional `note` (one sentence, plain text) is added to the 410's hint when
  *  a live tool answers a narrower question than the retired route did. */
@@ -84,13 +88,15 @@ export const RETIRED_TOOLS = Object.freeze({
   "tx-inspect": { retiredAt: "2026-09-22", replacement: "tx-receipt" },
   // 2026-09-20: equities moved onto a licensed feed that serves none of these.
   "options-chain": { retiredAt: "2026-09-20", replacement: "crypto-options-chain" },
-  "premarket-quote": { retiredAt: "2026-09-20", replacement: "stock-quote" },
+  // The replacement is named only while it is listed (an active stock
+  // provider, src/tools/stock-provider.js).
+  "premarket-quote": { retiredAt: "2026-09-20", replacement: STOCK_ON ? "stock-quote" : null },
   "stock-dividends": { retiredAt: "2026-09-20", replacement: null },
   "earnings-calendar": { retiredAt: "2026-09-20", replacement: null },
   "dividend-calendar": { retiredAt: "2026-09-20", replacement: null },
   // 2026-09-11: a composite that never sold; the company-dossier pack runs the
   // same five calls.
-  "research-company": { retiredAt: "2026-09-11", replacement: "skill-company-dossier" },
+  "research-company": { retiredAt: "2026-09-11", replacement: STOCK_ON ? "skill-company-dossier" : null },
   // 2026-09-03: outbound messaging, withdrawn the day it shipped.
   "email-send": { retiredAt: "2026-09-03", replacement: null },
   "sms-send": { retiredAt: "2026-09-03", replacement: null },

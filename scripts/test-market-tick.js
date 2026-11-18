@@ -184,9 +184,12 @@ ok(!/\$\d/.test(tool.description), "no dollar figure is typed in the description
 ok(METERED_SLUGS.has(MARKET_TICK_SLUG), "the slug is metered (the sweeps skip it: its equity leg spends a key)");
 ok(WALLET_ONLY_SLUGS.has(MARKET_TICK_SLUG), "the slug is wallet-only (no free tier: it egresses)");
 ok(resolveCoinId("BTC") === "bitcoin", "control: the coin resolver the route maps answers back through");
-ok(marketTickToolsEnabled({}).length === 0 && marketTickToolsEnabled({ MARKET_TICK: "on" }).length === 1 && marketTickToolsEnabled({ MARKET_TICK: "ON " }).length === 1 && marketTickToolsEnabled({ MARKET_TICK: "true" }).length === 0,
+const STOCK_ON = { STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "db-test-key-not-real" };
+ok(marketTickToolsEnabled({}).length === 0 && marketTickToolsEnabled({ MARKET_TICK: "on", ...STOCK_ON }).length === 1 && marketTickToolsEnabled({ MARKET_TICK: "ON ", ...STOCK_ON }).length === 1 && marketTickToolsEnabled({ MARKET_TICK: "true", ...STOCK_ON }).length === 0,
   "the kit lists its tool only for MARKET_TICK=on (case and whitespace tolerant; 'true' is not on)");
-ok(marketTickEnabled({}) === false && marketTickEnabled({ MARKET_TICK: "on" }) === true, "the switch module reads the same rule");
+ok(marketTickToolsEnabled({ MARKET_TICK: "on" }).length === 0 && marketTickToolsEnabled({ MARKET_TICK: "on", STOCK_DATA_PROVIDER: "databento" }).length === 0,
+  "...and only with an active stock provider (its equity leg is stock-quote)");
+ok(marketTickEnabled({}) === false && marketTickEnabled({ MARKET_TICK: "on", ...STOCK_ON }) === true && marketTickEnabled({ MARKET_TICK: "on" }) === false, "the switch module reads the same rule");
 
 // ---- part 3: the real server, switch off and on -------------------------------------------
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -234,7 +237,7 @@ async function surfaces(base) {
   } finally { off.child.kill("SIGTERM"); }
 }
 {
-  const on = await boot({ MARKET_TICK: "on" });
+  const on = await boot({ MARKET_TICK: "on", STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "db-test-key-not-real", DATABENTO_WARM: "off" });
   try {
     const s = await surfaces(on.base);
     ok(s.routeStatus === 400, `MARKET_TICK=on: the route is mounted and refuses an empty list itself (got ${s.routeStatus})`);

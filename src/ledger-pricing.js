@@ -62,7 +62,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
     ["Article extract - clean markdown out", priceLabel(tools, (t) => t.slug === "extract")],
     ["Headless browser - render & screenshot (real Chromium)", priceLabel(tools, (t) => t.slug === "render" || t.slug === "screenshot")],
     ["Web search & cited answers - search, news, answer", priceLabel(tools, (t) => ["search", "search-news", "answer"].includes(t.slug))],
-    ["Market data - stock and crypto quotes, perp funding", priceLabel(tools, (t) => ["stock-quote", "crypto-price", "perp-funding", "perp-basis"].includes(t.slug))],
+    [`Market data - ${tools.some((t) => t.slug === "stock-quote") ? "stock and " : ""}crypto quotes, perp funding`, priceLabel(tools, (t) => ["stock-quote", "crypto-price", "perp-funding", "perp-basis"].includes(t.slug))],
     ["Text to speech - three voice tiers", priceLabel(tools, (t) => ["tts-lite", "tts", "tts-hd"].includes(t.slug))],
     ["Transcription - audio to text", priceLabel(tools, (t) => ["transcribe", "transcribe-pro"].includes(t.slug))],
   ].filter((r) => r[1]);

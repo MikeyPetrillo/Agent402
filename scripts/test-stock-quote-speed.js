@@ -30,6 +30,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { stubGuardResolver, oneV4 } from "./lib/guard-resolver-stub.js";
 
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
+process.env.STOCK_DATA_PROVIDER = "databento";
 process.env.DATABENTO_WARM_TOP_N = "2";
 process.env.DATABENTO_WARM_RETRY_MS = "200";
 delete process.env.DATABENTO_BACKGROUND_DAILY_MAX_CALLS;

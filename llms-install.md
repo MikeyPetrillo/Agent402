@@ -98,7 +98,7 @@ tools (the older snake_case names such as `search_tools` / `call_tool` still
 work as call aliases):
 
 - Flagships, callable directly: `web.search`, `web.answer`, `web.news`,
-  `browser.render`, `market.quote`, `audio.transcribe`, `memory.read`,
+  `browser.render`, `audio.transcribe`, `memory.read`,
   `memory.write`.
 - `catalog.search(query)` - lexical search across the catalog. Task-shaped
   queries also return matching multi-tool skill packs, which the server
