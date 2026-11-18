@@ -35,6 +35,13 @@ ok(!validWellKnownPath("a b"), "space rejected");
 
 throws(() => registerWellKnown("x402", { a: 1 }), "dedicated route", "reserved name x402 refused at write time");
 throws(() => registerWellKnown("security.txt", "x"), "dedicated route", "reserved name security.txt refused");
+// Every /.well-known document a dedicated route serves is reserved: the
+// conformance document and the receipt key document (src/receipt-signing.js).
+{
+  const { RECEIPT_KEYS_PATH } = await import("../src/receipt-signing.js");
+  const { CONFORMANCE_PATH } = await import("../src/conformance.js");
+  for (const p of [CONFORMANCE_PATH, RECEIPT_KEYS_PATH]) throws(() => registerWellKnown(p.replace(/^\/\.well-known\//, ""), { keys: [] }), "dedicated route", `reserved name ${p} refused`);
+}
 throws(() => registerWellKnown("ok-path", "x".repeat(17 * 1024)), "max", "byte cap enforced");
 throws(() => registerWellKnown("ok-path", { a: 1 }, "text/html; charset=utf-8"), "application/json", "parameterized content type refused");
 throws(() => registerWellKnown("ok-path", "<script>x</script>", "text/html"), "application/json", "text/html refused outright - markup is structurally unservable");
