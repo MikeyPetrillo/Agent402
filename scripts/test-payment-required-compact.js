@@ -28,7 +28,6 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { isDeepStrictEqual } from "node:util";
 import { readFileSync } from "node:fs";
-import { getFreePorts } from "./lib/free-port.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import {
   COMPACT_HEADER_MAX_BYTES, COMPACT_REQUEST_HEADER, COMPACT_REQUEST_EXAMPLE, COMPACT_VARY,
@@ -155,7 +154,6 @@ const FULL = {
 // ---------------------------------------------------------------------------
 // Part 2: a booted paid server, every route
 // ---------------------------------------------------------------------------
-const [PORT, FAC_PORT] = await getFreePorts(2);
 const EVM_KINDS = ["eip155:8453", "eip155:137", "eip155:42161", "eip155:143", "eip155:42220", "eip155:43114", "eip155:1329", "eip155:10", "eip155:57073", "eip155:4663"];
 const NON_EVM_KINDS = [
   { x402Version: 2, scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", extra: { feePayer: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM" } },
@@ -175,16 +173,20 @@ facilitator = createServer((req, res) => {
     return reply(404, {});
   });
 });
-await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+const FAC_PORT = facilitator.address().port;
 const F = `http://127.0.0.1:${FAC_PORT}`;
 const BASE_URL = "https://agent402.test";
 const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) { if (line.trim()) serverLog.push(line.slice(0, 400)); } if (serverLog.length > 120) serverLog.splice(0, serverLog.length - 120); };
-const bootServer = (port, label, extraEnv = {}) => {
+// Each server boots on PORT=0; the port it bound is read back from its
+// listening line, so no port is reserved before the child binds it.
+const LISTENING = /listening on :(\d+)/;
+const bootServer = (label, extraEnv = {}) => {
   const env = { ...process.env };
   for (const k of ["TARGET_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY", "NETWORK_PRICE_FLOORS", "NETWORK_PRICE_PREMIUMS", "MPP_CHALLENGE_NETWORKS", "ACCEPT_OUTPUT_SCHEMA", "TEMPO_API_KEY", "CIRCLE_FACILITATOR_API_KEY", "PAYMENT_REQUIRED_BODY", "PAYMENT_REQUIRED_COMPACT"]) delete env[k];
   const child = spawn(process.execPath, ["--import", "./scripts/lib/loopback-only-preload.js", "src/server.js"], {
     env: {
-      ...env, ...ownStoreEnv(label), PORT: String(port), FREE_MODE: "", NODE_ENV: "test", BASE_URL, RAILS_TEST_GRADUATE: "ink",
+      ...env, ...ownStoreEnv(label), PORT: "0", FREE_MODE: "", NODE_ENV: "test", BASE_URL, RAILS_TEST_GRADUATE: "ink",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
       PAYMENT_NETWORKS: "base,polygon,arbitrum,monad,celo,avalanche,sei,optimism,ink,robinhood,solana,stellar,algorand", X402_UPTO_NETWORKS: "eip155:8453",
       CELO_FACILITATOR_KEY: "compact-placeholder", SOLVADOR_KEY: "compact-placeholder", SOLVADOR_FACILITATOR_URL: F,
@@ -202,7 +204,18 @@ const bootServer = (port, label, extraEnv = {}) => {
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.on("data", keepLog); child.stderr.on("data", keepLog);
+  let seen = "";
+  child.port = new Promise((resolve) => {
+    const read = (d) => { seen = (seen + d).slice(-4000); const m = LISTENING.exec(seen); if (m) resolve(Number(m[1])); };
+    child.stdout.on("data", read); child.stderr.on("data", read);
+    child.once("exit", () => resolve(0));
+  });
   return child;
+};
+/** The child's bound base URL, or null when it exited or never printed its listening line. */
+const boundBase = async (child) => {
+  const port = await Promise.race([child.port, sleep(120_000).then(() => 0)]);
+  return port ? `http://127.0.0.1:${port}` : null;
 };
 const waitUp = async (base) => {
   for (let i = 0; i < 240; i++) { try { if ((await fetch(`${base}/health`)).ok) return true; } catch { /* booting */ } await sleep(500); }
@@ -254,9 +267,9 @@ function projected(doc) {
 }
 
 try {
-  proc = bootServer(PORT, "compact-on");
-  const B = `http://127.0.0.1:${PORT}`;
-  ok(await waitUp(B), "B0 the paid server booted");
+  proc = bootServer("compact-on");
+  const B = await boundBase(proc);
+  ok(B && await waitUp(B), "B0 the paid server booted");
   const pricing = await (await fetch(`${B}/api/pricing`)).json();
   const endpoints = pricing.endpoints || [];
   const [def, flag, aio] = [await readAll(B, endpoints, {}), await readAll(B, endpoints, { [COMPACT_REQUEST_HEADER]: "1" }), await readAll(B, endpoints, { "user-agent": UA_AIOHTTP })];
@@ -342,10 +355,9 @@ try {
   // Part 3: the default request's header is byte-identical with the option off.
   proc.kill("SIGKILL");
   await new Promise((r) => (proc.exitCode !== null || proc.signalCode !== null ? r() : proc.once("exit", r)));
-  const [OFF_PORT] = await getFreePorts(1);
-  const OFF_B = `http://127.0.0.1:${OFF_PORT}`;
-  proc = bootServer(OFF_PORT, "compact-off", { PAYMENT_REQUIRED_COMPACT: "off" });
-  ok(await waitUp(OFF_B), "P0 the PAYMENT_REQUIRED_COMPACT=off server booted");
+  proc = bootServer("compact-off", { PAYMENT_REQUIRED_COMPACT: "off" });
+  const OFF_B = await boundBase(proc);
+  ok(OFF_B && await waitUp(OFF_B), "P0 the PAYMENT_REQUIRED_COMPACT=off server booted");
   const off = await readAll(OFF_B, endpoints, {});
   const offFlag = await readAll(OFF_B, endpoints, { [COMPACT_REQUEST_HEADER]: "1" });
   let same = 0;
