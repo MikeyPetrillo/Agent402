@@ -50,7 +50,7 @@ ok(/^[A-Z][^.]*\.$/.test(CATEGORY_LINE) && !/Agentic Finance|AIFI/.test(CATEGORY
   const signed = ledgerHomePage("https://agent402.tools", {}, {}, {}, [], { receipts: true });
   const signedLede = pageText(stripInlineTags((signed.match(/<p class="hm-lede"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || "")).trim();
   ok(signedLede === LEAD_SENTENCE, `with receipts signed the home lede is the full approved line ("${signedLede}")`);
-  ok(/with a signed receipt for each one/.test((signed.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "") && !/signed receipt/.test((html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || ""), "the home meta description names the signed receipt only while receipts are signed");
+  ok(/every paid call over x402 and MPP, each with a signed receipt/.test((signed.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "") && !/signed receipt/.test((html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || ""), "the home meta description names the signed receipt only while receipts are signed");
   const support = pageText(stripInlineTags((html.match(/<p class="hm-support"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || ""));
   ok(support.includes(SUPPORT_LINE.replace(/\.$/, "")) && html.indexOf('class="hm-support"') > html.indexOf('class="hm-lede"'), "the catalog's size is a supporting line under the lede");
   ok(!/\d+\+? (ready )?tools/.test(pageText(h1)) && !/\d+\+? (ready )?tools/.test((html.match(/<title>([^<]*)<\/title>/) || [])[1] || ""), "neither the h1 nor the title leads with a tool count");
