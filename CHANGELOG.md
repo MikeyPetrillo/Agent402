@@ -155,6 +155,26 @@ Packs:
   trip-planner resolves stops by name and forecasts any stop in the world.
   Each pack's price follows its new parts, so both cost more.
 
+### 2026-11-17 (a 402 a small header limit can read)
+Payments:
+- A client whose parser caps one header line near 8 KB, such as Python aiohttp
+  at its defaults, can read the 402. A request that sends X-Payment-Compact: 1,
+  or whose User-Agent names aiohttp, gets a PAYMENT-REQUIRED header under 7,500
+  bytes: the resource, the Bazaar extension and the builder code unchanged, the
+  Base exact accept first, each other exact accept that fits, and a compact
+  field that names the body as the full offer. The 402 body keeps every accept,
+  and a payment signed from the compact header settles the same way. Every other
+  request gets the header it got before, byte for byte, and every 402 that
+  carries it varies on both request headers.
+
+Surfaces:
+- The 402 body states the PAYMENT-REQUIRED header's size and how to ask for the
+  compact one (paymentRequiredHeader), and /llms-full.txt, /how-to-pay,
+  /x402-test and the wiki say how a client with a small header limit reads the
+  402: raise aiohttp's max_line_size and max_field_size, or send
+  X-Payment-Compact: 1. The compact header and paymentRequiredHeader are
+  served unless PAYMENT_REQUIRED_COMPACT=off.
+
 ### 2026-11-16 (computed market answers replace the DeFi analytics routes)
 Tools:
 - Eight new tools answer with figures computed per call: funding-screener (one

@@ -13,7 +13,7 @@
     "src/decide-page.js": "2026-11-12",
     "src/glossary.js": "2026-11-16",
     "src/guides.js": "2026-11-17",
-    "src/how-to-pay.js": "2026-11-16",
+    "src/how-to-pay.js": "2026-11-17",
     "src/human-reports-page.js": "2026-11-17",
     "src/index-tools-page.js": "2026-11-11",
     "src/integration-pages.js": "2026-11-16",
@@ -167,7 +167,7 @@
     "src/tools/pdf-worker.js": "2026-10-29",
     "src/tools/pdf.js": "2026-10-13",
     "src/tools/prediction-market-kit.js": "2026-11-04",
-    "src/tools/price-feed-kit.js": "2026-11-17",
+    "src/tools/price-feed-kit.js": "2026-11-16",
     "src/tools/provenance.js": "2026-07-18",
     "src/tools/recall-report-kit.js": "2026-11-08",
     "src/tools/redact.js": "2026-11-17",
@@ -214,7 +214,7 @@
     "src/what-is-x402.js": "2026-11-16",
     "src/workflows.js": "2026-10-11",
     "src/x402-101.js": "2026-11-05",
-    "src/x402-test-page.js": "2026-11-16"
+    "src/x402-test-page.js": "2026-11-17"
   },
   "toolSources": {
     "a2a-card-fetch": "src/tools/network-kit.js",

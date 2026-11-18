@@ -98,7 +98,7 @@ function shaped(n) {
 const HEADERS = ["user-agent", "accept", "accept-language", "referer", "origin", "x-forwarded-for", "authorization", "x-payment", "payment-signature", "x-operator-token", "cookie", "if-none-match", "range", "idempotency-key"];
 // Further headers a gate, the connector or the edge code reads; each gets the
 // general shapes.
-const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt"];
+const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt", "x-payment-compact"];
 
 // --- the readers the surfaces do not reach, timed directly --------------------
 // Synchronous functions, so a reading is the time this thread had a core.
@@ -108,12 +108,16 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
   const posthog = await import("../src/posthog.js");
   const refusals = await import("../src/discovery-refusals.js");
   const traffic = await import("../src/traffic-classifier.js");
+  const compact = await import("../src/payment-required-compact.js");
   const readers = {
     "posthog uaFamilyOf": (v) => posthog.uaFamilyOf(v),
     "posthog toolGoneSourceOf (user-agent)": (v) => posthog.toolGoneSourceOf({ headers: { "user-agent": v } }),
     "posthog toolGoneSourceOf (authorization)": (v) => posthog.toolGoneSourceOf({ headers: { authorization: v } }),
     "posthog toolGoneSourceOf (referer)": (v) => posthog.toolGoneSourceOf({ headers: { referer: v } }),
     "discovery-refusals uaFamilyOf": (v) => refusals.uaFamilyOf(v),
+    // Runs only on a paywall 402 (src/payment-required-compact.js).
+    "payment-required-compact wantsCompactHeader (user-agent)": (v) => compact.wantsCompactHeader({ headers: { "user-agent": v } }),
+    "payment-required-compact wantsCompactHeader (x-payment-compact)": (v) => compact.wantsCompactHeader({ headers: { "x-payment-compact": v } }),
   };
   for (const [name, fn] of Object.entries(traffic)) {
     // Every exported reader of the traffic classifier that takes one string.

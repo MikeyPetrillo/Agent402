@@ -51,11 +51,23 @@
 //
 // It never throws: any failure sends the original body.
 //
+// THE HEADER'S OWN SIZE. With the compact option on (server.js, unless
+// PAYMENT_REQUIRED_COMPACT=off), a mirrored 402 body also says how large the
+// header it carries is and how to ask for the compact one
+// (`paymentRequiredHeader`), and a request that asks gets the compact header
+// (src/payment-required-compact.js) while this body keeps the full offer. The
+// decision is made here, after the full header is in the body, so the body
+// always holds every accept.
+//
 // Rollback lever: PAYMENT_REQUIRED_BODY=off and server.js does not mount it.
 import { decodeB64Json } from "./payment-reject.js";
+import { COMPACT_REQUEST_EXAMPLE, compactPaymentRequired, markCompactHeader, wantsCompactHeader } from "./payment-required-compact.js";
 
 /** Statuses whose body mirrors the header when one is present. */
 export const MIRRORED_STATUSES = Object.freeze(new Set([402, 412]));
+
+/** The body field that describes the PAYMENT-REQUIRED header itself. */
+export const HEADER_NOTE_KEY = "paymentRequiredHeader";
 
 /** The protocol keys that make up the offer. `error` is deliberately not
  *  here: it is the refusal's own sentence and a stripped copy keeps it. */
@@ -84,17 +96,18 @@ export function decodePaymentRequired(value) {
 /** The body with the header's object merged in (header keys win), as a JSON
  *  string, or null when the body should go out unchanged. A body that
  *  explains itself gets the offer without any `error` key. */
-export function mergePaymentRequiredBody(bodyText, headerValue) {
+export function mergePaymentRequiredBody(bodyText, headerValue, trailing = null) {
   try {
     if (typeof bodyText !== "string" || !bodyText.trimStart().startsWith("{")) return null;
     const pr = decodePaymentRequired(headerValue);
     if (!pr) return null;
     const body = JSON.parse(bodyText);
     if (!isPlainObject(body)) return null;
-    if (!explainsItself(body)) return JSON.stringify({ ...body, ...pr });
+    const tail = isPlainObject(trailing) ? trailing : {};
+    if (!explainsItself(body)) return JSON.stringify({ ...body, ...pr, ...tail });
     const { error: _headerError, ...offer } = pr;
     const { error: _ownError, ...ours } = body;
-    return JSON.stringify({ ...ours, ...offer });
+    return JSON.stringify({ ...ours, ...offer, ...tail });
   } catch {
     return null;
   }
@@ -107,18 +120,35 @@ export function withoutPaymentRequired(doc) {
   if (!isPlainObject(doc) || typeof doc.x402Version !== "number") return doc;
   const out = { ...doc };
   for (const k of PAYMENT_REQUIRED_OFFER_KEYS) delete out[k];
+  delete out[HEADER_NOTE_KEY];
   return out;
 }
 
+/** The `paymentRequiredHeader` body field, and the compact header value when
+ *  this request asked for one that is shorter than the full header. */
+export function headerNoteFor(req, headerValue, statusCode) {
+  const pr = statusCode === 402 && wantsCompactHeader(req) ? decodePaymentRequired(headerValue) : null;
+  const c = pr ? compactPaymentRequired(pr) : null;
+  const note = { bytes: (c ? c.value : headerValue).length, compact: !!c };
+  if (c) Object.assign(note, { acceptsInHeader: c.doc.accepts.length, acceptsInBody: pr.accepts.length });
+  note.compactRequest = COMPACT_REQUEST_EXAMPLE;
+  return { note, compactValue: c ? c.value : null };
+}
+
 /** Express middleware. See the header comment for the mount-order rule. */
-export function paymentRequiredBodyMiddleware() {
+export function paymentRequiredBodyMiddleware({ compact = false } = {}) {
   return function paymentRequiredBody(req, res, next) {
     const origSend = res.send;
     res.send = function mirroredSend(chunk) {
       try {
         if (typeof chunk === "string" && MIRRORED_STATUSES.has(res.statusCode) && !res.headersSent) {
-          const merged = mergePaymentRequiredBody(chunk, res.getHeader("PAYMENT-REQUIRED"));
-          if (merged !== null) chunk = merged;
+          const header = res.getHeader("PAYMENT-REQUIRED");
+          const h = compact && decodePaymentRequired(header) ? headerNoteFor(req, header, res.statusCode) : null;
+          const merged = mergePaymentRequiredBody(chunk, header, h ? { [HEADER_NOTE_KEY]: h.note } : null);
+          if (merged !== null) {
+            chunk = merged;
+            if (h?.compactValue) markCompactHeader(res, header, h.compactValue);
+          }
         }
       } catch {
         // A mirror must never break a 402.
