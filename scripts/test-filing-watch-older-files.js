@@ -9,6 +9,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import dnsPromises from "node:dns/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { stubGuardResolver, oneV4 } from "./lib/guard-resolver-stub.js";
+import { urlMatches } from "./lib/url-host.js";
 dnsPromises.lookup = async () => ({ address: "1.1.1.1", family: 4 });
 stubGuardResolver(oneV4("1.1.1.1")); // the address guard resolves with dns.Resolver
 syncBuiltinESMExports();
@@ -47,7 +48,7 @@ const deps = {
   ok(r.filings[0]?.accession === acc(900), "the match beyond the newest 250 rows is found");
   ok(r.filings.length === 3 && r.filings.every((f) => f.form === "10-K"), `older files fill the filter to its limit (${r.filings.length})`);
   ok(olderReads.length === 2 && olderReads[0].endsWith("-001.json"), `older files are read newest first and only as needed (${olderReads.join(",")})`);
-  ok(!!r.filings[1]?.url?.startsWith("https://www.sec.gov/Archives/edgar/data/123456/"), "an older file's row gets its document URL");
+  ok(urlMatches(r.filings[1]?.url || "", "www.sec.gov", "/Archives/edgar/data/123456/"), "an older file's row gets its document URL");
   ok(r.olderFilesRead === 2, "the answer says how many older files were read");
 }
 

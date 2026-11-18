@@ -10,6 +10,7 @@
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ALCHEMY_DATA_TOOLS, __test } from "../src/tools/alchemy-data-kit.js";
+import { urlMatches } from "./lib/url-host.js";
 
 const { takeAddress, takeTxHash, takeBlockTag, takeInt, takeCategories, takeAddressList, formatUnits,
   decodeTransferLogs, takeWindow, metadataCache, clearMetadataCache,
@@ -198,7 +199,7 @@ calls = [];
 {
   const r = await h("asset-transfers")({ address: V, direction: "in", counterparty: "0xa916b82ff122591cc88aac0d64ce30a8e3e16081", category: "erc20,erc721", contracts: [USDC], maxCount: 5, network: "ethereum", fromBlock: "100", toBlock: "latest", pageKey: "abc" });
   ok(calls.length === 1, "asset-transfers: exactly ONE upstream request");
-  ok(calls[0].url.startsWith("https://eth-mainnet.g.alchemy.com/v2/"), "asset-transfers: ethereum host");
+  ok(urlMatches(calls[0].url, "eth-mainnet.g.alchemy.com", "/v2/"), "asset-transfers: ethereum host");
   ok(lastParams.toAddress === V.toLowerCase() && lastParams.fromAddress === "0xa916b82ff122591cc88aac0d64ce30a8e3e16081", "asset-transfers: direction in -> toAddress=address, counterparty -> fromAddress");
   ok(lastParams.maxCount === "0x5" && lastParams.fromBlock === "0x64" && lastParams.toBlock === "latest" && lastParams.pageKey === "abc" && lastParams.withMetadata === true && lastParams.excludeZeroValue === true, "asset-transfers: params mapped (hex maxCount, hex fromBlock, cursor, metadata, zero-value excluded by default)");
   ok(JSON.stringify(lastParams.contractAddresses) === JSON.stringify([USDC.toLowerCase()]) && JSON.stringify(lastParams.category) === JSON.stringify(["erc20", "erc721"]), "asset-transfers: contracts + categories passed");
@@ -211,7 +212,7 @@ calls = [];
   calls = [];
   await h("asset-transfers")({ address: V, direction: "out", network: "base" });
   ok(lastParams.fromAddress === V.toLowerCase() && !lastParams.toAddress && lastParams.fromBlock === "0x0" && lastParams.maxCount === "0x19", "asset-transfers: direction out defaults (genesis, 25 rows)");
-  ok(calls[0].url.startsWith("https://base-mainnet.g.alchemy.com/v2/"), "asset-transfers: base host");
+  ok(urlMatches(calls[0].url, "base-mainnet.g.alchemy.com", "/v2/"), "asset-transfers: base host");
   await h("asset-transfers")({ address: V, includeZeroValue: true });
   ok(lastParams.excludeZeroValue === false, "asset-transfers: includeZeroValue flips excludeZeroValue");
   await h("asset-transfers")({ contracts: [USDC], network: "ethereum" });
@@ -327,7 +328,7 @@ calls = [];
   calls = [];
   const rl = await h("block-receipts")({ block: "latest", network: "base" });
   ok(calls.length === 2 && receiptsParams.blockNumber === "0x2ffa276" && rl.block === 0x2ffa276 && rl.receipts.length === 100, "block-receipts: latest -> head read + receipts, default 100 rows");
-  ok(calls.every((c) => c.url.startsWith("https://base-mainnet.g.alchemy.com/v2/")), "block-receipts: base host");
+  ok(calls.every((c) => urlMatches(c.url, "base-mainnet.g.alchemy.com", "/v2/")), "block-receipts: base host");
   const big = await h("block-receipts")({ block: "1", limit: 300 });
   ok(big.receipts.length === 180 && big.returned === 180, "block-receipts: limit above block size -> all rows, returned = actual");
   // L1 fee on a rollup folds into fee

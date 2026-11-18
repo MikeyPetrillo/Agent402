@@ -5,6 +5,7 @@
 // every answer must name the dataset it came from.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
+import { isHost } from "./lib/url-host.js";
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
 process.env.STOCK_DATA_PROVIDER = "databento";
 process.env.DATABENTO_WARM = "off";
@@ -33,7 +34,7 @@ const datasetOf = (url, init) => {
 };
 globalThis.fetch = async (url, init) => {
   const u = String(url);
-  if (!u.startsWith("https://hist.databento.com/")) throw new Error(`unexpected egress: ${u}`);
+  if (!isHost(u, "hist.databento.com")) throw new Error(`unexpected egress: ${u}`);
   const ds = datasetOf(url, init);
   const kind = u.includes("get_dataset_range") ? "range" : u.includes("get_cost") ? "cost" : u.includes("get_range") ? "data" : "other";
   up.calls.push(`${kind}:${ds}`);

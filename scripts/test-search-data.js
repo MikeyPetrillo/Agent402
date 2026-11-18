@@ -9,6 +9,7 @@ import {
   parseBingDate, addDays, GSC_ROW_LIMIT, GSC_SCOPE_READ, GSC_SCOPE_WRITE,
 } from "../src/search-data.js";
 import { parseSitemap, collectSitemapUrls, selectChanged, pingIndexNow, chunk } from "../src/indexnow.js";
+import { isHost } from "./lib/url-host.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -264,7 +265,7 @@ function googleStub({ bigFirstPage = false } = {}) {
   };
   const r = await collectSitemapUrls("https://agent402.tools", { fetchImpl });
   ok(r.urls.length === 3 && r.sitemaps.length === 3, "every sitemap walked, URLs deduped across sitemaps");
-  ok(!fetched.some((u) => u.includes("other.example")), "child sitemaps on another host are not followed");
+  ok(!fetched.some((u) => isHost(u, "other.example")), "child sitemaps on another host are not followed");
   ok(selectChanged(r.urls).length === 3, "no state: everything selected");
   ok(JSON.stringify(selectChanged(r.urls, { previous: ["https://agent402.tools/", "https://agent402.tools/legacy"] })) === JSON.stringify(["https://agent402.tools/x?a=1&b=2"]), "state: only new URLs");
   ok(JSON.stringify(selectChanged(r.urls, { since: "2026-09-01" })) === JSON.stringify(["https://agent402.tools/"]), "since: lastmod on/after the date");
