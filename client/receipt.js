@@ -1,0 +1,56 @@
+// verifyReceipt(): check an Agent402-Receipt header (a compact JWS, EdDSA
+// over Ed25519) against the server's published keys, offline once the keys
+// are in hand. Optional: the client never calls it on its own.
+import { createHash, createPublicKey, verify as edVerify } from "node:crypto";
+
+export const RECEIPT_HEADER = "Agent402-Receipt";
+export const RECEIPT_KEYS_PATH = "/.well-known/agent402-receipt-key.json";
+const TYP = "agent402-receipt+jws";
+
+/** sha256 hex of "<METHOD> <path>[?query]\n" + JSON.stringify(body) (no body: "-"). */
+export function receiptRequestDigest(method, pathWithQuery, body) {
+  const h = createHash("sha256").update(`${String(method || "").toUpperCase()} ${String(pathWithQuery || "")}\n`);
+  if (body instanceof Uint8Array) h.update(body);
+  else if (body && typeof body === "object" && Object.keys(body).length) h.update(JSON.stringify(body));
+  else if (typeof body === "string" && body) h.update(body);
+  else h.update("-");
+  return h.digest("hex");
+}
+
+/**
+ * @param {string} receipt  the Agent402-Receipt header value
+ * @param {object} [opts]
+ * @param {Array}  [opts.keys]      the `keys` of the published key document
+ * @param {string} [opts.baseUrl]   fetch the key document from here when `keys` is absent
+ * @param {Function} [opts.fetchImpl]
+ * @param {string|Uint8Array} [opts.body]  the answer bytes, checked against responseSha256
+ * @param {{method:string,path:string,body?:any}} [opts.request]  checked against requestSha256
+ * @returns {Promise<{valid:boolean, reason:string|null, kid?:string, record?:object}>}
+ */
+export async function verifyReceipt(receipt, { keys = null, baseUrl = "https://agent402.tools", fetchImpl = globalThis.fetch, body, request } = {}) {
+  const no = (reason, extra = {}) => ({ valid: false, reason, ...extra });
+  if (typeof receipt !== "string") return no("not_a_receipt");
+  const parts = receipt.trim().split(".");
+  if (parts.length !== 3 || parts.some((p) => !/^[A-Za-z0-9_-]+$/.test(p))) return no("not_a_compact_jws");
+  let head, record;
+  try { head = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8")); record = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")); } catch { return no("unreadable"); }
+  if (!head || head.alg !== "EdDSA" || head.typ !== TYP || typeof head.kid !== "string") return no("unexpected_header");
+  if (!keys) {
+    const r = await fetchImpl(`${String(baseUrl).replace(/\/+$/, "")}${RECEIPT_KEYS_PATH}`);
+    if (!r.ok) return no("keys_unavailable", { kid: head.kid, record });
+    keys = (await r.json())?.keys || [];
+  }
+  const key = keys.find((k) => k && k.kid === head.kid && (k.crv == null || k.crv === "Ed25519") && typeof k.x === "string");
+  if (!key) return no("unknown_kid", { kid: head.kid, record });
+  let ok = false;
+  try { ok = edVerify(null, Buffer.from(`${parts[0]}.${parts[1]}`), createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: key.x }, format: "jwk" }), Buffer.from(parts[2], "base64url")); } catch { ok = false; }
+  if (!ok) return no("bad_signature", { kid: head.kid, record });
+  const iat = Date.parse(record?.iat);
+  if (!Number.isFinite(iat) || (key.validFrom && iat < Date.parse(key.validFrom)) || (key.validUntil && iat >= Date.parse(key.validUntil))) return no("key_not_valid_at_issue", { kid: head.kid, record });
+  if (body != null) {
+    const digest = createHash("sha256").update(typeof body === "string" ? Buffer.from(body, "utf8") : body).digest("hex");
+    if (digest !== record.responseSha256) return no("response_mismatch", { kid: head.kid, record });
+  }
+  if (request && receiptRequestDigest(request.method, request.path, request.body) !== record.requestSha256) return no("request_mismatch", { kid: head.kid, record });
+  return { valid: true, reason: null, kid: head.kid, record };
+}

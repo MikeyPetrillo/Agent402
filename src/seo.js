@@ -1,3 +1,4 @@
+import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
 import { smallHeaderLimitText } from "./payment-required-compact.js";
 import { whyPointsPlain } from "./why.js";
@@ -802,7 +803,7 @@ export function llmsFullTxt(baseUrl, catalog) {
 - Receipt: a settled x402 answer carries \`PAYMENT-RESPONSE\`, base64 JSON with \`success\`, \`transaction\`, \`network\` and \`payer\`; an MPP answer carries \`Payment-Receipt\`, whose \`reference\` names the payment.
 - Settlement: look \`transaction\` up on \`network\`: a stablecoin transfer from \`payer\` to the \`payTo\` the 402 named (also listed in ${baseUrl}/.well-known/x402). A batched payment names its batch transfer instead.
 - Delivery: sha256 the exact bytes received. \`POST /api/attest\` with the transaction, paid from the same EVM wallet, records that digest beside the payment in an attestation on Base; \`POST /api/receipts\` returns the paying wallet's settled calls with each transaction and response digest.
-- Rail rules: ${baseUrl}${CONFORMANCE_PATH}, the row whose \`id\` names the rail and network paid on: \`receipt\`, \`settleAfterAnswer\`, \`idempotencyKey\`, \`replayGuard\` and \`refundOnChargedFailure\`. \`signedReceipt\` reads false on every paid rail: the receipt is the settlement's own record.
+- Rail rules: ${baseUrl}${CONFORMANCE_PATH}, the row whose \`id\` names the rail and network paid on: \`receipt\`, \`settleAfterAnswer\`, \`idempotencyKey\`, \`replayGuard\` and \`refundOnChargedFailure\`. ${receiptsServed() ? `Where \`signedReceipt\` reads true, the answer also carries \`${RECEIPT_HEADER}\`, a compact JWS (EdDSA) this server signs over the route, the request digest, the answer's sha256, the price, the rail, the payer and the settlement, after settlement; keys at ${baseUrl}${RECEIPT_KEYS_PATH}, free check at \`POST ${RECEIPT_VERIFY_PATH}\`.` : "\`signedReceipt\` reads false on every paid rail: the receipt is the settlement's own record."}
 - Outside sellers: ${baseUrl}/api/index?seller=<host> gives a seller's crawl history, the live probe of its paywall and the router's verdict on paying it.
 - Walkthrough: ${baseUrl}/trust#verify
 

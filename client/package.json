@@ -18,6 +18,7 @@
     "tls-distrust.js",
     "reset-retry.js",
     "pow-solver.js",
+    "receipt.js",
     "README.md"
   ],
   "engines": {

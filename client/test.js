@@ -257,6 +257,29 @@ const advisoryWarnings = [];
   ok(pkg.types === "index.d.ts" && pkg.exports["."].types === "./index.d.ts" && pkg.files.includes("index.d.ts"), "package.json points types at index.d.ts and ships it");
 }
 
+// Offline: verifyReceipt checks a receipt signed the way the server signs
+// (src/receipt-signing.js), shipped in the package and never called by the
+// client on its own.
+{
+  const { verifyReceipt, receiptRequestDigest } = await import("./index.js");
+  const srv = await import("../src/receipt-signing.js");
+  const { generateKeyPairSync } = await import("node:crypto");
+  const kp = generateKeyPairSync("ed25519");
+  const { signer, keys } = srv.loadReceiptKeys({ RECEIPT_SIGNING_KEY: Buffer.from(kp.privateKey.export({ format: "pem", type: "pkcs8" })).toString("base64"), RECEIPT_SIGNING_KEY_ID: "c1" });
+  const body = '{"ok":true}';
+  const rec = srv.buildReceiptRecord({ method: "POST", path: "/api/hash", requestSha256: receiptRequestDigest("POST", "/api/hash", { text: "a" }), responseSha256: srv.responseDigest(Buffer.from(body)), rail: "x402", settlement: "0x01", priceUsd: 0.001 });
+  const jws = srv.signReceipt(rec, signer);
+  let fetched = 0;
+  const doc = { keys: keys.map((k) => ({ ...k, kty: "OKP", crv: "Ed25519", alg: "EdDSA" })) };
+  const fetchImpl = async (u) => { fetched++; return { ok: String(u).endsWith("/.well-known/agent402-receipt-key.json"), json: async () => doc }; };
+  const good = await verifyReceipt(jws, { fetchImpl, baseUrl: "https://x.test", body, request: { method: "POST", path: "/api/hash", body: { text: "a" } } });
+  ok(good.valid && good.record.settlement === "0x01" && fetched === 1, "verifyReceipt: a server-signed receipt verifies against the fetched key document, body and request");
+  ok((await verifyReceipt(jws, { keys: doc.keys, body: body + " " })).reason === "response_mismatch", "verifyReceipt: other bytes fail");
+  const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "package.json"), "utf8"));
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.js"), "utf8");
+  ok(pkg.files.includes("receipt.js") && !/verifyReceipt\(/.test(src), "receipt.js ships, and the client never verifies on its own (no default behavior change)");
+}
+
 // Offline: every request is given DEFAULT_REQUEST_TIMEOUT_MS, the published
 // client timeout for metered calls (src: meteredClientTimeoutMs), so the SDK
 // never hangs up before the server's own deadline and never waits forever.

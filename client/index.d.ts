@@ -271,3 +271,16 @@ export function distrustDispatcher(opts?: { extraSpki?: string[] }): Promise<unk
 export function distrustCheckServerIdentity(extraSpki?: string[]): (host: string, cert: unknown) => Error | undefined;
 export function resetRetryFetch(baseFetch?: FetchLike, opts?: { pauseMs?: number }): FetchLike;
 export function isConnectionReset(err: unknown): boolean;
+
+/** The record a signed Agent402-Receipt carries. */
+export interface ReceiptRecord {
+  v: 1; id: string; iss: string | null; iat: string; method: string; path: string; slug: string | null;
+  requestSha256: string; responseSha256: string; priceUsd: string | null; rail: string;
+  network: string | null; payer: string | null; settlement: string | null; replay: boolean;
+}
+export interface ReceiptKey { kid: string; kty: "OKP"; crv: "Ed25519"; alg: "EdDSA"; x: string; status?: string; validFrom: string | null; validUntil: string | null }
+export const RECEIPT_HEADER: "Agent402-Receipt";
+export const RECEIPT_KEYS_PATH: string;
+export function receiptRequestDigest(method: string, pathWithQuery: string, body?: unknown): string;
+/** Check an Agent402-Receipt against the published keys (fetched from baseUrl when `keys` is absent). */
+export function verifyReceipt(receipt: string, opts?: { keys?: ReceiptKey[]; baseUrl?: string; fetchImpl?: FetchLike; body?: string | Uint8Array; request?: { method: string; path: string; body?: unknown } }): Promise<{ valid: boolean; reason: string | null; kid?: string; record?: ReceiptRecord }>;

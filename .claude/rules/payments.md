@@ -6,6 +6,7 @@ paths:
   - "src/payment-*.js"
   - "src/*settle*.js"
   - "src/hangup-*.js"
+  - "src/receipt-signing.js"
   - "src/replay-*.js"
   - "src/network-floors.js"
   - "src/paid-price.js"
@@ -297,6 +298,29 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   (`src/answer-headers.js`); the guard, mounted before every payment gate, removes the recorded names
   from any response whose final status is 400 or above, so a gate that refuses after the handler
   sends none of the answer (`scripts/test-answer-headers.js`).
+- **Signed receipts (off unless `RECEIPT_SIGNING_KEY`):** `src/receipt-signing.js`. The one accepted
+  key format: `RECEIPT_SIGNING_KEY` is a PKCS8 Ed25519 private key in PEM, the whole PEM base64-encoded
+  as one line, with `RECEIPT_SIGNING_KEY_ID` (1-32 of `A-Z a-z 0-9 . _ -`); optional
+  `RECEIPT_SIGNING_KEY_VALID_FROM` (ISO) and `RECEIPT_RETIRED_KEYS` (JSON `[{kid,x,validFrom,validUntil}]`,
+  `x` the raw public key in base64url) for rotation. Anything else is refused at boot with the reason
+  (`[receipts] signing refused: ...`, never the value) and signing stays off. The signer wraps
+  `res.write`/`res.end` and is mounted before every payment gate (beside the answer-headers guard), so
+  each gate replays its buffered answer through it after it settled; it signs only a final 200 written in
+  one `end()`, with settlement evidence (`receiptFieldsOf` in server.js: a decoded PAYMENT-RESPONSE with
+  `success: true`, or the Tempo or card gate's settled mark). No receipt on a 4xx/5xx, a refused settle,
+  a free, trial or allowance answer, a credits call, a streamed answer, `/ref` or FREE_MODE, nor on a keyed
+  idempotent replay (it carries no settlement header; the first receipt covers the same bytes). The
+  implicit replay of a pending answer, which carries its PAYMENT-RESPONSE, is signed with `replay: true`. Header
+  `Agent402-Receipt`: a compact JWS (`alg` EdDSA, `typ` `agent402-receipt+jws`, `kid`) over the record
+  `{v,id,iss,iat,method,path,slug,requestSha256,responseSha256,priceUsd,rail,network,payer,settlement,replay}`
+  (`requestSha256` = sha256 of `"<METHOD> <path>[?query]\n"` + `JSON.stringify` of the parsed body, `-`
+  when empty; `responseSha256` over the bytes before content encoding; every string capped, the header
+  under `RECEIPT_MAX_BYTES`). The payer is the one the books already record (the signed EVM
+  `authorization.from`, else the facilitator's settle `payer`, the Tempo gate's proven sender, null on
+  the card wire): no new personal data. Keys at `/.well-known/agent402-receipt-key.json`; free check at
+  `POST /api/receipts/verify`; `verifyReceipt()` in the client package. The conformance `signedReceipt`
+  cell reads `receiptsServed()` (key loaded AND signer mounted) and the rail being in `SIGNED_RAILS`;
+  /trust and llms-full.txt offer receipts only under the same switch (`scripts/test-receipt-signing.js`).
 - **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
   in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
   route that outlives the claim's expiry cannot run twice on one payment. With Redis configured

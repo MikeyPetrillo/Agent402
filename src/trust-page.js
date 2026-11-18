@@ -18,6 +18,7 @@ import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { directUpstreamConfigured, directUpstreamName } from "./gateway-direct-upstream.js";
 import { COMPANY_MAILBOXES } from "./company.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
+import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
 
 /** The processors the server sends buyer data to, as the privacy policy names
  *  them. `gets` is what each receives; the guard checks every entry of
@@ -85,7 +86,7 @@ export function trustPage(baseUrl) {
           step(`A settled x402 answer carries ${code("PAYMENT-RESPONSE")}: base64 JSON whose ${code("success")}, ${code("transaction")}, ${code("network")} and ${code("payer")} fields name the settlement. An MPP answer carries ${code("Payment-Receipt")}, whose ${code("reference")} names the payment.`),
           step(`Look up ${code("transaction")} on that network's block explorer: a stablecoin transfer from ${code("payer")} to the ${code("payTo")} the 402 named. A batched payment names its batch transfer instead.`),
           step(`Hash the exact bytes you received with sha256. To keep that digest beside the payment on chain, send the transaction to ${code("POST /api/attest")} from the paying EVM wallet; ${code("POST /api/receipts")} returns that wallet's settled calls with each transaction and response digest.`),
-          step(`Open ${link(CONFORMANCE_PATH, code(CONFORMANCE_PATH))}, find the row whose ${code("id")} names the rail and network you paid on, and read its ${code("receipt")}, ${code("settleAfterAnswer")} and ${code("refundOnChargedFailure")} cells. ${code("signedReceipt")} reads false on every paid rail: the receipt is the settlement's own record, with no signature added by this server.`),
+          step(`Open ${link(CONFORMANCE_PATH, code(CONFORMANCE_PATH))}, find the row whose ${code("id")} names the rail and network you paid on, and read its ${code("receipt")}, ${code("settleAfterAnswer")} and ${code("refundOnChargedFailure")} cells. ${receiptsServed() ? `Where its ${code("signedReceipt")} cell reads true, the answer also carries ${code(RECEIPT_HEADER)}: a compact JWS this server signs over the route, the request, the sha256 of the answer, the price, the rail, the payer and the settlement, sent only after the payment settled. Check it against the keys at ${link(RECEIPT_KEYS_PATH, code(RECEIPT_KEYS_PATH))}, or send it to ${code(`POST ${RECEIPT_VERIFY_PATH}`)} (free).` : `${code("signedReceipt")} reads false on every paid rail: the receipt is the settlement's own record, with no signature added by this server.`}`),
         ].join("")}</ol></div>`,
         `A re-send with the same ${code("Idempotency-Key")}, credential, route and body within ${cacheMin} minutes replays the served JSON answer without a second charge. For an outside x402 seller the router buys from, ${code("/api/index?seller=<host>")} shows its's crawl history, the live probe of its paywall and the router's verdict on paying it.`,
       ],
