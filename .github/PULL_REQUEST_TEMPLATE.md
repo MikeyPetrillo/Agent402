@@ -8,7 +8,8 @@
 
 ## Checklist
 
-- [ ] Every commit is signed off (`git commit -s`, DCO).
+- [ ] Every commit is signed off (`git commit -s`, DCO) with my commit author email.
+- [ ] This description carries the agreement sentence from CLA.md, typed by me (outside contributors).
 - [ ] A test covers the change, or the description says why none can.
 - [ ] Nothing here needs a secret, a wallet, or a paid call to review.
 - [ ] If any part of this was written by an AI agent, the description says so.

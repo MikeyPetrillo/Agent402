@@ -6,20 +6,50 @@ useful to every agent that connects. Bug fixes and docs are just as welcome.
 
 Issues and tool ideas: [open an issue](https://github.com/MikeyPetrillo/Agent402/issues).
 For anything that doesn't fit a public issue, email **mike@agent402.tools**.
-Licensing (inbound = outbound): by contributing you agree your contribution is
-licensed under the same license as the component you're changing - AGPL-3.0 for
-the server (the repository root, where most tool contributions land) and MIT for
-the `client/`, `mcp/`, and `tollbooth/` packages. You keep the copyright on your
-code. The "Agent402" name and logo are trademarks of Havok Holdings LLC - see
-[TRADEMARKS.md](TRADEMARKS.md).
 
-**Developer Certificate of Origin (DCO):** every commit must be signed off
-(`git commit -s`), which adds a `Signed-off-by: Your Name <email>` line
-certifying you wrote the change or otherwise have the right to submit it under
-the project's license - the industry-standard [DCO 1.1](https://developercertificate.org/).
-It is a provenance certification, not a copyright assignment: you still keep
-your copyright. Forgot it? `git commit --amend -s && git push -f` fixes the
-last commit. CI checks this on every PR.
+## Licensing, sign-off and the contributor agreement
+
+Outside contributions need two short records, and CI checks both on every
+pull request:
+
+1. **Developer Certificate of Origin (DCO).** Sign off every commit
+   (`git commit -s`). That adds `Signed-off-by: Your Name <email>`, certifying
+   under [DCO 1.1](https://developercertificate.org/) that you wrote the change
+   or otherwise have the right to submit it. The sign-off email must be the
+   commit's author email. Forgot it? `git commit --amend -s` fixes the last
+   commit (`git rebase --signoff main` fixes a branch), then push again.
+2. **Contributor License Agreement (CLA).** Put this sentence in your pull
+   request description (or in a comment of your own on it):
+
+   > I have read the Agent402 Contributor License Agreement (CLA v1.0, 2026-11-17) in CLA.md and I agree to its terms.
+
+   By contributing, you grant Cardhavok LLC (doing business as Havok Holdings
+   LLC) the copyright and patent license stated in [CLA.md](CLA.md), and you
+   confirm that you have the right to contribute the work. Your agreement also
+   covers what you contributed to this repository before. If someone else
+   authored commits in your pull request, they post the sentence in a comment
+   of their own. A comment does not re-run the check by itself: after
+   agreeing in a comment, the contributor (or a maintainer) re-runs the check
+   or pushes a commit.
+
+Why both: the company holds the copyright in the code it wrote and the rights
+its contributors grant, and offers Agent402 under AGPL-3.0 and MIT. The
+sign-off records where each commit came from, and the agreement records that
+the company may keep using, licensing and relicensing what you contributed,
+including under commercial terms. Together they let anyone who relies on the
+code check where each outside contribution came from and under which terms.
+You keep the copyright in your contribution; the agreement is a license, not
+an assignment. Contributions made before these terms came in under the
+license of the component they changed, and their authors keep their
+copyright.
+
+Your contribution is also licensed under the license of the component you
+change: AGPL-3.0-or-later for the server (the repository root, where most
+tool contributions land) and MIT for the packages that carry their own MIT
+`LICENSE` (`client/`, `mcp/`, `tollbooth/`, `openclaw/`, `adapters/*` and
+`facilitator/`). The "Agent402" name and logo are trademarks of Havok
+Holdings LLC; see [TRADEMARKS.md](TRADEMARKS.md). Ownership and third-party
+notices are in [NOTICE](NOTICE).
 
 ## List your x402 seller
 
@@ -158,7 +188,8 @@ Each kit also has a focused test under [`scripts/`](scripts) (e.g.
 
 ## Open a PR
 
-1. Fork, branch, commit with a clear message, signed off (`git commit -s`).
+1. Fork, branch, commit with a clear message, signed off (`git commit -s`),
+   and put the agreement sentence from [CLA.md](CLA.md) in the description.
 2. Make sure the checks above pass.
 3. Fill in the PR template: what changed, and how you verified it. A test
    that fails without the change and passes with it is the best evidence; a

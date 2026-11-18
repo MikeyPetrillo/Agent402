@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (162 scripts, one process each)
+# @step 1: Offline suites (164 scripts, one process each)
 # Paid scan budget (a public route must not spend without limit)
 t node scripts/test-paid-scan-budget.js
 # A registry listing is not a seller answering (origin-responded)
@@ -311,6 +311,10 @@ t node scripts/test-workflow-run-refs.js
 t node scripts/test-workflow-runner-pins.js
 # Workflow trust gates (workflow_run jobs need a push run of this repo; PyPI build has no id-token; wish text fenced)
 t node scripts/test-workflow-trust-gates.js
+# Outside-PR check: DCO sign-off by the commit author and the CLA sentence; pinned, read-only, owner and bots exempt (scratch repo - offline)
+t node scripts/test-dco-cla-workflow.js
+# THIRD_PARTY_NOTICES.txt matches the lockfiles; no shipped package is copyleft-only (offline)
+t node scripts/test-third-party-notices.js
 # Metered settlement pricing rule (upto only, never above the ceiling, missing cost is not free - offline)
 t node scripts/test-gateway-meter.js
 t node scripts/test-metered-quote-binding.js

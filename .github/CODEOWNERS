@@ -33,3 +33,13 @@
 
 # Tollbooth payment gate + proof-of-work replay
 /tollbooth/                    @MikeyPetrillo
+
+# Contribution terms, notices and the outside-PR check that enforces them
+/CLA.md                        @MikeyPetrillo
+/NOTICE                        @MikeyPetrillo
+/CONTRIBUTING.md               @MikeyPetrillo
+/THIRD_PARTY_NOTICES.txt       @MikeyPetrillo
+/scripts/ci/                   @MikeyPetrillo
+/scripts/test-dco-cla-workflow.js      @MikeyPetrillo
+/scripts/gen-third-party-notices.js    @MikeyPetrillo
+/scripts/test-third-party-notices.js   @MikeyPetrillo
