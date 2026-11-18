@@ -1,7 +1,7 @@
 // The terms prepaid credits are sold on, enforced by the code (src/credits.js,
 // src/credits-sales.js) and stated by /terms and /privacy only while sales are
-// on: a cap on one key's balance (checked at checkout and at mint; nothing adds
-// to a key after it is issued), no expiry, no fees, the unspent balance
+// on: a cap on one key's balance (checked at checkout, at mint and on every
+// top-up; scripts/test-credits-account.js), no expiry, no fees, the unspent balance
 // refunded to the card on request, and spending only on our own services
 // (a route that buys from an outside seller refuses a key). Offline, file
 // backend, stubbed Stripe; the switch is read at call time, so one process
@@ -75,12 +75,12 @@ const big2 = await cr.claim("cs_big");
 ok(big2.status === "over_balance_cap" && refunds.length === 1, "a second claim answers the same and refunds nothing more");
 delete process.env.CREDITS_BALANCE_MAX_USD;
 
-// ---- no top-up: nothing adds to a key after it is issued ----------------------
+// ---- top-ups: the only way to add to an issued key ------------------------------
 const src = readFileSync(new URL("../src/credits.js", import.meta.url), "utf8");
 const loadedWrites = src.match(/loadedMicro\s*(\+=|=[^=])/g) || [];
-ok(loadedWrites.length === 1 && /const loadedMicro = p\.cents \* 10_000;/.test(src), "loadedMicro is set once, at mint, from the pack");
+ok(loadedWrites.length === 2 && /const loadedMicro = p\.cents \* 10_000;/.test(src) && /rec\.loadedMicro = \(Number\(rec\.loadedMicro\) \|\| 0\) \+ p\.cents \* 10_000;/.test(src), "loadedMicro is set at mint and raised only by a top-up of a whole pack");
 const api = Object.keys(cr);
-ok(!api.some((k) => /top.?up|add|credit(?!s)|load(?!ed)/i.test(k)), `the credits API has no way to add to an issued key (${api.length} methods)`);
+ok(api.filter((k) => /top.?up|add|credit(?!s)|load(?!ed)/i.test(k)).join() === "createTopupCheckout", `the only way the credits API adds to an issued key is a paid top-up checkout (${api.length} methods)`);
 
 // ---- no expiry -----------------------------------------------------------------
 ok(!/expir/i.test(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "").replace(/never expire/g, "")), "nothing in credits.js expires a key or a balance");
@@ -181,7 +181,8 @@ crAged.disableByPaymentIntent("pi_g", "refunded", { amountRefundedCents: 2000, f
 ok(!(await crAged.refundRequestsOwed()).includes(G.keyId) && crAged.balance(G.key).refund?.state === "refunded", "a refund made by hand is recorded by the charge.refunded webhook");
 
 // ---- a refund is done only when Stripe says it succeeded --------------------------
-const rrOf = (key) => JSON.parse(readFileSync(join(DIR, `k_${hashKey(key)}.json`), "utf8")).refundRequest;
+// A one-payment key's request is one part: its refund id and failures are that part's.
+const rrOf = (key) => { const rr = JSON.parse(readFileSync(join(DIR, `k_${hashKey(key)}.json`), "utf8")).refundRequest; const p = rr?.parts?.[0] || {}; return rr && { ...rr, refundId: p.refundId ?? null, failedIds: p.failedIds || [] }; };
 const refundEvent = (id, status) => ({ ...made[id], status });
 const setStatus = (id, status) => { const r = made[id]; const c = charges[r.payment_intent]; if ((status === "failed" || status === "canceled") && r.status !== "failed" && r.status !== "canceled") c.amount_refunded -= r.amount; r.status = status; };
 // Pending: answered pending, recorded with Stripe's id, not owed while Stripe
