@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The CI sweeps' server answers the published examples that name its own
-// files (https://agent402.tools/samples/..., /fixtures/...) from itself
+// origin (https://agent402.tools: the home page, /samples/..., /fixtures/...) from itself
 // (scripts/lib/own-examples-preload.js), so a sweep never depends on what
 // production serves at that minute: a2a-card-fetch's sample card answered
 // production's 404 to the strict sweep once.
@@ -11,9 +11,11 @@
 // So:
 //   - the published a2a-card-fetch example answering 200 with the sample card
 //     proves the server read its own copy;
-//   - the control (a path on the same origin the server does not serve as a
-//     sample) reaching the stand-in proves that layer is live, so the first
-//     result is not the outer fetch that happened to work;
+//   - the control (www.agent402.tools, another origin) reaching the stand-in
+//     proves that layer is live, so the first result is not the outer fetch
+//     that happened to work;
+//   - the home-page examples (http-check, site-map) are read from this
+//     server too, and report the published URL;
 //   - a fixture example (pdf-info on /fixtures/sample-invoice.pdf) is read
 //     from this server too, and reports the published URL, not the loopback.
 // Offline: nothing leaves the machine.
@@ -30,7 +32,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const URL_HOST = new URL("./lib/url-host.js", import.meta.url).href;
 const STAND_IN = "data:text/javascript," + encodeURIComponent(
   `import { isHost } from ${JSON.stringify(URL_HOST)}; ` +
-  'const real = globalThis.fetch; globalThis.fetch = (input, init) => { if (isHost(input, "agent402.tools")) return Promise.resolve(new Response(JSON.stringify({ name: "Production Stand-in", description: "x", url: "https://example.com/a2a", version: "1.0.0", protocolVersion: "0.3.0", capabilities: {}, defaultInputModes: ["text/plain"], defaultOutputModes: ["text/plain"], skills: [{ id: "s", name: "s", description: "s", tags: ["t"] }] }), { status: 200, headers: { "content-type": "application/json" } })); return real(input, init); };',
+  'const real = globalThis.fetch; globalThis.fetch = (input, init) => { if (isHost(input, "agent402.tools") || isHost(input, "www.agent402.tools")) return Promise.resolve(new Response(JSON.stringify({ name: "Production Stand-in", description: "x", url: "https://example.com/a2a", version: "1.0.0", protocolVersion: "0.3.0", capabilities: {}, defaultInputModes: ["text/plain"], defaultOutputModes: ["text/plain"], skills: [{ id: "s", name: "s", description: "s", tags: ["t"] }] }), { status: 200, headers: { "content-type": "application/json" } })); return real(input, init); };',
 );
 
 const srv = await bootServer({
@@ -53,11 +55,23 @@ try {
   ok(r.status === 200 && body.valid === true && body.summary?.name === "Sample Weather Agent" && body.source === exampleUrl,
     `the published example is answered from this server's own sample card (${r.status} ${body.summary?.name} ${body.source})`);
 
-  // Control: same origin, a path the server does not serve as a sample, so
-  // the preload passes it on and the production stand-in answers.
-  const c = await post("/api/a2a-card-fetch", { url: "https://agent402.tools/not-a-sample/agent-card.json" });
+  // Control: another origin (the www name), so the preload passes it on and
+  // the production stand-in answers.
+  const c = await post("/api/a2a-card-fetch", { url: "https://www.agent402.tools/samples/a2a-agent-card.json" });
   const cb = await c.json().catch(() => ({}));
-  ok(c.status === 200 && cb.card?.name === "Production Stand-in", `control: a path outside /samples and /fixtures reaches the production stand-in (${c.status} ${cb.card?.name})`);
+  ok(c.status === 200 && cb.card?.name === "Production Stand-in", `control: another origin's path reaches the production stand-in (${c.status} ${cb.card?.name})`);
+
+  // The home-page examples: the stand-in answers JSON, so an HTML home page
+  // with its own title can only be this server's.
+  const examples = (path) => spec.paths?.[path]?.post?.requestBody?.content?.["application/json"]?.example;
+  const hc = await post("/api/http-check", examples("/api/http-check"));
+  const hcb = await hc.json().catch(() => ({}));
+  ok(examples("/api/http-check")?.url === "https://agent402.tools" && hc.status === 200 && hcb.status === 200 && /text\/html/.test(hcb.headers?.["content-type"] || "") && /^https:\/\/agent402\.tools\/?$/.test(hcb.finalUrl || ""),
+    `the http-check example reads this server's home page and reports the published URL (${hc.status} ${hcb.status} ${hcb.headers?.["content-type"]} ${hcb.finalUrl})`);
+  const sm = await post("/api/site-map", { ...examples("/api/site-map"), limit: 5 });
+  const smb = await sm.json().catch(() => ({}));
+  ok(sm.status === 200 && Array.isArray(smb.urls) && smb.urls.length > 0 && smb.urls.every((u) => u.startsWith("https://agent402.tools/")),
+    `the site-map example reads this server's robots.txt and sitemap (${sm.status} ${smb.urls?.length} urls)`);
 
   const p = await post("/api/pdf-info", { url: "https://agent402.tools/fixtures/sample-invoice.pdf" });
   const pb = await p.json().catch(() => ({}));
@@ -72,7 +86,8 @@ try {
 {
   const { ownExampleUrl, EXAMPLE_ORIGIN } = await import("./lib/own-examples-preload.js");
   ok(ownExampleUrl(`${EXAMPLE_ORIGIN}/samples/a2a-agent-card.json`, 4321) === "http://127.0.0.1:4321/samples/a2a-agent-card.json", "control: this origin's /samples/ file maps to the loopback");
-  for (const other of ["https://other.example/samples/a2a-agent-card.json", "http://agent402.tools/samples/a2a-agent-card.json", "https://agent402.tools.evil.example/samples/a2a-agent-card.json", "https://other.example/fixtures/sample-invoice.pdf"]) {
+  ok(ownExampleUrl(EXAMPLE_ORIGIN, 4321) === "http://127.0.0.1:4321/" && ownExampleUrl(`${EXAMPLE_ORIGIN}/sitemap.xml?x=1`, 4321) === "http://127.0.0.1:4321/sitemap.xml?x=1", "control: this origin's home page and other paths map to the loopback");
+  for (const other of ["https://www.agent402.tools/", "https://user:pw@agent402.tools/", "https://agent402.tools:8443/", "https://other.example/samples/a2a-agent-card.json", "http://agent402.tools/samples/a2a-agent-card.json", "https://agent402.tools.evil.example/samples/a2a-agent-card.json", "https://other.example/fixtures/sample-invoice.pdf"]) {
     ok(ownExampleUrl(other, 4321) === null, `another origin's sample path is not redirected (${other})`);
   }
 }
