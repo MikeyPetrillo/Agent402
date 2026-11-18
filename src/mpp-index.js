@@ -158,6 +158,19 @@ export function mergeSubmittedSeedRows(stored, local) {
   for (const row of local) { const o = seedOriginOf(row); if (!o) continue; if (!out.has(o) || typeof row !== "string") out.set(o, row); }
   return [...out.values()];
 }
+// Saves started without a caller waiting on them (a registration's seed and
+// listing, a crawl's merged save). mppIndexSavesSettled() resolves once every
+// save started so far has finished, so a reader that must see them waits on
+// the saves themselves rather than on a guessed delay.
+const pendingSaves = new Set();
+function trackSave(p) {
+  const done = Promise.resolve(p).catch(() => {}).finally(() => pendingSaves.delete(done));
+  pendingSaves.add(done);
+  return p;
+}
+export async function mppIndexSavesSettled() {
+  while (pendingSaves.size) await Promise.all([...pendingSaves]);
+}
 function persistSubmittedSeeds() {
   try {
     const rows = [...submittedSeeds].map((origin) => (submittedHints.has(origin) ? { origin, ...submittedHints.get(origin) } : origin));
@@ -165,7 +178,7 @@ function persistSubmittedSeeds() {
     if (d.backend === "pg" && (d.loadState === "loading" || d.loadState === "failed")) { submittedUnsaved = true; return; }
     // A read-modify-write of the row: two containers taking submissions at
     // once each keep the other's.
-    void d.update((stored) => mergeSubmittedSeedRows(stored, rows), { fallback: [] }).then((r) => { if (!r.ok) submittedUnsaved = true; else applySubmittedSeeds(r.body); });
+    void trackSave(d.update((stored) => mergeSubmittedSeedRows(stored, rows), { fallback: [] }).then((r) => { if (!r.ok) submittedUnsaved = true; else applySubmittedSeeds(r.body); }));
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
@@ -746,10 +759,10 @@ export function persistMppIndexCacheMerged(file = MPP_INDEX_CACHE_FILE) {
     if (!local.some(([, v]) => v.verified)) return Promise.resolve(false);
     const d = docFor(file);
     if (d.backend === "pg" && (d.loadState === "loading" || d.loadState === "failed")) return Promise.resolve(false);
-    return d.update((stored) => {
+    return trackSave(d.update((stored) => {
       const next = mergeMppIndexEntries(stored, local);
       return next.entries.length ? next : SKIP_UPDATE;
-    }, { fallback: null }).then((r) => r.ok).catch(() => false);
+    }, { fallback: null }).then((r) => r.ok).catch(() => false));
   } catch { return Promise.resolve(false); }
 }
 /** Save after a crawl. Returns false without saving when the crawl did not
