@@ -368,6 +368,9 @@ import { insiderPage, fundPage, dossierPage, hubPage, loadTeaser, normalizeTicke
 import { createMonitorScheduler } from "./monitor-scheduler.js";
 import { createCredits, sellablePacks } from "./credits.js";
 import { creditsPage, creditsThanksPage } from "./credits-page.js";
+import { createCreditsAccount, mountCreditsAccount, accountSecretFrom } from "./credits-account.js";
+import { createJsonDocument as createCreditsAccountStore } from "./json-document.js";
+import { creditsAccountPage, creditsVerifyPage, creditsNoticePage, creditsNoticeOffPage } from "./credits-account-page.js";
 import { sendMonitorEmail, emailSendStatus, subscriptionPriceText } from "./email.js";
 import { probeDomain, normDomain } from "./tools/domain-audit-kit.js";
 import { latest13fFiling, resolveManager as edgarResolveManager } from "./tools/edgar-kit.js";
@@ -758,7 +761,7 @@ import { hostFigures, hostFiguresFromPayments, hostIndexEntry, isSelfSellerQuery
 import { standingCountsExcludingHost } from "./standing.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
-import { creditsSalesEnabled, creditsTopupFields, creditsBalanceMaxCents } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsTopupFields, creditsBalanceMaxCents, creditsTermsVersion } from "./credits-sales.js";
 
 // The /v1 settle breaker reads whether a wallet has ever paid from the sales
 // ledger, handed in here so the breaker never imports it (see the module).
@@ -3433,6 +3436,7 @@ if (_mppSubs) {
 // as the human checkout. The GATE mounts inside the paywall block below
 // (before x402mw); the routes/pages mount with the other storefront routes.
 let _credits = null;
+let _creditsAccount = null;
 try {
   _credits = humanCheckoutEnabled() ? createCredits({
     stripe: newStripeClient(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
@@ -3441,8 +3445,25 @@ try {
     // the money once - when it is spent (rail "credits" below).
     onLoad: ({ pack, priceUsd, keyId, paymentIntent }) => recordSale({ slug: `credits:${pack}`, priceUsd, rail: "card-prepaid", network: "stripe", payer: keyId, tx: paymentIntent, wire: "stripe-checkout" }),
     onDebit: ({ slug, priceUsd, keyId, via }) => recordSale({ slug, priceUsd, rail: "credits", network: "stripe", payer: keyId, tx: null, wire: "credits", via }),
+    // Our own emails (src/credits-account.js), sent only while credits are on sale.
+    onLowBalance: (n) => { void _creditsAccount?.sendLowBalance(n); },
+    onReceipt: (r) => { void _creditsAccount?.sendReceipt(r); },
+    onNewKey: (n) => { void _creditsAccount?.sendNewKeyNotice(n); },
   }) : null;
 } catch (e) { console.warn("[credits] init failed:", String(e?.message || e).slice(0, 200)); _credits = null; }
+// The balance page's sign-in and emails (src/credits-account.js): built with
+// the credits store, served only while credits are on sale. Sessions and spent
+// sign-in links live in one small document beside the key records.
+try {
+  _creditsAccount = _credits ? createCreditsAccount({
+    credits: _credits, baseUrl: BASE_URL, secret: accountSecretFrom(process.env.STRIPE_SECRET_KEY), sendEmail: faSendEmail,
+    store: createCreditsAccountStore({ name: "credits-account", file: joinPath(_credits._dir, "_account.json"), log: () => {} }),
+    ipLimiter: createRateLimiter("credits-sign-in", { perMin: 6, perHour: 40 }),
+    // Keyed on the address (hashed), so rotating client addresses cannot flood one inbox.
+    emailLimiter: createRateLimiter("credits-sign-in-email", { perMin: 2, perHour: 6 }),
+    termsVersion: creditsTermsVersion,
+  }) : null;
+} catch (e) { console.warn("[credits] balance page init failed:", String(e?.message || e).slice(0, 200)); _creditsAccount = null; }
 // Manage/cancel bearer for monitor subscribers: a keyed token over the report
 // id, carried ONLY in the subscriber's email - never in the report JSON or on
 // the report page, which subscribers are told to share. Derived from the
@@ -5290,6 +5311,14 @@ if (_credits) {
       malformed: "Malformed credits key.",
     }[r.status];
     res.status(REFUND_HTTP[r.status] || 500).json({ ...r, ...(said ? { message: said } : {}) });
+  });
+  // The balance page (/credits/account), served only while credits are on sale.
+  if (_creditsAccount) mountCreditsAccount(app, {
+    express, account: _creditsAccount, credits: _credits, baseUrl: BASE_URL, salesOn: creditsSalesEnabled, clientIp,
+    page: { account: () => creditsAccountPage(BASE_URL), verify: (t) => creditsVerifyPage(BASE_URL, t), notice: (title, html) => creditsNoticePage(BASE_URL, title, html), noticeOff: (id, k) => creditsNoticeOffPage(BASE_URL, id, k) },
+    writeLimiter: creditsRefundLimiter,
+    packs: () => Object.entries(sellablePacks()).map(([id, p]) => ({ id, usd: p.cents / 100 })),
+    capUsd: () => creditsBalanceMaxCents() / 100,
   });
   app.get("/__operator/credits.json", async (req, res) => {
     if (!operatorAuthed(req)) return operatorNotFound(req, res);

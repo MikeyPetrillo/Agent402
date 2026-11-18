@@ -35,6 +35,7 @@
 //   WRAP_PAGES=/,/sell WRAP_WIDTHS=1440 ...           (narrow a run while fixing)
 //   WRAP_FAMILY=tools,skills ...                      (some families; "pages" = hand-written)
 //   WRAP_COLOR_SCHEME=dark ...                        (lay out under the dark scheme; default light)
+//   WRAP_COOKIE="a402_acct=<sid>;/credits/account" ...  (a signed-in page; with TARGET_URL and WRAP_PAGES)
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
@@ -436,6 +437,8 @@ try {
       // The saved theme wins over the device setting (assets/js/theme-init.js),
       // so the saved one is the scheme asked for.
       await ctx.addInitScript((scheme) => { try { localStorage.setItem("a402-theme", scheme); } catch {} }, SCHEME);
+      // WRAP_COOKIE=name=value;path: lay a signed-in page out (the credits balance page's session).
+      if (process.env.WRAP_COOKIE) { const [nv, path = "/"] = process.env.WRAP_COOKIE.split(";"); const eq = nv.indexOf("="); await ctx.addCookies([{ name: nv.slice(0, eq), value: nv.slice(eq + 1), url: `${BASE}${path}` }]); }
       {
         // The scheme asked for is the one the pages draw in.
         const probe = await ctx.newPage();
