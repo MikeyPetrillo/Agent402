@@ -609,10 +609,23 @@ export class Agent402 {
    * still holds).
    * `timeoutMs` replaces the client's per-request timeout for the call.
    */
-  async call(slug, params = {}, { idempotencyKey, cache = true, maxResponseBytes, outputValidator, respondAsync, asyncTimeoutMs, onProgress } = {}) {
+  async call(slug, params = {}, { idempotencyKey, cache = true, maxResponseBytes, outputValidator, respondAsync, asyncTimeoutMs, onProgress, maxUsd, timeoutMs } = {}) {
     // The contract for this one call: a per-call validator replaces the
     // client's; null or absent keeps the client's. Refused before any work.
     const validator = outputValidator == null ? this.outputValidator : normalizeOutputValidator(outputValidator, "call");
+    // The caps this call is held to (a malformed maxUsd is refused here,
+    // before anything is read or sent).
+    const limits = this._limitsFor(maxUsd);
+    // This call's per-request timeout: absent keeps the client's, null is none.
+    const requestTimeoutMs = timeoutMs === undefined ? this.timeoutMs
+      : timeoutMs === null ? null : (numOrNull(timeoutMs) || this.timeoutMs);
+    // Job polls for this call run under the same timeout. A signal is always
+    // attached, so the client-wide one never replaces this call's choice.
+    const pollFetch = async (url, init = {}) => {
+      const i = { ...init };
+      if (!i.signal) i.signal = requestTimeoutMs != null ? AbortSignal.timeout(requestTimeoutMs) : new AbortController().signal;
+      try { return await this.f(url, i); } catch (e) { throw asTimeoutError(e, requestTimeoutMs, slug); }
+    };
     const cat = await this._loadCatalog();
     const tool = cat.get(slug);
     if (!tool) throw new Error(`unknown tool "${slug}" - use client.find(task) to discover one`);
@@ -655,7 +668,7 @@ export class Agent402 {
       // refused with where it pointed, so an alias baseUrl is easy to fix.
       const init = paid ? { method: tool.method, headers, redirect: "manual" } : { method: tool.method, headers };
       // Each send gets its own timer, so one send's wait never shortens the next.
-      if (requestTimeoutMs != null) init.signal = AbortSignal.timeout(requestTimeoutMs);
+      init.signal = requestTimeoutMs != null ? AbortSignal.timeout(requestTimeoutMs) : new AbortController().signal;
       if (tool.method === "GET") {
         const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : String(v)])).toString();
         if (qs) url += `?${qs}`;
@@ -674,7 +687,7 @@ export class Agent402 {
     // when ready. Payment still settles only on the delivered answer.
     const asyncHeaders = shouldRequestAsync(tool.async, respondAsync ?? this.respondAsync) ? { Prefer: "respond-async" } : {};
     const collect = (r) => awaitJob(r, {
-      baseUrl: this.baseUrl, fetchImpl: this.f, slug, sleep: this._sleep,
+      baseUrl: this.baseUrl, fetchImpl: pollFetch, slug, sleep: this._sleep,
       timeoutMs: numOrNull(asyncTimeoutMs) ?? this.asyncTimeoutMs,
       onProgress: typeof onProgress === "function" ? onProgress : this.onProgress,
     });
@@ -684,7 +697,7 @@ export class Agent402 {
       // The Circle Gateway batched accept, when this client signs for it and
       // the 402 offers one; otherwise the paths below, as without the option.
       if (this.gateway) {
-        const paid = await this._gatewayCall(slug, tool, { paidSend, asyncHeaders, collect, cacheKey, cache: caching, validator, maxResponseBytes });
+        const paid = await this._gatewayCall(slug, tool, { paidSend, asyncHeaders, collect, cacheKey, cache: caching, validator, maxResponseBytes, limits });
         if (paid !== NO_GATEWAY_ACCEPT) return paid;
         if (!this.payFetch && !this.creditsKey) {
           throw Object.assign(new Error(`call "${slug}" failed: HTTP 402 - the seller offers no Circle Gateway batched accept${this.gateway.networks ? ` on ${this.gateway.networks.join(", ")}` : ""} for this route, so the gateway signer cannot pay it; construct with { fetch: payFetch } to pay a plain accept`), { status: 402, slug, paid: false });

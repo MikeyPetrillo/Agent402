@@ -318,6 +318,8 @@ import { routeExcludedCategory } from "./route-category.js";
 import { withoutAttributions } from "./data-attribution.js";
 import { stripHiddenCharacters } from "./hidden-chars.js";
 import { looksLikeListingInjection, matchesInjectionPhrase, listingInjectionFinding } from "./listing-screen.js";
+import { sellerDocsUrlFor, sellerDocsFieldOf, storedSellerDocsField, SELLER_DOCS_URL_MAX, SELLER_DOCS_URL_LEGEND } from "./seller-docs-url.js";
+export { sellerDocsUrlFor, SELLER_DOCS_URL_MAX, SELLER_DOCS_URL_LEGEND };
 import { timSortSteps } from "./timsort-steps.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
 import { contained } from "./contained-turn.js";
@@ -3198,6 +3200,10 @@ function* normaliseOpenapiToolsSteps(openapi, originUrl) {
         })(),
         ...(pay.networks.length ? { networks: pay.networks } : {}),
         ...(Object.keys(pay.payToByNetwork).length ? { payToByNetwork: pay.payToByNetwork } : {}),
+        // The operation's own documentation link (externalDocs.url), kept
+        // only when it passes src/seller-docs-url.js; served on the exact
+        // seller record alone and never fetched.
+        ...sellerDocsFieldOf(op, originUrl),
         // In a document that distinguishes paid operations, an unannotated
         // sibling is free (paid:false) - the seller's own free routes list
         // rather than vanish. An explicit `x-payment-required: false` reads
@@ -4594,10 +4600,13 @@ function* templatesMatching(index, concreteRoute) {
 // carries them. A registry row is settlement and discovery evidence, so a
 // copy the merge publishes never takes them from it.
 const CONTRACT_FIELD_NAMES = ["requestContract", "responseContract"];
-// Does copying this row need the slow path: a contract field of its own to
+// What a registry row's copy never carries: the contract fields, and a
+// documentation link (only the seller's own operation names one).
+const REGISTRY_DROPPED_FIELDS = [...CONTRACT_FIELD_NAMES, "sellerDocsUrl"];
+// Does copying this row need the slow path: a dropped field of its own to
 // leave out, or a symbol key a spread would carry?
 function needsFieldByFieldCopy(row) {
-  for (const name of CONTRACT_FIELD_NAMES) if (Object.hasOwn(row, name)) return true;
+  for (const name of REGISTRY_DROPPED_FIELDS) if (Object.hasOwn(row, name)) return true;
   return Object.getOwnPropertySymbols(row).length > 0;
 }
 /** A fresh copy of a registry row without its contract fields, whose values
@@ -4610,7 +4619,7 @@ function withoutRegistryContracts(row) {
   if (!needsFieldByFieldCopy(row)) return { ...row };
   const copy = {};
   for (const field of Object.keys(row)) {
-    if (CONTRACT_FIELD_NAMES.includes(field)) continue;
+    if (REGISTRY_DROPPED_FIELDS.includes(field)) continue;
     Object.defineProperty(copy, field, { value: row[field], enumerable: true, writable: true, configurable: true });
   }
   return copy;
@@ -4735,6 +4744,9 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     // the call to a buyer and are never read for ranking, routing, price or
     // payment.
     ...sellerContracts,
+    // The documentation link, from the seller's own operation only and
+    // checked again against this row's seller origin.
+    ...(o.sellerDocsUrl !== undefined ? sellerDocsFieldOf({ externalDocs: { url: o.sellerDocsUrl } }, o.seller ?? b.seller) : {}),
     price,
     // What the ORIGIN itself declared this crawl, kept separately so a later
     // stage cannot quietly overwrite the seller's own current number with an
@@ -10118,7 +10130,7 @@ export function sellerDetail(originOrHost) {
   if (!key) return null;
   for (const [origin, v] of cache.entries()) {
     if (origin !== key) continue;
-    return {
+    const detail = {
       origin,
       // Present only for a path seller, so a bare origin's detail is unchanged.
       ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
@@ -10267,8 +10279,14 @@ export function sellerDetail(originOrHost) {
         // came from, and when it last answered us live. An undeclared row
         // that stops answering leaves the listing (see stampDeclared).
         ...listingBasisProjection(t),
+        // The seller's documentation link, checked once per stored row and
+        // origin (src/seller-docs-url.js). This record is the only surface
+        // that carries it.
+        ...storedSellerDocsField(t, origin),
       })),
     };
+    if (detail.tools.some((t) => t.sellerDocsUrl)) detail.sellerDocsUrlLegend = SELLER_DOCS_URL_LEGEND;
+    return detail;
   }
   return null;
 }
@@ -10301,6 +10319,8 @@ export function screenSellerDetailForServe(d) {
       const row = { ...t, name: s.name ?? null, description: s.description ? s.description : null };
       if (t.slug !== undefined) row.slug = s.slug ?? null;
       if (t.tags !== undefined) row.tags = s.tags.length ? s.tags : undefined;
+      // A flagged row is served without its documentation link.
+      if (s.finding) delete row.sellerDocsUrl;
       return { ...row, ...untrustedMarker(s.finding) };
     });
   }
