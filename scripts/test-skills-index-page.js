@@ -10,11 +10,7 @@ let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
 
 const BASE_URL = "https://agent402.tools";
-// The six featured packs; a featured pack that is not listed on this boot (the
-// two series packs run stock-history, listed only with a stock provider) gives
-// its place to a standby, in order.
-const FLAGSHIP = [...["security-audit", "trend-analysis", "structured-scrape", "document-intel", "decode-blob", "forecasting-bake-off"], ...["status-snapshot", "number-crunch"]]
-  .filter((slug) => SKILL_PACKS.some((p) => p.slug === slug)).slice(0, 6);
+const FLAGSHIP = ["security-audit", "trend-analysis", "structured-scrape", "document-intel", "decode-blob", "forecasting-bake-off"];
 
 const html = skillsIndex(BASE_URL);
 
@@ -75,7 +71,7 @@ for (const slug of FLAGSHIP) {
 // the "forecast-" prefix on four slugs (naive/ses/holt/holt-winters), which
 // aren't real catalog slugs - a reader following that link would 404. Lock
 // that the corrected, real slugs render instead.
-if (FLAGSHIP.includes("forecasting-bake-off")) ok(html.includes("forecast-naive") && html.includes("forecast-ses") && html.includes("forecast-holt") && html.includes("forecast-holt-winters"), "forecasting-bake-off renders the REAL forecast-* slugs, not the design's abbreviated (404-prone) versions");
+ok(html.includes("forecast-naive") && html.includes("forecast-ses") && html.includes("forecast-holt") && html.includes("forecast-holt-winters"), "forecasting-bake-off renders the REAL forecast-* slugs, not the design's abbreviated (404-prone) versions");
 ok(!/[^-]\bnaive\b/.test(html.split("forecasting-bake-off")[1]?.split("</a>")[0] || ""), "forecasting-bake-off's card never renders the bare (non-prefixed) 'naive' slug");
 
 // --- pricing honesty: real range, not invented -------------------------------

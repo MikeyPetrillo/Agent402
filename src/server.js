@@ -733,7 +733,7 @@ import { isBinaryListing, listingMimeTypeOf, responseTypesOf } from "./tool-medi
 import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH } from "./guides.js";
-import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_PACK_SLUGS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
+import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PACK_SLUGS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
 import { changelogPage, changelogRss } from "./changelog.js";
 import { playgroundPage } from "./playground.js";
@@ -4039,13 +4039,13 @@ app.use(rugcheckPauseMiddleware(
 ));
 
 // With no active stock provider (src/tools/stock-provider.js) the stock tools
-// and the packs that run them are not listed anywhere; a call to one of their
+// and the packs whose answer is the stock data (src/skills.js) are not listed anywhere; a call to one of their
 // routes answers a free 503 naming the slug, ahead of every payment gate, so
 // it is never a 402 and never the guessed-slug 404.
 if (!stockDataEnabled()) {
   const notOffered = new Map([
     ...[...STOCK_SLUGS].map((slug) => [`/api/${slug}`, slug]),
-    ...[...STOCK_PACK_SLUGS].map((slug) => [`/api/skill/${slug}`, `skill-${slug}`]),
+    ...[...STOCK_CORE_PACK_SLUGS].map((slug) => [`/api/skill/${slug}`, `skill-${slug}`]),
   ]);
   app.use((req, res, next) => {
     const slug = notOffered.get(String(req.path || "").toLowerCase().replace(/\/+$/, ""));

@@ -17,7 +17,7 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { bootServer } from "./lib/boot-server.js";
 import { STOCK_SLUGS } from "../src/tools/stock-provider.js";
-import { STOCK_PACK_SLUGS } from "../src/skills.js";
+import { STOCK_CORE_PACK_SLUGS as STOCK_PACK_SLUGS, STOCK_TRIMMED_PACK_SLUGS, PACK_PRICE_TABLE, PACK_PRICES_WITHOUT_STOCK } from "../src/skills.js";
 
 // The kit's published examples as the databento provider publishes them.
 process.env.STOCK_DATA_PROVIDER = "databento";
@@ -70,10 +70,17 @@ try {
     ok(leaks.length === 0, `no provider: no listing surface names a stock tool, a stock pack or market.quote (${leaks.join("; ") || `${SURFACES.length + 7} surfaces read`})`);
     const pricing = await (await fetch(`${base}/api/pricing`)).json();
     ok((pricing.endpoints || []).length > 300, `control: the catalog is read (${(pricing.endpoints || []).length} entries)`);
+    // The packs that still answer their own question are listed without their
+    // stock step (the surfaces above already hold them to naming no stock
+    // tool), at the rule's price for the tools they keep.
+    const rowOf = new Map((pricing.endpoints || []).map((e) => [e.slug, e]));
+    const offPriced = [...STOCK_TRIMMED_PACK_SLUGS].filter((s) => Number(String(rowOf.get(`skill-${s}`)?.price || "").replace("$", "")) !== PACK_PRICES_WITHOUT_STOCK[s]);
+    ok(STOCK_TRIMMED_PACK_SLUGS.size > 0 && offPriced.length === 0, `no provider: the ${STOCK_TRIMMED_PACK_SLUGS.size} trimmed packs are listed at their price without the stock step (${offPriced.join(", ") || "all"})`);
     const pages = [];
+    for (const s of STOCK_TRIMMED_PACK_SLUGS) { const r = await fetch(`${base}/skills/${s}`); if (r.status !== 200) pages.push(`/skills/${s} ${r.status}`); }
     for (const s of STOCK_SLUGS) { const r = await fetch(`${base}/tools/${s}`); if (r.status !== 404) pages.push(`/tools/${s} ${r.status}`); }
     for (const s of STOCK_PACK_SLUGS) { const r = await fetch(`${base}/skills/${s}`); if (r.status !== 404) pages.push(`/skills/${s} ${r.status}`); }
-    ok(pages.length === 0, `no provider: the tool and pack pages are not served (${pages.join(", ") || "all 404"})`);
+    ok(pages.length === 0, `no provider: the trimmed packs' pages are served, the stock tool and hidden pack pages are not (${pages.join(", ") || "all as expected"})`);
     const routes = [];
     for (const path of [...[...STOCK_SLUGS].map((s) => `/api/${s}?symbol=AAPL`), ...[...STOCK_PACK_SLUGS].map((s) => `/api/skill/${s}`)]) {
       const r = await fetch(`${base}${path}`, path.includes("/skill/") ? { method: "POST", headers: { "content-type": "application/json" }, body: '{"ticker":"AAPL"}' } : {});
@@ -142,6 +149,11 @@ try {
     ok(missing.length === 0, `provider on: every stock tool and pack is listed again (missing: ${missing.join(", ") || "none"})`);
     const kitPrice = Object.fromEntries(FINANCE_TOOLS.map((t) => [t.slug, t.price]));
     ok([...STOCK_SLUGS].every((s) => (pricing.endpoints || []).find((e) => e.slug === s)?.price === kitPrice[s]), "provider on: listed at the kit's prices");
+    const fullPriced = [...STOCK_TRIMMED_PACK_SLUGS, ...STOCK_PACK_SLUGS].filter((s) => {
+      const row = (pricing.endpoints || []).find((e) => e.slug === `skill-${s}`);
+      return Number(String(row?.price || "").replace("$", "")) !== PACK_PRICE_TABLE[s] || !/stock-(quote|history)/.test(row?.description || "");
+    });
+    ok(fullPriced.length === 0, `provider on: every stock pack is listed whole, at its full price and naming its stock step (${fullPriced.join(", ") || "all"})`);
     const openapi = await (await fetch(`${base}/openapi.json`)).json();
     ok([...STOCK_SLUGS].every((s) => openapi.paths?.[`/api/${s}`]), "provider on: /openapi.json carries the routes");
     ok(/market\.quote/.test(await mcp(base, "tools/list")), "provider on: the MCP flagship market.quote is listed");

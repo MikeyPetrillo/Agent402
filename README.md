@@ -382,8 +382,10 @@ A task-shaped query to `catalog.search` (the hosted connector's search tool; the
 | Featured pack | Chains | Use it for |
 |---|---|---|
 | [`security-audit`](https://agent402.tools/skills/security-audit) | cert-transparency · dns-lookup · spf-check · dmarc-check · http-headers · tls-cert · tech-stack | Domain security posture |
+| [`trend-analysis`](https://agent402.tools/skills/trend-analysis) | fred-series · stats-summary · moving-average · linear-regression · outliers · correlation · forecast-eval | Quant workup on any time series |
 | [`structured-scrape`](https://agent402.tools/skills/structured-scrape) | extract · render · html-select · html-table · html-strip · html-links · html-meta | Deterministic scraping decision tree |
 | [`decode-blob`](https://agent402.tools/skills/decode-blob) | jwt-decode · gunzip · brotli-decompress · base64 · hex · json-format · hash | Identify and peel any opaque string |
+| [`forecasting-bake-off`](https://agent402.tools/skills/forecasting-bake-off) | fred-series · forecast-eval · forecast-naive · forecast-ses · forecast-holt · forecast-holt-winters | Rank 4 forecasters by RMSE, pick the winner |
 | [`document-intel`](https://agent402.tools/skills/document-intel) | pdf-info · pdf-to-markdown · pdf-extract-pages · image-ocr · barcode-decode · pdf-merge · images-to-pdf | PDF/OCR/barcode pipeline |
 | [`status-snapshot`](https://agent402.tools/skills/status-snapshot) | dns-lookup · http-check · http-headers · tls-cert · robots-check | One-shot service-health sweep |
 

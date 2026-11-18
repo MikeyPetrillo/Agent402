@@ -420,10 +420,9 @@ try {
   }
   ok(bad.length === 0, `every retired snapshot route answers 410 with its registry replacement (wrong: ${bad.join(", ") || "none"})`);
   const research = await (await fetch(`${base}/api/research-company?ticker=AAPL`)).json();
-  // Its replacement pack runs a stock tool, so it is named only while a stock
-  // provider is active (src/tools/stock-provider.js); this boot has none.
-  ok(research.replacement === null && /no direct replacement/.test(research.hint || ""), `a retirement whose replacement pack is not listed names none (got ${JSON.stringify(research.replacement)})`);
-  ok(RETIRED_TOOLS["research-company"].replacement === null && RETIRED_TOOLS["premarket-quote"].replacement === null, "...and so does the registry on a boot with no stock provider");
+  ok(research.replacement?.slug === "skill-company-dossier" && /^POST \/api\/skill\/company-dossier$/.test(research.replacement?.route || ""), "a pack can be a tool's replacement, with the pack's own route");
+  // stock-quote is listed only with a stock provider (src/tools/stock-provider.js); this boot has none.
+  ok(RETIRED_TOOLS["premarket-quote"].replacement === null, "a retirement whose replacement tool is not listed names none on this boot");
   const livePack = [...live.packs][0];
   ok((await fetch(`${base}/api/skill-packs/${livePack}/prompt`)).status === 200, `a live pack's prompt is still served (${livePack})`);
   const tpl = await fetch(`${base}/api/skill-packs/%7Bslug%7D/prompt`);
@@ -442,7 +441,7 @@ try {
   // free 503 naming the slug: never a 402, a 410 or the guessed-slug 404.
   {
     const { STOCK_SLUGS } = await import("../src/tools/stock-provider.js");
-    const { STOCK_PACK_SLUGS } = await import("../src/skills.js");
+    const { STOCK_CORE_PACK_SLUGS: STOCK_PACK_SLUGS } = await import("../src/skills.js");
     const wrong = [];
     for (const path of [...[...STOCK_SLUGS].map((s) => `/api/${s}`), ...[...STOCK_PACK_SLUGS].map((s) => `/api/skill/${s}`)]) {
       for (const method of ["GET", "POST"]) {

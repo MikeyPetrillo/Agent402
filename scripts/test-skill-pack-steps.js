@@ -20,7 +20,8 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import assert from "node:assert/strict";
 // Every pack, listed or not: the packs that run a stock tool are listed only
 // with a stock provider, and must be ready to sell the moment one is active.
-import { ALL_SKILL_PACKS as SKILL_PACKS, PACK_PRICES } from "../src/skills.js";
+import { ALL_SKILL_PACKS as SKILL_PACKS, PACK_PRICES, STOCK_TRIMMED_PACK_SLUGS, packWithoutStock } from "../src/skills.js";
+const LISTED_PACKS = SKILL_PACKS.map(packWithoutStock).filter(Boolean);
 import { PACK_STEPS, __test } from "../src/tools/skill-runner.js";
 const { getStepConfig } = __test;
 
@@ -30,7 +31,21 @@ const ok = (cond, msg) => { assert.ok(cond, msg); passed++; console.log("ok -", 
 // No stub fallback: a slug with no PACK_STEPS entry gets no config at all, so
 // runPack refuses it instead of serving N failed steps as a 200.
 ok(getStepConfig("no-such-pack-slug") === null, "a pack with no PACK_STEPS entry gets no stub config");
-ok(getStepConfig(SKILL_PACKS[0].slug) === PACK_STEPS[SKILL_PACKS[0].slug], "a sold pack runs from its own PACK_STEPS entry");
+{
+  const plain = SKILL_PACKS.find((p) => !STOCK_TRIMMED_PACK_SLUGS.has(p.slug));
+  ok(getStepConfig(plain.slug) === PACK_STEPS[plain.slug], "a sold pack runs from its own PACK_STEPS entry");
+}
+// A pack listed without its stock step (no stock provider) runs exactly the
+// tools it is listed with: none it no longer advertises, none dropped.
+for (const pack of LISTED_PACKS.filter((p) => STOCK_TRIMMED_PACK_SLUGS.has(p.slug))) {
+  const ran = getStepConfig(pack.slug, { stock: false }).steps.map((s) => s.slug);
+  ok(JSON.stringify([...new Set(ran)].sort()) === JSON.stringify([...new Set(pack.toolSlugs)].sort()), `${pack.slug}: listed without its stock step, it runs exactly its listed tools (${[...new Set(ran)].join(", ")})`);
+}
+// The step runs below drive each pack whole, as it runs with a stock provider
+// active (the runner reads the switch per run; no market-data host is reached:
+// every step is an inline stub).
+process.env.STOCK_DATA_PROVIDER = "databento";
+process.env.DATABENTO_API_KEY = "db-test-key-not-real";
 
 const missing = SKILL_PACKS.filter((p) => !PACK_STEPS[p.slug]);
 ok(

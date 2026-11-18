@@ -73,9 +73,9 @@ export async function envGatedSegments() {
     })),
   ]);
   const gated = segmentsOf(kits.flat().map((t) => t.route));
-  // The packs that run a stock tool are listed under the same switch.
-  const { STOCK_PACK_SLUGS } = await import("../src/skills.js");
-  for (const p of STOCK_PACK_SLUGS) gated.packs.add(p);
+  // The packs whose answer is the stock data are listed under the same switch.
+  const { STOCK_CORE_PACK_SLUGS } = await import("../src/skills.js");
+  for (const p of STOCK_CORE_PACK_SLUGS) gated.packs.add(p);
   return gated;
 }
 

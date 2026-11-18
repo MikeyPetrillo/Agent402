@@ -65,11 +65,16 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**competitor-scan**](https://agent402.tools/skills/competitor-scan) | $0.014 | What's a competitor running? Tech stack, HTTP headers, WHOIS, and page metadata in one call. |
 | [**status-snapshot**](https://agent402.tools/skills/status-snapshot) | $0.008 | "Is this site healthy, addressable, and crawlable - right now?" DNS → HTTP → headers → TLS → robots. |
 
-## Finance (1)
+## Finance (6)
 
 | Pack | Price | What it solves |
 |---|---|---|
 | [**loan-comparison**](https://agent402.tools/skills/loan-comparison) | $0.006 | Compare loan offers with different rates and terms: payment, amortization, compound interest, NPV, IRR. |
+| [**financial-research**](https://agent402.tools/skills/financial-research) | $0.018 | SEC filings, XBRL company facts, insider filings and macro context for a single ticker. |
+| [**company-dossier**](https://agent402.tools/skills/company-dossier) | $0.036 | Raw company data in one call: financials, recent SEC filings, 90 days of insider trades and recent news results, each as its own answer (no written report). |
+| [**earnings-watch**](https://agent402.tools/skills/earnings-watch) | $0.014 | Has this company just reported? Newest SEC filings and recent coverage of analyst expectations. |
+| [**earnings-deep-dive**](https://agent402.tools/skills/earnings-deep-dive) | $0.032 | Everything before a company reports: latest financials, recent filings and fresh news in one pass. |
+| [**insider-alert**](https://agent402.tools/skills/insider-alert) | $0.009 | Insider buying/selling for a stock: Form 4 trades and recent SEC filings. |
 
 ## Macro & SEC (12)
 
@@ -88,11 +93,13 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**world-data**](https://agent402.tools/skills/world-data) | $0.005 | GDP and population for a country - two key World Bank indicators. |
 | [**macro-dashboard**](https://agent402.tools/skills/macro-dashboard) | $0.065 | The full macro plus crypto dashboard in one call: 5 FRED series, 5 Treasury reads, the curve spread, crypto market/trending/global, and live gas. |
 
-## Time series & forecasting (1)
+## Time series & forecasting (3)
 
 | Pack | Price | What it solves |
 |---|---|---|
 | [**number-crunch**](https://agent402.tools/skills/number-crunch) | $0.003 | Descriptive statistics, correlation and outliers over a numeric series. |
+| [**trend-analysis**](https://agent402.tools/skills/trend-analysis) | $0.013 | Take any numeric series and run the full workup - descriptives, moving averages, trend, outliers, forecast. |
+| [**forecasting-bake-off**](https://agent402.tools/skills/forecasting-bake-off) | $0.009 | Backtest all four methods (naive/drift, SES, Holt, Holt-Winters), rank by RMSE, forecast with the winner. |
 
 ## Crypto & onchain (13)
 

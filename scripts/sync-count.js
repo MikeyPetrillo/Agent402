@@ -33,13 +33,11 @@ import { pathToFileURL } from "node:url";
 
 export const CATALOG_FLOOR = 400;
 export const BRAND_FLOOR = 500; // the number in the public "500+" claim
-// The number in the public "70+ skill packs" claim (README, wiki). Five surfaces -
-// two of them PUBLISHED npm READMEs - once said "100+ skill packs" against a
-// real 85, and the pack count was already being read here for the summary line
-// without anything asserting on it. A count printed but never checked is how
-// the claim drifted. The packs that run a stock tool are listed only with an
-// active stock provider, so the claim holds on a boot with none.
-export const PACK_BRAND_FLOOR = 70;
+// The number in the public "80+ skill packs" claim. Five surfaces - two of them
+// PUBLISHED npm READMEs - said "100+ skill packs" against a real 85, and the
+// pack count was already being read here for the summary line without anything
+// asserting on it. A count printed but never checked is how the claim drifted.
+export const PACK_BRAND_FLOOR = 80;
 
 // Returns null when the total is at or above the floor, else the CI failure
 // message. Exported (and main() gated below) so the assertion is unit-testable
@@ -56,8 +54,8 @@ export function brandViolation(total) {
   return `Catalog (${total}) is below the public "${BRAND_FLOOR.toLocaleString("en-US")}+" claim — either restore the missing tools or rebrand the marketing surfaces.`;
 }
 
-// Returns null while the public "70+ skill packs" claim is honest, else the CI
-// failure message. packBrandViolation(69) must return the message.
+// Returns null while the public "80+ skill packs" claim is honest, else the CI
+// failure message. packBrandViolation(79) must return the message.
 export function packBrandViolation(packs) {
   if (packs >= PACK_BRAND_FLOOR) return null;
   return `Skill packs (${packs}) are below the public "${PACK_BRAND_FLOOR}+ skill packs" claim - either restore the missing packs or rebrand the surfaces that say it.`;

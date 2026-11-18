@@ -96,7 +96,7 @@ export const RETIRED_TOOLS = Object.freeze({
   "dividend-calendar": { retiredAt: "2026-09-20", replacement: null },
   // 2026-09-11: a composite that never sold; the company-dossier pack runs the
   // same five calls.
-  "research-company": { retiredAt: "2026-09-11", replacement: STOCK_ON ? "skill-company-dossier" : null },
+  "research-company": { retiredAt: "2026-09-11", replacement: "skill-company-dossier" },
   // 2026-09-03: outbound messaging, withdrawn the day it shipped.
   "email-send": { retiredAt: "2026-09-03", replacement: null },
   "sms-send": { retiredAt: "2026-09-03", replacement: null },
