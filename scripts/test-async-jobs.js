@@ -25,6 +25,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getFreePorts } from "./lib/free-port.js";
+import { generateKeyPairSync } from "node:crypto";
+import { verifyReceipt as verifySignedReceipt } from "../client/receipt.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 requireUpstreamCosts("test-async-jobs");
 
@@ -92,6 +94,8 @@ proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "",
+    // Signed receipts on: a finished job keeps the run's receipt with its result.
+    RECEIPT_SIGNING_KEY: Buffer.from(generateKeyPairSync("ed25519").privateKey.export({ format: "pem", type: "pkcs8" })).toString("base64"), RECEIPT_SIGNING_KEY_ID: "r1-async-jobs", RECEIPT_RETIRED_KEYS: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     AGENT402_TASK_DATA_DIR: join(TMP, "tasks"), REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db"), HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
     AGENT402_MCP_TASK_TTL_MS: "" },
@@ -157,6 +161,11 @@ try {
   ok(!g1r.headers.get("retry-after") && !("pollIntervalSeconds" in g1), "a final job sets no Retry-After");
   ok(fac.settle === s0 + 1, `exactly one settlement, after the result was ready (settles ${fac.settle - s0})`);
   ok(!!g1.result?.headers?.["payment-response"], "the settle receipt is kept with the result");
+  {
+    const keys = (await (await fetch(`${B}/.well-known/agent402-receipt-key.json`)).json()).keys;
+    const v = await verifySignedReceipt(g1.result?.headers?.["agent402-receipt"] || "", { keys, body: typeof g1.result?.body === "object" ? JSON.stringify(g1.result.body) : undefined });
+    ok(v.valid && v.record.settlement && v.record.replay === false, `the run's signed receipt is kept with the result and verifies against it (${v.reason})`);
+  }
   ok(!("owner" in g1) && !("pid" in g1), "the job document exposes no owner or process id");
 
   // 1b. A poller written before the progress fields (waits for status

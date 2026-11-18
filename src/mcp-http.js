@@ -71,7 +71,19 @@ import { withoutAttributions } from "./data-attribution.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredFromPrice, meteredQuoteSentence, flatTiersLine } from "./metered-lead.js";
 import { leadSentence, SUPPORT_LINE } from "./positioning.js";
-import { receiptsServed } from "./receipt-signing.js";
+import { receiptsServed, RECEIPT_HEADER } from "./receipt-signing.js";
+
+/** The `_meta` key a paid tools/call result carries the route's signed
+ *  receipt under (src/receipt-signing.js): the compact JWS the paid HTTP
+ *  answer carried, over that answer's bytes (a JSON result is those bytes
+ *  parsed, so JSON.stringify(result) recomputes the digest). */
+export const MCP_SIGNED_RECEIPT_META = "tools.agent402/receipt";
+/** A settled paid result with the loopback answer's signed receipt in _meta. */
+export function withSignedReceipt(out, r) {
+  const jws = r && r.status === 200 && typeof r.headers?.get === "function" ? r.headers.get(RECEIPT_HEADER) : null;
+  if (typeof jws !== "string" || !jws || !out || typeof out !== "object" || Array.isArray(out) || out.isError) return out;
+  return { ...out, _meta: { ...(out._meta && typeof out._meta === "object" ? out._meta : {}), [MCP_SIGNED_RECEIPT_META]: jws } };
+}
 import { mppMethodsSummary } from "./mpp-offers.js";
 import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
@@ -1037,7 +1049,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const x402Required = x402Target && r.status === 402
         ? (twinAsk ? await twinAsk : paymentRequiredFromHeader(r.headers.get("payment-required")))
         : null;
-      return translateMppResponse(entry, meta, params, startedAt, isNamed, r, { x402Required });
+      return withSignedReceipt(translateMppResponse(entry, meta, params, startedAt, isNamed, r, { x402Required }), r);
     }
 
     /** The params a paid call replays (flagship: args IS params; catalog.call:
@@ -1114,7 +1126,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           isError: true,
         };
       }
-      return translateX402Response(entry, target, params, isNamed, r, ip, signal);
+      return withSignedReceipt(await translateX402Response(entry, target, params, isNamed, r, ip, signal), r);
     }
 
     /** The no-offer result for a paid loopback's 402 that records a failed
@@ -1359,7 +1371,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // rather than making the client poll for something already done.
         endProgress();
         if (gate.e) throw gate.e;
-        return translateMppResponse(entry, meta, params, startedAt, isNamed, gate.r, { softAsk: false });
+        return withSignedReceipt(translateMppResponse(entry, meta, params, startedAt, isNamed, gate.r, { softAsk: false }), gate.r);
       }
 
       // With the state database on, create() resolves once the row is stored
@@ -1397,7 +1409,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         }
         let out;
         try {
-          out = translateMppResponse(entry, meta, params, startedAt, isNamed, r, { softAsk: false });
+          out = withSignedReceipt(translateMppResponse(entry, meta, params, startedAt, isNamed, r, { softAsk: false }), r);
         } catch (err) {
           // A 402 decided after the gate window (a slow verify). It is a
           // JSON-RPC error on the underlying request, so the task FAILED - and

@@ -43,7 +43,7 @@ const catalog = {
   const html = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, Array.from({ length: 42 }));
   for (const receipts of [true, false]) {
     const h = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, [], { receipts });
-    ok(/<a href="\/trust#verify"[^>]*>verify<\/a> paid calls/.test(h), `the lead links "verify" to /trust#verify (receipts ${receipts ? "on" : "off"})`);
+    ok(new RegExp(`<a href="/trust#verify"[^>]*>verify</a> ${receipts ? "every paid call" : "paid calls"}`).test(h), `the lead links "verify" to /trust#verify (receipts ${receipts ? "on" : "off"})`);
   }
 
   // The hero's paid figure is external payments only (src/home-proof.js); the
@@ -306,7 +306,7 @@ const catalog = {
     const d = homeDescription({ credits: false, storefront: true, receipts });
     ok(/signed receipt/.test(d) === receipts && d.length <= 155, `the description names the signed receipt only while receipts are signed, and fits the snippet (${receipts ? "on" : "off"}, ${d.length} chars)`);
   }
-  ok(homeDescription({ credits: false, storefront: true, receipts: true }) === "Find, pay for and verify paid calls over x402 and MPP, backed by signed receipts. 500+ tools on the same rails; reports and monitors also by card.", "the approved meta description, word for word (receipts signed, storefront on)");
+  ok(homeDescription({ credits: false, storefront: true, receipts: true }) === "Find, pay for and verify every paid call over x402 and MPP, each with a signed receipt. 500+ tools on the same rails; reports and monitors also by card.", "the approved meta description, word for word (receipts signed, storefront on)");
   const saved = { c: process.env.CREDITS_SALES, s: process.env.STRIPE_SECRET_KEY };
   delete process.env.CREDITS_SALES; process.env.STRIPE_SECRET_KEY = "sk_test_x";
   const meta = (ledgerHomePage(BASE_URL, catalog, {}, {}, []).match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";

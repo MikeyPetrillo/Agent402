@@ -3,7 +3,9 @@
 // write lands in the records table (and in the key's file while the directory
 // exists), a session is claimed by exactly one of two concurrent claims, two
 // concurrent holds on a balance that covers one leave exactly one holder, a
-// hold becomes spend only on a final 200 and comes back on anything else.
+// hold becomes spend only on a final 200 and comes back on anything else;
+// while signed receipts are served, a final 200 is debited before its answer
+// ends and the history names the debit's id.
 // Requires STATE_DATABASE_URL (CI fails without it).
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
@@ -96,6 +98,45 @@ try {
   res = fakeRes(); nexted = false;
   await gate({ method: "GET", path: "/api/other", headers: { authorization: `Bearer ${KEY}` } }, res, () => { nexted = true; });
   ok(nexted && res.statusCode === 200 && !res.headers["X-Credits-Balance"], "gate: an unpriced route passes through untouched");
+  // While signed receipts are served (settleBeforeEnd), a final 200 is
+  // debited BEFORE its answer ends: the row holds the debit, the history
+  // names its id, and the finish that follows takes nothing more.
+  {
+    // A key of its own, so the balances the checks below read are untouched.
+    const RKEY = "a402_" + "r".repeat(40), RHASH = hashKey(RKEY);
+    await sdb.stateQuery(`INSERT INTO ${sdb.stateDbSchema()}.records (collection, id, body) VALUES ('credits', $1, $2::jsonb)`, [`k_${RHASH}`, JSON.stringify({ keyId: "rcptkey00001", balanceMicro: 1_000_000, loadedMicro: 1_000_000, spentMicro: 0, heldMicro: 0, calls: 0, createdAt: "2026-11-01T00:00:00.000Z", history: [] })]);
+    const gateR = A.gate(priceFor, { settleBeforeEnd: () => true });
+    const before = (await B.balance(RKEY)).balanceUsd;
+    const debitsBefore = debits.length;
+    const r = fakeRes(); const req = { method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${RKEY}` } };
+    let ended = null; r.end = (...args) => { ended = { args, balance: null }; return r; };
+    await gateR(req, r, () => {});
+    r.statusCode = 200;
+    r.end("body");
+    ok(await until(async () => ended !== null), "pg receipts: the answer ends once the debit settled");
+    const row = await rowRec(RHASH);
+    ok(typeof req.creditsDebitId === "string" && /^cd_/.test(req.creditsDebitId) && row.history.some((e) => e.k === "charge" && e.d === req.creditsDebitId) && ended.args[0] === "body", `pg receipts: the debit landed before the end and the history names its id (${req.creditsDebitId})`);
+    ok((await B.balance(RKEY)).balanceUsd === Math.round((before - 0.001) * 1e6) / 1e6 && (await B.balance(RKEY)).heldUsd === 0, "pg receipts: one price taken, nothing held");
+    r.emit("finish");
+    await wait(100);
+    ok(debits.length === debitsBefore + 1 && (await B.balance(RKEY)).balanceUsd === Math.round((before - 0.001) * 1e6) / 1e6, "pg receipts: the finish takes nothing more");
+    // A debit that cannot land in CREDITS_DEBIT_WAIT_MS ends the answer
+    // without a debit id, and the retry still takes the hold once.
+    process.env.CREDITS_DEBIT_WAIT_MS = "100";
+    const slow = A.gate(priceFor, { settleBeforeEnd: () => true });
+    const r2 = fakeRes(); const req2 = { method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${RKEY}` } };
+    let ended2 = false; r2.end = () => { ended2 = true; return r2; };
+    await slow(req2, r2, () => {});
+    // Hold the row so the settle waits behind it.
+    const lockDone = sdb.withStateTx(async (c) => { await c.query(`SELECT 1 FROM ${sdb.stateDbSchema()}.records WHERE collection = 'credits' AND id = $1 FOR UPDATE`, [`k_${RHASH}`]); await wait(400); });
+    await wait(30);
+    r2.statusCode = 200; r2.end();
+    ok(await until(async () => ended2, 2000) && !req2.creditsDebitId, "pg receipts: a debit held up past the wait ends the answer with no debit id (no receipt)");
+    await lockDone.catch(() => {});
+    ok(await until(async () => (await B.balance(RKEY)).balanceUsd === Math.round((before - 0.002) * 1e6) / 1e6 && (await B.balance(RKEY)).heldUsd === 0, 5000), "pg receipts: the retried debit takes the hold once");
+    delete process.env.CREDITS_DEBIT_WAIT_MS;
+    await sdb.stateQuery(`DELETE FROM ${sdb.stateDbSchema()}.records WHERE collection = 'credits' AND id = $1`, [`k_${RHASH}`]);
+  }
 
   // ---- (5) operator reads and the clawback ---------------------------------
   const st = await B.status();

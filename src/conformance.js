@@ -34,7 +34,7 @@ import { IDEMPOTENCY_CREDENTIALS } from "./idempotency.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { refundClauses, REPAYMENT_FAMILIES } from "./refund-terms.js";
 import { sanctionsScreenStatus } from "./sanctions-screen.js";
-import { receiptsServed, SIGNED_RAILS, RECEIPT_HEADER, RECEIPT_KEYS_PATH } from "./receipt-signing.js";
+import { receiptsServed, SIGNED_RAILS, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_SSE_EVENT, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
 
 export { CONFORMANCE_PATH };
 export const CONFORMANCE_VERSION = 1;
@@ -127,9 +127,11 @@ const NOT_SIGNED = (header) => cell(false, `${header} is the settlement's own re
 // loaded, and the rail one it signs on.
 function signedCell(L, rail, header) {
   return L.receiptSigner && SIGNED_RAILS.includes(rail)
-    ? cell(true, `${RECEIPT_HEADER}: a compact JWS (EdDSA, Ed25519) this server signs over the route, the request digest, the answer's digest, the price, the rail, the payer and the settlement ${header} names; sent only on a final, non-streamed 200 after settlement (a streamed answer carries none). Keys at ${RECEIPT_KEYS_PATH}.`, "src/receipt-signing.js")
+    ? cell(true, `${RECEIPT_HEADER}: a compact JWS (EdDSA, Ed25519) this server signs over the route, the request digest, the answer's digest, the price, the rail, the payer and the settlement ${header} names, on a final 200 after settlement. ${STREAM_DELIVERY} Keys at ${RECEIPT_KEYS_PATH}.`, "src/receipt-signing.js")
     : NOT_SIGNED(header);
 }
+// How a streamed answer's receipt is delivered (src/receipt-signing.js).
+const STREAM_DELIVERY = `A streamed answer gets the receipt after its last byte, over every byte streamed: as a final \`event: ${RECEIPT_SSE_EVENT}\` server-sent event, and as an ${RECEIPT_HEADER} trailer when the client sent TE: trailers.`;
 
 function x402Row(L, { scheme, network, batched, offered }) {
   const { chain, asset } = chainOf(network);
@@ -247,7 +249,9 @@ function creditsRow(L) {
       hangupForgiveness: hangupCell(L, "The hold is released when the abandoned answer ends."),
       sanctionsScreening: cell(false, "This server runs no screen of its own on a credits call.", null),
       receipt: cell(false, "The answer carries X-Credits-Balance, the key's balance; there is no per-call receipt header.", "src/credits.js"),
-      signedReceipt: cell(false, "No per-call receipt.", null),
+      signedReceipt: L.receiptSigner && SIGNED_RAILS.includes("credits")
+        ? cell(true, `${RECEIPT_HEADER}: a compact JWS (EdDSA, Ed25519) this server signs over the route, the request digest, the answer's digest, the amount debited, the key's id (never the key) and the debit's id, on a final 200 whose debit landed before the answer ended. ${STREAM_DELIVERY} Keys at ${RECEIPT_KEYS_PATH}.`, "src/credits.js")
+        : cell(false, "No per-call receipt.", null),
     },
   };
 }
@@ -264,7 +268,9 @@ function checkoutRow(L) {
       hangupForgiveness: NA("The report is delivered by link and email, not on the paying connection."),
       sanctionsScreening: cell(false, "This server runs no screen of its own on a card checkout.", null),
       receipt: cell(false, "No receipt header; the report link is the delivery.", null),
-      signedReceipt: cell(false, "No receipt header.", null),
+      signedReceipt: L.receiptSigner && SIGNED_RAILS.includes("card-checkout")
+        ? cell(true, `A compact JWS (EdDSA, Ed25519) this server signs at delivery over the checkout (product and input), the report's text, the amount collected and the payment intent, shown on the report page and in the delivery email; checked at ${RECEIPT_VERIFY_PATH} against the keys at ${RECEIPT_KEYS_PATH}. A purchase that paid nothing (a 100% promotion code) gets none.`, "src/human-checkout.js")
+        : cell(false, "No receipt header.", null),
     },
   };
 }

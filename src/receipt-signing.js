@@ -3,21 +3,31 @@
 //
 // Off unless RECEIPT_SIGNING_KEY is set. With it, every final 200 whose
 // payment settled (x402 on every network, the MPP evm wire, Tempo, the card
-// wire) carries an `Agent402-Receipt` header: a compact JWS (RFC 7515),
-// EdDSA over Ed25519, whose payload is the canonical record below. The
-// public keys are published at RECEIPT_KEYS_PATH, and POST
-// RECEIPT_VERIFY_PATH checks a receipt against them (free, no egress).
+// wire, a prepaid credits debit) carries a receipt: a compact JWS (RFC 7515),
+// EdDSA over Ed25519, whose payload is the canonical record below. The public
+// keys are published at RECEIPT_KEYS_PATH, and POST RECEIPT_VERIFY_PATH checks
+// a receipt against them (free, no egress). A card-bought report carries one
+// signed by createCheckoutReceipt (src/human-checkout.js stores it on the
+// delivered report).
 //
-// Where it is signed: receiptSignerMiddleware() wraps res.write/res.end and
-// is mounted before every payment gate, so each gate's buffered answer is
-// replayed through it AFTER the gate settled (the x402 middleware, the Tempo
-// broadcast and the card capture all settle before they replay the buffered
-// body). It signs only when the body is about to leave in one end() call
-// with the head not yet written, the final status is 200, and `describe`
-// (src/server.js) reads settlement evidence on the response: a decoded
-// PAYMENT-RESPONSE with success true, or the Tempo/card gate's own settled
-// mark. A 4xx/5xx, a failed settle (402), a free or trial answer, a credits
-// call and a streamed answer carry no receipt.
+// Where it is signed: receiptSignerMiddleware() wraps res.writeHead,
+// res.write and res.end and is mounted before every payment gate, so each
+// gate's buffered answer is replayed through it AFTER the gate settled (the
+// x402 middleware, the Tempo broadcast and the card capture all settle before
+// they replay the buffered body; a Tempo push credential and a credits debit
+// are final before the end of the answer). It signs a final 200 only when
+// `describe` (src/server.js) reads settlement evidence on the response: a
+// decoded PAYMENT-RESPONSE with success true, the Tempo/card gate's own
+// settled mark, or the credits debit the gate landed. Delivery:
+//   - an answer sent in one end() call with the head not yet written: the
+//     `Agent402-Receipt` response header;
+//   - an answer written in parts (a stream): the digest covers every byte
+//     written, and the receipt follows the last byte as a final server-sent
+//     event (`event: agent402-receipt`, RECEIPT_SSE_EVENT) when the answer is
+//     text/event-stream, and as an `Agent402-Receipt` HTTP trailer when the
+//     client sent `TE: trailers` on HTTP/1.1. A streamed answer that is
+//     neither (no event stream, no trailers asked for) carries none.
+// A 4xx/5xx, a failed settle (402), a free or trial answer carries none.
 //
 // Key settings (src/receipt-signing.js is the only reader):
 //   RECEIPT_SIGNING_KEY       a PKCS8 Ed25519 private key in PEM, the whole
@@ -40,8 +50,15 @@ export const RECEIPT_KEYS_PATH = "/.well-known/agent402-receipt-key.json";
 export const RECEIPT_VERIFY_PATH = "/api/receipts/verify";
 export const RECEIPT_TYP = "agent402-receipt+jws";
 export const RECEIPT_VERSION = 1;
-/** The rail kinds a receipt is signed on (conformance rows read this). */
-export const SIGNED_RAILS = Object.freeze(["x402", "gateway-batched", "mpp-evm", "mpp-tempo", "mpp-stripe"]);
+/** The rail kinds a receipt is signed on (conformance rows read this).
+ *  "credits": a prepaid credits debit; "card-checkout": a report bought at
+ *  card checkout (signed at delivery, src/human-checkout.js). */
+export const SIGNED_RAILS = Object.freeze(["x402", "gateway-batched", "mpp-evm", "mpp-tempo", "mpp-stripe", "credits", "card-checkout"]);
+/** The rails the response signer signs on (the card checkout signs at delivery). */
+const RESPONSE_RAILS = Object.freeze(["x402", "gateway-batched", "mpp-evm", "mpp-tempo", "mpp-stripe", "credits"]);
+/** The server-sent event that carries a streamed answer's receipt. */
+export const RECEIPT_SSE_EVENT = "agent402-receipt";
+const SSE_FRAME_HEAD = `\nevent: ${RECEIPT_SSE_EVENT}\ndata: `;
 /** Upper bound on the header value: every string field is capped below. */
 export const RECEIPT_MAX_BYTES = 2048;
 const FIELD_MAX = 160;
@@ -238,6 +255,58 @@ export function verifyReceipt(jws, { keys = receiptKeys().keys, responseBody, re
 }
 
 /**
+ * The final server-sent event that carries a streamed answer's receipt. It
+ * opens with a newline, so it ends a last line the stream left open (an
+ * empty line after a finished event dispatches nothing), and it follows the
+ * last byte the receipt's digest covers.
+ */
+export function receiptSseFrame(jws) { return `${SSE_FRAME_HEAD}${jws}\n\n`; }
+
+/**
+ * Split an event-stream answer as received into the bytes the receipt's
+ * responseSha256 covers and the receipt itself: { body: Buffer, receipt }
+ * (receipt null, body the whole input, when the stream does not end with
+ * the receipt event).
+ */
+export function splitSseReceipt(streamed) {
+  const buf = Buffer.isBuffer(streamed) ? streamed : typeof streamed === "string" ? Buffer.from(streamed, "utf8") : Buffer.from(streamed ?? []);
+  const at = buf.lastIndexOf(SSE_FRAME_HEAD);
+  if (at < 0) return { body: buf, receipt: null };
+  const rest = buf.subarray(at + Buffer.byteLength(SSE_FRAME_HEAD)).toString("utf8");
+  const m = /^([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\n\n$/.exec(rest);
+  if (!m) return { body: buf, receipt: null };
+  return { body: buf.subarray(0, at), receipt: m[1] };
+}
+
+/**
+ * A signed receipt for a report bought at card checkout, over the purchase
+ * and its delivery: the checkout (method POST, path `/api/buy`, the product
+ * and its input as the request), the delivered report's text as the answer,
+ * the amount collected, the payment intent as the settlement. Null when
+ * signing is off or the purchase carries no payment intent.
+ */
+export function createCheckoutReceipt({ iss = null, product, input, reportText, priceUsd, paymentIntent, deliveredAt = Date.now() }, signer = receiptKeys().signer) {
+  if (!signer || typeof paymentIntent !== "string" || !paymentIntent) return null;
+  const record = buildReceiptRecord({
+    iss, method: "POST", path: CHECKOUT_RECEIPT_PATH, slug: product,
+    requestSha256: requestDigest("POST", CHECKOUT_RECEIPT_PATH, { product, input }),
+    responseSha256: responseDigest(Buffer.from(String(reportText ?? ""), "utf8")),
+    priceUsd, rail: "card-checkout", network: null, payer: null, settlement: paymentIntent, replay: false,
+    now: Number.isFinite(Date.parse(deliveredAt)) ? Date.parse(deliveredAt) : Number(deliveredAt) || Date.now(),
+  });
+  const jws = signReceipt(record, signer);
+  return jws.length <= RECEIPT_MAX_BYTES ? jws : null;
+}
+/** The checkout route a card report receipt names. */
+export const CHECKOUT_RECEIPT_PATH = "/api/buy";
+
+const bytesOf = (chunk, encoding) => (chunk == null ? Buffer.alloc(0)
+  : Buffer.isBuffer(chunk) ? chunk
+  : chunk instanceof Uint8Array ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+  : Buffer.from(String(chunk), typeof encoding === "string" ? encoding : "utf8"));
+const TE_TRAILERS_RE = /(?:^|,)\s*trailers\s*(?:;|,|$)/i;
+
+/**
  * Middleware. Mount before every payment gate (beside answerHeadersGuard).
  * `describe(req, res)` answers the settlement fields of a final settled paid
  * answer ({ rail, network, payer, settlement, priceUsd, slug, replay }) or
@@ -251,27 +320,86 @@ export function receiptSignerMiddleware({ describe, iss = null, signer = () => r
     // rewrites it for the gate chain: the receipt names and digests the
     // request as sent.
     const sentMethod = req.method;
+    // A client that asked for trailers on HTTP/1.1 can take the receipt as
+    // one after a streamed answer's last byte.
+    const wantsTrailer = TE_TRAILERS_RE.test(String(req.headers?.te || "")) && Number(req.httpVersionMajor) === 1 && Number(req.httpVersionMinor) >= 1;
     let wrote = false;
+    let hash = null;
+    let hashBroken = false;
+    let trailerDeclared = false;
+    let eventStream = false;
+    const origWriteHead = res.writeHead;
     const origWrite = res.write;
     const origEnd = res.end;
-    res.write = function receiptWrite(...args) { wrote = true; return origWrite.apply(this, args); };
-    res.end = function receiptEnd(chunk, encoding, cb) {
+    const recordFor = (bytesDigest) => {
+      const s = signer();
+      const d = s ? describe(req, res) : null;
+      if (!d || !RESPONSE_RAILS.includes(d.rail)) return null;
+      const url = String(req.originalUrl || req.url || "");
+      const q = url.indexOf("?");
+      const record = buildReceiptRecord({
+        iss, method: sentMethod, path: req.path, slug: d.slug,
+        requestSha256: requestDigest(sentMethod, `${req.path}${q >= 0 ? url.slice(q) : ""}`, req.body),
+        responseSha256: bytesDigest,
+        priceUsd: d.priceUsd, rail: d.rail, network: d.network, payer: d.payer, settlement: d.settlement, replay: d.replay,
+      });
+      const jws = signReceipt(record, s);
+      return jws.length <= RECEIPT_MAX_BYTES ? jws : null;
+    };
+    const contentTypeOf = (args) => {
+      for (const a of args) {
+        if (a && typeof a === "object" && !Array.isArray(a)) {
+          for (const [k, v] of Object.entries(a)) if (String(k).toLowerCase() === "content-type") return String(v);
+        }
+      }
+      return String(res.getHeader("Content-Type") ?? "");
+    };
+    res.writeHead = function receiptWriteHead(...args) {
       try {
-        if (!wrote && !res.headersSent && res.statusCode === 200 && typeof chunk !== "function") {
-          const s = signer();
-          const d = s ? describe(req, res) : null;
-          if (d && SIGNED_RAILS.includes(d.rail)) {
-            const bytes = chunk == null ? Buffer.alloc(0) : Buffer.isBuffer(chunk) ? chunk : chunk instanceof Uint8Array ? Buffer.from(chunk) : Buffer.from(String(chunk), typeof encoding === "string" ? encoding : "utf8");
-            const url = String(req.originalUrl || req.url || "");
-            const q = url.indexOf("?");
-            const record = buildReceiptRecord({
-              iss, method: sentMethod, path: req.path, slug: d.slug,
-              requestSha256: requestDigest(sentMethod, `${req.path}${q >= 0 ? url.slice(q) : ""}`, req.body),
-              responseSha256: responseDigest(bytes),
-              priceUsd: d.priceUsd, rail: d.rail, network: d.network, payer: d.payer, settlement: d.settlement, replay: d.replay,
-            });
-            const jws = signReceipt(record, s);
-            if (jws.length <= RECEIPT_MAX_BYTES) res.setHeader(RECEIPT_HEADER, jws);
+        const status = typeof args[0] === "number" ? args[0] : res.statusCode;
+        eventStream = /^text\/event-stream/i.test(contentTypeOf(args));
+        // A trailer is declared only where Node sends the answer chunked: a
+        // 200 with no length set, on a request that asked for trailers.
+        const hasLength = res.hasHeader("Content-Length") || args.some((a) => a && typeof a === "object" && !Array.isArray(a) && Object.keys(a).some((k) => k.toLowerCase() === "content-length" || k.toLowerCase() === "transfer-encoding"));
+        if (wantsTrailer && status === 200 && !hasLength && !res.hasHeader("Transfer-Encoding") && !res.headersSent) { res.setHeader("Trailer", RECEIPT_HEADER); trailerDeclared = true; }
+      } catch (e) { try { onError?.(e); } catch { /* never break the answer */ } }
+      try { return origWriteHead.apply(this, args); }
+      catch (e) {
+        // Never let the declaration break an answer: send it without one.
+        if (!trailerDeclared || res.headersSent) throw e;
+        trailerDeclared = false;
+        res.removeHeader("Trailer");
+        return origWriteHead.apply(this, args);
+      }
+    };
+    res.write = function receiptWrite(chunk, encoding, cb) {
+      try {
+        if (!wrote) { wrote = true; hash = createHash("sha256"); }
+        if (hash && chunk != null && typeof chunk !== "function") hash.update(bytesOf(chunk, encoding));
+      } catch (e) { hash = null; hashBroken = true; try { onError?.(e); } catch { /* never break the answer */ } }
+      return origWrite.apply(this, arguments);
+    };
+    res.end = function receiptEnd(chunk, encoding, cb) {
+      if (typeof chunk === "function") { cb = chunk; chunk = undefined; encoding = undefined; }
+      else if (typeof encoding === "function") { cb = encoding; encoding = undefined; }
+      try {
+        if (!wrote && !res.headersSent && res.statusCode === 200) {
+          const jws = recordFor(responseDigest(bytesOf(chunk, encoding)));
+          if (jws) res.setHeader(RECEIPT_HEADER, jws);
+        } else if ((wrote || res.headersSent) && !hashBroken && res.statusCode === 200 && (eventStream || trailerDeclared)) {
+          // Every byte of the answer, written in parts or after its head.
+          if (!hash) hash = createHash("sha256");
+          if (chunk != null) hash.update(bytesOf(chunk, encoding));
+          const jws = recordFor(hash.digest("hex"));
+          hash = null;
+          if (jws) {
+            if (trailerDeclared) res.addTrailers({ [RECEIPT_HEADER]: jws });
+            if (eventStream) {
+              // The answer's last bytes, then the receipt event, then the end.
+              if (chunk != null && bytesOf(chunk, encoding).length) origWrite.call(this, chunk, encoding);
+              origWrite.call(this, receiptSseFrame(jws));
+              return origEnd.call(this, cb);
+            }
           }
         }
       } catch (e) { try { onError?.(e); } catch { /* never break the answer */ } }

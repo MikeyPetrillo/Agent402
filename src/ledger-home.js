@@ -127,7 +127,7 @@ export function homeDescription(opts) {
   const card = cardPayClause(opts);
   const pay = card === "or by card" ? "; any tool also by card" : card ? `; ${card}` : "";
   const receipts = opts && "receipts" in opts ? Boolean(opts.receipts) : receiptsServed();
-  return `Find, pay for and verify paid calls over x402 and MPP${receipts ? ", backed by signed receipts" : ""}. 500+ tools on the same rails${pay}.`;
+  return `${receipts ? "Find, pay for and verify every paid call over x402 and MPP, each with a signed receipt" : "Find, pay for and verify paid calls over x402 and MPP"}. 500+ tools on the same rails${pay}.`;
 }
 
 export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null, proof = [], chainsOffered, mpp = true, receipts = receiptsServed() } = {}) {
@@ -160,7 +160,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   // while receipts are signed; each wire name and "verify" linked.
   const wireLink = (href, t) => `<a href="${href}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">${t}</a>`;
   const leadHtml = esc(leadSentence({ mpp, receipts }))
-    .replace("verify paid calls", `${wireLink("/trust#verify", "verify")} paid calls`)
+    .replace(/verify (every paid call|paid calls)/, (_m, rest) => `${wireLink("/trust#verify", "verify")} ${rest}`)
     .replace(mpp ? "across x402 and MPP" : "across x402", `across ${wireLink("/what-is-x402", "x402")}${mpp ? ` and ${wireLink("/what-is-mpp", "MPP")}` : ""}`);
   const viaPow = Number(served.viaProofOfWork) || 0;
   const rails = railsByVolume(stats);

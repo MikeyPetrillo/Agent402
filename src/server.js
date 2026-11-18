@@ -238,14 +238,24 @@ function tempoPushHashOf(req) {
 // The settlement fields of a signed receipt (src/receipt-signing.js) for a
 // final 200 whose payment settled, read from the same evidence the books
 // read: the Tempo or card gate's settled mark, or a decoded PAYMENT-RESPONSE
-// with success true. Null for anything else (a free, trial or allowance
-// answer, a credits call, a referral copy, an unpriced route).
+// with success true, or the credits debit the gate landed before the answer
+// ended (src/credits.js req.creditsDebitId). Null for anything else (a free,
+// trial or allowance answer, a credits call whose debit has not landed, a
+// referral copy, an unpriced route).
 function receiptFieldsOf(req, res) {
   if (FREE_MODE || String(req.path || "").startsWith("/ref/")) return null;
   const def = CATALOG[`${req.method} ${req.path}`];
-  if (!def || allowanceServed(req) || req.creditsSettled) return null;
+  if (!def || allowanceServed(req)) return null;
   if (res.getHeader("X-Pow-Accepted") === "true" || res.getHeader("X-Trial-Accepted") === "true") return null;
   const replay = String(res.getHeader("X-Replayed-Answer") ?? "") === "1" || String(res.getHeader("X-Idempotent-Replay") ?? "") === "true";
+  if (req.creditsSettled) {
+    // The payer is the key's id (never the key or its hash); the settlement
+    // is the debit id the key's history records.
+    const debitId = Object.hasOwn(req, "creditsDebitId") ? req.creditsDebitId : null;
+    if (typeof debitId !== "string" || !debitId || replay) return null;
+    const charged = Number(req.creditsCharged);
+    return { rail: "credits", network: null, payer: typeof req.creditsKeyId === "string" ? req.creditsKeyId : null, settlement: debitId, priceUsd: Number.isFinite(charged) ? charged : null, slug: def.slug, replay: false };
+  }
   if (req.tempoSettled === true) {
     return { rail: "mpp-tempo", network: "eip155:4217", payer: tempoLedgerPayerPending(req) ? null : tempoLedgerPayer(req), settlement: tempoPushHashOf(req) || tempoTxFromReceiptHeader(res.getHeader("Payment-Receipt")), priceUsd: settledPriceUsd(def, req, res), slug: def.slug, replay };
   }
@@ -459,8 +469,8 @@ import { agenticFinancePage } from "./agentic-finance.js";
 import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
 import { trustPage } from "./trust-page.js";
-import { markGateMounted } from "./gate-mounts.js";
-import { receiptKeys, receiptKeyDocument, receiptSignerMiddleware, verifyReceipt, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
+import { markGateMounted, gateMounted } from "./gate-mounts.js";
+import { receiptKeys, receiptKeyDocument, receiptSignerMiddleware, verifyReceipt, receiptsServed, createCheckoutReceipt, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
 import { conformanceDocumentCached, resetConformanceCache, CONFORMANCE_PATH } from "./conformance.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
@@ -5419,6 +5429,9 @@ if (humanCheckoutEnabled()) {
         recordSale({ slug: product, priceUsd, rail: "card", network: "stripe", payer: null, tx: paymentIntent, wire: "stripe-checkout" });
         try { capturePostHogHumanFunnel({ step: "paid", product, priceUsd }); } catch { /* telemetry never breaks the request */ }
       },
+      // A signed receipt over the purchase and the delivered report, while
+      // receipts are served (src/receipt-signing.js createCheckoutReceipt).
+      signDelivery: (d) => (receiptsServed() ? createCheckoutReceipt({ iss: BASE_URL, ...d }) : null),
       // A returning buyer's older sequence stops (never re-sold what they already
       // buy); the new purchase starts its own two-step sequence.
       onDelivered: ({ sessionId, email, product, kind, label, input }) => { _followups.markRepeat(email); _followups.enqueue({ sessionId, email, product, kind, label, input }); },
@@ -11501,7 +11514,9 @@ if (!FREE_MODE) {
       if (!def) return null;
       const priceUsd = quotedPriceUsd(def, req);
       return priceUsd ? { priceUsd, slug: def.slug, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def) } : null;
-    }));
+    // While receipts are signed, a final 200 is debited before its answer
+    // ends, so the receipt names a landed debit (src/credits.js).
+    }, { settleBeforeEnd: () => gateMounted("receiptSigner") }));
     markGateMounted("credits");
     console.log("Prepaid card credits enabled (Bearer a402_ keys)");
   }

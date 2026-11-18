@@ -304,11 +304,20 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `RECEIPT_SIGNING_KEY_VALID_FROM` (ISO) and `RECEIPT_RETIRED_KEYS` (JSON `[{kid,x,validFrom,validUntil}]`,
   `x` the raw public key in base64url) for rotation. Anything else is refused at boot with the reason
   (`[receipts] signing refused: ...`, never the value) and signing stays off. The signer wraps
-  `res.write`/`res.end` and is mounted before every payment gate (beside the answer-headers guard), so
-  each gate replays its buffered answer through it after it settled; it signs only a final 200 written in
-  one `end()`, with settlement evidence (`receiptFieldsOf` in server.js: a decoded PAYMENT-RESPONSE with
-  `success: true`, or the Tempo or card gate's settled mark). No receipt on a 4xx/5xx, a refused settle,
-  a free, trial or allowance answer, a credits call, a streamed answer, `/ref` or FREE_MODE, nor on a keyed
+  `res.writeHead`/`res.write`/`res.end` and is mounted before every payment gate (beside the answer-headers
+  guard), so each gate replays its buffered answer through it after it settled; it signs a final 200 with
+  settlement evidence (`receiptFieldsOf` in server.js: a decoded PAYMENT-RESPONSE with `success: true`, the
+  Tempo or card gate's settled mark, or `req.creditsDebitId`, the credits debit the gate landed before the
+  answer ended: `settleBeforeEnd` in `src/credits.js`, on while the signer is mounted, waiting at most
+  `CREDITS_DEBIT_WAIT_MS`, default 3000, then retried as before with no receipt). A one-piece answer gets
+  the header; an answer written in parts gets the digest of every byte written, then a final
+  `event: agent402-receipt` SSE event when it is `text/event-stream` and an `Agent402-Receipt` trailer when
+  the request sent `TE: trailers` on HTTP/1.1 (declared only on a 200 with no length; a declaration Node
+  refuses is dropped, never the answer). A card-bought report is signed at delivery
+  (`createCheckoutReceipt`, rail `card-checkout`, stored on the record, shown on `/r/<session>` and in the
+  ready email; none on a 100%-off session). The hosted MCP connector relays a paid result's receipt in
+  `_meta["tools.agent402/receipt"]`; an async job keeps it in `result.headers`. No receipt on a 4xx/5xx, a
+  refused settle, a free, trial or allowance answer, `/ref` or FREE_MODE, nor on a keyed
   idempotent replay (it carries no settlement header; the first receipt covers the same bytes). The
   implicit replay of a pending answer, which carries its PAYMENT-RESPONSE, is signed with `replay: true`. Header
   `Agent402-Receipt`: a compact JWS (`alg` EdDSA, `typ` `agent402-receipt+jws`, `kid`) over the record

@@ -284,3 +284,9 @@ export const RECEIPT_KEYS_PATH: string;
 export function receiptRequestDigest(method: string, pathWithQuery: string, body?: unknown): string;
 /** Check an Agent402-Receipt against the published keys (fetched from baseUrl when `keys` is absent). */
 export function verifyReceipt(receipt: string, opts?: { keys?: ReceiptKey[]; baseUrl?: string; fetchImpl?: FetchLike; body?: string | Uint8Array; request?: { method: string; path: string; body?: unknown } }): Promise<{ valid: boolean; reason: string | null; kid?: string; record?: ReceiptRecord }>;
+/** The server-sent event that ends a settled streamed answer with its receipt. */
+export const RECEIPT_SSE_EVENT: "agent402-receipt";
+/** Split a streamed answer into the bytes its receipt covers and the receipt (null when it ends with none). */
+export function splitStreamedReceipt(streamed: string | Uint8Array): { body: Uint8Array; receipt: string | null };
+/** Check the receipt event that ends a streamed answer against the bytes streamed before it. */
+export function verifyStreamedReceipt(streamed: string | Uint8Array, opts?: { keys?: ReceiptKey[]; baseUrl?: string; fetchImpl?: FetchLike; request?: { method: string; path: string; body?: unknown } }): Promise<{ valid: boolean; reason: string | null; kid?: string; record?: ReceiptRecord }>;

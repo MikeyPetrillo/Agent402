@@ -10,6 +10,18 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-18",
+    title: "Signed receipts on every paid call",
+    items: [
+      "Payments: A streamed paid answer ends with an `event: agent402-receipt` server-sent event whose data is the signed receipt over every byte streamed before it, and also carries it as an `Agent402-Receipt` trailer when the client sends `TE: trailers`.",
+      "Payments: A call paid with a prepaid credits key is debited before its answer ends and carries a signed receipt naming the key's id (never the key) and the debit's id, which the key's history records.",
+      "Payments: A report bought at card checkout carries a signed receipt over the checkout, the amount collected, the payment intent and the report's text, shown on the report page and in the delivery email and checked at `POST /api/receipts/verify`.",
+      "MCP: A paid tool result on the hosted MCP connector carries the route's signed receipt in `_meta[\"tools.agent402/receipt\"]`, and a finished async job keeps it in its result's headers.",
+      "Site: The lead line reads: Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call, across x402 and MPP, with a signed receipt for each one. A server with no signing key keeps the line without the receipt clause.",
+      "Packages: agent402-client exports `verifyStreamedReceipt` and `splitStreamedReceipt`, which check the receipt event that ends a streamed answer against the bytes streamed before it.",
+    ],
+  },
+  {
+    date: "2026-11-18",
     title: "Signed receipts",
     items: [
       "Payments: A server run with a receipt signing key (`RECEIPT_SIGNING_KEY`) sends an `Agent402-Receipt` header on each settled paid answer that is not streamed: a compact JWS (EdDSA, Ed25519) over the route, the request digest, the sha256 of the answer, the price, the rail, the network, the payer and the settlement. The public keys are published at `/.well-known/agent402-receipt-key.json`, and `POST /api/receipts/verify` checks a receipt for free. The `signedReceipt` cell of each conformance row reads true only while the server signs.",

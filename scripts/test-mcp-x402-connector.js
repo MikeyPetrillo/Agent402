@@ -52,6 +52,9 @@ import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import express from "express";
 import { encodePaymentRequiredHeader, encodePaymentResponseHeader, encodePaymentSignatureHeader } from "@x402/core/http";
 import { bootServer } from "./lib/boot-server.js";
+import { generateKeyPairSync } from "node:crypto";
+import { verifyReceipt as verifySignedReceipt } from "../client/receipt.js";
+import { MCP_SIGNED_RECEIPT_META } from "../src/mcp-http.js";
 
 const MCP_CLIENT_VERSION = "2.30.0";
 let x402MCPClient;
@@ -530,6 +533,8 @@ await new Promise((r) => fallbackFacilitator.listen(0, "127.0.0.1", r));
 const FAC2 = `http://127.0.0.1:${fallbackFacilitator.address().port}`;
 const PAID_ENV = {
   FREE_MODE: "", NODE_ENV: "test", BASE_URL: "https://agent402.tools", TRUST_PROXY_HOPS: "1",
+  // Signed receipts on: a paid result relays the route's receipt in _meta.
+  RECEIPT_SIGNING_KEY: Buffer.from(generateKeyPairSync("ed25519").privateKey.export({ format: "pem", type: "pkcs8" })).toString("base64"), RECEIPT_SIGNING_KEY_ID: "r1-mcp-x402", RECEIPT_RETIRED_KEYS: "",
   WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
   FACILITATOR_URL: FAC, PAYAI_FACILITATOR_URL: FAC, SOLVADOR_FACILITATOR_URL: FAC2, PAYMENT_SETTLE_FALLBACK: "true", AGENT402_BASE_RPC: `${FAC}/rpc`, EVM_RPC_8453: `${FAC}/rpc`, FACILITATOR_GAS_CHECK: "off",
   CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "test-key", CIRCLE_FACILITATOR_API_KEY: "",
@@ -659,8 +664,14 @@ try {
   c0 = { ...counts };
   const first = await sendRaw(payA.raw, once);
   ok(first.isError !== true && first._meta?.[X402_PAYMENT_RESPONSE_META]?.success === true && counts.settle === c0.settle + 1, `a payment sent by hand settles once (${counts.settle - c0.settle}) ${first.isError ? JSON.stringify(first.content).slice(0, 200) : ""}`);
+  {
+    const jws = first._meta?.[MCP_SIGNED_RECEIPT_META];
+    const keys = (await (await fetch(`${B}/.well-known/agent402-receipt-key.json`)).json()).keys;
+    const v = await verifySignedReceipt(jws || "", { keys });
+    ok(typeof jws === "string" && v.valid && v.record.rail === "x402" && v.record.settlement && v.record.settlement === first._meta?.[X402_PAYMENT_RESPONSE_META]?.transaction, `the paid result carries the route's signed receipt in _meta["${MCP_SIGNED_RECEIPT_META}"], naming the settlement (${v.reason})`);
+  }
   const again = await sendRaw(payA.raw, once);
-  ok(again.isError === true && !again._meta?.[X402_PAYMENT_RESPONSE_META] && counts.settle === c0.settle + 1 && !JSON.stringify(again.content).includes("hello"),
+  ok(again.isError === true && !again._meta?.[X402_PAYMENT_RESPONSE_META] && !again._meta?.[MCP_SIGNED_RECEIPT_META] && counts.settle === c0.settle + 1 && !JSON.stringify(again.content).includes("hello"),
     `the same payment sent again is refused, unsettled, with no output (${JSON.stringify(again.content).slice(0, 200)})`);
 
   // 4b. The same wires on 2026-07-28: the SDK v2 client pinned to the modern

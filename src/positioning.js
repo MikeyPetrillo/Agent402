@@ -8,8 +8,9 @@
 // Two clauses follow switches where a surface reads them: the wires follow the
 // MPP switch, so a server without MPP never offers it, and the signed-receipt
 // clause follows receiptsServed() (src/receipt-signing.js), so a server with
-// no signing key loaded never promises one. The published sentence is the one
-// with both wires and the receipt clause.
+// no signing key loaded never promises one (and says "paid calls" rather than
+// "every paid call"). The published sentence is the one with both wires and
+// the receipt clause: every paid path is signed (src/receipt-signing.js).
 //
 // The catalog's size is a supporting line, never the lead: SUPPORT_LINE.
 
@@ -19,7 +20,10 @@ export const CATEGORY_LINE = "Payments and trust for AI agents.";
 /** The lead sentence, with the wires this server offers and, when it signs
  *  them, the receipt clause. */
 export function leadSentence({ mpp = true, receipts = true } = {}) {
-  return `Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify paid calls across ${mpp ? "x402 and MPP" : "x402"}${receipts ? ", backed by signed receipts" : ""}.`;
+  const wires = mpp ? "x402 and MPP" : "x402";
+  return receipts
+    ? `Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call, across ${wires}, with a signed receipt for each one.`
+    : `Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify paid calls across ${wires}.`;
 }
 
 /** The published lead sentence (both wires, receipts on). */

@@ -1,6 +1,6 @@
 # agent402-client
 
-Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify paid calls across x402 and MPP, backed by signed receipts. 500+ ready tools on the same rails.
+Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails.
 
 A tiny buyer-side client for [Agent402](https://agent402.tools) (and any Agent402
 instance) - the buy side of [Agentic Finance](https://agent402.tools/agentic-finance),
@@ -578,13 +578,12 @@ dispatcher installed, requests go out through yours unchanged. Pass
 
 ## Checking a signed receipt (`verifyReceipt`)
 
-When the server signs receipts, a settled paid answer that is not streamed
-carries an
-`Agent402-Receipt` header: a compact JWS (EdDSA, Ed25519) over the route, a
-digest of the request, the sha256 of the answer bytes, the price, the rail,
-the network, the payer and the settlement. The client never checks it on
-its own; call `verifyReceipt` when you want proof of what you paid for and
-received:
+When the server signs receipts, every settled paid answer carries a
+receipt: a compact JWS (EdDSA, Ed25519) over the route, a digest of the
+request, the sha256 of the answer bytes, the price, the rail, the network,
+the payer and the settlement. A one-piece answer carries it as the
+`Agent402-Receipt` header. The client never checks it on its own; call
+`verifyReceipt` when you want proof of what you paid for and received:
 
 ```js
 import { verifyReceipt } from "agent402-client";
@@ -596,6 +595,20 @@ const v = await verifyReceipt(receipt, {
   request: { method: "POST", path: "/api/hash", body: input }, // what you sent
 });
 // v.valid, v.reason, v.record.settlement, v.record.priceUsd
+```
+
+A streamed answer (`stream: true` on the model routes) ends with one more
+server-sent event, `event: agent402-receipt`, whose data is the receipt over
+every byte streamed before it. Keep the bytes as they arrive and check them
+with `verifyStreamedReceipt` (`splitStreamedReceipt` separates the two):
+
+```js
+import { verifyStreamedReceipt } from "agent402-client";
+
+const bytes = new Uint8Array(await res.arrayBuffer()); // or the chunks, joined
+const v = await verifyStreamedReceipt(bytes, {
+  request: { method: "POST", path: "/v1/chat/completions", body: input },
+});
 ```
 
 The keys come from `/.well-known/agent402-receipt-key.json` (pass `keys` to

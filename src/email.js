@@ -200,7 +200,7 @@ function modelNoteParts(kind) {
   return { html: `<p style="color:#626970;font-size:12px;margin:0 0 16px">${escapeHtml(REPORT_MODEL_NOTE)}</p>`, text: `${REPORT_MODEL_NOTE}\n` };
 }
 
-export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind = null, baseUrl = "" }) {
+export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind = null, baseUrl = "", receipt = null }) {
   const subj = `Your ${hdr(productLabel || "report", 60)} is ready`;
   const on = subjectOf ? ` on “${hdr(subjectOf)}”` : "";
   // Retention loop: if a monitor watches this kind of thing, offer it with the
@@ -209,6 +209,7 @@ export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind
   // and price come from the monitor product table, never from copy here.
   const up = upgradeOffer(kind, subjectOf, baseUrl || originOf(reportUrl));
   const note = modelNoteParts(kind);
+  const rcpt = receiptParts(receipt, baseUrl || originOf(reportUrl));
   const upHtml = up
     ? `<p style="color:#3A3F45;border-top:1px solid #D9DDE1;padding-top:16px;margin-top:26px">Want this kept current? Our ${escapeHtml(up.label)} re-checks ${escapeHtml(hdr(up.target || "it"))} on a schedule and emails you up to ${MAX_FULL_PER_SUB_30D} fresh reports in any 30 days, ${escapeHtml(up.priceUsd)} a month, cancel any time. <a href="${escapeAttr(up.url)}" style="color:#0F5E43;font-weight:600">Start monitoring →</a></p>`
     : "";
@@ -222,10 +223,22 @@ export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind
     <p style="color:#626970;font-size:13px">Or paste this link into your browser:<br>${escapeHtml(reportUrl)}</p>
     ${note.html}
     ${upHtml}
+    ${rcpt.html}
     <p style="color:#626970;font-size:12px;margin-top:28px">Agent402 · cited reports · pay per report</p>
   </div>`;
-  const text = `Your ${productLabel || "report"}${on} is ready.\n\nOpen it here (yours to keep): ${reportUrl}\n${note.text ? `\n${note.text}` : ""}${upText}\nAgent402`;
+  const text = `Your ${productLabel || "report"}${on} is ready.\n\nOpen it here (yours to keep): ${reportUrl}\n${note.text ? `\n${note.text}` : ""}${upText}${rcpt.text}\nAgent402`;
   return { subject: subj, html, text };
+}
+
+/** The signed purchase receipt's lines in the report-ready email: the
+ *  compact JWS and where to check it. Empty when none was signed. */
+function receiptParts(receipt, origin) {
+  if (typeof receipt !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(receipt)) return { html: "", text: "" };
+  const verify = `${origin || ""}/api/receipts/verify`;
+  return {
+    html: `<p style="color:#626970;font-size:12px;border-top:1px solid #D9DDE1;padding-top:16px;margin-top:26px">Signed receipt for this purchase (check it with a POST to ${escapeHtml(verify)}, sending { "receipt", "body": the report text }):<br><code style="word-break:break-all;font-size:11px">${escapeHtml(receipt)}</code></p>`,
+    text: `\nSigned receipt for this purchase (check it with a POST to ${verify}, sending { "receipt", "body": the report text }):\n${receipt}\n`,
+  };
 }
 
 export async function sendReportReadyEmail({ to, ...rest }) {

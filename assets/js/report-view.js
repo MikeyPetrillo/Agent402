@@ -263,6 +263,16 @@
     return text.slice(m[0].length);
   }
   // The whole delivered page as markup: no DOM, no network (the server runs it too).
+  // The purchase's signed receipt (the buyer's own page only): a compact JWS
+  // over the checkout and this report's text, checked at /api/receipts/verify.
+  function receiptBlock(s, ctx) {
+    if (s.sample === true || s.publicView === true || typeof s.receipt !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(s.receipt)) return "";
+    var verify = ((ctx && ctx.origin) || "") + "/api/receipts/verify";
+    return '<details class="keep-hint no-print" id="purchase-receipt"><summary>Signed receipt for this purchase</summary>' +
+      "<p>Signed by Agent402 over the checkout, the amount paid and this report's text. Check it with a POST to " + esc(verify) + ' sending { "receipt", "body": the report text }.</p>' +
+      '<code style="word-break:break-all;font-size:var(--fs-xs);">' + esc(s.receipt) + "</code></details>";
+  }
+
   function doneHtml(s, ctx) {
     setAllowedHosts(Array.isArray(s.sources) && s.sources.length ? s.sources : null);
     var tables = Array.isArray(s.tables) ? s.tables : [];
@@ -332,7 +342,7 @@
       }).join(" ");
       return '<div class="rpt-image"><div class="rpt-meta">' + esc(im.slot || "image") + (im.alt ? " · " + esc(im.alt) : "") + "</div>" + prev + '<div class="report-actions no-print">' + files + "</div></div>";
     }).join("") + "</div>" : "";
-    return actions + mon + '<div class="report" id="report-body">' + head + mdToHtml(withoutLeadingTitle(s.report, s.title)) + imgHtml + "</div>" + upgradeBlock(s, ctx);
+    return actions + mon + '<div class="report" id="report-body">' + head + mdToHtml(withoutLeadingTitle(s.report, s.title)) + imgHtml + "</div>" + upgradeBlock(s, ctx) + receiptBlock(s, ctx);
   }
   g.a402ReportView = { doneHtml: doneHtml };
   if (!g.document) return;
