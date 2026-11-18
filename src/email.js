@@ -6,7 +6,7 @@
 // nothing breaks before email is set up. NEVER throws into the caller.
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady, stateDbEnabled } from "./state-db.js";
-import { upgradeOffer } from "./report-upgrade.js";
+import { upgradeOffer, priceUsd } from "./report-upgrade.js";
 import { REPORT_MODEL_NOTE, reportIsModelWritten } from "./report-disclosure.js";
 import { headerText, escapeHtml } from "./email-text.js";
 import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
@@ -235,7 +235,7 @@ export async function sendReportReadyEmail({ to, ...rest }) {
 /** Monitor delivery / alert email. reason: welcome | scheduled | change | tls-expiring | filing | recall | digest | safety-change. Best-effort.
  *  `kind` is the monitored report's kind; without it a "digest" (the IPO
  *  watch's only reason) reads as the code-written IPO digest. */
-export function buildMonitorEmail({ reason, label, target, changes = [], reportUrl, manageUrl, kind = null }) {
+export function buildMonitorEmail({ reason, label, target, changes = [], reportUrl, manageUrl, kind = null, priceCents = null }) {
   const t = hdr(target);
   const lbl = hdr(label || "monitor", 60);
   const subjects = {
@@ -272,6 +272,18 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
   const why = `You are getting this because you subscribed to the ${lbl} for ${t} on agent402.tools. It runs on its own until you cancel.`;
   const whyHtml = `<p style="color:#626970;font-size:12px;margin-top:26px">${escapeHtml(why)}</p>`;
   const whyText = `${why}\n`;
+  // The welcome mail is the subscriber's record of the purchase, so it states
+  // the renewal terms in full: price and period (when the caller passes the
+  // product's price), renewal until canceled, the online cancel path and what
+  // canceling does, as the terms say them. Later mails do not repeat them.
+  const cents = Number(priceCents);
+  const pricePart = Number.isFinite(cents) && cents > 0 ? `${priceUsd(cents)} a month, billed in advance. ` : "";
+  const termsUrl = `${originOf(reportUrl)}/terms`;
+  const renewal = reason === "welcome"
+    ? `Your subscription: ${pricePart}It renews each month until you cancel. Cancel anytime online with the manage or cancel link below; canceling stops future renewals, and the monitor keeps running to the end of the period you paid for.`
+    : "";
+  const renewalHtml = renewal ? `<p style="color:#3A3F45;font-size:13px;border-top:1px solid #D9DDE1;padding-top:14px;margin-top:22px">${escapeHtml(renewal)} <a href="${escapeAttr(termsUrl)}" style="color:#3A3F45">Terms</a></p>` : "";
+  const renewalText = renewal ? `${renewal}\nTerms: ${termsUrl}\n\n` : "";
   const list = (changes || []).slice(0, 12);
   const changesHtml = list.length ? `<ul style="color:#3A3F45;padding-left:18px">${list.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ul>` : "";
   const changesText = list.length ? `\n${list.map((c) => `- ${c}`).join("\n")}\n` : "";
@@ -281,10 +293,11 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
     <p style="margin:26px 0"><a href="${escapeAttr(reportUrl)}" style="background:#0F5E43;color:#fff;text-decoration:none;padding:12px 22px;border-radius:999px;font-weight:600;display:inline-block">Open the report →</a></p>
     <p style="color:#626970;font-size:13px">Or paste this link into your browser:<br>${escapeHtml(reportUrl)}</p>
     ${note.html}
+    ${renewalHtml}
     ${whyHtml}
     <p style="color:#626970;font-size:12px;margin-top:12px">Agent402 · ${escapeHtml(lbl)} · <a href="${escapeAttr(manageUrl || reportUrl)}" style="color:#626970">manage or cancel</a></p>
   </div>`;
-  const text = `${subj}\n\n${lead}\n${changesText}\nOpen the report: ${reportUrl}\n\n${note.text ? `${note.text}\n` : ""}${whyText}\nManage or cancel (change your card, or stop the emails): ${manageUrl || reportUrl}\n\nAgent402`;
+  const text = `${subj}\n\n${lead}\n${changesText}\nOpen the report: ${reportUrl}\n\n${note.text ? `${note.text}\n` : ""}${renewalText}${whyText}\nManage or cancel (change your card, or stop the emails): ${manageUrl || reportUrl}\n\nAgent402`;
   return { subject: subj, html, text };
 }
 

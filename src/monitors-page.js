@@ -86,16 +86,24 @@ ${ledgerFooterCompact()}
   });
 }
 
+// The renewal sentence again after purchase, under the confirmation the
+// script draws, so the buyer sees the terms they agreed to beside the
+// manage-or-cancel link. Tokens only.
+const THANKS_CSS = `
+  .renew-after{font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:18px 0 0;max-width:76ch}
+  .renew-after a{color:var(--ink)}
+`;
 export function monitorThanksPage(sessionId, baseUrl = "https://agent402.tools") {
   const body = `
 <div class="wrap" style="padding-top:28px;">
   <div id="app" data-session="${esc(sessionId)}"><div class="status"><h2><span class="spin"></span>Confirming your subscription…</h2><p>One moment.</p></div></div>
+  <p class="renew-after">${esc(RENEWAL_TERMS)} <a href="/terms">Terms</a></p>
 </div>
 ${ledgerFooterCompact()}
 <script src="/js/monitor-thanks.js"></script>`;
   return ledgerShell({
     title: "Subscription active - Agent402",
     description: "Your Agent402 monitor is being confirmed.",
-    canonical: `${baseUrl}/monitors`, baseUrl, activePath: "/monitors", extraCss: REPORTS_CSS, body, robots: "noindex, nofollow",
+    canonical: `${baseUrl}/monitors`, baseUrl, activePath: "/monitors", extraCss: REPORTS_CSS + THANKS_CSS, body, robots: "noindex, nofollow",
   });
 }

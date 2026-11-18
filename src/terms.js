@@ -14,6 +14,8 @@ import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { refundClauseText } from "./refund-terms.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
 import { connectorWires } from "./connector-pay.js";
+import { COMPANY_PHONE, LEGAL_ENTITY_SENTENCE } from "./company.js";
+import { companyPostalLine } from "./email.js";
 export function termsPage(baseUrl) {
   // Prepaid credits wording follows the sales switch and the purchase limit.
   const creditsOnSale = creditsSalesEnabled();
@@ -42,6 +44,9 @@ export function termsPage(baseUrl) {
   // The wires the hosted connector takes in the call on this boot
   // (src/connector-pay.js): none in FREE_MODE, x402 alone without the MPP gates.
   const connectorWire = connectorWires().phrase;
+  // The copyright agent's mail address is COMPANY_POSTAL_ADDRESS, the value
+  // /company and every outbound email print; unset, the section points there.
+  const postal = companyPostalLine();
 
   const extraCss = `
 .tm-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
@@ -142,12 +147,29 @@ measurements and probe results, and we license them on the terms we publish for 
 obtained them from. Measurements made by third parties are attributed where displayed and are not
 redistributed by us.</p>
 
-<h2>Copyright complaints</h2>
-<p>If you believe content generated, fetched, or stored through the service infringes your copyright,
-send a notice to <a href="mailto:mike@agent402.tools">mike@agent402.tools</a> identifying the work, the
-material at issue, your contact information, and a good-faith statement that the use is unauthorized.
-We respond to valid notices, including by removing stored material and blocking wallets of repeat
-infringers.</p>
+<h2 id="copyright">Copyright complaints</h2>
+<p>Some material on the service is stored or shown at a caller's request: memory-tool data, shared
+answer pages, reports made public, and listings in the published index. If you believe material on the
+service infringes your copyright, send a notice to our designated agent:</p>
+<p><b>Copyright agent</b>, ${LEGAL_ENTITY_SENTENCE}<br>
+Email: <a href="mailto:mike@agent402.tools">mike@agent402.tools</a><br>
+Phone: <a href="tel:${COMPANY_PHONE.tel}">${COMPANY_PHONE.display}</a><br>
+${postal ? `Mail: ${esc(postal)}` : `Mail: the postal address on <a href="/company">/company</a>`}</p>
+<p>A notice includes: your physical or electronic signature; the copyrighted work you say is infringed;
+the material you want removed and where it is (a URL is best); your name, postal address, phone and
+email; a statement that you believe in good faith the use is not authorized by the owner, its agent or
+the law; and a statement that the notice is accurate and, under penalty of perjury, that you are the
+owner or authorized to act for the owner. On a complete notice we remove or disable the material
+promptly and tell the person who provided it.</p>
+<p>If your material was removed and you believe that was a mistake or a misidentification, send a
+counter-notice to the same agent with: your physical or electronic signature; the material removed and
+where it was before removal; a statement under penalty of perjury that you believe in good faith it was
+removed by mistake or misidentification; your name, postal address and phone; and your consent to the
+jurisdiction of the federal district court for your address (or, outside the United States, any judicial
+district where we may be found) and to accept service from the person who sent the notice. We forward
+the counter-notice to that person and restore the material in 10 to 14 business days unless they tell us
+they have filed a court action to keep it down.</p>
+<p>We block the wallets, and end the subscriptions and keys, of repeat infringers.</p>
 
 <h2>Payments</h2>
 <p><b>On-chain (x402 / MPP).</b> Paid calls settle on public blockchains${gatewayBatched ? " (except Circle Gateway batched payments, below)" : ""} - USDC on Base and the other

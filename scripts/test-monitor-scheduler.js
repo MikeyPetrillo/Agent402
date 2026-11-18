@@ -67,6 +67,7 @@ const welcomeId = calls.mail[0].reportUrl.split("/m/")[1];
 const view = sch.reportView(welcomeId);
 ok(view && view.status === "done" && view.kind === "domain" && view.monitor.reason === "welcome" && !JSON.stringify(view).includes("manage"), "the report is served by id with monitor context and NO portal bearer in the JSON");
 ok(calls.mail[0].manageUrl === `https://agent402.tools/monitors/manage?report=${welcomeId}&k=TOKEN`, "the keyed manage link rides only in the email");
+ok(calls.mail[0].priceCents === MONITOR_PRODUCTS["domain-monitor"].price && calls.mail[0].priceCents > 0, "the welcome email is handed the product's monthly price, so it can state the renewal terms");
 ok(sch.subIdOfReport(welcomeId) === "sub_d" && sch.reportView("nope") === null, "report id resolves to its subscription; unknown id is null");
 
 // --- domain: quiet day = free probe, no regen ----------------------------------
