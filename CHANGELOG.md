@@ -15,7 +15,7 @@ Site:
   receipt for each one. The signed receipt clause appears only while the
   server signs receipts. The catalog's size follows as a supporting line, 500+
   ready tools on the same rails. The home title, description and social card,
-  /company and the site's structured data name the same layer.
+  /company and the site's structured data follow it.
 Packages:
 - The README, the agent402-mcp, agent402-client, agent402-tollbooth and
   agent402-openclaw READMEs, the package descriptions and the MCP Registry
