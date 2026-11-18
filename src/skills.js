@@ -2652,7 +2652,7 @@ const WITHOUT_STOCK_COPY = {
     claudePrompt: "Prepare an earnings deep-dive on TSLA using Agent402's earnings-deep-dive skill pack. (1) pull the latest financials, (2) list recent SEC filings, (3) search for analyst expectations. Summarize as a pre-earnings brief: what to watch in fundamentals, filing flags, and the key debate going into the report.",
   },
   "financial-research": {
-    tagline: "Pull SEC filings, XBRL company facts, insider filings and macro context for a single ticker in one pass.",
+    tagline: "A research one-pager for a single ticker in one pass: recent SEC filings, reported financials, insider filings and macro context.",
     claudePrompt: "Build a one-page research brief on AAPL. Use Agent402 to pull: (1) the last 4 SEC filings, (2) XBRL revenue and net income trend, (3) Form 4 insider trades in the last 90 days, (4) the fed funds rate as macro context. Output a clean markdown brief.",
     workflow: [
       "List recent SEC filings (10-K, 10-Q, 8-K) via edgar-filings - link each one in the report.",
@@ -2692,7 +2692,7 @@ const WITHOUT_STOCK_COPY = {
   },
   "trend-analysis": {
     tagline: "Take any numeric time series - a FRED macro indicator such as unemployment, CPI or fed funds - and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
-    useCase: "You have a question like \"is unemployment trending up - and what does the next year look like?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates, point forecast + 95% interval) instead of a hand-wavy LLM summary or hallucinated projection. The stats + forecast steps are pure-CPU and free over PoW; only the upstream data fetch (macro) is paid.",
+    useCase: "You have a question like \"is unemployment trending up - and what does the next year look like?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates, point forecast + 95% interval) instead of a hand-wavy LLM summary or hallucinated projection. The stats + forecast steps are pure-CPU and free over PoW; only the upstream data read (macro) is paid.",
     workflow: [
       "Fetch the series: call fred-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",
       "Run stats-summary on the values to get the full descriptive panel (mean, median, stddev, min, max, q1/q3, IQR). This is the one-line \"what does this series even look like\" answer - agents that skip this step end up reporting trends without context.",
