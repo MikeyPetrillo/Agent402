@@ -81,12 +81,18 @@ export const DELIVERY_FLUSH_MS = () => envInt("SELLER_REPUTATION_FLUSH_MS", 60_0
 // Sellers folded per event-loop turn in the pass.
 const PASS_STEP = 200;
 
+// The delivery metric's label, on every surface that shows it. It is an
+// observation of the seller's answers to those purchases, never a count of
+// buyers, sales or settlements, and nothing that qualifies or ranks a seller
+// for the router reads it.
+export const DELIVERY_LABEL = "measured from purchases Agent402's router made for buyers";
+
 export const METHODS = Object.freeze({
   manifestUptime: "each pass records the seller's newest crawl, if newer than the last one recorded: 1 when its own documents answered with routes, 0 when the seller's host answered with an error or nothing usable; a read that failed on our side (our time limit, resolver or size limit), a robots.txt exclusion and a registry-only record are left out",
   paywallUptime: "each pass records the newest unpaid probe of the seller's cheapest paid route, if newer than the last one recorded: 1 when it answered 402, 0 for any other status; a probe that read no status or a malformed-request answer (400, 415, 422) is left out",
   responsiveness: `time from our unpaid paywall probe to the seller's response headers, measured from this server; the score is the share of probes answered within ${RESPONSIVE_MS} ms, beside the median`,
   priceHonesty: "routes whose 402 we read live in the window and whose own documents list a price: the share where the price the 402 asks matches the listed price",
-  delivery: "the router's own paid calls to the seller for requests that are not ours: 1 when the payment settled and the seller answered 200, 0 when the router recorded a delivery failure (a 5xx after payment, or a 4xx the seller or the chain shows was charged); a caller's own input error is left out",
+  delivery: `${DELIVERY_LABEL}: 1 when the seller answered 200 after taking the payment, 0 when the router recorded a delivery failure (a 5xx after payment, or a 4xx the seller or the chain shows was charged); a caller's own input error, and calls made for our own probes, canaries and wallets, are left out`,
 });
 export const REPUTATION_LEGEND = `Measured by this server from its own crawl and paid calls, over a rolling ${WINDOW_DAYS}-day window. A metric is scored (0 to 1) only when its sample reaches minSampleSize; below that it reads not-enough-data. No metric counts payments or buyers: router purchases, our own wallets and test traffic are never buyer evidence, and settlement counts are not part of this record. Each metric's method field states how it is measured.`;
 
@@ -292,7 +298,7 @@ export function reputationOf({ rec = null, delivery = null, since = null, update
     paywallUptime: ratioMetric("paywallUptime", rec?.p, MIN_SAMPLES.paywallUptime, now, rec?.lp),
     responsiveness: latencyMetric(rec?.l, now, rec?.lp),
     priceHonesty: priceMetric(rec?.q, now),
-    delivery: ratioMetric("delivery", delivery?.d, MIN_SAMPLES.delivery, now),
+    delivery: { ...ratioMetric("delivery", delivery?.d, MIN_SAMPLES.delivery, now), label: DELIVERY_LABEL },
   };
   return {
     recordState: state,
@@ -317,7 +323,7 @@ export const METRIC_LABELS = Object.freeze({
   paywallUptime: "402 up",
   responsiveness: "responsive",
   priceHonesty: "price as listed",
-  delivery: "delivered",
+  delivery: `delivered (${DELIVERY_LABEL})`,
 });
 
 /** The pathname key a delivery is recorded under. */
@@ -342,6 +348,7 @@ export function toolReputationOf(t, { routes = null, url = null, now = Date.now(
   return {
     price,
     delivery: {
+      label: DELIVERY_LABEL,
       status: enough ? "scored" : "not-enough-data",
       score: enough ? round3(tot.ok / tot.n) : null,
       sampleSize: tot.n,
@@ -349,7 +356,7 @@ export function toolReputationOf(t, { routes = null, url = null, now = Date.now(
     },
   };
 }
-export const TOOL_REPUTATION_LEGEND = `Per route, measured by this server over a rolling ${WINDOW_DAYS}-day window. price: matches or differs compares the price this route's 402 asked on our last live read with the price the seller's own documents list (within ${PRICE_MATCH_TOLERANCE * 100}%); not-measured when no live read in the window has both. delivery: the share of the router's own paid calls to this route, for requests that are not ours, that settled and answered 200; scored from ${MIN_SAMPLES.toolDelivery} calls, not-enough-data below. Neither counts payments or buyers.`;
+export const TOOL_REPUTATION_LEGEND = `Per route, measured by this server over a rolling ${WINDOW_DAYS}-day window. price: matches or differs compares the price this route's 402 asked on our last live read with the price the seller's own documents list (within ${PRICE_MATCH_TOLERANCE * 100}%); not-measured when no live read in the window has both. delivery, ${DELIVERY_LABEL}: the share of those calls to this route that answered 200 after taking the payment, our own probes, canaries and wallets left out; scored from ${MIN_SAMPLES.toolDelivery} calls, not-enough-data below. Neither counts payments or buyers.`;
 
 // ---------------------------------------------------------------- state
 let enabled = false;

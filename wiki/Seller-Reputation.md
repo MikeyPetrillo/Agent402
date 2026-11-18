@@ -26,7 +26,7 @@ handful of readings cannot support.
 | `paywallUptime` | The newest unpaid probe of the seller's cheapest paid route | 5 | Share of probes answered with a 402 |
 | `responsiveness` | The time from that probe to the seller's response headers, measured from this server | 5 | Share answered within 2,000 ms, beside `medianMs` |
 | `priceHonesty` | Routes whose 402 we read live in the window and whose own documents list a price | 3 | Share where the price the 402 asks is within 1% of the listed price |
-| `delivery` | The router's own paid calls to the seller for requests that are not ours | 5 | Share that settled and answered 200 |
+| `delivery` | Calls measured from purchases Agent402's router made for buyers (our own probes, canaries and wallets left out) | 5 | Share where the seller answered 200 after taking the payment |
 
 `overall` is the weighted mean of the scored components (paywall uptime 0.3,
 delivery 0.25, manifest uptime 0.2, price honesty 0.15, responsiveness 0.1),
@@ -43,7 +43,10 @@ the seller and `recordsSince`, the date the record began.
 - **Payments and buyers.** No metric reads a payment count, a buyer count or a
   settlement total. Router purchases, our own wallets and test traffic are
   never buyer evidence, and a seller's own settlement figures are not part of
-  the record. The router's paid calls count only as delivery observations.
+  the record. The delivery metric is labeled "measured from purchases
+  Agent402's router made for buyers" wherever it appears: it observes the
+  seller's answers to those calls, and nothing that qualifies or ranks a
+  seller for the router reads it.
 - **Our own traffic.** A routed call made for a heartbeat probe, a canary or
   one of our own wallets is not recorded. Recording and the scheduled pass run
   only on a server that runs the production crawl; a CI, test or local boot

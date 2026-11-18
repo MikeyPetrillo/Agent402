@@ -192,6 +192,42 @@ const PRIVATE_KEY_RE = /settle|buyer|payer|wallet|volume|usd|calls30d|payers30d|
   ok(/enabled: x402Crawl\.on && /.test(server), "reputation runs only where the production crawl runs");
 }
 
+// ---------------------------------------------------------------- A2. the delivery label
+// Owner decision: the delivery metric is labeled "measured from purchases
+// Agent402's router made for buyers" wherever it appears, is never worded as
+// buyers, sales or settlements, and never feeds the router's qualification.
+const LABEL = "measured from purchases Agent402's router made for buyers";
+const NOT_BUYER_WORDING = /buyer|sale|settl/i;
+const unlabeled = (t) => String(t).split(LABEL).join("");
+{
+  ok(R.DELIVERY_LABEL === LABEL, "the module's delivery label is the owner's wording");
+  ok(R.METHODS.delivery.startsWith(LABEL) && !NOT_BUYER_WORDING.test(unlabeled(R.METHODS.delivery)), "the delivery method text carries the label and no buyer, sale or settlement wording");
+  const legendDelivery = R.TOOL_REPUTATION_LEGEND.slice(R.TOOL_REPUTATION_LEGEND.indexOf("delivery,"), R.TOOL_REPUTATION_LEGEND.indexOf("not-enough-data below."));
+  ok(legendDelivery.includes(LABEL) && !NOT_BUYER_WORDING.test(unlabeled(legendDelivery)), "the per-route legend's delivery clause carries the label and no such wording");
+  ok(R.METRIC_LABELS.delivery.includes(LABEL) && !NOT_BUYER_WORDING.test(unlabeled(R.METRIC_LABELS.delivery)), "the seller card's delivery label carries it");
+  const rep = R.reputationOf({ now: NOW });
+  ok(rep.metrics.delivery.label === LABEL && R.toolReputationOf({ method: "GET", route: "/x" }, { now: NOW }).delivery.label === LABEL, "the delivery metric and each route's delivery carry the label as a field");
+  const wiki = readFileSync(new URL("../wiki/Seller-Reputation.md", import.meta.url), "utf8");
+  const row = wiki.split("\n").find((l) => l.startsWith("| `delivery` |")) || "";
+  ok(row.includes(LABEL) && !NOT_BUYER_WORDING.test(unlabeled(row)), "the wiki method page's delivery row carries the label and no such wording");
+  ok(wiki.replace(/\s+/g, " ").includes(`labeled "${LABEL}" wherever it appears`), "the wiki method page states the label rule");
+  const seo = readFileSync(new URL("../src/seo.js", import.meta.url), "utf8");
+  ok(seo.includes(`delivery (${LABEL})`), "the llms.txt line labels delivery");
+  // Nothing that qualifies, ranks or pays a seller reads reputation.
+  const { readdirSync } = await import("node:fs");
+  const srcDir = new URL("../src/", import.meta.url);
+  const importers = [];
+  const walk = (dir, rel) => { for (const e of readdirSync(dir, { withFileTypes: true })) { if (e.isDirectory()) { if (e.name !== "generated") walk(new URL(`${e.name}/`, dir), `${rel}${e.name}/`); } else if (e.name.endsWith(".js") && /seller-reputation\.js["']/.test(readFileSync(new URL(e.name, dir), "utf8")) && e.name !== "seller-reputation.js") importers.push(`${rel}${e.name}`); } };
+  walk(srcDir, "src/");
+  ok(JSON.stringify(importers.sort()) === JSON.stringify(["src/market-page.js", "src/server.js", "src/tempo-buyer.js", "src/x402-buyer.js", "src/x402-index.js"]), `only the surfaces and the two writers import it, no dispatch, floor or ranking module (${importers.join(", ")})`);
+  const buyerSrc = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/tempo-buyer.js", import.meta.url), "utf8");
+  ok(!/import \{[^}]*(sellerReputation|sellerDeliveryRoutes|reputationOf)[^}]*\} from "\.\/seller-reputation\.js"/.test(buyerSrc), "the buyers only write outcomes, never read a score");
+  const idx = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
+  const detail = idx.slice(idx.indexOf("export function sellerDetail("), idx.indexOf("export function screenSellerDetailForServe("));
+  const uses = (t) => (t.match(/\b(sellerReputation|sellerDeliveryRoutes|toolReputationOf)\(/g) || []).length;
+  ok(uses(idx) === uses(detail) && uses(detail) === 3, "the index reads reputation only inside the ?seller= detail, never in routing or eligibility");
+}
+
 // ---------------------------------------------------------------- B. the server
 {
   const dir = mkdtempSync(join(tmpdir(), "a402-reputation-"));
@@ -288,7 +324,14 @@ const PRIVATE_KEY_RE = /settle|buyer|payer|wallet|volume|usd|calls30d|payers30d|
     ok(detail.json?.tools?.every((t) => t.reputation && t.reputation.price && t.reputation.delivery && !("method" in t.reputation.delivery)), "each ?seller= row carries a compact reputation (its method in the legend)");
     ok(keysOf(detail.json?.reputation).filter((k) => PRIVATE_KEY_RE.test(k)).length === 0, "the ?seller= reputation block has no payment, buyer or settlement key");
 
+    ok(rep?.metrics?.delivery?.label === LABEL && rep.metrics.delivery.method.startsWith(LABEL) && !NOT_BUYER_WORDING.test(unlabeled(JSON.stringify(rep.metrics.delivery))), "/api/reputation's delivery metric carries the label and no buyer, sale or settlement wording");
+    ok(t0?.reputation?.delivery?.label === LABEL && a.json.toolReputationLegend.includes(LABEL), "/api/reputation's route rows and legend carry the label");
+    ok(detail.json?.reputation?.metrics?.delivery?.label === LABEL && detail.json.tools.every((t) => t.reputation.delivery.label === LABEL), "?seller= carries the label on the metric and every row");
     const page = await get(`/base?seller=scored.example`);
+    const line = (page.text.match(/<div id="seller-reputation"[\s\S]*?<\/div>/) || [""])[0];
+    const escLabel = LABEL.replace(/'/g, "&#39;");
+    ok(line.includes(`delivered (${escLabel})`), "the seller card line labels delivery");
+    ok(!NOT_BUYER_WORDING.test(line.split(escLabel).join("")), "the seller card line has no other buyer, sale or settlement wording");
     ok(page.r.status === 200 && page.text.includes('id="seller-reputation"') && page.text.includes("/api/reputation?seller=scored.example") && /overall \d+%/.test(page.text), "the seller card shows the reputation line with a link to the data");
     const thinPage = await get(`/base?seller=thin.example`);
     ok(thinPage.text.includes("overall: not enough data"), "a thin seller's card says not enough data");
