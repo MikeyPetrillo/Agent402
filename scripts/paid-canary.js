@@ -153,7 +153,10 @@ export const TOOLS = [
     check: (r) => (r.county === "Los Angeles County" && r.state === "CA") || `expected Los Angeles County/CA, got ${JSON.stringify(r).slice(0, 100)}`,
   },
   {
+    // Listed only with an active stock provider (src/tools/stock-provider.js):
+    // bought only while prod lists the route.
     kit: "finance",
+    whenListed: true,
     path: "/api/stock-quote?symbol=AAPL",
     method: "GET",
     priceUsd: 0.001,
@@ -596,6 +599,10 @@ export const TOOLS = [
   },
   {
     kit: "skill-pack",
+    // Its stock step is the answer, so it is listed only with an active stock
+    // provider (src/skills.js STOCK_CORE_PACK_SLUGS): bought only while prod
+    // lists the route.
+    whenListed: true,
     path: "/api/skill/financial-analysis",
     method: "POST",
     body: { ticker: "AAPL" },
@@ -626,6 +633,10 @@ export const TOOLS = [
   },
   {
     kit: "skill-pack",
+    // Listed either way: with no active stock provider it runs without its
+    // stock step (src/skills.js STOCK_TRIMMED_PACK_SLUGS). The listing check
+    // stays so a pack later withdrawn is skipped, not bought into a 503.
+    whenListed: true,
     path: "/api/skill/company-dossier",
     method: "POST",
     body: { ticker: "AAPL" },
@@ -1036,7 +1047,7 @@ async function main() {
     catch (e) { console.warn(`WARN  preflight: GET ${TARGET}/api/pricing failed: ${(e?.message || String(e)).slice(0, 120)}`); }
   }
   for (const t of TOOLS) {
-    if (t.whenListed && listedPaths && !listedPaths.has(t.path)) {
+    if (t.whenListed && listedPaths && !listedPaths.has(t.path.split("?")[0])) {
       console.log(`SKIP  ${t.kit.padEnd(10)} ${t.path}  (not listed on this server)`);
       continue;
     }

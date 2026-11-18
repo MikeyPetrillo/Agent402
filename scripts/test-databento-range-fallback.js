@@ -6,6 +6,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 import "./lib/file-mode.js";
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
+process.env.STOCK_DATA_PROVIDER = "databento";
 const db = await import("../src/tools/databento.js");
 const { availableEndInfo, __resetDatabentoState, __ageRange, quoteWarmerStatus } = db;
 

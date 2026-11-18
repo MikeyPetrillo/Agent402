@@ -1,6 +1,8 @@
 // dossier-kit — Company Due-Diligence Dossier. A premium (card-tier) report that
 // grounds in OUR structured data - SEC EDGAR filings + Form 4 insider filings +
-// a live quote - which generic-web research agents cannot reach, plus grounded
+// a quote while a stock provider is active (src/tools/stock-provider.js; with
+// none the quote step is not run and the copy does not name it) - which
+// generic-web research agents cannot reach, plus grounded
 // web search for recent developments, then synthesizes a cited, structured
 // dossier.
 //
@@ -17,6 +19,11 @@ import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { EDGAR_TOOLS, fetchXmlText, isAnnualPeriod, isQuarterPeriod, periodMonths } from "./edgar-kit.js";
 import { FINANCE_TOOLS } from "./finance-kit.js";
+import { stockDataEnabled } from "./stock-provider.js";
+
+// Read at boot, like every listing switch: the quote step runs only with an
+// active stock provider.
+const QUOTE_ON = stockDataEnabled();
 
 // Per-buyer OpenRouter `user` id (OpenRouter abuse isolation); never throws.
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
@@ -267,7 +274,7 @@ function makeDossierHandlerInner(tierSlug) {
   return async (input, req) => {
     // Job progress (src/job-progress.js): a no-op outside an async job or task.
     const steps = stepProgress(3, req);
-    steps.next("reading SEC filings and market data");
+    steps.next(QUOTE_ON ? "reading SEC filings and market data" : "reading SEC filings");
     if (!input || typeof input !== "object") throw bad('Body must be a JSON object: {"ticker": "AAPL"}');
     const ticker = String(input.ticker ?? "").trim().toUpperCase();
     if (!ticker) throw bad('"ticker" (US stock ticker, e.g. "AAPL") is required');
@@ -287,7 +294,7 @@ function makeDossierHandlerInner(tierSlug) {
     // includes real XBRL financials pulled from the filings, so financial figures
     // are grounded in SEC data, not a news article.
     const [quote, k10, q10, k8, insider, financials] = await Promise.all([
-      settle(stockQuote, { symbol: ticker }, DATA_TIMEOUT_MS),
+      QUOTE_ON ? settle(stockQuote, { symbol: ticker }, DATA_TIMEOUT_MS) : Promise.resolve({ ok: false, skipped: true }),
       settle(edgarFilings, { ticker, form: "10-K", limit: Math.min(t.filings, 3) }, DATA_TIMEOUT_MS),
       settle(edgarFilings, { ticker, form: "10-Q", limit: t.filings }, DATA_TIMEOUT_MS),
       settle(edgarFilings, { ticker, form: "8-K", limit: t.filings * 2 }, DATA_TIMEOUT_MS),
@@ -384,18 +391,17 @@ function makeDossierHandlerInner(tierSlug) {
     const synthPrompt = `You are a diligence analyst writing a COMPANY DUE-DILIGENCE DOSSIER on ${company} (${ticker}) that will be SOLD to a paying customer. Accuracy is paramount; a fabricated fact fails the whole report.
 
 === ABSOLUTE GROUNDING RULES ===
-1. Use ONLY the SEC DATA, INSIDER DATA, LIVE QUOTE, and WEB RESEARCH provided below. Treat them as your only knowledge about this company.
+1. Use ONLY the SEC DATA, INSIDER DATA, ${QUOTE_ON ? "LIVE QUOTE, " : ""}and WEB RESEARCH provided below. Treat them as your only knowledge about this company.
 2. Every SPECIFIC fact - financial figures, dates, share counts, prices, filing references, named events - MUST appear in the provided material. NEVER introduce a number, metric, or claim from your own training/memory. If the material lacks a figure, describe it qualitatively rather than inventing one.
-3. CITATIONS: the sources are numbered [1] to [${maxCite}]. NEVER cite a number outside that range - if you cannot ground a claim in sources [1]-[${maxCite}], do not attach a citation to it. Cite every substantive claim with [n], and ONLY attach [n] to a claim that source's own text supports - for a WEB source, that means the claim appears in that source's quoted snippet or the web research; do NOT infer a source's content from its title alone. A citation is ONLY a bracketed number, e.g. [14] or [3][7] - NEVER put words, notes, ranges, or explanations inside the brackets (not "[14 for the release]", not "[13-adjacent]"), and never use a word-tag or source name like [research]/[web]/[data]/[morningstar]/[reuters] - EVERY citation must be a numbered [n] from the list, never a publication name or domain. The LIVE QUOTE, SEC XBRL FINANCIALS, and FORM 4 INSIDER data are given to you DIRECTLY - reference all three in prose WITHOUT a bracketed citation ("the live quote shows...", "the latest reported revenue was...", "Form 4 filings in the window show..."); do NOT attach a [n] to a financial figure (the specific filing that reported an XBRL fact is often not in the numbered list). The FORM 4 data is FILING METADATA ONLY - who filed and when - with NO buy/sell direction, share count, or price: report only that Form 4s were filed and by whom, and do NOT infer or state whether insiders bought or sold, or any amount.
+3. CITATIONS: the sources are numbered [1] to [${maxCite}]. NEVER cite a number outside that range - if you cannot ground a claim in sources [1]-[${maxCite}], do not attach a citation to it. Cite every substantive claim with [n], and ONLY attach [n] to a claim that source's own text supports - for a WEB source, that means the claim appears in that source's quoted snippet or the web research; do NOT infer a source's content from its title alone. A citation is ONLY a bracketed number, e.g. [14] or [3][7] - NEVER put words, notes, ranges, or explanations inside the brackets (not "[14 for the release]", not "[13-adjacent]"), and never use a word-tag or source name like [research]/[web]/[data]/[morningstar]/[reuters] - EVERY citation must be a numbered [n] from the list, never a publication name or domain. ${QUOTE_ON ? "The LIVE QUOTE, SEC XBRL FINANCIALS, and FORM 4 INSIDER data are given to you DIRECTLY - reference all three in prose WITHOUT a bracketed citation (\"the live quote shows...\", \"the latest reported revenue was...\", \"Form 4 filings in the window show...\");" : "The SEC XBRL FINANCIALS and FORM 4 INSIDER data are given to you DIRECTLY - reference both in prose WITHOUT a bracketed citation (\"the latest reported revenue was...\", \"Form 4 filings in the window show...\"); no share price is provided, so state none;"} do NOT attach a [n] to a financial figure (the specific filing that reported an XBRL fact is often not in the numbered list). The FORM 4 data is FILING METADATA ONLY - who filed and when - with NO buy/sell direction, share count, or price: report only that Form 4s were filed and by whom, and do NOT infer or state whether insiders bought or sold, or any amount.
 4. Do not overstate: reproduce magnitudes and dates exactly as given. Where sources disagree or are silent, say so. Being less specific beats stating something you cannot ground.
 4b. A GAP IN THIS MATERIAL IS NEVER A FINDING ABOUT THE COMPANY. If the material does not explain WHY a figure is what it is, write "the material provided here does not explain ..." - never "unexplained", "undisclosed", "cannot be reconciled" or a red flag, because the filing may explain it in text you were not given. Before characterising any gap between operating and net income, read the OPERATING-TO-NET BRIDGE (reported non-operating and tax lines) and the FILING EXCERPTS (the filing's own words); if they account for it, say what the item is and cite the excerpt's source.
 5. Do NOT write a "Sources" section - a complete numbered source list is appended automatically. Prioritize COMPLETING the dossier (finish your final sentence and section) over length.
 6. ${QUOTED_MATERIAL_RULE}
 
-Write a thorough, well-structured dossier of up to ${t.words} words, with these sections where the material supports them: an opening SNAPSHOT (what the company is, current quote, one-paragraph bottom line), BUSINESS & RECENT FILINGS (what the latest 10-K/10-Q/8-K disclose), FINANCIAL POSTURE, RECENT DEVELOPMENTS (from the web research), INSIDER ACTIVITY (which insiders filed Form 4s and when - NOT buy/sell direction or amounts, which these filings do not contain), RISKS & RED FLAGS, and a closing DILIGENCE READ (the balanced takeaway). Be specific and analytical, not a data dump; call out what matters for someone deciding whether to trust, invest in, or partner with this company.${focus.length ? `\nEmphasize: ${focus.join(", ")}.` : ""}
+Write a thorough, well-structured dossier of up to ${t.words} words, with these sections where the material supports them: an opening SNAPSHOT (what the company is, ${QUOTE_ON ? "current quote, " : ""}one-paragraph bottom line), BUSINESS & RECENT FILINGS (what the latest 10-K/10-Q/8-K disclose), FINANCIAL POSTURE, RECENT DEVELOPMENTS (from the web research), INSIDER ACTIVITY (which insiders filed Form 4s and when - NOT buy/sell direction or amounts, which these filings do not contain), RISKS & RED FLAGS, and a closing DILIGENCE READ (the balanced takeaway). Be specific and analytical, not a data dump; call out what matters for someone deciding whether to trust, invest in, or partner with this company.${focus.length ? `\nEmphasize: ${focus.join(", ")}.` : ""}
 
-=== LIVE QUOTE ===\n${quoteBlock}
-=== SEC XBRL FINANCIALS (reported figures - reference in prose, no bracket) ===\n${financialsBlock}
+${QUOTE_ON ? `=== LIVE QUOTE ===\n${quoteBlock}\n` : ""}=== SEC XBRL FINANCIALS (reported figures - reference in prose, no bracket) ===\n${financialsBlock}
 === SEC FILINGS (numbered sources) ===\n${filingLines}
 === FILING EXCERPTS (verbatim, from the newest 10-Q/10-K) ===\n${excerptBlock}
 === FORM 4 INSIDER FILINGS (last ${t.insiderDays} days - filing metadata only: NO buy/sell, share count, or price) ===\n${insiderBlock}
@@ -477,7 +483,7 @@ const OUT_EXAMPLE = {
 export const DOSSIER_TOOLS = [
   {
     route: "POST /v1/dossier", name: "Company due-diligence dossier (grounded, cited)", slug: "dossier", category: "llm", price: DOSSIER_TIERS["dossier"].price,
-    description: "Hand over a ticker and get one due-diligence dossier back. Pulls the company's SEC EDGAR filings (10-K / 10-Q / 8-K) and Form 4 insider trades, a live quote, and grounded web research on recent developments and risks, then synthesizes a ~2,400-word cited dossier - business, financial posture, insider activity, red flags, and a balanced diligence read. Grounded in real SEC data, not a generic web guess. One payment, one report. USDC (x402/MPP) or card (Stripe). Not cached.",
+    description: `Hand over a ticker and get one due-diligence dossier back. Pulls the company's SEC EDGAR filings (10-K / 10-Q / 8-K) and Form 4 insider trades${QUOTE_ON ? ", a live quote," : ""} and grounded web research on recent developments and risks, then synthesizes a ~2,400-word cited dossier - business, financial posture, insider activity, red flags, and a balanced diligence read. Grounded in real SEC data, not a generic web guess. One payment, one report. USDC (x402/MPP) or card (Stripe). Not cached.`,
     tags: ["research", "due-diligence", "company", "sec", "edgar", "filings", "insider", "stocks", "dossier", "premium", "agent"],
     discovery: { bodyType: "json", input: { ticker: "AAPL", focus: ["risks"] }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeDossierHandler("dossier"),

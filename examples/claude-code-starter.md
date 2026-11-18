@@ -24,7 +24,7 @@ Claude Code's slash-command list without any extra wiring.
 ## Example prompts
 
 - "Search the web for the latest x402 news"
-- "Get Apple's stock price and key financials"
+- "Get Apple's key financials and latest SEC filings"
 - "Look up the WHOIS data for stripe.com"
 - "Generate a QR code for https://agent402.tools"
 

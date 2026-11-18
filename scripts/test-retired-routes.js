@@ -409,7 +409,7 @@ try {
     else if (!pastSunset(r, RETIRED_TOOLS[slug].retiredAt) || successorOf(r) !== (b.replacement?.url || null)) bad.push(`/api/${slug} headers ${r.headers.get("sunset")} ${r.headers.get("link")}`);
   }
   for (const slug of snapshot.packs) {
-    if (live.packs.has(slug)) continue;
+    if (live.packs.has(slug) || gated.packs.has(slug)) continue;
     const r = await fetch(`${base}/api/skill/${slug}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     const b = await r.json().catch(() => ({}));
     if (!(r.status === 410 && b.slug === slug)) bad.push(`/api/skill/${slug} ${r.status}`);
@@ -421,6 +421,8 @@ try {
   ok(bad.length === 0, `every retired snapshot route answers 410 with its registry replacement (wrong: ${bad.join(", ") || "none"})`);
   const research = await (await fetch(`${base}/api/research-company?ticker=AAPL`)).json();
   ok(research.replacement?.slug === "skill-company-dossier" && /^POST \/api\/skill\/company-dossier$/.test(research.replacement?.route || ""), "a pack can be a tool's replacement, with the pack's own route");
+  // stock-quote is listed only with a stock provider (src/tools/stock-provider.js); this boot has none.
+  ok(RETIRED_TOOLS["premarket-quote"].replacement === null, "a retirement whose replacement tool is not listed names none on this boot");
   const livePack = [...live.packs][0];
   ok((await fetch(`${base}/api/skill-packs/${livePack}/prompt`)).status === 200, `a live pack's prompt is still served (${livePack})`);
   const tpl = await fetch(`${base}/api/skill-packs/%7Bslug%7D/prompt`);
@@ -434,6 +436,21 @@ try {
   for (const shape of ["/api/convert/km-to-miles", "/api/convert-km-to-miles", "/api/convert-not-a-unit-to-other"]) {
     const r = shape === "/api/convert/km-to-miles" ? conv : await fetch(`${base}${shape}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     ok(r.status === 410 && pastSunset(r, RETIRED_CONVERTERS_AT) && successorOf(r) === "http://agent402.test/api/unit-convert", `${shape} 410 carries a past Sunset and the unit-convert successor (got ${r.status} ${r.headers.get("sunset")} ${r.headers.get("link")})`);
+  }
+  // A key-gated stock route or pack (no stock provider on this boot) answers a
+  // free 503 naming the slug: never a 402, a 410 or the guessed-slug 404.
+  {
+    const { STOCK_SLUGS } = await import("../src/tools/stock-provider.js");
+    const { STOCK_CORE_PACK_SLUGS: STOCK_PACK_SLUGS } = await import("../src/skills.js");
+    const wrong = [];
+    for (const path of [...[...STOCK_SLUGS].map((s) => `/api/${s}`), ...[...STOCK_PACK_SLUGS].map((s) => `/api/skill/${s}`)]) {
+      for (const method of ["GET", "POST"]) {
+        const r = await fetch(`${base}${path}`, { method, ...(method === "POST" ? { headers: { "content-type": "application/json" }, body: "{}" } : {}) });
+        const b = await r.json().catch(() => ({}));
+        if (!(r.status === 503 && b.error === "not-offered" && !r.headers.get("payment-required"))) wrong.push(`${method} ${path} ${r.status}`);
+      }
+    }
+    ok(STOCK_PACK_SLUGS.size > 0 && wrong.length === 0, `every gated stock route and pack answers 503 not-offered with no payment challenge (${wrong.join(", ") || `${STOCK_SLUGS.size} tools, ${STOCK_PACK_SLUGS.size} packs`})`);
   }
   // A converter call we can serve is untouched: it is served (free boot), never a 410.
   const served = await fetch(`${base}/api/convert-miles-to-kilometers?value=2`);

@@ -20,7 +20,8 @@
 // Offline, no network, no key needed.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
-import { SKILL_PACKS } from "../src/skills.js";
+// Every pack, listed or not: the skip set must hold for a pack the moment it is listed.
+import { ALL_SKILL_PACKS as SKILL_PACKS } from "../src/skills.js";
 import { SEARCH_TOOLS } from "../src/tools/search.js";
 import { CODE_RUN_TOOLS } from "../src/tools/code-run-kit.js";
 

@@ -2015,7 +2015,7 @@ jobs:
           STATE_DATABASE_URL: postgres://decide@127.0.0.1:5432/decide_test?sslmode=disable
         run: node scripts/test-databento-shared-cache.js
 
-      - name: Offline suites (9 scripts, one process each)
+      - name: Offline suites (11 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-b4 2
 
       - name: Crawl honours robots.txt (explicit Disallow enforced, unreadable file fails OPEN, cached per origin - offline)
@@ -4497,7 +4497,6 @@ jobs:
     # secrets keep working until they are migrated to the environment.
     environment: "agent402 / production"
     env:
-      DATABENTO_API_KEY: ${{ secrets.DATABENTO_API_KEY }}
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       # The project id is KNOWN (repo var). Railway's `projects` listing query
       # answered "Internal Server Error" for account tokens on 2026-09-08 (the
@@ -4555,7 +4554,6 @@ jobs:
         run: |
           [ -n "$RAILWAY_API_TOKEN" ] && echo "::add-mask::$RAILWAY_API_TOKEN"
           [ -n "$CDP_KEY_SECRET" ] && echo "::add-mask::$CDP_KEY_SECRET"
-          [ -n "$DATABENTO_API_KEY" ] && echo "::add-mask::$DATABENTO_API_KEY"
           [ -n "$BRAVE_API_KEY" ] && echo "::add-mask::$BRAVE_API_KEY"
           [ -n "$FRED_API_KEY" ] && echo "::add-mask::$FRED_API_KEY"
           [ -n "$FRED_API_KEY_V2" ] && echo "::add-mask::$FRED_API_KEY_V2"
@@ -4765,13 +4763,6 @@ jobs:
             '{WALLET_ADDRESS:$w, NETWORK:$n, FACILITATOR_URL:$f, BASE_URL:$b, RAILWAY_DEPLOYMENT_DRAINING_SECONDS:"120", TRUST_PROXY_HOPS:"1"}')
           if [ -n "$CDP_KEY_ID" ] && [ -n "$CDP_KEY_SECRET" ]; then
             VARS=$(echo "$VARS" | jq --arg i "$CDP_KEY_ID" --arg s "$CDP_KEY_SECRET" '. + {CDP_API_KEY_ID:$i, CDP_API_KEY_SECRET:$s}')
-          fi
-          # The equities feed behind the equity tools bills per query. Prod
-          # needs the key; CI deliberately does NOT get it, because an unkeyed
-          # CI is what keeps a sweep from spending, the same rule as every
-          # other metered upstream key below.
-          if [ -n "$DATABENTO_API_KEY" ]; then
-            VARS=$(echo "$VARS" | jq --arg d "$DATABENTO_API_KEY" '. + {DATABENTO_API_KEY:$d}')
           fi
           if [ -n "$BRAVE_API_KEY" ]; then
             VARS=$(echo "$VARS" | jq --arg b "$BRAVE_API_KEY" '. + {BRAVE_API_KEY:$b}')

@@ -32,7 +32,7 @@ on:
   workflow_dispatch:
     inputs:
       slugs:
-        description: "Explicit comma list of MCP listings to buy once each, by catalog slug (search, search-news, answer, stock-quote, render, memory-read) or tool name (web.search, web.news, web.answer, market.quote, browser.render, memory.read). Empty buys nothing."
+        description: "Explicit comma list of MCP listings to buy once each, by catalog slug (search, search-news, answer, render, memory-read) or tool name (web.search, web.news, web.answer, browser.render, memory.read); a listing the live catalog does not serve refuses the list. Empty buys nothing."
         default: ""
       max_spend_usd:
         description: "Hard cap for the whole pass (USD). The pass refuses to start above it."

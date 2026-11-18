@@ -54,10 +54,13 @@ const META = [
 ];
 const FLAGSHIP_NAMES = FLAGSHIP_SLUGS.map((s) => FLAGSHIP_MCP_NAMES[s] || s.replace(/-/g, "_"));
 // A flagship whose route is absent from this server's catalog (the decide
-// tools without the decide service) is not listed, by design.
+// tools without the decide service, market.quote without a stock data
+// provider) is not listed, by design.
 const pricingDoc = await (await fetch(`${BASE}/api/pricing`)).json().catch(() => ({}));
 const served = JSON.stringify(pricingDoc);
-const inCatalog = (slug) => slug !== "decide" && slug !== "decide-execute" ? true : served.includes(slug === "decide" ? '"/api/decide"' : '"/api/decide/execute"');
+const servedSlugs = new Set((pricingDoc.endpoints || []).map((e) => e.slug));
+assert(servedSlugs.size > 0, `the catalog is read from ${BASE}/api/pricing`);
+const inCatalog = (slug) => slug !== "decide" && slug !== "decide-execute" ? servedSlugs.has(slug) : served.includes(slug === "decide" ? '"/api/decide"' : '"/api/decide/execute"');
 // decide.feedback (free, no catalog route) is listed alongside the decide tools.
 // Hosts truncate or skip long descriptions: every listed one stays within 400 characters.
 for (const t of (list.result?.tools ?? [])) assert((t.description || "").length <= 400, `${t.name} description is ${(t.description || "").length} characters (limit 400)`);

@@ -5,7 +5,7 @@
 // key — hot -> cold, never the treasury key.
 //
 // Gasless: the burner holds no native ETH, so we can't do a direct ERC-20
-// transfer. Instead it BUYS one of our own tools (the company-dossier pack,
+// transfer. Instead it BUYS one of our own tools (the entity-enrich pack,
 // treasury payTo) repeatedly, facilitator-sponsored — each settled buy moves
 // that tool's Base price burner -> treasury. The per-buy amount is read from
 // the tool's live 402 (the Base USDC accept), never typed here. We read the
@@ -22,8 +22,8 @@
 import { pathToFileURL } from "node:url";
 import { readFileSync } from "node:fs";
 
-/** The route each sweep buy calls: the company-dossier skill pack (src/skills.js routes packs at /api/skill/<slug>). */
-export const DENOM_PATH = "/api/skill/company-dossier";
+/** The route each sweep buy calls: the entity-enrich skill pack (src/skills.js routes packs at /api/skill/<slug>), which takes the domain the buy sends. */
+export const DENOM_PATH = "/api/skill/entity-enrich";
 const BASE_CAIP2 = "eip155:8453";
 const USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 const USDC_DECIMALS = 6;

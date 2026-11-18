@@ -21,7 +21,7 @@
 process.env.UPSTREAM_HANDLER_BUDGET_MS = "1200";
 for (const [k, v] of Object.entries({
   ALCHEMY_API_KEY: "test-alchemy", BRAVE_API_KEY: "test-brave", NEYNAR_API_KEY: "test-neynar", X_BEARER_TOKEN: "test-x",
-  EXA_API_KEY: "test-exa", HUNTER_API_KEY: "test-hunter", APOLLO_API_KEY: "test-apollo", DATABENTO_API_KEY: "db-test",
+  EXA_API_KEY: "test-exa", HUNTER_API_KEY: "test-hunter", APOLLO_API_KEY: "test-apollo", DATABENTO_API_KEY: "db-test", STOCK_DATA_PROVIDER: "databento",
   OPENROUTER_API_KEY: "test-openrouter", TYPESAFE_API_KEY: "test-typesafe", JUPITER_API_BASE: "", SOLANA_RPC_URL: "",
   // The spend-capped kits price a read before it leaves; the stalled reads
   // never book, so the caps only need to admit one priced read.

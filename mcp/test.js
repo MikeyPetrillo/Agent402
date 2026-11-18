@@ -143,6 +143,39 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   console.log("discovery.js shed-503 retry \u2713 (bounded, capped, 503-only; catalog loads through a shed, catalog.find names the surface)");
 }
 
+// 0b2) The initialize instructions name market.quote exactly when it is
+// listed: a catalog that lists stock-quote makes it first-class and named
+// (the main run below, against a server with no stock provider, checks the
+// other side).
+{
+  const { createServer } = await import("node:http");
+  const stub = createServer((req, res) => {
+    const u = new URL(req.url, "http://stub");
+    const send = (status, body) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+    if (u.pathname === "/api/pricing") return send(200, { endpoints: [
+      { slug: "stock-quote", method: "GET", path: "/api/stock-quote", price: "$0.01", description: "A stock quote", category: "Finance", computePayable: false },
+      { slug: "search", method: "GET", path: "/api/search", price: "$0.01", description: "Web search", category: "Search", computePayable: false },
+    ] });
+    if (u.pathname === "/openapi.json") return send(200, { paths: {} });
+    return send(404, { error: "not found" });
+  });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  const stubEnv = { ...process.env, AGENT402_URL: `http://127.0.0.1:${stub.address().port}` };
+  delete stubEnv.AGENT_KEY; delete stubEnv.SOLANA_AGENT_KEY; delete stubEnv.AGENT402_CREDITS_KEY; delete stubEnv.AGENT402_TOOLS;
+  const c = new Client({ name: "agent402-mcp-stock-test", version: "0.0.0" });
+  await c.connect(new StdioClientTransport({ command: process.execPath, args: [join(ROOT, "mcp", "index.js")], env: stubEnv, stderr: "ignore" }));
+  try {
+    const listed = (await c.listTools()).tools.map((t) => t.name);
+    const instr = c.getInstructions() || "";
+    if (!listed.includes("market.quote")) fail(`a catalog that lists stock-quote makes market.quote first-class (got: ${listed.join(", ")})`);
+    if (!/market\.quote/.test(instr)) fail(`the instructions name market.quote while it is listed: ${instr.slice(0, 400)}`);
+  } finally {
+    await c.close().catch(() => {});
+    stub.close();
+  }
+  console.log("initialize instructions name market.quote while the catalog lists stock-quote \u2713");
+}
+
 // 0c) Slow routes run as a job (./async-job.js): the catalog's
 // async.recommended sends the paid call with Prefer: respond-async, the job
 // link is polled honoring Retry-After, the route's 200 is the tool result,
@@ -496,13 +529,17 @@ try {
   const names = tools.map((t) => t.name);
   // Hosts truncate or skip long descriptions: every listed one stays within 400 characters.
   for (const t of tools) if ((t.description || "").length > 400) fail(`${t.name} description is ${t.description.length} characters (limit 400)`);
+  // market.quote is first-class exactly when the API's catalog lists
+  // stock-quote (a server with no stock data provider lists neither).
+  const stockListed = (await (await fetch(`${API}/api/pricing`)).json()).endpoints.some((e) => e.slug === "stock-quote");
   for (const required of [
     "catalog.search", "catalog.find", "catalog.call", "payment.info", "server.describe",
-    "web.search", "web.answer", "web.news", "browser.render", "market.quote",
+    "web.search", "web.answer", "web.news", "browser.render", ...(stockListed ? ["market.quote"] : []),
     "audio.transcribe", "memory.read", "memory.write",
   ]) {
     if (!names.includes(required)) fail(`tools/list missing "${required}" (got: ${names.join(", ")})`);
   }
+  if (!stockListed && names.includes("market.quote")) fail(`tools/list lists market.quote while the catalog lists no stock-quote (got: ${names.join(", ")})`);
   // With no wallet and no credits key, router.execute and sellers.list are not listed.
   for (const hidden of ["sellers.list", "router.execute"]) {
     if (names.includes(hidden)) fail(`tools/list lists "${hidden}" without a wallet (got: ${names.join(", ")})`);
@@ -551,6 +588,7 @@ try {
   {
     const instr = client.getInstructions() || "";
     if (!/catalog\.search/.test(instr) || /demand\.request/.test(instr) || names.includes("demand.request")) fail(`the stdio instructions must not name demand.request, which it does not list: ${instr.slice(0, 400)}`);
+    if (/market\.quote/.test(instr) !== names.includes("market.quote")) fail(`the stdio instructions name market.quote exactly when it is listed (listed: ${names.includes("market.quote")}): ${instr.slice(0, 400)}`);
     console.log("initialize instructions name no unlisted tool ✓");
   }
 
