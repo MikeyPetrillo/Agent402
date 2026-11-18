@@ -137,7 +137,8 @@ ok(strip(thanks).replace(/&#39;/g, "'").includes(CANCEL_EFFECT), "/monitors/than
 const thanksJs = readFileSync(join(ROOT, "assets/js/monitor-thanks.js"), "utf8");
 ok(/s\.priceText/.test(thanksJs), "/monitors/thanks draws the price sentence /api/monitors/confirm returns");
 const serverSrc = readFileSync(join(ROOT, "src/server.js"), "utf8");
-ok(/priceText = r\.status === "active" \? subscriptionPriceText\(r\)/.test(serverSrc), "/api/monitors/confirm derives the price sentence from the subscription record");
+const confirmSrc = serverSrc.slice(serverSrc.indexOf('app.get("/api/monitors/confirm"'), serverSrc.indexOf('app.get("/monitors/manage"'));
+ok(/priceText = r\.status === "active" \? subscriptionPriceText\(r\)/.test(confirmSrc) && /res\.json\(\{[^}]*\.\.\.\(priceText \? \{ priceText \} : \{\}\) \}\)/.test(confirmSrc), "/api/monitors/confirm derives the price sentence from the subscription record and returns it");
 
 // 6. Copyright agent and process
 const cr = termsText.slice(termsText.indexOf("Copyright complaints"));
