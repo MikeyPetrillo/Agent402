@@ -28,3 +28,7 @@ abaa1e8551cb11a44920cb716685a26c13e3222f:scripts/test-decide-index.js:generic-ap
 c40442064705ce150cfe0e90bd755ec6e66acb02:scripts/test-mcp-x402-connector.js:generic-api-key:118
 2dcef62d378ac709bc141d8a9215b885d5c40ea6:src/receipt-signing.js:private-key:49
 2dcef62d378ac709bc141d8a9215b885d5c40ea6:scripts/test-receipt-signing.js:private-key:58
+e00b2d19c697b9e6a2fd4ae2ef419b69f8a310cd:scripts/test-receipt-signing.js:private-key:62
+e00b2d19c697b9e6a2fd4ae2ef419b69f8a310cd:src/receipt-signing.js:private-key:50
+065904c2f0ba4e3378dc517871347f2e358af8ec:scripts/test-receipt-signing.js:private-key:58
+065904c2f0ba4e3378dc517871347f2e358af8ec:src/receipt-signing.js:private-key:49
