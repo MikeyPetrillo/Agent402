@@ -29,6 +29,7 @@ import { getSharedRedisClient } from "../shared-limit.js";
 import { sharedLimitsEnabled, keyOf, noteSharedLimitsDegraded } from "../shared-limits.js";
 import { withLoopTimeout } from "../loop-deadline.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { currentCallerKey } from "../request-timing.js";
 
 const cgRatePerMin = () => Math.max(1, parseInt(process.env.COINGECKO_MAX_PER_MIN || "80", 10) || 80);
 let cgTokens = null, cgRefilledAt = 0;
@@ -59,6 +60,16 @@ const cgDay = { day: "", used: 0, unsettled: 0 };
 //     answered with no read of its own and a real one is read as before.
 //   - A call whose inputs were confirmed and still ends in an error (an
 //     upstream failure) adds its reads too, so the share fills sooner.
+//   - PER CALLER. One caller (its address: the request's caller key,
+//     src/request-timing.js) holds at most COINGECKO_UNSETTLED_PER_CALLER_HOUR
+//     (default 8) places an hour; past them its unconfirmed ids go to the
+//     list first, as when the share is full, so one address cannot fill the
+//     share every other caller's new ids are read on. A real id is read and
+//     served either way: no call is refused for it.
+//   - PER ID. An id the upstream (a 404) or its list called unknown is
+//     remembered for the UTC day (cgNoteUnknownId): asked again it is
+//     answered with no read of its own unless its list, read at most once an
+//     hour, now names it (then it is forgotten and read as asked).
 // The market screens read several documents a call; they are held below the
 // whole ceiling by a reserve kept for every other CoinGecko tool
 // (COINGECKO_OTHERS_RESERVE, default 20% of the day; `ceiling: "screens"` on
@@ -83,12 +94,66 @@ export function cgCeiling(ceiling = null, dayMax = cgDailyMax()) {
 // The call a read is taken for (cgScoped): how many reads it took, whether it
 // holds a place in the unsettled share, and the ceiling it is held to.
 const calls = new AsyncLocalStorage();
+
+export const CG_UNSETTLED_PER_CALLER_HOUR_DEFAULT = 8;
+const perCallerHour = () => { const n = Number(process.env.COINGECKO_UNSETTLED_PER_CALLER_HOUR); return Number.isInteger(n) && n >= 0 ? n : CG_UNSETTLED_PER_CALLER_HOUR_DEFAULT; };
+const CALLERS_MAX = 10_000;
+const callerPlaces = new Map(); // `${hour}|${caller}` -> places held this hour (this process)
+const hourOf = (now) => Math.floor(now / 3_600_000);
+function callerTake(caller, now) {
+  const h = hourOf(now);
+  for (const k of callerPlaces.keys()) { if (Number(k.slice(0, k.indexOf("|"))) >= h && callerPlaces.size <= CALLERS_MAX) break; callerPlaces.delete(k); }
+  const key = `${h}|${caller}`;
+  const held = callerPlaces.get(key) || 0;
+  if (held >= perCallerHour()) return null;
+  callerPlaces.set(key, held + 1);
+  return key;
+}
+function callerGiveBack(key) {
+  const held = callerPlaces.get(key);
+  if (held > 1) callerPlaces.set(key, held - 1); else callerPlaces.delete(key);
+}
+
+// Ids the upstream or a list called unknown today (this process), by kind.
+const UNKNOWN_MAX = 20_000;
+const unknownToday = new Map(); // `${kind}|${id}` -> UTC day
+/** Remember that `id` of `kind` is unknown upstream, for the rest of the UTC day. */
+export function cgNoteUnknownId(kind, id, now = Date.now()) {
+  if (!kind || typeof id !== "string" || !id || id.length > 200) return;
+  const k = `${kind}|${id}`;
+  unknownToday.delete(k);
+  unknownToday.set(k, utcDay(now));
+  while (unknownToday.size > UNKNOWN_MAX) unknownToday.delete(unknownToday.keys().next().value);
+}
+/** True when `id` of `kind` was called unknown earlier today. */
+export function cgUnknownToday(kind, id, now = Date.now()) {
+  const k = `${kind}|${id}`;
+  const d = unknownToday.get(k);
+  if (d === undefined) return false;
+  if (d === utcDay(now)) return true;
+  unknownToday.delete(k);
+  return false;
+}
+/** Forget a remembered id (its list names it now). */
+export function cgForgetUnknownId(kind, id) { unknownToday.delete(`${kind}|${id}`); }
+// The coin (or exchange) id a CoinGecko API path reads, for a 404's verdict.
+const ID_PATH = /^(?:\/api\/v3)?\/(coins|exchanges)\/([^/?#]+)(?:\/(?:history|ohlc|market_chart(?:\/range)?|tickers))?\/?$/;
+const RESERVED_PATH_IDS = new Set(["list", "markets", "categories", "top_gainers_losers", "recently_added", "decentralized", "derivatives"]);
+/** The kind and id a 404 for this API path says is unknown, or null. */
+export function cgUnknownIdOfPath(path) {
+  const m = ID_PATH.exec(String(path || ""));
+  if (!m) return null;
+  let id;
+  try { id = decodeURIComponent(m[2]); } catch { return null; }
+  if (RESERVED_PATH_IDS.has(id)) return null;
+  return { kind: m[1] === "coins" ? "coin" : "exchange", id };
+}
 /** Wrap a tool handler: reads taken inside it are counted for the call; a call
  *  that ends in an error (never settled) counts them on the unsettled share,
  *  and a call that ends settled gives back the place it reserved there. */
 export function cgScoped(handler, { ceiling = null } = {}) {
   const scoped = async function cgScopedHandler(...args) {
-    const ctx = { taken: 0, reserved: 0, ceiling };
+    const ctx = { taken: 0, reserved: 0, ceiling, callerPlace: null };
     let failed = false;
     try {
       return await calls.run(ctx, () => handler.apply(this, args));
@@ -96,6 +161,8 @@ export function cgScoped(handler, { ceiling = null } = {}) {
       failed = true;
       throw err;
     } finally {
+      // A settled call gives back its caller's place too.
+      if (!failed && ctx.callerPlace) callerGiveBack(ctx.callerPlace);
       const delta = (failed ? ctx.taken : 0) - ctx.reserved;
       if (delta !== 0) await cgCountUnsettled(delta).catch(() => {});
     }
@@ -259,6 +326,10 @@ export async function cgReserveUnconfirmed(now = Date.now()) {
   if (ctx.reserved > 0) return true;
   const cap = cgDayCaps().unsettled;
   if (cap === 0) return false;
+  // The caller's own hourly places first (no caller known: none counted).
+  const caller = currentCallerKey();
+  let place = null;
+  if (caller) { place = callerTake(caller, now); if (!place) return false; }
   localDay(now);
   let got = null;
   if (sharedLimitsEnabled()) {
@@ -276,7 +347,7 @@ export async function cgReserveUnconfirmed(now = Date.now()) {
     got = cgDay.unsettled < cgLocalShare(cap);
     if (got) cgDay.unsettled += 1;
   }
-  if (got) ctx.reserved = 1;
+  if (got) { ctx.reserved = 1; ctx.callerPlace = place; } else if (place) callerGiveBack(place);
   return got;
 }
 
@@ -367,7 +438,7 @@ export function cgRefusal(reason, label = "CoinGecko", now = Date.now()) {
 /** Test seam: refill this process's bucket (offline suites make dozens of
  *  stubbed calls). A test against a shared store namespaces its run with
  *  SHARED_LIMITS_PREFIX instead. */
-export function resetCgRateLimit() { cgTokens = null; cgRefilledAt = 0; cgDay.day = ""; cgDay.used = 0; cgDay.unsettled = 0; }
+export function resetCgRateLimit() { cgTokens = null; cgRefilledAt = 0; cgDay.day = ""; cgDay.used = 0; cgDay.unsettled = 0; callerPlaces.clear(); unknownToday.clear(); }
 
 /** True for coingecko.com and its subdomains (api., pro-api.) and nothing
  *  else: this decides whether the API KEY rides the request, so a host that

@@ -20,7 +20,7 @@ import { assertPublicUrl } from "./fetch-guard.js";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 const CRYPTO_READ_MS = 10_000;
 const CRYPTO_RETRY_READ_MS = 12_000;
-import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll } from "./coingecko-rate.js";
+import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll, cgNoteUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
@@ -198,7 +198,12 @@ async function jsonLoad(safeUrl, host, { isCg }) {
   const text = await res.text();
   if (!res.ok) {
     const s = res.status;
-    if (s === 404) throw bad(`${host} returned 404 - unknown coin or market`, 422);
+    if (s === 404) {
+      // The upstream's verdict on a coin id this path reads, kept for the day (knownIdsGate).
+      const named = isCg ? cgUnknownIdOfPath(safeUrl.pathname) : null;
+      if (named) cgNoteUnknownId(named.kind, named.id);
+      throw bad(`${host} returned 404 - unknown coin or market`, 422);
+    }
     if (s === 429) throw bad(`${host} rate-limited the request - retry shortly`, 503);
     if (s >= 500) throw bad(`${host} upstream HTTP ${s} - try again later`, 502);
     if (isCg && (s === 401 || s === 403) && !CG_PLAN_CODES.has(cgErrorCode(text))) {
