@@ -2015,7 +2015,7 @@ jobs:
           STATE_DATABASE_URL: postgres://decide@127.0.0.1:5432/decide_test?sslmode=disable
         run: node scripts/test-databento-shared-cache.js
 
-      - name: Offline suites (9 scripts, one process each)
+      - name: Offline suites (10 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-b4 2
 
       - name: Crawl honours robots.txt (explicit Disallow enforced, unreadable file fails OPEN, cached per origin - offline)

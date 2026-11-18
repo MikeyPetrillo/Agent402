@@ -15,8 +15,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { getFreePorts } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 import { STOCK_SLUGS } from "../src/tools/stock-provider.js";
 import { STOCK_PACK_SLUGS } from "../src/skills.js";
 
@@ -28,25 +27,17 @@ delete process.env.STOCK_DATA_PROVIDER;
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const procs = [];
+const servers = [];
 let facilitator = null, dbStub = null;
-const cleanup = () => { for (const p of procs) p.kill("SIGKILL"); facilitator?.close(); dbStub?.close(); };
+const cleanup = () => { for (const s of servers) s.child.kill("SIGKILL"); facilitator?.close(); dbStub?.close(); };
 process.on("exit", cleanup);
 
 const BASE_ENV = { X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", POSTHOG_API_KEY: "",
   AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999", STOCK_DATA_PROVIDER: "", DATABENTO_API_KEY: "", MARKET_TICK: "" };
-async function boot(label, port, env, args = ["src/server.js"]) {
-  const child = spawn(process.execPath, args, { env: { ...process.env, ...ownStoreEnv(label), ...BASE_ENV, PORT: String(port), ...env }, stdio: ["ignore", process.env.STOCK_SWITCH_DEBUG ? "inherit" : "ignore", "pipe"] });
-  if (process.env.STOCK_SWITCH_DEBUG) child.stderr.on("data", (c) => process.stderr.write(c));
-  procs.push(child);
-  const err = [];
-  child.stderr.on("data", (c) => err.push(String(c)));
-  const base = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 240; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) return { base, child }; } catch { /* booting */ }
-    await sleep(500);
-  }
-  throw new Error(`${label} did not boot: ${err.join("").slice(-800)}`);
+async function boot(label, env, args = []) {
+  const srv = await bootServer({ env: { ...BASE_ENV, ...env }, stores: label, args, timeoutMs: 180_000 });
+  servers.push(srv);
+  return { base: srv.url, child: srv.child };
 }
 const mcp = async (base, method, params = {}) => (await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) })).text();
 
@@ -56,11 +47,10 @@ const NAMES_RE = new RegExp(`${TOOL_RE.source}|${PACK_RE.source}|market\\.quote|
 const SURFACES = ["/api/pricing", "/openapi.json", "/llms.txt", "/llms-full.txt", "/.well-known/x402", "/sitemap.xml", "/tools", "/skills", "/api/skill-packs.json",
   "/api/find?q=stock+quote+for+AAPL", "/api/find?q=price+an+option+on+a+stock", "/", "/docs", "/pricing", "/blog", "/.well-known/agent.json", "/api/index"];
 
-const [P_OFF, P_PAID, P_ON, FAC_PORT, DB_PORT] = await getFreePorts(5);
 try {
   // --- 1. FREE_MODE, no provider -------------------------------------------
   {
-    const { base, child } = await boot("stock-off", P_OFF, { FREE_MODE: "true" });
+    const { base, child } = await boot("stock-off", { FREE_MODE: "true" });
     const leaks = [];
     for (const p of SURFACES) {
       const r = await fetch(`${base}${p}`);
@@ -104,8 +94,9 @@ try {
         res.end(JSON.stringify(req.url === "/supported" ? { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} } : {}));
       });
     });
-    await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
-    const { base, child } = await boot("stock-paid", P_PAID, { FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
+    await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+    const FAC_PORT = facilitator.address().port;
+    const { base, child } = await boot("stock-paid", { FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
       // The x402 middleware reads the facilitator's kinds at start.
       X402_SYNC_ON_START: "",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, TRUST_PROXY_HOPS: "1", CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "" });
@@ -141,9 +132,10 @@ try {
         send(404, "{}");
       });
     });
-    await new Promise((r) => dbStub.listen(DB_PORT, "127.0.0.1", r));
-    const { base, child } = await boot("stock-on", P_ON, { FREE_MODE: "true", STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "db-test-key-not-real", DATABENTO_STUB_URL: `http://127.0.0.1:${DB_PORT}`, DATABENTO_WARM: "off" },
-      ["--import", "./scripts/lib/databento-stub-preload.js", "src/server.js"]);
+    await new Promise((r) => dbStub.listen(0, "127.0.0.1", r));
+    const DB_PORT = dbStub.address().port;
+    const { base, child } = await boot("stock-on", { FREE_MODE: "true", STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "db-test-key-not-real", DATABENTO_STUB_URL: `http://127.0.0.1:${DB_PORT}`, DATABENTO_WARM: "off" },
+      ["--import", "./scripts/lib/databento-stub-preload.js"]);
     const pricing = await (await fetch(`${base}/api/pricing`)).json();
     const listed = new Set((pricing.endpoints || []).map((e) => e.slug));
     const missing = [...[...STOCK_SLUGS], ...[...STOCK_PACK_SLUGS].map((s) => `skill-${s}`)].filter((s) => !listed.has(s));
