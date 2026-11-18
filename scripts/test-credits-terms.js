@@ -282,7 +282,13 @@ ok(stripe._last.metadata.terms === creditsTermsVersion(), `the checkout records 
 const { termsPage } = await import("../src/terms.js");
 const { privacyPage } = await import("../src/privacy.js");
 const dateOf = (html) => (html.match(/last updated (\d{4}-\d{2}-\d{2})\./) || [])[1];
-const strip = (html) => html.replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+// Text of the page for the copy checks (not a sanitizer): drop tags until none
+// remain, so a tag split across another tag is removed too.
+const strip = (html) => {
+  let s = String(html), prev;
+  do { prev = s; s = s.replace(/<[^<>]*>/g, ""); } while (s !== prev);
+  return s.replace(/\s+/g, " ");
+};
 const tOn = termsPage("https://agent402.tools"), pOn = privacyPage("https://agent402.tools");
 delete process.env.CREDITS_SALES;
 const tOff = termsPage("https://agent402.tools"), pOff = privacyPage("https://agent402.tools");
