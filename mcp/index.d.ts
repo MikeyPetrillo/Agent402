@@ -29,12 +29,15 @@ export interface Agent402McpEnv {
   AGENT402_ASYNC_TIMEOUT_MS?: string;
 }
 
-/** Names this server lists in tools/list. */
+/** Names this server can list in tools/list; a flagship is listed only when
+ *  the server's catalog serves its tool (market.quote, decide.plan and
+ *  decide.execute are absent on a server without them). */
 export type Agent402McpToolName =
   | "catalog.search" | "catalog.find" | "catalog.call"
   | "payment.info" | "server.describe" | "sellers.list" | "router.execute"
-  | "web.search" | "web.answer" | "web.news" | "browser.render" | "market.quote"
-  | "audio.transcribe" | "memory.read" | "memory.write" | "decide.plan" | "decide.execute";
+  | "web.search" | "web.answer" | "web.news" | "browser.render"
+  | "audio.transcribe" | "memory.read" | "memory.write" | "decide.plan" | "decide.execute"
+  | "market.quote";
 
 /** catalog.search arguments. `limit` is clamped to 1..25 (default 10). */
 export interface CatalogSearchArgs { query: string; limit?: number }

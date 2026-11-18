@@ -421,7 +421,8 @@ import { backupAlarmStatus, backupPlan, backupStatus, runBackup, startBackupSche
 import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
-import { startQuoteWarmer, quoteWarmerStatus } from "./tools/databento.js";
+import { quoteWarmerStatus } from "./tools/databento.js";
+import { activeStockAdapter, stockDataEnabled, selectedStockProvider, STOCK_SLUGS, stockNotOffered, stockProviderWarning } from "./tools/stock-provider.js";
 import { phaseArrivalMiddleware, markPaidHandlerStart, markCoverRefusalLine, paidPhaseSummary, hangupWaitOf } from "./paid-phase-timing.js";
 import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-paid-calls.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
@@ -607,7 +608,9 @@ import { UTIL_TOOLS } from "./tools/util-kit.js";
 import { API_TOOLS } from "./tools/api-kit.js";
 import { MACRO_TOOLS } from "./tools/macro-kit.js";
 import { EDGAR_TOOLS } from "./tools/edgar-kit.js";
-import { FINANCE_TOOLS } from "./tools/finance-kit.js";
+// Listed only with an active stock provider (src/tools/stock-provider.js).
+import { financeToolsEnabled } from "./tools/finance-kit.js";
+const FINANCE_TOOLS = financeToolsEnabled();
 import { CRYPTO_TOOLS } from "./tools/crypto-kit.js";
 import { RESEARCH_DEEP_TOOLS } from "./tools/research-deep-kit.js";
 import { FUND_TOOLS } from "./tools/fund-report-kit.js";
@@ -740,7 +743,7 @@ import { isBinaryListing, listingMimeTypeOf, responseTypesOf } from "./tool-medi
 import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH } from "./guides.js";
-import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
+import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PACK_SLUGS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
 import { changelogPage, changelogRss } from "./changelog.js";
 import { playgroundPage } from "./playground.js";
@@ -4044,6 +4047,23 @@ app.use((req, res, next) => {
 app.use(rugcheckPauseMiddleware(
   Object.entries(CATALOG).filter(([, d]) => RUGCHECK_SLUGS.has(d.slug)).map(([route]) => route)
 ));
+
+// With no active stock provider (src/tools/stock-provider.js) the stock tools
+// and the packs whose answer is the stock data (src/skills.js) are not listed anywhere; a call to one of their
+// routes answers a free 503 naming the slug, ahead of every payment gate, so
+// it is never a 402 and never the guessed-slug 404.
+if (!stockDataEnabled()) {
+  const notOffered = new Map([
+    ...[...STOCK_SLUGS].map((slug) => [`/api/${slug}`, slug]),
+    ...[...STOCK_CORE_PACK_SLUGS].map((slug) => [`/api/skill/${slug}`, `skill-${slug}`]),
+  ]);
+  app.use((req, res, next) => {
+    const slug = notOffered.get(String(req.path || "").toLowerCase().replace(/\/+$/, ""));
+    if (!slug) return next();
+    res.set("Cache-Control", "no-store");
+    return res.status(503).json({ ok: false, error: "not-offered", slug, message: stockNotOffered().message, list: `${BASE_URL}/api/pricing` });
+  });
+}
 
 // Free, unauthenticated routes
 // Sets browser/CDN cache headers for static-ish HTML pages so clicking around
@@ -13827,11 +13847,15 @@ bootStep("mppReconciler.start", () => mppReconciler.start());
 // failure mode this tool exists to avoid.
 bootStep("startSanctionsRefresh", () => startSanctionsRefresh());
 bootStep("startDatasetScheduler", () => startDatasetScheduler(datasetSources()));
-// Stock-quote warmer (src/tools/databento.js): keeps the session boundary and
-// the most-requested symbols' bars off the request path, under its own daily
-// ceiling of background calls. Started here, never from inside a request, so
-// its reads carry no request context. No key or DATABENTO_WARM=off: not started.
-bootStep("startQuoteWarmer", () => { if (startQuoteWarmer()) console.log("[databento] stock-quote warmer on"); });
+// The active stock provider's background work (the databento adapter's quote
+// warmer keeps the session boundary and the most-requested symbols' bars off
+// the request path, under its own daily ceiling). Started here, never from
+// inside a request. No active provider: nothing starts (a selection that
+// cannot be active warns once here).
+{ const w = stockProviderWarning(); if (w) console.warn(w); }
+activeStockAdapter().then((a) => {
+  if (a?.start && bootStep("startStockProvider", () => a.start())) console.log(`[stock-provider] ${selectedStockProvider()} background reads on`);
+}).catch((e) => console.warn(`[stock-provider] start failed: ${String(e?.message || e).slice(0, 120)}`));
 
 // Monitor scheduler timer (recurring report fulfilment). MONITOR_SCHEDULER=off
 // keeps the manual operator run available while disarming the timer.

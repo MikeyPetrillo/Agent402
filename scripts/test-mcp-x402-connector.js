@@ -583,16 +583,31 @@ try {
   const lister = await connect("203.0.113.9"), lister2 = await connect("203.0.113.8");
   await lister2.client.listTools();
   const listedTools = (await lister.client.listTools()).tools;
-  const strict = listedTools.filter((t) => t.outputSchema && ["web.search", "web.news", "web.answer", "market.quote", "browser.render", "audio.transcribe", "memory.write", "catalog.call"].includes(t.name));
+  // market.quote is a flagship exactly when the catalog lists stock-quote
+  // (STOCK_DATA_PROVIDER with its key; this boot sets neither).
+  const stockListed = (await (await fetch(`${B}/api/pricing`)).json()).endpoints.some((e) => e.slug === "stock-quote");
+  ok(!stockListed && !listedTools.some((t) => t.name === "market.quote"), `with no stock provider the catalog lists no stock-quote and the connector lists no market.quote (${stockListed}, ${listedTools.map((t) => t.name).join(",")})`);
+  const PAID_ASKS = [["web.search", { q: "x402" }], ["web.news", { q: "x402" }], ["web.answer", { q: "x402" }], ...(stockListed ? [["market.quote", { symbol: "AAPL" }]] : []), ["browser.render", { url: "https://example.com" }], ["audio.transcribe", { url: "https://example.com/a.mp3" }], ["memory.write", { key, value: 1 }], ["catalog.call", { slug: "search", params: { q: "x402" } }]];
+  const strict = listedTools.filter((t) => t.outputSchema && PAID_ASKS.some(([n]) => n === t.name));
   const unread = [];
   let unreadCalls = 0;
-  for (const [name, args] of [["web.search", { q: "x402" }], ["web.news", { q: "x402" }], ["web.answer", { q: "x402" }], ["market.quote", { symbol: "AAPL" }], ["browser.render", { url: "https://example.com" }], ["audio.transcribe", { url: "https://example.com/a.mp3" }], ["memory.write", { key, value: 1 }], ["catalog.call", { slug: "search", params: { q: "x402" } }]]) {
+  for (const [name, args] of PAID_ASKS) {
     try {
       const r = await (unreadCalls++ < 4 ? lister : lister2).client.callTool({ name, arguments: args });
       if (!(r.isError === true && !("structuredContent" in r) && Array.isArray(PR(r)?.accepts) && Array.isArray(r._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges))) unread.push(`${name}: ${JSON.stringify(r).slice(0, 120)}`);
     } catch (e) { unread.push(`${name}: threw ${String(e?.message).slice(0, 120)}`); }
   }
-  ok(strict.length === 8 && unread.length === 0, `the reference SDK client, tools listed, reads the first ask of every paid tool with an outputSchema: no structuredContent, the offer in the first text block, the MPP challenges in _meta (${unread.join(" | ") || "8 read"})`);
+  ok(strict.length === PAID_ASKS.length && unread.length === 0, `the reference SDK client, tools listed, reads the first ask of every paid tool with an outputSchema: no structuredContent, the offer in the first text block, the MPP challenges in _meta (${unread.join(" | ") || `${PAID_ASKS.length} read`}, ${strict.length} of ${PAID_ASKS.length} listed with a schema)`);
+  // Unlisted, market.quote answers the stock routes' not-offered refusal, never "Unknown tool".
+  if (!stockListed) {
+    // Own addresses: the per-IP free-call limit on this boot is 2 a minute.
+    const offA = await connect("203.0.113.90"), offB = await connect("203.0.113.91");
+    const off = await offA.client.callTool({ name: "market.quote", arguments: { symbol: "AAPL" } });
+    const offText = (off.content || []).map((c) => c.text || "").join(" ");
+    ok(off.isError === true && /not currently offered on this server/.test(offText) && !/Unknown tool/.test(offText) && !off._meta?.[MCP_PAYMENT_REQUIRED_META], `market.quote with no stock provider answers not-offered, with no payment ask (${offText.slice(0, 120)})`);
+    const offCat = await offB.client.callTool({ name: "catalog.call", arguments: { slug: "stock-quote", params: { symbol: "AAPL" } } });
+    ok(offCat.isError === true && /not currently offered on this server/.test((offCat.content || []).map((c) => c.text || "").join(" ")), "catalog.call stock-quote answers not-offered too");
+  }
   const ask = await plain.client.callTool({ name: "memory.read", arguments: { key } });
   const pr = PR(ask);
   ok(ask.isError === true && !("structuredContent" in ask) && pr?.x402Version === 2 && Array.isArray(pr.accepts) && pr.accepts.some((a) => a.network === BASE_NET), `memory.read's first ask is an isError result whose first text block is a v2 PaymentRequired, with no structuredContent (${JSON.stringify(pr).slice(0, 120)})`);
