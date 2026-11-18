@@ -10,6 +10,7 @@ import { backupKeepDays } from "./backup.js";
 import { KEEP_DAYS as DISCOVERY_REFUSALS_KEEP_DAYS } from "./discovery-refusals.js";
 import { WISH_STALE_DAYS, wishRetentionDays } from "./wish.js";
 import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
+import { RECEIPT_STORE_DAYS } from "./receipt-store.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
 import { creditsSalesEnabled, withCreditsSalesDate } from "./credits-sales.js";
 import { signInLifeWords, sessionIdleWords, sessionMaxWords, lowBalanceWords } from "./credits-figures.js";
@@ -168,6 +169,11 @@ so every claim below is verifiable in code.</p>
     same arrival paths, the requests to paid tools that carried no payment, the payment requests we
     answered, the payments tried and settled and the refusal reason of each one refused; these are
     counts only, kept with the daily traffic statistics;</li>
+    <li>when a paid call paid from an EVM wallet or over Tempo carries a signed receipt, we keep that
+    receipt (the tool, its route, the price, the rail, chain and transaction, the paying wallet, and
+    SHA-256 hashes of the request and the response, never their content) so the paying wallet can
+    export it in its <code>/api/audit-report</code>; only a payment from that wallet opens the report.
+    Each kept receipt is deleted ${RECEIPT_STORE_DAYS} days after it was issued;</li>
     <li>a verdict you leave on a paid call through <code>/api/feedback</code>, including the reason
     you write, is kept with that call's transaction id and is never published;</li>${allowanceOn ? `
     <li>the first-call allowance (a wallet's first paid call on an eligible tool served without
@@ -406,7 +412,7 @@ as soon as the last follow-up is sent, when you stop them or buy again, or after
 in a row, and in any case ${DAYS(ADDRESS_MAX_AGE_MS)} days after the purchase; the rest of the record (the
 product and the subject you asked about) is deleted ${DAYS(RECORD_KEEP_MS)} days after the purchase. Memory audit-log
 entries are deleted ${auditRetentionDays()} days after they are written, and demand-board request text
-${wishRetentionDays()} days after it was sent. Decisions bought on <code>/api/decide</code> are deleted after 30 days. An async job's or MCP task's result
+${wishRetentionDays()} days after it was sent. A kept signed receipt is deleted ${RECEIPT_STORE_DAYS} days after it was issued. Decisions bought on <code>/api/decide</code> are deleted after 30 days. An async job's or MCP task's result
 is deleted ${jobs.keptFor} after the job was created, and a wallet's funding-screen result after ${oneHop.ttlDays} days. An MPP
 monitor subscription's signing key is deleted when the subscription is canceled or ends, and its reduced
 record ${mppSub.keepDays} days after it ends. You can ask

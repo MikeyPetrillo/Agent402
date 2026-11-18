@@ -39,6 +39,8 @@ export function ownStoreEnv(label = "server") {
     REFERRAL_ANSWER_DIR: join(dir, "referral-answers"),
     // The card stores' record directories (src/credits.js, src/human-checkout.js).
     CREDITS_DIR: join(dir, "credits"),
+    // The issued receipts kept for audit reports (src/receipt-store.js).
+    RECEIPT_STORE_DB: join(dir, "agent402-receipts.db"),
     HUMAN_CHECKOUT_DIR: join(dir, "human-checkout"),
   };
 }

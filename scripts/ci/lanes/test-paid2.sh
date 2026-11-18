@@ -31,6 +31,8 @@ t node scripts/test-conformance.js
 t node scripts/test-receipt-signing.js
 # Signed receipts beyond a one-piece answer: a settled stream ends with an agent402-receipt event (and a trailer with TE: trailers) over every byte streamed, on every wire; a credits call is debited before its answer ends and its receipt names the key id and the debit; a card-bought report's receipt covers the checkout and the report text on its page and email; tamper fails (boots paid servers - offline)
 t node scripts/test-receipt-streams.js
+# The audit report on a paid server with a key: one wallet's x402, MPP evm and Tempo calls each carry the receipt their header carried and verify through the public check, the summary verifies, another wallet sees none of them, EVM x402 only, and the store keeps one receipt per settled 200 (boots paid servers - offline)
+t node scripts/test-audit-report-paid.js
 # A streamed chat, Messages or Responses answer that ends with no answer (all reasoning) is a 502 before any byte and is never settled on any wire; one with content is relayed byte for byte and settled once; a hold commits at the CDN window tail (boots a paid server - offline)
 t node scripts/test-stream-empty-answer.js
 # A card or Tempo challenge must outlive the run it pays for, and the breaker keys an address by its IPv6 /64 (boots a paid server - offline)

@@ -365,7 +365,7 @@ const MEMORY_NS = `smoke-all-${process.pid}-${Date.now().toString(36)}`;
 // Wallet-keyed tools (payment = identity): in free mode there is no payment,
 // so their documented "pay to unlock" 4xx is the CORRECT answer, not a bug —
 // same leniency class as the memory tools.
-const isWalletIdentity = (p) => isMemory(p) || p === "/api/my-usage" || p === "/api/receipts" || p === "/api/feedback";
+const isWalletIdentity = (p) => isMemory(p) || p === "/api/my-usage" || p === "/api/receipts" || p === "/api/audit-report" || p === "/api/feedback";
 
 // The seller index must have loaded before the strict sweep: seller-dossier
 // (and every tool that answers about a third-party seller) refuses with a 503

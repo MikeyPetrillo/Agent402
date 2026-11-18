@@ -525,8 +525,10 @@ export function enabledNetworks(network) {
 // derived from the signed authorization and never from a parameter, so it can
 // only be answered for a payer the server can verify. Without this a Solana or
 // Stellar buyer would settle and then be refused - charged for nothing.
+// `audit-report` joined 2026-11-18 on the same terms: the paying wallet's own
+// history, signed receipts included (src/tools/audit-report-kit.js).
 export const isIdentityBoundRoute = (def) =>
-  def?.category === "memory" || def?.slug === "my-usage" || def?.slug === "attest" || def?.slug === "receipts" || def?.slug === "feedback";
+  def?.category === "memory" || def?.slug === "my-usage" || def?.slug === "attest" || def?.slug === "receipts" || def?.slug === "feedback" || def?.slug === "audit-report";
 
 // Build the `accepts` list for one catalog item. EVM rails always apply. For an
 // identity-bound route that is ALL it advertises, so a buyer can never settle on

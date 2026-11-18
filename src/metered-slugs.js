@@ -62,6 +62,7 @@ export const METERED_SLUGS = new Set([
   "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",
   "my-usage",
   "receipts",
+  "audit-report",
   "feedback",        // feedback-kit.js: the verdict is bound to the wallet that paid for the rated call
   "judge",           // paid third-party judgment model; CI holds no key
   "decisions",       // the same judgment on the OpenAI Decisions wire

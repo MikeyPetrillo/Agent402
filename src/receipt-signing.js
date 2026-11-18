@@ -310,10 +310,11 @@ const TE_TRAILERS_RE = /(?:^|,)\s*trailers\s*(?:;|,|$)/i;
  * Middleware. Mount before every payment gate (beside answerHeadersGuard).
  * `describe(req, res)` answers the settlement fields of a final settled paid
  * answer ({ rail, network, payer, settlement, priceUsd, slug, replay }) or
- * null. Never throws into the response: a failure to sign sends the answer
- * without a receipt.
+ * null. `onSigned(jws, record, req, res)`, when given, is told of each
+ * receipt as it is attached. Never throws into the response: a failure to
+ * sign sends the answer without a receipt.
  */
-export function receiptSignerMiddleware({ describe, iss = null, signer = () => receiptKeys().signer, onError = null } = {}) {
+export function receiptSignerMiddleware({ describe, iss = null, signer = () => receiptKeys().signer, onError = null, onSigned = null } = {}) {
   return function receiptSignerMw(req, res, next) {
     if (!signer() || req.method === "HEAD" || req.method === "OPTIONS") return next();
     // The method the buyer sent, before the POST/GET alias (src/server.js)
@@ -344,7 +345,11 @@ export function receiptSignerMiddleware({ describe, iss = null, signer = () => r
         priceUsd: d.priceUsd, rail: d.rail, network: d.network, payer: d.payer, settlement: d.settlement, replay: d.replay,
       });
       const jws = signReceipt(record, s);
-      return jws.length <= RECEIPT_MAX_BYTES ? jws : null;
+      if (jws.length > RECEIPT_MAX_BYTES) return null;
+      // The issued receipt, for its keeper (src/server.js keeps it for the
+      // wallet's audit report once the response finished 200). Never throws.
+      if (onSigned) { try { onSigned(jws, record, req, res); } catch (e) { try { onError?.(e); } catch { /* never break the answer */ } } }
+      return jws;
     };
     const contentTypeOf = (args) => {
       for (const a of args) {

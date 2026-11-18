@@ -121,6 +121,8 @@ t node scripts/test-idempotency-unconfirmed.js
 t node scripts/test-stats-pg.js
 t node scripts/test-status-store-pg.js
 t node scripts/test-x402-economy-pg.js
+# Issued receipts on the database: one table under two loaders, one row per receipt, no other payer's, a refused write lands on retry, swept by age and rows; the audit report reads them
+t node scripts/test-audit-report-pg.js
 t node scripts/test-pow-pg.js
 t node scripts/test-memory-pg.js
 t node scripts/test-stripe-shadow-ledger-pg.js

@@ -21,6 +21,7 @@
     "attest",
     "audio-convert",
     "audio-normalize",
+    "audit-report",
     "b20-activation-check",
     "b20-feature-id",
     "b20-memos",
