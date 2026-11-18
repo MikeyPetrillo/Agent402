@@ -39,7 +39,7 @@ import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./networ
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
 import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, takePendingAnswers, peekPendingAnswers, pendingSettleTxOf, pendingTxsOf } from "./pending-settle.js";
-import { ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere, releasingClaimsOnRefusal, txServedElsewhere } from "./settlement-claims.js";
+import { lateSettleHolder, OWED_ELSEWHERE, ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere, releasingClaimsOnRefusal, settledRefundOwedResult, txServedElsewhere } from "./settlement-claims.js";
 import { randomUUID } from "node:crypto";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
 import { registerLateSettleHook } from "./late-settlements.js";
@@ -425,7 +425,7 @@ async function lateSettleBook() {
   // that tx after it is booked owed.
   lateBook = lateBook || createLateSettleBook({
     wasServed: async ({ tx, network, key }) =>
-      !!(await saleByTxFresh(tx).catch(() => null)) || (await txServedElsewhere(network, tx, `late-settle:${key}`)),
+      !!(await saleByTxFresh(tx).catch(() => null)) || (await txServedElsewhere(network, tx, lateSettleHolder(key))),
   });
   return lateBook;
 }
@@ -4013,9 +4013,10 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         // served or the late-settlement book booked owed is never served
         // again (a settler that answers a cached result for a resent
         // authorization cannot turn one transfer into two answers).
-        if (await recoveredTxHeldElsewhere(ctx, result)) {
-          console.warn(`[payments] ${name} settle fallback on ${ctx?.requirements?.network} answered tx ${result?.transaction}, already held by another request or booked owed; not served`);
-          return;
+        const heldBy = await recoveredTxHeldElsewhere(ctx, result);
+        if (heldBy) {
+          console.warn(`[payments] ${name} settle fallback on ${ctx?.requirements?.network} answered tx ${result?.transaction}, already ${heldBy === OWED_ELSEWHERE ? "booked owed" : "held by another request"}; not served`);
+          return owedRecovery(ctx, result, heldBy);
         }
         // The in-flight cover's release is called here for the same reason.
         releaseCoverOnSettled(ctx, result);
@@ -4060,6 +4061,21 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     if (passedOn && passedOn.err !== ctx?.error) await markUnconfirmedStop(ctx, passedOn.err, passedOn.via);
     return undefined;
   });
+}
+
+/**
+ * A recovered settlement whose transaction the late-settlement book already
+ * booked owed (recoveredTxHeldElsewhere answered OWED_ELSEWHERE): the
+ * earlier refusal no longer describes the payment (its transfer landed), so
+ * the settle ends on a failed result naming the transfer, with the reason
+ * settled_refund_owed (src/payment-reject.js settledRefundOwedRefusal words
+ * the 402). Ending it here also keeps the authorization claimed and books
+ * nothing more: the debt is the late book's, once. Any other holder (a
+ * request that served the transfer) keeps the earlier refusal (undefined).
+ */
+function owedRecovery(ctx, result, heldBy) {
+  if (heldBy !== OWED_ELSEWHERE) return undefined;
+  return { recovered: true, result: settledRefundOwedResult(ctx, result) };
 }
 
 /**
@@ -4297,10 +4313,11 @@ async function settleAfterPending(ctx, { error = null, via = null } = {}) {
     if (!PENDING_REFUSAL_SILENT.has(r.code)) explainPendingRefusal(ctx, network, pendingTxsOf(readCtx));
     return undefined;
   }
-  if (await recoveredTxHeldElsewhere(ctx, r.result)) {
+  const heldBy = await recoveredTxHeldElsewhere(ctx, r.result);
+  if (heldBy) {
     count("heldElsewhere");
-    console.warn(`[payments] ${network} pending settle: tx ${r.result.transaction} already held by another request or booked owed; not served`);
-    return undefined;
+    console.warn(`[payments] ${network} pending settle: tx ${r.result.transaction} already ${heldBy === OWED_ELSEWHERE ? "booked owed" : "held by another request"}; not served`);
+    return owedRecovery(ctx, r.result, heldBy);
   }
   count("recovered");
   forgivePendingAnswers(takePendingAnswers(ctx?.paymentPayload), { network, facilitator, outcome: null });
@@ -4441,9 +4458,10 @@ async function settleAfterAmbiguous(ctx, err, via, outageFor) {
   }
   if (!r) return undefined;
   if (r.served) {
-    if (await recoveredTxHeldElsewhere(ctx, r.result)) {
-      console.warn(`[payments] ${network} after ${via}'s ambiguous failure: tx ${r.result.transaction} already held by another request or booked owed; not served`);
-      return undefined;
+    const heldBy = await recoveredTxHeldElsewhere(ctx, r.result);
+    if (heldBy) {
+      console.warn(`[payments] ${network} after ${via}'s ambiguous failure: tx ${r.result.transaction} already ${heldBy === OWED_ELSEWHERE ? "booked owed" : "held by another request"}; not served`);
+      return owedRecovery(ctx, r.result, heldBy);
     }
     releaseCoverOnSettled(ctx, r.result);
     console.warn(`[payments] recovered ${network} settlement after ${via}'s ambiguous failure: tx ${r.result.transaction} (read on chain)`);
