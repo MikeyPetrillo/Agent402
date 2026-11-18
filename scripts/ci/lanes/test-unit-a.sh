@@ -28,6 +28,8 @@ t node scripts/test-upstream-costs.js
 t node scripts/test-ci-secretless-install.js
 # Every workflow apt install goes through the bounded helper (offline)
 t node scripts/test-ci-apt-bounded.js
+# The apt helper adds the Ubuntu archive when an image lists no source for the package (stub commands, temp apt tree)
+t node scripts/test-ci-apt-sources.js
 # Gateway settle-failure breaker (per-payer + global refusal before any upstream call, finish-listener outcomes, source pins - offline)
 t node scripts/test-gateway-settle-breaker.js
 
