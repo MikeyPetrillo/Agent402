@@ -311,7 +311,7 @@ const channelOf = (r, id) => r.stores.storage.get(id);
 
 // ---------------------------------------------------------------------------
 // Part 2: the real server.
-const [p1, p2, p3, fp] = await getFreePorts(4);
+const [p1, p2, p3, p4, fp] = await getFreePorts(5);
 const fac = makeEscrowFacilitator();
 const facSrv = createServer((req, res) => {
   let body = "";
@@ -364,11 +364,16 @@ const acceptsOf = async (base, path) => {
 
 const OP_TOKEN = `op-${process.pid}-${Date.now()}`;
 const ON = { AGENT402_OPERATOR_TOKEN: OP_TOKEN, X402_BATCH_SETTLEMENT_NETWORKS: BASE, X402_BATCH_SETTLEMENT_STORE: "memory", X402_BATCH_CLAIM_INTERVAL_SECONDS: "5", X402_BATCH_REFUND_INTERVAL_SECONDS: "5", X402_BATCH_IDLE_REFUND_SECONDS: "5" };
-const off = await boot(p1, {}, "bs-off");
-const on = await boot(p2, ON, "bs-on");
-const noStore = await boot(p3, { X402_BATCH_SETTLEMENT_NETWORKS: BASE }, "bs-nostore");
+const [off, on, noStore, floored] = await Promise.all([
+  boot(p1, {}, "bs-off"),
+  boot(p2, ON, "bs-on"),
+  boot(p3, { X402_BATCH_SETTLEMENT_NETWORKS: BASE }, "bs-nostore"),
+  boot(p4, { X402_BATCH_SETTLEMENT_NETWORKS: BASE, X402_BATCH_SETTLEMENT_STORE: "memory", NETWORK_PRICE_FLOORS: `${BASE}=0.001` }, "bs-floor"),
+]);
 try {
-  ok(off.up && on.up && noStore.up, "three servers booted (switch off, on, on without a durable store)");
+  ok(off.up && on.up && noStore.up && floored.up, "four servers booted (switch off, on, on without a durable store, on over a floored network)");
+  const af = await acceptsOf(floored.base, "/api/uuid");
+  ok(af.status === 402 && !af.accepts.some((a) => a.scheme === "batch-settlement") && /REFUSING eip155:8453, carries a price floor/.test(floored.log()), "a floored network is refused at boot with the reason");
   const a0 = await acceptsOf(off.base, "/api/uuid");
   ok(a0.status === 402 && !a0.accepts.some((a) => a.scheme === "batch-settlement"), "switch off: no channel accept, even though the facilitator lists the kind");
   const rails0 = await (await fetch(`${off.base}/api/rails`)).json();
@@ -451,7 +456,7 @@ try {
   ok(fac.channels.get(id)?.balance === buyer.charged && fac.channels.get(id)?.totalClaimed === buyer.charged, "the escrow ends holding exactly what was charged, all of it claimed");
   ok(fac.calls.some((c) => c.op === "settle" && c.type === "settle"), "the claimed funds are settled to payTo");
 } finally {
-  for (const s of [off, on, noStore]) { try { s.child.kill("SIGKILL"); } catch { /* gone */ } }
+  for (const s of [off, on, noStore, floored]) { try { s.child.kill("SIGKILL"); } catch { /* gone */ } }
   facSrv.close();
 }
 
