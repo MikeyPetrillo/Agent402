@@ -576,6 +576,31 @@ It applies on Node with the default dispatcher; with a proxy or custom
 dispatcher installed, requests go out through yours unchanged. Pass
 `{ tlsDistrust: false }` to send the default fetch as is.
 
+## Checking a signed receipt (`verifyReceipt`)
+
+When the server signs receipts, a settled paid answer carries an
+`Agent402-Receipt` header: a compact JWS (EdDSA, Ed25519) over the route, a
+digest of the request, the sha256 of the answer bytes, the price, the rail,
+the network, the payer and the settlement. The client never checks it on
+its own; call `verifyReceipt` when you want proof of what you paid for and
+received:
+
+```js
+import { verifyReceipt } from "agent402-client";
+
+const receipt = res.headers.get("agent402-receipt");
+const text = await res.text();
+const v = await verifyReceipt(receipt, {
+  body: text,                                            // the bytes you received
+  request: { method: "POST", path: "/api/hash", body: input }, // what you sent
+});
+// v.valid, v.reason, v.record.settlement, v.record.priceUsd
+```
+
+The keys come from `/.well-known/agent402-receipt-key.json` (pass `keys` to
+check offline). A retired key still verifies receipts dated inside its
+`validFrom`/`validUntil` window.
+
 ## Legal
 
 Use of the hosted instance at agent402.tools is subject to its [Terms of Service](https://agent402.tools/terms) (acceptable-use policy included) and [Privacy Policy](https://agent402.tools/privacy). This package is MIT-licensed; the hosted server is AGPL-3.0. Both are provided as-is without warranty, and self-hosted deployments are their operator's responsibility.

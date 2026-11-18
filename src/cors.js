@@ -70,6 +70,8 @@ export const CORS_EXPOSE_HEADERS = [
   "PAYMENT-RESPONSE",
   "WWW-Authenticate",
   "Payment-Receipt",
+  // A receipt this server signs (src/receipt-signing.js).
+  "Agent402-Receipt",
   "X-Cache",
   "X-Credits-Balance",
   "X-Metered-Usd",

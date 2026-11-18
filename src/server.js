@@ -235,6 +235,37 @@ function tempoPushHashOf(req) {
   const h = Object.hasOwn(req, "mppTempoPushHash") ? req.mppTempoPushHash : null;
   return typeof h === "string" && h ? h : null;
 }
+// The settlement fields of a signed receipt (src/receipt-signing.js) for a
+// final 200 whose payment settled, read from the same evidence the books
+// read: the Tempo or card gate's settled mark, or a decoded PAYMENT-RESPONSE
+// with success true. Null for anything else (a free, trial or allowance
+// answer, a credits call, a referral copy, an unpriced route).
+function receiptFieldsOf(req, res) {
+  if (FREE_MODE || String(req.path || "").startsWith("/ref/")) return null;
+  const def = CATALOG[`${req.method} ${req.path}`];
+  if (!def || allowanceServed(req) || req.creditsSettled) return null;
+  if (res.getHeader("X-Pow-Accepted") === "true" || res.getHeader("X-Trial-Accepted") === "true") return null;
+  const replay = String(res.getHeader("X-Replayed-Answer") ?? "") === "1" || String(res.getHeader("X-Idempotent-Replay") ?? "") === "true";
+  if (req.tempoSettled === true) {
+    return { rail: "mpp-tempo", network: "eip155:4217", payer: tempoLedgerPayerPending(req) ? null : tempoLedgerPayer(req), settlement: tempoPushHashOf(req) || tempoTxFromReceiptHeader(res.getHeader("Payment-Receipt")), priceUsd: settledPriceUsd(def, req, res), slug: def.slug, replay };
+  }
+  if (req.stripeSettled === true) {
+    return { rail: "mpp-stripe", network: null, payer: null, settlement: stripeTxFromReceiptHeader(res.getHeader("Payment-Receipt")), priceUsd: settledPriceUsd(def, req, res), slug: def.slug, replay };
+  }
+  const h = res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE");
+  const r = decodeSettleReceipt(typeof h === "string" ? h : null);
+  if (!receiptProvesCharge(r)) return null;
+  const wire = x402WireOf(req);
+  return {
+    rail: wire === GATEWAY_WIRE ? "gateway-batched" : wire === "mpp" ? "mpp-evm" : "x402",
+    network: typeof r.network === "string" ? r.network : null,
+    payer: payerFromRequest(req) || payerFromPaymentResponse(h),
+    settlement: typeof r.transaction === "string" && r.transaction ? r.transaction : null,
+    priceUsd: paidUsdOf(def, req, res, r.network),
+    slug: def.slug,
+    replay,
+  };
+}
 // A ledger write answers a boolean on the volume and a promise of one with
 // the state database on (src/refund-ledger.js): run `then` with the verdict
 // either way, and read the write as booked meanwhile.
@@ -426,6 +457,7 @@ import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
 import { trustPage } from "./trust-page.js";
 import { markGateMounted } from "./gate-mounts.js";
+import { receiptKeys, receiptKeyDocument, receiptSignerMiddleware, verifyReceipt, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
 import { conformanceDocumentCached, resetConformanceCache, CONFORMANCE_PATH } from "./conformance.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
@@ -4591,6 +4623,30 @@ for (const p of A2A_WELL_KNOWN_PATHS) {
 // Per payment rail, the protocol features this server implements and the
 // refund terms as data, computed at each request (src/conformance.js).
 app.get(CONFORMANCE_PATH, (_req, res) => res.set("Cache-Control", "public, max-age=300").json(conformanceDocumentCached(BASE_URL, { freeMode: FREE_MODE })));
+// Signed receipts: the public keys and a free check (src/receipt-signing.js).
+// The settings are read once at boot; an unusable one leaves signing off and
+// says why here (never the value).
+{
+  const rk = receiptKeys();
+  if (rk.error) console.error(`[receipts] signing refused: ${rk.error}`);
+  else if (rk.signer) console.log(`[receipts] signing on, key ${rk.signer.kid}`);
+}
+app.get(RECEIPT_KEYS_PATH, (_req, res) => res.set("Cache-Control", "public, max-age=300").json(receiptKeyDocument(BASE_URL)));
+const receiptVerifyLimiter = createRateLimiter("receipt-verify", { perMin: 60, perHour: 1200 });
+app.post(RECEIPT_VERIFY_PATH, express.json({ limit: "256kb" }), (req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (receiptVerifyLimiter.check(clientIp(req)).limited) {
+    res.set("Retry-After", "60");
+    return res.status(429).json({ error: "Too many receipt checks from this address; retry in a minute.", retryAfterSeconds: 60 });
+  }
+  const b = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  if (typeof b.receipt !== "string" || !b.receipt) return res.status(400).json({ error: "Send { receipt } (the Agent402-Receipt header value); optionally body (the answer text) or bodySha256, and request { method, path, body }." });
+  const opts = {};
+  if (typeof b.body === "string") opts.responseBody = b.body;
+  else if (typeof b.bodySha256 === "string") opts.responseSha256 = b.bodySha256;
+  if (b.request && typeof b.request === "object" && !Array.isArray(b.request) && typeof b.request.method === "string" && typeof b.request.path === "string") opts.request = { method: b.request.method, path: b.request.path, body: b.request.body };
+  return res.json(verifyReceipt(b.receipt, opts));
+});
 app.get("/.well-known/glama.json", (_req, res) => {
   const email = process.env.GLAMA_MAINTAINER_EMAIL || "mike@agent402.tools";
   res.set("Cache-Control", "public, max-age=86400").json({
@@ -11192,6 +11248,14 @@ if (!FREE_MODE) {
   // 400 or above (src/answer-headers.js). Before every payment gate: a gate
   // that buffers writeHead restores the function it found.
   app.use(answerHeadersGuard());
+  // Signed receipts (src/receipt-signing.js), on only with RECEIPT_SIGNING_KEY.
+  // Before every payment gate: each gate replays its buffered answer through
+  // this wrapper after it settled, so the receipt is signed over the final
+  // settled 200 and never before.
+  if (receiptKeys().signer) {
+    app.use(receiptSignerMiddleware({ describe: receiptFieldsOf, iss: BASE_URL, onError: (e) => console.warn(`[receipts] not signed: ${String(e?.message || e).slice(0, 120)}`) }));
+    markGateMounted("receiptSigner");
+  }
   app.use(createHangupSettlementHook({ onUndelivered: recordHangupOutcome }));
   markGateMounted("hangupHook");
 

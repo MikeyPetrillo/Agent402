@@ -4,7 +4,7 @@
 // that serves requests, never from a switch alone.
 const MOUNTED = new Set();
 
-export const GATE_NAMES = Object.freeze(["hangupHook", "mppShim", "tempo", "stripe", "credits", "idempotency", "x402", "x402PayerScreen", "replayGuard", "pow"]);
+export const GATE_NAMES = Object.freeze(["hangupHook", "mppShim", "tempo", "stripe", "credits", "idempotency", "x402", "x402PayerScreen", "replayGuard", "pow", "receiptSigner"]);
 
 /** Record that `names` are mounted. An unknown name throws, so a typo cannot
  *  leave a mounted gate unread. */

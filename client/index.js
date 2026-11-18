@@ -27,6 +27,7 @@ export { resetRetryFetch, isConnectionReset } from "./reset-retry.js";
 import { resetRetryFetch } from "./reset-retry.js";
 import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS } from "./async-job.js";
 export { AsyncJobPendingError } from "./async-job.js";
+export { verifyReceipt, receiptRequestDigest, RECEIPT_HEADER, RECEIPT_KEYS_PATH } from "./receipt.js";
 import { solvePowSync, solvePowAsync, checkPowChallenge } from "./pow-solver.js";
 export { MAX_POW_DIFFICULTY, MAX_POW_TRIES_FACTOR, solvePowAsync } from "./pow-solver.js";
 
