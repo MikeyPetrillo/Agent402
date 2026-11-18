@@ -63,7 +63,7 @@ t node scripts/test-openapi-local-refs.js
 # Uncached /api/find and /api/route computes are budgeted per client; the seller summary is memoized (boots a server)
 t node scripts/test-discovery-compute-limit.js
 t node scripts/test-coingecko-rate.js
-# Paid smoke buyer preflight (external targets require an outcome assertion before key/client/network work)
+# CLEANROOM 93: implement per spec 93
 t node scripts/test-smoke-buy.js
 # Smoke buy keeps the signed offer receipt (clean-room behavior test, local stub seller)
 t node scripts/test-cleanroom-smoke-receipt-capture.js
@@ -71,11 +71,7 @@ t node scripts/test-cleanroom-smoke-receipt-capture.js
 t node scripts/test-buyer-guard.js
 # Every script that signs a payment checks its target or is listed with its reason and cap (static scan, offline)
 t node scripts/test-paid-scripts-guarded.js
-# "Every paid route's PAYMENT-REQUIRED document parses under the OFFICIAL @x402/core
-#  schemas. Our live challenges did not: 557 of 560 published more than the protocol's
-#  five-tag maximum, so a buyer validating before paying got an invalid document
-#  (verified first-party against prod, 2026-08-29). Boots the real server against a
-#  local /supported stub; no payment is made."
+# CLEANROOM 93: implement per spec 93
 t node scripts/test-bazaar-contracts.js
 # A 402's shortened example is replayed from /openapi.json; html-frames' example fits whole (offline)
 t node scripts/test-replayable-example.js
@@ -229,7 +225,7 @@ t node scripts/test-font-licenses.js
 t node scripts/test-ci-tree-gate.js
 # Single-resource x402 manifest (spec 402-body shape; chains reach an OpenAPI-sourced row — offline)
 t node scripts/test-single-resource-manifest.js
-# Catalogue-entry payment terms (nested accepts / flat fields / service-wide block; atomic amounts are not dollars — offline)
+# CLEANROOM 93: implement per spec 93
 t node scripts/test-manifest-catalogue-payment.js
 # Manifest payment terms become seller payment fields (clean-room behavior test, offline)
 t node scripts/test-cleanroom-payment-fields.js
