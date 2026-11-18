@@ -302,6 +302,7 @@ const catalog = {
     const d = homeDescription({ credits: false, storefront: true, receipts });
     ok(/signed receipt/.test(d) === receipts && d.length <= 155, `the description names the signed receipt only while receipts are signed, and fits the snippet (${receipts ? "on" : "off"}, ${d.length} chars)`);
   }
+  ok(homeDescription({ credits: false, storefront: true, receipts: true }) === "Find, pay for and verify paid calls over x402 and MPP, backed by signed receipts. 500+ tools on the same rails; reports and monitors also by card.", "the approved meta description, word for word (receipts signed, storefront on)");
   const saved = { c: process.env.CREDITS_SALES, s: process.env.STRIPE_SECRET_KEY };
   delete process.env.CREDITS_SALES; process.env.STRIPE_SECRET_KEY = "sk_test_x";
   const meta = (ledgerHomePage(BASE_URL, catalog, {}, {}, []).match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
@@ -309,7 +310,7 @@ const catalog = {
   for (const [k, v] of [["CREDITS_SALES", saved.c], ["STRIPE_SECRET_KEY", saved.s]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   // The social card (/card.png) reads the same switches.
   const cs = socialCardText(537, { credits: false, storefront: true });
-  ok(cs.subtitle === "Agents find, pay for and verify every paid call over x402 and MPP." && cs.railsTag === "x402 · MPP · reports by card" && cs.toolsTag === "537 tools on the same rails", `social card, storefront on: card scoped to reports, the count a supporting tag (${cs.subtitle} | ${cs.railsTag} | ${cs.toolsTag})`);
+  ok(cs.subtitle === "Agents find, pay for and verify paid calls over x402 and MPP." && cs.railsTag === "x402 · MPP · reports by card" && cs.toolsTag === "537 tools on the same rails", `social card, storefront on: card scoped to reports, the count a supporting tag (${cs.subtitle} | ${cs.railsTag} | ${cs.toolsTag})`);
   ok(socialCardText(537, { credits: true, storefront: true }).railsTag === "x402 · MPP · card", "social card, credits on sale: any tool by card");
   const cn = socialCardText(537, { credits: false, storefront: false });
   ok(!/card/i.test(cn.subtitle + cn.railsTag) && cn.railsTag === "x402 · MPP", `social card, no card sale: no card on it (${cn.subtitle} | ${cn.railsTag})`);

@@ -34,7 +34,7 @@ export function siteOrgLd(baseUrl, { mpp = mppOffered() } = {}) {
     name: SITE_ORG_NAME,
     alternateName: ["Agent402.Tools", "Agent402 Tools", "agent402.tools"],
     url: baseUrl,
-    description: `Agent402.Tools is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call over x402${mpp ? " and MPP" : ""}, with 500+ ready tools on the same rails, operated by ${COMPANY_NAME}.`,
+    description: `Agent402.Tools is the payment and trust layer for agent commerce: agents find, pay for and verify paid calls over x402${mpp ? " and MPP" : ""}, with 500+ ready tools on the same rails, operated by ${COMPANY_NAME}.`,
     disambiguatingDescription: `The payment server, tool catalog and MCP server for AI agents at ${host}, operated by ${COMPANY_NAME}.`,
     knowsAbout: ["Agentic Finance", "AIFI", "x402", ...(mpp ? ["Machine Payments Protocol (MPP)"] : []), "agentic payments", "AI agents"],
     logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` },

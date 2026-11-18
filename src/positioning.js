@@ -19,7 +19,7 @@ export const CATEGORY_LINE = "Payments and trust for AI agents.";
 /** The lead sentence, with the wires this server offers and, when it signs
  *  them, the receipt clause. */
 export function leadSentence({ mpp = true, receipts = true } = {}) {
-  return `Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call, across ${mpp ? "x402 and MPP" : "x402"}${receipts ? ", with a signed receipt for each one" : ""}.`;
+  return `Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify paid calls across ${mpp ? "x402 and MPP" : "x402"}${receipts ? ", backed by signed receipts" : ""}.`;
 }
 
 /** The published lead sentence (both wires, receipts on). */

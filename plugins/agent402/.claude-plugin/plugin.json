@@ -1,7 +1,7 @@
 {
   "name": "agent402",
   "version": "2.8.2",
-  "description": "The payment and trust layer for agent commerce: find, pay for and verify every paid call over x402 or MPP, with 500+ ready tools on the same rails, or free via proof-of-work for pure-compute tools. Find a tool with catalog.find and call it.",
+  "description": "The payment and trust layer for agent commerce: find, pay for and verify paid calls over x402 or MPP, with 500+ ready tools on the same rails, or free via proof-of-work for pure-compute tools. Find a tool with catalog.find and call it.",
   "author": {
     "name": "Havok Holdings LLC",
     "url": "https://agent402.tools/company"

@@ -1,6 +1,6 @@
 # agent402-client
 
-Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails.
+Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify paid calls across x402 and MPP, backed by signed receipts. 500+ ready tools on the same rails.
 
 A tiny buyer-side client for [Agent402](https://agent402.tools) (and any Agent402
 instance) - the buy side of [Agentic Finance](https://agent402.tools/agentic-finance),

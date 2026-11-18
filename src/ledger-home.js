@@ -115,7 +115,7 @@ export function cardPayClause({ credits = creditsSalesEnabled(), storefront = hu
 export function socialCardText(toolCount, opts) {
   const card = cardPayClause(opts);
   return {
-    subtitle: "Agents find, pay for and verify every paid call over x402 and MPP.",
+    subtitle: "Agents find, pay for and verify paid calls over x402 and MPP.",
     railsTag: card === "or by card" ? "x402 · MPP · card" : card ? "x402 · MPP · reports by card" : "x402 · MPP",
     toolsTag: `${Number(toolCount).toLocaleString("en-US")} tools on the same rails`,
   };
@@ -127,7 +127,7 @@ export function homeDescription(opts) {
   const card = cardPayClause(opts);
   const pay = card === "or by card" ? "; any tool also by card" : card ? `; ${card}` : "";
   const receipts = opts && "receipts" in opts ? Boolean(opts.receipts) : receiptsServed();
-  return `Find, pay for and verify every paid call over x402 and MPP${receipts ? ", each with a signed receipt" : ""}. 500+ tools on the same rails${pay}.`;
+  return `Find, pay for and verify paid calls over x402 and MPP${receipts ? ", backed by signed receipts" : ""}. 500+ tools on the same rails${pay}.`;
 }
 
 export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null, proof = [], chainsOffered, mpp = true, receipts = receiptsServed() } = {}) {
