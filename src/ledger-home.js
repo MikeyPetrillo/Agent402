@@ -160,7 +160,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   // while receipts are signed; each wire name and "verify" linked.
   const wireLink = (href, t) => `<a href="${href}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">${t}</a>`;
   const leadHtml = esc(leadSentence({ mpp, receipts }))
-    .replace("verify every", `${wireLink("/trust#verify", "verify")} every`)
+    .replace("verify paid calls", `${wireLink("/trust#verify", "verify")} paid calls`)
     .replace(mpp ? "across x402 and MPP" : "across x402", `across ${wireLink("/what-is-x402", "x402")}${mpp ? ` and ${wireLink("/what-is-mpp", "MPP")}` : ""}`);
   const viaPow = Number(served.viaProofOfWork) || 0;
   const rails = railsByVolume(stats);

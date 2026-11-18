@@ -41,6 +41,10 @@ const catalog = {
   ];
   const leaderboardSnapshot = { leaderboard: board, windowLabel: "7d", totalSellers: 824 };
   const html = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, Array.from({ length: 42 }));
+  for (const receipts of [true, false]) {
+    const h = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, [], { receipts });
+    ok(/<a href="\/trust#verify"[^>]*>verify<\/a> paid calls/.test(h), `the lead links "verify" to /trust#verify (receipts ${receipts ? "on" : "off"})`);
+  }
 
   // The hero's paid figure is external payments only (src/home-proof.js); the
   // served-call tally, which includes our own test purchases, is not a figure.
