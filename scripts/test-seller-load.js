@@ -339,6 +339,22 @@ function fresh(opts = {}) {
   ok((await take(6)).ok && (await load.registrationHeldFor(V)) === 0, "the next hour the host is read again");
 }
 
+// ---- the pacing queue reaches at most the max lead ahead -------------------------
+{
+  const { REGISTRATION_PACE_MAX_LEAD_MS } = await import("../src/seller-load.js");
+  ok(REGISTRATION_PACE_MAX_LEAD_MS === 600_000, "default: a paced registration read reserves at most 10 minutes ahead");
+  // wait() does NOT advance the clock: every caller arrives at once.
+  const pending = [];
+  const { load } = fresh({ dailyBudget: 1000, registrationHourlyMax: 1000, registrationHostHourlyMax: 2, registrationPaceMs: 30_000, registrationPaceMaxLeadMs: 120_000, wait: (ms) => { pending.push(ms); return Promise.resolve(); } });
+  const H = "https://crowded.example";
+  const out = [];
+  for (let i = 0; i < 12; i++) out.push(await runAsRegistrant(`198.51.100.${i}`, () => load.takeBudget(`${H}/r${i}/.well-known/x402`, "crawler", { essential: true, unscheduled: true })));
+  const held = out.filter((b) => b.ok === false && b.heldBy === "registration-pace");
+  ok(held.length > 0 && held.every((b) => b.retryAfterSeconds > 0), `past the lead a read is held with when to retry (${held.length} held)`);
+  ok(pending.every((ms) => ms <= 120_000), `no queued read waits longer than the lead (longest ${Math.max(0, ...pending)} ms)`);
+  ok((load.status().budget.refused["crawler:registration-pace"] || 0) === held.length, "each held read is counted in the operator view");
+}
+
 // ---- one registrant's reads never spend another's ---------------------------------
 {
   ok(REGISTRATION_HOURLY_MAX === 20 && REGISTRATION_HOST_HOURLY_MAX === 200 && REGISTRATION_PACE_MS === 30_000, "defaults: 20 an hour per registrant and host, 200 at full pace per host, then one per 30 s");
