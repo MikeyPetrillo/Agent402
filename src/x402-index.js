@@ -2578,8 +2578,10 @@ function wholeBaseUnits(v) {
   return typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 }
 // The atomic figure an accept is priced from: a well-formed `amount`, else
-// the v1 `maxAmountRequired` (still common in flat manifests).
+// the v1 `maxAmountRequired` (still common in flat manifests). An `amount`
+// stated as empty text is present and reads as zero, never the fallback.
 function atomicFigureOf(a) {
+  if (a.amount === "") return a.amount;
   return wholeBaseUnits(a.amount) ? a.amount : a.maxAmountRequired;
 }
 // A receiving address as the accept wrote it; empty text is no address.
