@@ -544,9 +544,20 @@ export async function reputationPassUnleased({ entries, now = Date.now() } = {})
   body.sellers = pruneSellers(body.sellers, now);
   body.updatedAt = now;
   body.v = 1;
-  const saved = await repDoc().save(body);
+  // Serialized a step of sellers per turn (a few megabytes in all), so the
+  // write never holds the loop for the whole body.
+  const pieces = [`{"v":1,"since":${JSON.stringify(body.since)},"updatedAt":${JSON.stringify(now)},"sellers":{`];
+  let first = true, k = 0;
+  for (const [origin, rec] of Object.entries(body.sellers)) {
+    pieces.push(`${first ? "" : ","}${JSON.stringify(origin)}:${JSON.stringify(rec)}`);
+    first = false;
+    if (++k % PASS_STEP === 0) await turn();
+  }
+  pieces.push("}}");
+  const out = { v: 1, since: body.since, updatedAt: now, sellers: body.sellers };
+  const saved = await repDoc().saveSerialized(out, pieces);
   const d = await delDoc().read({ quiet: true });
-  if (saved) adopt(body, d?.ok ? d.body : state.delivery);
+  if (saved) adopt(out, d?.ok ? d.body : state.delivery);
   lastPass = { at: now, sellers: n, ms: Date.now() - t0, ok: !!saved };
   return { ok: !!saved, sellers: n };
 }

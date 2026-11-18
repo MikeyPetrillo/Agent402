@@ -221,6 +221,8 @@ t node scripts/test-wish-pg.js
 t node scripts/test-store-boot-blip-pg.js
 t node scripts/test-store-retry-recovery-pg.js
 t node scripts/test-json-document-outage-pg.js
+# Seller reputation on the state database: the record written in pieces and read back whole, a pass under another holder's lease skipped (the replica reads the row), two processes' delivery outcomes merged in one row.
+t node scripts/test-seller-reputation-pg.js
 # An import that timed out is a failed load (retried), never an empty store.
 t node scripts/test-json-document-import-fail-pg.js
 t node scripts/test-store-import-fail-pg.js
