@@ -195,6 +195,26 @@ ok(readdirSync(DIR).filter((f) => f === `k_${hashKey(K.key)}.json`).length === 0
 ok((await cr.claim("cs_k1")).status === "claimed" && (await cr.claim("cs_k1")).keyId === K.keyId, "the purchase's thanks page still finds the balance");
 ok(newKeys.length === 1 && newKeys[0].email === "k@x.com", "the email on the balance is told a new key was issued");
 
+// ---- (5b) the balance page reads one record, not every key file ----------------------
+{
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  paid("cs_idx", "credits-20", "pi_idx", "idx@x.com");
+  const KI = await cr.claim("cs_idx");
+  ok((await cr.balancesForEmail("IDX@x.com")).map((b) => b.keyId).join() === KI.keyId && (await cr.historyFor(KI.keyId, "idx@x.com"))?.keyId === KI.keyId, "file store: a balance bought after the lookup index was built is found by email and by key id");
+  // Count the store's directory walks and file reads during the lookups.
+  const real = { readdirSync: fs.readdirSync, readFileSync: fs.readFileSync };
+  let walks = 0, reads = 0;
+  fs.readdirSync = (...a) => { walks++; return real.readdirSync(...a); };
+  fs.readFileSync = (...a) => { reads++; return real.readFileSync(...a); };
+  syncBuiltinESMExports();
+  let found;
+  try {
+    found = [await cr.balancesForEmail("idx@x.com"), await cr.historyFor(KI.keyId, "idx@x.com"), await cr.setLowNotice(KI.keyId, true), await cr.balancesForEmail("nobody@x.com")];
+  } finally { Object.assign(fs, real); syncBuiltinESMExports(); }
+  ok(found[0].length === 1 && found[1] && found[2] === true && found[3].length === 0 && walks === 0 && reads <= 1, `file store: the sign-in, history and top-up lookups walk no directory and read no other key's file (${walks} walks, ${reads} reads)`);
+}
+
 // ---- (6) sign-in, sessions -----------------------------------------------------------
 const mail = [];
 const store = createJsonDocument({ name: "credits-account-test", file: join(DIR, "_account.json"), log: () => {} });
@@ -233,6 +253,44 @@ ok((await acct.sessionEmail(s2.sid)) === null, "a session ends after 12 hours ho
 const s3 = await acct.redeem(acct.signInToken("k@x.com"));
 await acct.signOut(s3.sid);
 ok((await acct.sessionEmail(s3.sid)) === null, "signing out ends the session");
+
+// ---- (6b) retention: ended sessions and expired link records are deleted -------------
+{
+  const RET = join(DIR, "_account-retention.json");
+  const retStore = createJsonDocument({ name: "credits-account-retention", file: RET, log: () => {} });
+  const mk = (extra = {}) => createCreditsAccount({ credits: cr, baseUrl: "https://agent402.tools", secret: accountSecretFrom("sk_test_fixture"), sendEmail: async () => true, store: retStore,
+    ipLimiter: createLimiter(`t-ret-ip-${Math.random()}`, { perMin: 1000, perHour: 1000 }), emailLimiter: createLimiter(`t-ret-e-${Math.random()}`, { perMin: 1000, perHour: 1000 }), now: () => clock, log: () => {}, sweepEveryMs: 0, ...extra });
+  const ra = mk();
+  const doc = () => { try { return JSON.parse(readFileSync(RET, "utf8")); } catch { return {}; } };
+  const counts = () => { const d = doc(); return `${Object.keys(d.sessions || {}).length}/${Object.keys(d.used || {}).length}`; };
+  // Two sessions that end (idle), their two used links past expiry; then a fresh session.
+  const ended = async () => { await ra.redeem(ra.signInToken("k@x.com")); await ra.redeem(ra.signInToken("k@x.com")); clock += Math.max(SESSION_IDLE_MS, SIGN_IN_TTL_MS) + 1; };
+  await ended();
+  const fresh = await ra.redeem(ra.signInToken("k@x.com"));
+  ok(counts() === "1/1", `redeeming a link deletes the ended sessions and expired link records (${counts()})`);
+  await ended();
+  ok(counts() === "2/2" || counts() === "3/3", `two more sessions end (${counts()})`);
+  ok((await ra.sessionEmail(fresh.sid)) === null && counts() === "0/0", `a session read deletes every ended session and expired link record, not only its own (${counts()})`);
+  await ra.redeem(ra.signInToken("k@x.com"));
+  await ra.redeem(ra.signInToken("k@x.com"));
+  const keep = await ra.redeem(ra.signInToken("k@x.com"));
+  clock += Math.max(SESSION_IDLE_MS, SIGN_IN_TTL_MS) + 1;
+  await ra.signOut(keep.sid);
+  ok(counts() === "0/0", `signing out deletes its own session and every ended one (${counts()})`);
+  const k2 = await ra.redeem(ra.signInToken("k@x.com"));
+  clock += SESSION_MAX_MS + 1;
+  const r = ra.requestSignIn("nobody@x.com", "9.9.9.9");
+  await r.work;
+  ok(counts() === "0/0" && (await ra.sessionEmail(k2.sid)) === null, `a sign-in request deletes ended sessions and expired link records after its answer (${counts()})`);
+  await ended();
+  ok((await ra.sweep()) === 4 && counts() === "0/0", `the sweep deletes them with no request at all (${counts()})`);
+  // The timer: an account built with a sweep interval deletes them on its own, and the timer never holds the process open.
+  await ended();
+  const timed = mk({ sweepEveryMs: 40 });
+  await new Promise((res) => setTimeout(res, 200));
+  timed.stopSweep();
+  ok(counts() === "0/0", `the periodic sweep deletes ended sessions and expired link records unprompted (${counts()})`);
+}
 
 // ---- (7) the routes -------------------------------------------------------------------
 const app = express();

@@ -143,9 +143,11 @@ export function noteEvent(rec, ev, at = Date.now()) {
     rec.byTool = by;
   }
 }
-// A balance under this (with what is held) is low: the low-balance notice is
-// sent once each time a charge takes the balance across it.
-export const LOW_BALANCE_MICRO = 2 * 1_000_000;
+// A balance under LOW_BALANCE_MICRO (with what is held) is low: the
+// low-balance notice is sent once each time a charge takes the balance
+// across it (src/credits-figures.js, which the copy stating it reads).
+import { LOW_BALANCE_MICRO } from "./credits-figures.js";
+export { LOW_BALANCE_MICRO };
 export const usdToMicro = (usd) => Math.round(Number(usd) * MICRO);
 export const microToUsd = (m) => Math.round(Number(m) / 100) / 10000; // 4 dp
 
@@ -178,7 +180,35 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   const cache = new Map(); // hash -> record (write-through; file backend only)
 
   const load = (hash) => cache.get(hash) || (() => { const r = readJson(recPath(hash)); if (r) cache.set(hash, r); return r; })();
-  function save(hash, rec) { cache.set(hash, rec); writeJsonAtomic(recPath(hash), rec); }
+  function save(hash, rec) { cache.set(hash, rec); writeJsonAtomic(recPath(hash), rec); idxPut(hash, rec); }
+  // The file store's lookup index (key id -> hash, email -> hashes), built on
+  // the first lookup from the files and kept by every write here, so the
+  // balance page reads one record instead of every key file.
+  let fileIdx = null;
+  function idxForget(hash) {
+    const o = fileIdx?.of.get(hash);
+    if (!o) return;
+    fileIdx.of.delete(hash);
+    if (o.k && fileIdx.byKeyId.get(o.k) === hash) fileIdx.byKeyId.delete(o.k);
+    const set = fileIdx.byEmail.get(o.e);
+    if (set) { set.delete(hash); if (!set.size) fileIdx.byEmail.delete(o.e); }
+  }
+  function idxPut(hash, rec) {
+    if (!fileIdx) return;
+    idxForget(hash);
+    if (!rec) return;
+    const k = typeof rec.keyId === "string" ? rec.keyId : "", e = String(rec.email || "").toLowerCase();
+    fileIdx.of.set(hash, { k, e });
+    if (k) fileIdx.byKeyId.set(k, hash);
+    if (e) { let set = fileIdx.byEmail.get(e); if (!set) fileIdx.byEmail.set(e, (set = new Set())); set.add(hash); }
+  }
+  function fileIndex() {
+    if (!fileIdx) {
+      fileIdx = { byKeyId: new Map(), byEmail: new Map(), of: new Map() };
+      for (const f of keyFiles()) { const hash = f.slice(2, -5); idxPut(hash, load(hash)); }
+    }
+    return fileIdx;
+  }
   const sessionsIdx = () => readJson(SESSIONS) || {};
   const keyFiles = () => { try { return readdirSync(dir).filter((f) => f.startsWith("k_") && f.endsWith(".json")); } catch { return []; } };
 
@@ -191,6 +221,14 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   const pgDel = async (id) => { await stateQuery(`DELETE FROM ${RT()} WHERE collection = $1 AND id = $2`, [COLL, id]); };
   // Every key row: the underscore in the prefix is literal.
   const pgKeys = async () => (await stateQuery(`SELECT id, body FROM ${RT()} WHERE collection = $1 AND id LIKE 'k\\_%' ESCAPE '\\' ORDER BY id`, [COLL])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
+  // Every key row without its history: the readers that walk every key (the
+  // operator status, the owed-refunds word) never read the history, so the
+  // database leaves it out of the rows it sends.
+  const pgKeysLite = async () => (await stateQuery(`SELECT id, body - 'history' AS body FROM ${RT()} WHERE collection = $1 AND id LIKE 'k\\_%' ESCAPE '\\' ORDER BY id`, [COLL])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
+  // The key rows one balance-page lookup needs, found by the database: by key
+  // id, or every row bought with an email.
+  const pgKeysByKeyId = async (keyId) => (await stateQuery(`SELECT id, body FROM ${RT()} WHERE collection = $1 AND id LIKE 'k\\_%' ESCAPE '\\' AND body->>'keyId' = $2`, [COLL, keyId])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
+  const pgKeysByEmail = async (email) => (await stateQuery(`SELECT id, body FROM ${RT()} WHERE collection = $1 AND id LIKE 'k\\_%' ESCAPE '\\' AND lower(body->>'email') = $2`, [COLL, email])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
   // Write-through to the directory while it is there, so a rollback reads
   // current balances. Best effort: a failure is logged once, never the verdict.
   let throughWarned = false;
@@ -368,6 +406,21 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   const mutate = usePg ? mutatePg : mutateFile;
   const readRec = usePg ? async (hash) => { await readyP(); return pgGet(recId(hash)); } : load;
   const allKeys = usePg ? async () => { await readyP(); return pgKeys(); } : () => keyFiles().map((f) => ({ hash: f.slice(2, -5), rec: readJson(join(dir, f)) })).filter((x) => x.rec);
+  const allKeysLite = usePg ? async () => { await readyP(); return pgKeysLite(); } : allKeys;
+  // The record(s) for one key id, or bought with one email: a lookup, never a
+  // walk of every key. Each hit is checked against the record itself.
+  async function keysByKeyId(keyId) {
+    if (typeof keyId !== "string" || !keyId) return [];
+    if (usePg) { await readyP(); return (await pgKeysByKeyId(keyId)).filter((x) => x.rec?.keyId === keyId); }
+    const hash = fileIndex().byKeyId.get(keyId);
+    const rec = hash ? load(hash) : null;
+    return rec && rec.keyId === keyId ? [{ hash, rec }] : [];
+  }
+  async function keysByEmail(email) {
+    if (!email) return [];
+    if (usePg) { await readyP(); return (await pgKeysByEmail(email)).filter((x) => String(x.rec?.email || "").toLowerCase() === email); }
+    return [...(fileIndex().byEmail.get(email) || [])].map((hash) => ({ hash, rec: load(hash) })).filter((x) => x.rec && String(x.rec.email || "").toLowerCase() === email);
+  }
   const answer = (v) => (usePg ? Promise.resolve(v) : v);
   const note = (rec, ev) => noteEvent(rec, ev, now());
   // A charge that takes the balance (with what is held) from at least
@@ -689,7 +742,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // the buyer's, enabled, with no refund asked, and with room under the cap
   // for the whole top-up. Anything else is refused and refunded in full.
   async function keyHashById(keyId) {
-    const hit = (await allKeys()).find((x) => x.rec?.keyId === keyId);
+    const hit = (await keysByKeyId(keyId))[0];
     return hit ? hit.hash : null;
   }
   async function topUp({ session, sessionId, packKey, p, paymentIntent, buyer, keyId, account }) {
@@ -910,7 +963,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     };
   };
   function status() {
-    if (usePg) return allKeys().then((xs) => statusOf(xs.map((x) => x.rec)));
+    if (usePg) return allKeysLite().then((xs) => statusOf(xs.map((x) => x.rec)));
     return statusOf(allKeys().map((x) => x.rec));
   }
   // The operator's switch. A disable records "operator" as the reason, which
@@ -1211,7 +1264,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
    *  past STUCK_MS), or sent and still pending at Stripe past SENT_STUCK_MS. */
   async function refundRequestsOwed() {
     const t = now();
-    return (await allKeys()).filter(({ rec }) => {
+    return (await allKeysLite()).filter(({ rec }) => {
       const rr = rec?.refundRequest;
       if (!rr || rr.state === "done") return false;
       if (rr.state === "failed") return true;
@@ -1490,13 +1543,13 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   async function balancesForEmail(email) {
     const e = String(email || "").trim().toLowerCase();
     if (!e) return [];
-    return (await allKeys()).filter(({ rec }) => rec && String(rec.email || "").toLowerCase() === e)
+    return (await keysByEmail(e))
       .map(({ rec }) => ({ ...balanceOf(rec), roomUsd: rec.disabled || rec.refundRequest ? 0 : capRoomUsd(rec), lowNotice: !rec.lowNoticeOff, disabledReason: rec.disabled ? rec.disabledReason || "operator" : null }))
       .sort((a, b) => String(b.lastUsedAt || b.createdAt).localeCompare(String(a.lastUsedAt || a.createdAt)));
   }
   async function ownedRec(keyId, email) {
     const e = String(email || "").trim().toLowerCase();
-    const hit = e ? (await allKeys()).find((x) => x.rec?.keyId === keyId && String(x.rec.email || "").toLowerCase() === e) : null;
+    const hit = e ? (await keysByKeyId(keyId)).find((x) => String(x.rec.email || "").toLowerCase() === e) : null;
     return hit || null;
   }
   /** One balance's history (newest first), its totals by tool and what is held now; null when the email does not hold it. */
@@ -1565,7 +1618,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     } else {
       r = move(load(hit.hash));
       if (r.status === "ok") {
-        save(next, r.rec); cache.delete(hit.hash); try { unlinkSync(recPath(hit.hash)); } catch { /* gone already */ }
+        save(next, r.rec); cache.delete(hit.hash); idxForget(hit.hash); try { unlinkSync(recPath(hit.hash)); } catch { /* gone already */ }
         const idx = sessionsIdx();
         let moved = false;
         for (const sid of Array.isArray(r.rec.sessions) ? r.rec.sessions : []) if (idx[sid] === hit.hash) { idx[sid] = next; moved = true; }

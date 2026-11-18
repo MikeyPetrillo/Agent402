@@ -93,6 +93,8 @@ t node scripts/test-credits-terms.js
 t node scripts/test-credits-refund-race.js
 # Credits for people: top-ups within the cap, refunds across payments, email sign-in, history and CSV, a new key, receipts and the low-balance email; absent with sales off.
 t node scripts/test-credits-account.js
+# The credits figures (sign-in link life, session life, low-balance threshold) are read by every sentence that states them: changing one changes the copy (offline)
+t node scripts/test-credits-figures.js
 # CAN-SPAM: every outbound email carries the physical postal address
 t node scripts/test-email-postal-address.js
 # List-Unsubscribe headers reach both email providers (ZeptoMail mime_headers, Resend headers)

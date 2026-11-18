@@ -7,6 +7,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
 import { ACCOUNT_PATH } from "./credits-account.js";
+import { signInLifeWords, lowBalanceWords } from "./credits-figures.js";
 
 export const ACCOUNT_CSS = `
   .acct-bal{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;margin-top:8px}
@@ -55,7 +56,7 @@ export function creditsAccountPage(baseUrl) {
           <button class="btn btn-primary" type="submit">Email me a sign-in link</button>
           <div class="err" id="err-email" aria-live="polite"></div>
         </form>
-        <p class="note">The link works once, for 15 minutes. Keys are stored only as a hash, so a lost key cannot be shown again; once signed in you can issue a new one.</p>
+        <p class="note">The link works once, for ${signInLifeWords()}. Keys are stored only as a hash, so a lost key cannot be shown again; once signed in you can issue a new one.</p>
       </div>
     </section>
   </template>
@@ -97,7 +98,7 @@ export function creditsNoticeOffPage(baseUrl, keyId, k) {
 <div class="wrap" style="padding-top:28px;">
   <div class="status">
     <h2>Stop low-balance emails</h2>
-    <p>We email you once each time the balance on key <span style="font-family:var(--font-mono)">${esc(keyId)}</span> drops under $2.00. Receipts and sign-in links still arrive.</p>
+    <p>We email you once each time the balance on key <span style="font-family:var(--font-mono)">${esc(keyId)}</span> drops under ${lowBalanceWords()}. Receipts and sign-in links still arrive.</p>
     <form method="post" action="/credits/low-balance/off" style="margin-top:18px">
       <input type="hidden" name="key" value="${esc(keyId)}"><input type="hidden" name="k" value="${esc(k)}"><input type="hidden" name="confirm" value="1">
       <button class="btn btn-primary" type="submit">Stop these emails</button>

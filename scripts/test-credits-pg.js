@@ -365,6 +365,26 @@ try {
     ok((await T2.authorize(k.key, 0.001)).reason === "unknown" && (await T2.balance(n.key)).balanceUsd === 40, "pg: another container refuses the old key and spends the new one");
     ok((await T2.claim("cs_tp")).keyId === k.keyId && (await T2.claim("cs_tq")).status === "topped_up", "pg: the claim index follows the record");
   }
+  // The balance page's lookups find rows by email and key id in the
+  // database (the history-free full walk stays for status and the owed word).
+  {
+    const L = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: quiet });
+    await L.ready();
+    const put = async (hash, body) => sdb.stateQuery(`INSERT INTO ${sdb.stateDbSchema()}.records (collection, id, body) VALUES ('credits', $1, $2::jsonb)`, [`k_${hash}`, JSON.stringify(body)]);
+    const rec = (keyId, email, extra = {}) => ({ keyId, email, balanceMicro: 5_000_000, loadedMicro: 5_000_000, spentMicro: 0, heldMicro: 0, calls: 0, createdAt: "2026-11-01T00:00:00.000Z", history: Array.from({ length: 300 }, (_, i) => ({ t: i, k: "charge", slug: "whois", m: 1000 })), ...extra });
+    for (let i = 0; i < 40; i++) await put(`lk${String(i).padStart(4, "0")}`.padEnd(64, "0"), rec(`lk${String(i).padStart(10, "0")}`, `other${i}@x.com`));
+    await put("lka".padEnd(64, "a"), rec("aaaaaaaaaaa1", "Mixed@Example.com"));
+    await put("lkb".padEnd(64, "b"), rec("aaaaaaaaaaa2", "mixed@example.com", { createdAt: "2026-11-02T00:00:00.000Z" }));
+    await put("lkc".padEnd(64, "c"), rec("aaaaaaaaaaa3", "someone@else.com"));
+    const mine = await L.balancesForEmail("mixed@example.com");
+    ok(mine.map((b) => b.keyId).join() === "aaaaaaaaaaa2,aaaaaaaaaaa1", `pg: balancesForEmail finds every row bought with the email, in any case, and only those (${mine.map((b) => b.keyId).join()})`);
+    ok((await L.balancesForEmail("nobody@example.com")).length === 0, "pg: an email with no balance finds none");
+    const h = await L.historyFor("aaaaaaaaaaa1", "MIXED@example.com");
+    ok(h?.keyId === "aaaaaaaaaaa1" && h.rows.length === 300 && (await L.historyFor("aaaaaaaaaaa3", "mixed@example.com")) === null, "pg: historyFor reads the key id's row and only for its own email");
+    ok((await L.setLowNotice("aaaaaaaaaaa3", false)) === true && (await rowRec("lkc".padEnd(64, "c"))).lowNoticeOff && (await L.setLowNotice("zzzzzzzzzzzz", false)) === false, "pg: a key id finds its row (and an unknown one none)");
+    const st = await L.status();
+    ok(st.keys >= 43 && st.rows.every((r) => !("history" in r)), `pg: the operator status still walks every key (${st.keys})`);
+  }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();

@@ -85,7 +85,7 @@
       bind(wrap);
     }).catch(function () {});
   }
-  function balanceCard(b, packs) {
+  function balanceCard(b, packs, lowNoticeUsd) {
     var st = stateOf(b);
     var open = !b.disabled && !b.refund;
     var card = h("div", { class: "acct-card", "data-key": b.keyId });
@@ -138,7 +138,7 @@
         } }, ["Refund the unspent balance"])]),
       ]));
       var cb = h("input", { type: "checkbox", checked: b.lowNotice ? true : null, onchange: function () { post("/low-notice", { key: b.keyId, on: cb.checked }); } });
-      card.appendChild(h("div", { class: "acct-section" }, [h("label", { class: "acct-check" }, [cb, "Low-balance email (under $2.00)"])]));
+      card.appendChild(h("div", { class: "acct-section" }, [h("label", { class: "acct-check" }, [cb, typeof lowNoticeUsd === "number" ? "Low-balance email (under " + usd(lowNoticeUsd) + ")" : "Low-balance email"])]));
     }
     var hist = h("div");
     card.appendChild(hist);
@@ -165,7 +165,7 @@
     var list = h("div", { class: "acct-bal" });
     root.appendChild(list);
     if (!s.balances.length) list.appendChild(h("p", { class: "lede", text: "No balance is on this email." }));
-    s.balances.forEach(function (b) { list.appendChild(balanceCard(b, s.packs || [])); });
+    s.balances.forEach(function (b) { list.appendChild(balanceCard(b, s.packs || [], s.lowNoticeUsd)); });
     root.appendChild(h("p", { class: "note", text: "Each balance holds at most " + usd(s.capUsd) + ". Credits never expire and carry no fees." }));
     bind(root);
   }

@@ -30,11 +30,13 @@ import { escapeHtml, headerText } from "./email-text.js";
 
 export const ACCOUNT_PATH = "/credits/account";
 export const ACCOUNT_COOKIE = "a402_acct";
-export const SIGN_IN_TTL_MS = 15 * 60_000;
-export const SESSION_IDLE_MS = 30 * 60_000;
-export const SESSION_MAX_MS = 12 * 3600_000;
+import { SIGN_IN_TTL_MS, SESSION_IDLE_MS, SESSION_MAX_MS, signInLifeWords, lowBalanceWords, lowBalanceUsd } from "./credits-figures.js";
+export { SIGN_IN_TTL_MS, SESSION_IDLE_MS, SESSION_MAX_MS };
 const TOUCH_MS = 60_000;
-export const SIGN_IN_ANSWER = "If that email bought a credits balance, a sign-in link is on its way. It works once, for 15 minutes.";
+/** How often ended sessions and expired link records are deleted from the store. */
+export const ACCOUNT_SWEEP_MS = 10 * 60_000;
+export const SIGN_IN_ANSWER = `If that email bought a credits balance, a sign-in link is on its way. It works once, for ${signInLifeWords()}.`;
+const LINK_LIFE_NOTE = () => `Sign-in links work once, for ${signInLifeWords()}.`;
 const EMAIL_RE = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/;
 const SID_RE = /^[A-Za-z0-9_-]{43}$/;
 const KEY_ID_RE = /^[0-9a-f]{12}$/;
@@ -58,9 +60,9 @@ const mailLink = (url, label) => `<a href="${escapeHtml(url)}" style="color:#0F5
 // design-tokens: literal-end
 const usd = (n) => `$${Number(n || 0).toFixed(2)}`;
 
-export function buildSignInEmail({ link, ttlMinutes = SIGN_IN_TTL_MS / 60_000 }) {
+export function buildSignInEmail({ link }) {
   const subject = "Sign in to your Agent402 credits balance";
-  const lead = `Open this link to manage your prepaid credits balance: see what it holds and what it paid for, add to it, ask for the unspent balance back, or issue a new key. It works once, for ${ttlMinutes} minutes.`;
+  const lead = `Open this link to manage your prepaid credits balance: see what it holds and what it paid for, add to it, ask for the unspent balance back, or issue a new key. It works once, for ${signInLifeWords()}.`;
   const why = "You are getting this because someone asked to sign in with this email address at agent402.tools/credits/account. If that was not you, you can ignore this email; nothing changes.";
   const html = mailWrap(subject, `${mailP(escapeHtml(lead))}${mailP(mailLink(link, "Sign in to your balance"))}${mailFine(escapeHtml(why))}`);
   const text = `${subject}\n\n${lead}\n\n${link}\n\n${why}\n\nAgent402`;
@@ -92,7 +94,7 @@ export function buildReceiptEmail({ kind, amountUsd, balanceUsd, keyId, at, paym
 export function buildLowBalanceEmail({ balanceUsd, keyId, accountUrl, unsubscribeUrl }) {
   const subject = `Your Agent402 credits balance is low: ${usd(balanceUsd)} left`;
   const lead = `The prepaid credits balance on key ${keyId} is down to ${usd(balanceUsd)}. Calls it cannot cover answer 402 with the balance and nothing is charged. Add to it from your balance page.`;
-  const why = "We send this once each time the balance drops under $2.00. You can turn this notice off for this balance with the link below; receipts and sign-in links still arrive.";
+  const why = `We send this once each time the balance drops under ${lowBalanceWords()}. You can turn this notice off for this balance with the link below; receipts and sign-in links still arrive.`;
   const html = mailWrap(subject, `${mailP(escapeHtml(lead))}${mailP(mailLink(accountUrl, "Add to your balance"))}${mailFine(`${escapeHtml(why)} ${mailLink(unsubscribeUrl, "Stop low-balance emails")}`)}`);
   const text = `${subject}\n\n${lead}\n\nAdd to your balance: ${accountUrl}\n\n${why}\nStop low-balance emails: ${unsubscribeUrl}\n\nAgent402`;
   return { subject, html, text };
@@ -117,7 +119,7 @@ export function buildNewKeyEmail({ keyId, accountUrl }) {
  * @param {{check:(k:string)=>{limited:boolean}}} d.ipLimiter
  * @param {{check:(k:string)=>{limited:boolean}}} d.emailLimiter
  */
-export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, store, ipLimiter, emailLimiter, termsVersion = () => null, now = () => Date.now(), log = console.log }) {
+export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, store, ipLimiter, emailLimiter, termsVersion = () => null, now = () => Date.now(), log = console.log, sweepEveryMs = ACCOUNT_SWEEP_MS }) {
   const mac = (purpose, body) => createHmac("sha256", secret).update(`${purpose}|${body}`).digest("base64url");
   const accountUrl = `${baseUrl}${ACCOUNT_PATH}`;
 
@@ -146,11 +148,32 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
   const noticeOffValid = (keyId, k) => Boolean(secret) && KEY_ID_RE.test(String(keyId || "")) && typeof k === "string" && sameBytes(k, noticeSig(keyId));
 
   // ---- the store: { sessions: { <sid digest>: { e, exp, idle, touched } }, used: { <nonce>: exp } }
+  // An ended session (idle or past its maximum) and the record of a used link
+  // past its expiry are deleted: by every read and write of the store below
+  // and by a sweep every ACCOUNT_SWEEP_MS, as /privacy says.
+  const live = (s, t) => Boolean(s) && s.exp > t && s.idle > t;
   const prune = (b, t) => {
-    b.sessions = Object.fromEntries(Object.entries(b.sessions || {}).filter(([, s]) => s && s.exp > t && s.idle > t));
+    b.sessions = Object.fromEntries(Object.entries(b.sessions || {}).filter(([, s]) => live(s, t)));
     b.used = Object.fromEntries(Object.entries(b.used || {}).filter(([, x]) => Number(x) > t));
     return b;
   };
+  const stale = (b, t) => Object.values(b?.sessions || {}).some((s) => !live(s, t)) || Object.values(b?.used || {}).some((x) => !(Number(x) > t));
+  /** Delete every ended session and expired link record now; answers how many went. */
+  async function sweep() {
+    const t = now();
+    let removed = 0;
+    await store.update((b) => {
+      if (!b || typeof b !== "object" || !stale(b, t)) return SKIP_UPDATE;
+      const before = Object.keys(b.sessions || {}).length + Object.keys(b.used || {}).length;
+      prune(b, t);
+      removed = before - Object.keys(b.sessions).length - Object.keys(b.used).length;
+      return b;
+    }, { fallback: {} });
+    return removed;
+  }
+  const sweepQuietly = () => sweep().catch((e) => { log(`[credits-account] sweep failed: ${String(e?.message || e).slice(0, 160)}`); return 0; });
+  let sweepTimer = null;
+  if (store && sweepEveryMs > 0) { sweepTimer = setInterval(sweepQuietly, sweepEveryMs); sweepTimer.unref?.(); }
 
   /** Ask for a sign-in link. Answers { status, message } at once; the lookup and the send run after. */
   function requestSignIn(rawEmail, ip) {
@@ -160,6 +183,7 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     if (!validEmail(email)) return { status: 400, message: "Enter the email address you bought credits with." };
     if (emailLimiter?.check(`e:${digest(email).slice(0, 32)}`).limited) return { status: 429, message: "Too many requests. Please try again in a few minutes." };
     const work = (async () => {
+      await sweepQuietly();
       const held = await credits.balancesForEmail(email);
       if (!held.length) return false;
       const sent = await sendEmail({ to: email, ...buildSignInEmail({ link: signInLink(email) }) });
@@ -197,9 +221,11 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     const r = await store.update((b) => {
       b = b && typeof b === "object" ? b : {};
       const s = b.sessions && Object.hasOwn(b.sessions, id) ? b.sessions[id] : null;
-      if (!s || !(s.exp > t) || !(s.idle > t)) { email = null; if (s) { delete b.sessions[id]; return b; } return SKIP_UPDATE; }
+      const old = stale(b, t);
+      if (old) prune(b, t);
+      if (!live(s, t)) { email = null; return old ? b : SKIP_UPDATE; }
       email = s.e;
-      if (t - (Number(s.touched) || 0) < TOUCH_MS) return SKIP_UPDATE;
+      if (t - (Number(s.touched) || 0) < TOUCH_MS) return old ? b : SKIP_UPDATE;
       b.sessions[id] = { ...s, idle: Math.min(s.exp, t + SESSION_IDLE_MS), touched: t };
       return b;
     }, { fallback: {} });
@@ -209,7 +235,13 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
   async function signOut(sid) {
     if (typeof sid !== "string" || !SID_RE.test(sid)) return;
     const id = digest(sid);
-    await store.update((b) => { if (!b?.sessions || !Object.hasOwn(b.sessions, id)) return SKIP_UPDATE; delete b.sessions[id]; return b; }, { fallback: {} });
+    const t = now();
+    await store.update((b) => {
+      const mine = Boolean(b?.sessions) && Object.hasOwn(b.sessions, id);
+      if (!mine && !stale(b, t)) return SKIP_UPDATE;
+      if (mine) delete b.sessions[id];
+      return prune(b, t);
+    }, { fallback: {} });
   }
 
   // ---- the notices credits.js raises (wired in server.js) -----------------
@@ -230,7 +262,7 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     return sendEmail({ to: email, subject: headerText(m.subject), html: m.html, text: m.text }).catch(() => false);
   }
 
-  return { requestSignIn, redeem, sessionEmail, signOut, signInToken, readToken, signInLink, noticeOffLink, noticeOffValid, sendLowBalance, sendReceipt, sendNewKeyNotice, enabled: () => Boolean(secret) };
+  return { requestSignIn, redeem, sessionEmail, signOut, sweep, stopSweep: () => { if (sweepTimer) clearInterval(sweepTimer); sweepTimer = null; }, signInToken, readToken, signInLink, noticeOffLink, noticeOffValid, sendLowBalance, sendReceipt, sendNewKeyNotice, enabled: () => Boolean(secret) };
 }
 
 // ---- HTTP ---------------------------------------------------------------------
@@ -307,7 +339,7 @@ export function mountCreditsAccount(app, { express, account, credits, baseUrl, s
     if (!salesOn()) return next();
     noStore(res).set("Referrer-Policy", "no-referrer");
     const t = String(req.query.t || "");
-    if (!account.readToken(t)) return res.status(400).type("html").send(page.notice("This sign-in link has expired", `<p>Sign-in links work once, for 15 minutes. <a href="${ACCOUNT_PATH}">Ask for a new one</a>.</p>`));
+    if (!account.readToken(t)) return res.status(400).type("html").send(page.notice("This sign-in link has expired", `<p>${LINK_LIFE_NOTE()} <a href="${ACCOUNT_PATH}">Ask for a new one</a>.</p>`));
     res.type("html").send(page.verify(t));
   });
   app.post(`${ACCOUNT_PATH}/verify`, form, async (req, res, next) => {
@@ -315,7 +347,7 @@ export function mountCreditsAccount(app, { express, account, credits, baseUrl, s
     noStore(res).set("Referrer-Policy", "no-referrer");
     if (!sameOriginWrite(req, siteOrigin)) return res.status(403).type("html").send(page.notice("Open the link again", `<p>Sign in from the link in your email. <a href="${ACCOUNT_PATH}">Back to your balance</a>.</p>`));
     const s = await account.redeem(String(req.body?.t || "")).catch(() => null);
-    if (!s) return res.status(400).type("html").send(page.notice("This sign-in link has expired", `<p>Sign-in links work once, for 15 minutes. <a href="${ACCOUNT_PATH}">Ask for a new one</a>.</p>`));
+    if (!s) return res.status(400).type("html").send(page.notice("This sign-in link has expired", `<p>${LINK_LIFE_NOTE()} <a href="${ACCOUNT_PATH}">Ask for a new one</a>.</p>`));
     res.setHeader("Set-Cookie", cookie(s.sid, Math.floor(SESSION_MAX_MS / 1000)));
     res.redirect(303, ACCOUNT_PATH);
   });
@@ -331,7 +363,7 @@ export function mountCreditsAccount(app, { express, account, credits, baseUrl, s
     if (!salesOn()) return next();
     const email = await who(req, res);
     if (!email) return;
-    noStore(res).json({ email, balances: await credits.balancesForEmail(email), packs: packs(), capUsd: capUsd() });
+    noStore(res).json({ email, balances: await credits.balancesForEmail(email), packs: packs(), capUsd: capUsd(), lowNoticeUsd: lowBalanceUsd() });
   });
   app.get(`${ACCOUNT_PATH}/history.json`, async (req, res, next) => {
     if (!salesOn()) return next();
