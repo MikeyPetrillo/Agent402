@@ -599,6 +599,10 @@ export const TOOLS = [
   },
   {
     kit: "skill-pack",
+    // Its stock step is the answer, so it is listed only with an active stock
+    // provider (src/skills.js STOCK_CORE_PACK_SLUGS): bought only while prod
+    // lists the route.
+    whenListed: true,
     path: "/api/skill/financial-analysis",
     method: "POST",
     body: { ticker: "AAPL" },
@@ -629,8 +633,9 @@ export const TOOLS = [
   },
   {
     kit: "skill-pack",
-    // Listed only with an active stock provider (it runs stock-quote): bought
-    // only while prod lists the route.
+    // Listed either way: with no active stock provider it runs without its
+    // stock step (src/skills.js STOCK_TRIMMED_PACK_SLUGS). The listing check
+    // stays so a pack later withdrawn is skipped, not bought into a 503.
     whenListed: true,
     path: "/api/skill/company-dossier",
     method: "POST",
