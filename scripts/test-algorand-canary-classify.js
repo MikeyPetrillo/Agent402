@@ -6,12 +6,32 @@
 // upstream vendor 5xx was booked as a broken tool on first sight.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
-import { outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
+import { outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent, isBuyerNetworkError, errorText, failedClasses } from "./avm-canary-classify.js";
+import { classesText } from "./algorand-canary-classes.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };
 const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m}${JSON.stringify(a) === JSON.stringify(b) ? "" : ` (got ${JSON.stringify(a)})`}`);
 const R = (status, body = "", elapsedMs = 6000) => ({ status, body, elapsedMs });
+
+// ---- a throw before any paid request (the runner's network) ----
+{
+  const fetchFailed = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
+  ok(isBuyerNetworkError(fetchFailed) && isBuyerNetworkError(Object.assign(new Error("x"), { cause: { code: "EAI_AGAIN" } })) && isBuyerNetworkError(Object.assign(new Error("t"), { name: "TimeoutError" })), "a transport failure preparing a payment (fetch failed, a reset, DNS, a timeout) is the runner's network");
+  ok(!isBuyerNetworkError(new Error("unsupported scheme for network algorand:x")) && !isBuyerNetworkError(new TypeError("Cannot read properties of undefined")) && !isBuyerNetworkError(null), "an offer the client cannot sign, or a bug, is not the runner's network");
+  ok(errorText(fetchFailed) === "fetch failed <- ECONNRESET read ECONNRESET", `the log line names the cause (${errorText(fetchFailed)})`);
+  const r = { railFail: [], toolFail: [], chargedNoAnswer: [], chargeUnverified: [], noAnswer: [], chargedEmpty: [], buyerNetwork: [{ key: "x" }], aborted: null };
+  eq(failedClasses(r, []), [], "a run with only a runner-network row names no failed class");
+  eq(failedClasses({ ...r, toolFail: [{}] }, []), ["tool-failure"], "a tool failure alone names only that class");
+  eq(failedClasses({ ...r, railFail: [{}], chargedEmpty: [{}] }, [{ key: "y" }]), ["rail-failure", "unexpected-missing-accept", "charged-empty"], "each failed class is named, in order");
+  const one = classesText({ failedClasses: ["tool-failure"] });
+  ok(/tool failure/.test(one) && !/rail failure/.test(one) && !/missing accept/.test(one), "the alert lists only the class that failed");
+  ok(/rail failure/.test(classesText(null)) && /tool failure/.test(classesText(null)), "an unreadable report lists every class");
+  const yml = readFileSync(new URL("../.github/workflows/algorand-rail-canary.yml", import.meta.url), "utf8");
+  ok(yml.includes("node scripts/algorand-canary-classes.js rail-report.json") && !yml.includes("Three failure classes"), "the workflow's alert text comes from the report's failed classes");
+  const canary = readFileSync(new URL("./algorand-rail-canary.js", import.meta.url), "utf8");
+  ok(/report\.failedClasses = failedClasses\(report, unexpectedNoAvm\)/.test(canary) && /attemptOnce\(\)/.test(canary) && /e\?\.buyerSide/.test(canary), "the sweep retries a throw before any paid request once and writes its failed classes");
+}
 
 // ---- outcomeOf ----
 ok(outcomeOf(R(200, '{"x":1}')) === "ok", "200 with a body is ok");
