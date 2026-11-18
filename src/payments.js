@@ -25,7 +25,7 @@ import { clarifySvmSettleFailure } from "./svm-clarify.js";
 import {
   bazaarResourceServerExtension,
   declareDiscoveryExtension,
-  // CLEANROOM 47: implement per spec 47
+  sanitizeTags,
 } from "@x402/extensions/bazaar";
 import {
   BUILDER_CODE,
@@ -2728,7 +2728,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const routes = Object.fromEntries(
     Object.entries(catalog).map(([route, item]) => {
       const ext = {};
-      // CLEANROOM 47: implement per spec 47
+      const path = route.slice(route.indexOf(" ") + 1);
       const { keepListing, descriptionFirst, ...discovery } = item.discovery || {};
       const slimmed = item.bazaar !== false && item.discovery ? slimDiscovery(discovery, path, item) : null;
       const listingText = capDesc(BAZAAR_DESCRIPTIONS[item.slug] || item.description);
@@ -2790,7 +2790,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           // it cannot be the whole rule), but the change stands on
           // discoverability alone.
           serviceName: serviceNameFor(item),
-          // CLEANROOM 47: implement per spec 47
+          // Marketplace categorizers read these: the listing's own category
+          // leads, and the protocol's sanitizer bounds the list (printable
+          // ASCII, 32 chars each, case-insensitive dedupe, five at most).
           tags: bazaarTagsFor(item),
           // The content type the published example answers with: JSON, or
           // the raw bytes a binary tool sends (its def's mimeType).
@@ -2826,7 +2828,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       accepts: acceptsFor(cfg),
       description: capDesc(cfg.description),
       serviceName: "Agent402.tools",
-      // CLEANROOM 47: implement per spec 47
+      tags: sanitizeTags([cfg.category, "agents", "x402", "tools"]),
       mimeType: "application/json",
       resource: `${baseUrl}${route.split(" ")[1]}`,
       iconUrl: `${baseUrl}${BAZAAR_ICON_PATH}`,

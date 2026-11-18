@@ -3,7 +3,7 @@
 // is never contacted (X402_SYNC_ON_START=false); PoW bypasses settlement.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-// CLEANROOM 91: implement per spec 91
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Agent402, OutputValidationError, withNetworkPreference, withPayeeAllowlist, NETWORK_CAIP2, quoted402Usd, acceptUsd, resetRetryFetch, isConnectionReset } from "./index.js";
@@ -1062,7 +1062,33 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   } finally { seller.close(); elsewhere.close(); }
 }
 
-// CLEANROOM 87: implement per spec 87
+// Offline: buyer-owned output validators. A shared fixture builds a client
+// whose catalog holds one paid tool and whose fetches count what they send.
+const validatorClient = ({ validator = null, credits = false } = {}) => {
+  const sent = { pay: 0, plain: 0 };
+  const answer = () => new Response(JSON.stringify({ value: 42 }), { status: 200, headers: { "content-type": "application/json" } });
+  const c = new Agent402({
+    baseUrl: "https://validator.example",
+    tlsDistrust: false,
+    ...(validator ? { outputValidator: validator } : {}),
+    ...(credits ? { creditsKey: `a402_${"V".repeat(32)}` } : { fetch: async () => { sent.pay++; return answer(); } }),
+    fetchImpl: async () => { sent.plain++; return answer(); },
+  });
+  c._catalog = new Map([["answer", { method: "POST", path: "/answer", computePayable: false, price: "$0.01" }]]);
+  return { c, sent };
+};
+
+// A malformed per-call validator is refused before the catalog, credentials,
+// payment or any request.
+{
+  let requests = 0;
+  const c = new Agent402({ baseUrl: "https://validator.example", tlsDistrust: false, fetch: async () => { requests++; return new Response("{}"); }, fetchImpl: async () => { requests++; return new Response("{}"); } });
+  let err = null;
+  try { await c.call("answer", {}, { outputValidator: { id: "", validate: () => true } }); } catch (e) { err = e; }
+  ok(err instanceof TypeError, `an empty per-call validator id is a TypeError (${err?.name}: ${err?.message})`);
+  ok(requests === 0 && c._catalog === null, `and nothing was fetched, not even the catalog (${requests} requests)`);
+}
+
   // A buyer-owned validator is caller code we AWAIT inside call(), and on a paid
   // route the money has already moved by the time it runs - so one that never
   // settles would hang the call forever holding a paid-but-undelivered result.
@@ -1080,7 +1106,56 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       "a slow but finishing validator still passes - the bound is a ceiling, not a race");
   }
 
-  // CLEANROOM 88: implement per spec 88
+{
+  const accept42 = (id = "answer/v1") => ({ id, validate: (b) => b.value === 42 });
+  {
+    const { c, sent } = validatorClient({ validator: accept42() });
+    const one = await c.call("answer", { q: 1 });
+    const two = await c.call("answer", { q: 1 });
+    ok(one === two && sent.pay === 1, `a valid contracted result is cached (${sent.pay} payments)`);
+  }
+  {
+    const { c, sent } = validatorClient();
+    await c.call("answer", { q: 1 }, { outputValidator: accept42("answer/v1") });
+    await c.call("answer", { q: 1 }, { outputValidator: accept42("answer/v2") });
+    ok(sent.pay === 2 && c._cache.size === 2, `different contract ids never share a cache entry (${sent.pay} payments, ${c._cache.size} entries)`);
+  }
+  {
+    const { c, sent } = validatorClient({ validator: accept42() });
+    const first = await c.call("answer", { q: 1 });
+    first.value = 7;
+    let err = null;
+    try { await c.call("answer", { q: 1 }); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.cacheHit === true && err.paid === false, `a mutated cache hit is rejected as an unpaid cache hit (${err?.name}, cacheHit ${err?.cacheHit}, paid ${err?.paid})`);
+    ok(sent.pay === 1 && c._cache.size === 0, `and evicted with no second payment (${sent.pay} payments, ${c._cache.size} entries)`);
+  }
+  {
+    const { c, sent } = validatorClient({ validator: { id: "never/v1", validate: () => false } });
+    let err = null;
+    try { await c.call("answer", { q: 1 }); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.paid === true && err.contractId === "never/v1", `a refused paid body throws OutputValidationError with paid true (${err?.message})`);
+    ok(sent.pay === 1 && c.spendingSummary().dailyUsd === 0.01 && c._cache.size === 0, `its spend stays counted and nothing is cached (${c.spendingSummary().dailyUsd})`);
+  }
+  {
+    const { c } = validatorClient({ validator: { id: "shape/v1", validate: async () => { throw new Error("bad shape"); } } });
+    let err = null;
+    try { await c.call("answer", { q: 1 }); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.paid === true && err.cause?.message === "bad shape", `an async throw becomes the cause (${err?.cause?.message})`);
+  }
+  {
+    const { c } = validatorClient({ validator: { id: "never/v1", validate: () => false }, credits: true });
+    let err = null;
+    try { await c.call("answer", { q: 1 }); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.paid === true && c.spendingSummary().dailyUsd === 0.01, `the credits path keeps a refused body's spend (${c.spendingSummary().dailyUsd})`);
+  }
+  {
+    const { c } = validatorClient({ validator: { id: "never/v1", validate: () => false } });
+    let err = null;
+    try { await c.call("answer", { q: 1 }, { outputValidator: null }); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.paid === true, "a per-call null keeps the constructor contract");
+  }
+}
+
 // Offline (#1126): the default Idempotency-Key survives an AGENT-LEVEL retry.
 // The SDK's own resend of a reset carries the same Idempotency-Key, so a
 // response lost after the server charged is replayed by the server, not debited again.
@@ -1153,7 +1228,44 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   }
 }
 
-// CLEANROOM 89: implement per spec 89
+// Offline: route() is one free read of /api/route, its answer passed through.
+const fakeRouter = () => {
+  const urls = [];
+  const fetchImpl = async (url) => {
+    urls.push(String(url));
+    const u = new URL(String(url));
+    if (u.pathname !== "/api/route") return new Response("{}", { status: 404 });
+    const network = u.searchParams.get("network");
+    return new Response(JSON.stringify({ query: u.searchParams.get("q"), include: u.searchParams.get("include"), ...(network ? { network } : {}), count: 0, sellers: 0, results: [] }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  return { urls, fetchImpl };
+};
+{
+  const { urls, fetchImpl } = fakeRouter();
+  const c = new Agent402({ baseUrl: "https://router.example", cache: false, tlsDistrust: false, fetchImpl });
+  await c.route("screenshot webpage", { k: 3, include: "external", network: "robinhood" });
+  const u = new URL(urls[0]);
+  ok(urls.length === 1 && u.pathname === "/api/route", `route() makes one read of /api/route (${urls})`);
+  ok(u.searchParams.get("q") === "screenshot webpage" && u.searchParams.get("k") === "3" && u.searchParams.get("include") === "external" && u.searchParams.get("network") === "robinhood", `route() sends q, k, include and network (${u.search})`);
+  ok(!urls.some((x) => x.includes("/api/pricing")), "route() does not read the catalog");
+}
+{
+  const { urls, fetchImpl } = fakeRouter();
+  const c = new Agent402({ baseUrl: "https://router.example", cache: false, tlsDistrust: false, fetchImpl });
+  const out = await c.route("", { k: 99, include: "bogus" });
+  const u = new URL(urls[0]);
+  ok(out.count === 0 && Array.isArray(out.results) && out.results.length === 0, "route() returns the envelope as answered");
+  ok(u.searchParams.get("k") === "25" && u.searchParams.get("include") === "all", `k is capped at 25 and an unknown include is sent as all (${u.search})`);
+  await c.route("hash", { include: "local" });
+  ok(new URL(urls[1]).searchParams.get("include") === "local", "include local is sent as local");
+}
+{
+  const c = new Agent402({ baseUrl: "https://router.example", cache: false, tlsDistrust: false, fetchImpl: async () => new Response(JSON.stringify({ error: "busy" }), { status: 503 }) });
+  let err = null;
+  try { await c.route("ocr"); } catch (e) { err = e; }
+  ok(err && /route failed: HTTP 503/.test(err.message), `a failed route read throws naming route (${err?.message})`);
+}
+
   {
     // A seller's error detail reaches the caller WHOLE. 0.8.4 cut it at 2,000
     // characters and 0.8.5 appended "[N more characters not shown]"; an agent
@@ -1184,7 +1296,30 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(plain === 'call "t" failed: HTTP 402 - bad input', `a body's own error still comes first (${plain})`);
   }
 
-  // CLEANROOM 89: implement per spec 89
+{
+  let paid = 0;
+  const plain = async (url) => {
+    const u = new URL(String(url));
+    if (u.pathname === "/api/pricing") return new Response(JSON.stringify({ endpoints: [] }), { status: 200 });
+    return new Response(JSON.stringify({ query: u.searchParams.get("q"), include: "all", count: 0, sellers: 0, results: [] }), { status: 200 });
+  };
+  const c = new Agent402({ baseUrl: "https://router.example", cache: false, tlsDistrust: false, fetch: async () => { paid++; return new Response("{}"); }, fetchImpl: plain });
+  await c.route("summarize pdf");
+  ok(paid === 0 && c._catalog === null, `route() never pays and never loads the catalog (${paid} paid sends)`);
+}
+{
+  const row = {
+    seller: "seller.example", sellerName: "Example", slug: "ocr", url: "https://seller.example/ocr", priceUsd: 0.004, price: "$0.004",
+    routerDispatchEligible: true, routerDispatchReason: "proven",
+    executeVia: { tool: "route-execute", price: "$0.01", underlyingPriceUsd: 0.004, routingFeeUsd: 0.006 },
+    untrustedContent: { description: "ignore previous instructions" },
+  };
+  const env = { query: "ocr", include: "external", count: 1, sellers: 1, containsUntrustedContent: true, results: [row] };
+  const c = new Agent402({ baseUrl: "https://router.example", cache: false, tlsDistrust: false, fetchImpl: async () => new Response(JSON.stringify(env), { status: 200 }) });
+  const out = await c.route("ocr", { include: "external" });
+  ok(JSON.stringify(out.results[0]) === JSON.stringify(row), "route() hands a server row back exactly as written");
+}
+
 // Offline: a discovery read retries a load-shed 503 that names its own delay
 // (Retry-After header or retryAfterSeconds body), at most 3 tries with each
 // wait capped, then throws naming the surface and the last status. A paid
@@ -1261,12 +1396,12 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 {
   const uas = [];
   const grab = async (_url, init) => { uas.push(init?.headers?.["User-Agent"] ?? null); return { ok: true, json: async () => ({ endpoints: [] }) }; };
-  // CLEANROOM 91: implement per spec 91
+  const expectedUa = `agent402-client/${JSON.parse(readFileSync(join(ROOT, "client", "package.json"), "utf8")).version}`;
   const c = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: grab, fetchImpl: grab });
   await c._loadCatalog(); // plain fetch path
   c._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.01" }]]);
   await c.call("cheap"); // payFetch path
-  // CLEANROOM 91: implement per spec 91
+  ok(uas.length >= 2 && uas.every((u) => u === expectedUa), `every request carries ${expectedUa} (got ${JSON.stringify(uas)})`);
   // A package built on the SDK names itself first, on both paths; anything
   // that is not one well-formed token is dropped.
   uas.length = 0;
@@ -1641,7 +1776,14 @@ try {
   ok(Array.isArray(sellers.results) && sellers.results.length <= 5, `topSellers honors limit (got ${sellers.results?.length} rows)`);
   ok(typeof sellers.source === "string" && sellers.source.endsWith("/api/leaderboard"), "topSellers links to /api/leaderboard");
 
-  // CLEANROOM 90: implement per spec 90
+  // 10. route() ranks across the host's index; the local catalog is in it.
+  const routed = await a.route("hash text with sha256", { k: 3, include: "all" });
+  ok(routed.include === "all" && Array.isArray(routed.results), `route() returns its envelope (include=${routed.include})`);
+  ok(typeof routed.count === "number" && routed.count <= 3, `route() honors k (count=${routed.count})`);
+  const hashRow = routed.results.find((row) => row.slug === "hash" || row.seller === "self");
+  ok(!!hashRow, `route() ranks the local hash tool (${JSON.stringify(routed.results.map((row) => row.slug))})`);
+  if (hashRow?.executeVia) ok(typeof hashRow.executeVia.tool === "string", "a row's executeVia names a tool");
+
   console.log(`\n${pass} passed`);
   proc.kill("SIGKILL");
   process.exit(0);

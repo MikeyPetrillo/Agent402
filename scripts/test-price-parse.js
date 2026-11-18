@@ -58,5 +58,11 @@ eq(priceToMicroUsd({ amount: "7500", asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGG
 // absences and nonsense
 for (const v of [null, undefined, "", {}, [], -1, NaN, Infinity]) eq(priceToMicroUsd(v), null, `${JSON.stringify(v)} is null`);
 
-// CLEANROOM 58: implement per spec 58
+// a token contract in currency states base units; a ticker stays dollars
+eq(priceToMicroUsd({ mode: "fixed", amount: "10000", currency: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" }), 10000,
+  "a Base USDC contract in currency reads the amount as base units ($0.01)");
+eq(priceToMicroUsd({ amount: "10000", currency: "0x00000000000000000000000000000000000000ff" }), null,
+  "an unknown token contract cannot be sized");
+eq(priceToMicroUsd({ amount: "5", currency: "USDC" }), 5000000,
+  "a ticker with no payment context stays a dollar figure");
 console.log(`test-price-parse: ${n} assertions OK`);

@@ -2445,7 +2445,8 @@ function priceRank(p) {
 // per-network price/asset), an optional serviceName, description, and tags.
 // We deliberately keep the price in atomic USDC units → USD here so the router
 // can compare across sellers without a per-network price lookup.
-// CLEANROOM 20: implement per spec 20
+// It is exported so offline tests of the registry/OpenAPI merge can build rows
+// directly, next to the OpenAPI normaliser.
 // PayAI's open registry (and occasionally others) carries `network` as a bare
 // shorthand string ("base", "solana") instead of proper CAIP-2
 // ("eip155:8453", "solana:5eykt4Us...") on some listings - every downstream
@@ -2535,7 +2536,8 @@ function addSellerPayTo(own, registry, t) {
   }
 }
 
-// CLEANROOM 1: implement per spec 1
+// Scaling an accept's atomic amount: the decimals come from the accept itself
+// when it states them, otherwise from the asset's known identity on its chain.
 // USDC by its identity per chain family, for an accept that states no decimals.
 const SVM_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const AVM_USDC_ASA = "31566704";
@@ -2558,8 +2560,66 @@ export function acceptDecimals(a) {
   return null;
 }
 
-// CLEANROOM 1: implement per spec 1
-// CLEANROOM 20: implement per spec 20
+const USDC_NAME_RE = /usdc|usd coin/i;
+const BASE_MAINNET = "eip155:8453";
+const ALGORAND_MAINNET_PREFIX = "algorand:wGHE2Pwd";
+/**
+ * The money fields an index row carries, read from an x402 `accepts` list
+ * (a 402 challenge, a registry item, a manifest entry or a catalogue entry's
+ * derived accepts). One reader for every source, so two rows that describe
+ * the same endpoint agree on price, chains and receiving addresses.
+ * Pure: the input list and its elements are never changed.
+ */
+export function paymentFieldsFromAccepts(rawAccepts) {
+  const list = (Array.isArray(rawAccepts) ? rawAccepts : []).map((a) =>
+    (a && typeof a === "object" && typeof a.network === "string")
+      ? { ...a, network: normalizeNetwork(a.network) }
+      : a);
+  const isObj = (a) => !!a && typeof a === "object";
+  const namesUsdc = (a) => isObj(a) && typeof a.extra?.name === "string" && USDC_NAME_RE.test(a.extra.name);
+  const preferred = list.find((a) => namesUsdc(a) && a.network === BASE_MAINNET)
+    || list.find(namesUsdc)
+    || (list.length ? list[0] : undefined);
+
+  let price = null;
+  if (isObj(preferred)) {
+    const figure = preferred.amount != null ? preferred.amount : preferred.maxAmountRequired;
+    if (sellerNumText(figure) !== undefined) {
+      const decimals = acceptDecimals(preferred);
+      if (decimals != null) {
+        const usd = Number(figure) / 10 ** decimals;
+        if (Number.isFinite(usd)) price = usd;
+      }
+    }
+  }
+
+  const networks = [];
+  for (const a of list) {
+    if (isObj(a) && typeof a.network === "string" && a.network && !networks.includes(a.network)) networks.push(a.network);
+  }
+
+  const firstPayTo = (match) => {
+    const hit = list.find((a) => isObj(a) && typeof a.network === "string" && match(a.network));
+    return hit ? (hit.payTo ?? null) : null;
+  };
+  const stellarPayTo = firstPayTo((n) => n.startsWith("stellar") && !n.includes("test"));
+  const algorandPayTo = firstPayTo((n) => n.startsWith(ALGORAND_MAINNET_PREFIX));
+
+  const payToByNetwork = {};
+  const record = (a) => {
+    if (!isObj(a) || typeof a.network !== "string" || typeof a.payTo !== "string" || !a.payTo) return;
+    if (!Object.hasOwn(payToByNetwork, a.network)) payToByNetwork[a.network] = a.payTo;
+  };
+  record(preferred);
+  for (const a of list) record(a);
+
+  const out = { price, networks, stellarPayTo, algorandPayTo, payToByNetwork };
+  const domains = evmDomainsOfAccepts(list);
+  if (domains && typeof domains === "object" && Object.keys(domains).length) out.evmDomainByNetwork = domains;
+  return out;
+}
+
+export function bazaarItemToTool(item, originUrl) {
   // `resource` = CDP Bazaar; `resourceUrl` = GoPlausible's AVM registry.
   const resource = item.resource || item.resourceUrl || item.url;
   if (typeof resource !== "string") return null;
@@ -2567,7 +2627,8 @@ export function acceptDecimals(a) {
   // "https://hostile.example/...", nor a path seller "/app/x" own "/app/x2".
   // The host compares case-insensitively (a registry may record "API.Host").
   if (!isUnderSeller(resource, originUrl)) return null;
-  // CLEANROOM 2: implement per spec 2
+  // The money fields come from the item's accepts, through the shared reader.
+  const pay = paymentFieldsFromAccepts(item.accepts);
   let pathStr = "/";
   try {
     pathStr = new URL(resource).pathname || "/";
@@ -2585,19 +2646,26 @@ export function acceptDecimals(a) {
     pathStr = scoped;
   }
   const tags = Array.isArray(item.tags) ? item.tags : [];
-  // CLEANROOM 21: implement per spec 21
+  // A verb counts as stated only when the item names one as non-empty text.
+  const methodInferred = !(typeof item.method === "string" && item.method.length > 0);
   // Bazaar entries don't always carry a method (GoPlausible's do); assume POST
   // if we can't tell. The router treats this as a hint and respects a 405 retry.
   return {
     seller: originUrl,
-    // CLEANROOM 21: implement per spec 21
+    method: methodInferred ? "POST" : item.method.toUpperCase(),
+    methodInferred,
     route: pathStr,
     slug: pathStr.replace(/^\//, "").replace(/\//g, "-") || originUrl.replace(/^https?:\/\//, ""),
     name: item.serviceName || pathStr,
     description: item.description || "",
     category: tags[0] || "other",
     tags,
-    // CLEANROOM 2: implement per spec 2
+    price: pay.price,
+    networks: pay.networks,
+    stellarPayTo: pay.stellarPayTo,
+    algorandPayTo: pay.algorandPayTo,
+    payToByNetwork: pay.payToByNetwork,
+    ...(pay.evmDomainByNetwork ? { evmDomainByNetwork: pay.evmDomainByNetwork } : {}),
     provenance: "bazaar",
     ...(scopedHere ? { [SCOPED_ROW]: true } : {}),
     // Coinbase-measured 30-day usage of THIS resource (null when absent).
@@ -2609,7 +2677,8 @@ export function acceptDecimals(a) {
   };
 }
 
-// CLEANROOM 22: implement per spec 22
+// The OpenAPI normaliser is exported and kept pure (no fetch, no state) so the
+// exact document-to-row mapping can be tested offline.
 /** The path prefix an OpenAPI document's `paths` are relative to.
  *
  *  OpenAPI paths are relative to `servers[].url`, so a document declaring
@@ -2666,7 +2735,12 @@ function isDevServerHost(h) {
     || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
 }
 
-// CLEANROOM 22: implement per spec 22
+/** An OpenAPI (or agents) document's operations as index rows, in one
+ *  synchronous call: the same rows the crawl's sliced copy builds. */
+export function normaliseOpenapiTools(openapi, originUrl) {
+  return scopeRowsToSeller(runSteps(normaliseOpenapiToolsSteps(openapi, originUrl)), originUrl);
+}
+
 // The crawl's copy: the same rows, built in slices of CRAWL_SLICE_MS. A
 // multi-megabyte document resolves its local refs twice per operation, and
 // one such document held the loop for most of a second in one turn.
@@ -2850,22 +2924,39 @@ function* filterSteps(list, keep) {
 }
 // One step per operation; the document is read only, so a yield between two
 // operations cannot change a row.
+// The path item keys that name an operation; anything else in a path item
+// (parameters, servers, summary, trace, ...) is not one.
+const OPENAPI_OPERATION_METHODS = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
+// Paths that are never a tool: housekeeping prefixes and static file types.
+const OPENAPI_NON_TOOL_PATH =
+  /^\/(\.well-known|health|openapi|llms|sitemap|robots|favicon|admin|internal)|\.(png|ico|svg|txt|xml)$/i;
 function* normaliseOpenapiToolsSteps(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
   if (base == null) return [];
-  // CLEANROOM 23: implement per spec 23
+  // Asked once per document: when any operation is priced, unannotated
+  // siblings are listed as free rather than left without a `paid` field.
+  const documentDistinguishesPaidOperations = openapiHasPaymentSignal(openapi);
   logUnknownPaymentKeys(openapi, originUrl);
-  // CLEANROOM 23: implement per spec 23
+  const isOperationKey = (k) => OPENAPI_OPERATION_METHODS.has(String(k).toLowerCase());
+  const neverATool = (p) => typeof p === "string" && OPENAPI_NON_TOOL_PATH.test(p);
   const out = [];
   for (const [rawPath, methods] of Object.entries(openapi.paths)) {
     // Apply the basePath unless the document already spells it out (some specs
     // repeat the prefix in every path even though servers declares it).
     const pathStr = base && !rawPath.startsWith(base + "/") && rawPath !== base ? base + rawPath : rawPath;
     for (const [method, op] of Object.entries(methods || {})) {
-      // CLEANROOM 23: implement per spec 23
+      if (!isOperationKey(method)) continue;
       if (!op || typeof op !== "object") continue;
-      // CLEANROOM 23: implement per spec 23
+      // Not every operation is a tool. Discovery and housekeeping paths
+      // (well-known files, health checks, the spec itself, robots, sitemaps,
+      // admin and internal areas) and static files (images, text, XML) are
+      // never sold, and an operation the seller marked deprecated is being
+      // withdrawn. The path is checked both as the document wrote it and with
+      // the server prefix applied, so a prefix such as /internal excludes too.
+      // This holds in every document, annotated or not.
+      if (neverATool(rawPath) || neverATool(pathStr)) continue;
+      if (op.deprecated === true) continue;
       // One reader for every annotation dialect (see openapiOperationPayment):
       // price, paid/free, the chains and the payTo the operation declares.
       const pay = openapiOperationPayment(op);
@@ -2998,12 +3089,33 @@ function mergeManifestToolRows(a, b) {
     price: prefer.price || other.price || null,
     slug: (prefer.slug && prefer.slug !== prefer.route) ? prefer.slug : (other.slug || prefer.slug),
     method: prefer.method || other.method,
-    // CLEANROOM 3: implement per spec 3
+    // Richness ignores payment terms, so the winner may carry none while the
+    // other row does: keep the winner's own, else take the other's.
+    ...fillFrom(prefer, other, "networks", (v) => Array.isArray(v) && v.length > 0),
+    ...fillFrom(prefer, other, "payToByNetwork", (v) => !!v && typeof v === "object" && Object.keys(v).length > 0),
+    ...fillFrom(prefer, other, "stellarPayTo", Boolean),
+    ...fillFrom(prefer, other, "algorandPayTo", Boolean),
+    ...fillFrom(prefer, other, "evmDomainByNetwork", Boolean),
     ...(a[MANIFEST_HOST_RELATIVE] || b[MANIFEST_HOST_RELATIVE] ? { [MANIFEST_HOST_RELATIVE]: true } : {}),
   };
 }
 
-// CLEANROOM 4: implement per spec 4
+/** `{ [key]: other[key] }` when the winner has no usable value there and the
+ *  other row does; otherwise nothing (the winner's own value stays). */
+function fillFrom(prefer, other, key, usable) {
+  if (usable(prefer[key])) return {};
+  return usable(other[key]) ? { [key]: other[key] } : {};
+}
+
+/** Is this entry (or price object) written in the x402 accept shape? Its
+ *  `amount` / `maxAmountRequired` are then atomic units priced through the
+ *  accepts reader, never a dollar figure. */
+function acceptShaped(raw) {
+  if (!raw || typeof raw !== "object") return false;
+  return typeof raw.network === "string" || typeof raw.asset === "string" || typeof raw.scheme === "string"
+    || typeof raw.payTo === "string" || typeof raw.maxAmountRequired === "string" || Array.isArray(raw.accepts);
+}
+
 /** An explicit DOLLAR label (`display`, `amountLabel`) the seller wrote for
  *  humans: preferred over any figure we would have to convert. Taken only when
  *  it reads as one dollar amount ("$0.003", "0.003 USDC"), never a sentence. */
@@ -3113,7 +3225,28 @@ export function singleResourceManifestTool(manifest, originUrl) {
   return { ...tool, provenance: "manifest" };
 }
 
-// CLEANROOM 5: implement per spec 5
+/** The payment terms one catalogue entry declares, as an accepts list: its
+ *  own accepts, its `payment` block, or flat chain fields on the entry; when it
+ *  declares none, the manifest-level `fallback`. */
+function catalogueEntryAccepts(raw, fallback) {
+  if (!raw || typeof raw !== "object") return fallback;
+  if (Array.isArray(raw.accepts) && raw.accepts.length) return raw.accepts;
+  const fromBlock = entryPaymentBlockAccepts(raw.payment);
+  if (fromBlock.length) return fromBlock;
+  const chain = [raw.network, raw.chain].find((v) => typeof v === "string" && v);
+  if (!chain) return fallback;
+  return [{
+    scheme: raw.scheme || "exact",
+    network: chain,
+    asset: raw.asset || raw.asset_address || raw.assetAddress,
+    payTo: raw.payTo || raw.pay_to,
+    amount: raw.amount != null ? raw.amount : raw.maxAmountRequired,
+    maxAmountRequired: raw.maxAmountRequired != null ? raw.maxAmountRequired : raw.amount,
+    maxTimeoutSeconds: raw.maxTimeoutSeconds,
+    extra: raw.extra,
+  }];
+}
+
 /** The accepts a catalogue entry's own `payment` block declares: its accepts
  *  array, else one accept per network it names (`network`, `chain`, or a
  *  `networks` list), each with the block's asset and, where its shape fits the
@@ -3211,7 +3344,24 @@ function manifestX402BlockAccepts(p) {
   }));
 }
 
-// CLEANROOM 6: implement per spec 6
+/** A manifest's service-wide `payment` block as accepts: the default for every
+ *  catalogue row that declares no payment of its own. */
+function manifestPaymentAccepts(manifest) {
+  const p = manifest?.payment;
+  if (!p || typeof p !== "object") return [];
+  const chain = p.network || p.chain;
+  if (typeof chain !== "string" || !chain) return manifestX402BlockAccepts(p);
+  const tickerOnly = typeof p.asset === "string" && !/^0x[0-9a-fA-F]{40}$/.test(p.asset);
+  return [{
+    scheme: p.scheme || "exact",
+    network: chain,
+    asset: p.asset_address || p.assetAddress || p.asset,
+    payTo: p.pay_to || p.payTo,
+    amount: p.amount != null ? p.amount : p.maxAmountRequired,
+    maxTimeoutSeconds: p.maxTimeoutSeconds,
+    extra: p.extra ? p.extra : (tickerOnly ? { name: p.asset } : undefined),
+  }];
+}
 export function normaliseManifestTools(manifest, originUrl, { examples = null } = {}) {
   // `examples` (a Map, crawl-local) collects each entry's published example
   // request for the unpaid quote probe and nothing else; see
@@ -3316,7 +3466,7 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   const metaByPath = new Map();
   // Probe examples by row key, only when the caller collects them.
   const exampleByKey = exampleOf ? new Map() : null;
-  // CLEANROOM 7: implement per spec 7
+  const manifestAccepts = manifestPaymentAccepts(manifest);
   const widePayment = widePriceView(manifest.payment);
   const manifestAcceptsWide = widePayment !== manifest.payment ? manifestPaymentAccepts({ payment: widePayment }) : manifestAccepts;
   // A catalogue row that carries only a bare `amount` under a manifest whose
@@ -3325,13 +3475,31 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   // times too large.
   const manifestAtomic = [...(Array.isArray(manifest.accepts) ? manifest.accepts : []), ...manifestAccepts]
     .find((a) => atomicContext(a) && tokenDecimalsOf(a) != null) || null;
-  // CLEANROOM 8: implement per spec 8
+  // One record per URL path, merged across every entry on it, so a thin
+  // sibling method can borrow the path's name, description, price and terms.
+  const realName = (n, path) => !!n && n !== path && !String(n).startsWith("/");
+  const notePathMeta = (path, entry) => {
+    if (!path) return;
+    const was = metaByPath.get(path);
+    const hasTerms = (p) => !!p && Array.isArray(p.networks) && p.networks.length > 0;
+    metaByPath.set(path, {
+      name: realName(entry.name, path) ? entry.name
+        : (was && realName(was.name, path) ? was.name : (was?.name || entry.name || "")),
+      description: entry.description || was?.description || "",
+      price: entry.price || was?.price || null,
+      slug: (entry.slug && entry.slug !== path) ? entry.slug : (was?.slug || entry.slug || ""),
+      pay: hasTerms(entry.pay) ? entry.pay : (was?.pay || null),
+    });
+  };
 
   for (const list of catalogues) {
     for (const raw of list.slice(0, 1000)) {
       let ref = "", name = "", description = "", price = null, inputSchema = null;
       const methodList = [];
-      // CLEANROOM 7: implement per spec 7
+      // A bare string entry inherits only the service-wide block; an object
+      // entry uses its own terms when it declares any.
+      const entryAccepts = typeof raw === "string" ? manifestAccepts : catalogueEntryAccepts(raw, manifestAccepts);
+      let pay = Array.isArray(entryAccepts) && entryAccepts.length ? paymentFieldsFromAccepts(entryAccepts) : null;
       if (typeof raw === "string") {
         ref = raw.trim();
       } else if (raw && typeof raw === "object") {
@@ -3385,7 +3553,7 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
       if (!u.pathname || u.pathname === "/" || MANIFEST_NON_TOOL_PATH.test(u.pathname)) continue;
       const pathOnly = u.pathname;
       const slug = cleanListingSlug(name) || u.pathname.replace(/^\//, "").replace(/\//g, "-");
-      // CLEANROOM 8: implement per spec 8
+      notePathMeta(pathOnly, { name, description, price, slug, pay });
       const methodsToEmit = methodList.length ? [...new Set(methodList)] : [""];
       for (const method of methodsToEmit) {
         // Keyed on method+route INCLUDING the query string: two entries that differ
@@ -3411,9 +3579,16 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
           description: description.slice(0, 400),
           category: "other",
           tags: [],
-          // CLEANROOM 9: implement per spec 9
+          // The seller's own display price wins; else the accepts' figure.
+          price: price != null ? price : (pay && pay.price != null ? `$${pay.price}` : null),
           ...(() => { const packed = inputSchema ? packRequestContract(requestContractFromInputSchema(inputSchema, method || "GET")) : null; return packed ? { requestContract: packed } : {}; })(),
-          // CLEANROOM 9: implement per spec 9
+          ...(pay ? {
+            networks: pay.networks,
+            stellarPayTo: pay.stellarPayTo,
+            algorandPayTo: pay.algorandPayTo,
+            payToByNetwork: pay.payToByNetwork,
+            ...(pay.evmDomainByNetwork ? { evmDomainByNetwork: pay.evmDomainByNetwork } : {}),
+          } : {}),
         };
         byKey.set(key, mergeManifestToolRows(byKey.get(key), row));
         if (example && !exampleByKey.has(key)) exampleByKey.set(key, example);
@@ -3431,7 +3606,16 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
     if ((!t.name || t.name === t.route || String(t.name).startsWith("/")) && meta.name) t.name = meta.name;
     if (!t.description && meta.description) t.description = String(meta.description).slice(0, 400);
     if ((!t.slug || t.slug === t.route) && meta.slug) t.slug = meta.slug;
-    // CLEANROOM 8: implement per spec 8
+    // One path, one set of payment terms: a sibling with no chain takes the
+    // path's.
+    const mp = meta.pay;
+    if ((!Array.isArray(t.networks) || !t.networks.length) && mp && Array.isArray(mp.networks) && mp.networks.length) {
+      t.networks = mp.networks;
+      if ((!t.payToByNetwork || !Object.keys(t.payToByNetwork).length) && mp.payToByNetwork && Object.keys(mp.payToByNetwork).length) t.payToByNetwork = mp.payToByNetwork;
+      if (!t.stellarPayTo && mp.stellarPayTo) t.stellarPayTo = mp.stellarPayTo;
+      if (!t.algorandPayTo && mp.algorandPayTo) t.algorandPayTo = mp.algorandPayTo;
+      if (!t.evmDomainByNetwork && mp.evmDomainByNetwork) t.evmDomainByNetwork = mp.evmDomainByNetwork;
+    }
   }
   // A price in the seller's OWN manifest is an origin declaration, exactly like
   // one in their openapi.json, and must be marked as such: `originDeclaredPrice`
@@ -3958,7 +4142,12 @@ function openapiOperationPaymentOnce(op) {
   return out;
 }
 
-// CLEANROOM 24: implement per spec 24
+/** Does the payment reader judge this one path item value a paid operation? */
+function isPaidOperation(op) {
+  if (!op || typeof op !== "object") return false;
+  try { return openapiOperationPayment(op).paid === true; } catch { return false; }
+}
+
 // Annotation-dialect watch. There is no standard for payment extensions, so
 // sellers invent keys — and in an ANNOTATED document an unrecognized price key
 // doesn't inflate anything, it silently DELETES: the op reads as unannotated
@@ -4006,9 +4195,33 @@ function logUnknownPaymentKeys(openapi, originUrl) {
   }
 }
 
-// CLEANROOM 24: implement per spec 24
+// Whether a document sells anything at all. A document found without a
+// manifest or a registry record is read as a paid seller only when at least
+// one of its operations is priced or declared payment-required; the same
+// answer decides whether unannotated operations are stamped free. Every value
+// in every path item is checked, ignoring the listing filters.
+export function openapiHasPaymentSignal(openapi) {
+  if (!openapi || typeof openapi !== "object" || !openapi.paths) return false;
+  try {
+    for (const item of Object.values(openapi.paths)) {
+      if (!item || typeof item !== "object") continue;
+      for (const v of Object.values(item)) if (isPaidOperation(v)) return true;
+    }
+  } catch { return false; }
+  return false;
+}
 
-// CLEANROOM 25: implement per spec 25
+// Merging a seller's OpenAPI document into its registry rows
+// (mergeOpenapiIntoBazaar, below). A registry row proves payments settled but
+// says little about the tool; the seller's operation supplies the slug (its
+// operationId), the name (summary), the description and the tags. Rows join
+// on method plus route; a join on the route alone is allowed only when the
+// registry had to guess the verb. The document wins on descriptive fields and,
+// when the verb was guessed, on the method. For price, the registry's observed
+// amount stands unless the origin declares a different one, in which case the
+// origin's current declaration wins; an OpenAPI price fills a missing amount.
+// Operations only the document lists are appended, and rows only the registry
+// lists pass through as clean copies.
 /** Every operation's {method, route} in a document — NO payment filtering, no
  *  static-asset skip. Used only to COLLAPSE facilitator-registry rows whose
  *  concrete URLs instantiate a templated path (see mergeOpenapiIntoBazaar);
@@ -4016,7 +4229,22 @@ function logUnknownPaymentKeys(openapi, originUrl) {
 export function openapiAllOperationRoutes(openapi, originUrl) {
   return scopeRowsToSeller(openapiAllOperationRoutesUnscoped(openapi, originUrl), originUrl);
 }
-// CLEANROOM 26: implement per spec 26
+function openapiAllOperationRoutesUnscoped(openapi, originUrl) {
+  if (!openapi || typeof openapi !== "object" || !openapi.paths || typeof openapi.paths !== "object") return [];
+  const base = openapiBasePath(openapi, originUrl);
+  if (base == null) return [];
+  const out = [];
+  for (const [rawPath, item] of Object.entries(openapi.paths)) {
+    if (!item || typeof item !== "object") continue;
+    const route = base && !rawPath.startsWith(base + "/") && rawPath !== base ? base + rawPath : rawPath;
+    for (const [key, op] of Object.entries(item)) {
+      if (!OPENAPI_OPERATION_METHODS.has(key.toLowerCase())) continue;
+      if (!op || typeof op !== "object") continue;
+      out.push({ method: key.toUpperCase(), route });
+    }
+  }
+  return out;
+}
 
 // Does `concrete` instantiate the templated `route` ("/a/{id}/b" matches
 // "/a/57dc.../b")? Literal segments must match exactly; {param} segments match
@@ -4073,7 +4301,33 @@ function* templatesMatching(index, concreteRoute) {
   }
 }
 
-// CLEANROOM 27: implement per spec 27
+// Registry rows are evidence of settlement and discovery, never of the
+// seller's application contract: a copy of one that the merge may publish
+// leaves the contract keys behind. A row without them (and without symbol
+// keys) is copied in one spread, so the copies share one object shape; only
+// the rest are copied key by key, never reading a contract value.
+const ownKey = Object.prototype.hasOwnProperty;
+function withoutRegistryContracts(row) {
+  if (!row || typeof row !== "object") return row;
+  if (!ownKey.call(row, "requestContract") && !ownKey.call(row, "responseContract") && Object.getOwnPropertySymbols(row).length === 0) return { ...row };
+  const copy = {};
+  for (const k of Object.keys(row)) {
+    if (k === "requestContract" || k === "responseContract") continue;
+    copy[k] = row[k];
+  }
+  return copy;
+}
+/** The seller operation's own contract tuple under `key`, or null: only an
+ *  own data property holding an array counts, and no getter is ever run. */
+function ownContractTuple(row, key) {
+  if (!row || typeof row !== "object") return null;
+  try {
+    const d = Object.getOwnPropertyDescriptor(row, key);
+    if (!d || !("value" in d)) return null;
+    return Array.isArray(d.value) ? d.value : null;
+  } catch { return null; }
+}
+
 export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { allRoutes = [] } = {}) {
   return runSteps(mergeOpenapiIntoBazaarSteps(openapiTools, bazaarTools, { allRoutes }));
 }
@@ -4094,7 +4348,8 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
   const byRoute = new Map();
   for (const o of openapiTools) {
     exact.set(`${o.method} ${o.route}`, o);
-    // CLEANROOM 28: implement per spec 28
+    // A route-only answer exists only for a route with a single operation.
+    byRoute.set(o.route, byRoute.has(o.route) ? null : o);
   }
   // Templated operations, for collapsing per-instance registry rows. A
   // facilitator registry records every settled URL verbatim, so one templated
@@ -4117,7 +4372,12 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
   };
   const used = new Set();
   const enrich = (b, o, route) => {
-    // CLEANROOM 29: implement per spec 29
+    // The registry row is evidence that payments settled, not authority on the
+    // seller's contract: copy it without contracts, and read the tuples from
+    // the seller's own operation only.
+    const bazaar = withoutRegistryContracts(b);
+    const requestContract = ownContractTuple(o, "requestContract");
+    const responseContract = ownContractTuple(o, "responseContract");
     const bazaarMicro = priceToMicroUsd(b.price);
     const originMicro = priceToMicroUsd(o.price);
     const priceConflict = bazaarMicro != null && originMicro != null && bazaarMicro !== originMicro;
@@ -4140,14 +4400,18 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     if (priceConflict) price = microUsdToPrice(originMicro);
     else price = b.price == null ? o.price : b.price;
     return ({
-    // CLEANROOM 29: implement per spec 29
+    ...bazaar,
+    method: b.methodInferred ? (o.method || b.method) : b.method,
     route,
     slug: o.slug || b.slug,
     name: o.name && o.name !== o.route ? o.name : b.name,
     description: o.description || b.description,
     tags: o.tags?.length ? o.tags : b.tags,
     category: o.tags?.length ? o.category : b.category,
-    // CLEANROOM 29: implement per spec 29
+    // Contract tuples cross only from the seller's own operation; they play
+    // no part in ranking, routing, pricing or payment.
+    ...(requestContract ? { requestContract } : {}),
+    ...(responseContract ? { responseContract } : {}),
     price,
     // What the ORIGIN itself declared this crawl, kept separately so a later
     // stage cannot quietly overwrite the seller's own current number with an
@@ -4183,7 +4447,9 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
   });
   };
   const mergeRow = (b) => {
-    // CLEANROOM 30: implement per spec 30
+    // An inferred verb may fall back to the route alone; a stated verb must
+    // match exactly.
+    const o = b?.methodInferred ? byRoute.get(b.route) : exact.get(`${b?.method} ${b?.route}`);
     if (o) { used.add(o); return enrich(b, o, b.route); }
     // Per-instance collapse, indexed operations first: the first instance
     // becomes the operation's row (templated route, registry payment truth);
@@ -4202,11 +4468,11 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     if (d) {
       const key = `${d.method} ${d.route}`;
       if (collapsedDocRows.has(key)) return null;
-      // CLEANROOM 31: implement per spec 31
+      const row = { ...withoutRegistryContracts(b), route: d.route, slug: d.route.replace(/^\//, "").replace(/\//g, "-") };
       collapsedDocRows.set(key, row);
       return row;
     }
-    // CLEANROOM 31: implement per spec 31
+    return withoutRegistryContracts(b);
   };
   const merged = [];
   for (let i = 0; i < bazaarTools.length; i++) {
@@ -6401,7 +6667,13 @@ function isRoutable(entry) {
 // key, and a dropped entry's memo goes with it.
 const slugSetMemo = new WeakMap();
 const serviceKeyMemo = new WeakMap();
-// CLEANROOM 32: implement per spec 32
+// Payees per network in one canonical order: networks by locale order,
+// addresses lower-cased and sorted.
+function canonicalPayeesFrom(byNetwork) {
+  return Object.keys(byNetwork)
+    .sort((a, b) => a.localeCompare(b))
+    .map((net) => [net, Array.from(byNetwork[net], (a) => String(a).toLowerCase()).sort()]);
+}
 // The full tool contract + payees of one entry, memoized by identity. Built
 // here rather than inside computeAliasOriginsBaseSteps so the route index can
 // prime it in the background as each re-crawled entry lands.
@@ -6439,7 +6711,15 @@ function* exactServiceKeySteps(v) {
     const pairs = new Array(tools.length);
     for (let i = 0; i < tools.length; i++) {
       const t = tools[i];
-      // CLEANROOM 33: implement per spec 33
+      // The sellable contract only; descriptive fields stay out of the key.
+      const c = [
+        String(t.method || "GET").toUpperCase(),
+        t.route ? String(t.route) : "",
+        t.slug ? String(t.slug) : "",
+        t.price == null ? "" : String(t.price),
+        t.paid === false ? "free" : "paid-or-unknown",
+        Array.from(t.networks || [], (n) => String(n)).sort(),
+      ];
       pairs[i] = JSON.stringify(c);
       if (i % SERVICE_KEY_STEP === SERVICE_KEY_STEP - 1) { serviceKeySteps++; yield; }
     }
@@ -6565,7 +6845,33 @@ function* computeAliasOriginsBaseSteps(entries) {
     for (const s of mine) if (!theirs.has(s)) { subset = false; break; }
     if (subset) aliases.add(origin);
   }
-// CLEANROOM 34: implement per spec 34
+  // Generated deployment hostnames. A seller may serve one service on its own
+  // domain and again on a generated `.up.railway.app` host, each naming itself
+  // as homepage, so the rule above cannot see it. Fold only the proven case:
+  // the exact same service key (payees and every tool's contract) and exactly
+  // one durable origin in the group. A shared wallet alone never folds
+  // anything, and two custom origins always stay distinct.
+  const byKey = new Map();
+  for (const [origin, v] of entries) {
+    if (++walked % ALIAS_YIELD_ENTRIES === 0) yield;
+    if (v?.error || aliases.has(origin)) continue;
+    const key = v && typeof v === "object" && !serviceKeyMemo.has(v)
+      ? yield* exactServiceKeySteps(v)
+      : exactServiceKeyOf(v);
+    if (key == null) continue;
+    let group = byKey.get(key);
+    if (!group) byKey.set(key, (group = []));
+    group.push(origin);
+  }
+  const isDeploymentHost = (origin) => {
+    try { return new URL(origin).hostname.toLowerCase().endsWith(".up.railway.app"); } catch { return false; }
+  };
+  for (const group of byKey.values()) {
+    if (group.length < 2) continue;
+    const durable = group.filter((o) => !isDeploymentHost(o));
+    if (durable.length !== 1) continue;
+    for (const o of group) if (isDeploymentHost(o)) aliases.add(o);
+  }
   return aliases;
 }
 

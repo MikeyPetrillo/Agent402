@@ -8,6 +8,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-17",
+    title: "Internal reimplementation, no behavior change",
+    items: [
+      "Internal: Parts of the seller index, the payment and contract checks, the smoke buy and the buyer client were reimplemented from written specifications; internal reimplementation, no behavior change.",
+    ],
+  },
+  {
+    date: "2026-11-17",
     title: "An unconfirmed settlement is answered as unconfirmed",
     items: [
       "Payments: When a backup settler ends a settlement on an answer that does not show whether the transfer was sent (an HTTP error, a dropped connection, an unreadable answer, or a failure naming a transaction), the call is answered 402 with reason settlement-unconfirmed: the answer says not to sign a new authorization for that call before the expiry the payment carries (an authorization's validBefore, a time by which a Solana transaction's blockhash has expired, an Algorand lastValid round or a Stellar expiration ledger), or when it carries none, until the paying wallet shows whether the transfer landed, names the transaction to watch and its refund lookup when there is one (retry watch-transaction, otherwise check-wallet), carries no new offer, and its receipt reads settlement_unconfirmed.",

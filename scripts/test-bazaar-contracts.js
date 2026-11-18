@@ -1,11 +1,17 @@
 #!/usr/bin/env node
-// CLEANROOM 53: implement per spec 53
+// Paid-route contract sweep of what PAYMENT-REQUIRED emits. Boots the real
+// server against a local /supported stub (no payment is ever made); every
+// route builds the same x402 v2 challenge it builds in production, and each
+// one is checked against the official schemas, the Bazaar validators, the
+// byte budgets and its own published example.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-// CLEANROOM 53: implement per spec 53
+import { createServer } from "node:http";
 import { isDeepStrictEqual } from "node:util";
 import { spawn } from "node:child_process";
 import { getFreePorts } from "./lib/free-port.js";
-// CLEANROOM 53: implement per spec 53
+import { parsePaymentRequired, ResourceInfoSchema } from "@x402/core/schemas";
+import { validateDiscoveryExtension, validateDiscoveryExtensionSpec } from "@x402/extensions/bazaar";
+import { boundedSchemaFromExample, SHAPE_HAPPY_PATH_ONLY } from "../src/openapi-schema.js";
 import { gradeX402Response } from "../src/tools/x402-kit.js";
 import { CAIP2_PATTERN } from "../src/avm-network.js";
 import { hasShortenedExample, replayableInput, openapiOperation } from "./lib/replayable-example.js";
@@ -25,7 +31,8 @@ const openapiOutputExample = (openapi, endpoint) => {
   return ok?.example ?? ok?.examples?.default?.value;
 };
 const WHOLE_LISTING_ROUTES = new Set(["POST /v1/judge", "POST /v1/decisions", "POST /v1/judge/vision", "POST /api/loop-gate"]);
-// CLEANROOM 53: implement per spec 53
+// The encoded challenge header a buyer echoes back stays under this.
+const MAX_HEADER_CHARS = 12_000;
 // The JSON body mirrors the header's PaymentRequired object (see
 // src/payment-required-body.js). Nobody echoes the body back, so this is not
 // the header's echo ceiling; it is a ratchet so a mirrored body cannot grow
@@ -38,26 +45,100 @@ const MAX_BODY_BYTES = 12_000;
 // header (which scripts/test-challenge-size.js caps against production) plus
 // our own fields, and those are capped here.
 const MAX_OWN_FIELD_BYTES = 2_048;
-// CLEANROOM 53: implement per spec 53
+const MIN_ROUTES = 560;
+const CONCURRENCY = 12;
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const [port, stubPort] = await getFreePorts(2);
+const base = `http://127.0.0.1:${port}`;
+
+// The helper's contract, checked before anything boots: an object example
+// gets an object schema, anything else gets none.
+for (const v of [null, "raw", [1, 2], 7, true]) {
+  if (boundedSchemaFromExample(v, 500) !== null) throw new Error(`boundedSchemaFromExample(${JSON.stringify(v)}) should be null`);
+}
+if (boundedSchemaFromExample({ ok: true }, 500)?.type !== "object") throw new Error("boundedSchemaFromExample({ ok: true }) should be an object schema");
+
+// The stub facilitator: answers /supported for Base exact, nothing else.
+const stub = createServer((req, res) => {
+  req.resume();
+  req.on("end", () => {
+    if (req.url === "/supported") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }));
+    } else { res.writeHead(404); res.end(); }
+  });
+});
+await new Promise((resolve) => stub.listen(stubPort, "127.0.0.1", resolve));
+
+let serverLog = "";
+// Dummy keys let the gated paid routes register without reaching an upstream.
+const serverEnv = (listenPort, extra = {}) => ({
+  ...process.env,
+  PORT: String(listenPort),
+  FREE_MODE: "",
+  NODE_ENV: "test",
+  NETWORK: "base",
+  PAYMENT_NETWORKS: "base",
+  WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
+  FACILITATOR_URL: `http://127.0.0.1:${stubPort}`,
+  CDP_API_KEY_ID: "",
+  CDP_API_KEY_SECRET: "",
+  OPENROUTER_TTS_ENABLED: "true",
+  X_BEARER_TOKEN: "test",
+  APOLLO_API_KEY: "test",
+  TYPESAFE_API_KEY: "test",
+  X402_INDEX_CRAWL: "off",
+  MPP_INDEX_CRAWL: "off",
+  MONITOR_SCHEDULER: "off",
+  FREE_ALERTS: "off",
+  FOLLOWUPS: "off",
+  STATS_ALLOW_EPHEMERAL: "true",
+  ...extra,
+});
 const child = spawn(process.execPath, ["src/server.js"], { env: serverEnv(port), stdio: ["ignore", "pipe", "pipe"] });
 child.stdout.on("data", (d) => { serverLog += d; });
 child.stderr.on("data", (d) => { serverLog += d; });
 
-// CLEANROOM 53: implement per spec 53
+const failures = [];
+const fail = (route, problem) => { failures.push(`${route}: ${problem}`); };
+const jsonType = (v) => (Array.isArray(v) ? "array" : v === null ? "null" : Number.isInteger(v) ? "integer" : typeof v === "number" ? "number" : typeof v);
+
+try {
   let up = false;
   for (let i = 0; i < 240; i++) {
     try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* booting */ }
     await wait(250);
   }
-  // CLEANROOM 53: implement per spec 53
+  if (!up) throw new Error(`server did not boot:\n${serverLog.slice(-1200)}`);
   const pricing = await (await fetch(`${base}/api/pricing`)).json();
-  // CLEANROOM 53: implement per spec 53
+  const endpoints = Array.isArray(pricing.endpoints) ? pricing.endpoints : [];
+  if (!endpoints.length) throw new Error("/api/pricing lists no endpoints");
+  if (endpoints.length < MIN_ROUTES) throw new Error(`/api/pricing lists ${endpoints.length} routes, fewer than the ${MIN_ROUTES} floor`);
   // The paid sweeps replay each 402's example input; a long string there is
   // a placeholder, and the full example must come back from /openapi.json.
   const openapi = await (await fetch(`${base}/openapi.json`)).json();
   let shortenedExamples = 0;
 
-  // CLEANROOM 53: implement per spec 53
+  const rows = [];
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < endpoints.length) {
+      const endpoint = endpoints[cursor++];
+      const method = String(endpoint.method || "GET").toUpperCase();
+      const route = `${method} ${endpoint.path}`;
+      try {
+        const res = await fetch(base + endpoint.path, {
+          method,
+          headers: { "content-type": "application/json" },
+          body: /^(POST|PUT|PATCH)$/.test(method) ? "{}" : undefined,
+          signal: AbortSignal.timeout(20_000),
+        });
+        const bodyText = await res.text();
+        rows.push({ endpoint, route, status: res.status, encoded: res.headers.get("payment-required") || "", bodyText, cacheControl: res.headers.get("cache-control") || "" });
+      } catch (e) { fail(route, `request failed: ${e.message}`); }
+    }
+  };
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
   // The amount a 402 asks for against what the price list publishes. A
   // fixed-price route asks exactly its list price. A quoted route (its row says
   // quoted: true with a quoteRange) prices the body it was sent, so its 402 for
@@ -67,14 +148,17 @@ child.stderr.on("data", (d) => { serverLog += d; });
   const microOf = (usd) => Math.round(Number(String(usd ?? "").replace(/[^0-9.]/g, "")) * 1e6);
   let fixedPriced = 0;
   let quotedPriced = 0;
-  // CLEANROOM 53: implement per spec 53
+  let requiredRoutes = 0;
+  let variableRoutes = 0;
+  let rawRoutes = 0;
+  let largestHeader = { route: "", bytes: 0 };
   let largestBody = { route: "", bytes: 0 };
   let largestOwn = { route: "", bytes: 0 };
-  // CLEANROOM 53: implement per spec 53
+  let speechChecked = false;
   // path -> listing mimeType, for every tool whose example answers raw bytes.
   const binaryListings = new Map();
   const method0 = (route) => route.split(" ")[0];
-  // CLEANROOM 53: implement per spec 53
+  let extractTagSeen = false;
   // Fields the Bazaar ranks on (description, output schema, service metadata):
   // routes that carry each one, printed and required of every route.
   const has = { serviceName: 0, tags: 0, icon: 0, description: 0, input: 0, output: 0, outputSchema: 0, screened: 0 };
@@ -91,7 +175,15 @@ child.stderr.on("data", (d) => { serverLog += d; });
   const iconPaths = new Set();
 
   for (const { endpoint, route, status, encoded, bodyText, cacheControl } of rows) {
-    // CLEANROOM 53: implement per spec 53
+    if (status !== 402) { fail(route, `expected 402, got ${status}`); continue; }
+    if (!encoded) { fail(route, "missing PAYMENT-REQUIRED header"); continue; }
+    if (encoded.length > largestHeader.bytes) largestHeader = { route, bytes: encoded.length };
+    if (encoded.length > MAX_HEADER_CHARS) fail(route, `${encoded.length}-char PAYMENT-REQUIRED header exceeds ${MAX_HEADER_CHARS}`);
+    let paymentRequired;
+    try { paymentRequired = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")); }
+    catch (e) { fail(route, `challenge is not base64 JSON: ${e.message}`); continue; }
+    const parsed = parsePaymentRequired(paymentRequired);
+    if (!parsed.success) fail(route, `PaymentRequiredSchema: ${parsed.error?.issues?.[0]?.message || "invalid"}`);
 
     // The body carries the same object as the header, key for key.
     const bodyBytes = Buffer.byteLength(bodyText || "");
@@ -158,7 +250,16 @@ child.stderr.on("data", (d) => { serverLog += d; });
       const wantTypes = endpoint.responseTypes || [want];
       if (!isDeepStrictEqual(types, wantTypes)) fail(route, `/openapi.json 200 content types ${JSON.stringify(types)} are not ${JSON.stringify(wantTypes)}`);
     }
-    // CLEANROOM 53: implement per spec 53
+    {
+      const info = ResourceInfoSchema.safeParse(paymentRequired.resource);
+      if (!info.success) fail(route, `ResourceInfoSchema: ${info.error?.issues?.[0]?.message || "invalid"}`);
+      const tags = Array.isArray(listing.tags) ? listing.tags : [];
+      if (tags.length > 5) fail(route, `listing carries ${tags.length} tags, more than 5`);
+      if (endpoint.path === "/api/extract") {
+        if (tags.includes("scraping")) extractTagSeen = true;
+        else fail(route, `the route-specific "scraping" tag was displaced: ${JSON.stringify(tags)}`);
+      }
+    }
     {
       // accepts[0] is read here ahead of the outputSchema checks below, which
       // declare their own `accepts` for the whole list.
@@ -177,7 +278,8 @@ child.stderr.on("data", (d) => { serverLog += d; });
       }
     }
 
-    // CLEANROOM 53: implement per spec 53
+    const extension = paymentRequired.extensions?.bazaar;
+    if (!extension) { fail(route, "missing bazaar extension"); continue; }
     {
       const input = extension.info?.input;
       if (hasShortenedExample(input?.body) || hasShortenedExample(input?.queryParams)) {
@@ -188,7 +290,14 @@ child.stderr.on("data", (d) => { serverLog += d; });
       }
       if (endpoint.path === "/api/html-frames" && hasShortenedExample(input)) fail(route, "html-frames' 402 example lost its document to the byte budget");
     }
-    // CLEANROOM 53: implement per spec 53
+    {
+      const spec = validateDiscoveryExtensionSpec(extension);
+      if (!spec.valid) fail(route, `Bazaar spec: ${(spec.errors || []).join("; ")}`);
+      const schemaCheck = validateDiscoveryExtension(extension);
+      if (!schemaCheck.valid) fail(route, `Bazaar schema: ${(schemaCheck.errors || []).join("; ")}`);
+    }
+    const example = extension.info?.output?.example;
+    const outputSchema = extension.schema?.properties?.output?.properties?.example;
     // accepts[0].outputSchema (2026-09-02): the spec's own field carries the
     // extension's typed schema, on the FIRST accept only (one copy, never per
     // rail: the buyer echoes the challenge back).
@@ -240,12 +349,35 @@ child.stderr.on("data", (d) => { serverLog += d; });
       if (outputSchema?.type !== "string" || outputSchema?.contentMediaType !== listing.mimeType) fail(route, `binary listing's output schema is not a ${listing.mimeType} string: ${JSON.stringify(outputSchema)}`);
       if (extension.info?.output?.type !== "binary") fail(route, `binary listing's output.type is ${JSON.stringify(extension.info?.output?.type)}, not "binary"`);
     } else if (extension.info?.output && extension.info.output.type !== "json") fail(route, `JSON listing's output.type is ${JSON.stringify(extension.info.output.type)}`);
-    // CLEANROOM 53: implement per spec 53
+    if (example === undefined || !outputSchema) continue;
+    if (JSON.stringify(outputSchema).length > 500) fail(route, `output schema is ${JSON.stringify(outputSchema).length} chars, over 500`);
     if (TRIM_ROUTES.has(endpoint.path)) {
       trimSeen++;
       if (outputSchema.properties?.trimmedToCapSeconds?.type !== "number" || outputSchema.properties?.durationUnconfirmed?.type !== "boolean") fail(route, "output schema lacks trimmedToCapSeconds and durationUnconfirmed");
     }
-// CLEANROOM 53: implement per spec 53
+    const exampleType = jsonType(example);
+    if (exampleType === "object") {
+      const required = Array.isArray(outputSchema.required) ? outputSchema.required : [];
+      const published = Object.keys(outputSchema.properties || {}).filter((k) => example[k] !== null && example[k] !== undefined);
+      if (SHAPE_HAPPY_PATH_ONLY.has(endpoint.path)) {
+        variableRoutes++;
+        if (required.length) fail(route, `variable route invents required fields: ${required.join(",")}`);
+      } else if (published.length) {
+        requiredRoutes++;
+        const missing = published.filter((k) => !required.includes(k));
+        if (missing.length) fail(route, `published fields not required: ${missing.join(",")}`);
+      }
+    } else {
+      rawRoutes++;
+      const declared = outputSchema.type;
+      if (!(declared === exampleType || (exampleType === "integer" && declared === "number"))) fail(route, `raw ${exampleType} example is declared ${declared || "without a type"}`);
+    }
+    if (endpoint.path === "/v1/audio/speech") {
+      speechChecked = true;
+      if (exampleType === "object" || outputSchema.type === "object") fail(route, "speech output is declared an object, not raw");
+    }
+  }
+  if (rows.length !== endpoints.length) fail("catalog", `probed ${rows.length}/${endpoints.length} endpoints`);
   // The icon every listing names is served as an image (a host without
   // Chromium redirects to the SVG, which this boot may be).
   for (const iconPath of iconPaths) {
@@ -261,7 +393,7 @@ child.stderr.on("data", (d) => { serverLog += d; });
   if (trimSeen !== TRIM_ROUTES.size) fail("catalog", `checked ${trimSeen} of ${TRIM_ROUTES.size} transcription listings for the cut-answer fields`);
   if (wholeListingSeen !== WHOLE_LISTING_ROUTES.size) fail("catalog", `checked ${wholeListingSeen} of ${WHOLE_LISTING_ROUTES.size} typed-judgment listings`);
   if (!quotedPriced) fail("catalog", "no quoted route was checked against its published range (the metered tiers and decide are quoted)");
-  // CLEANROOM 53: implement per spec 53
+  if (!speechChecked) fail("POST /v1/audio/speech", "speech route was never validated as a raw output");
   // Derived from the catalog, so these name the floor, not the list: QR,
   // screenshot, the three image transforms and speech answer raw bytes.
   if (binaryListings.size < 6) fail("catalog", `only ${binaryListings.size} binary listings (${[...binaryListings.keys()].join(", ")}); expected 6 or more`);
@@ -269,7 +401,10 @@ child.stderr.on("data", (d) => { serverLog += d; });
   if (binaryListings.get("/api/image-convert") !== "image/jpeg") fail("POST /api/image-convert", `listed as ${binaryListings.get("/api/image-convert") || "JSON"}, its example answers image/jpeg`);
   if (binaryListings.has("/api/hash")) fail("GET /api/hash", "a JSON tool is listed as binary");
   console.log(`binary listings: ${[...binaryListings].map(([p, t]) => `${p} ${t}`).join(", ")}`);
-  // CLEANROOM 53: implement per spec 53
+  if (!extractTagSeen) fail("POST /api/extract", "the route-specific tag never survived sanitization");
+  console.log(`catalog routes: ${endpoints.length}`);
+  console.log(`402 examples shortened by the byte budget (replayed from /openapi.json): ${shortenedExamples}`);
+  console.log(`output schemas: ${requiredRoutes} with a required list, ${variableRoutes} variable, ${rawRoutes} raw`);
   console.log(`402 amount vs price list: ${fixedPriced} fixed routes at list price, ${quotedPriced} quoted routes inside their published range`);
   // The rollout switch: with X402_BINARY_LISTINGS=off every binary route
   // lists what it listed before it named its bytes: application/json, output
@@ -284,7 +419,7 @@ child.stderr.on("data", (d) => { serverLog += d; });
       "/api/image-thumbnail": { __note: "returns the square thumbnail as binary" },
       "/v1/audio/speech": "(raw mp3 bytes - Content-Type: audio/mpeg)",
     };
-    // CLEANROOM 53: implement per spec 53
+    try { child.kill("SIGKILL"); } catch { /* stopped */ }
     const [offPort] = await getFreePorts(1);
     const off = spawn(process.execPath, ["src/server.js"], { env: serverEnv(offPort, { X402_BINARY_LISTINGS: "off" }), stdio: "ignore" });
     try {
@@ -313,6 +448,13 @@ child.stderr.on("data", (d) => { serverLog += d; });
       }
     } finally { try { off.kill("SIGKILL"); } catch { /* stopped */ } }
   }
-  // CLEANROOM 53: implement per spec 53
+  console.log(`largest 402 header: ${largestHeader.route} at ${largestHeader.bytes} chars`);
   console.log(`largest 402 body: ${largestBody.route} at ${largestBody.bytes} bytes; largest own fields: ${largestOwn.route} at ${largestOwn.bytes} bytes`);
-  // CLEANROOM 53: implement per spec 53
+  for (const f of failures.slice(0, 40)) console.error(`FAIL - ${f}`);
+  if (failures.length > 40) console.error(`... ${failures.length - 40} more failure(s)`);
+  console.log(`${failures.length ? "FAILED" : "OK"}: ${endpoints.length - failures.length}/${endpoints.length} route checks green`);
+  process.exitCode = failures.length ? 1 : 0;
+} finally {
+  try { child.kill("SIGKILL"); } catch { /* stopped */ }
+  stub.close();
+}

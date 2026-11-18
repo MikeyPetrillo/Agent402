@@ -108,7 +108,17 @@ export function schemaFromExample(value, depth = 0) {
   return schema;
 }
 
-// CLEANROOM 45: implement per spec 45
+/** Promise `required` top-level fields only where the catalog sweeps check
+ *  them: every key whose example value is present (a null example says
+ *  nothing about type), never on a path whose shape varies by outcome. */
+function addRequiredForRoute(path, example, schema) {
+  if (!path || SHAPE_HAPPY_PATH_ONLY.has(path)) return schema;
+  if (!example || typeof example !== "object" || Array.isArray(example)) return schema;
+  if (!schema || schema.type !== "object" || !schema.properties) return schema;
+  const required = Object.keys(schema.properties).filter((k) => example[k] !== null && example[k] !== undefined);
+  if (required.length) schema.required = required;
+  return schema;
+}
 
 /** A tool's declared optional output fields (discovery.output.optional:
  *  field name to a typed schema with a description) added to an object
@@ -131,7 +141,40 @@ export function responseSchemaFor(path, example, optional = null) {
   return withOptionalOutput(addRequiredForRoute(path, example, schema), optional);
 }
 
-// CLEANROOM 46: implement per spec 46
+/** A typed output schema for an object example, sized to fit `maxBytes`
+ *  (no `required`: no route is named). Null for anything but an object. */
+export function boundedSchemaFromExample(example, maxBytes = 1500) {
+  if (!example || typeof example !== "object" || Array.isArray(example)) return null;
+  return boundedResponseSchemaFor(null, example, maxBytes);
+}
+
+/** The 402 challenge's output schema for a route: the deepest typing of its
+ *  example that fits `maxBytes` (declared optional fields kept while they
+ *  fit), or null when even one level does not. /openapi.json has the full one. */
+export function boundedResponseSchemaFor(path, example, maxBytes = 1500, optional = null) {
+  if (example === null || example === undefined) return null;
+  const fits = (s) => JSON.stringify(s).length <= maxBytes;
+  let typedOptional = null;
+  if (optional && typeof optional === "object") {
+    typedOptional = {};
+    for (const [k, v] of Object.entries(optional)) {
+      typedOptional[k] = v && typeof v === "object" && v.type ? { type: v.type } : {};
+    }
+  }
+  for (let limit = MAX_DEPTH; limit >= 1; limit--) {
+    const schema = addRequiredForRoute(path, example, schemaAtDepth(example, limit));
+    if (!Object.keys(schema).length) return null;
+    if (typedOptional) {
+      const withOpt = withOptionalOutput(schema, typedOptional);
+      if (fits(withOpt)) return withOpt;
+    }
+    if (fits(schema)) return schema;
+  }
+  return null;
+}
+
+/** Types any JSON value (not only objects) down to a depth ceiling shallower
+ *  than the default. */
 function schemaAtDepth(value, limit, depth = 0) {
   if (value === null || value === undefined) return {};
   if (Array.isArray(value)) {

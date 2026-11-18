@@ -220,7 +220,11 @@ export function packRequestContract(c) {
 }
 
 export function unpackRequestContract(t) {
-  // CLEANROOM 49: implement per spec 49
+  let v;
+  try {
+    const d = t !== null && typeof t === "object" ? Object.getOwnPropertyDescriptor(t, "requestContract") : undefined;
+    v = d && "value" in d ? d.value : undefined;
+  } catch { return null; }
   if (!Array.isArray(v) || v.length < 2 || v.length > 4) return null;
   const [state, required] = v;
   const source = v.length >= 3 ? v[2] : "seller_openapi";

@@ -102,7 +102,35 @@ function jsonSchemaOf(variant) {
   return isRecord(entry?.schema) ? entry.schema : null;
 }
 
-// CLEANROOM 51: implement per spec 51
+/** What a seller's OpenAPI operation guarantees on success:
+ *  `{ state: "declared"|"partial"|"absent", source: "seller_openapi",
+ *     successVariants, jsonSchemas, guaranteedPaths, runtimeVerified: false }`.
+ *  A path is guaranteed only when every explicit 2xx variant (read up to
+ *  MAX_VARIANTS; more than that is never complete evidence) requires it. */
+export function responseContractOf(operation) {
+  const report = (state, successVariants, jsonSchemas, guaranteedPaths) =>
+    ({ state, source: "seller_openapi", successVariants, jsonSchemas, guaranteedPaths, runtimeVerified: false });
+  if (!isRecord(operation) || !isRecord(operation.responses)) return report("absent", 0, 0, []);
+  const keys = Object.keys(operation.responses).filter((k) => /^2\d\d$/.test(k) || k === "2XX");
+  if (!keys.length) return report("absent", 0, 0, []);
+  keys.sort();
+  const read = keys.slice(0, MAX_VARIANTS);
+  let allAdmissible = keys.length <= MAX_VARIANTS;
+  let jsonSchemas = 0;
+  let common = null;
+  for (const k of read) {
+    const schema = jsonSchemaOf(operation.responses[k]);
+    if (!schema || hasUnsupported(schema)) { allAdmissible = false; continue; }
+    jsonSchemas++;
+    const { paths, truncated } = requiredPaths(schema);
+    if (truncated) { allAdmissible = false; continue; }
+    const set = new Set(paths);
+    common = common === null ? set : new Set([...common].filter((p) => set.has(p)));
+  }
+  const guaranteedPaths = allAdmissible && common ? [...common].sort() : [];
+  const state = jsonSchemas === 0 ? "absent" : allAdmissible && guaranteedPaths.length ? "declared" : "partial";
+  return report(state, keys.length, jsonSchemas, guaranteedPaths);
+}
 
 /** Compact tuple for the crawl cache. The public object repeats a constant
  *  source string and a constant false on every row; a cache holding tens of
@@ -115,7 +143,11 @@ export function packResponseContract(c) {
 /** Rehydrate for a public projection. Anything unrecognised reads as absent
  *  rather than throwing: a stale cache entry must not break a listing. */
 export function unpackResponseContract(t) {
-  // CLEANROOM 50: implement per spec 50
+  let v;
+  try {
+    const d = t !== null && typeof t === "object" ? Object.getOwnPropertyDescriptor(t, "responseContract") : undefined;
+    v = d && "value" in d ? d.value : undefined;
+  } catch { return null; }
   if (!Array.isArray(v) || v.length !== 4) return null;
   const [state, successVariants, jsonSchemas, guaranteedPaths] = v;
   if (state !== "declared" && state !== "partial") return null;

@@ -138,7 +138,16 @@ export function payerFromLog(l) {
   return t && t.length >= 40 ? ("0x" + t.slice(-40)).toLowerCase() : null;
 }
 
-// CLEANROOM 52: implement per spec 52
+/** Is this accept on the scanned chain? By its CAIP-2 id, or by the x402 v1
+ *  shorthand key (case-insensitive) that names the same chain. Kept local:
+ *  this module does not import the index. */
+function onScannedChain(a, chain) {
+  const network = a?.network;
+  if (typeof network !== "string") return false;
+  if (network === (chain?.caip2 || BASE_MAINNET)) return true;
+  return network.toLowerCase() === String(chain?.key || "base").toLowerCase();
+}
+
 /**
  * Pull the Base-mainnet payment wallet from a Bazaar item's `accepts[]`. An
  * item lists multiple payment options (different chains/schemes); for ranking
@@ -151,7 +160,7 @@ export function baseUsdcPayToFromItem(item, chain = { caip2: BASE_MAINNET, token
   const accepts = Array.isArray(item?.accepts) ? item.accepts : [];
   const token = String(chain.token || USDC).toLowerCase();
   for (const a of accepts) {
-    // CLEANROOM 52: implement per spec 52
+    if (!onScannedChain(a, chain)) continue;
     const asset = String(a.asset || "").toLowerCase();
     if (asset && asset !== token) continue;
     const w = a.payTo;
@@ -171,7 +180,7 @@ export function advertisedMicroUsd(item, chain = { caip2: BASE_MAINNET, token: U
   const accepts = Array.isArray(item?.accepts) ? item.accepts : [];
   const token = String(chain.token || USDC).toLowerCase();
   for (const a of accepts) {
-    // CLEANROOM 52: implement per spec 52
+    if (!onScannedChain(a, chain)) continue;
     const asset = String(a.asset || "").toLowerCase();
     if (asset && asset !== token) continue;
     const raw = a.amount ?? a.maxAmountRequired;

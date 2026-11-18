@@ -106,7 +106,43 @@ seed("https://rival.example", "https://rival.example", ["url-to-markdown-fast"])
   ok(perSeller["https://rival.example"] >= 1, "rival gets a slot instead of the operator's duplicate");
 }
 
-// CLEANROOM 35: implement per spec 35
+// ---- 8. a generated deployment hostname serving the same service folds ----
+const PAYEE = "0x" + "7a".repeat(20);
+const OTHER_PAYEE = "0x" + "8b".repeat(20);
+function paidTool(seller, slug, payTo) {
+  return { ...tool(seller, slug), price: 0.01, networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": payTo } };
+}
+function seedPaid(origin, slugs, payTo) {
+  cache.set(origin, {
+    manifest: { name: "seller", homepage: origin },
+    tools: slugs.map((s) => paidTool(origin, s, payTo)),
+    fetchedAt: Date.now(),
+    error: null,
+    history: [1, 1, 1, 1, 1],
+  });
+}
+cache.clear();
+seedPaid("https://agents.example.com", ["url-to-markdown", "extract-web-data"], PAYEE);
+seedPaid("https://seller-production.up.railway.app", ["url-to-markdown", "extract-web-data"], PAYEE);
+{
+  const aliases = computeAliasOrigins(cache);
+  ok(aliases.has("https://seller-production.up.railway.app"), "deployment hostname with the same service is an alias");
+  ok(!aliases.has("https://agents.example.com"), "the custom domain is not an alias");
+  const r = routeQuery({ query: "url to markdown", top: 10, include: "external", ...ctx });
+  ok(!r.results.some((x) => x.seller === "https://seller-production.up.railway.app"), "the deployment alias produces no route rows");
+}
+
+// ---- 9. a shared wallet or shared routes alone never fold ----
+cache.clear();
+seedPaid("https://agents.example.com", ["url-to-markdown", "extract-web-data"], PAYEE);
+seedPaid("https://other-production.up.railway.app", ["url-to-markdown", "summarize-page"], PAYEE);
+seedPaid("https://third-production.up.railway.app", ["url-to-markdown", "extract-web-data"], OTHER_PAYEE);
+{
+  const aliases = computeAliasOrigins(cache);
+  ok(!aliases.has("https://other-production.up.railway.app"), "same payee with a different tool set does not fold");
+  ok(!aliases.has("https://third-production.up.railway.app"), "same tools with a different payee do not fold");
+}
+
 cache.clear();
 console.log("router-alias tests passed");
 

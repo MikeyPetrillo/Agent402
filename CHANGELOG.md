@@ -6,6 +6,12 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-17 (internal reimplementation, no behavior change)
+Internal:
+- Parts of the seller index, the payment and contract checks, the smoke buy
+  and the buyer client were reimplemented from written specifications;
+  internal reimplementation, no behavior change.
+
 ### 2026-11-17 (an unconfirmed settlement is answered as unconfirmed)
 Payments:
 - When a backup settler ends a settlement on an answer that does not show

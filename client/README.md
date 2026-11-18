@@ -198,7 +198,48 @@ const { messages } = await a.getWorkflowPrompt("security-audit", { domain: "stri
 // → feed messages straight to any LLM
 ```
 
-<!-- CLEANROOM 84: implement per spec 84 -->
+## Route a task across sellers
+
+`find()` searches this host's own catalog. `route()` ranks tools for the same
+kind of plain-language task across the eligible, routable seller rows in the
+host's current index: its own tools plus the outside sellers it has indexed and
+holds as routable (not every seller everywhere). It is free and read-only, and
+needs no wallet:
+
+```js
+const { query, include, results } = await a.route("screenshot a webpage", {
+  k: 5,               // rows to return, 1 to 25
+  include: "all",     // "all", "external" or "local"
+  network: "base",    // optional chain filter: a short name or a CAIP-2 id
+});
+```
+
+Rows belong to the server and come back unchanged. A typical row carries
+`seller`, `slug`, `url`, `priceUsd`, `routerDispatchEligible` and
+`routerDispatchReason`, plus `executeVia` when a tier can run it now, or
+`executeViaWhenEligible` when one could once the row is eligible.
+
+`executeVia` names the `route-execute*` tier whose cap covers the row's price.
+It does not bind that row: the tier resolves a match again when it runs, so the
+url, route, seller and identity it uses can differ from the row you read.
+
+```js
+const hint = results.find((row) => row.executeVia)?.executeVia;
+if (hint) {
+  const { result, receipt } = await a.call(hint.tool, {
+    task: "screenshot a webpage",
+    include: "external",
+    params: { url: "https://example.com" },
+  }, { cache: false });
+}
+```
+
+Caching is turned off for a routed call because the client cache is on by
+default and an outside seller's answer can change from one call to the next.
+`executeVia` is metadata the server reports: the SDK does not validate a
+seller's output on its own and does not promise which seller or tool the tier
+picks (see buyer-owned output validation below to enforce what you need).
+
 ## Discover the live x402 economy
 
 Want to see who's actually getting paid on x402 right now - not just what tools
@@ -249,7 +290,8 @@ that runs as one.
 | Method | What |
 |---|---|
 | `new Agent402({ baseUrl?, fetch?, x402Client?, creditsKey?, gateway?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, payNetworks?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, userAgent? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `x402Client` is the `@x402/core` client that `fetch` wraps, so the caps are enforced on the payment that is signed (see below); `payNetworks` (for example `["base"]`, the names `withNetworkPreference` takes) tells the caps which chains a pre-wrapped `fetch` without an `x402Client` pays on, so a call is counted at the dearest option on those chains (when none of a 402's options is on them, the dearest of all counts); `creditsKey` is a prepaid credits key (`a402_...`) used for paid tools when no `fetch` is given; `gateway` (`{ signer, networks? }`) pays the Circle Gateway batched accept where a 402 offers one, from the signer's Gateway deposit (see above); `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above); `userAgent` (`"name/version"`) is a calling package's own product token, sent before `agent402-client/<version>` in the User-Agent |
-<!-- CLEANROOM 85: implement per spec 85 -->
+| `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools on this host (route, price, schema, example) |
+| `await a.route(task, { k?, include?, network? })` | Cross-seller router: ranks eligible, routable seller rows from the host's current index; free and read-only; rows come back as the server wrote them and may carry server-reported `executeVia` |
 | `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |
 | `await a.getWorkflowPrompt(slug, args)` | Fetch the rendered prompt messages for a skill pack with arguments substituted in |
 | `await a.topSellers({ limit?, sort?, include? })` | Live x402 leaderboard: which sellers are settling the most USDC (primarily on Base) in the last ~24h (free, no payment) |
@@ -280,7 +322,40 @@ An oversized body throws `ResponseTooLargeError` carrying `size`, `cap`,
 `source` and `paid`. Check `paid`: on a wallet-only tool the money moved before
 the body arrived, so a refused response is still a spend you made.
 
-<!-- CLEANROOM 86: implement per spec 86 -->
+## Buyer-owned output validation
+
+A settled payment and an HTTP 200 prove the seller answered, not that the
+answer is useful to you. Give the client a delivery contract: a stable id you
+own and a local check of the result you need.
+
+```js
+const a = new Agent402({
+  fetch: payFetch,
+  outputValidator: {
+    id: "quote-shape/v1",
+    validate: (body) => typeof body.symbol === "string" && Number.isFinite(body.price) && body.price > 0,
+  },
+});
+```
+
+`validate` rejects a delivery by returning `false` or by throwing, and it may be
+async. Use plain code or any validation library you already have: the client
+adds no dependency, and neither the validator nor its id is ever sent to the
+seller.
+
+The check runs after the bounded JSON parse and before the result is cached. A
+paid response that fails it throws `OutputValidationError` with `paid: true`;
+its spend still counts in `spendingSummary()`, and it is never cached. Cache
+entries under a contract are kept in a namespace derived from the SHA-256 digest
+of `id` and checked again on every hit, so a different contract, or a cached
+object your own code changed, cannot get around the check.
+
+You own what `id` means and keep it stable; when the meaning of the check
+changes, give it a new id. A per-call `outputValidator` replaces the
+constructor's for that call. Passing `null`, or leaving it out, keeps the
+constructor's policy and never weakens it, so use a separate client for routes
+that should run with no contract.
+
 **Two costs worth knowing.** `validate` is awaited inside `call()`, so it is
 bounded: a validator that has not settled in **5 seconds** rejects delivery with
 `OutputValidationError` rather than hanging the call. On a paid route the money
