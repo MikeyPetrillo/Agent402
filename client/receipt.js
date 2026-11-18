@@ -36,7 +36,9 @@ export async function verifyReceipt(receipt, { keys = null, baseUrl = "https://a
   try { head = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8")); record = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")); } catch { return no("unreadable"); }
   if (!head || head.alg !== "EdDSA" || head.typ !== TYP || typeof head.kid !== "string") return no("unexpected_header");
   if (!keys) {
-    const r = await fetchImpl(`${String(baseUrl).replace(/\/+$/, "")}${RECEIPT_KEYS_PATH}`);
+    let base = String(baseUrl);
+    while (base.endsWith("/")) base = base.slice(0, -1);
+    const r = await fetchImpl(`${base}${RECEIPT_KEYS_PATH}`);
     if (!r.ok) return no("keys_unavailable", { kid: head.kid, record });
     keys = (await r.json())?.keys || [];
   }

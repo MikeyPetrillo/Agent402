@@ -29,7 +29,9 @@ import { loadReceiptKeys, buildReceiptRecord, signReceipt, verifyReceipt, reques
 import { verifyReceipt as clientVerify, receiptRequestDigest } from "../client/receipt.js";
 import { CONFORMANCE_PATH } from "../src/conformance.js";
 import { LEAD_SENTENCE } from "../src/positioning.js";
-const ledeOf = (html) => ((html.match(/<p class="hm-lede"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+// Page text for the copy checks (not a sanitizer): drop tags to a fixed point.
+const textOf = (html) => { let s = String(html), prev; do { prev = s; s = s.replace(/<[^<>]*>/g, ""); } while (s !== prev); return s; };
+const ledeOf = (html) => textOf((html.match(/<p class="hm-lede"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || "").replace(/\s+/g, " ").trim();
 
 let pass = 0, rig = null;
 const fail = async (m) => { console.error(`FAIL - ${m}`); for (const l of (rig?.log() || "").split("\n").filter(Boolean).slice(-20)) console.error("  server:", l.slice(0, 300)); await rig?.stop().catch(() => {}); process.exit(1); };
@@ -47,7 +49,7 @@ const xOf = (kp) => kp.publicKey.export({ format: "jwk" }).x;
   await ok(off.signer === null && off.error === null && off.keys.length === 0, "no key: signing off, no error");
   const on = loadReceiptKeys(ENV_A);
   await ok(on.signer?.kid === "r1-test" && on.keys.length === 1 && on.keys[0].x === xOf(A) && on.error === null, "a base64 PKCS8 Ed25519 PEM with a key id: signing on, the public key derived");
-  const rsa = generateKeyPairSync("rsa", { modulusLength: 1024 });
+  const rsa = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const ec = generateKeyPairSync("ec", { namedCurve: "P-256" });
   const rawPem = A.privateKey.export({ format: "pem", type: "pkcs8" });
   const refusals = [
@@ -185,7 +187,7 @@ try {
   // every surface that offers one scopes it to non-streamed answers.
   const { readFileSync } = await import("node:fs");
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-  const scoped = [["/trust", trust.replace(/<[^>]*>/g, "")], ["llms-full.txt", llms], ["the conformance cell", row("x402:exact:eip155:8453").features.signedReceipt.detail], ["README.md", readme.split("\n").find((l) => l.includes("`Agent402-Receipt`")) || ""], ["client/README.md", readFileSync(new URL("../client/README.md", import.meta.url), "utf8").replace(/\s+/g, " ")]];
+  const scoped = [["/trust", textOf(trust)], ["llms-full.txt", llms], ["the conformance cell", row("x402:exact:eip155:8453").features.signedReceipt.detail], ["README.md", readme.split("\n").find((l) => l.includes("`Agent402-Receipt`")) || ""], ["client/README.md", readFileSync(new URL("../client/README.md", import.meta.url), "utf8").replace(/\s+/g, " ")]];
   for (const [where, text] of scoped) await ok(/non-streamed|not streamed/.test(text), `${where}: the signed receipt is scoped to answers that are not streamed`);
   {
     const lede = ledeOf(await (await fetch(`${rig.url}/`)).text());
