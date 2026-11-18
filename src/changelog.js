@@ -10,6 +10,15 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-18",
+    title: "Yield age limit, MCP cut-offs, unknown coin ids",
+    items: [
+      "Tools: The Treasury yield tools (`treasury-yield-curve`, `treasury-yield-history`, `yield-curve-spread`) answer 503 with Retry-After, uncharged, when the last good read of the yield file is more than three days old, instead of serving older yields marked stale.",
+      "MCP: A paid call on the hosted MCP connector whose settled answer the connector stopped waiting for is booked as owed in the refund ledger, as its cut-off text says, also when the answer was written just as the connector's wait ended.",
+      "Tools: A CoinGecko id the upstream called unknown is answered 422 with no upstream read for the rest of the UTC day unless its list names it, and one address's calls naming unknown ids take at most 8 of the day's reads an hour before their ids are checked against their lists; a real id is always read.",
+    ],
+  },
+  {
+    date: "2026-11-18",
     title: "Signed receipts on every paid call",
     items: [
       "Payments: A streamed paid answer ends with an `event: agent402-receipt` server-sent event whose data is the signed receipt over every byte streamed before it, and also carries it as an `Agent402-Receipt` trailer when the client sends `TE: trailers`.",
