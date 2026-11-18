@@ -2,7 +2,11 @@
 // read by an independent @modelcontextprotocol/sdk client) passes against a
 // real FREE_MODE boot (with and without MPP_SECRET_KEY set: no paywall, so no
 // payment capability either way) and against paid boots (x402 and MPP in the
-// call, and x402 alone), and fails against a connector that drifted.
+// call, and x402 alone), and fails against a connector that drifted. Every
+// run is made twice: with the SDK v1 Client on 2025-11-25 (initialize) and
+// with the SDK v2 Client pinned to 2026-07-28 (server/discover and the
+// per-request envelope), so both protocol revisions the connector serves are
+// read by a reference client.
 //
 // The positive half boots src/server.js on PORT=0, reads the bound port back,
 // and runs the check against it: exit 0, every check line ok, the JSON summary
@@ -25,10 +29,10 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Server, createMcpHandler } from "@modelcontextprotocol/server";
+import { toNodeHandler } from "@modelcontextprotocol/node";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import { AjvJsonSchemaValidator as AjvJsonSchemaValidatorV2 } from "@modelcontextprotocol/client/validators/ajv";
 import { bootServer as bootPaid } from "./lib/boot-server.js";
 import { FLAGSHIP_OUTPUT_SCHEMAS, META_OUTPUT_SCHEMAS, outputSchemaFromExample } from "../src/mcp-flagship.js";
 
@@ -40,11 +44,12 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 
 // Asynchronous on purpose: the stub connectors below live in THIS process, so
 // a blocking spawnSync would starve them and every check would time out.
-function runCheck(baseUrl, outName) {
-  const out = join(TMP, outName);
+const PROTOCOLS = ["2025-11-25", "2026-07-28"];
+function runCheck(baseUrl, outName, protocol = "2025-11-25") {
+  const out = join(TMP, `${protocol}-${outName}`);
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [CHECK], {
-      env: { ...process.env, TARGET_URL: baseUrl, MCP_CHECK_TARGET: "", MCP_CHECK_OUT: out, MCP_CHECK_CALL_TIMEOUT_MS: "20000" },
+      env: { ...process.env, TARGET_URL: baseUrl, MCP_CHECK_TARGET: "", MCP_CHECK_OUT: out, MCP_CHECK_CALL_TIMEOUT_MS: "20000", MCP_CHECK_PROTOCOL: protocol },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "", stderr = "";
@@ -70,11 +75,12 @@ function runCheck(baseUrl, outName) {
 // inferred shapes below include the one that reached production: an empty
 // example array, whose item type was typeof undefined.
 {
-  const validator = new AjvJsonSchemaValidator();
-  const compiles = (schema) => { try { validator.getValidator(schema); return null; } catch (err) { return err.message; } };
+  // Both reference clients: SDK v1 (2025-11-25) and SDK v2 (2026-07-28).
+  const validators = [new AjvJsonSchemaValidator(), new AjvJsonSchemaValidatorV2()];
+  const compiles = (schema) => { try { for (const v of validators) v.getValidator(schema); return null; } catch (err) { return err.message; } };
   const tables = { ...Object.fromEntries(Object.entries(FLAGSHIP_OUTPUT_SCHEMAS).map(([k, v]) => [`flagship ${k}`, v])), ...Object.fromEntries(Object.entries(META_OUTPUT_SCHEMAS).map(([k, v]) => [`meta ${k}`, v])) };
   const bad = Object.entries(tables).map(([k, s]) => [k, compiles(s)]).filter(([, e]) => e);
-  ok(Object.keys(tables).length >= 10 && bad.length === 0, `every hand-written outputSchema compiles under the SDK validator (${Object.keys(tables).length} schemas)${bad.length ? `: ${bad.map(([k, e]) => `${k}: ${e}`).join("; ")}` : ""}`);
+  ok(Object.keys(tables).length >= 10 && bad.length === 0, `every hand-written outputSchema compiles under both SDK validators (${Object.keys(tables).length} schemas)${bad.length ? `: ${bad.map(([k, e]) => `${k}: ${e}`).join("; ")}` : ""}`);
   const examples = {
     "empty array": { gaps: [] },
     "null field": { leftoverCredit: null },
@@ -135,19 +141,28 @@ for (const [label, mppKey] of [["FREE_MODE", ""], ["FREE_MODE with MPP_SECRET_KE
     const booted = await bootServer(mppKey);
     child = booted.child;
     ok(booted.port > 0, `${label}: server booted on PORT=0 and printed the bound port (${booted.port})`);
-    const r = await runCheck(`http://127.0.0.1:${booted.port}`, `real-${mppKey ? "key" : "nokey"}.json`);
-    ok(r.status === 0, `${label}: the check exits 0 against the real connector${r.status === 0 ? "" : `\n${r.stdout}\n${r.stderr}`}`);
+    for (const protocol of PROTOCOLS) {
+      const r = await runCheck(`http://127.0.0.1:${booted.port}`, `real-${mppKey ? "key" : "nokey"}.json`, protocol);
+      const tag = `${label} (${protocol})`;
+      ok(r.status === 0, `${tag}: the check exits 0 against the real connector${r.status === 0 ? "" : `\n${r.stdout}\n${r.stderr}`}`);
+      const lines = r.stdout.split("\n").filter((l) => /^(ok|FAIL) - /.test(l));
+      ok(lines.length >= 10 && lines.every((l) => l.startsWith("ok - ")), `${tag}: every check line is ok (${lines.length} lines)`);
+      ok(r.summary && r.summary.failed === 0 && r.summary.passed === lines.length && r.summary.target.endsWith("/mcp") && r.summary.protocol === protocol, `${tag}: the JSON summary matches the lines (passed, failed, target, protocol)`);
+      const opener = protocol === "2026-07-28" ? "server/discover" : "initialize";
+      for (const name of [opener, "tools/list", "server.describe", "payment.info", "catalog.search", "catalog.find", "sellers.list", "catalog.call", "web.search without payment", "memory.write without payment", "catalog.call search without payment", "tasks"]) {
+        ok((r.summary?.checks || []).some((c) => c.name.startsWith(name) && c.ok), `${tag}: summary carries a passing "${name}" check`);
+      }
+    }
     const init = await fetch(`http://127.0.0.1:${booted.port}/mcp`, {
       method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } }),
     }).then((x) => x.text());
     ok(/"capabilities"/.test(init) && !/"payment"\s*:\s*\{\s*"methods"/.test(init), `${label}: initialize advertises no payment capability`);
-    const lines = r.stdout.split("\n").filter((l) => /^(ok|FAIL) - /.test(l));
-    ok(lines.length >= 10 && lines.every((l) => l.startsWith("ok - ")), `${label}: every check line is ok (${lines.length} lines)`);
-    ok(r.summary && r.summary.failed === 0 && r.summary.passed === lines.length && r.summary.target.endsWith("/mcp"), `${label}: the JSON summary matches the lines (passed, failed, target)`);
-    for (const name of ["initialize", "tools/list", "server.describe", "payment.info", "catalog.search", "catalog.find", "sellers.list", "catalog.call", "web.search without payment", "memory.write without payment", "catalog.call search without payment", "tasks"]) {
-      ok((r.summary?.checks || []).some((c) => c.name.startsWith(name) && c.ok), `${label}: summary carries a passing "${name}" check`);
-    }
+    const discover = await fetch(`http://127.0.0.1:${booted.port}/mcp`, {
+      method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2026-07-28", "mcp-method": "server/discover" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "server/discover", params: { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}, "io.modelcontextprotocol/clientInfo": { name: "t", version: "0" } } } }),
+    }).then((x) => x.text());
+    ok(/"supportedVersions":\[[^\]]*"2026-07-28"/.test(discover) && /"capabilities"/.test(discover) && !/"payment"\s*:\s*\{\s*"methods"/.test(discover), `${label}: server/discover lists 2026-07-28 and advertises no payment capability`);
   } catch (err) {
     ok(false, `${label}: real server: ${err.message}`);
   } finally {
@@ -188,12 +203,15 @@ for (const [label, mppKey] of [["FREE_MODE", ""], ["FREE_MODE with MPP_SECRET_KE
           AGENT402_MCP_MAX_PER_MIN: "1000000", AGENT402_MCP_MAX_PER_HOUR: "1000000", AGENT402_SHOW_ROUTER: "1",
         },
       });
-      const r = await runCheck(srv.url, `paid-${mppKey ? "both" : "x402"}.json`);
-      ok(r.status === 0, `paid boot (${label}): the check exits 0${r.status === 0 ? "" : `\n${r.stdout}\n${r.stderr}`}`);
-      const unpaid = (r.summary?.checks || []).filter((c) => / without payment: /.test(c.name));
-      ok(unpaid.length === 9 && unpaid.every((c) => c.ok), `paid boot (${label}): all eight flagships and catalog.call answer an unpaid ask the client reads (${unpaid.filter((c) => c.ok).length} of ${unpaid.length})`);
-      const offers = r.stdout.split("\n").filter((l) => / without payment: /.test(l));
-      ok(offers.length === 9, `paid boot (${label}): one line per unpaid ask`);
+      for (const protocol of PROTOCOLS) {
+        const r = await runCheck(srv.url, `paid-${mppKey ? "both" : "x402"}.json`, protocol);
+        const tag = `paid boot (${label}, ${protocol})`;
+        ok(r.status === 0, `${tag}: the check exits 0${r.status === 0 ? "" : `\n${r.stdout}\n${r.stderr}`}`);
+        const unpaid = (r.summary?.checks || []).filter((c) => / without payment: /.test(c.name));
+        ok(unpaid.length === 9 && unpaid.every((c) => c.ok), `${tag}: all eight flagships and catalog.call answer an unpaid ask the client reads (${unpaid.filter((c) => c.ok).length} of ${unpaid.length})`);
+        const offers = r.stdout.split("\n").filter((l) => / without payment: /.test(l));
+        ok(offers.length === 9, `${tag}: one line per unpaid ask`);
+      }
     } catch (err) {
       ok(false, `paid boot (${label}): ${err?.stack || err}`);
     } finally {
@@ -210,16 +228,18 @@ const META_TOOLS = ["catalog.search", "catalog.find", "catalog.call", "payment.i
 const FLAGSHIP_TOOLS = ["web.search", "web.answer", "web.news", "browser.render", "market.quote", "audio.transcribe", "memory.read", "memory.write"];
 const text = (obj, extra = {}) => ({ content: [{ type: "text", text: JSON.stringify(obj) }], ...extra });
 
-/** A connector that answers exactly the shapes the check reads. `brk` names one deliberate drift. */
+/** A connector that answers exactly the shapes the check reads, on both
+ *  protocol revisions (SDK v2 createMcpHandler: 2026-07-28, and 2025-era
+ *  traffic served stateless). `brk` names one deliberate drift. */
 function stubConnector(brk = null) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
-  app.post("/mcp", async (req, res) => {
+  const handler = createMcpHandler(() => {
     const server = new Server({ name: "agent402", version: "stub" }, {
       capabilities: { tools: {} },
       instructions: "Stub connector for the client check: call catalog.find with your task, then catalog.call.",
     });
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    server.setRequestHandler("tools/list", async () => ({
       tools: [...META_TOOLS, ...FLAGSHIP_TOOLS]
         .filter((name) => !(brk === "missing-tool" && name === "demand.request"))
         .map((name) => ({
@@ -231,7 +251,7 @@ function stubConnector(brk = null) {
           ...(brk === "ask-in-structured" && name === "market.quote" ? { outputSchema: { type: "object", properties: { symbol: { type: "string" } }, required: ["symbol"], additionalProperties: false } } : {}),
         })),
     }));
-    server.setRequestHandler(CallToolRequestSchema, async (req) => {
+    server.setRequestHandler("tools/call", async (req) => {
       const { name, arguments: args = {} } = req.params;
       if (name === "server.describe") return text({ maintainer: "Havok Holdings LLC", startHere: { firstJob: "call catalog.find" } });
       if (name === "payment.info") return text({ freeTier: {}, pay: {} });
@@ -250,11 +270,10 @@ function stubConnector(brk = null) {
       }
       return { content: [{ type: "text", text: `Unknown tool "${name}".` }], isError: true };
     });
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-    res.on("close", () => { transport.close().catch(() => {}); server.close().catch(() => {}); });
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
+    return server;
   });
+  const serve = toNodeHandler(handler);
+  app.all("/mcp", (req, res) => serve(req, res, req.body));
   return new Promise((resolve) => {
     const listener = app.listen(0, "127.0.0.1", () => resolve({ listener, port: listener.address().port }));
   });
@@ -268,19 +287,25 @@ const EXPECTED_FAILS = {
   "paid-runs": /^FAIL - catalog\.call search without payment: /m,
 };
 
-{
+for (const protocol of PROTOCOLS) {
   const stub = await stubConnector(null);
-  const r = await runCheck(`http://127.0.0.1:${stub.port}`, "stub-control.json");
-  ok(r.status === 0, `control: the unchanged stub connector passes the check${r.status === 0 ? "" : `\n${r.stdout}\n${r.stderr}`}`);
+  const r = await runCheck(`http://127.0.0.1:${stub.port}`, "stub-control.json", protocol);
+  ok(r.status === 0, `control (${protocol}): the unchanged stub connector passes the check${r.status === 0 ? "" : `\n${r.stdout}\n${r.stderr}`}`);
   stub.listener.close();
 }
+// The SDK v2 client checks structuredContent against the outputSchema only on a
+// result that is not an error, so a payment ask carried that way still reads
+// on 2026-07-28; the break is a drift only the v1 client (2025-11-25) catches.
+const BREAK_PROTOCOLS = { "ask-in-structured": ["2025-11-25"] };
 for (const [brk, re] of Object.entries(EXPECTED_FAILS)) {
-  const stub = await stubConnector(brk);
-  const r = await runCheck(`http://127.0.0.1:${stub.port}`, `stub-${brk}.json`);
-  ok(r.status !== 0, `break "${brk}": the check exits non-zero`);
-  ok(re.test(r.stdout), `break "${brk}": the failing line names the drifted check${re.test(r.stdout) ? "" : `\n${r.stdout}`}`);
-  ok(r.summary && r.summary.failed >= 1, `break "${brk}": the JSON summary counts the failure`);
-  stub.listener.close();
+  for (const protocol of BREAK_PROTOCOLS[brk] || PROTOCOLS) {
+    const stub = await stubConnector(brk);
+    const r = await runCheck(`http://127.0.0.1:${stub.port}`, `stub-${brk}.json`, protocol);
+    ok(r.status !== 0, `break "${brk}" (${protocol}): the check exits non-zero`);
+    ok(re.test(r.stdout), `break "${brk}" (${protocol}): the failing line names the drifted check${re.test(r.stdout) ? "" : `\n${r.stdout}`}`);
+    ok(r.summary && r.summary.failed >= 1, `break "${brk}" (${protocol}): the JSON summary counts the failure`);
+    stub.listener.close();
+  }
 }
 
 {
@@ -291,6 +316,8 @@ for (const [brk, re] of Object.entries(EXPECTED_FAILS)) {
   await new Promise((r) => probe.close(r));
   const r = await runCheck(`http://127.0.0.1:${deadPort}`, "dead.json");
   ok(r.status !== 0 && /^FAIL - initialize/m.test(r.stdout), "an unreachable connector fails the initialize check and exits non-zero");
+  const m = await runCheck(`http://127.0.0.1:${deadPort}`, "dead.json", "2026-07-28");
+  ok(m.status !== 0 && /^FAIL - server\/discover/m.test(m.stdout), "an unreachable connector fails the server/discover check and exits non-zero (2026-07-28)");
 }
 
 rmSync(TMP, { recursive: true, force: true });

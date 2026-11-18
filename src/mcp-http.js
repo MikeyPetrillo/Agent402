@@ -12,6 +12,12 @@ import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 let _ladder = null;
 const reportLadder = () => (_ladder ||= reportLadderProse({ humanProducts: HUMAN_PRODUCTS, monitorProducts: MONITOR_PRODUCTS }));
+// A protocol error whose wire message starts "MCP error <code>: ", as SDK v1's
+// McpError wrote it: every error answer the connector sends reads byte for byte
+// as before on both protocol eras (clients key on the code and data).
+class McpError extends ProtocolError {
+  constructor(code, message, data) { super(code, `MCP error ${code}: ${message}`, data); }
+}
 // Remote MCP endpoint (Streamable HTTP) — makes Agent402 an installable
 // connector: paste https://agent402.tools/mcp into Claude (Settings >
 // Connectors), ChatGPT, or any MCP client that speaks streamable HTTP.
@@ -23,20 +29,17 @@ const reportLadder = () => (_ladder ||= reportLadderProse({ humanProducts: HUMAN
 // npm `agent402-mcp` server with a funded AGENT_KEY. Payment identity can't
 // flow through a hosted authless connector, so paid execution stays on the
 // stdio package by design.
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/sdk/types.js";
+//
+// Protocol revisions: the MCP SDK v2 serves both eras from one server build.
+// A request that carries the 2026-07-28 per-request envelope
+// (_meta["io.modelcontextprotocol/protocolVersion"]) is served on the modern
+// path (createMcpHandler, server/discover, no initialize); every other request
+// (initialize and the 2025-era stateless calls after it, 2024-10-07 through
+// 2025-11-25) is served by a per-request Node transport exactly as before.
+import { AsyncLocalStorage } from "node:async_hooks";
+import { Server, ProtocolError, ProtocolErrorCode as ErrorCode, createMcpHandler, isLegacyRequest, CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY, SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/server";
+import { NodeStreamableHTTPServerTransport, toWebRequest } from "@modelcontextprotocol/node";
 import { REPO_URL, REPO_NAMESPACE } from "./repo-link.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  ListPromptsRequestSchema,
-  GetPromptRequestSchema,
-  ListResourcesRequestSchema,
-  ReadResourceRequestSchema,
-  McpError,
-  ErrorCode,
-} from "@modelcontextprotocol/sdk/types.js";
 import {
   MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, MCP_PAYMENT_REQUIRED_META, MCP_CREDENTIAL_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, settleReceiptFromHeader, tempoSettleProof, credentialSignedUsd, challengeIdFromMeta,
   mcpBinaryResult,
@@ -306,6 +309,60 @@ export function carriesPayment(body) {
 // calls 402" and which refuse the full catalog as a tool dump.
 let sharedTaskStore = null;
 /** Test seam: how many task stores this process holds (must be at most one). */
+/** The headers the SDK's era classification reads, on a body-less Request:
+ *  isLegacyRequest(probe, parsedBody) classifies from the parsed body and
+ *  these headers and reads nothing else, so the request body is never
+ *  re-serialized for a 2025-era call. */
+const ERA_HEADERS = ["content-type", "mcp-protocol-version", "mcp-method", "mcp-name"];
+export function eraProbeOf(req) {
+  const headers = new Headers();
+  for (const h of ERA_HEADERS) {
+    const v = req.headers?.[h];
+    if (typeof v === "string") { try { headers.set(h, v); } catch { /* an unsendable value classifies as absent */ } }
+  }
+  return new Request("http://mcp.invalid/", { method: "POST", headers });
+}
+
+/** Writes a web-standard Response from the 2026-07-28 handler to Express. A
+ *  JSON answer is read whole first, then written in one go unless the request
+ *  was aborted or answered meanwhile (the deadline writes its own result); an
+ *  event stream (subscriptions/listen) is piped until it ends or the request
+ *  is aborted. */
+export async function writeWebResponse(res, response, signal) {
+  const isStream = /^text\/event-stream/i.test(response.headers.get("content-type") || "");
+  const writeHead = () => {
+    res.status(response.status);
+    for (const [k, v] of response.headers) res.setHeader(k, v);
+  };
+  if (!response.body) {
+    if (!res.headersSent && !signal.aborted) { writeHead(); res.end(); }
+    return;
+  }
+  if (!isStream) {
+    const buf = Buffer.from(await response.arrayBuffer());
+    if (res.headersSent || signal.aborted) return;
+    writeHead();
+    res.end(buf);
+    return;
+  }
+  if (res.headersSent || signal.aborted) { try { await response.body.cancel(); } catch { /* already closed */ } return; }
+  writeHead();
+  res.flushHeaders?.();
+  const reader = response.body.getReader();
+  const stop = () => { reader.cancel().catch(() => {}); };
+  signal.addEventListener("abort", stop, { once: true });
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done || signal.aborted) break;
+      if (value && !res.write(value)) await new Promise((r) => { res.once("drain", r); signal.addEventListener("abort", r, { once: true }); });
+    }
+  } catch { /* the stream was canceled */ } finally {
+    signal.removeEventListener("abort", stop);
+    if (!res.writableEnded) res.end();
+  }
+}
+
 export function _sharedTaskStoreForTest() { return sharedTaskStore; }
 /** The MPP methods the hosted connector can settle a paid tool call with. */
 export function mcpPaymentMethods() {
@@ -665,7 +722,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     // the HTML pages at /skills/<slug>. buildPromptMessages does the args
     // substitution + tool-plan rendering, and gets freeSlugs so it can pre-
     // split free vs wallet-only tools for the caller.
-    server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+    server.setRequestHandler("prompts/list", async () => ({
       prompts: SKILL_PACKS.map((p) => ({
         name: p.slug,
         title: p.title,
@@ -677,7 +734,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         })),
       })),
     }));
-    server.setRequestHandler(GetPromptRequestSchema, async (req) => {
+    server.setRequestHandler("prompts/get", async (req) => {
       const { name, arguments: args = {} } = req.params;
       const pack = SKILL_PACKS.find((p) => p.slug === name);
       if (!pack) throw new Error(`Unknown prompt ${quotedEcho(name)}. List available with prompts/list.`);
@@ -687,13 +744,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     // Skill files as base resources (src/mcp-skills.js). skills/list and
     // skills/get are answered ahead of the transport, in app.post below.
     if (skillsCaps && skillSet) {
-      server.setRequestHandler(ListResourcesRequestSchema, async (req) => {
+      server.setRequestHandler("resources/list", async (req) => {
         if (req.params?.cursor != null) throw new McpError(ErrorCode.InvalidParams, "Invalid cursor");
         return {
           resources: [...skillSet.fileByUri.values()].map(({ uri, name, title, description, mimeType, size }) => ({ uri, name, title, description, mimeType, size })),
         };
       });
-      server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
+      server.setRequestHandler("resources/read", async (req) => {
         const uri = String(req.params?.uri || "");
         const file = skillSet.fileByUri.get(uri);
         if (!file) throw new McpError(ErrorCode.InvalidParams, `Unknown resource: ${uri.slice(0, 200)}`);
@@ -716,7 +773,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     // memory.write replaces the value a key held.
     const OVERWRITE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
     const flagshipHints = (slug) => (slug === "memory-write" ? OVERWRITE : NET);
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    server.setRequestHandler("tools/list", async () => ({
       tools: listable([
         {
           name: META_MCP_NAMES.search_tools,
@@ -901,7 +958,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
      *  settlement. A cancelled or timed-out wait only stops THIS connector
      *  waiting: the paid request runs on and settles on a <400, and a charge
      *  that never reached the buyer is owed in the refund ledger. */
-    async function payOverMpp(entry, reqParams, args, isNamed, ip, signal) {
+    /** `declaredCapabilities`: the client capabilities THIS message declared
+     *  in _meta["io.modelcontextprotocol/clientCapabilities"]. The SDK lifts
+     *  that key out of params._meta before a handler runs (on both eras) and
+     *  hands it back per message in ctx.mcpReq.envelope, so each call of a
+     *  2025-era batch reads its own. */
+    async function payOverMpp(entry, reqParams, args, isNamed, ip, signal, declaredCapabilities) {
       const meta = reqParams?._meta;
       const credentialHeader = credentialHeaderFromMeta(meta);
       // Same params shaping as the free path (flagship: args IS params;
@@ -914,7 +976,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
 
       // The composites, plus every route that runs as a job over HTTP
       // (src/slow-routes.js: the slow ones and the async-capable ones).
-      const taskEligible = Boolean(tasks) && (EXPENSIVE_COMPOSITE_SLUGS.has(entry.def.slug) || Boolean(entry.def.asyncProfile)) && clientDeclaresTasks(reqParams);
+      const taskEligible = Boolean(tasks) && (EXPENSIVE_COMPOSITE_SLUGS.has(entry.def.slug) || Boolean(entry.def.asyncProfile)) && clientDeclaresTasks({ _meta: { [CLIENT_CAPABILITIES_META]: declaredCapabilities } });
       if (taskEligible) {
         const handle = await runAsTask(entry, meta, params, credentialHeader, ip, isNamed, startedAt, idempotencyKey);
         if (handle) return handle;
@@ -1369,7 +1431,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       return createTaskResult(rec);
     }
 
-    server.setRequestHandler(CallToolRequestSchema, async (req) => {
+    server.setRequestHandler("tools/call", async (req, ctx) => {
       const { name: rawName, arguments: args = {} } = req.params;
       const name = resolveListedName(rawName);
       const overBound = toolInputBoundRefusal(rawName, args, maxToolInputElements);
@@ -1784,7 +1846,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             return (offer && buildPaymentRequiredResult(offer, { message: walletRequiredText(entry.def, { x402: true }) }))
               || { content: [{ type: "text", text: walletRequiredText(entry.def) }], isError: true };
           }
-          return await payOverMpp(entry, req.params, args, isNamed, ip, signal);
+          return await payOverMpp(entry, req.params, args, isNamed, ip, signal, ctx?.mcpReq?.envelope?.[CLIENT_CAPABILITIES_META]);
         }
         const toolBudget = mcpLimiter.check(ip);
         if (toolBudget.limited) {
@@ -2011,11 +2073,45 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   app.use(path, (req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, Mcp-Session-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Last-Event-ID");
     res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
     if (req.method === "OPTIONS") return res.status(204).end();
     next();
   });
+
+  // 2026-07-28 serving (SDK v2 createMcpHandler, modern-only: 2025-era traffic
+  // never reaches it, see app.post below). One handler per mount, built on the
+  // first modern request; the factory builds a fresh server per request from
+  // the context app.post sets, so the two eras share buildServer and cannot
+  // drift apart.
+  const mcpRequestContext = new AsyncLocalStorage();
+  let _modernHandler = null;
+  const modernHandler = () => (_modernHandler ||= createMcpHandler(() => {
+    const c = mcpRequestContext.getStore();
+    return buildServer(c.ip, c.signal, c.heartbeatToken, c.serverOpts);
+  }, { legacy: "reject", onerror: (err) => console.warn(`[mcp] 2026-07-28 request refused or failed: ${logSafe(mcpErrorText(err, 160), 160)}`) }));
+  // The same SDK ladder for the 2026-07-28 methods answered ahead of it
+  // (tasks/*, skills/*): the envelope, the revision, MCP-Protocol-Version,
+  // Mcp-Method and Mcp-Name are checked exactly as on every other modern
+  // request. This handler's factory is reached only once every rung passed;
+  // it marks the pass and ends the exchange, so a refusal is the SDK's own.
+  const LADDER_PASSED = "mcp-ladder-passed";
+  const ladderContext = new AsyncLocalStorage();
+  let _ladderHandler = null;
+  const ladderHandler = () => (_ladderHandler ||= createMcpHandler(() => {
+    ladderContext.getStore().passed = true;
+    throw Object.assign(new Error(LADDER_PASSED), { [LADDER_PASSED]: true });
+  }, { legacy: "reject", onerror: (err) => { if (!err?.[LADDER_PASSED]) console.warn(`[mcp] 2026-07-28 request refused or failed: ${logSafe(mcpErrorText(err, 160), 160)}`); } }));
+  /** null when a 2026-07-28 request passes the SDK's validation ladder, else
+   *  the SDK's refusal (a web Response). */
+  async function modernLadderRefusal(req, signal) {
+    const probe = { passed: false };
+    const webReq = await toWebRequest(req, req.body, { signal });
+    const response = await ladderContext.run(probe, () => ladderHandler().fetch(webReq, { parsedBody: req.body }));
+    if (!probe.passed) return response;
+    try { await response.body?.cancel(); } catch { /* nothing to drain */ }
+    return null;
+  }
 
   // Stateless mode: a fresh server+transport per POST, no session table. Every
   // JSON-RPC message (including initialize) is self-contained, which survives
@@ -2045,9 +2141,29 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     // ttl/pollInterval), which is not the shape this extension puts on the wire.
     // It stays behind the per-IP request limiter above - the spec asks for rate
     // limiting on task operations to bound polling and id enumeration.
+    // The protocol era of this request (see the imports): the SDK's own
+    // classification, from the parsed body and the standard headers.
+    // A request it cannot classify is served as 2025-era traffic.
+    const modern = !(await isLegacyRequest(eraProbeOf(req), req.body ?? undefined).catch(() => true));
+    // Only a request that claims 2026-07-28 (the envelope, or a modern
+    // MCP-Protocol-Version header) meets the ladder here; a malformed 2025-era
+    // body keeps the answers below.
+    const claimsModern = () => {
+      const meta = req.body?.params?._meta;
+      const header = req.headers["mcp-protocol-version"];
+      return (meta && typeof meta === "object" && !Array.isArray(meta) && Object.hasOwn(meta, PROTOCOL_VERSION_META_KEY)) || (typeof header === "string" && header.trim() >= "2026-07-28");
+    };
+    if (modern && ((tasks && isTaskMethod(req.body?.method)) || (skillSet && isSkillMethod(req.body?.method))) && claimsModern()) {
+      const lac = new AbortController();
+      res.on("close", () => lac.abort());
+      const refusal = await modernLadderRefusal(req, lac.signal);
+      if (refusal) return writeWebResponse(res, refusal, lac.signal);
+    }
     if (tasks && isTaskMethod(req.body?.method)) {
       const handled = await handleTaskRpc(req.body);
-      return res.status(200).json(handled);
+      // 2026-07-28 HTTP: a missing required client capability is a 400; every
+      // other task answer, and every answer to a 2025-era request, is a 200.
+      return res.status(modern && handled.error?.code === TASK_MISSING_CAPABILITY ? 400 : 200).json(handled);
     }
     // Skills (io.modelcontextprotocol/skills): skills/list and skills/get are
     // static answers over the skill set built at mount, answered here because
@@ -2059,21 +2175,26 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       return answer ? res.status(200).json(answer) : res.status(202).end();
     }
     const isInitialize = req.body?.method === "initialize";
-    const skillsCaps = Boolean(skillSet) && (!isInitialize || clientDeclaresSkills(req.body?.params));
+    const isDiscover = req.body?.method === "server/discover";
+    // The answers that show capabilities: initialize (2025 era) and
+    // server/discover (2026-07-28). Skills appear there only for a client that
+    // declared the extension on that request.
+    const skillsCaps = Boolean(skillSet) && (!(isInitialize || isDiscover) || clientDeclaresSkills(req.body?.params));
     // R-11 outer gate #2: global in-flight transport ceiling, BEFORE building
     // the server/transport (bounds allocation under an initialize/malformed flood).
     if (mcpInFlight >= MCP_MAX_CONCURRENT) {
       return res.status(503).json({ jsonrpc: "2.0", error: { code: -32000, message: "MCP endpoint is at capacity - retry shortly." }, id: req.body?.id ?? null });
     }
     // Adoption telemetry: every MCP session announces its client at
-    // initialize (e.g. "claude-ai", "claude-code"). In-memory since boot.
-    const ci = isInitialize ? req.body?.params?.clientInfo : null;
+    // initialize (e.g. "claude-ai", "claude-code"), or in the envelope of a
+    // 2026-07-28 server/discover. In-memory since boot.
+    const ci = isInitialize ? req.body?.params?.clientInfo : isDiscover ? req.body?.params?._meta?.[CLIENT_INFO_META_KEY] : null;
     if (ci?.name && mcpClients.size < 500) {
       // clientInfo is attacker-controlled — sanitize before it lands in the log
       // line OR the in-memory telemetry map (audit F24).
       const key = logSafe(`${ci.name}@${ci.version || "?"}`, 80);
       mcpClients.set(key, (mcpClients.get(key) || 0) + 1);
-      console.log(`[mcp] initialize from ${key}`);
+      console.log(`[mcp] ${isInitialize ? "initialize" : "discover"} from ${key}`);
     }
     mcpInFlight++;
     let deadlineTimer = null;
@@ -2081,19 +2202,30 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     let transport = null;
     let run = null;
     try {
-      transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+      const heartbeatToken = typeof req.headers["x-heartbeat-token"] === "string" ? req.headers["x-heartbeat-token"] : null;
+      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall };
       // Client disconnect: abort in-flight handler work AND close the transport
       // (F14) — not just close the transport while the handler keeps running.
-      res.on("close", () => { ac.abort(); try { transport.close(); } catch { /* already closing */ } });
-      await buildServer(ip, ac.signal, typeof req.headers["x-heartbeat-token"] === "string" ? req.headers["x-heartbeat-token"] : null, { skillsCaps, reqHeaders: req.headers, paymentCall }).connect(transport);
-      run = transport.handleRequest(req, res, req.body);
+      res.on("close", () => { ac.abort(); try { transport?.close(); } catch { /* already closing */ } });
+      if (modern) {
+        // 2026-07-28: the SDK's handler validates the envelope and the
+        // standard headers, answers server/discover, and builds this
+        // request's server from the factory, which reads this context.
+        const webReq = await toWebRequest(req, req.body, { signal: ac.signal });
+        run = mcpRequestContext.run({ ip, signal: ac.signal, heartbeatToken, serverOpts }, () => modernHandler().fetch(webReq, { parsedBody: req.body }))
+          .then((response) => writeWebResponse(res, response, ac.signal));
+      } else {
+        transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+        await buildServer(ip, ac.signal, heartbeatToken, serverOpts).connect(transport);
+        run = transport.handleRequest(req, res, req.body);
+      }
       // R-11/F14: per-request deadline. On fire, abort the handler and close the
       // transport so it settles, then (in finally) await that settle before the
       // slot is released — mcpInFlight never undercounts truly-live work.
       const deadline = new Promise((_, reject) => {
         deadlineTimer = setTimeout(() => {
           ac.abort();
-          try { transport.close(); } catch { /* already closing */ }
+          try { transport?.close(); } catch { /* already closing */ }
           reject(Object.assign(new Error("mcp request deadline exceeded"), { __deadline: true }));
         }, MCP_REQ_DEADLINE_MS);
       });
@@ -2110,15 +2242,21 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         const cls = err.__deadline ? "deadline" : "internal";
         console.warn(`[mcp] ${logSafe(method, 40)} failed class=${cls}${tool ? ` tool=${tool}` : ""}`);
         if (method === "tools/call" && req.body?.id != null) {
-          // Only a call that carried no payment credential is certainly
-          // uncharged; a paid call may have settled server-side.
+          // Only a call that carried no payment is certainly uncharged; a
+          // call with an MPP credential or an x402 payment the reader accepts
+          // (the one payOverX402 replays) may have settled server-side, and
+          // is answered as the paid loopback's own cut-off is.
           let paid = false;
-          try { paid = Boolean(credentialHeaderFromMeta(req.body?.params?._meta)); } catch { paid = false; }
+          try {
+            const meta = req.body?.params?._meta;
+            paid = Boolean(credentialHeaderFromMeta(meta)) || (Boolean(x402Loopback) && Boolean(readPaymentFromMeta(meta).payment));
+          } catch { paid = false; }
           const label = `Agent402${tool ? ` (${tool})` : ""}`;
           const text = err.__deadline
             ? connectorCutoffText({ label, seconds: Math.round(MCP_REQ_DEADLINE_MS / 1000), paid })
             : `${label}: the connector hit an internal error handling this call (${mcpErrorText(err, 120)}). ${paid ? PAID_CUTOFF_TEXT : `${UNPAID_CUTOFF_TEXT} Retry shortly.`}`;
-          res.status(200).json({ jsonrpc: "2.0", id: req.body.id, result: { content: [{ type: "text", text }], isError: true } });
+          // A 2026-07-28 result names its kind (resultType); a 2025 one never did.
+          res.status(200).json({ jsonrpc: "2.0", id: req.body.id, result: { ...(modern ? { resultType: "complete" } : {}), content: [{ type: "text", text }], isError: true } });
         } else {
           res.status(err.__deadline ? 504 : 500).json({ jsonrpc: "2.0", error: { code: -32603, message: mcpErrorText(err) }, id: req.body?.id ?? null });
         }
