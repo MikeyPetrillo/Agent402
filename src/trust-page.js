@@ -77,9 +77,9 @@ export function trustPage(baseUrl) {
   const SECTIONS = [
     {
       id: "verify",
-      h: "Verify what an agent paid for and received",
+      h: "Verify a paid call",
       p: [
-        `One paid call, checked end to end with public records and no account:`,
+        `Verify what an agent paid for and received, one call end to end, from public records and with no account:`,
         `<div><ol style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 14px;padding-left:24px;">${[
           step(`Before paying, the 402 names the price, the network, the asset and the ${code("payTo")} address; ${link("/.well-known/x402", code("/.well-known/x402"))} lists the same addresses.`),
           step(`A settled x402 answer carries ${code("PAYMENT-RESPONSE")}: base64 JSON whose ${code("success")}, ${code("transaction")}, ${code("network")} and ${code("payer")} fields name the settlement. An MPP answer carries ${code("Payment-Receipt")}, whose ${code("reference")} names the payment.`),
