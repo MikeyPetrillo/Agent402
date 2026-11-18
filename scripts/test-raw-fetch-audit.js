@@ -83,7 +83,7 @@ const CALLS = {
   "src/tools/cve-kit.js": [F("pass-through default; NVD is the only host", { t: "init" })],
   "src/tools/domain-audit-kit.js": [F("DNS over HTTPS resolver")],
   "src/tools/embed-kit.js": [F("embeddings vendor")],
-  "src/tools/fetch-guard.js": [{ cls: "guard", note: "probePublicUrl" }, { cls: "guard", note: "safeFetch" }],
+  "src/tools/fetch-guard.js": [{ cls: "guard", note: "probePublicUrl" }, { cls: "guard", note: "safeFetch" }, { cls: "guard", note: "safeFetch redirect hop: asserted per hop, pinned, redirect manual" }],
   "src/tools/image-gen-kit.js": [F("image vendor")],
   "src/tools/kit.js": [
     F("IANA RDAP bootstrap, pinned"),
@@ -275,8 +275,9 @@ const staleDefaults = Object.keys(DEFAULTS).filter((f) => !seenDefaults.has(f));
 ok(staleDefaults.length === 0, staleDefaults.length ? `DEFAULTS names files with no fetch default: ${staleDefaults.join(", ")}` : "no stale default entries");
 
 // safeFetch and probePublicUrl stay the only transports the guard exports with
-// a fetch inside: a third raw fetch in the guard would be a policy change.
-ok((CALLS["src/tools/fetch-guard.js"] || []).length === 2, "the guard itself holds exactly two transports");
+// a fetch inside (safeFetch sends each redirect hop as its own checked
+// request): another raw fetch in the guard would be a policy change.
+ok((CALLS["src/tools/fetch-guard.js"] || []).length === 3, "the guard itself holds exactly two transports (safeFetch with its hop request)");
 
 console.log(`\nraw fetch sites by class: ${Object.entries(tally).map(([k, v]) => `${k}=${v}`).join(", ")}`);
 console.log(`${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
