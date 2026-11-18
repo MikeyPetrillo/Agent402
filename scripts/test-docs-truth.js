@@ -138,6 +138,8 @@ const KNOWN_NON_CATALOG = new Set([
   "/api/pricing", "/api/find", "/api/index", "/api/route", "/api/stats", "/api/wishes",
   "/api/sales", "/api/revenue", "/api/revenue/daily", "/api/revenue/mpp", "/api/calls/daily",
   "/api/reliability", "/api/rails", "/api/status", "/api/status/probe", "/api/leaderboard", "/api/analytics",
+  // Free seller reputation (src/seller-reputation.js), outside CATALOG.
+  "/api/reputation",
   "/api/cacheable", "/api/cache-stats", "/api/pow", "/api/pow/challenge", "/api/skill-packs.json",
   "/api/index/register", "/api/x402-economy", "/api/gateway-status", "/api/selfcheck",
   "/api/wish", "/api/route/execute", "/api/skill-packs",

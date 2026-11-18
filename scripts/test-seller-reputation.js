@@ -15,13 +15,11 @@
 //   the partial-answer fields, refuses a missing, oversized or own-host value,
 //   and answers a hostile value quickly; ?seller= and the seller card carry it.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
-import { getFreePort } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 
 const R = await import("../src/seller-reputation.js");
 const { requestTimingMiddleware } = await import("../src/request-timing.js");
@@ -216,21 +214,22 @@ const PRIVATE_KEY_RE = /settle|buyer|payer|wallet|volume|usd|calls30d|payers30d|
     "https://stale.example": { f: now - 90 * DAY, s: now - 35 * DAY, c: [], p: [], l: [] },
   } }));
   writeFileSync(delFile, JSON.stringify({ v: 1, o: { [SCORED]: { d: series(5, 6), r: { "GET /api/t0": series(5, 5) }, at: now } } }));
-  const port = await getFreePort();
-  const proc = spawn(process.execPath, ["src/server.js"], {
-    env: {
-      ...process.env, ...ownStoreEnv("reputation"), FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
-      X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"),
-      ROUTER_WORKERS: "0", LOAD_SHED: "off", SELLER_REPUTATION_FILE: repFile, SELLER_DELIVERY_FILE: delFile, SELLER_REPUTATION_FIRST_MS: "1500",
-    },
-    stdio: ["ignore", "ignore", "inherit"],
-  });
-  const base = `http://127.0.0.1:${port}`;
+  let srv = null;
+  try {
+    srv = await bootServer({
+      stores: "reputation",
+      env: {
+        FREE_MODE: "true", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
+        X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"),
+        ROUTER_WORKERS: "0", LOAD_SHED: "off", SELLER_REPUTATION_FILE: repFile, SELLER_DELIVERY_FILE: delFile, SELLER_REPUTATION_FIRST_MS: "1500",
+      },
+    });
+  } catch (e) { ok(false, `server booted (${String(e?.message || e).slice(0, 400)})`); }
+  const base = srv?.url || "http://127.0.0.1:0";
   const get = async (p) => { const r = await fetch(`${base}${p}`); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch { /* html */ } return { r, text, json }; };
   try {
-    let up = false;
-    for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await sleep(500); } }
-    ok(up, "server booted");
+    if (!srv) throw new Error("no server");
+    ok(true, "server booted");
     let sellers = 0;
     for (let i = 0; i < 60 && sellers < 3; i++) {
       try { sellers = (await (await fetch(`${base}/api/index?limit=1`)).json()).sellerCount || 0; } catch { /* warming */ }
@@ -298,9 +297,10 @@ const PRIVATE_KEY_RE = /settle|buyer|payer|wallet|volume|usd|calls30d|payers30d|
     ok(llms.text.includes("/api/reputation?seller="), "llms.txt names /api/reputation");
     const oa = await get(`/openapi.json`);
     ok(oa.json?.paths?.["/api/reputation"]?.get?.security?.length === 0, "openapi documents GET /api/reputation as free");
+  } catch (e) {
+    ok(false, `server part ran to the end (${String(e?.message || e).slice(0, 200)})`);
   } finally {
-    proc.kill("SIGTERM");
-    await sleep(300);
+    await srv?.stop();
   }
 }
 
