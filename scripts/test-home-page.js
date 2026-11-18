@@ -7,7 +7,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { stripTags } from "./lib/html-text.js";
 import { ledgerHomePage, cardPayClause, homeDescription, socialCardText } from "../src/ledger-home.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
-import { CATEGORY_LINE, LEAD_SENTENCE } from "../src/positioning.js";
+import { CATEGORY_LINE, SUPPORT_LINE, leadSentence } from "../src/positioning.js";
 import { homeProofFigures } from "../src/home-proof.js";
 
 let pass = 0, fail = 0;
@@ -147,7 +147,8 @@ const catalog = {
   ok(!/<script src="https?:\/\//.test(html), "homepage loads no third-party script (no CDN tags)");
   ok(html.includes('<script src="/js/home-hero.js">'), "homepage behavior script is first-party");
   const heroText = stripTags(html.slice(html.indexOf("<header"), html.indexOf("</header>")), "").replace(/\s+/g, " ");
-  ok(heroText.includes(CATEGORY_LINE) && heroText.includes(LEAD_SENTENCE) && heroText.includes("Web search, browser rendering, SEC filings, market data and more: an agent sends a request, gets a price back") && !/plus [\d,]+ utilities/.test(html), "the hero states the category, then the lead sentence (500+ tools), then what they do and how a call is paid");
+  const lead = leadSentence({ receipts: false });
+  ok(heroText.includes(CATEGORY_LINE) && heroText.includes(lead) && heroText.indexOf("an x402 payment settles after a successful answer") > heroText.indexOf(lead) && heroText.indexOf(SUPPORT_LINE.replace(/\.$/, "")) > heroText.indexOf(lead) && !/plus [\d,]+ utilities/.test(html), "the hero states the category, then the lead sentence (payment and trust), then how a call is paid and protected, with the catalog's size as the supporting line");
   const proof = homeProofFigures({ external: { value: { count: 40000 }, at: Date.UTC(2026, 10, 11) } });
   const withExt = ledgerHomePage(BASE_URL, catalog, { toolCallsServed: { viaUSDC: 35138, viaProofOfWork: 1, viaMPPWire: 0, viaRouter: 0, viaUSDCByNetwork: {} } }, { leaderboard: [] }, [], { settledOnChain: 46007, external: { count: 40000, usd: 1234.5 }, proof });
   ok(/external payments/.test(withExt) && withExt.includes("40,000") && /of our own test purchases are not counted/.test(withExt) && !/>46,007</.test(withExt),
@@ -292,11 +293,15 @@ const catalog = {
 
 // --- the meta description's card clause reads the switches that sell card ---
 {
-  ok(cardPayClause({ credits: true, storefront: true }) === "or by card" && /over x402 and MPP, or by card\./.test(homeDescription({ credits: true, storefront: true })), "credits on sale: any tool by card");
+  ok(cardPayClause({ credits: true, storefront: true }) === "or by card" && /on the same rails; any tool also by card\.$/.test(homeDescription({ credits: true, storefront: true })), "credits on sale: any tool by card");
   const store = homeDescription({ credits: false, storefront: true });
-  ok(/over x402 and MPP; reports and monitors also by card\./.test(store) && !/, or by card/.test(store), "credits off, storefront on: card scoped to reports and monitors");
+  ok(/on the same rails; reports and monitors also by card\.$/.test(store) && !/any tool also by card/.test(store), "credits off, storefront on: card scoped to reports and monitors");
   const none = homeDescription({ credits: false, storefront: false });
-  ok(!/card/i.test(none) && /over x402 and MPP\. No signup/.test(none), "no card sale: no card in the description");
+  ok(!/card/i.test(none) && /over x402 and MPP[,.]/.test(none) && /500\+ tools on the same rails\.$/.test(none), "no card sale: no card in the description");
+  for (const receipts of [true, false]) {
+    const d = homeDescription({ credits: false, storefront: true, receipts });
+    ok(/signed receipt/.test(d) === receipts && d.length <= 155, `the description names the signed receipt only while receipts are signed, and fits the snippet (${receipts ? "on" : "off"}, ${d.length} chars)`);
+  }
   const saved = { c: process.env.CREDITS_SALES, s: process.env.STRIPE_SECRET_KEY };
   delete process.env.CREDITS_SALES; process.env.STRIPE_SECRET_KEY = "sk_test_x";
   const meta = (ledgerHomePage(BASE_URL, catalog, {}, {}, []).match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
@@ -304,10 +309,10 @@ const catalog = {
   for (const [k, v] of [["CREDITS_SALES", saved.c], ["STRIPE_SECRET_KEY", saved.s]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   // The social card (/card.png) reads the same switches.
   const cs = socialCardText(537, { credits: false, storefront: true });
-  ok(cs.subtitle === "537 tools priced in cents. USDC over x402 / MPP; reports and monitors also by card." && cs.railsTag === "x402 · MPP · card", `social card, storefront on: card scoped to reports and monitors (${cs.subtitle})`);
-  ok(/USDC over x402 \/ MPP, or by card\.$/.test(socialCardText(537, { credits: true, storefront: true }).subtitle), "social card, credits on sale: any tool by card");
+  ok(cs.subtitle === "Agents find, pay for and verify every paid call over x402 and MPP." && cs.railsTag === "x402 · MPP · reports by card" && cs.toolsTag === "537 tools on the same rails", `social card, storefront on: card scoped to reports, the count a supporting tag (${cs.subtitle} | ${cs.railsTag} | ${cs.toolsTag})`);
+  ok(socialCardText(537, { credits: true, storefront: true }).railsTag === "x402 · MPP · card", "social card, credits on sale: any tool by card");
   const cn = socialCardText(537, { credits: false, storefront: false });
-  ok(!/card/i.test(cn.subtitle) && cn.railsTag === "x402 · MPP" && /USDC over x402 \/ MPP\.$/.test(cn.subtitle), `social card, no card sale: no card on it (${cn.subtitle} | ${cn.railsTag})`);
+  ok(!/card/i.test(cn.subtitle + cn.railsTag) && cn.railsTag === "x402 · MPP", `social card, no card sale: no card on it (${cn.subtitle} | ${cn.railsTag})`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

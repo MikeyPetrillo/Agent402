@@ -8,6 +8,8 @@ import { COMPANY_MAILBOXES } from "./company.js";
 import { COMPANY_NAME, mppOffered } from "./site-org.js";
 import { REPO_URL } from "./repo-link.js";
 import { X_PROFILE_URL } from "./org-profiles.js";
+import { leadSentence, SUPPORT_LINE } from "./positioning.js";
+import { receiptsServed } from "./receipt-signing.js";
 
 const LINK = "font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;";
 
@@ -24,7 +26,6 @@ const links = (pairs) => `<div class="pr-links" style="display:flex;gap:18px;fle
 export function pressPage(baseUrl, { mpp = mppOffered() } = {}) {
   const canonical = `${baseUrl}/press`;
   const host = (() => { try { return new URL(baseUrl).host; } catch { return String(baseUrl); } })();
-  const wires = mpp ? "x402 or MPP" : "x402";
   const press = COMPANY_MAILBOXES.operator;
   const title = "Agent402 press kit";
   const description = `Agent402.Tools press kit: how to write the name, the logo and social card files, the operating company and the press contact.`;
@@ -46,7 +47,7 @@ export function pressPage(baseUrl, { mpp = mppOffered() } = {}) {
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">press</span></nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);max-width:900px;">Press kit.</h1>
-    <p class="ml-measure" style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0;">Agent402.Tools is a catalog of 500+ tools that AI agents find, pay for per request over ${esc(wires)}, and call with no account or API key. It is built and operated by <a href="/company" style="color:var(--ink);">${esc(COMPANY_NAME)}</a>.</p>
+    <p class="ml-measure" style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0;">${esc(leadSentence({ mpp, receipts: receiptsServed() }))} ${esc(SUPPORT_LINE)} It is built and operated by <a href="/company" style="color:var(--ink);">${esc(COMPANY_NAME)}</a>.</p>
   </div>
 </header>
 ${row("What it is", `${para(`Each tool is an HTTP endpoint and an MCP tool. A call without payment answers HTTP 402 with the price, and the agent pays from its own wallet in USDC. The server is open source under AGPL-3.0 and the client packages under MIT, so anyone can run their own.`)}${links([["/101", "How it works"], [REPO_URL, "Source"]])}`)}

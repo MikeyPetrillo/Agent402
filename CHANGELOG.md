@@ -6,6 +6,21 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-18 (payment and trust layer lead)
+Site:
+- The home page, /llms.txt, /openapi.json, /press and the hosted MCP
+  connector's description, instructions and server.describe lead with one
+  line: Agent402 is the payment and trust layer for agent commerce: agents
+  find, pay for and verify every paid call, across x402 and MPP, with a signed
+  receipt for each one. The signed receipt clause appears only while the
+  server signs receipts. The catalog's size follows as a supporting line, 500+
+  ready tools on the same rails. The home title, description and social card,
+  /company and the site's structured data name the same layer.
+Packages:
+- The README, the agent402-mcp, agent402-client, agent402-tollbooth and
+  agent402-openclaw READMEs, the package descriptions and the MCP Registry
+  entry carry the same line, with the catalog's size after it.
+
 ### 2026-11-18 (ownership statement)
 Repository:
 - NOTICE, the README, CONTRIBUTING.md and /llms-full.txt state that

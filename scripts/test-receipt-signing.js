@@ -26,6 +26,8 @@ import { bootPaidWires } from "./lib/paid-wires-rig.js";
 import { loadReceiptKeys, buildReceiptRecord, signReceipt, verifyReceipt, requestDigest, responseDigest, receiptSignerMiddleware, RECEIPT_MAX_BYTES, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, SIGNED_RAILS } from "../src/receipt-signing.js";
 import { verifyReceipt as clientVerify, receiptRequestDigest } from "../client/receipt.js";
 import { CONFORMANCE_PATH } from "../src/conformance.js";
+import { LEAD_SENTENCE } from "../src/positioning.js";
+const ledeOf = (html) => ((html.match(/<p class="hm-lede"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
 
 let pass = 0, rig = null;
 const fail = async (m) => { console.error(`FAIL - ${m}`); for (const l of (rig?.log() || "").split("\n").filter(Boolean).slice(-20)) console.error("  server:", l.slice(0, 300)); await rig?.stop().catch(() => {}); process.exit(1); };
@@ -157,6 +159,11 @@ try {
   const llms = await (await fetch(`${rig.url}/llms-full.txt`)).text();
   await ok(trust.includes(RECEIPT_HEADER) && trust.includes(RECEIPT_KEYS_PATH) && !trust.includes("no signature added by this server"), "with a key: /trust offers the signed receipt and its keys");
   await ok(llms.includes(RECEIPT_HEADER) && llms.includes(RECEIPT_VERIFY_PATH) && !llms.includes("`signedReceipt` reads false"), "with a key: llms-full.txt names the header and the check");
+  {
+    const lede = ledeOf(await (await fetch(`${rig.url}/`)).text());
+    const summary = (llms.match(/^> (.*)$/m) || [])[1] || "";
+    await ok(lede === LEAD_SENTENCE && summary.startsWith(LEAD_SENTENCE), `with a key: the home lede and the llms summary carry the full lead sentence, signed receipt clause included ("${lede}")`);
+  }
   const WIRE_ROW = { evm: "x402:exact:eip155:8453", svm: "x402:exact:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", avm: doc.rails.find((r) => /^x402:exact:algorand/.test(r.id)).id, stellar: "x402:exact:stellar:pubnet", "mpp-evm": "mpp:evm:eip155:8453", tempo: "mpp:tempo:pull" };
   for (const id of [...Object.values(WIRE_ROW), "mpp:tempo:push", "mpp:stripe"]) await ok(row(id).features.signedReceipt.supported === true && /Agent402-Receipt/.test(row(id).features.signedReceipt.detail), `${id}: with a key the cell reads signed`);
   for (const id of ["credits", "card:checkout"]) await ok(row(id).features.signedReceipt.supported === false, `${id}: no per-call receipt, still false`);
@@ -240,6 +247,11 @@ try {
   const trust = await (await fetch(`${rig.url}/trust`)).text();
   const llms = await (await fetch(`${rig.url}/llms-full.txt`)).text();
   await ok(!trust.includes(RECEIPT_HEADER) && trust.includes("no signature added by this server") && !llms.includes(RECEIPT_HEADER), "no key: /trust and llms-full.txt do not offer a signed receipt");
+  {
+    const lede = ledeOf(await (await fetch(`${rig.url}/`)).text());
+    const summary = (llms.match(/^> (.*)$/m) || [])[1] || "";
+    await ok(lede.startsWith("Agent402 is the payment and trust layer for agent commerce") && !/signed receipt/.test(lede + summary.slice(0, 300)), `no key: the home lede and the llms summary drop the signed receipt clause ("${lede}")`);
+  }
   const w = await rig.wallet("evm");
   rig.fund(w, 10n ** 12n);
   const good = await rig.pay(w, HASH);

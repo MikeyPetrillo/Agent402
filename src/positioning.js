@@ -5,17 +5,25 @@
 // stdio MCP package, the package READMEs and descriptions) carry it verbatim:
 // scripts/test-positioning.js fails when any of them drifts.
 //
-// The wires clause follows the MPP switch where a surface reads it, so a
-// server without MPP never offers it; the published sentence is the one with
-// both wires.
+// Two clauses follow switches where a surface reads them: the wires follow the
+// MPP switch, so a server without MPP never offers it, and the signed-receipt
+// clause follows receiptsServed() (src/receipt-signing.js), so a server with
+// no signing key loaded never promises one. The published sentence is the one
+// with both wires and the receipt clause.
+//
+// The catalog's size is a supporting line, never the lead: SUPPORT_LINE.
 
 /** The home page h1: the category, in the words a stranger uses. */
-export const CATEGORY_LINE = "Pay-per-call tools for AI agents.";
+export const CATEGORY_LINE = "Payments and trust for AI agents.";
 
-/** The lead sentence, with the wires this server offers. */
-export function leadSentence({ mpp = true } = {}) {
-  return `Agent402 is a catalog of 500+ tools that AI agents find, pay for per request over ${mpp ? "x402 or MPP" : "x402"}, and call with no account or API key.`;
+/** The lead sentence, with the wires this server offers and, when it signs
+ *  them, the receipt clause. */
+export function leadSentence({ mpp = true, receipts = true } = {}) {
+  return `Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call, across ${mpp ? "x402 and MPP" : "x402"}${receipts ? ", with a signed receipt for each one" : ""}.`;
 }
 
-/** The published lead sentence (both wires). */
+/** The published lead sentence (both wires, receipts on). */
 export const LEAD_SENTENCE = leadSentence();
+
+/** The catalog, as a supporting line: evergreen count, never an exact one. */
+export const SUPPORT_LINE = "500+ ready tools on the same rails.";
