@@ -472,6 +472,8 @@ import { setAlgorandCrawlSources, makeIndexerInboundCount } from "./algorand-sel
 import { priceToMicroUsd, sellerRouteUrl, isUrlTemplateRoute } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
+import { sellerLoad, sellerLoadStatus, sendRouterProbe } from "./seller-load.js";
+import { ROUTER_UA } from "./user-agents.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
 import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, removalPreview, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
 import { crawlSwitch } from "./crawl-switch.js";
@@ -2040,12 +2042,17 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       // validated host.
       // The bound probe is a second round trip before any payment on a loop
       // that runs candidates in turn, so it gets half the bare probe's time.
-      const probeAt = (u, timeoutMs = 6000) => probePublicUrl(u, {
+      // It is the first leg of a paying caller's purchase, so it says so
+      // (the router's User-Agent and X-Agent402-Via), is counted against the
+      // seller host's day and is never held back (src/seller-load.js); a 429
+      // or 503 it reads holds that host's unpaid crawl probes, not this buy.
+      const probeAt = (u, timeoutMs = 6000) => sendRouterProbe(u, () => probePublicUrl(u, {
         method: probeMethod,
-        headers: { Accept: "application/json", ...(!isQueryMethod(probeMethod) ? { "Content-Type": "application/json" } : {}) },
+        headers: { Accept: "application/json", "X-Agent402-Via": "router", ...(!isQueryMethod(probeMethod) ? { "Content-Type": "application/json" } : {}) },
         ...(!isQueryMethod(probeMethod) ? { body: "{}" } : {}),
         timeoutMs,
-      });
+        userAgent: ROUTER_UA,
+      }));
       let probe = await probeAt(r.url);
       if (isQueryMethod(probeMethod) && (probe.status === 400 || probe.status === 422)) {
         let boundUrl;
@@ -2307,12 +2314,13 @@ async function diagnoseExternalSeller(task, { cap }) {
     let probe = null;
     if (passesFilters) {
       try {
-        const p = await probePublicUrl(r.url, {
+        const p = await sendRouterProbe(r.url, () => probePublicUrl(r.url, {
           method: (r.method || "POST").toUpperCase(),
-          headers: { Accept: "application/json", ...((r.method || "POST").toUpperCase() !== "GET" ? { "Content-Type": "application/json" } : {}) },
+          headers: { Accept: "application/json", "X-Agent402-Via": "router", ...((r.method || "POST").toUpperCase() !== "GET" ? { "Content-Type": "application/json" } : {}) },
           ...((r.method || "POST").toUpperCase() !== "GET" ? { body: "{}" } : {}),
           timeoutMs: 6000,
-        });
+          userAgent: ROUTER_UA,
+        }));
         probe = { status: p.status, live: p.status === 402 };
       } catch (e) { probe = { error: String(e?.message || e).slice(0, 120) }; }
     }
@@ -7022,6 +7030,17 @@ app.get("/__operator/quote-probes.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json(quoteProbeStatsSnapshot());
 });
+// What our own requests cost sellers' hosting: the revisit back-off, the
+// per-host daily budget and the Retry-After holds (src/seller-load.js).
+// Counts only, never an origin or a host; with ?host=<hostname>, the requests
+// we sent that host per component and minute over the last two days, to check
+// a seller's timestamps against.
+app.get("/__operator/seller-load.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  const host = typeof req.query.host === "string" ? req.query.host.trim().toLowerCase().slice(0, 253) : "";
+  if (host) return res.set("Cache-Control", "no-store").json(await sellerLoad.requestLog(host).catch((e) => ({ host, error: redactSecrets(e?.message || String(e)).slice(0, 120) })));
+  res.set("Cache-Control", "no-store").json(sellerLoadStatus());
+});
 app.get("/__operator/successions.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const rows = listSuccessions();
@@ -9360,13 +9379,20 @@ app.post("/api/index/register", async (req, res) => {
     if (isRemovedOrigin(rv.origin)) return res.status(410).json({ error: REMOVED_ORIGIN_ERROR });
     replaces = rv.origin;
   }
-  const result = await registerOrigin(v.origin, { replaces });
+  const result = await registerOrigin(v.origin, { replaces, registrant: ip });
   if (result?.notLoaded) {
     // The removal list has not been read yet (the state database is down):
     // nothing was fetched or listed, so the call gives back both of its
     // slots and answers 503 with when to try again.
     regLimiter.giveBack(slot);
     return res.status(503).set("Retry-After", "30").json(result);
+  }
+  // This caller has had this hour's registration reads of the host (src/seller-load.js):
+  // nothing was sent, so the global slot goes back, and the caller is told
+  // when to retry.
+  if (result?.held) {
+    regLimiter.giveBackGlobal(slot);
+    return res.status(429).set("Retry-After", String(result.retryAfterSeconds || 60)).json(result);
   }
   // Verification outlasted the registration's deadline: answered now (202),
   // and the listing completes in the background (registerOrigin).
@@ -9394,7 +9420,11 @@ app.post("/api/mpp-index/register", async (req, res) => {
   if (!taken.ok) return res.status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
   // Optional probe hint: the priced path (and GET/POST) the seller's 402 lives
   // on, for sellers not yet in the registry (validated in registerMppOrigin).
-  const result = await registerMppOrigin(v.origin, { path: req.body?.path, method: req.body?.method });
+  const result = await registerMppOrigin(v.origin, { path: req.body?.path, method: req.body?.method, registrant: ip });
+  if (result?.held) {
+    mppRegLimiter.giveBackGlobal(taken.slot);
+    return res.status(429).set("Retry-After", String(result.retryAfterSeconds || 60)).json(result);
+  }
   res.json(result);
 });
 const computeRoute = async (q, k, include, net, scoredMemo = null, meter = null) => {

@@ -31,6 +31,9 @@ import { trackStoreReady, leased } from "./state-db.js";
 const { docs, docFor } = createDocumentCache();
 import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
+import { CRAWLER_UA } from "./user-agents.js";
+import { sellerLoad, landingGate, addressGate, RequestHeld, SLOW_READ_INTERVAL_MS, runAsRegistrant } from "./seller-load.js";
+import { isSlowOrigin } from "./crawl-cadence.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";
 import { registerMemoryStore } from "./memory-stores.js";
 import { fetchLlmsExamples, attachInputExamples } from "./mpp-input-examples.js";
@@ -194,7 +197,7 @@ export function __testResetSubmitted() { submittedSeeds.clear(); submittedHints.
 export const discoverMppRegistry = leased("mpp-index-discover-registry", { ttlMs: 10 * 60_000, failOpen: true }, discoverMppRegistryUnleased);
 async function discoverMppRegistryUnleased() {
   try {
-    const { html } = await safeFetch(MPP_DISCOVERY_URL, { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "application/json" } });
+    const { html } = await safeFetch(MPP_DISCOVERY_URL, { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "application/json" }, userAgent: CRAWLER_UA });
     const parsed = JSON.parse(html);
     const services = Array.isArray(parsed?.services) ? parsed.services : [];
     let added = 0, skippedPathScoped = 0;
@@ -306,7 +309,7 @@ async function discoverMppScanUnleased() {
   let added = 0, total = 0, error = null, source = "api";
   try {
     for (let page = 0; page < MPPSCAN_MAX_PAGES; page++) {
-      const { html } = await safeFetch(mppScanListUrl(page), { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "application/json" } });
+      const { html } = await safeFetch(mppScanListUrl(page), { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "application/json" }, userAgent: CRAWLER_UA });
       const { total: t, rows } = parseMppScanList(html);
       total = t;
       for (const row of rows) {
@@ -323,7 +326,7 @@ async function discoverMppScanUnleased() {
     source = "page";
     error = String(e?.message || e).slice(0, 200);
     try {
-      const { html } = await safeFetch(MPPSCAN_DISCOVERY_URL, { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "text/html" } });
+      const { html } = await safeFetch(MPPSCAN_DISCOVERY_URL, { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "text/html" }, userAgent: CRAWLER_UA });
       for (const o of parseMppScanOrigins(html)) {
         seen.add(o);
         if (!discoveredSeeds.has(o)) { added++; if (!seedSource.has(o)) seedSource.set(o, "mppscan"); }
@@ -358,17 +361,53 @@ export function probeTargetFromDiscovery(doc) {
 }
 
 const discoveryDocCache = new Map(); // origin -> { at, target|null }
+
+// The same load controls as the x402 crawl (src/seller-load.js). A crawl's
+// request (`gate`) waits while the seller's host is held by a Retry-After or
+// past its day's budget, and is counted when sent; a request the seller asked
+// for (a registration) is counted on a day count of its own, never the one the
+// crawl reads, and never held by the host's hold. A 429 or 503 to a crawl's
+// request holds the host; one to a registration's read holds only that
+// registrant's later registration reads of that origin.
+class MppRequestHeld extends Error {
+  constructor(reason) { super(`not sent: ${reason}`); this.sellerLoadSkip = reason; }
+}
+async function loadGate(url, kind, gate) {
+  if (gate) {
+    const refusal = await sellerLoad.probeRefusal(url, kind);
+    if (refusal) throw new MppRequestHeld(refusal);
+  } else {
+    const b = await sellerLoad.takeBudget(url, kind, { essential: true, unscheduled: true });
+    if (b?.ok === false && b.heldBy) throw new RequestHeld(b.heldBy, b.retryAfterSeconds);
+  }
+}
+function noteHold(url, status, retryAfter, gate) {
+  if (status === 429 || status === 503) void Promise.resolve().then(() => sellerLoad.noteThrottle(url, status, retryAfter, { unscheduled: !gate })).catch(() => {});
+}
+// A redirect hop is counted before it is sent, and one onto another operator's
+// host is not sent past that host's landed allowance (landingGate).
+const fetchDiscoveryDoc = (url, { unscheduled = false } = {}) => safeFetch(url, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "mpp-crawler", { unscheduled }), onResolved: addressGate("mpp-crawler", { unscheduled }) });
+
 /** Fetch `${origin}/openapi.json` (guarded, capped, cached 1h) and derive a
- *  probe target. Never throws; null on any failure. */
-async function discoveryProbeTarget(origin) {
+ *  probe target. null on any failure; throws only when the load controls held
+ *  the request back (nothing was asked, so nothing is cached). */
+async function discoveryProbeTarget(origin, { gate = false, fetchDoc = fetchDiscoveryDoc } = {}) {
   const hit = discoveryDocCache.get(origin);
   if (hit && Date.now() - hit.at < DISCOVERY_DOC_TTL_MS) return hit.target;
+  const url = `${origin}/openapi.json`;
+  await loadGate(url, "mpp-crawler", gate);
   let target = null;
   try {
-    const { html } = await safeFetch(`${origin}/openapi.json`, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS });
+    const { html } = await fetchDoc(url, { unscheduled: !gate });
     const t = probeTargetFromDiscovery(JSON.parse(html));
     if (t) target = { method: t.method, url: `${origin}${t.path}` };
-  } catch { target = null; }
+  } catch (e) {
+    // A hop that was not sent is no answer: nothing is cached.
+    if (e?.requestHeld) throw e;
+    if (e?.landingHeld) throw new MppRequestHeld("budget");
+    noteHold(url, Number(e?.upstreamStatus), e?.retryAfter ?? e?.upstreamRetryAfter ?? null, gate);
+    target = null;
+  }
   discoveryDocCache.set(origin, { at: Date.now(), target });
   return target;
 }
@@ -432,10 +471,10 @@ export function pickProbeTarget(origin, svc, hint = submittedHints.get(origin)) 
 
 /** Full target resolution: registry endpoints > submitted hint > the seller's
  *  /openapi.json x-payment-info operation > bare root. */
-async function resolveProbeTarget(origin, svc) {
+async function resolveProbeTarget(origin, svc, opts = {}) {
   const t = pickProbeTarget(origin, svc);
   if (t.url !== origin) return t;
-  return (await discoveryProbeTarget(origin)) || t;
+  return (await discoveryProbeTarget(origin, opts)) || t;
 }
 
 /** Make one unpaid request to `target` and confirm a genuine MPP challenge.
@@ -449,6 +488,7 @@ async function probeMppChallenge({ method, url }) {
       headers: { Accept: "application/json", ...(method !== "GET" ? { "Content-Type": "application/json" } : {}) },
       ...(method !== "GET" ? { body: "{}" } : {}),
       timeoutMs: PROBE_TIMEOUT_MS,
+      onResolved: addressGate("mpp-probe"),
     });
     const challenge = res.headers.get("www-authenticate");
     const mpp = isMppChallenge(challenge);
@@ -456,8 +496,10 @@ async function probeMppChallenge({ method, url }) {
     // "payment required" answer; anything else (200, 404, 5xx) is not.
     const statusOk = res.status === 401 || res.status === 402;
     const offers = mpp ? await parseOffers(challenge) : [];
-    return { ok: mpp && statusOk, status: res.status, url, at: Date.now(), offers, error: mpp ? null : "no WWW-Authenticate: Payment challenge on the probed endpoint" };
+    return { ok: mpp && statusOk, status: res.status, url, at: Date.now(), offers, retryAfter: res.headers.get("retry-after"), error: mpp ? null : "no WWW-Authenticate: Payment challenge on the probed endpoint" };
   } catch (e) {
+    // Not sent by our own limit (the address's day): no answer, so no verdict.
+    if (e?.requestHeld) throw e;
     return { ok: false, status: 0, url, at: Date.now(), offers: [], error: String(e?.message || e).slice(0, 160) };
   }
 }
@@ -497,10 +539,23 @@ const HEALTH_WINDOW = 5;
  *  the reason recorded, same posture as x402-index.js's crawlSeller().
  *  `probe` and `fetchText` are injectable for tests (the guarded network
  *  primitives refuse a local stub); production passes neither. */
-export async function verifyMppSeller(origin, { probe, fetchText } = {}) {
+export async function verifyMppSeller(origin, { probe, fetchText, fetchDoc, gate = false } = {}) {
   const svc = registryByOrigin.get(origin) || null;
-  const target = await resolveProbeTarget(origin, svc);
-  const result = await (probe || probeMppChallenge)(target);
+  let result;
+  let target;
+  try {
+    target = await resolveProbeTarget(origin, svc, { gate, ...(fetchDoc ? { fetchDoc } : {}) });
+    await loadGate(target.url, "mpp-probe", gate);
+    result = await (probe || probeMppChallenge)(target);
+  } catch (e) {
+    // Held back by the load controls: nothing was asked, so the entry stays
+    // exactly as the last completed probe left it. A registration's read held
+    // by the host's hourly ceiling goes back to the registration.
+    if (e?.requestHeld && !gate) throw e;
+    if (e?.sellerLoadSkip || e?.requestHeld) return cache.get(origin) || null;
+    throw e;
+  }
+  noteHold(target.url, Number(result?.status), result?.retryAfter ?? null, gate);
   noteProbeOutcome(origin, result.ok);
   const prior = cache.get(origin);
   const history = [...(prior?.history || []), result.ok ? 1 : 0].slice(-HEALTH_WINDOW);
@@ -549,7 +604,12 @@ export async function verifyMppSeller(origin, { probe, fetchText } = {}) {
 
 /** Probe + list a submitted origin. `verify` is injectable for tests; defaults
  *  to the real verifyMppSeller. Successful probes persist the origin as a seed. */
-export async function registerMppOrigin(origin, { verify, path, method } = {}) {
+export async function registerMppOrigin(origin, { registrant = null, ...opts } = {}) {
+  // Its reads are counted for the registrant (src/seller-load.js), so one
+  // caller's registrations never spend another's allowance on a host.
+  return runAsRegistrant(registrant, () => registerMppOriginNow(origin, opts));
+}
+async function registerMppOriginNow(origin, { verify, path, method } = {}) {
   const existing = cache.get(origin);
   if (existing?.verified) return { listed: true, origin, seller: mppSellerSummary(existing) };
   if (!submittedSeeds.has(origin) && submittedSeeds.size >= submittedSeedsCap) {
@@ -557,13 +617,23 @@ export async function registerMppOrigin(origin, { verify, path, method } = {}) {
   }
   const hint = validateProbeHint({ path, method });
   if (hint.error) return { listed: false, origin, error: hint.error };
+  // One registrant sends a host at most an hour's ceiling of registration
+  // reads (src/seller-load.js): past it that registrant is told when to retry.
+  const heldFor = await sellerLoad.registrationHeldFor(origin);
+  if (heldFor > 0) return mppRegistrationHeld(origin, heldFor);
   // Stage the hint so this verification probes it; keep it only if it verifies
   // (a wrong hint must not stick to an origin for the crawler to re-probe forever).
   const priorHint = submittedHints.get(origin);
   if (hint.path || hint.method) submittedHints.set(origin, hint);
   const doVerify = verify || verifyMppSeller;
   let entry;
-  try { entry = await doVerify(origin); } catch (e) { entry = { verified: false, lastProbeError: String(e?.message || e) }; }
+  try { entry = await doVerify(origin); } catch (e) {
+    if (e?.requestHeld) {
+      if (priorHint) submittedHints.set(origin, priorHint); else submittedHints.delete(origin);
+      return mppRegistrationHeld(origin, e.retryAfterSeconds || 60, e.heldBy);
+    }
+    entry = { verified: false, lastProbeError: String(e?.message || e) };
+  }
   if (!entry?.verified) { if (priorHint) submittedHints.set(origin, priorHint); else submittedHints.delete(origin); }
   // Own the cache write here rather than relying on doVerify's own side effect
   // (the real verifyMppSeller() already writes it; an injected test verifier
@@ -580,6 +650,13 @@ export async function registerMppOrigin(origin, { verify, path, method } = {}) {
     return { listed: true, origin, seller: mppSellerSummary(cache.get(origin)) };
   }
   return { listed: false, origin, error: entry?.lastProbeError || "no MPP challenge (WWW-Authenticate: Payment) found on the probed endpoint" };
+}
+
+function mppRegistrationHeld(origin, secs, heldBy = "registration-hour") {
+  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests"
+    : heldBy === "seller-retry-after" ? "this origin answered this caller's last registration read with a Retry-After"
+      : "this caller has had this hour's registration reads of this host";
+  return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `${why}; nothing was listed or changed, register again in ${secs} s` };
 }
 
 function mppSellerSummary(v) {
@@ -611,6 +688,19 @@ async function runPool(items, limit, worker) {
   await Promise.all(workers);
 }
 
+// An origin its operator asked us to read less often (CRAWL_SLOW_ORIGINS) is
+// probed on the slow cycle, as the x402 crawl reads it: by the clock, from its
+// last probe (the cache's lastProbeAt) or its last scheduled read recorded in
+// the shared store (src/seller-load.js slowWaiting), whichever is later, so a
+// boot whose stored listing has not loaded yet does not probe it early.
+const SLOW_MPP_INTERVAL_MS = SLOW_READ_INTERVAL_MS;
+/** The seeds a crawl cycle probes: past their failure back-off, and a slow
+ *  origin only once its slow interval has passed since its last probe. */
+export function mppCrawlDue(seeds, now = Date.now()) {
+  return seeds.filter((o) => probeDue(o, now)
+    && !(isSlowOrigin(o) && (now - (Number(cache.get(o)?.lastProbeAt) || 0) < SLOW_MPP_INTERVAL_MS || sellerLoad.slowWaiting(o, "mpp", now))));
+}
+
 export const runMppCrawl = leased("mpp-index-crawl", { ttlMs: 30 * 60_000, failOpen: true }, runMppCrawlUnleased);
 async function runMppCrawlUnleased() {
   if (crawlInFlight) return;
@@ -619,9 +709,12 @@ async function runMppCrawlUnleased() {
     // Every cycle, fold in whatever the x402 crawler has detected as
     // dual-stack since last time (its cache keeps moving between our runs).
     discoverFromX402Crawl();
-    const seeds = [...discoveredSeeds];
-    const due = seeds.filter((o) => probeDue(o));
-    await runPool(due, MPP_CRAWL_CONCURRENCY, verifyMppSeller);
+    const listed = mppCrawlDue([...discoveredSeeds]);
+    await sellerLoad.prefetch(listed);
+    // The prefetch brings in the slow origins' last scheduled read from every
+    // container; one read since then waits.
+    const due = listed.filter((o) => !sellerLoad.slowWaiting(o, "mpp"));
+    await runPool(due, MPP_CRAWL_CONCURRENCY, (o) => { sellerLoad.noteSlowRead(o, "mpp"); return verifyMppSeller(o, { gate: true }); });
   } finally {
     crawlInFlight = false;
   }

@@ -28,6 +28,7 @@ import { manifestEntryExample, openapiOperationExample, noteProbeExample, probeE
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { gzip, gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { createDocumentCache } from "./json-document.js";
@@ -302,7 +303,16 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 // this is the multiplier.
 // 30 min crawl, 1 hr discovery: defined in src/crawl-cadence.js so the pages
 // that quote the cadence read the same constants without importing this file.
-import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGIN_EVERY_CYCLES } from "./crawl-cadence.js";
+import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
+import { operatorKey } from "./operator-key.js";
+import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
+import { sellerLoad, bodyHash, landingGate, addressGate, RequestHeld, runAsRegistrant } from "./seller-load.js";
+// Reads made for a registration (anyone may register any origin, with no proof
+// of control) run inside this scope: they are counted on a day count of their
+// own (src/seller-load.js takeBudget `unscheduled`), never on the day the
+// origin's scheduled crawl and its probes read.
+const unscheduledReads = new AsyncLocalStorage();
+const readIsUnscheduled = () => unscheduledReads.getStore() === true;
 import { routeTiebreakLabels } from "./route-order.js";
 import { routeExcludedCategory } from "./route-category.js";
 import { withoutAttributions } from "./data-attribution.js";
@@ -465,21 +475,61 @@ export function schemeUpgradeOf(target, location) {
 let probeFetch = (url, opts) => probePublicUrl(url, opts);
 export function __setProbeFetchForTest(fn) { probeFetch = typeof fn === "function" ? fn : (url, opts) => probePublicUrl(url, opts); }
 
+/** Thrown instead of sending a probe the host's load controls hold back
+ *  (src/seller-load.js); a caller reads it as "not asked", never as an answer. */
+export class ProbeSkipped extends Error {
+  constructor(reason) { super(`probe not sent: ${reason}`); this.sellerLoadSkip = reason; }
+}
+// `load` = { kind, gate, chargeTo }: every probe is counted against its host's
+// day, and a scheduled crawl's probe (gate) is not sent while the host is held
+// by a Retry-After or past the day's budget. `chargeTo` is the seller key being
+// crawled: a probe sent to the origin its documents moved to (probeOriginOf) is
+// counted on the key's own day, never on the day of the host it lands on, and
+// is not sent past a day's allowance of such landings on that host. A 429 or
+// 503 answer to a scheduled probe of the host's own origin holds the host; one
+// to a probe sent for another operator's origin holds only that operator's
+// probes there, and one to a registration's probe only that registrant's
+// (src/seller-load.js noteThrottle).
+// A probe whose host's address has had its day (seller-load addressGate) is
+// not sent, as a probe past the host's own day is not.
+const probeAddressGate = (kind, unscheduled = false) => {
+  const gate = addressGate(kind, { unscheduled });
+  return async (addresses, url) => {
+    try { await gate(addresses, url); } catch (e) { if (e?.requestHeld) throw new ProbeSkipped("budget"); throw e; }
+  };
+};
+async function probeOnce(target, opts, load) {
+  const unscheduled = readIsUnscheduled();
+  const chargeTo = load?.chargeTo || null;
+  if (load?.kind) {
+    if (load.gate) {
+      const refusal = await sellerLoad.probeRefusal(target, load.kind, { chargeTo });
+      if (refusal) throw new ProbeSkipped(refusal);
+    } else {
+      const b = await sellerLoad.takeBudget(target, load.kind, { essential: true, chargeTo, unscheduled });
+      if (b?.ok === false) throw new ProbeSkipped("budget");
+    }
+  }
+  const res = await probeFetch(target, load?.kind ? { ...opts, onResolved: probeAddressGate(load.kind, unscheduled) } : opts);
+  if (load?.kind && (res?.status === 429 || res?.status === 503)) await sellerLoad.noteThrottle(target, res.status, res.headers?.get?.("retry-after"), { chargeTo, unscheduled });
+  return res;
+}
+
 /** One unpaid probe of a seller route. An http target answered 301/308 with
  *  the same request over https on the same host is asked once more there,
  *  through the same guard; any other redirect is the answer as given. Returns
  *  the response and the URL that produced it; a thrown error carries the URL
  *  being asked as `probedUrl`. */
-export async function probeSellerRoute(target, opts) {
+export async function probeSellerRoute(target, { load = null, ...opts } = {}) {
   let url = target;
   try {
-    let res = await probeFetch(target, opts);
+    let res = await probeOnce(target, opts, load);
     if (res.status === 301 || res.status === 308) {
       const upgraded = schemeUpgradeOf(target, res.headers.get("location"));
       if (upgraded) {
         await res.body?.cancel?.().catch?.(() => {});
         url = upgraded;
-        res = await probeFetch(upgraded, opts);
+        res = await probeOnce(upgraded, opts, load);
       }
     }
     return { res, url };
@@ -1660,7 +1710,12 @@ async function readMarker(origin, fetchImpl) {
     // `fetchImpl` remains only for tests and is never the network path.
     const res = fetchImpl
       ? await fetchImpl(url).then(async (r) => (r.ok ? { html: await r.text(), finalUrl: r.url || url } : null))
-      : await safeFetch(url, { headers: { accept: "application/json" }, maxBytes: 4096 }).catch(() => null);
+      : await safeFetch(url, {
+        headers: { accept: "application/json" }, maxBytes: 4096, userAgent: CRAWLER_UA,
+        // A marker served from another origin is never a proof (below), so a
+        // redirect that leaves this origin is not followed at all.
+        beforeRedirect: (next) => { if (!sameOrigin(next, origin)) throw new Error("the marker redirects off its origin"); },
+      }).catch(() => null);
     if (!res) return null;
     // THE MARKER MUST BE SERVED BY THE ORIGIN ITSELF.
     //
@@ -1731,14 +1786,16 @@ const registerDeadlineMs = () => { const n = Number(process.env.INDEX_REGISTER_D
 const registrationsInFlight = new Map(); // origin + replaces -> the running verification
 const REGISTER_PENDING = Symbol("register-pending");
 const REGISTER_PENDING_NOTE = "verification of this origin is still running (its discovery lists resources that are slow to answer); the listing completes in the background when it finishes. Check GET /api/index?seller=<origin> in a minute or two; if the origin is not listed then, its x402 surface could not be verified, and registering again retries.";
-export async function registerOrigin(origin, { crawl, replaces = null, deadlineMs = registerDeadlineMs() } = {}) {
+export async function registerOrigin(origin, { crawl, replaces = null, deadlineMs = registerDeadlineMs(), registrant = null } = {}) {
   if (isRemovedOrigin(origin) || (replaces && isRemovedOrigin(replaces))) return { listed: false, origin, removed: true, error: REMOVED_ORIGIN_ERROR };
   if (!removalsKnown()) return { listed: false, origin, notLoaded: true, error: REMOVALS_NOT_LOADED_ERROR };
   const key = `${origin} ${replaces || ""}`;
   let run = registrationsInFlight.get(key);
   if (!run) {
     const t0 = Date.now();
-    run = registerOriginNow(origin, { crawl, replaces, deadlineAt: t0 + deadlineMs });
+    // Its reads are counted for the registrant (src/seller-load.js), so one
+    // caller's registrations never spend another's allowance on a host.
+    run = runAsRegistrant(registrant, () => unscheduledReads.run(true, () => registerOriginNow(origin, { crawl, replaces, deadlineAt: t0 + deadlineMs })));
     registrationsInFlight.set(key, run);
     run.then((r) => {
       const ms = Date.now() - t0;
@@ -1751,6 +1808,15 @@ export async function registerOrigin(origin, { crawl, replaces = null, deadlineM
   const out = await Promise.race([run, deadline]).finally(() => clearTimeout(timer));
   if (out !== REGISTER_PENDING) return out;
   return { listed: false, pending: true, origin, status: "verifying", note: REGISTER_PENDING_NOTE, retryAfterSeconds: 60 };
+}
+
+/** A registration whose reads the host's hourly ceiling held back: nothing
+ *  was listed or changed, and the registrant retries after `secs`. */
+function registrationHeld(origin, secs, heldBy = "registration-hour") {
+  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests"
+    : heldBy === "seller-retry-after" ? "this origin answered this caller's last registration read with a Retry-After"
+      : "this caller has had this hour's registration reads of this host";
+  return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `${why}; nothing was listed or changed, register again in ${secs} s` };
 }
 
 async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 0 } = {}) {
@@ -1817,6 +1883,9 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
       // A re-registration is the seller asking us to look again: every route
       // this origin had dropped or was about to drop is re-checked from scratch.
       clearGoneMarks(origin);
+      // Back on the normal crawl cycle (src/seller-load.js), whether or not
+      // the documents are re-read now.
+      await sellerLoad.resetRevisit(origin, "re-registration");
       // The windows another container opened for this origin count here too.
       await refreshOriginCooldowns(origin);
       if (forcedCrawlDue(origin)) {
@@ -1888,10 +1957,20 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
   if (!submittedSeeds.has(origin) && submittedSeeds.size >= submittedSeedsCap) {
     return { listed: false, origin, error: `submission list is full - a slot frees up ${Math.round(RELEASE_AFTER_MS / 86400000)} days after its origin's last successful probe (${Math.round(SETTLED_RELEASE_AFTER_MS / 86400000)} for a seller that has settled payments, ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)} for a quick tunnel); open a GitHub issue to get seeded sooner` };
   }
-  const doCrawl = crawl || (async (o, opts) => { await crawlSeller(o, opts); return cache.get(o); });
+  // One registrant sends a host at most an hour's ceiling of registration
+  // reads (src/seller-load.js), whichever origins on it it registers: past it
+  // that registrant is told when to retry, and nothing is sent.
+  const heldFor = await sellerLoad.registrationHeldFor(origin);
+  if (heldFor > 0) return registrationHeld(origin, heldFor);
+  const doCrawl = crawl || (async (o, opts) => {
+    const read = await crawlSeller(o, opts);
+    if (read?.heldBy && !cache.has(o)) return { error: read.error, registrationHeldFor: read.retryAfterSeconds || 60, heldBy: read.heldBy };
+    return cache.get(o) || (read?.landingHeld ? { error: read.error } : undefined);
+  });
   let v;
   // A first registration reads the paywall on its first crawl, as a re-registration does.
   try { v = await doCrawl(origin, { deadlineAt, forcePaywall: true }); } catch (e) { v = { error: String(e?.message || e) }; }
+  if (v?.registrationHeldFor > 0) return registrationHeld(origin, v.registrationHeldFor, v.heldBy);
   // Injected test crawlers return the entry directly; the real path re-reads cache.
   if (v && !v.error && (v.tools?.length || v.manifest)) {
     submittedSeeds.add(origin);
@@ -2245,7 +2324,7 @@ export function isJunkOrigin(origin) {
 // Accept must say JSON: safeFetch's default Accept prefers text/html, and
 // content-negotiating registries (GoPlausible's) serve their docs page for it.
 async function safeFetchJson(url) {
-  const { html } = await safeFetch(url, { maxBytes: MAX_DISCOVERY_BYTES, headers: { Accept: "application/json" } });
+  const { html } = await safeFetch(url, { maxBytes: MAX_DISCOVERY_BYTES, headers: { Accept: "application/json" }, userAgent: CRAWLER_UA });
   return JSON.parse(html);
 }
 let discoveryFetchJson = safeFetchJson;
@@ -3940,6 +4019,14 @@ export function mergeManifestIntoTools(manifestTools = [], existing = []) {
     if (!hit.name || hit.name === hit.route || String(hit.name).startsWith("/")) hit.name = m.name || hit.name;
     if (!hit.description) hit.description = m.description || "";
     if (!hit.price && sellerNumText(m.price) !== undefined && m.price) hit.price = m.price;
+    // The manifest's price is the origin's own declaration (see the stamp in
+    // manifestRowsPass), and it stays one when it reaches a row another
+    // document already listed: a row priced from the manifest here without the
+    // stamp read as a price "from somewhere no read looked at", so the weekly
+    // live re-read (networksNeedLiveVerify, quoteIsStale) found it due on
+    // every crawl. Stamped only where the row's price IS the manifest's.
+    if (!isPricedAboveZero(hit.originDeclaredPrice) && isPricedAboveZero(m.originDeclaredPrice)
+        && priceToMicroUsd(hit.price) === priceToMicroUsd(m.originDeclaredPrice)) hit.originDeclaredPrice = m.originDeclaredPrice;
     if ((!hit.slug || hit.slug === hit.route) && m.slug) hit.slug = m.slug;
     // Settlement terms too, and this is the half that used to be missing. An
     // OpenAPI document carries no payment metadata, so a row sourced from one
@@ -4696,9 +4783,12 @@ export function paywallVerdictExpired(pw, now = Date.now(), windowMs = PAYWALL_F
  *  re-registration (bounded upstream by the per-origin forced-crawl window);
  *  an expired failure spends the per-cycle re-check budget; otherwise the
  *  rotation decides. */
-function paywallProbeTurn(prev, { force = false, now = Date.now() } = {}) {
+function paywallProbeTurn(prev, { force = false, now = Date.now(), tools = null } = {}) {
   if (PAYWALL_PROBES_PER_CYCLE === 0) return false;
   if (force) return true;
+  // Read once a week, like its price reads, whatever the rotation or an
+  // expired failure would make due (readThisWeekAboveRouterCaps).
+  if (tools && paywallReadThisWeekAboveRouterCaps(prev, tools, now)) return false;
   if (paywallRecheckBudget > 0 && paywallVerdictExpired(prev?.paywall, now)) { paywallRecheckBudget--; return true; }
   return paywallProbeDue();
 }
@@ -4961,6 +5051,15 @@ function carryLearnedOnto(t, { exact: learnedExact, byRoute: learnedByRoute }) {
       // (An origin-priced row is due through networksNeedLiveVerify instead,
       // and a row already priced carries no age from the hit in any case.)
       if (hit.quoteObservedAt && !withheldRead) t.quoteObservedAt = hit.quoteObservedAt;
+    } else if (fromQuote && isPricedAboveZero(t.price) && !originPricedThisCrawl && Number(hit.quoteObservedAt) > 0 && !withheldRead
+        && priceToMicroUsd(t.price) === priceToMicroUsd(hit.price)) {
+      // A row the rebuild priced from a document that is not the origin's
+      // declaration (a registry's settlement snapshot, a label) at the very
+      // amount the live 402 quoted: the quote confirmed that price, so its age
+      // rides with it. Without the age the row was stamped "live-402" below
+      // with none, which quoteIsStale reads as never observed, so every crawl
+      // asked the route again. A price that differs from the quote stays due.
+      t.quoteObservedAt = hit.quoteObservedAt;
     }
     // Did this row just take its chains from the hit? A row with no chains of
     // its own takes a learned quote's chains through the route fallback (the
@@ -5071,7 +5170,7 @@ const QUOTE_DRIFT_FACTOR = Number(process.env.QUOTE_DRIFT_FACTOR) || 2;
  *  stand forever, which is the same ratchet by a quieter route. An unstamped
  *  quote counts as stale once, so pre-existing rows get one refresh. Budgeted
  *  and backed-off like every other probe. */
-const QUOTE_MAX_AGE_MS = Number(process.env.QUOTE_MAX_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
+const QUOTE_MAX_AGE_MS = LIVE_QUOTE_MAX_AGE_MS; // src/crawl-cadence.js (QUOTE_MAX_AGE_MS)
 export function quoteIsStale(t, now = Date.now()) {
   if (t?.quoteSource !== "live-402") return false;
   if (!isPricedAboveZero(t?.price)) return false;
@@ -5088,7 +5187,7 @@ export function quoteIsStale(t, now = Date.now()) {
 // on issue #1178). One live read, then a weekly one, unions what the 402
 // actually offers into the row. Learned quotes have their own clock
 // (quoteIsStale); this is the manifest-vs-402 consistency check.
-const NETWORKS_VERIFY_AGE_MS = Number(process.env.NETWORKS_VERIFY_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
+// NETWORKS_VERIFY_AGE_MS: src/crawl-cadence.js
 export function networksNeedLiveVerify(t, now = Date.now()) {
   if (!t || t.quoteSource === "live-402") return false;
   if (!isPricedAboveZero(t.price)) return false;
@@ -5108,6 +5207,16 @@ export function networksNeedLiveVerify(t, now = Date.now()) {
   // such a row had no stamp and was read on the next crawl; it still is.
   if (!isPricedAboveZero(t.originDeclaredPrice)) return true;
   return now - at >= NETWORKS_VERIFY_AGE_MS;
+}
+
+/** Is this row's declared price above every route-execute tier (so the router
+ *  never buys it), and was its live 402 read within the quote window? Such a
+ *  row is not asked again by the automatic crawl until the window passes. */
+export function readThisWeekAboveRouterCaps(t, now = Date.now()) {
+  const usd = priceUsdOf(t?.originDeclaredPrice) ?? priceUsdOf(t?.price);
+  if (!(usd > 0) || routeExecuteHint(usd) != null) return false;
+  const lastRead = Math.max(Number(t?.quoteObservedAt) || 0, Number(t?.networksVerifiedAt) || 0, Number(t?.liveProvenAt) || 0);
+  return lastRead > 0 && now - lastRead < QUOTE_MAX_AGE_MS;
 }
 
 export function priceDisagreesWithOrigin(t) {
@@ -5250,7 +5359,7 @@ export function adoptLivePrice(row, livePrice, originUrl = "") {
   delete row.quoteCarriedForward;
 }
 
-export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null, candidatePass = null } = {}) {
+export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null, candidatePass = null, gated = false } = {}) {
   // Requests go to the origin the manifest was redirected to, when the crawl
   // recorded one; every key, mark and log line below stays on the stored key.
   const probeOrigin = probeOriginOf(originUrl, redirectedTo);
@@ -5301,6 +5410,10 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       // A route observed free inside the quote window is left alone by the
       // automatic crawl; an explicit re-registration still re-asks it.
       && (ignoreBudget || !isObservedFree(t))
+      // A route priced above every router tier is never bought by us, so its
+      // live 402 is read once and then once a week (and on a re-registration),
+      // whatever else would make it due: a drift, a stamp from another verb.
+      && (ignoreBudget || !readThisWeekAboveRouterCaps(t))
       && probeMethodsFor(t).length                       // never PUT/PATCH/DELETE
       && probeDue(originUrl, `quote:${t.route}`);
   // The registry fallback hands its pass runner in (`candidatePass`), so a
@@ -5349,6 +5462,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
   // new probe starts; a probe in flight finishes on its own limit. The routes
   // not reached stay candidates for the next crawl.
   const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
+  let loadSkipped = false;
   for (const tool of rotated) {
     if (pastDeadline()) break;
     let learned = null;
@@ -5380,6 +5494,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
           method,
           headers: { Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
           ...(method === "POST" ? { body: reqBody } : {}),
+          load: { kind: "quote", gate: gated, chargeTo: originUrl },
         });
         // A GET that returns 200 has ANSWERED: the route is not paywalled, and
         // there is nothing a POST can add. Following it with an unpaid POST is
@@ -5454,11 +5569,16 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         note(method, mppOnly ? "402-mpp-only" : "402-unreadable");
         if (!mppOnly) sampleUnreadable402(originUrl, tool.route, res.headers.get("payment-required"), body);
       } catch (err) {
+        // Not sent (the host's load controls held it back): nothing was asked,
+        // so nothing is noted, and the pass stops for this origin.
+        if (err?.sellerLoadSkip) { loadSkipped = true; break probe; }
         note(method, probeFailureCode(err));
         (answersByMethod[method] ||= []).push(0);
         /* unreachable, blocked, or malformed - try the next method */
       }
     }
+    // The routes not reached stay candidates for the next crawl, as past a deadline.
+    if (loadSkipped) break;
     if (gone) {
       markRouteGone(originUrl, own, tool.route, { kind: "410" });
       dropped.add(tool);
@@ -5499,11 +5619,12 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         // are relative to its prefix, which URL resolution against the key drops.
         const target = sellerRouteUrl(probeOrigin, tool.route);
         if (!target) throw new Error("route outside the seller");
-        const { res: r } = await probeSellerRoute(target, { method: "GET", headers: { Accept: "application/json" } });
+        const { res: r } = await probeSellerRoute(target, { method: "GET", headers: { Accept: "application/json" }, load: { kind: "quote", gate: gated, chargeTo: originUrl } });
         statusByMethod.GET = r.status;
         await r.body?.cancel?.().catch?.(() => {});
-      } catch { statusByMethod.GET = 0; }
+      } catch (e) { if (e?.sellerLoadSkip) loadSkipped = true; statusByMethod.GET = 0; }
     }
+    if (loadSkipped) break;
     if (missCandidate
         && (!tool.methodInferred || Object.values(statusByMethod).every((st) => MISS.has(st)))) {
       // First sighting: remember it and keep the row. Confirmed only by a
@@ -5631,15 +5752,10 @@ export function isMppChallenge(wwwAuthHeaderValue) {
   return !!wwwAuthHeaderValue && /^Payment\b/i.test(String(wwwAuthHeaderValue).trim());
 }
 
-async function probePaywall(tools, { redirectedTo = null } = {}) {
-  // A cached tool row has NO `url` field — the callable URL is derived as
-  // seller + route, the same way routeQuery builds it (see the `url:` mapping
-  // further down this file). The first version of this filtered on
-  // `typeof t.url === "string"`, which no producer ever sets, so the probe
-  // returned null for every seller and `paywall` was permanently null. It read
-  // as "not probed yet" and was really "never probes anything" — the same
-  // inert-feature defect this module's own header warns about, one field over.
-  const paid = (Array.isArray(tools) ? tools : []).filter(
+/** The routes the paywall probe may ask: this seller's priced, callable,
+ *  never-ourselves routes. */
+function paywallCandidates(tools) {
+  return (Array.isArray(tools) ? tools : []).filter(
     (t) => t
       && typeof t.seller === "string" && t.seller !== LOCAL_SELLER  // never probe ourselves
       && typeof t.route === "string" && t.route.startsWith("/")
@@ -5653,9 +5769,37 @@ async function probePaywall(tools, { redirectedTo = null } = {}) {
       // parameter and files it as a broken paywall.
       && !URL_TEMPLATE_RE.test(t.route)
   );
+}
+/** Is every route the paywall probe could ask priced above every route-execute
+ *  tier (so the router never buys from this seller), and was the stored
+ *  verdict taken within the quote window? Such a seller's paywall is then not
+ *  asked again by the automatic crawl until the window passes, as its price
+ *  reads are not (readThisWeekAboveRouterCaps); a re-registration still asks. */
+export function paywallReadThisWeekAboveRouterCaps(prev, tools, now = Date.now()) {
+  const at = Number(prev?.paywall?.at);
+  if (!(at > 0) || now - at >= QUOTE_MAX_AGE_MS) return false;
+  const paid = paywallCandidates(tools);
+  return paid.length > 0 && paid.every((t) => {
+    const usd = priceUsdOf(t?.originDeclaredPrice) ?? priceUsdOf(t?.price);
+    return usd > 0 && routeExecuteHint(usd) == null;
+  });
+}
+async function probePaywall(tools, { redirectedTo = null, gated = false } = {}) {
+  // A cached tool row has NO `url` field — the callable URL is derived as
+  // seller + route, the same way routeQuery builds it (see the `url:` mapping
+  // further down this file). The first version of this filtered on
+  // `typeof t.url === "string"`, which no producer ever sets, so the probe
+  // returned null for every seller and `paywall` was permanently null. It read
+  // as "not probed yet" and was really "never probes anything" — the same
+  // inert-feature defect this module's own header warns about, one field over.
+  const paid = paywallCandidates(tools);
   // Prefer a GET: no body to guess, and a wrong body shape would produce a 400
-  // that says nothing about the paywall.
-  const pick = paid.find((t) => String(t.method || "GET").toUpperCase() === "GET") || paid[0];
+  // that says nothing about the paywall. Among those, the cheapest: an unpaid
+  // request to a seller's dearest product (a report priced in the thousands)
+  // reads the same paywall as one to its cheapest route, and is the request a
+  // seller least wants from a crawler.
+  const cheapestFirst = (list) => list.reduce((best, t) => (best && (priceUsdOf(best.price) ?? Infinity) <= (priceUsdOf(t.price) ?? Infinity) ? best : t), null);
+  const pick = cheapestFirst(paid.filter((t) => String(t.method || "GET").toUpperCase() === "GET")) || cheapestFirst(paid);
   if (!pick) return null;
   const method = String(pick.method || "GET").toUpperCase();
   // Built from the origin the manifest was redirected to, when one is recorded:
@@ -5671,6 +5815,7 @@ async function probePaywall(tools, { redirectedTo = null } = {}) {
       method,
       headers: { Accept: "application/json", ...(method !== "GET" ? { "Content-Type": "application/json" } : {}) },
       ...(method !== "GET" ? { body: "{}" } : {}),
+      load: { kind: "paywall", gate: gated, chargeTo: pick.seller },
     });
     const res = probed.res;
     url = probed.url;
@@ -5694,10 +5839,21 @@ async function probePaywall(tools, { redirectedTo = null } = {}) {
     // `url` is the URL that answered, which is the upgraded one after a 301/308.
     return { ok: res.status === 402, status: res.status, url, at: Date.now(), mpp };
   } catch (e) {
+    // Not sent (the host's load controls held it back): the stored verdict stands.
+    if (e?.sellerLoadSkip) return PAYWALL_NOT_SENT;
     // No status was read: our time limit, a connection that did not finish,
     // our resolver. That is our probe not completing, not the route failing.
     return paywallUnknown(e?.probedUrl || url, `our unpaid probe did not complete (${String(e?.message || e).slice(0, 100)}); no paywall verdict`, 0);
   }
+}
+// probePaywall's answer when the probe was not sent (src/seller-load.js).
+const PAYWALL_NOT_SENT = Symbol("paywall-not-sent");
+/** The paywall verdict a crawl stores: a fresh probe on this seller's turn,
+ *  else (or when the probe was held back) the last reading carried forward. */
+async function paywallForCrawl(prev, tools, { redirectedTo, force, pastDeadline, gated }) {
+  if (pastDeadline() || !paywallProbeTurn(prev, { force, tools })) return prev?.paywall ?? null;
+  const v = await probePaywall(tools, { redirectedTo, gated });
+  return v === PAYWALL_NOT_SENT ? (prev?.paywall ?? null) : v;
 }
 // The answers to our own malformed probe request, read as no verdict.
 const PAYWALL_PROBE_SHAPE_STATUSES = new Set([400, 415, 422]);
@@ -5965,7 +6121,9 @@ export function crawlBackoffState() {
 const ROBOTS_TTL_MS = 24 * 60 * 60 * 1000;  // robots.txt is not a hot document
 const ROBOTS_MAX_BYTES = 512 * 1024;
 const robotsCache = new Map();               // origin -> { groups, at }
-const ROBOTS_UA = "Agent402";
+// The crawler's own product token; a group for the older "Agent402" token is
+// still matched, since robotsAllows picks a group whose name the token contains.
+const ROBOTS_UA = CRAWLER_TOKEN;
 
 // `fetchText` is injectable so the policy can be tested without a network or a
 // resolvable hostname. The default is the real guarded fetch; a test that
@@ -5983,9 +6141,12 @@ async function robotsGroupsFor(sellerKey, fetchText) {
   try {
     const text = fetchText
       ? await fetchText(`${originUrl}/robots.txt`)
-      : (await crawlFetch(`${originUrl}/robots.txt`, { maxBytes: ROBOTS_MAX_BYTES })).html;
+      : (await crawlRead(`${originUrl}/robots.txt`, { maxBytes: ROBOTS_MAX_BYTES })).html;
     groups = parseRobots(String(text || ""));
-  } catch {
+  } catch (e) {
+    // A read we did not send (its redirect lands on a host past its landed
+    // allowance) is no answer: nothing is cached, and the crawl waits.
+    if (e?.landingHeld) throw e;
     groups = [];   // unreachable, 404, oversize: nothing to honour
   }
   robotsCache.set(originUrl, { groups, at: Date.now() });
@@ -6047,7 +6208,68 @@ export function __resetRobotsCacheForTest() { robotsCache.clear(); }
 // host before it fetches).
 let crawlFetch = (url, opts) => safeFetch(url, opts);
 export function __setCrawlFetchForTest(fn) { crawlFetch = typeof fn === "function" ? fn : (url, opts) => safeFetch(url, opts); }
+/** One crawler read of a seller document: counted against the host's day
+ *  (src/seller-load.js; a read inside a crawl already started is never
+ *  refused), and a 429 or 503 holds the host until its Retry-After. Each
+ *  redirect hop is a request of its own, counted on the same day before it is
+ *  sent; a hop onto another operator's host is also counted on that host's
+ *  landed allowance and is not sent past it (LandingHeld, landingGate). */
+async function crawlRead(url, opts) {
+  const unscheduled = readIsUnscheduled();
+  const b = await sellerLoad.takeBudget(url, "crawler", { essential: true, unscheduled });
+  if (b?.ok === false && b.heldBy) throw new RequestHeld(b.heldBy, b.retryAfterSeconds);
+  try {
+    return await crawlFetch(url, { ...opts, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "crawler", { unscheduled }), onResolved: addressGate("crawler", { unscheduled }) });
+  } catch (e) {
+    if (e?.landingHeld) throw e;
+    const st = Number(e?.upstreamStatus);
+    // A registration's read holds only its registrant's reads (seller-load).
+    if (st === 429 || st === 503) await sellerLoad.noteThrottle(url, st, Number(e?.retryAfter || e?.upstreamRetryAfter) || null, { unscheduled });
+    throw e;
+  }
+}
 export async function __crawlSellerForTest(originUrl, opts) { return crawlSeller(originUrl, opts); }
+// Where an origin's read was last held back (LandingHeld): the host its
+// documents redirect to. Its scheduled crawl then waits, without a request to
+// either host, until that host's landed allowance has room (the next UTC day).
+const landingHeldOn = new Map();   // origin -> the landing host's origin
+const LANDING_HELD_CAP = 5_000;
+function noteLandingHeld(origin, host) {
+  if (!host) return;
+  landingHeldOn.delete(origin);
+  landingHeldOn.set(origin, `https://${host}`);
+  while (landingHeldOn.size > LANDING_HELD_CAP) landingHeldOn.delete(landingHeldOn.keys().next().value);
+}
+/** One origin's turn in a scheduled crawl cycle: its load controls
+ *  (src/seller-load.js) decide whether it is read; null when it was, else why
+ *  it waits ("throttled", "budget", "landing" or "unchanged"). "landing": its
+ *  documents are read from another operator's host whose landed allowance for
+ *  the day is spent; the entry stays as the last completed read left it. */
+async function crawlScheduled(origin, outcome = { ours: false }) {
+  const landsOn = [cache.get(origin)?.redirectedTo, landingHeldOn.get(origin)].filter(Boolean);
+  const plan = await sellerLoad.crawlPlan(origin, { landsOn });
+  if (plan.skip) { noteTurnNotRead(origin); return plan.skip; }
+  landingHeldOn.delete(origin);
+  sellerLoad.noteSlowRead(origin, "x402");
+  const read = await crawlSeller(origin, { scheduled: true, revisitIntervalMs: plan.intervalMs }, outcome);
+  if (read?.landingHeld) { noteTurnNotRead(origin); return read.heldBy ? "budget" : "landing"; }
+  return null;
+}
+// When an origin's scheduled turn last passed without a read because of a
+// limit of ours (a spent day, a Retry-After, a landing allowance, the slow
+// cycle, a back-off, a shared turn that ended): the hold of its last good
+// listing (crawlHoldsLastGood) counts from then, so a seller is never dropped
+// from the router because we chose not to read it. Only until a read of it
+// fails: the hold start is then fixed (holdOnOurs in crawlSeller).
+const turnNotReadAt = new Map();   // origin -> ms
+function noteTurnNotRead(origin, at = Date.now()) {
+  turnNotReadAt.delete(origin);
+  turnNotReadAt.set(origin, at);
+  while (turnNotReadAt.size > LANDING_HELD_CAP) turnNotReadAt.delete(turnNotReadAt.keys().next().value);
+}
+export async function __crawlScheduledForTest(originUrl) { return crawlScheduled(originUrl); }
+/** Test seam: one whole crawl cycle (no lease), and the summary it logged. */
+export async function __runCrawlCycleForTest() { await runCrawl(); return lastCycleSummary; }
 
 /** Did this crawl read fail on our side? Our own deadline or abort, our
  *  resolver failing to finish a lookup, our own byte cap on the document, or
@@ -6060,6 +6282,7 @@ export async function __crawlSellerForTest(originUrl, opts) { return crawlSeller
  *  answer near the host can carry) are the seller's host and read false. Exported for the test. */
 export function crawlReadFailureIsOurs(e) {
   if (!e || typeof e !== "object") return false;
+  if (e.landingHeld) return true;                // a hop we did not send (src/seller-load.js LandingHeld)
   if (e.upstreamStatus != null || e.robotsBlocked) return false;
   if (e.hint === "source-timeout") return true;
   if (e.code === "EDNSUNAVAILABLE") return true; // fetch-guard's lookupUnavailable: our resolver
@@ -6092,14 +6315,16 @@ function closeCrawlCycleTally() {
 export function __setLastCycleOursShareForTest(x) { lastCycleOursShare = Number(x) || 0; crawlCycleTally = { done: 0, ours: 0 }; }
 /** May this failed crawl keep `prev` as it was? Only an entry whose last
  *  completed crawl succeeded with a catalog the origin itself served. */
-export function crawlHoldsLastGood(prev, now = Date.now()) {
+/** `holdFromAt`: when the window starts, if later than the last completed
+ *  read (the end of a revisit wait, src/seller-load.js). */
+export function crawlHoldsLastGood(prev, now = Date.now(), holdFromAt = 0) {
   if (!prev || typeof prev !== "object" || prev.error || prev.originResponded === false) return false;
   const h = prev.history;
   if (!Array.isArray(h) || !h.length || h[h.length - 1] !== 1) return false;
   if (!Array.isArray(prev.tools) || !prev.tools.length) return false;
   if (lastCycleOursShare >= CRAWL_OURS_SIDE_SHARE) return true;
-  const at = Number(prev.fetchedAt);
-  return Number.isFinite(at) && now - at <= CRAWL_HOLD_MS;
+  const at = Math.max(Number(prev.fetchedAt) || 0, Number(holdFromAt) || 0);
+  return at > 0 && now - at <= CRAWL_HOLD_MS;
 }
 /** What the ?seller= detail and the index rows say about a read of ours that
  *  did not complete: the time, and that the listing from the last completed
@@ -6147,7 +6372,7 @@ async function probePath(originUrl, path, { manifestPublished = false, condition
     // A fallback document is read unconditionally: that branch keeps no parsed
     // copy, so a 304 would only be followed by a second, full fetch.
     const stored = conditional ? validatorFor(originUrl, path) : null;
-    const res = await crawlFetch(`${originUrl}${path}`, { ...opts, validators: stored, allowNotModified: conditional });
+    const res = await crawlRead(`${originUrl}${path}`, { ...opts, validators: stored, allowNotModified: conditional });
     // A path seller's document must be served from under its own prefix. A
     // redirect to another path on the same host is another app's document,
     // and reading it as this seller's would attribute that app to it.
@@ -6170,6 +6395,8 @@ async function probePath(originUrl, path, { manifestPublished = false, condition
     rememberValidator(originUrl, path, conditional ? res.validators || null : null);
     return res;
   } catch (e) {
+    // A hop we did not send says nothing about this path: no backoff step.
+    if (e?.landingHeld) throw e;
     if (!crawlReadFailureIsOurs(e)) noteProbeOutcome(originUrl, path, false);
     else noteProbeOursFailure(originUrl, path);
     throw e;
@@ -6329,12 +6556,26 @@ function oncePerCrawl() {
   };
 }
 
-async function crawlSeller(originUrl, opts = {}) {
-  const outcome = { ours: false };
+/** One crawl of an origin. A crawl one of whose reads was not sent because
+ *  its redirect lands on a host past its landed allowance (LandingHeld) is not
+ *  a read at all: the entry, its history and its revisit wait stay as they
+ *  were, the cycle's tally does not count it, and `{ landingHeld, error }` is
+ *  returned. The validators kept during it are dropped, so the next read
+ *  derives every document afresh rather than pairing a 304 with an entry this
+ *  crawl never wrote. */
+async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
+  let read = true;
   try { return await crawlSellerOnce(originUrl, opts, outcome); }
-  finally { crawlCycleTally.done++; if (outcome.ours) crawlCycleTally.ours++; }
+  catch (e) {
+    if (!e?.landingHeld) throw e;
+    read = false;
+    clearValidatorsFor(originUrl);
+    noteLandingHeld(originUrl, e.landingHost);
+    return { landingHeld: e.landingHost || true, error: String(e.message || e), ...(e.heldBy ? { heldBy: e.heldBy, retryAfterSeconds: e.retryAfterSeconds || 0 } : {}) };
+  }
+  finally { if (read) { crawlCycleTally.done++; if (outcome.ours) crawlCycleTally.ours++; } }
 }
-async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false } = {}, outcome = { ours: false }) {
+async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false, scheduled = false, revisitIntervalMs = 0 } = {}, outcome = { ours: false }) {
   const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
   const once = oncePerCrawl();
   // `manifestPublished` is set by the well-known branch only: once the seller's
@@ -6357,6 +6598,8 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     const manifestBody = manifestDoc.reused
       ? (prev?.manifestBody ?? null)
       : (validatorFor(originUrl, WELL_KNOWN_PATH) ? await packManifestBody(manifestDoc.body) : null);
+    // For the revisit back-off: undefined = a 304 (the same document), else the body's hash.
+    const manifestHash = manifestDoc.reused ? undefined : bodyHash(manifestDoc.body);
     manifestDoc.body = null;
     // A manifest that arrives from ANOTHER origin (safeFetch followed a 301/308)
     // is that origin's manifest: the seller retired this hostname and pointed it
@@ -6382,6 +6625,8 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // The OpenAPI's probe examples: read from the document, or on a 304 from
     // probeExampleMemo (the document is not kept). null = no OpenAPI read.
     let openapiExamples = null;
+    // null = no OpenAPI read; undefined = a 304; else the body's hash.
+    let openapiHash = null;
     try {
       const res = await fetchOpenapi({ manifestPublished: true });
       const prevRows = res.notModified ? await previousOpenapiRows(prev) : null;
@@ -6390,13 +6635,17 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         openapiRoutes = prevRows.routes;
         openapiPacked = Buffer.isBuffer(prev.openapiPacked) ? prev.openapiPacked : await packOpenapiRows(openapiTools, openapiRoutes);
         tools = openapiTools;
+        openapiHash = undefined;
         openapi = prev.openapiSummary ? { paths: {} } : null; // presence only; summary carried forward below
         openapiExamples = probeExampleMemo.get(originUrl, "openapi") || new Map();
       } else {
-        const body = res.notModified
-          ? (rememberValidator(originUrl, "/openapi.json", null),
-             await parseInCrawlLane((await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES })).html))
-          : await parseInCrawlLane(res.html);
+        let text = res.html;
+        if (res.notModified) {
+          rememberValidator(originUrl, "/openapi.json", null);
+          text = (await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES })).html;
+        }
+        openapiHash = bodyHash(text);
+        const body = await parseInCrawlLane(text);
         openapi = body;
         openapiTools = await normaliseOpenapiToolsSliced(openapi, originUrl);
         openapiRoutes = openapiAllOperationRoutes(openapi, originUrl);
@@ -6404,7 +6653,8 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         tools = openapiTools;
         openapiExamples = openapiProbeExamples(openapi, originUrl, new Map());
       }
-    } catch {
+    } catch (e) {
+      if (e?.landingHeld) throw e;
       /* manifest-only seller — fine */
     }
 
@@ -6439,7 +6689,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // Keep what earlier crawls already learned, THEN spend the probe budget on
     // routes we still know nothing about.
     tools = carryForwardLearnedQuotes(tools, prev);
-    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo, probeExamples });
+    tools = await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo, probeExamples, gated: scheduled });
 
     cache.set(originUrl, {
       // Derivation is done: the entry keeps the slim keys its readers use,
@@ -6466,8 +6716,11 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
       fallbackErrors: undefined,
       // Not this seller's turn: carry the last reading forward rather than
       // dropping it — null must mean "never probed", not "not probed today".
-      paywall: !pastDeadline() && paywallProbeTurn(prev, { force: forcePaywall }) ? await probePaywall(tools, { redirectedTo }) : (prev?.paywall ?? null),
+      paywall: await paywallForCrawl(prev, tools, { redirectedTo, force: forcePaywall, pastDeadline, gated: scheduled }),
     });
+    // The revisit back-off (src/seller-load.js): the same manifest and OpenAPI
+    // as the last read doubles the wait before the next crawl; a change resets it.
+    await sellerLoad.noteDiscoveryRead(originUrl, { manifestHash, openapiHash, advance: scheduled });
   } catch (e) {
     // No /.well-known/x402 — two fallback surfaces, richest metadata wins:
     //
@@ -6491,6 +6744,12 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // Outcome recording moved into probePath, which records every path it
     // fetches. Recording again here would double-count the manifest failure
     // and deepen its backoff twice per cycle.
+    // A read that was not sent (LandingHeld) ends the crawl with nothing
+    // changed; crawlSeller answers for it.
+    if (e?.landingHeld) throw e;
+    // No manifest this crawl (or the read failed): the origin is back on the
+    // normal cycle, so a seller who fixes or publishes one is read promptly.
+    await sellerLoad.resetRevisit(originUrl, "listing-failure");
     const bazaarTools = bazaarToolsByOrigin.get(originUrl) || [];
     let openapi = null;
     let openapiTools = [];
@@ -6505,14 +6764,29 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // is kept as it was (crawlHoldsLastGood).
     let oursFailed = crawlReadFailureIsOurs(e);
     const noteFallback = (path, err) => {
+      if (err?.landingHeld) throw err;
       if (crawlReadFailureIsOurs(err)) oursFailed = true;
       fallbackErrors.push({ path, error: String(err?.message || err).slice(0, 160) });
     };
     const holdOnOurs = () => {
       if (!oursFailed) return false;
       outcome.ours = true;
-      if (!crawlHoldsLastGood(prev)) return false;
-      cache.set(originUrl, heldEntry(prev, e?.message || e));
+      // An origin on a revisit back-off was last read up to that long ago by
+      // our own choice, so the hold window counts from the end of that wait,
+      // and keeps counting from there on the failed reads that follow (the
+      // first one put the origin back on the cycle, with no wait of its own).
+      // A scheduled turn we passed over since that read moves the start to
+      // that turn (turnNotReadAt), up to the first read that failed: from
+      // then on the start stays where that read put it, so turns an origin
+      // waits after a failed read never renew its hold, and an origin that
+      // stays dark drops once the hold runs out.
+      const holdFromAt = prev?.readIncomplete
+        ? (Number(prev?.holdFromAt) || 0)
+        : Math.max(revisitIntervalMs > 0
+          ? Math.min(Date.now(), (Number(prev?.fetchedAt) || 0) + revisitIntervalMs)
+          : (Number(prev?.holdFromAt) || 0), Number(turnNotReadAt.get(originUrl)) || 0);
+      if (!crawlHoldsLastGood(prev, Date.now(), holdFromAt)) return false;
+      cache.set(originUrl, { ...heldEntry(prev, e?.message || e), ...(holdFromAt > 0 ? { holdFromAt } : {}) });
       return true;
     };
     try {
@@ -6613,7 +6887,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
       // In memory only, for a re-price; this branch's reads are unconditional.
       probeExampleMemo.set(originUrl, "manifest", null);
       probeExampleMemo.set(originUrl, "openapi", probeExamples);
-      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples,
+      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples, gated: scheduled,
         candidatePass: (gen) => { meter.rows(tools.length); return laned ? meter.lane("quotes", gen) : meter.sync("quotes", gen); } });
       // A cut listing: rows a live probe just dropped are replaced from the
       // rows not yet taken, and the total is the kept rows plus the listed
@@ -6644,6 +6918,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         // (a seller that shrank from 77,000 tools to 6,000 reads 6,000).
         ...freshListBase(prev),
         readIncomplete: undefined,
+        holdFromAt: undefined,
         manifest,
         openapiSummary: openapi ? { paths: Object.keys(openapi.paths || {}).length } : prev?.openapiSummary ?? null,
         tools,
@@ -6689,7 +6964,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         // while never having responded — and the marketplace rendered them
         // "healthy". A crawl completing is not a seller answering.
         originResponded: openapiTools.length > 0,
-        paywall: !pastDeadline() && paywallProbeTurn(prev, { force: forcePaywall }) ? await probePaywall(tools, { redirectedTo: prev?.redirectedTo ?? null }) : (prev?.paywall ?? null),
+        paywall: await paywallForCrawl(prev, tools, { redirectedTo: prev?.redirectedTo ?? null, force: forcePaywall, pastDeadline, gated: scheduled }),
       });
       return;
     }
@@ -6702,6 +6977,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     cache.set(originUrl, {
       ...(prev || {}),
       readIncomplete: undefined,
+      holdFromAt: undefined,
       // Whether a read of ours failed (a timeout, a connection that never
       // completed): the record then says our read did not complete, not that
       // the seller's document failed.
@@ -7225,50 +7501,9 @@ async function runPool(items, limit, worker) {
   await Promise.all(workers);
 }
 
-// Registrable domain, approximately: the last two labels, plus a third for the
-// common multi-part suffixes. It does not need to be a full public-suffix list -
-// getting it wrong groups an operator slightly wider or narrower than ideal, and
-// never causes an origin to be skipped forever.
-const MULTI_PART_TLDS = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "co.jp", "com.au", "com.br", "co.nz", "co.in", "com.cn", "com.mx"]);
-
-// Suffixes where the label BELOW the suffix is a different tenant, not a
-// different host of one operator. Without these, "last two labels" made every
-// Vercel seller one operator, every Workers seller one operator, and so on -
-// they would then have shared a single per-cycle crawl budget, and an attacker
-// could have registered throwaway origins under the same suffix to starve another
-// seller's listing until its learned quote went stale (QUOTE_MAX_AGE_MS).
-// This file already knew better in one place: railwayDeploymentOrigin exists
-// precisely because unrelated sellers publish on *.up.railway.app.
-const SHARED_HOSTING_SUFFIXES = [
-  "workers.dev", "vercel.app", "up.railway.app", "railway.app", "onrender.com",
-  "fly.dev", "pages.dev", "netlify.app", "herokuapp.com", "replit.app",
-  "repl.co", "chatgpt.site", "trycloudflare.com", "ngrok-free.app", "ngrok.app",
-  "deno.dev", "glitch.me", "surge.sh", "web.app", "firebaseapp.com",
-  "azurewebsites.net", "appspot.com", "cloudfunctions.net", "koyeb.app",
-  "vercel.sh", "netlify.com", "render.com", "streamlit.app", "hf.space",
-  // Added from a read of the index (2026-10-20): each of these carried three
-  // or more hosts paying to distinct wallets, so the hosts are different
-  // sellers. A suffix whose hosts all paid to one wallet is one operator and
-  // stays grouped (the cap is what keeps one actor's many hostnames to one
-  // budget), and a suffix whose hosts had no payTo at all is left as it is
-  // until one does.
-  "supabase.co", "run.app", "sslip.io", "deno.net", "duckdns.org",
-  "ngrok-free.dev", "ngrok.dev", "ts.net",
-];
-export function operatorKey(origin) {
-  let host;
-  try { host = new URL(origin).hostname.toLowerCase(); } catch { return String(origin).toLowerCase(); }
-  const parts = host.split(".").filter(Boolean);
-  if (parts.length <= 2) return host;
-  // Multi-tenant hosting: the tenant is the whole hostname. Grouping two tenants
-  // together is not a small inaccuracy - it hands them one budget and lets either
-  // one crowd the other out.
-  for (const suffix of SHARED_HOSTING_SUFFIXES) {
-    if (host === suffix || host.endsWith(`.${suffix}`)) return host;
-  }
-  const lastTwo = parts.slice(-2).join(".");
-  return MULTI_PART_TLDS.has(lastTwo) ? parts.slice(-3).join(".") : lastTwo;
-}
+// operatorKey (the registrable domain, or the whole hostname on shared
+// hosting) lives in src/operator-key.js, a leaf the seller-load budget shares.
+export { operatorKey };
 
 // How many origins of ONE operator we will crawl in a single cycle.
 const CRAWL_ORIGINS_PER_OPERATOR = Math.max(1, Number(process.env.CRAWL_ORIGINS_PER_OPERATOR || 4));
@@ -7276,7 +7511,7 @@ const CRAWL_ORIGINS_PER_OPERATOR = Math.max(1, Number(process.env.CRAWL_ORIGINS_
 /** At most `cap` origins per operator this cycle, rotating by cycle so every
  *  origin comes up in turn instead of the same few always winning. Input order
  *  is preserved, and anyone at or under the cap is unaffected. */
-export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_OPERATOR) {
+export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_OPERATOR, { slowWaiting = (o) => sellerLoad.slowWaiting(o, "x402") } = {}) {
   const byOperator = new Map();
   for (const o of origins) {
     const k = operatorKey(o);
@@ -7289,9 +7524,59 @@ export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_
     const offset = (cycle * cap) % list.length;
     for (let i = 0; i < cap; i++) due.add(list[(offset + i) % list.length]);
   }
-  // A slow origin (its operator asked) is due only on every SLOW_ORIGIN_EVERY_CYCLES-th cycle.
-  const slowWait = (o) => isSlowOrigin(o) && cycle % SLOW_ORIGIN_EVERY_CYCLES !== 0;
-  return origins.filter((o) => due.has(o) && !slowWait(o));
+  // A slow origin (its operator asked) waits SLOW_READ_INTERVAL_MS by the
+  // clock from its last scheduled read, whichever container made it and
+  // however many cycles (a boot runs one) came between (src/seller-load.js).
+  return origins.filter((o) => due.has(o) && !slowWaiting(o));
+}
+
+/** The cycle's turns. Origins whose documents are read from one other
+ *  operator's host share that host's landed allowance for the day
+ *  (src/seller-load.js), and a cycle spends it first come. Such origins take
+ *  one turn together, at the place of the first of them: an array, least
+ *  recently read first (`readAt`, 0 for one never read; equal times keep the
+ *  cycle's order), read one after another. So when the allowance ends before
+ *  the last of them, each is refreshed in turn and none is read again while
+ *  another still waits; read side by side, a later one could finish while an
+ *  earlier one was held at its last request. Every other origin is its own
+ *  turn, in its place. `landingOf(origin)` is the host its documents were last
+ *  read from or held at, null when they are its own operator's. Exported for
+ *  the test. */
+export function landingTurns(due, { landingOf, readAt }) {
+  const groups = new Map();
+  for (const o of due) {
+    const to = landingOf(o);
+    const k = to ? operatorKey(to) : null;
+    if (!k || k === operatorKey(o)) continue;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(o);
+  }
+  const shared = new Map();   // origin -> its group's turn
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const turn = list.map((o, n) => ({ o, at: Number(readAt(o)) || 0, n })).sort((a, b) => a.at - b.at || a.n - b.n).map((x) => x.o);
+    for (const o of list) shared.set(o, turn);
+  }
+  if (!shared.size) return due;
+  const placed = new Set();
+  const turns = [];
+  for (const o of due) {
+    const turn = shared.get(o);
+    if (!turn) turns.push(o);
+    else if (!placed.has(turn)) { placed.add(turn); turns.push(turn); }
+  }
+  return turns;
+}
+
+/** Whether a shared turn reads its member `read` (0-based) of `size`. Read
+ *  side by side, the pool spreads those `size` reads over its
+ *  CRAWL_CONCURRENCY slots, so it spends at least ceil(size / slots) reads'
+ *  time on them: a shared turn always reads that many. Past that it goes on
+ *  only while other turns of the cycle are still open (`othersOpen`), so its
+ *  reads overlap theirs, and the cycle closes at most one read after it would
+ *  have read side by side. Exported for the test. */
+export function groupTurnGoesOn(read, size, othersOpen, slots = CRAWL_CONCURRENCY) {
+  return read < Math.ceil(size / Math.max(1, slots)) || othersOpen > 0;
 }
 
 /** True while a crawl cycle is running (every entry is being replaced). */
@@ -7329,8 +7614,58 @@ async function runCrawl() {
     // seen every 5th cycle (~2.5h) instead of every 30 minutes. Single-host
     // sellers - almost all of them - are untouched.
     const due = originsDueThisCycle(ordered, crawlCycle);
+    // A slow origin left out while it waits its slow cycle is a turn we put
+    // off: the hold of its last good listing counts from here (turnNotReadAt).
+    if (SLOW_ORIGINS.size) { const dueSet = new Set(due); for (const o of ordered) if (!dueSet.has(o) && sellerLoad.slowWaiting(o, "x402")) noteTurnNotRead(o); }
     crawlCycleTally = { done: 0, ours: 0 };
-    await runPool(due, CRAWL_CONCURRENCY, crawlSeller);
+    // Each origin's load controls (src/seller-load.js) decide whether it is
+    // read this cycle: held by its own Retry-After, past its host's daily
+    // budget, or backed off because its documents have not changed. A skipped
+    // origin keeps its entry exactly as it is and casts no vote below.
+    const skipped = new Map();
+    // Which origins' last read was a good one, before this cycle reads any.
+    const prevGood = new Set(due.filter((o) => entryReadGood(cache.get(o))));
+    // What other containers recorded for these origins, read in one batch
+    // before any is decided (bounded: a slow store costs the cycle its wait).
+    await sellerLoad.prefetch(due);
+    const oursByOrigin = new Map();
+    const takeTurn = async (origin) => {
+      const outcome = { ours: false };
+      const skip = await crawlScheduled(origin, outcome);
+      if (skip) skipped.set(origin, skip); else oursByOrigin.set(origin, outcome.ours);
+    };
+    // Origins that share one landing host's allowance are read one after
+    // another, least recently read first (landingTurns): the rotation above
+    // alone handed each day's allowance to the same few of them.
+    const turns = landingTurns(due, {
+      landingOf: (o) => landingHeldOn.get(o) || cache.get(o)?.redirectedTo || null,
+      readAt: (o) => cache.get(o)?.fetchedAt,
+    });
+    // A shared turn ends inside the cycle (groupTurnGoesOn): the members it
+    // does not reach wait for the next cycle, entries as they were and no
+    // vote cast, and being least recently read they go first then.
+    const open = { n: turns.length };   // turns not yet finished (a group's, not yet started)
+    await runPool(turns, CRAWL_CONCURRENCY, async (turn) => {
+      if (!Array.isArray(turn)) { try { return await takeTurn(turn); } finally { open.n--; } }
+      open.n--;
+      for (let i = 0; i < turn.length; i++) {
+        if (!groupTurnGoesOn(i, turn.length, open.n)) { for (const o of turn.slice(i)) { skipped.set(o, "turn"); noteTurnNotRead(o); } break; }
+        try { await takeTurn(turn[i]); } catch { /* one origin's failure does not end the others' turns */ }
+      }
+    });
+    const crawled = skipped.size ? due.filter((o) => !skipped.has(o)) : due;
+    // An origin backed off because its documents did not change votes as the
+    // origins read this cycle whose last read was good: an outage of ours
+    // fails those reads, so a backed-off origin votes failed and failing on
+    // our side; a few dark sellers never read well, so they do not move the
+    // rate, and a backed-off origin votes as it did when every origin was
+    // read. A cycle that read no such origin votes at the last measured rate.
+    const backedOff = skipped.size ? due.filter((o) => skipped.get(o) === "unchanged") : [];
+    const rates = measureBackedOffVote(crawled.filter((o) => prevGood.has(o)), oursByOrigin);
+    if (backedOff.length && rates) {
+      crawlCycleTally.done += backedOff.length;
+      crawlCycleTally.ours += backedOff.length * rates.ours;
+    }
     const oursShare = closeCrawlCycleTally();
     // Each step is guarded on its own: a throw in one used to skip the release
     // silently for every later cycle, and the slots it should have freed stayed
@@ -7338,19 +7673,25 @@ async function runCrawl() {
     try { recordSubmittedSellerObservations(); } catch (e) { console.log(`[x402-index] observation pass failed: ${String(e?.message || e).slice(0, 160)}`); }
     let rowsAdded = 0;
     try { const known = registeredOrigins(); rowsAdded = ensureSellerRegistrations([...submittedSeeds].filter((o) => !known.has(o))); } catch { /* counted as 0 */ }
-    // `due`, not `ordered`: cycleOkFraction's own contract is that it measures
+    // This pass's reads (and the backed-off origins at the rate this pass
+    // measured), not `ordered`: cycleOkFraction's own contract is that it measures
     // THIS pass. Once the per-operator cap made the crawled set a subset, passing
     // the full list let every origin held back this cycle contribute its previous
     // cached verdict - diluting the denominator with stale OKs in the UNSAFE
     // direction, so during an egress outage the fraction could stay above the
     // 0.5 floor and slots would be released anyway.
-    const fraction = cycleOkFraction(due);
+    const okCounts = cycleOkCounts(crawled);
+    const fraction = backedOff.length && rates
+      ? (okCounts.ok + backedOff.length * rates.ok) / (okCounts.seen + backedOff.length)
+      : (okCounts.seen ? okCounts.ok / okCounts.seen : null);
     let release;
     try { release = releaseDeadSubmissions(fraction); } catch (e) { release = { released: 0, reason: `error: ${String(e?.message || e).slice(0, 120)}` }; }
-    lastCycleSummary = { at: new Date().toISOString(), cycle: crawlCycle, due: due.length, okFraction: fraction === null ? null : Number(fraction.toFixed(3)), oursShare: Number(oursShare.toFixed(3)), rowsAdded, ...release };
+    const skippedBy = {};
+    for (const why of skipped.values()) skippedBy[why] = (skippedBy[why] || 0) + 1;
+    lastCycleSummary = { at: new Date().toISOString(), cycle: crawlCycle, due: due.length, crawled: crawled.length, skipped: skippedBy, okFraction: fraction === null ? null : Number(fraction.toFixed(3)), oursShare: Number(oursShare.toFixed(3)), rowsAdded, ...release };
     // One line per cycle (every ~30 min): the only way to tell from the log
     // whether the release ran, freed slots, or why it did not.
-    console.log(`[x402-index] cycle ${crawlCycle}: probed ${due.length}, ok ${fraction === null ? "n/a" : (fraction * 100).toFixed(1) + "%"}, release ${release.released ? `freed ${release.released}` : `none (${release.reason})`}${rowsAdded ? `, ${rowsAdded} registration row(s) added` : ""}`);
+    console.log(`[x402-index] cycle ${crawlCycle}: probed ${crawled.length}${skipped.size ? ` (${skipped.size} waiting: ${Object.entries(skippedBy).map(([k, n]) => `${n} ${k}`).join(", ")})` : ""}, ok ${fraction === null ? "n/a" : (fraction * 100).toFixed(1) + "%"}, release ${release.released ? `freed ${release.released}` : `none (${release.reason})`}${rowsAdded ? `, ${rowsAdded} registration row(s) added` : ""}`);
   } finally {
     crawlInFlight = false;
     crawlsCompleted += 1;
@@ -7479,7 +7820,11 @@ export function selectReleasableOrigins({
 // intended outcome and not an oversight: releasing it frees the slot AND
 // stops us fetching them, which is what their robots.txt asked for.)
 export function cycleOkFraction(visited = [], lookup = (o) => cache.get(o)) {
-  if (!visited.length) return null;
+  const { ok, seen } = cycleOkCounts(visited, lookup);
+  return seen ? ok / seen : null;
+}
+/** cycleOkFraction's votes: `seen` origins with a verdict, `ok` of them good. */
+export function cycleOkCounts(visited = [], lookup = (o) => cache.get(o)) {
   let ok = 0, seen = 0;
   for (const origin of visited) {
     const entry = lookup(origin);
@@ -7487,9 +7832,27 @@ export function cycleOkFraction(visited = [], lookup = (o) => cache.get(o)) {
     if (entry.robotsBlocked) continue;  // their choice, not our outage
     seen++;
     // A held entry (our read did not complete) is not a read that worked.
-    if (!entry.error && !entry.readIncomplete) ok++;
+    if (entryReadGood(entry)) ok++;
   }
-  return seen ? ok / seen : null;
+  return { ok, seen };
+}
+/** Was this entry's last read a good one (a verdict, no error, not held)? */
+function entryReadGood(entry) {
+  return Boolean(entry) && !entry.robotsBlocked && !entry.error && !entry.readIncomplete;
+}
+// The rates a backed-off origin votes at (see runCrawl): of this cycle's reads
+// of origins whose last read was good, the share that read good again and the
+// share that ended on our side. Kept for a cycle that reads none of them.
+let lastBackedOffVote = null;
+function measureBackedOffVote(readAfterGood, oursByOrigin) {
+  if (!readAfterGood.length) return lastBackedOffVote;
+  let ok = 0, ours = 0;
+  for (const o of readAfterGood) {
+    if (entryReadGood(cache.get(o))) ok++;
+    if (oursByOrigin.get(o)) ours++;
+  }
+  lastBackedOffVote = { ok: ok / readAfterGood.length, ours: ours / readAfterGood.length };
+  return lastBackedOffVote;
 }
 
 // The release pass's health floor (see selectReleasableOrigins' outage guard).

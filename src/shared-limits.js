@@ -25,6 +25,11 @@
 //   flag     a value with an expiry: a pause or a block "until <time>".
 //   counter  a fixed-window integer with an expiry: a day's spend, a minute's
 //            spend (INCRBY; a negative delta releases).
+//   tally    a hash of named integers with one expiry, set when the key is new
+//            (HINCRBY per field): many fixed counters under one key, added to
+//            in O(1) per field and read whole. A key holds at most
+//            TALLY_FIELD_CAP fields; an add naming a new field past that is
+//            dropped (reported as `dropped`).
 //
 // Every call resolves { ok, ... }. It never throws. `ok: false` means the
 // shared store did not answer (not configured, not reachable, or the command
@@ -64,6 +69,10 @@ export const OP_MS = () => Math.max(50, Number(process.env.SHARED_LIMITS_OP_MS) 
 export const DEGRADED_HOLD_MS = () => Math.max(1_000, Number(process.env.SHARED_LIMITS_DEGRADED_HOLD_MS) || 60_000);
 /** A window read hands back its entries only up to this many (count and sum always). */
 const MAX_ENTRIES = 512;
+/** Fields one tally key may hold. */
+export const TALLY_FIELD_CAP = 1_024;
+/** Fields every tally key in one memory backend may hold together. */
+export const MEMORY_TALLY_FIELD_CAP = 500_000;
 
 const PREFIX = (() => {
   const p = String(process.env.SHARED_LIMITS_PREFIX || "").trim().replace(/[^A-Za-z0-9_.-]/g, "");
@@ -93,8 +102,11 @@ const summarize = (entries) => ({ count: entries.length, sum: entries.reduce((s,
  *  cannot grow a process's memory without bound while Redis is away. */
 export const MEMORY_KEY_CAP = 50_000;
 /** The same interface from process memory. Every call resolves ok: true. */
-export function createMemoryLimits({ keyCap = MEMORY_KEY_CAP } = {}) {
+export function createMemoryLimits({ keyCap = MEMORY_KEY_CAP, tallyFieldCap = MEMORY_TALLY_FIELD_CAP } = {}) {
   const windows = new Map();  // key -> [{ score, weight, member }]
+  const tallies = new Map();  // key -> { fields: Map(field -> n), exp }
+  let tallyFields = 0;
+  const dropTally = (k) => { const v = tallies.get(k); if (v) { tallyFields -= v.fields.size; tallies.delete(k); } };
   const flags = new Map();    // key -> until (ms)
   const counters = new Map(); // key -> { value, exp }
   const windowSpan = new Map(); // key -> the window (ms) it was last written with
@@ -175,10 +187,40 @@ export function createMemoryLimits({ keyCap = MEMORY_KEY_CAP } = {}) {
       return { ok: true, value: c.value };
     },
     async counterClear(name, key) { counters.delete(keyOf(name, key)); return { ok: true }; },
+    async tallyAdd(name, key, increments, ttlMs, { now = Date.now() } = {}) {
+      const k = keyOf(name, key);
+      let v = tallies.get(k);
+      if (v && v.exp <= now) { dropTally(k); v = null; }
+      if (!v) v = { fields: new Map(), exp: now + Math.max(1, Number(ttlMs) || 1) };
+      let dropped = 0;
+      for (const [field, delta] of increments || []) {
+        const f = String(field);
+        const have = v.fields.get(f);
+        if (have === undefined && v.fields.size >= TALLY_FIELD_CAP) { dropped++; continue; }
+        if (have === undefined) tallyFields++;
+        v.fields.set(f, (have || 0) + Math.trunc(Number(delta) || 0));
+      }
+      tallies.delete(k);
+      tallies.set(k, v);
+      // Expired keys first, then the oldest written, until the fields fit.
+      if (tallies.size > keyCap || tallyFields > tallyFieldCap) for (const [tk, tv] of tallies) if (tv.exp <= now) dropTally(tk);
+      while ((tallies.size > keyCap || tallyFields > tallyFieldCap) && tallies.size > 1) dropTally(tallies.keys().next().value);
+      return { ok: true, dropped };
+    },
+    async tallyReadMany(items, { now = Date.now() } = {}) {
+      return { ok: true, results: items.map((it) => {
+        const k = keyOf(it.name, it.key);
+        const v = tallies.get(k);
+        if (!v || v.exp <= now) { if (v) dropTally(k); return { fields: {} }; }
+        return { fields: Object.fromEntries(v.fields) };
+      }) };
+    },
     /** Test seam. */
-    _clear() { windows.clear(); flags.clear(); counters.clear(); windowSpan.clear(); },
+    _clear() { windows.clear(); flags.clear(); counters.clear(); windowSpan.clear(); tallies.clear(); tallyFields = 0; },
     /** Test seam: key counts per map. */
-    _sizes() { return { windows: windows.size, flags: flags.size, counters: counters.size }; },
+    _sizes() { return { windows: windows.size, flags: flags.size, counters: counters.size, tallies: tallies.size }; },
+    /** Test seam: tally keys, fields held, and the most fields in one key. */
+    _tallySizes() { let maxFieldsPerKey = 0; for (const v of tallies.values()) maxFieldsPerKey = Math.max(maxFieldsPerKey, v.fields.size); return { keys: tallies.size, fields: tallyFields, maxFieldsPerKey }; },
   };
 }
 
@@ -219,6 +261,26 @@ const COUNTER_ADD = `
 local v = redis.call('INCRBY', KEYS[1], ARGV[1])
 if tonumber(redis.call('PTTL', KEYS[1])) < 0 then redis.call('PEXPIRE', KEYS[1], ARGV[2]) end
 return v`;
+// KEYS[1] = tally; ARGV: ttlMs, fieldCap, then field, delta pairs. One HINCRBY
+// per field (a new field past the cap is dropped and counted); the expiry is
+// set when the key is new, never refreshed.
+const TALLY_ADD = `
+local cap = tonumber(ARGV[2])
+local dropped = 0
+for i = 3, #ARGV, 2 do
+  if redis.call('HEXISTS', KEYS[1], ARGV[i]) == 1 or redis.call('HLEN', KEYS[1]) < cap then
+    redis.call('HINCRBY', KEYS[1], ARGV[i], ARGV[i + 1])
+  else
+    dropped = dropped + 1
+  end
+end
+if tonumber(redis.call('PTTL', KEYS[1])) < 0 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+return dropped`;
+// KEYS[1..n] = tallies: each one's fields and values, flat.
+const TALLY_READ_MANY = `
+local out = {}
+for i = 1, #KEYS do out[i] = redis.call('HGETALL', KEYS[i]) end
+return out`;
 
 // Measured in loop time (src/loop-deadline.js): a command whose answer came
 // back while boot work held the loop is read, not booked as a store that did
@@ -306,6 +368,27 @@ export function createRedisLimits(getClient = getSharedRedisClient, { opTimeoutM
     counterClear(name, key) {
       return run(async (c) => { await c.del(keyOf(name, key)); return { ok: true }; });
     },
+    tallyAdd(name, key, increments, ttlMs) {
+      const pairs = [];
+      for (const [field, delta] of increments || []) pairs.push(String(field), Math.trunc(Number(delta) || 0));
+      if (!pairs.length) return Promise.resolve({ ok: true, dropped: 0 });
+      return run(async (c) => {
+        const dropped = await evalScript(c, TALLY_ADD, [keyOf(name, key)], [Math.max(1, Math.round(ttlMs)), TALLY_FIELD_CAP, ...pairs]);
+        return { ok: true, dropped: Number(dropped) || 0 };
+      });
+    },
+    tallyReadMany(items) {
+      if (!items.length) return Promise.resolve({ ok: true, results: [] });
+      return run(async (c) => {
+        const r = await evalScript(c, TALLY_READ_MANY, items.map((it) => keyOf(it.name, it.key)), []);
+        return { ok: true, results: items.map((_, i) => {
+          const flat = Array.isArray(r?.[i]) ? r[i] : [];
+          const fields = {};
+          for (let j = 0; j + 1 < flat.length; j += 2) fields[String(flat[j])] = Number(flat[j + 1]) || 0;
+          return { fields };
+        }) };
+      });
+    },
   };
 }
 
@@ -338,6 +421,8 @@ export const shared = {
   counterAdd: (...a) => impl.counterAdd(...a),
   counterGet: (...a) => impl.counterGet(...a),
   counterClear: (...a) => impl.counterClear(...a),
+  tallyAdd: (...a) => impl.tallyAdd(...a),
+  tallyReadMany: (...a) => impl.tallyReadMany(...a),
 };
 
 /** The word: on / memory / degraded. */

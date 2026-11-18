@@ -12,6 +12,7 @@
 // passes in any sandbox (CI, local, restricted networks).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
+import { urlMatches } from "./lib/url-host.js";
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
 const ok = (label) => console.log("  ✓", label);
 
@@ -309,6 +310,31 @@ console.log("\nunresolved host: caller URL vs our own upstream:");
     if ((seen.get(`pin-${own ? "own" : "caller"}.example`) || 0) < 2) fail(`${label}: the connect-time lookup did not run (the refusal came from the up-front check)`);
     ok(`${label} refused at connect answers ${own ? "our 503 with retryAfter" : "the caller's 400"}`);
   }
+}
+
+// onResolved: the addresses the SSRF check read, handed over before anything
+// is sent (the index crawler counts its requests per address with them);
+// whatever it throws is thrown as it is, and no request goes out.
+{
+  const { probePublicUrl } = await import("../src/tools/fetch-guard.js");
+  const real = globalThis.fetch;
+  let sent = 0;
+  globalThis.fetch = async () => { sent++; return new Response("ok", { status: 200 }); };
+  try {
+    for (const [label, call] of [["safeFetch", (o) => safeFetch("http://203.0.113.9/doc", o)], ["probePublicUrl", (o) => probePublicUrl("http://203.0.113.9/doc", o)]]) {
+      let seen = null;
+      const held = Object.assign(new Error("held by the caller"), { requestHeld: true });
+      try { await call({ onResolved: async (addresses) => { seen = addresses; throw held; } }); fail(`${label}: an onResolved refusal must throw`); }
+      catch (e) { if (e !== held) fail(`${label}: onResolved's own error must be thrown as it is, got ${e?.message}`); }
+      if (!Array.isArray(seen) || seen.length !== 1 || seen[0].address !== "203.0.113.9") fail(`${label}: onResolved did not get the address the check read (${JSON.stringify(seen)})`);
+      if (sent !== 0) fail(`${label}: a request was sent after onResolved refused it`);
+      let got = null;
+      await call({ onResolved: async (addresses, url) => { got = { addresses, url }; } });
+      if (sent !== 1 || got?.addresses?.[0]?.address !== "203.0.113.9" || !urlMatches(got.url, "203.0.113.9", "/")) fail(`${label}: control: a passing onResolved lets the request go (${sent})`);
+      sent = 0;
+      ok(`${label} hands onResolved the checked address, and sends nothing when it refuses`);
+    }
+  } finally { globalThis.fetch = real; }
 }
 
 console.log("\ntest-fetch-guard: ALL PASS");

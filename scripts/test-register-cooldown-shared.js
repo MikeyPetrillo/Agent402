@@ -34,12 +34,12 @@ try {
   say(crawlsB === 0 && rb.reverify?.documentsReread === false, "B honours the document re-read window A opened");
   say(hits === 0 && rb.reverify?.routesRechecked === false, `B honours the re-price window A opened (sent ${hits} probes)`);
   // Past the window, the hourly allowance A spent still counts on B.
-  B.__shiftRecheckClocksForTest(11 * 60_000);
-  A.__shiftRecheckClocksForTest(11 * 60_000);
+  await B.__shiftRecheckClocksForTest(11 * 60_000);
+  await A.__shiftRecheckClocksForTest(11 * 60_000);
   hits = 0;
   await A.registerOrigin(ORIGIN, { crawl: async () => null });
-  B.__shiftRecheckClocksForTest(11 * 60_000);
-  A.__shiftRecheckClocksForTest(11 * 60_000);
+  await B.__shiftRecheckClocksForTest(11 * 60_000);
+  await A.__shiftRecheckClocksForTest(11 * 60_000);
   const spentA2 = hits;
   hits = 0;
   const rb2 = await B.registerOrigin(ORIGIN, { crawl: async () => null });

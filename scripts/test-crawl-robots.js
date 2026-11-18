@@ -105,7 +105,7 @@ const fetcher = (body) => async () => { hits++; if (body instanceof Error) throw
     "probePath consults robots.txt, so EVERY per-origin probe is gated by it and not just the ones we remembered");
   ok(/robotsBlocked: true/.test(helper),
     "a robots refusal is marked, so the crawl can report it as an exclusion rather than as a failure");
-  ok(helper.indexOf("robotsForbids") > -1 && helper.indexOf("crawlFetch") > -1 && helper.indexOf("robotsForbids") < helper.indexOf("crawlFetch"),
+  ok(helper.indexOf("robotsForbids") > -1 && helper.indexOf("crawlRead") > -1 && helper.indexOf("robotsForbids") < helper.indexOf("crawlRead"),
     "and it is consulted BEFORE the fetch, which is the only ordering that saves the seller a request");
 }
 
@@ -161,6 +161,44 @@ const fetcher = (body) => async () => { hits++; if (body instanceof Error) throw
   const wk = src.indexOf("fetchOpenapi({ manifestPublished: true })");
   const fb = src.indexOf("fetchOpenapi({ conditional: false })");
   ok(wk > -1 && fb > wk, "and the flagged call is the manifest branch's, which runs before the fallback's unflagged call");
+}
+
+// ---- every group that names us is read as one (RFC 9309 2.2.1) --------------------
+{
+  // A Disallow written for the crawler's own token holds after an Allow written
+  // for the shorter token, in either order, and a `*` group does not join them.
+  for (const [label, text] of [
+    ["Allow for Agent402 first", "User-agent: Agent402\nAllow: /\n\nUser-agent: Agent402-Crawler\nDisallow: /private\n"],
+    ["Disallow for Agent402-Crawler first", "User-agent: Agent402-Crawler\nDisallow: /private\n\nUser-agent: Agent402\nAllow: /\n"],
+  ]) {
+    const groups = parseRobots(text);
+    ok(robotsAllows(groups, "Agent402-Crawler", "/private/x").allowed === false, `${label}: the crawler's Disallow is honoured`);
+    ok(robotsAllows(groups, "Agent402-Crawler", "/public").allowed === true, `${label}: and the Allow still opens the rest`);
+  }
+  const star = parseRobots("User-agent: Agent402\nAllow: /\n\nUser-agent: *\nDisallow: /\n");
+  ok(robotsAllows(star, "Agent402-Crawler", "/x").allowed === true, "a group that names us replaces the * group, as before");
+  const stars = parseRobots("User-agent: *\nDisallow: /a\n\nUser-agent: *\nDisallow: /b\n");
+  ok(!robotsAllows(stars, "Agent402-Crawler", "/a").allowed && !robotsAllows(stars, "Agent402-Crawler", "/b").allowed, "two * groups are combined too");
+  const tie = parseRobots("User-agent: Agent402\nDisallow: /p\nAllow: /p\n");
+  ok(robotsAllows(tie, "Agent402-Crawler", "/p").allowed === true, "an Allow and a Disallow of the same length: the Allow wins (RFC 9309 2.2.2)");
+  const empty = parseRobots("User-agent:\nDisallow: /\n");
+  ok(robotsAllows(empty, "Agent402-Crawler", "/x").allowed === true, "an empty User-agent line names nobody");
+  __resetRobotsCacheForTest();
+  const split = async () => "User-agent: Agent402\nAllow: /\n\nUser-agent: Agent402-Crawler\nDisallow: /openapi.json\n";
+  ok((await robotsForbids("https://split.example", "/openapi.json", { fetchText: split })) !== null, "the crawl honours that Disallow on its own reads");
+  // Combined, the longest match wins whichever group it came from: a longer
+  // Allow in one group admits a path a shorter Disallow in the other covers.
+  const longer = parseRobots("User-agent: Agent402\nDisallow: /\n\nUser-agent: Agent402-Crawler\nAllow: /openapi.json\n");
+  ok(robotsAllows(longer, "Agent402-Crawler", "/openapi.json").allowed === true, "a longer Allow in the other group admits its path (longest match, RFC 9309)");
+  ok(robotsAllows(longer, "Agent402-Crawler", "/other").allowed === false, "and the Disallow still covers every other path");
+  // The published sentence states that rule, and no longer says a Disallow in
+  // any group holds whatever another allows.
+  const { readFileSync } = await import("node:fs");
+  for (const f of ["src/crawler-page.js", "src/changelog.js", "CHANGELOG.md"]) {
+    const text = readFileSync(new URL(`../${f}`, import.meta.url), "utf8").replace(/\s+/g, " ");
+    ok(!/a (<code>)?Disallow(<\/code>)? in any of them holds/.test(text), `${f}: no claim that a Disallow in any group holds whatever another allows`);
+    ok(/longest rule that matches a path decides it/.test(text), `${f}: states the longest-match rule`);
+  }
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

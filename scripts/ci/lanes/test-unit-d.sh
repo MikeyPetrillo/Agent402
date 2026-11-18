@@ -97,6 +97,7 @@ t node scripts/test-stripe-api-version.js
 # Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)
 t node scripts/test-fetch-guard.js
 t node scripts/test-ssrf-literal-ip.js
+t node scripts/test-ssrf-redirect-hops.js
 # Guard lookups run on c-ares, not the thread pool: a full pool and unanswered names never delay a healthy one
 t node scripts/test-dns-pool-starvation.js
 t node scripts/test-dns-name-filter.js

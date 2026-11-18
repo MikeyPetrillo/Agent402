@@ -12,7 +12,7 @@
 // skipped integration test is not coverage); locally it is reported as skipped
 // in so many words.
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
-import { createMemoryLimits, createRedisLimits, createSharedDailySpend, sharedLimitsConfigured, SHARED_LIMITS_WORDS } from "../src/shared-limits.js";
+import { createMemoryLimits, createRedisLimits, createSharedDailySpend, sharedLimitsConfigured, SHARED_LIMITS_WORDS, TALLY_FIELD_CAP } from "../src/shared-limits.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -98,6 +98,23 @@ async function contract(label, make) {
     r = await b.counterGet(name, "day", { now: T0 });
     ok(r.ok && r.value === 0, `${label}: a cleared counter reads 0 for the other instance`);
   }
+  // --- tallies: named counters under one key, added in O(1), read whole ---------
+  {
+    const name = `${RUN}-tally`;
+    let r = await a.tallyAdd(name, "h|1", [["m1|fetch", 3], ["m1|crawler", 1]], 60_000, { now: T0 });
+    ok(r.ok && r.dropped === 0, `${label}: a tally add answers ok`);
+    await b.tallyAdd(name, "h|1", [["m1|fetch", 2], ["m2|fetch", 1]], 60_000, { now: T0 });
+    r = await a.tallyReadMany([{ name, key: "h|1" }, { name, key: "none" }], { now: T0 });
+    ok(r.ok && r.results.length === 2 && r.results[0].fields["m1|fetch"] === 5 && r.results[0].fields["m1|crawler"] === 1 && r.results[0].fields["m2|fetch"] === 1 && Object.keys(r.results[1].fields).length === 0,
+      `${label}: both instances add to the same fields; an unknown key reads empty (${JSON.stringify(r.results)})`);
+    const many = Array.from({ length: TALLY_FIELD_CAP + 5 }, (_, i) => [`f${i}`, 1]);
+    r = await a.tallyAdd(name, "cap", many, 60_000, { now: T0 });
+    ok(r.ok && r.dropped === 5, `${label}: a key holds at most ${TALLY_FIELD_CAP} fields; new ones past it are dropped (${r.dropped})`);
+    r = await a.tallyAdd(name, "cap", [["f0", 1]], 60_000, { now: T0 });
+    const got = await b.tallyReadMany([{ name, key: "cap" }], { now: T0 });
+    ok(r.dropped === 0 && got.results[0].fields.f0 === 2 && Object.keys(got.results[0].fields).length === TALLY_FIELD_CAP, `${label}: an existing field still adds at the cap`);
+    ok((await a.tallyReadMany([], { now: T0 })).results.length === 0, `${label}: a read of nothing is ok and empty`);
+  }
 }
 
 // ---- the memory backend (every run) ------------------------------------------------
@@ -119,6 +136,15 @@ async function contract(label, make) {
   const live = await m1.counterGet(`${RUN}-ttl`, "x", { now: 1_500 });
   const gone = await m1.counterGet(`${RUN}-ttl`, "x", { now: 2_000 });
   ok(live.value === 5 && gone.value === 0, "memory: a counter expires at its ttl");
+  // A tally expires at the ttl set when it was new; a later add does not extend it.
+  await m1.tallyAdd(`${RUN}-tt`, "x", [["a", 1]], 1_000, { now: 1_000 });
+  await m1.tallyAdd(`${RUN}-tt`, "x", [["a", 1]], 1_000, { now: 1_900 });
+  ok((await m1.tallyReadMany([{ name: `${RUN}-tt`, key: "x" }], { now: 1_950 })).results[0].fields.a === 2 && Object.keys((await m1.tallyReadMany([{ name: `${RUN}-tt`, key: "x" }], { now: 2_000 })).results[0].fields).length === 0,
+    "memory: a tally expires at the ttl set when it was new");
+  // Every tally in one memory backend holds a bounded number of fields together.
+  const small = createMemoryLimits({ tallyFieldCap: 1_000 });
+  for (let i = 0; i < 100; i++) await small.tallyAdd(`${RUN}-b`, `k${i}`, Array.from({ length: 60 }, (_, j) => [`f${j}`, 1]), 60_000, { now: 1 });
+  ok(small._tallySizes().fields <= 1_000, `memory: the tallies' fields stay under the backend's cap, oldest keys first (${small._tallySizes().fields})`);
 }
 {
   // The daily spend helper on the process's own backend (memory here unless
@@ -180,6 +206,11 @@ if (!process.env.REDIS_URL) {
     await r1.counterAdd(`${RUN}-exp-c`, "k", 1, 1_500);
     const again = await client.pTTL(keyOf(`${RUN}-exp-c`, "k"));
     ok(again > 0 && again <= 1_250, `redis: a later add does not extend a counter's window (${again} ms left of 1500)`);
+    await r1.tallyAdd(`${RUN}-exp-t`, "k", [["a", 1]], 1_500);
+    await new Promise((r) => setTimeout(r, 300));
+    await r1.tallyAdd(`${RUN}-exp-t`, "k", [["a", 1]], 1_500);
+    const tl = await client.pTTL(keyOf(`${RUN}-exp-t`, "k"));
+    ok(tl > 0 && tl <= 1_250 && (await client.type(keyOf(`${RUN}-exp-t`, "k"))) === "hash", `redis: a tally is a hash whose expiry is set once (${tl} ms left of 1500)`);
 
     // --- the degraded path: a backend whose client is gone answers ok:false, never throws ---
     const results = [];

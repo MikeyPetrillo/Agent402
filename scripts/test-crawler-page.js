@@ -8,7 +8,7 @@
 //   - a rule naming Agent402 stops /openapi.json but never the manifest;
 //   - with no manifest, /agents.json and /llms.txt are tried, and a blanket
 //     Disallow stops them;
-// and, from the source, that every raw 402 probe sends the crawler User-Agent
+// and, from the source, that every raw 402 probe sends the probe User-Agent
 // the page quotes, and that the robots token the page names is the crawler's.
 // Offline: no network, no server.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -21,7 +21,7 @@ const dir = mkdtempSync(join(tmpdir(), "crawler-page-"));
 process.env.REMOVED_ORIGINS_FILE = join(dir, "removed-origins.json");
 const idx = await import("../src/x402-index.js");
 const { crawlerPage, CRAWLER_UA, ROBOTS_TOKEN } = await import("../src/crawler-page.js");
-const { USER_AGENT } = await import("../src/tools/fetch-guard.js");
+const UA = await import("../src/user-agents.js");
 const { crawlIntervalLabel } = await import("../src/crawl-cadence.js");
 
 let pass = 0, fail = 0;
@@ -33,13 +33,51 @@ const text = decodeEntities(stripTags(stripInlineTags(html))).replace(/\s+/g, " 
 // ---- the page's identity strings are the crawler's ---------------------------
 const idxSrc = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
 const mppSrc = readFileSync(new URL("../src/mpp-index.js", import.meta.url), "utf8");
-ok(CRAWLER_UA === USER_AGENT && text.includes(USER_AGENT), "the page quotes the User-Agent safeFetch sends (src/tools/fetch-guard.js)");
-ok(new RegExp(`const ROBOTS_UA = "${ROBOTS_TOKEN}";`).test(idxSrc) && text.includes(`product token ${ROBOTS_TOKEN}`), `robots.txt rules are matched on the token the page names (${ROBOTS_TOKEN})`);
+ok(CRAWLER_UA === UA.CRAWLER_UA && text.includes(UA.CRAWLER_UA), "the page quotes the crawler's User-Agent (src/user-agents.js)");
+for (const { token, ua } of UA.SELLER_FACING_USER_AGENTS) ok(text.includes(ua), `the page lists ${token}'s full User-Agent`);
+ok(new Set(UA.SELLER_FACING_USER_AGENTS.map((u) => u.ua)).size === UA.SELLER_FACING_USER_AGENTS.length, "every component's User-Agent is distinct");
+ok(UA.SELLER_FACING_USER_AGENTS.every((u) => u.ua !== UA.RETIRED_BARE_UA && u.ua.includes(UA.INFO_URL)), "none is the bare Agent402/1.0, and each links to /crawler");
+ok(text.includes(`No request to a site in our index, or to a URL a caller names, carries the older ${UA.RETIRED_BARE_UA} token`), "the page says the older token never reaches a seller or a caller's URL (scoped: test-user-agents pins where it remains)");
+
+// ---- every figure on the page and in its changelog entries comes from code ----------
+{
+  const { spanLabel, LIVE_QUOTE_MAX_AGE_MS, slowOriginIntervalLabel } = await import("../src/crawl-cadence.js");
+  const SL = await import("../src/seller-load.js");
+  for (const [what, ms] of [["revisit cap", SL.REVISIT_CAP_MS], ["default hold", SL.THROTTLE_DEFAULT_MS], ["longest hold", SL.THROTTLE_MAX_MS], ["request log", SL.REQUEST_LOG_KEEP_MS], ["price re-read", LIVE_QUOTE_MAX_AGE_MS]]) {
+    ok(text.includes(spanLabel(ms)), `the page prints the ${what} from code (${spanLabel(ms)})`);
+  }
+  ok(text.includes(`about ${SL.DAILY_BUDGET.toLocaleString("en-US")} requests a day to one site on its own account (a crawl already under way finishes its reads)`) && text.includes(slowOriginIntervalLabel()), "the daily budget and the slow cycle are printed from code");
+  ok(text.includes(`The unpaid price checks take at most ${SL.probeShareLabel()} of that`) && text.includes("counted apart and never use that allowance"), "the probes' share and the registration reads' own count are stated, from code");
+  // The rule for requests that follow a redirect onto another site
+  // (src/seller-load.js landingGate; scripts/test-crawl-redirect-budget.js
+  // holds the code to it): the page states it, with the figure from code.
+  ok(text.includes(`Every request that follows such a move to the other site, a document read or a price check, is held to ${SL.DAILY_BUDGET.toLocaleString("en-US")} more a day there, apart from that site's own allowance: past it those requests are not sent until the next day, and the moved site's listing stays as it was.`), "the page states the allowance for requests that follow a moved site's documents, from code");
+  ok(!text.includes("a separate allowance of the same size"), "the earlier wording of that allowance is gone");
+  // Typed figures: the prose of the page module and of the changelog's
+  // seller-request entries, with every \${...} interpolation removed, names no
+  // count of time or requests in digits or words.
+  const TYPED = /\b(\d[\d,.]*|one|two|three|four|five|six|seven|eight|nine|ten|twelve|twenty|thirty|a|an)[ -](second|minute|hour|day|week|request)s?\b/gi;
+  // A rate's unit ("in an hour", "a day") and "one request made for one
+  // caller" are not figures the code could change.
+  const ALLOW = new Set(["a day", "a request", "a minute", "an hour", "one request"]);
+  const stripInterp = (src) => src.replace(/\$\{(?:[^{}]|\{[^{}]*\})*\}/g, "");
+  const pageSrc = readFileSync(new URL("../src/crawler-page.js", import.meta.url), "utf8");
+  const sections = stripInterp(pageSrc.slice(pageSrc.indexOf("const SECTIONS = ["), pageSrc.indexOf("export function crawlerPage")));
+  const typedPage = [...sections.matchAll(TYPED)].map((m) => m[0]).filter((m) => !ALLOW.has(m.toLowerCase()));
+  ok(typedPage.length === 0, `no figure is typed into the page's prose (${typedPage.join(", ") || "none"})`);
+  const clSrc = readFileSync(new URL("../src/changelog.js", import.meta.url), "utf8");
+  const TITLES = ["Our requests to sellers name themselves and back off", "Price reads keep their weekly clock, and the router never uses up a seller's crawl"];
+  const blocks = [...clSrc.matchAll(/title: "([^"]*)",\s*items: \[([\s\S]*?)\n {4}\],/g)].filter((b) => TITLES.includes(b[1]));
+  ok(blocks.length === TITLES.length, `the changelog's seller-request entries are found (${blocks.length})`);
+  const typedCl = blocks.flatMap((b) => [...stripInterp(b[2]).matchAll(TYPED)].map((m) => `${b[1]}: ${m[0]}`)).filter((m) => !ALLOW.has(m.split(": ").pop().toLowerCase()));
+  ok(typedCl.length === 0, `no figure is typed into those entries (${typedCl.join("; ") || "none"})`);
+}
+ok(/const ROBOTS_UA = CRAWLER_TOKEN;/.test(idxSrc) && ROBOTS_TOKEN === UA.CRAWLER_TOKEN && text.includes(`product token ${ROBOTS_TOKEN}`), `robots.txt rules are matched on the token the page names (${ROBOTS_TOKEN})`);
 // Every unpaid 402 probe goes through probePublicUrl (src/tools/fetch-guard.js),
 // which sets the crawler User-Agent; neither index makes a raw fetch to a seller.
 const guardSrc = readFileSync(new URL("../src/tools/fetch-guard.js", import.meta.url), "utf8");
 const probeFn = guardSrc.slice(guardSrc.indexOf("export async function probePublicUrl"), guardSrc.indexOf("export async function retryTransient"));
-ok(/headers: \{ "User-Agent": USER_AGENT, \.\.\.headers \}/.test(probeFn), "probePublicUrl sends the crawler User-Agent on every probe");
+ok(/userAgent: USER_AGENT = PROBE_UA \}/.test(probeFn) && /headers: \{ "User-Agent": USER_AGENT, \.\.\.headers \}/.test(probeFn), "probePublicUrl sends the probe User-Agent unless its caller names another");
 for (const [name, src] of [["x402-index.js", idxSrc], ["mpp-index.js", mppSrc]]) {
   const raw = [...src.matchAll(/await fetch\((target|url), \{/g)].length;
   // x402-index.js routes its per-route probes through probeSellerRoute, whose
@@ -58,8 +96,10 @@ ok(!/That is all|2026-09-21|same effect|honours robots\.txt, including for the d
 // ---- drive the crawl --------------------------------------------------------
 const served = new Map();
 const fetched = [];
-idx.__setCrawlFetchForTest(async (url) => {
+const sentAs = new Set();
+idx.__setCrawlFetchForTest(async (url, opts) => {
   fetched.push(url);
+  sentAs.add(opts?.userAgent);
   const hit = served.get(url);
   if (hit === undefined) throw Object.assign(new Error(`Upstream returned HTTP 404 for ${url}`), { statusCode: 422 });
   return { html: typeof hit === "string" ? hit : JSON.stringify(hit), finalUrl: url, validators: null };
@@ -88,6 +128,12 @@ async function crawl(origin, files) {
   ok(paths.includes("/.well-known/x402"), "a rule naming Agent402: the manifest is still read, as the page says");
   ok(!paths.includes("/openapi.json"), `a rule naming Agent402 stops /openapi.json (${paths.join(", ")})`);
 }
+{
+  const O = "https://names-legacy.example.invalid";
+  const paths = await crawl(O, { "/robots.txt": "User-agent: Agent402\nDisallow: /\n", "/.well-known/x402": manifest(O), "/openapi.json": openapi(O) });
+  ok(!paths.includes("/openapi.json"), `a group for the shorter token Agent402 still applies to the crawler (${paths.join(", ")})`);
+}
+ok(sentAs.size === 1 && sentAs.has(UA.CRAWLER_UA), "every crawler read asks for the crawler's own User-Agent");
 {
   const O = "https://no-manifest.example.invalid";
   const paths = await crawl(O, { "/robots.txt": "User-agent: *\nAllow: /\n", "/llms.txt": `# Seller\n\n- [Thing](${O}/api/thing): a thing, $0.01\n` });

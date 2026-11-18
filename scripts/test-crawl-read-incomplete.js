@@ -21,6 +21,9 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 process.env.X402_INDEX_CRAWL = "off";
+// Every stub seller here is one operator (example.test), registered many
+// times an hour: the hourly ceiling on registration reads is not under test.
+process.env.SELLER_REGISTRATION_HOURLY_MAX = "off";
 delete process.env.INDEX_CRAWL_HOLD_HOURS;
 const { mkdtempSync, rmSync } = await import("node:fs");
 const { tmpdir } = await import("node:os");

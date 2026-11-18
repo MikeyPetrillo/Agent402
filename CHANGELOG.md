@@ -217,6 +217,88 @@ Surfaces:
   match; inside a conversion, currency codes and names count as values, not as
   the task.
 
+### 2026-11-16 (price reads keep their weekly clock, and the router never uses up a seller's crawl)
+Index:
+- A paid route priced in a seller's manifest and listed without a price in its
+  /openapi.json is read live once and then again after a week, as every other
+  route is; until now every crawl asked it again, because the merge of the two
+  documents dropped the mark that the price was the seller's own.
+- A route priced above everything the router buys is asked at most once in a
+  week, and when its seller registers again; the check that a seller's routes
+  still ask for payment uses its cheapest paid route, and runs at most once in
+  a week for a seller whose paid routes are all priced that high.
+- Every robots.txt group that names Agent402 or Agent402-Crawler is read as
+  one (RFC 9309): their rules are combined, and the longest rule that matches
+  a path decides it, whichever group it came from.
+- The MPP index's reads of a seller count against the same daily allowance,
+  wait out the same Retry-After holds, and follow the slower cycle (every 6
+  hours) a site asked for. That cycle is timed by the clock from the last read
+  any of our servers made, in both indexes, so a restart does not read such a
+  site early.
+- A site whose scheduled read we put off (its day spent, a Retry-After, the
+  slower cycle) keeps its last good listing through a read of ours that then
+  does not complete, for the same hold window counted from the last turn we
+  put off, so it never leaves the router because we chose not to read it.
+  Once such a read has failed, the turns the site then waits no longer extend
+  the hold, so a site that stays unreachable leaves after it.
+- One caller's registrations send one site at most 20 document reads and
+  paywall checks an hour, whichever origins on it they name; that caller's
+  registration past that is answered 429 with a Retry-After, and nothing is
+  listed or changed. Another caller's registration of the site is never held
+  by it: past 200 such reads of one site in an hour from every caller
+  together, the rest are sent one every 30 seconds. A name under a
+  wildcard or dynamic DNS service, which points wherever its owner sets, is
+  also counted per address it resolves to: every such name on one address
+  shares one allowance of about 200 requests a day.
+Operations:
+- The seller load controls decide from each server's own memory and read the
+  shared store once per crawl cycle, so a slow store no longer slows the crawl
+  or a buyer's purchase. A crawl cycle's health counts the sites waiting on
+  unchanged documents as the cycle's reads of sites last read well came out,
+  so a few dark sites still read as theirs and an outage of ours as ours.
+- The request log behind /__operator/seller-load.json also counts the
+  catalog's fetches, the site-crawl tool and the router's purchases per host.
+
+### 2026-11-16 (our requests to sellers name themselves and back off)
+Index:
+- Each part of the service that sends requests to a seller names itself with
+  its own User-Agent: Agent402-Crawler for the index crawler's document reads,
+  Agent402-Probe for the unpaid price and paywall checks, Agent402-Router for
+  a purchase made for a paying caller (and the request that opens it), and
+  Agent402-Fetch for a tool fetching a URL its caller named. Each keeps the
+  browser-compatible form and links to /crawler, which lists them all; no
+  request to a site in the index or to a URL a caller names carries the older
+  Agent402/1.0 token. robots.txt groups for Agent402 still apply to the
+  crawler.
+- When a seller's manifest and /openapi.json come back unchanged (a 304, or
+  the same bytes), the wait before the crawler reads that origin again doubles
+  each time, from an hour up to 12 hours. A changed document, a failed crawl,
+  a purchase that did not deliver, or registering again puts it back on the
+  regular cycle (every 30 minutes); a waiting origin's listing stays as it
+  was.
+- The crawler, the unpaid price checks and the MPP index's scheduled reads
+  keep to about 200 requests a day to one site on its own account (a crawl
+  already under way finishes its reads), counted per registrable domain or per
+  hostname on shared hosting (a platform subdomain or a cloud API host); the
+  unpaid price checks take at most half of that, and past it they wait for the
+  next UTC day. The reads a registration of the site asks for are counted
+  apart and never use that allowance. A site whose documents moved to another site is counted on its own
+  allowance. Every request that follows such a move to the other site, a
+  document read or a price check, is held to 200 more a day there, apart from
+  that site's own allowance: past it those requests are not sent until the
+  next day, and the moved site's listing stays as it was. Sites that moved to
+  the same site are read one after another, the one read longest ago first, so
+  each is refreshed in turn. The router's request before a purchase for a
+  paying caller is counted on its own and always goes through.
+- A 429 or 503 from a seller pauses the crawl and the unpaid price checks for
+  that host until its Retry-After, 30 minutes when it names none, and never
+  longer than a day.
+Operations:
+- /__operator/seller-load.json counts the revisit waits, resets by reason,
+  requests and refusals per kind, the hosts past their day and the Retry-After
+  holds, without naming a seller; with ?host= it lists the requests we sent
+  that host per component and minute over the last 2 days.
+
 ### 2026-11-16 (settlement wording per rail, and a page for a stopped reconciliation)
 Payments:
 - Every sentence that said a payment settles only on a delivered result names
