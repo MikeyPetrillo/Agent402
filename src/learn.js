@@ -268,7 +268,7 @@ export const LEARN = [
         { code: CLIENT_CAPS },
       ]],
       ["No wallet yet", [
-        P(`Two paths need no wallet. Pure-CPU tools on this server accept a proof-of-work solve instead of money, a fraction of a second of CPU. ${creditsSalesEnabled() ? "For everything else, a prepaid card-credits key works on any paid tool: the price is held before the call and debited only on a successful response." : "Finished reports and monitors can be bought by card at /reports. Everything else is paid from a wallet, which takes a few minutes to create (see Create an agent wallet)."}`),
+        P(`Two paths need no wallet. Pure-CPU tools on this server accept a proof-of-work solve instead of money, a fraction of a second of CPU. ${creditsSalesEnabled() ? "For most of the rest, a prepaid card-credits key works on any paid tool except the wallet-scoped ones (memory, usage) and the routes that buy from an outside seller: the price is held before the call and debited only on a successful response." : "Finished reports and monitors can be bought by card at /reports. Everything else is paid from a wallet, which takes a few minutes to create (see Create an agent wallet)."}`),
       ]],
     ],
     links: [["/agentic-finance", "Agentic Finance"], ["/guides/create-agent-wallet", "Create an agent wallet"], ["/integrations", "Framework integrations"], ["/tools/route-execute", "route-execute: buy from another seller in one call"]],

@@ -154,7 +154,7 @@ const shapeTally = (t) => (t && typeof t === "object" ? { ...emptyTally(), ...t,
  * @param {string} deps.baseUrl
  * @param {string} [deps.storePath]  override for tests
  */
-export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed, onDisputeClosed }) {
+export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed, onDisputeClosed, onRefundUpdated }) {
   const path = storePath || STORE_PATH();
   const doc = createJsonDocument({ file: path, log: () => {} });
   const tallyDoc = createJsonDocument({ file: path + TALLY_SUFFIX, log: () => {} });
@@ -573,6 +573,18 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
             stored = stored && await upsert(subId, (cur) => (cur?.disputed || !paidWith(cur, ids) ? null : { disputed: true, disputedAt: new Date().toISOString(), disputeOutcome: null }));
           }
         }
+        break;
+      }
+      case "refund.updated":
+      case "refund.failed":
+      case "charge.refund.updated": {
+        // A refund changed status (pending -> succeeded, failed or canceled).
+        // The credits store settles a refund it sent on request by this event
+        // (matched by the refund's metadata and payment). A hook that throws
+        // leaves the event unacknowledged, so Stripe delivers it again; the
+        // hook is idempotent on a repeat.
+        const obj = event.data.object;
+        if (obj?.id && typeof onRefundUpdated === "function") { try { await onRefundUpdated(obj); } catch { stored = false; } }
         break;
       }
       case "charge.dispute.closed": {

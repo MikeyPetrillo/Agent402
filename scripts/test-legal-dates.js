@@ -11,14 +11,17 @@ import { createHash } from "node:crypto";
 // paragraph shown only while a switch is on (the Circle Gateway batched
 // option, the public settlement index, the direct inference upstream's
 // sentence, Third parties item and location exception) moves the sha, not
-// the date, until that switch ships on. While the public settlement index disclosure renders,
+// the date, until that switch ships on. The prepaid credits sales text
+// (CREDITS_SALES) carries its own date instead, CREDITS_SALES_TERMS_DATE in
+// src/credits-sales.js, which both pages print while sales are on and a
+// checkout records: move it with any change to that text. While the public settlement index disclosure renders,
 // each page prints the later of this date and FACILITATOR_PUBLIC_INDEX_SINCE
 // (scripts/test-public-index-copy.js).
 const PINS = {
   // The refund sentences /terms prints live in src/refund-terms.js (the
   // conformance document reads them too), so that file is hashed with it.
-  "src/terms.js": { date: "2026-11-17", sha: "1852777d5f57f217", with: ["src/refund-terms.js"] },
-  "src/privacy.js": { date: "2026-11-17", sha: "6e24afad40a0b3a2" },
+  "src/terms.js": { date: "2026-11-17", sha: "561ff7bfae782991", with: ["src/refund-terms.js"] },
+  "src/privacy.js": { date: "2026-11-17", sha: "871f5da9cfcdc127" },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -38,6 +41,10 @@ for (const [file, pin] of Object.entries(PINS)) {
   ok(Boolean(date) && date <= TODAY, `${file}: last updated ${date} is not after today (${TODAY} UTC)`);
   const h = bodyHash([src, ...(pin.with || []).map((f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8"))].join("\n"));
   ok(h === pin.sha, `${file}: text unchanged since ${pin.date} (hash ${h}; if you changed the text, bump the date in the page and set date + sha here)`);
+}
+{
+  const { CREDITS_SALES_TERMS_DATE } = await import("../src/credits-sales.js");
+  ok(/^\d{4}-\d{2}-\d{2}$/.test(CREDITS_SALES_TERMS_DATE) && CREDITS_SALES_TERMS_DATE <= TODAY, `the credits sales text date ${CREDITS_SALES_TERMS_DATE} is a day not after today`);
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

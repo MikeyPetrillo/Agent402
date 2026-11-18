@@ -84,6 +84,7 @@ t node scripts/test-stripe-subscriptions.js
 t node scripts/test-monitor-manage-link.js
 # Prepaid card credits (mint-once, exact micro-dollar balances, gate debits only on 200, 402 on insufficient, operator view)
 t node scripts/test-credits.js
+t node scripts/test-credits-terms.js
 # CAN-SPAM: every outbound email carries the physical postal address
 t node scripts/test-email-postal-address.js
 # List-Unsubscribe headers reach both email providers (ZeptoMail mime_headers, Resend headers)

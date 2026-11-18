@@ -7,7 +7,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { ncTaxReport, ncTaxableKind, isNcBilling, taxIncludedPortion, monthBounds, NC_TAXABLE_SLUGS } from "../src/nc-sales-tax.js";
-import { TERMS_VERSION } from "../src/credits-sales.js";
+import { TERMS_VERSION, creditsTermsVersion } from "../src/credits-sales.js";
 
 let failed = 0;
 const ok = (c, m) => { if (c) console.log("ok - " + m); else { failed++; console.log("FAIL - " + m); } };
@@ -54,9 +54,18 @@ const credits = src("credits.js");
 ok(/billing_address_collection: "required"/.test(credits) && /tax_id_collection: \{ enabled: true \}/.test(credits), "credits checkout requires a billing address and offers a tax ID field");
 ok(/key: "terms"[\s\S]{0,200}optional: false/.test(credits) && /key: "use"[\s\S]{0,200}optional: false/.test(credits), "checkout requires the business-use and terms answers");
 ok(!/automatic_tax/.test(credits.slice(credits.indexOf("async function createCheckout"), credits.indexOf("const claimedAnswer"))), "credits checkout adds no Stripe tax on top of a tax-included price");
-ok(/metadata: \{ credits_pack: packKey, terms: TERMS_VERSION \}/.test(credits), "checkout records the terms version");
+ok(/metadata: \{ credits_pack: packKey, terms: creditsTermsVersion\(\) \}/.test(credits), "checkout records the terms version");
 const termsDate = (src("terms.js").match(/last updated (\d{4}-\d{2}-\d{2})\./) || [])[1];
-ok(termsDate === TERMS_VERSION, `the recorded terms version is the date on /terms (${TERMS_VERSION} vs ${termsDate})`);
+ok(termsDate === TERMS_VERSION, `TERMS_VERSION is the date in the /terms source (${TERMS_VERSION} vs ${termsDate})`);
+// A checkout runs only while sales are on: what it records is the date /terms prints then.
+{
+  const prev = process.env.CREDITS_SALES;
+  process.env.CREDITS_SALES = "on";
+  const { termsPage } = await import("../src/terms.js");
+  const printed = (termsPage("https://agent402.tools").match(/last updated (\d{4}-\d{2}-\d{2})\./) || [])[1];
+  ok(printed === creditsTermsVersion(), `the recorded terms version is the date /terms prints while sales are on (${creditsTermsVersion()} vs ${printed})`);
+  if (prev === undefined) delete process.env.CREDITS_SALES; else process.env.CREDITS_SALES = prev;
+}
 // G.S. 105-164.7(2): the tax-included statement on each taxable tool's page.
 ok(/if \(ncTaxableKind\(tool\.slug\)\) facts\.push\(`Sales tax: the price includes North Carolina sales tax/.test(src("pages.js")), "taxable tool pages state the price includes NC sales tax");
 ok(/ncTaxReport\(rows/.test(src("server.js")) && /externalSalesForSlugs\(Object\.keys\(NC_TAXABLE_SLUGS\)/.test(src("server.js")), "the operator report is built from the sales ledger");

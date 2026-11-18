@@ -17,6 +17,34 @@ const log = [];
 const fail = (m) => { console.error(`FAIL - ${m}`); for (const l of log.slice(-20)) console.error("  server:", l); proc?.kill("SIGKILL"); process.exit(1); };
 const ok = (c, m) => { c ? (pass++, console.log("ok -", m)) : fail(m); };
 
+// Every surface that names a credits key a caller may hold reads the switch:
+// "a key already issued" while sales are off, any key while they are on.
+// Each entry is [surface, text, the phrase there with sales off, with sales on].
+async function rpc(method, params) {
+  const res = await fetch(`${B}/mcp`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+  const t = await res.text();
+  return (res.headers.get("content-type") || "").startsWith("text/event-stream") ? JSON.parse(t.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("")) : JSON.parse(t);
+}
+const callText = async (name, args) => JSON.stringify((await rpc("tools/call", { name, arguments: args }))?.result || {});
+async function keySurfaces() {
+  const get = (path) => fetch(`${B}${path}`).then((r) => r.text());
+  const llms = await get("/llms-full.txt"), skill = await get("/skill.md"), pricing = await get("/pricing"), howToPay = await get("/how-to-pay");
+  const search = await callText("catalog.search", { query: "whois domain", limit: 30 });
+  const find = await callText("catalog.find", { task: "look up the whois record of a domain" });
+  const describe = await callText("server.describe", {});
+  return [
+    ["llms-full.txt skip-the-signature line", llms, "A prepaid credits key already issued also skips the per-call signature.", "A prepaid credits key also skips the per-call signature."],
+    ["llms-full.txt npm package line", llms, "for a prepaid credits key already issued)", "`AGENT402_CREDITS_KEY` for a prepaid credits key)"],
+    ["SKILL.md description", skill, "or with a prepaid credits key already issued (Bearer a402_...)", "or with a prepaid credits key (Bearer a402_...)"],
+    ["SKILL.md body", skill, "a prepaid credits key already issued also works", "a prepaid credits key also works"],
+    ["/pricing gateway note", pricing, "A credits key already issued also works as the API key.", ">A credits key also works as the API key."],
+    ["/how-to-pay install lines", howToPay, "# a credits key already issued works there too", "# a credits key works there too"],
+    ["MCP catalog.search access", search, "or a prepaid credits key already issued as AGENT402_CREDITS_KEY", "or a prepaid credits key as AGENT402_CREDITS_KEY"],
+    ["MCP catalog.find usage", find, "a prepaid credits key already issued).", "(a wallet, or a prepaid credits key)."],
+    ["MCP server.describe paidAccess", describe, "or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 HTTP client", "or a prepaid credits key (AGENT402_CREDITS_KEY), or any x402 HTTP client"],
+  ];
+}
+
 const boot = (env) => new Promise(async (resolve) => {
   proc = spawn("node", ["src/server.js"], {
     env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", STRIPE_SECRET_KEY: "sk_test_x",
@@ -31,6 +59,15 @@ const boot = (env) => new Promise(async (resolve) => {
   }
   resolve(false);
 });
+
+// The flagship tool descriptions are clipped before this line can show, so
+// their source is read: no surface module types the off-state phrase bare.
+{
+  for (const f of ["src/mcp-http.js", "src/seo.js", "src/skill-md.js", "src/ledger-pricing.js", "src/how-to-pay.js"]) {
+    const src = readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+    ok(!/credits key already issued/.test(src), `${f} names "a credits key already issued" only through creditsKeyQualifier()`);
+  }
+}
 
 // --- the copy that cannot read the switch ----------------------------------
 // The README and the published packages are static text: they cannot ask
@@ -89,16 +126,23 @@ try {
   const body = await off.json().catch(() => ({}));
   ok(/not on sale/i.test(String(body.error || "")), "and the refusal says sales are off rather than reading as a misconfiguration");
 
+  for (const [where, text, offPhrase, onPhrase] of await keySurfaces()) ok(text.includes(offPhrase) && !text.includes(onPhrase), `${where} names only a key already issued while sales are off`);
+
   // redemption must survive: a 404 here would mean an existing key was stranded
   ok((await fetch(`${B}/api/credits/balance`)).status !== 404, "the balance route still exists, so an existing key can still be read");
   ok((await fetch(`${B}/api/credits/claim?session=x`)).status !== 404, "the claim route still exists");
+  // Refund on request is part of the on-sale terms: with sales off the route
+  // answers exactly as a path this server does not serve.
+  const refundOff = await fetch(`${B}/api/credits/refund`, { method: "POST", headers: { authorization: `Bearer a402_${"q".repeat(40)}` } });
+  const noRoute = await fetch(`${B}/api/credits/no-such-route`, { method: "POST" });
+  ok(refundOff.status === 404 && refundOff.status === noRoute.status, `the refund route is not served while sales are off (got ${refundOff.status}, an unserved path ${noRoute.status})`);
 
   // The machine and page surfaces follow the same switch. /api/pricing used to
   // advertise packs and a checkout body that this server answers 503 to, and
   // /credits carried an InStock Offer and a "Buy $20" snippet while refusing.
   const pricingOff = await (await fetch(`${B}/api/pricing`)).json();
   ok(pricingOff.credits && pricingOff.credits.onSale === false, "/api/pricing says credits are not on sale");
-  ok(!pricingOff.credits.checkout && !pricingOff.credits.packs && !pricingOff.credits.buy, "...and offers no packs, buy link or checkout body");
+  ok(!pricingOff.credits.checkout && !pricingOff.credits.packs && !pricingOff.credits.buy && !pricingOff.credits.refund && !("balanceMaxUsd" in pricingOff.credits), "...and offers no packs, buy link, checkout body, refund route or cap");
   ok(/already issued/.test(String(pricingOff.credits.how)) && /balance/.test(String(pricingOff.credits.balance)), "...and still tells an existing key holder how to spend and read it");
   const pageOff = await (await fetch(`${B}/credits`)).text();
   ok(!/InStock/.test(pageOff) && !/Buy \$20/.test(pageOff) && !/data-pack-buy/.test(pageOff), "/credits carries no Offer, buy snippet or buy button while sales are off");
@@ -137,6 +181,21 @@ try {
   ok(on.status !== 503, `selling is reachable when explicitly enabled (got ${on.status}, not the 503 refusal)`);
   const pricingOn = await (await fetch(`${B}/api/pricing`)).json();
   ok(pricingOn.credits?.onSale === true && pricingOn.credits.checkout?.method === "POST", "/api/pricing advertises the checkout when sales are on");
+  ok(pricingOn.credits.balanceMaxUsd === 100 && pricingOn.credits.expires === false && pricingOn.credits.feesUsd === 0 && /\/api\/credits\/refund$/.test(pricingOn.credits.refund?.url) && pricingOn.credits.packs.every((p) => p.priceUsd <= pricingOn.credits.balanceMaxUsd), "/api/pricing states the cap, no expiry, no fees and the refund route, and every pack is within the cap");
+  for (const [where, text, offPhrase, onPhrase] of await keySurfaces()) ok(text.includes(onPhrase) && !text.includes(offPhrase), `${where} names any credits key while sales are on`);
+  const refundOn = await fetch(`${B}/api/credits/refund`, { method: "POST" });
+  const refundOnBad = await fetch(`${B}/api/credits/refund`, { method: "POST", headers: { authorization: `Bearer a402_${"q".repeat(40)}` } });
+  ok(refundOn.status === 401 && refundOnBad.status === 401 && (await refundOnBad.json()).status === "unknown", `the refund route is served when sales are on and refuses a missing or unknown key (${refundOn.status}, ${refundOnBad.status})`);
+  // Refund requests count on their own limiter: a holder resending one never
+  // uses up the same address's checkout budget.
+  let refund429 = null;
+  for (let i = 0; i < 12 && !refund429; i++) {
+    const r = await fetch(`${B}/api/credits/refund`, { method: "POST", headers: { authorization: `Bearer a402_${"q".repeat(40)}` } });
+    if (r.status === 429) refund429 = { retryAfter: r.headers.get("retry-after"), body: await r.json() };
+  }
+  ok(refund429 && Number(refund429.retryAfter) > 0 && refund429.body.status === "rate_limited", `repeated refund requests are limited with a status and Retry-After (${refund429?.retryAfter})`);
+  const buyAfter = await fetch(`${B}/api/credits/checkout`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pack: "credits-20" }) });
+  ok(buyAfter.status !== 429, `a purchase from the same address is not limited by those refund requests (got ${buyAfter.status})`);
   const pageOnRes = await fetch(`${B}/credits`);
   const pageOn = await pageOnRes.text();
   ok(pageOnRes.status === 200 && !/noindex/.test(robotsMeta(pageOn)), `/credits is 200 and indexable when sales are on (got "${robotsMeta(pageOn)}")`);
@@ -149,6 +208,8 @@ try {
   ok(tOn.status === 200 && tOn.clause.length > 100, "/terms renders its credits clause when sales are on");
   ok(/\bsold by card\b/i.test(tOn.clause) && /href="\/credits"/.test(tOn.clause) && !NOT_SOLD.test(tOn.clause), "/terms offers credits by card at /credits, and does not say they are not sold, when sales are on");
   ok(/Stripe Checkout, for reports and monitors, and for prepaid credits\)/.test(tOn.access), "/terms access line names card for prepaid credits when sales are on");
+  ok(/POST \/api\/credits\/refund/.test(pageOn) && /No fees/.test(pageOn) && /refunded on request/.test(pageOn), "/credits states the refund route and no fees when sales are on");
+  ok(!/api\/credits\/refund/.test(pageOff) && !/No fees/.test(pageOff), "/credits offers neither while sales are off");
 
   // the gate must be read at call time, never latched at boot
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
