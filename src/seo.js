@@ -743,7 +743,8 @@ export function llmsTxt(baseUrl, catalog) {
     [`- [/api/scorecard](`, `- [/api/scorecard](${baseUrl}/api/scorecard): monthly buyer scorecard`],
     [`- [/mcp/server-card](`, `- [/mcp/server-card](${baseUrl}/mcp/server-card): MCP server card`],
     [`- [/api/refunds](`, `- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments`],
-    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled inside \`windowServed\` (\`eth_getLogs\` on Base USDC, a transfer matching no published price counted only up to the per-call ceiling \`maxCallUsd\`, by payTo). The TOP N only: 25 rows by default, 50 the ceiling, \`totalSellers\` for how many rank in all. \`?sort=usd|calls\`, \`?top=N\`, \`?include=external|all\`; the same data as the SDK's \`topSellers()\` and MCP \`sellers.list\` (listed on hosted /mcp with \`AGENT402_SHOW_ROUTER=1\`, in the npm package with a wallet or that switch)`],
+    // The counting method, the filters and the SDK and MCP readers are in /llms-full.txt.
+    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled, the top 25 by default (50 the ceiling, \`totalSellers\` for how many rank in all); \`?sort=usd|calls\`, \`?top=N\`; the counting method and filters are in /llms-full.txt`],
   ];
   const briefOf = (line) => (brief.find(([prefix]) => line.startsWith(prefix)) || [])[1] || line;
   const sections = keep.map((name) => {
