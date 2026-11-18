@@ -70,7 +70,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-17.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-18.</p>
 </section>
 
 <section>
@@ -160,15 +160,16 @@ the material you want removed and where it is (a URL is best); your name, postal
 email; a statement that you believe in good faith the use is not authorized by the owner, its agent or
 the law; and a statement that the notice is accurate and, under penalty of perjury, that you are the
 owner or authorized to act for the owner. On a complete notice we remove or disable the material
-promptly and tell the person who provided it.</p>
+promptly and take reasonable steps to notify the person who provided it, where we can identify them.
+Removing a shared answer page deletes it, so it cannot be restored.</p>
 <p>If your material was removed and you believe that was a mistake or a misidentification, send a
 counter-notice to the same agent with: your physical or electronic signature; the material removed and
 where it was before removal; a statement under penalty of perjury that you believe in good faith it was
 removed by mistake or misidentification; your name, postal address and phone; and your consent to the
 jurisdiction of the federal district court for your address (or, outside the United States, any judicial
-district where we may be found) and to accept service from the person who sent the notice. We forward
-the counter-notice to that person and restore the material in 10 to 14 business days unless they tell us
-they have filed a court action to keep it down.</p>
+district where we may be found) and to accept service from the person who sent the notice or that
+person's agent. We forward the counter-notice to that person and, for material we can restore, restore it
+in 10 to 14 business days unless they tell us they have filed a court action to keep it down.</p>
 <p>We block the wallets, and end the subscriptions and keys, of repeat infringers.</p>
 
 <h2>Payments</h2>
@@ -229,8 +230,9 @@ and it does not apply to a balance disabled for a refund or dispute.</p>
 MPP on Tempo from an authorization you sign, and renews each month until you cancel. Cancel a card subscription any
 time in the Stripe Customer Portal, opened by the manage link in your monitor emails; if you no longer have those
 emails, enter your checkout email under "Already subscribed?" on <a href="/monitors#manage">/monitors</a> and we email
-you a new link. Cancel an MPP subscription by revoking the authorization. Cancellation stops future renewals and the
-monitor keeps running to the end of the paid period. Renewal charges are not refunded pro rata. A monitor whose subject cannot be read (for example a
+you a new link. Cancel an MPP subscription with a POST request to the cancel link in your monitor emails (it carries
+your manage token), or by revoking the authorization. A canceled subscription stays active until the end of the period
+you already paid for and is not renewed; there is no partial refund for the remaining days. A monitor whose subject cannot be read (for example a
 domain that does not resolve) keeps its free daily check, emails you once about the problem, and produces
 no further paid reports until the subject is readable again; each subscription also has a cap on paid
 re-runs per 30 days, above which it alerts without re-running.</p>

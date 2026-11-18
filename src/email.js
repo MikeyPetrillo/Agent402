@@ -10,6 +10,7 @@ import { upgradeOffer, priceUsd } from "./report-upgrade.js";
 import { REPORT_MODEL_NOTE, reportIsModelWritten } from "./report-disclosure.js";
 import { headerText, escapeHtml } from "./email-text.js";
 import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
+import { CANCEL_EFFECT } from "./stripe-subscriptions.js";
 
 const RESEND_URL = "https://api.resend.com/emails";
 // ZeptoMail region base (api.zeptomail.com default; .eu / .in for those regions).
@@ -232,10 +233,40 @@ export async function sendReportReadyEmail({ to, ...rest }) {
   return sendEmail({ to, subject, html, text });
 }
 
+/** The price sentence of a monitor subscription, from the product's price and,
+ *  when a promotion code changed the first period, the first-period and
+ *  renewal amounts Stripe reported at checkout. "" when no price is known. */
+export function subscriptionPriceText({ priceCents = null, firstPeriodCents = null, renewalCents = null } = {}) {
+  const list = Number(priceCents);
+  const first = Number(firstPeriodCents);
+  const renew = Number(renewalCents);
+  const hasList = Number.isFinite(list) && list > 0;
+  const hasRenew = renewalCents != null && Number.isFinite(renew) && renew >= 0;
+  if (firstPeriodCents != null && Number.isFinite(first) && first >= 0 && (!hasList || first !== list || (hasRenew && renew !== first))) {
+    const then = hasRenew ? `${priceUsd(renew)} a month` : "the monthly amount shown in your billing portal";
+    return `${first === 0 ? "Free" : priceUsd(first)} for the first month with your promotion code, then ${then}, billed in advance.`;
+  }
+  if (hasRenew && hasList && renew !== list) return `${priceUsd(renew)} a month, billed in advance.`;
+  return hasList ? `${priceUsd(list)} a month, billed in advance.` : "";
+}
+
 /** Monitor delivery / alert email. reason: welcome | scheduled | change | tls-expiring | filing | recall | digest | safety-change. Best-effort.
  *  `kind` is the monitored report's kind; without it a "digest" (the IPO
  *  watch's only reason) reads as the code-written IPO digest. */
-export function buildMonitorEmail({ reason, label, target, changes = [], reportUrl, manageUrl, kind = null, priceCents = null }) {
+export function buildMonitorEmail({ reason, label, target, changes = [], reportUrl, manageUrl, kind = null, priceCents = null, firstPeriodCents = null, renewalCents = null, rail = "card", cancelUrl = null, withTerms = false }) {
+  // A wallet (MPP) subscriber has no Stripe portal: its link is a status
+  // endpoint, and it cancels with a POST to its cancel endpoint or by revoking
+  // the authorization it signed. A card subscriber cancels in the portal the
+  // manage link opens (or, before any report, from the page that emails one).
+  const mpp = rail === "mpp";
+  const keyedManage = /[?&]k=/.test(String(manageUrl || ""));
+  const cancelHow = mpp
+    ? (cancelUrl
+      ? `Cancel anytime by sending a POST request to ${cancelUrl} (the link carries your manage token), or by revoking the authorization you signed for this subscription.`
+      : "Cancel anytime by revoking the authorization you signed for this subscription.")
+    : keyedManage
+      ? "Cancel anytime online through the manage or cancel link below."
+      : "Cancel anytime online: open the manage or cancel link below, enter your checkout email, and we email you a link to cancel.";
   const t = hdr(target);
   const lbl = hdr(label || "monitor", 60);
   const subjects = {
@@ -256,7 +287,9 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
     change: `Our latest check of ${t} found changes since the last report:`,
     "tls-expiring": `Heads up: the TLS certificate for ${t} is close to expiry.`,
     filing: `${t} has a new SEC 13F filing. Your fresh holdings + changes report is ready.`,
-    problem: `We could not produce a report for ${t}. We will keep trying, first within the hour and then daily; if the target is wrong, you can cancel or re-subscribe with a corrected one from the manage link below.`,
+    problem: mpp
+      ? `We could not produce a report for ${t}. We will keep trying, first within the hour and then daily; if the target is wrong, you can cancel (see below) and subscribe again with a corrected one.`
+      : `We could not produce a report for ${t}. We will keep trying, first within the hour and then daily; if the target is wrong, you can cancel or re-subscribe with a corrected one from the manage link below.`,
     recall: `The FDA recall feeds show new activity for ${t} since your last report:`,
     "safety-change": `The on-chain safety picture for this token changed since your last brief:`,
     "filing-new": `${t} has filed with the SEC since your last report. Here is what landed, with the new document read and explained:`,
@@ -276,11 +309,13 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
   // the renewal terms in full: price and period (when the caller passes the
   // product's price), renewal until canceled, the online cancel path and what
   // canceling does, as the terms say them. Later mails do not repeat them.
-  const cents = Number(priceCents);
-  const pricePart = Number.isFinite(cents) && cents > 0 ? `${priceUsd(cents)} a month, billed in advance. ` : "";
+  // A first run that failed sends a problem mail instead (withTerms), which
+  // then carries the same terms.
+  const priceText = subscriptionPriceText({ priceCents, firstPeriodCents, renewalCents });
+  const pricePart = priceText ? `${priceText} ` : "";
   const termsUrl = `${originOf(reportUrl)}/terms`;
-  const renewal = reason === "welcome"
-    ? `Your subscription: ${pricePart}It renews each month until you cancel. Cancel anytime online with the manage or cancel link below; canceling stops future renewals, and the monitor keeps running to the end of the period you paid for.`
+  const renewal = (reason === "welcome" || (reason === "problem" && withTerms))
+    ? `Your subscription: ${pricePart}It renews each month until you cancel. ${cancelHow} ${CANCEL_EFFECT}`
     : "";
   const renewalHtml = renewal ? `<p style="color:#3A3F45;font-size:13px;border-top:1px solid #D9DDE1;padding-top:14px;margin-top:22px">${escapeHtml(renewal)} <a href="${escapeAttr(termsUrl)}" style="color:#3A3F45">Terms</a></p>` : "";
   const renewalText = renewal ? `${renewal}\nTerms: ${termsUrl}\n\n` : "";
@@ -295,9 +330,14 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
     ${note.html}
     ${renewalHtml}
     ${whyHtml}
-    <p style="color:#626970;font-size:12px;margin-top:12px">Agent402 · ${escapeHtml(lbl)} · <a href="${escapeAttr(manageUrl || reportUrl)}" style="color:#626970">manage or cancel</a></p>
+    <p style="color:#626970;font-size:12px;margin-top:12px">Agent402 · ${escapeHtml(lbl)} · ${mpp
+      ? `<a href="${escapeAttr(manageUrl || reportUrl)}" style="color:#626970">subscription status</a>${cancelUrl ? ` · cancel: send a POST request to ${escapeHtml(cancelUrl)}` : " · cancel by revoking your authorization"}`
+      : `<a href="${escapeAttr(manageUrl || reportUrl)}" style="color:#626970">manage or cancel</a>`}</p>
   </div>`;
-  const text = `${subj}\n\n${lead}\n${changesText}\nOpen the report: ${reportUrl}\n\n${note.text ? `${note.text}\n` : ""}${renewalText}${whyText}\nManage or cancel (change your card, or stop the emails): ${manageUrl || reportUrl}\n\nAgent402`;
+  const stopText = mpp
+    ? `Subscription status: ${manageUrl || reportUrl}\n${cancelUrl ? `Cancel (send a POST request): ${cancelUrl}` : "Cancel: revoke the authorization you signed for this subscription."}`
+    : `Manage or cancel (change your card, or stop the emails): ${manageUrl || reportUrl}`;
+  const text = `${subj}\n\n${lead}\n${changesText}\nOpen the report: ${reportUrl}\n\n${note.text ? `${note.text}\n` : ""}${renewalText}${whyText}\n${stopText}\n\nAgent402`;
   return { subject: subj, html, text };
 }
 

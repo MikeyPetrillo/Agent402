@@ -152,7 +152,7 @@ export function describeDomainChanges(prev, next) {
  * @param {(s:string)=>void} [deps.log]
  * @param {(ms:number)=>Promise<void>} [deps.sleep]
  */
-export function createMonitorScheduler({ subs, generate, probeDomain, normDomain, latestFiling, resolveManager, notify, baseUrl, storePath, now = () => Date.now(), ownerId, log = console.log, uptimeMs = () => process.uptime() * 1000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), manageUrlFor = () => `${baseUrl}/monitors`, refreshStatus = null, probeRecalls = null, probeIpos = null, probeInsiderFilings = null, probeTokenBrief = null, describeTokenChanges = null, probeCompanyFilings = null, describeFilingChanges = null }) {
+export function createMonitorScheduler({ subs, generate, probeDomain, normDomain, latestFiling, resolveManager, notify, baseUrl, storePath, now = () => Date.now(), ownerId, log = console.log, uptimeMs = () => process.uptime() * 1000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), manageUrlFor = () => `${baseUrl}/monitors`, billingFor = () => null, refreshStatus = null, probeRecalls = null, probeIpos = null, probeInsiderFilings = null, probeTokenBrief = null, describeTokenChanges = null, probeCompanyFilings = null, describeFilingChanges = null }) {
   const path = storePath || STORE_PATH();
   const doc = createJsonDocument({ file: path, log });
   const usePg = doc.backend === "pg";
@@ -303,6 +303,23 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     return st == null || st === "active" || st === "trialing";
   }
 
+  // What every email needs to say how this subscriber cancels: the rail
+  // ("card" or "mpp"), and for a wallet subscriber its own status link and
+  // cancel endpoint (it has no Stripe portal). A card subscriber with no
+  // delivered report yet gets the page that emails a fresh manage link.
+  function billingOf(rec, reportId) {
+    let b = null;
+    try { b = billingFor(rec.subId) || null; } catch { b = null; }
+    const rail = b?.rail === "mpp" ? "mpp" : "card";
+    const manageUrl = b?.manageUrl || (reportId ? manageUrlFor(reportId) : `${baseUrl}/monitors#manage`);
+    return { rail, manageUrl, ...(b?.cancelUrl ? { cancelUrl: b.cancelUrl } : {}) };
+  }
+  // The prices a promotion code set at checkout, as Stripe reported them.
+  const promoOf = (rec) => ({
+    ...(Number.isFinite(rec?.firstPeriodCents) ? { firstPeriodCents: rec.firstPeriodCents } : {}),
+    ...(Number.isFinite(rec?.renewalCents) ? { renewalCents: rec.renewalCents } : {}),
+  });
+
   async function runFull(rec, st, reason, changes = []) {
     const p = MONITOR_PRODUCTS[rec.product];
     if (!(await stillActive(rec))) { const e = new Error("subscription no longer active"); e.inactive = true; throw e; }
@@ -337,7 +354,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     if (rec.email) {
       // The manage link (a keyed bearer to the Stripe portal) rides ONLY in the
       // subscriber's email; the report JSON/page carry no bearer to the portal.
-      notify({ to: rec.email, reason, kind: p.kind, label: p.label, target: rec.target, changes, reportUrl: `${baseUrl}/m/${id}`, manageUrl: manageUrlFor(id), priceCents: p.price }).catch(() => {});
+      notify({ to: rec.email, reason, kind: p.kind, label: p.label, target: rec.target, changes, reportUrl: `${baseUrl}/m/${id}`, ...billingOf(rec, id), priceCents: p.price, ...promoOf(rec) }).catch(() => {});
     }
     return id;
   }
@@ -351,7 +368,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     persist();
     if (rec.email) {
       const id = st.lastReportId;
-      notify({ to: rec.email, reason, kind: p.kind, label: p.label, target: rec.target, changes, reportUrl: id ? `${baseUrl}/m/${id}` : `${baseUrl}/monitors`, manageUrl: id ? manageUrlFor(id) : `${baseUrl}/monitors` }).catch(() => {});
+      notify({ to: rec.email, reason, kind: p.kind, label: p.label, target: rec.target, changes, reportUrl: id ? `${baseUrl}/m/${id}` : `${baseUrl}/monitors`, ...billingOf(rec, id) }).catch(() => {});
     }
   }
 
@@ -375,7 +392,9 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     if (rec && !st.problemNotifiedAt && (welcomeFailed || st.failures === PERMANENT_FAIL_NOTICE_AT)) {
       st.problemNotifiedAt = new Date(now()).toISOString();
       const p = MONITOR_PRODUCTS[rec.product];
-      if (rec.email) notify({ to: rec.email, reason: "problem", label: p?.label || "monitor", target: rec.target, changes: [`We have not been able to complete a report for this target (${st.lastError}).`], reportUrl: st.lastReportId ? `${baseUrl}/m/${st.lastReportId}` : `${baseUrl}/monitors`, manageUrl: st.lastReportId ? manageUrlFor(st.lastReportId) : `${baseUrl}/monitors` }).catch(() => {});
+      // A first run that failed is the only mail this subscriber has had, so it
+      // carries the renewal terms the welcome mail would have.
+      if (rec.email) notify({ to: rec.email, reason: "problem", label: p?.label || "monitor", target: rec.target, changes: [`We have not been able to complete a report for this target (${st.lastError}).`], reportUrl: st.lastReportId ? `${baseUrl}/m/${st.lastReportId}` : `${baseUrl}/monitors`, ...billingOf(rec, st.lastReportId), ...(welcomeFailed ? { withTerms: true, priceCents: p?.price, ...promoOf(rec) } : {}) }).catch(() => {});
     }
     persist();
   }

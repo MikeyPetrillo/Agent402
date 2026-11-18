@@ -74,6 +74,10 @@ export const MONITOR_PRODUCTS = Object.fromEntries(Object.entries(MONITOR_PRODUC
 // /monitors and above the pay button on the Stripe Checkout page, so the two
 // never say different things.
 export const RENEWAL_TERMS = "Renews each month until you cancel. Cancel anytime from the manage link in your monitor emails.";
+// What canceling does, as the Stripe portal is set to do it (cancel at the
+// end of the paid period, no proration): one sentence the welcome email, the
+// thanks page and /terms all mean.
+export const CANCEL_EFFECT = "Canceling keeps your subscription active until the end of the period you already paid for, and it is not renewed; there is no partial refund for the remaining days.";
 // The Checkout version (custom_text.submit.message, Markdown links, at most
 // 1200 characters): the same sentence, where to get a new manage link, and
 // the terms.
@@ -411,6 +415,25 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
   // the live Subscription object; if that read fails, an existing record keeps
   // its status and only a first-time provisioning assumes active.
   const negative = new Map();   // unknown ids are not re-asked of Stripe for 60s
+  // A promotion code changes what the buyer pays, so the subscriber's emails
+  // state Stripe's figures, never a typed one: the first period from the
+  // Checkout Session (subtotal less its discount, before tax) and the renewal
+  // from Stripe's preview of the next invoice. Nothing is read or stored for a
+  // session with no discount, which pays the catalog price.
+  async function promoPricesOf(session, subId) {
+    const disc = Number(session?.total_details?.amount_discount);
+    if (!(Number.isFinite(disc) && disc > 0)) return {};
+    const out = {};
+    const subtotal = Number(session?.amount_subtotal);
+    if (Number.isFinite(subtotal)) out.firstPeriodCents = Math.max(0, Math.round(subtotal - disc));
+    try {
+      const inv = await stripe.invoices.createPreview({ subscription: subId });
+      const c = Number(inv?.total_excluding_tax ?? inv?.total);
+      if (Number.isFinite(c) && c >= 0) out.renewalCents = Math.round(c);
+    } catch { /* the email then names the billing portal for the renewal amount */ }
+    return out;
+  }
+  const keepPromo = (cur, promo) => (cur && (cur.firstPeriodCents != null || cur.renewalCents != null) ? {} : promo);
   async function recordFromSession(sessionId) {
     if (typeof sessionId !== "string" || !/^cs_[A-Za-z0-9_]+$/.test(sessionId)) return { status: "invalid" };
     const n = negative.get(sessionId);
@@ -427,9 +450,11 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       const sub = await stripe.subscriptions.retrieve(subId);
       if (sub?.status) { live = sub.status; readAt = liveReadAt(); }
     } catch { /* keep existing status (or first-time active) */ }
+    const promo = store.get(subId)?.firstPeriodCents != null ? {} : await promoPricesOf(session, subId);
     // Built from the stored record inside the write: the live status when it
     // was read, else the stored one, else (first provisioning) active.
     await upsert(subId, (cur) => ({
+      ...keepPromo(cur, promo),
       customer: session.customer || cur?.customer || null,
       status: live || cur?.status || "active",
       ...(live ? { statusEventAt: Math.max(Number(cur?.statusEventAt) || 0, readAt) } : {}),
@@ -441,7 +466,12 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     const rec = store.get(subId) || {};
     const status = rec.status || live || "active";
     const p = MONITOR_PRODUCTS_ALL[rec.product];
-    return { status, subId, customer: rec.customer ?? session.customer, product: rec.product ?? null, label: p?.label || "monitor", target: rec.target ?? null };
+    return {
+      status, subId, customer: rec.customer ?? session.customer, product: rec.product ?? null, label: p?.label || "monitor", target: rec.target ?? null,
+      priceCents: p?.price ?? null,
+      ...(Number.isFinite(rec.firstPeriodCents) ? { firstPeriodCents: rec.firstPeriodCents } : {}),
+      ...(Number.isFinite(rec.renewalCents) ? { renewalCents: rec.renewalCents } : {}),
+    };
   }
 
   // Signature-verified webhook. Never trusts an unverified body: without the
@@ -476,9 +506,11 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
         if (s.mode === "payment" && typeof onPaymentSession === "function") { try { await onPaymentSession(s); } catch { /* never fail the webhook on a hook */ } }
         if (s.mode === "subscription" && s.subscription) {
           const id = idOf(s.subscription);
+          const promo = store.get(id)?.firstPeriodCents != null ? {} : await promoPricesOf(s, id);
           // Stripe retries and reorders events: a completed-checkout event must
           // never overwrite a status the subscription lifecycle already set.
           stored = stored && await upsert(id, (cur) => ({
+            ...keepPromo(cur, promo),
             customer: s.customer || cur?.customer || null, status: cur?.status || "active",
             product: s.metadata?.product || cur?.product || null, target: s.metadata?.target || cur?.target || null,
             email: s.customer_details?.email || s.customer_email || cur?.email || null,

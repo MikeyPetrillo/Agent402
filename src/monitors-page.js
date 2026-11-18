@@ -2,7 +2,7 @@
 // storefront and the /monitors/thanks confirmation. Rendered through the
 // shared ledger shell (2026-08-22 redesign); shares REPORTS_CSS with the
 // one-shot reports pages. External JS (site CSP drops inline script).
-import { MONITOR_PRODUCTS, RENEWAL_TERMS } from "./stripe-subscriptions.js";
+import { MONITOR_PRODUCTS, RENEWAL_TERMS, CANCEL_EFFECT } from "./stripe-subscriptions.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPORTS_CSS, cardField, cardError } from "./human-reports-page.js";
 import { MAX_FULL_PER_SUB_30D, MIN_FULL_GAP_MS } from "./monitor-scheduler.js";
@@ -97,7 +97,7 @@ export function monitorThanksPage(sessionId, baseUrl = "https://agent402.tools")
   const body = `
 <div class="wrap" style="padding-top:28px;">
   <div id="app" data-session="${esc(sessionId)}"><div class="status"><h2><span class="spin"></span>Confirming your subscription…</h2><p>One moment.</p></div></div>
-  <p class="renew-after">${esc(RENEWAL_TERMS)} <a href="/terms">Terms</a></p>
+  <p class="renew-after">${esc(RENEWAL_TERMS)} ${esc(CANCEL_EFFECT)} <a href="/terms">Terms</a></p>
 </div>
 ${ledgerFooterCompact()}
 <script src="/js/monitor-thanks.js"></script>`;

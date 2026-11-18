@@ -19,6 +19,8 @@ const sessions = {
   cs_paid: { id: "cs_paid", mode: "subscription", payment_status: "paid", status: "complete", subscription: "sub_1", customer: "cus_1", customer_details: { email: "a@b.com" }, metadata: { product: "domain-monitor", target: "example.com" } },
   cs_unpaid: { id: "cs_unpaid", mode: "subscription", payment_status: "unpaid", status: "open", subscription: "sub_2", customer: "cus_2", metadata: { product: "domain-monitor", target: "x.com" } },
   cs_notsub: { id: "cs_notsub", mode: "payment", payment_status: "paid", status: "complete" },
+  cs_promo: { id: "cs_promo", mode: "subscription", payment_status: "paid", status: "complete", subscription: "sub_promo", customer: "cus_p", customer_details: { email: "p@b.com" }, metadata: { product: "domain-monitor", target: "promo.example.com" }, amount_subtotal: 500, total_details: { amount_discount: 375, amount_tax: 0 } },
+  cs_promo_nopreview: { id: "cs_promo_nopreview", mode: "subscription", payment_status: "paid", status: "complete", subscription: "sub_promo2", customer: "cus_p2", metadata: { product: "domain-monitor", target: "p2.example.com" }, amount_subtotal: 500, total_details: { amount_discount: 500 } },
 };
 const stripe = {
   checkout: { sessions: {
@@ -29,6 +31,8 @@ const stripe = {
   // The live Subscription object is the status source; sub_1 is canceled once the
   // lifecycle webhook says so (mirrors Stripe: the Checkout Session stays paid).
   subscriptions: { retrieve: async (id) => ({ id, status: stripe._subStatus?.[id] || "active" }) },
+  // Stripe's preview of the next invoice: the renewal amount after a promotion.
+  invoices: { createPreview: async ({ subscription }) => { stripe._previews = (stripe._previews || 0) + 1; if (subscription === "sub_promo2") throw new Error("preview down"); return { total_excluding_tax: 500, total: 530 }; } },
   webhooks: { constructEvent: (body, sig, secret) => { if (sig !== "goodsig" || secret !== "whsec_test") throw new Error("bad signature"); return JSON.parse(body.toString()); } },
 };
 
@@ -65,6 +69,22 @@ ok((await subs.recordFromSession("cs_unpaid")).status === "unpaid", "an unpaid s
 ok((await subs.recordFromSession("cs_notsub")).status === "invalid", "a non-subscription session is invalid");
 ok((await subs.recordFromSession("garbage")).status === "invalid", "a malformed session id is invalid");
 ok((await subs.recordFromSession("cs_missing")).status === "not_found", "a nonexistent session id is not_found");
+// A promotion code: the first period from the session, the renewal from Stripe's invoice preview.
+ok(r1.priceCents === MONITOR_PRODUCTS["domain-monitor"].price && r1.firstPeriodCents === undefined && !stripe._previews, "no discount: the catalog price, no promotion figures, no invoice preview read");
+const rp = await subs.recordFromSession("cs_promo");
+ok(rp.firstPeriodCents === 125 && rp.renewalCents === 500 && subs.get("sub_promo")?.firstPeriodCents === 125 && subs.get("sub_promo")?.renewalCents === 500, "a promotion code: first period = subtotal less discount, renewal = the previewed invoice before tax, both stored");
+const nPrev = stripe._previews;
+await subs.recordFromSession("cs_promo");
+ok(stripe._previews === nPrev, "a reloaded thanks page does not read the preview again");
+const rp2 = await subs.recordFromSession("cs_promo_nopreview");
+ok(rp2.firstPeriodCents === 0 && rp2.renewalCents === undefined, "a preview that cannot be read stores no renewal figure (the email then points to the billing portal)");
+{
+  process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
+  sessions.cs_promo_wh = { ...sessions.cs_promo, id: "cs_promo_wh", subscription: "sub_promo_wh" };
+  await subs.handleWebhook(Buffer.from(JSON.stringify({ id: "evt_promo_wh", type: "checkout.session.completed", data: { object: sessions.cs_promo_wh } })), "goodsig");
+  ok(subs.get("sub_promo_wh")?.firstPeriodCents === 125 && subs.get("sub_promo_wh")?.renewalCents === 500, "the checkout webhook stores the same promotion figures");
+  delete process.env.STRIPE_WEBHOOK_SECRET;
+}
 
 // webhook: refuses without a secret (never trusts an unsigned body)
 delete process.env.STRIPE_WEBHOOK_SECRET;

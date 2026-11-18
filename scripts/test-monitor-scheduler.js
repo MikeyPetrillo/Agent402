@@ -70,6 +70,7 @@ ok(calls.mail[0].manageUrl === `https://agent402.tools/monitors/manage?report=${
 ok(calls.mail[0].priceCents === MONITOR_PRODUCTS["domain-monitor"].price && calls.mail[0].priceCents > 0, "the welcome email is handed the product's monthly price, so it can state the renewal terms");
 ok(sch.subIdOfReport(welcomeId) === "sub_d" && sch.reportView("nope") === null, "report id resolves to its subscription; unknown id is null");
 
+
 // --- domain: quiet day = free probe, no regen ----------------------------------
 clock += DOMAIN_CHECK_MS + 1;
 r = await sch.tick();
@@ -278,6 +279,24 @@ active.delete("sub_c");
   for (const f of [SP, RP, SP + ".webhooks.json"]) { try { rmSync(f); } catch { /* ignore */ } }
 }
 
+// --- the rail's cancel path and a promotion's prices ride to every email -------
+{
+  const P = join("/tmp", `test-monitors-billing-${process.pid}.json`);
+  try { rmSync(P); } catch { /* first run */ }
+  const bsch = mk({ storePath: P, billingFor: (subId) => (subId === "sub_mw" ? { rail: "mpp", manageUrl: "https://agent402.tools/api/mpp/monitors/sub_mw?token=T", cancelUrl: "https://agent402.tools/api/mpp/monitors/sub_mw/cancel?token=T" } : { rail: "card" }) });
+  active.set("sub_mw", { subId: "sub_mw", status: "active", product: "domain-monitor", target: "mw.example.com", email: "mw@x.com" });
+  active.set("sub_pc", { subId: "sub_pc", status: "active", product: "domain-monitor", target: "pc.example.com", email: "pc@x.com", firstPeriodCents: 250, renewalCents: 500 });
+  const m0 = calls.mail.length;
+  await bsch.tick({ force: true, subId: "sub_mw" });
+  await bsch.tick({ force: true, subId: "sub_pc" });
+  const mw = calls.mail.slice(m0).find((x) => x.to === "mw@x.com");
+  const pc = calls.mail.slice(m0).find((x) => x.to === "pc@x.com");
+  ok(mw && mw.rail === "mpp" && mw.cancelUrl.endsWith("/cancel?token=T") && mw.manageUrl === "https://agent402.tools/api/mpp/monitors/sub_mw?token=T", "a wallet subscriber's welcome email is handed its rail, its status link and its cancel endpoint");
+  ok(pc && pc.rail === "card" && pc.firstPeriodCents === 250 && pc.renewalCents === 500 && /\/monitors\/manage\?report=/.test(pc.manageUrl), "a card subscriber's welcome email is handed the first-period and renewal prices read at checkout, and the keyed manage link");
+  active.delete("sub_mw"); active.delete("sub_pc");
+  try { rmSync(P); } catch { /* ignore */ }
+}
+
 // --- failure notice (once): at the welcome run's first failure, else at the fifth in a row -------
 active.set("sub_p", { subId: "sub_p", status: "active", product: "fund-monitor", target: "Nonexistent Fund", email: "p@x.com" });
 const failSch = mk({ resolveManager: async () => { const e = new Error("Could not confidently resolve"); e.statusCode = 404; throw e; } });
@@ -288,6 +307,7 @@ ok(firstMails.length === 1 && firstMails[0].to === "p@x.com" && /Could not confi
 for (let i = 0; i < 6; i++) { clock += DAY + 1; await failSch.tick({ force: true, subId: "sub_p" }); }
 const pMails = calls.mail.slice(mP).filter((x) => x.reason === "problem");
 ok(pMails.length === 1, "...and is told ONCE, not every day");
+ok(firstMails[0].withTerms === true && firstMails[0].priceCents === MONITOR_PRODUCTS["fund-monitor"].price && firstMails[0].manageUrl === "https://agent402.tools/monitors#manage", "the first-run failure notice carries the renewal terms, the price and the page that emails a manage link (no report has been delivered yet)");
 active.delete("sub_p");
 // A monitor whose welcome report was delivered is told at the fifth failure in a row, once.
 active.set("sub_w", { subId: "sub_w", status: "active", product: "domain-monitor", target: "w.example.com", email: "w@x.com" });
@@ -302,6 +322,7 @@ clock += DAY + 1; await laterSch.tick({ force: true, subId: "sub_w" });
 clock += DAY + 1; await laterSch.tick({ force: true, subId: "sub_w" });
 const wMails = calls.mail.slice(mW).filter((x) => x.reason === "problem");
 ok(wMails.length === 1 && wMails[0].to === "w@x.com", "the fifth consecutive failure tells the subscriber once");
+ok(!wMails[0].withTerms, "control: a failure notice after a delivered report does not repeat the purchase terms");
 probeFail = false;
 active.delete("sub_w");
 
