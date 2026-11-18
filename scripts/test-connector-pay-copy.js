@@ -170,7 +170,7 @@ for (const boot of BOOTS) {
     const hosted = String(client.getInstructions() || "").split("\n").find((l) => l.startsWith("Hosted connector")) || "";
     const wires = [boot.x402 && "x402", boot.mpp && "MPP"].filter(Boolean);
     const lead = String(client.getInstructions() || "").split("\n")[0];
-    ok(lead.includes(boot.mpp ? "pay for per request over x402 or MPP," : "pay for per request over x402,"), `${boot.label}: the initialize lead names MPP only where the connector takes it (${lead.slice(0, 110)})`);
+    ok(boot.mpp ? /\bacross x402 and MPP\b/.test(lead) : (/\bacross x402\b/.test(lead) && !/\bMPP\b/.test(lead)), `${boot.label}: the initialize lead names MPP only where the connector takes it (${lead.slice(0, 110)})`);
     ok(hosted.includes(wires.length ? `other tools paid in the call over ${wires.join(" or ")} from a wallet)` : "others need a wallet on the npm package)"), `${boot.label}: the initialize instructions name ${want} (${hosted.slice(0, 110)})`);
     const tools = (await client.listTools()).tools;
     const info = tools.find((t) => t.name === "payment.info")?.description || "";
