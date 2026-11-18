@@ -10,6 +10,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-18",
+    title: "Ownership statement",
+    items: [
+      "Repository: NOTICE, the README, CONTRIBUTING.md and /llms-full.txt state that Cardhavok LLC (doing business as Havok Holdings LLC) owns the code in this repository except a small number of trivial lines (seed URLs, a badge line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose authors keep their copyright, and that the contributor license agreement covers new and earlier contributions. The README's receipts section describes the signed receipt header a server sends when a receipt signing key is set.",
+    ],
+  },
+  {
+    date: "2026-11-18",
     title: "Copyright agent, cancel paths, fetched-host counts and seller docs links",
     items: [
       "Site: /terms names the copyright agent for notices about material on the site, with the steps for a notice and for a counter-notice, and says how each subscription rail cancels: the portal link for a card subscription, a POST to the cancel link in the monitor emails or revoking the authorization for an MPP subscription. A canceled subscription stays active until the end of the period already paid for.",

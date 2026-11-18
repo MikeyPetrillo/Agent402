@@ -6,6 +6,17 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-18 (ownership statement)
+Repository:
+- NOTICE, the README, CONTRIBUTING.md and /llms-full.txt state that
+  Cardhavok LLC (doing business as Havok Holdings LLC) owns the code in this
+  repository except a small number of trivial lines (seed URLs, a badge
+  line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose
+  authors keep their copyright, and that the contributor license agreement
+  covers new and earlier contributions. The README's receipts section
+  describes the signed receipt header a server sends when a receipt signing
+  key is set.
+
 ### 2026-11-18 (copyright agent, cancel paths, fetched-host counts and seller docs links)
 Site:
 - /terms names the copyright agent for notices about material on the site,

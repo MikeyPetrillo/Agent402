@@ -25,6 +25,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 
 - Every settled x402 answer carries `PAYMENT-RESPONSE` (`success`, `transaction`, `network`, `payer`), and every MPP answer `Payment-Receipt` (`reference`). Look the x402 `transaction` up on its `network` to see the transfer to the `payTo` the 402 named.
 - [`/.well-known/agent402-conformance.json`](https://agent402.tools/.well-known/agent402-conformance.json) lists, per payment rail, settlement after the answer, idempotent re-sends, the replay guard, refunds of a charged failure and the receipt, computed from the serving code.
+- A server run with a receipt signing key (`RECEIPT_SIGNING_KEY`) also sends `Agent402-Receipt` on each settled paid answer: a compact JWS (EdDSA, Ed25519) over the route, the request, the answer's sha256, the price, the rail, the payer and the settlement, checked against `/.well-known/agent402-receipt-key.json` or with `verifyReceipt` in agent402-client. The `signedReceipt` cell of each conformance row reads true only while that server signs; without the key the receipt is the settlement's own record.
 - `POST /api/attest` binds a paid call's response digest to its settlement on Base; `POST /api/receipts` returns the paying wallet's settled calls with each transaction and digest.
 - [/trust#verify](https://agent402.tools/trust#verify) walks one call end to end; [`/api/index?seller=<host>`](https://agent402.tools/api/index) shows an outside seller's crawl history, paywall probe and router verdict.
 
@@ -719,16 +720,16 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 
 ## Ownership and licensing
 
-- Cardhavok LLC (doing business as Havok Holdings LLC) holds the copyright in the code it
-  wrote for Agent402, the rights its contributors grant and the "Agent402" name. Outside
-  contributors keep the copyright in their contributions, used under the terms recorded in
-  [NOTICE](NOTICE).
+- Cardhavok LLC (doing business as Havok Holdings LLC) owns the code in this repository
+  except a small number of trivial lines (seed URLs, a badge line, punctuation) contributed
+  earlier under AGPL-3.0 or MIT, whose authors keep their copyright (see [NOTICE](NOTICE)).
 - The server is AGPL-3.0-or-later and every published package is MIT (details under Legal
-  below). For a commercial license to the code the company can license, write to
+  below). For a commercial license to the code, write to
   [mike@agent402.tools](mailto:mike@agent402.tools) or see
   [agent402.tools/company](https://agent402.tools/company).
 - Outside contributions carry a DCO sign-off on every commit and the contributor license
-  agreement in [CLA.md](CLA.md); see [CONTRIBUTING.md](CONTRIBUTING.md).
+  agreement in [CLA.md](CLA.md), which covers new and earlier contributions; see
+  [CONTRIBUTING.md](CONTRIBUTING.md).
 - [NOTICE](NOTICE) records ownership, contributions and AI-assisted development;
   [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) lists bundled dependencies and their
   licenses; [SECURITY.md](SECURITY.md) covers reporting a vulnerability.
