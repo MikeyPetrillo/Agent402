@@ -78,9 +78,11 @@ import { receiptsServed, RECEIPT_HEADER } from "./receipt-signing.js";
  *  answer carried, over that answer's bytes (a JSON result is those bytes
  *  parsed, so JSON.stringify(result) recomputes the digest). */
 export const MCP_SIGNED_RECEIPT_META = "tools.agent402/receipt";
-/** A settled paid result with the loopback answer's signed receipt in _meta. */
+/** A settled paid result with the loopback answer's signed receipt in _meta.
+ *  Never throws: a header that cannot be read leaves the result as it was. */
 export function withSignedReceipt(out, r) {
-  const jws = r && r.status === 200 && typeof r.headers?.get === "function" ? r.headers.get(RECEIPT_HEADER) : null;
+  let jws = null;
+  try { jws = r && r.status === 200 && typeof r.headers?.get === "function" ? r.headers.get(RECEIPT_HEADER) : null; } catch { return out; }
   if (typeof jws !== "string" || !jws || !out || typeof out !== "object" || Array.isArray(out) || out.isError) return out;
   return { ...out, _meta: { ...(out._meta && typeof out._meta === "object" ? out._meta : {}), [MCP_SIGNED_RECEIPT_META]: jws } };
 }
@@ -1409,7 +1411,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         }
         let out;
         try {
-          out = withSignedReceipt(translateMppResponse(entry, meta, params, startedAt, isNamed, r, { softAsk: false }), r);
+          out = translateMppResponse(entry, meta, params, startedAt, isNamed, r, { softAsk: false });
         } catch (err) {
           // A 402 decided after the gate window (a slow verify). It is a
           // JSON-RPC error on the underlying request, so the task FAILED - and
@@ -1418,6 +1420,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           await tasks.fail(rec.taskId, { code, message: mcpErrorText(err) || "Payment required.", ...(err?.data ? { data: err.data } : {}) }, "Payment was required for this call; no payment was claimed.");
           return;
         }
+        // The route's signed receipt rides with the stored result (never throws).
+        out = withSignedReceipt(out, r);
         // Spec: `failed` is for JSON-RPC errors only. A tool result that
         // completed carrying isError:true is a COMPLETED task whose result says
         // it went wrong (and our text already says "not charged"), so a caller

@@ -36,6 +36,7 @@ import { createHumanCheckout } from "../src/human-checkout.js";
 import { buildReportReadyEmail } from "../src/email.js";
 import { reportDoneHtml } from "../src/report-prerender.js";
 import { CONFORMANCE_PATH } from "../src/conformance.js";
+import { withSignedReceipt, MCP_SIGNED_RECEIPT_META } from "../src/mcp-http.js";
 
 let pass = 0, rig = null;
 const fail = async (m) => { console.error(`FAIL - ${m}`); for (const l of (rig?.log() || "").split("\n").filter(Boolean).slice(-20)) console.error("  server:", l.slice(0, 300)); await rig?.stop().catch(() => {}); process.exit(1); };
@@ -126,6 +127,16 @@ const listen = (app) => new Promise((r) => { const s = app.listen(0, "127.0.0.1"
     await ok(!!one.headers[RECEIPT_HEADER.toLowerCase()] && !one.headers.trailer && verifyReceipt(one.headers[RECEIPT_HEADER.toLowerCase()], { keys, responseBody: one.body }).valid, "a one-piece answer keeps the header and declares no trailer");
   } finally { srv.close(); }
   await ok(SIGNED_RAILS.join() === "x402,gateway-batched,mpp-evm,mpp-tempo,mpp-stripe,credits,card-checkout", "the signed rails include credits and card checkout");
+}
+
+// ---- 1b. the MCP connector's relay ----
+{
+  const out = { content: [{ type: "text", text: "{}" }] };
+  const hdr = (v) => ({ get: (k) => (String(k).toLowerCase() === "agent402-receipt" ? v : null) });
+  await ok(withSignedReceipt(out, { status: 200, headers: hdr("a.b.c") })._meta?.[MCP_SIGNED_RECEIPT_META] === "a.b.c", "the connector relays a 200's receipt in _meta");
+  await ok(withSignedReceipt(out, { status: 402, headers: hdr("a.b.c") }) === out && withSignedReceipt({ ...out, isError: true }, { status: 200, headers: hdr("a.b.c") })._meta === undefined, "a refusal or an error result carries none");
+  const broken = { status: 200, headers: { get: () => { throw new Error("header store broke"); } } };
+  await ok(withSignedReceipt(out, broken) === out, "a header store that throws leaves the result as it was (the relay never throws)");
 }
 
 // ---- 2. credits: the debit lands before the answer ends ----
