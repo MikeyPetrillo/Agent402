@@ -1,6 +1,6 @@
 # agent402-client
 
-Agent402 is a catalog of 500+ tools that AI agents find, pay for per request over x402 or MPP, and call with no account or API key.
+Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify paid calls across x402 and MPP, backed by signed receipts. 500+ ready tools on the same rails.
 
 A tiny buyer-side client for [Agent402](https://agent402.tools) (and any Agent402
 instance) - the buy side of [Agentic Finance](https://agent402.tools/agentic-finance),
@@ -575,6 +575,32 @@ const payFetch = wrapFetchWithPayment(distrustFetch(), client);
 It applies on Node with the default dispatcher; with a proxy or custom
 dispatcher installed, requests go out through yours unchanged. Pass
 `{ tlsDistrust: false }` to send the default fetch as is.
+
+## Checking a signed receipt (`verifyReceipt`)
+
+When the server signs receipts, a settled paid answer that is not streamed
+carries an
+`Agent402-Receipt` header: a compact JWS (EdDSA, Ed25519) over the route, a
+digest of the request, the sha256 of the answer bytes, the price, the rail,
+the network, the payer and the settlement. The client never checks it on
+its own; call `verifyReceipt` when you want proof of what you paid for and
+received:
+
+```js
+import { verifyReceipt } from "agent402-client";
+
+const receipt = res.headers.get("agent402-receipt");
+const text = await res.text();
+const v = await verifyReceipt(receipt, {
+  body: text,                                            // the bytes you received
+  request: { method: "POST", path: "/api/hash", body: input }, // what you sent
+});
+// v.valid, v.reason, v.record.settlement, v.record.priceUsd
+```
+
+The keys come from `/.well-known/agent402-receipt-key.json` (pass `keys` to
+check offline). A retired key still verifies receipts dated inside its
+`validFrom`/`validUntil` window.
 
 ## Legal
 

@@ -10,12 +10,42 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-18",
+    title: "Signed receipts",
+    items: [
+      "Payments: A server run with a receipt signing key (`RECEIPT_SIGNING_KEY`) sends an `Agent402-Receipt` header on each settled paid answer that is not streamed: a compact JWS (EdDSA, Ed25519) over the route, the request digest, the sha256 of the answer, the price, the rail, the network, the payer and the settlement. The public keys are published at `/.well-known/agent402-receipt-key.json`, and `POST /api/receipts/verify` checks a receipt for free. The `signedReceipt` cell of each conformance row reads true only while the server signs.",
+      "Packages: agent402-client exports `verifyReceipt`, which checks an `Agent402-Receipt` against the published keys and, when given them, against the answer bytes and the request sent.",
+    ],
+  },
+  {
+    date: "2026-11-18",
+    title: "Payment and trust layer lead",
+    items: [
+      "Site: The home page, /llms.txt, /openapi.json, /press and the hosted MCP connector's description, instructions and server.describe lead with one line: Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify paid calls across x402 and MPP, backed by signed receipts. The signed receipt clause appears only while the server signs receipts. The catalog's size follows as a supporting line, 500+ ready tools on the same rails. The home title, description and social card, /company and the site's structured data follow it.",
+      "Packages: The README, the agent402-mcp, agent402-client, agent402-tollbooth and agent402-openclaw READMEs, the package descriptions and the MCP Registry entry carry the same line, with the catalog's size after it.",
+    ],
+  },
+  {
+    date: "2026-11-18",
+    title: "Ownership statement",
+    items: [
+      "Repository: NOTICE, the README, CONTRIBUTING.md and /llms-full.txt state that Cardhavok LLC (doing business as Havok Holdings LLC) owns the code in this repository except a small number of trivial lines (seed URLs, a badge line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose authors keep their copyright, and that the contributor license agreement covers new and earlier contributions. The README's receipts section describes the signed receipt header a server sends when a receipt signing key is set.",
+    ],
+  },
+  {
+    date: "2026-11-18",
     title: "Copyright agent, cancel paths, fetched-host counts and seller docs links",
     items: [
       "Site: /terms names the copyright agent for notices about material on the site, with the steps for a notice and for a counter-notice, and says how each subscription rail cancels: the portal link for a card subscription, a POST to the cancel link in the monitor emails or revoking the authorization for an MPP subscription. A canceled subscription stays active until the end of the period already paid for.",
       "Site: /privacy says that when a tool fetches a URL you name, the host name in it (never the path, the query or who asked) is counted per minute, so a site that asks how often it was called can be answered; the counts are deleted after two days.",
       "Site: While prepaid credits are on sale, each purchase is a new key holding at most the largest pack (`CREDITS_BALANCE_MAX_USD`), and `POST /api/credits/refund` with the key refunds its unspent balance to the card and disables the key. With sales off, neither is offered.",
       "Seller index: A seller's rows on `/api/index?seller=` carry `sellerDocsUrl` when the seller's own OpenAPI operation names one (`externalDocs.url`): an unverified https link on the seller's exact host, never fetched, that changes no price, quote, routing or payment.",
+    ],
+  },
+  {
+    date: "2026-11-17",
+    title: "Verify a paid call",
+    items: [
+      "Site: The /trust page opens with a walkthrough for checking one paid call end to end: the receipt header and its fields, the settlement on chain, the response digest and its attestation, and the conformance cell for the rail paid on. The home page links to it from the hero, and the README and /llms-full.txt carry the same steps.",
     ],
   },
   {

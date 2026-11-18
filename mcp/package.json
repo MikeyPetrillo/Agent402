@@ -9,7 +9,7 @@
     "url": "git+https://github.com/MikeyPetrillo/Agent402.git",
     "directory": "mcp"
   },
-  "description": "Agent402 MCP server. Agent402 is a catalog of 500+ tools that AI agents find, pay for per request over x402 or MPP, and call with no account or API key. The applied layer of Agentic Finance: skill packs too, USDC or USDG on 14 chains, or free via proof-of-work. Catalog: browser, web search + cited answers, PDFs, OCR, images, LLM inference, image generation, code execution, STT, embeddings, live financial/crypto/macro data, SEC EDGAR filings, deterministic stats & forecasting, compression, payments. Open source, self-hostable.",
+  "description": "Agent402 MCP server. Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify paid calls across x402 and MPP, backed by signed receipts. The applied layer of Agentic Finance. 500+ ready tools on the same rails: skill packs too, USDC or USDG on 14 chains, or free via proof-of-work. Catalog: browser, web search + cited answers, PDFs, OCR, images, LLM inference, image generation, code execution, STT, embeddings, live financial/crypto/macro data, SEC EDGAR filings, deterministic stats & forecasting, compression, payments. Open source, self-hostable.",
   "type": "module",
   "bin": {
     "agent402-mcp": "index.js"

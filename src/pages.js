@@ -3,6 +3,8 @@
 import { siteOrgRef } from "./site-org.js";
 import { usdToBaseUnits } from "./base-units.js";
 import { frontDoorOneLine } from "./front-door.js";
+import { leadSentence, SUPPORT_LINE } from "./positioning.js";
+import { receiptsServed } from "./receipt-signing.js";
 import { PAYMENT_RETRY_VERBS_NOTE } from "./tool-error-fields.js";
 import { openapiRequestBody } from "./openapi-request.js";
 import { asyncAdvice } from "./slow-routes.js";
@@ -754,7 +756,7 @@ export function faqPage(baseUrl) {
   <section>
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;">FAQ</div>
   <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.96;margin-bottom:14px;">Frequently asked questions</h1>
-  <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.6;max-width:720px;margin-bottom:32px;">Agent402 is an open-source x402 and MPP server with 500+ tools an AI agent pays for per call.</p>
+  <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.6;max-width:720px;margin-bottom:32px;">Agent402 is the open-source payment and trust layer for x402 and MPP, with 500+ ready tools an AI agent pays for per call.</p>
   </section>
   ${groups}
 </div>
@@ -1120,7 +1122,7 @@ export function openapiSpec(baseUrl, catalog) {
         // Template literal, not a plain string: this is the spec description
         // every crawler and directory reads, and as a quoted string it shipped
         // a literal ${RAILS_OR} to production.
-        `${frontDoorOneLine(catalog)} Agent402.tools: 500+ pay-per-call tools for AI agents over x402 + MPP. The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Each priced operation is paid per call over x402 (${RAILS_OR}; identity-bound and long-running operations take EVM chains only, and each operation's description names its own rails)${mppShort ? `, or over MPP (Machine Payments Protocol: ${mppShort})` : ""} - no signup, no API keys - the first request returns HTTP 402 carrying ${mppShort ? "both offers, an x402 or mppx client pays" : "the offer, an x402 client pays"} and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
+        `${frontDoorOneLine(catalog)} ${leadSentence({ mpp: Boolean(mppShort), receipts: receiptsServed() })} ${SUPPORT_LINE} The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Each priced operation is paid per call over x402 (${RAILS_OR}; identity-bound and long-running operations take EVM chains only, and each operation's description names its own rails)${mppShort ? `, or over MPP (Machine Payments Protocol: ${mppShort})` : ""} - no signup, no API keys - the first request returns HTTP 402 carrying ${mppShort ? "both offers, an x402 or mppx client pays" : "the offer, an x402 client pays"} and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
       // Email doubles as x402scan's ownership-verification signal; it is the
       // same public maintainer contact the /.well-known/x402 manifest names.
       contact: { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: baseUrl },

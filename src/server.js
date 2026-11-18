@@ -235,6 +235,37 @@ function tempoPushHashOf(req) {
   const h = Object.hasOwn(req, "mppTempoPushHash") ? req.mppTempoPushHash : null;
   return typeof h === "string" && h ? h : null;
 }
+// The settlement fields of a signed receipt (src/receipt-signing.js) for a
+// final 200 whose payment settled, read from the same evidence the books
+// read: the Tempo or card gate's settled mark, or a decoded PAYMENT-RESPONSE
+// with success true. Null for anything else (a free, trial or allowance
+// answer, a credits call, a referral copy, an unpriced route).
+function receiptFieldsOf(req, res) {
+  if (FREE_MODE || String(req.path || "").startsWith("/ref/")) return null;
+  const def = CATALOG[`${req.method} ${req.path}`];
+  if (!def || allowanceServed(req) || req.creditsSettled) return null;
+  if (res.getHeader("X-Pow-Accepted") === "true" || res.getHeader("X-Trial-Accepted") === "true") return null;
+  const replay = String(res.getHeader("X-Replayed-Answer") ?? "") === "1" || String(res.getHeader("X-Idempotent-Replay") ?? "") === "true";
+  if (req.tempoSettled === true) {
+    return { rail: "mpp-tempo", network: "eip155:4217", payer: tempoLedgerPayerPending(req) ? null : tempoLedgerPayer(req), settlement: tempoPushHashOf(req) || tempoTxFromReceiptHeader(res.getHeader("Payment-Receipt")), priceUsd: settledPriceUsd(def, req, res), slug: def.slug, replay };
+  }
+  if (req.stripeSettled === true) {
+    return { rail: "mpp-stripe", network: null, payer: null, settlement: stripeTxFromReceiptHeader(res.getHeader("Payment-Receipt")), priceUsd: settledPriceUsd(def, req, res), slug: def.slug, replay };
+  }
+  const h = res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE");
+  const r = decodeSettleReceipt(typeof h === "string" ? h : null);
+  if (!receiptProvesCharge(r)) return null;
+  const wire = x402WireOf(req);
+  return {
+    rail: wire === GATEWAY_WIRE ? "gateway-batched" : wire === "mpp" ? "mpp-evm" : "x402",
+    network: typeof r.network === "string" ? r.network : null,
+    payer: payerFromRequest(req) || payerFromPaymentResponse(h),
+    settlement: typeof r.transaction === "string" && r.transaction ? r.transaction : null,
+    priceUsd: paidUsdOf(def, req, res, r.network),
+    slug: def.slug,
+    replay,
+  };
+}
 // A ledger write answers a boolean on the volume and a promise of one with
 // the state database on (src/refund-ledger.js): run `then` with the verdict
 // either way, and read the write as booked meanwhile.
@@ -368,6 +399,9 @@ import { insiderPage, fundPage, dossierPage, hubPage, loadTeaser, normalizeTicke
 import { createMonitorScheduler } from "./monitor-scheduler.js";
 import { createCredits, sellablePacks } from "./credits.js";
 import { creditsPage, creditsThanksPage } from "./credits-page.js";
+import { createCreditsAccount, mountCreditsAccount, accountSecretFrom } from "./credits-account.js";
+import { createJsonDocument as createCreditsAccountStore } from "./json-document.js";
+import { creditsAccountPage, creditsVerifyPage, creditsNoticePage, creditsNoticeOffPage } from "./credits-account-page.js";
 import { sendMonitorEmail, emailSendStatus, subscriptionPriceText } from "./email.js";
 import { probeDomain, normDomain } from "./tools/domain-audit-kit.js";
 import { latest13fFiling, resolveManager as edgarResolveManager } from "./tools/edgar-kit.js";
@@ -426,6 +460,7 @@ import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
 import { trustPage } from "./trust-page.js";
 import { markGateMounted } from "./gate-mounts.js";
+import { receiptKeys, receiptKeyDocument, receiptSignerMiddleware, verifyReceipt, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
 import { conformanceDocumentCached, resetConformanceCache, CONFORMANCE_PATH } from "./conformance.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
@@ -758,7 +793,7 @@ import { hostFigures, hostFiguresFromPayments, hostIndexEntry, isSelfSellerQuery
 import { standingCountsExcludingHost } from "./standing.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
-import { creditsSalesEnabled, creditsTopupFields, creditsBalanceMaxCents } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsTopupFields, creditsBalanceMaxCents, creditsTermsVersion } from "./credits-sales.js";
 
 // The /v1 settle breaker reads whether a wallet has ever paid from the sales
 // ledger, handed in here so the breaker never imports it (see the module).
@@ -3433,6 +3468,7 @@ if (_mppSubs) {
 // as the human checkout. The GATE mounts inside the paywall block below
 // (before x402mw); the routes/pages mount with the other storefront routes.
 let _credits = null;
+let _creditsAccount = null;
 try {
   _credits = humanCheckoutEnabled() ? createCredits({
     stripe: newStripeClient(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
@@ -3441,8 +3477,25 @@ try {
     // the money once - when it is spent (rail "credits" below).
     onLoad: ({ pack, priceUsd, keyId, paymentIntent }) => recordSale({ slug: `credits:${pack}`, priceUsd, rail: "card-prepaid", network: "stripe", payer: keyId, tx: paymentIntent, wire: "stripe-checkout" }),
     onDebit: ({ slug, priceUsd, keyId, via }) => recordSale({ slug, priceUsd, rail: "credits", network: "stripe", payer: keyId, tx: null, wire: "credits", via }),
+    // Our own emails (src/credits-account.js), sent only while credits are on sale.
+    onLowBalance: (n) => { void _creditsAccount?.sendLowBalance(n); },
+    onReceipt: (r) => { void _creditsAccount?.sendReceipt(r); },
+    onNewKey: (n) => { void _creditsAccount?.sendNewKeyNotice(n); },
   }) : null;
 } catch (e) { console.warn("[credits] init failed:", String(e?.message || e).slice(0, 200)); _credits = null; }
+// The balance page's sign-in and emails (src/credits-account.js): built with
+// the credits store, served only while credits are on sale. Sessions and spent
+// sign-in links live in one small document beside the key records.
+try {
+  _creditsAccount = _credits ? createCreditsAccount({
+    credits: _credits, baseUrl: BASE_URL, secret: accountSecretFrom(process.env.STRIPE_SECRET_KEY), sendEmail: faSendEmail,
+    store: createCreditsAccountStore({ name: "credits-account", file: joinPath(_credits._dir, "_account.json"), log: () => {} }),
+    ipLimiter: createRateLimiter("credits-sign-in", { perMin: 6, perHour: 40 }),
+    // Keyed on the address (hashed), so rotating client addresses cannot flood one inbox.
+    emailLimiter: createRateLimiter("credits-sign-in-email", { perMin: 2, perHour: 6 }),
+    termsVersion: creditsTermsVersion,
+  }) : null;
+} catch (e) { console.warn("[credits] balance page init failed:", String(e?.message || e).slice(0, 200)); _creditsAccount = null; }
 // Manage/cancel bearer for monitor subscribers: a keyed token over the report
 // id, carried ONLY in the subscriber's email - never in the report JSON or on
 // the report page, which subscribers are told to share. Derived from the
@@ -4593,6 +4646,30 @@ for (const p of A2A_WELL_KNOWN_PATHS) {
 // Per payment rail, the protocol features this server implements and the
 // refund terms as data, computed at each request (src/conformance.js).
 app.get(CONFORMANCE_PATH, (_req, res) => res.set("Cache-Control", "public, max-age=300").json(conformanceDocumentCached(BASE_URL, { freeMode: FREE_MODE })));
+// Signed receipts: the public keys and a free check (src/receipt-signing.js).
+// The settings are read once at boot; an unusable one leaves signing off and
+// says why here (never the value).
+{
+  const rk = receiptKeys();
+  if (rk.error) console.error(`[receipts] signing refused: ${rk.error}`);
+  else if (rk.signer) console.log(`[receipts] signing on, key ${rk.signer.kid}`);
+}
+app.get(RECEIPT_KEYS_PATH, (_req, res) => res.set("Cache-Control", "public, max-age=300").json(receiptKeyDocument(BASE_URL)));
+const receiptVerifyLimiter = createRateLimiter("receipt-verify", { perMin: 60, perHour: 1200 });
+app.post(RECEIPT_VERIFY_PATH, express.json({ limit: "256kb" }), (req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (receiptVerifyLimiter.check(clientIp(req)).limited) {
+    res.set("Retry-After", "60");
+    return res.status(429).json({ error: "Too many receipt checks from this address; retry in a minute.", retryAfterSeconds: 60 });
+  }
+  const b = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  if (typeof b.receipt !== "string" || !b.receipt) return res.status(400).json({ error: "Send { receipt } (the Agent402-Receipt header value); optionally body (the answer text) or bodySha256, and request { method, path, body }." });
+  const opts = {};
+  if (typeof b.body === "string") opts.responseBody = b.body;
+  else if (typeof b.bodySha256 === "string") opts.responseSha256 = b.bodySha256;
+  if (b.request && typeof b.request === "object" && !Array.isArray(b.request) && typeof b.request.method === "string" && typeof b.request.path === "string") opts.request = { method: b.request.method, path: b.request.path, body: b.request.body };
+  return res.json(verifyReceipt(b.receipt, opts));
+});
 app.get("/.well-known/glama.json", (_req, res) => {
   const email = process.env.GLAMA_MAINTAINER_EMAIL || "mike@agent402.tools";
   res.set("Cache-Control", "public, max-age=86400").json({
@@ -5292,6 +5369,14 @@ if (_credits) {
       malformed: "Malformed credits key.",
     }[r.status];
     res.status(REFUND_HTTP[r.status] || 500).json({ ...r, ...(said ? { message: said } : {}) });
+  });
+  // The balance page (/credits/account), served only while credits are on sale.
+  if (_creditsAccount) mountCreditsAccount(app, {
+    express, account: _creditsAccount, credits: _credits, baseUrl: BASE_URL, salesOn: creditsSalesEnabled, clientIp,
+    page: { account: () => creditsAccountPage(BASE_URL), verify: (t) => creditsVerifyPage(BASE_URL, t), notice: (title, html) => creditsNoticePage(BASE_URL, title, html), noticeOff: (id, k) => creditsNoticeOffPage(BASE_URL, id, k) },
+    writeLimiter: creditsRefundLimiter,
+    packs: () => Object.entries(sellablePacks()).map(([id, p]) => ({ id, usd: p.cents / 100 })),
+    capUsd: () => creditsBalanceMaxCents() / 100,
   });
   app.get("/__operator/credits.json", async (req, res) => {
     if (!operatorAuthed(req)) return operatorNotFound(req, res);
@@ -9929,7 +10014,7 @@ const cardSvg = (width = 1200, height = 630) => {
   const ty = (height - 630 * s) / 2;
   const mono = JSON.stringify(BRAND.mono);
   const display = JSON.stringify(BRAND.display);
-  const { subtitle, railsTag } = socialCardText(n);
+  const { subtitle, railsTag, toolsTag } = socialCardText(n);
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${BRAND_FONT_STYLE}${BRAND_DEFS}
   <rect width="${width}" height="${height}" fill="${BRAND.paper}"/>
   <g transform="translate(${tx},${ty}) scale(${s})">
@@ -9938,8 +10023,8 @@ const cardSvg = (width = 1200, height = 630) => {
   <text x="132" y="96" font-size="30" font-weight="600" font-family=${display} letter-spacing="-0.5" fill="${BRAND.ink}">Agent402</text>
   <text x="1128" y="95" font-size="20" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">agent402.tools</text>
   <!-- headline -->
-  <text x="72" y="238" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.ink}">The web's paid door,</text>
-  <text x="72" y="330" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.faint}">finally open.</text>
+  <text x="72" y="238" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.ink}">Payment and trust</text>
+  <text x="72" y="330" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.faint}">for agent commerce.</text>
   <text x="72" y="392" font-size="23" font-family=${display} fill="${BRAND.muted}">${subtitle}</text>
   <!-- handshake panel -->
   <rect x="72" y="430" width="1056" height="140" rx="16" fill="url(#panel)" stroke="${BRAND.hairline}" stroke-width="1.5"/>
@@ -9948,6 +10033,7 @@ const cardSvg = (width = 1200, height = 630) => {
   <text x="100" y="540" font-size="19" font-family=${mono} fill="${BRAND.accent}">HTTP/2 200  <tspan fill="${BRAND.muted}">payment-response: settled · tx 0x9ec4…</tspan></text>
   <text x="1100" y="472" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">${railsTag}</text>
   <text x="1100" y="506" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">${RAILS.length} rails · USDC · USDG</text>
+  <text x="1100" y="540" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">${toolsTag}</text>
   </g>
 </svg>`;
 };
@@ -11194,6 +11280,14 @@ if (!FREE_MODE) {
   // 400 or above (src/answer-headers.js). Before every payment gate: a gate
   // that buffers writeHead restores the function it found.
   app.use(answerHeadersGuard());
+  // Signed receipts (src/receipt-signing.js), on only with RECEIPT_SIGNING_KEY.
+  // Before every payment gate: each gate replays its buffered answer through
+  // this wrapper after it settled, so the receipt is signed over the final
+  // settled 200 and never before.
+  if (receiptKeys().signer) {
+    app.use(receiptSignerMiddleware({ describe: receiptFieldsOf, iss: BASE_URL, onError: (e) => console.warn(`[receipts] not signed: ${String(e?.message || e).slice(0, 120)}`) }));
+    markGateMounted("receiptSigner");
+  }
   app.use(createHangupSettlementHook({ onUndelivered: recordHangupOutcome }));
   markGateMounted("hangupHook");
 

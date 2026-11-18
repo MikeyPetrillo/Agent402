@@ -1,3 +1,4 @@
+import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
 import { smallHeaderLimitText } from "./payment-required-compact.js";
 import { whyPointsPlain } from "./why.js";
@@ -19,7 +20,7 @@ import { CHAIN_PAGES } from "./market-page.js";
 import { EXEC_TIERS } from "./tools/route-execute.js";
 import { stripeEnabled } from "./mpp-stripe.js";
 import { mppMethodsProse, mppMethodsSummary } from "./mpp-offers.js";
-import { leadSentence } from "./positioning.js";
+import { leadSentence, SUPPORT_LINE } from "./positioning.js";
 import { mppFlagshipLlmsBlock } from "./mpp-flagship.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
@@ -580,11 +581,11 @@ function llmsFullBody(baseUrl, catalog) {
 
   return `# Agent402.Tools
 
-> ${leadSentence({ mpp: mppMethodsSummary().enabled })} The applied layer of Agentic Finance: agents that pay and get paid on their own (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) - then the long catalog of 500+ tools via \`/api/find\`: deterministic utilities, a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages and Gemini; for example \`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying ${mppMethodsSummary().enabled ? "both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment)" : "the x402 offer (PAYMENT-REQUIRED)"}, and settle from your own wallet - USDC via x402${mppRailsProse()}${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (a card payment token over MPP's \`stripe\` charge method - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools ${TYPICAL_PRICE_RANGE.text}, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
+> ${leadSentence({ mpp: mppMethodsSummary().enabled, receipts: receiptsServed() })} ${SUPPORT_LINE} The applied layer of Agentic Finance (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) - then the catalog via \`/api/find\`: deterministic utilities, a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages and Gemini; for example \`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying ${mppMethodsSummary().enabled ? "both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment)" : "the x402 offer (PAYMENT-REQUIRED)"}, and settle from your own wallet - USDC via x402${mppRailsProse()}${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (a card payment token over MPP's \`stripe\` charge method - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools ${TYPICAL_PRICE_RANGE.text}, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
 
 Base URL: ${baseUrl}
 
-**Open source and two-sided.** Agent402 is the open-source, self-hostable applied layer of Agentic Finance (agents paying and getting paid on their own) for x402 and MPP (+ MCP server): 500+ pay-per-call tools for agents to buy (live web search + cited answers, browser rendering, PDFs, OCR, images, live financial / crypto / macro data, SEC EDGAR, wallet-keyed memory, a metered model gateway, finished reports), a neutral cross-seller index and on-chain leaderboard for the whole x402 ecosystem, and \`agent402-tollbooth\` for API sellers to charge AI crawlers per request. Maintainer: Havok Holdings LLC. Read every line and run it yourself: ${REPO_URL}
+**Open source and two-sided.** Agent402 is the open-source, self-hostable payment and trust layer for x402 and MPP (+ MCP server): 500+ ready tools for agents to buy (live web search + cited answers, browser rendering, PDFs, OCR, images, live financial / crypto / macro data, SEC EDGAR, wallet-keyed memory, a metered model gateway, finished reports), a neutral cross-seller index and on-chain leaderboard for the whole x402 ecosystem, and \`agent402-tollbooth\` for API sellers to charge AI crawlers per request. Maintainer: Havok Holdings LLC. Read every line and run it yourself: ${REPO_URL}
 
 **Why pay here (${countWord(whyPointsPlain().length)} first-party differences, each proven on a live surface - full section: /docs#why).** ${whyPointsPlain().map((line, i) => `(${i + 1}) ${line}`).join(" ")} Metered usage pricing: \`POST /v1/metered/chat/completions\` quotes each request from its body; finished reports and monitors: /reports and /monitors; sourcing from other sellers: \`POST /api/route/execute\`; proof: /status and /revenue.
 
@@ -708,7 +709,7 @@ ${toolSections}
 - [Integrations](${baseUrl}/integrations): one page per published package (framework adapters, MCP server, buyer SDK, tollbooth, OpenClaw provider) with install line, example and payment modes
 - [llms-full.txt](${baseUrl}/llms-full.txt): this file plus every catalog route (slug, method, route, price, one-line description) and the learn summaries
 - [Maintainer](${REPO_URL}): Havok Holdings LLC, mike@agent402.tools
-- [Ownership and licensing](${REPO_URL}#ownership-and-licensing): copyright Cardhavok LLC (doing business as Havok Holdings LLC) for the code it wrote, and each outside contributor for their own contributions; server AGPL-3.0-or-later, published packages MIT; a commercial license to the code the company can license at mike@agent402.tools; outside contributions carry a DCO sign-off and the contributor license agreement (CLA.md)
+- [Ownership and licensing](${REPO_URL}#ownership-and-licensing): Cardhavok LLC (doing business as Havok Holdings LLC) owns the code in this repository except a small number of trivial lines (seed URLs, a badge line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose authors keep their copyright; server AGPL-3.0-or-later, published packages MIT; a commercial license to the code at mike@agent402.tools; outside contributions carry a DCO sign-off and the contributor license agreement (CLA.md), which covers new and earlier contributions
 `;
 }
 
@@ -797,6 +798,15 @@ export function llmsFullTxt(baseUrl, catalog) {
   const catalogLines = tools.map((t) => `- ${t.slug} | ${t.method} ${t.path} | ${t.price ? priceOfLine(t) : "see /api/pricing"} | ${firstSentence(t.description)}${t.quoteRange && t.quoteFormula ? ` The quote is ${t.quoteFormula}.` : ""}`).join("\n");
   const learnLines = LEARN.map((l) => `- [${l.term}](${baseUrl}/learn/${l.slug}): ${l.summary}`).join("\n");
   return `${llmsFullBody(baseUrl, catalog)}
+## Verify a paid call
+
+- Receipt: a settled x402 answer carries \`PAYMENT-RESPONSE\`, base64 JSON with \`success\`, \`transaction\`, \`network\` and \`payer\`; an MPP answer carries \`Payment-Receipt\`, whose \`reference\` names the payment.
+- Settlement: look \`transaction\` up on \`network\`: a stablecoin transfer from \`payer\` to the \`payTo\` the 402 named (also listed in ${baseUrl}/.well-known/x402). A batched payment names its batch transfer instead.
+- Delivery: sha256 the exact bytes received. \`POST /api/attest\` with the transaction, paid from the same EVM wallet, records that digest beside the payment in an attestation on Base; \`POST /api/receipts\` returns the paying wallet's settled calls with each transaction and response digest.
+- Rail rules: ${baseUrl}${CONFORMANCE_PATH}, the row whose \`id\` names the rail and network paid on: \`receipt\`, \`settleAfterAnswer\`, \`idempotencyKey\`, \`replayGuard\` and \`refundOnChargedFailure\`. ${receiptsServed() ? `Where \`signedReceipt\` reads true, the answer also carries \`${RECEIPT_HEADER}\`, a compact JWS (EdDSA) this server signs over the route, the request digest, the answer's sha256, the price, the rail, the payer and the settlement, on a non-streamed answer after settlement; keys at ${baseUrl}${RECEIPT_KEYS_PATH}, free check at \`POST ${RECEIPT_VERIFY_PATH}\`.` : "\`signedReceipt\` reads false on every paid rail: the receipt is the settlement's own record."}
+- Outside sellers: ${baseUrl}/api/index?seller=<host> gives a seller's crawl history, the live probe of its paywall and the router's verdict on paying it.
+- Walkthrough: ${baseUrl}/trust#verify
+
 ## Learn (summaries)
 
 ${learnLines}

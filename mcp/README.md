@@ -1,6 +1,6 @@
 # agent402-mcp
 
-MCP server for [Agent402](https://agent402.tools), the applied layer of Agentic Finance. Agent402 is a catalog of 500+ tools that AI agents find, pay for per request over x402 or MPP, and call with no account or API key. Paid calls settle in USDC over x402 or MPP (Machine Payments Protocol). Pure-CPU tools are free: each call solves a small proof-of-work puzzle on your own machine. Other tools are paid per call in USDC over the [x402 protocol](https://www.x402.org) from a wallet you control. Built by [Havok Holdings LLC](https://github.com/MikeyPetrillo/Agent402).
+MCP server for [Agent402](https://agent402.tools), the applied layer of Agentic Finance. Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify paid calls across x402 and MPP, backed by signed receipts. 500+ ready tools on the same rails. Paid calls settle in USDC over x402 or MPP (Machine Payments Protocol). Pure-CPU tools are free: each call solves a small proof-of-work puzzle on your own machine. Other tools are paid per call in USDC over the [x402 protocol](https://www.x402.org) from a wallet you control. Built by [Havok Holdings LLC](https://github.com/MikeyPetrillo/Agent402).
 
 ## Quick start
 

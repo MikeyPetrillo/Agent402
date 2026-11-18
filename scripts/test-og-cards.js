@@ -66,7 +66,7 @@ ok(/\/tools\/attest\/card\.png/.test(await og("/tools/attest")), "a tool page ke
 ok(/\/card\.png\?v=/.test(await og("/company")), "a page with no section keeps the homepage card");
 { // The home card follows the card switch, and its URL version carries a hash of the card itself.
   const cardSvgBody = await (await fetch(`${BASE}/card.svg`)).text();
-  ok(!/by card/.test(cardSvgBody) && !/MPP · card/.test(cardSvgBody) && /USDC over x402 \/ MPP\./.test(cardSvgBody), "no card sale on this boot: the social card offers no card");
+  ok(!/by card/.test(cardSvgBody) && !/MPP · card/.test(cardSvgBody) && /verify paid calls over x402 and MPP\./.test(cardSvgBody) && /x402 · MPP</.test(cardSvgBody), "no card sale on this boot: the social card offers no card");
   const v = (/\/card\.png\?v=([^"&]+)/.exec(await og("/company")) || [])[1] || "";
   const sha = createHash("sha256").update(cardSvgBody).digest("hex").slice(0, 8);
   ok(new RegExp(`^\\d+\\.${sha}$`).test(v), `the card URL version is the tool count and a hash of the card (${v}, card ${sha})`);

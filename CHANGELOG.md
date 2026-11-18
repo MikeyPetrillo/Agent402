@@ -6,6 +6,47 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-18 (signed receipts)
+Payments:
+- A server run with a receipt signing key (`RECEIPT_SIGNING_KEY`) sends an
+  `Agent402-Receipt` header on each settled paid answer that is not
+  streamed: a compact JWS (EdDSA, Ed25519) over the route, the request
+  digest, the sha256 of the answer, the price, the rail, the network, the
+  payer and the settlement. The public keys are published at
+  `/.well-known/agent402-receipt-key.json`, and `POST /api/receipts/verify`
+  checks a receipt for free. The `signedReceipt` cell of each conformance
+  row reads true only while the server signs.
+Packages:
+- agent402-client exports `verifyReceipt`, which checks an
+  `Agent402-Receipt` against the published keys and, when given them,
+  against the answer bytes and the request sent.
+
+### 2026-11-18 (payment and trust layer lead)
+Site:
+- The home page, /llms.txt, /openapi.json, /press and the hosted MCP
+  connector's description, instructions and server.describe lead with one
+  line: Agent402 is the payment and trust layer for agent commerce: agents
+  find, pay for and verify paid calls across x402 and MPP, backed by signed
+  receipts. The signed receipt clause appears only while the
+  server signs receipts. The catalog's size follows as a supporting line, 500+
+  ready tools on the same rails. The home title, description and social card,
+  /company and the site's structured data follow it.
+Packages:
+- The README, the agent402-mcp, agent402-client, agent402-tollbooth and
+  agent402-openclaw READMEs, the package descriptions and the MCP Registry
+  entry carry the same line, with the catalog's size after it.
+
+### 2026-11-18 (ownership statement)
+Repository:
+- NOTICE, the README, CONTRIBUTING.md and /llms-full.txt state that
+  Cardhavok LLC (doing business as Havok Holdings LLC) owns the code in this
+  repository except a small number of trivial lines (seed URLs, a badge
+  line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose
+  authors keep their copyright, and that the contributor license agreement
+  covers new and earlier contributions. The README's receipts section
+  describes the signed receipt header a server sends when a receipt signing
+  key is set.
+
 ### 2026-11-18 (copyright agent, cancel paths, fetched-host counts and seller docs links)
 Site:
 - /terms names the copyright agent for notices about material on the site,
@@ -27,6 +68,14 @@ Seller index:
   seller's own OpenAPI operation names one (`externalDocs.url`): an unverified
   https link on the seller's exact host, never fetched, that changes no price,
   quote, routing or payment.
+
+### 2026-11-17 (verify a paid call)
+Site:
+- The /trust page opens with a walkthrough for checking one paid call end to
+  end: the receipt header and its fields, the settlement on chain, the
+  response digest and its attestation, and the conformance cell for the rail
+  paid on. The home page links to it from the hero, and the README and
+  /llms-full.txt carry the same steps.
 
 ### 2026-11-17 (internal code changes, stricter reading of payment fields)
 Internal:

@@ -5,9 +5,17 @@
 Use this block (or any subset) wherever a directory asks what Agent402 is. Every
 claim below is served live; verify prices against `/api/pricing` before pasting.
 
-- **What it is:** the applied layer of Agentic Finance (AIFI): tools, a model
-  gateway and finished reports an agent pays for per request over x402 or MPP.
-- **Catalog:** 500+ pay-per-call tools and multi-tool skill packs for AI agents:
+- **What it is:** Agent402 is the payment and trust layer for agent commerce:
+  agents find, pay for and verify paid calls across x402 and MPP, backed by
+  signed receipts. The applied layer of Agentic Finance (AIFI).
+- **Payment and trust:** x402 across chains with facilitator fallbacks, MPP with
+  Tempo and card, and proof of work for the pure-CPU tools, on one server. An
+  x402 payment settles after a successful answer, a hang-up before the answer
+  can be forgiven, and a charged failure is booked and repaid against the chain
+  record. A crawled index of outside x402 sellers feeds a router that buys from
+  the proven ones. Open source and self-hostable, with a pay-per-crawl
+  tollbooth for sites and a buyer SDK.
+- **Catalog:** 500+ ready tools on the same rails, including multi-tool skill packs:
   live web search and cited answers, headless browser, PDFs, OCR,
   financial / SEC EDGAR / macro / on-chain data, an OpenAI-compatible LLM gateway
   (`/v1`), durable wallet-keyed memory, 150+ pure-CPU utilities.

@@ -2,11 +2,11 @@ Agent402
 Copyright (C) 2026 Cardhavok LLC (doing business as Havok Holdings LLC)
 and the Agent402 contributors
 
-Cardhavok LLC (doing business as Havok Holdings LLC) holds the copyright in
-the code it wrote for Agent402 and the rights its contributors grant to it.
-Each outside contributor keeps the copyright in their own contribution (see
-Contributions below). For a commercial license to the code the company can
-license: mike@agent402.tools, or see https://agent402.tools/company.
+Cardhavok LLC (doing business as Havok Holdings LLC) owns the code in this
+repository except a small number of trivial lines (seed URLs, a badge line,
+punctuation) contributed earlier under AGPL-3.0 or MIT, whose authors keep
+their copyright (see Contributions below). For a commercial license to the
+code: mike@agent402.tools, or see https://agent402.tools/company.
 
 This repository is licensed under more than one license. Check the LICENSE
 file nearest to the code you are using; the applicable license is the closest
@@ -54,16 +54,15 @@ one in the directory tree.
     and upstream sources are in assets/fonts/licenses/ and
     assets/fonts/README.md, as OFL 1.1 condition 2 requires.
 
-Contributions. Portions of Agent402 were contributed by others, who keep the
-copyright in their contributions. Contributions are accepted under the terms
-in CONTRIBUTING.md: a Developer Certificate of Origin sign-off on every commit
+Contributions. The trivial lines contributed earlier came in under the
+license of the component they changed (AGPL-3.0-or-later for the server, MIT
+for the packages above) and are used under that license; their authors keep
+their copyright. Contributions are accepted under the terms in
+CONTRIBUTING.md: a Developer Certificate of Origin sign-off on every commit
 and the contributor license agreement in CLA.md, which licenses them to the
-company under the terms it states. Contributions made before those terms took
-effect came in under the license of the component they changed
-(AGPL-3.0-or-later for the server, MIT for the packages above) and are used
-under that license; a contributor who agrees to CLA.md also licenses their
-earlier contributions under it. The project's git history records the author
-of every commit.
+company under the terms it states and covers both new contributions and a
+contributor's earlier ones. The project's git history records the author of
+every commit.
 
 AI-assisted development. Agent402 was developed with AI coding assistants,
 used under the direction and review of the company, which owns the resulting

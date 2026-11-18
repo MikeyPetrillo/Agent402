@@ -103,7 +103,7 @@ ok(hi === si, "hosted and stdio initialize instructions are byte-identical");
     ok(!/x402|MPP/.test(line) && /others need a wallet on the npm package/.test(line), `a self-host URL's hosted line names no wire (${self || "empty"}: ${line.slice(0, 90)})`);
   }
 }
-ok(/positioning: `\$\{leadSentence\(\{ mpp: mppMethodsSummary\(\)\.enabled \}\)\} It is the applied layer of Agentic Finance/.test(read("src/mcp-http.js")), "hosted describe_server carries a positioning field that leads with the lead sentence and names Agentic Finance");
+ok(/positioning: `\$\{leadSentence\(\{ mpp: mppMethodsSummary\(\)\.enabled, receipts: receiptsServed\(\) \}\)\} \$\{SUPPORT_LINE\} It is the applied layer of Agentic Finance/.test(read("src/mcp-http.js")), "hosted describe_server carries a positioning field that leads with the lead sentence and names Agentic Finance");
 ok((read("mcp/index.js").match(/positioning: `[^`]*Agentic Finance[^`]*MPP/g) || []).length >= 2, "stdio describe payloads (both aliases) carry Agentic Finance + MPP positioning");
 
 // --- prominence (2026-08-18, the operator): the BRAND leads; the AIFI acronym lives only on the
@@ -114,11 +114,11 @@ ok((read("mcp/index.js").match(/positioning: `[^`]*Agentic Finance[^`]*MPP/g) ||
   ok(/const title = `Agent402: /.test(home) && !/const title = `[^`]*AIFI/.test(home), "homepage <title> leads with the brand word Agent402 (the entity Google must tie to this domain) and carries no AIFI acronym");
   ok(!/<h1[^>]*>[^<]*Agentic Finance/.test(home), "homepage hero H1 is not the category name");
   ok(/title: "Agent402\.tools",/.test(read("src/pages.js")), "openapi.json title is the plain product name Agent402.tools");
-  ok(/Agent402\.tools: 500\+ pay-per-call tools for AI agents over x402 \+ MPP\./.test(read("src/pages.js")), "openapi.json description keeps the tagline");
+  ok(/`\$\{frontDoorOneLine\(catalog\)\} \$\{leadSentence\(\{ mpp: Boolean\(mppShort\), receipts: receiptsServed\(\) \}\)\} \$\{SUPPORT_LINE\} /.test(read("src/pages.js")), "openapi.json description leads with the lead sentence (wires and receipts from their switches), then the supporting line");
   {
-    const line = read("src/pages.js").split("\n").find((l) => l.includes("Agent402.tools: 500+ pay-per-call tools")) || "";
+    const line = read("src/pages.js").split("\n").find((l) => l.includes("${SUPPORT_LINE} The open-source")) || "";
     const n = (line.match(/500\+/g) || []).length;
-    ok(n === 1, `openapi.json description says "500+" once (${n})`);
+    ok(n === 0, `openapi.json description types no "500+" of its own beside the supporting line (${n})`);
   }
   ok(!/AIFI/.test(HOSTED_DESC) && HOSTED_DESC.startsWith("Agent402"), "MCP serverInfo.description leads with Agent402, no acronym");
   for (const d of pkgDirs) ok(!/AIFI/.test(JSON.parse(read(`${d}/package.json`)).description), `${d} description carries no AIFI acronym`);

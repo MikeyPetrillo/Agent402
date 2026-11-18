@@ -275,6 +275,8 @@ function pageModules() {
   const out = [];
   for (const f of readdirSync(new URL("src/", ROOT))) if (f.endsWith(".js")) out.push(`src/${f}`);
   for (const f of readdirSync(new URL("assets/js/", ROOT))) if (f.endsWith(".js")) out.push(`assets/js/${f}`);
+  // Page scripts served from a route of their own (the credits balance page's, served only while sales are on).
+  for (const f of readdirSync(new URL("assets/credits/", ROOT))) if (f.endsWith(".js")) out.push(`assets/credits/${f}`);
   return out.sort();
 }
 

@@ -109,8 +109,10 @@ LLC: credit the entity, never a personal name.
 - **Identity-bound routes** (memory, my-usage, attest, feedback) are keyed on the signed
   EIP-3009 `authorization.from` (`src/payer.js` `identityPayerOf`: null in FREE_MODE, where no
   header is verified); they are EVM-exact only and refused on Tempo/credits gates. Never weaken payer attribution. Never case-fold base58/Stellar addresses.
-- Catalog floor: 400 entries, CI-checked by `node scripts/sync-count.js --check`. Marketing and
-  static surfaces say **"500+ tools"**, never an exact number; runtime surfaces derive exact counts.
+- Catalog floor: 400 entries, CI-checked by `node scripts/sync-count.js --check`. Marketing leads
+  with the payment and trust layer; catalog size appears only as a supporting line, as "500+ tools",
+  never an exact number. The lead sentence lives in `src/positioning.js` (its signed-receipt clause
+  reads `receiptsServed()`); runtime surfaces derive exact counts.
 - Retired routes answer 410 with a replacement: add every retirement to `src/retired-tools.js`.
   `scripts/published-slugs.json` records every route ever published; after adding a tool or
   pack run `node scripts/published-slugs.js --write` (`test-retired-routes.js` fails otherwise,

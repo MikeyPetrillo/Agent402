@@ -56,8 +56,8 @@ ok(offenders.length === 0, `no module writes a profile URL into its own sameAs${
 ok([...`sameAs: [REPO_URL, "https://x.com/Agent402Tools"]`.matchAll(/sameAs\s*:\s*\[([^\]]*)\]/g)].some((m) => PROFILE.test(m[1])), "control: a module-local list is caught");
 
 // 5. the site entity says what it is
-ok(org.alternateName.includes("Agent402.Tools") && /pay-per-call catalog of 500\+ tools for AI agents/.test(org.description) && /Havok Holdings LLC/.test(org.disambiguatingDescription) && org.disambiguatingDescription.includes("agent402.tools"), "the site entity carries a description, a disambiguating description and its alternate names");
-ok(/x402 or MPP/.test(org.description) && !/MPP/.test(siteOrgLd(B, { mpp: false }).description), "the description names MPP only where MPP is offered");
+ok(org.alternateName.includes("Agent402.Tools") && /payment and trust layer for agent commerce/.test(org.description) && /500\+ ready tools/.test(org.description) && /Havok Holdings LLC/.test(org.disambiguatingDescription) && org.disambiguatingDescription.includes("agent402.tools"), "the site entity carries a description, a disambiguating description and its alternate names");
+ok(/x402 and MPP/.test(org.description) && !/MPP/.test(siteOrgLd(B, { mpp: false }).description), "the description names MPP only where MPP is offered");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

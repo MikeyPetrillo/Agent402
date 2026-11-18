@@ -27,6 +27,8 @@ t node scripts/test-inflight-admission.js
 t node scripts/test-answer-headers.js
 # The conformance document's cells against the code: every wire paid (an error not settled, a success settled with the receipt the cell names, replay and idempotency as claimed), switches flipped change their cells, FREE_MODE offers nothing, and its refund terms are the /terms sentences (boots paid servers - offline)
 t node scripts/test-conformance.js
+# Signed receipts: the one key format and its refusals, sign and verify with tamper on every field, rotation, the header bound and the cost per call; with a key every settling wire's 200 carries a receipt that verifies and none on an error or a refused settle; without one no receipt and no cell claims it (boots paid servers - offline)
+t node scripts/test-receipt-signing.js
 # A streamed chat, Messages or Responses answer that ends with no answer (all reasoning) is a 502 before any byte and is never settled on any wire; one with content is relayed byte for byte and settled once; a hold commits at the CDN window tail (boots a paid server - offline)
 t node scripts/test-stream-empty-answer.js
 # A card or Tempo challenge must outlive the run it pays for, and the breaker keys an address by its IPv6 /64 (boots a paid server - offline)

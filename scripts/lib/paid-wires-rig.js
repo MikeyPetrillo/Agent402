@@ -218,6 +218,7 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
       OPENROUTER_API_KEY: "sk-or-paid-wires-never-used", OPENROUTER_STUB_URL: `${F}/llm`, STRIPE_STUB_URL: `${F}/stripe`, OPENAI_API_KEY: "", BRAVE_API_KEY: "", EXA_API_KEY: "", X_BEARER_TOKEN: "",
       UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_FILE: fileURLToPath(new URL("../../docs/example-upstream-costs.json", import.meta.url)),
       STATS_ALLOW_EPHEMERAL: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
+      RECEIPT_SIGNING_KEY: "", RECEIPT_SIGNING_KEY_ID: "", RECEIPT_RETIRED_KEYS: "",
       MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", REVENUE_WARMUP: "off", REVENUE_LEDGER: "off",
       ...env,
     },

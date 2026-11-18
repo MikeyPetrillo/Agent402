@@ -23,8 +23,10 @@
 //      size means a kit fell off the build, not a curation decision. There is
 //      NO upper bound: the catalog grows when a tool is worth calling.
 //   2. HONESTY — the evergreen "500+" claim must be true: total >= 500.
-//   3. ANCHOR — the README H1 must carry the literal "500+ tools" claim, so
-//      the flagship surface can't silently drift back to an exact count.
+//   3. ANCHOR: the README's lead (above its first "## ") must carry the
+//      literal "500+ ready tools" supporting line, and its H1 no tool count
+//      at all: marketing leads with the payment and trust layer, and the
+//      flagship surface can't silently drift back to an exact count.
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -91,12 +93,15 @@ async function main() {
     const packBrand = packBrandViolation(packs);
     if (packBrand) { console.error(packBrand); process.exit(1); }
 
-    // 3. ANCHOR — the README H1 must claim "500+ tools" (evergreen), never an
-    // exact count that would rot as the catalog grows.
-    const claim = `${BRAND_FLOOR.toLocaleString("en-US")}+ tools`;
-    const readmeH1 = (readFileSync("README.md", "utf8").split("\n")[0]) || "";
-    if (!readmeH1.includes(claim)) {
-      console.error(`sync-count: README H1 no longer carries the evergreen "${claim}" claim — restore it (exact counts on marketing surfaces are banned; runtime surfaces derive the real number).`);
+    // 3. ANCHOR: the README's lead carries the evergreen "500+ ready tools"
+    // supporting line, never an exact count that would rot as the catalog
+    // grows, and the H1 names no tool count (the catalog is not the headline).
+    const claim = `${BRAND_FLOOR.toLocaleString("en-US")}+ ready tools`;
+    const readme = readFileSync("README.md", "utf8");
+    const readmeH1 = readme.split("\n")[0] || "";
+    const readmeLead = readme.split(/\n## /)[0];
+    if (!readmeLead.includes(claim) || /\d+\+? (ready )?tools/.test(readmeH1)) {
+      console.error(`sync-count: the README lead no longer carries the evergreen "${claim}" line, or its H1 names a tool count; restore it (exact counts on marketing surfaces are banned; runtime surfaces derive the real number).`);
       process.exit(1);
     }
 

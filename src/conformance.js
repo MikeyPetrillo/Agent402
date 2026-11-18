@@ -34,6 +34,7 @@ import { IDEMPOTENCY_CREDENTIALS } from "./idempotency.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { refundClauses, REPAYMENT_FAMILIES } from "./refund-terms.js";
 import { sanctionsScreenStatus } from "./sanctions-screen.js";
+import { receiptsServed, SIGNED_RAILS, RECEIPT_HEADER, RECEIPT_KEYS_PATH } from "./receipt-signing.js";
 
 export { CONFORMANCE_PATH };
 export const CONFORMANCE_VERSION = 1;
@@ -49,7 +50,7 @@ export const FEATURES = Object.freeze([
   { id: "hangupForgiveness", title: "Hang-up forgiveness", description: "A buyer whose connection closes before the first answer byte is not charged, within a budget." },
   { id: "sanctionsScreening", title: "Payer sanctions screening", description: "The paying address is checked against the OFAC SDN list before the paid handler runs." },
   { id: "receipt", title: "Receipt header", description: "A paid answer carries a receipt header naming the settlement." },
-  { id: "signedReceipt", title: "Receipt signed by this server", description: "The receipt carries a signature by this server over the answer." },
+  { id: "signedReceipt", title: "Receipt signed by this server", description: "The paid answer carries a receipt this server signs over the request, the answer and the settlement, verifiable against its published keys." },
 ]);
 
 /** The chain family a repayment is sent on for `network`, or null when the
@@ -98,6 +99,8 @@ function liveState() {
     credits: gateMounted("credits"),
     checkout: humanCheckoutEnabled(),
     pow: gateMounted("pow"),
+    // Signed receipts: the signer is in the chain and a key is loaded.
+    receiptSigner: receiptsServed(),
   };
 }
 
@@ -120,6 +123,13 @@ function refundCell(network, how) {
     : cell(false, "A charge whose answer was not delivered is recorded as owed, but the refund run repays chain payments only and has no sender for this rail.", "scripts/refund-run.js");
 }
 const NOT_SIGNED = (header) => cell(false, `${header} is the settlement's own record; this server adds no signature of its own.`, null);
+// True only where src/receipt-signing.js signs: the signer mounted with a key
+// loaded, and the rail one it signs on.
+function signedCell(L, rail, header) {
+  return L.receiptSigner && SIGNED_RAILS.includes(rail)
+    ? cell(true, `${RECEIPT_HEADER}: a compact JWS (EdDSA, Ed25519) this server signs over the route, the request digest, the answer's digest, the price, the rail, the payer and the settlement ${header} names; sent only on a final, non-streamed 200 after settlement (a streamed answer carries none). Keys at ${RECEIPT_KEYS_PATH}.`, "src/receipt-signing.js")
+    : NOT_SIGNED(header);
+}
 
 function x402Row(L, { scheme, network, batched, offered }) {
   const { chain, asset } = chainOf(network);
@@ -153,7 +163,7 @@ function x402Row(L, { scheme, network, batched, offered }) {
         ? cell(false, "The x402 payer screen is mounted but no sanctions list is loaded right now, so it fails open: payers are served unscreened until the list loads.", "src/x402-payer-screen.js")
         : cell(true, network.startsWith("eip155:") ? "The signed EVM payer (authorization.from, or the Permit2 signer) is checked after verification and before the route runs; a listed payer is refused 403 and not charged. While no list is loaded the screen fails open (served unscreened)." : "The transaction's signers are checked after verification and before the route runs; a listed signer is refused 403 and not charged. While no list is loaded the screen fails open (served unscreened).", "src/x402-payer-screen.js"),
       receipt: cell(true, "PAYMENT-RESPONSE: the settlement result, with the transaction.", "src/payments.js"),
-      signedReceipt: NOT_SIGNED("PAYMENT-RESPONSE"),
+      signedReceipt: signedCell(L, batched ? "gateway-batched" : "x402", "PAYMENT-RESPONSE"),
     },
   };
 }
@@ -171,7 +181,7 @@ function mppEvmRow(L, network, offered) {
       settleAfterAnswer: cell(true, "Translated onto the x402 paywall, which settles only an answer below 400.", "src/mpp-shim.js"),
       paymentIdentifier: NA("An x402 extension; an MPP credential carries none."),
       receipt: cell(true, "Payment-Receipt, mirrored from the x402 settlement result.", "src/mpp-shim.js"),
-      signedReceipt: NOT_SIGNED("Payment-Receipt"),
+      signedReceipt: signedCell(L, "mpp-evm", "Payment-Receipt"),
     },
   };
 }
@@ -203,7 +213,7 @@ function tempoRow(L, push) {
         ? cell(true, "Direct settlement (TEMPO_RELAY=off) checks every payment party, and the paying wallet's recent funders, before any money moves; no Tempo challenge is offered while the list is not loaded.", "src/mpp-tempo.js")
         : cell(false, "Settled through Tempo's relay (the default); this server does not screen Tempo payment parties in that mode.", "src/mpp-tempo.js"),
       receipt: cell(true, "Payment-Receipt, naming the Tempo transaction.", "src/mpp-receipt.js"),
-      signedReceipt: NOT_SIGNED("Payment-Receipt"),
+      signedReceipt: signedCell(L, "mpp-tempo", "Payment-Receipt"),
     },
   };
 }
@@ -220,7 +230,7 @@ function stripeRow(L) {
       hangupForgiveness: hangupCell(L, "The payment is not captured (499, not charged)."),
       sanctionsScreening: cell(false, "This server runs no screen of its own on a card payment.", null),
       receipt: cell(true, "Payment-Receipt, naming the Stripe payment.", "src/mpp-receipt.js"),
-      signedReceipt: NOT_SIGNED("Payment-Receipt"),
+      signedReceipt: signedCell(L, "mpp-stripe", "Payment-Receipt"),
     },
   };
 }

@@ -258,8 +258,9 @@ names first); `WRAP_ALL=1` runs all of them.
 - No taglines, helper text or secondary labels. A screen that needs one to make sense gets a
   better layout instead.
 - First-party and affirmative; no competitor names; no em dashes.
-- Say **"500+ tools"** on marketing and static surfaces; exact counts only where derived at
-  runtime.
+- Marketing leads with the payment and trust layer (the lead sentence in `src/positioning.js`);
+  catalog size is a supporting line, **"500+ tools"** on marketing and static surfaces, exact
+  counts only where derived at runtime.
 - Model-backed tools are labeled as model-backed. Any claim about determinism or about models
   being absent is scoped to the utility tools it is true of (scripts/test-copy-absolutes.js
   lists the phrasings it refuses).

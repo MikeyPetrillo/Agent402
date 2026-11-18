@@ -32,16 +32,17 @@ pull request:
    agreeing in a comment, the contributor (or a maintainer) re-runs the check
    or pushes a commit.
 
-Why both: the company holds the copyright in the code it wrote and the rights
-its contributors grant, and offers Agent402 under AGPL-3.0 and MIT. The
+Why both: Cardhavok LLC (doing business as Havok Holdings LLC) owns the code
+in this repository except a small number of trivial lines (seed URLs, a badge
+line, punctuation) contributed earlier under AGPL-3.0 or MIT, whose authors
+keep their copyright, and offers Agent402 under AGPL-3.0 and MIT. The
 sign-off records where each commit came from, and the agreement records that
 the company may keep using, licensing and relicensing what you contributed,
 including under commercial terms. Together they let anyone who relies on the
 code check where each outside contribution came from and under which terms.
 You keep the copyright in your contribution; the agreement is a license, not
-an assignment. Contributions made before these terms came in under the
-license of the component they changed, and their authors keep their
-copyright.
+an assignment, and it covers both your new contributions and your earlier
+ones.
 
 Your contribution is also licensed under the license of the component you
 change: AGPL-3.0-or-later for the server (the repository root, where most
