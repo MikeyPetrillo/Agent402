@@ -293,10 +293,13 @@ ok(tOnText.includes(`no key holds more than $${creditsBalanceMaxCents() / 100}`)
 ok(/Credits never expire and carry no fees/.test(tOnText) && /Routes that buy from an outside seller with our wallet are paid with a wallet, not with credits/.test(tOnText), "/terms (on) states no expiry, no fees and own services only");
 ok(!tOnText.includes("unspent balance under $10") && !/non-refundable/.test(tOnText.slice(tOnText.indexOf("Prepaid credits are consumed"), tOnText.indexOf("Prepaid credits are consumed") + 300)), "/terms (on) drops the $10 exception and the non-refundable rule");
 ok(tOffText.includes("non-refundable except where required by law, with one exception: an unspent balance under $10") && !tOffText.includes("/api/credits/refund") && !/no key holds more than/.test(tOffText), "/terms (off) keeps the sentence issued keys were sold under and offers no refund route");
-ok(dateOf(tOff) === TERMS_VERSION && dateOf(pOff) === TERMS_VERSION, `with sales off both pages keep their own date (${TERMS_VERSION})`);
+// Each page has a date of its own (/terms is TERMS_VERSION; /privacy the date
+// its source prints), and the on-sale date moves either only when it is later.
+const PRIVACY_OWN = (readFileSync(new URL("../src/privacy.js", import.meta.url), "utf8").match(/last updated (\d{4}-\d{2}-\d{2})\./) || [])[1];
+ok(dateOf(tOff) === TERMS_VERSION && dateOf(pOff) === PRIVACY_OWN, `with sales off both pages keep their own dates (${TERMS_VERSION}, ${PRIVACY_OWN})`);
 const today = new Date().toISOString().slice(0, 10);
-const want = CREDITS_SALES_TERMS_DATE <= today ? CREDITS_SALES_TERMS_DATE : TERMS_VERSION;
-ok(dateOf(tOn) === want && dateOf(pOn) === want, `with sales on both pages print the date the on-sale text was written (${dateOf(tOn)})`);
+const want = (own) => (CREDITS_SALES_TERMS_DATE > own && CREDITS_SALES_TERMS_DATE <= today ? CREDITS_SALES_TERMS_DATE : own);
+ok(dateOf(tOn) === want(TERMS_VERSION) && dateOf(pOn) === want(PRIVACY_OWN), `with sales on each page prints the later of its own date and the date the on-sale text was written (${dateOf(tOn)}, ${dateOf(pOn)})`);
 process.env.CREDITS_SALES = "on";
 ok(creditsTermsVersion() === dateOf(tOn), "the version a checkout records is the date /terms prints with sales on");
 ok(creditsLegalDate("2099-01-01") === "2099-01-01" && creditsLegalDate("2026-01-01", "2026-11-16") === "2026-01-01", "control: a later page date wins, and the on-sale date never prints before its day");
