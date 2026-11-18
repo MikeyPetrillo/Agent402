@@ -188,7 +188,9 @@ const listen = (app) => new Promise((r) => { const s = app.listen(0, "127.0.0.1"
   mkdirSync(dir, { recursive: true });
   const sessions = {
     cs_receipt_paid: { id: "cs_receipt_paid", payment_status: "paid", payment_intent: "pi_receipt_1", amount_total: 150, metadata: { product: "dossier", input: "AAPL" } },
-    cs_receipt_free: { id: "cs_receipt_free", payment_status: "no_payment_required", payment_intent: null, amount_total: 0, metadata: { product: "dossier", input: "MSFT" } },
+    // A 100%-off code: nothing collected (a payment intent is named here so
+    // the paid-status rule, not a missing intent, is what withholds it).
+    cs_receipt_free: { id: "cs_receipt_free", payment_status: "no_payment_required", payment_intent: "pi_receipt_free", amount_total: 0, metadata: { product: "dossier", input: "MSFT" } },
   };
   const stripe = { checkout: { sessions: { retrieve: async (id) => { const s = sessions[id]; if (!s) throw new Error("No such session"); return s; } } }, refunds: { create: async () => ({ id: "re_1" }) } };
   const generate = async (_kind, slug, input) => ({ report: `# REPORT (${slug})\n\nAnalysis of ${input}. [1]`, title: `T:${input}`, sources: [], tables: [] });
@@ -256,6 +258,16 @@ try {
     await ok(s.status === 200 && sv.valid && sv.record.rail === "credits", `credits: a streamed chat answer ends with a receipt event that verifies (${s.status}, ${sv.reason})`);
     const cl = await clientVerify(v.record ? r.headers.get(RECEIPT_HEADER) : "", { baseUrl: rig.url, body: text });
     await ok(cl.valid, "credits: the client fetches the keys and agrees");
+    // An answer served without a run (a keyed replay of the same call) is
+    // not debited, so it carries no receipt; the first one covers its bytes.
+    const idem = { ...auth, "Idempotency-Key": `receipt-credits-${Date.now()}` };
+    const first = await fetch(`${rig.url}${HASH.path}`, { method: "POST", headers: idem, body: JSON.stringify(HASH.body) });
+    const firstText = await first.text();
+    await new Promise((res) => setTimeout(res, 300));
+    const again = await fetch(`${rig.url}${HASH.path}`, { method: "POST", headers: idem, body: JSON.stringify(HASH.body) });
+    const againText = await again.text();
+    const fv = verifyReceipt(first.headers.get(RECEIPT_HEADER) || "", { keys: keyDoc.keys, responseBody: againText });
+    await ok(again.status === 200 && again.headers.get("x-idempotent-replay") === "true" && !again.headers.get(RECEIPT_HEADER) && fv.valid && firstText === againText, `credits: a keyed replay is not debited and carries no new receipt; the first verifies against its bytes (${fv.reason})`);
   }
   const doc = await (await fetch(`${rig.url}${CONFORMANCE_PATH}`)).json();
   for (const id of ["credits", "card:checkout"]) {
