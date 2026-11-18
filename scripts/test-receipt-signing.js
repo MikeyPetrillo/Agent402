@@ -19,9 +19,11 @@
 //   3. Without a key (scripts/test-conformance.js section 2 runs the same
 //      wires): no receipt header, the cells read false, the key document
 //      lists no key.
+//   4. A key with a retired list that does not read: signing refused at boot
+//      with the reason (never the value), the cells read false, no receipt.
 import "./lib/offline-stores.js";
 import "./lib/file-mode.js";
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, createHmac } from "node:crypto";
 import { bootPaidWires } from "./lib/paid-wires-rig.js";
 import { loadReceiptKeys, buildReceiptRecord, signReceipt, verifyReceipt, requestDigest, responseDigest, receiptSignerMiddleware, RECEIPT_MAX_BYTES, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, SIGNED_RAILS } from "../src/receipt-signing.js";
 import { verifyReceipt as clientVerify, receiptRequestDigest } from "../client/receipt.js";
@@ -64,8 +66,15 @@ const xOf = (kp) => kp.publicKey.export({ format: "jwk" }).x;
     const leaked = typeof env.RECEIPT_SIGNING_KEY === "string" && env.RECEIPT_SIGNING_KEY.length > 24 && [0, 8, 40].some((i) => r.error?.includes(env.RECEIPT_SIGNING_KEY.slice(i, i + 16)));
     await ok(r.signer === null && re.test(r.error || "") && !leaked && !/PRIVATE KEY-----\n[A-Za-z0-9]/.test(r.error || ""), `refused, signing off: ${what} (${r.error})`);
   }
-  const badRetired = loadReceiptKeys({ ...ENV_A, RECEIPT_RETIRED_KEYS: "{" });
-  await ok(badRetired.signer && /RECEIPT_RETIRED_KEYS/.test(badRetired.error || "") && badRetired.keys.length === 1, "an unreadable retired list is reported and dropped; the current key still signs");
+  // A retired list that does not read refuses signing (a receipt its keys
+  // signed would stop verifying), with the reason and never the value.
+  const retiredX = xOf(B);
+  for (const [list, what] of [["{" + retiredX, "not JSON"], [JSON.stringify({ kid: "r0", x: retiredX }), "not an array"], [JSON.stringify([{ kid: "r0", x: retiredX }, { kid: "bad kid", x: retiredX }]), "an entry without a usable kid"], [JSON.stringify([{ kid: "r0", x: retiredX.slice(4) }]), "a short key"], [JSON.stringify([{ kid: "r0", x: retiredX, validUntil: "soon" }]), "a validUntil that is not a date"]]) {
+    const r = loadReceiptKeys({ ...ENV_A, RECEIPT_RETIRED_KEYS: list });
+    await ok(r.signer === null && r.keys.length === 0 && /RECEIPT_RETIRED_KEYS/.test(r.error || "") && /signing refused/.test(r.error || "") && !(r.error || "").includes(retiredX.slice(4, 24)), `a retired list that does not read refuses signing: ${what} (${r.error})`);
+  }
+  const twoRetired = loadReceiptKeys({ ...ENV_A, RECEIPT_RETIRED_KEYS: JSON.stringify([{ kid: "r0", x: retiredX, validUntil: "2026-06-01T00:00:00Z" }, { kid: "r00", x: xOf(ed()), validUntil: "2026-03-01T00:00:00Z" }]) });
+  await ok(twoRetired.signer?.kid === "r1-test" && twoRetired.error === null && twoRetired.keys.map((k) => `${k.kid}:${k.status}`).join(",") === "r1-test:current,r0:retired,r00:retired", "a retired list that reads: the key signs and every retired key stays published");
 
   // Round trip and tamper.
   const signer = on.signer;
@@ -141,12 +150,25 @@ const xOf = (kp) => kp.publicKey.export({ format: "jwk" }).x;
   await ok(run(200, { ...settled, rail: "credits" }) === null, "middleware: a rail it does not sign gets none");
   await ok(run(200, settled, { write: true }) === null, "middleware: a streamed answer (written before end) gets none");
   await ok(SIGNED_RAILS.join() === "x402,gateway-batched,mpp-evm,mpp-tempo,mpp-stripe", "the signed rails");
+  // The method the buyer sent, though a later layer rewrites it (the POST/GET
+  // alias in src/server.js) before the answer ends.
+  for (const [sent, rewritten, body] of [["POST", "GET", { n: 1 }], ["GET", "POST", {}]]) {
+    const headers = new Map();
+    const res = { statusCode: 200, headersSent: false, setHeader: (k, val) => headers.set(k.toLowerCase(), val), write() { return true; }, end() { return this; } };
+    const req = { method: sent, path: "/api/x", originalUrl: "/api/x?a=1", body };
+    let seenAtEnd = null;
+    receiptSignerMiddleware({ describe: (q) => { seenAtEnd = q.method; return settled; }, signer: () => signer })(req, res, () => { req.method = rewritten; });
+    res.end(answer);
+    const v = verifyReceipt(headers.get(RECEIPT_HEADER.toLowerCase()) || "", { keys, request: { method: sent, path: "/api/x?a=1", body: sent === "GET" ? undefined : body } });
+    await ok(v.valid && v.record.method === sent && seenAtEnd === rewritten, `middleware: a ${sent} rewritten to ${rewritten} is named and digested as sent (${v.reason}, ${v.record?.method}); describe reads the rewritten method`);
+  }
 }
 
 // ---- 2. a paid server with a key ----
 const DUB = { method: "POST", path: "/api/dub", body: { text: "hello world", targetLanguage: "es" } };
 const HASH = { method: "POST", path: "/api/hash", body: { text: "receipt" } };
-rig = await bootPaidWires({ label: "receipts", env: { ...ENV_A, RECEIPT_SIGNING_KEY_VALID_FROM: "2026-01-01T00:00:00Z" } });
+const STRIPE_SK = "sk_test_receipts_never_used";
+rig = await bootPaidWires({ label: "receipts", env: { ...ENV_A, RECEIPT_SIGNING_KEY_VALID_FROM: "2026-01-01T00:00:00Z", STRIPE_SECRET_KEY: STRIPE_SK, STRIPE_PROFILE_ID: "profile_test_receipts", STRIPE_WEBHOOK_SECRET: "", STRIPE_TOKEN_STUB: "on" } });
 try {
   const keyDoc = await (await fetch(`${rig.url}${RECEIPT_KEYS_PATH}`)).json();
   await ok(keyDoc.signing === true && keyDoc.keys.length === 1 && keyDoc.keys[0].kid === "r1-test" && keyDoc.keys[0].x === xOf(A) && keyDoc.keys[0].validFrom === "2026-01-01T00:00:00.000Z", "the key document publishes the public key, its id and valid-from");
@@ -187,6 +209,36 @@ try {
     await ok(api.valid === true && api.record.id === rec.id, `${wire}: POST ${RECEIPT_VERIFY_PATH} agrees`);
     const cl = await clientVerify(r, { baseUrl: rig.url, body: good.text });
     await ok(cl.valid === true, `${wire}: the client fetches the keys and agrees`);
+  }
+  // The card wire (mpp:stripe): a capture the stub accepts is a settled 200
+  // with a receipt naming the payment the wire's own receipt names.
+  {
+    // Cards carry a minimum, so the card wire is offered on a route priced above it.
+    const CARD = { method: "POST", path: "/v1/premium/chat/completions", body: { messages: [{ role: "user", content: "say ok" }], max_tokens: 16 } };
+    const o = await rig.offerOf(CARD);
+    const seen = o.challenges.find((c) => c.method === "stripe");
+    await ok(!!seen, "card: the route offers a card challenge");
+    const cardSecret = createHmac("sha256", STRIPE_SK).update("mpp-challenge-signing").digest("base64");
+    const card = (n) => ({ Authorization: rig.Credential.serialize({ challenge: rig.Challenge.from({ ...seen, id: undefined, expires: new Date(Date.now() + 280_000 + n), secretKey: cardSecret }), payload: { type: "spt", spt: `spt_test_receipts_${n}` } }) });
+    const declined = await rig.send(CARD, card(1));
+    await ok(declined.status === 402 && !declined.headers.get(RECEIPT_HEADER), `card: a declined capture (${declined.status}) carries no receipt`);
+    rig.st.stripeCapture = "ok";
+    const paid = await rig.send(CARD, card(2));
+    rig.st.stripeCapture = "decline";
+    const r = paid.headers.get(RECEIPT_HEADER);
+    const v = verifyReceipt(r || "", { keys: keyDoc.keys, responseBody: paid.text, request: CARD });
+    const ref = paid.headers.get("payment-receipt") ? JSON.parse(Buffer.from(paid.headers.get("payment-receipt"), "base64url").toString("utf8")).reference : null;
+    await ok(paid.status === 200 && v.valid && v.checks.response && v.checks.request && v.record.rail === "mpp-stripe" && v.record.slug && !!ref && v.record.settlement === ref && v.record.priceUsd, `card: the captured 200 carries a receipt that verifies, rail mpp-stripe, naming the card payment (${paid.status}, ${v.reason}, ${v.record?.rail}, ${v.record?.settlement})`);
+  }
+  // The POST/GET alias: a POST to a GET-only tool and a GET to a POST tool
+  // are served through the other method's gate chain; the receipt names and
+  // digests the request the buyer sent.
+  for (const route of [{ method: "POST", path: "/api/uuid", body: { count: 1 } }, { method: "GET", path: "/api/hash?text=receipt" }]) {
+    const w = await rig.wallet("evm");
+    rig.fund(w, 10n ** 12n);
+    const good = await rig.pay(w, route);
+    const v = verifyReceipt(good.headers.get(RECEIPT_HEADER) || "", { keys: keyDoc.keys, responseBody: good.text, request: { method: route.method, path: route.path, body: route.body } });
+    await ok(good.status === 200 && v.valid && v.checks.request && v.record.method === route.method, `${route.method} ${route.path.split("?")[0]} (served by the other method): the receipt verifies as sent (${good.status}, ${v.reason}, method ${v.record?.method})`);
   }
   // A keyed resend replays the served answer without a second charge and
   // without settlement evidence of its own: no new receipt (the first one
@@ -245,5 +297,23 @@ try {
   const good = await rig.pay(w, HASH);
   await ok(good.status === 200 && good.headers.get("payment-response") && !good.headers.get(RECEIPT_HEADER), "no key: a settled 200 carries the settlement receipt and no signed one");
 } finally { await rig.stop(); rig = null; }
+
+// ---- 4. a key with a retired list that does not read ----
+{
+  const badList = `[{"kid":"r0","x":"${xOf(B)}"`;
+  rig = await bootPaidWires({ label: "receipts-bad-retired", env: { ...ENV_A, RECEIPT_RETIRED_KEYS: badList } });
+  try {
+    const log = rig.log();
+    await ok(/\[receipts\] signing refused: RECEIPT_RETIRED_KEYS is not JSON/.test(log) && !log.includes(xOf(B).slice(2, 30)) && !log.includes(ENV_A.RECEIPT_SIGNING_KEY.slice(30, 60)) && !/\[receipts\] signing on/.test(log), "a retired list that does not read: the boot log says signing is refused and why, never the value");
+    const keyDoc = await (await fetch(`${rig.url}${RECEIPT_KEYS_PATH}`)).json();
+    await ok(keyDoc.signing === false, "a retired list that does not read: the key document says signing is off");
+    const doc = await (await fetch(`${rig.url}${CONFORMANCE_PATH}`)).json();
+    await ok(doc.rails.every((r) => r.features.signedReceipt.supported !== true), "a retired list that does not read: no conformance cell claims a signed receipt");
+    const w = await rig.wallet("evm");
+    rig.fund(w, 10n ** 12n);
+    const good = await rig.pay(w, HASH);
+    await ok(good.status === 200 && !good.headers.get(RECEIPT_HEADER), "a retired list that does not read: a settled 200 carries no signed receipt");
+  } finally { await rig.stop(); rig = null; }
+}
 
 console.log(`\n${pass} checks passed`);

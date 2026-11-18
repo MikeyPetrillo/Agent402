@@ -31,6 +31,7 @@
 //                             [{ kid, x, validFrom, validUntil }] (x: the raw
 //                             32-byte Ed25519 public key, base64url), kept
 //                             published so receipts they signed still verify.
+//                             A list that does not read refuses signing.
 import { createHash, createPrivateKey, createPublicKey, sign as edSign, verify as edVerify, randomUUID } from "node:crypto";
 import { gateMounted } from "./gate-mounts.js";
 
@@ -89,6 +90,9 @@ export function loadReceiptKeys(env = process.env) {
     retired.length = 0;
   }
   if (!raw) return { signer: null, keys: retired, error };
+  // A retired list that does not read refuses signing: a receipt its keys
+  // signed would stop verifying the moment this key replaced them.
+  if (error) return { signer: null, keys: [], error: `${error}; signing refused until it reads` };
   const kid = typeof env.RECEIPT_SIGNING_KEY_ID === "string" ? env.RECEIPT_SIGNING_KEY_ID.trim() : "";
   try {
     if (!KID_RE.test(kid)) throw new Error("RECEIPT_SIGNING_KEY_ID is missing or not 1-32 of A-Z a-z 0-9 . _ -");
@@ -239,6 +243,10 @@ export function verifyReceipt(jws, { keys = receiptKeys().keys, responseBody, re
 export function receiptSignerMiddleware({ describe, iss = null, signer = () => receiptKeys().signer, onError = null } = {}) {
   return function receiptSignerMw(req, res, next) {
     if (!signer() || req.method === "HEAD" || req.method === "OPTIONS") return next();
+    // The method the buyer sent, before the POST/GET alias (src/server.js)
+    // rewrites it for the gate chain: the receipt names and digests the
+    // request as sent.
+    const sentMethod = req.method;
     let wrote = false;
     const origWrite = res.write;
     const origEnd = res.end;
@@ -253,8 +261,8 @@ export function receiptSignerMiddleware({ describe, iss = null, signer = () => r
             const url = String(req.originalUrl || req.url || "");
             const q = url.indexOf("?");
             const record = buildReceiptRecord({
-              iss, method: req.method, path: req.path, slug: d.slug,
-              requestSha256: requestDigest(req.method, `${req.path}${q >= 0 ? url.slice(q) : ""}`, req.body),
+              iss, method: sentMethod, path: req.path, slug: d.slug,
+              requestSha256: requestDigest(sentMethod, `${req.path}${q >= 0 ? url.slice(q) : ""}`, req.body),
               responseSha256: responseDigest(bytes),
               priceUsd: d.priceUsd, rail: d.rail, network: d.network, payer: d.payer, settlement: d.settlement, replay: d.replay,
             });
