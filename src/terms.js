@@ -14,6 +14,8 @@ import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { refundClauseText } from "./refund-terms.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
 import { connectorWires } from "./connector-pay.js";
+import { COMPANY_PHONE, LEGAL_ENTITY_SENTENCE } from "./company.js";
+import { companyPostalLine } from "./email.js";
 export function termsPage(baseUrl) {
   // Prepaid credits wording follows the sales switch and the purchase limit.
   const creditsOnSale = creditsSalesEnabled();
@@ -43,6 +45,9 @@ export function termsPage(baseUrl) {
   // The wires the hosted connector takes in the call on this boot
   // (src/connector-pay.js): none in FREE_MODE, x402 alone without the MPP gates.
   const connectorWire = connectorWires().phrase;
+  // The copyright agent's mail address is COMPANY_POSTAL_ADDRESS, the value
+  // /company and every outbound email print; unset, the section points there.
+  const postal = companyPostalLine();
 
   const extraCss = `
 .tm-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
@@ -66,7 +71,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-17.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-18.</p>
 </section>
 
 <section>
@@ -143,12 +148,30 @@ measurements and probe results, and we license them on the terms we publish for 
 obtained them from. Measurements made by third parties are attributed where displayed and are not
 redistributed by us.</p>
 
-<h2>Copyright complaints</h2>
-<p>If you believe content generated, fetched, or stored through the service infringes your copyright,
-send a notice to <a href="mailto:mike@agent402.tools">mike@agent402.tools</a> identifying the work, the
-material at issue, your contact information, and a good-faith statement that the use is unauthorized.
-We respond to valid notices, including by removing stored material and blocking wallets of repeat
-infringers.</p>
+<h2 id="copyright">Copyright complaints</h2>
+<p>Some material on the service is stored or shown at a caller's request: memory-tool data, shared
+answer pages, reports made public, and listings in the published index. If you believe material on the
+service infringes your copyright, send a notice to our designated agent:</p>
+<p><b>Copyright agent</b>, ${LEGAL_ENTITY_SENTENCE}<br>
+Email: <a href="mailto:mike@agent402.tools">mike@agent402.tools</a><br>
+Phone: <a href="tel:${COMPANY_PHONE.tel}">${COMPANY_PHONE.display}</a><br>
+${postal ? `Mail: ${esc(postal)}` : `Mail: the postal address on <a href="/company">/company</a>`}</p>
+<p>A notice includes: your physical or electronic signature; the copyrighted work you say is infringed;
+the material you want removed and where it is (a URL is best); your name, postal address, phone and
+email; a statement that you believe in good faith the use is not authorized by the owner, its agent or
+the law; and a statement that the notice is accurate and, under penalty of perjury, that you are the
+owner or authorized to act for the owner. On a complete notice we remove or disable the material
+promptly and take reasonable steps to notify the person who provided it, where we can identify them.
+Removing a shared answer page deletes it, so it cannot be restored.</p>
+<p>If your material was removed and you believe that was a mistake or a misidentification, send a
+counter-notice to the same agent with: your physical or electronic signature; the material removed and
+where it was before removal; a statement under penalty of perjury that you believe in good faith it was
+removed by mistake or misidentification; your name, postal address and phone; and your consent to the
+jurisdiction of the federal district court for your address (or, outside the United States, any judicial
+district where we may be found) and to accept service from the person who sent the notice or that
+person's agent. We forward the counter-notice to that person and, for material we can restore, restore it
+in 10 to 14 business days unless they tell us they have filed a court action to keep it down.</p>
+<p>We block the wallets, and end the subscriptions and keys, of repeat infringers.</p>
 
 <h2>Payments</h2>
 <p><b>On-chain (x402 / MPP).</b> Paid calls settle on public blockchains${gatewayBatched ? " (except Circle Gateway batched payments, below)" : ""} - USDC on Base and the other
@@ -216,8 +239,9 @@ and it does not apply to a balance disabled for a refund or dispute.</p>
 MPP on Tempo from an authorization you sign, and renews each month until you cancel. Cancel a card subscription any
 time in the Stripe Customer Portal, opened by the manage link in your monitor emails; if you no longer have those
 emails, enter your checkout email under "Already subscribed?" on <a href="/monitors#manage">/monitors</a> and we email
-you a new link. Cancel an MPP subscription by revoking the authorization. Cancellation stops future renewals and the
-monitor keeps running to the end of the paid period. Renewal charges are not refunded pro rata. A monitor whose subject cannot be read (for example a
+you a new link. Cancel an MPP subscription with a POST request to the cancel link in your monitor emails (it carries
+your manage token), or by revoking the authorization. A canceled subscription stays active until the end of the period
+you already paid for and is not renewed; there is no partial refund for the remaining days. A monitor whose subject cannot be read (for example a
 domain that does not resolve) keeps its free daily check, emails you once about the problem, and produces
 no further paid reports until the subject is readable again; each subscription also has a cap on paid
 re-runs per 30 days, above which it alerts without re-running.</p>

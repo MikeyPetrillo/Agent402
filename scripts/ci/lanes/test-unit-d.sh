@@ -63,6 +63,8 @@ t node scripts/test-badge-contrast.js
 t node scripts/test-ga-snippet.js
 # Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
 t node scripts/test-analytics-privacy.js
+# Age, self-hosted fonts, analytics off-switches, recurring-mail stop links, renewal terms after purchase, the copyright agent
+t node scripts/test-compliance-surfaces.js
 t node scripts/test-chain-page-cache.js
 # ?seller= views: unknown sellers never build, one build per listed seller, bounded memo, flat heap
 t node scripts/test-chain-seller-view-memo.js

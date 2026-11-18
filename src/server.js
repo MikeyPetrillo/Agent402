@@ -368,7 +368,7 @@ import { insiderPage, fundPage, dossierPage, hubPage, loadTeaser, normalizeTicke
 import { createMonitorScheduler } from "./monitor-scheduler.js";
 import { createCredits, sellablePacks } from "./credits.js";
 import { creditsPage, creditsThanksPage } from "./credits-page.js";
-import { sendMonitorEmail, emailSendStatus } from "./email.js";
+import { sendMonitorEmail, emailSendStatus, subscriptionPriceText } from "./email.js";
 import { probeDomain, normDomain } from "./tools/domain-audit-kit.js";
 import { latest13fFiling, resolveManager as edgarResolveManager } from "./tools/edgar-kit.js";
 import { resolveSpend as resolveExternalSpend, globalUnsettledStatus } from "./external-spend-guard.js";
@@ -5432,7 +5432,10 @@ if (_subs) {
       const r = await _subs.recordFromSession(String(req.query.session || ""));
       // Do NOT mint a billing portal on the auto-poll (a portal can view invoices
       // + payment method and cancel). The manage link mints it on explicit click.
-      res.json({ status: r.status, label: r.label, target: r.target });
+      // The price sentence the thanks page shows, from the catalog price and
+      // any promotion figures Stripe reported (src/email.js).
+      const priceText = r.status === "active" ? subscriptionPriceText(r) : "";
+      res.json({ status: r.status, label: r.label, target: r.target, ...(priceText ? { priceText } : {}) });
     } catch (e) { console.warn("[monitors] confirm failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); res.status(500).json({ status: "error", error: "Could not confirm the subscription right now." }); }
   });
   // Explicit manage/cancel: mint the Stripe Customer Portal at click time, then
@@ -5572,6 +5575,15 @@ if (_allSubs) {
         const subId = _monitors?.subIdOfReport(reportId);
         if (_mppSubs && subId && _mppSubs.isMine(subId)) return `${BASE_URL}/api/mpp/monitors/${encodeURIComponent(subId)}?token=${_mppSubs.manageToken(subId)}`;
         return `${BASE_URL}/monitors/manage?report=${encodeURIComponent(reportId)}&k=${_manageToken(reportId)}`;
+      },
+      // How each subscriber cancels, for every email: a wallet subscriber by
+      // a POST to its cancel endpoint (manage token in the link) or by
+      // revoking its authorization; a card subscriber in the Stripe portal.
+      billingFor: (subId) => {
+        if (!(_mppSubs && subId && _mppSubs.isMine(subId))) return { rail: "card" };
+        const base = `${BASE_URL}/api/mpp/monitors/${encodeURIComponent(subId)}`;
+        const tok = encodeURIComponent(_mppSubs.manageToken(subId));
+        return { rail: "mpp", manageUrl: `${base}?token=${tok}`, cancelUrl: `${base}/cancel?token=${tok}` };
       },
       refreshStatus: (subId) => _allSubs.refreshStatus(subId),
       probeRecalls, probeIpos, probeInsiderFilings,
