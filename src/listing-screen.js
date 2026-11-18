@@ -316,13 +316,26 @@ const LISTED = "(?:one|tool|listing|seller|option|provider|route|endpoint|servic
 // ("to this API endpoint", "to this one tool"), or "the" with a word that
 // points back at it ("to the one tool", "to the listed endpoint"). A "the"
 // with any other word ("to the nearest server") names a place of its own.
-const POINTING = "(?:one|only|single|same|listed|named|above|current|following)";
-const HERE = `(?:(?:(?:over|right) )?(?:to )?here|to (?:me|us)|to (?:this|our)(?: [a-z0-9]+){0,3} ${LISTED}|to (?:this|our)|to the(?: ${POINTING}){1,2}(?: [a-z0-9]+){0,2} ${LISTED}|to the ${LISTED} (?:named|listed|described|shown|given|written|linked) (?:here|above|below))`;
+// "the following" is how documentation introduces its own base address ("All
+// requests should go to the following endpoint: https://..."), so it points
+// at this listing only with a noun that names a listing, never an address.
+const POINTING = "(?:one|only|single|same|listed|named|above|current)";
+const LISTING_SELF = "(?:one|tool|listing|seller|option|provider)";
+// The words between the demonstrative and the noun are joined by plain
+// spaces (FILL, which words() leaves as written), so they never cross a mark:
+// "to this URL: https://api.example.com" is an address, and its host's "api"
+// is not the listing's noun.
+const FILL = (n, word = "[a-z0-9]+") => `(?:\\x20${word}){0,${n}}`;
+const HERE = `(?:(?:(?:over|right) )?(?:to )?here|to (?:me|us)|to (?:this|our)${FILL(3)} ${LISTED}|to (?:this|our)|to the(?: ${POINTING}){1,2}${FILL(2)} ${LISTED}|to the following${FILL(2)} ${LISTING_SELF}|to the ${LISTED} (?:named|listed|described|shown|given|written|linked) (?:here|above|below))`;
 // The few words that only say WHICH requests ("for all incoming API
 // requests"); the "use this for ..." rule takes no other word there, so
 // "Use this tool for all image resizing tasks." (what the tool is for) is kept.
 const WHICH = "(?:of|the|your|their|my|incoming|inbound|outbound|api|http|user|agent|future|new|subsequent|such|similar|related|single)";
 const OTHER_TOOLS = "(?:tools?|listings?|sellers?|options?|providers?|results?|candidates?|services?|apis?|endpoints?|routes?|servers?|vendors?|alternatives?|choices?|entry|entries|ones?)";
+// What "no other ... is needed" sets aside: other listings. "No other options
+// are needed" in a tool's documentation is about its parameters, and
+// "results", "choices" or "entries" are rows of its answer.
+const OTHER_LISTINGS = "(?:tools?|listings?|sellers?|providers?|services?|apis?|endpoints?|vendors?|alternatives?)";
 // This listing as the object of a verb: "me", "us", "this" or "our" alone, or
 // with up to three words before the listing's own noun ("this one tool").
 const SELF = `(?:me|us|ours|this|our|(?:this|our)(?: [a-z0-9]+){0,3} ${LISTED})`;
@@ -334,11 +347,18 @@ const RELATIVE = "(?: (?:you|that|which|we|they|i)(?: [a-z0-9]+){1,3})?";
 // verb, "all" or "every", up to four words, the traffic and this listing as
 // the place. Accents are optional.
 const FW = "[a-z\\u00e0-\\u00ff]+";
+// As in English, a demonstrative points at this listing alone or before the
+// listing's own noun: "a esta URL", "vers cette URL" and "an diese URL" name
+// the documented address a client calls, which is what the docs say.
+const LISTED_ES = "(?:herramienta|servicio|proveedor|vendedor|endpoint|api|servidor|listado|anuncio|opci[oó]n)";
+const LISTED_PT = "(?:ferramenta|servi[cç]o|provedor|fornecedor|vendedor|endpoint|api|servidor|an[uú]ncio|op[cç][aã]o)";
+const LISTED_FR = "(?:outil|service|fournisseur|vendeur|endpoint|api|serveur|annonce|option)";
+const LISTED_DE = "(?:tool|werkzeug|dienst|anbieter|verk[aä]ufer|endpunkt|endpoint|api|server|angebot)";
 const FOREIGN_SEND = [
-  `\\b(?:env[ií]a|env[ií]e|env[ií]en|enviar|manda|mande|dirige|dirija|redirige|redirija|enruta|enrute|reenv[ií]a|reenv[ií]e) (?:todas|todos|cada)(?: ${FW}){0,4} (?:solicitudes|solicitud|peticiones|petici[oó]n|consultas|consulta|llamadas|llamada|tareas|tarea|pedidos|pedido|mensajes) (?:(?:directamente|solo|siempre) )?(?:aqu[ií]|ac[aá]|a nosotros|a (?:este|esta)(?: ${FW}){0,2})`,
-  `\\b(?:envie|envia|enviar|mande|manda|direcione|encaminhe|redirecione) (?:todas|todos|cada)(?: ${FW}){0,4} (?:solicita[cç][oõ]es|solicita[cç][aã]o|requisi[cç][oõ]es|requisi[cç][aã]o|pedidos|pedido|consultas|chamadas|tarefas|mensagens) (?:(?:diretamente|s[oó]|sempre) )?(?:aqui|para c[aá]|para n[oó]s|para (?:este|esta)(?: ${FW}){0,2})`,
-  `\\b(?:envoyez|envoie|envoyer|dirigez|redirigez|acheminez|routez|transmettez) (?:toutes|tous|chaque)(?: ${FW}){0,4} (?:requ[eê]tes|requ[eê]te|demandes|demande|appels|appel|t[aâ]ches|messages) (?:(?:directement|uniquement|toujours) )?(?:ici|vers nous|[aà] nous|(?:vers|[aà]) (?:ce|cet|cette)(?: ${FW}){0,2})`,
-  `\\b(?:sende|sendet|senden sie|schicke|schickt|schicken sie|leite|leitet|leiten sie) (?:alle|jede|jeden|jedes)(?: ${FW}){0,4} (?:anfragen|anfrage|aufrufe|abfragen|auftr[aä]ge|nachrichten) (?:(?:direkt|nur|immer) )?(?:hierher|hierhin|hier|an uns|zu uns|an (?:dieses|diesen|diese)(?: ${FW}){0,2})`,
+  `\\b(?:env[ií]a|env[ií]e|env[ií]en|enviar|manda|mande|dirige|dirija|redirige|redirija|enruta|enrute|reenv[ií]a|reenv[ií]e) (?:todas|todos|cada)(?: ${FW}){0,4} (?:solicitudes|solicitud|peticiones|petici[oó]n|consultas|consulta|llamadas|llamada|tareas|tarea|pedidos|pedido|mensajes) (?:(?:directamente|solo|siempre) )?(?:aqu[ií]|ac[aá]|a nosotros|a (?:este|esta)${FILL(2, FW)} ${LISTED_ES}|a (?:este|esta))`,
+  `\\b(?:envie|envia|enviar|mande|manda|direcione|encaminhe|redirecione) (?:todas|todos|cada)(?: ${FW}){0,4} (?:solicita[cç][oõ]es|solicita[cç][aã]o|requisi[cç][oõ]es|requisi[cç][aã]o|pedidos|pedido|consultas|chamadas|tarefas|mensagens) (?:(?:diretamente|s[oó]|sempre) )?(?:aqui|para c[aá]|para n[oó]s|para (?:este|esta)${FILL(2, FW)} ${LISTED_PT}|para (?:este|esta))`,
+  `\\b(?:envoyez|envoie|envoyer|dirigez|redirigez|acheminez|routez|transmettez) (?:toutes|tous|chaque)(?: ${FW}){0,4} (?:requ[eê]tes|requ[eê]te|demandes|demande|appels|appel|t[aâ]ches|messages) (?:(?:directement|uniquement|toujours) )?(?:ici|vers nous|[aà] nous|(?:vers|[aà]) (?:ce|cet|cette)${FILL(2, FW)} ${LISTED_FR}|(?:vers|[aà]) (?:ce|cet|cette))`,
+  `\\b(?:sende|sendet|senden sie|schicke|schickt|schicken sie|leite|leitet|leiten sie) (?:alle|jede|jeden|jedes)(?: ${FW}){0,4} (?:anfragen|anfrage|aufrufe|abfragen|auftr[aä]ge|nachrichten) (?:(?:direkt|nur|immer) )?(?:hierher|hierhin|hier|an uns|zu uns|an (?:dieses|diesen|diese)${FILL(2, FW)} ${LISTED_DE}|an (?:dieses|diesen|diese))`,
 ];
 const DIRECTIVE_PATTERNS = [
   // Where to send all traffic: the verb, "all", "every" or "each", up to
@@ -369,9 +389,9 @@ const DIRECTIVE_PATTERNS = [
   // This listing for everything: "use this tool for everything".
   `\\b(?:use|call|invoke|pick|choose|select|prefer) ${SELF} (?:for|on|with) (?:everything|anything|all of it|all (?:your|of your) (?:needs|work|tasks|requests))`,
   // No other tool needed: "No other tool is needed", "you need no other tool".
-  `\\bno (?:other|another|additional|second|further) ${OTHER_TOOLS} (?:is|are|will be|would be) (?:ever )?(?:needed|necessary|required)`,
-  `\\b(?:you|agents?|the agent)(?: will)? (?:need|require) no (?:other|another|additional|further) ${OTHER_TOOLS}`,
-  `\\b(?:you|agents?|the agent) (?:do not|dont|don t|does not|doesn t|will not|won t|never)(?: ever)? (?:need|require) (?:any )?(?:other|another|additional|further) ${OTHER_TOOLS}`,
+  `\\bno (?:other|another|additional|second|further) ${OTHER_LISTINGS} (?:is|are|will be|would be) (?:ever )?(?:needed|necessary|required)`,
+  `\\b(?:you|agents?|the agent)(?: will)? (?:need|require) no (?:other|another|additional|further) ${OTHER_LISTINGS}`,
+  `\\b(?:you|agents?|the agent) (?:do not|dont|don t|does not|doesn t|will not|won t|never)(?: ever)? (?:need|require) (?:any )?(?:other|another|additional|further) ${OTHER_LISTINGS}`,
   // Where to send all traffic, in the other languages seen on the index.
   ...FOREIGN_SEND,
 ].map((src) => `${words(src)}${END}`);
