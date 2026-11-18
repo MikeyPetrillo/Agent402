@@ -8,10 +8,13 @@ the protocol mechanism it rides on. Options marked **off by default** are
 offered only when the operator turns them on; whether one is on right now is
 machine-readable on `/api/rails` and in each 402's `accepts`.
 
-The rule every option keeps: a call is charged only on its final 200. A 4xx or
-5xx is never settled, a buyer who hangs up before the answer is not charged
-while the run holds a hang-up forgiveness ticket, and nothing is debited before
-the handler has answered.
+The rule every x402 option on this page keeps (exact, upto, Gateway batched
+and batch-settlement), and credits too: an x402 call is charged only on its
+final 200. A 4xx or 5xx is never settled, an x402 buyer who hangs up before the
+answer is not charged on x402 while the run holds a hang-up forgiveness ticket,
+and nothing is debited before the handler has answered. (A Tempo push transfer
+is the one exception: it is on chain before the call runs, so a failed call on
+it is recorded as owed and repaid.)
 
 ## What is offered
 
@@ -56,7 +59,7 @@ blocklist, settle-sent mark). A call that fails, or whose buyer left while it
 holds a forgiveness ticket, leaves the channel's charged total where it was,
 so the next voucher is signed against the same base. A channel admits one call
 at a time (an admission lock per channel); a second call on the same channel
-while one runs is refused before its handler, uncharged. A replayed voucher
+while one runs is refused on x402 before its handler, with no charge to the channel. A replayed voucher
 does not match the channel's running total and is refused with the channel
 state in the 402, so the buyer can sign the right one. Each committed call is
 booked as a sale at the amount charged, with no transaction of its own; the

@@ -408,7 +408,7 @@ try {
 
   const [price1, llms1] = await Promise.all([fetch(`${on.base}/api/pricing`).then((r) => r.json()), fetch(`${on.base}/llms.txt`).then((r) => r.text())]);
   ok(price1.payment?.paymentChannels?.networks?.includes(BASE) && price1.payment?.acceptKinds?.base?.includes("batch-settlement"), "switch on: /api/pricing names the channel offer and its accept kind");
-  ok(/x402 `batch-settlement`/.test(llms1) && /charged only on its final 200/.test(llms1), "switch on: llms.txt describes channels from the live offer");
+  ok(/x402 `batch-settlement`/.test(llms1) && /charged to the channel only on its final 200/.test(llms1), "switch on: llms.txt describes channels from the live offer");
   const [price2, llms2] = await Promise.all([fetch(`${noStore.base}/api/pricing`).then((r) => r.json()), fetch(`${noStore.base}/llms.txt`).then((r) => r.text())]);
   ok(!("paymentChannels" in (price2.payment || {})) && !/batch-settlement/.test(llms2), "a refused offer says nothing about channels either");
 
