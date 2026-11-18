@@ -977,6 +977,8 @@ export async function withLease(name, opts = {}, fn) {
     }
   } finally { heldLeases.delete(key); }
 }
+/** Tests only: forget the runs in progress here with no state database, as a restart would. */
+export function __forgetLocalLeaseRunsForTest() { localRuns.clear(); }
 function markLeaseLost(entry, why) {
   if (entry.lost) return;
   entry.lost = true;

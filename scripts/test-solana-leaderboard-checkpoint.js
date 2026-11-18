@@ -42,6 +42,8 @@ process.env.SOLANA_LB_RETRY_PAUSE_MS = "0";
 
 const lb = await import("../src/solana-leaderboard.js");
 const { creditFromTx } = await import("../src/solana-buyer.js");
+// A restart also ends the hung scan's run under its lease name.
+const { __forgetLocalLeaseRunsForTest } = await import("../src/state-db.js");
 
 const nowSec = Math.floor(Date.now() / 1000);
 const mkChain = (tag, n, startSec, stepSec) => Array.from({ length: n }, (_, i) => ({ signature: `${tag}${n - i}`, blockTime: startSec - i * stepSec, err: null, buyer: `Buyer${(n - i) % 50}`, amount: 1000 + ((n - i) % 7) }));
@@ -113,6 +115,7 @@ const stored = () => (existsSync(FILE) ? JSON.parse(readFileSync(FILE, "utf8")) 
 // ---- 2. the next boot continues from the checkpoint --------------------------
 {
   lb.__resetSolanaLeaderboardForTest();
+  __forgetLocalLeaseRunsForTest();
   ok(lb.loadPersistedSolanaLeaderboard() === true && lb._stateForTest()[P2]?.bfBefore === "b1031", "a boot from the store warm-starts the cursors of the cut-off scan");
   const { fn, calls } = chainRpc();
   await lb.refreshSolanaLeaderboard({ listPayTos, rpc: fn, creditFromTx, prime: () => {}, windowHours: 168 });
@@ -155,6 +158,7 @@ const stored = () => (existsSync(FILE) ? JSON.parse(readFileSync(FILE, "utf8")) 
   ok(calls.hung === 1 && saved !== false && (await saved) === true && stored().stateAt > before, "during a scan the drain checkpoint writes the cursors and resolves once they are stored");
   void running;
   lb.__resetSolanaLeaderboardForTest();
+  __forgetLocalLeaseRunsForTest();
   lb.loadPersistedSolanaLeaderboard();
 }
 
