@@ -46,7 +46,7 @@ const CHECKLIST = [
   ] },
   // Secrets
   { area: "secrets", item: "no keys in code: gitleaks over the full history (merge commits included) and the working tree on every push", guards: [
-    [".github/workflows/secret-scan.yml", '--log-opts="--all -m"', "--no-git", "--redact"],
+    [".github/workflows/secret-scan.yml", '--log-opts="--all -m"', "--no-git", "--redact", "--retry 3 --retry-all-errors"],
     [".gitleaks.toml", "[allowlist]"],
   ], ci: false },
   { area: "secrets", item: "no configured secret in a buyer answer, a tool error or a log line", guards: [

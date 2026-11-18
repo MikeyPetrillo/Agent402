@@ -58,6 +58,7 @@ for (const [name, v] of Object.entries(pinned.dependencies)) ok(pkg.dependencies
 // CI recompiles the artifact from source with the pinned solc and diffs it.
 const ci = expandedDeployWorkflow();
 ok(ci.includes("node scripts/test-agentkit-data-to-deploy.js"), "this test runs in a CI lane");
-ok(ci.includes("solc@0.8.28 && node contracts/compile.js") && ci.includes("git diff --exit-code -- examples/agentkit-data-to-deploy/contracts/artifact.json"), "CI recompiles the artifact from the committed source and requires byte equality");
+ok(/install_solc\(\) \{ npm i --no-save --ignore-scripts --no-audit --no-fund solc@0\.8\.28; \}\n\s*install_solc \|\| \{[^}\n]*echo "::warning::solc@0\.8\.28 install failed[^}\n]*install_solc; \}\n\s*node contracts\/compile\.js/.test(ci) && ci.includes("git diff --exit-code -- examples/agentkit-data-to-deploy/contracts/artifact.json"), "CI recompiles the artifact from the committed source and requires byte equality");
+ok(!/--silent solc@/.test(ci), "the solc install is not silent: a failed install prints why, and is retried once with a warning");
 
 console.log(`test-agentkit-data-to-deploy: ${n} assertions ok`);
