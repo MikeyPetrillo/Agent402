@@ -42,9 +42,9 @@ A route with an `async` block takes `Prefer: respond-async`: 202 and a `Location
 
 | Package | Per call | Across calls | Source |
 |---|---|---|---|
-| agent402-client | `maxPerCallUsd` | `dailyLimitUsd`, `maxPerHostUsd` (rolling 24 hours, per instance) | `client/index.js` |
-| agent402-mcp | `AGENT402_MAX_PER_CALL` (on by default, `off` removes it) | `AGENT402_BUDGET` (whole session, opt-in) | `mcp/index.js` |
-| agent402-openclaw | `maxPerCallUsd` or `AGENT402_MAX_PER_CALL_USD` (defaults to the metered per-call cap) | none | `openclaw/index.js` |
+| agent402-client | `maxPerCallUsd` (opt-in; `call(..., { maxUsd })` allows one call above it) | `dailyLimitUsd`, `maxPerHostUsd` (opt-in, rolling 24 hours, per instance) | `client/index.js` |
+| agent402-mcp | `AGENT402_MAX_PER_CALL` (opt-in) | `AGENT402_BUDGET` (whole session, opt-in) | `mcp/index.js` |
+| agent402-openclaw | `maxPerCallUsd` or `AGENT402_MAX_PER_CALL_USD` (opt-in) | none | `openclaw/index.js` |
 
 Every cap is checked before a payment is signed. All three packages refuse an accept asking for a signing validity longer than a day (`MAX_VALIDITY_SECONDS` in each `known-assets.js`). `AGENT402_NETWORKS` (agent402-mcp) restricts and orders the chains a wallet pays on.
 

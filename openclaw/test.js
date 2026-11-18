@@ -95,29 +95,25 @@ const upstream = `http://127.0.0.1:${stub.address().port}`;
   const odd = { scheme: "exact", network: "eip155:8453", amount: "1", asset: "0x000000000000000000000000000000000000bEEF", extra: { decimals: 18 } };
   let oddRefused = null; try { selectAccept([odd], { maxUsd: 1 }); } catch (e) { oddRefused = String(e.message); }
   ok(acceptUsd(odd) === null && /unreadable/.test(oddRefused || ""), "an accept in an unknown asset cannot be priced and is refused under a finite ceiling");
-  ok(maxPerCallUsd({}) === DEFAULT_MAX_PER_CALL_USD && DEFAULT_MAX_PER_CALL_USD === 2, "default ceiling is $2, the gateway's metered quote cap");
-  ok(maxPerCallUsd({ maxPerCallUsd: "0.5" }) === 0.5 && maxPerCallUsd({ maxPerCallUsd: "abc" }) === DEFAULT_MAX_PER_CALL_USD && maxPerCallUsd({ maxPerCallUsd: -3 }) === DEFAULT_MAX_PER_CALL_USD, "config value honoured; malformed or negative reads as the default, never as off");
-  // No ceiling only with the explicit acknowledgment beside it.
+  // The per-call ceiling is opt-in: none unless a positive value is set.
   {
-    const prevCap = process.env.AGENT402_MAX_PER_CALL_USD, prevAck = process.env.AGENT402_ALLOW_UNCAPPED_PAYMENTS;
-    delete process.env.AGENT402_MAX_PER_CALL_USD; delete process.env.AGENT402_ALLOW_UNCAPPED_PAYMENTS;
-    ok(maxPerCallUsd({ maxPerCallUsd: "off" }) === DEFAULT_MAX_PER_CALL_USD && maxPerCallUsd({ maxPerCallUsd: 0 }) === DEFAULT_MAX_PER_CALL_USD && uncappedRefused({ maxPerCallUsd: "off" }), "off or 0 without allowUncappedPayments keeps the default ceiling");
-    ok(maxPerCallUsd({ maxPerCallUsd: "off", allowUncappedPayments: true }) === Infinity && maxPerCallUsd({ maxPerCallUsd: "0", allowUncappedPayments: "true" }) === Infinity && !uncappedRefused({ maxPerCallUsd: "off", allowUncappedPayments: true }), "off with allowUncappedPayments: true removes the ceiling");
-    ok(maxPerCallUsd({ maxPerCallUsd: "off", allowUncappedPayments: "yes" }) === DEFAULT_MAX_PER_CALL_USD && maxPerCallUsd({ maxPerCallUsd: "off", allowUncappedPayments: false }) === DEFAULT_MAX_PER_CALL_USD, "only true acknowledges; anything else keeps the ceiling");
-    ok(maxPerCallUsd({ allowUncappedPayments: true }) === DEFAULT_MAX_PER_CALL_USD && maxPerCallUsd({ maxPerCallUsd: "0.5", allowUncappedPayments: true }) === 0.5, "the acknowledgment alone removes nothing");
-    process.env.AGENT402_MAX_PER_CALL_USD = "off";
-    ok(maxPerCallUsd({}) === DEFAULT_MAX_PER_CALL_USD, "AGENT402_MAX_PER_CALL_USD=off alone keeps the ceiling");
-    process.env.AGENT402_ALLOW_UNCAPPED_PAYMENTS = "true";
-    ok(maxPerCallUsd({}) === Infinity && uncappedAcknowledged({}) && !uncappedAcknowledged({ allowUncappedPayments: false }), "AGENT402_ALLOW_UNCAPPED_PAYMENTS=true acknowledges it; the plugin config wins over the env");
+    const prevCap = process.env.AGENT402_MAX_PER_CALL_USD;
+    delete process.env.AGENT402_MAX_PER_CALL_USD;
+    ok(maxPerCallUsd({}) === Infinity && DEFAULT_MAX_PER_CALL_USD === Infinity, "no ceiling by default");
+    ok(maxPerCallUsd({ maxPerCallUsd: "0.5" }) === 0.5 && maxPerCallUsd({ maxPerCallUsd: 4 }) === 4, "a positive value sets the ceiling");
+    ok([ "off", 0, "0", "abc", -3 ].every((v) => maxPerCallUsd({ maxPerCallUsd: v }) === Infinity) && !uncappedRefused({ maxPerCallUsd: "off" }), "off, 0, malformed or negative is no ceiling, with no acknowledgment needed");
+    process.env.AGENT402_MAX_PER_CALL_USD = "3";
+    ok(maxPerCallUsd({}) === 3 && maxPerCallUsd({ maxPerCallUsd: "1" }) === 1, "AGENT402_MAX_PER_CALL_USD sets it; the plugin config wins");
     if (prevCap == null) delete process.env.AGENT402_MAX_PER_CALL_USD; else process.env.AGENT402_MAX_PER_CALL_USD = prevCap;
-    if (prevAck == null) delete process.env.AGENT402_ALLOW_UNCAPPED_PAYMENTS; else process.env.AGENT402_ALLOW_UNCAPPED_PAYMENTS = prevAck;
   }
   // The price is read from the field the challenge's version signs.
   {
     const split = { scheme: "exact", network: "eip155:8453", asset: BASE_USDC, amount: "1000", maxAmountRequired: "500000000" };
     let e2 = null; try { selectAccept([split], { maxUsd: 1, x402Version: 2 }); } catch (e) { e2 = String(e.message); }
     let e1 = null; try { selectAccept([split], { maxUsd: 1, x402Version: 1 }); } catch (e) { e1 = String(e.message); }
-    ok(/unreadable/.test(e2 || "") && /unreadable/.test(e1 || ""), "an accept whose amount and maxAmountRequired differ is refused under v1 and v2");
+    const noAmount = /names no amount its x402 version signs/;
+    let e3 = null; try { selectAccept([split], { x402Version: 2 }); } catch (e) { e3 = String(e.message); }
+    ok(noAmount.test(e2 || "") && noAmount.test(e1 || "") && noAmount.test(e3 || ""), "an accept whose amount and maxAmountRequired differ is refused under v1 and v2, ceiling or none");
     const v1 = { scheme: "exact", network: "eip155:8453", asset: BASE_USDC, maxAmountRequired: "3000000" };
     let ev1 = null; try { selectAccept([v1], { maxUsd: 1, x402Version: 1 }); } catch (e) { ev1 = String(e.message); }
     ok(/\$3 exceeds/.test(ev1 || ""), `a v1 accept is priced from maxAmountRequired (got ${ev1})`);
@@ -167,11 +163,12 @@ const upstream = `http://127.0.0.1:${stub.address().port}`;
   const { generatePrivateKey } = await import("viem/accounts");
   const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
   const values = [];
+  let quoteAmount = "1000";
   const seller = createServer((req, res) => {
     req.resume();
     const sig = req.headers["payment-signature"] || req.headers["x-payment"];
     if (sig) { values.push(JSON.parse(Buffer.from(sig, "base64").toString("utf8")).payload?.authorization?.value); res.writeHead(200, { "content-type": "application/json" }); return res.end("{}"); }
-    const doc = { x402Version: 2, resource: { url: "http://127.0.0.1/v1/x" }, accepts: [{ scheme: "exact", network: "eip155:8453", asset: BASE_USDC, payTo: "0x000000000000000000000000000000000000dEaD", amount: "1000", maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } }] };
+    const doc = { x402Version: 2, resource: { url: "http://127.0.0.1/v1/x" }, accepts: [{ scheme: "exact", network: "eip155:8453", asset: BASE_USDC, payTo: "0x000000000000000000000000000000000000dEaD", amount: quoteAmount, maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } }] };
     res.writeHead(402, { "content-type": "application/json", "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(doc)).toString("base64") }); res.end("{}");
   });
   await new Promise((r) => seller.listen(0, "127.0.0.1", r));
@@ -190,9 +187,14 @@ const upstream = `http://127.0.0.1:${stub.address().port}`;
     ExactEvmScheme.prototype.createPaymentPayload = async function (v, r, ctx) { return orig.call(this, v, { ...r, maxTimeoutSeconds: 10 * 365 * 24 * 3600 }, ctx); };
     const errLong = await pay({});
     ok(values.length === 1 && /86400-second ceiling/.test(errLong || ""), `a payload signed for ten years is not sent (${errLong})`);
-    const logs = [];
-    await resolvePayFetch({ walletKey: generatePrivateKey(), baseRpc: "http://127.0.0.1:9", maxPerCallUsd: "off" }, (m) => logs.push(m));
-    ok(logs.some((m) => /allowUncappedPayments/.test(m)), "off without the acknowledgment says why the ceiling stays");
+    // A default plugin pays a $3.30 quote and one above $4: no ceiling unless set.
+    ExactEvmScheme.prototype.createPaymentPayload = orig;
+    quoteAmount = "3300000";
+    ok(await pay({}) === null && values.at(-1) === "3300000", "a default plugin pays a $3.30 quote");
+    quoteAmount = "5000000";
+    ok(await pay({}) === null && values.at(-1) === "5000000", "a default plugin pays a $5 quote, above $4");
+    const capped = await pay({ maxPerCallUsd: 4 });
+    ok(/exceeds the per-call ceiling \$4/.test(capped || "") && values.at(-1) === "5000000" && /AGENT402_MAX_PER_CALL_USD/.test(capped || ""), `a $4 ceiling the operator sets refuses it and names the setting (${capped})`);
   } finally {
     ExactEvmScheme.prototype.createPaymentPayload = orig;
     seller.close();
@@ -247,7 +249,7 @@ const upstream = `http://127.0.0.1:${stub.address().port}`;
       ok(good.err === null && signerRuns === runs0 + 1 && sent.length === sent0 + 1 && good.logs.some((m) => (path === "upto" ? /paying actual usage/ : /paying exact|per-request quote/).test(m)), `control (${path} client): a version 2 accept naming amount is signed and sent`);
       accept = { ...base, scheme, extra, maxAmountRequired: "1000" };
       const { err } = await pay(baseRpc);
-      ok(/quote unreadable exceeds the per-call ceiling/.test(err || "") && signerRuns === runs0 + 1 && sent.length === sent0 + 1, `${path} client: a version 2 accept naming only maxAmountRequired is refused by the selector before the signer runs (${err}; signer runs after the control ${signerRuns - runs0 - 1})`);
+      ok(/names no amount its x402 version signs/.test(err || "") && signerRuns === runs0 + 1 && sent.length === sent0 + 1, `${path} client: a version 2 accept naming only maxAmountRequired is refused by the selector before the signer runs (${err}; signer runs after the control ${signerRuns - runs0 - 1})`);
     }
   } finally {
     ExactEvmScheme.prototype.createPaymentPayload = orig;

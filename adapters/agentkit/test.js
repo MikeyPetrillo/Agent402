@@ -125,12 +125,16 @@ async function main() {
     });
     await new Promise((r) => stub.listen(0, "127.0.0.1", r));
     const STUB = `http://127.0.0.1:${stub.address().port}`;
-    const [, callW] = await agent402Actions({ baseUrl: STUB });
+    const [, callW] = await agent402Actions({ baseUrl: STUB, maxPerCallUsd: 1 });
     let refused = null;
     try { await callW.invoke(walletProvider, { slug: "dear", params: { q: "x" } }); } catch (e) { refused = e; }
     ok(seen.unpaid === 2, `the preflight and the paid request each drew a 402 (saw ${seen.unpaid})`);
-    ok(seen.signed === 0, "the $5 payment the paid request asked for was never signed under the default $1 ceiling");
+    ok(seen.signed === 0, "the $5 payment the paid request asked for was never signed under a $1 ceiling the caller set");
     ok(refused?.name === "SpendingLimitError" && refused.atSigning === true, `the refusal is a SpendingLimitError at signing (${refused?.message})`);
+    // Caps are opt-in: with none set the same $5 payment is signed and paid.
+    const [, callOpen] = await agent402Actions({ baseUrl: STUB });
+    const opened = JSON.parse(await callOpen.invoke(walletProvider, { slug: "dear", params: { q: "y" } }));
+    ok(opened.ok === true && seen.signed === 1, `with no cap set the $5 call is paid, not refused (signed ${seen.signed})`);
     stub.close();
   }
 

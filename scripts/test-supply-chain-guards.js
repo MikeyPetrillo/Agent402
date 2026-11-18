@@ -101,7 +101,7 @@ for (const dir of pkgDirs) {
 // published package is capped below the next major, so a major nobody here
 // ran is never accepted unseen.
 {
-  const SIGNING = ["viem", "@solana/kit", "@modelcontextprotocol/sdk", "@x402/core", "@x402/evm", "@x402/fetch", "@x402/svm"];
+  const SIGNING = ["viem", "@solana/kit", "@modelcontextprotocol/sdk", "@modelcontextprotocol/server", "@x402/core", "@x402/evm", "@x402/fetch", "@x402/svm"];
   const pkg = JSON.parse(readFileSync(join(ROOT, "mcp/package.json"), "utf8"));
   const lock = JSON.parse(readFileSync(join(ROOT, "mcp/package-lock.json"), "utf8"));
   for (const name of SIGNING) {

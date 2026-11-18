@@ -68,8 +68,10 @@ against production.
 
 `agent402ActionProvider({ baseUrl, fetchImpl, zod, maxPerCallUsd, dailyLimitUsd, maxPerHostUsd, payees })`
 
-- `maxPerCallUsd` (default `1`): a paid call above this is refused before any
-  signature. `dailyLimitUsd` and `maxPerHostUsd` bound rolling 24-hour spend.
+- `maxPerCallUsd`, `dailyLimitUsd`, `maxPerHostUsd`: opt-in spending caps, none
+  set by default (since 0.2.0), so no call is refused for its price unless you
+  set one. A paid call above `maxPerCallUsd` is refused before any signature;
+  `dailyLimitUsd` and `maxPerHostUsd` bound rolling 24-hour spend.
   The caps are enforced on the payment that is signed, priced from the known
   decimals of its asset, so a 402 that changes between the preflight and the
   paid request is held to them too.

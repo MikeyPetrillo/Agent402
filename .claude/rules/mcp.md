@@ -76,3 +76,9 @@ Loaded when a connector or front-door file is read.
   `memory.write` is also `destructiveHint: true`. `scripts/test-mcp-http.js` derives this from the free-tier table.
   The stdio package keeps its own copy.
 - **429:** the transport limiter's refusal carries `Retry-After` (seconds, from `src/rate-limit.js` `retryAfterSeconds`).
+- **stdio package on SDK v2:** `mcp/index.js` runs `@modelcontextprotocol/server` (exact pin in `mcp/package.json`,
+  in the signing list of `scripts/test-supply-chain-guards.js`) with handlers registered by method name and the
+  `/stdio` transport; `mcp/test.js` drives it with the v2 client (an `mcp` devDependency, so a lane that runs the stdio
+  server needs `npm --prefix mcp ci`). Errors are a local `McpError` over `ProtocolError` that keeps the
+  "MCP error <code>: " prefix. The SDK lifts `io.modelcontextprotocol/*` keys out of `params._meta`, so a handler that
+  needs one reads the raw message. A JSON-RPC batch on the hosted transport counts one limiter hit per message.

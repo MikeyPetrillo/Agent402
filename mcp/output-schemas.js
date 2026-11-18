@@ -494,7 +494,7 @@ export function mcpJsonResult(obj) {
  * Hosted URL is parameterized; npm / Claude Code / Cursor notes
  * match docs/ecosystem-listings.md + wiki/MCP-Connector.md.
  */
-export const AGENT402_MCP_VERSION = "0.13.32";
+export const AGENT402_MCP_VERSION = "0.14.0";
 
 /** A listed MCP tool description, at most `max` characters. Hosts truncate or
  *  skip long descriptions, so the listing keeps the first whole sentences; the
@@ -526,12 +526,12 @@ export function mcpInstallHints(baseUrl) {
       mcpServers: {
         agent402: {
           command: "npx",
-          args: ["-y", "agent402-mcp@0.13.32"],
+          args: ["-y", "agent402-mcp@0.14.0"],
           env: { AGENT_KEY: "0xYOUR_PRIVATE_KEY" },
         },
       },
     },
-    npm: "npx -y agent402-mcp@0.13.32",
+    npm: "npx -y agent402-mcp@0.14.0",
     maintainer: "Havok Holdings LLC",
   };
 }
@@ -555,7 +555,7 @@ export function hostedConnectorWiresFor(baseUrl) {
   return String(baseUrl || "").replace(/\/+$/, "") === HOSTED_SERVICE_URL ? HOSTED_CONNECTOR_WIRES : {};
 }
 
-export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false, x402 = false } = {}) {
+export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false, x402 = false, demand = true } = {}) {
   const install = mcpInstallHints(baseUrl);
   const hosted = install.hostedUrl;
   return [
@@ -565,7 +565,8 @@ export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false
     // Only where the decide tools are listed: an instruction must never name a
     // tool the connector does not advertise.
     ...(decide ? ["Multi-step jobs: decide.plan returns a call-ready plan (tools, order, fallbacks, inputs); decide.execute runs it. The plan fee is credited toward the run."] : []),
-    "Also: server.describe (connector details), payment.info (wallet and payment setup), demand.request (report a missing tool).",
+    // demand.request is named only where it is listed (the hosted connector).
+    `Also: server.describe (connector details), payment.info (wallet and payment setup)${demand ? ", demand.request (report a missing tool)" : ""}.`,
     `Install (npm package, pinned): ${install.claudeCodeNpm}`,
     `Hosted connector (proof-of-work tools free; ${x402 || mpp ? `other tools paid in the call over ${[x402 && "x402", mpp && "MPP"].filter(Boolean).join(" or ")} from a wallet` : "others need a wallet on the npm package"}): ${install.claudeCodeHosted}`,
     `Cursor mcp.json: { "mcpServers": { "agent402": { "url": "${hosted}" } } }`,

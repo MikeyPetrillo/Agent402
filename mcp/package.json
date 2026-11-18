@@ -1,6 +1,6 @@
 {
   "name": "agent402-mcp",
-  "version": "0.13.32",
+  "version": "0.14.0",
   "mcpName": "io.github.MikeyPetrillo/agent402",
   "author": "Havok Holdings LLC <mike@agent402.tools> (https://agent402.tools)",
   "homepage": "https://agent402.tools",
@@ -16,12 +16,14 @@
   },
   "files": [
     "index.js",
+    "index.d.ts",
     "async-job.js",
     "known-assets.js",
     "networks.js",
     "discovery.js",
     "output-schemas.js",
-    "README.md"
+    "README.md",
+    "pow-solver.js"
   ],
   "engines": {
     "node": ">=20"
@@ -73,7 +75,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.32.2",
+    "@modelcontextprotocol/server": "2.4.0",
     "@solana/kit": "8.4.0",
     "@x402/core": "2.30.0",
     "@x402/evm": "2.30.0",
@@ -93,8 +95,15 @@
     "@solana-program/compute-budget": "0.19.0",
     "@solana-program/token-2022": "0.19.0",
     "@solana/program-client-core": "8.4.0",
-    "@modelcontextprotocol/sdk": {
+    "@modelcontextprotocol/server": {
+      "zod": "4.6.7"
+    },
+    "@modelcontextprotocol/client": {
       "zod": "4.6.7"
     }
+  },
+  "types": "index.d.ts",
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0"
   }
 }

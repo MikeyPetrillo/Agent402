@@ -27,12 +27,14 @@ export { resetRetryFetch, isConnectionReset } from "./reset-retry.js";
 import { resetRetryFetch } from "./reset-retry.js";
 import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS } from "./async-job.js";
 export { AsyncJobPendingError } from "./async-job.js";
+import { solvePowSync, solvePowAsync, checkPowChallenge } from "./pow-solver.js";
+export { MAX_POW_DIFFICULTY, MAX_POW_TRIES_FACTOR, solvePowAsync } from "./pow-solver.js";
 
 // Keep in lockstep with package.json. Every request the SDK issues carries
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.26";
+const VERSION = "0.9.0";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // A package built on this SDK (an adapter) names itself first: its own
 // product token, then this one. Anything that is not one well-formed token
@@ -45,7 +47,11 @@ const userAgentOf = (product) => (typeof product === "string" && PRODUCT_TOKEN_R
 // by default protects nobody, so this one is on; pass null to disable it.
 const DEFAULT_MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
-const leadingZeroBits = (buf) => { let n = 0; for (const b of buf) { if (b === 0) { n += 8; continue; } n += Math.clz32(b) - 24; break; } return n; };
+// Each request the SDK sends is given this long before it is abandoned: the
+// published client timeout for metered calls on Agent402 (src/metered-lead.js
+// meteredClientTimeoutMs), so the client never hangs up before the server's
+// own deadline. null disables it.
+export const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 
 // Discovery reads (catalog, find, route, skill packs, leaderboard, a
 // proof-of-work challenge) settle nothing, so a 503 the server sheds under
@@ -109,6 +115,21 @@ const GATEWAY_PENDING_MAX_WAIT_MS = 30_000;
 export const GATEWAY_MAX_TIMEOUT_SECONDS = 7 * 24 * 3600 + 3600;
 const GATEWAY_DOCS_URL = "https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway";
 const EVM_ADDR = /^0x[0-9a-fA-F]{40}$/;
+// The GatewayWallet contract each chain's batched accept must name as its
+// verifyingContract (Circle's published addresses: one address on every
+// mainnet Gateway serves, another on every testnet). A batched accept naming
+// any other contract, or on a chain this table does not list, is not signed:
+// the seller chooses the accept, so a seller-chosen verifyingContract would
+// let it name a contract of its own under the Gateway kind's name. A caller
+// can add or replace entries with gateway.verifyingContracts.
+const GATEWAY_WALLET_MAINNET = "0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE";
+const GATEWAY_WALLET_TESTNET = "0x0077777d7EBA4688BDeF3E311b846F25870A19B9";
+export const GATEWAY_VERIFYING_CONTRACTS = Object.freeze({
+  // mainnets: Ethereum, OP, Polygon, Unichain, Sonic, World Chain, HyperEVM, Sei, Base, Arbitrum, Avalanche, Arc
+  ...Object.fromEntries(["1", "10", "137", "130", "146", "480", "999", "1329", "8453", "42161", "43114", "5042"].map((id) => [`eip155:${id}`, GATEWAY_WALLET_MAINNET])),
+  // testnets: Ethereum Sepolia, OP Sepolia, Polygon Amoy, Unichain Sepolia, Sei testnet, Base Sepolia, Arbitrum Sepolia, Avalanche Fuji, Arc testnet
+  ...Object.fromEntries(["11155111", "11155420", "80002", "1301", "1328", "84532", "421614", "43113", "5042002"].map((id) => [`eip155:${id}`, GATEWAY_WALLET_TESTNET])),
+});
 
 // The rolling window the daily and per-host caps count over.
 const SPEND_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -191,8 +212,9 @@ export class Agent402 {
    *                                         chain through a distrusted intermediate CA); false sends it as is
    * @param {boolean} [opts.retryResets=true] resend the SDK's own request once when its connection failed
    *                                         before any answer (see resetRetryFetch); false sends each once
-   * @param {number} [opts.maxPerCallUsd]    hard ceiling on a single paid call (USD); over → SpendingLimitError before paying
-   * @param {number} [opts.dailyLimitUsd]    hard ceiling on rolling-24h paid spend (USD)
+   * @param {number|null} [opts.maxPerCallUsd]  opt-in ceiling on a single paid call (USD); over → SpendingLimitError
+   *                                         before paying. No cap unless set
+   * @param {number|null} [opts.dailyLimitUsd]  opt-in ceiling on rolling-24h paid spend (USD). No cap unless set
    * @param {number} [opts.maxPerHostUsd]    hard ceiling on rolling-24h paid spend to one seller host (USD)
    * @param {object} [opts.x402Client]       the @x402/core x402Client your `fetch` wraps: the caps are then
    *                                         enforced on the payment that is signed (see guardX402Client)
@@ -224,11 +246,14 @@ export class Agent402 {
    *        AsyncJobPendingError carries the job link to collect later
    * @param {function} [opts.onProgress] called with each job document
    *        ({ status, stage, progress, etaSeconds, ... }) while a job runs
+   * @param {number|null} [opts.timeoutMs=120000] how long each request may take before it is
+   *        abandoned (RequestTimeoutError); null waits as long as the connection stays open
    */
   constructor({ baseUrl = DEFAULT_BASE_URL, fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
     maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null, payNetworks = null,
     maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null,
-    respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null, gateway = null, userAgent = null, retryResets = true } = {}) {
+    respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null, gateway = null, userAgent = null, retryResets = true,
+    timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
     this.userAgent = userAgentOf(userAgent);
     this.respondAsync = respondAsync;
     this.gateway = normalizeGateway(gateway);
@@ -246,9 +271,12 @@ export class Agent402 {
     if (retryResets !== false) fetchImpl = resetRetryFetch(fetchImpl);
     this.baseUrl = String(baseUrl).replace(/\/$/, "");
     this.payFetch = payFetch || null;
+    this.timeoutMs = timeoutMs === null ? null : (numOrNull(timeoutMs) || DEFAULT_REQUEST_TIMEOUT_MS);
     // Wrap the plain fetch so every request identifies the SDK (see USER_AGENT
-    // above). Caller-supplied init.headers still win on a key collision.
-    this.f = (url, init = {}) => fetchImpl(url, { ...init, headers: { "User-Agent": this.userAgent, ...(init.headers || {}) } });
+    // above) and is abandoned after timeoutMs. Caller-supplied init.headers
+    // still win on a key collision, and a caller's own signal wins over the
+    // timeout.
+    this.f = timedFetch((url, init = {}) => fetchImpl(url, { ...init, headers: { "User-Agent": this.userAgent, ...(init.headers || {}) } }), () => this.timeoutMs);
     this._catalog = null;
     // The wait between shed-503 retries of a discovery read (tests replace it).
     this._sleep = sleepMs;
@@ -262,9 +290,10 @@ export class Agent402 {
     // the header promised beyond it.
     this._idemSalt = randomBytes(12).toString("hex");
     // Spending policy (defends the x402 "wallet drain via uncapped spending"
-    // failure mode): optional hard ceilings enforced BEFORE any payment is
-    // signed. A malicious or misconfigured 402 that quotes an inflated price is
-    // refused instead of paid. null = no limit (default - behavior unchanged).
+    // failure mode): hard ceilings enforced BEFORE any payment is signed. A
+    // malicious or misconfigured 402 that quotes an inflated price is refused
+    // instead of paid. Every cap is opt-in: null (the default) is no limit,
+    // so a client nobody configured never refuses a purchase.
     // A call refused before any payment left this process never counts. Once
     // a payment header has been sent, its signed amount counts whatever the
     // seller answers: "settled" on a delivered answer, otherwise "held" (the
@@ -335,14 +364,15 @@ export class Agent402 {
    *  is left of the rolling-24h caps, net of every other call's reservation
    *  (this call's own one is what is being replaced). */
   _signAllowance() {
-    const s = this._spend;
     const ctx = this._signCtx.getStore();
+    const s = ctx?.limits || this._spend;
+    const log = this._spend.log;
     const own = ctx?.reservation || null;
     // A payload this call already sent (a fetch that retries with a fresh
     // one) is outstanding too, beside every other call's entry.
     const ownSent = (ctx?.sent || []).reduce((a, p) => a + p.usd, 0);
     const now = Date.now();
-    const others = s.log.filter((e) => countsAt(e, now) && e !== own);
+    const others = log.filter((e) => countsAt(e, now) && e !== own);
     const host = hostOf(this.baseUrl);
     let cap = Infinity, limit = null;
     const tighten = (value, name) => { if (value < cap) { cap = value; limit = name; } };
@@ -555,16 +585,29 @@ export class Agent402 {
     return r.json();
   }
 
-  /** Solve a proof-of-work challenge object (from a 402 body) into an X-Pow-Solution value. */
+  /** Solve a proof-of-work challenge object (from a 402 body) into an
+   *  X-Pow-Solution value, on the calling thread. A difficulty above
+   *  MAX_POW_DIFFICULTY is refused (see ./pow-solver.js). call() uses
+   *  solvePowAsync, which keeps the event loop free. */
   static solvePow(pow) {
-    let n = 0;
-    while (leadingZeroBits(createHash("sha256").update(`${pow.challenge}:${n}`).digest()) < pow.difficulty) n++;
-    return `${pow.token}:${n}`;
+    checkPowChallenge(pow, { needToken: true });
+    return `${pow.token}:${solvePowSync(pow)}`;
+  }
+
+  /** The same as solvePow, solved on a worker thread. */
+  static async solvePowAsync(pow) {
+    checkPowChallenge(pow, { needToken: true });
+    return `${pow.token}:${await solvePowAsync(pow)}`;
   }
 
   /**
    * Call a tool by slug; pays automatically (PoW for free tools, x402 for
    * wallet-only) and returns the parsed JSON result.
+   *
+   * `maxUsd` allows this one call to pay up to that amount: it replaces the
+   * per-call cap for the call (a dailyLimitUsd or maxPerHostUsd you set
+   * still holds).
+   * `timeoutMs` replaces the client's per-request timeout for the call.
    */
   async call(slug, params = {}, { idempotencyKey, cache = true, maxResponseBytes, outputValidator, respondAsync, asyncTimeoutMs, onProgress } = {}) {
     // The contract for this one call: a per-call validator replaces the
@@ -611,6 +654,8 @@ export class Agent402 {
       // and deliver that host's answer as this route's. The redirect is
       // refused with where it pointed, so an alias baseUrl is easy to fix.
       const init = paid ? { method: tool.method, headers, redirect: "manual" } : { method: tool.method, headers };
+      // Each send gets its own timer, so one send's wait never shortens the next.
+      if (requestTimeoutMs != null) init.signal = AbortSignal.timeout(requestTimeoutMs);
       if (tool.method === "GET") {
         const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : String(v)])).toString();
         if (qs) url += `?${qs}`;
@@ -618,7 +663,8 @@ export class Agent402 {
         headers["Content-Type"] = "application/json";
         init.body = JSON.stringify(params);
       }
-      const r = await useFetch(url, init);
+      let r;
+      try { r = await useFetch(url, init); } catch (e) { throw asTimeoutError(e, requestTimeoutMs, slug); }
       if (paid && (r?.type === "opaqueredirect" || (r?.status >= 300 && r?.status < 400))) throw new PaymentRedirectError(slug, url, r);
       return r;
     };
@@ -658,16 +704,16 @@ export class Agent402 {
         // (FREE_MODE / non-402 / unparseable) falls back to the advertised
         // price - never block a legitimate payment on a parse miss.
         const guarded = this._guarded;
-        if (!guarded && this._spendCapsConfigured()) warnAdvisoryCaps();
-        const usd = await this._quotedUsd(paidSend, listUsd, { slug, mode: guarded ? "guarded" : "wallet" });
+        if (!guarded && this._spendCapsConfigured(limits)) warnAdvisoryCaps();
+        const usd = await this._quotedUsd(paidSend, listUsd, { slug, mode: guarded ? "guarded" : "wallet", limits });
         // Reserve the amount synchronously (before the await) so concurrent calls
         // can't each observe the pre-commit total and collectively blow a rolling
         // cap. With the signing guard on, the reservation is replaced by the
         // amount actually signed, and each payload the guard let through is
         // recorded as sent (ctx.sent). Without it the payment fetch is opaque:
         // any request it made may have carried a signature.
-        const reservation = this._spendReserve(host, usd, slug, listUsd, { always: guarded });
-        const ctx = { reservation, signedUsd: null, refusal: null, sent: [] };
+        const reservation = this._spendReserve(host, usd, slug, listUsd, { always: guarded, limits });
+        const ctx = { reservation, limits, signedUsd: null, refusal: null, sent: [] };
         const sentPayment = () => !guarded || ctx.sent.length > 0;
         let settled = false;
         try {
@@ -716,8 +762,8 @@ export class Agent402 {
         // debit.
         const host = hostOf(this.baseUrl);
         const listUsd = parseUsd(tool.price);
-        const usd = await this._quotedUsd(paidSend, listUsd, { slug, mode: "credits" });
-        const reservation = this._spendReserve(host, usd, slug, listUsd);
+        const usd = await this._quotedUsd(paidSend, listUsd, { slug, mode: "credits", limits });
+        const reservation = this._spendReserve(host, usd, slug, listUsd, { limits });
         let settled = false;
         try {
           const r = await collect(await paidSend({ Authorization: `Bearer ${this.creditsKey}`, ...asyncHeaders }));
@@ -747,7 +793,7 @@ export class Agent402 {
     let r = await send();
     if (!r.ok) {
       const chal = await this._powChallenge(slug);
-      r = await send({ "X-Pow-Solution": Agent402.solvePow(chal) });
+      r = await send({ "X-Pow-Solution": await Agent402.solvePowAsync(chal) });
     }
     if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r, " after proof-of-work"));
     return this._deliverResponse(slug, r, cacheKey, caching, validator, { maxResponseBytes, paid: false });
@@ -783,11 +829,11 @@ export class Agent402 {
    * settle and the rolling window has passed it; only a signer that throws
    * releases the reservation.
    */
-  async _gatewayCall(slug, tool, { paidSend, asyncHeaders, collect, cacheKey, cache, validator, maxResponseBytes }) {
+  async _gatewayCall(slug, tool, { paidSend, asyncHeaders, collect, cacheKey, cache, validator, maxResponseBytes, limits = this._spend }) {
     const pre = await paidSend();
     if (pre?.status !== 402) return NO_GATEWAY_ACCEPT;
     const env = await challengeEnvelope(pre);
-    const accept = gatewayAcceptOf(acceptsOf(env), this.gateway.networks);
+    const accept = gatewayAcceptOf(acceptsOf(env), this.gateway.networks, this.gateway.verifyingContracts);
     if (!accept) return NO_GATEWAY_ACCEPT;
     const host = hostOf(this.baseUrl);
     const listUsd = parseUsd(tool.price);
@@ -798,10 +844,10 @@ export class Agent402 {
     const acceptedUsd = acceptUsd(accept, Number(env?.x402Version));
     if (acceptedUsd == null) return NO_GATEWAY_ACCEPT;
     const usd = Math.max(listUsd, acceptedUsd);
-    const reservation = this._spendReserve(host, usd, slug, listUsd);
+    const reservation = this._spendReserve(host, usd, slug, listUsd, { limits });
     let header, payload;
     try {
-      ({ header, payload } = await signGatewayPayment(accept, { signer: this.gateway.signer, resource: env?.resource }));
+      ({ header, payload } = await signGatewayPayment(accept, { signer: this.gateway.signer, resource: env?.resource, verifyingContracts: this.gateway.verifyingContracts }));
     } catch (e) {
       // Nothing signed: the reservation is the only thing to undo.
       this._spendRelease(reservation);
@@ -896,8 +942,8 @@ export class Agent402 {
    *  since a chain premium or price floor only raises an accept, so the
    *  cheapest known accept counts).
    *  @returns {Promise<number>} the quoted amount, or `listUsd` when there is no readable 402 */
-  async _quotedUsd(send, listUsd, { slug = "", mode = "wallet" } = {}) {
-    if (!this._spendCapsConfigured()) return listUsd;
+  async _quotedUsd(send, listUsd, { slug = "", mode = "wallet", limits = this._spend } = {}) {
+    if (!this._spendCapsConfigured(limits)) return listUsd;
     let q = null;
     try {
       const pre = await send();
@@ -936,20 +982,32 @@ export class Agent402 {
     return Math.max(listUsd, quoted);
   }
 
+  /** The caps one call is held to: this client's, or, for a call the caller
+   *  allowed by name (`maxUsd`), that amount as the per-call cap (the daily
+   *  and per-host caps the caller set still hold). */
+  _limitsFor(maxUsd) {
+    const s = this._spend;
+    const allow = maxUsd == null ? null : numOrNull(maxUsd);
+    if (maxUsd != null && allow == null) throw new TypeError("maxUsd must be a non-negative number of USD");
+    if (allow == null) return s;
+    return { maxPerCall: allow, daily: s.daily, perHost: s.perHost, allowed: true };
+  }
+
   /** Throw SpendingLimitError if paying `usd` to `host` now would break a cap.
    *  Prunes the rolling 24h window first; a null cap is unlimited.
    *  `listUsd` (when it differs) is the catalog price, named in the refusal so
    *  a caller can see the quote is not the number they budgeted from. */
-  _spendCheck(host, usd, slug, listUsd = null) {
-    const s = this._spend;
+  _spendCheck(host, usd, slug, listUsd = null, limits = this._spend) {
     const now = Date.now();
-    s.log = s.log.filter((e) => countsAt(e, now));
+    this._spend.log = this._spend.log.filter((e) => countsAt(e, now));
+    const s = { ...limits, log: this._spend.log };
     if (s.maxPerCall == null && s.daily == null && s.perHost == null) return;
     const quotedNote = listUsd != null && listUsd !== usd
       ? ` (this request is quoted $${usd}; the catalog lists $${listUsd})` : "";
     if (s.maxPerCall != null && usd > s.maxPerCall) {
+      const name = limits.allowed ? "maxUsd" : "maxPerCallUsd";
       throw new SpendingLimitError(
-        `refusing to pay $${usd} for "${slug}" - exceeds maxPerCallUsd $${s.maxPerCall}${quotedNote}`,
+        `refusing to pay $${usd} for "${slug}" - exceeds ${name} $${s.maxPerCall}${quotedNote}`,
         { limit: "maxPerCallUsd", slug, priceUsd: usd, cap: s.maxPerCall, ...(listUsd != null ? { listPriceUsd: listUsd } : {}) });
     }
     // Held payments count: each is a signed authorization that was sent and
@@ -1010,8 +1068,7 @@ export class Agent402 {
   }
 
   /** True if any spending ceiling is configured (worth preflighting the 402). */
-  _spendCapsConfigured() {
-    const s = this._spend;
+  _spendCapsConfigured(s = this._spend) {
     return s.maxPerCall != null || s.daily != null || s.perHost != null;
   }
 
@@ -1019,8 +1076,8 @@ export class Agent402 {
    *  concurrent calls account for each other's in-flight reservations instead of
    *  all passing against the same pre-commit total. Returns a reservation handle
    *  (or null for a $0 call). Throws SpendingLimitError before reserving if over. */
-  _spendReserve(host, usd, slug, listUsd = null, { always = false } = {}) {
-    this._spendCheck(host, usd, slug, listUsd);
+  _spendReserve(host, usd, slug, listUsd = null, { always = false, limits = this._spend } = {}) {
+    this._spendCheck(host, usd, slug, listUsd, limits);
     if (!(usd > 0) && !always) return null;
     const entry = { ts: Date.now(), host, usd, state: "reserved" };
     this._spend.log.push(entry);
@@ -1180,22 +1237,41 @@ function normalizeGateway(value) {
     throw new TypeError("gateway.signer must be an EIP-712 signer with an EVM address and signTypedData (a viem account)");
   }
   const networks = Array.isArray(value.networks) && value.networks.length ? value.networks.map(String) : null;
-  return Object.freeze({ signer, networks });
+  return Object.freeze({ signer, networks, verifyingContracts: gatewayContractTable(value.verifyingContracts) });
+}
+
+/** The verifyingContract table a batched accept is checked against: the
+ *  published one, with a caller's own entries ({ "eip155:<id>": "0x..." })
+ *  added or replacing it. */
+function gatewayContractTable(extra) {
+  if (extra == null) return GATEWAY_VERIFYING_CONTRACTS;
+  if (typeof extra !== "object" || Array.isArray(extra)) throw new TypeError("gateway.verifyingContracts must be an object of { \"eip155:<chainId>\": \"0x<address>\" }");
+  const out = { ...GATEWAY_VERIFYING_CONTRACTS };
+  for (const [network, addr] of Object.entries(extra)) {
+    if (!/^eip155:[0-9]{1,12}$/.test(network) || !EVM_ADDR.test(String(addr))) throw new TypeError(`gateway.verifyingContracts entry ${JSON.stringify(network)} must map an eip155:<chainId> network to a 0x address`);
+    out[network] = String(addr);
+  }
+  return Object.freeze(out);
 }
 
 /** The first Circle Gateway batched accept a buyer may pay: scheme exact,
  *  `extra.name` the Gateway kind, on an EVM chain (among `networks` when
- *  given), with a payTo, a verifyingContract, a domain version, a validity
+ *  given) whose GatewayWallet contract `verifyingContracts` lists, naming
+ *  that contract as its verifyingContract, with a payTo, a domain version, a validity
  *  window of at most GATEWAY_MAX_TIMEOUT_SECONDS and an amount in a known
  *  asset (so the caps can price it; a batched accept in an asset the table
  *  does not know is never signed). null when there is none. */
-export function gatewayAcceptOf(accepts, networks = null) {
+export function gatewayAcceptOf(accepts, networks = null, verifyingContracts = GATEWAY_VERIFYING_CONTRACTS) {
   const list = Array.isArray(accepts) ? accepts : [];
+  const pinned = (a) => {
+    const want = verifyingContracts?.[String(a.network).toLowerCase()];
+    return typeof want === "string" && String(a.extra.verifyingContract).toLowerCase() === want.toLowerCase();
+  };
   const wanted = networks ? new Set(networks.flatMap((n) => networkIdsOf(n)).map((id) => id.toLowerCase())) : null;
   return list.find((a) => a && typeof a === "object" && a.scheme === "exact"
     && a.extra && typeof a.extra === "object" && a.extra.name === GATEWAY_KIND_NAME
     && /^eip155:[0-9]{1,12}$/.test(String(a.network || "")) && (!wanted || wanted.has(String(a.network).toLowerCase()))
-    && EVM_ADDR.test(String(a.payTo || "")) && EVM_ADDR.test(String(a.extra.verifyingContract || ""))
+    && EVM_ADDR.test(String(a.payTo || "")) && EVM_ADDR.test(String(a.extra.verifyingContract || "")) && pinned(a)
     && typeof a.extra.version === "string" && /^[0-9]{1,4}$/.test(a.extra.version)
     && /^[0-9]{1,78}$/.test(String(a.amount ?? "")) && Number(a.maxTimeoutSeconds) > 0 && Number(a.maxTimeoutSeconds) <= GATEWAY_MAX_TIMEOUT_SECONDS
     && acceptUsd(a, 2) != null) || null;
@@ -1209,9 +1285,9 @@ export function gatewayAcceptOf(accepts, networks = null) {
  * (name, version, verifyingContract) with the accept's chain id. Returns the
  * x402 v2 payment payload and its base64 header value.
  */
-export async function signGatewayPayment(accept, { signer, resource = undefined, now = Date.now, nonce = undefined } = {}) {
+export async function signGatewayPayment(accept, { signer, resource = undefined, now = Date.now, nonce = undefined, verifyingContracts = GATEWAY_VERIFYING_CONTRACTS } = {}) {
   if (!signer || typeof signer.signTypedData !== "function" || !EVM_ADDR.test(String(signer.address || ""))) throw new TypeError("signGatewayPayment needs a signer with an EVM address and signTypedData");
-  if (!gatewayAcceptOf([accept])) throw new TypeError("signGatewayPayment needs a Circle Gateway batched accept (scheme exact, extra.name GatewayWalletBatched, an EVM network, payTo, verifyingContract, version, amount, maxTimeoutSeconds)");
+  if (!gatewayAcceptOf([accept], null, verifyingContracts)) throw new TypeError("signGatewayPayment needs a Circle Gateway batched accept (scheme exact, extra.name GatewayWalletBatched, an EVM network whose GatewayWallet contract is pinned, that contract as verifyingContract, payTo, version, amount, maxTimeoutSeconds)");
   const nowSec = Math.floor(now() / 1000);
   const authorization = {
     from: signer.address, to: accept.payTo, value: String(accept.amount),
@@ -1293,6 +1369,34 @@ function acceptsOf(obj) {
     if (nested && typeof nested === "object" && Array.isArray(nested.accepts) && nested.accepts.length) return nested.accepts;
   }
   return null;
+}
+
+/** A request the SDK abandoned after its timeout. `timeoutMs` is the wait it
+ *  was given. On a paid call the paid path marks it `paid: "unknown"`: the
+ *  payment may have been sent before the wait ran out. */
+export class RequestTimeoutError extends Error {
+  constructor(timeoutMs, slug = null, cause = undefined) {
+    super(`${slug ? `call "${slug}"` : "request"} gave no answer within ${timeoutMs} ms and was abandoned (timeoutMs)`, cause === undefined ? undefined : { cause });
+    this.name = "RequestTimeoutError";
+    this.timeoutMs = timeoutMs;
+    this.slug = slug;
+    this.paid = false;
+  }
+}
+
+/** An abort raised by a timeout signal, as RequestTimeoutError; anything else as it came. */
+function asTimeoutError(e, timeoutMs, slug = null) {
+  return e && (e.name === "TimeoutError" || (e.name === "AbortError" && e.cause?.name === "TimeoutError")) && timeoutMs != null
+    ? new RequestTimeoutError(timeoutMs, slug, e) : e;
+}
+
+/** `fetchFn` with a timeout signal on every request that carries none of its own. */
+function timedFetch(fetchFn, timeoutOf) {
+  return async (url, init = {}) => {
+    const ms = timeoutOf();
+    if (ms == null || init.signal) return fetchFn(url, init);
+    try { return await fetchFn(url, { ...init, signal: AbortSignal.timeout(ms) }); } catch (e) { throw asTimeoutError(e, ms); }
+  };
 }
 
 function numOrNull(v) { if (v == null) return null; const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; }

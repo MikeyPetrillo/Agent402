@@ -168,8 +168,8 @@ export function createTollbooth(config = {}) {
     // Who pays. Default "bots" = the original behavior (charge AI crawler UAs).
     //  "all":    charge every client except a `free()` match (UA detection is
     //             not a security boundary; this stops relying on it).
-    //  "strict": charge anything that isn't a real-browser request (browser-like
-    //             UA + an HTML Accept). Raises the bar on naive scrapers.
+    //  "strict": charge every listed AI crawler and anything else that isn't a
+    //             real-browser request (browser-like UA + an HTML Accept).
     // An explicit charge()/free() still wins over the mode.
     mode = process.env.TOLLBOOTH_MODE || "bots",
     charge,
@@ -267,7 +267,9 @@ export function createTollbooth(config = {}) {
       if (typeof charge === "function") return Boolean(charge(req));
     } catch { return true; /* fail closed: charge on predicate error */ }
     if (mode === "all") return true;
-    if (mode === "strict") return !looksHuman(req);
+    // strict: a known AI crawler pays even when it sends a browser-like UA and
+    // an HTML Accept; anything else that does not look like a browser pays too.
+    if (mode === "strict") return isBot(req.headers["user-agent"] || "") || !looksHuman(req);
     return isBot(req.headers["user-agent"] || ""); // "bots" (default)
   };
 
@@ -923,6 +925,32 @@ async function startCli() {
   // (it never fires while the server listens).
   server.on("close", () => console.error("[agent402-tollbooth] http server closed"));
   server.on("error", (e) => console.error(`[agent402-tollbooth] http server error: ${e?.code || ""} ${e?.message || e}`));
+  // A clean stop on SIGTERM or SIGINT (a container stop, Ctrl-C): stop
+  // accepting connections, let the requests in flight finish (a paid request
+  // settles only after its answer, so cutting one drops a payment the buyer
+  // signed), then exit 0. A request still running after
+  // TOLLBOOTH_SHUTDOWN_GRACE_MS (default 10000, at most 120000) is cut and the
+  // exit code is 1. A second signal during the wait exits at once.
+  const rawGrace = Number(process.env.TOLLBOOTH_SHUTDOWN_GRACE_MS);
+  const graceMs = Number.isFinite(rawGrace) && rawGrace >= 0 ? Math.min(rawGrace, 120_000) : 10_000;
+  let stopping = false;
+  const stop = (signal) => {
+    if (stopping) { console.error(`[agent402-tollbooth] ${signal} again: exiting now`); process.exit(1); }
+    stopping = true;
+    console.error(`[agent402-tollbooth] ${signal}: no new connections; waiting up to ${graceMs} ms for requests in flight`);
+    const cut = setTimeout(() => {
+      console.error(`[agent402-tollbooth] requests still running after ${graceMs} ms: closing them`);
+      server.closeAllConnections?.();
+      process.exit(1);
+    }, graceMs);
+    server.close(() => { clearTimeout(cut); console.error("[agent402-tollbooth] stopped cleanly"); process.exit(0); });
+    // A keep-alive socket goes idle when its last answer is sent: close it
+    // then, rather than waiting out the client's keep-alive.
+    server.closeIdleConnections?.();
+    setInterval(() => server.closeIdleConnections?.(), 100).unref();
+  };
+  process.on("SIGTERM", () => stop("SIGTERM"));
+  process.on("SIGINT", () => stop("SIGINT"));
   process.on("beforeExit", (code) => {
     let active = "?";
     try { active = JSON.stringify(process.getActiveResourcesInfo()); } catch { /* older node */ }

@@ -16,7 +16,7 @@ if (!existsSync(join(HERE, "node_modules", "agent402-client"))) {
 }
 const { getFreePort } = await import("../../scripts/lib/free-port.js");
 const plugin = (await import("./index.js")).default;
-const { findAction, callAction, aboutAction, agent402Provider } = await import("./index.js");
+const { findAction, callAction, aboutAction, agent402Provider, spendingSummaryFor } = await import("./index.js");
 
 const PORT = await getFreePort();
 const BASE = process.env.AGENT402_BASE_URL || `http://127.0.0.1:${PORT}`;
@@ -111,10 +111,17 @@ async function main() {
       return j(402, {}, { "payment-required": offer(seen.unpaid === 1 ? 10000 : 5000000) });
     });
     await new Promise((resolve) => dear.listen(0, "127.0.0.1", resolve));
-    const rtDear = runtime({ AGENT402_BASE_URL: `http://127.0.0.1:${dear.address().port}`, AGENT402_WALLET_KEY: "0x" + "22".repeat(32) });
+    // Spending caps are opt-in: a per-call ceiling the operator sets holds on
+    // the signed payment, and with none set the same $5 payment is paid.
+    const rtDear = runtime({ AGENT402_BASE_URL: `http://127.0.0.1:${dear.address().port}`, AGENT402_WALLET_KEY: "0x" + "22".repeat(32), AGENT402_MAX_PER_CALL_USD: "1" });
     r = await callAction.handler(rtDear, msg({ text: "", slug: "dear", params: { q: "x" } }));
-    ok(seen.unpaid === 2 && seen.signed === 0, `the $5 payment the paid request asked for was never signed under the default $1 ceiling (unpaid ${seen.unpaid}, signed ${seen.signed})`);
+    ok(seen.unpaid === 2 && seen.signed === 0, `the $5 payment the paid request asked for was never signed under a $1 ceiling the operator set (unpaid ${seen.unpaid}, signed ${seen.signed})`);
     ok(r.success === false && r.data?.errorCode === "spend_limit", `the call answers a spend-limit refusal (got: ${r.text})`);
+    const rtOpen = runtime({ AGENT402_BASE_URL: `http://127.0.0.1:${dear.address().port}`, AGENT402_WALLET_KEY: "0x" + "33".repeat(32) });
+    const r2 = await callAction.handler(rtOpen, msg({ text: "", slug: "dear", params: { q: "y" } }));
+    const lim = spendingSummaryFor(rtOpen)?.limits;
+    ok(lim && lim.maxPerCallUsd === null && lim.dailyLimitUsd === null, `with no spending setting the client has no cap (${JSON.stringify(lim)})`);
+    ok(r2.success === true && seen.signed === 1, `with no spending setting the $5 call is paid, not refused (signed ${seen.signed}, got: ${String(r2.text).slice(0, 120)})`);
     dear.close();
   }
 

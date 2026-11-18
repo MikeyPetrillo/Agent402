@@ -27,4 +27,19 @@ async function main() {
   console.log(`PASS — agent402-anthropic-tools: ${tools.length} tool(s) generated, execute() returned a real result.`);
 }
 
+// Spending caps are opt-in and pass through to agent402-client: none by
+// default (a caller who sets none is never refused a purchase), and the ones
+// a caller sets reach the client.
+{
+  const { agent402Tools: tools402 } = await import("./index.js");
+  const base = BASE;
+  // The server this test reads may still be starting (when the test boots its own).
+  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${base}/health`)).ok) break; } catch { /* not up yet */ } await new Promise((r) => setTimeout(r, 500)); }
+  const plain = (await tools402({ baseUrl: base, slugs: ["hash"] })).client.spendingSummary().limits;
+  const capped = (await tools402({ baseUrl: base, slugs: ["hash"], maxPerCallUsd: 0.5, dailyLimitUsd: 2, maxPerHostUsd: 1 })).client.spendingSummary().limits;
+  if (plain.maxPerCallUsd !== null || plain.dailyLimitUsd !== null || plain.maxPerHostUsd !== null) { console.error("FAIL: no spending cap by default", plain); process.exit(1); }
+  if (capped.maxPerCallUsd !== 0.5 || capped.dailyLimitUsd !== 2 || capped.maxPerHostUsd !== 1) { console.error("FAIL: caller-set caps reach the client", capped); process.exit(1); }
+  console.log("ok - spending caps are opt-in and pass through to agent402-client");
+}
+
 main().catch((e) => { console.error("FAIL:", e); process.exit(1); });

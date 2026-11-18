@@ -92,6 +92,58 @@ Surfaces:
 - A tools/call paid over x402 in the call that the connector stops waiting on
   says it may have been charged, as an MPP-paid one does.
 
+### 2026-11-17 (package releases: opt-in spending caps, request timeouts, typed APIs)
+Packages:
+- agent402-client 0.9.0 keeps every spending cap opt-in (no cap unless the
+  caller sets one) and adds call(slug, params, { maxUsd }), which allows one
+  call up to that amount over the per-call cap the caller set. Each request is
+  given 120 seconds (timeoutMs, the published client timeout for metered
+  calls) and then ends in RequestTimeoutError; a paid request that times out
+  reads paid: "unknown" and its amount is held against any caps the caller
+  set.
+- agent402-client 0.9.0 signs a Circle Gateway batched accept only when its
+  verifyingContract is the chain's own GatewayWallet contract
+  (GATEWAY_VERIFYING_CONTRACTS, Circle's published address on each mainnet and
+  testnet Gateway serves); gateway.verifyingContracts adds or replaces
+  entries. agent402-client and agent402-mcp 0.14.0 solve proof-of-work on a
+  worker thread and refuse a challenge above 28 bits.
+- agent402-mcp 0.14.0 sets no spending cap of its own: the per-call cap
+  (AGENT402_MAX_PER_CALL, $4 by default before) and the session budget
+  (AGENT402_BUDGET) are both opt-in, and a call either refuses names the
+  setting to raise; it returns at most 25 catalog.search results, takes params
+  as an object or a JSON string of one on catalog.call and router.execute,
+  marks catalog.call, router.execute and memory.write destructive and the
+  catalog lookups read-only as the hosted connector does, names no
+  demand.request in its instructions (it does not list it), names a wallet key
+  that does not parse at start instead of reporting a configured wallet, and
+  runs on MCP SDK v2 (@modelcontextprotocol/server 2.4.0) with the same
+  answers on the 2024-11-05 through 2025-11-25 revisions.
+- agent402-tollbooth 0.12.0 charges every listed AI crawler in strict mode, a
+  browser-like one included; the CLI stops on SIGTERM or SIGINT by letting
+  requests in flight finish and exiting 0 (TOLLBOOTH_SHUTDOWN_GRACE_MS,
+  default 10000, then exit 1); the README settle examples run on Base Sepolia
+  with the x402.org facilitator. agent402-client, agent402-mcp and
+  agent402-tollbooth ship TypeScript declarations.
+- agent402-openai-tools, agent402-anthropic-tools, agent402-llamaindex and
+  agent402-strands 0.2.0 pass agent402-client's spending caps through
+  (maxPerCallUsd, dailyLimitUsd, maxPerHostUsd, x402Client; none by default).
+  elizaos-plugin-agent402 0.3.0 and agent402-agentkit 0.2.0 set no per-call
+  cap unless one is set ($1 by default before), and agent402-openclaw 0.6.0
+  sets no per-call ceiling unless maxPerCallUsd or AGENT402_MAX_PER_CALL_USD
+  is set ($2 by default before; off needs no acknowledgment). The adapters
+  accept agent402-client from 0.8.21 up to the next major, 0.9.0 included.
+MCP:
+- The hosted connector counts each message of a JSON-RPC batch against its
+  per-client request limit.
+
+### 2026-11-17 (the OpenClaw plugin on OpenClaw 2026.11.5)
+Packages:
+- agent402-openclaw 0.5.12 is tested against OpenClaw 2026.11.5 and 2026.11.2.
+  OpenClaw 2026.11.5 installs a bare plugin name from ClawHub, where each
+  release is also published; the README names `npm:agent402-openclaw` for the
+  npm package on that host, and the real-install test covers the ClawHub and
+  npm installs there.
+
 ### 2026-11-17 (an unconfirmed settlement is answered as unconfirmed)
 Payments:
 - When a backup settler ends a settlement on an answer that does not show
