@@ -744,7 +744,7 @@ export function llmsTxt(baseUrl, catalog) {
     [`- [/mcp/server-card](`, `- [/mcp/server-card](${baseUrl}/mcp/server-card): MCP server card`],
     [`- [/api/refunds](`, `- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments`],
     // The counting method, the filters and the SDK and MCP readers are in /llms-full.txt.
-    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled, the top 25 by default (50 the ceiling, \`totalSellers\` for how many rank in all); \`?sort=usd|calls\`, \`?top=N\`; the counting method and filters are in /llms-full.txt`],
+    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\` on Base USDC, by payTo), the top 25 by default (50 the ceiling, \`totalSellers\` for how many rank in all); \`?sort=usd|calls\`, \`?top=N\`; also the SDK's \`topSellers()\` and MCP \`sellers.list\` (listed on hosted /mcp only with \`AGENT402_SHOW_ROUTER=1\`); the counting window and filters are in /llms-full.txt`],
   ];
   const briefOf = (line) => (brief.find(([prefix]) => line.startsWith(prefix)) || [])[1] || line;
   const sections = keep.map((name) => {
