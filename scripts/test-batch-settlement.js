@@ -115,6 +115,14 @@ const PAY_TO = "0x000000000000000000000000000000000000dEaD";
   const stt = readFileSync(new URL("../src/tools/stt-kit.js", import.meta.url), "utf8");
   ok(/if \(mediaMeterEnabled\(\)\) setMeterSentinel\(out, upstreamUsd\);/.test(tts), "speech reports what was spoken to the meter only under METERED_MEDIA, through the non-enumerable sentinel");
   ok(/if \(mediaMeterEnabled\(\) && !out\?\.agent402_retried\) setMeterSentinel\(out, upstreamUsd\);/.test(stt), "transcription reports under METERED_MEDIA, never for a transcript billed twice upstream");
+  // A channel sale is booked under its own wire, marked settled off chain.
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const wireFn = server.slice(server.indexOf("function x402WireOf(req) {"), server.indexOf("function recordHangupDebt("));
+  ok(/if \(isBatchSettlementRequest\(req\)\) return BATCH_WIRE;/.test(wireFn), "a channel call is booked under the x402-batch wire");
+  const { settlementKindOf } = await import("../src/gateway-wire.js");
+  ok(settlementKindOf("x402-batch") === "offchain" && settlementKindOf("x402") === "onchain", "and that wire reads settled off chain (claimed on chain later, in a batch)");
+  const hang = server.slice(server.indexOf("function recordHangupDebt("), server.indexOf("function recordHangupDebt(") + 6000);
+  ok(/isBatchSettlementRequest\(req\)[\s\S]*creditHungUpBatchCall\(req, receipt\)/.test(hang), "a hang-up after a channel charge credits the channel back before any owed row");
 }
 
 // ---------------------------------------------------------------------------
