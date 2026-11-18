@@ -17,7 +17,7 @@ const R = (status, body = "", elapsedMs = 6000) => ({ status, body, elapsedMs })
 // ---- a throw before any paid request (the runner's network) ----
 {
   const fetchFailed = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
-  ok(isBuyerNetworkError(fetchFailed) && isBuyerNetworkError(Object.assign(new Error("x"), { cause: { code: "EAI_AGAIN" } })) && isBuyerNetworkError(Object.assign(new Error("t"), { name: "TimeoutError" })), "a transport failure preparing a payment (fetch failed, a reset, DNS, a timeout) is the runner's network");
+  ok(isBuyerNetworkError(fetchFailed) && isBuyerNetworkError(Object.assign(new Error("x"), { cause: { code: "EAI_AGAIN" } })) && isBuyerNetworkError(Object.assign(new Error("t"), { name: "TimeoutError" })) && isBuyerNetworkError(new TypeError("fetch failed")), "a transport failure preparing a payment (fetch failed, a reset, DNS, a timeout) is the runner's network");
   ok(!isBuyerNetworkError(new Error("unsupported scheme for network algorand:x")) && !isBuyerNetworkError(new TypeError("Cannot read properties of undefined")) && !isBuyerNetworkError(null), "an offer the client cannot sign, or a bug, is not the runner's network");
   ok(errorText(fetchFailed) === "fetch failed <- ECONNRESET read ECONNRESET", `the log line names the cause (${errorText(fetchFailed)})`);
   const r = { railFail: [], toolFail: [], chargedNoAnswer: [], chargeUnverified: [], noAnswer: [], chargedEmpty: [], buyerNetwork: [{ key: "x" }], aborted: null };
