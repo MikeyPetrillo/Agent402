@@ -12,7 +12,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
-  isUpstreamErrorShape, isKeyedRequest, upstreamHostsForSlug, failuresBetween,
+  isUpstreamErrorShape, isKeyedRequest, upstreamHostsForSlug, failuresBetween, requestMatchesDefinition,
   directReadFails, directReadStatus, upstreamOutageVerdict, accessRefusalStatus,
 } from "./lib/upstream-outage.js";
 import { isHost } from "./lib/url-host.js";
@@ -45,6 +45,16 @@ try {
   ok(isKeyedRequest(new URL("https://h.example/x?api_key=1"), {}) && isKeyedRequest(new URL("https://h.example/x?token=1"), {}), "a key-like query parameter marks the request keyed");
   ok(isKeyedRequest(new URL("https://h.example/x"), { Authorization: "Bearer x" }) && isKeyedRequest(new URL("https://h.example/x"), new Headers({ "x-api-key": "k" })), "a credential header (object or Headers) marks it keyed");
   ok(!isKeyedRequest(new URL("https://api.weather.gov/alerts/active?area=CA"), { "User-Agent": "a", Accept: "b", "If-None-Match": "c" }), "a keyless request with the fetch helper's own headers is keyless");
+  // A key in the URL path: by host, or by a configured credential's value.
+  ok(isKeyedRequest(new URL("https://base-mainnet.g.alchemy.com/v2/abc"), {}, {}), "a host that takes its key in the path marks the request keyed");
+  const env = { SOME_API_KEY: "pathSecretValue12345", PLAIN: "pathSecretValue12345x" };
+  ok(isKeyedRequest(new URL("https://rpc.example/v1/pathSecretValue12345/call"), {}, env) && isKeyedRequest(new URL("https://rpc.example/q?x=pathSecretValue12345"), {}, env), "a configured credential's value in a path segment or a query value marks the request keyed");
+  ok(!isKeyedRequest(new URL("https://rpc.example/v1/public/call"), {}, env) && !isKeyedRequest(new URL("https://rpc.example/v1/pathSecretValue1234/call"), {}, { SOME_API_KEY: "short" }), "control: a URL without the value, or a value too short to be a credential, stays keyless");
+
+  // ---- a URL we built wrong is ours, whatever the upstream answers
+  ok(requestMatchesDefinition("weather-alerts", "https://api.weather.gov/alerts/active?area=CA"), "weather-alerts' own request matches the path its definition writes");
+  ok(!requestMatchesDefinition("weather-alerts", "https://api.weather.gov/points/1,2"), "a path the definition never writes does not match");
+  ok(!requestMatchesDefinition("weather-alerts", "https://api.weather.gov/alerts/active?area=undefined") && !requestMatchesDefinition("weather-alerts", "https://api.weather.gov/alerts/active?area=%5Bobject%20Object%5D") && !requestMatchesDefinition("weather-alerts", "https://api.weather.gov/alerts//active"), "an interpolation's residue (undefined, an object's string form) or an empty segment does not match");
 
   // ---- hosts are derived from the tool definitions in src/tools/
   ok(upstreamHostsForSlug("weather-alerts").has("api.weather.gov"), "weather-alerts' upstream host (api.weather.gov) is read from its definition");
@@ -77,6 +87,10 @@ try {
   ok(await verdictFor({ logPath: join(work, "missing.jsonl") }) === "fail", "(stub) no failure log (server booted without the preload) excuses nothing");
   rmSync(log, { force: true }); row({ keyed: true });
   ok(await verdictFor({}) === "fail", "(stub) a keyed request is never re-read and excuses nothing");
+  rmSync(log, { force: true }); row({ url: at(down, "/wrong/place") });
+  ok(await verdictFor({}) === "fail", "(stub) a 5xx to a path the definition never builds, refused to the runner too, is ours: FAILS");
+  rmSync(log, { force: true }); row({ url: at(down, "/alerts/undefined") });
+  ok(await verdictFor({}) === "fail", "(stub) a 5xx to a URL with an interpolation's residue is ours: FAILS");
   rmSync(log, { force: true }); row({ url: at(down), method: "POST" });
   ok(await verdictFor({}) === "fail", "(stub) a POST is never re-sent and excuses nothing");
   // ---- an access refusal: excused only when the runner gets the same status
@@ -116,19 +130,20 @@ try {
     await fetch("http://127.0.0.1:1/").catch(() => {});
     await fetch(${JSON.stringify(at(forbidden, "/f"))}, { headers: { Accept: "text/html" } }).catch(() => {});
     await fetch(${JSON.stringify(at(notFound, "/n"))}).catch(() => {});
+    await fetch(${JSON.stringify(at(down, "/v2/PATHSECRETVALUE99"))}).catch(() => {});
   `;
   const code = await new Promise((resolve) => {
-    const p = spawn(process.execPath, ["--import", join(ROOT, "scripts/lib/upstream-failure-log-preload.js"), "--input-type=module", "-e", child], { env: { ...process.env, UPSTREAM_FAILURE_LOG: plog }, stdio: "inherit" });
+    const p = spawn(process.execPath, ["--import", join(ROOT, "scripts/lib/upstream-failure-log-preload.js"), "--input-type=module", "-e", child], { env: { ...process.env, UPSTREAM_FAILURE_LOG: plog, STUB_RPC_API_KEY: "PATHSECRETVALUE99" }, stdio: "inherit" });
     p.on("exit", resolve);
   });
   ok(code === 0, "the preload child ran");
   const text = existsSync(plog) ? readFileSync(plog, "utf8") : "";
   const rows = failuresBetween(0, Date.now() + 1, plog);
   const byUrl = rows.filter((r) => !r.keyed);
-  ok(rows.length === 5, `only failed requests are logged: 503 x3, one with no answer and one 403, never the 200 or the 404 (${rows.length} rows)`);
+  ok(rows.length === 6, `only failed requests are logged: 503 x4, one with no answer and one 403, never the 200 or the 404 (${rows.length} rows)`);
   ok(byUrl.some((r) => r.status === 403 && r.accept === "text/html" && r.url === at(forbidden, "/f")), "a keyless refusal is logged with its URL, status and Accept header");
   ok(byUrl.length === 3 && byUrl.some((r) => r.url === at(down) && r.status === 503) && byUrl.some((r) => r.error && isHost(r.url, "127.0.0.1") && new URL(r.url).port === "1"), "a keyless failure is logged with its URL and status or error");
-  ok(rows.filter((r) => r.keyed).length === 2 && rows.filter((r) => r.keyed).every((r) => !("url" in r)), "a keyed failure (query key or credential header) is logged by host only");
+  ok(rows.filter((r) => r.keyed).length === 3 && rows.filter((r) => r.keyed).every((r) => !("url" in r)), "a keyed failure (query key, credential header, or a configured key in the path) is logged by host only");
   ok(!text.includes("SECRETVALUE"), "no credential reaches the log");
 
   // ---- the live-sites step: pass, outage, our defect
