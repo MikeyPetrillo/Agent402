@@ -13,6 +13,7 @@
 // carries its reason and a check that the reason still holds.
 //
 // When a guard moves, update its entry here in the same change.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
