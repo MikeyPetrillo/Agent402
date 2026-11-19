@@ -58,7 +58,7 @@ facilitator = createServer((req, res) => {
     res.writeHead(404); res.end();
   });
 });
-await new Promise((r) => facilitator.listen(0, r));
+await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
 const FAC = `http://127.0.0.1:${facilitator.address().port}`;
 
 // ---- the operator's stack: @x402/express v2, exact USDC on Base, every GET ----
@@ -72,7 +72,7 @@ const gate = createTollbooth({ mode: "all", payTo: PAYTO, price: "$0.001", netwo
 const e = express();
 e.use(gate);
 e.get("/page", (_req, res) => res.json({ page: "paid content", n: 42 }));
-app = e.listen(0);
+app = e.listen(0, "127.0.0.1");
 await new Promise((r) => app.once("listening", r));
 const B = `http://127.0.0.1:${app.address().port}`;
 
@@ -166,7 +166,7 @@ ok(st.mppPaid === 1 && st.x402Paid === 1 && st.powSolved === 1, `stats: mppPaid=
 // ---- 7. MPP off (x402 middleware without mpp) -> no challenge, x402 still works ----
 const gate2 = createTollbooth({ mode: "all", payTo: PAYTO, x402: x402mw, mpp: false, powSecret: SECRET });
 const e2 = express(); e2.use(gate2); e2.get("/p", (_q, r) => r.json({ ok: 1 }));
-const app2 = e2.listen(0); await new Promise((r) => app2.once("listening", r));
+const app2 = e2.listen(0, "127.0.0.1"); await new Promise((r) => app2.once("listening", r));
 const r2 = await fetch(`http://127.0.0.1:${app2.address().port}/p`);
 ok(r2.status === 402 && !r2.headers.get("www-authenticate") && !!r2.headers.get("payment-required"), "mpp:false -> no MPP challenge, PAYMENT-REQUIRED still lifted");
 app2.close();
@@ -177,7 +177,7 @@ app2.close();
 const { x402VerifierFromExpress } = await import("../tollbooth/index.js");
 const gate3 = createTollbooth({ mode: "all", payTo: PAYTO, verifyX402: x402VerifierFromExpress(x402mw, { timeoutMs: 5000 }), pow: false });
 const e3 = express(); e3.use(gate3); e3.get("/p", (_q, r) => r.json({ ok: 1 }));
-const app3 = e3.listen(0); await new Promise((r) => app3.once("listening", r));
+const app3 = e3.listen(0, "127.0.0.1"); await new Promise((r) => app3.once("listening", r));
 const before3 = { v: facCalls.verify.length, s: facCalls.settle.length };
 // The old gate emits no PAYMENT-REQUIRED header, so a v2 client cannot even
 // negotiate; hand it a credential signed for the middleware's requirements.

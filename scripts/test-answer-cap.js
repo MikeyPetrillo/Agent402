@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
+import { childJson } from "./lib/child-json.js";
 import {
   MB, ANSWER_CAPS, ANSWER_CAPS_ELSEWHERE, AUDIO_ANSWER_MAX_BYTES, PDF_ANSWER_MAX_BYTES, IMAGE_ANSWER_MAX_BYTES,
   capText, answerTooLarge, assertAnswerBytes, readFileWithin, projectedAudioBytes, audioSecondsWithin, lengthText,
@@ -159,7 +160,7 @@ try {
     for (const [label, path] of [["the hour of Opus (refused before the encode)", hourPath], ["the file that understates its length (refused after it)", liarPath]]) {
       const r = spawnSync(process.execPath, ["--input-type=module", "-e", child, path], { cwd: ROOT, encoding: "utf8", timeout: 120_000 });
       let got = null;
-      try { got = JSON.parse(String(r.stdout).trim().split("\n").pop()); } catch { /* reported below */ }
+      try { got = childJson(r.stdout); } catch { /* reported below */ }
       ok(got?.status === 413 && got.maxRssMb < RSS_BOUND_MB, `${label}: 413, peak resident memory ${got?.maxRssMb} MB (bound ${RSS_BOUND_MB})${got ? "" : `: ${String(r.stderr).slice(0, 300)}`}`);
     }
   }
