@@ -79,7 +79,7 @@ for (const t of ALCHEMY_DATA_TOOLS) {
   ok(t.route === `POST /api/${t.slug}`, `${t.slug}: route matches slug`);
   ok(t.category === "crypto", `${t.slug}: category=crypto`);
   const usd = Number(String(t.price).replace("$", ""));
-  ok(usd >= 0.002 && usd <= 0.006, `${t.slug}: priced $0.002-$0.006 (${t.price})`);
+  ok(usd >= 0.001 && usd <= 0.006, `${t.slug}: priced $0.001-$0.006 (${t.price})`);
   ok(typeof t.handler === "function", `${t.slug}: has handler`);
   const d = t.discovery;
   ok(d && d.bodyType === "json" && d.input && d.inputSchema?.properties && d.output?.example, `${t.slug}: full discovery envelope`);

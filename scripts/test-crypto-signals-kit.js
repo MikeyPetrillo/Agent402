@@ -174,7 +174,7 @@ globalThis.fetch = async (url, opts = {}) => {
 // Catalog envelope
 // ----------------------------------------------------------------------------
 ok(CRYPTO_SIGNALS_TOOLS.length === 3, "3 tools exported");
-const want = { "crypto-news": "$0.002", "crypto-indicators": "$0.002", "crypto-market-pulse": "$0.004" };
+const want = { "crypto-news": "$0.001", "crypto-indicators": "$0.002", "crypto-market-pulse": "$0.004" };
 for (const t of CRYPTO_SIGNALS_TOOLS) {
   ok(want[t.slug] === t.price, `${t.slug} priced ${t.price}`);
   ok(t.category === "crypto" && /^POST \/api\//.test(t.route), `${t.slug} route/category`);

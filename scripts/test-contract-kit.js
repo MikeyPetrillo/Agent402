@@ -20,8 +20,8 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 ok(CONTRACT_TOOLS.length === 7, `7 tools exported (got ${CONTRACT_TOOLS.length})`);
 const PRICES = {
   "contract-source": "$0.005", "contract-abi": "$0.003", "solidity-scan": "$0.01",
-  "calldata-decode": "$0.003", "selector-lookup": "$0.002", "tx-simulate": "$0.005",
-  "address-label": "$0.002",
+  "calldata-decode": "$0.002", "selector-lookup": "$0.002", "tx-simulate": "$0.005",
+  "address-label": "$0.001",
 };
 for (const t of CONTRACT_TOOLS) {
   ok(typeof t.slug === "string" && t.slug.length > 0, `${t.slug}: has slug`);

@@ -18,7 +18,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 ok(WEB_TOOLS.length === 3, `3 tools exported (got ${WEB_TOOLS.length})`);
 const SPEC = {
   "archive-snapshot": { price: "$0.003", category: "web" },
-  "feed-parse": { price: "$0.004", category: "web" },
+  "feed-parse": { price: "$0.001", category: "web" },
   "unshorten-url": { price: "$0.002", category: "web" },
 };
 for (const t of WEB_TOOLS) {

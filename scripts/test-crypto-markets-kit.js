@@ -63,8 +63,8 @@ const reset = () => { calls.length = 0; clearCryptoMarketsCache(); };
 // Catalog envelope
 // ----------------------------------------------------------------------------
 const EXPECTED = {
-  "coin-price-by-contract": "$0.005", "coin-profile": "$0.008", "coin-history": "$0.005", "coin-ohlc": "$0.008",
-  "coin-market-chart-range": "$0.008", "coin-categories": "$0.005", "global-defi": "$0.005", "exchanges": "$0.005",
+  "coin-price-by-contract": "$0.005", "coin-profile": "$0.008", "coin-history": "$0.005", "coin-ohlc": "$0.003",
+  "coin-market-chart-range": "$0.008", "coin-categories": "$0.005", "global-defi": "$0.005", "exchanges": "$0.003",
   "exchange-tickers": "$0.008", "exchange-rates": "$0.005", "coin-search": "$0.005", "coins-list": "$0.005",
   "rwa-list": "$0.003", "rwa-markets": "$0.006", "rwa-asset": "$0.006", "rwa-issuers": "$0.003", "rwa-issuer": "$0.006",
 };
