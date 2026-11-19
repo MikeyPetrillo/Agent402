@@ -160,7 +160,11 @@ try {
       const r4 = fakeRes(); const req4 = { method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${RKEY}` } };
       let ended4 = false; r4.end = () => { ended4 = true; return r4; };
       await g(req4, r4, () => {});
-      reserveHangupForgiveness(req4, { keys: ["credits-pg-test"], priceUsd: 0.001, slug: "whois" });
+      // Awaited as the server awaits it: on a shared store (REDIS_URL set) the
+      // reservation is a promise, and the ticket is on the request only once
+      // it settles. The key is this run's own, so no other run's figures on
+      // that store decide it.
+      await reserveHangupForgiveness(req4, { keys: [`credits-pg-test-${basename(DIR)}`], priceUsd: 0.001, slug: "whois" });
       ok(hangupForgiven(req4), "pg receipts hang-up: the run holds a granted ticket");
       req4.__a402ClientGoneAt = Date.now();
       r4.statusCode = 200; r4.end("answer");

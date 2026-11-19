@@ -44,6 +44,7 @@
     "LE_102": "an upstream error code",
     "MAX_TOKENS": "an upstream finish reason",
     "NODE_OPTIONS": "passed through to a worker thread",
+    "NOT_FOUND": "an error code in an upstream answer",
     "PLAYWRIGHT_BROWSERS_PATH": "passed through to a child process",
     "QR_CODE": "a barcode format name",
     "SOLANA_AGENT_KEY": "named in a code sample a page shows (the reader's own program)",
