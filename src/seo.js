@@ -18,6 +18,7 @@ import { LEARN, learnSlugs } from "./learn.js";
 import { RAILS, RAILS_OR, countWord } from "./rails.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
+import { batchOfferPublic } from "./batch-settlement.js";
 import { CHAIN_PAGES } from "./market-page.js";
 import { EXEC_TIERS } from "./tools/route-execute.js";
 import { stripeEnabled } from "./mpp-stripe.js";
@@ -469,6 +470,17 @@ function gatewayNanopaymentsLine() {
   return ` **Batched option, no gas per call (Circle Gateway nanopayments).** On ${chains.join(" and ")} the same 402 also carries a second \`exact\` accept whose \`extra.name\` is \`${gw.kind}\` (with \`extra.verifyingContract\`${windowWords}): after a USDC deposit into Circle Gateway (an on-chain transfer the buyer makes and pays gas for), the buyer for each call signs the same EIP-3009 authorization under that domain against that balance and pays no gas for the call; Gateway verifies it and settles it off chain in batches. Same price, same payTo; a client that ignores \`extra.name\` keeps paying the plain accept, which stays first in \`accepts\`; agent402-client 0.8.20+ pays the batched one when constructed with \`{ gateway: { signer } }\`. Identity-bound routes and routes with a lasting effect (such as memory writes, attest and the route-execute tiers) offer the plain accept only. Machine-readable: \`/api/pricing\` (\`payment.acceptKinds\`, \`payment.gatewayNanopayments\`) and \`/.well-known/x402\`.`;
 }
 
+/** The x402 payment-channel option (batch-settlement), as one sentence for
+ *  llms.txt, from the live offer (src/batch-settlement.js); empty while off. */
+function paymentChannelsLine() {
+  const ch = batchOfferPublic();
+  if (!ch) return "";
+  const chains = Object.entries(CHAIN_PAGES).filter(([, c]) => ch.networks.includes(c.caip2)).map(([, c]) => c.chainName);
+  const hours = Math.round(ch.idleRefundSeconds / 3600);
+  const idle = hours >= 1 ? `${hours} hour${hours === 1 ? "" : "s"}` : `${ch.idleRefundSeconds} seconds`;
+  return ` **Payment channels, one deposit for many calls (x402 \`batch-settlement\`).** On ${chains.join(" and ") || ch.networks.join(", ")} the 402 also carries a \`batch-settlement\` accept, last in \`accepts\`: the first call deposits USDC into the channel escrow, and each later call carries one signed cumulative voucher, with no transaction per call. Vouchers are claimed on chain in batches; an x402 channel call is charged to the channel only on its final 200, and a channel idle for ${idle} gets its unused deposit refunded. Identity-bound routes, routes with a lasting effect and the long-running reports offer the other accepts only. Machine-readable: \`/api/pricing\` (\`payment.acceptKinds\`, \`payment.paymentChannels\`) and \`/api/rails\`.`;
+}
+
 /** The full llms text: every section, the skill packs and every tool category.
  *  /llms-full.txt is this plus the learn summaries and the catalog lines. */
 /** Identity-bound routes, read from the same flag the gates and tool pages read
@@ -597,7 +609,7 @@ Base URL: ${baseUrl}
 
 **No wallet? Pay with compute (proof-of-work).** ${powCount} of the ${tools.length} tools accept a sha256 proof-of-work puzzle (a fraction of a second of CPU) instead of USDC - no money and no AI tokens (no model in the serving path of these tools). Get a challenge at \`${baseUrl}/api/pow/challenge?slug=hash\`, find an integer nonce so that \`sha256(challenge + ":" + nonce)\` has at least ${POW_DIFFICULTY} leading zero bits, then resend the request with header \`X-Pow-Solution: <token>:<nonce>\`. **The response has two different fields and you use both: hash the \`challenge\` (32 hex chars), submit the \`token\` (the longer signed string).** Submitting the challenge you just hashed returns a 402 that looks exactly like an unpaid request, so this is the one step worth reading twice. The network / browser / storage tools that need wallet-bound identity or live egress stay wallet-only.
 
-**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin${floorClause() ? ` (${floorClause()})` : ""}.${premiumClause() ? ` A chain's settlement premium is in the 402 and in \`/api/pricing\` (\`payment.premiumUsdByNetwork\`): ${premiumClause()}.` : ""} Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result (answers up to ${IDEM_MAX_BODY_LABEL}) without paying again.${gatewayNanopaymentsLine()}
+**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin${floorClause() ? ` (${floorClause()})` : ""}.${premiumClause() ? ` A chain's settlement premium is in the 402 and in \`/api/pricing\` (\`payment.premiumUsdByNetwork\`): ${premiumClause()}.` : ""} Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result (answers up to ${IDEM_MAX_BODY_LABEL}) without paying again.${gatewayNanopaymentsLine()}${paymentChannelsLine()}
 
 **${creditsSalesEnabled() ? "Pay with a prepaid credits key." : "Already hold a prepaid credits key?"}** ${creditsSalesEnabled() ? `Packs are sold by card at ${baseUrl}/credits.` : "New credits are not on sale; a key already issued keeps working."} Send it as \`Authorization: Bearer a402_...\` on any paid tool except the ones that buy from an outside seller (the router's execute tiers, seller-payability, decide-execute and the flight routes), which take a wallet payment - the list price is held before the call and debited only on a successful (200) response; \`X-Credits-Balance\` rides on every answer and \`GET ${baseUrl}/api/credits/balance\` reports the key. agent402-mcp (AGENT402_CREDITS_KEY) and agent402-client ({ creditsKey }) support it. Identity-bound tools (${identityBoundList}) still need an EVM x402 wallet - the payment is the identity there, so credits keys and Tempo are refused on them.
 
@@ -782,6 +794,7 @@ ${[
     mppMethodsProse(),
     mppFlagshipLlmsBlock(catalog, { compact: true }),
     gatewayNanopaymentsLine(),
+    paymentChannelsLine(),
     ...sections,
     identity,
   ].map((b) => String(b || "").replace(/^\n+|\n+$/g, "")).filter(Boolean).join("\n\n")}

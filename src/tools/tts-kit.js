@@ -56,6 +56,7 @@ import { audioProviderPolicy } from "../openrouter-audio-policy.js";
 import { transcodePcm } from "./media-kit.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
+import { mediaMeterEnabled, setMeterSentinel } from "../gateway-meter.js";
 import { createUnansweredTracker } from "../unanswered-rule.js";
 import { currentCallerKey } from "../request-timing.js";
 import { upstreamFetch, upstreamDeadline, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, KIND } from "../upstream-deadline.js";
@@ -467,14 +468,18 @@ function recordSpeechSpend(tierSlug, out) {
     const chars = Number(out?.chars) || 0;
     const upstreamUsd = rate != null && chars > 0 ? Math.round(chars * rate * 1e6) / 1e6 : null;
     capturePostHogGatewayUsage({ tier: tierSlug, model: out?.model, priceUsd: tierPriceUsd(tierSlug, chars), upstreamUsd, source: "speech" });
-  } catch { /* telemetry must never fail a served response */ }
+    return upstreamUsd;
+  } catch { return null; /* telemetry must never fail a served response */ }
 }
 
 function makeHandler(tierSlug) {
   const serve = makeServe(tierSlug);
   return async (input) => {
     const out = await serve(input);
-    recordSpeechSpend(tierSlug, out);
+    const upstreamUsd = recordSpeechSpend(tierSlug, out);
+    // The work meter (METERED_MEDIA): an upto, channel or credits buyer
+    // settles what was spoken, under the quote (src/gateway-meter.js).
+    if (mediaMeterEnabled()) setMeterSentinel(out, upstreamUsd);
     return out;
   };
 }

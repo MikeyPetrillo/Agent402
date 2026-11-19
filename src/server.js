@@ -100,6 +100,7 @@ import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
 import { backfillBrokenPackRefunds, backfillNamedSales } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
+import { batchSettlementStatus, isBatchSettlementRequest, creditHungUpBatchCall, batchOfferPublic, BATCH_WIRE } from "./batch-settlement.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
 import { configureHowToCall, howToCall402Field, howToCallField } from "./how-to-call.js";
 import { paymentGuide, quoteInputs, usdText } from "./payment-guide.js";
@@ -291,6 +292,7 @@ function whenVerdict(r, then) {
 // charged-failure debt, so the three books agree.
 function x402WireOf(req) {
   if (isGatewayBatchedRequest(req)) return GATEWAY_WIRE;
+  if (isBatchSettlementRequest(req)) return BATCH_WIRE;
   return req.mppCredential ? "mpp" : "x402";
 }
 function recordHangupDebt(req, res, { reason = null } = {}) {
@@ -318,6 +320,27 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
       wire: req.tempoSettled ? "mpp-tempo" : "mpp-stripe",
       priceUsd: settledPriceUsd(def, req, res),
     };
+  } else if (settleReceipt && isBatchSettlementRequest(req)) {
+    // A channel charge (x402 batch-settlement) moved nothing on chain: it is
+    // given back to the channel, and the buyer's next voucher is signed on
+    // the lower total (the corrective 402 carries it). Only a credit the
+    // channel cannot take (already claimed on chain) is booked as owed, under
+    // evidence unique to this request, and repaid by hand.
+    const channelReceipt = decodeSettleReceipt(settleReceipt);
+    if (!receiptProvesCharge(channelReceipt)) return null;
+    const owedRow = {
+      network: networkFromPaymentResponse(settleReceipt),
+      payer: payerFromPaymentResponse(settleReceipt),
+      tx: `batch-hangup:${randomUUID()}`,
+      wire: BATCH_WIRE,
+      priceUsd: paidUsdOf(def, req, res, channelReceipt?.network),
+    };
+    void creditHungUpBatchCall(req, channelReceipt).then((how) => {
+      if (how === "credited") return;
+      console.warn(`[batch] hang-up on ${def.slug}: channel credit not taken (${how}); booked as owed`);
+      try { recordRefundOwed({ slug: def.slug, ...owedRow, httpStatus: 499, synthetic, hangupReason: "channel credit refused" }); } catch { /* logged above */ }
+    }).catch(() => {});
+    return { credited: true };
   } else if (settleReceipt) {
     if (!receiptProvesCharge(decodeSettleReceipt(settleReceipt))) return null;
     row = {
@@ -7715,6 +7738,8 @@ function acceptKindsByNetwork() {
     const kinds = ["exact"];
     if ((rails.uptoCaip2 || []).includes(caip2)) kinds.push("upto");
     if (rails.gatewayKinds instanceof Map && rails.gatewayKinds.has(caip2)) kinds.push("exact:GatewayWalletBatched");
+    // x402 payment channels (src/batch-settlement.js), only while offered.
+    if (Array.isArray(rails.batchCaip2) && rails.batchCaip2.includes(caip2)) kinds.push("batch-settlement");
     out[nameOf(caip2)] = kinds;
   }
   return out;
@@ -7855,6 +7880,11 @@ app.get("/api/rails", (_req, res) => {
     // left out and its reason word (railStatus's words, plus not-in-offer), so
     // a dropped option reaches the heartbeat's rail check. Absent while off.
     ...gatewayBatchedRailField(),
+    // x402 payment channels (batch-settlement) while X402_BATCH_SETTLEMENT_NETWORKS
+    // names a network: status offered / partial / dropped, each dropped
+    // network with our reason word, and the claim loop's word and times.
+    // Absent while off.
+    ...(batchSettlementStatus() ? { batchSettlement: batchSettlementStatus() } : {}),
   });
 });
 app.get("/api/reliability", async (_req, res) =>
@@ -10951,7 +10981,9 @@ app.get("/api/pricing", (_req, res) => {
       // (exact everywhere; upto where it is on; the Circle Gateway batched
       // kind where that option is on). Absent before the paywall is built.
       ...(acceptKindsByNetwork() ? { acceptKinds: acceptKindsByNetwork() } : {}),
-      ...(gatewayOfferPublic() ? { gatewayNanopayments: gatewayOfferPublic() } : {}) },
+      ...(gatewayOfferPublic() ? { gatewayNanopayments: gatewayOfferPublic() } : {}),
+      // x402 payment channels (batch-settlement) while offered; absent off.
+      ...(batchOfferPublic() ? { paymentChannels: batchOfferPublic() } : {}) },
     altPayment: {
       protocol: "proof-of-work",
       summary: "No wallet? Solve a sha256 puzzle (a fraction of a second of CPU) instead - no money, no AI tokens, no model involved.",

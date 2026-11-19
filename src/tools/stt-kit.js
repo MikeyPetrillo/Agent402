@@ -62,6 +62,7 @@ import { upstreamCosts } from "../upstream-costs.js";
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
 import { assertUpstreamBody } from "./llm-gateway-kit.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
+import { mediaMeterEnabled, setMeterSentinel } from "../gateway-meter.js";
 import { audioProviderPolicy } from "../openrouter-audio-policy.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { evmCredentialBudgetMs } from "../evm-validity.js";
@@ -624,7 +625,8 @@ function recordSttSpend(tierSlug, out, probedDuration) {
     const rate = upstreamUsdPerMinute(out?.model);
     const upstreamUsd = rate != null && seconds > 0 ? Math.round((seconds / 60) * rate * 1e6) / 1e6 : null;
     capturePostHogGatewayUsage({ tier: tierSlug, model: out?.model, priceUsd: TIERS[tierSlug]?.priceUsd, upstreamUsd, source: "stt" });
-  } catch { /* telemetry must never fail a served response */ }
+    return upstreamUsd;
+  } catch { return null; /* telemetry must never fail a served response */ }
 }
 
 /** May a failure that could have been billed get a second attempt? Only when
@@ -714,7 +716,10 @@ async function transcribeWithRetry(buf, filename, tierSlug, language, diarize, p
 
 async function transcribeBuffer(buf, filename, tierSlug, language, diarize, probedDuration, req) {
   const out = await transcribeWithRetry(buf, filename, tierSlug, language, diarize, probedDuration, req);
-  recordSttSpend(tierSlug, out, probedDuration);
+  const upstreamUsd = recordSttSpend(tierSlug, out, probedDuration);
+  // The work meter (METERED_MEDIA). A transcript served on a second attempt
+  // was billed twice upstream and is not metered: it settles the price.
+  if (mediaMeterEnabled() && !out?.agent402_retried) setMeterSentinel(out, upstreamUsd);
   return out;
 }
 
