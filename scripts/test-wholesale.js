@@ -16,6 +16,7 @@ import { ERROR_CODES, stableErrorCode, errorCodeField } from "../src/stable-erro
 import { reliabilityOf, outsideCounts, callsBand, toolRow, wholesaleIndex, wholesaleFamily, WHOLESALE_FAMILIES, WHOLESALE_MIN_SAMPLE } from "../src/wholesale.js";
 import { TOOL_CLASSES, createToolFailureMonitor } from "../src/tool-failure-monitor.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
+import { preValidateInput } from "../src/handler-input.js";
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -26,6 +27,12 @@ for (const [s, c] of Object.entries(V1_CODES)) ok(stableErrorCode(Number(s)) ===
 ok(new Set(ERROR_CODES.map((e) => e.code)).size === ERROR_CODES.length && ERROR_CODES.every((e) => /^[a-z_]+$/.test(e.code) && e.meaning && /^[a-z-]+$/.test(e.retry)), "codes are unique snake_case words, each with a meaning and a retry verb");
 ok(stableErrorCode(418) === "invalid_input" && stableErrorCode(507) === "internal_error" && stableErrorCode(200) === null && stableErrorCode("x") === null, "an unlisted status reads its class; under 400 reads none");
 ok(JSON.stringify(errorCodeField(200)) === "{}" && errorCodeField(504).errorCode === "timeout", "the field spreads to nothing under 400");
+{
+  // The pre-payment input check (direct routes and /ref) answers in the dispatcher's shape, code included.
+  const def = { slug: "zz", route: "POST /api/zz", discovery: { inputSchema: { properties: { text: { type: "string" } }, required: ["text"] }, input: { text: "a" } } };
+  const bad = preValidateInput(def, { method: "POST", path: "/api/zz", body: {}, query: {}, headers: { "content-type": "application/json" } });
+  ok(bad?.status === 400 && bad.body.errorCode === "invalid_input" && Object.keys(bad.body).slice(0, 3).join(",") === "error,tool,errorCode", `the pre-payment refusal carries errorCode right after tool (${bad && Object.keys(bad.body).join(",")})`);
+}
 
 // ---- reliability, pure
 const now = Date.parse("2026-11-18T12:00:00Z");

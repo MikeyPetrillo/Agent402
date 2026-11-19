@@ -13456,7 +13456,9 @@ for (const tool of ALL_KIT) {
       if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
       // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
       if (err?.shed === true) res.locals.shed = true;
-      const provenance = { ...toolErrorFields(err), ...errorCodeField(status) };
+      const provenance = toolErrorFields(err);
+      // The stable code a caller branches on (src/stable-error-code.js).
+      Object.assign(provenance, errorCodeField(status));
       if (status >= 400 && status < 500 && !fromUpstream) {
         res.status(status).json({
           error: errorMessage,

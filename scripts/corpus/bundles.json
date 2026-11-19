@@ -1,0 +1,60 @@
+{
+  "about": "The bundle products (src/tools/bundle-kit.js): weather-risk-brief (open-meteo), filings-brief (SEC EDGAR), token-diligence (CoinGecko). Tier 1: free public upstreams; a source's 429 or 5xx is reported as upstream, never fatal.",
+  "cases": [
+    {
+      "slug": "weather-risk-brief",
+      "name": "two sites by place and by coordinates, in fahrenheit",
+      "input": {
+        "units": "fahrenheit",
+        "sites": [
+          { "place": "Oslo" },
+          { "name": "Sydney yard", "lat": -33.87, "lon": 151.21 }
+        ]
+      },
+      "expect": {
+        "equals": { "units": "fahrenheit", "sites": 2, "pricing.units": 2, "rows[1].site.name": "Sydney yard" },
+        "count": { "rows": 2, "ranking": 2 },
+        "matches": { "rows[0].site.place": "Oslo", "rows[0].forecast.unit": "F" },
+        "populated": ["rows[0].forecast.days", "rows[0].forecast.wettestDay.date", "rows[1].airQuality.usAqi", "rows[1].vsLastYear.from", "rows[0].heavyRain.members", "rows[0].risks.frost.rule", "portfolio.sitesWithFlag", "pricing.priceUsd"]
+      }
+    },
+    {
+      "slug": "weather-risk-brief",
+      "name": "an empty site list is a 400 naming the field",
+      "input": { "sites": [] },
+      "expect": { "status": 400, "matches": { "error": "sites" } }
+    },
+    {
+      "slug": "filings-brief",
+      "name": "two companies from a comma string",
+      "input": { "tickers": "nvda, ko" },
+      "expect": {
+        "equals": { "companies": 2, "rows[0].ticker": "NVDA", "rows[1].ticker": "KO", "pricing.units": 2 },
+        "count": { "peers.byRevenue": 2 },
+        "populated": ["rows[0].financials.annual.revenue", "rows[0].financials.ratios.netMargin", "rows[1].filingActivity.last10K", "rows[1].filingActivity.recentFilings", "rows[0].insiderActivity.windowDays"]
+      }
+    },
+    {
+      "slug": "filings-brief",
+      "name": "an unknown ticker is a 422 naming it",
+      "input": { "tickers": ["MSFT", "ZZZZQX"] },
+      "expect": { "status": 422, "matches": { "error": "ZZZZQX" } }
+    },
+    {
+      "slug": "token-diligence",
+      "name": "two coins other than the example",
+      "input": { "coins": ["solana", "dogecoin"] },
+      "expect": {
+        "equals": { "coins": 2, "rows[0].id": "solana", "rows[1].id": "dogecoin", "pricing.units": 2 },
+        "count": { "comparison.byMarketCap": 2 },
+        "populated": ["rows[0].market.marketCap", "rows[0].computed.maxDrawdown1yPct", "rows[1].computed.volatilityAnnualizedPct", "rows[1].supply.circulating"]
+      }
+    },
+    {
+      "slug": "token-diligence",
+      "name": "a malformed coin id is a 400 naming its index",
+      "input": { "coins": ["bitcoin", "Not A Coin!"] },
+      "expect": { "status": 400, "matches": { "error": "coins\\[1\\]" } }
+    }
+  ]
+}
