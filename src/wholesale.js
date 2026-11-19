@@ -39,7 +39,7 @@ export const WHOLESALE_FAMILIES = Object.freeze([
     slugs: () => ["edgar-company-lookup", "edgar-filings", "edgar-company-concept", "edgar-company-facts", "edgar-xbrl-frame", "company-financials", "edgar-insider-trades", "edgar-13f-holdings", "edgar-recent-ipos", "edgar-search", "edgar-13f-datasets", "edgar-13f-dataset-head", "filings-brief"],
   },
   {
-    id: "us-treasury", title: "US Treasury rates and debt", source: "US Treasury (fiscaldata.treasury.gov, home.treasury.gov)",
+    id: "us-treasury", title: "US Treasury rates and debt", source: "US Treasury (fiscaldata.treasury.gov and home.treasury.gov)",
     redistribution: "public-domain", credit: US_TREASURY_ATTRIBUTION,
     slugs: () => ["treasury-yield-curve", "treasury-yield-history", "yield-curve-spread", "treasury-debt", "treasury-avg-rates"],
   },

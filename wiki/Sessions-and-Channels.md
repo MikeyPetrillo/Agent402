@@ -23,7 +23,7 @@ it is recorded as owed and repaid.)
 | Pay per call, fixed price | x402 `exact` (EIP-3009, every rail) | on |
 | Charge up to a ceiling, settle actual use (`/v1` chat, Messages, Responses) | x402 `upto` (Permit2) | off by default (`X402_UPTO_NETWORKS`, `GATEWAY_METERED_BILLING`) |
 | Deposit once, sign each call, settled in batches | x402 `exact` under the Circle Gateway batched domain | off by default (`GATEWAY_NANOPAYMENTS`); see [[Circle Gateway (batched USDC)\|Circle-Gateway]] |
-| Deposit once into a channel, a cumulative voucher per call, claimed in batches, unused deposit refunded | x402 `batch-settlement` | off by default (`X402_BATCH_SETTLEMENT_NETWORKS`), below |
+| Deposit once into a channel, a cumulative voucher per call, claimed in batches, unused deposit refunded | x402 `batch-settlement` | off by default (`X402_BATCH_SETTLEMENT_NETWORKS`) |
 | Charge up to a ceiling on speech, transcription and embeddings | x402 `upto` (and `batch-settlement`) with the work meter | off by default (`METERED_MEDIA`), below |
 | Pay per call over MPP | MPP `charge` intent (evm, Tempo, card) | on where configured |
 | Recurring monitors over MPP | MPP Tempo `subscription` intent | on where configured |

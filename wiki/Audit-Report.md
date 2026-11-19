@@ -41,7 +41,7 @@ Beside the rows: `totals`, `byTool` and `byDay` cover the whole window, whatever
 
 ## Verifying a report
 
-Every receipt is a compact JWS (Ed25519, `alg` EdDSA) signed with a key published at [`/.well-known/agent402-receipt-key.json`](https://agent402.tools/.well-known/agent402-receipt-key.json).
+The key published at [`/.well-known/agent402-receipt-key.json`](https://agent402.tools/.well-known/agent402-receipt-key.json) signs every receipt, and each receipt is a compact JWS (Ed25519, `alg` EdDSA).
 
 - **The summary.** `summaryReceipt` signs the SHA-256 of `JSON.stringify(report)` (`reportSha256`), or of the CSV bytes. Its `payer` is the wallet, its `rail` is `audit-summary`, and it names no price or settlement. Check it with `POST /api/receipts/verify` and `{ "receipt": summaryReceipt, "body": JSON.stringify(report) }`: `valid: true` means this server signed exactly this report for this wallet. A changed amount, a dropped row or another wallet named fails it.
 - **Each row.** `POST /api/receipts/verify` with the row's `receipt`, and the answer bytes you kept as `body`. The record's `settlement` is the row's.
