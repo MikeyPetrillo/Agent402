@@ -11,8 +11,9 @@
 //      scrolling is off.
 //   4. No page module or browser script writes a literal time in a transition
 //      or animation declaration (var(--dur-*) and var(--stagger) only; 0s is fine).
-//   5. A browser script that animates (a requestAnimationFrame loop, a smooth
-//      scroll, element.animate) reads prefers-reduced-motion.
+//   5. A browser script that animates (a requestAnimationFrame loop or
+//      element.animate) reads prefers-reduced-motion, and a smooth scroll
+//      turns to "auto" under it (never written unconditionally).
 //
 // Run: node scripts/test-motion-tokens.js             (repo tree)
 //      node scripts/test-motion-tokens.js --self-test (proves it can fail)
@@ -106,9 +107,13 @@ export function scanLiterals(rel, src) {
 
 export function scriptMotionProblems(rel, src) {
   const code = stripComments(src);
-  const animates = (/requestAnimationFrame\s*\(/.test(code) && !RAF_PAINT_ONLY[rel]) || /behavior\s*:\s*["']smooth["']/.test(code) || /\.animate\s*\(/.test(code);
-  if (!animates) return [];
-  return /prefers-reduced-motion/.test(code) ? [] : [`${rel}: animates (rAF loop, smooth scroll or element.animate) without reading prefers-reduced-motion`];
+  const out = [];
+  // A smooth scroll written unconditionally ignores the query whatever else
+  // the file reads; the reduced-motion form picks "auto" (still ? "auto" : "smooth").
+  if (/behavior\s*:\s*["']smooth["']/.test(code)) out.push(`${rel}: an unconditional smooth scroll (pick "auto" under prefers-reduced-motion)`);
+  const animates = (/requestAnimationFrame\s*\(/.test(code) && !RAF_PAINT_ONLY[rel]) || /\.animate\s*\(/.test(code);
+  if (animates && !/prefers-reduced-motion/.test(code)) out.push(`${rel}: animates (a frame loop or element.animate) without reading prefers-reduced-motion`);
+  return out;
 }
 
 function modules() {
@@ -138,6 +143,8 @@ if (process.argv.includes("--self-test")) {
   ok(scanLiterals("src/x.js", `// design-tokens: off-start (svg)\n.a{transition:opacity .3s}\n// design-tokens: off-end`).length === 0, "an off region is exempt");
   ok(scriptMotionProblems("assets/js/x.js", `function f(){requestAnimationFrame(f)}`).length === 1, "an rAF loop without a reduced-motion read is caught");
   ok(scriptMotionProblems("assets/js/x.js", `el.scrollIntoView({behavior:'smooth'})`).length === 1, "a smooth scroll without a reduced-motion read is caught");
+  ok(scriptMotionProblems("assets/js/x.js", `var r=matchMedia('(prefers-reduced-motion: reduce)');el.scrollIntoView({behavior:'smooth'})`).length === 1, "an unconditional smooth scroll is caught even beside a reduced-motion read");
+  ok(scriptMotionProblems("assets/js/x.js", `var still=matchMedia('(prefers-reduced-motion: reduce)').matches;el.scrollIntoView({behavior: still ? 'auto' : 'smooth'})`).length === 0, "a smooth scroll that turns to auto under reduced motion passes");
   ok(scriptMotionProblems("assets/js/x.js", `var r=matchMedia('(prefers-reduced-motion: reduce)');function f(){requestAnimationFrame(f)}`).length === 0, "a loop that reads reduced motion passes");
   const good = { "dur-fast": "200ms", "dur-base": "300ms", "dur-slow": "400ms", "dur-fast-exit": "140ms", "dur-base-exit": "210ms", "dur-slow-exit": "280ms", stagger: "60ms", "dur-spin": "800ms", "dur-pulse": "1800ms", "dur-beat": "1000ms", "ease-out": "cubic-bezier(.22,.61,.36,1)", "ease-in": "cubic-bezier(.55,0,1,.45)", "ease-in-out": "cubic-bezier(.65,0,.35,1)" };
   ok(tokenRuleProblems(good, 6).length === 0, "the documented tokens pass their rules");
