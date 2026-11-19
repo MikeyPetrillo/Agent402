@@ -24,7 +24,7 @@
 // gets a BUCKET, never an address.
 import { createHash } from "node:crypto";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
-import { classifyPaymentRejection, classifySettlementRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint, notCheckedRefusal, RETRY_SAME_PAYMENT } from "./payment-reject.js";
+import { classifyPaymentRejection, classifySettlementRefusal, settledRefundOwedRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint, notCheckedRefusal, RETRY_SAME_PAYMENT } from "./payment-reject.js";
 import { classifySvmFundingRefusal, fundingHint, fundingPayerOf, POW_SENTENCE } from "./svm-funding-refusal.js";
 import { classifySettlementPending, isGatewayBatchedPayment, isGatewayBatchedRequest, PENDING_RETRY_AFTER_SECONDS, SETTLEMENT_FAILED_DETAIL, SETTLEMENT_PENDING_DETAIL } from "./gateway-wire.js";
 import { decodePaymentHeader } from "./payment-header.js";
@@ -404,7 +404,7 @@ export function hintForCredential(key, { now = Date.now } = {}) {
  *  these fields, and because each of these bodies carries a hint it drops
  *  `error` (the "Payment rejected" fallback and the header's sentence alike),
  *  so a client that reads `error` first reads the hint instead. */
-export function verifyHintMiddleware() {
+export function verifyHintMiddleware({ origin = process.env.BASE_URL || null } = {}) {
   return function verifyHint(req, res, next) {
     // A header that did not decode was removed at intake
     // (src/payment-header.js); the value as sent is still worded here.
@@ -426,6 +426,20 @@ export function verifyHintMiddleware() {
         if (refused) {
           req.__paymentRejectReason = refused.reason; // for the paywall rollup
           return origJson({ ...body, error: body.error || "Payment rail temporarily unavailable", reason: refused.reason, ...(refused.network ? { network: refused.network } : {}), hint: refused.detail, retry: refused.retry });
+        }
+        // The settle's transfer was already booked owed by the
+        // late-settlement book (src/settlement-claims.js): charged, owed
+        // back, not served. The transfer and its refund lookup, never "not
+        // charged".
+        const owed = settled ? settledRefundOwedRefusal(decodeB64Json(settled), { origin }) : null;
+        if (owed) {
+          req.__paymentRejectReason = owed.reason;
+          const { detail, network, ...fields } = owed;
+          const answer = { ...body, error: "Payment already booked as owed", ...fields, ...(network ? { network } : {}), hint: detail };
+          // Kept for the same payment sent again (src/idempotency.js, as an
+          // unconfirmed answer is): no handler run, no verify, no settle.
+          req.__a402UnconfirmedAnswer = { body: answer, receipt: typeof settled === "string" ? settled : null, validBefore: decodeB64Json(header)?.payload?.authorization?.validBefore ?? null };
+          return origJson(answer);
         }
         // A Circle Gateway batched settlement still settling after the wait:
         // nothing served, the payment booked by its authorization, and the

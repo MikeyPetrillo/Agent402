@@ -574,7 +574,14 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   lone container restarted on its own memory) sends the same payment down the normal path, where it
   is verified, run and settled at most once; its late-settlement booking stays open and the sales
   ledger (`wasServed`) closes it once the chain shows the authorization used by that settlement, so
-  it is charged once and never also owed (section 7 of the same suite).
+  it is charged once and never also owed (section 7 of the same suite). **A transfer booked owed is
+  never also served:** the late book's served check claims the transaction (`lateSettleHolder`,
+  src/settlement-claims.js) before it books it owed; a settle that then answers success naming that
+  transaction (the normal settle: afterSettle aborts, on any rail; a recovery: `recoveredTxHeldElsewhere`
+  answers `OWED_ELSEWHERE`) ends failed with errorReason `settled_refund_owed` (not the buyer's fault,
+  src/settle-fault.js), and the 402 is `settled-refund-owed` (`settledRefundOwedRefusal`: the transfer,
+  `refundStatusUrl`, retry fresh-authorization, never "not charged"), kept for the same payment sent
+  again like an unconfirmed answer (section 8).
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read. The key is the client
