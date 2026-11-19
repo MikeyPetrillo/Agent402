@@ -5,6 +5,7 @@
 // a registry comparing the listed version with the release history found no
 // match. package.json's version is the single source; cut a release by moving
 // it, and the manifests must follow in the same commit.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
