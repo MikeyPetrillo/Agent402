@@ -89,7 +89,10 @@ const DSN_PASSWORD_RE = /^(?:password|passwd|pwd)=(?:'([^']*)'|"([^"]*)"|(.*))$/
 const CREDENTIAL_PARAM_RE = /^(key|api[-_]?key|apikey|token|access[-_]?token|auth|secret|password|pass|sig|signature|x-api-key)$/i;
 // Bounded parts, so the scan is linear: error text can carry a caller's input
 // (100 KB of "a.a.a..." once took seconds with an unbounded scheme).
-const USERINFO_IN_TEXT_RE = /\b([a-z][a-z0-9+.-]{0,31}:\/\/[^\s:@/]{0,256}:)([^\s@/]{1,256})@/gi;
+// The scheme may itself have been replaced a step earlier: a configured
+// secret that is also a scheme word (a database password "postgres") turns
+// "postgres://" into "[redacted]://", and the password after it still goes.
+const USERINFO_IN_TEXT_RE = /((?:\b[a-z][a-z0-9+.-]{0,31}|\[redacted\]):\/\/[^\s:@/]{0,256}:)([^\s@/]{1,256})@/gi;
 const MIN_SECRET_LEN = 8;
 // An API key a URL carries as a query value (`?apikey=...`, `&api_key=...`),
 // whichever variable it came from: a request URL printed into an error or a
