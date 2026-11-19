@@ -558,7 +558,7 @@
       "slug": "x402-quote",
       "name": "a paid GET route quotes accepts",
       "input": {
-        "url": "https://agent402.tools/api/stock-quote?symbol=AAPL",
+        "url": "https://agent402.tools/api/crypto-price?coins=bitcoin",
         "method": "GET"
       },
       "expect": {
