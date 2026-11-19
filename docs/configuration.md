@@ -10,7 +10,7 @@ Scope: the server that runs as node src/server.js (every file under src/). The f
 Every value is set on the host, never in the repository. "Default" is the plain literal the code falls back to at
 its first read site when there is one; a helper may still clamp it, and the read site is the reference.
 
-1031 variables in 109 groups.
+1036 variables in 109 groups.
 
 ## Contents
 
@@ -928,6 +928,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `RENDER_EGRESS_PROXY_URL` | Render egress proxy URL. |  | `src/tools/render.js` |
+| `RENDER_STATIC_READ` | (no purpose line) |  | `src/tools/render-static.js` |
 | `RENDER_WORKER_MAX_BYTES` | Render worker maximum bytes. |  | `src/worker-client.js` |
 | `RENDER_WORKER_MIN_ATTEMPT_MS` | Render worker minimum attempt, in milliseconds. |  | `src/worker-client.js` |
 | `RENDER_WORKER_REQUIRED` | Render worker required. |  | `src/worker-client.js` |
@@ -1093,6 +1094,9 @@ its first read site when there is one; a helper may still clamp it, and the read
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
+| `SOLANA_FACILITATOR_RECHECK_MS` | How often the second Solana facilitator's /supported is read again, in milliseconds. Unset = 10 minutes. |  | `src/payments.js` |
+| `SOLANA_FACILITATOR_SHARE` | Percent of Solana quotes that name the second Solana facilitator (integer 0 to 100). Unset = 50. |  | `src/payments.js` |
+| `SOLANA_FACILITATOR_URL` | Ordered list of a second Solana mainnet facilitator that takes a share of Solana quotes and settles the payments whose fee payer it names (src/svm-facilitator-split.js). Unset = unchanged. |  | `src/payments.js` |
 | `SOLANA_HISTORY_ALCHEMY_FIRST` | Solana history alchemy first. |  | `src/solana-history-rpc.js` |
 | `SOLANA_HISTORY_CACHE` | Solana history cache. |  | `src/solana-history-rpc.js` |
 | `SOLANA_HISTORY_PUBLIC_MAX_WAIT_MS` | Solana history public maximum wait, in milliseconds. |  | `src/solana-history-rpc.js` |
@@ -1508,6 +1512,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `JEV_MODEL` | Jev model. | `jev-1.14.0` | `src/discovery-rerank.js`, `src/tool-judge.js`, `src/tools/judge-kit.js` and 1 more |
 | `JUPITER_API_BASE` | Jupiter API base. |  | `src/tools/solana-intel-kit.js` |
 | `JUPITER_API_KEY` | Jupiter API key (a credential, set on the host). |  | `src/tools/solana-intel-kit.js` |
+| `KALSHI_TOOLS` | on lists the prediction-market tools that read the Kalshi API; unset or any other value leaves them unlisted and their routes answer a free 503. |  | `src/kalshi-switch.js` |
 | `LARGE_BODY_INFLIGHT_MAX_MB` | Large body inflight maximum MB. |  | `src/large-body-gate.js` |
 | `LEASE_RELEASE_RETRY_MS` | Lease release retry, in milliseconds. |  | `src/state-db.js` |
 | `LIVE_QUOTE_PROBES_PER_CRAWL` | Unpriced seller routes read for their 402 price, per seller per crawl. | `15` | `src/x402-index.js` |
