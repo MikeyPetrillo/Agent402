@@ -366,7 +366,7 @@ try {
   ok(r.pairs.every((x) => x.signals && Array.isArray(x.signals.flags)) && r.analysis && r.analysis.tickerMints === 0, `search: rows carry signals; a query that is not a ticker names no ticker mint (${JSON.stringify(r.analysis)})`);
   ok(r.query === "JUP token" && r.source === "dexscreener", "search: echoes query + source");
   // Two mints answer to one ticker: the thinner one's rows are marked.
-  stub((url) => url.startsWith("https://api.dexscreener.com/latest/dex/search?q=JUP")
+  stub((url) => ((u) => u.host === "api.dexscreener.com" && u.pathname === "/latest/dex/search" && u.searchParams.get("q") === "JUP")(new URL(url))
     ? Promise.resolve(jsonRes({ schemaVersion: "1.0.0", pairs: [DS_PAIR({ pairAddress: "fake", baseToken: { address: "FakeJup111", name: "Jupiter", symbol: "JUP" }, liquidity: { usd: 5000 } }), DS_PAIR({ pairAddress: "real" })] }))
     : Promise.reject(new Error("bad url " + url)));
   r = await h("sol-token-search")({ query: "JUP" });
