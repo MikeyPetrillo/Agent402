@@ -2503,8 +2503,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   }
   // A second facilitator on Solana mainnet (SOLANA_FACILITATOR_URL, ordered
   // list; SOLANA_FACILITATOR_SHARE, percent of Solana quotes, default 50):
-  // each 402 names one facilitator's fee payer, and a paid transaction
-  // settles only at the facilitator whose fee payer it names
+  // each 402 names one facilitator's fee payer, and a paid x402 Solana
+  // transaction settles only at the facilitator whose fee payer it names
   // (src/svm-facilitator-split.js). Not a routing client: it can never take
   // another network, and unset leaves every lookup the vendor's own.
   let svmSplit = null;
@@ -2525,7 +2525,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       else svmSplit.check().catch(() => {});
       svmSplit.start(Math.max(10_000, Number(process.env.SOLANA_FACILITATOR_RECHECK_MS) || 600_000));
       const st = svmSplit.status();
-      console.log(`Solana: ${st.active ? `${st.active} takes ${share}% of Solana quotes; the boot-order facilitator takes the rest` : "no listed facilitator confirmed; every Solana offer names the boot-order facilitator"}. A paid Solana transaction settles only at the facilitator whose fee payer it names (no cross-facilitator fallback).`);
+      console.log(`Solana: ${st.active ? `${st.active} takes ${share}% of Solana quotes; the boot-order facilitator takes the rest` : "no listed facilitator confirmed; every Solana offer names the boot-order facilitator"}. A paid x402 Solana transaction settles only at the facilitator whose fee payer it names (no cross-facilitator fallback).`);
     }
   }
   let server = new x402ResourceServer(facilitatorClients)
