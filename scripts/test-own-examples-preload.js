@@ -78,6 +78,15 @@ try {
   const pb = await p.json().catch(() => ({}));
   ok(p.status === 200 && pb.pages === 1, `a /fixtures/ example is read from this server too (${p.status} pages=${pb.pages})`);
   ok(!/127\.0\.0\.1/.test(JSON.stringify(pb)), "the answer names the published URL, never the loopback hop");
+
+  // A call to a paid route on this origin is not a read of a file: this
+  // free-mode boot has no paywall, so answered here the example would read
+  // 200 where the published route answers 402. It goes to the origin (here
+  // the stand-in), and a hash answer would mean this server answered it.
+  const sp = await post("/api/seller-payability", examples("/api/seller-payability"));
+  const spb = await sp.json().catch(() => ({}));
+  ok(examples("/api/seller-payability")?.method === "POST" && sp.status === 200 && /Production Stand-in/.test(spb.unpaidCall?.bodySlice || "") && !/"hex"/.test(spb.unpaidCall?.bodySlice || ""),
+    `the seller-payability example's POST to a paid route is sent to the published origin, not answered here (${sp.status} ${String(spb.unpaidCall?.bodySlice).slice(0, 60)})`);
 } finally {
   await srv.stop();
 }
@@ -88,6 +97,8 @@ try {
   const { ownExampleUrl, EXAMPLE_ORIGIN } = await import("./lib/own-examples-preload.js");
   ok(ownExampleUrl(`${EXAMPLE_ORIGIN}/samples/a2a-agent-card.json`, 4321) === "http://127.0.0.1:4321/samples/a2a-agent-card.json", "control: this origin's /samples/ file maps to the loopback");
   ok(ownExampleUrl(EXAMPLE_ORIGIN, 4321) === "http://127.0.0.1:4321/" && ownExampleUrl(`${EXAMPLE_ORIGIN}/sitemap.xml?x=1`, 4321) === "http://127.0.0.1:4321/sitemap.xml?x=1", "control: this origin's home page and other paths map to the loopback");
+  ok(ownExampleUrl(`${EXAMPLE_ORIGIN}/api/hash`, 4321, "POST") === null && ownExampleUrl(`${EXAMPLE_ORIGIN}/api/hash`, 4321, "post") === null && ownExampleUrl(`${EXAMPLE_ORIGIN}/health`, 4321, "HEAD") === "http://127.0.0.1:4321/health",
+    "a POST to this origin is not redirected (a paid route has no paywall on a free-mode boot); a HEAD is");
   for (const other of ["https://www.agent402.tools/", "https://user:pw@agent402.tools/", "https://agent402.tools:8443/", "https://other.example/samples/a2a-agent-card.json", "http://agent402.tools/samples/a2a-agent-card.json", "https://agent402.tools.evil.example/samples/a2a-agent-card.json", "https://other.example/fixtures/sample-invoice.pdf"]) {
     ok(ownExampleUrl(other, 4321) === null, `another origin's sample path is not redirected (${other})`);
   }

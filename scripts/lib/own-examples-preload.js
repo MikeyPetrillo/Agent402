@@ -5,7 +5,10 @@
 // never depends on what production serves at that minute (a2a-card-fetch's
 // sample card answered production's 404 to the strict sweep once). A browser
 // tool (page-speed) navigates in Chromium's own network stack, which this
-// fetch hook does not reach. The
+// fetch hook does not reach. Only a read (GET or HEAD) is answered here: a
+// free-mode boot has no paywall, so a call an example makes to a paid route
+// on this origin (seller-payability and the x402 inspectors POST to
+// /api/hash to read its 402) goes to the published origin as written. The
 // published examples keep naming production for buyers; only the fetch is
 // redirected, after the address guard has passed the public name. Every other
 // URL goes to the real fetch untouched.
@@ -23,7 +26,8 @@ export const EXAMPLE_ORIGIN = "https://agent402.tools";
 
 /** The loopback URL that serves `url` on this process, or null for any URL
  *  this server does not serve itself. */
-export function ownExampleUrl(url, port) {
+export function ownExampleUrl(url, port, method = "GET") {
+  if (!/^(GET|HEAD)$/i.test(String(method || "GET"))) return null;
   if (!port || !Number.isInteger(Number(port)) || Number(port) <= 0) return null;
   let u;
   try { u = new URL(url); } catch { return null; }
@@ -41,7 +45,8 @@ http.Server.prototype.listen = function listenAndRecord(...args) {
 const realFetch = globalThis.fetch;
 globalThis.fetch = async function ownExamples(input, init) {
   const url = typeof input === "string" ? input : input?.url || String(input);
-  const local = ownExampleUrl(url, boundPort);
+  const method = init?.method || (typeof input === "object" && input?.method) || "GET";
+  const local = ownExampleUrl(url, boundPort, method);
   if (!local) return realFetch(input, init);
   // The guard's pinned dispatcher refuses loopback by design; this hop is the
   // server reading its own file, so it goes out on the default one.
