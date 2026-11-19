@@ -395,7 +395,7 @@ export const GOV_TOOLS = [
     },
   },
   {
-    route: "GET /api/earthquakes", name: "Recent earthquakes (USGS)", slug: "earthquakes", category: "data", price: "$0.002",
+    route: "GET /api/earthquakes", name: "Recent earthquakes (USGS)", slug: "earthquakes", category: "data", price: "$0.001",
     description:
       "Real-time USGS earthquake feed: magnitude, place, time, depth, coordinates. Live government data, no key. ?minMag=4.5&period=day (minMag: significant|4.5|2.5|1.0|all; period: hour|day|week|month).",
     tags: ["earthquakes", "earthquake", "feed", "usgs", "geology", "government", "real-time"],
@@ -551,7 +551,7 @@ export const GOV_TOOLS = [
 
   // ---- NHTSA (vpic + api.nhtsa.gov) — vehicles, keyless --------------------
   {
-    route: "GET /api/vin-decode", name: "VIN decoder (NHTSA)", slug: "vin-decode", category: "data", price: "$0.004",
+    route: "GET /api/vin-decode", name: "VIN decoder (NHTSA)", slug: "vin-decode", category: "data", price: "$0.001",
     description:
       "Decode a vehicle VIN via NHTSA vPIC: make, model, year, trim, body class, engine, fuel, plant, and vehicle type. Accepts full or partial VINs (partial needs modelYear). Live gov data, no key. ?vin=1HGCM82633A004352",
     tags: ["nhtsa", "vin", "vehicle", "car", "decoder", "government"],
@@ -596,7 +596,7 @@ export const GOV_TOOLS = [
     },
   },
   {
-    route: "GET /api/vehicle-recalls", name: "Vehicle recalls (NHTSA)", slug: "vehicle-recalls", category: "data", price: "$0.004",
+    route: "GET /api/vehicle-recalls", name: "Vehicle recalls (NHTSA)", slug: "vehicle-recalls", category: "data", price: "$0.003",
     description:
       "NHTSA safety recalls for a vehicle by make/model/year: campaign number, affected component, summary, consequence, and remedy. Live gov data, no key. ?make=honda&model=accord&year=2019",
     tags: ["nhtsa", "recall", "vehicle", "car", "safety", "government"],

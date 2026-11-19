@@ -1725,7 +1725,7 @@ const validationTools = [
     name: "IP info",
     slug: "ip-info",
     category: "validation",
-    price: "$0.002",
+    price: "$0.001",
     description: "Classify an IP address: version, public/private/loopback/link-local, integer form, and reverse-DNS (PTR) lookup.",
     tags: ["ip", "network", "ptr", "reverse-dns"],
     discovery: {
@@ -2312,7 +2312,7 @@ const networkTools = [
     name: "Domain WHOIS (RDAP)",
     slug: "whois",
     category: "network",
-    price: "$0.005",
+    price: "$0.001",
     description: "Domain registration data via RDAP (the structured WHOIS successor): registrar, creation/expiry dates, status, nameservers.",
     tags: ["whois", "rdap", "domain", "registration"],
     discovery: {
@@ -2459,7 +2459,7 @@ const networkTools = [
     name: "Sitemap reader",
     slug: "sitemap",
     category: "network",
-    price: "$0.002",
+    price: "$0.001",
     description: "Fetch and parse a sitemap.xml (or sitemap index): returns up to 500 URLs with lastmod, or the child sitemaps of an index.",
     tags: ["sitemap", "crawling", "seo", "urls"],
     discovery: {

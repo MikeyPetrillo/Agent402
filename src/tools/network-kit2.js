@@ -594,7 +594,7 @@ export const NETWORK_TOOLS2 = [
     name: "Tech stack detection",
     slug: "tech-stack",
     category: "network",
-    price: "$0.005",
+    price: "$0.001",
     description:
       "Detect the technology stack of a public website: CDN, web server, language/runtime, frontend framework (Next.js, Nuxt, SvelteKit, Remix, Astro, React, Vue, Angular), CMS (WordPress, Drupal, Ghost, Shopify, Wix, Squarespace, Webflow), analytics (GA, GTM, PostHog, Mixpanel, Segment, Hotjar, Plausible, Fathom), and payments (Stripe, PayPal). Signature-based; no third-party API.",
     tags: ["security", "audit", "research", "fingerprint"],

@@ -602,7 +602,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     name: "Coin OHLC candles",
     slug: "coin-ohlc",
     category: "crypto",
-    price: "$0.008",
+    price: "$0.003",
     description:
       "OHLC candles for a coin: days 1 (30-min candles), 7 or 14 (4-hour), 30 / 90 / 180 / 365 (daily), in any vs currency. Returns aligned {time, open, high, low, close} bars plus the window's high/low/first/last and % change. The candle sibling of crypto-history, which returns close-only points: use OHLC for technical indicators, range/volatility work and charting. Cached in-process for 60 seconds.",
     tags: ["crypto", "ohlc", "candles", "chart", "technical-analysis", "volatility", "timeseries"],
@@ -823,7 +823,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     name: "Crypto exchanges",
     slug: "exchanges",
     category: "crypto",
-    price: "$0.005",
+    price: "$0.003",
     description:
       "Crypto exchanges ranked by trust score: id, name, country, year established, trust score (1-10) and rank, 24h volume in BTC (and normalized), centralized flag and URL; limit 1-100 (default 25). Pass `exchange` (an id such as binance, gdax, kraken) for ONE exchange's profile instead: the same fields plus description, trade volume incl. and excl. wash-trade normalization, ticker count and social links. Cached in-process for 5 minutes. Use exchange-tickers for an exchange's markets.",
     tags: ["crypto", "exchanges", "cex", "trust-score", "volume", "venue"],

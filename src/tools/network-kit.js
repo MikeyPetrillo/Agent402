@@ -297,7 +297,7 @@ export const NETWORK_TOOLS = [
     name: "DNS lookup",
     slug: "dns-lookup",
     category: "network",
-    price: "$0.002",
+    price: "$0.001",
     description:
       "Resolve any DNS record type for a host: A, AAAA, MX, TXT, CNAME, NS, SOA, CAA, SRV, PTR. Returns the records plus a count. Built on Node's native resolver - no external API.",
     tags: ["dns", "lookup", "network", "diagnostic", "a", "aaaa", "mx", "txt", "cname", "ns"],
@@ -347,7 +347,7 @@ export const NETWORK_TOOLS = [
     name: "DNS propagation check",
     slug: "dns-propagation",
     category: "network",
-    price: "$0.002",
+    price: "$0.001",
     description:
       "Resolve the same DNS record against 4 public resolvers (Google, Cloudflare, Quad9, OpenDNS) in parallel; surface divergences. The first call you make after a DNS change - confirms the world sees what you intended.",
     tags: ["dns", "propagation", "network", "diagnostic", "migration", "resolver"],

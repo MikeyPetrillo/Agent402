@@ -896,7 +896,7 @@ export const CDP_TOOLS = [
     name: "Wallet token balances (indexed)",
     slug: "wallet-balances",
     category: "wallet",
-    price: "$0.002",
+    price: "$0.001",
     description:
       "All token balances for any address in one call, from an indexed chain-data API - ERC-20 + native on EVM, SPL on Solana; no per-token contract calls, no RPC wrangling. Networks: base, ethereum, base-sepolia, solana, solana-devnet. Symbols/decimals populated for whitelisted tokens (USDC always included).",
     tags: [...SHARED_TAGS, "balances", "erc-20", "spl", "base", "ethereum", "solana", "portfolio"],

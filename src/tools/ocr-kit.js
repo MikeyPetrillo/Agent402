@@ -549,7 +549,7 @@ export const OCR_TOOLS = [
     name: "Image OCR",
     slug: "image-ocr",
     category: "data",
-    price: "$0.01",
+    price: "$0.006",
     description:
       `Extract text from an image (${OCR_FORMATS_TEXT}, up to ${OCR_MAX_MEGAPIXELS} megapixels and ${OCR_MAX_SIDE.toLocaleString("en-US")} pixels a side): returns the full text, overall confidence (0-100), and per-line bounding boxes. Send either {image: base64} or {url: 'https://…'}. Pure-CPU Tesseract via tesseract.js - no upstream API, no keys. Default lang 'eng'; pass 'lang' (ISO 639-2) for others.`,
     tags: ["ocr", "image", "text-extraction", "tesseract", "scanned-document", "receipt", "extract", "text"],

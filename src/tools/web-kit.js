@@ -350,7 +350,7 @@ export const WEB_TOOLS = [
     name: "RSS/Atom feed parser",
     slug: "feed-parse",
     category: "web",
-    price: "$0.004",
+    price: "$0.001",
     description:
       "Fetch an RSS 2.0, Atom, or RSS 1.0 feed URL and parse it into normalized JSON: feed title/description/link plus items (title, link, id, published, author, plain-text summary, categories). Deterministic pure-XML parse with a lenient recovery pass for common malformations (reported in a warnings array). Item count is bounded (default 20, max 50). SSRF-guarded.",
     tags: ["web", "rss", "atom", "feed", "parse", "monitoring", "news"],

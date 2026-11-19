@@ -24,7 +24,7 @@ Returns an **object**, not a bare array:
   "count": 3,
   "topMax": 25, "returned": 3, "matched": 144, "complete": false, "truncated": true,
   "results": [
-    { "slug": "pdf", "name": "PDF to text", "route": "POST /api/pdf", "price": "$0.01", "priceUsd": 0.01,
+    { "slug": "pdf", "name": "PDF to text", "route": "POST /api/pdf", "price": "$0.001", "priceUsd": 0.001,
       "callExample": { "method": "POST", "path": "/api/pdf", "body": { "url": "…" } },
       "example": { "url": "…" }, "required": ["url"], "inputSchema": { },
       "category": "web", "description": "…", "score": 64.9,

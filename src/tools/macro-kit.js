@@ -392,7 +392,7 @@ let fxDashCache = null;
 
 export const MACRO_TOOLS = [
   {
-    route: "GET /api/treasury-yield-curve", name: "US Treasury daily yield curve", slug: "treasury-yield-curve", category: "data", attribution: "us-treasury", price: "$0.005",
+    route: "GET /api/treasury-yield-curve", name: "US Treasury daily yield curve", slug: "treasury-yield-curve", category: "data", attribution: "us-treasury", price: "$0.001",
     description:
       "Latest US Treasury daily par yield curve in one object: recordDate plus mo1, mo3, mo6, yr1, yr2, yr3, yr5, yr7, yr10, yr20 and yr30, each a yield in percent, from the Treasury's Daily Treasury Par Yield Curve Rates (public domain). No params - always returns the most recent published curve, which trails today by a business day or two; for a date range use treasury-yield-history. Source: U.S. Treasury.",
     tags: ["treasury", "yield-curve", "interest-rates", "rates", "macro", "bonds", "fed", "10-year", "yields"],
@@ -887,7 +887,7 @@ async function fredObservations({ seriesId, startDate, endDate, limit, units, fr
 
 MACRO_TOOLS.push(
   {
-    route: "GET /api/fred-series", name: "FRED time series", slug: "fred-series", category: "data", attribution: "fred", price: "$0.005",
+    route: "GET /api/fred-series", name: "FRED time series", slug: "fred-series", category: "data", attribution: "fred", price: "$0.001",
     description:
       "Fetch any of FRED's ~800,000 economic time series by series ID - GDP (GDPC1), CPI (CPIAUCSL), unemployment (UNRATE), fed funds (DFF), and so on. Supports date windowing and the standard FRED units transformations (lin, chg, ch1, pch, pc1, pca, cca, log). ?seriesId=GDPC1&startDate=2018-01-01&endDate=2023-12-31&units=pc1. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fred", "series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed", "macro", "economic-data", "st-louis-fed"],

@@ -470,7 +470,7 @@ export const CHAIN_TOOLS = [
     name: "Wallet transaction history",
     slug: "wallet-transactions",
     category: "crypto",
-    price: "$0.002",
+    price: "$0.001",
     description:
       "Return the most recent asset transfers (incoming + outgoing) for a wallet address - native coin, ERC-20, ERC-721, ERC-1155 - already merged and sorted newest first. Each row carries the block, tx hash, counterparty, asset, and decimal value. Cap is 100 per direction; widen the window via `fromBlock` if you need deeper history.",
     tags: ["crypto", "wallet", "transactions", "history", "transfers", "evm"],
@@ -652,7 +652,7 @@ export const CHAIN_TOOLS = [
     name: "Gas snapshot (slow / standard / fast)",
     slug: "gas-snapshot",
     category: "crypto",
-    price: "$0.005",
+    price: "$0.001",
     description:
       "Live gas price snapshot for a chain - slow / standard / fast tiers in gwei, plus the latest base fee. Sampled from eth_feeHistory (last 4 blocks, 25th/50th/90th percentile priority fees). Use to estimate before broadcasting a transaction from another tool.",
     tags: ["crypto", "gas", "fees", "evm", "transaction"],

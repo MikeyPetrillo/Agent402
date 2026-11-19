@@ -504,7 +504,7 @@ const CRYPTO_SIGNALS_TOOLS_RAW = [
     name: "Crypto news headlines",
     slug: "crypto-news",
     category: "crypto",
-    price: "$0.002",
+    price: "$0.001",
     description:
       `Latest crypto headlines aggregated from the public RSS/Atom feeds of ${SOURCE_IDS.length} major outlets (${SOURCE_IDS.join(", ")}), normalized to title, url, source, publishedAt and a plain-text summary, deduplicated by URL and sorted newest first. Optional keyword filter on title + summary (all keywords must match, or match=any), source subset, time window (hours, max 168) and limit (max 50). Feeds are cached 5 minutes; a feed that fails is listed in errors[] and never blocks the rest. No key, no LLM.`,
     tags: ["crypto", "news", "headlines", "rss", "bitcoin", "ethereum", "defi", "signals"],
