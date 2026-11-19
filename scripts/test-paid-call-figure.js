@@ -36,6 +36,13 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
   ok(/data-pc-m="latency" hidden><\/span>/.test(empty) && /data-pc-m="settled" hidden><\/span>/.test(empty), "a figure with no reading is served hidden and empty");
   ok(!/<script/i.test(html) && /role="list"/.test(html) && /aria-label="A paid call, step by step: Request, 402, Sign, Settle, Answer, Receipt"/.test(html), "no inline script; a named list for assistive technology");
   ok(/\.pc-run \.pc-step:not\(\.is-on\)/.test(PAID_CALL_CSS) && !/\.pc-step \{[^}]*opacity/.test(PAID_CALL_CSS), "only the script's run state dims a step; served, every step is lit");
+  // Layout: one row of every step (five, or six with the receipt) from 1024 px
+  // up, so a desktop figure never wraps 3 + 2; stacked in one column on phones.
+  const wide = (PAID_CALL_CSS.match(/@media \(min-width:1024px\)\{([\s\S]*?)\n\}/) || [])[1] || "";
+  ok(/\.pc-track\{[^}]*grid-auto-flow:column[^}]*grid-auto-columns:minmax\(0,1fr\)/.test(wide) && /\.pc-track\{[^}]*grid-template-columns:none/.test(wide), "from 1024 px every step sits in one row, whatever their count");
+  ok(/\.pc-step:nth-child\(3n\) \.pc-rail::after\{visibility:visible\}/.test(wide) && /\.pc-step:last-child \.pc-rail::after\{visibility:hidden\}/.test(wide), "from 1024 px the rail runs to the last step and ends there");
+  const phone = (PAID_CALL_CSS.match(/@media \(max-width:640px\)\{([\s\S]*?)\n\}/) || [])[1] || "";
+  ok(/\.pc-track\{grid-template-columns:minmax\(0,1fr\)/.test(phone), "phones stack the steps in one column");
 }
 {
   const { toolPage, toolList } = await import("../src/pages.js");

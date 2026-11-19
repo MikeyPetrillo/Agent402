@@ -40,8 +40,9 @@ export function paidCallFigure(opts = {}) {
 /** The figure's script tag (served under script-src 'self' from assets/js). */
 export const paidCallScript = () => `<script src="${jsSrc("paid-call.js")}" defer></script>`;
 
-// Desktop: three steps a row, a rail through the dots. Phone: one column, the
-// rail runs down the left. Under paid-call.js (.pc-run) a step not yet reached
+// At 1024 px and wider: every step in one row (five, or six with the receipt),
+// a rail through the dots. Between phone and 1024: three steps a row. Phone:
+// one column, the rail runs down the left. Under paid-call.js (.pc-run) a step not yet reached
 // is drawn hollow and faint; without it every step is lit.
 export const PAID_CALL_CSS = `
 .pc{margin:0;padding:22px 20px 6px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card)}
@@ -61,6 +62,11 @@ export const PAID_CALL_CSS = `
 .pc-run .pc-step .pc-rail::after{background:var(--hairline)}
 .pc-run .pc-step.is-on:not(.is-now) .pc-rail::after{background:var(--accent)}
 .pc-run .pc-step.is-now .pc-dot::after{opacity:1;transform:none;transition-duration:var(--dur-base);transition-timing-function:var(--ease-out)}
+@media (min-width:1024px){
+.pc-track{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr)}
+.pc-step:nth-child(3n) .pc-rail::after{visibility:visible}
+.pc-step:last-child .pc-rail::after{visibility:hidden}
+}
 @media (max-width:640px){
 .pc{padding:18px 16px 4px}
 .pc-track{grid-template-columns:minmax(0,1fr);row-gap:0}
