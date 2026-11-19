@@ -6,6 +6,34 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-19 (reputation corrections, transcript language, gateway models)
+Seller index:
+- A seller's reputation record reads the price metric as
+  `priceMatchesListing` ("price matches listing"): the share of routes whose
+  live 402 price matches the price the seller's own documents list. `POST
+  /api/reputation/recheck?seller=<host>` asks for a fresh measurement: free,
+  one accepted request per seller every 6 hours (a repeat answers the one
+  already scheduled), limited per caller; the crawl reads the seller on its
+  next cycle inside its operator's crawl budget, and the answer is 202 with
+  `crawlBy` and `recordBy`. The record shows `lastRecheckedAt`, and a day on
+  which our own crawl cycle failed broadly on our side is left out of the
+  crawl and paywall metrics and named under `measurementIssue` ("measurement
+  issue on our side"). The method page names the correction contact.
+Tools:
+- Transcription answers carry `language` on every tier: the language the
+  model reports, else the caller's `language` hint, else the transcript's
+  language read from its words, else null.
+Gateway:
+- The pro tier serves openai/gpt-6.2-sol and gpt-6.2-sol-pro,
+  google/gemini-4-carbon and gemini-4-neon; the premium tier serves
+  openai/gpt-6.2-astra and gpt-6.2-astra-pro in place of gpt-6-astra, and a
+  call naming gpt-6-astra or gpt-6-astra-pro is served by its 6.2 twin; the
+  base tier serves google/gemini-4-hydrogen and lists qwen/qwen4-max by
+  name. Each is on the metered tier too.
+Site:
+- The "Watch a call get paid" figure lays every step out in one row from
+  1024 px wide, and stacks them on phones.
+
 ### 2026-11-18 (yield age limit, MCP cut-offs, unknown coin ids)
 Tools:
 - The Treasury yield tools (`treasury-yield-curve`,
