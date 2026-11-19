@@ -33,6 +33,8 @@ export const ACCOUNT_COOKIE = "a402_acct";
 import { SIGN_IN_TTL_MS, SESSION_IDLE_MS, SESSION_MAX_MS, signInLifeWords, lowBalanceWords, lowBalanceUsd } from "./credits-figures.js";
 export { SIGN_IN_TTL_MS, SESSION_IDLE_MS, SESSION_MAX_MS };
 const TOUCH_MS = 60_000;
+/** A new key is issued only to a session whose sign-in link was used this recently. */
+export const NEW_KEY_FRESH_SIGN_IN_MS = 10 * 60_000;
 /** How often ended sessions and expired link records are deleted from the store. */
 export const ACCOUNT_SWEEP_MS = 10 * 60_000;
 export const SIGN_IN_ANSWER = `If that email bought a credits balance, a sign-in link is on its way. It works once, for ${signInLifeWords()}.`;
@@ -205,7 +207,7 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
       if (Object.hasOwn(b.used, c.n)) { fresh = false; return SKIP_UPDATE; }
       fresh = true;
       b.used[c.n] = c.x;
-      b.sessions[digest(sid)] = { e: c.e, exp: t + SESSION_MAX_MS, idle: t + SESSION_IDLE_MS, touched: t };
+      b.sessions[digest(sid)] = { e: c.e, exp: t + SESSION_MAX_MS, idle: t + SESSION_IDLE_MS, touched: t, at: t };
       return b;
     }, { fallback: {} });
     if (!r.ok || !fresh) return null;
@@ -230,6 +232,19 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
       return b;
     }, { fallback: {} });
     return r.ok ? email : null;
+  }
+
+  /** Whether this live session's sign-in link was used within `ms` (read only;
+   *  a session stored before the sign-in time was recorded is not fresh). */
+  async function signedInWithin(sid, ms) {
+    if (typeof sid !== "string" || !SID_RE.test(sid)) return false;
+    const id = digest(sid);
+    const t = now();
+    const r = await store.read().catch(() => null);
+    const b = r?.ok ? r.body : null;
+    const s = b?.sessions && Object.hasOwn(b.sessions, id) ? b.sessions[id] : null;
+    const at = Number(s?.at);
+    return live(s, t) && Number.isFinite(at) && at <= t && t - at <= ms;
   }
 
   async function signOut(sid) {
@@ -262,7 +277,7 @@ export function createCreditsAccount({ credits, baseUrl, secret, sendEmail, stor
     return sendEmail({ to: email, subject: headerText(m.subject), html: m.html, text: m.text }).catch(() => false);
   }
 
-  return { requestSignIn, redeem, sessionEmail, signOut, sweep, stopSweep: () => { if (sweepTimer) clearInterval(sweepTimer); sweepTimer = null; }, signInToken, readToken, signInLink, noticeOffLink, noticeOffValid, sendLowBalance, sendReceipt, sendNewKeyNotice, enabled: () => Boolean(secret) };
+  return { requestSignIn, redeem, sessionEmail, signedInWithin, signOut, sweep, stopSweep: () => { if (sweepTimer) clearInterval(sweepTimer); sweepTimer = null; }, signInToken, readToken, signInLink, noticeOffLink, noticeOffValid, sendLowBalance, sendReceipt, sendNewKeyNotice, enabled: () => Boolean(secret) };
 }
 
 // ---- HTTP ---------------------------------------------------------------------
@@ -425,6 +440,10 @@ export function mountCreditsAccount(app, { express, account, credits, baseUrl, s
     const email = await who(req, res);
     if (!email) return;
     if (limited(req, res)) return;
+    // A new key is a credential: it is issued only on a fresh sign-in (a link
+    // used in the last NEW_KEY_FRESH_SIGN_IN_MS), not on a long-lived session.
+    const fresh = await account.signedInWithin(readCookie(req, ACCOUNT_COOKIE), NEW_KEY_FRESH_SIGN_IN_MS).catch(() => false);
+    if (!fresh) return res.status(403).json({ status: "sign_in_again", error: `Issuing a new key needs a fresh sign-in: request a new sign-in link and use it, then issue the key within ${NEW_KEY_FRESH_SIGN_IN_MS / 60_000} minutes. The current key still works.`, signIn: `${ACCOUNT_PATH}` });
     const id = keyIdOf(req.body?.key);
     let r;
     try { r = id ? await credits.issueNewKey(id, email) : { status: "unknown" }; }

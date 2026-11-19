@@ -23,7 +23,7 @@ delete process.env.CREDITS_BALANCE_MAX_USD;
 delete process.env.CREDITS_DAILY_MAX_USD;
 
 const { createCredits, hashKey, CREDIT_PACKS, LOW_BALANCE_MICRO } = await import("../src/credits.js");
-const { createCreditsAccount, mountCreditsAccount, accountSecretFrom, historyCsv, SIGN_IN_ANSWER, SIGN_IN_TTL_MS, SESSION_IDLE_MS, SESSION_MAX_MS, ACCOUNT_COOKIE, buildLowBalanceEmail } = await import("../src/credits-account.js");
+const { createCreditsAccount, mountCreditsAccount, accountSecretFrom, historyCsv, SIGN_IN_ANSWER, SIGN_IN_TTL_MS, SESSION_IDLE_MS, SESSION_MAX_MS, ACCOUNT_COOKIE, NEW_KEY_FRESH_SIGN_IN_MS, buildLowBalanceEmail } = await import("../src/credits-account.js");
 const { createJsonDocument } = await import("../src/json-document.js");
 const { createLimiter } = await import("../src/rate-limit.js");
 
@@ -336,6 +336,15 @@ const overJ = await over.json();
 ok(over.status === 400 && overJ.roomUsd === 81.5 && /\$81\.50/.test(overJ.error), `an over-cap top-up is refused before payment with the room left (${overJ.error})`);
 const topR = await (await req("/credits/account/top-up", { method: "POST", body: { key: K.keyId, pack: "credits-20" }, headers: { ...C, ...SAME } })).json();
 ok(/^https:\/\/checkout\.stripe\.com\//.test(topR.url), "a top-up that fits opens checkout");
+// A new key needs a fresh sign-in: a session whose link was used more than
+// NEW_KEY_FRESH_SIGN_IN_MS ago is refused (and the old key keeps working).
+const clockAtSignIn = clock;
+clock = clockAtSignIn + NEW_KEY_FRESH_SIGN_IN_MS + 1_000;
+const stale = await req("/credits/account/new-key", { method: "POST", body: { key: K.keyId }, headers: { ...C, ...SAME } });
+const staleJ = await stale.json();
+ok(stale.status === 403 && staleJ.status === "sign_in_again" && !staleJ.key && cr.balance(nk.key)?.balanceUsd === 18.5, `a new key on a sign-in older than ten minutes is refused, the current key untouched (${stale.status} ${staleJ.status})`);
+ok((await req("/credits/account/session.json", { headers: C })).status === 200, "the same session still reads the balance page");
+clock = clockAtSignIn + NEW_KEY_FRESH_SIGN_IN_MS - 1_000;
 const newK = await req("/credits/account/new-key", { method: "POST", body: { key: K.keyId }, headers: { ...C, ...SAME } });
 const newKJ = await newK.json();
 ok(newK.status === 200 && /^a402_/.test(newKJ.key) && newK.headers.get("cache-control") === "no-store", "a new key is answered once in the POST body, not stored by any cache");
