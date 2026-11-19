@@ -11,6 +11,7 @@ import { measureAudioSeconds, __setExecFileForTest } from "../src/tools/media-ki
 import { execFile as realExecFile } from "node:child_process";
 import * as sttKit from "../src/tools/stt-kit.js";
 import { execFileSync } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -635,7 +636,7 @@ const reject = (p) => p.then(() => null, (e) => e);
   ok(!sttLongEnabled() && !sttLongEnabled({ TRANSCRIBE_LONG: "1" }) && sttLongEnabled({ TRANSCRIBE_LONG: "on" }) && !STT_TOOLS.some((t) => t.slug === "transcribe-long"), "transcribe-long is off unless TRANSCRIBE_LONG=on, and the list loaded here does not carry it");
   ok(!STT_TOOLS.some((t) => /transcribe-long/.test(t.description)), "with the switch off no route's description names it");
   const { execFileSync } = await import("node:child_process");
-  const listedWith = (v) => JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", `import("${new URL("../src/tools/stt-kit.js", import.meta.url).href}").then((m) => console.log(JSON.stringify({ slugs: m.STT_TOOLS.map((t) => t.slug), pro: m.STT_TOOLS.find((t) => t.slug === "transcribe-pro").description })))`], { env: { ...process.env, TRANSCRIBE_LONG: v }, encoding: "utf8" }).trim().split("\n").pop());
+  const listedWith = (v) => childJson(execFileSync(process.execPath, ["--input-type=module", "-e", `import("${new URL("../src/tools/stt-kit.js", import.meta.url).href}").then((m) => console.log(JSON.stringify({ slugs: m.STT_TOOLS.map((t) => t.slug), pro: m.STT_TOOLS.find((t) => t.slug === "transcribe-pro").description })))`], { env: { ...process.env, TRANSCRIBE_LONG: v }, encoding: "utf8" }));
   const on = listedWith("on"), off = listedWith("");
   ok(on.slugs.includes("transcribe-long") && !off.slugs.includes("transcribe-long"), "TRANSCRIBE_LONG=on lists the route; unset does not");
   ok(/transcribe-long takes a URL to 30 minutes/.test(on.pro) && !/transcribe-long/.test(off.pro) && /the longer cap of the transcribe routes/.test(off.pro), "the pro description names the longer tier only while it is on");

@@ -11,6 +11,7 @@
 // states a floor reads it. Our own relayer's minimum sale price
 // (ROBINHOOD_RELAYER_MIN_PRICE_USD) is parsed here too.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { childJson } from "./lib/child-json.js";
 import { strict as assert } from "node:assert";
 import { networkPriceFloors, applyNetworkFloor, networkFloorUsd, ROBINHOOD_CAIP2, ROBINHOOD_MIN_PRICE_DEFAULT_USD, ROBINHOOD_RELAYER_MIN_PRICE_DEFAULT_USD, robinhoodRelayerMinPriceUsd, robinhoodRelayerMinUnits } from "../src/network-floors.js";
 import { acceptsForItem, priceForNetwork, parseNetworkPremiums, premiumUsdByNetworkName, premiumClause } from "../src/payments.js";
@@ -109,7 +110,7 @@ await check("ROBINHOOD_MIN_PRICE_USD=0.004 restores the old 402 exactly (fresh p
     console.log(JSON.stringify(out));
     process.exit(0);`;
   const env = { ...process.env, ...OLD, NETWORK_PRICE_PREMIUMS: "", NETWORK_PRICE_FLOORS: "" };
-  const out = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", code], { env, encoding: "utf8" }).trim().split("\n").pop());
+  const out = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", code], { env, encoding: "utf8" }));
   assert.equal(out[`cheap@${RH}`], FLOOR);
   assert.equal(out[`cheap@${BASE}`], "$0.001");
   assert.equal(out[`dear@${RH}`], "$0.07");
