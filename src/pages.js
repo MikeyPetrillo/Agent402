@@ -843,6 +843,50 @@ const REFUND_LOOKUP_SCHEMA = {
   },
 };
 
+// The answers of GET /api/skill-packs.json and /api/skill-packs/{slug}/prompt
+// (server.js), as their handlers build them.
+const SKILL_PACK_LIST_SCHEMA = Object.freeze({
+  type: "object",
+  required: ["packs"],
+  properties: {
+    packs: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["slug", "title", "toolSlugs"],
+        properties: {
+          slug: { type: "string" },
+          title: { type: "string" },
+          tagline: { type: "string" },
+          useCase: { type: "string" },
+          toolSlugs: { type: "array", items: { type: "string" } },
+          workflow: { type: "array", items: { type: "string" } },
+          claudePrompt: { type: "string" },
+          promptArgs: { type: "array", items: { type: "object", required: ["name"], properties: { name: { type: "string" }, description: { type: "string" }, required: { type: "boolean" } } } },
+        },
+      },
+    },
+  },
+});
+const SKILL_PACK_PROMPT_SCHEMA = Object.freeze({
+  type: "object",
+  required: ["messages"],
+  properties: {
+    description: { type: "string" },
+    messages: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["role", "content"],
+        properties: {
+          role: { type: "string", enum: ["user", "assistant"] },
+          content: { type: "object", required: ["type", "text"], properties: { type: { type: "string", const: "text" }, text: { type: "string" } } },
+        },
+      },
+    },
+  },
+});
+
 export function openapiSpec(baseUrl, catalog) {
   const paths = {};
   // MPP start-here set (src/mpp-flagship.js), already filtered to routes the
@@ -1063,7 +1107,7 @@ export function openapiSpec(baseUrl, catalog) {
       responses: {
         200: {
           description: "All skill packs.",
-          content: { "application/json": { schema: { type: "object" } } },
+          content: { "application/json": { schema: SKILL_PACK_LIST_SCHEMA } },
         },
       },
     },
@@ -1089,7 +1133,7 @@ export function openapiSpec(baseUrl, catalog) {
       responses: {
         200: {
           description: "Rendered prompt messages.",
-          content: { "application/json": { schema: { type: "object" } } },
+          content: { "application/json": { schema: SKILL_PACK_PROMPT_SCHEMA } },
         },
         404: { description: "Unknown slug. Use /api/skill-packs.json to list." },
       },
