@@ -718,6 +718,7 @@
     "REFUND_SOLANA_RPCS": "Refund solana RPC endpoints.",
     "REMOVED_ORIGINS_FILE": "Removed origins file path.",
     "RENDER_EGRESS_PROXY_URL": "Render egress proxy URL.",
+    "RENDER_STATIC_READ": "The render tool reads a page's served HTML without the browser when that HTML carries the page's content (src/tools/render-static.js); off sends every page to headless Chromium. Unset = on.",
     "RENDER_WORKER_MAX_BYTES": "Render worker maximum bytes.",
     "RENDER_WORKER_MIN_ATTEMPT_MS": "Render worker minimum attempt, in milliseconds.",
     "RENDER_WORKER_REQUIRED": "Render worker required.",

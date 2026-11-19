@@ -928,7 +928,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `RENDER_EGRESS_PROXY_URL` | Render egress proxy URL. |  | `src/tools/render.js` |
-| `RENDER_STATIC_READ` | (no purpose line) |  | `src/tools/render-static.js` |
+| `RENDER_STATIC_READ` | The render tool reads a page's served HTML without the browser when that HTML carries the page's content (src/tools/render-static.js); off sends every page to headless Chromium. Unset = on. |  | `src/tools/render-static.js` |
 | `RENDER_WORKER_MAX_BYTES` | Render worker maximum bytes. |  | `src/worker-client.js` |
 | `RENDER_WORKER_MIN_ATTEMPT_MS` | Render worker minimum attempt, in milliseconds. |  | `src/worker-client.js` |
 | `RENDER_WORKER_REQUIRED` | Render worker required. |  | `src/worker-client.js` |

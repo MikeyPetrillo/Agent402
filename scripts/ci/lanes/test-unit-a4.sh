@@ -153,6 +153,8 @@ t node scripts/test-arc-rail.js
 t node scripts/test-circle-evm-fallback.js
 # Render actual-byte budget (F03 — chunked/streamed/headerless/WebSocket bytes counted via CDP, cap not bypassable — offline)
 t node scripts/test-render-bytebudget.js
+# render's no-browser read: the served-HTML verdict and the browser fallback (offline stubs)
+t node scripts/test-render-static.js
 # Tempo chain-truth confirm (relay says failed but the credential's tx settled -> serve the buyer; pinned on the real incident tx — offline)
 t node scripts/test-tempo-confirm.js
 # Durable Tempo late-landing watches: failed reads kept, a day of failures dropped with an error, bounded list, in-process removal only once answered (offline)

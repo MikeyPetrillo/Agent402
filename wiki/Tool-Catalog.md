@@ -19,7 +19,7 @@ These exist because an agent mid-task cannot give itself a browser, a paid searc
 | `search` | $0.01 | Live web search over a paid index, no signup: the wallet is the credential |
 | `search-lite` | $0.008 | A quick sample of the same web search: up to 5 results (title, URL, snippet), no freshness filter |
 | `answer` | $0.08 | Web answer with inline citations: a one-call "ask the web" the model couldn't reach otherwise |
-| `render` | $0.01 | Real headless Chromium, JavaScript executed - reads SPAs that `extract` can't |
+| `render` | $0.01 | Real headless Chromium, JavaScript executed, when the page needs it - reads SPAs that `extract` can't |
 | `screenshot` | $0.004 | PNG of any public page (viewport or full-page) |
 | `extract` | $0.01 | Main-article extraction → clean markdown (title, byline, word count) |
 | `pdf-info`, `pdf-rotate`, `pdf-extract-pages`, `pdf-merge`, `images-to-pdf`, `pdf`, `pdf-to-markdown` | $0.001–$0.01 | Read and manipulate PDFs |

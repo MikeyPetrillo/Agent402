@@ -6,7 +6,7 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-19 (Solana fresh quote after a refusal)
+### 2026-11-19 (Solana fresh quote after a refusal, render without a browser)
 Payments:
 - A Solana payment its facilitator refused before broadcasting it (a verify
   refusal, or a settle refusal that names no transaction) is answered 402
@@ -14,6 +14,12 @@ Payments:
   a payment header: that fresh 402 names another facilitator's fee payer
   when one is available, and otherwise the same quote as before. Nothing was
   charged.
+Tools:
+- render reads a page's served HTML without starting the browser when that
+  HTML already carries the page's content, and answers `rendered: false`; a
+  page that needs JavaScript (an app shell, little text, hydrated
+  components, a refused fetch) is rendered in headless Chromium as before
+  and answers `rendered: true`.
 
 ### 2026-11-19 (reputation corrections, transcript language, gateway models)
 Seller index:
