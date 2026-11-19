@@ -6,6 +6,15 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-19 (Solana fresh quote after a refusal)
+Payments:
+- A Solana payment its facilitator refused before broadcasting it (a verify
+  refusal, or a settle refusal that names no transaction) is answered 402
+  with `requote: true` and words that say to request the route again without
+  a payment header: that fresh 402 names another facilitator's fee payer
+  when one is available, and otherwise the same quote as before. Nothing was
+  charged.
+
 ### 2026-11-19 (reputation corrections, transcript language, gateway models)
 Seller index:
 - A seller's reputation record reads the price metric as

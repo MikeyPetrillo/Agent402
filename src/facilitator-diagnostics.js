@@ -126,7 +126,18 @@ export function describeErrorResponse({ url, status, headers, body } = {}) {
  * matches `settle failed (402)` as a substring and the summarizer scans for
  * the facilitator's JSON body, so replacing the message would silently break
  * the fallback's safety classification.
+ *
+ * `label` may be a function of the call's network (the requirements'
+ * `network`, else the payload's): one client that serves several chains is
+ * then named with the chain each error came from, so a Solana failure never
+ * reads as a Base one.
  */
+export function networkOfFacilitatorCall(args) {
+  const req = args?.[1];
+  const pay = args?.[0];
+  const n = req?.network || pay?.accepted?.network || pay?.network;
+  return typeof n === "string" ? n : "";
+}
 export function labelFacilitatorErrors(label, client, methods = ["settle", "verify"]) {
   if (!client || !label) return client;
   for (const name of methods) {
@@ -139,8 +150,9 @@ export function labelFacilitatorErrors(label, client, methods = ["settle", "veri
         try {
           // First label wins: an inner client already named itself.
           if (err && !err.__a402Facilitator) {
-            err.__a402Facilitator = label;
-            err.message = `[${label}] ${err.message}`;
+            const name = typeof label === "function" ? String(label(networkOfFacilitatorCall(args)) || "") : label;
+            err.__a402Facilitator = name;
+            err.message = `[${name}] ${err.message}`;
           }
         } catch { /* frozen/exotic error - a label is a nicety, never a failure */ }
         throw err;

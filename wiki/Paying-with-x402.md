@@ -40,7 +40,10 @@ stands), so that call was charged and not served;
 on Solana, no trustline on Stellar, not opted in on Algorand), so a new signature alone is refused the
 same way: fund the wallet or pay on another listed network, and wait the `Retry-After` before trying the
 same wallet again. That body also carries `needs`: the `network`, `asset` and `amount` (base units, with
-`usd`) the refused call asked for. Every route's challenge is
+`usd`) the refused call asked for. A Solana refusal body with `requote: true` means the facilitator
+that quote named refused the x402 payment before broadcasting it: nothing was charged, so request the route
+again without a payment header and sign against that fresh 402, which names another facilitator's fee
+payer when one is available. Every route's challenge is
 valid under `@x402/core`'s own schemas (CI runs all 500+ routes through the official parser),
 and it carries a typed output schema twice: inside the `bazaar` discovery extension (with the
 input schema and an example) and as `accepts[0].outputSchema` on the first accept, so a client

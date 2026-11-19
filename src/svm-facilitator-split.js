@@ -27,7 +27,13 @@
 //     lists exact on Solana mainnet with a valid base58 fee payer that is not
 //     one of the boot-order facilitator's signers; otherwise every Solana
 //     offer names the boot-order facilitator, exactly as with the switch
-//     unset. It is read at boot and again on a timer.
+//     unset. It is read at boot and again on a timer;
+//   - a facilitator that refuses a payment before broadcasting it (a verify
+//     refusal, or a settle refusal that names no transaction) is avoided for
+//     that request identity's next quotes for REQUOTE_TTL_MS: the refusal
+//     answer carries `requote: true` and says to request a fresh 402, and
+//     that 402 names the OTHER facilitator when it is usable. With no usable
+//     other one the quote stays the stable pick above.
 //
 // Mechanism (the same seam as src/settle-preference.js): the payment
 // middleware runs inside an AsyncLocalStorage scope that names the listed
@@ -45,6 +51,13 @@ export const SOLANA_MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 export const SVM_FEE_PAYER_NOT_OFFERED = "fee_payer_not_offered";
 export const SVM_FEE_PAYER_NOT_OFFERED_MESSAGE =
   "The Solana transaction names a fee payer this server does not offer. Nothing was charged; pay again from a fresh 402's Solana offer or on another network.";
+
+export const REQUOTE_TTL_MS = 10 * 60_000;
+const REQUOTE_MAX = 5000;
+const BOOT_ORDER = "boot-order";
+/** The refusal answer's words when a fresh quote names another facilitator. */
+export const SVM_REQUOTE_SENTENCE =
+  "The Solana facilitator this quote named refused the payment before broadcasting it, so nothing was charged. Request this route again without a payment header for a fresh 402 (it names another facilitator's fee payer when one is available) and sign against that quote.";
 
 const scope = new AsyncLocalStorage();
 const B58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -141,6 +154,9 @@ export function createSvmFacilitatorSplit({ entries, share, network = SOLANA_MAI
   const list = (Array.isArray(entries) ? entries : []).map((e) => ({ ...e, state: null, everSigners: new Set() }));
   let server = null, origKind = null, origExt = null, origClient = null;
   let overlapWarned = false;
+  // identity -> { avoid: entry label | BOOT_ORDER, at }: a facilitator that
+  // refused this identity's payment before broadcast (bounded, oldest first out).
+  const avoided = new Map();
 
   const defaultKind = () => {
     try { return origKind ? origKind(2, network, "exact") : null; } catch { return null; }
@@ -174,6 +190,21 @@ export function createSvmFacilitatorSplit({ entries, share, network = SOLANA_MAI
   // The entry whose signer a paid transaction names (any it ever published,
   // so a read that fails between the 402 and its paid retry does not refuse it).
   const ownerOf = (feePayer) => list.find((e) => e.everSigners.has(feePayer)) || null;
+  // The facilitator a paid request goes to: a listed entry, BOOT_ORDER, or
+  // null (not a Solana payment, unreadable, or a fee payer neither manages).
+  const handlerOf = (req) => {
+    const { paid, feePayer } = svmFeePayerOfRequest(req, network);
+    if (!paid || !feePayer) return null;
+    const owner = ownerOf(feePayer);
+    if (owner && owner.state?.kind) return owner;
+    return defaultSigners().has(feePayer) ? BOOT_ORDER : null;
+  };
+  const avoidedFor = (identity, now = Date.now()) => {
+    const a = avoided.get(identity);
+    if (!a) return null;
+    if (now - a.at > REQUOTE_TTL_MS) { avoided.delete(identity); return null; }
+    return a.avoid;
+  };
 
   async function readEntry(e) {
     let supported = null, reason = null;
@@ -214,8 +245,32 @@ export function createSvmFacilitatorSplit({ entries, share, network = SOLANA_MAI
       const a = active();
       return { active: a ? a.label : null, share, entries: list.map((e) => ({ label: e.label, ok: e.state?.ok === true, reason: e.state?.ok ? null : e.state?.reason || "not read" })) };
     },
+    /**
+     * A paid request's facilitator refused it before broadcast: its identity's
+     * next quotes avoid that facilitator. Returns { requote, handler, other }
+     * (handler and other are labels; other is null when no other facilitator
+     * is usable now), or null when the request is not a Solana payment this
+     * split routes.
+     */
+    noteRefusal(req, { now = Date.now() } = {}) {
+      const h = handlerOf(req);
+      if (!h) return null;
+      const avoid = h === BOOT_ORDER ? BOOT_ORDER : h.label;
+      const identity = quoteIdentity(req);
+      avoided.delete(identity);
+      avoided.set(identity, { avoid, at: now });
+      while (avoided.size > REQUOTE_MAX) avoided.delete(avoided.keys().next().value);
+      const a = active();
+      const other = avoid === BOOT_ORDER ? (a ? a.label : null) : (isSolanaAddress(defaultKind()?.extra?.feePayer) ? BOOT_ORDER : null);
+      return { requote: true, handler: avoid, other };
+    },
+    /** The label of the facilitator a paid request is routed to (a listed
+     *  entry's label, or null for the boot-order facilitator or no route). */
+    handlerLabel(req) {
+      try { const h = handlerOf(req); return h && h !== BOOT_ORDER ? h.label : null; } catch { return null; }
+    },
     /** The scope a request runs in, or null for the vendor's own lookups. */
-    decide(req) {
+    decide(req, { now = Date.now() } = {}) {
       const { paid, feePayer } = svmFeePayerOfRequest(req, network);
       if (paid) {
         if (!feePayer) return null; // unreadable: the boot-order facilitator verifies (and refuses) it
@@ -225,6 +280,11 @@ export function createSvmFacilitatorSplit({ entries, share, network = SOLANA_MAI
         return { refuse: true, feePayer };
       }
       const a = active();
+      // A facilitator that refused this identity's payment before broadcast is
+      // not quoted again while another is usable.
+      const avoid = avoided.size ? avoidedFor(quoteIdentity(req), now) : null;
+      if (avoid === BOOT_ORDER && a) return { entry: a, feePayer: a.state.kind.extra.feePayer };
+      if (avoid && avoid !== BOOT_ORDER && isSolanaAddress(defaultKind()?.extra?.feePayer)) return null;
       if (!a || share <= 0) return null;
       return share >= 100 || shareBucket(quoteIdentity(req)) < share ? { entry: a, feePayer: a.state.kind.extra.feePayer } : null;
     },

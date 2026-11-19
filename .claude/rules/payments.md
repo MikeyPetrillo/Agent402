@@ -534,7 +534,14 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   payer its transaction's first account names, never by the share: a listed signer to the listed
   facilitator, the boot-order one's to it, any other refused before verify
   (`fee_payer_not_offered`). With it set, Solana has no settle fallback (`[]` override)
-  (`scripts/test-svm-facilitator-split.js`).
+  (`scripts/test-svm-facilitator-split.js`). A refusal before broadcast (a verify refusal that is
+  not about funding, or a settle refusal `isPreBroadcastSettleRejection` admits) notes the request
+  identity for `REQUOTE_TTL_MS` (10 min): the 402 carries `requote: true` and
+  `SVM_REQUOTE_SENTENCE` (`extendHint`, `src/verify-hint.js`), and that identity's next quotes
+  name the other facilitator while it is usable, else the stable pick. A 5xx or timeout (it may
+  have broadcast) notes nothing. Settle failures are labeled with the facilitator that handled
+  them and the call's chain: CDP's label is `cdpLabelOf(network)` ("CDP (Solana)" on Solana),
+  and `settle_failed` carries `facilitator` (`settleFacilitatorOf`).
   `FACILITATOR_PUBLIC_INDEX_CHAINS` (`robinhood` and `ink` are the known values; unset = none;
   any other value renders nothing and warns at boot; a listed chain renders only while the
   final offer carries it, and one it leaves out is named in a boot warning,

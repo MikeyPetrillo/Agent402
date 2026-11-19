@@ -22,7 +22,12 @@
 //   5. a listed stub that lists Solana with no fee payer is not used: every
 //      quote names A, and the boot log says why;
 //   6. with SOLANA_FACILITATOR_URL unset, the 402s are byte-identical to that
-//      boot's and a paid A transaction settles exactly as before.
+//      boot's and a paid A transaction settles exactly as before;
+//   7. a refusal before broadcast (the listed stub's settle 402, the
+//      boot-order stub's verify rejection) answers `requote: true` with the
+//      words, the re-requested quote names the other facilitator, and the
+//      Solana failure is logged under the facilitator that handled it with
+//      the Solana chain, never as Base.
 //
 //   node scripts/test-svm-facilitator-split.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -32,9 +37,11 @@ import { isDeepStrictEqual } from "node:util";
 import { getFreePorts } from "./lib/free-port.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import {
-  SOLANA_MAINNET as SOL, SVM_FEE_PAYER_NOT_OFFERED, confirmSvmKind, createSvmFacilitatorSplit, isSolanaAddress,
+  SOLANA_MAINNET as SOL, SVM_FEE_PAYER_NOT_OFFERED, SVM_REQUOTE_SENTENCE, REQUOTE_TTL_MS, confirmSvmKind, createSvmFacilitatorSplit, isSolanaAddress,
   parseSvmShare, quoteIdentity, shareBucket, svmFeePayerOfRequest,
 } from "../src/svm-facilitator-split.js";
+import { labelFacilitatorErrors } from "../src/facilitator-diagnostics.js";
+import { settleFailedProps } from "../src/posthog.js";
 
 const BASE = "eip155:8453";
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
@@ -179,6 +186,45 @@ const headerReq = (payload, extra = {}) => {
   await overlap.check();
   ok(overlap.status().active === null && reqs.every((r) => overlap.decide(r) === null), "a shared fee payer keeps every quote on the boot-order facilitator");
 
+  // A refusal before broadcast: that identity's next quote names the other
+  // facilitator; every other identity keeps its stable pick.
+  {
+    const t0 = 1_000_000;
+    const toB = reqs.find((r) => split.decide(r, { now: t0 })?.entry?.label === "B");
+    const toA = reqs.find((r) => split.decide(r, { now: t0 }) === null);
+    const paidAs = (r, fp) => headerReq({ x402Version: 2, accepted: { scheme: "exact", network: SOL }, payload: { transaction: wireTx(fp) } }, { ip: r.ip, method: r.method, originalUrl: r.originalUrl });
+    const nB = split.noteRefusal(paidAs(toB, FEE_B), { now: t0 });
+    ok(nB?.requote === true && nB.handler === "B" && nB.other === "boot-order", `a listed refusal is noted: avoid B, the other is the boot-order facilitator (${JSON.stringify(nB)})`);
+    ok(split.decide(toB, { now: t0 + 1000 }) === null, "...and that identity's next quote names the boot-order facilitator");
+    ok(split.decide(toB, { now: t0 + 2000 }) === null, "...on every re-read inside the window");
+    ok(split.decide(toB, { now: t0 + REQUOTE_TTL_MS + 1 })?.entry?.label === "B", "...and its stable pick again once the window has passed");
+    const nA = split.noteRefusal(paidAs(toA, FEE_A), { now: t0 });
+    ok(nA?.handler === "boot-order" && nA.other === "B", `a boot-order refusal is noted: the other is B (${JSON.stringify(nA)})`);
+    ok(split.decide(toA, { now: t0 + 1000 })?.entry?.label === "B", "...and that identity's next quote names B");
+    ok(reqs.filter((r) => r !== toA && r !== toB).every((r, i, arr) => isDeepStrictEqual(split.decide(r, { now: t0 + 1000 })?.feePayer ?? null, picks[reqs.indexOf(r)]?.feePayer ?? null)), "every other identity keeps its stable pick");
+    ok(split.noteRefusal(paidAs(toA, FEE_X)) === null && split.noteRefusal(toA) === null, "an unpaid request or a fee payer neither manages notes nothing");
+    ok(split.decide(paidAs(toA, FEE_A), { now: t0 + 1000 }) === null, "a paid retry is still routed by its fee payer, never by the note");
+    bDown = true;
+    await split.check();
+    const nA2 = split.noteRefusal(paidAs(toA, FEE_A), { now: t0 });
+    ok(nA2?.other === null && split.decide(toA, { now: t0 + 1000 }) === null, "B down: a boot-order refusal has no other facilitator, and the quote stays stable");
+    bDown = false;
+    await split.check();
+    ok(split.handlerLabel(paidAs(toA, FEE_B)) === "B" && split.handlerLabel(paidAs(toA, FEE_A)) === null && split.handlerLabel(toA) === null, "handlerLabel names the listed facilitator a paid request routes to, null otherwise");
+  }
+  ok(/request this route again without a payment header/i.test(SVM_REQUOTE_SENTENCE) && /nothing was charged/i.test(SVM_REQUOTE_SENTENCE), "the requote sentence says to request a fresh 402 and that nothing was charged");
+
+  // Labels: one client serving two chains names each error with its chain.
+  const multi = { async settle() { throw new Error("settle failed (402)"); }, async verify() { throw new Error("boom"); } };
+  labelFacilitatorErrors((n) => `CDP (${n === SOL ? "Solana" : "Base"})`, multi);
+  const solErr = await multi.settle({ accepted: { network: SOL } }, { network: SOL }).catch((e) => e);
+  const baseErr = await multi.verify({}, { network: BASE }).catch((e) => e);
+  ok(solErr.__a402Facilitator === "CDP (Solana)" && solErr.message.startsWith("[CDP (Solana)] "), `a Solana error is labeled with the Solana chain (${solErr.message})`);
+  ok(baseErr.__a402Facilitator === "CDP (Base)", "...and a Base error with Base");
+  const props = settleFailedProps({ slug: "uuid", status: 402, network: "solana", errorReason: solErr.message, facilitator: "Solana listed (http://b)" });
+  ok(props.facilitator === "Solana listed (http://b)" && props.network === "solana" && !/Base/.test(JSON.stringify(props)), "settle_failed carries the facilitator and the network solana");
+  ok(!("facilitator" in settleFailedProps({ slug: "uuid" })), "...and no facilitator field when none is known");
+
   const all = createSvmFacilitatorSplit({ entries: [{ url: "http://b", label: "B", client: clientB }], share: 100, log: quiet });
   all.install({ ...fakeServer, onBeforeVerify() {} });
   await all.check();
@@ -192,7 +238,7 @@ const headerReq = (payload, extra = {}) => {
 // ---------------------------------------------------------------------------
 // Booted
 function stubFacilitator(port, { feePayer, base = true, solFeePayer = true }) {
-  const state = { verify: [], settle: [], mode: "ok" };
+  const state = { verify: [], settle: [], mode: "ok", vmode: "ok" };
   const srv = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => { body += c; });
@@ -208,7 +254,11 @@ function stubFacilitator(port, { feePayer, base = true, solFeePayer = true }) {
         });
       }
       let parsed = {}; try { parsed = body ? JSON.parse(body) : {}; } catch { /* keep {} */ }
-      if (req.url === "/verify") { state.verify.push(parsed); return reply({ isValid: true, payer: BUYER }); }
+      if (req.url === "/verify") {
+        state.verify.push(parsed);
+        if (state.vmode === "reject") return reply({ isValid: false, invalidReason: "invalid_exact_svm_payload_transaction_simulation_failed", invalidMessage: "simulation failed", payer: BUYER });
+        return reply({ isValid: true, payer: BUYER });
+      }
       if (req.url === "/settle") {
         state.settle.push(parsed);
         // An HTTP 402 with no transaction: the refusal the settle fallback acts on.
@@ -284,14 +334,15 @@ async function pay(url, accepted, feePayer) {
   const r = await fetch(url, { headers: { Accept: "application/json", "payment-signature": credential(url, accepted, feePayer) } });
   const text = await r.text();
   const pr = r.headers.get("payment-required");
-  return { status: r.status, text: `${text} ${pr ? JSON.stringify(decode(pr)) : ""}` };
+  let body = null; try { body = JSON.parse(text); } catch { /* not JSON */ }
+  return { status: r.status, text: `${text} ${pr ? JSON.stringify(decode(pr)) : ""}`, body };
 }
 const counts = () => [first, second, listed].map((s) => [s.verify.length, s.settle.length]);
 const delta = (a, b) => b.map((x, i) => [x[0] - a[i][0], x[1] - a[i][1]]);
 const N = 40;
 
 // ---- 1. the split, on a real boot ----------------------------------------
-await boot({ SOLANA_FACILITATOR_URL: `http://127.0.0.1:${pB}`, SOLANA_FACILITATOR_SHARE: "50" }, "split");
+const splitLog = await boot({ SOLANA_FACILITATOR_URL: `http://127.0.0.1:${pB}`, SOLANA_FACILITATOR_SHARE: "50" }, "split");
 const quotes = [];
 for (let i = 0; i < N; i++) quotes.push(await challenge(route(i)));
 ok(quotes.every((q) => q.status === 402 && solAccept(q.pr)), "every quote is a 402 with a Solana accept");
@@ -341,18 +392,44 @@ d = delta(c0, counts());
 ok(r.status === 402 && isDeepStrictEqual(d, [[0, 0], [0, 0], [0, 0]]), `an offer and transaction both naming an unknown fee payer: 402, no facilitator asked (${JSON.stringify(d)})`);
 
 // ---- 4. listed refusals are never re-settled elsewhere ---------------------
+// (7, first half) and the refusal answer asks for a fresh quote, which names
+// the boot-order facilitator.
 listed.mode = "refuse";
 c0 = counts();
 r = await pay(route(iB), solAccept(quotes[iB].pr), FEE_B);
 d = delta(c0, counts());
 ok(r.status === 402, `a listed refusal that moved no money answers 402 (got ${r.status})`);
 ok(d[2][1] === 1 && d[0][1] === 0 && d[1][1] === 0, `...and no other facilitator is asked to settle it, though the settle fallback is on (${JSON.stringify(d)})`);
+ok(r.body?.requote === true && String(r.body?.hint || "").includes(SVM_REQUOTE_SENTENCE), `...answers requote: true with the words to request a fresh quote (${JSON.stringify({ requote: r.body?.requote, retry: r.body?.retry, hint: r.body?.hint }).slice(0, 300)})`);
+ok(solAccept((await challenge(route(iB))).pr)?.extra?.feePayer === FEE_A, "...and the re-requested quote names the boot-order facilitator");
+ok(solAccept((await challenge(route(iB))).pr)?.extra?.feePayer === FEE_A, "...on every re-read");
+const iB2 = fees.indexOf(FEE_B, iB + 1);
+ok(iB2 < 0 || solAccept((await challenge(route(iB2))).pr)?.extra?.feePayer === FEE_B, "...while another request's quote keeps its stable pick");
 listed.mode = "5xx";
 c0 = counts();
 r = await pay(route(iB), solAccept(quotes[iB].pr), FEE_B);
 d = delta(c0, counts());
 ok(r.status === 402 && d[2][1] >= 1 && d[0][1] === 0 && d[1][1] === 0, `a listed 5xx (may have broadcast): 402, never re-settled elsewhere (${r.status} ${JSON.stringify(d)})`);
+ok(r.body?.requote !== true, "...and a 5xx (it may have broadcast) never asks for a fresh quote");
 listed.mode = "ok";
+// (7, second half) the boot-order facilitator rejects at verify: the next
+// quote for that request names the listed one.
+first.vmode = "reject";
+r = await pay(route(iA), solAccept(quotes[iA].pr), FEE_A);
+first.vmode = "ok";
+ok(r.status === 402 && r.body?.requote === true, `a boot-order verify rejection answers 402 with requote: true (${r.status} ${JSON.stringify(r.body || {}).slice(0, 200)})`);
+ok(solAccept((await challenge(route(iA))).pr)?.extra?.feePayer === FEE_B, "...and the re-requested quote names the listed facilitator");
+// A settle refusal at the boot-order facilitator is logged under its own
+// label with the Solana chain.
+first.mode = "refuse";
+const iA2 = fees.indexOf(FEE_A, iA + 1);
+r = await pay(route(iA2), solAccept(quotes[iA2].pr), FEE_A);
+first.mode = "ok";
+await sleep(200);
+ok(r.status === 402, `a boot-order settle refusal answers 402 (got ${r.status})`);
+const solFailLines = splitLog.text.split("\n").filter((l) => /SETTLE failed|settle REJECTED/.test(l) && l.includes(SOL));
+ok(solFailLines.length >= 2 && solFailLines.every((l) => !l.includes("CDP (Base)")), `no Solana settle failure line names Base (${solFailLines.length} lines)`);
+ok(solFailLines.some((l) => l.includes("CDP (Solana)")) && solFailLines.some((l) => l.includes(`Solana listed (http://127.0.0.1:${pB})`)), `...each names the facilitator that handled it: ${solFailLines.map((l) => l.slice(0, 140)).join(" | ")}`);
 await stop();
 
 // ---- 5. boot check refusal --------------------------------------------------

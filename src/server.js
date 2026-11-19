@@ -12880,6 +12880,8 @@ app.use((req, res, next) => {
             synthetic,
             payer,
             errorReason: receipt.errorReason || receipt.errorMessage || null,
+            // The facilitator that handled it (src/payments.js settleFacilitatorOf).
+            facilitator: req.__a402SettleFacilitator || null,
           });
         } else {
           // success:true — or an unreadable/legacy receipt without the field,

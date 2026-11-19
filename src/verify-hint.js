@@ -388,6 +388,22 @@ export function rememberHint(paymentPayload, h, { now = Date.now } = {}) {
   return entry;
 }
 
+/** Add fields to the hint already remembered for one payment's credential,
+ *  or remember them as its hint when it has none (a settle refusal noted no
+ *  verify hint). `hint` is appended to the remembered words. */
+export function extendHint(paymentPayload, fields, { now = Date.now } = {}) {
+  const key = paymentPayload ? credentialKeyOf(paymentPayload) : null;
+  if (!key || !fields) return null;
+  const prev = hints.get(key);
+  const live = prev && now() - prev.at <= HINT_TTL_MS ? prev : null;
+  const hint = [live?.hint, fields.hint].filter(Boolean).join(" ");
+  const entry = live
+    ? { ...live, ...fields, hint }
+    : { balanceUsd: null, reasonClass: null, reason: "", ...fields, hint, at: now() };
+  hints.set(key, entry); bounded(hints);
+  return entry;
+}
+
 /** The remembered hint for one credential key (null when none / expired). */
 export function hintForCredential(key, { now = Date.now } = {}) {
   if (!key) return null;
@@ -463,7 +479,7 @@ export function verifyHintMiddleware({ origin = process.env.BASE_URL || null } =
           // A wallet that cannot cover the call: the same advice as fields (src/next-step.js).
           const nextStep = nextStepForRefusal(h);
           if (nextStep) req.__paymentNextStepState = nextStep.state; // for the funnel
-          return origJson({ ...body, ...(h.reasonClass ? { reason: h.reasonClass } : {}), hint, retry: h.retry, ...(h.needs ? { needs: h.needs } : {}), ...(h.balanceUsd != null ? { payerUsdcOnBase: Number(h.balanceUsd.toFixed(6)) } : {}), ...(nextStep ? { nextStep } : {}) });
+          return origJson({ ...body, ...(h.reasonClass ? { reason: h.reasonClass } : {}), hint, retry: h.retry, ...(h.requote ? { requote: true } : {}), ...(h.needs ? { needs: h.needs } : {}), ...(h.balanceUsd != null ? { payerUsdcOnBase: Number(h.balanceUsd.toFixed(6)) } : {}), ...(nextStep ? { nextStep } : {}) });
         }
         // No facilitator hint means the payment never REACHED the facilitator:
         // @x402/express refused it first and threw the reason away. Read the

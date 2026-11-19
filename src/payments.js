@@ -15,7 +15,7 @@ import { attributionTailOf, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION } from ".
 import { isBinaryListing, listingMimeTypeOf, binaryOutputExample, binaryOutputSchema, binaryListingsEnabled, withBinaryOutputType, JSON_MIME } from "./tool-media-type.js";
 import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute, uptoNetworkKept } from "./upto-gas-sponsoring.js";
 import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
-import { createSvmFacilitatorSplit, parseSvmShare, SOLANA_MAINNET as SVM_SPLIT_NETWORK } from "./svm-facilitator-split.js";
+import { createSvmFacilitatorSplit, parseSvmShare, SOLANA_MAINNET as SVM_SPLIT_NETWORK, SVM_REQUOTE_SENTENCE } from "./svm-facilitator-split.js";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
@@ -1388,6 +1388,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // /supported probe below can NAME the facilitator that failed — "a rail
   // was dropped" without which one is a debugging session, not a log line.
   const facilitatorLabels = [];
+  const facilitatorLabelOfs = [];
   // getSupported is memoized per INSTANCE (60s, shared in-flight promise):
   // the boot /supported probe below, the upto gate, and @x402's own
   // initialize() would otherwise each refetch within seconds of each other —
@@ -1447,11 +1448,13 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     client.__a402ExclusiveStrip = true;
     return client;
   };
-  const addFacilitator = (label, client) => {
+  // `labelOf(network)`, when given, names the client per chain in its errors
+  // and in the first-tried map (one client serving Base and Solana).
+  const addFacilitator = (label, client, { labelOf = null } = {}) => {
     // Name the facilitator in its own errors. The failure hooks log the chain
     // and never the client, so a Polygon failure could read as Coinbase's
     // words while PayAI owns that chain and may never have been reached.
-    labelFacilitatorErrors(label, client);
+    labelFacilitatorErrors(labelOf || label, client);
     // Every pending settle answer is noted on its payload (its transaction,
     // whether it came as a 5xx, and this facilitator's label), so each noted
     // transaction is read and booked under the facilitator that named it, and
@@ -1477,6 +1480,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     withoutNetworksOwnedElsewhere(client);
     facilitatorClients.push(memoizeGetSupported(client));
     facilitatorLabels.push(label);
+    facilitatorLabelOfs.push(labelOf);
     facilitatorRegistry.push({ label, client: facilitatorClients[facilitatorClients.length - 1] });
     // Clients expose their base URL as `url`; a subclass that does not is
     // simply not diagnosed rather than a boot failure.
@@ -1551,7 +1555,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   if (isMultiChain) {
     const cdpConfig = await resolveCdpFacilitatorConfig();
     if (cdpConfig) {
-      addFacilitator("CDP (Base)", new HTTPFacilitatorClient(cdpConfig));
+      addFacilitator("CDP (Base)", new HTTPFacilitatorClient(cdpConfig), { labelOf: cdpLabelOf });
     } else {
       console.warn(
         "WARNING: multi-chain mode without CDP keys - Base will settle via PayAI and the " +
@@ -2205,7 +2209,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       probed.forEach((kinds, i) => {
         for (const k of kinds || []) {
           if (String(k?.scheme || "").toLowerCase() === "exact" && k?.network && !facilitatorFirstTriedByNetwork.has(String(k.network))) {
-            facilitatorFirstTriedByNetwork.set(String(k.network), facilitatorLabels[i] || `#${i}`);
+            facilitatorFirstTriedByNetwork.set(String(k.network), (facilitatorLabelOfs[i] ? facilitatorLabelOfs[i](String(k.network)) : facilitatorLabels[i]) || `#${i}`);
           }
         }
       });
@@ -2521,6 +2525,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         return { url, label, client };
       });
       svmSplit = createSvmFacilitatorSplit({ entries, share });
+      activeSvmSplit = svmSplit;
       if (process.env.X402_SYNC_ON_START !== "false") await svmSplit.check();
       else svmSplit.check().catch(() => {});
       svmSplit.start(Math.max(10_000, Number(process.env.SOLANA_FACILITATOR_RECHECK_MS) || 600_000));
@@ -3770,6 +3775,11 @@ async function recordVerifyFailure(ctx, reason, { detail = "" } = {}) {
     const priceUsd = Number.isFinite(amount) ? amount / 10 ** assetDecimalsFor(ctx?.requirements?.network) : null;
     const noted = await noteVerifyFailure({ paymentPayload: ctx?.paymentPayload, network: ctx?.requirements?.network, reason, priceUsd, detail, feePayer: ctx?.requirements?.extra?.feePayer, requirements: ctx?.requirements });
     if (noted) bucket = noted.bucket;
+    // A Solana facilitator that refused at verify (before anything was
+    // broadcast) is avoided for this request's next quote, and the answer says
+    // to ask for one. A wallet that cannot cover the call is not a
+    // facilitator's refusal, nor is a verify another facilitator recovered.
+    if (noted && !FUNDING_RETRY.has(noted.retry) && !/\(recovered via /.test(String(reason))) await noteSvmRequote(ctx);
     // A Solana wallet with no USDC account or too little USDC: counted toward
     // the funding hold (src/svm-funding-refusal.js), never a recovered verify.
     if (noted?.svmFunding && !/\(recovered via /.test(String(reason))) {
@@ -3785,6 +3795,63 @@ async function recordVerifyFailure(ctx, reason, { detail = "" } = {}) {
     // 7,103 verify_failed events had a path before this, 2026-10-02 audit).
     resource: ctx?.paymentPayload?.resource?.url || ctx?.requirements?.resource, errorReason: reason, payerBalanceBucket: bucket, payerKey,
   })).catch(() => {});
+}
+
+/**
+ * CDP serves Base and, since its table grew, Solana and others: its label
+ * names the chain a call was on ("CDP (Base)", "CDP (Solana)"), so a Solana
+ * error or a Solana first-tried entry never reads as Base. An unnamed network
+ * keeps the boot label.
+ */
+export function cdpLabelOf(network) {
+  const net = typeof network === "string" ? network : "";
+  const lower = net.toLowerCase();
+  const rail = net ? [...RAILS, ...GATED_RAILS].find((r) => r.caip2 === net || r.name.toLowerCase() === lower) : null;
+  return `CDP (${rail ? rail.name : net ? net.slice(0, 80) : "Base"})`;
+}
+
+// The Solana facilitator split (src/svm-facilitator-split.js), when
+// SOLANA_FACILITATOR_URL is set; null otherwise.
+let activeSvmSplit = null;
+const FUNDING_RETRY = new Set(["fund-wallet", "fund-gateway-deposit"]);
+/**
+ * A Solana payment its facilitator refused before broadcast, with the split
+ * on: the split avoids that facilitator for the request identity's next quote
+ * and the refusal answer carries `requote: true` and the sentence that says to
+ * request a fresh 402. Returns the split's note, or null. Never throws.
+ */
+export async function noteSvmRequote(ctx, split = activeSvmSplit) {
+  try {
+    if (!split || ctx?.requirements?.network !== SVM_SPLIT_NETWORK) return null;
+    const req = ctx?.transportContext?.request?.adapter?.req;
+    if (!req) return null;
+    const note = split.noteRefusal(req);
+    if (!note) return null;
+    const { extendHint } = await import("./verify-hint.js");
+    extendHint(ctx?.paymentPayload, { requote: true, retry: "fresh-authorization", hint: SVM_REQUOTE_SENTENCE });
+    console.warn(`[payments] Solana ${note.handler === "boot-order" ? facilitatorLabelFor(SVM_SPLIT_NETWORK) : note.handler} refused before broadcast on ${SVM_SPLIT_NETWORK}; the next quote for that request names ${note.other ? (note.other === "boot-order" ? facilitatorLabelFor(SVM_SPLIT_NETWORK) : note.other) : "the same facilitator (no other is usable)"}`);
+    return note;
+  } catch { return null; }
+}
+
+/** The facilitator a settle or verify on `network` went to, as logs and
+ *  telemetry name it: the error's own label, the Solana split's listed
+ *  facilitator for a request routed there, else the network's first-tried
+ *  facilitator. */
+export function settleFacilitatorOf(ctx) {
+  const network = ctx?.requirements?.network;
+  if (ctx?.error?.__a402Facilitator) return String(ctx.error.__a402Facilitator);
+  try {
+    const req = ctx?.transportContext?.request?.adapter?.req;
+    const listed = activeSvmSplit && network === SVM_SPLIT_NETWORK && req ? activeSvmSplit.handlerLabel(req) : null;
+    if (listed) return listed;
+  } catch { /* the first-tried label */ }
+  return facilitatorLabelFor(network);
+}
+const facilitatorLabelFor = (network) => facilitatorFirstTriedByNetwork.get(network) || "primary";
+/** Kept on the request for the settle_failed event. Never throws. */
+function noteSettleFacilitator(ctx, via) {
+  try { const req = ctx?.transportContext?.request?.adapter?.req; if (req && via) req.__a402SettleFacilitator = via; } catch { /* telemetry only */ }
 }
 
 // Networks whose first-tried facilitator is wrapped by the settle demotion.
@@ -3977,8 +4044,10 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
   server.onAfterSettle((ctx) => {
     const result = ctx?.result;
     if (!result || result.success !== false) return;
+    const via = settleFacilitatorOf(ctx);
+    noteSettleFacilitator(ctx, via);
     console.warn(
-      `[payments] facilitator settle REJECTED on ${ctx?.requirements?.network} ` +
+      `[payments] facilitator settle REJECTED by ${via} on ${ctx?.requirements?.network} ` +
         `${ctx?.requirements?.scheme}: ${result.errorReason || result.errorMessage || "no reason given"}`
     );
   });
@@ -3992,6 +4061,13 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
   }
   server.onSettleFailure(async (ctx) => {
     const failure = summarizeFacilitatorError(ctx?.error);
+    // The facilitator that handled it, for the settle_failed event
+    // (server.js) and the log line below.
+    const via = settleFacilitatorOf(ctx);
+    noteSettleFacilitator(ctx, via);
+    // A Solana settle refused before broadcast (no transaction named): the
+    // next quote for this request avoids that facilitator (the split).
+    if (isPreBroadcastSettleRejection(ctx?.error)) await noteSvmRequote(ctx);
     // A Circle Gateway batched payment never reaches the chain recovery, the
     // settle fallback, the outage read or our relayer: a GatewayWalletBatched
     // authorization is settled by Gateway alone, and handing it to a chain
@@ -4033,7 +4109,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       noteAvmSettleRefusal({ network: ctx?.requirements?.network, payTo: ctx?.requirements?.payTo, errorReason: ctx?.error?.errorReason, reason: failure });
     }
     console.warn(
-      `[payments] facilitator SETTLE failed on ${ctx?.requirements?.network} ` +
+      `[payments] facilitator SETTLE failed${ctx?.error?.__a402Facilitator ? "" : ` at ${via}`} on ${ctx?.requirements?.network} ` +
         `${ctx?.requirements?.scheme}: ${failure}`
     );
     // "Already on-chain": the facilitator's own transfer may have landed, or

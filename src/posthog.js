@@ -601,9 +601,15 @@ export function capturePostHogWrongMethod({ path, method, allow, ua }) {
   });
 }
 
-export function capturePostHogSettleFailed({ slug, status, network, priceUsd, synthetic, payer, errorReason }) {
+export function capturePostHogSettleFailed({ slug, status, network, priceUsd, synthetic, payer, errorReason, facilitator }) {
   if (!active()) return;
-  capture("settle_failed", {
+  capture("settle_failed", settleFailedProps({ slug, status, network, priceUsd, synthetic, payer, errorReason, facilitator }));
+}
+/** The settle_failed event's properties. `facilitator` is the one that
+ *  handled the settle, named with the call's chain (never another chain's
+ *  label). Pure; exported for tests. */
+export function settleFailedProps({ slug, status, network, priceUsd, synthetic, payer, errorReason, facilitator }) {
+  return {
     slug: String(slug || "unknown"),
     status: Number(status) || 0,
     network: network ? String(network) : null,
@@ -611,7 +617,8 @@ export function capturePostHogSettleFailed({ slug, status, network, priceUsd, sy
     synthetic: !!synthetic,
     ...(payer ? { payer } : {}),
     ...(errorReason ? { errorReason: String(errorReason).slice(0, 200) } : {}),
-  });
+    ...(facilitator ? { facilitator: String(facilitator).slice(0, 120) } : {}),
+  };
 }
 
 // Retired routes — the teaching 410s (the pruned convert-* pairs). Residual

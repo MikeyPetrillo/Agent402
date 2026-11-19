@@ -10,6 +10,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-19",
+    title: "Solana fresh quote after a refusal",
+    items: [
+      "Payments: A Solana payment its facilitator refused before broadcasting it (a verify refusal, or a settle refusal that names no transaction) is answered 402 with `requote: true` and words that say to request the route again without a payment header: that fresh 402 names another facilitator's fee payer when one is available, and otherwise the same quote as before. Nothing was charged.",
+    ],
+  },
+  {
+    date: "2026-11-19",
     title: "Reputation corrections, transcript language, gateway models",
     items: [
       "Seller index: A seller's reputation record reads the price metric as `priceMatchesListing` (\"price matches listing\"): the share of routes whose live 402 price matches the price the seller's own documents list. `POST /api/reputation/recheck?seller=<host>` asks for a fresh measurement: free, one accepted request per seller every 6 hours (a repeat answers the one already scheduled), limited per caller; the crawl reads the seller on its next cycle inside its operator's crawl budget, and the answer is 202 with `crawlBy` and `recordBy`. The record shows `lastRecheckedAt`, and a day on which our own crawl cycle failed broadly on our side is left out of the crawl and paywall metrics and named under `measurementIssue` (\"measurement issue on our side\"). The method page names the correction contact.",
