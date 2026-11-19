@@ -620,7 +620,7 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   transaction (the normal settle: afterSettle aborts, on any rail; a recovery: `recoveredTxHeldElsewhere`
   answers `OWED_ELSEWHERE`) ends failed with errorReason `settled_refund_owed` (not the buyer's fault,
   src/settle-fault.js), and the 402 is `settled-refund-owed` (`settledRefundOwedRefusal`: the transfer,
-  `refundStatusUrl`, retry fresh-authorization, never "not charged"), kept for the same payment sent
+  `refundStatusUrl`, retry fresh-authorization, and no wording that says the x402 call cost nothing), kept for the same payment sent
   again like an unconfirmed answer (section 8).
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
