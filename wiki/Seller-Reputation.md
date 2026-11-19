@@ -1,5 +1,7 @@
 # Seller Reputation
 
+> **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
+
 Agent402 publishes a reputation record for each outside x402 seller in its
 index. Every figure in it is a measurement this server made itself: its crawl
 of the seller's documents, its unpaid probe of the seller's paywall, its live
