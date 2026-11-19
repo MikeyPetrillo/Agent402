@@ -370,6 +370,10 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
   // The idempotency middleware commits the undelivered answer under this
   // charge, so a resend of the same payment is served and the debt voided.
   req.__a402HangupDebt = row;
+  // An answer already stored as delivered (the MCP connector's cut-off books
+  // after the route's settled 200 finished) is restated as charged, so its
+  // resend voids this debt before it is served.
+  noteChargedAfterServe(req, row);
   // Why it was not forgiven, when a ticket was refused ("lasting effect",
   // "payer budget", ...); nothing for the residual window, where it was.
   // Stored on the row: the refund planner holds a budget denial (a repeat
@@ -781,7 +785,7 @@ import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
 import { isBinaryListing, listingMimeTypeOf, responseTypesOf } from "./tool-media-type.js";
-import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict } from "./idempotency.js";
+import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict, noteChargedAfterServe } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PACK_SLUGS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";

@@ -16,7 +16,9 @@ MCP:
 - A paid call on the hosted MCP connector whose settled answer the connector
   stopped waiting for is booked as owed in the refund ledger, as its cut-off
   text says, also when the answer was written just as the connector's wait
-  ended.
+  ended. A resend of the same payment with the same idempotency key is
+  served the stored answer and that booking is voided first, so the call is
+  never both served and owed.
 Tools:
 - A CoinGecko id the upstream called unknown is answered 422 with no
   upstream read for the rest of the UTC day unless its list names it, and

@@ -13,6 +13,8 @@
 //     connector's deadline fires after the answer was written, and the charge
 //     is booked as owed (it was neither booked nor delivered before);
 //   - ONE OUTCOME PER CALL: whichever end counts first, the other does not;
+//   - cut off, then resent with the same Idempotency-Key: the stored answer
+//     is restated as charged, so the replay voids the owed booking first;
 //   - bounded: entries end when both ends spoke, the oldest go past the cap;
 //   - the server and the connector are wired to it (source pins).
 // Offline: two servers on 127.0.0.1, port 0.
@@ -25,6 +27,7 @@ import {
   LOOPBACK_CALLS_MAX, MCP_CALL_HEADER,
 } from "../src/mcp-loopback.js";
 import { createMcpMppLoopback } from "../src/mcp-mpp.js";
+import { createIdempotency, noteChargedAfterServe } from "../src/idempotency.js";
 
 let passed = 0, failed = 0;
 const ok = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -146,6 +149,74 @@ function fakeEnds(id, { status = 200 } = {}) {
   } finally {
     await new Promise((r) => server.close(r));
   }
+}
+
+// ---- cut off, then resent with the same Idempotency-Key -----------------------
+// The stalled answer was stored as delivered (its 200 finished), and the cut
+// booked it as owed afterwards. A resend of the same payment and key must not
+// get both the stored answer and the debt: the stored answer is restated as
+// charged, so the replay voids the debt before serving it. Both orders of the
+// route's finish listeners (the store's commit first, or the booking first).
+for (const bookFirst of [false, true]) {
+  const app = express();
+  app.use(express.json());
+  app.use(stripMcpMarker);
+  const debts = new Map(); // tx -> "owed" | "void"
+  const replays = [];
+  const watch = (req, res, next) => {
+    watchLoopbackOutcome(req, res, {
+      settled: (r) => r.statusCode === 200,
+      onSettledCut: () => {
+        const tx = "0x" + "ef".repeat(32);
+        debts.set(tx, "owed");
+        noteChargedAfterServe(req, { tx, network: "eip155:8453", wire: "x402" });
+      },
+    });
+    next();
+  };
+  if (bookFirst) app.use(watch);
+  app.use(createIdempotency({
+    isCatalogRoute: () => true,
+    freeMode: true,
+    onReplay: async (_req, { charged }) => {
+      replays.push(charged);
+      if (charged?.tx && debts.get(charged.tx) === "owed") debts.set(charged.tx, "void");
+    },
+  }));
+  if (!bookFirst) app.use(watch);
+  let runs = 0;
+  app.post("/api/stall-idem", (req, res) => {
+    runs++;
+    const until = Date.now() + 400; while (Date.now() < until) { /* held loop */ }
+    res.status(200).json({ ok: true, run: runs });
+  });
+  const server = await new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
+  const pay = createMcpMppLoopback({ port: server.address().port });
+  const label = bookFirst ? "booking listener first" : "store listener first";
+  try {
+    const call = { def: { route: "POST /api/stall-idem" }, params: { q: 1 }, paymentSignature: "sig-cut-resend", idempotencyKey: "cut-resend-1" };
+    const id = openLoopbackCall();
+    let cut = false;
+    try { await pay({ ...call, timeoutMs: 150, callId: id }); } catch { cut = true; cutLoopbackCall(id); }
+    await sleep(100);
+    const tx = "0x" + "ef".repeat(32);
+    ok(cut && debts.get(tx) === "owed", `${label}: the cut-off settled answer is booked as owed`);
+    const id2 = openLoopbackCall();
+    const again = await pay({ ...call, timeoutMs: 5_000, callId: id2 });
+    closeLoopbackCall(id2);
+    ok(again.status === 200 && runs === 1, `${label}: the resend is served from the stored answer, not run again (${again.status}, runs ${runs})`);
+    ok(replays.length === 1 && replays[0]?.tx === tx, `${label}: the stored answer was restated as charged under the booked debt (${JSON.stringify(replays[0])})`);
+    ok(debts.get(tx) === "void", `${label}: the debt is void once the stored answer is delivered, so the buyer is not both served and owed`);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+}
+{
+  // The restatement is a no-op off a keyed request.
+  ok(noteChargedAfterServe({}, { tx: "0x1" }) === false && noteChargedAfterServe(null, { tx: "0x1" }) === false, "no stored answer, nothing restated");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const fn = server.slice(server.indexOf("function recordHangupDebt("), server.indexOf("function recordHangupOutcome("));
+  ok(/req\.__a402HangupDebt = row;\s*(\/\/[^\n]*\n\s*)*noteChargedAfterServe\(req, row\);/.test(fn), "server: every booked hang-up debt restates an answer already stored as delivered");
 }
 
 // ---- the server and the connector are wired to it -----------------------------

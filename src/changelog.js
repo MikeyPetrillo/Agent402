@@ -13,7 +13,7 @@ const ENTRIES = [
     title: "Yield age limit, MCP cut-offs, unknown coin ids",
     items: [
       "Tools: The Treasury yield tools (`treasury-yield-curve`, `treasury-yield-history`, `yield-curve-spread`) answer 503 with Retry-After, uncharged, when the last good read of the yield file is more than three days old, instead of serving older yields marked stale.",
-      "MCP: A paid call on the hosted MCP connector whose settled answer the connector stopped waiting for is booked as owed in the refund ledger, as its cut-off text says, also when the answer was written just as the connector's wait ended.",
+      "MCP: A paid call on the hosted MCP connector whose settled answer the connector stopped waiting for is booked as owed in the refund ledger, as its cut-off text says, also when the answer was written just as the connector's wait ended. A resend of the same payment with the same idempotency key is served the stored answer and that booking is voided first, so the call is never both served and owed.",
       "Tools: A CoinGecko id the upstream called unknown is answered 422 with no upstream read for the rest of the UTC day unless its list names it, and one address's calls naming unknown ids take at most 8 of the day's reads an hour before their ids are checked against their lists; a real id is always read.",
     ],
   },
