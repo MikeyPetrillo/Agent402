@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { walk } from "./lib/env-reads.js";
+import { childJson } from "./lib/child-json.js";
 import { testSeam, testSeamOn } from "../src/test-seams.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -33,7 +34,7 @@ const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
   const { isProductionEnv } = await import("./src/production-env.js");
   console.log(JSON.stringify({ prod: isProductionEnv(), debug: testSeamOn("RESEARCH_DEBUG"), hooks: testSeamOn("ROUTER_WORKER_TEST_HOOKS"), capture: testSeamOn("POSTHOG_TEST_CAPTURE") }));
 `], { cwd: ROOT, encoding: "utf8", env: { PATH: process.env.PATH, NODE_ENV: "production", RESEARCH_DEBUG: "1", ROUTER_WORKER_TEST_HOOKS: "1", POSTHOG_TEST_CAPTURE: "1" } });
-let seen = null; try { seen = JSON.parse(child.stdout.trim().split("\n").pop()); } catch { /* checked below */ }
+let seen = null; try { seen = childJson(child.stdout); } catch { /* checked below */ }
 ok(seen && seen.prod === true && !seen.debug && !seen.hooks && !seen.capture, `a production process with every seam set reads none of them (${child.stdout.trim() || child.stderr.slice(0, 200)})`);
 
 // 3. Every seam read in src/.
