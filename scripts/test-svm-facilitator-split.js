@@ -31,11 +31,10 @@
 //
 //   node scripts/test-svm-facilitator-split.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { isDeepStrictEqual } from "node:util";
 import { getFreePorts } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 import {
   SOLANA_MAINNET as SOL, SVM_FEE_PAYER_NOT_OFFERED, SVM_REQUOTE_SENTENCE, REQUOTE_TTL_MS, confirmSvmKind, createSvmFacilitatorSplit, isSolanaAddress,
   parseSvmShare, quoteIdentity, shareBucket, svmFeePayerOfRequest,
@@ -53,9 +52,9 @@ const FEE_X = "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4";
 const BUYER = "J28Fii2VFnJcavvaeEfsKc628htk3mnrZKubD7WsGStW";
 
 let pass = 0;
-let proc = null;
+let srv = null;
 const stubs = [];
-const cleanup = () => { proc?.kill("SIGKILL"); for (const s of stubs) s.close(); };
+const cleanup = () => { srv?.child?.kill("SIGKILL"); for (const s of stubs) s.close(); };
 const fail = (m) => { console.error("FAIL:", m); cleanup(); process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -273,47 +272,43 @@ function stubFacilitator(port, { feePayer, base = true, solFeePayer = true }) {
   return new Promise((r) => srv.listen(port, "127.0.0.1", () => r(state)));
 }
 
-const [pA, pC, pB, pBad, PORT] = await getFreePorts(5);
+const [pA, pC, pB, pBad] = await getFreePorts(4);
 const first = await stubFacilitator(pA, { feePayer: FEE_A });
 const second = await stubFacilitator(pC, { feePayer: FEE_C });
 const listed = await stubFacilitator(pB, { feePayer: FEE_B, base: true });
 const broken = await stubFacilitator(pBad, { feePayer: FEE_B, base: false, solFeePayer: false });
-const B = `http://127.0.0.1:${PORT}`;
+let B = "";
 
 async function boot(extraEnv, label) {
-  const log = { text: "" };
-  proc = spawn(process.execPath, ["src/server.js"], {
-    env: {
-      ...process.env, ...ownStoreEnv(`svm-split-${label}`), PORT: String(PORT), FREE_MODE: "",
-      WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,solana",
-      SOLANA_WALLET_ADDRESS: SOL_PAYTO,
-      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", FACILITATOR_URL: "",
-      CDP_FACILITATOR_URL: `http://127.0.0.1:${pA}`,
-      PAYAI_FACILITATOR_URL: `http://127.0.0.1:${pC}`,
-      PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "",
-      PAYMENT_SETTLE_FALLBACK: "true", X402_UPTO_NETWORKS: "", POSTHOG_API_KEY: "",
-      X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0",
-      SOLANA_TOKEN_ACCOUNT_CHECK: "off",
-      SOLANA_FACILITATOR_URL: "", SOLANA_FACILITATOR_SHARE: "",
-      ...extraEnv,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  proc.stdout.on("data", (c) => { log.text += c; });
-  proc.stderr.on("data", (c) => { log.text += c; });
-  let up = false;
-  for (let i = 0; i < 160 && !up; i++) {
-    try { up = (await fetch(`${B}/health`)).ok; } catch { /* booting */ }
-    if (!up) await sleep(500);
-  }
-  if (!up) fail(`${label}: server never became healthy; log tail: ${log.text.slice(-1500)}`);
-  return log;
+  try {
+    srv = await bootServer({
+      stores: `svm-split-${label}`,
+      timeoutMs: 80_000,
+      env: {
+        FREE_MODE: "",
+        WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,solana",
+        SOLANA_WALLET_ADDRESS: SOL_PAYTO,
+        CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", FACILITATOR_URL: "",
+        CDP_FACILITATOR_URL: `http://127.0.0.1:${pA}`,
+        PAYAI_FACILITATOR_URL: `http://127.0.0.1:${pC}`,
+        PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "",
+        PAYMENT_SETTLE_FALLBACK: "true", X402_UPTO_NETWORKS: "", POSTHOG_API_KEY: "",
+        X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0",
+        SOLANA_TOKEN_ACCOUNT_CHECK: "off",
+        SOLANA_FACILITATOR_URL: "", SOLANA_FACILITATOR_SHARE: "",
+        ...extraEnv,
+      },
+    });
+  } catch (e) { fail(`${label}: server never became healthy: ${String(e.message).slice(-1500)}`); }
+  B = srv.url;
+  const s = srv;
+  return { get text() { return s.log(); } };
 }
 async function stop() {
-  if (!proc) return;
-  const p = proc;
-  proc = null;
-  await new Promise((r) => { p.once("exit", r); p.kill("SIGTERM"); setTimeout(() => p.kill("SIGKILL"), 8000).unref(); });
+  if (!srv) return;
+  const s = srv;
+  srv = null;
+  await s.stop();
 }
 
 const decode = (h) => JSON.parse(Buffer.from(h, "base64").toString("utf8"));
