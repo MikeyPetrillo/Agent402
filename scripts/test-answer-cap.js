@@ -98,8 +98,9 @@ try {
       const lowPath = join(dir, "low.mp3");
       silence(3600, ["-c:a", "libmp3lame", "-b:a", "8k"], lowPath);
       started.length = 0;
-      const out = await toMp3(readFileSync(lowPath), { bitrate: "192k" });
-      ok(out.format === "mp3" && out.bytes > 20 * MB && out.bytes <= AUDIO_ANSWER_MAX_BYTES && Buffer.from(out.mp3Base64, "base64").length === out.bytes, `an hour of 8 kHz audio converts (${capText(out.bytes)}: the encoder holds that sample rate to 64k)`);
+      let out = null;
+      const refused = await caught(async () => { out = await toMp3(readFileSync(lowPath), { bitrate: "192k" }); });
+      ok(!refused && out?.format === "mp3" && out.bytes > 20 * MB && out.bytes <= AUDIO_ANSWER_MAX_BYTES && Buffer.from(out.mp3Base64, "base64").length === out.bytes, `an hour of 8 kHz audio converts (${refused ? refused.message : `${capText(out.bytes)}: the encoder holds that sample rate to 64k`})`);
       // The loudness filter writes 48 kHz whatever came in, so the same
       // file normalized is 192k for the hour: refused before the encode.
       const before = started.length;
