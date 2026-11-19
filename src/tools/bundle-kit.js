@@ -378,10 +378,13 @@ const coinUnitsCount = (input) => { try { return coinIdsOf(input).length; } catc
 export function candleStats(bars) {
   const closes = (bars || []).map((b) => Number(b.close)).filter((x) => Number.isFinite(x) && x > 0);
   let peak = -Infinity, maxDd = 0;
+  // A bar's low is measured against the highs of the bars BEFORE it (and its
+  // own open): within one bar the order of its high and low is unknown.
   for (const b of bars || []) {
-    const hi = Number(b.high), lo = Number(b.low);
-    if (Number.isFinite(hi) && hi > peak) peak = hi;
+    const hi = Number(b.high), lo = Number(b.low), open = Number(b.open);
+    if (Number.isFinite(open) && open > peak) peak = open;
     if (Number.isFinite(lo) && peak > 0) maxDd = Math.max(maxDd, (peak - lo) / peak);
+    if (Number.isFinite(hi) && hi > peak) peak = hi;
   }
   const rets = [];
   for (let i = 1; i < closes.length; i++) rets.push(Math.log(closes[i] / closes[i - 1]));
@@ -447,7 +450,7 @@ async function tokenDiligence(input, ctx) {
       flagged: rows.filter((r) => r.flags.length).map((r) => ({ id: r.id, flags: r.flags })),
     },
     rows,
-    method: "turnover24h is 24h volume over market cap; fdvToMarketCap is fully diluted value over market cap; maxDrawdown1yPct is the largest fall from a running high to a later low over the one-year candles; volatilityAnnualizedPct is the standard deviation of close-to-close log returns scaled to a year. Flags: highDilution (fdvToMarketCap above 2), thinTurnover (below 0.01), farBelowATH (70% or more under the all-time high), highVolatility (above 100%), deepDrawdown1y (above 60%). Market facts only; nothing here is investment advice.",
+    method: "turnover24h is 24h volume over market cap; fdvToMarketCap is fully diluted value over market cap; maxDrawdown1yPct is the largest fall from a running high to a later candle's low over the one-year candles; volatilityAnnualizedPct is the standard deviation of close-to-close log returns scaled to a year. Flags: highDilution (fdvToMarketCap above 2), thinTurnover (below 0.01), farBelowATH (70% or more under the all-time high), highVolatility (above 100%), deepDrawdown1y (above 60%). Market facts only; nothing here is investment advice.",
     pricing: pricingFields(rows.length, TOKEN_DILIGENCE_LEGS),
     source: "computed from CoinGecko coin profiles and OHLC candles",
     credits: [COINGECKO_ATTRIBUTION],

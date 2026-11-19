@@ -103,6 +103,8 @@ const COINGECKO_SLUGS = new Set([
   // crypto-screens-kit.js: the computed answers whose endpoints answer keyless
   // (its two pool tools need a key and are in METERED_SLUGS).
   "funding-screener", "stablecoin-depeg-watch", "exchange-spread", "defi-screener", "chain-board",
+  // bundle-kit.js: token-diligence runs coin-profile and coin-ohlc per coin.
+  "token-diligence",
 ]);
 const CG_SAMPLE_SIZE = Number(process.env.NON_METERED_CG_SAMPLE) || 2;
 
@@ -610,8 +612,8 @@ function runControls() {
       "control: only CoinGecko-backed slugs are ever sampled");
     ok(!COINGECKO_SLUGS.has("lending-rates") && !COINGECKO_SLUGS.has("perp-funding"),
       "control: tools on other upstreams (contract reads, a perp venue) are NOT in the CoinGecko family - they stay swept");
-    ok(COINGECKO_SLUGS.has("crypto-price") && COINGECKO_SLUGS.has("coins-list") && COINGECKO_SLUGS.size === 29,
-      `control: the family is the full 29 keyless CoinGecko-backed slugs (got ${COINGECKO_SLUGS.size})`);
+    ok(COINGECKO_SLUGS.has("crypto-price") && COINGECKO_SLUGS.has("coins-list") && COINGECKO_SLUGS.size === 30,
+      `control: the family is the full 30 keyless CoinGecko-backed slugs (got ${COINGECKO_SLUGS.size})`);
     ok(coingeckoSample("x", 99).size === COINGECKO_SLUGS.size,
       "control: raising the sample past the family size sweeps all of them, so the cap is a budget and not a lock");
   }

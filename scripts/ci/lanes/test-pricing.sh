@@ -50,6 +50,10 @@ t node scripts/test-price-by-model.js
 t node scripts/test-tts-quote-paid.js
 # Every quoted route states one floor: /api/pricing, /openapi.json, /llms-full.txt and the 402's smallest quote agree (paid boot, stub facilitator).
 t node scripts/test-quoted-from-price.js
+# Bundle products: price derived per unit from the leg tools by the pack rule, quote capped, inputs refused before any read, computed rows, no partial 200 (offline, legs stubbed)
+t node scripts/test-bundle-products.js
+# Wholesale surface: v1 fields and error codes pinned, reliability bounded and honest, prices are the public ones, no licensed data listed, errorCode on tool errors (boots FREE_MODE, offline)
+t node scripts/test-wholesale.js
 # Real sample reports: fixtures are finished reports, pages indexable with own title/JSON-LD, /reports links them, sitemap carries them (boots FREE_MODE, offline)
 t node scripts/test-sample-reports.js
 # openFDA 404 = no matches, an empty result: recall-report must not 502 on it (offline)

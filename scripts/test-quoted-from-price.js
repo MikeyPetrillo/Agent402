@@ -80,6 +80,10 @@ const BODIES = {
   "v1-chat-metered-messages": [chat, "example"],
   "v1-chat-metered-responses": [{ input: "hi", max_output_tokens: 1 }, "example"],
   "v1-chat-metered-gemini": [{ contents: [{ role: "user", parts: [{ text: "hi" }] }], generationConfig: { maxOutputTokens: 1 } }, "example"],
+  // The bundle products (src/tools/bundle-kit.js): one unit is the floor.
+  "weather-risk-brief": [{ sites: [{ lat: 41.88, lon: -87.63 }] }, "example"],
+  "filings-brief": [{ tickers: ["MSFT"] }, "example"],
+  "token-diligence": [{ coins: ["bitcoin"] }, "example"],
 };
 
 try {
