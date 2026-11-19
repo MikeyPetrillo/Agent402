@@ -2917,7 +2917,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const mcpVendorMw = mcpHttpServer ? withBazaarHidden(mcpRouteConfigs, () => paymentMiddlewareFromHTTPServer(mcpHttpServer, undefined, undefined, false)) : null;
   // A flagged request this server does not price runs the HTTP route's own
   // paywall: never passed on unpaid.
-  const withMcpTwins = (main, mcp) => mcpX402Dispatch({ main, mcp, knows: mcpHttpServer ? mcpX402Knows(mcpHttpServer) : () => false });
+  // The whole dispatcher runs inside the Solana facilitator split's scope
+  // when SOLANA_FACILITATOR_URL is set (src/svm-facilitator-split.js).
+  const withMcpTwins = (main, mcp) => {
+    const mw = mcpX402Dispatch({ main, mcp, knows: mcpHttpServer ? mcpX402Knows(mcpHttpServer) : () => false });
+    return svmSplit ? svmSplit.wrap(mw) : mw;
+  };
 
   // X402_SYNC_ON_START=false skips the facilitator handshake at boot —
   // only for local testing where the facilitator is unreachable.
@@ -3035,8 +3040,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     railRecheck.start();
     console.log(`[payments] rail re-read: ${candidates.join(", ")} dropped on a failed /supported read; ${failedReads.map((f) => f.label).join(", ")} read again in ${Math.round(recheck.firstMs / 1000)} s, then on a backoff up to ${Math.round(recheck.maxMs / 1000)} s`);
   }
-  const paymentMw = withMcpTwins(withGuardedInit(vendorMw, init, httpServer), mcpVendorMw && withGuardedInit(mcpVendorMw, init, mcpHttpServer));
-  return svmSplit ? svmSplit.wrap(paymentMw) : paymentMw;
+  return withMcpTwins(withGuardedInit(vendorMw, init, httpServer), mcpVendorMw && withGuardedInit(mcpVendorMw, init, mcpHttpServer));
 }
 
 /**
