@@ -147,6 +147,7 @@ const STREAM_DELIVERY = `An event-stream answer (text/event-stream) gets the rec
 function x402ScreenCell(L, key, evm) {
   if (!L.payerScreen) return screenCell(false, "The x402 payer screen is not mounted on this server.", key);
   if (L.screenList === "missing") return screenCell(false, "The x402 payer screen is mounted but no sanctions list is loaded right now, so it fails open: payers are served unscreened until the list loads.", key);
+  if (key === "x402-batch-settlement") return screenCell(true, "The channel's payer (channelConfig.payer), the voucher signer it names and a Permit2 deposit's funder are checked after verification and before the route runs, on the deposit that opens or tops up the channel, on every voucher call and on a refund request; a listed payer is refused 403 and its channel is not charged. While no list is loaded the screen fails open (served unscreened).", key);
   return screenCell(true, evm ? "The signed EVM payer (authorization.from, or the Permit2 signer) is checked after verification and before the route runs; a listed payer is refused 403 and not charged. While no list is loaded the screen fails open (served unscreened)." : "The transaction's signers are checked after verification and before the route runs; a listed signer is refused 403 and not charged. While no list is loaded the screen fails open (served unscreened).", key);
 }
 
@@ -176,12 +177,15 @@ function x402Row(L, { scheme, network, batched, offered }) {
         : cell(false, "The x402 paywall is not mounted on this server.", "src/replay-guard.js"),
       refundOnChargedFailure: refundCell(network, batched ? "A Gateway payment settled for a request never served:" : "A charge that did not deliver:"),
       hangupForgiveness: hangupCell(L, "Settlement is aborted before any facilitator call (client_disconnected)."),
-      sanctionsScreening: x402ScreenCell(L, x402ScreenKey(network, { batched }), network.startsWith("eip155:")),
+      sanctionsScreening: x402ScreenCell(L, x402ScreenKey(network, { batched, scheme }), network.startsWith("eip155:")),
       receipt: cell(true, "PAYMENT-RESPONSE: the settlement result, with the transaction.", "src/payments.js"),
       signedReceipt: signedCell(L, batched ? "gateway-batched" : "x402", "PAYMENT-RESPONSE"),
     },
   };
 }
+
+/** Test seam: one x402 row as conformanceRails builds it, with the screen mounted and a list loaded. */
+export function __x402RowForTest(o, L = { payerScreen: true, screenList: "ok" }) { return x402Row(L, o); }
 
 function mppEvmRow(L, network, offered) {
   const base = x402Row(L, { scheme: "exact", network, batched: false, offered });

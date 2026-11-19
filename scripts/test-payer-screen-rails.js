@@ -6,6 +6,10 @@
 //   - x402 on an EVM chain (EIP-3009 and Permit2), Circle Gateway batched,
 //     the MPP evm credential as the shim hands it to the paywall: the signed
 //     payer, through the real middleware;
+//   - x402 payment channels (batch-settlement): the channel's payer, its
+//     voucher signer and a Permit2 deposit's funder, on the deposit, on a
+//     voucher call and on a refund request, through the same middleware; a
+//     payment whose payer cannot be read is served and counted;
 //   - x402 on Solana, Stellar and Algorand: the signers the reader returns,
 //     against the payout map;
 //   - MPP Tempo through the relay: the payer the credential names, refused
@@ -94,6 +98,68 @@ const refused = (r) => !r.next && r.code === 403 && r.body?.charged === false;
   ok(/req\.headers\[PAYMENT_SIGNATURE_HEADER\] = t\.paymentSignature;/.test(shim) && /payload: \{ authorization, signature \}/.test(shim), "the MPP evm shim hands the paywall an x402 header carrying the signed authorization, which the screen reads");
   await loadList(null);
   ok((await runScreen({ "payment-signature": eip3009(LISTED) })).next, "x402 EVM: no list loaded, served (fails open, never refuses a buyer for our missing list)");
+}
+
+// ---- x402 batch-settlement (payment channels): the channel's payer ----
+// The payment names its payer in payload.channelConfig, not in an
+// authorization: on the deposit that opens or tops up the channel, on every
+// voucher call and on a refund request. A deposit made over Permit2 names its
+// funder too.
+{
+  const X = await import("../src/x402-payer-screen.js");
+  await loadList([LISTED]);
+  __resetX402PayerScreenForTests();
+  const ZERO = "0x" + "00".repeat(20), AUTH = "0x" + "a7".repeat(20), CHANNEL = "0x" + "cd".repeat(32);
+  const accepted = { scheme: "batch-settlement", network: "eip155:8453", payTo: TREASURY };
+  const config = (payer, payerAuthorizer = ZERO) => ({ payer, payerAuthorizer, receiver: TREASURY, receiverAuthorizer: AUTH, token: PATH_USD, withdrawDelay: 86400, salt: "0x" + "01".repeat(32) });
+  const voucherFields = { channelId: CHANNEL, maxClaimableAmount: "1000", signature: "0x" + "11".repeat(65) };
+  const hdr = (payload) => b64({ x402Version: 2, accepted, payload });
+  const voucher = (payer, authorizer) => hdr({ type: "voucher", channelConfig: config(payer, authorizer), voucher: voucherFields });
+  const deposit3009 = (payer) => hdr({ type: "deposit", channelConfig: config(payer), voucher: voucherFields, deposit: { amount: "100000", authorization: { erc3009Authorization: { validAfter: "0", validBefore: "9999999999", salt: "0x" + "02".repeat(32), signature: "0x" + "22".repeat(65) } } } });
+  const depositPermit2 = (payer, funder) => hdr({ type: "deposit", channelConfig: config(payer), voucher: voucherFields, deposit: { amount: "100000", authorization: { permit2Authorization: { from: funder, permitted: { token: PATH_USD, amount: "100000" }, spender: AUTH, nonce: "1", deadline: "9999999999", witness: { channelId: CHANNEL }, signature: "0x" + "33".repeat(65) } } } });
+  const refund = (payer) => hdr({ type: "refund", channelConfig: config(payer), voucher: voucherFields });
+  for (const [what, make] of [["a voucher call", voucher], ["the deposit that opens the channel (EIP-3009)", deposit3009], ["a deposit over Permit2", (p) => depositPermit2(p, p)], ["a refund request", refund]]) {
+    ok(refused(await runScreen({ "payment-signature": make(LISTED) })), `x402 batch-settlement, ${what}: a listed channel payer is refused 403 before the handler, not charged`);
+    ok((await runScreen({ "payment-signature": make(CLEAN) })).next, `x402 batch-settlement, ${what}: CONTROL an unlisted channel payer is served`);
+  }
+  ok(refused(await runScreen({ "payment-signature": depositPermit2(CLEAN, LISTED) })), "x402 batch-settlement: a listed deposit funder behind an unlisted payer is refused");
+  ok(refused(await runScreen({ "payment-signature": voucher(CLEAN, LISTED) })), "x402 batch-settlement: a listed voucher signer (payerAuthorizer) behind an unlisted payer is refused");
+  ok((await runScreen({ "payment-signature": depositPermit2(CLEAN, AUTH) })).next && (await runScreen({ "payment-signature": voucher(CLEAN, AUTH) })).next, "CONTROL: an unlisted funder and an unlisted voucher signer are served");
+  const view = X.x402PayerScreenView();
+  ok(view.screened === 12 && view.refused === 6 && view.servedUnscreened === 0, `counted: 12 screened, 6 refused, none unscreened (${view.screened}, ${view.refused}, ${view.servedUnscreened})`);
+  // A channel payment whose payer cannot be read is served (the screen never
+  // refuses a payer that is not listed) and counted as unscreened.
+  __resetX402PayerScreenForTests();
+  const unread = await runScreen({ "payment-signature": hdr({ type: "voucher", channelConfig: { payer: "0xNOTHEX" }, voucher: voucherFields }) });
+  ok(unread.next && X.x402PayerScreenView().servedUnscreened === 1 && X.x402PayerScreenView().screened === 0, `a channel payment with no readable payer is counted as served unscreened (${JSON.stringify(X.x402PayerScreenView())})`);
+  ok((await runScreen({ "payment-signature": b64({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: { signature: "0x" } }) })).next && X.x402PayerScreenView().servedUnscreened === 2, "an EVM payment of any scheme with no readable payer is counted the same way");
+  ok((await runScreen({ "payment-signature": b64({ x402Version: 2, accepted: { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" }, payload: { transaction: "AQAB" } }) }, { nonEvm: [] })).next && X.x402PayerScreenView().servedUnscreened === 2, "CONTROL: a non-EVM payment with no readable signer is not counted here (its documented rule)");
+  // No list loaded: served, and counted.
+  await loadList(null);
+  __resetX402PayerScreenForTests();
+  ok((await runScreen({ "payment-signature": voucher(LISTED) })).next && X.x402PayerScreenView().servedUnscreened === 1, "x402 batch-settlement: no list loaded, served and counted as unscreened");
+  // The table's row for the rail, and the conformance cell, name what the screen reads.
+  await loadList([LISTED]);
+  const key = P.x402ScreenKey("eip155:8453", { scheme: "batch-settlement" });
+  ok(key === "x402-batch-settlement" && P.x402ScreenKey("eip155:8453", { scheme: "exact" }) === "x402-evm" && P.x402ScreenKey("eip155:8453") === "x402-evm", `the channel rail has its own row in the screen table (${key})`);
+  const fields = X.X402_SCREENED_FIELDS?.[key] || [];
+  ok(fields.length >= 2 && fields.includes("channelConfig.payer") && fields.every((f) => P.PAYER_SCREEN_RAILS[key]?.identifier.includes(f.split(".").slice(-2).join("."))), `its identifier names every payload field the screen reads for it (${fields.join(", ")})`);
+  // Each field the table lists is one the screen refuses on: the cell follows the behavior.
+  for (const k of Object.keys(X.X402_SCREENED_FIELDS || {})) {
+    for (const f of X.X402_SCREENED_FIELDS[k]) {
+      const payload = { signature: "0x" };
+      const parts = f.split(".");
+      let at = payload;
+      for (const part of parts.slice(0, -1)) at = (at[part] ||= {});
+      at[parts.at(-1)] = LISTED;
+      ok(P.PAYER_SCREEN_RAILS[k]?.identifier.includes(parts.at(-2) ? `${parts.at(-2)}.${parts.at(-1)}` : f) && refused(await runScreen({ "payment-signature": hdr(payload) })), `${k}: a listed address at payload.${f} is refused, and the row names it`);
+    }
+  }
+  ok(Object.keys(X.X402_SCREENED_FIELDS || {}).sort().join() === Object.keys(P.PAYER_SCREEN_RAILS).filter((k) => P.PAYER_SCREEN_RAILS[k].source === "src/x402-payer-screen.js" && k !== "mpp-evm").sort().join(), "every row the x402 EVM screen is the source of lists its fields");
+  // The conformance row for an offered channel accept.
+  const { __x402RowForTest } = await import("../src/conformance.js");
+  const row = __x402RowForTest?.({ scheme: "batch-settlement", network: "eip155:8453", batched: false, offered: true });
+  ok(row?.features?.sanctionsScreening?.identifier === P.PAYER_SCREEN_RAILS["x402-batch-settlement"].identifier && /channel/.test(row?.features?.sanctionsScreening?.detail || ""), `the conformance cell of a channel row names the channel payer (${row?.features?.sanctionsScreening?.identifier})`);
 }
 
 // ---- x402 Solana, Stellar, Algorand (the transaction's signers) ----

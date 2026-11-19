@@ -16,6 +16,9 @@
 // gate refuses what it must.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { x402ResourceServer } from "@x402/core/server";
 import { bootServer } from "./lib/boot-server.js";
@@ -363,7 +366,12 @@ const acceptsOf = async (base, path) => {
 };
 
 const OP_TOKEN = `op-${process.pid}-${Date.now()}`;
-const ON = { AGENT402_OPERATOR_TOKEN: OP_TOKEN, X402_BATCH_SETTLEMENT_NETWORKS: BASE, X402_BATCH_SETTLEMENT_STORE: "memory", X402_BATCH_CLAIM_INTERVAL_SECONDS: "5", X402_BATCH_REFUND_INTERVAL_SECONDS: "5", X402_BATCH_IDLE_REFUND_SECONDS: "5" };
+// The switch-on server's payer screen holds one listed address: a second
+// channel buyer's (the list is read from the stored file, nothing is fetched).
+const listedBuyer = makeChannelBuyer();
+const screenDir = mkdtempSync(join(tmpdir(), "bs-screen-"));
+writeFileSync(join(screenDir, "screen.json"), JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 1 }, addresses: [listedBuyer.address.toLowerCase()] }));
+const ON = { SANCTIONS_SCREEN_FILE: join(screenDir, "screen.json"), SANCTIONS_LIST_URL: "http://127.0.0.1:9/SDN.XML", AGENT402_OPERATOR_TOKEN: OP_TOKEN, X402_BATCH_SETTLEMENT_NETWORKS: BASE, X402_BATCH_SETTLEMENT_STORE: "memory", X402_BATCH_CLAIM_INTERVAL_SECONDS: "5", X402_BATCH_REFUND_INTERVAL_SECONDS: "5", X402_BATCH_IDLE_REFUND_SECONDS: "5" };
 const [off, on, noStore, floored] = await Promise.all([
   boot({}, "bs-off"),
   boot(ON, "bs-on"),
@@ -435,6 +443,25 @@ try {
   if (next.status === 200) buyer.charged += BigInt(ch.amount);
   ok(fac.calls.filter((c) => c.op === "settle" && c.type === "voucher").length === 0, "no voucher reached the facilitator: no transaction per call");
 
+  // A listed channel payer is refused by the payer screen before the route
+  // runs, on the deposit and on a voucher call: no deposit reaches the
+  // facilitator, no channel is charged, nothing is booked (the count below).
+  const view = async () => (await (await fetch(`${on.base}/api/gateway-status`, { headers: { "x-operator-token": OP_TOKEN } })).json())?.sanctionsScreen;
+  const before = await view();
+  ok(before?.status === "fresh" && before?.x402?.screened >= 5 && before.x402.refused === 0 && before.x402.servedUnscreened === 0, `CONTROL: the list is loaded and every channel call above was screened and served (${JSON.stringify(before?.x402)}, ${before?.status})`);
+  const depositsBefore = fac.calls.filter((c) => c.op === "settle" && c.type === "deposit").length;
+  const refusedCall = async (payload) => {
+    const r = await fetch(`${on.base}/api/uuid`, { headers: { "payment-signature": encodePayment(payload) } });
+    return { status: r.status, body: await r.json().catch(() => null), settled: r.headers.get("payment-response") };
+  };
+  const listedDeposit = await refusedCall(await listedBuyer.deposit(ch, Number(ch.amount) * 10));
+  ok(listedDeposit.status === 403 && listedDeposit.body?.reason === "payer-not-accepted" && listedDeposit.body?.charged === false && !listedDeposit.settled, `a listed channel payer's deposit call is refused 403, not charged (${listedDeposit.status} ${listedDeposit.body?.reason})`);
+  const listedVoucher = await refusedCall(await listedBuyer.voucher(ch));
+  ok(listedVoucher.status >= 400 && listedVoucher.status !== 200 && !listedVoucher.settled, `and its voucher call is not served (${listedVoucher.status})`);
+  ok(fac.calls.filter((c) => c.op === "settle" && c.type === "deposit").length === depositsBefore && !fac.channels.get(listedBuyer.channelIdFor(ch)), "no deposit of the listed payer reached the facilitator and no channel was opened for it");
+  const after = await view();
+  ok(after?.x402?.refused >= 1 && after.x402.servedUnscreened === 0, `the screen counted the refusal, and nothing was served unscreened (${JSON.stringify(after?.x402)})`);
+
   // Each served call is booked once, as an off-chain channel sale.
   await wait(1500);
   const sales = await (await fetch(`${on.base}/__operator/sales.json`, { headers: { "x-operator-token": OP_TOKEN } })).json();
@@ -458,6 +485,7 @@ try {
 } finally {
   await Promise.all([off, on, noStore, floored].map((s) => s.stop().catch(() => {})));
   facSrv.close();
+  rmSync(screenDir, { recursive: true, force: true });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

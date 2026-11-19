@@ -357,6 +357,13 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   relay's settled sender after (`relayPayerScreen`, hooked in `validateTempoCredential`); no list
   loaded serves unscreened and counts it (operator view `tempoRelay`). Only Tempo direct mode fails
   closed. A payer not on the list is never refused (`scripts/test-payer-screen-rails.js`).
+  The x402 EVM screen reads the payload fields `X402_SCREENED_FIELDS` lists
+  (`src/x402-payer-screen.js`), one list per table row: a scheme whose payer sits in another field
+  (channels: `channelConfig.payer`, its `payerAuthorizer`, a Permit2 deposit's funder, on the
+  deposit, every voucher call and a refund request) is added there, to its own row of
+  `PAYER_SCREEN_RAILS` and to `x402ScreenKey`, in the change that offers it; the suite refuses a
+  listed address at every listed field with an unlisted control. An EVM payment none of whose
+  fields reads is served and counted (`servedUnscreened`, `unreadablePayer` on the operator view).
 - **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
   in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
   route that outlives the claim's expiry cannot run twice on one payment. Every command the guard

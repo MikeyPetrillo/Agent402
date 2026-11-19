@@ -13,6 +13,9 @@
 //   - x402 on an EVM chain, the MPP evm shim (x402 underneath) and the Circle
 //     Gateway batched option (the same EIP-3009 authorization): the signed
 //     payer, src/x402-payer-screen.js, after verification, before the handler.
+//   - x402 payment channels (batch-settlement): the channel's payer, its
+//     voucher signer and a Permit2 deposit's funder, read by the same screen
+//     on the deposit, on every voucher call and on a refund request.
 //   - x402 on Solana (the transfer authorities and required signers), Stellar
 //     (the transfer's `from`) and Algorand (the signed payment's sender): the
 //     same screen.
@@ -36,6 +39,7 @@ import { screenAddresses, sanctionsScreenStatus, maskAddress } from "./sanctions
 export const PAYER_SCREEN_RAILS = Object.freeze({
   "x402-evm": { identifier: "the signed payer: authorization.from (EIP-3009), or permit2Authorization.from (Permit2); both when both are present", source: "src/x402-payer-screen.js" },
   "x402-gateway-batched": { identifier: "the signed payer: authorization.from of the batched EIP-3009 authorization", source: "src/x402-payer-screen.js" },
+  "x402-batch-settlement": { identifier: "the channel's payer on the deposit, on every voucher call and on a refund request: channelConfig.payer, the voucher signer channelConfig.payerAuthorizer when one is named, and a Permit2 deposit's funder (permit2Authorization.from)", source: "src/x402-payer-screen.js" },
   "x402-svm": { identifier: "the transaction's transfer authorities and required signers, except the fee payer", source: "src/non-evm-payer.js" },
   "x402-stellar": { identifier: "the `from` of the token transfer the transaction invokes", source: "src/non-evm-payer.js" },
   "x402-avm": { identifier: "the sender of the signed payment transaction in the group", source: "src/non-evm-payer.js" },
@@ -50,9 +54,10 @@ export const PAYER_SCREEN_RAILS = Object.freeze({
 });
 
 /** The rail key for a conformance row's network (x402 rows). */
-export function x402ScreenKey(network, { batched = false } = {}) {
+export function x402ScreenKey(network, { batched = false, scheme = "" } = {}) {
   const n = String(network || "");
   if (batched) return "x402-gateway-batched";
+  if (String(scheme || "").toLowerCase() === "batch-settlement") return "x402-batch-settlement";
   if (n.startsWith("solana:")) return "x402-svm";
   if (n.startsWith("stellar:")) return "x402-stellar";
   if (n.startsWith("algorand:")) return "x402-avm";
