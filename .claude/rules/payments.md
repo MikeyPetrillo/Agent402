@@ -610,6 +610,11 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `reason: malformed-header`. Every other field and the header are unchanged
   (`scripts/test-payment-guide.js`). Rollback lever:
   `PAYMENT_GUIDE_402=off`.
+- **Funding next step:** `src/next-step.js`: a refusal the verify hint answers with `fund-wallet`,
+  `lower-price-route` or `fund-gateway-deposit` also carries `nextStep` (`state`, `whoActs`,
+  `command`, `fund` from `needs`, `wait` with the Retry-After); the request is marked
+  `__paymentNextStepState` for the funnel. payment.info carries the general `emptyWallet` block
+  (`scripts/test-next-step.js`).
 - **Tempo push refusals:** `src/push-refusal-body.js`: for a push credential the Tempo gate
   restates a 4xx JSON body's not-charged sentence and sets `charged`, `transferClaimed`, `refundOwed`.
 - **Algorand network id:** `src/avm-network.js`: the CAIP-2 (32-character) id is what every 402
