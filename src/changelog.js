@@ -10,6 +10,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-19",
+    title: "agent402-client 0.10.0: a default per-call ceiling",
+    items: [
+      "Packages: agent402-client 0.10.0 holds a $5 per-call ceiling by default (`maxPerCallUsd`), above every catalog price, so a 402 that asks for far more is refused before anything is signed. `0`, `\"off\"` or `null` turns it off; a malformed value keeps the default and prints a warning; a refusal names `maxPerCallUsd` and the per-call `maxUsd` option. The rolling caps stay opt-in.",
+    ],
+  },
+  {
+    date: "2026-11-19",
     title: "Solana fresh quote after a refusal, render without a browser",
     items: [
       "Payments: A Solana payment its facilitator refused before broadcasting it (a verify refusal, or a settle refusal that names no transaction) is answered 402 with `requote: true` and words that say to request the route again without a payment header: that fresh 402 names another facilitator's fee payer when one is available, and otherwise the same quote as before. Nothing was charged.",
