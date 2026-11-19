@@ -86,6 +86,7 @@ ok(row.price.text === "$0.027" && row.price.usd === 0.027 && row.price.perReques
 const idx = wholesaleIndex(ctx);
 for (const k of ["version", "stability", "pricing", "errorCodes", "reliabilityDefinition", "docs", "asOf", "families", "notOffered"]) ok(k in idx, `the index carries ${k}`);
 ok(idx.version === "v1" && /no wholesale discount/.test(idx.pricing), "v1, and the pricing sentence says no discount");
+ok(!/license|vendor/i.test(idx.notOffered) && /^Market data, search results and model output are not offered/.test(idx.notOffered), "notOffered lists what is left out, with no reason given");
 const fam = wholesaleFamily("sec-filings", ctx);
 ok(fam.tools.map((t) => t.slug).join(",") === "edgar-filings,filings-brief", "a family lists its tools, never a model-backed one");
 ok(fam.tools[0].reliability.status === STATUS_MEASURED && fam.tools[0].reliability.successRate === 0.990 && fam.tools[1].reliability.status === STATUS_THIN, "a family row reads its own outcome; a tool with none reads not enough data");

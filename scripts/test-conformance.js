@@ -211,5 +211,11 @@ try {
   const listen = server.slice(server.indexOf("const httpServer = app.listen("), server.indexOf("const httpServer = app.listen(") + 600);
   await ok(/resetConformanceCache\(\)/.test(listen), "cache: the server drops it when it starts listening (gates mounted)");
 }
+{
+  // The stream delivery sentence names the two cases that carry a receipt.
+  const src = readFileSync(new URL("../src/conformance.js", import.meta.url), "utf8");
+  const line = src.split("\n").find((l) => l.startsWith("const STREAM_DELIVERY = ")) || "";
+  await ok(/An event-stream answer \(text\/event-stream\)/.test(line) && /request that sent TE: trailers/.test(line) && /neither carries no receipt/.test(line) && !/^const STREAM_DELIVERY = `A streamed answer gets/.test(line), "stream receipt wording is scoped to event streams and trailer requests");
+}
 rmSync(SCREEN_DIR, { recursive: true, force: true });
 console.log(`\n${pass} checks passed`);
