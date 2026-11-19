@@ -1173,8 +1173,11 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   // (the field itself is counted as a few input tokens by the body estimate, so the per-token RATE is compared on the input side)
   const r4o = costFor("openai/gpt-4o");
   ok(p.cost.prompt === Math.min(r4o.prompt * PRIORITY_PRICE_FACTOR, pro.maxPrice.prompt) && p.cost.completion === Math.min(r4o.completion * PRIORITY_PRICE_FACTOR, pro.maxPrice.completion) && p.inTokens >= d.inTokens && Math.abs(p.inUsd / p.inTokens - (d.inUsd / d.inTokens) * PRIORITY_PRICE_FACTOR) < 1e-12 && Math.abs(p.outUsd - d.outUsd * PRIORITY_PRICE_FACTOR) < 1e-12 && p.totalUsd > d.totalUsd, `priority worst case is ${PRIORITY_PRICE_FACTOR}x the default row on both units`);
-  const astra = worstCaseUpstreamCost({ model: "openai/gpt-6-astra", messages: msg1(), max_tokens: 64, service_tier: "priority" }, premium);
-  ok(astra.cost.prompt === premium.maxPrice.prompt && astra.cost.completion === premium.maxPrice.completion, "the tier's max_price still bounds a priority row (capped at premium's bound, which rides upstream as provider.max_price)");
+  // fable-5.1's row at the priority factor sits above premium's bound (gpt-6-astra's did until it retired 2026-11-19).
+  const rf = costFor("anthropic/claude-fable-5.1");
+  ok(rf.prompt * PRIORITY_PRICE_FACTOR > premium.maxPrice.prompt || rf.completion * PRIORITY_PRICE_FACTOR > premium.maxPrice.completion, "setup: fable-5.1 at the priority factor is above premium's bound on a unit");
+  const astra = worstCaseUpstreamCost({ model: "anthropic/claude-fable-5.1", messages: msg1(), max_tokens: 64, service_tier: "priority" }, premium);
+  ok(astra.cost.prompt === Math.min(rf.prompt * PRIORITY_PRICE_FACTOR, premium.maxPrice.prompt) && astra.cost.completion === Math.min(rf.completion * PRIORITY_PRICE_FACTOR, premium.maxPrice.completion), "the tier's max_price still bounds a priority row (capped at premium's bound, which rides upstream as provider.max_price)");
   const opus = worstCaseUpstreamCost({ model: "anthropic/claude-opus-5", messages: msg1(), max_tokens: 64, service_tier: "priority" }, premium);
   const ro5 = costFor("anthropic/claude-opus-5");
   ok(opus.cost.prompt === Math.min(ro5.prompt * PRIORITY_PRICE_FACTOR, premium.maxPrice.prompt) && opus.cost.completion === Math.min(ro5.completion * PRIORITY_PRICE_FACTOR, premium.maxPrice.completion), "opus-5 at priority prices factor x its regional row, which covers anthropic/fast's live endpoint");
@@ -1554,14 +1557,15 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
 }
 
 // ---- GPT-6 Astra + Claude Fable 5.1 on premium (2026-09-18 audit) ----
+// gpt-6.2-astra replaced gpt-6-astra on premium 2026-11-19 (RETIRING_MODELS serves the old id by it).
 // Live (2026-09-18): openai/gpt-6-astra 1.05M ctx, reasoning mandatory (low..max, no none), no temperature/top_p in
 // supported_parameters (OpenRouter drops them silently: measured 200 on both).
 // anthropic/claude-fable-5.1 1M ctx, reasoning
 // mandatory, new tokenizer (Claude 4.7+ family).
 {
   const { costFor, noSamplingKnobs, clampToMargin, reasoningProfile, defaultReasoningFor, FLEX_MODELS } = await import("../src/tools/llm-gateway-kit.js");
-  const A = "openai/gpt-6-astra", F = "anthropic/claude-fable-5.1";
-  ok(tierFor(A) === "v1-chat-premium" && tierFor(F) === "v1-chat-premium" && tierFor("openai/gpt-6-astra-pro") === "v1-chat-premium" && tierFor("anthropic/claude-fable-5") === null, "astra, astra-pro and fable-5.1 home on premium; fable-5 (a different model) is not admitted");
+  const A = "openai/gpt-6.2-astra", F = "anthropic/claude-fable-5.1";
+  ok(tierFor(A) === "v1-chat-premium" && tierFor(F) === "v1-chat-premium" && tierFor("openai/gpt-6.2-astra-pro") === "v1-chat-premium" && tierFor("anthropic/claude-fable-5") === null, "astra, astra-pro and fable-5.1 home on premium; fable-5 (a different model) is not admitted");
   ok(tierAllows("v1-chat-metered", A) && tierAllows("v1-chat-metered", F), "the metered tier admits both (union of the flat tiers)");
   const ca = costFor(A), cf = costFor(F);
   ok(ca === ROW(A) && ca !== ROW("openai/gpt-5"), `astra has its own cost row at the dearest routable endpoint; the boundary-aware "openai/gpt-5" row never matched it`);
@@ -1569,12 +1573,12 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(costFor("anthropic/claude-opus-5") === ROW("anthropic/claude-opus-5") && costFor("openai/gpt-5.6-sol") === ROW("openai/gpt-5.6-sol") && costFor("anthropic/claude-sonnet-5") === ROW("anthropic/claude-sonnet") && costFor("anthropic/claude-haiku-4.5") === ROW("anthropic/claude-haiku-4.5"), "sol, opus-5, sonnet-5 and haiku-4.5 resolve to their own rows (the live guard checks each against its dearest endpoint)");
   ok(costFor("anthropic/claude-opus-5-fast") === costFor("anthropic/claude-opus-5") && costFor("anthropic/claude-opus-4.7-fast") === ROW("anthropic/claude-opus-4.7"), "the -fast rows are gone (the ids left the catalog 2026-07-24); a stale -fast id falls to its base model's row");
   ok(tokenizerFactor(F) === NEW_TOKENIZER_FACTOR && tokenizerFactor(A) === 1, "fable-5.1 is priced on the newer tokenizer; astra is o200k");
-  ok(reasoningProfile(A)?.prefix === "openai/gpt-6-astra" && !reasoningProfile(A).efforts.includes("none") && reasoningProfile("openai/gpt-6-astra-pro")?.prefix === "openai/gpt-6-astra" && reasoningProfile(F)?.id === F, "reasoning rows: astra (prefix, covers -pro, no none), fable-5.1 (exact)");
+  ok(reasoningProfile(A)?.prefix === "openai/gpt-6.2-astra" && !reasoningProfile(A).efforts.includes("none") && reasoningProfile("openai/gpt-6.2-astra-pro")?.prefix === "openai/gpt-6.2-astra" && reasoningProfile(F)?.id === F, "reasoning rows: astra (prefix, covers -pro, no none), fable-5.1 (exact)");
   ok(defaultReasoningFor(A, "v1-chat-premium") === null && JSON.stringify(defaultReasoningFor(A, "v1-chat-metered")) === '{"effort":"low"}', "premium leaves the model default; metered injects low");
   // The chat wire refuses what the upstream would drop silently, naming the model.
   const tryV = (body) => { try { validateRequest(body, "v1-chat-premium"); return null; } catch (e) { return e; } };
   const e1 = tryV({ model: A, messages: [{ role: "user", content: "hi" }], temperature: 0.2 });
-  ok(e1?.statusCode === 400 && /"temperature" is not supported by openai\/gpt-6-astra/.test(e1.message) && /reasoning.effort/.test(e1.message), `astra: temperature refused 400 naming the model and the lever (${e1?.message?.slice(0, 80)})`);
+  ok(e1?.statusCode === 400 && /"temperature" is not supported by openai\/gpt-6\.2-astra/.test(e1.message) && /reasoning.effort/.test(e1.message), `astra: temperature refused 400 naming the model and the lever (${e1?.message?.slice(0, 80)})`);
   ok(tryV({ model: A, messages: [{ role: "user", content: "hi" }], top_p: 0.5 })?.statusCode === 400, "astra: top_p refused 400");
   ok(tryV({ model: A, messages: [{ role: "user", content: "hi" }] }) === null && tryV({ model: A, messages: [{ role: "user", content: "hi" }], seed: 7, tools: [{ type: "function", function: { name: "t", parameters: { type: "object" } } }] }) === null, "astra: a plain body, seed and function tools (live: tool_calls returned on the chat wire) still validate");
   ok(tryV({ model: "anthropic/claude-opus-5", messages: [{ role: "user", content: "hi" }], temperature: 0.2 }) === null && noSamplingKnobs(A) && noSamplingKnobs("gpt-6-astra-pro") && !noSamplingKnobs("openai/gpt-5.6-sol"), "the chat-wire sampling refusal is astra-only (opus-5 keeps temperature on this wire; the Messages wire has its own rule)");
@@ -1593,7 +1597,39 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const listed = modelsList().data.map((m) => m.id);
   ok(listed.includes(A) && listed.includes(F) && modelsList().data.find((m) => m.id === A).x402.tier === "v1-chat-premium", "/v1/models lists both under premium");
   ok(!FLEX_MODELS.includes(A) && !FLEX_MODELS.includes(F), "neither is flex-first yet (astra's flex endpoint exists upstream but has not been live-verified through a flex call)");
-  ok(canonicalModel("claude-fable-5-1-20260724") === F && canonicalModel("gpt-6-astra") === A, "dated Anthropic id and bare OpenAI id resolve to the admitted ids");
+  ok(canonicalModel("claude-fable-5-1-20260724") === F && canonicalModel("gpt-6.2-astra") === A, "dated Anthropic id and bare OpenAI id resolve to the admitted ids");
+  ok(canonicalModel("openai/gpt-6-astra") === A && canonicalModel("gpt-6-astra-pro") === "openai/gpt-6.2-astra-pro" && tierAllows("v1-chat-premium", "openai/gpt-6-astra") && tierAllows("v1-chat-metered", "openai/gpt-6-astra-pro") && validateRequest({ model: "openai/gpt-6-astra", messages: [{ role: "user", content: "hi" }] }, "v1-chat-premium").model === A, "gpt-6-astra and -pro stay admitted on premium and metered and are served by their 6.2 twins");
+}
+
+// ---- models from the 2026-11-18 live read ------------------------------------
+// gpt-6.2-sol (+pro) on pro, gpt-6.2-astra (+pro) on premium, Gemini 4 Carbon
+// and Neon on pro, Hydrogen on base, qwen4-max on base (qwen/ family) and
+// metered: each on the tiers its dearest endpoint fits, each priced by its own
+// row (never a family row), each with its live reasoning efforts.
+{
+  const { costFor, reasoningProfile, defaultReasoningFor, FLEX_MODELS } = await import("../src/tools/llm-gateway-kit.js");
+  const { REQUIRED_MODEL_ROWS } = await import("../src/upstream-costs.js");
+  const homes = [
+    ["openai/gpt-6.2-sol", "v1-chat-pro", "openai/gpt-6.2-sol"], ["openai/gpt-6.2-sol-pro", "v1-chat-pro", "openai/gpt-6.2-sol"],
+    ["openai/gpt-6.2-astra", "v1-chat-premium", "openai/gpt-6.2-astra"], ["openai/gpt-6.2-astra-pro", "v1-chat-premium", "openai/gpt-6.2-astra"],
+    ["google/gemini-4-carbon", "v1-chat-pro", "google/gemini-4-carbon"], ["google/gemini-4-neon", "v1-chat-pro", "google/gemini-4-neon"],
+    ["google/gemini-4-hydrogen", "v1-chat", "google/gemini-4-hydrogen"], ["qwen/qwen4-max", "v1-chat", "qwen/qwen4-max"],
+  ];
+  for (const [id, home, row] of homes) {
+    ok(tierFor(id) === home && tierAllows("v1-chat-metered", id), `${id}: home ${home} (${tierFor(id)}), and metered`);
+    ok(REQUIRED_MODEL_ROWS.includes(row) && costFor(id) === ROW(row), `${id}: priced by its own row ${row}, a required row`);
+    ok(reasoningProfile(id) !== null && !reasoningProfile(id).efforts.includes("minimal"), `${id}: has its live reasoning row`);
+    const b = validateRequest({ model: id, messages: [{ role: "user", content: "x".repeat(4000) }], max_tokens: TIERS[home].maxTokens }, home);
+    ok(b.max_tokens >= 512, `${id}: at ${home}'s price a 4k-char prompt leaves a usable output budget (${b.max_tokens})`);
+  }
+  ok(!tierAllows("v1-chat-pro", "openai/gpt-6.2-astra") && !tierAllows("v1-chat", "google/gemini-4-carbon") && !tierAllows("v1-chat-nano", "google/gemini-4-hydrogen"), "none is admitted on a tier below its home");
+  ok(["google/gemini-4-carbon", "google/gemini-4-hydrogen", "google/gemini-4-neon"].every((m) => FLEX_MODELS.includes(m)) && !FLEX_MODELS.includes("openai/gpt-6.2-sol"), "the Gemini 4 models are flex-first (live flex tag); gpt-6.2 has no flex endpoint");
+  ok(reasoningProfile("qwen/qwen4-max").efforts.includes("none") && JSON.stringify(defaultReasoningFor("qwen/qwen4-max", "v1-chat")) === '{"effort":"low"}', "qwen4-max takes none; base injects low");
+  ok(!reasoningProfile("openai/gpt-6.2-sol").efforts.includes("none") && !reasoningProfile("google/gemini-4-carbon").efforts.includes("xhigh") && reasoningProfile("google/gemini-4-neon").efforts.includes("xhigh"), "efforts as listed live: sol mandatory, carbon to high, neon to xhigh");
+  const listed = modelsList().data;
+  for (const [id, home] of homes.filter(([i]) => !i.endsWith("-pro"))) ok(listed.find((m) => m.id === id)?.x402?.tier === home, `/v1/models lists ${id} under ${home}`);
+  ok(!listed.some((m) => m.id === "openai/gpt-6-astra"), "/v1/models no longer lists gpt-6-astra");
+  ok(listed.find((m) => m.id === "qwen/qwen4-max")?.x402?.meteredEndpoint === "/v1/metered/chat/completions", "qwen4-max is named on /v1/models with its metered endpoint");
 }
 
 // ---- price by model (2026-09-22) ------------------------------------------
@@ -1917,7 +1953,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   // GPT-6 Luna (nano default, fast band lead) and Sol (pro).
   ok(tierFor("openai/gpt-6-luna") === "v1-chat-nano" && tierFor("openai/gpt-6-luna-pro") === "v1-chat-nano" && TIERS["v1-chat-nano"].defaultModel === "openai/gpt-6-luna", "gpt-6-luna (and -pro) home on nano; luna is the nano default");
   ok(tierFor("openai/gpt-6-sol") === "v1-chat-pro" && tierFor("openai/gpt-6-sol-pro") === "v1-chat-pro" && !tierAllows("v1-chat-premium", "openai/gpt-6-sol"), "gpt-6-sol (and -pro) home on pro");
-  ok(cf("openai/gpt-6-luna") === ROW("openai/gpt-6-luna") && cf("openai/gpt-6-sol") === ROW("openai/gpt-6-sol") && cf("openai/gpt-6-astra") === ROW("openai/gpt-6-astra"), "gpt-6 luna, sol and astra each resolve to their own row");
+  ok(cf("openai/gpt-6-luna") === ROW("openai/gpt-6-luna") && cf("openai/gpt-6-sol") === ROW("openai/gpt-6-sol") && cf("openai/gpt-6.2-astra") === ROW("openai/gpt-6.2-astra"), "gpt-6 luna, sol and gpt-6.2 astra each resolve to their own row");
   ok(cf("openai/gpt-6-luna").prompt <= TIERS["v1-chat-nano"].maxPrice.prompt && cf("openai/gpt-6-luna").completion <= TIERS["v1-chat-nano"].maxPrice.completion && cf("openai/gpt-6-sol").completion <= TIERS["v1-chat-pro"].maxPrice.completion, "both rows sit inside their tiers' max_price bounds");
   ok(Object.values(AUTO_RANKINGS.fast).every((l) => l[0] === "openai/gpt-6-luna") && TIERS["v1-chat-auto"].prefixes.includes("openai/gpt-6-luna"), "gpt-6-luna leads every fast-band category and is admitted on auto");
   ok(JSON.stringify(dr("openai/gpt-6-luna", "v1-chat-nano")) === '{"effort":"low"}' && JSON.stringify(dr("openai/gpt-6-sol", "v1-chat-pro")) === '{"effort":"low"}' && rp("openai/gpt-6-luna-pro")?.prefix === "openai/gpt-6-luna", "gpt-6 luna/sol: reasoning rows (budget tiers inject low, the -pro twins covered)");
