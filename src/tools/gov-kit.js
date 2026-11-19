@@ -60,15 +60,24 @@ async function getJson(url, opts = {}) {
   // wasn't dead, this loop just didn't give it the same second chance.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      ({ html } = await safeFetch(url, { maxBytes: 5 * 1024 * 1024, ...opts, ownUpstream: true }));
+      const { isAnswer404: _isAnswer404, ...fetchOpts } = opts;
+      ({ html } = await safeFetch(url, { maxBytes: 5 * 1024 * 1024, ...fetchOpts, ownUpstream: true }));
       break;
     } catch (e) {
       // An upstream 404 is an ANSWER for openFDA (no matches) - never retried,
       // and the upstream code rides on the re-labelled error so
       // getJsonAllowEmpty can read it (it was lost here until 2026-08-27).
       // No second attempt once a run's ceiling has passed (src/run-ceiling.js; never on a direct route).
-      if (attempt === 0 && !ceilingPassed() && e.upstreamStatus !== 404 && (e.statusCode === 422 || e.statusCode === 502 || e.statusCode === 504)) continue;
-      if (e.statusCode === 422) throw Object.assign(bad(e.message, 502), { upstreamStatus: e.upstreamStatus });
+      // A caller that names which 404 is an answer (opts.isAnswer404) has every
+      // other 404 retried once like any upstream failure.
+      const answer404 = e.upstreamStatus === 404 && (opts.isAnswer404 ? opts.isAnswer404(e) : true);
+      if (attempt === 0 && !ceilingPassed() && !answer404 && (e.statusCode === 422 || e.statusCode === 502 || e.statusCode === 504)) continue;
+      if (e.statusCode === 422) {
+        const relabelled = Object.assign(bad(e.message, 502), { upstreamStatus: e.upstreamStatus });
+        // The refusal's body head stays readable (non-enumerable, as the guard set it).
+        if (e.upstreamBody != null) Object.defineProperty(relabelled, "upstreamBody", { value: e.upstreamBody, enumerable: false });
+        throw relabelled;
+      }
       throw e;
     }
   }
@@ -80,21 +89,34 @@ async function getJson(url, opts = {}) {
 }
 
 // openFDA returns HTTP 404 with {error:{code:"NOT_FOUND"}} when a query simply
-// has no matches — that's an empty result, not an outage. Swallow 404 to null so
-// the tool returns count:0 instead of erroring; real 5xx/timeouts still throw.
+// has no matches - that is an empty result, not an outage, and it reads as
+// null so the tool returns count:0. ONLY that body is "no matches": any other
+// 404 (an edge or proxy page, a truncated or non-JSON body, another error
+// code) is the upstream failing, and reading it as "no matches" told a buyer
+// a product had no recalls while the source was not answering. So it is
+// retried once and then thrown as a 502 naming the host (never charged). A 200
+// whose body carries no `results` array is the same failure.
+// fetch-guard re-labels an upstream 4xx as OUR 422 and keeps the upstream code
+// in `upstreamStatus` and, when asked, the head of its body in `upstreamBody`.
+export function isOpenFdaNoMatch(e) {
+  if (!(e?.statusCode === 404 || e?.upstreamStatus === 404)) return false;
+  try { return JSON.parse(String(e.upstreamBody ?? ""))?.error?.code === "NOT_FOUND"; } catch { return false; }
+}
+const openFdaFailure = (url, what, upstreamStatus) => {
+  let host = "the source"; try { host = new URL(url).hostname; } catch { /* keep the generic name */ }
+  return Object.assign(bad(`${host} ${what} - an upstream issue, not your input; nothing was charged, retry shortly`, 502), { ...(upstreamStatus ? { upstreamStatus } : {}), attribution: "upstream" });
+};
 async function getJsonAllowEmpty(url, opts = {}) {
+  let data;
   try {
-    return await getJson(url, opts);
+    data = await getJson(url, { ...opts, errorBodyMaxBytes: 2048, isAnswer404: isOpenFdaNoMatch });
   } catch (e) {
-    // fetch-guard re-labels an upstream 4xx as OUR 422 and keeps the upstream
-    // code in `upstreamStatus` - so `statusCode === 404` never matched, every
-    // no-match query threw "Source URL returned HTTP 404", and recall-report
-    // (which needs 2 of 3 feeds) 502'd for any drug name absent from the food
-    // and device feeds, i.e. most of them (found 2026-08-27 generating the
-    // losartan sample; the buyer was refunded, the product was unsellable).
-    if (e.statusCode === 404 || e.upstreamStatus === 404) return null;
+    if (isOpenFdaNoMatch(e)) return null;
+    if (e?.statusCode === 404 || e?.upstreamStatus === 404) throw openFdaFailure(url, "answered HTTP 404 without its no-match body", 404);
     throw e;
   }
+  if (!data || typeof data !== "object" || !Array.isArray(data.results)) throw openFdaFailure(url, "answered without a results list", null);
+  return data;
 }
 
 // FDA dates are YYYYMMDD strings; render as ISO YYYY-MM-DD (null if unparseable).

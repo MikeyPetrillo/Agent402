@@ -45,6 +45,52 @@ try {
   let threw = null;
   try { await probeRecalls("losartan", { perFeed: 5 }); } catch (e) { threw = e; }
   ok(threw && threw.statusCode === 502 && /Could not read enough/.test(threw.message), "two feeds down (5xx) still refuses the report, uncharged (502)");
+
+  // Only openFDA's own no-match body is "no matches". Any other 404 (an edge
+  // page, a truncated body, another error code) is the upstream failing: it
+  // is retried once, then answered 502 naming the host, never as count:0.
+  const res = (status, text, type = "application/json") => new Response(text, { status, headers: { "content-type": type } });
+  const other404 = {
+    "a bare 404 with no body": () => res(404, "", "text/plain"),
+    "an edge HTML 404": () => res(404, "<html><body>404 Not Found</body></html>", "text/html"),
+    "a truncated no-match body": () => res(404, '{"error":{"code":"NOT_FO'),
+    "a 404 with another error code": () => res(404, JSON.stringify({ error: { code: "SERVER_ERROR", message: "x" } })),
+  };
+  for (const slug of ["drug-recalls", "food-recalls", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "device-510k", "device-adverse-events"]) {
+    const input = slug === "drug-ndc" ? { ndc: "58151-155" } : slug === "drug-adverse-events" ? { drug: "ibuprofen" } : slug === "drug-label" ? { name: "lipitor" } : slug === "device-510k" ? { applicant: "medtronic" } : slug === "device-adverse-events" ? { brand: "minimed" } : { q: "insulin pump", limit: 5 };
+    let reads = 0, err = null, out = null;
+    globalThis.fetch = async () => { reads++; return other404["a bare 404 with no body"](); };
+    try { out = await bySlug(slug).handler(input); } catch (e) { err = e; }
+    ok(out === null && err?.statusCode === 502 && err.upstreamStatus === 404 && err.attribution === "upstream" && /api\.fda\.gov/.test(err.message) && reads >= 2,
+      `${slug}: a bare 404 is an upstream failure (502 naming the host, read again once), never count:0 (${err?.statusCode} ${reads} reads ${String(err?.message).slice(0, 60)})`);
+  }
+  for (const [label, make] of Object.entries(other404)) {
+    let reads = 0, err = null, out = null;
+    globalThis.fetch = async () => { reads++; return make(); };
+    try { out = await bySlug("device-recalls").handler({ q: "insulin pump", limit: 5 }); } catch (e) { err = e; }
+    ok(out === null && err?.statusCode === 502 && reads === 2, `device-recalls: ${label} is a 502 after one more read (${err?.statusCode}, ${reads} reads)`);
+  }
+  // Control: the no-match body is still count:0, in one read.
+  {
+    let reads = 0;
+    globalThis.fetch = async () => { reads++; return res(404, JSON.stringify({ error: { code: "NOT_FOUND", message: "No matches found!" } })); };
+    const dev = await bySlug("device-recalls").handler({ q: "zzzz-no-such-device", limit: 5 });
+    ok(dev.count === 0 && dev.recalls.length === 0 && reads === 1, `control: openFDA's NOT_FOUND body is count:0 and is not read again (${reads} read)`);
+  }
+  // A 404 that clears on the second read is served.
+  {
+    let reads = 0;
+    globalThis.fetch = async () => (++reads === 1 ? res(404, "", "text/plain") : res(200, JSON.stringify(drugHit)));
+    const dev = await bySlug("device-recalls").handler({ q: "insulin pump", limit: 5 });
+    ok(dev.count === 1 && reads === 2, `a bare 404 followed by a real answer is served from the second read (${dev.count} row, ${reads} reads)`);
+  }
+  // A 200 that carries no results list is not "no matches" either.
+  {
+    let err = null;
+    globalThis.fetch = async () => res(200, JSON.stringify({ meta: {} }));
+    try { await bySlug("device-recalls").handler({ q: "insulin pump", limit: 5 }); } catch (e) { err = e; }
+    ok(err?.statusCode === 502 && /api\.fda\.gov/.test(err.message), `a 200 with no results list is a 502 naming the host (${err?.statusCode})`);
+  }
 } finally { globalThis.fetch = realFetch; }
 
 // Reason groups: the model's WHY counts are built from exact per-wording
