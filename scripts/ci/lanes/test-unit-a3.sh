@@ -66,3 +66,13 @@ t node scripts/test-leaderboard-memory.js
 # Conversion tools (~970 endpoints, exact + round-trip)
 t node scripts/test-convert.js
 t node scripts/test-json-canonical.js
+# Configuration reference: every environment variable src/ reads has a purpose line; docs/configuration.md is current (offline)
+t node scripts/test-config-reference.js
+# Debug and test switches are never honored on a production boot (src/test-seams.js; offline)
+t node scripts/test-debug-off-in-production.js
+# Every declared package is imported (offline)
+t node scripts/test-unused-deps.js
+# CycloneDX SBOM from package-lock.json: deterministic, no network (offline)
+t node scripts/test-sbom.js
+# Data-room metrics read only the public surfaces (stub, then a FREE_MODE boot on port 0)
+t node scripts/test-data-room-metrics.js

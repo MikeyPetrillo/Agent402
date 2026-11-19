@@ -27,5 +27,27 @@ ok(dbSsl("not a url")?.rejectUnauthorized === true,
 ok(dbSsl("postgresql://u:p@localhost:5432/db?sslmode=disable") === false,
   "sslmode=disable turns SSL off explicitly");
 
+// Every Postgres pool the server opens takes its TLS setting from dbSsl().
+{
+  const { readdirSync, readFileSync, statSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const root = new URL("../src/", import.meta.url).pathname;
+  const files = [];
+  const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (/\.(?:c|m)?js$/.test(f)) files.push(p); } };
+  walk(root);
+  const POOL = /new\s+(?:pg\.)?(?:Pool|Client)\s*\(\s*\{([\s\S]*?)\}\s*\)/g;
+  const pools = [], bare = [];
+  for (const f of files) {
+    for (const m of readFileSync(f, "utf8").matchAll(POOL)) {
+      pools.push(f);
+      if (!/\bssl\s*:\s*dbSsl\(/.test(m[1])) bare.push(f.slice(root.length));
+    }
+  }
+  ok(pools.length >= 3, `the scan sees the server's Postgres pools (${pools.length})`);
+  ok(bare.length === 0, `every Postgres pool in src/ sets ssl: dbSsl(...)${bare.length ? `: ${bare.join(", ")}` : ""}`);
+  const planted = "pool = new Pool({ connectionString: url, max: 2 });";
+  ok([...planted.matchAll(POOL)].length === 1 && ![...planted.matchAll(POOL)].some((m) => /\bssl\s*:\s*dbSsl\(/.test(m[1])), "control: a pool without the TLS setting is seen and flagged");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
