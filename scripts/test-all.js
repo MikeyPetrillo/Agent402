@@ -139,6 +139,9 @@ const NETWORK = new Set([
   "/api/image-exif", "/api/image-dominant-color", "/api/image-crop",
   "/api/barcode-lookup", "/api/fx-rate", "/api/weather-forecast",
   "/api/public-holidays",
+  // Holidays kit: the same holiday-source egress as public-holidays.
+  "/api/bank-holidays", "/api/school-holidays", "/api/next-holidays", "/api/long-weekends",
+  "/api/country-business-days", "/api/business-day-planner", "/api/settlement-calendar",
   // Weather-kit: live open-meteo forecasts — same upstream class as
   // weather-forecast above (was misfiled as pure-CPU; an open-meteo outage
   // must not hard-block the deploy gate).

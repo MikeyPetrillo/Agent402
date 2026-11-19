@@ -87,6 +87,40 @@ Status:
   keeps getting that refusal over a sustained stretch, not on a single
   refusal.
 
+### 2026-11-18 (holiday, business-day and market calendars)
+Tools:
+- public-holidays reads the v4 holiday dataset: each holiday adds
+  `calendarDate`, `nationalHoliday`, `subdivisionCodes` and `holidayTypes`
+  (Public, Bank, School, Authorities, Optional, Observance), and the call
+  takes optional `subdivision` and `types` filters. Every existing field
+  keeps its meaning: `date` is still the observed date. Until 2027-01-31
+  `date` and `localName` come from the earlier source and years outside the
+  v4 window are answered from it; from 2027-02-01 `date` follows the
+  published observance rule where a country has one (US federal, UK
+  substitute days, Japan substitute holidays), `localName` is null, and
+  those years answer 400.
+- New holiday tools: bank-holidays, school-holidays, next-holidays (upcoming
+  holidays with days until each), long-weekends (runs of three or more days
+  off with bridge days), country-business-days (check a date, add or
+  subtract business days, count between dates, by country or region, with
+  the US federal, UK substitute-day and Japan substitute-holiday rules
+  applied) and business-day-planner (the first dates that are business days
+  in every listed country or region).
+- settlement-calendar: the settlement date for a payment sent on a given
+  date over ACH, Fedwire, SEPA Credit Transfer, SEPA Instant or CHAPS, from
+  each rail's published operating days and bank holidays, with the rule and
+  its official sources in the answer.
+- market-calendar: whether NYSE, the London Stock Exchange, Xetra, JPX or
+  HKEX is open at a given moment, the day's sessions, the next open and
+  close, and closures in the coming month, from each exchange's own
+  published calendar. It is pure computation and free through proof of work.
+- gtin-validate: checks the GS1 check digit of a GTIN-8, UPC-A, EAN-13 or
+  GTIN-14 barcode number and returns the expected digit and the 14-digit
+  form. It is pure computation and free through proof of work.
+Credits:
+- Holiday data by Nager.Date, which Agent402 sponsors; every tool that
+  serves it carries the credit.
+
 ### 2026-11-18 (signed receipts on every paid call)
 Payments:
 - A streamed paid answer ends with an `event: agent402-receipt` server-sent

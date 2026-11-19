@@ -6,9 +6,10 @@
 //   fx-rate           Frankfurter (European Central Bank reference rates, the
 //                     ECB cited as the source; no other publisher)
 //   weather-forecast  api.weather.gov (US gov, public domain) — US only
-//   public-holidays   Nager.Date (open source, MIT) — holidays by country+year
-//                     (community-run, self-documented flapping → serve-stale
-//                     cache below)
+//   public-holidays   Nager.Date v4 community API: holidays by country+year,
+//                     read and cached (at most 24 h) by holiday-source.js,
+//                     whose header cites the terms (commercial use under an
+//                     active sponsorship, which this service holds)
 //   country-info      committed world-countries dataset (ODbL) + IANA tz
 //                     country map — src/data/countries.json, pure CPU
 // All keyless. Network tools are wallet-only (country-info is pure CPU and
@@ -17,6 +18,8 @@ import { readFileSync } from "node:fs";
 import { safeFetch } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
 import { ratesUrl, latestShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
+import { attribute } from "../data-attribution.js";
+import { publicHolidaysCompat, parseCountry, parseYear, parseSubdivision, parseTypes, appliesIn, hasAnyType } from "./holiday-source.js";
 
 // Committed open dataset (see src/data/LICENSE.md — ODbL attribution).
 // Regenerate with scripts/build-countries-data.js. Loaded once at module load;
@@ -29,7 +32,7 @@ function bad(message, statusCode = 400) {
 
 async function getJson(url, { allowEmpty = false } = {}) {
   let html;
-  // Retry once on upstream 5xx/timeout — community-run upstreams (Nager.Date)
+  // Retry once on upstream 5xx/timeout — community-run upstreams
   // intermittently flap on the first attempt then succeed immediately. Same
   // convention as gov-kit/finance-kit getJson.
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -50,11 +53,11 @@ async function getJson(url, { allowEmpty = false } = {}) {
   }
 }
 
-// ── serve-stale cache (barcode-lookup, public-holidays) ──────────────────────
-// Neither upstream has a good diverse free alternative (Open Food Facts is the
-// only open barcode DB of its kind; Nager.Date likewise for holidays), so the
-// single-upstream mitigation here is caching, not a fallback provider. Both
-// datasets are near-static, so each tool keeps its last SUCCESSFUL response per
+// ── serve-stale cache (barcode-lookup) ───────────────────────────────────────
+// The upstream has no good diverse free alternative (Open Food Facts is the
+// only open barcode DB of its kind), so the single-upstream mitigation here is
+// caching, not a fallback provider. The dataset is near-static, so the tool
+// keeps its last SUCCESSFUL response per
 // request identity and (a) serves it for 24h without touching the upstream at
 // all — which is also what keeps us under Open Food Facts' 100 req/min/IP cap
 // on Railway's shared egress IP — and (b) on upstream failure serves whatever
@@ -64,7 +67,6 @@ async function getJson(url, { allowEmpty = false } = {}) {
 const CACHE_FRESH_MS = 24 * 60 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 500;
 const BARCODE_CACHE = new Map(); // code -> { response, fetchedAt }
-const HOLIDAY_CACHE = new Map(); // "CC:YYYY" -> { response, fetchedAt }
 
 function cacheFresh(cache, key) {
   const e = cache.get(key);
@@ -246,58 +248,46 @@ export const DATA_TOOLS = [
   {
     route: "GET /api/public-holidays", name: "Public holidays", slug: "public-holidays", category: "time", price: "$0.001",
     description:
-      "Public holidays for a country and year from an open public-holiday dataset (keyless, 100+ countries): date, local name, English name, nationwide flag, and holiday types. Pairs with /api/business-days and /api/country-info. ?country=US&year=2026",
+      "Public holidays for a country and year from an open public-holiday dataset (keyless, 100+ countries): observed date and calendar date, local and English name, nationwide flag, the ISO 3166-2 regions each applies to, and holiday types (Public, Bank, School, Authorities, Optional, Observance). Optional filters: one region, holiday types. Pairs with /api/country-business-days and /api/country-info. ?country=US&year=2026.",
     tags: ["holidays", "public-holidays", "calendar", "country", "time"],
     discovery: {
       input: { country: "US", year: 2026 },
       inputSchema: {
         properties: {
           country: { type: "string", description: "ISO 3166-1 alpha-2 country code, e.g. US, DE, JP" },
-          year: { type: "integer", description: "calendar year (1975-2099)" },
+          year: { type: "integer", description: "calendar year (1975-2099; years outside the dataset's rolling window are answered until 2027-01-31, then refused)" },
+          subdivision: { type: "string", description: "optional ISO 3166-2 region, e.g. DE-BY: nationwide holidays plus that region's" },
+          types: { type: "string", description: "optional comma list of holiday types to keep: Public, Bank, School, Authorities, Optional, Observance" },
         },
         required: ["country", "year"],
       },
       output: {
         example: {
           country: "US", year: 2026, count: 17,
-          holidays: [{ date: "2026-01-01", localName: "New Year's Day", name: "New Year's Day", global: true, counties: null, types: ["Public", "Bank"] }],
+          holidays: [{ date: "2026-01-01", calendarDate: "2026-01-01", localName: "New Year's Day", name: "New Year's Day", global: true, counties: null, types: ["Public", "Bank"], nationalHoliday: true, subdivisionCodes: null, holidayTypes: ["Public", "Bank"] }],
         },
       },
     },
     handler: async (i) => {
-      const country = String(i.country ?? "").trim().toUpperCase();
-      if (!/^[A-Z]{2}$/.test(country)) throw bad("country must be a 2-letter ISO 3166-1 code (e.g. US, DE, JP)");
-      const year = Number(i.year);
-      if (!Number.isInteger(year) || year < 1975 || year > 2099) throw bad("year must be an integer between 1975 and 2099");
-      const key = `${country}:${year}`;
-      const fresh = cacheFresh(HOLIDAY_CACHE, key);
-      if (fresh) return { ...fresh.response };
-      let j;
-      try {
-        // Nager returns 204 (empty body) for a known country with no data for
-        // that year, and 404 for an unknown country code.
-        j = await getJson(`https://date.nager.at/api/v3/PublicHolidays/${year}/${country}`, { allowEmpty: true });
-      } catch (e) {
-        const mapped = e.statusCode === 422
-          ? bad(`no holiday data for country "${country}" - Nager.Date covers ~110 countries by ISO alpha-2 code`)
-          : e;
-        return serveStaleOrThrow(HOLIDAY_CACHE, key, "public-holidays", mapped);
-      }
-      let response;
-      if (j === null) {
-        response = { country, year, count: 0, holidays: [] };
-      } else {
-        if (!Array.isArray(j)) {
-          return serveStaleOrThrow(HOLIDAY_CACHE, key, "public-holidays", bad("Upstream returned an unexpected shape", 502));
-        }
-        const holidays = j.slice(0, 100).map((h) => ({
-          date: h.date, localName: h.localName ?? null, name: h.name ?? null,
-          global: h.global === true, counties: h.counties ?? null, types: h.types ?? [],
+      const country = parseCountry(i.country);
+      const year = parseYear(i.year);
+      const subdivision = parseSubdivision(i.subdivision, country);
+      const types = parseTypes(i.types);
+      const { rows, stale } = await publicHolidaysCompat(country, year);
+      // The v3 contract holds: `date` is the observed date (v3's own while it
+      // answers, then the published observance rule), `calendarDate` the
+      // holiday's calendar date, global/counties/types mirror the v4 fields,
+      // and localName is v3's until its end of life (2027-01-31), then null.
+      const holidays = rows
+        .filter((r) => (!subdivision || appliesIn(r, subdivision)) && hasAnyType(r, types))
+        .map((r) => ({
+          date: r.date, calendarDate: r.calendarDate, localName: r.localName, name: r.name, global: r.nationalHoliday, counties: r.subdivisionCodes, types: r.holidayTypes,
+          nationalHoliday: r.nationalHoliday, subdivisionCodes: r.subdivisionCodes, holidayTypes: r.holidayTypes,
         }));
-        response = { country, year, count: holidays.length, holidays };
-      }
-      cachePut(HOLIDAY_CACHE, key, response);
-      return response;
+      return {
+        country, year, ...(subdivision ? { subdivision } : {}), ...(types ? { filterTypes: types } : {}),
+        count: holidays.length, holidays, ...(stale ? { stale: true } : {}),
+      };
     },
   },
   {
@@ -356,3 +346,4 @@ export const DATA_TOOLS = [
 // (src/run-ceiling.js): a caller that stops waiting at a deadline of its own
 // can serve them. A handler that gains another kind of wait leaves this list.
 markEndsAtCeiling(DATA_TOOLS, ["fx-rate", "public-holidays", "weather-forecast"]);
+attribute(DATA_TOOLS.find((t) => t.slug === "public-holidays"), "nager");

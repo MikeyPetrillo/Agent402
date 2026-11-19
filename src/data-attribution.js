@@ -46,6 +46,10 @@ export const C3S_ATTRIBUTION = "Contains modified Copernicus Climate Change Serv
 // GeoNames (CC BY 4.0, geonames.org: "give credit to GeoNames"), the place
 // data behind Open-Meteo's geocoding API (open-meteo.com/en/docs/geocoding-api).
 export const GEONAMES_ATTRIBUTION = "Place data from GeoNames (CC BY 4.0).";
+// Nager.Date (holiday lists, src/tools/holiday-source.js): served under the
+// commercial sponsorship its terms require (https://date.nager.at/Legal/TermsOfService);
+// the credit names the dataset wherever its rows or answers computed from them are served.
+export const NAGER_ATTRIBUTION = "Holiday data by Nager.Date.";
 export const COPERNICUS_DISCLAIMER = "Neither the European Commission nor ECMWF is responsible for any use that may be made of the Copernicus information or data it contains.";
 /** The Copernicus credit an answer carries: its sentence, then the disclaimer. */
 export const CAMS_CREDIT = `${CAMS_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;
@@ -63,6 +67,7 @@ export const ATTRIBUTIONS = Object.freeze({
   "open-meteo-cams": `${OPEN_METEO_ATTRIBUTION} ${CAMS_CREDIT}`,
   "open-meteo-c3s": `${OPEN_METEO_ATTRIBUTION} ${C3S_CREDIT}`,
   geonames: GEONAMES_ATTRIBUTION,
+  nager: NAGER_ATTRIBUTION,
 });
 
 /** Every sentence the listing cut keeps when a description ends with it. */

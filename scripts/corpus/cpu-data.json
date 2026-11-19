@@ -1099,6 +1099,61 @@
      "error": "good"
     }
    }
+  },
+  {
+   "slug": "gtin-validate",
+   "name": "a UPC-A with a good check digit",
+   "input": {
+    "code": "036000291452"
+   },
+   "expect": {
+    "equals": {
+     "valid": true,
+     "format": "GTIN-12",
+     "gtin14": "00036000291452"
+    }
+   }
+  },
+  {
+   "slug": "gtin-validate",
+   "name": "an EAN-13 with a wrong check digit names the right one",
+   "input": {
+    "code": "4006381333932"
+   },
+   "expect": {
+    "equals": {
+     "valid": false,
+     "expectedCheckDigit": 1
+    }
+   }
+  },
+  {
+   "slug": "market-calendar",
+   "name": "LSE is closed on the 2026 Boxing Day substitute",
+   "input": {
+    "exchange": "XLON",
+    "date": "2026-12-28"
+   },
+   "expect": {
+    "equals": {
+     "tradingDay": false,
+     "reason": "holiday"
+    }
+   }
+  },
+  {
+   "slug": "market-calendar",
+   "name": "JPX lunch break",
+   "input": {
+    "exchange": "JPX",
+    "at": "2026-11-18T02:45:00Z"
+   },
+   "expect": {
+    "equals": {
+     "isOpen": false,
+     "nextOpen": "2026-11-18T03:30:00.000Z"
+    }
+   }
   }
  ]
 }
