@@ -261,7 +261,8 @@ export function _ageQueryHealthForTest(ms) { for (const v of queryHealth.values(
 // Buyer queries in flight at once. The query service rate-limits the
 // project (its documented default is 2 queries a second), whose keys also
 // sign facilitator calls, so the RATE of queries sent is held by the send
-// pacer below, and this cap bounds what a burst holds on this server: a
+// pacer below (which also yields to every facilitator verify and settle: the
+// settlement lane), and this cap bounds what a burst holds on this server: a
 // query and its answer (the service sends at most about 1 MB; SQL_SEND_LIMIT_BYTES)
 // in memory, and one parse of it on the event loop. Measured 2026-11-18 on a
 // local boot, every query answered 1,000 rows (about 1 MB) after 1.5 s: a
@@ -294,13 +295,59 @@ export function sqlSendGapMs(env = process.env) {
 }
 let nextSqlSlotAt = 0;
 let sqlSendGap = sqlSendGapMs();
-export function _resetSqlPacerForTest(gapMs = null) { nextSqlSlotAt = 0; sqlSendGap = gapMs ?? sqlSendGapMs(); }
+export function _resetSqlPacerForTest(gapMs = null) { nextSqlSlotAt = 0; sqlSendGap = gapMs ?? sqlSendGapMs(); priorityInflight = 0; priorityClearAt = 0; }
+
+// The settlement lane. The same project keys sign the facilitator's verify
+// and settle calls (src/cdp-facilitator.js), so those calls come first: a
+// settlement call never waits on anything here (beginPriorityCdpCall is
+// synchronous and only marks it), and while one is in flight, and for one
+// send gap after it ends, no query is sent. A query whose slot falls in that
+// time waits for the lane to clear inside its own wait, or is refused as
+// busy (uncharged); it never holds the settlement call back.
+let priorityInflight = 0;
+let priorityClearAt = 0;
+const priorityWaiters = new Set();
+/** Marks a settlement-side call in flight; returns its end (idempotent). */
+export function beginPriorityCdpCall() {
+  priorityInflight++;
+  let ended = false;
+  return () => {
+    if (ended) return;
+    ended = true;
+    priorityInflight = Math.max(0, priorityInflight - 1);
+    priorityClearAt = Math.max(priorityClearAt, Date.now() + sqlSendGap);
+    for (const w of [...priorityWaiters]) w();
+  };
+}
+export function _priorityLaneForTest() { return { inflight: priorityInflight, clearAt: priorityClearAt }; }
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
+/** Resolves when the settlement lane has no call in flight and its gap has passed, or false at `deadline`. */
+async function yieldToSettlement(deadline) {
+  for (;;) {
+    const t = Date.now();
+    if (priorityInflight === 0 && t >= priorityClearAt) return true;
+    if (t >= deadline) return false;
+    if (priorityInflight > 0) {
+      let wake;
+      const ended = new Promise((r) => { wake = r; priorityWaiters.add(r); });
+      let timer;
+      await Promise.race([ended, new Promise((r) => { timer = setTimeout(r, deadline - t); })]);
+      clearTimeout(timer);
+      priorityWaiters.delete(wake);
+    } else {
+      await sleepMs(Math.min(priorityClearAt, deadline) - t);
+    }
+  }
+}
 /** Waits for the next send slot; resolves false (no slot taken) when it is further off than maxWaitMs. */
 export async function takeSqlSendSlot(maxWaitMs = SQL_SLOT_MAX_WAIT_MS, now = Date.now()) {
-  const at = Math.max(now, nextSqlSlotAt);
-  if (at - now > Math.max(0, maxWaitMs)) return false;
+  const deadline = now + Math.max(0, maxWaitMs);
+  const at = Math.max(now, nextSqlSlotAt, priorityInflight > 0 ? now : priorityClearAt);
+  if (at > deadline) return false;
   nextSqlSlotAt = at + sqlSendGap;
-  if (at > now) await new Promise((r) => setTimeout(r, at - now));
+  if (at > now) await sleepMs(at - now);
+  // A settlement call that began while this query waited goes first.
+  if (priorityInflight > 0 || Date.now() < priorityClearAt) return yieldToSettlement(Date.now() + Math.max(0, deadline - at));
   return true;
 }
 function slotWaitMs() {

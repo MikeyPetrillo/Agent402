@@ -10,7 +10,7 @@
 // the Correlation-Context below hard-coded aud ["cdp_service"]. Only the auth headers are built here: the
 // payment payloads are still validated by @x402/core. Pinned by
 // scripts/test-cdp-facilitator.js.
-import { mintCdpJwt } from "./tools/cdp-kit.js";
+import { mintCdpJwt, beginPriorityCdpCall } from "./tools/cdp-kit.js";
 
 export const CDP_FACILITATOR_HOST = "api.cdp.coinbase.com";
 export const CDP_FACILITATOR_ROUTE = "/platform/v2/x402";
@@ -44,4 +44,25 @@ export function cdpAuthHeaders(apiKeyId, apiKeySecret) {
 
 export function cdpFacilitatorConfig(apiKeyId, apiKeySecret) {
   return { url: CDP_FACILITATOR_URL, createAuthHeaders: cdpAuthHeaders(apiKeyId, apiKeySecret) };
+}
+
+// Settlement first: a client of this facilitator marks each verify and settle
+// call in the CDP kit's settlement lane, so no onchain-sql query is sent while
+// one is in flight (src/tools/cdp-kit.js takeSqlSendSlot). The mark is
+// synchronous and never waits or refuses; the call itself is unchanged.
+export function isCdpFacilitatorUrl(url) {
+  return typeof url === "string" && url.replace(/\/+$/, "") === CDP_FACILITATOR_URL;
+}
+export function prioritizeCdpCalls(client, begin = beginPriorityCdpCall) {
+  if (!client || client.__cdpPriority) return client;
+  for (const m of ["verify", "settle"]) {
+    const orig = client[m];
+    if (typeof orig !== "function") continue;
+    client[m] = async function (...args) {
+      const end = begin();
+      try { return await orig.apply(this, args); } finally { end(); }
+    };
+  }
+  Object.defineProperty(client, "__cdpPriority", { value: true });
+  return client;
 }

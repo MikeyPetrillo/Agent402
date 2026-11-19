@@ -455,6 +455,54 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
           "a refused slot is not taken: the next caller gets the same slot");
       } finally { globalThis.fetch = realFetchP; _resetSqlPacerForTest(0); }
     }
+    // The settlement lane: the facilitator's verify and settle (same project
+    // keys) go first. A burst of queries never delays or refuses a settle
+    // call, and no query is sent while one is in flight or inside one send gap
+    // after it.
+    {
+      const { _priorityLaneForTest } = await import("../src/tools/cdp-kit.js");
+      const { prioritizeCdpCalls, isCdpFacilitatorUrl, CDP_FACILITATOR_URL } = await import("../src/cdp-facilitator.js");
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      try {
+        const GAP = 100;
+        _resetSqlPacerForTest(GAP);
+        const grants = [];
+        // A burst of 30 queries queued on the pacer first.
+        const burst = Array.from({ length: 30 }, () => takeSqlSendSlot(10_000).then((g) => { if (g) grants.push(Date.now()); return g; }));
+        await sleep(250);
+        let started = null;
+        const spans = [];
+        const client = prioritizeCdpCalls({
+          async settle(x) { const s0 = Date.now(); started ??= s0; await sleep(400); spans.push([s0, Date.now()]); return { success: true, x }; },
+          async verify() { throw Object.assign(new Error("verify refused"), { statusCode: 400 }); },
+        });
+        const t = Date.now();
+        const p = client.settle(7);
+        const calledAtOnce = started !== null && started - t < 5;
+        const firstDelay = started - t;
+        const inLane = _priorityLaneForTest().inflight === 1;
+        const answer = await p;
+        // A query whose slot falls in the lane, with a short wait, is refused rather than holding settlement back.
+        const p2 = client.settle(8);
+        const short = await takeSqlSendSlot(50);
+        await p2;
+        await Promise.all(burst);
+        const during = grants.filter((g) => spans.some(([a, b]) => g >= a && g < b + GAP - 5));
+        ok(calledAtOnce && inLane && answer?.success === true && answer.x === 7,
+          `a settle call starts at once behind a queued burst of 30 queries (started after ${firstDelay} ms)`);
+        ok(spans.length === 2 && during.length === 0 && grants.length > 0, `no query is sent while a settle is in flight or within a send gap after it (${during.length} inside, ${grants.length} sent)`);
+        ok(short === false, "a query whose wait ends inside the settle is refused busy, never waited for by the settle");
+        const ve = await client.verify().catch((x) => x);
+        ok(ve?.statusCode === 400 && _priorityLaneForTest().inflight === 0, "a verify error passes through unchanged and the lane is released");
+        ok(isCdpFacilitatorUrl(CDP_FACILITATOR_URL) && isCdpFacilitatorUrl(`${CDP_FACILITATOR_URL}/`) && !isCdpFacilitatorUrl("https://facilitator.example/x402"),
+          "only the CDP facilitator's URL takes the lane");
+        const { readFileSync } = await import("node:fs");
+        const pay = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
+        ok(/const addFacilitator = [^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*if \(isCdpFacilitatorUrl\([^\n]*\)\) prioritizeCdpCalls\(client\);/.test(pay)
+          && /const wireSideFacilitator = [^\n]*\n\s*if \(isCdpFacilitatorUrl\([^\n]*\)\) prioritizeCdpCalls\(client\);/.test(pay),
+          "every CDP facilitator client the server registers takes the settlement lane");
+      } finally { _resetSqlPacerForTest(0); }
+    }
     // The log throttle: one line per key a minute, and its map is bounded.
     {
       const { _resetCdpLogThrottleForTest, _cdpLogOnceForTest } = await import("../src/tools/cdp-kit.js");

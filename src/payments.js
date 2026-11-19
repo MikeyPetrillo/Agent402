@@ -5,6 +5,7 @@ import { registerPhaseTimingHooks } from "./paid-phase-timing.js";
 import { createGuardedInit, withGuardedInit } from "./x402-boot-init.js";
 import { scheduleBazaarRouteCheck, withBazaarHidden } from "./bazaar-route-check.js";
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
+import { isCdpFacilitatorUrl, prioritizeCdpCalls } from "./cdp-facilitator.js";
 import { installAcceptOutputSchema, withOutputSchemaOnFirstAccept, outputSchemaFromExtensions, acceptOutputSchemaEnabled } from "./accept-output-schema.js";
 import { avmSubcentGateEnabled, installAvmSubcentGate, noteAvmSettleRefusal, startAvmSponsorshipRefresher, REFRESH_MS as AVM_SPONSORSHIP_REFRESH_MS } from "./avm-sponsorship.js";
 import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal, unconfirmedSettleRefusal, unconfirmedSettleReceipt, railTxOf } from "./payment-reject.js";
@@ -1451,6 +1452,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // `labelOf(network)`, when given, names the client per chain in its errors
   // and in the first-tried map (one client serving Base and Solana).
   const addFacilitator = (label, client, { labelOf = null } = {}) => {
+    // A CDP client's verify and settle go before any onchain-sql query.
+    if (isCdpFacilitatorUrl(client?.url || client?.config?.url || client?.options?.url)) prioritizeCdpCalls(client);
     // Name the facilitator in its own errors. The failure hooks log the chain
     // and never the client, so a Polygon failure could read as Coinbase's
     // words while PayAI owns that chain and may never have been reached.
@@ -1493,6 +1496,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // client, so @x402 never routes another network to it): the same error
   // labels, pending-settle notes, signer pinning and diagnostics as above.
   const wireSideFacilitator = (label, client) => {
+    if (isCdpFacilitatorUrl(client?.url || client?.config?.url || client?.options?.url)) prioritizeCdpCalls(client);
     labelFacilitatorErrors(label, client);
     notePendingSettleAnswers(client, client?.url || client?.config?.url || client?.options?.url, {
       via: label,
