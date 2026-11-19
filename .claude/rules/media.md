@@ -108,6 +108,16 @@ Loaded when a media, document or worker-pool tool file is read.
   `durationUnconfirmed: true`. A file ffmpeg cannot decode is a 400 (format unreadable, no upstream call); a decoder that
   cannot run (no slot in the time the budget leaves, deadline, no ffmpeg) is a retryable 503 with no upstream call. The unmeasured count since boot
   is `transcriptionUnmeasured.sinceBoot` on `/__operator/tool-failures.json`. Suite: `scripts/test-stt-cap.js`.
+- **Thirty-minute tier (`transcribe-long`, `POST /api/transcribe-long`):** listed and served only with
+  `TRANSCRIBE_LONG=on` (off by default; `src/tools/stt-kit.js` `sttLongEnabled`, env-gated in
+  `scripts/published-slugs.js`). An audio URL only (a job replays a JSON body). Its price is the margin rule's
+  (the cent at or above 30 minutes at the dearer model's rate over `STT_MARGIN`, pinned by test-stt-cap). A
+  converted file goes as 16 kHz mono Opus in Ogg (`SPEECH_CODECS`, `src/tools/media-kit.js`): thirty minutes of
+  FLAC can pass the 25 MB upload limit. Its upstream cap is 140 s per path (`sttUpstreamCapMs`), its run budget
+  230 s (`EVM_RUN_SECONDS`, the fetch, the decode and that cap), and it is long-running (EVM exact only,
+  `LONG_RUNNING_SLUGS`); past the CDN answer window it runs as a job. The other tiers' over-cap refusal and the
+  pro description name it only while the switch is on. The upstream's time on a thirty-minute file is measured
+  by one supervised paid run before the switch goes on.
 - **Image generation moderation:** the three GPT Image tiers (`src/tools/image-gen-kit.js`) send
   `moderation: "low"` unless the caller sends `"auto"` (any other value is a 400 naming the field).
   A 400 whose OpenAI error names the `moderation` parameter (`error.param`, or an
