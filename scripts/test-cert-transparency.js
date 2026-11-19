@@ -77,6 +77,13 @@ try {
   try { await tool.handler({ domain: "example.com" }); } catch (e) { threw = e; }
   ok(threw && threw.statusCode === 502, "both sources down → 502 (was: " + (threw && threw.statusCode) + ")");
 
+  // 4b. Both logs rate-limit this server (429) → 502, an upstream failure,
+  //     not a 422 that blames the caller's domain.
+  stub(() => Promise.resolve(errRes(429)));
+  threw = null;
+  try { await tool.handler({ domain: "example.com" }); } catch (e) { threw = e; }
+  ok(threw && threw.statusCode === 502, "both sources rate-limited (429) → 502 (was: " + (threw && threw.statusCode) + ")");
+
   // 5. certspotter honors includeExpired=false (drops an expired cert).
   stub((url) => isHost(url, "crt.sh") ? Promise.resolve(errRes(502))
     : Promise.resolve(jsonRes([{ id: "x", cert_sha256: "old", dns_names: ["old.example.com"], not_after: "2000-01-01" }])));
