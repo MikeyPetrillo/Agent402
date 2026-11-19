@@ -6,6 +6,26 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-18 (site motion and charts)
+Site:
+- Home, /101 and every tool page show one paid call step by step: the request,
+  the 402 with the tool's price, the signature, the settlement, the answer
+  and, while the server signs them, the signed receipt, with the 24-hour
+  median latency and the count of settled outside payments read from
+  /api/stats. It holds still under reduced motion.
+- /scorecard charts outside paying wallets per month, returning and new;
+  /proof charts each settlement as a share of its quoted ceiling; /leaderboard
+  charts the top ten sellers by USDC settled.
+- Motion follows the DESIGN.md tokens: interface moves take 200 to 400 ms, an
+  exit takes 70% of its entrance, and every page goes still under reduced
+  motion.
+Live view:
+- A walker near the pointer lifts toward it, the gate under the pointer
+  brightens, and each settlement sends a ring out of its gate.
+Docs:
+- The READMEs and the wiki show a paid call as an animated image and the
+  architecture as a diagram.
+
 ### 2026-11-18 (signed receipts on every paid call)
 Payments:
 - A streamed paid answer ends with an `event: agent402-receipt` server-sent
