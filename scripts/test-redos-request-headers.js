@@ -118,7 +118,11 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
   const webBotAuth = await import("../src/web-bot-auth.js");
   const walletSignIn = await import("../src/wallet-sign-in.js");
   const walletSvc = walletSignIn.createWalletSignIn({ env: { SIWE_SESSION_SECRET: "r".repeat(40) }, baseUrl: "https://redos.example.test" });
+  const sources = await import("../src/funnel-sources.js");
   const readers = {
+    // The paid-call funnel's source words (src/funnel-sources.js), read on every paid-route finish.
+    "funnel-sources uaFamilyOf": (v) => sources.uaFamilyOf(v),
+    "funnel-sources referrerClassOf": (v) => sources.referrerClassOf(v, "agent402.tools"),
     "posthog uaFamilyOf": (v) => posthog.uaFamilyOf(v),
     "posthog toolGoneSourceOf (user-agent)": (v) => posthog.toolGoneSourceOf({ headers: { "user-agent": v } }),
     "posthog toolGoneSourceOf (authorization)": (v) => posthog.toolGoneSourceOf({ headers: { authorization: v } }),

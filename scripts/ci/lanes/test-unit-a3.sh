@@ -15,6 +15,8 @@ t node scripts/test-find-ranking.js
 t node scripts/test-find-direction.js
 # /openapi.json coverage (every CATALOG tool has a path + operationId + x-price)
 t node scripts/test-openapi-coverage.js
+# /openapi.json schemas: every operation's request and answer schema present, compiling under 2020-12, examples valid, GET tools declare every input (boots free-mode)
+t node scripts/test-openapi-schemas.js
 # MCP prompts/list + prompts/get (one prompt per skill pack; substitution renders)
 t node scripts/test-mcp-prompts.js
 # MCP outer transport limits (R-11 — per-IP cap + concurrency ceiling bound floods before server/transport allocation — spawns child)

@@ -292,6 +292,14 @@ t node scripts/test-mpp-agents-weekly.js
 t node scripts/test-sale-path.js
 # Paid-call funnel per day and arrival path (probes, 402s served, attempts, settlements, refusal classes, callers that never came back), the ledger half and weekly figures, a 400k-row cost bound, operator-only /__operator/funnel.json (paid boot, stub facilitator)
 t node scripts/test-funnel.js
+# Funnel sources: User-Agent family, Referer class, the discovery document a caller read last (keyed hash, window, cap), no-payment reasons, next-step and timeout counts on a real traffic store
+t node scripts/test-funnel-sources.js
+# Paying wallets to operators on public evidence only: forward-checked ENS and Base names, a single-origin payTo, failed lookups never cached, deadline, concurrency, cache cap (stub clients)
+t node scripts/test-payer-operators.js
+# nextStep on a refused payment whose wallet cannot cover the call (state, who acts, command, wait) and emptyWallet on payment.info (FREE_MODE boot)
+t node scripts/test-next-step.js
+# Weekly operator scoreboard: ledger half (our rows out, 30-day shares, new payers with Arc out), operator-only /__operator/scoreboard.json, the local script's pure parts and private report directory
+t node scripts/test-scoreboard.js
 # The connector's internal x402 twins of six flagships: 404 without the loopback secret, resource /mcp with a valid MCP Bazaar extension, the route's accepts on every chain, settle on the final 200 only, no payment spent on both, sales booked x402-mcp (paid boot, stub facilitator)
 t node scripts/test-mcp-x402-routes.js
 # First-call allowance returning payers (operator view): granted wallets with a later outside paid sale, and within 7 days; one batched ledger read, cached (offline, temp SQLite ledger)

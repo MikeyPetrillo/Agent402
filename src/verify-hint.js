@@ -28,6 +28,7 @@ import { classifyPaymentRejection, classifySettlementRefusal, settledRefundOwedR
 import { classifySvmFundingRefusal, fundingHint, fundingPayerOf, POW_SENTENCE } from "./svm-funding-refusal.js";
 import { classifySettlementPending, isGatewayBatchedPayment, isGatewayBatchedRequest, PENDING_RETRY_AFTER_SECONDS, SETTLEMENT_FAILED_DETAIL, SETTLEMENT_PENDING_DETAIL } from "./gateway-wire.js";
 import { decodePaymentHeader } from "./payment-header.js";
+import { nextStepForRefusal } from "./next-step.js";
 import { RAILS, GATED_RAILS } from "./rails.js";
 import { ALGORAND_MAINNET_LEGACY_CAIP2 } from "./avm-network.js";
 const decodeB64Json = (v) => { try { return JSON.parse(Buffer.from(String(v), "base64").toString("utf8")); } catch { return null; } };
@@ -459,7 +460,10 @@ export function verifyHintMiddleware({ origin = process.env.BASE_URL || null } =
           if (h.reasonClass) req.__paymentRejectReason = h.reasonClass;
           // A route that also takes proof-of-work says so in the funding hint.
           const hint = h.svmFunding && body.altPayment ? `${h.hint} ${POW_SENTENCE}` : h.hint;
-          return origJson({ ...body, ...(h.reasonClass ? { reason: h.reasonClass } : {}), hint, retry: h.retry, ...(h.needs ? { needs: h.needs } : {}), ...(h.balanceUsd != null ? { payerUsdcOnBase: Number(h.balanceUsd.toFixed(6)) } : {}) });
+          // A wallet that cannot cover the call: the same advice as fields (src/next-step.js).
+          const nextStep = nextStepForRefusal(h);
+          if (nextStep) req.__paymentNextStepState = nextStep.state; // for the funnel
+          return origJson({ ...body, ...(h.reasonClass ? { reason: h.reasonClass } : {}), hint, retry: h.retry, ...(h.needs ? { needs: h.needs } : {}), ...(h.balanceUsd != null ? { payerUsdcOnBase: Number(h.balanceUsd.toFixed(6)) } : {}), ...(nextStep ? { nextStep } : {}) });
         }
         // No facilitator hint means the payment never REACHED the facilitator:
         // @x402/express refused it first and threw the reason away. Read the

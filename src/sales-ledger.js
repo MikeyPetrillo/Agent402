@@ -2481,3 +2481,86 @@ export function buyerScorecard(opts = {}) { return runSteps(buyerScorecardSteps(
 registerSqliteStore("sales-ledger.db", () => db, { note: "sales ledger (in memory with a state database)" });
 registerSqliteStore("sales-ledger.fileDb", () => fileDb, { note: "sales ledger write-through file" });
 registerMemoryStore("sales-ledger.answerDigests", () => qAnswerDigests, { note: "answer digests" });
+
+// ---------------------------------------------------------------------------
+// The operator scoreboard's ledger half (src/scoreboard.js; operator only,
+// computed on read, nothing stored). Outside sales on the counted rails, as
+// the funnel reads them (internal = 0: our wallets, the router's spending
+// wallets, burners and signed probes are already out).
+//   weekPayers      the week's paying wallets with their dollars and paying
+//                   days, handed to the operator resolver and never answered
+//   concentration   over the `days` window: outside dollars, paying wallets,
+//                   tools sold, the largest wallet's and the largest tool's
+//                   share of the dollars, and that tool's slug (ours)
+//   newPayersPerDay wallets whose first counted sale ever falls on that day,
+//                   a sale on `excludeNetworks` (Arc by default) not counted
+// One paged pass (windowPages) plus one index read per wallet of the window.
+const SCOREBOARD_STEP = 200;
+const qScoreboardPage = db.prepare(`
+  SELECT (ts / 86400000) AS d, slug, network, payer, COUNT(*) AS n,
+         SUM(CAST(ROUND(${SALE_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano
+  ${WINDOW_PAGE} AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL}
+  GROUP BY d, slug, network, payer`);
+function* scoreboardLedgerSteps({ days = 30, weekDays = 7, now = Date.now(), excludeNetworks = ["eip155:5042"] } = {}) {
+  const n = Math.max(1, Math.min(FUNNEL_MAX_DAYS, Math.floor(Number(days)) || 30));
+  const w = Math.max(1, Math.min(n, Math.floor(Number(weekDays)) || 7));
+  const today = Math.floor(now / 86_400_000);
+  const from = today - n; // whole days [from, today)
+  const weekFrom = today - w;
+  const since = from * 86_400_000;
+  const excluded = new Set((excludeNetworks || []).map((x) => String(x).toLowerCase()));
+  const byPayer = new Map(); // payer -> nano (window)
+  const bySlug = new Map(); // slug -> nano (window)
+  const firstDay = new Map(); // payer -> first day in the window on a counted network
+  const week = new Map(); // payer -> { nano, days:Set }
+  let totalNano = 0;
+  yield* windowPages(since, (a, b) => {
+    for (const r of qScoreboardPage.all(a, b, since)) {
+      const d = Number(r.d);
+      if (d < from || d >= today) continue;
+      const nano = Number(r.nano) || 0;
+      totalNano += nano;
+      bySlug.set(r.slug, (bySlug.get(r.slug) || 0) + nano);
+      if (!r.payer) continue;
+      byPayer.set(r.payer, (byPayer.get(r.payer) || 0) + nano);
+      if (!excluded.has(String(r.network || "").toLowerCase())) {
+        const f = firstDay.get(r.payer);
+        if (f === undefined || d < f) firstDay.set(r.payer, d);
+      }
+      if (d >= weekFrom) {
+        const e = week.get(r.payer) || { nano: 0, days: new Set() };
+        e.nano += nano; e.days.add(d);
+        week.set(r.payer, e);
+      }
+    }
+  });
+  const newByDay = new Map();
+  let i = 0;
+  for (const [payer, d] of firstDay) {
+    if (!qPaidBefore.get(payer, since)) newByDay.set(d, (newByDay.get(d) || 0) + 1);
+    if (++i % SCOREBOARD_STEP === 0) yield;
+  }
+  const top = (m) => { let k = null, v = 0; for (const [kk, vv] of m) if (vv > v) { k = kk; v = vv; } return { k, v }; };
+  const tp = top(byPayer), ts = top(bySlug);
+  const newPayersPerDay = [];
+  for (let d = from; d < today; d++) newPayersPerDay.push({ day: dayKey(d), newPayers: newByDay.get(d) || 0 });
+  return {
+    window: { days: n, from: dayKey(from), to: dayKey(today - 1) },
+    week: { days: w, from: dayKey(weekFrom), to: dayKey(today - 1) },
+    weekPayers: [...week].map(([payer, e]) => ({ payer, usd: nanoToUsd4(e.nano), days: e.days.size })),
+    concentration: {
+      outsideUsd: nanoToUsd4(totalNano),
+      payingWallets: byPayer.size,
+      toolsSold: bySlug.size,
+      topWalletShare: totalNano ? +(tp.v / totalNano).toFixed(4) : null,
+      topToolShare: totalNano ? +(ts.v / totalNano).toFixed(4) : null,
+      topTool: ts.k,
+    },
+    newPayersPerDay,
+    newPayersExcludedNetworks: [...excluded],
+  };
+}
+/** The scoreboard's ledger half (see above), synchronously. */
+export function scoreboardLedger(opts = {}) { return runSteps(scoreboardLedgerSteps(opts)); }
+/** scoreboardLedger across event-loop turns (same answer). */
+export function scoreboardLedgerAsync(opts = {}) { return runStepsAsync(scoreboardLedgerSteps(opts)); }

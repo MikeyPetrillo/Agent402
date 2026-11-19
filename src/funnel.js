@@ -31,9 +31,19 @@
 // "bazaar" (a User-Agent naming the Bazaar), "direct" (everything else).
 // A request carries no sign of where its caller found the URL, so a buyer who
 // read a Bazaar listing and calls with a plain client reads "direct".
+//
+// Beside the arrival, from fixed vocabularies (src/funnel-sources.js), for
+// probes (`ua`, `referrer`, `found`) and settlements (`uaPaid`,
+// `referrerPaid`, `foundPaid`): the client family its User-Agent names, the
+// kind of page its Referer names, and the discovery document the same caller
+// read last (llms.txt, openapi.json, /.well-known/x402 and the rest; "none"
+// when it read none in the trail's window). A refused attempt whose wallet
+// cannot cover the call counts its next-step state (`nextStep`), and an
+// attempt answered 408 or 504 counts as `timeouts`.
 import { createHmac, randomBytes } from "node:crypto";
 import { REJECTION_REASONS } from "./payment-reject.js";
 import { salePathOf, salePathGroup, BAZAAR_SALE_PATH } from "./sale-path.js";
+import { uaFamilyOf, referrerClassOf, NEXT_STEP_COUNTED } from "./funnel-sources.js";
 
 export const ARRIVALS = Object.freeze(["bazaar", "mcp", "direct", "marketplace", "unknown"]);
 export const OUTCOMES = Object.freeze(["probe", "attempt", "free", "ours"]);
@@ -107,18 +117,22 @@ export function settledResponse(req, res) {
  * One finished request's funnel event: { arrival, outcome, status, settled, reason }.
  * `ours` is the caller's verdict on our own traffic (signed probe, own wallet).
  */
-export function funnelEventOf(req, res, { ours = false } = {}) {
+export function funnelEventOf(req, res, { ours = false, ownHost = "" } = {}) {
   const arrival = arrivalOfRequest(req);
   const status = res.headersSent || res.writableEnded ? res.statusCode : 499;
   if (ours) return { arrival, outcome: "ours", status };
   const pow = !!req?.headers?.["x-pow-solution"];
   if (pow) return { arrival, outcome: "free", status };
+  const h = req?.headers || {};
+  const ua = uaFamilyOf(h["user-agent"]);
+  const ref = referrerClassOf(h.referer || h.referrer, ownHost);
   if (hadCredential(req)) {
     const settled = settledResponse(req, res);
-    return { arrival, outcome: "attempt", status, settled, reason: status === 402 ? (req.__paymentRejectReason ?? null) : null };
+    const step = status === 402 && req && Object.hasOwn(req, "__paymentNextStepState") ? req.__paymentNextStepState : null;
+    return { arrival, outcome: "attempt", status, settled, reason: status === 402 ? (req.__paymentRejectReason ?? null) : null, ua, ref, step };
   }
   if (status >= 200 && status < 300) return { arrival, outcome: "free", status };
-  return { arrival, outcome: "probe", status };
+  return { arrival, outcome: "probe", status, ua, ref };
 }
 
 export const FUNNEL_DEFAULTS = Object.freeze({
@@ -132,7 +146,7 @@ export const FUNNEL_DEFAULTS = Object.freeze({
  * store's day rollup (createTrafficStore().bumpFunnel). Pure apart from the
  * in-memory caller map, which is bounded by callerCap and the window.
  */
-export function createFunnel({ bump, retryWindowMs = FUNNEL_DEFAULTS.retryWindowMs, callerCap = FUNNEL_DEFAULTS.callerCap, sweepEveryMs = FUNNEL_DEFAULTS.sweepEveryMs } = {}) {
+export function createFunnel({ bump, foundVia = null, retryWindowMs = FUNNEL_DEFAULTS.retryWindowMs, callerCap = FUNNEL_DEFAULTS.callerCap, sweepEveryMs = FUNNEL_DEFAULTS.sweepEveryMs } = {}) {
   if (typeof bump !== "function") throw new Error("createFunnel needs bump");
   const key = randomBytes(32);
   const callers = new Map(); // keyed caller -> { at, day, arrival, retried, paid }
@@ -148,6 +162,14 @@ export function createFunnel({ bump, retryWindowMs = FUNNEL_DEFAULTS.retryWindow
       if (!e.retried) close(e, "neverRetried");
     }
   }
+  // Where the caller came from (fixed words only; see src/funnel-sources.js).
+  function sources(day, a, event, ip, suffix) {
+    let found = "none";
+    try { found = typeof foundVia === "function" ? foundVia(ip) : "none"; } catch { /* the trail is optional */ }
+    if (event.ua) bump(day, a, `ua${suffix}`, 1, event.ua);
+    if (event.ref) bump(day, a, `referrer${suffix}`, 1, event.ref);
+    bump(day, a, `found${suffix}`, 1, found);
+  }
   function record(event, { ip = null, now = Date.now() } = {}) {
     if (!event || !ARRIVALS.includes(event.arrival)) return;
     if (now - lastSweep >= sweepEveryMs) sweep(now);
@@ -158,6 +180,7 @@ export function createFunnel({ bump, retryWindowMs = FUNNEL_DEFAULTS.retryWindow
     const k = ip == null ? null : callerOf(ip);
     if (event.outcome === "probe") {
       bump(day, a, "probes", 1);
+      sources(day, a, event, ip, "");
       if (event.status === 402) bump(day, a, "challenges", 1);
       if (k && !callers.has(k)) {
         if (callers.size >= callerCap) {
@@ -175,13 +198,17 @@ export function createFunnel({ bump, retryWindowMs = FUNNEL_DEFAULTS.retryWindow
     }
     if (event.outcome !== "attempt") return;
     bump(day, a, "attempts", 1);
-    if (event.settled) bump(day, a, "settled", 1);
+    if (event.settled) { bump(day, a, "settled", 1); sources(day, a, event, ip, "Paid"); }
     else if (event.status === 402) {
       bump(day, a, "challenges", 1);
       bump(day, a, "refused", 1);
       bump(day, a, `refusal.${refusalClassOf(event.reason)}`, 1);
       bump(day, a, "reasons", 1, refusalReasonKey(event.reason));
-    } else bump(day, a, "errorAnswered", 1);
+      if (NEXT_STEP_COUNTED.includes(event.step)) bump(day, a, "nextStep", 1, event.step);
+    } else {
+      bump(day, a, "errorAnswered", 1);
+      if (event.status === 408 || event.status === 504) bump(day, a, "timeouts", 1);
+    }
     const open = k ? callers.get(k) : null;
     if (open && now - open.at < retryWindowMs) {
       if (!open.retried) { open.retried = true; close(open, "retried"); }
@@ -197,5 +224,6 @@ export function emptyFunnelRow() {
     probes: 0, challenges: 0, attempts: 0, settled: 0, refused: 0, errorAnswered: 0, free: 0, ours: 0,
     refusal: Object.fromEntries(REFUSAL_CLASSES.map((c) => [c, 0])), reasons: {},
     probedCallers: 0, retried: 0, paidAfterProbe: 0, neverRetried: 0, untracked: 0,
+    timeouts: 0, nextStep: {}, ua: {}, referrer: {}, found: {}, uaPaid: {}, referrerPaid: {}, foundPaid: {},
   };
 }

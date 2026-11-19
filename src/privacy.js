@@ -171,13 +171,21 @@ so every claim below is verifiable in code.</p>
     and version, the first word of the User-Agent it sends), from a client whose User-Agent names the
     Bazaar discovery service, or as any other HTTP request. Beside it we count, per day and per those
     same arrival paths, the requests to paid tools that carried no payment, the payment requests we
-    answered, the payments tried and settled and the refusal reason of each one refused; these are
-    counts only, kept with the daily traffic statistics;</li>
+    answered, the payments tried and settled and the refusal reason of each one refused, together
+    with the kind of client the User-Agent names (for example curl or a browser), the kind of page
+    the Referer names (for example a search engine; never the page or its host) and which of our
+    discovery documents (llms.txt, openapi.json and the like) the same caller read before. That last
+    link is held in memory for six hours under a keyed hash of the caller's address, never the address,
+    and is never written anywhere; the rest are counts only, kept with the daily traffic statistics;</li>
     <li>when a paid call paid from an EVM wallet or over Tempo carries a signed receipt, we keep that
     receipt (the tool, its route, the price, the rail, chain and transaction, the paying wallet, and
     SHA-256 hashes of the request and the response, never their content) so the paying wallet can
     export it in its <code>/api/audit-report</code>; only a payment from that wallet opens the report.
     Each kept receipt is deleted ${RECEIPT_STORE_DAYS} days after it was issued;</li>
+    <li>to count how many separate operators pay us, we look up public records about a paying wallet:
+    its primary name on Ethereum or Base when the name's own address record is that wallet, or the
+    seller whose own payment offer names it as the receiving address. The result is held in memory for
+    up to seven days and only counts of operators leave it;</li>
     <li>a verdict you leave on a paid call through <code>/api/feedback</code>, including the reason
     you write, is kept with that call's transaction id and is never published;</li>${allowanceOn ? `
     <li>the first-call allowance (a wallet's first paid call on an eligible tool served without
