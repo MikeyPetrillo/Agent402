@@ -79,6 +79,35 @@ const PROC = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 let seq = 0;
 
 const local = new Map(); // payer -> [{ id, at, slug, status, error }], oldest first
+// Busy refusals are also kept per payer over TIME, not by count: a payer
+// refused several times a second fills the 50-event list above in seconds,
+// and a sustained stretch would then read as one burst. This ring keeps the
+// newest and oldest refusals of the window plus hold and, past its size,
+// drops the refusal closest to the one before it, so what it keeps stays
+// spread over the whole stretch (busyRingSize: enough for the rule to read
+// ONCHAIN_SQL_BUSY_MIN refusals inside any one window of the kept span).
+const busyLocal = new Map(); // payer -> [{ id, at, slug, status, error, kind }], oldest first
+const BUSY_RING_MAX = 512;
+export function busyRingSize(env = process.env) {
+  const spans = Math.ceil(keepSpan(env) / failWindowMs(env));
+  return Math.min(BUSY_RING_MAX, Math.max(64, sqlBusyMin(env) * spans * 2));
+}
+function keepBusy(payer, ev, cutoff, env) {
+  let ring = busyLocal.get(payer);
+  if (ring) busyLocal.delete(payer);
+  ring = (ring || []).filter((e) => e.at > cutoff);
+  let i = ring.length;
+  while (i > 0 && ring[i - 1].at > ev.at) i--;
+  ring.splice(i, 0, ev);
+  const cap = busyRingSize(env);
+  while (ring.length > cap) {
+    let drop = 1, gap = Infinity;
+    for (let j = 1; j < ring.length - 1; j++) { const g = ring[j].at - ring[j - 1].at; if (g < gap) { gap = g; drop = j; } }
+    ring.splice(drop, 1);
+  }
+  busyLocal.set(payer, ring);
+  while (busyLocal.size > MAX_PAYERS) busyLocal.delete(busyLocal.keys().next().value);
+}
 const pending = new Set();
 let top = null; // { payers: [payer, ...] in rank order, at }
 let sharedCache = { at: 0, key: "", byPayer: null };
@@ -161,6 +190,7 @@ export function noteVerifiedPaidOutcome({ payer, slug, status, error = null, att
     while (list.length > MAX_EVENTS) list.shift();
     local.set(payer, list);
     while (local.size > MAX_PAYERS) local.delete(local.keys().next().value);
+    if (ev.kind === SQL_BUSY_KIND) keepBusy(payer, ev, cutoff, env);
     counts.recorded++;
     if (sharedLimitsEnabled()) {
       const p = shared.windowAdd(NAME, sharedKey(payer), { windowMs: keepSpan(env), member: JSON.stringify({ i: ev.id, s: ev.slug, c: ev.status, e: ev.error, ...(ev.kind ? { k: ev.kind } : {}) }), now: ev.at, score: ev.at })
@@ -180,6 +210,9 @@ export function sweepIdleTopBuyerFailures(now = Date.now(), env = process.env) {
   let dropped = 0;
   for (const [payer, list] of local) {
     if (!list.length || list[list.length - 1].at <= cutoff) { local.delete(payer); dropped++; }
+  }
+  for (const [payer, ring] of busyLocal) {
+    if (!ring.length || ring[ring.length - 1].at <= cutoff) busyLocal.delete(payer);
   }
   return dropped;
 }
@@ -341,7 +374,7 @@ export async function onchainSqlBusyStatus({ full = false, now = Date.now(), off
     const alerting = [];
     top.payers.forEach((payer, i) => {
       const seen = new Map();
-      for (const e of [...(local.get(payer) || []), ...(fromShared?.get(payer) || [])]) if (e.kind === SQL_BUSY_KIND && e.at >= cutoff && e.at <= now && !seen.has(e.id)) seen.set(e.id, e);
+      for (const e of [...(busyLocal.get(payer) || []), ...(local.get(payer) || []), ...(fromShared?.get(payer) || [])]) if (e.kind === SQL_BUSY_KIND && e.at >= cutoff && e.at <= now && !seen.has(e.id)) seen.set(e.id, e);
       if (seen.size < min) return;
       const events = [...seen.values()].sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1));
       // The latest refusal that met the rule: `min` refusals inside the
@@ -371,8 +404,13 @@ export async function onchainSqlBusyStatus({ full = false, now = Date.now(), off
 /** Test seams. */
 export async function _flushTopBuyerWrites() { while (pending.size) await Promise.allSettled([...pending]); }
 export function _resetTopBuyerFailures() {
-  local.clear(); top = null; sharedCache = { at: 0, key: "", byPayer: null };
+  local.clear(); busyLocal.clear(); top = null; sharedCache = { at: 0, key: "", byPayer: null };
   counts = { recorded: 0, sharedWrites: 0, sharedWriteFailures: 0, sharedReadFailures: 0 };
   if (timer) { clearTimeout(timer); clearInterval(timer); timer = null; }
 }
-export function _localSizes() { let events = 0; for (const l of local.values()) events += l.length; return { payers: local.size, events }; }
+export function _localSizes() {
+  let events = 0, busyEvents = 0;
+  for (const l of local.values()) events += l.length;
+  for (const r of busyLocal.values()) busyEvents = Math.max(busyEvents, r.length);
+  return { payers: local.size, events, busyPayers: busyLocal.size, busyEvents };
+}

@@ -250,6 +250,27 @@ const SPEND_EVM = [...OUR_EVM_WALLETS].find((w) => w.startsWith("0x7706"));
   T.setTopBuyers([evm(1), TOP], t0);
   busy(t0); busy(t0 + 11 * MIN); busy(t0 + 22 * MIN);
   ok((await T.onchainSqlBusyStatus({ now: t0 + 22 * MIN + 1, env })).status === "ok", "three refusals eleven minutes apart leave it ok (never three inside one window)");
+  // Sustained refusals at a high rate with no shared store: five a second for
+  // two minutes is far past the per-payer failure list's 50, and still reads
+  // alert (the busy refusals are kept over time, not by count).
+  T._resetTopBuyerFailures();
+  T.setTopBuyers([evm(1), TOP], t0);
+  for (let i = 0; i < 600; i++) busy(t0 + i * 200);
+  const endAt = t0 + 599 * 200;
+  ok((await T.onchainSqlBusyStatus({ now: endAt + 1, env })).status === "alert", "600 refusals over two minutes without a shared store read alert");
+  ok(T._localSizes().busyEvents <= 512, `the busy refusals kept per payer stay bounded (${T._localSizes().busyEvents})`);
+  // The same rate for 30 seconds only (one burst) stays ok.
+  T._resetTopBuyerFailures();
+  T.setTopBuyers([evm(1), TOP], t0);
+  for (let i = 0; i < 150; i++) busy(t0 + i * 200);
+  ok((await T.onchainSqlBusyStatus({ now: t0 + 150 * 200, env })).status === "ok", "150 refusals inside 30 seconds (one burst) stay ok");
+  // Sustained for 25 minutes (window plus hold past the first): still alert at the end, clears after the hold.
+  T._resetTopBuyerFailures();
+  T.setTopBuyers([evm(1), TOP], t0);
+  for (let i = 0; i < 25 * 60; i++) busy(t0 + i * 1000);
+  const lastAt = t0 + (25 * 60 - 1) * 1000;
+  ok((await T.onchainSqlBusyStatus({ now: lastAt + 1, env })).status === "alert" && (await T.onchainSqlBusyStatus({ now: lastAt + 20 * MIN + 1, env })).status === "ok",
+    "refusals every second for 25 minutes read alert at the end and clear after the hold");
   T._resetTopBuyerFailures();
 }
 
