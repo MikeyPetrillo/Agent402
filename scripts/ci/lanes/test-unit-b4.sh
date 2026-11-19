@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (44 scripts, one process each)
+# @step 1: Offline suites (46 scripts, one process each)
 # "Router Sybil resistance (M6 — Attack IV: per-seller diversity cap, metadata-injection listings dropped)"
 t node scripts/test-router-sybil.js
 # Data-kit tests (barcode-lookup, fx-rate, weather-forecast — live keyless APIs)

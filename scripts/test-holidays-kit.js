@@ -340,6 +340,8 @@ const check = async (country, date, extra = {}) => (await call("country-business
   const lw = await call("long-weekends", { country: "DE", year: 2026 });
   eq(lw.longWeekends.map((x) => [x.start, x.days]), [["2026-04-03", 4], ["2026-05-01", 3], ["2026-05-23", 3], ["2026-12-25", 3]], "DE 2026 long weekends");
   eq(lw.bridgeDays.map((x) => [x.bridgeDay, x.days]), [["2026-01-02", 4], ["2026-05-15", 4]], "DE 2026 bridge days (after New Year, after Ascension)");
+  const us = await call("long-weekends", { country: "US", year: 2026 });
+  ok(us.bridgeDays.some((x) => x.bridgeDay === "2026-11-27") && !us.bridgeDays.some((x) => x.bridgeDay.startsWith("2026-11-1") || x.bridgeDay.startsWith("2026-11-09")), "a bridge day is one working day: Thanksgiving Friday is one, a Wednesday holiday (Veterans Day) makes none");
   const by = await call("long-weekends", { country: "DE", year: 2026, subdivision: "DE-BY" });
   ok(by.bridgeDays.some((x) => x.bridgeDay === "2026-06-05"), "DE-BY adds the Corpus Christi bridge day 2026-06-05");
   const p = await call("business-day-planner", { regions: "US,GB-ENG,DE-BY", start: "2026-12-25", count: 2 });
