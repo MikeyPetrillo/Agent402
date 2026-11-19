@@ -45,6 +45,8 @@ export const PAYER_SCREEN_RAILS = Object.freeze({
   "mpp-stripe": { identifier: null, source: null },
   credits: { identifier: null, source: null },
   "card-checkout": { identifier: null, source: null },
+  "card-subscription": { identifier: null, source: null },
+  "mpp-subscription": { identifier: "the paying wallet the subscription authorization names, and its recent funders, before the first payment and before each renewal", source: "src/mpp-subscriptions.js" },
 });
 
 /** The rail key for a conformance row's network (x402 rows). */

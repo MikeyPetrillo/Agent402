@@ -157,7 +157,7 @@ const xOf = (kp) => kp.publicKey.export({ format: "jwk" }).x;
   // A streamed answer's receipt follows its last byte (scripts/test-receipt-streams.js);
   // one that is neither an event stream nor asked for trailers gets none.
   await ok(run(200, settled, { write: true }) === null, "middleware: a streamed answer that is not an event stream and did not ask for trailers gets none");
-  await ok(SIGNED_RAILS.join() === "x402,gateway-batched,mpp-evm,mpp-tempo,mpp-stripe,credits,card-checkout", "the signed rails");
+  await ok(SIGNED_RAILS.join() === "x402,gateway-batched,mpp-evm,mpp-tempo,mpp-stripe,credits,card-checkout,card-subscription,mpp-subscription", "the signed rails");
   // The method the buyer sent, though a later layer rewrites it (the POST/GET
   // alias in src/server.js) before the answer ends.
   for (const [sent, rewritten, body] of [["POST", "GET", { n: 1 }], ["GET", "POST", {}]]) {
@@ -201,7 +201,7 @@ try {
   }
   const WIRE_ROW = { evm: "x402:exact:eip155:8453", svm: "x402:exact:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", avm: doc.rails.find((r) => /^x402:exact:algorand/.test(r.id)).id, stellar: "x402:exact:stellar:pubnet", "mpp-evm": "mpp:evm:eip155:8453", tempo: "mpp:tempo:pull" };
   for (const id of [...Object.values(WIRE_ROW), "mpp:tempo:push", "mpp:stripe"]) await ok(row(id).features.signedReceipt.supported === true && /Agent402-Receipt/.test(row(id).features.signedReceipt.detail), `${id}: with a key the cell reads signed`);
-  for (const id of ["credits", "card:checkout"]) await ok(row(id).features.signedReceipt.supported === true, `${id}: with a key the cell reads signed`);
+  for (const id of ["credits", "card:checkout", "card:subscription", "mpp:subscription"]) await ok(row(id).features.signedReceipt.supported === true, `${id}: with a key the cell reads signed`);
   await ok(row("pow").features.signedReceipt.supported === null, "pow: does not apply");
 
   for (const [wire, id] of Object.entries(WIRE_ROW)) {

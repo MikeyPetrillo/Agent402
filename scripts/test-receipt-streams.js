@@ -126,7 +126,7 @@ const listen = (app) => new Promise((r) => { const s = app.listen(0, "127.0.0.1"
     const one = await call(port, "/json", { te: true });
     await ok(!!one.headers[RECEIPT_HEADER.toLowerCase()] && !one.headers.trailer && verifyReceipt(one.headers[RECEIPT_HEADER.toLowerCase()], { keys, responseBody: one.body }).valid, "a one-piece answer keeps the header and declares no trailer");
   } finally { srv.close(); }
-  await ok(SIGNED_RAILS.join() === "x402,gateway-batched,mpp-evm,mpp-tempo,mpp-stripe,credits,card-checkout", "the signed rails include credits and card checkout");
+  await ok(SIGNED_RAILS.join() === "x402,gateway-batched,mpp-evm,mpp-tempo,mpp-stripe,credits,card-checkout,card-subscription,mpp-subscription", "the signed rails include credits and card checkout");
 }
 
 // ---- 1b. the MCP connector's relay ----

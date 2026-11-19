@@ -4,11 +4,19 @@
   var app = document.getElementById("app");
   var id = app && app.getAttribute("data-session");
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); }
+  // The latest paid period's signed receipt, with the period statement its
+  // answer digest covers (POST both to /api/receipts/verify to check them).
+  function receiptHtml(r) {
+    if (!r || typeof r.receipt !== "string" || typeof r.statement !== "string") return "";
+    return '<div class="receipt"><p><b>Signed receipt for this payment.</b> Check it with a POST to /api/receipts/verify, sending { "receipt", "body": the period statement }.</p>' +
+      '<p><code style="word-break:break-all">' + esc(r.receipt) + '</code></p><p>Period statement:</p><p><code style="word-break:break-all">' + esc(r.statement) + '</code></p></div>';
+  }
   function render(s) {
     if (s.status === "active") {
       app.innerHTML = '<div class="status"><h2>You’re subscribed ✓</h2><p>We’re now monitoring <b>' + esc(s.target || "") + '</b> (' + esc(s.label || "monitor") + '). Your first report arrives by email within about 10 minutes, then we email you again whenever something changes.</p>' +
         (s.priceText ? '<p class="price-line"><b>' + esc(s.priceText) + '</b></p>' : '') +
         '<p style="margin-top:18px"><a class="btn btn-secondary" href="/monitors/manage?session=' + encodeURIComponent(id) + '">Manage or cancel</a></p>' +
+        receiptHtml(s.signedReceipt) +
         '</div>';
       return;
     }

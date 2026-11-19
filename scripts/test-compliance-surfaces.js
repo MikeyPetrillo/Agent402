@@ -139,7 +139,16 @@ const thanksJs = readFileSync(join(ROOT, "assets/js/monitor-thanks.js"), "utf8")
 ok(/s\.priceText/.test(thanksJs), "/monitors/thanks draws the price sentence /api/monitors/confirm returns");
 const serverSrc = readFileSync(join(ROOT, "src/server.js"), "utf8");
 const confirmSrc = serverSrc.slice(serverSrc.indexOf('app.get("/api/monitors/confirm"'), serverSrc.indexOf('app.get("/monitors/manage"'));
-ok(/priceText = r\.status === "active" \? subscriptionPriceText\(r\)/.test(confirmSrc) && /res\.json\(\{[^}]*\.\.\.\(priceText \? \{ priceText \} : \{\}\) \}\)/.test(confirmSrc), "/api/monitors/confirm derives the price sentence from the subscription record and returns it");
+ok(/priceText = r\.status === "active" \? subscriptionPriceText\(r\)/.test(confirmSrc) && /res\.json\(\{[^}]*\.\.\.\(priceText \? \{ priceText \} : \{\}\)[,} ]/.test(confirmSrc), "/api/monitors/confirm derives the price sentence from the subscription record and returns it");
+ok(/s\.signedReceipt/.test(thanksJs) && /signedReceipt: last/.test(confirmSrc), "/monitors/thanks draws the latest period's signed receipt /api/monitors/confirm returns");
+{
+  const { buildMonitorEmail } = await import("../src/email.js");
+  const base = { reason: "scheduled", label: "Domain security monitor", target: "example.com", reportUrl: "https://agent402.tools/m/abc", manageUrl: "https://agent402.tools/monitors/manage?report=abc&k=T" };
+  const withR = buildMonitorEmail({ ...base, signedReceipt: { receipt: "aa.bb.cc", statement: "{\"kind\":\"monitor-subscription-period\"}" } });
+  ok(withR.text.includes("aa.bb.cc") && withR.text.includes("monitor-subscription-period") && withR.text.includes("https://agent402.tools/api/receipts/verify") && withR.html.includes("aa.bb.cc"), "a monitor email carries the latest period's signed receipt, its statement and where to check them");
+  const noR = buildMonitorEmail(base);
+  ok(!/Signed receipt/.test(noR.text) && !/Signed receipt/.test(noR.html), "a monitor email with no receipt says nothing about one");
+}
 
 // 6. Copyright agent and process
 const cr = termsText.slice(termsText.indexOf("Copyright complaints"));

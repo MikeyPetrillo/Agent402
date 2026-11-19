@@ -312,7 +312,11 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     try { b = billingFor(rec.subId) || null; } catch { b = null; }
     const rail = b?.rail === "mpp" ? "mpp" : "card";
     const manageUrl = b?.manageUrl || (reportId ? manageUrlFor(reportId) : `${baseUrl}/monitors#manage`);
-    return { rail, manageUrl, ...(b?.cancelUrl ? { cancelUrl: b.cancelUrl } : {}) };
+    // The latest paid period's signed receipt rides in every email, so the
+    // first one after a renewal carries that renewal's receipt.
+    const kept = Array.isArray(rec?.signedReceipts) ? rec.signedReceipts.filter((r) => r && typeof r.receipt === "string" && typeof r.statement === "string") : [];
+    const last = kept[kept.length - 1];
+    return { rail, manageUrl, ...(b?.cancelUrl ? { cancelUrl: b.cancelUrl } : {}), ...(last ? { signedReceipt: { receipt: last.receipt, statement: last.statement } } : {}) };
   }
   // The prices a promotion code set at checkout, as Stripe reported them.
   const promoOf = (rec) => ({

@@ -28,6 +28,7 @@ import { mppShimEnabled, challengeEnabledForChain } from "./mpp-shim.js";
 import { tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
 import { stripeEnabled } from "./mpp-stripe.js";
 import { humanCheckoutEnabled } from "./human-checkout.js";
+import { subscriptionsEnabled } from "./stripe-subscriptions.js";
 import { creditsSalesEnabled, TERMS_VERSION } from "./credits-sales.js";
 import { hangupForgivenessConfig } from "./hangup-forgiveness.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
@@ -104,6 +105,10 @@ function liveState() {
     stripe: gateMounted("stripe") && stripeEnabled(),
     credits: gateMounted("credits"),
     checkout: humanCheckoutEnabled(),
+    // Monitor subscriptions: by card (the Stripe key builds the engine) and
+    // over MPP on Tempo (src/server.js marks it when the engine is built).
+    cardSubscriptions: subscriptionsEnabled(),
+    mppSubscriptions: gateMounted("mppSubscriptions"),
     pow: gateMounted("pow"),
     // Signed receipts: the signer is in the chain and a key is loaded.
     receiptSigner: receiptsServed(),
@@ -286,6 +291,52 @@ function checkoutRow(L) {
   };
 }
 
+// A monitor subscription's paid period receipt (src/receipt-signing.js
+// createSubscriptionReceipt), per subscription rail.
+function subscriptionSignedCell(L, rail, settlement, source) {
+  return L.receiptSigner && SIGNED_RAILS.includes(rail)
+    ? cell(true, `A compact JWS (EdDSA, Ed25519) this server signs for each paid period, the first and every renewal, once its payment is final: over the subscribe call (product, target and subscription), a period statement (the subscription, product, target, period, settlement and amount), the amount paid and ${settlement}. Kept on the subscription and shown with its period statement ${rail === "card-subscription" ? "on the confirmation page" : "in the subscribe answer and on the subscription's status link"} and in each monitor email after that payment; checked at ${RECEIPT_VERIFY_PATH} against the keys at ${RECEIPT_KEYS_PATH}.${rail === "card-subscription" ? " A period that paid nothing (a 100% promotion code) gets none." : ""}`, source)
+    : cell(false, "No receipt signed by this server.", null);
+}
+const PREPAID_MONTH = "A monitor bills monthly in advance: each period is paid before that period's reports run.";
+
+function cardSubscriptionRow(L) {
+  return {
+    id: "card:subscription", protocol: "card", scheme: "stripe-subscription", kind: "monitor", network: null, chain: null, asset: "USD", offered: L.cardSubscriptions,
+    features: {
+      settleAfterAnswer: cell(false, PREPAID_MONTH, "src/stripe-subscriptions.js"),
+      idempotencyKey: NA("A paid invoice is the unit of payment."),
+      paymentIdentifier: NA("An x402 extension; a card subscription carries none."),
+      replayGuard: cell(true, "Each paid invoice is booked once, by its invoice id, across redelivered webhook events and restarts.", "src/stripe-subscriptions.js"),
+      refundOnChargedFailure: cell(false, "A paid month is not refunded automatically: a subject that cannot be read keeps its free daily check and runs no further paid reports, and canceling stops the next renewal.", "src/monitor-scheduler.js"),
+      hangupForgiveness: NA("Reports are delivered by link and email, not on the paying connection."),
+      sanctionsScreening: screenCell(false, NO_PAYER_ADDRESS("a card subscription"), "card-subscription"),
+      receipt: cell(false, "No receipt header; the Stripe invoice is the payment's record.", null),
+      signedReceipt: subscriptionSignedCell(L, "card-subscription", "the paid invoice's id", "src/stripe-subscriptions.js"),
+    },
+  };
+}
+
+function mppSubscriptionRow(L) {
+  const key = "mpp-subscription";
+  return {
+    id: "mpp:subscription", protocol: "mpp", scheme: "tempo-subscription", kind: "monitor", network: TEMPO_CAIP2, ...chainOf(TEMPO_CAIP2), offered: L.mppSubscriptions,
+    features: {
+      settleAfterAnswer: cell(false, `${PREPAID_MONTH} The first period's transfer is confirmed before the subscription starts, and each renewal is pulled before its period's reports run.`, "src/mpp-subscriptions.js"),
+      idempotencyKey: NA("A signed subscription authorization is the unit of payment."),
+      paymentIdentifier: NA("An x402 extension; an MPP credential carries none."),
+      replayGuard: cell(true, "Each challenge names an access key minted for one offer, and a period is charged once: a renewal whose send timed out is looked up on chain before any new transfer.", "src/mpp-subscriptions.js"),
+      refundOnChargedFailure: refundCell(TEMPO_CAIP2, "A first payment that settled without starting its subscription is"),
+      hangupForgiveness: NA("Reports are delivered by link and email, not on the paying connection."),
+      sanctionsScreening: L.screenList === "missing"
+        ? screenCell(false, "The subscription payer screen is in place but no sanctions list is loaded right now, so it fails open: payments are sent unscreened until the list loads.", key)
+        : screenCell(true, "The paying wallet, and its recent funders, are checked before the first payment and before every renewal; a refused wallet is sent nothing, and a renewal refused this way ends the subscription. While no list is loaded the screen fails open (sent unscreened).", key),
+      receipt: cell(true, "Payment-Receipt on the subscribe answer, naming the first period's Tempo transaction; the latest renewal's transaction is on the subscription's status link.", "src/mpp-subscriptions.js"),
+      signedReceipt: subscriptionSignedCell(L, "mpp-subscription", "the confirmed transfer's transaction hash", "src/mpp-subscriptions.js"),
+    },
+  };
+}
+
 function powRow(L) {
   return {
     id: "pow", protocol: "pow", scheme: "proof-of-work", kind: "free", network: null, chain: null, asset: null, offered: L.pow,
@@ -323,6 +374,8 @@ export function conformanceRails(L = liveState()) {
   add(stripeRow(L));
   add(creditsRow(L));
   add(checkoutRow(L));
+  add(cardSubscriptionRow(L));
+  add(mppSubscriptionRow(L));
   add(powRow(L));
   return rows;
 }

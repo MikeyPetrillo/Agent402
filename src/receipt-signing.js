@@ -8,7 +8,11 @@
 // keys are published at RECEIPT_KEYS_PATH, and POST RECEIPT_VERIFY_PATH checks
 // a receipt against them (free, no egress). A card-bought report carries one
 // signed by createCheckoutReceipt (src/human-checkout.js stores it on the
-// delivered report).
+// delivered report). A monitor subscription's paid period (the first one and
+// each renewal, by card or over MPP on Tempo) carries one signed by
+// createSubscriptionReceipt once the period's payment is final
+// (src/stripe-subscriptions.js on invoice.paid, src/mpp-subscriptions.js on a
+// confirmed transfer), kept on the subscription's record.
 //
 // Where it is signed: receiptSignerMiddleware() wraps res.writeHead,
 // res.write and res.end and is mounted before every payment gate, so each
@@ -52,8 +56,10 @@ export const RECEIPT_TYP = "agent402-receipt+jws";
 export const RECEIPT_VERSION = 1;
 /** The rail kinds a receipt is signed on (conformance rows read this).
  *  "credits": a prepaid credits debit; "card-checkout": a report bought at
- *  card checkout (signed at delivery, src/human-checkout.js). */
-export const SIGNED_RAILS = Object.freeze(["x402", "gateway-batched", "mpp-evm", "mpp-tempo", "mpp-stripe", "credits", "card-checkout"]);
+ *  card checkout (signed at delivery, src/human-checkout.js);
+ *  "card-subscription" / "mpp-subscription": a monitor subscription's paid
+ *  period, by card or over MPP on Tempo (signed once the payment is final). */
+export const SIGNED_RAILS = Object.freeze(["x402", "gateway-batched", "mpp-evm", "mpp-tempo", "mpp-stripe", "credits", "card-checkout", "card-subscription", "mpp-subscription"]);
 /** The rails the response signer signs on (the card checkout signs at delivery). */
 const RESPONSE_RAILS = Object.freeze(["x402", "gateway-batched", "mpp-evm", "mpp-tempo", "mpp-stripe", "credits"]);
 /** The server-sent event that carries a streamed answer's receipt. */
@@ -299,6 +305,58 @@ export function createCheckoutReceipt({ iss = null, product, input, reportText, 
 }
 /** The checkout route a card report receipt names. */
 export const CHECKOUT_RECEIPT_PATH = "/api/buy";
+
+/** The subscribe route a monitor subscription's receipt names, per rail. */
+export const SUBSCRIPTION_RECEIPT_PATHS = Object.freeze({ "card-subscription": "/api/subscribe", "mpp-subscription": "/api/mpp/monitors/subscribe" });
+/** Paid-period receipts kept on a subscription's record (the newest last). */
+export const SUBSCRIPTION_RECEIPTS_KEPT = 3;
+
+/**
+ * The paid period a subscription receipt's answer digest covers: canonical
+ * JSON, keys in a fixed order, built only from the period's own facts, so the
+ * same period always reads the same bytes. The buyer is shown this text beside
+ * the receipt and checks it at RECEIPT_VERIFY_PATH as the body.
+ */
+export function subscriptionPeriodStatement({ rail, subscription, product, target, period, settlement, priceUsd }) {
+  const price = Number.isFinite(Number(priceUsd)) && priceUsd !== null && priceUsd !== "" ? String(Number(Number(priceUsd).toFixed(8))) : null;
+  return JSON.stringify({
+    kind: "monitor-subscription-period",
+    rail: cap(rail), subscription: cap(subscription), product: cap(product), target: cap(target),
+    period: period == null ? null : cap(period), settlement: cap(settlement), priceUsd: price,
+  });
+}
+
+/**
+ * A signed receipt for one paid period of a monitor subscription:
+ * { receipt, statement, id, period, settlement, at }, or null when signing is
+ * off, the rail is not a subscription rail, or the period names no final
+ * payment (`settlement`: the paid invoice's id by card, the confirmed
+ * transfer's hash on Tempo). The request digest covers the subscribe call
+ * (product, target and subscription), the answer digest the period statement.
+ */
+export function createSubscriptionReceipt({ iss = null, rail, network = null, payer = null, subscription, product, target, period = null, settlement, priceUsd, paidAt = Date.now() }, signer = receiptKeys().signer) {
+  const path = SUBSCRIPTION_RECEIPT_PATHS[rail];
+  if (!signer || !path || typeof settlement !== "string" || !settlement || typeof subscription !== "string" || !subscription) return null;
+  const statement = subscriptionPeriodStatement({ rail, subscription, product, target, period, settlement, priceUsd });
+  const at = Number.isFinite(Date.parse(paidAt)) ? Date.parse(paidAt) : Number(paidAt) || Date.now();
+  const record = buildReceiptRecord({
+    iss, method: "POST", path, slug: product,
+    requestSha256: requestDigest("POST", path, { product: product ?? null, target: target ?? null, subscription }),
+    responseSha256: responseDigest(Buffer.from(statement, "utf8")),
+    priceUsd, rail, network, payer, settlement, replay: false, now: at,
+  });
+  const receipt = signReceipt(record, signer);
+  if (receipt.length > RECEIPT_MAX_BYTES) return null;
+  return { receipt, statement, id: record.id, period: period == null ? null : String(period), settlement, at: record.iat };
+}
+
+/** A record's kept receipts with one more period's appended (same period: kept as it was). */
+export function appendPeriodReceipt(list, entry, keep = SUBSCRIPTION_RECEIPTS_KEPT) {
+  const prior = Array.isArray(list) ? list.filter((r) => r && typeof r.receipt === "string") : [];
+  if (!entry || typeof entry.receipt !== "string") return prior;
+  if (prior.some((r) => r.settlement === entry.settlement && r.period === entry.period)) return prior;
+  return [...prior, entry].slice(-keep);
+}
 
 const bytesOf = (chunk, encoding) => (chunk == null ? Buffer.alloc(0)
   : Buffer.isBuffer(chunk) ? chunk

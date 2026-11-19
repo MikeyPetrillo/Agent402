@@ -241,6 +241,21 @@ function receiptParts(receipt, origin) {
   };
 }
 
+/** The latest paid period's signed receipt in a monitor email: the compact
+ *  JWS, the period statement its answer digest covers, and where to check
+ *  both. Empty when none was signed (signing off, or a period that paid
+ *  nothing). */
+export function periodReceiptParts(signedReceipt, origin) {
+  const r = signedReceipt && typeof signedReceipt === "object" ? signedReceipt : null;
+  if (!r || typeof r.receipt !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(r.receipt) || typeof r.statement !== "string") return { html: "", text: "" };
+  const verify = `${origin || ""}/api/receipts/verify`;
+  const lead = `Signed receipt for your latest subscription payment (check it with a POST to ${verify}, sending { "receipt", "body": the period statement below })`;
+  return {
+    html: `<p style="color:#626970;font-size:12px;border-top:1px solid #D9DDE1;padding-top:16px;margin-top:22px">${escapeHtml(lead)}:<br><code style="word-break:break-all;font-size:11px">${escapeHtml(r.receipt)}</code><br>Period statement:<br><code style="word-break:break-all;font-size:11px">${escapeHtml(r.statement)}</code></p>`,
+    text: `\n${lead}:\n${r.receipt}\nPeriod statement:\n${r.statement}\n`,
+  };
+}
+
 export async function sendReportReadyEmail({ to, ...rest }) {
   const { subject, html, text } = buildReportReadyEmail(rest);
   return sendEmail({ to, subject, html, text });
@@ -266,7 +281,7 @@ export function subscriptionPriceText({ priceCents = null, firstPeriodCents = nu
 /** Monitor delivery / alert email. reason: welcome | scheduled | change | tls-expiring | filing | recall | digest | safety-change. Best-effort.
  *  `kind` is the monitored report's kind; without it a "digest" (the IPO
  *  watch's only reason) reads as the code-written IPO digest. */
-export function buildMonitorEmail({ reason, label, target, changes = [], reportUrl, manageUrl, kind = null, priceCents = null, firstPeriodCents = null, renewalCents = null, rail = "card", cancelUrl = null, withTerms = false }) {
+export function buildMonitorEmail({ reason, label, target, changes = [], reportUrl, manageUrl, kind = null, priceCents = null, firstPeriodCents = null, renewalCents = null, rail = "card", cancelUrl = null, withTerms = false, signedReceipt = null }) {
   // A wallet (MPP) subscriber has no Stripe portal: its link is a status
   // endpoint, and it cancels with a POST to its cancel endpoint or by revoking
   // the authorization it signed. A card subscriber cancels in the portal the
@@ -332,6 +347,7 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
     : "";
   const renewalHtml = renewal ? `<p style="color:#3A3F45;font-size:13px;border-top:1px solid #D9DDE1;padding-top:14px;margin-top:22px">${escapeHtml(renewal)} <a href="${escapeAttr(termsUrl)}" style="color:#3A3F45">Terms</a></p>` : "";
   const renewalText = renewal ? `${renewal}\nTerms: ${termsUrl}\n\n` : "";
+  const rcpt = periodReceiptParts(signedReceipt, originOf(reportUrl));
   const list = (changes || []).slice(0, 12);
   const changesHtml = list.length ? `<ul style="color:#3A3F45;padding-left:18px">${list.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ul>` : "";
   const changesText = list.length ? `\n${list.map((c) => `- ${c}`).join("\n")}\n` : "";
@@ -342,6 +358,7 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
     <p style="color:#626970;font-size:13px">Or paste this link into your browser:<br>${escapeHtml(reportUrl)}</p>
     ${note.html}
     ${renewalHtml}
+    ${rcpt.html}
     ${whyHtml}
     <p style="color:#626970;font-size:12px;margin-top:12px">Agent402 · ${escapeHtml(lbl)} · ${mpp
       ? `<a href="${escapeAttr(manageUrl || reportUrl)}" style="color:#626970">subscription status</a>${cancelUrl ? ` · cancel: send a POST request to ${escapeHtml(cancelUrl)}` : " · cancel by revoking your authorization"}`
@@ -350,7 +367,7 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
   const stopText = mpp
     ? `Subscription status: ${manageUrl || reportUrl}\n${cancelUrl ? `Cancel (send a POST request): ${cancelUrl}` : "Cancel: revoke the authorization you signed for this subscription."}`
     : `Manage or cancel (change your card, or stop the emails): ${manageUrl || reportUrl}`;
-  const text = `${subj}\n\n${lead}\n${changesText}\nOpen the report: ${reportUrl}\n\n${note.text ? `${note.text}\n` : ""}${renewalText}${whyText}\n${stopText}\n\nAgent402`;
+  const text = `${subj}\n\n${lead}\n${changesText}\nOpen the report: ${reportUrl}\n\n${note.text ? `${note.text}\n` : ""}${renewalText}${rcpt.text}${whyText}\n${stopText}\n\nAgent402`;
   return { subject: subj, html, text };
 }
 

@@ -505,7 +505,7 @@ import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
 import { trustPage } from "./trust-page.js";
 import { markGateMounted, gateMounted } from "./gate-mounts.js";
-import { receiptKeys, receiptKeyDocument, receiptSignerMiddleware, verifyReceipt, receiptsServed, createCheckoutReceipt, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
+import { receiptKeys, receiptKeyDocument, receiptSignerMiddleware, verifyReceipt, receiptsServed, createCheckoutReceipt, createSubscriptionReceipt, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
 import { conformanceDocumentCached, resetConformanceCache, CONFORMANCE_PATH } from "./conformance.js";
 import { refundTermsFullDocumentCached, resetRefundTermsCache, REFUND_TERMS_PATH } from "./refund-terms-doc.js";
 import { toolReliabilityDocument, toolOutcomesCached, toolReliabilityEnabled, TOOL_RELIABILITY_PATH, TOOL_RELIABILITY_WINDOW_HOURS, TOOL_RELIABILITY_MIN_SAMPLE } from "./tool-reliability.js";
@@ -3497,6 +3497,9 @@ try {
   _subs = subscriptionsEnabled() ? createStripeSubscriptions({
     stripe: newStripeClient(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
     validateTarget: _monitorTargetValidators,
+    // Each paid period (the first invoice and every renewal) gets a signed
+    // receipt while receipts are served (src/receipt-signing.js).
+    signPeriod: (d) => (receiptsServed() ? createSubscriptionReceipt({ iss: BASE_URL, ...d }) : null),
     onInvoicePaid: ({ invoiceId, product, amountUsd }) => {
       recordSale({ slug: product || "monitor", priceUsd: amountUsd, rail: "card", network: "stripe", payer: null, tx: invoiceId, wire: "stripe-subscription" });
       try { capturePostHogHumanFunnel({ step: "monitor_paid", product: product || "monitor", priceUsd: amountUsd }); } catch { /* telemetry never breaks the request */ }
@@ -3537,9 +3540,12 @@ const { engine: _mppSubs, state: _mppSubsState } = buildMppSubscriptionsEngine({
     // Rail "usdc" / network "tempo" is what a settled tempo/charge records, so
     // a subscription period reconciles against the same rows on /revenue.
     onCharge: ({ product, priceUsd, payer, tx }) => recordSale({ slug: product || "monitor", priceUsd, rail: "usdc", network: "tempo", payer, tx, wire: "mpp-tempo-subscription" }),
+    // Each confirmed period (the first payment and every renewal) gets a
+    // signed receipt while receipts are served (src/receipt-signing.js).
+    signPeriod: (d) => (receiptsServed() ? createSubscriptionReceipt({ iss: BASE_URL, ...d }) : null),
   }),
 });
-if (_mppSubs) console.log("MPP recurring subscriptions enabled (native tempo/subscription, pull billing)");
+if (_mppSubs) { console.log("MPP recurring subscriptions enabled (native tempo/subscription, pull billing)"); markGateMounted("mppSubscriptions"); }
 // Boot sweep: close rail-canary subscriptions a canary run left open (the
 // canary's own product only, never a real subscriber; see sweepStaleCanaries).
 // Deferred and unref'd so it never sits in the boot path.
@@ -5656,7 +5662,10 @@ if (_subs) {
       // The price sentence the thanks page shows, from the catalog price and
       // any promotion figures Stripe reported (src/email.js).
       const priceText = r.status === "active" ? subscriptionPriceText(r) : "";
-      res.json({ status: r.status, label: r.label, target: r.target, ...(priceText ? { priceText } : {}) });
+      // A paid period's signed receipt (the newest), with the statement its
+      // answer digest covers: shown on the thanks page (src/monitors-page.js).
+      const last = r.status === "active" && Array.isArray(r.signedReceipts) ? r.signedReceipts[r.signedReceipts.length - 1] : null;
+      res.json({ status: r.status, label: r.label, target: r.target, ...(priceText ? { priceText } : {}), ...(last ? { signedReceipt: last } : {}) });
     } catch (e) { console.warn("[monitors] confirm failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); res.status(500).json({ status: "error", error: "Could not confirm the subscription right now." }); }
   });
   // Explicit manage/cancel: mint the Stripe Customer Portal at click time, then
