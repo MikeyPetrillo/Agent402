@@ -46,11 +46,16 @@ none. `lastRecheckedAt` is the newest crawl read after a re-check request, and
 
 ## What is left out
 
-- **A day our crawl failed broadly on our side.** When at least half of one
-  crawl cycle's reads ended on our side (the crawl's own cycle health, with at
-  least 20 reads in the cycle), that day is recorded, and its crawl, paywall
-  and response-time readings are left out of `manifestUptime`, `paywallUptime`
-  and `responsiveness` for every seller. Each such metric shows
+- **A day our crawl failed broadly on our side.** A day is recorded when one
+  crawl cycle shows all of the following: at least half of its reads ended on
+  our side (with at least 20 reads in the cycle); counted one vote per operator
+  (a registrable domain, however many hosts it runs), at least 10 operators'
+  reads ended on our side and they are at least half of the operators read;
+  and a control read of our own, of hosts no seller runs, got no answer
+  either. That day's crawl, paywall
+  and response-time readings are then left out of `manifestUptime`, `paywallUptime`
+  and `responsiveness` for every seller. Reads of one operator's hosts that do
+  not complete stay in that operator's own record. Each such metric shows
   `excludedSamples` and `excludedReason: "measurement issue on our side"`.
 - **Our side of a read.** A crawl that failed on our side (our time limit, our
   resolver, our size limit), a robots.txt exclusion, a registry-only record

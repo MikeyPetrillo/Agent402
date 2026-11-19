@@ -560,7 +560,8 @@ import { ROUTER_UA } from "./user-agents.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
 import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, removalPreview, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus, sellerEntriesForReputation, sellerEntryByKey } from "./x402-index.js";
 import { reputationStatus, startSellerReputation, sellerReputation, sellerDeliveryRoutes, toolReputationOf, reputationVersion, TOOL_REPUTATION_LEGEND, requestRecheck, pendingRecheckOrigins, noteOurSideIssue, reputationEnabled, REPUTATION_INTERVAL_MS, RECHECK_PATH } from "./seller-reputation.js";
-import { setCrawlRecheckSource, setOurSideIssueHook } from "./x402-index.js";
+import { setCrawlRecheckSource, setOurSideIssueHook, setOurSideControl } from "./x402-index.js";
+import { ourSideControlUrls, readOurSideControl } from "./our-side-control.js";
 import { CRAWL_INTERVAL_MS as REPUTATION_CRAWL_INTERVAL_MS } from "./crawl-cadence.js";
 import { partialFields } from "./partial-answer.js";
 import { crawlSwitch } from "./crawl-switch.js";
@@ -14174,7 +14175,10 @@ if (startSellerReputation({
   // The crawl reads the sellers a re-check asked for, and tells the record
   // which days a cycle failed broadly on our side (left out of the scores).
   setCrawlRecheckSource(() => pendingRecheckOrigins());
-  setOurSideIssueHook((at) => noteOurSideIssue(at));
+  // A day is left out only on the crawl's confirmed verdict, which needs a
+  // control read of hosts no seller runs (src/our-side-control.js) to fail.
+  setOurSideControl(() => readOurSideControl(ourSideControlUrls({ baseUrl: BASE_URL })));
+  setOurSideIssueHook((at, evidence) => noteOurSideIssue(at, evidence));
 }
 // Router worker pool (src/router-pool.js): route queries score in a worker
 // thread so a burst of them never holds this one. ROUTER_WORKERS=0 keeps them

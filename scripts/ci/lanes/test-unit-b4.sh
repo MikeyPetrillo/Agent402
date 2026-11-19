@@ -196,6 +196,8 @@ t node scripts/test-crawl-redirect-budget.js
 t node scripts/test-crawl-landing-turns.js
 # A cycle with healthy origins backed off still measures its health on them: 1000 origins, 200 dark (offline)
 t node scripts/test-crawl-cycle-health.js
+# A cycle is read as failing on our side per operator, at ten or more, and only when our own control read fails too (offline)
+t node scripts/test-crawl-our-side-verdict.js
 # The MPP index obeys the seller load controls: day budget, Retry-After holds, CRAWL_SLOW_ORIGINS (offline)
 t node scripts/test-mpp-seller-load.js
 # The router's probe is sent with the day spent, counted apart and never waits on the store; 429 holds and failed-buy resets (offline)

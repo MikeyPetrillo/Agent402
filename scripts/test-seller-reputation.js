@@ -282,15 +282,26 @@ const unlabeled = (t) => String(t).split(LABEL).join("");
   ok(originsDueThisCycle(many, 0, 4, { ...noSlow, prefer: () => true }).length === 4, "every origin requested: still the cap");
   ok(originsDueThisCycle(many, 0, 4, { slowWaiting: (o) => o === target, prefer: (o) => o === target }).every((o) => o !== target), "a slow origin's own wait still holds for a requested read");
   const idx = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
-  ok(/const rechecks = await recheckWantedFor\(\);/.test(idx) && /if \(oursShare >= CRAWL_OURS_SIDE_SHARE\) \{ try \{ await ourSideIssueHook\(Date\.now\(\)\);/.test(idx), "runCrawl reads the requested origins and reports a broad failure on our side");
+  ok(/const rechecks = await recheckWantedFor\(\);/.test(idx) && /const ourSide = await closeOurSideVerdict\(oursShare\);\n\s+if \(ourSide\.broad\) \{ try \{ await ourSideIssueHook\(Date\.now\(\), ourSide\);/.test(idx), "runCrawl reads the requested origins and reports a broad failure on our side with its verdict");
   const srvSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/setCrawlRecheckSource\(\(\) => pendingRecheckOrigins\(\)\);/.test(srvSrc) && /setOurSideIssueHook\(\(at\) => noteOurSideIssue\(at\)\);/.test(srvSrc), "the server wires both hooks where reputation starts");
+  ok(/setCrawlRecheckSource\(\(\) => pendingRecheckOrigins\(\)\);/.test(srvSrc) && /setOurSideIssueHook\(\(at, evidence\) => noteOurSideIssue\(at, evidence\)\);/.test(srvSrc) && /setOurSideControl\(\(\) => readOurSideControl\(ourSideControlUrls\(\{ baseUrl: BASE_URL \}\)\)\);/.test(srvSrc), "the server wires the hooks and the control read where reputation starts");
   // The shared meta document: a broad failure is recorded once per day, a
   // re-check is idempotent, and the crawl's pending list carries it.
   const metaDir = mkdtempSync(join(tmpdir(), "a402-rep-meta-"));
   process.env.SELLER_REPUTATION_META_FILE = join(metaDir, "meta.json");
   R.__resetReputationForTest();
-  ok(await R.noteOurSideIssue(Date.now()) && await R.noteOurSideIssue(Date.now() + 1000), "a broad failure on our side is recorded");
+  // A day is recorded only with the crawl's confirmed verdict: enough
+  // operators and a control read of our own that failed.
+  const verdict = { broad: true, share: 1, operatorsRead: 30, operatorsOurs: 30, operatorShare: 1, minOperators: 10, control: { checked: 2, failed: 2 } };
+  ok(await R.noteOurSideIssue(Date.now()) === false && await R.noteOurSideIssue(Date.now(), { ...verdict, broad: false }) === false
+    && await R.noteOurSideIssue(Date.now(), { ...verdict, control: null }) === false && await R.noteOurSideIssue(Date.now(), { ...verdict, control: { checked: 2, failed: 1 } }) === false,
+  "no verdict, an unconfirmed one, no control read, or a control read that answered: nothing is recorded");
+  ok(R.sellerReputation("https://x.example").measurementIssue === null && R.reputationStatus().ourSideDays.length === 0, "and no day is left out");
+  ok(await R.noteOurSideIssue(Date.now(), verdict) && await R.noteOurSideIssue(Date.now() + 1000, verdict), "CONTROL: a confirmed broad failure on our side is recorded");
+  const seen = R.reputationStatus().ourSideDays;
+  ok(seen.length === 1 && seen[0].day === new Date().toISOString().slice(0, 10) && seen[0].evidence?.operatorsOurs === 30 && seen[0].evidence?.control?.failed === 2 && seen[0].evidence?.cycles === 2,
+    `the operator view lists the day with the evidence it rests on (${JSON.stringify(seen)})`);
+  ok(R.confirmedOurSideDays({ ourSide: [1, 2], ourSideEvidence: { 2: { ...verdict } } }).join() === "2", "a stored day without its evidence is not left out of any record");
   const X = "https://x.example";
   const q1 = await R.requestRecheck(X), q2 = await R.requestRecheck(X);
   ok(q1.ok && q1.accepted && q2.ok && !q2.accepted && q2.requestedAt === q1.requestedAt, "requestRecheck is idempotent inside the span");

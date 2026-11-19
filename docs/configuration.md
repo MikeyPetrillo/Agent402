@@ -10,7 +10,7 @@ Scope: the server that runs as node src/server.js (every file under src/). The f
 Every value is set on the host, never in the repository. "Default" is the plain literal the code falls back to at
 its first read site when there is one; a helper may still clamp it, and the read site is the reference.
 
-1037 variables in 109 groups.
+1038 variables in 109 groups.
 
 ## Contents
 
@@ -261,6 +261,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `CRAWL_CYCLE_FILE` | Crawl cycle file path. | `/data/x402-crawl-cycle.json` | `src/x402-index.js` |
 | `CRAWL_GLOBAL_MAX` | Crawl global maximum. | `2` | `src/tools/crawl-kit.js` |
 | `CRAWL_ORIGINS_PER_OPERATOR` | Crawl origins per operator. | `4` | `src/x402-index.js` |
+| `CRAWL_OUR_SIDE_CONTROL_URLS` | Comma-separated https URLs (at most five) of hosts independent of this deployment and of every seller, read beside this server's own public /health before a crawl cycle is recorded as failing on our side; a day is left out of the reputation records only when every control read gets no answer. |  | `src/our-side-control.js` |
 | `CRAWL_SLOW_ORIGINS` | Crawl slow origins. |  | `src/crawl-cadence.js` |
 
 ## CREDITS

@@ -437,6 +437,9 @@ export function reputationStatus() {
   return {
     enabled, loaded: state.loaded, sellers: Object.keys(state.body?.sellers || {}).length,
     computedAt: iso(state.body?.updatedAt), since: iso(state.body?.since), lastPass: { ...lastPass, at: iso(lastPass.at) },
+    // The days left out of every seller's crawl and paywall metrics, each
+    // with the crawl's verdict it rests on (operator view only).
+    ourSideDays: ourSideDaysIn(confirmedOurSideDays(state.meta)).map((d) => ({ day: iso(d * DAY_MS).slice(0, 10), evidence: state.meta?.ourSideEvidence?.[d] || null })),
   };
 }
 /** Version of the state a lookup read (bumped on every adopted reload). */
@@ -504,15 +507,44 @@ export async function pendingRecheckOrigins({ now = Date.now() } = {}) {
   return out;
 }
 
+/** The days of a meta body that carry a confirmed verdict: a day stored
+ *  without one is not left out of any seller's record. */
+export function confirmedOurSideDays(meta) {
+  const ev = meta?.ourSideEvidence && typeof meta.ourSideEvidence === "object" ? meta.ourSideEvidence : {};
+  return (Array.isArray(meta?.ourSide) ? meta.ourSide : []).filter((d) => ourSideEvidenceOf({ ...ev[d], broad: true }, 0) !== null);
+}
+
+/** The verdict a day rests on, as the record keeps it: counts only. Null
+ *  unless the crawl confirmed it (src/x402-index.js ourSideVerdict: enough
+ *  distinct operators and a failed control read of our own). */
+export function ourSideEvidenceOf(evidence, at = Date.now()) {
+  const e = evidence && typeof evidence === "object" ? evidence : null;
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+  const c = e?.control && typeof e.control === "object" ? { checked: n(e.control.checked), failed: n(e.control.failed) } : null;
+  if (!e || e.broad !== true || !c || !(c.checked >= 1) || c.failed !== c.checked) return null;
+  return { at, share: n(e.share), operatorsRead: n(e.operatorsRead), operatorsOurs: n(e.operatorsOurs), operatorShare: n(e.operatorShare), minOperators: n(e.minOperators), control: c };
+}
+
 /** Record that a crawl cycle failed broadly on our side at `at` (the crawl's
  *  own cycle health, src/x402-index.js): that day's crawl and paywall readings
- *  are left out of every seller's scores. Never throws. */
-export async function noteOurSideIssue(at = Date.now()) {
+ *  are left out of every seller's scores. `evidence` is the crawl's verdict:
+ *  a call without a confirmed one records nothing and answers false, so a day
+ *  is never left out on a share of sellers' own reads alone. The first
+ *  confirmed cycle's evidence is kept with the day, and `cycles` counts the
+ *  confirmed cycles that day. Never throws. */
+export async function noteOurSideIssue(at = Date.now(), evidence = null) {
   try {
+    const ev = ourSideEvidenceOf(evidence, at);
+    if (!ev) return false;
     const d = dayOf(at);
     const r = await metaDoc().update((b) => {
       const m = metaBody(b);
       m.ourSide = ourSideDaysIn([...m.ourSide, d], at);
+      const kept = m.ourSideEvidence && typeof m.ourSideEvidence === "object" ? m.ourSideEvidence : {};
+      const next = {};
+      for (const day of m.ourSide) if (kept[day]) next[day] = kept[day];
+      next[d] = next[d] ? { ...next[d], cycles: (Number(next[d].cycles) || 1) + 1, lastAt: at } : { ...ev, cycles: 1, lastAt: at };
+      m.ourSideEvidence = next;
       return m;
     }, { fallback: null });
     if (r?.ok) state = { ...state, meta: metaBody(r.body), version: state.version + 1 };
@@ -527,7 +559,7 @@ export function sellerReputation(origin, { now = Date.now() } = {}) {
     rec: state.body?.sellers?.[origin] || null,
     delivery: state.delivery?.o?.[origin] || null,
     since: state.body?.since, updatedAt: state.body?.updatedAt, state: st, now,
-    ourSideDays: state.meta?.ourSide || [],
+    ourSideDays: confirmedOurSideDays(state.meta),
     recheck: state.meta?.rechecks?.[origin] ? { requestedAt: state.meta.rechecks[origin].at } : null,
   });
 }

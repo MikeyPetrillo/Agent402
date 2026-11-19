@@ -276,9 +276,18 @@ Loaded when an index, discovery, router or buyer file is read.
   across replicas, a 429 past either) records the request in `seller-reputation-meta` (`SELLER_REPUTATION_META_FILE`);
   the crawl reads `pendingRecheckOrigins()` each cycle and `originsDueThisCycle`'s `prefer` gives
   the origin one of its operator's places (never an extra read; `crawlPlan` budgets still apply);
-  the pass sets `rk`, served as `lastRecheckedAt`. A cycle whose `oursShare` reaches
-  `CRAWL_OURS_SIDE_SHARE` calls `noteOurSideIssue`: that day's crawl, paywall and latency samples
-  are left out of every seller's scores (`measurementIssue`, "measurement issue on our side").
+  the pass sets `rk`, served as `lastRecheckedAt`. A cycle the crawl confirms as
+  failing broadly on our side (`ourSideVerdict` in `src/x402-index.js`) calls `noteOurSideIssue` with
+  its evidence: that day's crawl, paywall and latency samples are left out of every seller's scores
+  (`measurementIssue`, "measurement issue on our side"). `oursShare` is counted over sellers' own
+  origins, so it never decides this alone: the verdict also needs one vote per operator
+  (`operatorKey`), at least `CRAWL_OURS_MIN_OPERATORS` (10) operators whose reads ended on our side and
+  at least half of the operators read, and every control read of hosts no seller runs
+  (`src/our-side-control.js`: this server's own public `/health` and `CRAWL_OUR_SIDE_CONTROL_URLS`)
+  getting no answer; no control wired, or one answer, keeps the day. A day is stored only with that
+  evidence, read back only with it, and listed with it on `/__operator/perf.json`
+  (`reputation.ourSideDays`; `scripts/test-crawl-our-side-verdict.js`). A new reader of "our side"
+  that changes what every seller's record says takes this verdict, never the share.
   Reputation output and copy carry no judgment words (`scripts/test-reputation-wording.js`).
 - **Seller docs link:** `src/seller-docs-url.js`. A tool row on `/api/index?seller=<host>` carries
   `sellerDocsUrl` when the seller's own OpenAPI operation names `externalDocs.url`, kept only as an

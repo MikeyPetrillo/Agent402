@@ -225,6 +225,7 @@
     "CRAWL_CYCLE_FILE": "Crawl cycle file path.",
     "CRAWL_GLOBAL_MAX": "Crawl global maximum.",
     "CRAWL_ORIGINS_PER_OPERATOR": "Crawl origins per operator.",
+    "CRAWL_OUR_SIDE_CONTROL_URLS": "Comma-separated https URLs (at most five) of hosts independent of this deployment and of every seller, read beside this server's own public /health before a crawl cycle is recorded as failing on our side; a day is left out of the reputation records only when every control read gets no answer.",
     "CRAWL_SLOW_ORIGINS": "Crawl slow origins.",
     "CREDITS_ABANDONED_HOLD_MS": "Credits abandoned hold, in milliseconds.",
     "CREDITS_BAD_KEY_MAX": "Credits bad key maximum.",

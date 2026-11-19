@@ -6454,6 +6454,90 @@ function closeCrawlCycleTally() {
   crawlCycleTally = { done: 0, ours: 0, read: 0 };
   return lastCycleOursShare;
 }
+
+// WHOSE SIDE A BROAD FAILURE IS ON. The share above is counted over reads of
+// sellers' origins, and a read that times out counts as ours, so the share
+// alone is evidence a seller can supply: its own origins not answering. It
+// still decides the hold of a last good listing (crawlHoldsLastGood), which
+// only keeps entries as they were. The verdict that leaves a UTC day out of
+// every seller's reputation record (ourSideVerdict) asks for more, all of it:
+//   - the cycle's share is at least CRAWL_OURS_SIDE_SHARE;
+//   - one vote per OPERATOR (operatorKey, the registrable domain), however
+//     many origins it runs: an operator votes "ours" when at least half of
+//     its reads this cycle ended on our side;
+//   - at least CRAWL_OURS_MIN_OPERATORS distinct operators voted "ours", and
+//     they are at least half of the operators read;
+//   - a control read of our own failed too (setOurSideControl: hosts no
+//     seller runs, read through the same egress). Every control read must
+//     have failed; a control that was not wired, read nothing, or got an
+//     answer from any host confirms nothing, and the day stands.
+// The control is read when the operator floor is first met inside the cycle
+// (near the failures) and once more at its close when the first one answered.
+export const CRAWL_OURS_MIN_OPERATORS = 10;
+const OUR_SIDE_CONTROL_WAIT_MS = 15_000;
+let cycleOperators = new Map();   // operatorKey -> { read, ours }, this cycle
+let cycleOursOperators = 0;       // operators with at least one read on our side
+let cycleControl = null;          // the in-cycle control read's promise
+let ourSideControl = null;
+/** `fn()` resolves to { checked, failed }: how many control reads of hosts no
+ *  seller runs were made, and how many got no answer. Null unwires it. */
+export function setOurSideControl(fn) { ourSideControl = typeof fn === "function" ? fn : null; }
+async function readOurSideControl() {
+  if (!ourSideControl) return null;
+  try {
+    const r = await Promise.race([ourSideControl(), new Promise((res) => setTimeout(() => res(null), OUR_SIDE_CONTROL_WAIT_MS).unref?.())]);
+    const checked = Math.trunc(Number(r?.checked)), failed = Math.trunc(Number(r?.failed));
+    return Number.isFinite(checked) && Number.isFinite(failed) && checked >= 0 && failed >= 0 && failed <= checked ? { checked, failed } : null;
+  } catch { return null; }
+}
+const controlFailed = (c) => !!c && c.checked >= 1 && c.failed === c.checked;
+function noteOperatorRead(originUrl, ours) {
+  if (!crawlInFlight) return;      // a read outside a cycle casts no vote
+  let k;
+  try { k = operatorKey(originUrl); } catch { return; }
+  let row = cycleOperators.get(k);
+  if (!row) { row = { read: 0, ours: 0 }; cycleOperators.set(k, row); }
+  row.read++;
+  if (!ours) return;
+  if (row.ours++ === 0) cycleOursOperators++;
+  if (cycleOursOperators >= CRAWL_OURS_MIN_OPERATORS && !cycleControl) cycleControl = readOurSideControl();
+}
+/** How the operators read this cycle voted (one vote each). */
+export function operatorVotes(operators) {
+  let read = 0, ours = 0;
+  for (const row of operators instanceof Map ? operators.values() : []) {
+    if (!(row?.read > 0)) continue;
+    read++;
+    if (row.ours / row.read >= CRAWL_OURS_SIDE_SHARE) ours++;
+  }
+  return { operatorsRead: read, operatorsOurs: ours, operatorShare: read ? ours / read : 0 };
+}
+/** The verdict and its evidence (see above). `control` is { checked, failed }
+ *  or null. Pure. */
+export function ourSideVerdict({ operators, share = 0, control = null } = {}) {
+  const v = operatorVotes(operators);
+  const votes = Number(share) >= CRAWL_OURS_SIDE_SHARE && v.operatorsOurs >= CRAWL_OURS_MIN_OPERATORS && v.operatorShare >= CRAWL_OURS_SIDE_SHARE;
+  const c = control && Number.isFinite(control.checked) && Number.isFinite(control.failed) ? { checked: control.checked, failed: control.failed } : null;
+  return {
+    broad: votes && controlFailed(c),
+    share: Number((Number(share) || 0).toFixed(3)),
+    operatorsRead: v.operatorsRead, operatorsOurs: v.operatorsOurs, operatorShare: Number(v.operatorShare.toFixed(3)),
+    minOperators: CRAWL_OURS_MIN_OPERATORS, control: c,
+    reason: !votes ? (Number(share) < CRAWL_OURS_SIDE_SHARE ? "share" : v.operatorsOurs < CRAWL_OURS_MIN_OPERATORS ? "operators-under-floor" : "operators-under-half") : !c ? "no-control" : controlFailed(c) ? "confirmed" : "control-answered",
+  };
+}
+/** Close the cycle's operator tally into the verdict; the control is read
+ *  again only when the votes passed and the in-cycle read did not fail. */
+async function closeOurSideVerdict(share) {
+  const operators = cycleOperators;
+  const pending = cycleControl;
+  cycleOperators = new Map(); cycleOursOperators = 0; cycleControl = null;
+  let verdict = ourSideVerdict({ operators, share, control: null });
+  if (verdict.reason !== "no-control") return verdict;
+  let control = pending ? await pending : null;
+  if (!controlFailed(control)) control = (await readOurSideControl()) || control;
+  return ourSideVerdict({ operators, share, control });
+}
 export function __closeCrawlCycleTallyForTest(tally) { crawlCycleTally = { done: 0, ours: 0, read: 0, ...tally }; return closeCrawlCycleTally(); }
 export function __setLastCycleOursShareForTest(x) { lastCycleOursShare = Number(x) || 0; crawlCycleTally = { done: 0, ours: 0, read: 0 }; }
 /** May this failed crawl keep `prev` as it was? Only an entry whose last
@@ -6716,7 +6800,7 @@ async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
     noteLandingHeld(originUrl, e.landingHost);
     return { landingHeld: e.landingHost || true, error: String(e.message || e), ...(e.heldBy ? { heldBy: e.heldBy, retryAfterSeconds: e.retryAfterSeconds || 0 } : {}) };
   }
-  finally { if (read) { crawlCycleTally.done++; crawlCycleTally.read++; if (outcome.ours) crawlCycleTally.ours++; } }
+  finally { if (read) { crawlCycleTally.done++; crawlCycleTally.read++; if (outcome.ours) crawlCycleTally.ours++; noteOperatorRead(originUrl, !!outcome.ours); } }
 }
 async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false, scheduled = false, revisitIntervalMs = 0 } = {}, outcome = { ours: false }) {
   const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
@@ -7785,7 +7869,8 @@ let recheckSource = async () => new Map();
 let ourSideIssueHook = async () => {};
 /** `fn()` resolves to a Map origin -> requestedAt (ms). */
 export function setCrawlRecheckSource(fn) { recheckSource = typeof fn === "function" ? fn : async () => new Map(); }
-/** `fn(at)` is called once per crawl cycle that failed broadly on our side. */
+/** `fn(at, evidence)` is called once per crawl cycle that failed broadly on
+ *  our side (ourSideVerdict), with the verdict it rests on. */
 export function setOurSideIssueHook(fn) { ourSideIssueHook = typeof fn === "function" ? fn : async () => {}; }
 async function recheckWantedFor() {
   try {
@@ -7797,7 +7882,7 @@ async function recheckWantedFor() {
  *  our side, and whether that is a broad failure of ours. */
 export function crawlCycleHealth() {
   const s = lastCycleSummary;
-  return { at: s?.at || null, oursShare: s ? s.oursShare : null, broadOurSide: !!s && s.oursShare >= CRAWL_OURS_SIDE_SHARE, threshold: CRAWL_OURS_SIDE_SHARE };
+  return { at: s?.at || null, oursShare: s ? s.oursShare : null, broadOurSide: !!s?.ourSide?.broad, threshold: CRAWL_OURS_SIDE_SHARE, verdict: s?.ourSide || null };
 }
 
 /** True while a crawl cycle is running (every entry is being replaced). */
@@ -7843,6 +7928,7 @@ async function runCrawl() {
     // off: the hold of its last good listing counts from here (turnNotReadAt).
     if (SLOW_ORIGINS.size) { const dueSet = new Set(due); for (const o of ordered) if (!dueSet.has(o) && sellerLoad.slowWaiting(o, "x402")) noteTurnNotRead(o); }
     crawlCycleTally = { done: 0, ours: 0, read: 0 };
+    cycleOperators = new Map(); cycleOursOperators = 0; cycleControl = null;
     // Each origin's load controls (src/seller-load.js) decide whether it is
     // read this cycle: held by its own Retry-After, past its host's daily
     // budget, or backed off because its documents have not changed. A skipped
@@ -7893,8 +7979,11 @@ async function runCrawl() {
     }
     const oursShare = closeCrawlCycleTally();
     // A cycle that failed broadly on our side: its day's readings say nothing
-    // about the sellers, so the reputation record leaves them out.
-    if (oursShare >= CRAWL_OURS_SIDE_SHARE) { try { await ourSideIssueHook(Date.now()); } catch { /* the cycle goes on */ } }
+    // about the sellers, so the reputation record leaves them out. The share
+    // alone never decides that (ourSideVerdict): it is counted over sellers'
+    // own origins.
+    const ourSide = await closeOurSideVerdict(oursShare);
+    if (ourSide.broad) { try { await ourSideIssueHook(Date.now(), ourSide); } catch { /* the cycle goes on */ } }
     // Each step is guarded on its own: a throw in one used to skip the release
     // silently for every later cycle, and the slots it should have freed stayed
     // held with nothing in the log to say why.
@@ -7916,7 +8005,7 @@ async function runCrawl() {
     try { release = releaseDeadSubmissions(fraction); } catch (e) { release = { released: 0, reason: `error: ${String(e?.message || e).slice(0, 120)}` }; }
     const skippedBy = {};
     for (const why of skipped.values()) skippedBy[why] = (skippedBy[why] || 0) + 1;
-    lastCycleSummary = { at: new Date().toISOString(), cycle: crawlCycle, due: due.length, crawled: crawled.length, skipped: skippedBy, okFraction: fraction === null ? null : Number(fraction.toFixed(3)), oursShare: Number(oursShare.toFixed(3)), rowsAdded, ...release };
+    lastCycleSummary = { at: new Date().toISOString(), cycle: crawlCycle, due: due.length, crawled: crawled.length, skipped: skippedBy, okFraction: fraction === null ? null : Number(fraction.toFixed(3)), oursShare: Number(oursShare.toFixed(3)), ourSide, rowsAdded, ...release };
     // One line per cycle (every ~30 min): the only way to tell from the log
     // whether the release ran, freed slots, or why it did not.
     console.log(`[x402-index] cycle ${crawlCycle}: probed ${crawled.length}${skipped.size ? ` (${skipped.size} waiting: ${Object.entries(skippedBy).map(([k, n]) => `${n} ${k}`).join(", ")})` : ""}, ok ${fraction === null ? "n/a" : (fraction * 100).toFixed(1) + "%"}, release ${release.released ? `freed ${release.released}` : `none (${release.reason})`}${rowsAdded ? `, ${rowsAdded} registration row(s) added` : ""}`);
