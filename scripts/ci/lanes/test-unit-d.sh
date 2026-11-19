@@ -387,6 +387,7 @@ t node scripts/test-pdf.js
 t node scripts/test-demand.js
 # Media-kit tests (ffprobe, mp4-to-mp3, loudnorm — real ffmpeg)
 t node scripts/test-media.js
+t node scripts/test-answer-cap.js
 # Finance-math-kit tests (TVM, Black-Scholes, bonds, CAGR, Sharpe — vs textbook values)
 t node scripts/test-finance-math-kit.js
 # Barcode-kit tests (QR/barcode decode round-trip, PNG + JPEG)

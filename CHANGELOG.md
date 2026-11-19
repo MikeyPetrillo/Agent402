@@ -6,6 +6,15 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-19 (answer size of the audio and PDF tools)
+Tools:
+- `audio-convert` and `audio-normalize` answer an MP3 of up to 60 MB (43
+  minutes at 192k). A recording that would encode larger is answered 413
+  before it is encoded, with the limit and the length that fits, and is not
+  charged; a lower `bitrate` fits a longer one. The PDF tools (`pdf-merge`,
+  `pdf-extract-pages`, `pdf-rotate`, `images-to-pdf`) answer a file of up to
+  40 MB, and 413 past it.
+
 ### 2026-11-19 (agent402-client 0.10.0: a default per-call ceiling)
 Packages:
 - agent402-client 0.10.0 holds a $5 per-call ceiling by default

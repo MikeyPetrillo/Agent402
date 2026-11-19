@@ -3,11 +3,18 @@
 // filesystem: the handlers fetch through safeFetch on the main thread and hand
 // the bytes to the worker, which runs one of these per job.
 import { loadPdfLib } from "./lazy-deps.js";
+import { PDF_ANSWER_MAX_BYTES, assertAnswerBytes } from "./answer-cap.js";
 
 export function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
-const b64 = (bytes) => Buffer.from(bytes).toString("base64");
+/** The saved PDF as base64, refused (413) past the answer cap before the
+ *  base64 copy is made. */
+export function pdfBase64(bytes, cap = PDF_ANSWER_MAX_BYTES) {
+  assertAnswerBytes(bytes.length, cap, "The PDF", { hint: "send fewer or smaller files, or fewer pages" });
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length).toString("base64");
+}
+const b64 = pdfBase64;
 
 // pdf-lib stamps itself as Creator and Producer and sets both dates to now on
 // load unless told not to. Harmless for a PDF we produce, wrong for a read:

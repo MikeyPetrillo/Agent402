@@ -36,10 +36,12 @@ ok(calls.length === 1 && calls[0].bin === "ffprobe", "probeMedia runs ffprobe on
 if (calls[0]) checkInput(calls[0], "wav", "ffprobe on a WAV");
 
 calls.length = 0; await settle(toMp3(mp4, { bitrate: "128k" }));
-if (calls[0]) checkInput(calls[0], "mov", "mp3 conversion of an MP4");
+ok(calls.length === 2, `mp3 conversion probes, then encodes (${calls.map((c) => c.bin).join(",")})`);
+for (const c of calls) checkInput(c, "mov", `mp3 conversion of an MP4 (${c.bin})`);
 
 calls.length = 0; await settle(normalizeAudio(pad("OggS"), { targetLufs: -16 }));
-if (calls[0]) checkInput(calls[0], "ogg", "loudness normalize of an Ogg file");
+ok(calls.length === 2, `loudness normalize probes, then encodes (${calls.map((c) => c.bin).join(",")})`);
+for (const c of calls) checkInput(c, "ogg", `loudness normalize of an Ogg file (${c.bin})`);
 
 calls.length = 0; await settle(transcodePcm(Buffer.alloc(4800), "wav"));
 if (calls[0]) checkInput(calls[0], "s16le", "speech PCM transcode");

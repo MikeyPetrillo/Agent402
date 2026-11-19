@@ -10,6 +10,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-19",
+    title: "Answer size of the audio and PDF tools",
+    items: [
+      "Tools: `audio-convert` and `audio-normalize` answer an MP3 of up to 60 MB (43 minutes at 192k). A recording that would encode larger is answered 413 before it is encoded, with the limit and the length that fits, and is not charged; a lower `bitrate` fits a longer one. The PDF tools (`pdf-merge`, `pdf-extract-pages`, `pdf-rotate`, `images-to-pdf`) answer a file of up to 40 MB, and 413 past it.",
+    ],
+  },
+  {
+    date: "2026-11-19",
     title: "agent402-client 0.10.0: a default per-call ceiling",
     items: [
       "Packages: agent402-client 0.10.0 holds a $5 per-call ceiling by default (`maxPerCallUsd`), above every catalog price, so a 402 that asks for far more is refused before anything is signed. `0`, `\"off\"` or `null` turns it off; a malformed value keeps the default and prints a warning; a refusal names `maxPerCallUsd` and the per-call `maxUsd` option. The rolling caps stay opt-in.",
