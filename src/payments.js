@@ -15,6 +15,7 @@ import { attributionTailOf, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION } from ".
 import { isBinaryListing, listingMimeTypeOf, binaryOutputExample, binaryOutputSchema, binaryListingsEnabled, withBinaryOutputType, JSON_MIME } from "./tool-media-type.js";
 import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute, uptoNetworkKept } from "./upto-gas-sponsoring.js";
 import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
+import { createSvmFacilitatorSplit, parseSvmShare, SOLANA_MAINNET as SVM_SPLIT_NETWORK } from "./svm-facilitator-split.js";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
@@ -1462,6 +1463,23 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     installFacilitatorDiagnostics(facilitatorUrls);
     return client;
   };
+  // A facilitator reached only through a per-request scope (never a routing
+  // client, so @x402 never routes another network to it): the same error
+  // labels, pending-settle notes, signer pinning and diagnostics as above.
+  const wireSideFacilitator = (label, client) => {
+    labelFacilitatorErrors(label, client);
+    notePendingSettleAnswers(client, client?.url || client?.config?.url || client?.options?.url, {
+      via: label,
+      onSettledAfterPending: (notes, payload) => forgivePendingAnswers(notes, { network: payload?.accepted?.network, outcome: "retrySettled" }),
+      onSettledByOther: (notes, payload) => countPendingOutcome(notes, { network: payload?.accepted?.network, outcome: "fallbackSettled" }),
+    });
+    withoutArcKinds(client);
+    memoizeGetSupported(client);
+    const u = client?.url || client?.config?.url || client?.options?.url;
+    if (u) { facilitatorUrls.push(u); registerFacilitatorUpstream(u); }
+    installFacilitatorDiagnostics(facilitatorUrls);
+    return client;
+  };
   // PayAI's Solana settles report an on-chain "insufficient funds" failure as
   // `settle_exact_svm_transaction_confirmation_timed_out` - measured
   // 2026-08-03 when our best Solana buyer drained its wallet to $0 and its
@@ -2421,9 +2439,39 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       console.log(`Algorand sub-cent offer gate: on (sponsorship status re-read every ${Math.round(AVM_SPONSORSHIP_REFRESH_MS / 1000)} s; AVM_SUBCENT_GATE=off disarms)`);
     }
   }
+  // A second facilitator on Solana mainnet (SOLANA_FACILITATOR_URL, ordered
+  // list; SOLANA_FACILITATOR_SHARE, percent of Solana quotes, default 50):
+  // each 402 names one facilitator's fee payer, and a paid transaction
+  // settles only at the facilitator whose fee payer it names
+  // (src/svm-facilitator-split.js). Not a routing client: it can never take
+  // another network, and unset leaves every lookup the vendor's own.
+  let svmSplit = null;
+  const svmSplitUrls = facilitatorUrlList(process.env.SOLANA_FACILITATOR_URL);
+  if (svmSplitUrls.length && svmCaip2.includes(SVM_SPLIT_NETWORK)) {
+    const share = parseSvmShare(process.env.SOLANA_FACILITATOR_SHARE);
+    if (share === null) {
+      console.warn(`WARNING: SOLANA_FACILITATOR_SHARE is not an integer percent 0-100; every Solana offer stays on the boot-order facilitator`);
+    } else {
+      const entries = svmSplitUrls.map((url) => {
+        const label = `Solana listed (${url})`;
+        const client = new SvmClarifyingFacilitatorClient({ url });
+        wireSideFacilitator(label, client);
+        return { url, label, client };
+      });
+      svmSplit = createSvmFacilitatorSplit({ entries, share });
+      if (process.env.X402_SYNC_ON_START !== "false") await svmSplit.check();
+      else svmSplit.check().catch(() => {});
+      svmSplit.start(Math.max(10_000, Number(process.env.SOLANA_FACILITATOR_RECHECK_MS) || 600_000));
+      const st = svmSplit.status();
+      console.log(`Solana: ${st.active ? `${st.active} takes ${share}% of Solana quotes; the boot-order facilitator takes the rest` : "no listed facilitator confirmed; every Solana offer names the boot-order facilitator"}. A paid Solana transaction settles only at the facilitator whose fee payer it names (no cross-facilitator fallback).`);
+    }
+  }
   let server = new x402ResourceServer(facilitatorClients)
     .registerExtension(bazaarResourceServerExtension)
     .registerExtension(builderCodeResourceServerExtension);
+  // Installed before the settle preference, so an operator-tagged request's
+  // scope still wins its lookups.
+  if (svmSplit) svmSplit.install(server);
   // Per-request facilitator preference (operator-gated): the three lookups
   // that name a facilitator read the request's scope first; an untagged
   // request takes the vendor's own lookup (src/settle-preference.js).
@@ -2502,6 +2550,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   }
   registerFacilitatorFailureHooks(server, payAiClient, solvadorClient, {
     [ARC_CAIP2]: [],
+    // With a second Solana facilitator, no Solana settle fallback: the
+    // transaction names one facilitator's fee payer, and no other can co-sign it.
+    ...(svmSplit ? { [SVM_SPLIT_NETWORK]: [] } : {}),
     ...(solvadorCeloPrimary ? { [CELO_CAIP2]: celoClient ? [{ name: "Celo", client: celoClient }] : [] } : {}),
     // Robinhood's listed fallbacks first (those whose /supported confirmed
     // exact on 4663), then the chain it had before. Read at settle time: the
@@ -2984,7 +3035,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     railRecheck.start();
     console.log(`[payments] rail re-read: ${candidates.join(", ")} dropped on a failed /supported read; ${failedReads.map((f) => f.label).join(", ")} read again in ${Math.round(recheck.firstMs / 1000)} s, then on a backoff up to ${Math.round(recheck.maxMs / 1000)} s`);
   }
-  return withMcpTwins(withGuardedInit(vendorMw, init, httpServer), mcpVendorMw && withGuardedInit(mcpVendorMw, init, mcpHttpServer));
+  const paymentMw = withMcpTwins(withGuardedInit(vendorMw, init, httpServer), mcpVendorMw && withGuardedInit(mcpVendorMw, init, mcpHttpServer));
+  return svmSplit ? svmSplit.wrap(paymentMw) : paymentMw;
 }
 
 /**
