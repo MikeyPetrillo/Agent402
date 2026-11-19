@@ -358,14 +358,14 @@ export const TOKEN_DILIGENCE_LEGS = Object.freeze(["coin-profile", "coin-ohlc"])
 export const TOKEN_DILIGENCE_MAX_COINS = 20;
 const COIN_ID_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;
 
-/** The CoinGecko coin ids a token-diligence body names, validated and deduplicated. */
+/** The coin ids a token-diligence body names, validated and deduplicated. */
 export function coinIdsOf(input) {
   const raw = typeof input?.coins === "string" ? input.coins.split(",") : input?.coins;
-  if (!Array.isArray(raw) || raw.length === 0) throw bad(`"coins" must be a list of 1 to ${TOKEN_DILIGENCE_MAX_COINS} CoinGecko coin ids, for example ["bitcoin","chainlink"] (coin-search finds an id)`);
+  if (!Array.isArray(raw) || raw.length === 0) throw bad(`"coins" must be a list of 1 to ${TOKEN_DILIGENCE_MAX_COINS} coin ids, for example ["bitcoin","chainlink"] (coin-search finds an id)`);
   const out = [];
   for (const [i, c] of raw.entries()) {
     const s = typeof c === "string" ? c.trim().toLowerCase() : "";
-    if (!COIN_ID_RE.test(s)) throw bad(`coins[${i}] must be a CoinGecko coin id such as "chainlink" (lowercase letters, digits and "-")`);
+    if (!COIN_ID_RE.test(s)) throw bad(`coins[${i}] must be a coin id such as "chainlink" (lowercase letters, digits and "-")`);
     if (!out.includes(s)) out.push(s);
   }
   if (out.length > TOKEN_DILIGENCE_MAX_COINS) throw bad(`"coins" holds ${out.length} coins; one call takes at most ${TOKEN_DILIGENCE_MAX_COINS}. Split the list across calls`);
@@ -560,13 +560,13 @@ export const BUNDLE_TOOLS = [
     attribution: "coingecko",
     ...quoted(TOKEN_DILIGENCE_LEGS, coinUnitsCount, TOKEN_DILIGENCE_MAX_COINS),
     description:
-      `One market diligence read for up to ${TOKEN_DILIGENCE_MAX_COINS} coins in one call: per coin the profile and market snapshot (price, market cap, fully diluted value, volume, supply, all-time high) with turnover, dilution and circulating share computed, one year of candles reduced to return, largest drawdown and annualized volatility, and contract addresses per chain; flags for high dilution, thin turnover, far below the all-time high, high volatility and a deep drawdown, with the list ranked by market cap, one-year return and volatility. Priced per coin: the two tools it runs (${TOKEN_DILIGENCE_LEGS.join(", ")}) less ${Math.round(BUNDLE_DISCOUNT * 100)}%, ${perUnit(TOKEN_DILIGENCE_LEGS)} a coin, quoted in the 402 for the coins you send. Coins by CoinGecko id (coin-search finds one). Deterministic code, no model; market facts, not investment advice. ${COINGECKO_ATTRIBUTION}`,
+      `One market diligence read for up to ${TOKEN_DILIGENCE_MAX_COINS} coins in one call: per coin the profile and market snapshot (price, market cap, fully diluted value, volume, supply, all-time high) with turnover, dilution and circulating share computed, one year of candles reduced to return, largest drawdown and annualized volatility, and contract addresses per chain; flags for high dilution, thin turnover, far below the all-time high, high volatility and a deep drawdown, with the list ranked by market cap, one-year return and volatility. Priced per coin: the two tools it runs (${TOKEN_DILIGENCE_LEGS.join(", ")}) less ${Math.round(BUNDLE_DISCOUNT * 100)}%, ${perUnit(TOKEN_DILIGENCE_LEGS)} a coin, quoted in the 402 for the coins you send. Coins by coin id (coin-search finds one). Deterministic code, no model; market facts, not investment advice. ${COINGECKO_ATTRIBUTION}`,
     tags: ["crypto", "token", "diligence", "volatility", "drawdown", "dilution", "portfolio", "bundle"],
     discovery: {
       bodyType: "json",
       input: { coins: COINS_EXAMPLE },
       inputSchema: {
-        properties: { coins: { type: "array", items: { type: "string" }, description: `1 to ${TOKEN_DILIGENCE_MAX_COINS} CoinGecko coin ids (a comma-separated string also works)` } },
+        properties: { coins: { type: "array", items: { type: "string" }, description: `1 to ${TOKEN_DILIGENCE_MAX_COINS} coin ids as coin-search returns them (a comma-separated string also works)` } },
         required: ["coins"],
       },
       output: {
