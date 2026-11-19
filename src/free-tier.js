@@ -19,7 +19,7 @@ export const FREE_TIER_SLUGS = new Set([
   "count", "country-info", "crc32", "cron-next", "csv-lint", "csv-to-json",
   "csv-to-md", "date-diff", "date-format", "day-of-year", "dedupe-lines", "duration",
   "easter-date", "effective-annual-rate", "email-guard", "epoch-convert", "extract-entities", "feedback-summary", "finance",
-  "forecast-eval", "forecast-holt", "forecast-holt-winters", "forecast-naive", "forecast-ses", "gcd-lcm", "geo-distance",
+  "forecast-eval", "forecast-holt", "forecast-holt-winters", "forecast-naive", "forecast-ses", "gcd-lcm", "geo-distance", "gtin-validate",
   "gunzip", "gzip", "hash", "hex", "hidden-text-scan", "hmac", "html-entities",
   "html-links", "html-meta", "html-select", "html-strip", "html-table", "html-to-markdown",
   "iban-validate", "ics-parse", "image-convert", "image-resize", "image-thumbnail", "irr",

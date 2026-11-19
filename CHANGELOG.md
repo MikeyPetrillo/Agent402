@@ -31,6 +31,9 @@ Tools:
   HKEX is open at a given moment, the day's sessions, the next open and
   close, and closures in the coming month, from each exchange's own
   published calendar. It is pure computation and free through proof of work.
+- gtin-validate: checks the GS1 check digit of a GTIN-8, UPC-A, EAN-13 or
+  GTIN-14 barcode number and returns the expected digit and the 14-digit
+  form. It is pure computation and free through proof of work.
 Credits:
 - Holiday data by Nager.Date, which Agent402 sponsors; every tool that
   serves it carries the credit.

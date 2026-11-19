@@ -971,6 +971,174 @@
       }
     },
     {
+      "slug": "public-holidays",
+      "name": "a region filter keeps nationwide holidays and that region's",
+      "input": {
+        "country": "DE",
+        "year": 2027,
+        "subdivision": "DE-BY",
+        "types": "Public"
+      },
+      "expect": {
+        "equals": {
+          "subdivision": "DE-BY"
+        },
+        "populated": [
+          "holidays[0].holidayTypes"
+        ]
+      }
+    },
+    {
+      "slug": "bank-holidays",
+      "name": "Belgium tags bank holidays",
+      "input": {
+        "country": "BE",
+        "year": 2027
+      },
+      "expect": {
+        "minCount": {
+          "holidays": 1
+        },
+        "equals": {
+          "type": "Bank"
+        }
+      }
+    },
+    {
+      "slug": "school-holidays",
+      "name": "Denmark tags school holidays",
+      "input": {
+        "country": "DK",
+        "year": 2027
+      },
+      "expect": {
+        "minCount": {
+          "holidays": 1
+        },
+        "equals": {
+          "type": "School"
+        }
+      }
+    },
+    {
+      "slug": "next-holidays",
+      "name": "Japan's upcoming holidays",
+      "input": {
+        "country": "JP",
+        "limit": 3
+      },
+      "expect": {
+        "count": {
+          "holidays": 3
+        },
+        "populated": [
+          "holidays[0].daysUntil",
+          "asOf"
+        ]
+      }
+    },
+    {
+      "slug": "long-weekends",
+      "name": "England 2027 long weekends include Easter",
+      "input": {
+        "country": "GB",
+        "subdivision": "GB-ENG",
+        "year": 2027
+      },
+      "expect": {
+        "equals": {
+          "longWeekends[0].start": "2027-01-01",
+          "longWeekends[1].start": "2027-03-26"
+        }
+      }
+    },
+    {
+      "slug": "country-business-days",
+      "name": "Japan 2026-09-22 is a holiday between two national holidays",
+      "input": {
+        "country": "JP",
+        "op": "check",
+        "date": "2026-09-22"
+      },
+      "expect": {
+        "equals": {
+          "isBusinessDay": false,
+          "closed.reason": "holiday"
+        }
+      }
+    },
+    {
+      "slug": "country-business-days",
+      "name": "England counts the 2027 Christmas substitutes",
+      "input": {
+        "country": "GB",
+        "subdivision": "GB-ENG",
+        "op": "count",
+        "from": "2027-12-20",
+        "to": "2028-01-04"
+      },
+      "expect": {
+        "equals": {
+          "businessDays": 8
+        }
+      }
+    },
+    {
+      "slug": "business-day-planner",
+      "name": "first common business day of the US and Japan after New Year 2027",
+      "input": {
+        "regions": "US,JP",
+        "start": "2027-01-01"
+      },
+      "expect": {
+        "equals": {
+          "dates[0]": "2027-01-04"
+        }
+      }
+    },
+    {
+      "slug": "settlement-calendar",
+      "name": "CHAPS sent on the 2027 Christmas substitute settles after both substitutes",
+      "input": {
+        "rail": "chaps",
+        "date": "2027-12-27"
+      },
+      "expect": {
+        "equals": {
+          "settlementDate": "2027-12-29",
+          "operatingDay": false
+        },
+        "populated": [
+          "sources"
+        ]
+      }
+    },
+    {
+      "slug": "settlement-calendar",
+      "name": "SEPA SCT on Easter Monday 2027",
+      "input": {
+        "rail": "sepa-sct",
+        "date": "2027-03-29"
+      },
+      "expect": {
+        "equals": {
+          "settlementDate": "2027-03-30",
+          "latestCreditDate": "2027-03-31"
+        }
+      }
+    },
+    {
+      "slug": "settlement-calendar",
+      "name": "an unsourced rail is a self-explaining 400",
+      "input": {
+        "rail": "bacs",
+        "date": "2027-03-29"
+      },
+      "expect": {
+        "status": 400
+      }
+    },
+    {
       "slug": "email-validate",
       "name": "a null-MX domain is not deliverable",
       "input": {

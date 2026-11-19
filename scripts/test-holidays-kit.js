@@ -13,6 +13,7 @@ import { DATA_TOOLS } from "../src/tools/data-kit.js";
 import { __setHolidayReadForTests, __setNowForTests, __caches, MAX_ENTRIES, FRESH_MS, MAX_AGE_MS, toDay, HOLIDAY_API } from "../src/tools/holiday-source.js";
 import { EXCHANGES, daySchedule } from "../src/tools/exchange-calendars.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
+import { KIT2 } from "../src/tools/kit2.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -404,6 +405,16 @@ const check = async (country, date, extra = {}) => (await call("country-business
   ok(await status("market-calendar", { exchange: "NASDAQ" }) === 400 && await status("market-calendar", { exchange: "NYSE", at: "yesterday" }) === 400, "unknown exchange or instant is a 400");
   ok(FREE_TIER_SLUGS.has("market-calendar"), "market-calendar (pure CPU) is on the free tier");
   ok(["bank-holidays", "next-holidays", "country-business-days", "business-day-planner", "settlement-calendar"].every((s) => !FREE_TIER_SLUGS.has(s)), "tools that read the holiday source stay wallet-only");
+}
+
+// ── gtin-validate (GS1 check digits; added with this kit) ─────────────────────
+{
+  const g = (code) => KIT2.find((t) => t.slug === "gtin-validate").handler({ code });
+  ok(g("4006381333931").valid && g("036000291452").valid && g("96385074").valid && g("00012345600012").valid, "valid EAN-13, UPC-A, EAN-8 and GTIN-14 check digits pass");
+  const wrong = g("4006381333932");
+  ok(!wrong.valid && wrong.expectedCheckDigit === 1, "a wrong check digit fails and names the right one");
+  ok(g("978-0-306-40615-7").prefix === "ISBN-13 (Bookland)" && g("036000291452").gtin14 === "00036000291452", "ISBN prefix and the 14-digit form");
+  ok(g("12345").valid === false && FREE_TIER_SLUGS.has("gtin-validate"), "a wrong length is invalid; the tool is on the free tier");
 }
 
 // ── every published example answers (offline, fixture source) ──────────────────

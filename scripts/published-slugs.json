@@ -238,6 +238,7 @@
     "gov-data",
     "gravatar-check",
     "group-by",
+    "gtin-validate",
     "gunzip",
     "gzip",
     "hash",
