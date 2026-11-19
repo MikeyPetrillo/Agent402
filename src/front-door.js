@@ -270,7 +270,7 @@ Maintained by Havok Holdings LLC.
  *  x402 discovery document): what the first call gets for its price. */
 export function frontDoorOneLine(catalog) {
   const first = routeOf(catalog, FRONT_DOOR_SLUG) || { method: "GET", path: `/api/${FRONT_DOOR_SLUG}`, price: null };
-  return `Start here: ${first.method} ${first.path}?q=<query> returns ranked live web results as JSON (title, URL, snippet, age) for ${priceText(first)} a call, with no account and no API key; the first request answers HTTP 402 with the price, and ${AGENTS_MD_PATH} has the recovery contract.`;
+  return `First call: ${first.method} ${first.path}?q=<query> returns ranked live web results as JSON (title, URL, snippet, age) for ${priceText(first)} a call, with no account and no API key; the first request answers HTTP 402 with the price, and ${AGENTS_MD_PATH} has the recovery contract.`;
 }
 
 /** The unpaid 402 body's part of the block: the access line, the one that

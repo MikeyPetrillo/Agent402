@@ -19,6 +19,8 @@ import { listingInjectionFinding, addressesReader } from "../src/listing-screen.
 import { readFileSync } from "node:fs";
 import { BAZAAR_DESCRIPTIONS, bazaarCapDescription, isExamplePointer, TAG_FILLER, slugRepeatsTag } from "../src/payments.js";
 import { attributionTailOf } from "../src/data-attribution.js";
+import { listingCompletenessGaps } from "../src/own-listing-rules.js";
+import { FLAGSHIPS } from "./bazaar-rank-monitor.js";
 
 // Routes whose 402 carried a real sample output on the baseline tree. A route
 // over its byte budget may carry the /openapi.json pointer instead (counted
@@ -165,6 +167,8 @@ try {
   // A pointer stands in for a sample output too large for the 402: legitimate
   // for an oversized route, counted apart so it never reads as a real example.
   has.outputPointer = 0; has.outputSchemaPointer = 0;
+  has.complete = 0;
+  const flagshipsSeen = new Set();
   let wholeListingSeen = 0;
   // The transcription routes declare the two fields a cut answer adds
   // (discovery.output.optional); their listing's schema carries both.
@@ -227,6 +231,18 @@ try {
     try { iconPath = new URL(listing.iconUrl).pathname; } catch { /* checked below */ }
     if (LISTING_ICON.test(iconPath)) { has.icon++; iconPaths.add(iconPath); } else fail(route, `listing icon is not a PNG, JPG, WebP or GIF path: ${listing.iconUrl}`);
     const desc = String(listing.description || "");
+    // The fixed flagship queries the weekly rank monitor asks the Bazaar
+    // search (scripts/bazaar-rank-monitor.js): the tool each one names says
+    // so in its own description, the text the search ranks, as a plain
+    // phrase (a plural counts), once is enough.
+    {
+      const flagship = FLAGSHIPS.find((f) => f.slug === endpoint.slug);
+      if (flagship) {
+        flagshipsSeen.add(flagship.slug);
+        const phrase = new RegExp(`\\b${flagship.query.replace(/\s+/g, "\\s+")}`, "i");
+        if (!phrase.test(desc)) fail(route, `flagship query "${flagship.query}" is not a phrase in its listing description: ${desc.slice(0, 120)}`);
+      }
+    }
     if (desc.length >= 40 && desc.length <= 500 && !/(?:^|\s)\(?\?[a-zA-Z_]\w*=/.test(desc)) has.description++;
     else fail(route, `listing description is ${desc.length} chars or keeps a query hint (40..500, no hint): ${desc.slice(0, 80)}`);
     // The Bazaar delists metadata that reads as an instruction to an agent.
@@ -295,6 +311,13 @@ try {
       if (!spec.valid) fail(route, `Bazaar spec: ${(spec.errors || []).join("; ")}`);
       const schemaCheck = validateDiscoveryExtension(extension);
       if (!schemaCheck.valid) fail(route, `Bazaar schema: ${(schemaCheck.errors || []).join("; ")}`);
+    }
+    // Completeness: the fields a listing is ranked and curated on, each one
+    // present and real on every route (listingCompletenessGaps).
+    {
+      const gaps = listingCompletenessGaps({ endpoint, listing, extension });
+      if (gaps.length) fail(route, `listing is incomplete: ${gaps.join("; ")}`);
+      else has.complete++;
     }
     const example = extension.info?.output?.example;
     const outputSchema = extension.schema?.properties?.output?.properties?.example;
@@ -402,6 +425,7 @@ try {
   if (binaryListings.has("/api/hash")) fail("GET /api/hash", "a JSON tool is listed as binary");
   console.log(`binary listings: ${[...binaryListings].map(([p, t]) => `${p} ${t}`).join(", ")}`);
   if (!extractTagSeen) fail("POST /api/extract", "the route-specific tag never survived sanitization");
+  for (const f of FLAGSHIPS) if (!flagshipsSeen.has(f.slug)) fail(f.slug, `flagship query "${f.query}" names a slug this boot does not list`);
   console.log(`catalog routes: ${endpoints.length}`);
   console.log(`402 examples shortened by the byte budget (replayed from /openapi.json): ${shortenedExamples}`);
   console.log(`output schemas: ${schemaTally.fullyRequired} with a required list, ${schemaTally.happyPathOnly} variable, ${schemaTally.nonObject} raw`);

@@ -423,9 +423,9 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
 
   // Origin-level descriptions lead with the first call.
   const openapi = await (await fetch(`${B}/openapi.json`)).json();
-  ok(String(openapi.info?.description || "").startsWith(`Start here: ${s.ROUTE}?q=`) && openapi.info.description.includes(`${s.PRICE} a call`), "openapi info.description leads with the first call at the catalog price");
+  ok(String(openapi.info?.description || "").startsWith(`First call: ${s.ROUTE}?q=`) && openapi.info.description.includes(`${s.PRICE} a call`), "openapi info.description leads with the first call at the catalog price");
   const manifest = await (await fetch(`${B}/.well-known/x402`)).json();
-  ok(String(manifest.summary || "").startsWith(`Start here: ${s.ROUTE}?q=`) && manifest.summary.includes(`${s.PRICE} a call`), "/.well-known/x402 summary leads with the first call at the catalog price");
+  ok(String(manifest.summary || "").startsWith(`First call: ${s.ROUTE}?q=`) && manifest.summary.includes(`${s.PRICE} a call`), "/.well-known/x402 summary leads with the first call at the catalog price");
   ok(!EM_DASH.test(openapi.info.description.slice(0, 300)) && !EM_DASH.test(manifest.summary.slice(0, 300)), "no em or en dash in either lead sentence");
   ok(!FIRST_CALL_FREE_COPY.test(openapi.info.description) && !FIRST_CALL_FREE_COPY.test(manifest.summary), "off: neither origin description offers a free first call");
   stopProc();
