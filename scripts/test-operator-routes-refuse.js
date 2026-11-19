@@ -315,13 +315,29 @@ try {
   // are every handler that calls operatorView(req, res), read from the source.
   {
     const src = readFileSync(join(ROOT, "src/server.js"), "utf8").split("\n");
+    const srcFiles = readdirSync(join(ROOT, "src")).filter((f) => f.endsWith(".js")).map((f) => readFileSync(join(ROOT, "src", f), "utf8"));
+    const routeConstant = (name) => {
+      for (const text of srcFiles) { const m = new RegExp(`export const ${name} = "([^"]+)"`).exec(text); if (m) return m[1]; }
+      return null;
+    };
+    const unresolved = [];
     const surfaces = new Set();
     let current = null;
     for (const line of src) {
       const reg = /^\s*app\.(get|post)\(\s*(\[[^\]]*\]|"[^"]*")/.exec(line);
+      // A route named by a constant (app.get(TOOL_RELIABILITY_PATH, ...)) is
+      // a route too: resolved from its export, or the handler before it would
+      // be credited with this one's operator view.
+      const named = !reg && /^\s*app\.(get|post)\(\s*([A-Z][A-Z0-9_]*)\s*,/.exec(line);
       if (reg) current = { method: reg[1].toUpperCase(), paths: [...reg[2].matchAll(/"([^"]+)"/g)].map((x) => x[1]) };
-      if (/\boperatorView\(req, res\)/.test(line) && !/^\s*function operatorView/.test(line) && current) for (const p of current.paths) surfaces.add(`${current.method} ${p}`);
+      else if (named) { const p = routeConstant(named[2]); current = { method: named[1].toUpperCase(), paths: p ? [p] : [], unresolved: p ? null : named[2] }; }
+      if (/\boperatorView\(req, res\)/.test(line) && !/^\s*function operatorView/.test(line) && current) {
+        if (current.unresolved) unresolved.push(current.unresolved);
+        for (const p of current.paths) surfaces.add(`${current.method} ${p}`);
+      }
     }
+    ok(unresolved.length === 0, `every operator-view route's path is read from the source (a route named by ${unresolved.join(", ") || "a constant"} that is not an exported string literal cannot be checked)`);
+    ok(surfaces.has("GET /api/reliability/tools") && !surfaces.has("GET /api/reliability"), "control: a route named by a constant is its own route; the handler before it is not credited with its operator view");
     ok(surfaces.size >= 6 && surfaces.has("GET /api/gateway-status") && surfaces.has("GET /health"), `the source names ${surfaces.size} public surfaces with an operator view (${[...surfaces].join(", ")})`);
     const shape = (a) => { let keys = "(not json)"; try { const j = JSON.parse(a.text); keys = Object.keys(j && typeof j === "object" ? j : {}).sort().join(","); } catch { /* a page or a redirect */ } return `${a.status}|${keys}|${/private/.test(a.headers.get("cache-control") || "") ? "private" : "shared"}`; };
     for (const s of surfaces) {
