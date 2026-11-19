@@ -111,6 +111,8 @@ ok(fr.filingActivity.recentFilings.length === 5 && fr.filingActivity.recentFilin
 ok(fr.insiderActivity.filers.length === 1 && fr.insiderActivity.form4Filings === 61, "filings: insider filers deduplicated, the count is the source's total");
 const stale = filingCompanyRow("OLD", { financials: { metrics: [] }, filings: { filings: [{ form: "10-K", filingDate: "2025-01-01" }] }, insiders: {} }, now);
 ok(stale.flags.includes("noPeriodicReport120d") && stale.financials.ratios.netMargin === null, "filings: an old periodic report flags; missing facts read null, not zero");
+const busy = filingCompanyRow("BUSY", { financials: { metrics: [] }, filings: { filings: Array.from({ length: 200 }, () => ({ form: "4", filingDate: "2026-11-01" })) }, insiders: {} }, now);
+ok(!busy.flags.includes("noPeriodicReport120d") && busy.filingActivity.last10K === null && busy.filingActivity.oldestFilingRead === "2026-11-01", "filings: a full window that reaches back less than 120 days leaves the report date unknown, not flagged late");
 
 const bars = [
   { time: "2026-01-01T00:00:00Z", high: 10, low: 9, close: 10 },

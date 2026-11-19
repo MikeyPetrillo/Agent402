@@ -258,7 +258,8 @@ async function weatherRiskBrief(input, ctx) {
 export const FILINGS_BRIEF_LEGS = Object.freeze(["company-financials", "edgar-filings", "edgar-insider-trades"]);
 export const FILINGS_BRIEF_MAX_COMPANIES = 40;
 const TICKER_RE = /^[A-Za-z][A-Za-z0-9.-]{0,9}$/;
-const FILINGS_READ = 100;
+// The most filings one edgar-filings call reads (its own limit).
+const FILINGS_READ = 200;
 const RECENT_SHOWN = 5;
 
 /** The tickers a filings-brief body names, validated and deduplicated. */
@@ -299,7 +300,11 @@ export function filingCompanyRow(ticker, { financials, filings, insiders }, now 
   if (Number.isFinite(ni) && ni < 0) flags.push("netLoss");
   if (Number.isFinite(eq) && eq < 0) flags.push("negativeEquity");
   if (leverage !== null && leverage > 0.8) flags.push("highLeverage");
-  if (daysSincePeriodic === null || daysSincePeriodic > 120) flags.push("noPeriodicReport120d");
+  // Only when the filings read reach back 120 days (or are the whole list):
+  // a filer busy enough to push its last report out of the window is unknown, not late.
+  const oldest = list.length ? list[list.length - 1].filingDate : null;
+  const windowCovers120 = list.length < FILINGS_READ || (oldest && daysBetween(oldest, today) >= 120);
+  if ((daysSincePeriodic === null || daysSincePeriodic > 120) && windowCovers120) flags.push("noPeriodicReport120d");
   if (form4Total !== null && form4Total >= 60) flags.push("busyInsiderFiling");
   if (eightK90 >= 5) flags.push("frequent8K");
   return {
@@ -317,6 +322,9 @@ export function filingCompanyRow(ticker, { financials, filings, insiders }, now 
       recentFilings: list.slice(0, RECENT_SHOWN).map((f) => ({ form: f.form, filingDate: f.filingDate, url: f.url })),
       recentFilingsPartial: partialFields(list.length, Math.min(RECENT_SHOWN, list.length)),
       filingsRead: list.length,
+      // A null last10K or last10Q means none among the filings read, which
+      // reach back to this date; an active filer's older report can sit past it.
+      oldestFilingRead: list.length ? list[list.length - 1].filingDate ?? null : null,
     },
     insiderActivity: {
       windowDays: insiders?.windowDays ?? 90, form4Filings: form4Total,
@@ -347,7 +355,7 @@ async function filingsBrief(input, ctx) {
       flagged: rows.filter((r) => r.flags.length).map((r) => ({ ticker: r.ticker, flags: r.flags })),
     },
     rows,
-    method: "Values are the latest annual and quarterly XBRL facts as filed; ratios divide annual values. noPeriodicReport120d: no 10-K, 10-Q, 20-F or 40-F among the latest 100 filings within 120 days. busyInsiderFiling: 60 or more Form 4 filings in 90 days. frequent8K: 5 or more 8-K filings in 90 days. highLeverage: liabilities above 80% of assets. Facts only; nothing here is investment advice.",
+    method: "Values are the latest annual and quarterly XBRL facts as filed; ratios divide annual values. last10K and last10Q are read from the latest 200 filings (back to oldestFilingRead); null means none in that window. noPeriodicReport120d: no 10-K, 10-Q, 20-F or 40-F among them within 120 days. busyInsiderFiling: 60 or more Form 4 filings in 90 days. frequent8K: 5 or more 8-K filings in 90 days. highLeverage: liabilities above 80% of assets. Facts only; nothing here is investment advice.",
     pricing: pricingFields(rows.length, FILINGS_BRIEF_LEGS),
     source: "computed from SEC EDGAR (data.sec.gov submissions and XBRL company facts, efts.sec.gov full-text search; public domain)",
   };
@@ -543,7 +551,7 @@ export const BUNDLE_TOOLS = [
           rows: [{
             ticker: "MSFT", cik: "0000789019", name: "MICROSOFT CORP", industry: "Services-Prepackaged Software", exchanges: ["Nasdaq"], flags: [],
             financials: { annual: { revenue: 331839000000, netIncome: 133749000000, operatingIncome: 155237000000, totalAssets: 758376000000, totalLiabilities: 315989000000, stockholdersEquity: 442387000000, epsBasic: 18, operatingCashFlow: 151893000000, period: "2026-06-30" }, quarterly: { revenue: 92279000000, netIncome: 36629000000, period: "2026-09-30" }, ratios: { netMargin: 0.4031, operatingMargin: 0.4678, liabilitiesToAssets: 0.4167, equityToAssets: 0.5833 } },
-            filingActivity: { last10K: "2026-07-29", last10Q: "2026-10-28", daysSinceLatestPeriodicReport: 21, eightKLast90Days: 4, recentFilings: [{ form: "4", filingDate: "2026-11-16", url: "https://www.sec.gov/Archives/edgar/data/789019/000078901926000236/xslF345X06/form4.xml" }], recentFilingsPartial: { returned: 5, matched: 100, complete: false, truncated: true }, filingsRead: 100 },
+            filingActivity: { last10K: "2026-07-29", last10Q: "2026-10-28", daysSinceLatestPeriodicReport: 21, eightKLast90Days: 4, recentFilings: [{ form: "4", filingDate: "2026-11-16", url: "https://www.sec.gov/Archives/edgar/data/789019/000078901926000236/xslF345X06/form4.xml" }], recentFilingsPartial: { returned: 5, matched: 200, complete: false, truncated: true }, filingsRead: 200, oldestFilingRead: "2026-03-02" },
             insiderActivity: { windowDays: 90, form4Filings: 45, filers: ["Coleman Amy  (CIK 0002062356)"], note: "Form 4 filings counted, not shares or direction" },
           }],
           method: "Values are the latest annual and quarterly XBRL facts as filed; ratios divide annual values.",

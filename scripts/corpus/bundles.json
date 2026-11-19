@@ -31,7 +31,7 @@
       "expect": {
         "equals": { "companies": 2, "rows[0].ticker": "NVDA", "rows[1].ticker": "KO", "pricing.units": 2 },
         "count": { "peers.byRevenue": 2 },
-        "populated": ["rows[0].financials.annual.revenue", "rows[0].financials.ratios.netMargin", "rows[1].filingActivity.last10K", "rows[1].filingActivity.recentFilings", "rows[0].insiderActivity.windowDays"]
+        "populated": ["rows[0].financials.annual.revenue", "rows[0].financials.ratios.netMargin", "rows[1].filingActivity.last10Q", "rows[1].filingActivity.oldestFilingRead", "rows[1].filingActivity.recentFilings", "rows[0].insiderActivity.windowDays"]
       }
     },
     {
