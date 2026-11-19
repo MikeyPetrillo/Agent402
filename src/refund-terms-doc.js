@@ -30,11 +30,12 @@ import { hangupForgivenessConfig, LASTING_EFFECT_SLUG_LIST } from "./hangup-forg
 import { creditsSalesEnabled, TERMS_VERSION } from "./credits-sales.js";
 import { humanCheckoutEnabled } from "./human-checkout.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
+import { OWED_REPAID } from "./tempo-push-debts.js";
 
 export { REFUND_TERMS_PATH };
 export const REFUND_TERMS_VERSION = 1;
 
-/** true (charged), false (not charged), null (nothing is charged on this rail),
+/** true (taken before the route runs), false (an error answer is left unsettled), null (nothing is charged on this rail),
  *  from a row's settleAfterAnswer cell. */
 function chargedOnErrorAnswer(cell) {
   if (!cell || cell.supported === null) return null;
@@ -74,7 +75,7 @@ export function refundTermsFullDocument(baseUrl = "", { freeMode = false, rails 
     governs: "The terms of service govern; this document states the same rules as data, computed from the serving code.",
     conformance: `${baseUrl}${CONFORMANCE_PATH}`,
     legend: {
-      chargedOnErrorAnswer: "false: an answer of 400 or above is not charged on this rail; true: the payment is final before the route runs, so a failed call is recorded as owed and repaid (refundOnChargedFailure); null: nothing is charged on this rail",
+      chargedOnErrorAnswer: "false: an answer of 400 or above is not charged on this rail (x402, MPP evm, a Tempo pull, a card capture, credits); true: the payment is taken before the route runs (a Tempo push transfer, a card checkout), so a failed call is repaid as refundOnChargedFailure says; null: nothing is charged on this rail",
       offered: "true while this server accepts payment on the rail",
     },
     rules: {
@@ -86,8 +87,8 @@ export function refundTermsFullDocument(baseUrl = "", { freeMode = false, rails 
         enabled: hang.enabled,
         budgeted: true,
         note: hang.enabled
-          ? "A buyer whose connection closes before the first answer byte is not charged, within a per-wallet, per-address and service-wide budget; past the budget the charge stands and the undelivered answer is recorded as owed."
-          : "Off on this server: a charge whose answer was not delivered is recorded as owed and repaid as the refund ledger below says.",
+          ? `On x402, MPP evm, a Tempo pull, a card capture and credits, a buyer whose connection closes before the first answer byte is not charged, within a per-wallet, per-address and service-wide budget; past the budget the charge stands and the undelivered answer is ${OWED_REPAID}. A Tempo push transfer is final before the call, so its undelivered answer is ${OWED_REPAID}.`
+          : `Off on this server: a charge whose answer was not delivered is ${OWED_REPAID}, as the refund ledger below says.`,
         neverForgivenSlugs: LASTING_EFFECT_SLUG_LIST.slice(),
         neverForgivenAlso: "any route that spends this server's own wallet or buys from an outside seller: its effect outlives the answer, so it is settled and, when the answer was not delivered, reviewed before any repayment",
       },

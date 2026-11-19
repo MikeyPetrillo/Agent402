@@ -80,8 +80,8 @@ part of it.
 
 ### `rules`
 
-- `x402Ordering`: `settlesOnlyBelow: 400`. The route runs first and only an
-  answer below 400 is settled; any other answer cancels settlement.
+- `x402Ordering`: `settlesOnlyBelow: 400`. On x402 the route runs first and
+  only an answer below 400 is settled; any other answer cancels settlement.
 - `hangupForgiveness`: `enabled`, `budgeted`, and `neverForgivenSlugs`, the
   routes whose effect outlives the answer and are therefore settled.
 - `refundLedger`: which events record an amount as owed, who is repaid
@@ -100,7 +100,7 @@ part of it.
 |---|---|
 | `id` | Rail id, for example `x402:exact:eip155:8453`, `mpp:tempo:push`, `credits`. |
 | `protocol`, `network`, `offered` | What the rail is and whether it is accepted now. |
-| `chargedOnErrorAnswer` | false: an error answer is not charged. true: the payment is taken before the route runs, so a failed call is repaid as `refundOnChargedFailure` says. null: nothing is charged on the rail. |
+| `chargedOnErrorAnswer` | false: on this rail (x402, MPP evm, a Tempo pull, a card capture, credits) an error answer is not charged. true: the payment is taken before the route runs (a Tempo push transfer, a card checkout), so a failed call is repaid as `refundOnChargedFailure` says. null: nothing is charged on the rail. |
 | `repaymentFamily` | The chain family a repayment is sent on, or null. |
 | `settleAfterAnswer`, `hangupForgiveness`, `refundOnChargedFailure` | Cells `{ supported, detail, source }`: whether the rail implements the rule, one sentence on how, and the module that runs it. |
 
