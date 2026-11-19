@@ -1108,6 +1108,22 @@ export function openapiSpec(baseUrl, catalog) {
       },
     },
   };
+  paths["/api/reputation"] = {
+    get: {
+      operationId: "getSellerReputation",
+      security: [],
+      summary: "One outside seller's reputation, measured by this server",
+      description: "Free. What this server's own crawl and its router's own paid calls measured about one outside x402 seller over a rolling 30-day window: manifest uptime, paywall (402) uptime, responsiveness of the 402, price honesty (the live 402 price against the price the seller's own documents list) and delivery (measured from purchases Agent402's router made for buyers), with age. Each metric names its method, window, sample size, minimum sample and last measurement, and is scored (0 to 1) only past its minimum sample; below it reads not-enough-data. No metric counts payments or buyers: router purchases, our own wallets and test traffic are never buyer evidence, and settlement counts are not part of the record. Per-route rows are capped (returned, matched, complete and truncated say so). Computed off the request path by a scheduled pass.",
+      tags: ["transparency"],
+      parameters: [{ name: "seller", in: "query", required: true, description: "The seller's host or origin, as on /api/index?seller=.", schema: { type: "string", maxLength: 512 } }],
+      responses: {
+        200: { description: "The seller's reputation record.", content: { "application/json": { schema: { type: "object", required: ["seller", "reputation", "tools"], properties: { seller: { type: "string" }, reputation: { type: "object" }, tools: { type: "array", items: { type: "object" } }, returned: { type: "integer" }, matched: { type: "integer" }, complete: { type: "boolean" }, truncated: { type: "boolean" } } } } } },
+        400: { description: "No seller named, or one longer than 512 characters." },
+        404: { description: "The seller is not in this server's index (or names this server's own host)." },
+        503: { description: "The index is still loading; retry after Retry-After seconds." },
+      },
+    },
+  };
   // Instance-wide MPP offer, read from the same config the 402 middlewares read.
   const mppShort = mppOfferShortProse();
   return {

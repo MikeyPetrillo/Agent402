@@ -33,6 +33,9 @@ export function ownStoreEnv(label = "server") {
     // The per-call count documents (src/sql-query-stats.js, src/x-search-stats.js).
     SQL_QUERY_STATS_FILE: join(dir, "onchain-sql-query-stats.json"),
     X_SEARCH_STATS_FILE: join(dir, "x-search-author-stats.json"),
+    // Seller reputation records and delivery outcomes (src/seller-reputation.js).
+    SELLER_REPUTATION_FILE: join(dir, "seller-reputation.json"),
+    SELLER_DELIVERY_FILE: join(dir, "seller-delivery-outcomes.json"),
     DISCOVERY_REFUSALS_FILE: join(dir, "discovery-refusals.json"),
     // The referral gate's open-settlement book (src/referral-book.js).
     REFERRAL_BOOK_FILE: join(dir, "referral-settlements.json"),

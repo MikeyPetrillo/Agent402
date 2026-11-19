@@ -247,6 +247,21 @@ Loaded when an index, discovery, router or buyer file is read.
   Its phrase rules are a mitigation; the primary defense is each prompt's own rule that seller
   text is quoted data, never instructions. A paraphrase the rules miss is expected: add it to
   `scripts/redteam-corpus.json` and extend the rule, rather than treat each one as a blocker.
+- **Seller reputation:** `src/seller-reputation.js`. A leased hourly pass (`seller-reputation-pass`,
+  `SELLER_REPUTATION_INTERVAL_MS`, first after `SELLER_REPUTATION_FIRST_MS`, waiting for the index to
+  load) folds each indexed seller's newest crawl, paywall probe (its `ms`, the probe's answer time)
+  and live-price reading into a per-day record in the state document `seller-reputation`
+  (`SELLER_REPUTATION_FILE`; 30 days, at most `SELLER_REPUTATION_MAX_SELLERS`, 8000). The router's
+  own purchases add delivery outcomes (`noteSellerDeliveryOutcome`: a settled 200 on the
+  `memoizeDelivery` path, or a struck failure after the repeat rule), only for a request whose scope
+  is not ours (`scope.isOurs`, set by the paid handler from `callIsOurs`), folded every minute into
+  `seller-delivery-outcomes` (`SELLER_DELIVERY_FILE`, at most `SELLER_REPUTATION_MAX_DELIVERY_ORIGINS`,
+  4000, and 64 routes each). It runs only where `crawlSwitch("X402_INDEX_CRAWL")` is on
+  (`SELLER_REPUTATION=off` turns it off alone). Served on `/api/reputation?seller=` (a key lookup
+  through two Maps rebuilt at most every 30 s, rows capped at 200 with the partial-answer fields),
+  as `reputation` on `?seller=` and its rows, and on the chain page's seller card. A metric scores
+  only past its minimum sample; no field is a payment, buyer or settlement count
+  (`scripts/test-seller-reputation.js`). Method: `wiki/Seller-Reputation.md`.
 - **Seller docs link:** `src/seller-docs-url.js`. A tool row on `/api/index?seller=<host>` carries
   `sellerDocsUrl` when the seller's own OpenAPI operation names `externalDocs.url`, kept only as an
   https link on the seller's exact host (under its own path for a seller listed with a path) and

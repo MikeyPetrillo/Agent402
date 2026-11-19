@@ -28,6 +28,8 @@ LLC: credit the entity, never a personal name.
 - `src/credits.js`: prepaid card credits (hold at authorize, debit on a final 200).
 - `src/human-checkout.js`, `src/stripe-subscriptions.js`, `src/monitor-scheduler.js`: card
   report products and recurring monitors.
+- `src/seller-reputation.js` (`/api/reputation`): outside sellers' reputation from our own crawl
+  and the router's own paid calls; never a payment, buyer or settlement count.
 - `src/find.js` (`/api/find`), `src/discovery.js` (`/.well-known/x402`, `/api/reliability`),
   `src/x402-index.js` (crawled seller index), `src/dispatch-eligibility.js` (router labels).
   Submissions, parts, tool cap and the paywall probe: `.claude/rules/index-router.md`.
@@ -158,7 +160,7 @@ LLC: credit the entity, never a personal name.
 
 ## Key machine-readable surfaces (free)
 `/health`, `/api/pricing`, `/openapi.json`, `/llms.txt`, `/.well-known/x402`,
-`/api/reliability`, `/api/find?q=<task>`, `/api/route`, `/api/index`, `/api/stats`,
+`/api/reliability`, `/api/find?q=<task>`, `/api/route`, `/api/index`, `/api/reputation?seller=<host>`, `/api/stats`,
 `/api/status`, `/api/gateway-status` (bucketed status words only, never numbers), `/robots.txt`,
 `/sitemap.xml`, `/.well-known/glama.json`, `/x402-test` (payment-refusal diagnostics).
 Operator-only surfaces live under `/__operator/*` (token-authed); the operator view of a public

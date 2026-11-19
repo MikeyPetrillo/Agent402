@@ -57,6 +57,7 @@ import { reserveUnprovenSellerSpend, releaseUnprovenSellerSpend } from "./base-u
 import { usdFigure } from "./price-usd.js";
 import { EVM_BUYER_CHAINS, isEvmBuyerChain, evmBuyerChainEnabled, evmAcceptDomainCheck } from "./evm-buyer-chains.js";
 import { markNotSellerBody } from "./response-observation.js";
+import { noteSellerDeliveryOutcome } from "./seller-reputation.js";
 
 /** The buyer-visible 409 when a Base unproven daily cap refuses: every figure
  *  through usdFigure, as the lane's other sentences print them. */
@@ -765,7 +766,7 @@ const deliveryFailures = new Map(); // "chain|origin" -> { at, firstAt, status, 
  * url, method and body. Without the opt-in, one paid call was a 24-hour
  * routing ban against any origin on the internet, chosen by the buyer.
  */
-export function noteSellerDeliveryFailure(origin, chain, { status = null, ms = null, input = null, payer = null } = {}) {
+export function noteSellerDeliveryFailure(origin, chain, { status = null, ms = null, input = null, payer = null, url = null, method = null } = {}) {
   if (!origin || !chain) return;
   // A purchase that did not deliver puts the seller back on the normal crawl
   // cycle (src/seller-load.js), so a changed document is read promptly.
@@ -792,6 +793,9 @@ export function noteSellerDeliveryFailure(origin, chain, { status = null, ms = n
     live.status = Number.isFinite(status) ? status : live.status;
     return;
   }
+  // A struck failure is also a delivery observation for the seller's public
+  // reputation (src/seller-reputation.js), counted under the same repeat rule.
+  noteSellerDeliveryOutcome(origin, { ok: false, url, method: method || "GET" });
   // Re-insert at the TAIL. Map.set on an EXISTING key keeps its original
   // insertion slot, so the plain `set` this started as meant the seller that
   // had failed fifty times was evicted FIRST and 499 one-off failures sat
@@ -1785,7 +1789,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           inputFaultPending = true;
           console.warn(`[x402-buyer] ${where} answered HTTP ${paid.status} naming the request as the problem - struck unless the chain proves nothing was charged`);
         } else {
-          noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput, payer });
+          noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput, payer, url, method });
           console.warn(`[x402-buyer] ${where} failed to deliver after payment (HTTP ${paid.status}, no receipt, ${Date.now() - sentAtMs}ms) - noted on ${chain}; the resolver skips it after two strikes`);
         }
       }
@@ -1805,7 +1809,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       const strikeInputFault = () => {
         if (!inputFaultPending) return;
         inputFaultPending = false;
-        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput, payer });
+        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput, payer, url, method });
         console.warn(`[x402-buyer] ${where} answered HTTP ${paid.status} after payment and the chain does not prove it uncharged - noted on ${chain}`);
       };
       const strikeChargedFailure = (how) => {
@@ -1817,7 +1821,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           slug: slug || null, origin: sellerOrigin, result: "undelivered", tx: null,
         });
         if (!memoizeDelivery) return;
-        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput, payer });
+        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput, payer, url, method });
         console.warn(`[x402-buyer] ${where} took the payment and answered HTTP ${paid.status} (${how}) - memoized as failing on ${chain}`);
       };
       if (receiptSaysSettled(paid.headers)) strikeChargedFailure("its own settle receipt");
@@ -1936,7 +1940,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // route from the one that fails. Gated on the same opt-in as the record,
     // so a diagnostic can never clear what the router learned.
     if (tx) noteChainSettled(chain);
-    if (memoizeDelivery && tx) { clearSellerDeliveryFailure(memoSeller, chain); clearSellerRefusal(url, chain); }
+    if (memoizeDelivery && tx) { clearSellerDeliveryFailure(memoSeller, chain); clearSellerRefusal(url, chain); noteSellerDeliveryOutcome(memoSeller, { ok: true, url, method }); }
     recordUpstreamSpend("x402-buyer", Number(quotedAtomic) / 1e6);
     // The aggregate above answers "what did upstream cost". This answers
     // "which payment, to whom, on what chain, did it arrive" - what an
