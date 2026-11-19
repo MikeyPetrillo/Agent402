@@ -1,23 +1,46 @@
 // Per-chain price floors: the least any call costs on a given chain.
-// Robinhood Chain (eip155:4663) settles through the listed facilitators first
-// and through our own relayer when they fail, so every eip155:4663 accept
-// quotes at least the floor; every other chain quotes exactly what it quoted
-// before.
+// No chain carries a floor by default: every chain, Robinhood Chain
+// (eip155:4663) included, quotes the list price plus its premium.
+// NETWORK_PRICE_FLOORS="caip2=usd,..." sets one on any chain, and
+// ROBINHOOD_MIN_PRICE_USD sets Robinhood's ("0" or unset: none).
 //
-// The floor is a PRICE, published in the 402 and on the chain's pages, never
+// A floor is a PRICE, published in the 402 and on the chain's pages, never
 // a cost figure. It is static on purpose: @x402/core re-derives the price on
 // the paid retry, so a floor that moved between the 402 and the retry (for
 // example one tracking gas) would make the signed amount disagree with the
-// quote and the payment would be refused. ROBINHOOD_MIN_PRICE_USD tunes it
-// ("0" turns it off); NETWORK_PRICE_FLOORS="caip2=usd,..." sets any other.
-// Ink (eip155:57073) has no floor by default: no settler of ours pays its gas
-// (its listed facilitators do), so it quotes the list price; a fee its
-// facilitator bills per settlement is a NETWORK_PRICE_PREMIUMS entry.
+// quote and the payment would be refused.
+//
+// Our own Robinhood relayer (src/robinhood-relayer.js) pays the gas of the
+// sales it settles, so it takes a sale only when its price is at least
+// ROBINHOOD_RELAYER_MIN_PRICE_USD (default 0.004; "0" lets it settle any
+// price). Under it the listed facilitators alone settle the sale, and a
+// refusal from them stands as the buyer's 402.
 //
 // No imports: page and guide modules read the floor without loading payments.
 
 export const ROBINHOOD_CAIP2 = "eip155:4663";
-export const ROBINHOOD_MIN_PRICE_DEFAULT_USD = 0.006;
+export const ROBINHOOD_MIN_PRICE_DEFAULT_USD = 0;
+export const ROBINHOOD_RELAYER_MIN_PRICE_DEFAULT_USD = 0.004;
+
+/** The least price, in USD, a sale must carry for our own Robinhood relayer
+ *  to settle it (it pays that sale's gas). Unset or blank: the default; a
+ *  malformed or negative value is refused loudly for the default; "0": any
+ *  price. */
+export function robinhoodRelayerMinPriceUsd(env = process.env) {
+  const raw = env.ROBINHOOD_RELAYER_MIN_PRICE_USD;
+  if (raw === undefined || String(raw).trim() === "") return ROBINHOOD_RELAYER_MIN_PRICE_DEFAULT_USD;
+  const usd = Number(raw);
+  if (!Number.isFinite(usd) || usd < 0) {
+    console.warn(`[payments] ROBINHOOD_RELAYER_MIN_PRICE_USD ignored (malformed or negative): "${raw}"; using ${ROBINHOOD_RELAYER_MIN_PRICE_DEFAULT_USD}`);
+    return ROBINHOOD_RELAYER_MIN_PRICE_DEFAULT_USD;
+  }
+  return usd;
+}
+
+/** The same minimum in the token's base units (USDG has 6 decimals). */
+export function robinhoodRelayerMinUnits(env = process.env) {
+  return BigInt(Math.round(robinhoodRelayerMinPriceUsd(env) * 1e6));
+}
 
 /** caip2 -> floor in integer micro-dollars. A malformed or negative entry is
  *  refused loudly (never a floor below what was asked for silently). */
@@ -45,7 +68,7 @@ export function networkFloorUsd(network, floors = networkPriceFloors()) {
   return (floors.get(network) || 0) / 1e6;
 }
 
-/** "$0.001" on a floored network -> "$0.006"; at or above the floor, or on a
+/** "$0.001" on a network with a $0.006 floor -> "$0.006"; at or above the floor, or on a
  *  network without one, the price is returned unchanged. A price this parser
  *  cannot read is returned unchanged (never a NaN quote). */
 export function applyNetworkFloor(price, network, floors = networkPriceFloors()) {

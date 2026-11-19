@@ -36,7 +36,7 @@ import {
 import { declarePaymentIdentifierExtension, PAYMENT_IDENTIFIER } from "@x402/extensions/payment-identifier";
 import { normalizePayerAddress } from "./payer.js";
 import { x402EvmOnly, RAILS, GATED_RAILS } from "./rails.js";
-import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./network-floors.js";
+import { networkPriceFloors, applyNetworkFloor, networkFloorUsd, robinhoodRelayerMinPriceUsd } from "./network-floors.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
 import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, takePendingAnswers, peekPendingAnswers, pendingSettleTxOf, pendingTxsOf } from "./pending-settle.js";
@@ -251,7 +251,7 @@ const USDG = {
 // An ExactEvmScheme that settles USDG on Robinhood Chain: the money parser turns
 // a dollar price into a USDG AssetAmount, bypassing @x402/evm's USDC-only
 // default-asset lookup (which throws for chain 4663).
-function makeUsdgScheme() {
+export function makeUsdgScheme() {
   return new ExactEvmScheme().registerMoneyParser((amount, network) => {
     if (String(network) !== ROBINHOOD_CAIP2) return null;
     return {
@@ -1704,7 +1704,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         ownRelayer = { name: client.name, client, url: null, revertRetry: true, confirmed: true, own: true };
         const { createRobinhoodOutage } = await import("./robinhood-outage.js");
         robinhoodOutage = createRobinhoodOutage({ network: ROBINHOOD_CAIP2, token: USDG.asset, treasury: walletAddress, rpcUrl: evmRpcFor(ROBINHOOD_CAIP2), relayer: client });
-        console.log(`Robinhood Chain: own relayer ${client.address} enabled as the last settle fallback (our sales only; pays gas only when the listed facilitators fail)`);
+        console.log(`Robinhood Chain: own relayer ${client.address} enabled as the last settle fallback (our sales only, priced at least $${robinhoodRelayerMinPriceUsd()}; pays gas only when the listed facilitators fail)`);
         // While the listed facilitator's settlement signer reads dry, our
         // relayer settles first and the facilitator is not asked; a reading
         // that shows it funded again puts it first (src/robinhood-order.js).
@@ -3917,8 +3917,11 @@ export async function startFacilitatorGasCheck({ network, urls, ownSigners = [],
   const { createRelayerGasCheck, gasCheckSettings, createFloorGasCheck } = await import("./facilitator-gas.js");
   const { evmRpcFor } = await import("./evm-rpcs.js");
   const settings = gasCheckSettings();
-  // Settlement gas against the chain's price floor (no floor: no row).
-  const floorCheck = networkFloorUsd(network) > 0 ? createFloorGasCheck({ network, floorUsd: () => networkFloorUsd(network), readEthUsd }) : null;
+  // Settlement gas against the least price a settler of ours is paid for:
+  // the chain's price floor, else (our relayer on, Robinhood) the relayer's
+  // minimum sale price. Neither: no row.
+  const gasRefUsd = () => networkFloorUsd(network) || (network === ROBINHOOD_CAIP2 && ownSigners.length ? robinhoodRelayerMinPriceUsd() : 0);
+  const floorCheck = gasRefUsd() > 0 ? createFloorGasCheck({ network, floorUsd: gasRefUsd, readEthUsd }) : null;
   const checkers = new Map(); // url-list key -> checker (keeps each signer's failure count)
   const tick = leased(`facilitator-gas-${network}`, { ttlMs: 5 * 60_000, failOpen: true }, async () => {
     const list = (typeof urls === "function" ? urls() : urls || []).filter(Boolean);

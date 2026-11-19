@@ -21,6 +21,19 @@ Tools:
   components, a refused fetch) is rendered in headless Chromium as before
   and answers `rendered: true`.
 
+### 2026-11-19 (Robinhood Chain price)
+Payments:
+- Robinhood Chain (`eip155:4663`) quotes every call at its list price, like
+  every other chain: the chain no longer carries a price floor by default.
+  `ROBINHOOD_MIN_PRICE_USD` still sets one, and `/api/pricing`
+  `payment.minPriceUsdByNetwork`, llms.txt and the guides state it only when
+  it is set.
+- The optional own settler on Robinhood Chain (`ROBINHOOD_RELAYER_KEY`)
+  settles a sale only when its price is at least
+  `ROBINHOOD_RELAYER_MIN_PRICE_USD` (default 0.004). Under it, a refusal from
+  the listed facilitators is answered as a 402 and the x402 payment is not
+  settled.
+
 ### 2026-11-19 (reputation corrections, transcript language, gateway models)
 Seller index:
 - A seller's reputation record reads the price metric as

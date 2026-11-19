@@ -56,7 +56,11 @@ unmodified client that takes the first accept it can pay settles on Base. The pr
   adds a settler you run after every listed facilitator. It submits the
   buyer's signed authorization from that wallet and pays the gas, only when
   the listed facilitators could not settle, and only for payments to your own
-  `WALLET_ADDRESS` in USDG on `eip155:4663`. Fund the wallet with a little ETH
+  `WALLET_ADDRESS` in USDG on `eip155:4663`, priced at least
+  `ROBINHOOD_RELAYER_MIN_PRICE_USD` (default 0.004, since it pays that sale's
+  gas; `0` settles any price). Under it your settler is never asked: a
+  refusal from the listed facilitators stands as the buyer's 402 and the x402
+  payment is not settled. Fund the wallet with a little ETH
   on the chain for gas and nothing else. Optional caps:
   `ROBINHOOD_RELAYER_MAX_GWEI` (default 5), `ROBINHOOD_RELAYER_GAS_CAP`
   (default 200000), `ROBINHOOD_RELAYER_RECEIPT_MS` (default 30000). It reads

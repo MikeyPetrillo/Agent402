@@ -10,7 +10,7 @@ Scope: the server that runs as node src/server.js (every file under src/). The f
 Every value is set on the host, never in the repository. "Default" is the plain literal the code falls back to at
 its first read site when there is one; a helper may still clamp it, and the read site is the reference.
 
-1036 variables in 109 groups.
+1037 variables in 109 groups.
 
 ## Contents
 
@@ -967,13 +967,14 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `ROBINHOOD_AMBIGUOUS_WAIT_MS` | Robinhood ambiguous wait, in milliseconds. |  | `src/robinhood-outage.js` |
 | `ROBINHOOD_FACILITATOR_URL` | Robinhood facilitator URL. |  | `src/facilitator-public-index.js`, `src/payments.js` |
 | `ROBINHOOD_FALLBACK_RECHECK_MS` | Robinhood fallback recheck, in milliseconds. |  | `src/payments.js` |
-| `ROBINHOOD_MIN_PRICE_USD` | Robinhood minimum price, in USD. |  | `src/network-floors.js` |
+| `ROBINHOOD_MIN_PRICE_USD` | Price floor on Robinhood Chain, in USD (unset or 0: none, the list price is quoted). |  | `src/network-floors.js` |
 | `ROBINHOOD_ORDER_REFRESH_MS` | Robinhood order refresh, in milliseconds. |  | `src/payments.js` |
 | `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS` | Robinhood relayer first alert, in hours. |  | `src/robinhood-order.js` |
 | `ROBINHOOD_RELAYER_GAS_CAP` | Robinhood relayer gas cap. |  | `src/robinhood-relayer.js` |
 | `ROBINHOOD_RELAYER_KEY` | Robinhood relayer key (a credential, set on the host). |  | `src/payments.js` |
 | `ROBINHOOD_RELAYER_LOCK_WAIT_MS` | Robinhood relayer lock wait, in milliseconds. |  | `src/robinhood-relayer.js` |
 | `ROBINHOOD_RELAYER_MAX_GWEI` | Robinhood relayer maximum gwei. |  | `src/robinhood-relayer.js` |
+| `ROBINHOOD_RELAYER_MIN_PRICE_USD` | Least sale price, in USD, the own Robinhood relayer settles (0: any). |  | `src/network-floors.js` |
 | `ROBINHOOD_RELAYER_RECEIPT_MS` | Robinhood relayer receipt, in milliseconds. |  | `src/robinhood-relayer.js` |
 | `ROBINHOOD_SKIP_DRY_BELOW_SETTLEMENTS` | Robinhood skip dry below settlements. |  | `src/robinhood-order.js` |
 | `ROBINHOOD_USDG_ADDRESS` | Robinhood usdg address. | `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` | `src/payments.js` |

@@ -18,6 +18,14 @@ const ENTRIES = [
   },
   {
     date: "2026-11-19",
+    title: "Robinhood Chain price",
+    items: [
+      "Payments: Robinhood Chain (`eip155:4663`) quotes every call at its list price, like every other chain: the chain no longer carries a price floor by default. `ROBINHOOD_MIN_PRICE_USD` still sets one, and `/api/pricing` `payment.minPriceUsdByNetwork`, llms.txt and the guides state it only when it is set.",
+      "Payments: The optional own settler on Robinhood Chain (`ROBINHOOD_RELAYER_KEY`) settles a sale only when its price is at least `ROBINHOOD_RELAYER_MIN_PRICE_USD` (default 0.004). Under it, a refusal from the listed facilitators is answered as a 402 and the x402 payment is not settled.",
+    ],
+  },
+  {
+    date: "2026-11-19",
     title: "Reputation corrections, transcript language, gateway models",
     items: [
       "Seller index: A seller's reputation record reads the price metric as `priceMatchesListing` (\"price matches listing\"): the share of routes whose live 402 price matches the price the seller's own documents list. `POST /api/reputation/recheck?seller=<host>` asks for a fresh measurement: free, one accepted request per seller every 6 hours (a repeat answers the one already scheduled), limited per caller; the crawl reads the seller on its next cycle inside its operator's crawl budget, and the answer is 202 with `crawlBy` and `recordBy`. The record shows `lastRecheckedAt`, and a day on which our own crawl cycle failed broadly on our side is left out of the crawl and paywall metrics and named under `measurementIssue` (\"measurement issue on our side\"). The method page names the correction contact.",

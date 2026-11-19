@@ -2,13 +2,17 @@
 // Offline test for per-chain price floors (src/network-floors.js) and the one
 // funnel every accept is priced through (priceForNetwork in src/payments.js).
 //
-// The rule: a call on a floored chain (Robinhood Chain) is never priced below that chain's floor. Pinned here: the
-// eip155:4663 accept is raised for a cheap tool and untouched for a dear one,
-// no other chain moves, the metered per-request quote is floored too, a
-// premium still only adds, and every surface that states the floor reads it.
+// The rule: no chain carries a floor by default, Robinhood Chain included, so
+// every chain quotes the list price (plus its premium). A floor set by
+// ROBINHOOD_MIN_PRICE_USD or NETWORK_PRICE_FLOORS still raises that chain's
+// quote exactly as before: the eip155:4663 accept is raised for a cheap tool
+// and untouched for a dear one, no other chain moves, the metered per-request
+// quote is floored too, a premium still only adds, and every surface that
+// states a floor reads it. Our own relayer's minimum sale price
+// (ROBINHOOD_RELAYER_MIN_PRICE_USD) is parsed here too.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
-import { networkPriceFloors, applyNetworkFloor, networkFloorUsd, ROBINHOOD_CAIP2, ROBINHOOD_MIN_PRICE_DEFAULT_USD } from "../src/network-floors.js";
+import { networkPriceFloors, applyNetworkFloor, networkFloorUsd, ROBINHOOD_CAIP2, ROBINHOOD_MIN_PRICE_DEFAULT_USD, ROBINHOOD_RELAYER_MIN_PRICE_DEFAULT_USD, robinhoodRelayerMinPriceUsd, robinhoodRelayerMinUnits } from "../src/network-floors.js";
 import { acceptsForItem, priceForNetwork, parseNetworkPremiums, premiumUsdByNetworkName, premiumClause } from "../src/payments.js";
 
 let failures = 0;
@@ -18,31 +22,48 @@ const check = async (name, fn) => {
 };
 
 const RH = ROBINHOOD_CAIP2, BASE = "eip155:8453", OP = "eip155:10";
-const FLOOR = "$" + ROBINHOOD_MIN_PRICE_DEFAULT_USD;
+// The floor the knob set in production before it was dropped, and the code
+// default before that: setting either restores it exactly.
+const OLD = { ROBINHOOD_MIN_PRICE_USD: "0.004" };
+const FLOOR = "$0.004";
 const rails = { evmCaip2: [BASE, OP, RH], svmCaip2: [], stellarCaip2: [], avmCaip2: [], walletAddress: "0x0000000000000000000000000000000000000001" };
 const priceOn = async (opt, req = {}) => (typeof opt.price === "function" ? opt.price({ adapter: { req, getBody: () => ({}) } }) : opt.price);
 
 console.log("per-chain price floors");
 
-await check("the default Robinhood floor is $0.006", () => {
-  assert.equal(ROBINHOOD_MIN_PRICE_DEFAULT_USD, 0.006);
-});
-
-await check("default: Robinhood Chain carries the floor, no other chain does", () => {
+await check("no chain carries a floor by default, Robinhood Chain included", () => {
+  assert.equal(ROBINHOOD_MIN_PRICE_DEFAULT_USD, 0);
   const f = networkPriceFloors({});
-  assert.equal(f.size, 1);
-  assert.equal(networkFloorUsd(RH, f), ROBINHOOD_MIN_PRICE_DEFAULT_USD);
+  assert.equal(f.size, 0);
+  assert.equal(networkFloorUsd(RH, f), 0);
   assert.equal(networkFloorUsd(BASE, f), 0);
+  assert.equal(applyNetworkFloor("$0.001", RH, f), "$0.001");
+  assert.equal(networkPriceFloors({ ROBINHOOD_MIN_PRICE_USD: "" }).size, 0, "blank reads as unset");
 });
 
-await check("ROBINHOOD_MIN_PRICE_USD tunes it; \"0\" turns it off; a negative is refused for the default", () => {
-  assert.equal(networkFloorUsd(RH, networkPriceFloors({ ROBINHOOD_MIN_PRICE_USD: "0.01" })), 0.01);
+await check("ROBINHOOD_MIN_PRICE_USD restores a floor exactly; \"0\" is none; a negative or malformed value is refused for the default (none)", () => {
+  assert.equal(networkFloorUsd(RH, networkPriceFloors(OLD)), 0.004);
+  assert.equal(networkFloorUsd(RH, networkPriceFloors({ ROBINHOOD_MIN_PRICE_USD: "0.006" })), 0.006);
+  assert.equal(networkPriceFloors(OLD).size, 1, "Robinhood only");
   assert.equal(networkPriceFloors({ ROBINHOOD_MIN_PRICE_USD: "0" }).size, 0);
-  assert.equal(networkFloorUsd(RH, networkPriceFloors({ ROBINHOOD_MIN_PRICE_USD: "-1" })), ROBINHOOD_MIN_PRICE_DEFAULT_USD);
+  assert.equal(networkPriceFloors({ ROBINHOOD_MIN_PRICE_USD: "-1" }).size, 0);
+  assert.equal(networkPriceFloors({ ROBINHOOD_MIN_PRICE_USD: "abc" }).size, 0);
+  assert.equal(networkFloorUsd(RH, networkPriceFloors({ NETWORK_PRICE_FLOORS: `${RH}=0.005` })), 0.005, "NETWORK_PRICE_FLOORS names it too");
 });
 
-await check("applyNetworkFloor raises only below the floor, exactly, and leaves unreadable prices alone", () => {
-  const f = networkPriceFloors({});
+await check("the relayer minimum: default $0.004 (4000 USDG base units), tunable, \"0\" any price, a bad value refused for the default", () => {
+  assert.equal(ROBINHOOD_RELAYER_MIN_PRICE_DEFAULT_USD, 0.004);
+  assert.equal(robinhoodRelayerMinPriceUsd({}), 0.004);
+  assert.equal(robinhoodRelayerMinUnits({}), 4000n);
+  assert.equal(robinhoodRelayerMinUnits({ ROBINHOOD_RELAYER_MIN_PRICE_USD: "0.01" }), 10000n);
+  assert.equal(robinhoodRelayerMinUnits({ ROBINHOOD_RELAYER_MIN_PRICE_USD: "0" }), 0n);
+  assert.equal(robinhoodRelayerMinUnits({ ROBINHOOD_RELAYER_MIN_PRICE_USD: "-1" }), 4000n);
+  assert.equal(robinhoodRelayerMinUnits({ ROBINHOOD_RELAYER_MIN_PRICE_USD: "x" }), 4000n);
+  assert.equal(robinhoodRelayerMinUnits({ ROBINHOOD_RELAYER_MIN_PRICE_USD: " " }), 4000n);
+});
+
+await check("applyNetworkFloor (floor set) raises only below the floor, exactly, and leaves unreadable prices alone", () => {
+  const f = networkPriceFloors(OLD);
   assert.equal(applyNetworkFloor("$0.001", RH, f), FLOOR);
   assert.equal(applyNetworkFloor("$0.07", RH, f), "$0.07");
   assert.equal(applyNetworkFloor(FLOOR, RH, f), FLOOR);
@@ -51,36 +72,61 @@ await check("applyNetworkFloor raises only below the floor, exactly, and leaves 
 });
 
 await check("a premium still only adds, and the floor applies after it", () => {
-  const p = parseNetworkPremiums(`${RH}=0.001`), f = networkPriceFloors({});
+  const p = parseNetworkPremiums(`${RH}=0.001`), f = networkPriceFloors(OLD);
   assert.equal(priceForNetwork("$0.001", RH, p, f), FLOOR, "0.001 + 0.001 is still below the floor");
+  assert.equal(priceForNetwork("$0.001", RH, p, networkPriceFloors({})), "$0.002", "no floor: list plus premium");
   assert.equal(priceForNetwork("$0.07", RH, p, f), "$0.071");
   assert.equal(priceForNetwork("$0.001", OP, parseNetworkPremiums(`${OP}=0.001`), f), "$0.002", "Optimism keeps its premium and gets no floor");
 });
 
-await check("402: a $0.001 tool quotes the floor on eip155:4663 and $0.001 everywhere else", async () => {
+await check("402 (default, no floor): a $0.001 tool quotes $0.001 on eip155:4663 like every other chain", async () => {
   const opts = acceptsForItem({ slug: "cheap", price: "$0.001" }, rails);
-  assert.equal(await priceOn(opts.find((o) => o.network === RH)), FLOOR);
+  assert.equal(await priceOn(opts.find((o) => o.network === RH)), "$0.001");
   assert.equal(await priceOn(opts.find((o) => o.network === BASE)), "$0.001");
+  const metered = acceptsForItem({ slug: "metered", price: "$0.001", quote: () => 0.002 }, rails);
+  assert.equal(await priceOn(metered.find((o) => o.network === RH), {}), "$0.002", "a metered quote is not raised either");
 });
 
-await check("402: a $0.07 tool quotes $0.07 on every chain, Robinhood included", async () => {
-  const opts = acceptsForItem({ slug: "dear", price: "$0.07" }, rails);
-  for (const o of opts.filter((x) => x.network !== OP)) assert.equal(await priceOn(o), "$0.07", o.network);
+await check("402 (default): the USDG money parser turns the $0.001 accept into 1000 base units on eip155:4663", async () => {
+  const opts = acceptsForItem({ slug: "cheap", price: "$0.001" }, rails);
+  const { makeUsdgScheme } = await import("../src/payments.js");
+  const amount = await makeUsdgScheme().parsePrice(await priceOn(opts.find((o) => o.network === RH)), RH);
+  assert.equal(String(amount.amount), "1000");
 });
 
-await check("402: a metered per-request quote is floored on eip155:4663 only", async () => {
-  const item = { slug: "metered", price: "$0.001", quote: () => 0.002 };
-  const opts = acceptsForItem(item, rails);
-  assert.equal(await priceOn(opts.find((o) => o.network === RH), {}), FLOOR);
-  assert.equal(await priceOn(opts.find((o) => o.network === BASE), {}), "$0.002");
-  const big = acceptsForItem({ slug: "metered", price: "$0.001", quote: () => 0.09 }, rails);
-  assert.equal(await priceOn(big.find((o) => o.network === RH), {}), "$0.09");
+// With the knob set, a fresh process (the floors are read once at import)
+// quotes exactly what the old floor quoted.
+await check("ROBINHOOD_MIN_PRICE_USD=0.004 restores the old 402 exactly (fresh process): $0.001 -> 4000 base units on 4663, 1000 elsewhere", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const code = `
+    const { acceptsForItem, makeUsdgScheme } = await import(${JSON.stringify(new URL("../src/payments.js", import.meta.url).href)});
+    const rails = ${JSON.stringify(rails)};
+    const out = {};
+    for (const [slug, price] of [["cheap", "$0.001"], ["dear", "$0.07"]]) {
+      for (const o of acceptsForItem({ slug, price }, rails)) out[slug + "@" + o.network] = typeof o.price === "function" ? await o.price({ adapter: { req: {}, getBody: () => ({}) } }) : o.price;
+    }
+    out.units = String((await makeUsdgScheme().parsePrice(out["cheap@${RH}"], "${RH}")).amount);
+    console.log(JSON.stringify(out));
+    process.exit(0);`;
+  const env = { ...process.env, ...OLD, NETWORK_PRICE_PREMIUMS: "", NETWORK_PRICE_FLOORS: "" };
+  const out = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", code], { env, encoding: "utf8" }).trim().split("\n").pop());
+  assert.equal(out[`cheap@${RH}`], FLOOR);
+  assert.equal(out[`cheap@${BASE}`], "$0.001");
+  assert.equal(out[`dear@${RH}`], "$0.07");
+  assert.equal(out.units, "4000");
 });
 
-await check("every surface that states the floor reads the same constant", async () => {
+await check("402 (floor set): a metered per-request quote is floored on eip155:4663 only", async () => {
+  const f = networkPriceFloors(OLD);
+  assert.equal(priceForNetwork("$0.002", RH, new Map(), f), FLOOR);
+  assert.equal(priceForNetwork("$0.002", BASE, new Map(), f), "$0.002");
+  assert.equal(priceForNetwork("$0.09", RH, new Map(), f), "$0.09");
+});
+
+await check("every surface that states a floor reads the same map, and states none by default", async () => {
   const { readFileSync } = await import("node:fs");
   const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
-  // Every offered chain's floor, by public name (Robinhood's default, or a NETWORK_PRICE_FLOORS entry).
+  // Every offered chain's floor, by public name (a ROBINHOOD_MIN_PRICE_USD or NETWORK_PRICE_FLOORS entry).
   assert.match(src("server.js"), /publicNetworks\(\)\.map\(\(n\) => \[n, networkFloorUsd\(PAY_NETWORKS\[n\]\)\]\)\.filter\(\(\[, usd\]\) => usd > 0\)/, "/api/pricing");
   assert.match(src("server.js"), /\{ minPriceUsdByNetwork: floors \}/, "/api/pricing");
   assert.match(src("server.js"), /floorUsd: caip2 \? networkFloorUsd\(caip2\) : 0/, "chain page extras");
@@ -91,12 +137,14 @@ await check("every surface that states the floor reads the same constant", async
   assert.equal(floorClause(new Map()), "", "no floor, no clause");
   assert.match(floorClause(new Map([[RH, 2000], [OP, 1500]])), /^on Robinhood Chain every call costs at least \$0\.002, the floor its 402 quotes; on Optimism every call costs at least \$0\.0015, the floor its 402 quotes$/, "each floored chain is named from the rails list");
   const llms = llmsFullTxt("https://agent402.tools", {});
-  assert.ok(llms.includes(`hold the stablecoin (on Robinhood Chain every call costs at least $${ROBINHOOD_MIN_PRICE_DEFAULT_USD}, the floor its 402 quotes)`), "llms.txt x402 paragraph states the floor");
+  assert.ok(!/every call costs at least/.test(llms), "llms-full.txt states no floor by default");
   for (const t of [llms, llmsTxt("https://agent402.tools", {})]) assert.ok(!/^- \[[^\]]+\]\([^)]+\): [A-Z.]+ \(`[^`]+`\).+$/m.test(t), "no llms.txt chain line carries a floor or premium clause");
   assert.ok((src("guides.js").match(/\$\{networkFloorUsd\(ROBINHOOD_CAIP2\)\}/g) || []).length >= 2, "guides");
+  assert.ok((src("guides.js").match(/networkFloorUsd\(ROBINHOOD_CAIP2\) > 0 \?/g) || []).length >= 2, "the guides state a floor only when one is set");
   const { guidePage } = await import("../src/guides.js");
-  const g = guidePage("https://agent402.tools", "usdg-payments-robinhood-chain");
-  assert.ok(String(g?.html ?? g).includes(`$${ROBINHOOD_MIN_PRICE_DEFAULT_USD}`), "the USDG guide prints the floor");
+  const g = String((guidePage("https://agent402.tools", "usdg-payments-robinhood-chain"))?.html ?? guidePage("https://agent402.tools", "usdg-payments-robinhood-chain"));
+  assert.ok(!/whichever is higher/.test(g), "the USDG guide states no floor by default");
+  assert.match(src("mcp-http.js"), /networkFloorUsd\(ROBINHOOD_CAIP2\) > 0 \?/, "MCP payment.info states a floor only when one is set");
 });
 
 // The settlement premium a chain adds is on the machine price surfaces too,

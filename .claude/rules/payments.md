@@ -372,9 +372,17 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   (`scripts/test-replay-consumed-hold.js`, on Redis).
 - **Per-chain price floors:** `src/network-floors.js`. Every accept is priced through
   `priceForNetwork` (`src/payments.js`: list or per-request quote, plus the chain's
-  `NETWORK_PRICE_PREMIUMS` premium, raised to its floor). eip155:4663 has a static floor
-  (`ROBINHOOD_MIN_PRICE_USD`, "0" off; `NETWORK_PRICE_FLOORS` for others) because its settlement
-  can run through our own relayer; it is static so the paid retry re-derives the same amount.
+  `NETWORK_PRICE_PREMIUMS` premium, raised to its floor). No chain has a floor by default,
+  eip155:4663 included (it quotes the list price like every chain); `ROBINHOOD_MIN_PRICE_USD`
+  sets one there (unset or "0": none) and `NETWORK_PRICE_FLOORS` on any chain. A floor is static
+  so the paid retry re-derives the same amount. Our own relayer pays the gas of what it settles,
+  so it takes a sale only when its amount is at least `ROBINHOOD_RELAYER_MIN_PRICE_USD` (default
+  0.004; "0" any price; `covers()` in `src/robinhood-relayer.js`): under it the relayer refuses
+  with nothing sent (`own_relayer_below_minimum`), the gas order asks the facilitator instead of
+  it, and the outage read books the authorization without submitting, so a refusal from the
+  listed facilitators stands as the buyer's 402 and the x402 payment is not settled
+  (`scripts/test-own-relayer.js`, `scripts/test-rh-outage.js`). The settlement-gas row
+  ("price floor") on 4663 compares gas to that minimum when the relayer is on and no floor is set.
   Ink (eip155:57073) has none by default: only its listed facilitators pay its gas, so the
   floor rule (a settler of ours may pay) does not apply; a per-settlement fee is a premium.
   A floored network, or one with a premium above zero, is never offered `upto` (the boot gate refuses it). /api/pricing (`minPriceUsdByNetwork`), llms-full.txt,
@@ -558,7 +566,7 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   invalid URL or date (`publicIndexBootWarnings`); there is no status word for it
   (`src/facilitator-public-index.js`, `scripts/test-public-index-copy.js`). `ROBINHOOD_RELAYER_KEY` (key present = on) adds our own
   settler after the listed ones (`src/robinhood-relayer.js`): our 4663 sales only (token, call and
-  treasury fixed), the package's exact EVM facilitator verify and settle, one submission per
+  treasury fixed, amount at least `ROBINHOOD_RELAYER_MIN_PRICE_USD`), the package's exact EVM facilitator verify and settle, one submission per
   relayer key across replicas under a lease with the nonce read under it, fee and gas caps, a
   balance check before signing, and a hash for any send that may have reached the node so a
   missing receipt stops the chain; its signer joins the gas check (`scripts/test-own-relayer.js`).
