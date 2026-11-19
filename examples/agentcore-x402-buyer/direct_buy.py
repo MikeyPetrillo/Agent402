@@ -96,12 +96,17 @@ def main():
     print("4) Paid response:")
     print(json.dumps(payload, indent=2)[:600])
 
-    got = payload.get("hash") or payload.get("digest") or payload.get("result")
-    if TARGET_URL.endswith("/api/hash") and got == EXPECTED_HASH:
+    # The hash tool answers {algo, hex, base64}; the sample checks the hex digest.
+    if TARGET_URL.endswith("/api/hash"):
+        got = payload.get("hex")
+        if got != EXPECTED_HASH:
+            print(f"\nNOT VERIFIED: expected hex {EXPECTED_HASH}, got {got!r}")
+            sys.exit(1)
         print(f"\nVERIFIED: sha256('hello world') == {EXPECTED_HASH}")
-    receipt = headers.get("Payment-Response") or headers.get("X-Payment-Response")
+    lower = {k.lower(): v for k, v in headers.items()}
+    receipt = lower.get("payment-response") or lower.get("x-payment-response")
     if receipt:
-        print(f"Settlement receipt present (Payment-Response header).")
+        print("Settlement receipt present (Payment-Response header).")
     print("\nDone: an AgentCore-hosted wallet bought an Agent402 tool over x402.")
 
 

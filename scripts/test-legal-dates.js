@@ -22,7 +22,7 @@ const PINS = {
   // conformance document reads them too), so that file is hashed with it.
   // Both print the credits figures (src/credits-figures.js), so it is hashed with them.
   "src/terms.js": { date: "2026-11-18", sha: "5c618518913799cf", with: ["src/refund-terms.js", "src/credits-figures.js"] },
-  "src/privacy.js": { date: "2026-11-18", sha: "4387724260790819", with: ["src/credits-figures.js"] },
+  "src/privacy.js": { date: "2026-11-19", sha: "9a683a91ee17cb25", with: ["src/credits-figures.js"] },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);

@@ -80,6 +80,8 @@ t node scripts/test-replayable-example.js
 # Our own listing text (every 402, /api/pricing, /openapi.json, /.well-known/x402) passes
 # the listing screen and the hidden-character scan we hold sellers to (stub facilitator)
 t node scripts/test-own-listing-screen.js
+# The AgentCore payments recipe runs as written against our own 402 (stub AWS modules, stand-in seller, python3)
+t node scripts/test-agentcore-recipe.js
 # Standing red team (scripts/redteam-corpus.json): injection and tool-abuse payloads against
 # the MCP connector, the seller judge, decide's planner, the fetch guard, the router's payer
 # and report prose; fails on any attack that lands (stub judge, model and facilitator, port 0)

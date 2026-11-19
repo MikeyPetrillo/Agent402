@@ -46,6 +46,35 @@ two rails Agent402 serves.
 > the buy from the agent, and why the headline discovery path for paid tools is the
 > **Coinbase x402 Bazaar** Gateway target + this plugin.
 
+## Card-funded wallets
+
+The agent pays from an embedded wallet that AgentCore Payments holds for the end
+user, and the wallet can be topped up by card, debit, Apple Pay, Google Pay or ACH
+(availability depends on the wallet provider and the country) as well as with USDC.
+The agent code is the same either way: it never sees a card, a key or a stablecoin
+transfer, and the Payment Session's spend limit bounds every call it pays for.
+
+## Finding Agent402 tools from an AgentCore agent
+
+AgentCore Gateway lists the x402 Bazaar as a pre-configured target ("Coinbase x402
+Bazaar"), so an agent that searches it for a task can reach Agent402's listings
+there and pays them with this plugin. Each listing carries its input schema, a
+sample output (or, for a large one, a link to it in `/openapi.json`) and the price
+in its 402, the same prices `GET https://agent402.tools/api/pricing` publishes.
+
+## Tested without an AWS account
+
+`scripts/test-agentcore-recipe.js` runs `direct_buy.py` as written against the real
+402 that `POST /api/hash` answers (the server booted locally in paid mode), with
+stand-in `boto3` and `bedrock_agentcore.payments` modules in place of AWS. It checks
+that the payment service is handed the 402 whole, that the retry carries the header
+it returns, that the digest checked is the field the tool answers, and that a
+retry the seller refuses fails the run:
+
+```bash
+node scripts/test-agentcore-recipe.js
+```
+
 ## Prerequisites
 
 1. **AWS account + Agent Toolkit** (one-time). Sign in (`aws login --profile agent402`)

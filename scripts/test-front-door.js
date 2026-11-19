@@ -415,7 +415,7 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
     const r = await fetch(`${B}${e.path}${e.method === "GET" ? "?q=test" : ""}`, e.method === "GET" ? {} : { method: e.method, headers: { "content-type": "application/json" }, body: "{}" });
     const hdr = decode(r);
     const info = hdr?.extensions?.bazaar?.info;
-    ok(hdr?.resource?.description === BAZAAR_DESCRIPTIONS[slug] && /^One call (returns|loads)/.test(BAZAAR_DESCRIPTIONS[slug]), `${slug}: the listing says what one call gets, untrimmed`);
+    ok(hdr?.resource?.description === BAZAAR_DESCRIPTIONS[slug] && /^(?:[A-Z][a-z]+(?: [a-z]+)*: one|One) call (returns|loads)/.test(BAZAAR_DESCRIPTIONS[slug]), `${slug}: the listing says what one call gets, untrimmed`);
     const ex = info?.output?.example;
     ok(ex && !isExamplePointer(ex), `${slug}: the listing carries the full sample output, not the pointer`);
     if (Array.isArray(ex?.results)) ok(ex.results.length === ex.count && ex.count > 1, `${slug}: the sample's count matches its results (${ex.count} vs ${ex.results.length})`);
@@ -423,9 +423,9 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
 
   // Origin-level descriptions lead with the first call.
   const openapi = await (await fetch(`${B}/openapi.json`)).json();
-  ok(String(openapi.info?.description || "").startsWith(`Start here: ${s.ROUTE}?q=`) && openapi.info.description.includes(`${s.PRICE} a call`), "openapi info.description leads with the first call at the catalog price");
+  ok(String(openapi.info?.description || "").startsWith(`First call: ${s.ROUTE}?q=`) && openapi.info.description.includes(`${s.PRICE} a call`), "openapi info.description leads with the first call at the catalog price");
   const manifest = await (await fetch(`${B}/.well-known/x402`)).json();
-  ok(String(manifest.summary || "").startsWith(`Start here: ${s.ROUTE}?q=`) && manifest.summary.includes(`${s.PRICE} a call`), "/.well-known/x402 summary leads with the first call at the catalog price");
+  ok(String(manifest.summary || "").startsWith(`First call: ${s.ROUTE}?q=`) && manifest.summary.includes(`${s.PRICE} a call`), "/.well-known/x402 summary leads with the first call at the catalog price");
   ok(!EM_DASH.test(openapi.info.description.slice(0, 300)) && !EM_DASH.test(manifest.summary.slice(0, 300)), "no em or en dash in either lead sentence");
   ok(!FIRST_CALL_FREE_COPY.test(openapi.info.description) && !FIRST_CALL_FREE_COPY.test(manifest.summary), "off: neither origin description offers a free first call");
   stopProc();

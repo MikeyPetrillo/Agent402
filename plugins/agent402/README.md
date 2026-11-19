@@ -6,6 +6,7 @@ The Agent402 plugin connects Claude Code to Agent402, the payment and trust laye
 
 - Adds the Agent402 MCP server at `https://agent402.tools/mcp`.
 - Lets Claude find the right tool for a task with `catalog.find`, then call it.
+- Adds the `agent402` skill (`skills/agent402/SKILL.md`): when the catalog fits a task, how a call goes, and where prices and spending caps are read.
 - Shows each tool's price in its catalog entry, so you can see what a call costs before you make it.
 
 ## How you pay
