@@ -73,41 +73,46 @@ const keysOnlyFrom = (o, allowed) => Object.keys(o).every((k) => allowed.include
   const sent = [];
   obs._setSinkForTest((event, props) => sent.push({ event, props }));
   obs._resetObservabilityForTest({ env: {} });
-  ok(obs.captureAiGeneration({ tier: "v1-chat", model: "m" }) === true, "a model call queues with the key present");
+  ok(obs.captureAiGeneration({ tier: "v1-chat", model: "m" }) === false && obs.captureServerException(new Error("unset")) === false && obs._queueForTest().length === 0, "both streams are off by default (no switch set)");
+  obs._resetObservabilityForTest({ env: { POSTHOG_AI_EVENTS: "yes", POSTHOG_EXCEPTIONS: "true" } });
+  ok(obs.captureAiGeneration({ tier: "v1-chat" }) === false && obs.captureServerException(new Error("near")) === false, "only the exact word on turns a stream on");
+  ok(!obs.aiEventsEnabled({}) && !obs.exceptionEventsEnabled({}) && obs.aiEventsEnabled({ POSTHOG_AI_EVENTS: " ON " }) && obs.exceptionEventsEnabled({ POSTHOG_EXCEPTIONS: "on" }), "the switch readers the privacy page uses agree");
+  obs._resetObservabilityForTest({ env: { POSTHOG_AI_EVENTS: "on", POSTHOG_EXCEPTIONS: "on" } });
+  ok(obs.captureAiGeneration({ tier: "v1-chat", model: "m" }) === true, "a model call queues with the switch on and the key present");
   ok(obs.flushObservability() === 1 && sent.length === 1 && sent[0].event === "$ai_generation", "the flush sends it through the sink");
 
   obs._resetObservabilityForTest({ env: { POSTHOG_AI_EVENTS: "off", POSTHOG_EXCEPTIONS: "OFF" } });
   ok(obs.captureAiGeneration({ tier: "v1-chat" }) === false && obs.captureServerException(new Error("z")) === false && obs._queueForTest().length === 0, "each off switch sends nothing");
 
   obs._setSinkForTest((event, props) => sent.push({ event, props }), () => false);
-  obs._resetObservabilityForTest({ env: {} });
+  obs._resetObservabilityForTest({ env: { POSTHOG_AI_EVENTS: "on", POSTHOG_EXCEPTIONS: "on" } });
   ok(obs.captureAiGeneration({ tier: "v1-chat" }) === false && obs.captureServerException(new Error("z")) === false && obs.noteWebBotAuth({ agent: "a", verified: true }) === false, "without the key (inactive sink) nothing queues");
   obs._setSinkForTest((event, props) => sent.push({ event, props }));
 
-  obs._resetObservabilityForTest({ env: { POSTHOG_AI_SAMPLE: "0.5" }, random: () => 0.9 });
+  obs._resetObservabilityForTest({ env: { POSTHOG_AI_EVENTS: "on", POSTHOG_EXCEPTIONS: "on", POSTHOG_AI_SAMPLE: "0.5" }, random: () => 0.9 });
   ok(obs.captureAiGeneration({ tier: "v1-chat" }) === false, "a sampled-out call is not queued");
-  obs._resetObservabilityForTest({ env: { POSTHOG_AI_SAMPLE: "0.5" }, random: () => 0.1 });
+  obs._resetObservabilityForTest({ env: { POSTHOG_AI_EVENTS: "on", POSTHOG_EXCEPTIONS: "on", POSTHOG_AI_SAMPLE: "0.5" }, random: () => 0.1 });
   ok(obs.captureAiGeneration({ tier: "v1-chat" }) === true, "a sampled-in call is queued");
-  obs._resetObservabilityForTest({ env: { POSTHOG_AI_SAMPLE: "0" } });
+  obs._resetObservabilityForTest({ env: { POSTHOG_AI_EVENTS: "on", POSTHOG_EXCEPTIONS: "on", POSTHOG_AI_SAMPLE: "0" } });
   ok(obs.captureAiGeneration({ tier: "v1-chat" }) === false, "sample 0 sends nothing");
 
-  obs._resetObservabilityForTest({ env: { POSTHOG_AI_HOURLY_MAX: "3" } });
+  obs._resetObservabilityForTest({ env: { POSTHOG_AI_EVENTS: "on", POSTHOG_EXCEPTIONS: "on", POSTHOG_AI_HOURLY_MAX: "3" } });
   let n = 0; for (let i = 0; i < 10; i++) if (obs.captureAiGeneration({ tier: "v1-chat" })) n++;
   ok(n === 3, `the hourly ceiling holds (${n} of 10)`);
 
-  obs._resetObservabilityForTest({ env: { POSTHOG_AI_HOURLY_MAX: "100000" } });
+  obs._resetObservabilityForTest({ env: { POSTHOG_AI_EVENTS: "on", POSTHOG_EXCEPTIONS: "on", POSTHOG_AI_HOURLY_MAX: "100000" } });
   for (let i = 0; i < 1000; i++) obs.captureAiGeneration({ tier: "v1-chat" });
   const st = obs.observabilityStats();
   ok(st.queued === obs.OBS_QUEUE_MAX && st.dropped === 1000 - obs.OBS_QUEUE_MAX, `the queue is bounded at ${obs.OBS_QUEUE_MAX} and counts what it drops (${st.dropped})`);
 
-  obs._resetObservabilityForTest({ env: {} });
+  obs._resetObservabilityForTest({ env: { POSTHOG_AI_EVENTS: "on", POSTHOG_EXCEPTIONS: "on" } });
   const mk = () => { try { null.x; } catch (e) { return e; } };
   ok(obs.captureServerException(mk()) === true && obs.captureServerException(mk()) === false, "one fingerprint is sent once per window");
-  obs._resetObservabilityForTest({ env: { POSTHOG_EXCEPTION_HOURLY_MAX: "2" } });
+  obs._resetObservabilityForTest({ env: { POSTHOG_AI_EVENTS: "on", POSTHOG_EXCEPTIONS: "on", POSTHOG_EXCEPTION_HOURLY_MAX: "2" } });
   const distinct = [() => { throw new RangeError("a"); }, () => { throw new SyntaxError("b"); }, () => { throw new EvalError("c"); }].map((f) => { try { f(); } catch (e) { return e; } });
   ok(distinct.filter((e) => obs.captureServerException(e)).length === 2, "the exception hourly ceiling holds");
 
-  obs._resetObservabilityForTest({ env: {} });
+  obs._resetObservabilityForTest({ env: { POSTHOG_AI_EVENTS: "on", POSTHOG_EXCEPTIONS: "on" } });
   sent.length = 0;
   obs.noteWebBotAuth({ agent: "https://agent.example.test/.well-known/http-message-signatures-directory", verified: true, reason: "ok" });
   obs.noteWebBotAuth({ agent: "https://agent.example.test/.well-known/http-message-signatures-directory", verified: true, reason: "ok" });
@@ -121,7 +126,7 @@ const keysOnlyFrom = (o, allowed) => Object.keys(o).every((k) => allowed.include
 
 // --- the real hooks: posthog.js test sink and server.js wiring ------------------
 {
-  obs._resetObservabilityForTest({ env: {} });
+  obs._resetObservabilityForTest({ env: { POSTHOG_AI_EVENTS: "on", POSTHOG_EXCEPTIONS: "on" } });
   // Re-register posthog.js's own capture (the test above replaced the sink).
   const reg = readFileSync(new URL("../src/posthog.js", import.meta.url), "utf8");
   ok(/registerObservabilitySink\(/.test(reg) && /captureAiGeneration\(\{ tier, routeTier, model, promptTokens, completionTokens, servedBy, source: src, serviceTier, defaulted \}\)/.test(reg), "posthog.js registers its capture and the gateway usage hook passes counts and labels only");
@@ -141,7 +146,7 @@ const keysOnlyFrom = (o, allowed) => Object.keys(o).every((k) => allowed.include
     const evs = ph._testEventsForTest().filter((e) => e.event.startsWith("$"));
     process.stdout.write(JSON.stringify(evs));
   `;
-  const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { cwd: fileURLToPath(new URL("..", import.meta.url)), env: { ...process.env, POSTHOG_TEST_CAPTURE: "1", POSTHOG_API_KEY: "" }, encoding: "utf8", timeout: 60_000 });
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { cwd: fileURLToPath(new URL("..", import.meta.url)), env: { ...process.env, POSTHOG_TEST_CAPTURE: "1", POSTHOG_API_KEY: "", POSTHOG_AI_EVENTS: "on", POSTHOG_EXCEPTIONS: "on" }, encoding: "utf8", timeout: 60_000 });
   let evs = [];
   try { evs = JSON.parse(r.stdout.split("\n").filter((l) => l.startsWith("[")).pop() || "[]"); } catch { evs = []; }
   const ai = evs.find((e) => e.event === "$ai_generation"), ex = evs.find((e) => e.event === "$exception");
@@ -155,6 +160,23 @@ const keysOnlyFrom = (o, allowed) => Object.keys(o).every((k) => allowed.include
   ok(/process\.on\("unhandledRejection"[\s\S]{0,300}captureServerException\(reason, \{ source: "unhandledRejection" \}\)/.test(src), "an unhandled rejection is captured");
   ok(/process\.on\("uncaughtException"[\s\S]{0,300}captureServerException\(err, \{ source: "uncaughtException", handled: false, level: "fatal" \}\)/.test(src), "an uncaught exception is captured as fatal before the drain");
   ok(/if \(status >= 500\) captureServerException\(err, \{ source: "tool", slug: tool\.slug, status \}\)/.test(src), "a tool 5xx is captured with its slug and status");
+}
+
+{
+  // The privacy page describes each stream only while its switch is on.
+  const { privacyPage } = await import("../src/privacy.js");
+  const AI = "records the model, the tier, the token counts", EX = "An unexpected server error records its";
+  const keep = { a: process.env.POSTHOG_AI_EVENTS, e: process.env.POSTHOG_EXCEPTIONS };
+  delete process.env.POSTHOG_AI_EVENTS; delete process.env.POSTHOG_EXCEPTIONS;
+  const off = String(privacyPage("https://agent402.test"));
+  process.env.POSTHOG_AI_EVENTS = "on";
+  const aiOnly = String(privacyPage("https://agent402.test"));
+  process.env.POSTHOG_EXCEPTIONS = "on";
+  const both = String(privacyPage("https://agent402.test"));
+  for (const [k, v] of [["POSTHOG_AI_EVENTS", keep.a], ["POSTHOG_EXCEPTIONS", keep.e]]) { if (v == null) delete process.env[k]; else process.env[k] = v; }
+  ok(!off.replace(/\s+/g, " ").includes(AI) && !off.includes(EX), "with both switches unset the privacy page names neither stream");
+  ok(aiOnly.replace(/\s+/g, " ").includes(AI) && !aiOnly.includes(EX), "the model-call sentence follows POSTHOG_AI_EVENTS alone");
+  ok(both.replace(/\s+/g, " ").includes(AI) && both.includes(EX), "the error sentence follows POSTHOG_EXCEPTIONS");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

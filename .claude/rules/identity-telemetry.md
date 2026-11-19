@@ -30,9 +30,11 @@ Loaded when a sign-in, signed-agent, payer or PostHog file is read.
   Signature-Agent's directory fetched in the background through `safeFetch` (no redirects, 64 KB, 20 keys,
   30 fetches a minute, 4 at once, 500 cached, an hour each; a failure waits 10 minutes). The outcome is
   `req.webBotAuth` and the `web_bot_auth` PostHog rollup; it never refuses or changes an answer.
-- **PostHog LLM analytics and error tracking:** `src/posthog-observability.js`, on with `POSTHOG_API_KEY`
-  (the same production guard as the rest of `src/posthog.js`); `POSTHOG_AI_EVENTS=off` and
-  `POSTHOG_EXCEPTIONS=off` turn each stream off. `$ai_generation` rides `capturePostHogGatewayUsage`
+- **PostHog LLM analytics and error tracking:** `src/posthog-observability.js`, off by default: each
+  stream needs its own switch set to exactly `on` (`POSTHOG_AI_EVENTS=on`, `POSTHOG_EXCEPTIONS=on`) and
+  `POSTHOG_API_KEY` (the same production guard as the rest of `src/posthog.js`). The privacy page's
+  sentence for each stream renders only while its switch is on (`aiEventsEnabled`,
+  `exceptionEventsEnabled`). `$ai_generation` rides `capturePostHogGatewayUsage`
   (model, tier, token counts, status; never a prompt, answer or cost); `$exception` comes from
   unhandled rejections, the fatal uncaught exception and tool 5xx (scrubbed message, frames as file and
   line). Every event is an allowlist (`*_FIELDS`), pinned by `scripts/test-posthog-observability.js`;

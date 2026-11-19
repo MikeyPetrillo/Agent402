@@ -29,6 +29,7 @@ import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUB
 import { referralOffered } from "./referral-gate.js";
 import { walletSignInEnabled } from "./wallet-sign-in.js";
 import { webBotAuthEnabled } from "./web-bot-auth.js";
+import { aiEventsEnabled, exceptionEventsEnabled } from "./posthog-observability.js";
 import { GOOD_READ_MAX_MS, SETTLED_MARK_MS, COVER_WALLETS_MAX, sharedWindowMs } from "./inflight-cover.js";
 
 // How long a kept balance read is used, and how long a wallet's settled mark
@@ -54,6 +55,10 @@ export function privacyPage(baseUrl) {
   // sentences about that channel appear only while this server has it.
   const referralOn = referralOffered();
   const walletSignInOn = walletSignInEnabled();
+  // PostHog model-call and error events (src/posthog-observability.js): each
+  // sentence renders only while its switch is on.
+  const aiEventsOn = aiEventsEnabled();
+  const exceptionEventsOn = exceptionEventsEnabled();
   const webBotAuthOn = webBotAuthEnabled();
   // Job and task results, and the funding screen's bounds, as the server runs
   // them (src/mcp-tasks.js, src/sanctions-screen.js).
@@ -287,10 +292,10 @@ so every claim below is verifiable in code.</p>
   hash of one declared input field (for example the ticker), so repeat use is countable without the value;
   a refused payment carries the resource URL the payment names and a coarse balance bucket for the paying
   wallet; and an error event carries our error message (at most 200 characters), which can name the input
-  value that was refused. A call to a model-backed tier also records the model, the tier, the token counts,
-  the status and how long it took, never the prompt or the answer. An unexpected server error records its
+  value that was refused.${aiEventsOn ? ` A call to a model-backed tier also records the model, the tier, the token counts,
+  the status and how long it took, never the prompt or the answer.` : ""}${exceptionEventsOn ? ` An unexpected server error records its
   type, its message with any quoted text, address, link, email, long token or long number removed, and the
-  places in our code it passed through; it carries no request body, header value or wallet address.</li>
+  places in our code it passed through; it carries no request body, header value or wallet address.` : ""}</li>
 ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sign a one-time message with an Ethereum wallet so that
   routes keyed to a wallet (your usage, your receipts, your memory) answer for that wallet on a call paid another way.
   We keep each one-time code for at most five minutes and until it is used, and we give you a signed session token that

@@ -793,11 +793,11 @@ its first read site when there is one; a helper may still clamp it, and the read
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `POSTHOG_AI_EVENTS` | PostHog model-call analytics events; off sends none. |  | `src/posthog-observability.js` |
+| `POSTHOG_AI_EVENTS` | PostHog model-call analytics events ($ai_generation); off unless set to on (with POSTHOG_API_KEY). The privacy page describes them only while on. |  | `src/posthog-observability.js` |
 | `POSTHOG_AI_HOURLY_MAX` | Most PostHog model-call events sent per hour. |  | `src/posthog-observability.js` |
 | `POSTHOG_AI_SAMPLE` | Share of model calls sent to PostHog, 0 to 1. |  | `src/posthog-observability.js` |
 | `POSTHOG_API_KEY` | Posthog API key (a credential, set on the host). |  | `src/ledger-chrome.js`, `src/posthog.js` |
-| `POSTHOG_EXCEPTIONS` | PostHog error tracking events; off sends none. |  | `src/posthog-observability.js` |
+| `POSTHOG_EXCEPTIONS` | PostHog error tracking events ($exception); off unless set to on (with POSTHOG_API_KEY). The privacy page describes them only while on. |  | `src/posthog-observability.js` |
 | `POSTHOG_EXCEPTION_HOURLY_MAX` | Most PostHog error events sent per hour. |  | `src/posthog-observability.js` |
 | `POSTHOG_EXCEPTION_SAMPLE` | Share of errors sent to PostHog, 0 to 1. |  | `src/posthog-observability.js` |
 | `POSTHOG_FORCE` | Posthog force. |  | `src/posthog.js` |

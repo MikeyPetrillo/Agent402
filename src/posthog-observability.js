@@ -1,10 +1,12 @@
 // PostHog LLM analytics ($ai_generation) and error tracking ($exception) for
 // the server, plus the verified-agent rollup of Web Bot Auth.
 //
-// On with the PostHog key (src/posthog.js registers its capture here at
-// import; without POSTHOG_API_KEY nothing is captured and nothing queues).
-// Each stream has its own off switch: POSTHOG_AI_EVENTS=off,
-// POSTHOG_EXCEPTIONS=off.
+// Off by default. Each stream has its own on switch: POSTHOG_AI_EVENTS=on,
+// POSTHOG_EXCEPTIONS=on (exactly "on"); it then needs the PostHog key too
+// (src/posthog.js registers its capture here at import; without
+// POSTHOG_API_KEY nothing is captured and nothing queues). The privacy page
+// describes a stream only while its switch is on (aiEventsEnabled,
+// exceptionEventsEnabled).
 //
 // What an event may carry is an allowlist per event (the *_FIELDS below,
 // enforced by `pickAllowed` on every event built here, and pinned by
@@ -40,10 +42,15 @@ const MAX_FRAMES = 40;
 
 const num01 = (v, d) => { const n = Number(v); return v == null || v === "" || !Number.isFinite(n) ? d : Math.min(1, Math.max(0, n)); };
 const posInt = (v, d) => { const n = Number(v); return Number.isInteger(n) && n >= 0 ? n : d; };
+const switchOn = (v) => String(v ?? "").trim().toLowerCase() === "on";
+// Model-call analytics events ($ai_generation): off unless POSTHOG_AI_EVENTS=on.
+export function aiEventsEnabled(env = process.env) { return switchOn(env.POSTHOG_AI_EVENTS); }
+// Error tracking events ($exception): off unless POSTHOG_EXCEPTIONS=on.
+export function exceptionEventsEnabled(env = process.env) { return switchOn(env.POSTHOG_EXCEPTIONS); }
 function config(env = process.env) {
   return {
-    aiOn: String(env.POSTHOG_AI_EVENTS || "").toLowerCase() !== "off",
-    excOn: String(env.POSTHOG_EXCEPTIONS || "").toLowerCase() !== "off",
+    aiOn: aiEventsEnabled(env),
+    excOn: exceptionEventsEnabled(env),
     aiSample: num01(env.POSTHOG_AI_SAMPLE, 1),
     excSample: num01(env.POSTHOG_EXCEPTION_SAMPLE, 1),
     aiHourly: posInt(env.POSTHOG_AI_HOURLY_MAX, 3000),
