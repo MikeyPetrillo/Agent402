@@ -223,6 +223,13 @@ try {
   ok((await runCheck(stubCheck, { callTool: fixed(200, { nope: 1 }), verdict: verdict(at(down)) })).outcome === "fail", "(live check) a malformed 200 FAILS");
   ok((await runCheck(stubCheck, { callTool: fixed(500, { error: "Internal error" }), verdict: verdict(at(down)) })).outcome === "fail", "(live check) our own 500 FAILS while the upstream is down");
 
+  // ---- wiring: the strict sweep grades a bundle's failure by the bundle rule
+  // after the pure-computation grade and before its rate-limit skip
+  {
+    const sweepSrc = readFileSync(join(ROOT, "scripts/test-non-metered-examples.js"), "utf8");
+    const pure = sweepSrc.indexOf("if (isPureCpuSlug(t.slug)) {"), graded = sweepSrc.indexOf("await bundleFailureGrade(t, r)"), skip = sweepSrc.indexOf("if (isRateLimited(r.status, r.body, r.threw)) {");
+    ok(pure > 0 && graded > pure && skip > graded, "the strict sweep reads a bundle's failure against the runner before its rate-limit skip");
+  }
   // ---- wiring: both CI boots load the preload, the live step runs the check
   const yml = readFileSync(join(ROOT, ".github/workflows/deploy.yml"), "utf8");
   const boots = yml.split("\n").filter((l) => /--import \.\/scripts\/lib\/upstream-failure-log-preload\.js src\/server\.js/.test(l));
