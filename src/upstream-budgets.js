@@ -11,17 +11,27 @@
 // budget the operator sets. So it answers "are we using far more than we
 // planned today", never "how much credit is left".
 //
-// THE COUNTER IS DAILY AND IN MEMORY. It resets at UTC midnight and on every
-// deploy, so a figure here is a FLOOR for the day, and a monthly quota is only
-// bounded by proxy: a daily budget under the month's share keeps the month safe
-// without pretending to read the quota. Every status says so rather than
-// implying precision it does not have.
+// THE COUNT IS THE DAY'S, ACROSS DEPLOYS AND REPLICAS, when a shared store is
+// configured. Each process counts its own calls in memory (the egress meter,
+// reset at UTC midnight and on every deploy); on a timer it adds what it has
+// counted since its last flush to a shared daily counter per upstream
+// (src/shared-limits.js) and reads the day's total back. The status is built
+// from that total (plus what this process has not flushed yet), or from the
+// day's count the hard ceiling of the same name keeps
+// (src/upstream-hard-caps.js), whichever is larger, never from less than this
+// process's own count. So a deploy late in a heavy day does not read "ok" on
+// a budget the day already passed. Without a shared store the process's own
+// count is all there is, a FLOOR for the day, and the status says which it
+// read (`shared`). A monthly quota is only bounded by proxy: a daily budget
+// under the month's share keeps the month safe without pretending to read it.
 //
 // WHO SEES WHAT. /api/gateway-status publishes one word for the whole group;
 // the per-upstream rows (calls, budget, reason) are the operator view only, so
 // no public surface names an upstream or publishes a daily ceiling.
 
 import { egressReport } from "./egress-meter.js";
+import { createSharedDailySpend } from "./shared-limits.js";
+import { hardCapStatus } from "./upstream-hard-caps.js";
 
 // host suffix -> { name, env, default daily call budget }
 // Defaults are set ABOVE current observed use, so switching this on does not
@@ -67,6 +77,78 @@ const budgetOf = (b) => {
   return Number.isFinite(n) && n > 0 ? n : b.dflt;
 };
 
+const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
+// This process's own count for one budget: the tool kit's registered counter,
+// else the egress meter's calls to hosts under the budget's suffix.
+function processCalls(b, hosts) {
+  const own = ownCounters.get(b.name);
+  let calls;
+  try { calls = own ? Number(own()) || 0 : null; } catch { calls = null; }
+  if (calls === null) {
+    calls = hosts
+      .filter((h) => typeof h.host === "string" && h.host.endsWith(b.match))
+      .reduce((a, h) => a + (h.calls || 0), 0);
+  }
+  return calls;
+}
+
+// The shared day per budget: what this process has added to the shared
+// counter (`flushed`, out of its own count) and the last total read back.
+const sharedRows = new Map(); // name -> { day, flushed, shared, store }
+function sharedRowOf(b, now = Date.now()) {
+  let s = sharedRows.get(b.name);
+  const d = utcDay(now);
+  if (!s) { s = { day: d, flushed: 0, shared: null, store: createSharedDailySpend(`upstream-budget-${b.name}`, "upstream-budgets", { scale: 1 }) }; sharedRows.set(b.name, s); }
+  if (s.day !== d) { s.day = d; s.flushed = 0; s.shared = null; }
+  return s;
+}
+// The day's count as this process sees it: the shared total plus what it has
+// not flushed, the hard ceiling's own day count, or its own count.
+function dayCalls(b, calls, now) {
+  const s = sharedRowOf(b, now);
+  let seen = Math.max(calls, s.shared === null ? 0 : s.shared + Math.max(0, calls - s.flushed));
+  let shared = s.shared !== null;
+  try {
+    const cap = hardCapStatus(now).upstreams[b.name];
+    // The ceiling counts what the egress meter counts (calls to the host); a
+    // budget with a registered counter counts tool calls and is left alone.
+    if (cap && !ownCounters.has(b.name) && cap.shared) { seen = Math.max(seen, Number(cap.usedToday) || 0); shared = true; }
+  } catch { /* the budget's own counts stand */ }
+  return { seen, shared };
+}
+
+/**
+ * Add this process's new calls to each budget's shared daily counter and read
+ * the day's totals back. On a timer (startUpstreamBudgetSync); never on a
+ * request's path. Without a shared store it does nothing.
+ */
+export async function syncUpstreamBudgets(now = Date.now(), report = null) {
+  const hosts = (report || egressReport({ top: 2000 })).hosts || [];
+  for (const b of UPSTREAM_BUDGETS) {
+    const s = sharedRowOf(b, now);
+    if (!s.store.enabled) continue;
+    const calls = processCalls(b, hosts);
+    const delta = calls - s.flushed;
+    if (delta > 0) { s.flushed = calls; s.store.book(delta, now); }
+    try {
+      const v = await s.store.today(now);
+      // The day's total only grows; a read that predates the flush is not taken as a step back.
+      if (v !== null) s.shared = Math.max(v, s.shared ?? 0);
+    } catch { /* keep the last reading */ }
+  }
+}
+let syncTimer = null;
+export function startUpstreamBudgetSync() {
+  if (syncTimer) return;
+  syncTimer = setInterval(() => { void syncUpstreamBudgets().catch(() => {}); }, Math.max(1_000, Number(process.env.UPSTREAM_BUDGET_SYNC_MS) || 15_000));
+  syncTimer.unref?.();
+  // The first read lands soon after boot, so a new process does not answer from its own empty count for long.
+  const first = setTimeout(() => { void syncUpstreamBudgets().catch(() => {}); }, 2_000);
+  first.unref?.();
+}
+/** Test seam. */
+export function _resetUpstreamBudgetShared() { sharedRows.clear(); }
+
 /**
  * Per-upstream daily call usage against budget (the operator view; the public
  * view keeps `status` alone). Counts only - never a key, never a URL, never a
@@ -76,28 +158,28 @@ const budgetOf = (b) => {
  *   disabled  budget explicitly turned off
  * A host we made no calls to today simply reads 0/ok; absence is not an error.
  */
-export function upstreamBudgetStatus(report = null) {
+export function upstreamBudgetStatus(report = null, now = Date.now()) {
   const rep = report || egressReport({ top: 2000 });
   const hosts = rep.hosts || [];
   const out = { day: rep.day, sinceRestart: true, upstreams: {} };
   let worst = "ok";
+  let anyShared = false;
   for (const b of UPSTREAM_BUDGETS) {
     const own = ownCounters.get(b.name);
-    let calls;
-    try { calls = own ? Number(own()) || 0 : null; } catch { calls = null; }
-    if (calls === null) {
-      calls = hosts
-        .filter((h) => typeof h.host === "string" && h.host.endsWith(b.match))
-        .reduce((a, h) => a + (h.calls || 0), 0);
-    }
+    const processCount = processCalls(b, hosts);
+    const { seen: calls, shared } = dayCalls(b, processCount, now);
+    if (shared) anyShared = true;
     const budget = budgetOf(b);
     const status = budget === 0 ? "disabled" : (calls >= budget ? "elevated" : "ok");
     if (status === "elevated") worst = "elevated";
-    out.upstreams[b.name] = { callsToday: calls, budget: budget || null, status, why: b.why, ...(own ? { counts: "tool calls only" } : {}) };
+    // callsToday is the day's count (shared: across deploys and replicas);
+    // processCallsToday is this process's own, since its restart.
+    out.upstreams[b.name] = { callsToday: calls, processCallsToday: processCount, shared, budget: budget || null, status, why: b.why, ...(own ? { counts: "tool calls only" } : {}) };
   }
   out.status = worst;
+  out.sinceRestart = !anyShared;
   out.note = "Counts OUR outbound calls per host, not a vendor balance - most of these publish none. "
-    + "Daily, in memory, reset by UTC midnight and by every deploy, so a figure here is a floor for the day. "
+    + "A row marked shared is the UTC day's count across deploys and replicas; a row that is not is this process's own count since its restart, a floor for the day. "
     + "A monthly quota is bounded by proxy, never read.";
   return out;
 }
