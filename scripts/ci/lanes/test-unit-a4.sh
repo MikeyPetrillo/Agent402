@@ -68,6 +68,8 @@ t node scripts/test-listing-inputs.js
 t node scripts/test-multipart-openapi.js
 # Per-request facilitator preference: honored only with the operator token, the 402 byte-identical otherwise, verify and settle at the named facilitator (booted, two stub
 t node scripts/test-settle-preference.js
+# Second Solana facilitator: quote share, stable quotes, settle routed by the transaction fee payer, no cross-facilitator fallback, boot check, unset byte-identical (booted, three stubs)
+t node scripts/test-svm-facilitator-split.js
 # Tool resolver (/api/find ranking, guards)
 t node scripts/test-find.js
 # Reader searches find the article extractor through its aliases, on the real catalog (booted free-mode server)

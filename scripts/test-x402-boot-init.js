@@ -44,7 +44,9 @@ const tick = () => new Promise((r) => setImmediate(r));
   ok(/if \(!syncOnStart\) return withMcpTwins\(vendorMw, mcpVendorMw\);/.test(src), "payments.js: X402_SYNC_ON_START=false still skips the handshake entirely");
   // A flagged request the twins' paywall does not price runs the HTTP
   // route's paywall (mcpX402Dispatch, tested in test-mcp-x402-routes.js).
-  ok(/const withMcpTwins = \(main, mcp\) => mcpX402Dispatch\(\{ main, mcp, knows: mcpHttpServer \? mcpX402Knows\(mcpHttpServer\) : \(\) => false \}\);/.test(src),
+  // The dispatcher (one expression, wrapped in the Solana facilitator split's
+  // scope when that switch is set) is the whole of withMcpTwins.
+  ok(/const withMcpTwins = \(main, mcp\) => \{\n\s*const mw = mcpX402Dispatch\(\{ main, mcp, knows: mcpHttpServer \? mcpX402Knows\(mcpHttpServer\) : \(\) => false \}\);\n\s*return svmSplit \? svmSplit\.wrap\(mw\) : mw;\n\s*\};/.test(src),
     "payments.js: the twins' paywall runs only for a request it prices; any other runs the HTTP route's");
 }
 

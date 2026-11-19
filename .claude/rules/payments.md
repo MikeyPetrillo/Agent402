@@ -525,6 +525,16 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   rail whose readings replace only that network's rows (`scripts/test-settle-fallback.js`,
   `scripts/test-tool-failure-monitor.js`). There is no extra Solana settle fallback by design: a
   Solana payment names the quoted facilitator's fee payer, and any other facilitator refuses it.
+  `SOLANA_FACILITATOR_URL` (ordered list; unset = unchanged) adds a second Solana mainnet
+  facilitator that is never a routing client (`src/svm-facilitator-split.js`): it names
+  `SOLANA_FACILITATOR_SHARE` percent (default 50) of Solana quotes, chosen by a hash of client
+  address, method and URL (a re-read is the same quote), while its /supported lists exact with a
+  valid base58 fee payer that the boot-order facilitator does not also name (read at boot and
+  every `SOLANA_FACILITATOR_RECHECK_MS`, default 10 min). A paid request is routed by the fee
+  payer its transaction's first account names, never by the share: a listed signer to the listed
+  facilitator, the boot-order one's to it, any other refused before verify
+  (`fee_payer_not_offered`). With it set, Solana has no settle fallback (`[]` override)
+  (`scripts/test-svm-facilitator-split.js`).
   `FACILITATOR_PUBLIC_INDEX_CHAINS` (`robinhood` and `ink` are the known values; unset = none;
   any other value renders nothing and warns at boot; a listed chain renders only while the
   final offer carries it, and one it leaves out is named in a boot warning,
