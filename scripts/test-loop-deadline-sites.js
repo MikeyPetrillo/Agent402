@@ -43,6 +43,7 @@ process.env.WALLET_DAILY_LEDGER_FILE = join(dir, "wallet-daily.json");
 process.env.FIRST_CALL_ALLOWANCE = "on";
 process.env.DATABENTO_SHARED_DEADLINE_MS = "200";
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
+process.env.STOCK_DATA_PROVIDER = "databento";
 
 // Two sites have no client seam: the cache opens its own client through the
 // redis package, and the lease release runs on the state database's pg.Pool.

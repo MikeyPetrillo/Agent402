@@ -78,6 +78,13 @@ for (const e of pricing.endpoints || []) {
   priceBySlug.set(e.slug, e.price);
 }
 const packSlugs = new Set((packs.packs || []).map((p) => p.slug));
+// Whether this server has an active stock data provider (it lists stock-quote
+// then). A pack that runs a stock step only with a provider is priced two
+// ways in the docs: "$a (with a stock data provider: $b)", and the price
+// this server serves must be the one for its own state.
+const stockOn = priceBySlug.has("stock-quote");
+const DUAL_PRICE_RE = /\$(\d+\.\d+) \(with a stock data provider: \$(\d+\.\d+)\)/;
+let dualSeen = 0;
 ok(routeByPath.size > 400, `catalog loaded from the server (${routeByPath.size} routes)`);
 
 /** Docs we hold to this standard. Excludes release notes and changelogs, which
@@ -195,13 +202,16 @@ for (const file of files) {
     // Pack price tables key on a /skills/<slug> LINK, not a route and not a
     // backticked slug, so neither check above looked at them - found when a
     // reprice left three wiki rows stale and this gate stayed green.
-    if (pricesOnLine.length === 1) {
+    const dual = line.match(DUAL_PRICE_RE);
+    if (pricesOnLine.length === 1 || (pricesOnLine.length === 2 && dual)) {
       const packs = [...line.matchAll(/\/skills\/([a-z0-9-]+)/g)].map((m) => m[1]).filter((sl) => priceBySlug.has(`skill-${sl}`));
+      if (dual) dualSeen++;
       if (new Set(packs).size === 1) {
         const real = String(priceBySlug.get(`skill-${packs[0]}`)).replace("$", "");
-        if (Number(pricesOnLine[0]) !== Number(real)) {
+        const stated = dual ? (stockOn ? dual[2] : dual[1]) : pricesOnLine[0];
+        if (Number(stated) !== Number(real)) {
           priceMismatches++;
-          if (priceMismatches <= 12) console.error(`  price: ${rel} -> pack ${packs[0]} says $${pricesOnLine[0]}, catalog says $${real}`);
+          if (priceMismatches <= 12) console.error(`  price: ${rel} -> pack ${packs[0]} says $${stated}${dual ? ` for a server ${stockOn ? "with" : "without"} a stock data provider` : ""}, catalog says $${real}`);
         }
       }
     }
@@ -287,6 +297,7 @@ for (const file of files) {
   }
 }
 
+ok(dualSeen > 0, `the docs' two-state pack prices are read against this server's state (${dualSeen} lines, stock data provider ${stockOn ? "on" : "off"})`);
 ok(deadRoutes === 0, `no documentation references a route the server does not serve (${deadRoutes} found)`);
 ok(priceMismatches === 0, `every price stated beside a route matches the catalog (${priceMismatches} mismatched)`);
 ok(badSlugLinks === 0, `every /tools and /skills link resolves to a real entry (${badSlugLinks} dead)`);

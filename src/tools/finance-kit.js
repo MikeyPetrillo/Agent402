@@ -1,23 +1,19 @@
-// Finance tools: US equity end-of-day data from Databento.
-//
-// Previously Yahoo Finance. That was removed 2026-09-20: their developer terms
-// forbid deriving income from the API without written permission, the endpoint
-// used was an undocumented internal one, and reaching it required fetching an
-// anti-bot "crumb" and routing around an IP block through a Cloudflare relay.
-// None of that is a posture worth defending for a $0.001 tool.
-//
-// Databento is a paid commercial account, so access is licensed. The dataset is
-// EQUS.SUMMARY, the consolidated end-of-day summary across all US exchanges
-// and ATSs, with DBEQ.BASIC (a three-venue consolidation) as the fallback -
-// see databento.js for what each covers, particularly for volume. Every
-// answer names the dataset it came from and its coverage.
-//
-// Three tools went with Yahoo rather than moving: options-chain (would need a
-// separate OPRA build), premarket-quote (extended-hours needs the live feed)
-// and stock-dividends (corporate actions are not market data and Databento
-// does not carry them). Removing beat keeping an unlicensed source.
-import { availableEndInfo, dailyBarsRead, noteQuoteSymbol, quoteWindow, COVERAGE, PRIMARY_DATASET } from "./databento.js";
+// Finance tools: US equity end-of-day quote and daily bars, read through the
+// stock-provider seam (src/tools/stock-provider.js). The provider is chosen by
+// STOCK_DATA_PROVIDER and is active only with its own key; with none active
+// these tools are not listed (financeToolsEnabled() is empty) and the routes
+// answer 503 not-offered. Every answer names the source it came from and its
+// coverage (the adapter's provenance fields).
+import { selectedStockAdapter, stockDataEnabled, quote as providerQuote, dailyBars as providerDailyBars } from "./stock-provider.js";
 import { computeIndicators } from "./crypto-signals-kit.js";
+
+// The selected adapter's own copy and example fields (the tools are listed
+// only once its key is present too); with "off" they carry no provider text.
+const ADAPTER = await selectedStockAdapter();
+const DESCRIBE = ADAPTER?.describe || { coverageCopy: "", barsCopy: "", exampleProvenance: {} };
+const COVERAGE_COPY = DESCRIBE.coverageCopy;
+const EXAMPLE_PROVENANCE = DESCRIBE.exampleProvenance;
+const sentence = (t) => (t ? ` ${t}` : "");
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -49,22 +45,9 @@ function stockIndicatorSet(raw) {
   if (!ids.length || unknown.length) throw bad(`"indicators" must be true or a list of: ${STOCK_INDICATOR_IDS.join(", ")}${unknown.length ? ` (unknown: ${unknown.join(", ")})` : ""}.`);
   return new Set(ids);
 }
+// The spend bound a history read is held to (an adapter that prices its
+// queries refuses one wider than this).
 const MAX_QUERY_USD = 0.0035;
-
-// What an answer says about where its bars came from. The note is the one
-// caveat a reader needs for that dataset; `volume` is the market total only
-// when the dataset is consolidated, and null otherwise.
-const SUMMARY_NOTE = "Official consolidated end-of-day bars across all US exchanges and ATSs; volume is the consolidated total and includes post-market trading. Prices are unadjusted for splits and dividends.";
-// The fallback note says the consolidated dataset was unavailable only when
-// that dataset answered so for this read (read.primaryUnavailable); a read
-// that went to the fallback for any other reason says only where it came from.
-const FALLBACK_NOTE = "Daily bars from a three-venue consolidation (the consolidated dataset was unavailable for this read); venueVolume counts those venues only, not the consolidated tape, and volume is null.";
-const FALLBACK_NOTE_PLAIN = "Daily bars from a three-venue consolidation; venueVolume counts those venues only, not the consolidated tape, and volume is null.";
-function provenance(dataset, read = null) {
-  const c = COVERAGE[dataset];
-  return { dataset: c.dataset, coverage: c.coverage, venues: c.venues, source: "databento.com " + c.dataset, note: c.consolidated ? SUMMARY_NOTE : read?.primaryUnavailable ? FALLBACK_NOTE : FALLBACK_NOTE_PLAIN };
-}
-const COVERAGE_COPY = "Built from the official consolidated end-of-day summary across all US exchanges and ATSs, so price, range and volume are market totals. If that dataset is unavailable for a read, the answer comes from a consolidation of three U.S. exchange venues instead and says so: coverage reads three-venue, venueVolume counts those venues only and volume is null.";
 
 export const FINANCE_TOOLS = [
   {
@@ -76,7 +59,7 @@ export const FINANCE_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      `End-of-day US equity quote: last close, day range, consolidated volume, previous close and the change between them. US equities only; indices, FX and crypto are not covered (crypto-price serves those). ${COVERAGE_COPY} No 52-week range and no intraday print: for a date range call stock-history. Each answer names its dataset and coverage, and says whether its bars came from this session's cache (cached, fetchedAt).`,
+      `End-of-day US equity quote: last close, day range, consolidated volume, previous close and the change between them. US equities only; indices, FX and crypto are not covered (crypto-price serves those).${sentence(COVERAGE_COPY)} No 52-week range and no intraday print: for a date range call stock-history. Each answer names its dataset and coverage, and says whether its bars came from this session's cache (cached, fetchedAt).`,
     tags: ["finance", "stocks", "quote", "market-data", "price"],
     discovery: {
       input: { symbol: "AAPL" },
@@ -99,8 +82,8 @@ export const FINANCE_TOOLS = [
           volume: 38983839,
           venueVolume: 38983839,
           asOf: "2026-10-13",
-          ...provenance(PRIMARY_DATASET),
-          note: `End-of-day close, not a live intraday quote, and no 52-week range (use stock-history for a range). ${SUMMARY_NOTE}`,
+          ...EXAMPLE_PROVENANCE,
+          note: `End-of-day close, not a live intraday quote, and no 52-week range (use stock-history for a range).${sentence(EXAMPLE_PROVENANCE.note)}`,
           cached: true,
           fetchedAt: "2026-10-14T13:05:12.000Z",
           rangeCheckedAt: "2026-10-14T13:00:03.000Z",
@@ -109,26 +92,16 @@ export const FINANCE_TOOLS = [
     },
     handler: async (i, ctx) => {
       const symbol = assertSymbol(i.symbol);
-      // The available end is served from memory once warm (the warmer in
-      // databento.js re-reads it off the request path), so a symbol already
-      // read this session answers with no upstream call, and a cold one with
-      // a single data read. Both say which they were: `cached` and
-      // `fetchedAt` are the bars' own read time, `rangeCheckedAt` when the
-      // session boundary was last confirmed.
-      const range = await availableEndInfo({ demand: !ctx?.selfcheck });
-      // A WEEK, not a year. Databento bills by bytes, and a 52-week lookback
-      // priced above this tool's price - the cost guard refused it. Yahoo gave the 52-week range away inside one quote payload; here
-      // it is a separate, larger query, so the fields are gone rather than
-      // sold at a loss or silently narrowed. stock-history serves a range.
-      const { start, end } = quoteWindow(range.end);
-      // A read the upstream does not answer may be served from the last good
-      // read (labeled stale), except for the self-check, which must see it.
-      const read = await dailyBarsRead({ symbol, start, end, lastGoodOk: !ctx?.selfcheck });
-      // The self-check's own call (/api/selfcheck) is not a buyer's demand.
-      if (!ctx?.selfcheck) noteQuoteSymbol(symbol);
+      // The adapter serves the newest session it holds; a symbol already read
+      // this session answers from its cache. `cached` and `fetchedAt` are the
+      // bars' own read time, `rangeCheckedAt` when the session boundary was
+      // last confirmed. A read the upstream does not answer may be served
+      // from the last good read (labeled stale), except for the self-check,
+      // which must see it and is not a buyer's demand.
+      const read = await providerQuote(symbol, { demand: !ctx?.selfcheck, lastGoodOk: !ctx?.selfcheck });
       const bars = read.bars;
       const last = bars.at(-1), prev = bars.at(-2) || null;
-      const where = provenance(read.dataset, read);
+      const where = read.provenance;
       return {
         symbol,
         currency: "USD",
@@ -138,24 +111,23 @@ export const FINANCE_TOOLS = [
         changePct: prev ? Number((((last.close - prev.close) / prev.close) * 100).toFixed(4)) : null,
         dayHigh: last.high,
         dayLow: last.low,
-        // The market total on the consolidated dataset; null on the
-        // three-venue fallback, whose share is only ever venueVolume.
+        // The market total on a consolidated source; null on a partial one,
+        // whose share is only ever venueVolume.
         volume: last.volume ?? null,
-        // Volume across the venues named in `venues`: the whole market on
-        // the consolidated dataset, three venues on the fallback.
+        // Volume across the venues named in `venues`.
         venueVolume: last.venueVolume,
         asOf: last.day,
         ...where,
         cached: read.cached,
         fetchedAt: read.fetchedAt,
-        rangeCheckedAt: range.checkedAt,
+        rangeCheckedAt: read.rangeCheckedAt,
         // The session boundary's refresh failed: the answer is bounded by the
-        // last confirmed end (up to DATABENTO_RANGE_STALE_MAX_MS old).
-        ...(range.stale ? { rangeStale: true } : {}),
+        // last confirmed end.
+        ...(read.rangeStale ? { rangeStale: true } : {}),
         // The upstream did not answer this read: the bars are the newest this
-        // server holds for the symbol (databento.js, last good quote).
+        // server holds for the symbol.
         ...(read.stale ? { stale: true, staleReason: "The market data upstream did not answer in time; this quote is the last end-of-day read this server holds for the symbol (see asOf and fetchedAt)." } : {}),
-        note: `End-of-day close, not a live intraday quote, and no 52-week range (use stock-history for a range). ${where.note}`,
+        note: `End-of-day close, not a live intraday quote, and no 52-week range (use stock-history for a range).${sentence(where?.note)}`,
       };
     },
   },
@@ -169,7 +141,7 @@ export const FINANCE_TOOLS = [
     category: "data",
     price: "$0.005",
     description:
-      `Daily OHLCV bars for a US equity: the last \`days\` sessions, 1 to 250, default 30. Daily only, no intraday. ${COVERAGE_COPY} On that fallback each bar's high and low are the extremes across the three venues and open and close come from the venue that traded the most that session. A flat ascending array ready for charting or backtests. Set indicators to also get technical analysis computed from the same bars: RSI(14), MACD(12,26,9), EMA 20/50/200, SMA 20/50, Bollinger(20,2) and ATR(14), with a plain summary (close vs EMA50, RSI zone, MACD cross). Indicators need enough sessions (EMA200 needs days >= 200) and are descriptive, not a trading recommendation.`,
+      `Daily OHLCV bars for a US equity: the last \`days\` sessions, 1 to 250, default 30. Daily only, no intraday.${sentence(COVERAGE_COPY)}${sentence(DESCRIBE.barsCopy)} A flat ascending array ready for charting or backtests. Set indicators to also get technical analysis computed from the same bars: RSI(14), MACD(12,26,9), EMA 20/50/200, SMA 20/50, Bollinger(20,2) and ATR(14), with a plain summary (close vs EMA50, RSI zone, MACD cross). Indicators need enough sessions (EMA200 needs days >= 200) and are descriptive, not a trading recommendation.`,
     tags: ["finance", "stocks", "history", "ohlcv", "technical-analysis"],
     discovery: {
       input: { symbol: "AAPL", days: 30 },
@@ -191,7 +163,7 @@ export const FINANCE_TOOLS = [
             { day: "2026-10-13", open: 344.665, high: 348.1499, low: 340.74, close: 341.27, venueVolume: 38983839, volume: 38983839 },
           ],
           asOf: "2026-10-13",
-          ...provenance(PRIMARY_DATASET),
+          ...EXAMPLE_PROVENANCE,
         },
       },
     },
@@ -213,36 +185,31 @@ export const FINANCE_TOOLS = [
         points = Number(i.points);
         if (!Number.isInteger(points) || points < 1 || points > 100) throw bad(`"points" must be a whole number from 1 to 100 (got ${JSON.stringify(i.points)}).`);
       }
-      const range = await availableEndInfo({ demand: !ctx?.selfcheck });
-      const end = range.end;
-      // N sessions span about 1.4N calendar days once weekends are counted,
-      // so the lookback SCALES rather than adding a flat margin: a flat +10
-      // returned 29 bars for a 30-session ask, and the shortfall grows with
-      // the window. The extra 12 days covers the ~9 US market holidays a
-      // year plus the partial week either side of them.
-      const span = Math.ceil(days * 1.45) + 12;
-      const start = new Date(new Date(end) - span * 864e5).toISOString().slice(0, 10);
-      // Bounded by the standing margin rule on this tool's own price. That
-      // bound, not a round number, is what sets MAX_DAYS: query cost scales
-      // with the calendar span, so the advertised maximum is one a buyer can
-      // actually spend. A flat 365 was advertised
-      // and refused at 90.
-      const read = await dailyBarsRead({ symbol, start, end, maxUsd: MAX_QUERY_USD });
+      // Bounded by the standing margin rule on this tool's own price: query
+      // cost scales with the calendar span, so the advertised maximum is one
+      // a buyer can actually spend.
+      const read = await providerDailyBars(symbol, { sessions: days, maxUsd: MAX_QUERY_USD, demand: !ctx?.selfcheck });
       const bars = read.bars.slice(-days);
       return {
         symbol,
         days: bars.length,
         bars,
         asOf: bars.at(-1)?.day ?? null,
-        ...provenance(read.dataset, read),
+        ...read.provenance,
         // The session boundary's refresh failed: the bars end at the last
         // confirmed end, which `rangeCheckedAt` dates.
-        ...(range.stale ? { rangeStale: true, rangeCheckedAt: range.checkedAt } : {}),
+        ...(read.rangeStale ? { rangeStale: true, rangeCheckedAt: read.rangeCheckedAt } : {}),
         ...(want && bars.length >= 2 ? { analysis: stockAnalysis(bars, want, points) } : {}),
       };
     },
   },
 ];
+
+/** The finance tools this boot lists: all of them with an active stock
+ *  provider, none without one. */
+export function financeToolsEnabled(env = process.env) {
+  return stockDataEnabled(env) ? FINANCE_TOOLS : [];
+}
 
 // Technical indicators over the returned daily bars, through the same pure
 // arithmetic crypto-indicators uses. No extra market-data read.

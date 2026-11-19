@@ -11,7 +11,8 @@
 // What it does, in order (a handful of calls, like the heartbeat):
 //   initialize; tools/list (every expected dotted name, a non-empty
 //   description, an object inputSchema); server.describe; payment.info;
-//   catalog.search; catalog.find; sellers.list; one free pure-CPU tool through
+//   /api/pricing (whether stock-quote is listed: market.quote is expected
+//   exactly then); catalog.search; catalog.find; sellers.list; one free pure-CPU tool through
 //   catalog.call (hash, checked against node:crypto); every wallet-only
 //   flagship and one wallet-only slug through catalog.call without payment
 //   (each must answer a payment pointer this client can read: never a run,
@@ -63,8 +64,12 @@ const TOTAL_MS = Number(process.env.MCP_CHECK_TOTAL_TIMEOUT_MS) || 180_000;
 const META_TOOLS = ["catalog.search", "catalog.find", "catalog.call", "payment.info", "server.describe", "demand.request"];
 // sellers.list is listed only on a connector that opts in (AGENT402_SHOW_ROUTER=1);
 // it is checked when listed and never required.
-const FLAGSHIP_TOOLS = ["web.search", "web.answer", "web.news", "browser.render", "market.quote", "audio.transcribe", "memory.read", "memory.write"];
-const EXPECTED_TOOLS = [...META_TOOLS, ...FLAGSHIP_TOOLS];
+const CORE_FLAGSHIP_TOOLS = ["web.search", "web.answer", "web.news", "browser.render", "audio.transcribe", "memory.read", "memory.write"];
+// market.quote is a flagship exactly when the server's catalog lists
+// stock-quote (a server with no stock data provider lists neither), so the
+// expected set is read from the live catalog (/api/pricing) before tools/list.
+const STOCK_FLAGSHIP = "market.quote";
+const STOCK_SLUG = "stock-quote";
 
 const TASKS_EXTENSION = "io.modelcontextprotocol/tasks";
 const CLIENT_CAPABILITIES_META = "io.modelcontextprotocol/clientCapabilities";
@@ -148,7 +153,20 @@ const connected = await check(`${MODERN ? "server/discover" : "initialize"}: ser
 });
 if (!connected) finish(MODERN ? "could not discover" : "could not initialize");
 
-// 2. tools/list
+// 2. the catalog's stock listing, then tools/list
+let stockListed = null;
+await check(`catalog: /api/pricing reads, and says whether ${STOCK_SLUG} is listed`, async () => {
+  const ctl = AbortSignal.timeout(PER_CALL_MS);
+  const res = await fetch(`${base}/api/pricing`, { signal: ctl, headers: { accept: "application/json" } });
+  assert(res.ok, `HTTP ${res.status}`);
+  const j = await res.json();
+  assert(Array.isArray(j?.endpoints) && j.endpoints.length > 0, "endpoints missing or empty");
+  stockListed = j.endpoints.some((e) => e?.slug === STOCK_SLUG);
+  return stockListed ? `${STOCK_SLUG} listed` : `${STOCK_SLUG} not listed`;
+});
+const FLAGSHIP_TOOLS = stockListed ? [...CORE_FLAGSHIP_TOOLS.slice(0, 4), STOCK_FLAGSHIP, ...CORE_FLAGSHIP_TOOLS.slice(4)] : CORE_FLAGSHIP_TOOLS;
+const EXPECTED_TOOLS = [...META_TOOLS, ...FLAGSHIP_TOOLS];
+
 let listed = [];
 await check("tools/list: every expected dotted tool is listed with a description and an object inputSchema", async () => {
   const { tools } = await client.listTools(undefined, opts);
@@ -156,6 +174,8 @@ await check("tools/list: every expected dotted tool is listed with a description
   const byName = new Map(tools.map((t) => [t.name, t]));
   const missing = EXPECTED_TOOLS.filter((n) => !byName.has(n));
   assert(missing.length === 0, `missing: ${missing.join(", ")} (listed: ${tools.map((t) => t.name).join(", ")})`);
+  // The other direction: never a flagship for a tool the catalog does not sell.
+  assert(stockListed !== false || !byName.has(STOCK_FLAGSHIP), `${STOCK_FLAGSHIP} is listed but the catalog does not list ${STOCK_SLUG}`);
   const bad = [];
   for (const t of tools) {
     if (typeof t.description !== "string" || !t.description.trim()) bad.push(`${t.name}: empty description`);
@@ -225,7 +245,7 @@ const UNPAID_CALLS = [
   ["web.answer", { q: "what is x402" }],
   ["web.news", { q: "x402" }],
   ["browser.render", { url: "https://example.com" }],
-  ["market.quote", { symbol: "AAPL" }],
+  ...(stockListed ? [[STOCK_FLAGSHIP, { symbol: "AAPL" }]] : []),
   ["audio.transcribe", { url: "https://example.com/a.mp3" }],
   ["memory.read", { key: "mcp-client-check" }],
   ["memory.write", { key: "mcp-client-check", value: "unpaid" }],
@@ -255,6 +275,22 @@ for (const [tool, args] of UNPAID_CALLS) {
     const namesPaidPath = /agent402-mcp|AGENT_KEY|MPP|x402/.test(text);
     assert(challenges || offer || namesPaidPath, `neither challenges, an x402 offer nor a paid path named: ${text.slice(0, 120)}`);
     return [offer && "x402 offer in the first text block", challenges && "MPP challenges in _meta", !offer && !challenges && "isError result naming the paid path"].filter(Boolean).join(", ");
+  });
+}
+
+// 9b. With no stock listing, a call to market.quote by name is refused: an
+// error result with no quote in it (never a run).
+if (stockListed === false) {
+  await check(`${STOCK_FLAGSHIP} unlisted: a call by name is refused, does not run`, async () => {
+    let r;
+    try { r = await callTool(STOCK_FLAGSHIP, { symbol: "AAPL" }); } catch (err) {
+      assert(err instanceof McpError, `the client could not read the answer: ${err?.message}`);
+      return `JSON-RPC ${err.code}`;
+    }
+    assert(r.isError === true, "the call ran");
+    const text = (r.content || []).map((c) => String(c?.text || "")).join("\n");
+    assert(!/"(close|price|bars)"\s*:/.test(text), "the answer carries a quote");
+    return text.slice(0, 80);
   });
 }
 

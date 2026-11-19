@@ -10,7 +10,7 @@ Cloudflare x402 docs: https://developers.cloudflare.com/agents/agentic-payments/
 
 ## 1. Calling Agent402 from a Cloudflare Worker
 
-A minimal Worker that calls Agent402's `/api/stock-quote` endpoint using
+A minimal Worker that calls Agent402's `/api/crypto-price` endpoint using
 `@x402/fetch` for automatic payment:
 
 ```ts
@@ -31,7 +31,7 @@ export default {
 
     // Call Agent402 - the 402 challenge + USDC payment happen transparently
     const res = await payFetch(
-      "https://agent402.tools/api/stock-quote?symbol=AAPL"
+      "https://agent402.tools/api/crypto-price?coins=bitcoin"
     );
     const data = await res.json();
 
@@ -98,7 +98,7 @@ This is a streamable-HTTP MCP server. Four meta-tools drive it - `catalog.search
 (run by slug) and `payment.info` (how paying and spend caps work) - alongside
 `server.describe`, `demand.request` (`sellers.list` too when a wallet is set) and the flagship tools listed
 first-class by name (`web.search`, `web.answer`, `web.news`, `browser.render`,
-`market.quote`, `audio.transcribe`, `memory.read`, `memory.write`). A
+`audio.transcribe`, `memory.read`, `memory.write`). A
 Cloudflare Agent can connect to it as a remote MCP server:
 
 ```ts

@@ -1,4 +1,7 @@
 import { esc } from "./ledger-chrome.js";
+import { stockDataEnabled } from "./tools/stock-provider.js";
+
+const STOCK = stockDataEnabled();
 
 // The Examples section of /docs (#examples; /use-cases answers a 301 to it).
 // Example tasks, each with the calls it makes. The COST is computed from the
@@ -10,8 +13,9 @@ import { esc } from "./ledger-chrome.js";
 export const USE_CASES = [
   {
     title: "Research 50 public companies overnight",
-    story: "An analyst's agent walks 50 tickers, pulling filings, reported financials, the latest close and price history for each, and leaves 50 structured summaries ready for review in the morning.",
-    calls: [["edgar-filings", 50], ["edgar-company-facts", 50], ["stock-quote", 50], ["stock-history", 50]],
+    // The stock legs only while a stock provider is active (src/tools/stock-provider.js).
+    story: `An analyst's agent walks 50 tickers, pulling filings${STOCK ? ", reported financials, the latest close and price history" : " and reported financials"} for each, and leaves 50 structured summaries ready for review in the morning.`,
+    calls: [["edgar-filings", 50], ["edgar-company-facts", 50], ...(STOCK ? [["stock-quote", 50], ["stock-history", 50]] : [])],
     per: "for 50 companies",
   },
   {

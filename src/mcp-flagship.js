@@ -12,6 +12,7 @@
 // (Glama's well-scoped band is 3–15).
 
 import { leadSentence, SUPPORT_LINE } from "./positioning.js";
+import { stockDataEnabled } from "./tools/stock-provider.js";
 
 export const FLAGSHIP_SLUGS = [
   "search",
@@ -588,12 +589,13 @@ export function mcpInstallHints(baseUrl) {
  */
 // `mpp`: a paid call can be settled over MPP on this connector (the loopback);
 // `mppOffered`: the MPP switch, which sets the wires the lead sentence names.
-export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false, x402 = false, mppOffered = true, receipts = true, demand = true } = {}) {
+export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false, x402 = false, mppOffered = true, receipts = true, demand = true, stock = stockDataEnabled() } = {}) {
   const install = mcpInstallHints(baseUrl);
   const hosted = install.hostedUrl;
   return [
     `${leadSentence({ mpp: mppOffered, receipts })} ${SUPPORT_LINE} Per-call tools and metered models, paid in USDC, or free through proof-of-work for the pure-CPU tools; the applied layer of Agentic Finance.`,
-    "Flagship tools: web.search (live web search), web.answer (answers with citations), web.news, browser.render, market.quote, audio.transcribe, memory.read, memory.write.",
+    // market.quote only while a stock provider is active (it is listed then).
+    `Flagship tools: web.search (live web search), web.answer (answers with citations), web.news, browser.render, ${stock ? "market.quote, " : ""}audio.transcribe, memory.read, memory.write.`,
     "Long tail: catalog.search lists tools by keyword, catalog.find returns the best match with its input schema and price, catalog.call runs a tool by slug.",
     // Only where the decide tools are listed: an instruction must never name a
     // tool the connector does not advertise.

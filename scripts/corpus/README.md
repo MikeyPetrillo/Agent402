@@ -27,7 +27,9 @@ with the host named, never as our code. Our own hollow 200s, our 4xx on a valid 
 Keys: a pack whose first step is a keyed tool declares `requires` with that key (the equities
 packs: `DATABENTO_API_KEY`), the same as a keyed tool's own cases. Without it, a keyless boot
 makes every step fail, the pack answers 502, and the nightly reports a host outage that never
-happened. A case that carries a `_why` is one that was wrong once; read it before changing the case.
+happened. A case that carries a `_why` is one that was wrong once; read it before changing the case. The stock tools and the packs that run one are listed only with an active stock provider
+(`STOCK_DATA_PROVIDER` and its key, `src/tools/stock-provider.js`); on a boot with none, their cases
+are skipped as not listed.
 
 Pacing: a file may declare `pace` (ms between case starts, whatever the concurrency) and `paceKey`
 (the clock those starts are spaced on; default the file name). A case may override both. Cases that

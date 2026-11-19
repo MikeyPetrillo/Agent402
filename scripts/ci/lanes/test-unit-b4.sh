@@ -95,11 +95,15 @@ t node scripts/test-base-unit-parity.js
 # a payment header decoding to non-object JSON answers 4xx (real resource server + two paid boots)
 t node scripts/test-x402-hook-throws.js
 
-# @step 2: Offline suites (9 scripts, one process each)
+# @step 2: Offline suites (11 scripts, one process each)
 # "x402-audit grader (deterministic scoring: TLS, cache hygiene, terms, info-leak → letter grade)"
 t node scripts/test-x402-audit.js
 # Finance-kit tests (Yahoo chart quote+history, Nasdaq earnings calendar — keyless live APIs)
 t node scripts/test-finance-kit.js
+# The stock-provider seam: switch, adapter contract, kit, packs and copy follow it (stub adapter, offline)
+t node scripts/test-stock-provider.js
+# Static copy (markdown trees, package READMEs, sample reports) names no stock tool, hidden pack or market.quote and promises no live quote while no stock provider is active
+t node scripts/test-stock-copy-off.js
 t node scripts/test-databento-timeouts.js
 t node scripts/test-databento-fallback.js
 t node scripts/test-databento-bar-range.js

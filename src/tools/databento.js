@@ -819,3 +819,58 @@ export function consolidate(rows) {
   }));
 }
 const round = (n) => Number(n.toFixed(4));
+
+// ------------------------------------------------------------- adapter
+//
+// The stock-provider adapter (src/tools/stock-provider.js): what the stock
+// tools read through STOCK_DATA_PROVIDER=databento. Each answer names the
+// dataset it came from and its coverage.
+const SUMMARY_NOTE = "Official consolidated end-of-day bars across all US exchanges and ATSs; volume is the consolidated total and includes post-market trading. Prices are unadjusted for splits and dividends.";
+// The fallback note says the consolidated dataset was unavailable only when
+// that dataset answered so for this read (read.primaryUnavailable); a read
+// that went to the fallback for any other reason says only where it came from.
+const FALLBACK_NOTE = "Daily bars from a three-venue consolidation (the consolidated dataset was unavailable for this read); venueVolume counts those venues only, not the consolidated tape, and volume is null.";
+const FALLBACK_NOTE_PLAIN = "Daily bars from a three-venue consolidation; venueVolume counts those venues only, not the consolidated tape, and volume is null.";
+export function provenanceOf(dataset, read = null) {
+  const c = COVERAGE[dataset];
+  return { dataset: c.dataset, coverage: c.coverage, venues: c.venues, source: "databento.com " + c.dataset, note: c.consolidated ? SUMMARY_NOTE : read?.primaryUnavailable ? FALLBACK_NOTE : FALLBACK_NOTE_PLAIN };
+}
+const COVERAGE_COPY = "Built from the official consolidated end-of-day summary across all US exchanges and ATSs, so price, range and volume are market totals. If that dataset is unavailable for a read, the answer comes from a consolidation of three U.S. exchange venues instead and says so: coverage reads three-venue, venueVolume counts those venues only and volume is null.";
+const BARS_COPY = "On that fallback each bar's high and low are the extremes across the three venues and open and close come from the venue that traded the most that session.";
+
+async function readFor(symbol, { start, end, maxUsd, lastGoodOk = false }, range) {
+  const read = await dailyBarsRead({ symbol, start, end, maxUsd, lastGoodOk });
+  return {
+    bars: read.bars,
+    provenance: provenanceOf(read.dataset, read),
+    cached: read.cached,
+    fetchedAt: read.fetchedAt,
+    rangeCheckedAt: range.checkedAt,
+    ...(range.stale ? { rangeStale: true } : {}),
+    ...(read.stale ? { stale: true } : {}),
+  };
+}
+
+export const databentoAdapter = Object.freeze({
+  name: "databento",
+  describe: Object.freeze({ coverageCopy: COVERAGE_COPY, barsCopy: BARS_COPY, exampleProvenance: Object.freeze(provenanceOf(PRIMARY_DATASET)) }),
+  // A quote reads a fixed QUOTE_LOOKBACK_DAYS window ending at the dataset's
+  // last session; `demand: false` (the self-check) is not a buyer's demand.
+  async quote(symbol, { demand = true, lastGoodOk = false } = {}) {
+    const range = await availableEndInfo({ demand });
+    const r = await readFor(symbol, { ...quoteWindow(range.end), lastGoodOk }, range);
+    if (demand) noteQuoteSymbol(symbol);
+    return r;
+  },
+  // N sessions span about 1.4N calendar days once weekends are counted, so
+  // the lookback SCALES rather than adding a flat margin; the extra 12 days
+  // covers the US market holidays plus the partial week either side.
+  async dailyBars(symbol, { sessions = 30, start, end, maxUsd, demand = true } = {}) {
+    const range = await availableEndInfo({ demand });
+    const e = end || range.end;
+    const s = start || new Date(new Date(e) - (Math.ceil(sessions * 1.45) + 12) * 864e5).toISOString().slice(0, 10);
+    return readFor(symbol, { start: s, end: e, maxUsd }, range);
+  },
+  start: () => startQuoteWarmer(),
+  status: () => quoteWarmerStatus(),
+});

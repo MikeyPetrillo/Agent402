@@ -19,14 +19,14 @@
 // real buyers pay for — plus a pure-CPU canary that isolates "the server itself
 // is fine" from "an upstream broke".
 
+import { STOCK_SLUGS, stockDataEnabled } from "./tools/stock-provider.js";
+
 export const SELFCHECK_SLUGS = [
   "hash",                  // pure-CPU canary — proves the server itself is healthy
-  "stock-quote",           // wedge star (Databento; 503s without DATABENTO_API_KEY)
   "treasury-debt",         // Treasury Fiscal Data
   "treasury-avg-rates",    // Treasury Fiscal Data
   "treasury-yield-curve",  // U.S. Treasury par yield curve CSV (keyless)
   "fx-dashboard",          // ECB / Frankfurter
-  "stock-history",         // wedge — the second Databento endpoint beyond the quote
   "crypto-market",         // crypto prices
   "whois",                 // DNS / RDAP
   // High-value paid tools the reliability review flagged as unmonitored — added so
@@ -99,7 +99,9 @@ export function selfcheckSlugs() {
   const keyed = KEYED_SELFCHECKS
     .filter((k) => (process.env[k.envVar] || "").trim())
     .map((k) => k.slug);
-  return [...SELFCHECK_SLUGS, ...keyed];
+  // The stock tools only with an active stock provider (they are listed then).
+  const stock = stockDataEnabled() ? [...STOCK_SLUGS] : [];
+  return [...SELFCHECK_SLUGS, ...stock, ...keyed];
 }
 
 // Run one tool's documented example, with a hard timeout. Returns a plain result

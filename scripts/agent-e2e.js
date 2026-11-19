@@ -168,7 +168,7 @@ const CASES = [
   { slug: "audio-convert", method: "POST", path: "/api/audio-convert", body: { url: "https://agent402.tools/fixtures/sample-audio.wav" }, check: (b) => b.bytes > 1000 && !!b.mp3Base64, show: (b) => `mp3 ${b.bytes} bytes` },
   // --- Premium skill packs (must score ALL steps) ---
   { slug: "skill/domain-intel", method: "POST", path: "/api/skill/domain-intel", body: { domain: "stripe.com" }, check: (b) => b.pack === "domain-intel" && b.steps?.every(s => s.ok), show: (b) => `${b.steps.filter(s=>s.ok).length}/${b.steps.length} steps` },
-  { slug: "skill/company-dossier", method: "POST", path: "/api/skill/company-dossier", body: { ticker: "AAPL" }, check: (b) => b.pack === "company-dossier" && b.steps?.every(s => s.ok), show: (b) => `${b.steps.filter(s=>s.ok).length}/${b.steps.length} steps` },
+  { slug: "skill/sec-filings-deep-dive", method: "POST", path: "/api/skill/sec-filings-deep-dive", body: { ticker: "AAPL" }, check: (b) => b.pack === "sec-filings-deep-dive" && b.steps?.every(s => s.ok), show: (b) => `${b.steps.filter(s=>s.ok).length}/${b.steps.length} steps` },
   { slug: "skill/crypto-dossier", method: "POST", path: "/api/skill/crypto-dossier", body: { coin: "bitcoin" }, check: (b) => b.pack === "crypto-dossier" && b.steps?.every(s => s.ok), show: (b) => `${b.steps.filter(s=>s.ok).length}/${b.steps.length} steps` },
 ];
 
