@@ -1499,8 +1499,8 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `JUPITER_API_KEY` | Jupiter API key (a credential, set on the host). |  | `src/tools/solana-intel-kit.js` |
 | `LARGE_BODY_INFLIGHT_MAX_MB` | Large body inflight maximum MB. |  | `src/large-body-gate.js` |
 | `LEASE_RELEASE_RETRY_MS` | Lease release retry, in milliseconds. |  | `src/state-db.js` |
-| `LIVE_QUOTE_PROBES_PER_CRAWL` | Live quote probes per crawl. | `15` | `src/x402-index.js` |
-| `LIVE_QUOTE_PROBES_PER_CYCLE` | Live quote probes per cycle. | `10000` | `src/x402-index.js` |
+| `LIVE_QUOTE_PROBES_PER_CRAWL` | Unpriced seller routes read for their 402 price, per seller per crawl. | `15` | `src/x402-index.js` |
+| `LIVE_QUOTE_PROBES_PER_CYCLE` | Unpriced seller routes read for their 402 price, across all sellers per crawl cycle. | `10000` | `src/x402-index.js` |
 | `LLM_ATTEMPT_MAX_MS` | Model attempt maximum, in milliseconds. |  | `src/tools/llm-gateway-kit.js` |
 | `LLM_MAX_TIMED_OUT_ATTEMPTS` | Model maximum timed out attempts. | `2` | `src/tools/llm-gateway-kit.js` |
 | `LOAD_SHED` | off disables load shedding of free routes under event-loop pressure. |  | `src/load-shed.js` |
