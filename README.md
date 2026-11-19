@@ -4,7 +4,7 @@ Live at **[agent402.tools](https://agent402.tools)**.
 
 ![A paid call on Agent402: the request, the 402 with its price, the signature, the settlement, the answer and the signed receipt](docs/media/agent402-call.gif)
 
-**Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call, across x402 and MPP, with a signed receipt for each one.**
+**Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one.**
 
 - **Every rail on one server:** x402 across chains with facilitator fallbacks, MPP with Tempo and card, and proof of work for the pure-CPU tools.
 - **Buyer protection in the money path:** an x402 payment settles after a successful answer and an error cancels it, a hang-up before the answer can be forgiven, a charged failure is booked and repaid against the chain record, and every settled paid answer carries a signed receipt.

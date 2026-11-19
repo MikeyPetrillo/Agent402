@@ -119,7 +119,7 @@ export const FLAGSHIP_WRITERS = new Set(["memory-write", "decide-execute"]);
 
 /** initialize.serverInfo description (MCP Implementation.description). */
 export const MCP_SERVER_DESCRIPTION =
-  "Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. Flagships: live web search and cited answers, news, browser render, market data, speech-to-text and wallet-keyed memory; the rest via catalog.find. Settle in USDC via x402 or MPP (Machine Payments Protocol) on the same 402, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.";
+  "Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. Flagships: live web search and cited answers, news, browser render, market data, speech-to-text and wallet-keyed memory; the rest via catalog.find. Settle in USDC via x402 or MPP (Machine Payments Protocol) on the same 402, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.";
 
 /** initialize.serverInfo.websiteUrl */
 export const MCP_SERVER_WEBSITE = "https://agent402.tools";
@@ -559,7 +559,7 @@ export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false
   const install = mcpInstallHints(baseUrl);
   const hosted = install.hostedUrl;
   return [
-    "Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. Per-call tools and metered models, paid in USDC, or free through proof-of-work for the pure-CPU tools; the applied layer of Agentic Finance.",
+    "Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. Per-call tools and metered models, paid in USDC, or free through proof-of-work for the pure-CPU tools; the applied layer of Agentic Finance.",
     // market.quote only where the server lists a stock quote (it is listed then).
     `Flagship tools: web.search (live web search), web.answer (answers with citations), web.news, browser.render, ${stock ? "market.quote, " : ""}audio.transcribe, memory.read, memory.write.`,
     "Long tail: catalog.search lists tools by keyword, catalog.find returns the best match with its input schema and price, catalog.call runs a tool by slug.",
