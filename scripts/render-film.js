@@ -24,11 +24,13 @@
 //
 //   node scripts/render-film.js                       (boots its own server)
 //   node scripts/render-film.js --only=film|clips|gif --fps=24 --out=dist/media
+//   node scripts/render-film.js --receipts=sign       (its boot signs receipts with a throwaway key)
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/render-film.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { generateKeyPairSync } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ownStoreEnv } from "./lib/own-stores.js";
@@ -117,10 +119,10 @@ function callScene({ t0, tool, price, chains, example, receipts, query }) {
   const beat = 1.7;
   const curlPath = `${tool.path}${query ? `?${query}` : ""}`;
   const reqLine = `${tool.method} ${curlPath}`;
-  const json = JSON.stringify(example ?? {}, null, 2).split("\n").slice(0, 6);
-  if (JSON.stringify(example ?? {}, null, 2).split("\n").length > 6) json.push("  …");
+  const json = JSON.stringify(example ?? {}, null, 2).split("\n").slice(0, 5);
+  if (JSON.stringify(example ?? {}, null, 2).split("\n").length > 5) json.push("  …");
   const lines = [
-    [0, `<span class="k">$</span> curl "agent402.tools${esc(curlPath.length > 44 ? `${curlPath.slice(0, 43)}…` : curlPath)}"`],
+    [0, `<span class="k">$</span> curl "agent402.tools${esc(curlPath.length > 32 ? `${curlPath.slice(0, 31)}…` : curlPath)}"`],
     [1, `<span class="warn">HTTP 402</span> Payment Required`],
     [1, `<span class="k">price</span> ${esc(price)} USDC <span class="k">on</span> ${chains} chains`],
     [2, `<span class="k">PAYMENT-SIGNATURE:</span> <span class="v">signed for ${esc(price)}</span>`],
@@ -181,7 +183,7 @@ function filmDoc(ctx) {
 function clipDoc(c) {
   let body = brand();
   const layers = [{ id: "mk", from: 0, to: null, rise: false }];
-  body += `<div class="l" id="ttl" style="left:64px;top:92px;font-size:30px;font-weight:600;width:1150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.tool.name)} <span class="mono" style="color:#9EF0B0;font-weight:400;font-size:24px">${esc(c.price)} per call</span></div>`;
+  body += `<div class="l" id="ttl" style="left:64px;top:92px;font-size:30px;font-weight:600;width:1150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.tool.name)} <span class="mono" style="color:#9EF0B0;font-weight:400;font-size:24px">${esc(c.price)} per call</span>${c.tool.modelBacked ? ` <span class="mono" style="color:#9AA1A9;font-weight:400;font-size:20px">· model-backed</span>` : ""}</div>`;
   layers.push({ id: "ttl", from: 0.1, to: null });
   const call = callScene({ t0: 0.4, ...c });
   body += call.body;
@@ -212,7 +214,13 @@ async function main() {
   mkdirSync(OUT, { recursive: true });
   let proc = null, BASE = process.env.TARGET_URL || null;
   if (!BASE) {
-    proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], { cwd: ROOT, env: { ...process.env, ...ownStoreEnv("film"), FREE_MODE: "true", PORT: "0", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" }, stdio: ["ignore", "pipe", "ignore"] });
+    // --receipts=sign: the boot signs receipts with a throwaway key made here and
+    // never stored, as production does with its own, so the receipt step shows.
+    const signing = arg("receipts", "") === "sign" ? (() => {
+      const { privateKey } = generateKeyPairSync("ed25519");
+      return { RECEIPT_SIGNING_KEY: Buffer.from(privateKey.export({ type: "pkcs8", format: "pem" })).toString("base64"), RECEIPT_SIGNING_KEY_ID: "film-local" };
+    })() : {};
+    proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], { cwd: ROOT, env: { ...process.env, ...ownStoreEnv("film"), ...signing, FREE_MODE: "true", PORT: "0", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" }, stdio: ["ignore", "pipe", "ignore"] });
     let log = "";
     proc.stdout.on("data", (d) => { if (!BASE) log = (log + d).slice(-20_000); });
     for (let i = 0; i < 180 && !BASE; i++) { const m = log.match(/listening on :(\d+)/); if (m) BASE = `http://127.0.0.1:${m[1]}`; else await sleep(500); }
@@ -222,7 +230,7 @@ async function main() {
     const pricing = await (await fetch(`${BASE}/api/pricing`)).json();
     const spec = await (await fetch(`${BASE}/openapi.json`)).json();
     const keyDoc = await fetch(`${BASE}/.well-known/agent402-receipt-key.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    const receipts = !!(keyDoc && Array.isArray(keyDoc.keys) && keyDoc.keys.length);
+    const receipts = !!(keyDoc && keyDoc.signing === true);
     const endpoints = pricing.endpoints || [];
     const chains = RAILS.length;
     const ex = (t) => {

@@ -2,6 +2,8 @@
 
 Live at **[agent402.tools](https://agent402.tools)**.
 
+![A paid call on Agent402: the request, the 402 with its price, the signature, the settlement, the answer and the signed receipt](docs/media/agent402-call.gif)
+
 **Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call, across x402 and MPP, with a signed receipt for each one.**
 
 - **Every rail on one server:** x402 across chains with facilitator fallbacks, MPP with Tempo and card, and proof of work for the pure-CPU tools.
@@ -37,6 +39,8 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 - [/trust#verify](https://agent402.tools/trust#verify) walks one call end to end; [`/api/index?seller=<host>`](https://agent402.tools/api/index) shows an outside seller's crawl history, paywall probe and router verdict.
 
 ## What Agent402 is
+
+![How a paid call flows through Agent402: buyers, the payment gates, the tools, signed receipts and the router, and settlement on chain](docs/media/architecture.svg)
 
 > **Agentic Finance** is software agents paying and getting paid on their
 > own: discovering a service, paying per request from a wallet over open protocols
