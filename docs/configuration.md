@@ -10,11 +10,11 @@ Scope: the server that runs as node src/server.js (every file under src/). The f
 Every value is set on the host, never in the repository. "Default" is the plain literal the code falls back to at
 its first read site when there is one; a helper may still clamp it, and the read site is the reference.
 
-988 variables in 106 groups.
+1022 variables in 108 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -145,7 +145,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `BASE_DENIM_ACTIVATION_TIMESTAMP` | Base denim activation timestamp. |  | `src/chain-block-time.js` |
 | `BASE_RPCS` | Base RPC endpoints. |  | `src/leaderboard.js` |
 | `BASE_SEPOLIA_DENIM_ACTIVATION_TIMESTAMP` | Base sepolia denim activation timestamp. |  | `src/chain-block-time.js` |
-| `BASE_URL` | Public origin of this deployment, used in links, examples, the canonical host and operator Origin checks. | `https://agent402.tools` | `src/answer-share.js`, `src/mpp-stripe.js`, `src/server.js` |
+| `BASE_URL` | Public origin of this deployment, used in links, examples, the canonical host and operator Origin checks. | `https://agent402.tools` | `src/answer-share.js`, `src/mpp-stripe.js`, `src/server.js` and 2 more |
 
 ## BAZAAR
 
@@ -238,6 +238,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `COINGECKO_OTHERS_RESERVE` | Coingecko others reserve. | `0.2` | `src/tools/coingecko-rate.js` |
 | `COINGECKO_SHARED_CACHE_MAX_BYTES` | Coingecko shared cache maximum bytes. |  | `src/tools/coingecko-cache.js` |
 | `COINGECKO_SHARED_DEADLINE_MS` | Coingecko shared deadline, in milliseconds. |  | `src/tools/coingecko-rate.js` |
+| `COINGECKO_UNSETTLED_PER_CALLER_HOUR` | CoinGecko reads one caller's unconfirmed coin ids may take per hour before they are checked against the coin lists. |  | `src/tools/coingecko-rate.js` |
 | `COINGECKO_UNSETTLED_SHARE` | Coingecko unsettled share. | `0.1` | `src/tools/coingecko-rate.js` |
 
 ## COMPOSITE
@@ -274,6 +275,8 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `CREDITS_DIR` | Card store directories when no state database is set (default <data root>/credits and <data root>/human-checkout; the legacy human-checkout.json is read beside the latter). |  | `src/credits.js` |
 | `CREDITS_EU_UK_REQUIRE_TAX_ID` | Credits eu uk require tax id. |  | `src/credits.js` |
 | `CREDITS_HOLD_REFRESH_MAX_MS` | Credits hold refresh maximum, in milliseconds. |  | `src/credits.js` |
+| `CREDITS_INDEXES` | Prepaid credits table indexes built in the background; off leaves them to an operator. |  | `src/credits.js` |
+| `CREDITS_INDEX_DELAY_MS` | Delay before the prepaid credits index build starts after the store's first load, in milliseconds. | `60000` | `src/credits.js` |
 | `CREDITS_SALES` | 1, true, on or yes sells prepaid card credits; unset keeps credit sales off. |  | `src/credits-sales.js` |
 
 ## DATABENTO
@@ -440,6 +443,15 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `FREE_ALERTS` | Free alerts. |  | `src/server.js` |
 | `FREE_ALERTS_SECRET` | Free alerts secret (a credential, set on the host). |  | `src/server.js` |
 | `FREE_MODE` | true disables every payment gate (local development and tests only); identity-bound routes then have no verified payer. |  | `src/connector-pay.js`, `src/mcp-tasks.js`, `src/payer.js` and 8 more |
+
+## FUNNEL
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `FUNNEL_CALLER_CAP` | Funnel caller cap. |  | `src/funnel.js` |
+| `FUNNEL_FOUND_CAP` | Most callers the paid-call funnel remembers as having read a discovery document. |  | `src/funnel-sources.js` |
+| `FUNNEL_FOUND_WINDOW_MS` | How long the paid-call funnel links a discovery read to the same caller's later calls, in milliseconds. |  | `src/funnel-sources.js` |
+| `FUNNEL_RETRY_WINDOW_MS` | Funnel retry window, in milliseconds. |  | `src/funnel.js` |
 
 ## GATEWAY
 
@@ -772,7 +784,13 @@ its first read site when there is one; a helper may still clamp it, and the read
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
+| `POSTHOG_AI_EVENTS` | PostHog model-call analytics events; off sends none. |  | `src/posthog-observability.js` |
+| `POSTHOG_AI_HOURLY_MAX` | Most PostHog model-call events sent per hour. |  | `src/posthog-observability.js` |
+| `POSTHOG_AI_SAMPLE` | Share of model calls sent to PostHog, 0 to 1. |  | `src/posthog-observability.js` |
 | `POSTHOG_API_KEY` | Posthog API key (a credential, set on the host). |  | `src/ledger-chrome.js`, `src/posthog.js` |
+| `POSTHOG_EXCEPTIONS` | PostHog error tracking events; off sends none. |  | `src/posthog-observability.js` |
+| `POSTHOG_EXCEPTION_HOURLY_MAX` | Most PostHog error events sent per hour. |  | `src/posthog-observability.js` |
+| `POSTHOG_EXCEPTION_SAMPLE` | Share of errors sent to PostHog, 0 to 1. |  | `src/posthog-observability.js` |
 | `POSTHOG_FORCE` | Posthog force. |  | `src/posthog.js` |
 | `POSTHOG_HOST` | Posthog host. | `https://us.i.posthog.com` | `src/posthog.js` |
 | `POSTHOG_PAYWALL_FLUSH_MS` | Posthog paywall flush, in milliseconds. |  | `src/posthog.js` |
@@ -824,6 +842,10 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `RECEIPT_SIGNING_KEY` | Ed25519 private key (base64 of a PKCS8 PEM) that signs paid-answer receipts; unset leaves receipts off. |  | `src/changelog.js`, `src/receipt-signing.js` |
 | `RECEIPT_SIGNING_KEY_ID` | Key id published with the receipt key; required with RECEIPT_SIGNING_KEY. |  | `src/receipt-signing.js` |
 | `RECEIPT_SIGNING_KEY_VALID_FROM` | Optional ISO date the key signs from (published as validFrom). |  | `src/receipt-signing.js` |
+| `RECEIPT_STORE_DAYS` | Days a kept signed receipt is held before it is deleted. | `400` | `src/receipt-store.js` |
+| `RECEIPT_STORE_DB` | SQLite file for kept signed receipts when no state database is set. |  | `src/receipt-store.js` |
+| `RECEIPT_STORE_MAX_ROWS` | Most kept signed receipts; past it the oldest are deleted first. | `2000000` | `src/receipt-store.js` |
+| `RECEIPT_STORE_PENDING_MAX` | Most signed receipts queued while the receipt store cannot take them. | `5000` | `src/receipt-store.js` |
 
 ## REDIS
 
@@ -833,7 +855,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `REDIS_PERSISTENCE_FIRST_MS` | Redis persistence first, in milliseconds. | `2000` | `src/redis-persistence.js` |
 | `REDIS_PERSISTENCE_OP_MS` | Redis persistence op, in milliseconds. |  | `src/redis-persistence.js` |
 | `REDIS_PERSISTENCE_RETRY_MS` | Redis persistence retry, in milliseconds. |  | `src/redis-persistence.js` |
-| `REDIS_URL` | Redis connection string for shared limits, journals and caches across replicas. |  | `src/cache.js`, `src/ledger-journal-redis.js`, `src/redis-persistence.js` and 3 more |
+| `REDIS_URL` | Redis connection string for shared limits, journals and caches across replicas. |  | `src/batch-settlement.js`, `src/cache.js`, `src/ledger-journal-redis.js` and 4 more |
 
 ## REFERRAL
 
@@ -1016,9 +1038,17 @@ its first read site when there is one; a helper may still clamp it, and the read
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
+| `SELLER_DELIVERY_FILE` | File for the seller delivery outcomes behind seller reputation. | `/data/seller-delivery-outcomes.json` | `src/seller-reputation.js` |
 | `SELLER_PROBE_DAILY_BUDGET` | Seller probe daily budget. | `200` | `src/seller-load.js` |
 | `SELLER_REGISTRATION_HOST_HOURLY_MAX` | Seller registration host hourly maximum. | `200` | `src/seller-load.js` |
 | `SELLER_REGISTRATION_HOURLY_MAX` | Seller registration hourly maximum. | `20` | `src/seller-load.js` |
+| `SELLER_REPUTATION` | Seller reputation measurement; off turns it off. |  | `src/server.js` |
+| `SELLER_REPUTATION_FILE` | File for the seller reputation records. | `/data/seller-reputation.json` | `src/seller-reputation.js` |
+| `SELLER_REPUTATION_FIRST_MS` | Delay before the first seller reputation pass after boot, in milliseconds. | `600000` | `src/seller-reputation.js` |
+| `SELLER_REPUTATION_FLUSH_MS` | How often seller delivery outcomes are written, in milliseconds. | `60000` | `src/seller-reputation.js` |
+| `SELLER_REPUTATION_INTERVAL_MS` | Interval between seller reputation passes, in milliseconds. | `3600000` | `src/seller-reputation.js` |
+| `SELLER_REPUTATION_MAX_DELIVERY_ORIGINS` | Most seller origins with delivery outcomes kept. | `4000` | `src/seller-reputation.js` |
+| `SELLER_REPUTATION_MAX_SELLERS` | Most sellers with a reputation record kept. | `8000` | `src/seller-reputation.js` |
 | `SELLER_REVISIT_MAX_HOURS` | Seller revisit maximum, in hours. | `12` | `src/seller-load.js` |
 
 ## SETTLE
@@ -1035,10 +1065,18 @@ its first read site when there is one; a helper may still clamp it, and the read
 | --- | --- | --- | --- |
 | `SHARED_LIMITS` | off keeps rate-limit counters in process memory even when REDIS_URL is set. |  | `src/shared-limits.js` |
 | `SHARED_LIMITS_DEGRADED_HOLD_MS` | Shared limits degraded hold, in milliseconds. |  | `src/shared-limits.js` |
-| `SHARED_LIMITS_OP_MS` | Shared limits op, in milliseconds. |  | `src/shared-limits.js` |
+| `SHARED_LIMITS_OP_MS` | Shared limits op, in milliseconds. |  | `src/bounded-redis.js` |
 | `SHARED_LIMITS_PREFIX` | Key prefix for shared rate-limit counters, so two deployments on one Redis do not mix. |  | `src/shared-limits.js`, `src/tool-failure-monitor.js` |
 | `SHARED_LIMITS_PROBE_FIRST_MS` | Shared limits probe first, in milliseconds. | `2000` | `src/shared-limits.js` |
 | `SHARED_LIMITS_PROBE_MS` | Shared limits probe, in milliseconds. |  | `src/shared-limits.js` |
+
+## SIWE
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `SIWE_CHAIN_IDS` | Chain ids a wallet sign-in message may name (comma list). |  | `src/wallet-sign-in.js` |
+| `SIWE_SESSION_SECONDS` | Wallet sign-in session lifetime, in seconds (at most 3600). |  | `src/wallet-sign-in.js` |
+| `SIWE_SESSION_SECRET` | Secret that signs wallet sign-in sessions; set (32 or more characters) turns wallet sign-in on. |  | `src/wallet-sign-in.js` |
 
 ## SOLANA
 
@@ -1250,6 +1288,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `TOOL_FREE_FAIL_RATE` | Tool free fail rate. |  | `src/tool-failure-monitor.js` |
 | `TOOL_OUTPUT_EXAMPLES_FILE` | Tool output examples file path. |  | `src/tool-output-examples.js` |
 | `TOOL_OUTPUT_EXAMPLES_TEST_BARE` | Tool output examples test bare. |  | `src/server.js` |
+| `TOOL_RELIABILITY_PUBLIC` | Per-tool reliability table on /api/reliability/tools; off hides it. |  | `src/tool-reliability.js` |
 
 ## TOP
 
@@ -1374,6 +1413,11 @@ its first read site when there is one; a helper may still clamp it, and the read
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
+| `X402_BATCH_CLAIM_INTERVAL_SECONDS` | Interval between x402 payment channel claim passes, in seconds. |  | `src/batch-settlement.js` |
+| `X402_BATCH_IDLE_REFUND_SECONDS` | Idle time after which an x402 payment channel's balance is refunded, in seconds. |  | `src/batch-settlement.js` |
+| `X402_BATCH_REFUND_INTERVAL_SECONDS` | Interval between x402 payment channel refund passes, in seconds. |  | `src/batch-settlement.js` |
+| `X402_BATCH_SETTLEMENT_NETWORKS` | Networks offering x402 payment channels (comma list of CAIP-2 ids); unset turns them off. |  | `src/batch-settlement.js`, `src/payments.js` |
+| `X402_BATCH_SETTLEMENT_STORE` | Store for x402 payment channel state; memory names the single-process store. |  | `src/batch-settlement.js` |
 | `X402_BINARY_LISTINGS` | X402 binary listings. |  | `src/tool-media-type.js` |
 | `X402_ECONOMY_DB` | X402 economy database. |  | `src/x402-economy.js` |
 | `X402_HOOK_FAULT_FOR_TEST` | X402 hook fault for test. |  | `src/x402-hook-guard.js` |
@@ -1398,7 +1442,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `ACCEPT_OUTPUT_SCHEMA` | Accept output schema. |  | `src/accept-output-schema.js` |
-| `ALCHEMY_API_KEY` | Key for the on-chain data host behind chain reads (a credential, set on the host). |  | `src/leaderboard.js`, `src/revenue-live.js`, `src/solana-history-rpc.js` and 7 more |
+| `ALCHEMY_API_KEY` | Key for the on-chain data host behind chain reads (a credential, set on the host). |  | `src/leaderboard.js`, `src/payer-operators.js`, `src/revenue-live.js` and 8 more |
 | `APOLLO_API_KEY` | Apollo API key (a credential, set on the host). |  | `src/tools/b2b-enrich-kit.js` |
 | `AUDIO_DECODE_SLOTS` | Audio decode slots. |  | `src/tools/media-kit.js` |
 | `BING_SITE_URL` | Bing site URL. | `https://agent402.tools/` | `src/search-data.js` |
@@ -1433,8 +1477,6 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `FRED_API_KEY_V2` | Fred API key v2. |  | `src/tools/macro-kit.js` |
 | `FUNDING_HISTORY_CHUNK_BLOCKS` | Funding history chunk blocks. | `0` | `src/seller-funding.js` |
 | `FUNDING_HISTORY_FROM_BLOCK` | Funding history from block. |  | `src/seller-funding.js` |
-| `FUNNEL_CALLER_CAP` | Funnel caller cap. |  | `src/funnel.js` |
-| `FUNNEL_RETRY_WINDOW_MS` | Funnel retry window, in milliseconds. |  | `src/funnel.js` |
 | `GATED_RAIL_HISTORY_FILE` | Gated rail history file path. | `/data/gated-rail-history.json` | `src/gated-rail-history.js` |
 | `GA_MEASUREMENT_ID` | Analytics measurement id. |  | `src/ledger-chrome.js` |
 | `GITHUB_TRAFFIC_TOKEN` | Github traffic token (a credential, set on the host). |  | `src/transparency.js` |
@@ -1466,6 +1508,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `MAX_WALLETS_SCAN` | Maximum wallets scan. | `0` | `src/leaderboard.js` |
 | `MCP_LOOPBACK_TEST_SECRET` | MCP loopback test secret (a credential, set on the host). |  | `src/mcp-loopback.js` |
 | `MCP_SKILLS` | MCP skills. |  | `src/mcp-skills.js` |
+| `METERED_MEDIA` | Speech, transcription and embedding tools settle on measured work for metered buyers (on). |  | `src/gateway-meter.js` |
 | `MODEL_CATALOG_URL` | Model catalog URL. | `https://openrouter.ai/api/v1/models` | `src/model-catalog.js` |
 | `MONITOR_MANAGE_SECRET` | Monitor manage secret (a credential, set on the host). |  | `src/server.js` |
 | `MONITOR_SCHEDULER` | off stops the scheduler that runs recurring monitors. |  | `src/server.js` |
@@ -1531,6 +1574,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `VIDEOS_POLL_MS` | Videos poll, in milliseconds. | `5000` | `src/tools/llm-images-fast-kit.js` |
 | `VIDEO_PARK_MS` | Video park, in milliseconds. | `1800000` | `src/tools/llm-images-fast-kit.js` |
 | `WARPCAST_API_KEY` | Warpcast API key (a credential, set on the host). |  | `src/tools/farcaster-social-kit.js`, `src/tools/onchain-identity-kit.js` |
+| `WEB_BOT_AUTH` | Web Bot Auth signature verification on requests (on). |  | `src/web-bot-auth.js` |
 | `ZEPTOMAIL_TOKEN` | Zeptomail token (a credential, set on the host). |  | `src/email.js` |
 | `ZEPTOMAIL_URL` | Zeptomail URL. | `https://api.zeptomail.com/v1.1/email` | `src/email.js` |
 
