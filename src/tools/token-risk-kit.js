@@ -25,6 +25,7 @@ import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { checkReportGrounding, sanitizeReportProse, cleanSourceTitle, quotedMaterial, neutralizeQuoteMarkers, QUOTED_DATA_RULE } from "../report-grounding.js";
 import { CONTRACT_TOOLS } from "./contract-kit.js";
 import { upstreamFetch, bodyUnderDeadline } from "../upstream-deadline.js";
+import { testSeamOn } from "../test-seams.js";
 
 // Keyless control-plane facts the report used to disclaim as "not visible
 // here": GoPlus token_security (honeypot, proxy, mintable, hidden owner, taxes,
@@ -352,7 +353,7 @@ Write a clear, structured report of up to ${t.words} words: SNAPSHOT (what the t
       disclaimer: "Evidence-based on-chain risk signals only. Not financial advice, not a guarantee, not exhaustive. On-chain analysis cannot detect off-chain or social scams.",
     };
     const out = { report, address, chain, sources, tables, meta, grounding };
-    if (process.env.RESEARCH_DEBUG === "1") out._debug = { infoBlock, verifyBlock, holderBlock, scanBlock, webBlock };
+    if (testSeamOn("RESEARCH_DEBUG")) out._debug = { infoBlock, verifyBlock, holderBlock, scanBlock, webBlock };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(TOKEN_RISK_TIERS[tierSlug]) });
     return out;
   };

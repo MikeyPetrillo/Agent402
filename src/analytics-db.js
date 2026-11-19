@@ -19,6 +19,7 @@ import pg from "pg";
 import { dbSsl } from "./db-ssl.js";
 import { probeDbHost } from "./db-probe.js";
 import { leased, leaseStillHeld } from "./state-db.js";
+import { testSeamOn } from "./test-seams.js";
 
 const { Pool } = pg;
 
@@ -27,7 +28,7 @@ const ANALYTICS_URL = process.env.ANALYTICS_DATABASE_URL || process.env.DATABASE
 // single `[tool-call-test] {json}` line instead of touching a database, so a
 // suite reads the exact rows a boot would have written (the same pattern as
 // POSTHOG_TEST_CAPTURE in src/posthog.js). Never set in production.
-const TEST_CAPTURE = process.env.ANALYTICS_TEST_CAPTURE === "1";
+const TEST_CAPTURE = testSeamOn("ANALYTICS_TEST_CAPTURE"); // never on a production boot (src/test-seams.js)
 let pool = null;
 let schemaReady = false;
 // After a failed init the database is not retried for RETRY_AFTER_MS. This

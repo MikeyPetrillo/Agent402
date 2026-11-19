@@ -39,6 +39,7 @@ import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase } from "./solana-intel-kit.js";
 import { attribute } from "../data-attribution.js";
 import { markUntrusted } from "./provenance.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
+import { testSeamOn } from "../test-seams.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -442,7 +443,7 @@ ${riskBlock}`;
       disclaimer: "Evidence from public Solana data sources (RugCheck, DexScreener, Jupiter) at the time of the request. Not investment advice, not a verdict, not exhaustive: this data cannot see off-chain rug mechanics, social scams, or team intent.",
     };
     const out = { report: report_md, mint, sources: numbered, tables, evidence, meta, grounding };
-    if (process.env.RESEARCH_DEBUG === "1") out._debug = { synthPrompt };
+    if (testSeamOn("RESEARCH_DEBUG")) out._debug = { synthPrompt };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(TOKEN_BRIEF_TIERS[tierSlug]) });
     // Token metadata, pool labels and DEX labels inside this payload are written
     // by third parties (anyone can mint a token), so the whole result is marked

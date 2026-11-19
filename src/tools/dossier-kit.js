@@ -20,6 +20,7 @@ import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { EDGAR_TOOLS, fetchXmlText, isAnnualPeriod, isQuarterPeriod, periodMonths } from "./edgar-kit.js";
 import { FINANCE_TOOLS } from "./finance-kit.js";
 import { stockDataEnabled } from "./stock-provider.js";
+import { testSeamOn } from "../test-seams.js";
 
 // Read at boot, like every listing switch: the quote step runs only with an
 // active stock provider.
@@ -453,7 +454,7 @@ ${QUOTE_ON ? `=== LIVE QUOTE ===\n${quoteBlock}\n` : ""}=== SEC XBRL FINANCIALS 
     const out = format === "json"
       ? { dossier, company, ticker, sources: numbered, tables, meta, grounding }
       : { dossier, company, ticker, sources: numbered, tables, meta, grounding };
-    if (process.env.RESEARCH_DEBUG === "1") out._debug = { webAnswers: webGood.map((r) => ({ q: r.q, answer: r.answer })), quoteBlock, insiderBlock, financialsBlock, bridge: financials.bridge, excerptBlock, webSources: numbered.filter((s) => s.kind !== "sec").map((s) => ({ n: s.n, snippet: s.snippet })) };
+    if (testSeamOn("RESEARCH_DEBUG")) out._debug = { webAnswers: webGood.map((r) => ({ q: r.q, answer: r.answer })), quoteBlock, insiderBlock, financialsBlock, bridge: financials.bridge, excerptBlock, webSources: numbered.filter((s) => s.kind !== "sec").map((s) => ({ n: s.n, snippet: s.snippet })) };
     // A composite that CALLS this one in-process passes `accountAs`, so the sale is
     // booked once against the product the buyer actually paid for; the caller folds
     // this leg's spend into its own. Direct callers are unaffected.

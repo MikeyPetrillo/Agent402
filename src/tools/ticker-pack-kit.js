@@ -47,6 +47,7 @@ import { resolveCompany, eftsSearch, edgarGetJson, parse13fInformationTable, fet
 import { mapLimit } from "./map-limit.js";
 import { makeDossierHandler, DOSSIER_TIERS } from "./dossier-kit.js";
 import { makeInsiderHandler, INSIDER_TIERS, probeInsiderFilings } from "./insider-flow-kit.js";
+import { testSeamOn } from "../test-seams.js";
 
 const SYNTH = "anthropic/claude-opus-5";
 // Exported so the live-catalog guard can check the id is still upstream.
@@ -900,7 +901,7 @@ ${factLines.join("\n")}`;
       insider: insiderR.ok ? insiderR.data?.grounding : null,
     });
     const out = { report, company: meta.company, ticker, cik, sources: merged, tables, evidence, meta, grounding };
-    if (process.env.RESEARCH_DEBUG === "1") out._debug = { synthPrompt, factLines };
+    if (testSeamOn("RESEARCH_DEBUG")) out._debug = { synthPrompt, factLines };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent + partSpend, ok: true, priceUsd: priceUsdOf(t) });
     return out;
   };
