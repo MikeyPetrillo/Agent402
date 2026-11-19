@@ -17,7 +17,7 @@ export function apiExplorerPage(baseUrl) {
 .ae-cats{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:22px}
 /* On a phone the category chips are one sideways strip, so no row ends on a stray chip. */
 @media (max-width:600px){.ae-cats{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}.ae-cat-btn{flex:none}}
-.ae-cat-btn{background:transparent;border:1px solid var(--control);color:var(--ink);padding:5px 10px;font-family:var(--font-mono);font-size:var(--fs-xs);cursor:pointer;transition:.15s}
+.ae-cat-btn{background:transparent;border:1px solid var(--control);color:var(--ink);padding:5px 10px;font-family:var(--font-mono);font-size:var(--fs-xs);cursor:pointer;transition:var(--dur-fast)}
 .ae-cat-btn:hover{border-color:var(--accent);color:var(--accent)}
 .ae-cat-btn.active{background:var(--panel);color:var(--on-panel);border-color:var(--ink);font-weight:700}
 .ae-endpoint{background:var(--card);border:1px solid var(--hairline);margin-bottom:8px;overflow:hidden}

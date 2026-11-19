@@ -247,7 +247,7 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
         <div style="border:1px solid var(--hairline);background:var(--panel);">
           <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);">
             <span>SNAPSHOT</span>
-            <span style="display:inline-flex;align-items:center;gap:6px;color:var(--accent-lit);"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent-lit);display:inline-block;animation:ml-pulse 1.8s ease-in-out infinite;"></span>${cadenceBadge(LEADERBOARD_REFRESH_MS)}</span>
+            <span style="display:inline-flex;align-items:center;gap:6px;color:var(--accent-lit);"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent-lit);display:inline-block;animation:ml-pulse var(--dur-pulse) ease-in-out infinite;"></span>${cadenceBadge(LEADERBOARD_REFRESH_MS)}</span>
           </div>
           <table class="ml-kv" style="font-family:var(--font-mono);font-size:var(--fs-sm);"><tbody>${metaRowsHtml}</tbody></table>
         </div>

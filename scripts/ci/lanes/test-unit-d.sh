@@ -254,6 +254,9 @@ t node scripts/test-scan-cap.js
 # Market terminal contract (palette resolves + clears WCAG AA in BOTH themes,
 # no literal hex, escaping, and a capped scan still reads as a floor — offline)
 t node scripts/test-terminal-tokens.js
+# Motion tokens (DESIGN.md "Motion"): token rules, reduced motion at 0ms, no literal time in any page module or browser script (offline)
+t node scripts/test-motion-tokens.js
+t node scripts/test-motion-tokens.js --self-test
 # Revenue buyers trend (rolling 14d recent-vs-prior comparison — offline)
 t node scripts/test-buyers-trend.js
 # Per-chain price premiums (fee-charging rails priced in; dormant default byte-identical — offline)

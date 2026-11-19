@@ -369,7 +369,7 @@ export function blogIndex(baseUrl) {
 .bl-desc{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
 .blog-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;}
 @media(max-width:700px){.blog-grid{grid-template-columns:1fr;}}
-.blog-card{display:block;background:var(--card);border:1px solid var(--hairline);padding:24px 26px;text-decoration:none;transition:border-color .2s;}
+.blog-card{display:block;background:var(--card);border:1px solid var(--hairline);padding:24px 26px;text-decoration:none;transition:border-color var(--dur-fast);}
 .blog-card:hover{border-color:var(--accent);}
 .blog-date{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:6px;}
 .blog-card h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-lg);line-height:1.15;letter-spacing:-.02em;margin:4px 0 12px;color:var(--ink);}

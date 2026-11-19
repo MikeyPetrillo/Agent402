@@ -79,7 +79,7 @@ export const REPORTS_CSS = `
   .report ol,.report ul{color:var(--muted);line-height:1.6}
   .cite{font-family:var(--font-mono);font-size:var(--fs-code-inline);font-weight:500;color:var(--accent);vertical-align:super}
   @keyframes sp{to{transform:rotate(360deg)}}
-  .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--dash);border-top-color:var(--ink);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-3px;margin-right:8px}
+  .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--dash);border-top-color:var(--ink);border-radius:50%;animation:sp var(--dur-spin) linear infinite;vertical-align:-3px;margin-right:8px}
   .status{background:var(--card);border:1px solid var(--hairline);border-radius:var(--radius);padding:44px 34px;text-align:center;margin-top:24px}
   .status h2{font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink)}.status p{color:var(--muted);max-width:460px;margin:0 auto 8px;line-height:1.55}
   .report-actions{display:flex;gap:10px;align-items:center;margin:22px 0 4px;flex-wrap:wrap}

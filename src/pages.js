@@ -734,7 +734,7 @@ export function faqPage(baseUrl) {
   .fq-group h2 { padding-bottom:6px; border-bottom:1px solid var(--hairline); }
   .fq-item > summary { list-style:none; cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:20px 0; font-family:var(--font-body); font-weight:800; font-size:var(--fs-lg); line-height:1.3; color:var(--ink); }
   .fq-item > summary::-webkit-details-marker { display:none; }
-  .fq-mark { font-family:var(--font-mono); font-weight:400; font-size:var(--fs-xl); line-height:1; color:var(--accent); flex:none; transition:transform .15s ease; display:inline-block; }
+  .fq-mark { font-family:var(--font-mono); font-weight:400; font-size:var(--fs-xl); line-height:1; color:var(--accent); flex:none; transition:transform var(--dur-fast) ease; display:inline-block; }
   .fq-item[open] .fq-mark { transform:rotate(45deg); }
   @media (prefers-reduced-motion:reduce){ .fq-mark { transition:none; } }
   .fq-item p { color:var(--muted); font-size:var(--fs-base); line-height:1.7; margin:0; padding:0 0 22px; max-width:760px; }

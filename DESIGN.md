@@ -86,6 +86,20 @@ radius:           # stance: square-ish surfaces, one expressive shape for the mo
   pill: 999px     # --radius-pill: the primary button only
   dot: 50%        # status dots, nothing else
   none: 0         # tables, bars, the bottom of a receipt-edge surface
+motion:          # --dur-*, --stagger, --ease-*; 0ms under prefers-reduced-motion (scripts/test-motion-tokens.js)
+  dur-fast: 200ms        # hover, press, a color or border change
+  dur-base: 300ms        # a control, panel or figure step arriving
+  dur-slow: 400ms        # a section reveal, the largest UI move
+  dur-fast-exit: 140ms   # exits run at 70% of their entrance
+  dur-base-exit: 210ms
+  dur-slow-exit: 280ms
+  stagger: 60ms          # step between siblings; six members start inside 300 ms
+  dur-spin: 800ms        # loops: a spinner
+  dur-pulse: 1800ms      # loops: a live dot
+  dur-beat: 1000ms       # loops: one step of a sequenced figure
+  ease-out: "cubic-bezier(.22,.61,.36,1)"     # entrances
+  ease-in: "cubic-bezier(.55,0,1,.45)"        # exits
+  ease-in-out: "cubic-bezier(.65,0,.35,1)"    # a move from one place to another
 elevation:
   signature: "0 18px 40px rgba(17,19,21,.10)"   # --shadow-lg (dark: rgba(0,0,0,.35)); one shadow, on feature cards only
   button: --btn-shadow
@@ -247,6 +261,23 @@ names first); `WRAP_ALL=1` runs all of them.
   `margin-top: auto`). A section of claims is a row list (heading left, one sentence and at
   most two links right, the rest behind an expander), not a grid of squeezed cards.
 - A list section (FAQ) sits in the 1180px container, left-aligned, its rows capped at 900px.
+
+## Motion
+- **Tokens only.** A transition or animation names `var(--dur-*)` (or `var(--stagger)` in a
+  delay) and an `--ease-*` curve; `scripts/test-motion-tokens.js` fails a literal time in any
+  page module or browser script.
+- **UI moves take 200 to 400 ms**: `--dur-fast` for hover, press and color, `--dur-base` for a
+  control or figure step arriving, `--dur-slow` for a section reveal. An exit runs at 70% of its
+  entrance (`--dur-*-exit`, the guard allows 65 to 75%). Entrances ease out, exits ease in.
+- **Stagger stays under 500 ms**: siblings start `--stagger` apart, and the sixth and every
+  later member share the last start, so a group of any size is moving within 300 ms.
+- **Loops are steady and few**: a spinner (`--dur-spin`), the live dot (`--dur-pulse`) and a
+  sequenced figure's beat (`--dur-beat`). Nothing else repeats on its own.
+- **Reduced motion is still, never blank.** Under `prefers-reduced-motion: reduce` every duration
+  token is 0ms and smooth scrolling is off, so a page on the tokens goes still with no rule of
+  its own. A script that animates (a frame loop, a smooth scroll, `element.animate`) reads the
+  same query and draws its final state; the guard fails one that does not. Content is complete
+  without motion and without script: motion only orders what is already there.
 
 ## Signature: the receipt edge
 - A paid call returns a receipt, so the surfaces that sell or prove one end in a perforated

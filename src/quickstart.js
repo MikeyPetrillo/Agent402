@@ -16,7 +16,7 @@ export function quickstartPage(baseUrl) {
 
 /* tabs */
 .qs-tab-bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:0;border-bottom:1px solid var(--hairline);padding-bottom:10px}
-.qs-tab{background:transparent;border:1px solid var(--hairline);color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-sm);padding:8px 16px;cursor:pointer;transition:all .15s}
+.qs-tab{background:transparent;border:1px solid var(--hairline);color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-sm);padding:8px 16px;cursor:pointer;transition:all var(--dur-fast)}
 .qs-tab:hover{color:var(--ink);border-color:var(--ink)}
 .qs-tab.active{background:var(--panel);color:var(--on-panel);border-color:var(--ink);font-weight:700}
 

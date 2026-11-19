@@ -2766,7 +2766,7 @@ const SKILLS_CSS = `
 @media (max-width:640px){ .sk-cardgrid { grid-template-columns:1fr; } }
 .sk-flagship { display:flex; flex-direction:column; gap:11px; padding:24px; background:var(--card); color:inherit; text-decoration:none; }
 .sk-flagship:hover .sk-flagship-slug { color:var(--accent); }
-.sk-flagship-slug { font-family:var(--font-mono); font-weight:700; font-size:var(--fs-lg); color:var(--ink); transition:color .15s; }
+.sk-flagship-slug { font-family:var(--font-mono); font-weight:700; font-size:var(--fs-lg); color:var(--ink); transition:color var(--dur-fast); }
 .sk-flagship-body { font-size:var(--fs-md); line-height:1.55; color:var(--muted); flex:1; }
 .sk-flagship-tools { display:flex; flex-wrap:wrap; font-family:var(--font-mono); font-size:var(--fs-2xs); line-height:1.6; color:var(--faint); }
 .sk-flagship-tools > span { white-space:nowrap; }

@@ -72,14 +72,14 @@ export function playgroundPage(baseUrl, catalog) {
   .pg-field input:focus{border-color:var(--accent)}
   .pg-field .chk-wrap{display:flex;align-items:center;gap:8px}
   .pg-field input[type="checkbox"]{accent-color:var(--accent);width:16px;height:16px}
-  .pg-btn{margin-top:14px;padding:10px 22px;border:none;font-size:var(--fs-base);font-family:var(--font-mono);font-weight:700;cursor:pointer;transition:opacity .15s}
+  .pg-btn{margin-top:14px;padding:10px 22px;border:none;font-size:var(--fs-base);font-family:var(--font-mono);font-weight:700;cursor:pointer;transition:opacity var(--dur-fast)}
   .pg-btn.run{background:var(--panel);color:var(--on-panel)}
   .pg-btn.run:hover{opacity:.85}
   .pg-btn.run:disabled{opacity:.5;cursor:not-allowed}
   .pg-paid{margin:16px 0 0;font-size:var(--fs-base);line-height:1.55;color:var(--muted)}
   .pg-paid a{color:var(--accent);white-space:nowrap}
   .pg-status{margin-top:10px;font-size:var(--fs-md);color:var(--faint);font-family:var(--font-mono)}
-  .pg-status .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--faint);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
+  .pg-status .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--faint);border-top-color:var(--accent);border-radius:50%;animation:spin var(--dur-spin) linear infinite;vertical-align:middle;margin-right:6px}
   @keyframes spin{to{transform:rotate(360deg)}}
   .pg-result{padding:16px;border:1px solid var(--hairline);background:var(--card);min-height:300px;position:sticky;top:80px}
   .pg-result .placeholder{color:var(--faint);font-size:var(--fs-md);text-align:center;padding-top:100px}
