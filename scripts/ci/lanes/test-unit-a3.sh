@@ -76,6 +76,8 @@ t node scripts/test-convert.js
 t node scripts/test-json-canonical.js
 # PostHog LLM analytics and error tracking: each event carries only its allowlisted fields and no prompt, answer, body, header value, payer address or secret; sampling, hourly ceilings, the fingerprint window and the bounded queue hold; off switches and an absent key send nothing (offline)
 t node scripts/test-posthog-observability.js
+# render-film --out: absolute paths are used as given, relative ones read from the repository root (offline)
+t node scripts/test-render-film-out.js
 # Wallet sign-in (EIP-4361): nonce replay, cross-domain message, wrong URI, wrong chain, expired message and token, altered and foreign tokens, sign-out; a signed payer wins and a different session wallet is refused; off mounts nothing (two FREE_MODE boots)
 t node scripts/test-wallet-sign-in.js
 # Web Bot Auth verification: the RFC 9421 Ed25519 example, draft-shaped signatures and each refusal, bounded directory fetches, never refusing a request; every switch off and on answers pricing, openapi, llms.txt and the identity-bound 402s byte for byte alike (two paid boots, stub facilitator)

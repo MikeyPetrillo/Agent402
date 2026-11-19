@@ -31,7 +31,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { generateKeyPairSync } from "node:crypto";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { RAILS } from "../src/rails.js";
@@ -40,7 +40,10 @@ import { CATEGORY_LINE, SUPPORT_LINE } from "../src/positioning.js";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const arg = (k, d) => { const a = process.argv.find((x) => x.startsWith(`--${k}=`)); return a ? a.slice(k.length + 3) : d; };
 const FPS = Number(arg("fps", "24"));
-const OUT = join(ROOT, arg("out", "dist/media"));
+// --out: a relative path is read from the repository root; an absolute path
+// is used as given (never joined under the repository).
+export function outDirOf(value, root = ROOT) { return resolve(root, String(value || "dist/media")); }
+const OUT = outDirOf(arg("out", "dist/media"));
 const ONLY = arg("only", "");
 const CLIP_SLUGS = arg("clips", "answer,search,whois,uuid").split(",").filter(Boolean);
 const W = 1280, H = 720;
