@@ -51,6 +51,7 @@ export function setMeterSpendSinkForTest(fn) { __meterSink = typeof fn === "func
 import { isCountedRail } from "./paid-rails.js";
 import { OWN_UA, indexerFor, isBrowserUa } from "./traffic-classifier.js";
 import { registerObservabilitySink, captureAiGeneration, flushObservability, flushWebBotAuthRollup } from "./posthog-observability.js";
+import { testSeamOn } from "./test-seams.js";
 
 const API_KEY = process.env.POSTHOG_API_KEY || "";
 const HOST = process.env.POSTHOG_HOST || "https://us.i.posthog.com";
@@ -78,7 +79,7 @@ let enabled = false;
 // touching the network. This is how the funnel CI test asserts the exact
 // events + properties the server would have sent, fully offline — same
 // pattern as the wallet E2E's leak audit reading the server log.
-const TEST_MODE = process.env.POSTHOG_TEST_CAPTURE === "1";
+const TEST_MODE = testSeamOn("POSTHOG_TEST_CAPTURE"); // never on a production boot (src/test-seams.js)
 const testEvents = [];
 export function _testEventsForTest() {
   return testEvents;

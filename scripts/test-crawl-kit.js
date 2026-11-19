@@ -17,6 +17,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 import { gzipSync } from "node:zlib";
 import { CRAWL_TOOLS, CRAWL_USER_AGENT, normalizeUrl, hostAllowed, parseSitemap, sitemapDeclarations, extractLinks, pageContent, __test } from "../src/tools/crawl-kit.js";
+import { hostOf, isHost } from "./lib/url-host.js";
 
 const h = (slug) => CRAWL_TOOLS.find((t) => t.slug === slug).handler;
 let fail = 0, pass = 0;
@@ -163,7 +164,7 @@ ok(map.sitemapsRead === 3, `site-map: index + gz child + plain child read (got $
 ok(map.urls.some((u) => u === "https://example.com/blog/2") && map.urls.some((u) => u === "https://example.com/docs"), "site-map: gzipped child sitemap URLs present");
 ok(map.urls.some((u) => u === "https://example.com/about") && !map.urls.some((u) => u === "https://example.com/target"), "site-map: link + sitemap URLs merged (redirect target not fetched here)");
 ok(!map.urls.some((u) => { const h = new URL(u).host; return h === "other.test" || h.endsWith(".other.test") || h === "iana.org" || h.endsWith(".iana.org"); }), "site-map: offsite URLs filtered");
-ok(!map.urls.some((u) => u.includes("10.0.0") || u.includes("127.0.0.1")), "site-map: private-IP URLs filtered");
+ok(!map.urls.some((u) => /^10\.0\.0\./.test(hostOf(u)) || hostOf(u) === "127.0.0.1"), "site-map: private-IP URLs filtered");
 ok(!map.urls.some((u) => new URL(u).host === "docs.example.com"), "site-map: subdomain excluded by default");
 ok(!map.urls.some((u) => u.includes("#") || u.startsWith("mailto")), "site-map: fragments + non-http dropped");
 ok(new Set(map.urls).size === map.urls.length, "site-map: deduped");
@@ -178,7 +179,7 @@ const mapSub = await h("site-map")({ url: "https://www.example.com/", includeSub
 ok(mapSub.urls.length <= 3 && mapSub.truncated === (mapSub.total > 3), `site-map: limit + truncated flag (${mapSub.total} total, ${mapSub.urls.length} returned)`);
 ok(mapSub.urls.every((u) => u.toLowerCase().includes("docs")), "site-map: search is a case-insensitive substring filter");
 ok(mapSub.urls.some((u) => u === "https://docs.example.com/p"), "site-map: includeSubdomains keeps subdomain URLs");
-ok(mapSub.host === "www.example.com" && mapSub.urls.some((u) => u.startsWith("https://example.com/")), "site-map: www start counts bare host as the same site");
+ok(mapSub.host === "www.example.com" && mapSub.urls.some((u) => isHost(u, "example.com")), "site-map: www start counts bare host as the same site");
 
 // fetch-count bound: a sitemap index with many children stops at 6 fetches and says so
 ROUTES.set("/sitemap-index.xml", { type: "application/xml", body: "<sitemapindex>" + Array.from({ length: 12 }, (_, i) => `<sitemap><loc>https://example.com/child-${i}.xml</loc></sitemap>`).join("") + "</sitemapindex>" });
@@ -253,7 +254,7 @@ fetched = [];
 const sub = await h("site-crawl")({ url: SITE, sameHost: false, limit: 20 });
 // An unresolvable subdomain is refused by the guard like a private one (one
 // answer for both), so it lands under unsafe rather than error.
-ok(fetched.some((u) => u.startsWith("https://docs.example.com/")) || sub.skipped.error + sub.skipped.unsafe >= 1, "site-crawl: sameHost:false admits the docs subdomain (fetched or refused, never offsite)");
+ok(fetched.some((u) => isHost(u, "docs.example.com")) || sub.skipped.error + sub.skipped.unsafe >= 1, "site-crawl: sameHost:false admits the docs subdomain (fetched or refused, never offsite)");
 ok(!fetched.some((u) => /iana\.org/.test(u)), "site-crawl: sameHost:false still never leaves the site");
 
 // format text + maxCharsPerPage

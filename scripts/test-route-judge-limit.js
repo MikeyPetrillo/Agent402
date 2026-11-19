@@ -9,14 +9,12 @@
 // never an error. The free path's share of the daily ceiling is pinned in
 // test-tool-judge.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
-let pass = 0, proc = null, judge = null;
-const fail = (m) => { console.error("FAIL:", m); proc?.kill("SIGKILL"); judge?.close(); process.exit(1); };
+let pass = 0, srv = null, judge = null;
+const fail = (m) => { console.error("FAIL:", m); srv?.child.kill("SIGKILL"); judge?.close(); process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let judgeCalls = 0;
 judge = createServer((req, res) => {
@@ -27,18 +25,17 @@ judge = createServer((req, res) => {
     res.end(JSON.stringify({ answers: { best: { choice: "c1", confidence: 0.97 } } }));
   });
 });
-const [PORT, JUDGE_PORT] = [await getFreePort(), await getFreePort()];
-await new Promise((r) => judge.listen(JUDGE_PORT, "127.0.0.1", r));
-proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", REDIS_URL: "",
+await new Promise((r) => judge.listen(0, "127.0.0.1", r));
+const JUDGE_PORT = judge.address().port;
+srv = await bootServer({
+  stores: "route-judge-limit",
+  env: { TRUST_PROXY_HOPS: "1", FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", REDIS_URL: "",
     TYPESAFE_API_KEY: "test-judge-key", TYPESAFE_API_URL: `http://127.0.0.1:${JUDGE_PORT}/v1/systemone`,
     ROUTE_JUDGE_PER_IP_HOUR: "2" },
-  stdio: "ignore",
 });
-const B = `http://127.0.0.1:${PORT}`;
+const B = srv.url;
 
 try {
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
   const ask = async (q) => { const r = await fetch(`${B}/api/route?q=${encodeURIComponent(q)}&include=local&top=5`); return { status: r.status, body: await r.json() }; };
   const qs = ["convert json to csv", "hash a string with sha256", "decode a base64 string"];
   const a = await ask(qs[0]);
@@ -54,7 +51,7 @@ try {
   const ob = await other.json();
   ok(other.status === 200 && ob.judged && !ob.judged.skipped && judgeCalls === 3, `another caller keeps its own allowance (${JSON.stringify(ob.judged)}, judge calls ${judgeCalls})`);
   console.log(`\nPASS - ${pass} checks (route judge limit)`);
-  proc.kill("SIGKILL"); judge.close();
+  await srv.stop(); judge.close();
   process.exit(0);
 } catch (e) {
   fail(`unexpected: ${e?.stack || e}`);

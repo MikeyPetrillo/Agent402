@@ -5,13 +5,11 @@
 // on a non-EVM rail learns which routes it cannot pay before it pays:
 // /api/pricing lists a restricted route's networks, the x402 manifest says so.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { withLlmsLinkTag, LLMS_LINK_TAG } from "../src/llms-link.js";
 
-let pass = 0, proc = null;
-const log = [];
-const fail = (m) => { console.error(`FAIL - ${m}`); for (const l of log.slice(-20)) console.error("  server:", l); proc?.kill("SIGKILL"); process.exit(1); };
+let pass = 0, srv = null;
+const fail = (m) => { console.error(`FAIL - ${m}`); for (const l of (srv?.log() || "").split("\n").filter(Boolean).slice(-20)) console.error("  server:", l); srv?.child.kill("SIGKILL"); process.exit(1); };
 const ok = (c, m) => { c ? (pass++, console.log("ok -", m)) : fail(m); };
 
 // --- offline: the injector
@@ -21,18 +19,13 @@ ok(withLlmsLinkTag(withLlmsLinkTag(page)).split('href="/llms.txt"').length === 2
 ok(withLlmsLinkTag("<p>fragment</p>") === "<p>fragment</p>", "a fragment with no </head> is left alone");
 
 // --- live: FREE_MODE boot
-const PORT = await getFreePort();
-const B = `http://127.0.0.1:${PORT}`;
-proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", X402_SYNC_ON_START: "false" },
-  stdio: ["ignore", "pipe", "pipe"],
+srv = await bootServer({
+  stores: "llms-link",
+  env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", X402_SYNC_ON_START: "false" },
 });
-proc.stdout.on("data", (d) => log.push(...String(d).split("\n").filter(Boolean)));
-proc.stderr.on("data", (d) => log.push(...String(d).split("\n").filter(Boolean)));
-let up = false;
-for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${B}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
+const B = srv.url;
 try {
-  ok(up, "server booted");
+  ok(true, "server booted");
   // One page from each kind of shell: ledger shell, hand-written heads, the
   // legacy chrome, a tool page, and a 404.
   for (const p of ["/", "/tools", "/tools/hash", "/revenue", "/sell", "/docs", "/crawler", "/what-is-x402", "/no-such-page"]) {
@@ -57,4 +50,4 @@ try {
   ok(/EVM chains only/.test(manifest.ecosystem?.restrictedRoutes || "") && /\/api\/pricing/.test(manifest.ecosystem.restrictedRoutes), "the x402 manifest names the restriction and where to read it");
 
   console.log(`\n${pass} passed, 0 failed`);
-} finally { proc?.kill("SIGKILL"); }
+} finally { await srv.stop(); }

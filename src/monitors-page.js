@@ -4,7 +4,7 @@
 // one-shot reports pages. External JS (site CSP drops inline script).
 import { MONITOR_PRODUCTS, RENEWAL_TERMS, CANCEL_EFFECT } from "./stripe-subscriptions.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
-import { REPORTS_CSS, cardField, cardError } from "./human-reports-page.js";
+import { REPORTS_CSS, cardField, cardError, NO_SCRIPT_CHECKOUT } from "./human-reports-page.js";
 import { MAX_FULL_PER_SUB_30D, MIN_FULL_GAP_MS } from "./monitor-scheduler.js";
 
 // The per-subscription report cap, read from the scheduler that enforces it.
@@ -58,6 +58,7 @@ export function monitorsPage(baseUrl = "https://agent402.tools", prefill = null)
   </section>
   <section>
     <h2 class="sr-section">Every monitor you can subscribe to</h2>
+    ${NO_SCRIPT_CHECKOUT}
     <div class="products">${cards}</div>
     <p class="note">${esc(CAP_NOTE)}</p>
     <p class="note">Monthly subscription · card via Stripe · cancel anytime from the link in your email · one-off reports at <a href="/reports" style="color:var(--ink);">/reports</a></p>

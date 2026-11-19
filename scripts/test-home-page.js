@@ -293,6 +293,10 @@ const catalog = {
   const fail02 = WHY_POINTS.find((w) => w.id === "never-charged");
   ok(/x402/.test(fail02.t) && !fail02.links.some(([h]) => h === "/status"), "the failure claim is scoped to x402 and links a payment check, not uptime");
   ok(!/^No wallet required/.test(WHY_POINTS.find((w) => w.id === "no-wallet").t), "the no-wallet row is not an absolute");
+  // The link to the claims counts them from WHY_POINTS, never a typed number.
+  const { countWord } = await import("../src/rails.js");
+  const claimsLink = (html.match(/href="\/docs#why"[^>]*>([^<]*)</) || [])[1] || "";
+  ok(claimsLink.includes(`all ${countWord(WHY_POINTS.length)} claims`), `the /docs#why link counts WHY_POINTS (${claimsLink})`);
 }
 
 // --- the meta description's card clause reads the switches that sell card ---

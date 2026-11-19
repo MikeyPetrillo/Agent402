@@ -20,11 +20,16 @@ import { reportDoneHtml } from "./report-prerender.js";
 
 // One field of a product card (DESIGN.md "Forms"): a visible label tied to its
 // input, the input tied to its error line by aria-describedby, and the error
-// line announced when it changes. The ids are the ones the storefront scripts read.
+// line announced when it changes. The field is marked required (the form keeps
+// novalidate, so the script's own error line speaks, not the browser bubble).
+// The ids are the ones the storefront scripts read.
 export function cardField(id, label, placeholder = "", { upper = false, value = "", autofocus = false } = {}) {
-  return `<label class="flabel" for="in-${esc(id)}">${esc(label)}</label><div class="field"><input id="in-${esc(id)}" name="input" type="text" autocomplete="off" aria-describedby="err-${esc(id)}"${placeholder ? ` placeholder="${esc(placeholder)}"` : ""}${upper ? ' style="text-transform:uppercase"' : ""}${value ? ` value="${esc(value)}"` : ""}${autofocus ? " autofocus" : ""}></div>`;
+  return `<label class="flabel" for="in-${esc(id)}">${esc(label)}</label><div class="field"><input id="in-${esc(id)}" name="input" type="text" required autocomplete="off" aria-describedby="err-${esc(id)}"${placeholder ? ` placeholder="${esc(placeholder)}"` : ""}${upper ? ' style="text-transform:uppercase"' : ""}${value ? ` value="${esc(value)}"` : ""}${autofocus ? " autofocus" : ""}></div>`;
 }
 export const cardError = (id) => `<div class="err" id="err-${esc(id)}" aria-live="polite"></div>`;
+// Card checkout starts from the page script; with scripts off the forms cannot
+// start one, so the storefronts say so in place of a button that does nothing.
+export const NO_SCRIPT_CHECKOUT = `<noscript><p class="note">Checkout opens with JavaScript on.</p></noscript>`;
 
 // How long a report takes, said once: the storefront said "about two minutes"
 // while the page a buyer waits on said one to three, the deepest up to five.
@@ -162,6 +167,7 @@ export function humanReportsPage(baseUrl) {
   <section>
     <h2 class="sr-section">Every report you can buy</h2>
     <p class="note" style="margin:0 0 16px;">Card prices include payment processing. An agent paying per call over x402 or MPP pays the tool's own price instead. Both buy the same report.</p>
+    ${NO_SCRIPT_CHECKOUT}
     <div class="products">
       <div class="pcard receipt" data-kind="research">
         <div class="k">Deep research</div>

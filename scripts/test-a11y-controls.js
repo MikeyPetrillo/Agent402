@@ -75,7 +75,7 @@ try {
     await ctx.addInitScript(HELPERS);
     // Nothing on these pages may start a checkout: any request to the buy or
     // subscribe endpoints is refused here and counted.
-    let checkoutCalls = 0;
+    let checkoutCalls = 0, refusedOnPurpose = 0;
     await ctx.route(/\/api\/(buy|subscribe|monitors\/subscribe|checkout)/, (r) => { checkoutCalls++; return r.abort(); });
     const page = await ctx.newPage();
     for (const path of PAGES) {
@@ -228,10 +228,26 @@ try {
           if (!errs.length) bad.push(`${el.id || el.name}: no aria-describedby target`);
           else if (!errs.some((e) => e.getAttribute("aria-live") || /^(alert|status)$/.test(e.getAttribute("role") || ""))) bad.push(`${el.id || el.name}: the described error line is not announced`);
           if (!el.closest("form")) bad.push(`${el.id || el.name}: not inside a <form>`);
+          if (el.closest(".pcard") && !el.required) bad.push(`${el.id || el.name}: not marked required`);
         }
         return { n: fields.length, bad };
       });
-      ok(f.n > 0 && f.bad.length === 0, `[${theme}] ${path}: ${f.n} fields have a visible label and an announced error line${f.bad.length ? ` (${list(f.bad)})` : ""}`);
+      ok(f.n > 0 && f.bad.length === 0, `[${theme}] ${path}: ${f.n} fields have a visible label, an announced error line and a required mark${f.bad.length ? ` (${list(f.bad)})` : ""}`);
+      if (theme === "light") {
+        // With scripts off a card form cannot start a checkout, so the page says
+        // so in a <noscript> line rather than leaving a button that does nothing.
+        const raw = await (await fetch(`${BASE}${path}`)).text();
+        ok(/<noscript>[^<]*<p[^>]*>[^<]*JavaScript/i.test(raw), `${path}: the served page tells a reader with scripts off that checkout needs JavaScript`);
+        // A refused checkout restores the button as it was drawn (its price
+        // slot included), so a later tier choice still updates the price.
+        const before = await page.evaluate(() => { const b = document.querySelector(".pcard-form button[type=submit]"); return b ? { html: b.innerHTML, price: !!b.querySelector(".bprice") } : null; });
+        await page.locator(".pcard-form input").first().fill("AAPL");
+        refusedOnPurpose++; // this one request is sent on purpose and refused by the route above
+        await page.locator(".pcard-form button[type=submit]").first().click();
+        await page.waitForFunction(() => { const b = document.querySelector(".pcard-form button[type=submit]"); return b && !b.disabled && !b.querySelector(".spin"); }, null, { timeout: 10_000 }).catch(() => {});
+        const after = await page.evaluate(() => { const b = document.querySelector(".pcard-form button[type=submit]"); return b ? { html: b.innerHTML, price: !!b.querySelector(".bprice"), disabled: b.disabled } : null; });
+        ok(before && after && !after.disabled && after.html === before.html && after.price === before.price, `${path}: a refused checkout puts the button back as drawn (${JSON.stringify({ before: before?.price, after: after?.price, same: after?.html === before?.html })})`);
+      }
     }
     if (theme === "light") {
       // Enter on an empty field shows the error in the described line and keeps focus on the field; nothing is sent.
@@ -242,7 +258,7 @@ try {
       const e = await page.evaluate(() => { const el = document.activeElement; const id = (el.getAttribute("aria-describedby") || "").split(/\s+/)[0]; const err = id && document.getElementById(id); return { focusedInput: el.tagName === "INPUT", err: err ? err.textContent.trim() : "", invalid: el.getAttribute("aria-invalid") }; });
       ok(e.focusedInput && e.err.length > 0 && e.invalid === "true", `/reports: Enter on an empty field shows its error, marks it invalid and keeps focus (${JSON.stringify(e)})`);
     }
-    ok(checkoutCalls === 0, `[${theme}] no checkout request was sent (${checkoutCalls})`);
+    ok(checkoutCalls === refusedOnPurpose, `[${theme}] no checkout request was sent beyond the ${refusedOnPurpose} refused on purpose (${checkoutCalls})`);
     await ctx.close();
   }
 

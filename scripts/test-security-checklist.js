@@ -13,6 +13,7 @@
 // carries its reason and a check that the reason still holds.
 //
 // When a guard moves, update its entry here in the same change.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -121,6 +122,23 @@ const CHECKLIST = [
     [".github/workflows/codeql.yml"],
     ["scripts/test-advisory-triage.js"],
   ], ci: false },
+  { area: "launch", item: "debug and test switches are off on a production boot (no debug field in an answer, no crash or hang hook)", guards: [
+    ["scripts/test-debug-off-in-production.js", "a production process with every seam set reads none of them", "control: a planted ungated debug read is caught"],
+    ["src/test-seams.js", "isProductionEnv(env)"],
+  ] },
+  { area: "launch", item: "environment review: every variable the server reads is documented, none documented that no code reads", guards: [
+    ["scripts/test-config-reference.js", "every environment variable src/ reads has a purpose line", "control: a new variable with no purpose line is reported"],
+    ["docs/configuration.md", "# Configuration reference"],
+  ] },
+  { area: "launch", item: "unused packages: every declared dependency is imported", guards: [
+    ["scripts/test-unused-deps.js", "every runtime dependency is imported by src/ or services/"],
+  ] },
+  { area: "data", item: "database connections verify TLS off the private network; every pool takes the shared TLS policy", guards: [
+    ["scripts/test-db-ssl.js", "every Postgres pool in src/ sets ssl: dbSsl(...)", "an unparseable URL defaults to verify"],
+  ] },
+  { area: "secrets", item: "key rotation is a written procedure (new credential, host and Actions secret, verify, revoke)", guards: [
+    ["docs/runbook.md", "## Rotate a key", "Revoke the old credential"],
+  ] },
   { area: "launch", item: "suspicious activity pages: wrong operator credentials counted shared, published as a word, paged by the heartbeat", guards: [
     ["scripts/test-operator-auth.js", "wrong operator credentials are counted"],
     [".github/workflows/heartbeat.yml", ".operatorAuth.status", "Operator token guessing ELEVATED"],
@@ -130,10 +148,8 @@ const CHECKLIST = [
 const NOT_APPLICABLE = [
   { area: "access", item: "password hashing", why: "no password is stored: the operator credential is a token compared in constant time and exchanged for an opaque session id; buyers authenticate by signed payment",
     holds: () => !/\b(?:import|require)\b[^\n]*\b(?:bcrypt|argon2|scrypt-js)\b/.test(srcText()) && !/CREATE TABLE[^;]*\bpassword\b/i.test(srcText()) },
-  { area: "secrets", item: "exposed-key response", why: "rotation is an owner action outside the repository; the history scan above is the detector",
-    holds: () => true },
-  { area: "launch", item: "unused packages", why: "a one-time import-graph read found every runtime dependency imported; removal is never automatic",
-    holds: () => true },
+  { area: "secrets", item: "exposed-key response", why: "issuing and revoking a credential is an owner action at its issuer; the history scan above is the detector and docs/runbook.md the procedure",
+    holds: () => existsSync(join(ROOT, "docs/runbook.md")) },
 ];
 
 let _src = null;
@@ -166,6 +182,17 @@ for (const entry of CHECKLIST) {
   }
 }
 for (const n of NOT_APPLICABLE) ok(n.holds(), `[${n.area}] ${n.item} is n/a: ${n.why}`);
+
+// The written mapping (docs/security-checklist.md) names only files that exist,
+// and names every guard file this checklist lists.
+{
+  const doc = read("docs/security-checklist.md");
+  const named = [...doc.matchAll(/`((?:scripts|src|\.github)\/[^`\s]+|\.gitleaks\.toml|SECURITY\.md)`/g)].map((m) => m[1]);
+  const missing = [...new Set(named)].filter((f) => !existsSync(join(ROOT, f)));
+  ok(named.length >= 30 && missing.length === 0, `docs/security-checklist.md names ${named.length} files, all present${missing.length ? `; missing: ${missing.join(", ")}` : ""}`);
+  const unlisted = [...new Set(CHECKLIST.flatMap((e) => e.guards.map(([f]) => f)))].filter((f) => f !== "docs/security-checklist.md" && f !== "docs/runbook.md" && f !== "docs/configuration.md" && !doc.includes(f));
+  ok(unlisted.length === 0, `every guard in this checklist is named in docs/security-checklist.md${unlisted.length ? `: ${unlisted.join(", ")}` : ""}`);
+}
 
 // This guard runs in exactly one lane.
 const lanes = readdirSync(join(ROOT, "scripts/ci/lanes")).filter((f) => f.endsWith(".sh") && read(`scripts/ci/lanes/${f}`).includes("scripts/test-security-checklist.js"));

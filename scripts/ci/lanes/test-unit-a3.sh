@@ -78,3 +78,13 @@ t node scripts/test-posthog-observability.js
 t node scripts/test-wallet-sign-in.js
 # Web Bot Auth verification: the RFC 9421 Ed25519 example, draft-shaped signatures and each refusal, bounded directory fetches, never refusing a request; every switch off and on answers pricing, openapi, llms.txt and the identity-bound 402s byte for byte alike (two paid boots, stub facilitator)
 t node scripts/test-web-bot-auth.js
+# Configuration reference: every environment variable src/ reads has a purpose line; docs/configuration.md is current (offline)
+t node scripts/test-config-reference.js
+# Debug and test switches are never honored on a production boot (src/test-seams.js; offline)
+t node scripts/test-debug-off-in-production.js
+# Every declared package is imported (offline)
+t node scripts/test-unused-deps.js
+# CycloneDX SBOM from package-lock.json: deterministic, no network (offline)
+t node scripts/test-sbom.js
+# Data-room metrics read only the public surfaces (stub, then a FREE_MODE boot on port 0)
+t node scripts/test-data-room-metrics.js

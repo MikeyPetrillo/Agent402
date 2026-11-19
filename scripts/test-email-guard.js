@@ -16,6 +16,7 @@ import { readableBase64 } from "../src/tools/email-guard-html.js";
 import { HTML_TOOLS } from "../src/tools/html-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
+import { urlMatches } from "./lib/url-host.js";
 
 let fail = 0, pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`ASSERT FAIL - ${m}`); } };
@@ -184,7 +185,7 @@ ok(/no score and no verdict/.test(tool.description), "copy says there is no scor
   ok(sch.length === 2 && sch.map((f) => f.scheme).sort().join() === "data,javascript", `javascript: and data: hrefs reported (${sch.map((f) => f.scheme).join(", ")})`);
   ok(out.links.count === 9 && out.links.unusualScheme === 2 && out.links.mismatched === 3, `link counts (${out.links.count}, ${out.links.unusualScheme}, ${out.links.mismatched})`);
   ok(JSON.stringify(out.links.hosts) === JSON.stringify(["cdn.example.net", "example.com", "example.net", "example.org", "login.example.net", "www.example.com"]), `distinct link hosts (${out.links.hosts.join(", ")})`);
-  ok(out.links.items.find((i) => i.href.startsWith("https://example.org/track"))?.hidden === true, "links.items marks the hidden link");
+  ok(out.links.items.find((i) => urlMatches(i.href, "example.org", "/track"))?.hidden === true, "links.items marks the hidden link");
   const textLinks = await run({ text: "See https://example.com/a and http://example.net/b." });
   ok(textLinks.links.count === 2 && textLinks.links.hosts.join() === "example.com,example.net" && textLinks.links.items[1].href === "http://example.net/b", "bare URLs in the text part are collected without the trailing period");
 }

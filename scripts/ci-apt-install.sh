@@ -7,6 +7,9 @@
 # on an idle transfer, a lost attempt drops that mirror, and a mirror set that
 # is dead for three attempts fails loudly.
 set -u
+# CI_APT_ETC moves the apt configuration root (scripts/test-ci-apt-sources.js
+# runs the helper against a temp tree with stub commands); CI leaves it unset.
+ETC=${CI_APT_ETC:-/etc/apt}
 [ "$#" -gt 0 ] || { echo "usage: ci-apt-install.sh <package>... | --playwright-chromium"; exit 2; }
 PLAYWRIGHT=0
 if [ "$1" = "--playwright-chromium" ]; then
@@ -17,21 +20,43 @@ attempt() {
   if [ "$PLAYWRIGHT" = 1 ]; then
     timeout 170 npx playwright install --with-deps chromium
   else
-    sudo timeout 170 apt-get update -q >"$LOG" 2>&1 && sudo timeout 170 apt-get install -y -q "$@" >>"$LOG" 2>&1
+    sudo timeout 170 apt-get update -q >"$LOG" 2>&1 || return 1
+    if ! have_candidates "$@"; then
+      add_archive_sources "$@"
+      sudo timeout 170 apt-get update -q >>"$LOG" 2>&1 || return 1
+    fi
+    sudo timeout 170 apt-get install -y -q "$@" >>"$LOG" 2>&1
   fi
+}
+# True when apt knows an installable version of every named package.
+have_candidates() {
+  for p in "$@"; do
+    apt-cache policy "$p" 2>/dev/null | grep -Eq 'Candidate: [^(]' || return 1
+  done
+}
+# An image whose apt sources name no Ubuntu archive (seen 2026-11-16: the
+# update read only packages.microsoft.com, then "Unable to locate package
+# ffmpeg" three times) gets the archive's main and universe components for
+# this job, then a fresh update. Nothing is added when the packages resolve.
+add_archive_sources() {
+  [ -f "$ETC/sources.list.d/ci-ubuntu-archive.sources" ] && return 0
+  codename=$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-noble}")
+  echo "apt sees no installable $* candidate; adding the Ubuntu archive ($codename main universe) and updating again"
+  printf 'Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: %s %s-updates %s-security\nComponents: main universe\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' \
+    "$codename" "$codename" "$codename" | sudo tee "$ETC/sources.list.d/ci-ubuntu-archive.sources" >/dev/null
 }
 # apt's own output goes to a log that is printed (last lines, with the time
 # taken) when an attempt fails, so a failed install names its cause.
 LOG=$(mktemp)
 printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "2";\n' \
-  | sudo tee /etc/apt/apt.conf.d/99-ci-mirror-timeouts >/dev/null
+  | sudo tee "$ETC/apt.conf.d/99-ci-mirror-timeouts" >/dev/null
 set_mirrors() {  # $1 = with-azure | no-azure
-  [ -f /etc/apt/apt-mirrors.txt ] || return 0
+  [ -f "$ETC/apt-mirrors.txt" ] || return 0
   {
     printf 'https://archive.ubuntu.com/ubuntu/\tpriority:1\n'
     [ "$1" = "with-azure" ] && printf 'http://azure.archive.ubuntu.com/ubuntu/\tpriority:2\n'
     printf 'https://security.ubuntu.com/ubuntu/\tpriority:3\n'
-  } | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+  } | sudo tee "$ETC/apt-mirrors.txt" >/dev/null
 }
 set_mirrors with-azure
 # When the runner's resolver cannot find the Ubuntu archive hosts (seen
@@ -62,7 +87,7 @@ for i in 1 2 3; do
   fi
   echo "apt install attempt $i failed or stalled after $(( $(date +%s) - t0 )) s - retrying without the azure mirror; apt's last lines:"
   tail -n 25 "$LOG" 2>/dev/null | sed 's/^/  | /'
-  [ -f /etc/apt/apt-mirrors.txt ] && sed 's/^/  mirror: /' /etc/apt/apt-mirrors.txt
+  [ -f "$ETC/apt-mirrors.txt" ] && sed 's/^/  mirror: /' "$ETC/apt-mirrors.txt"
   # A stalled apt-get may outlive the killed parent (sudo can detach it from
   # the group); clear it so the retry is not blocked on its lock.
   sudo pkill -TERM -f 'apt-get' 2>/dev/null || true
