@@ -172,7 +172,8 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     ok((await fund(addr("c"))).funded && (await fund(addr("c"))).funded, "and its slot was returned");
     // A buyer's query (onchain-sql): a slow 502 is answered once, a fast 5xx
     // is tried twice, and the answer says how to narrow the query.
-    const { _setSlowQueryGatewayMsForTest, _setQueryHealthForTest, QUERY_HEALTH_SQL, _setHealthTimeoutMsForTest, HEALTH_TIMEOUT_MS, HEALTH_TTL_MS, HEALTH_UNKNOWN_TTL_MS, _ageQueryHealthForTest = () => {}, BUYER_QUERY_INFLIGHT_MAX, _buyerQueriesInflightForTest, _cdpLogThrottleSizeForTest } = await import("../src/tools/cdp-kit.js");
+    const { _setSlowQueryGatewayMsForTest, _setQueryHealthForTest, QUERY_HEALTH_SQL, _setHealthTimeoutMsForTest, HEALTH_TIMEOUT_MS, HEALTH_TTL_MS, HEALTH_UNKNOWN_TTL_MS, _ageQueryHealthForTest = () => {}, BUYER_QUERY_INFLIGHT_MAX, BUYER_QUERY_INFLIGHT_DEFAULT, _buyerQueriesInflightForTest, _cdpLogThrottleSizeForTest, _resetSqlPacerForTest, sqlSendGapMs, takeSqlSendSlot } = await import("../src/tools/cdp-kit.js");
+    _resetSqlPacerForTest(0); // the send pacer has its own section below
     const isHealth = (sql) => Object.values(QUERY_HEALTH_SQL).includes(sql);
     _setSlowQueryGatewayMsForTest(40);
     _setQueryHealthForTest(true); // the service answers a known-good query (checked below)
@@ -391,22 +392,68 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         _setHealthTimeoutMsForTest(null);
       } finally { globalThis.fetch = realFetchH; _setQueryHealthForTest(true); }
     }
-    // At most two buyer queries run at once per server; a third is refused
-    // at once, uncharged, with a retry time.
+    // At most BUYER_QUERY_INFLIGHT_MAX buyer queries run at once per server
+    // (8 by default); the next is refused at once, uncharged, with a retry time.
     {
       const realFetchC = globalThis.fetch;
       let release; const gate = new Promise((r) => { release = r; });
       globalThis.fetch = async () => { await gate; return J(200, { result: [{ x: 1 }] }); };
       try {
-        const a = sqlRun(), b = sqlRun();
+        ok(BUYER_QUERY_INFLIGHT_DEFAULT === 8 && BUYER_QUERY_INFLIGHT_MAX === 8, `the in-flight cap is 8 by default (${BUYER_QUERY_INFLIGHT_MAX})`);
+        const held = Array.from({ length: BUYER_QUERY_INFLIGHT_MAX }, () => sqlRun());
         await new Promise((r) => setTimeout(r, 20));
-        ok(_buyerQueriesInflightForTest() === BUYER_QUERY_INFLIGHT_MAX && BUYER_QUERY_INFLIGHT_MAX === 2, `two buyer queries are in flight (${_buyerQueriesInflightForTest()})`);
+        ok(_buyerQueriesInflightForTest() === BUYER_QUERY_INFLIGHT_MAX, `${BUYER_QUERY_INFLIGHT_MAX} buyer queries are in flight (${_buyerQueriesInflightForTest()})`);
         const c = await Promise.race([sqlRun().catch((x) => x), new Promise((r) => setTimeout(() => r({ statusCode: "not refused" }), 500))]);
-        ok(c?.statusCode === 429 && c?.retryAfter === 5 && c?.hint === "busy" && c?.shed === true, `a third is refused 429 with Retry-After 5, marked as shed load (${c?.statusCode})`);
+        ok(c?.statusCode === 429 && c?.retryAfter === 5 && c?.hint === "busy" && c?.shed === true && /answering 8 queries/.test(c?.message) && /Nothing was charged\.$/.test(c?.message), `the next is refused 429 with Retry-After 5, marked as shed load (${c?.statusCode})`);
         release();
-        const [ra, rb] = await Promise.all([a, b]);
-        ok(ra.rowCount === 1 && rb.rowCount === 1 && _buyerQueriesInflightForTest() === 0, "the two in flight answer and the count returns to zero");
+        const done = await Promise.all(held);
+        ok(done.every((r) => r.rowCount === 1) && _buyerQueriesInflightForTest() === 0, "the ones in flight answer and the count returns to zero");
       } finally { globalThis.fetch = realFetchC; }
+    }
+    // ONCHAIN_SQL_INFLIGHT_MAX overrides the cap inside 1..16; anything else keeps 8.
+    {
+      const { execFileSync } = await import("node:child_process");
+      const capWith = (v) => Number(execFileSync(process.execPath, ["--input-type=module", "-e", `import("${new URL("../src/tools/cdp-kit.js", import.meta.url).href}").then((m) => console.log(m.BUYER_QUERY_INFLIGHT_MAX))`], { env: { ...process.env, ONCHAIN_SQL_INFLIGHT_MAX: v }, encoding: "utf8" }).trim().split("\n").pop());
+      ok(capWith("3") === 3 && capWith("16") === 16 && capWith("0") === 8 && capWith("17") === 8 && capWith("2.5") === 8 && capWith("x") === 8, "ONCHAIN_SQL_INFLIGHT_MAX sets the cap within 1..16 only");
+    }
+    // The send pacer: slots CDP_SQL_SEND_GAP_MS apart (625 ms default, times
+    // the replicas), so a raised in-flight cap never raises the send rate.
+    {
+      ok(sqlSendGapMs({}) === 625 && sqlSendGapMs({ RATE_LIMIT_REPLICAS: "2" }) === 1250 && sqlSendGapMs({ CDP_SQL_SEND_GAP_MS: "50" }) === 625 && sqlSendGapMs({ CDP_SQL_SEND_GAP_MS: "1000" }) === 1000,
+        "the send gap is 625 ms per replica by default, overridable from 100 ms");
+      const realFetchP = globalThis.fetch;
+      const sentAt = [];
+      globalThis.fetch = async (url, init = {}) => { sentAt.push(Date.now()); return J(200, { result: [{ x: 1 }] }); };
+      try {
+        _resetSqlPacerForTest(150);
+        const rs = await Promise.all([sqlRun(), sqlRun(), sqlRun(), sqlRun()]);
+        const gaps = sentAt.slice(1).map((t, i) => t - sentAt[i]);
+        ok(rs.every((r) => r.rowCount === 1) && sentAt.length === 4 && gaps.every((g) => g >= 140), `four queries at once are sent a slot apart (gaps ${gaps.join(", ")} ms)`);
+        // A buyer's first send whose slot is out of reach is the busy refusal: nothing is sent.
+        _resetSqlPacerForTest(10_000);
+        sentAt.length = 0;
+        const first = await sqlRun();
+        const r2 = await sqlRun().catch((x) => x);
+        ok(first.rowCount === 1 && r2?.statusCode === 429 && r2?.hint === "busy" && r2?.shed === true && /rate limit allows/.test(r2?.message) && /Nothing was charged\.$/.test(r2?.message) && sentAt.length === 1 && _buyerQueriesInflightForTest() === 0,
+          `a query with no send slot in reach is refused 429 busy, unsent, and its in-flight place returned (${r2?.statusCode}, sent ${sentAt.length})`);
+        // A later send of the same call (the retry of a fast 5xx, a recovery run) waits for its slot;
+        // one whose slot is out of reach is not sent and the call ends on what it has, uncharged.
+        _resetSqlPacerForTest(2_500);
+        sentAt.length = 0;
+        globalThis.fetch = async () => { sentAt.push(Date.now()); return J(500, {}); };
+        const r3 = await sqlRun().catch((x) => x);
+        const g3 = sentAt.slice(1).map((t, i) => t - sentAt[i]);
+        ok(r3?.statusCode >= 400 && r3?.statusCode !== 429 && sentAt.length >= 2 && g3.every((g) => g >= 2_400), `a later send of the call waits for its slot and is sent (${r3?.statusCode}, gaps ${g3.join(", ")} ms)`);
+        _resetSqlPacerForTest(5_000);
+        sentAt.length = 0;
+        const r4 = await sqlRun().catch((x) => x);
+        ok(r4?.statusCode >= 400 && r4?.statusCode !== 429 && sentAt.length === 1, `a retry whose slot is out of reach is not sent; the call ends on the 5xx (${r4?.statusCode}, sent ${sentAt.length})`);
+        // takeSqlSendSlot itself: no slot taken when refused.
+        _resetSqlPacerForTest(1_000);
+        const t0 = 1_000_000;
+        ok(await takeSqlSendSlot(0, t0) === true && await takeSqlSendSlot(500, t0) === false && await takeSqlSendSlot(1_000, t0 + 2_000) === true,
+          "a refused slot is not taken: the next caller gets the same slot");
+      } finally { globalThis.fetch = realFetchP; _resetSqlPacerForTest(0); }
     }
     // The log throttle: one line per key a minute, and its map is bounded.
     {

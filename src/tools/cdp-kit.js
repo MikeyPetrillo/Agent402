@@ -225,7 +225,8 @@ async function queryServiceHealth(sql = "", now = Date.now()) {
       // our check's, never as the service's.
       const ctx = { label: "Coinbase Developer Platform", step: "query health", timeoutMs: healthTimeoutMs, tag: null };
       try {
-        const path = "/platform/v2/data/query/run";
+        const path = SQL_QUERY_PATH;
+        if (!(await takeSqlSendSlot(slotWaitMs()))) throw Object.assign(new Error("no send slot"), { upstreamFailure: "paced" });
         const jwt = await mintCdpJwt({ method: "POST", path });
         const r = await upstreamFetch(`https://${CDP_HOST}${path}`, {
           method: "POST",
@@ -257,13 +258,66 @@ export function _setHealthTimeoutMsForTest(ms) { healthTimeoutMs = ms || HEALTH_
 /** Moves every kept reading `ms` into the past (a later call, without waiting). */
 export function _ageQueryHealthForTest(ms) { for (const v of queryHealth.values()) v.at -= ms; }
 
-// Buyer queries in flight at once: the query service rate-limits the
-// project, whose keys also sign facilitator calls, so a burst of heavy
-// queries must not hold it. Past the cap a query is refused at once (429,
-// never charged) and told when to retry.
-export const BUYER_QUERY_INFLIGHT_MAX = 2;
+// Buyer queries in flight at once. The query service rate-limits the
+// project (its documented default is 2 queries a second), whose keys also
+// sign facilitator calls, so the RATE of queries sent is held by the send
+// pacer below, and this cap bounds what a burst holds on this server: a
+// query and its answer (the service sends at most about 1 MB; SQL_SEND_LIMIT_BYTES)
+// in memory, and one parse of it on the event loop. Measured 2026-11-18 on a
+// local boot, every query answered 1,000 rows (about 1 MB) after 1.5 s: a
+// burst of 60 calls at once held the longest event-loop turn near 50 ms at
+// cap 2, 8 and 16 alike (the burst's own arrival, not the cap); 6 calls a
+// second for 15 s held it at 23 ms with RSS peaking 87 MB over idle at cap 8
+// (37 MB at cap 2, 126 MB at 16). At cap 2 a query that takes 1.5 s caps the
+// server at 1.3 queries a second, and a slower one far lower, under the
+// project's rate; at 8 the pacer is what holds the rate.
+// ONCHAIN_SQL_INFLIGHT_MAX overrides it (1 to 16). Past the cap a query is
+// refused at once (429, never charged) and told when to retry.
+const intIn = (v, def, lo, hi) => { const n = Number(v); return v != null && v !== "" && Number.isInteger(n) && n >= lo && n <= hi ? n : def; };
+export const BUYER_QUERY_INFLIGHT_DEFAULT = 8;
+export const BUYER_QUERY_INFLIGHT_MAX = intIn(process.env.ONCHAIN_SQL_INFLIGHT_MAX, BUYER_QUERY_INFLIGHT_DEFAULT, 1, 16);
 let buyerQueriesInflight = 0;
 export function _buyerQueriesInflightForTest() { return buyerQueriesInflight; }
+
+// The send pacer: every query this server sends to the query service (a
+// buyer's query, its retry and recovery runs, the health check, the
+// revenue reads) takes the next send slot first, slots CDP_SQL_SEND_GAP_MS
+// apart on each replica (default 625 ms times RATE_LIMIT_REPLICAS: under 2
+// a second across the project in any one-second window). A send whose slot
+// is further off than its call can wait (SQL_SLOT_MAX_WAIT_MS, or the
+// handler budget less a read) takes no slot and is refused as busy.
+export const SQL_QUERY_PATH = "/platform/v2/data/query/run";
+export const SQL_SLOT_MAX_WAIT_MS = 3_000;
+export function sqlSendGapMs(env = process.env) {
+  const replicas = Math.max(1, Math.floor(Number(env.RATE_LIMIT_REPLICAS)) || 1);
+  return intIn(env.CDP_SQL_SEND_GAP_MS, 625, 100, 60_000) * replicas;
+}
+let nextSqlSlotAt = 0;
+let sqlSendGap = sqlSendGapMs();
+export function _resetSqlPacerForTest(gapMs = null) { nextSqlSlotAt = 0; sqlSendGap = gapMs ?? sqlSendGapMs(); }
+/** Waits for the next send slot; resolves false (no slot taken) when it is further off than maxWaitMs. */
+export async function takeSqlSendSlot(maxWaitMs = SQL_SLOT_MAX_WAIT_MS, now = Date.now()) {
+  const at = Math.max(now, nextSqlSlotAt);
+  if (at - now > Math.max(0, maxWaitMs)) return false;
+  nextSqlSlotAt = at + sqlSendGap;
+  if (at > now) await new Promise((r) => setTimeout(r, at - now));
+  return true;
+}
+function slotWaitMs() {
+  const budget = currentBudget();
+  return budget ? Math.min(SQL_SLOT_MAX_WAIT_MS, budget.remaining() - OPTIONAL_READ_FLOOR_MS) : SQL_SLOT_MAX_WAIT_MS;
+}
+// The busy refusal (429, shed, never charged): the in-flight cap, or a
+// buyer's first send with no slot in reach. The request is marked so
+// server.js counts the refusal by caller once its response has ended
+// (src/sql-query-stats.js noteSqlBusy) and a top payer's feeds
+// onchainSqlBusy (src/top-buyer-failures.js).
+function sqlBusyRefusal(text) {
+  const e = bad(`${text} Nothing was charged.`, 429);
+  e.retryAfter = 5; e.hint = "busy"; e.shed = true; // a capacity refusal, not a tool failure
+  try { const scope = currentRequestScope(); if (scope) scope.onchainSqlBusy = true; } catch { /* bookkeeping only */ }
+  return e;
+}
 
 // One [cdp] 5xx line per status and query shape a minute: a buyer resending
 // the same failing query does not repeat it.
@@ -461,6 +515,13 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
       const budget = currentBudget();
       if (budget && budget.remaining() - backoff < OPTIONAL_READ_FLOOR_MS) throw lastErr;
       await new Promise((r) => setTimeout(r, backoff));
+    }
+    // Every query sent takes a send slot (the pacer above). A buyer's first
+    // send with no slot in reach is the busy refusal; a later one (a retry
+    // or a recovery run) ends on the service-busy answer, uncharged.
+    if (path === SQL_QUERY_PATH && !(await takeSqlSendSlot(slotWaitMs()))) {
+      if (buyerQuery && queries && queries.sent === 0) throw sqlBusyRefusal("The query service is taking this server's queries as fast as its rate limit allows; retry in a few seconds.");
+      throw lastErr ?? bad("Coinbase Developer Platform is busy right now - retry shortly. Nothing was charged.", 503);
     }
     // A buyer's call sends at most SQL_QUERY_BUDGET queries, retries
     // included: the budget is spent here, where the query goes out.
@@ -1061,13 +1122,7 @@ export const CDP_TOOLS = [
       let capped = cappedSql(sql);
       body.sql = capped.sql;
       if (buyerQueriesInflight >= BUYER_QUERY_INFLIGHT_MAX) {
-        const e = bad(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds. Nothing was charged.`, 429);
-        e.retryAfter = 5; e.hint = "busy"; e.shed = true; // a capacity refusal, not a tool failure
-        // The request is marked so server.js counts the refusal by caller
-        // once its response has ended (src/sql-query-stats.js noteSqlBusy)
-        // and a top payer's raises onchainSqlBusy (src/top-buyer-failures.js).
-        try { const scope = currentRequestScope(); if (scope) scope.onchainSqlBusy = true; } catch { /* bookkeeping only */ }
-        throw e;
+        throw sqlBusyRefusal(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds.`);
       }
       buyerQueriesInflight++;
       // One query budget for the call: the buyer's query, its retry, and

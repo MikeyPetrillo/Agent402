@@ -30,10 +30,14 @@
 // spend rank, and the failures (slug, status, time, our error text).
 //
 // onchainSqlBusy (also on /api/gateway-status): alert while a watched payer
-// got onchain-sql's busy refusal (the server-wide in-flight query cap,
-// src/tools/cdp-kit.js: a 429, never charged) inside TOP_BUYER_FAIL_HOLD_MS;
-// one refusal is enough, since a top payer sends one query at a time. The
-// refusal is kept as one of the payer's failures with its kind ("sql-busy"),
+// got onchain-sql's busy refusal (the server-wide in-flight query cap or the
+// query service's send pacer, src/tools/cdp-kit.js: a 429, never charged)
+// over a sustained stretch: ONCHAIN_SQL_BUSY_MIN refusals (default 3) inside
+// TOP_BUYER_FAIL_WINDOW_MS whose first and last are ONCHAIN_SQL_BUSY_SPAN_MS
+// (default a minute) or more apart, held TOP_BUYER_FAIL_HOLD_MS after the
+// refusal that met the rule. A single refusal, or one burst refused in the
+// same few seconds, is a buyer told to retry, not a cap that holds them off,
+// since the cap was raised from 2 to 8. The refusal is kept as one of the payer's failures with its kind ("sql-busy"),
 // so it is read from the same per-payer window. ok otherwise; unknown before
 // the first read of the top payers; off in FREE_MODE. Publicly the word only;
 // the operator view names each alerting payer by its first characters, its
@@ -55,6 +59,10 @@ export const failMin = (env = process.env) => intEnv(env.TOP_BUYER_FAIL_MIN, 3, 
 export const failWindowMs = (env = process.env) => intEnv(env.TOP_BUYER_FAIL_WINDOW_MS, 600_000, 1_000, 6 * 3_600_000);
 /** How long alert holds after the failure that met the rule (TOP_BUYER_FAIL_HOLD_MS, default 20 minutes). */
 export const failHoldMs = (env = process.env) => intEnv(env.TOP_BUYER_FAIL_HOLD_MS, 1_200_000, 0, 6 * 3_600_000);
+/** Busy refusals inside the window that raise onchainSqlBusy (ONCHAIN_SQL_BUSY_MIN, default 3). */
+export const sqlBusyMin = (env = process.env) => intEnv(env.ONCHAIN_SQL_BUSY_MIN, 3, 1, 1000);
+/** How far apart the first and last of those refusals are at least (ONCHAIN_SQL_BUSY_SPAN_MS, default 1 minute). */
+export const sqlBusySpanMs = (env = process.env) => intEnv(env.ONCHAIN_SQL_BUSY_SPAN_MS, 60_000, 0, 6 * 3_600_000);
 /** How many top payers are watched (TOP_BUYERS_COUNT, default 10). */
 export const topCount = (env = process.env) => intEnv(env.TOP_BUYERS_COUNT, 10, 1, 100);
 /** The spend window the top payers are ranked over, in days (TOP_BUYERS_DAYS, default 7). */
@@ -314,8 +322,9 @@ export async function topBuyerFailuresStatus({ full = false, now = Date.now(), o
 }
 
 /**
- * onchainSqlBusy for /api/gateway-status. alert while a watched payer has a
- * busy refusal of onchain-sql inside TOP_BUYER_FAIL_HOLD_MS (one is enough);
+ * onchainSqlBusy for /api/gateway-status. alert while a watched payer's busy
+ * refusals of onchain-sql met the sustained rule (sqlBusyMin inside the
+ * window, sqlBusySpanMs apart) within TOP_BUYER_FAIL_HOLD_MS;
  * ok otherwise; unknown before the first read of the top payers; off in
  * FREE_MODE. Public: { status } only. Operator (`full`): the rule and, per
  * alerting payer, its short id, its spend rank and the refusal times. Never
@@ -325,22 +334,32 @@ export async function onchainSqlBusyStatus({ full = false, now = Date.now(), off
   try {
     if (off) return { status: "off" };
     if (!top) return { status: "unknown" };
-    const holdMs = failHoldMs(env);
-    const cutoff = now - holdMs;
+    const holdMs = failHoldMs(env), windowMs = failWindowMs(env), min = sqlBusyMin(env), spanMs = Math.min(sqlBusySpanMs(env), windowMs);
+    const cutoff = now - holdMs - windowMs;
     let fromShared = null, sharedRead = sharedLimitsEnabled() ? "unread" : "memory";
     try { fromShared = await sharedEvents(top.payers, now, env); if (fromShared) sharedRead = "on"; } catch { fromShared = null; }
     const alerting = [];
     top.payers.forEach((payer, i) => {
       const seen = new Map();
       for (const e of [...(local.get(payer) || []), ...(fromShared?.get(payer) || [])]) if (e.kind === SQL_BUSY_KIND && e.at >= cutoff && e.at <= now && !seen.has(e.id)) seen.set(e.id, e);
-      if (!seen.size) return;
-      alerting.push({ payer, rank: i + 1, events: [...seen.values()].sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1)) });
+      if (seen.size < min) return;
+      const events = [...seen.values()].sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1));
+      // The latest refusal that met the rule: `min` refusals inside the
+      // window ending at it, the earliest of them spanMs or more before it.
+      let metAt = null;
+      for (let j = events.length - 1, lo = j; j >= min - 1 && metAt === null; j--) {
+        lo = Math.min(lo, j);
+        while (lo > 0 && events[j].at - events[lo - 1].at <= windowMs) lo--;
+        if (j - lo + 1 >= min && events[j].at - events[lo].at >= spanMs) metAt = events[j].at;
+      }
+      if (metAt === null || now - metAt > holdMs) return;
+      alerting.push({ payer, rank: i + 1, events });
     });
     const status = alerting.length ? "alert" : "ok";
     if (!full) return { status };
     return {
       status,
-      rule: { refusals: 1, holdMinutes: holdMs / 60_000, topBuyers: topCount(env), days: topDays(env) },
+      rule: { refusals: min, windowMinutes: windowMs / 60_000, spanSeconds: spanMs / 1000, holdMinutes: holdMs / 60_000, topBuyers: topCount(env), days: topDays(env) },
       watched: top.payers.length,
       topReadAt: top.at ? new Date(top.at).toISOString() : null,
       sharedStore: sharedRead,
