@@ -275,7 +275,9 @@ try {
       TRAFFIC_DIR: join(TMP, "boot-traffic") },
   });
   const B = srv.url;
-  const unpaid = await fetch(`${B}/api/uuid`, { headers: { "user-agent": "curl/8.7.1" } });
+  // The caller reads a discovery document first: its probes and its payment count under it.
+  ok((await fetch(`${B}/llms.txt`, { headers: { "user-agent": "curl/8.7.1" } })).status === 200, "llms.txt is read first");
+  const unpaid = await fetch(`${B}/api/uuid`, { headers: { "user-agent": "curl/8.7.1", referer: "https://github.com/some/list" } });
   ok(unpaid.status === 402, `unpaid uuid -> 402 (${unpaid.status})`);
   await fetch(`${B}/api/uuid`, { headers: { "user-agent": "curl/8.7.1" } });
   const bz = await fetch(`${B}/api/uuid`, { headers: { "user-agent": "Coinbase-Bazaar/1.0" } });
@@ -314,7 +316,11 @@ try {
   ok(today?.sales?.byArrival?.direct?.sales === 1 && today?.sales?.byArrival?.mcp?.sales === 1 && today?.sales?.byArrival?.bazaar?.sales === 1, `the ledger books each sale's arrival (${JSON.stringify(today?.sales?.byArrival)})`);
   ok(j?.conversion?.direct?.paidAfterProbe === 1 && j?.conversion?.direct?.probedCallers === 1, `the probing caller came back and paid (${JSON.stringify(j?.conversion?.direct)})`);
   ok(j?.week && "repeatShare" in j.week && "organicUsdPerDay" in j.week && j.definitions?.probes, "the weekly figures and the definitions ride along");
-  ok(!/0x00000000000000000000000000000000000c/i.test(JSON.stringify(j)) && !/127\.0\.0\.1/.test(JSON.stringify(j)), "no wallet or address in the answer");
+  ok(dr && dr.ua?.curl >= 2 && dr.found?.llms >= 2 && dr.referrer?.code === 1 && dr.uaPaid?.curl === 1 && dr.foundPaid?.llms === 1, `probes and the payment count their client family, referrer class and the document read first (${JSON.stringify(dr && { ua: dr.ua, f: dr.found, r: dr.referrer, up: dr.uaPaid, fp: dr.foundPaid })})`);
+  const np = j?.conversion?.direct?.noPayment;
+  ok(np && np.wrongNetwork === 1 && np.malformed === 1 && np.belowBalance === 0 && "noWalletHeader" in np && "timeout" in np, `why direct requests did not pay, folded (${JSON.stringify(np)})`);
+  ok(j?.conversion?.direct?.bySource?.found?.llms?.settled === 1 && j.definitions?.noPayment && j.definitions?.sources, "conversion by source and its definitions ride along");
+  ok(!/0x00000000000000000000000000000000000c/i.test(JSON.stringify(j)) && !/127\.0\.0\.1|github\.com/.test(JSON.stringify(j)), "no wallet, address or Referer host in the answer");
   const anon = await fetch(`${B}/__operator/funnel.json`);
   ok(anon.status === 404, "funnel.json is 404 without the operator token");
   const routes = await (await fetch(`${B}/__operator/routes.json`, { headers: { "x-operator-token": OP } })).json();

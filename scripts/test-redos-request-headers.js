@@ -114,7 +114,11 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
   const refusals = await import("../src/discovery-refusals.js");
   const traffic = await import("../src/traffic-classifier.js");
   const compact = await import("../src/payment-required-compact.js");
+  const sources = await import("../src/funnel-sources.js");
   const readers = {
+    // The paid-call funnel's source words (src/funnel-sources.js), read on every paid-route finish.
+    "funnel-sources uaFamilyOf": (v) => sources.uaFamilyOf(v),
+    "funnel-sources referrerClassOf": (v) => sources.referrerClassOf(v, "agent402.tools"),
     "posthog uaFamilyOf": (v) => posthog.uaFamilyOf(v),
     "posthog toolGoneSourceOf (user-agent)": (v) => posthog.toolGoneSourceOf({ headers: { "user-agent": v } }),
     "posthog toolGoneSourceOf (authorization)": (v) => posthog.toolGoneSourceOf({ headers: { authorization: v } }),

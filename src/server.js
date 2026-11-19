@@ -9,6 +9,9 @@ import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attemp
 import { retiredEntryFor, retiredEntryForSlug, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { createFunnel, funnelEventOf, emptyFunnelRow, ARRIVALS as FUNNEL_ARRIVALS } from "./funnel.js";
+import { createDiscoveryTrail, discoveryDocOf, noPaymentReasonsOf, conversionBySource } from "./funnel-sources.js";
+import { createOperatorResolver, payToOperatorOf } from "./payer-operators.js";
+import { summarizeOperators, composeScoreboard } from "./scoreboard.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf, workerEgressAddressKeyOf } from "./unpaid-quote-budget.js";
 import { createPaidQuoteTrust, paidAndSettled } from "./paid-quote-trust.js";
 import { stripMcpMarker } from "./mcp-loopback.js";
@@ -797,7 +800,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -3057,12 +3060,21 @@ app.use(trafficMiddleware(TRAFFIC, { payerOf: (req, res) => payerFromRequest(req
 // payment, counted on the traffic store's day rollups (counts only). Fed by
 // the catalog routes' finish hook and the marketplace copies under /ref;
 // read at /__operator/funnel.json.
-const FUNNEL = createFunnel({ bump: (day, arrival, field, n, sub) => TRAFFIC.bumpFunnel(day, arrival, field, n, sub) });
+// The discovery document each caller read last (src/funnel-sources.js: a
+// keyed hash and one word, in memory, capped) names the funnel's `found` count.
+const FUNNEL_TRAIL = createDiscoveryTrail();
+const FUNNEL_OWN_HOST = (() => { try { return new URL(BASE_URL).hostname; } catch { return ""; } })();
+const FUNNEL = createFunnel({ bump: (day, arrival, field, n, sub) => TRAFFIC.bumpFunnel(day, arrival, field, n, sub), foundVia: (ip) => FUNNEL_TRAIL.foundVia(ip) });
+app.use((req, res, next) => {
+  const doc = req.method === "GET" || req.method === "HEAD" ? discoveryDocOf(req.path) : null;
+  if (doc) res.once("finish", () => { try { if (res.statusCode < 400) FUNNEL_TRAIL.note(clientIp(req), doc); } catch { /* optional */ } });
+  next();
+});
 function noteFunnelOnFinish(req, res) {
   if (Object.hasOwn(req, "__a402FunnelNoted")) return;
   req.__a402FunnelNoted = true;
   res.once("finish", () => {
-    try { FUNNEL.record(funnelEventOf(req, res, { ours: callIsOurs(req) }), { ip: clientIp(req) }); } catch { /* counting never fails a response */ }
+    try { FUNNEL.record(funnelEventOf(req, res, { ours: callIsOurs(req), ownHost: FUNNEL_OWN_HOST }), { ip: clientIp(req) }); } catch { /* counting never fails a response */ }
   });
 }
 const CANONICAL_HOST = (() => { try { return new URL(BASE_URL).host.toLowerCase(); } catch { return ""; } })();
@@ -5850,6 +5862,8 @@ async function funnelView(days) {
       probedCallers: t.probedCallers, paidAfterProbe: t.paidAfterProbe,
       callerConversion: closed > 0 ? +(t.paidAfterProbe / closed).toFixed(4) : null,
       neverRetried: t.neverRetried,
+      noPayment: noPaymentReasonsOf(t),
+      bySource: conversionBySource(t),
     };
   }
   const value = {
@@ -5864,6 +5878,9 @@ async function funnelView(days) {
       settled: "attempts answered 2xx with a settlement receipt",
       errorAnswered: "attempts answered a 4xx other than 402, or a 5xx (on a Tempo push credential the transfer was final before the call and is booked owed)",
       refusal: "why an attempt got a 402: unfundedWallet, wrongNetwork, verifyRefused (payload or authorization faults), ourSide (not checked, quota, unconfirmed), unclassified, noReason",
+      noPayment: "why requests did not pay, per arrival over the window: noWalletHeader (a probe whose caller sent no credential inside the retry window), wrongNetwork, belowBalance (insufficient funds, no token account), malformed (the payment did not match the offer), timeout (not checked, settlement unconfirmed, an attempt answered 408 or 504), ourSide (facilitator quota), refused (every other refusal)",
+      sources: "ua: the client family the User-Agent names; referrer: the kind of page the Referer names (none, self, search, code, social, assistant, other; never the host); found: the discovery document the same caller read last within 6 hours (llms, openapi, wellKnown, agentsMd, pricing, find, mcpCard, none), per replica. Counted on probes, and on settlements as uaPaid, referrerPaid, foundPaid",
+      nextStep: "refused attempts whose wallet cannot cover the call, by the nextStep state their 402 carried (wallet-empty, wallet-below-price, wallet-short, no-token-account, gateway-deposit-short)",
       neverRetried: "callers whose first probe in a 30-minute window was followed by no credential from them inside it (per replica)",
       sales: "outside sales from the sales ledger (our own wallets and signed probes excluded), dollars at the buyer's price",
       week: "the 7 whole UTC days before today; wallets, not operators",
@@ -5882,6 +5899,58 @@ app.get("/__operator/funnel.json", async (req, res) => {
   try {
     const days = Math.max(1, Math.min(FUNNEL_MAX_DAYS, parseInt(req.query.days, 10) || 14));
     res.json(await funnelView(days));
+  } catch (err) {
+    res.status(500).json({ error: redactSecrets(err?.message) });
+  }
+});
+
+// The weekly operator scoreboard (src/scoreboard.js; operator only, counts
+// and shares only: no wallet, name, origin or hash in the answer). Paying
+// wallets are resolved to operators on public evidence only
+// (src/payer-operators.js: the one origin advertising the wallet as its payTo,
+// or a forward-checked ENS or Base primary name), a few lookups at a time,
+// waiting at most SCOREBOARD_RESOLVE_MS; the rest land in the resolver's
+// cache for the next read. Built at most once per SCOREBOARD_CACHE_MS.
+const SCOREBOARD_CACHE_MS = 5 * 60_000;
+const SCOREBOARD_RESOLVE_MS = 8_000;
+const SCOREBOARD_PAYTO_MS = 3600_000;
+let scoreboardCache = null; // { at, value }
+let scoreboardBuilding = null;
+let scoreboardPayTo = { at: 0, map: null };
+const PAYER_OPERATORS = createOperatorResolver({
+  payTo: (addr) => payToOperatorOf(addr, scoreboardPayTo.map, { has: (w) => { try { return sharedPayToStore().has(w); } catch { return true; } } }),
+});
+async function buildScoreboard() {
+  const now = Date.now();
+  if (!scoreboardPayTo.map || now - scoreboardPayTo.at > SCOREBOARD_PAYTO_MS) {
+    try { scoreboardPayTo = { at: now, map: await allPayToOriginsAsync("eip155:8453") }; } catch { /* the registry source is optional */ }
+  }
+  const [ledger, funnel, fca] = await Promise.all([
+    scoreboardLedgerAsync({ days: 30, weekDays: 7, now }).catch(() => null),
+    funnelView(7).catch(() => null),
+    firstCallAllowanceStatus({ returned: firstPaidSaleAfterAsync }).catch(() => null),
+  ]);
+  let operators = null;
+  if (ledger) {
+    try {
+      const resolved = await PAYER_OPERATORS.resolveAll(ledger.weekPayers.map((p) => p.payer), { deadlineMs: SCOREBOARD_RESOLVE_MS });
+      operators = summarizeOperators(ledger.weekPayers, resolved);
+    } catch { operators = null; }
+  }
+  let refunds = null;
+  try { refunds = refundTotals(); } catch { /* optional */ }
+  return composeScoreboard({ now, ledger, funnelWeek: funnel?.week || null, operators, conversion: funnel?.conversion || null, firstCallAllowance: fca, refunds, catalogRoutes: Object.keys(CATALOG).length });
+}
+app.get("/__operator/scoreboard.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.vary("X-Operator-Token");
+  res.set("Cache-Control", "private, no-store");
+  try {
+    if (!scoreboardCache || Date.now() - scoreboardCache.at > SCOREBOARD_CACHE_MS) {
+      if (!scoreboardBuilding) scoreboardBuilding = buildScoreboard().then((value) => { scoreboardCache = { at: Date.now(), value }; return value; }).finally(() => { scoreboardBuilding = null; });
+      await scoreboardBuilding;
+    }
+    res.json(scoreboardCache.value);
   } catch (err) {
     res.status(500).json({ error: redactSecrets(err?.message) });
   }
