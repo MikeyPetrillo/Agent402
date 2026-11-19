@@ -36,6 +36,8 @@ t node scripts/test-gateway-settle-breaker.js
 # @step 2: Offline suites (7 scripts, one process each)
 # Economy history unit tests (daily upsert idempotency + week-over-week math — offline)
 t node scripts/test-x402-economy.js
+# The live CDP check excuses a kit failure only when the runner's direct read of CDP fails too (offline, stub reads)
+t node scripts/test-cdp-direct-read.js
 # /sitemap.xml coverage (every skill pack, sample tools, static surfaces, per-URL lastmod stable across boots)
 t node scripts/test-sitemap-coverage.js
 # Sitemap URLs are their own canonical; breadcrumb trails match their BreadcrumbList; one site entity in JSON-LD
