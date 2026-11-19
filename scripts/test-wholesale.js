@@ -17,6 +17,10 @@ import { bootServer } from "./lib/boot-server.js";
 import { ERROR_CODES, stableErrorCode, errorCodeField } from "../src/stable-error-code.js";
 import { reliabilityOf, toolRow, wholesaleIndex, wholesaleFamily, WHOLESALE_FAMILIES, WHOLESALE_MIN_SAMPLE, WHOLESALE_WINDOW_HOURS, STATUS_MEASURED, STATUS_THIN } from "../src/wholesale.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
+import { toolReliabilityEnabled, TOOL_RELIABILITY_PATH } from "../src/tool-reliability.js";
+import { reliabilityDefinition, RELIABILITY_DEFINITION } from "../src/wholesale.js";
+import { wholesalePage } from "../src/wholesale-page.js";
+import { reliabilityReport } from "../src/discovery.js";
 import { preValidateInput } from "../src/handler-input.js";
 import { stripScripts } from "./lib/html-text.js";
 
@@ -97,6 +101,35 @@ ok(off.reliabilityAvailable === false && off.reliabilityReason === "not-configur
 ok(wholesaleFamily("compute", ctx).tools.map((t) => t.slug).join(",") === "hash", "compute is the proof-of-work set");
 ok(wholesaleFamily("nope", ctx) === null, "an unknown family reads null");
 ok(WHOLESALE_FAMILIES.every((f) => ["public-domain", "cc-by-4.0", "own-computation"].includes(f.redistribution)), "every family's basis is public domain, CC BY 4.0 or our own computation");
+
+// ---- the per-tool table withdrawn: nothing here points to it
+{
+  const sw = (v) => ({ TOOL_RELIABILITY_PUBLIC: v });
+  ok([undefined, "", "on", "1", "true", "yes", "offf"].every((v) => toolReliabilityEnabled(sw(v))), "TOOL_RELIABILITY_PUBLIC unset or any other word: the table is published");
+  ok(["off", "0", "false", "no", " OFF ", "False", "NO\n"].every((v) => !toolReliabilityEnabled(sw(v))), "off, 0, false and no (trimmed, any case) withdraw it");
+  ok(reliabilityDefinition({}).sameAs === TOOL_RELIABILITY_PATH && !("sameAs" in reliabilityDefinition(sw("off"))) && Object.keys(reliabilityDefinition(sw("off"))).join() === Object.keys(RELIABILITY_DEFINITION).filter((k) => k !== "sameAs").join(), "the definition names the table only while it is published; its other fields stay");
+  const surfaces = () => ({
+    index: JSON.stringify(wholesaleIndex(ctx)),
+    family: JSON.stringify(wholesaleFamily(WHOLESALE_FAMILIES[0].id, ctx)),
+    page: wholesalePage("https://agent402.tools"),
+    report: JSON.stringify(reliabilityReport({ baseUrl: "https://agent402.tools", network: "base", wallet: null, stats: {} })),
+  });
+  const before = process.env.TOOL_RELIABILITY_PUBLIC;
+  try {
+    delete process.env.TOOL_RELIABILITY_PUBLIC;
+    const onNow = surfaces();
+    ok(Object.entries(onNow).every(([, text]) => text.includes(TOOL_RELIABILITY_PATH)), "published: the wholesale index, a family, the page and /api/reliability each point to it");
+    for (const word of ["off", "0", "false", "No"]) {
+      process.env.TOOL_RELIABILITY_PUBLIC = word;
+      const offNow = surfaces();
+      const still = Object.entries(offNow).filter(([, text]) => text.includes(TOOL_RELIABILITY_PATH)).map(([k]) => k);
+      ok(still.length === 0, `TOOL_RELIABILITY_PUBLIC=${word}: none of them names the table${still.length ? ` (still: ${still.join(", ")})` : ""}`);
+      ok(JSON.parse(offNow.report).endpoints.status && offNow.page.includes("/api/reliability\"") && JSON.parse(offNow.index).reliabilityDefinition.successRate, "the service-wide pointers and the definition's own words stay");
+    }
+  } finally {
+    if (before === undefined) delete process.env.TOOL_RELIABILITY_PUBLIC; else process.env.TOOL_RELIABILITY_PUBLIC = before;
+  }
+}
 
 // ---- a FREE_MODE boot
 let srv = null;

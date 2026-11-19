@@ -17,6 +17,7 @@
 // count, no band) and no ranking: per-tool volume stays operator-only. The
 // v1 field set only grows (scripts/test-wholesale.js pins it).
 import { ERROR_CODES } from "./stable-error-code.js";
+import { toolReliabilityEnabled, TOOL_RELIABILITY_PATH } from "./tool-reliability.js";
 import { OPEN_METEO_ATTRIBUTION, US_TREASURY_ATTRIBUTION } from "./data-attribution.js";
 
 export const WHOLESALE_VERSION = "v1";
@@ -57,8 +58,15 @@ export const RELIABILITY_DEFINITION = Object.freeze({
   latency: "p50Ms and p95Ms: milliseconds inside the server, from the request reaching the tool to its answer, over the same calls",
   status: `measured, or not enough data when the tool had fewer than ${WHOLESALE_MIN_SAMPLE} calls in the window (its figures are then null)`,
   excluded: "this server's own monitoring and test calls, empty-input probes and refusals answered before payment",
-  sameAs: "/api/reliability/tools",
+  sameAs: TOOL_RELIABILITY_PATH,
 });
+/** The definition as a document carries it: `sameAs` names the per-tool
+ *  table only while that table is published (TOOL_RELIABILITY_PUBLIC). */
+export function reliabilityDefinition(env = process.env) {
+  if (toolReliabilityEnabled(env)) return RELIABILITY_DEFINITION;
+  const { sameAs: _withdrawn, ...rest } = RELIABILITY_DEFINITION;
+  return rest;
+}
 
 const floorRate = (okCount, n) => (n ? Math.floor((okCount / n) * 1000) / 1000 : null);
 
@@ -108,7 +116,7 @@ const COMMON = (baseUrl) => ({
   stability: "Within v1, fields are only added, never renamed, retyped or removed. A breaking change ships as v2 beside v1.",
   pricing: "Every price here is the public route's own price, the same for every buyer (a payment network's premium, where one applies, applies here as it does there); there is no wholesale discount. Pay per call as on the public route.",
   errorCodes: { field: "errorCode", note: "every tool error answer carries errorCode beside the message; branch on the code, not the text", codes: ERROR_CODES },
-  reliabilityDefinition: RELIABILITY_DEFINITION,
+  reliabilityDefinition: reliabilityDefinition(),
   docs: `${baseUrl}/wholesale`,
 });
 

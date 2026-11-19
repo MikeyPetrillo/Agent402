@@ -61,7 +61,7 @@ const MIN = R.TOOL_RELIABILITY_MIN_SAMPLE;
     const u = R.toolReliabilityDocument({ tools: TOOLS, ...args });
     ok(u.available === false && u.reason === reason && u.tools.length === 4 && u.tools.every((t) => t.measured === false && t.successRate === null && t.p50Ms === null && t.status === "not enough data" && !("calls" in t)), `${name}: available false, reason ${u.reason}, every row not enough data with no figure`);
   }
-  ok(R.toolReliabilityEnabled({}) === true && R.toolReliabilityEnabled({ TOOL_RELIABILITY_PUBLIC: "off" }) === false && R.toolReliabilityEnabled({ TOOL_RELIABILITY_PUBLIC: " OFF " }) === false, "on by default; TOOL_RELIABILITY_PUBLIC=off withdraws it");
+  ok(R.toolReliabilityEnabled({}) === true && R.toolReliabilityEnabled({ TOOL_RELIABILITY_PUBLIC: "off" }) === false && R.toolReliabilityEnabled({ TOOL_RELIABILITY_PUBLIC: " OFF " }) === false && ["0", "false", "no", " No "].every((v) => R.toolReliabilityEnabled({ TOOL_RELIABILITY_PUBLIC: v }) === false) && R.toolReliabilityEnabled({ TOOL_RELIABILITY_PUBLIC: "on" }) === true, "on by default; TOOL_RELIABILITY_PUBLIC=off (or 0, false, no) withdraws it");
 }
 
 // ---- 2. the cache ----

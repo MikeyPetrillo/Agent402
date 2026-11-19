@@ -7,6 +7,7 @@ import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { WHOLESALE_FAMILIES, WHOLESALE_VERSION, RELIABILITY_DEFINITION } from "./wholesale.js";
 import { ERROR_CODES } from "./stable-error-code.js";
+import { toolReliabilityEnabled, TOOL_RELIABILITY_PATH } from "./tool-reliability.js";
 
 const P = (html) => `<p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 14px;">${html}</p>`;
 const CODE = (t) => `<code style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);">${esc(t)}</code>`;
@@ -54,7 +55,7 @@ export function wholesalePage(baseUrl, catalog = {}, powSlugs = new Set()) {
 </header>
 ${section("Families", `${P("Each family lists only sources whose answers may be passed on: public-domain government data, CC BY 4.0 weather data with its credit, and our own computation. Keep the family's credit line with every answer you pass on.")}${families}`)}
 ${section("Price", P(`Every price is the public route's own price, the same for every buyer; there is no wholesale discount. A route priced per request (the bundle products, priced per site, company or coin) lists its range and quotes the exact amount in each 402 from the body you send. Pay per call over x402 or MPP as on the public route; <a href="/how-to-pay" style="color:var(--ink);">how to pay</a>.`))}
-${section("Reliability", `${P(`Each tool reads ${CODE("measured")} or ${CODE("not enough data")}: ${esc(RELIABILITY_DEFINITION.status)}.`)}${P(`Success rate: ${esc(RELIABILITY_DEFINITION.successRate)}.`)}${P(`Latency: ${esc(RELIABILITY_DEFINITION.latency)}.`)}${P(`The same figures, window and threshold as <a href="/api/reliability/tools" style="color:var(--ink);">/api/reliability/tools</a>.`)}${P(`Service-wide uptime, measured from outside production, is on <a href="/status" style="color:var(--ink);">/status</a> and <a href="/api/reliability" style="color:var(--ink);">/api/reliability</a>.`)}`)}
+${section("Reliability", `${P(`Each tool reads ${CODE("measured")} or ${CODE("not enough data")}: ${esc(RELIABILITY_DEFINITION.status)}.`)}${P(`Success rate: ${esc(RELIABILITY_DEFINITION.successRate)}.`)}${P(`Latency: ${esc(RELIABILITY_DEFINITION.latency)}.`)}${toolReliabilityEnabled() ? P(`The same figures, window and threshold as <a href="${TOOL_RELIABILITY_PATH}" style="color:var(--ink);">${TOOL_RELIABILITY_PATH}</a>.`) : ""}${P(`Service-wide uptime, measured from outside production, is on <a href="/status" style="color:var(--ink);">/status</a> and <a href="/api/reliability" style="color:var(--ink);">/api/reliability</a>.`)}`)}
 ${section("Error codes", `${P(`Every tool error answer carries ${CODE("errorCode")} beside the message. Branch on the code; the message text may change. An answer of 400 or above is never charged.`)}${codes}`)}
 ${section("Stability", P(`This is ${CODE(WHOLESALE_VERSION)}. Within it, fields are only added, never renamed, retyped or removed; a breaking change ships as a new version beside this one. Each tool's input and output schema is in <a href="/openapi.json" style="color:var(--ink);">/openapi.json</a>.`))}
 ${ledgerFooterCompact()}`;

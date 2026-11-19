@@ -252,8 +252,9 @@ Loaded when an index, discovery, router or buyer file is read.
   route over `TOOL_RELIABILITY_WINDOW_HOURS` (168), a measured share once a route has
   `TOOL_RELIABILITY_MIN_SAMPLE` (20) calls, else "not enough data"; never a call count or a ranking
   (the operator view adds `calls` and `serverErrors`). One grouped query per 10 minutes per process.
-  `TOOL_RELIABILITY_PUBLIC=off` (unset = on) withdraws the table: the route answers
-  `available: false` with reason off and `/api/pricing` drops its pointer.
+  `TOOL_RELIABILITY_PUBLIC=off` (or 0, false, no; unset = on) withdraws the table: the route answers
+  `available: false` with reason off, and `/api/pricing`, `/api/reliability`, the wholesale
+  documents and page, llms.txt and /trust drop their pointers (each reads `toolReliabilityEnabled()`).
 - **Seller reputation:** `src/seller-reputation.js`. A leased hourly pass (`seller-reputation-pass`,
   `SELLER_REPUTATION_INTERVAL_MS`, first after `SELLER_REPUTATION_FIRST_MS`, waiting for the index to
   load) folds each indexed seller's newest crawl, paywall probe (its `ms`, the probe's answer time)

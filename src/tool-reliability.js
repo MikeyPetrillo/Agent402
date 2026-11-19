@@ -30,8 +30,10 @@
 // COST. One grouped query per TOOL_RELIABILITY_CACHE_MS (10 minutes) per
 // process, single-flight, bounded by the analytics pool's statement timeout;
 // every read in between is served from memory. TOOL_RELIABILITY_PUBLIC=off
-// withdraws the table (the route answers available:false, reason off, and
-// /api/pricing drops its pointer).
+// (or 0, false, no; trimmed, any case) withdraws the table: the route answers
+// available:false, reason off, and every surface that points to it
+// (/api/pricing, /api/reliability, the wholesale documents and page, llms.txt,
+// /trust) drops its pointer.
 import { partialFields } from "./partial-answer.js";
 
 export const TOOL_RELIABILITY_PATH = "/api/reliability/tools";
@@ -40,8 +42,9 @@ export const TOOL_RELIABILITY_MIN_SAMPLE = 20;
 export const TOOL_RELIABILITY_CACHE_MS = 10 * 60_000;
 const FAILED_RETRY_MS = 60_000;
 
+const OFF_WORDS = new Set(["off", "0", "false", "no"]);
 export function toolReliabilityEnabled(env = process.env) {
-  return String(env.TOOL_RELIABILITY_PUBLIC || "").trim().toLowerCase() !== "off";
+  return !OFF_WORDS.has(String(env.TOOL_RELIABILITY_PUBLIC ?? "").trim().toLowerCase());
 }
 
 export const STATUS_MEASURED = "measured";
