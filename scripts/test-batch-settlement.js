@@ -122,7 +122,7 @@ const PAY_TO = "0x000000000000000000000000000000000000dEaD";
   const { settlementKindOf } = await import("../src/gateway-wire.js");
   ok(settlementKindOf("x402-batch") === "offchain" && settlementKindOf("x402") === "onchain", "and that wire reads settled off chain (claimed on chain later, in a batch)");
   const hang = server.slice(server.indexOf("function recordHangupDebt("), server.indexOf("function recordHangupDebt(") + 6000);
-  ok(/isBatchSettlementRequest\(req\)[\s\S]*creditHungUpBatchCall\(req, receipt\)/.test(hang), "a hang-up after a channel charge credits the channel back before any owed row");
+  ok(/isBatchSettlementRequest\(req\)[\s\S]*creditHungUpBatchCall\(req, channelReceipt\)/.test(hang), "a hang-up after a channel charge credits the channel back before any owed row");
 }
 
 // ---------------------------------------------------------------------------

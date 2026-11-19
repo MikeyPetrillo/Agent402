@@ -326,16 +326,16 @@ function recordHangupDebt(req, res) {
     // the lower total (the corrective 402 carries it). Only a credit the
     // channel cannot take (already claimed on chain) is booked as owed, under
     // evidence unique to this request, and repaid by hand.
-    const receipt = decodeSettleReceipt(settleReceipt);
-    if (!receiptProvesCharge(receipt)) return null;
+    const channelReceipt = decodeSettleReceipt(settleReceipt);
+    if (!receiptProvesCharge(channelReceipt)) return null;
     const owedRow = {
       network: networkFromPaymentResponse(settleReceipt),
       payer: payerFromPaymentResponse(settleReceipt),
       tx: `batch-hangup:${randomUUID()}`,
       wire: BATCH_WIRE,
-      priceUsd: paidUsdOf(def, req, res, receipt?.network),
+      priceUsd: paidUsdOf(def, req, res, channelReceipt?.network),
     };
-    void creditHungUpBatchCall(req, receipt).then((how) => {
+    void creditHungUpBatchCall(req, channelReceipt).then((how) => {
       if (how === "credited") return;
       console.warn(`[batch] hang-up on ${def.slug}: channel credit not taken (${how}); booked as owed`);
       try { recordRefundOwed({ slug: def.slug, ...owedRow, httpStatus: 499, synthetic, hangupReason: "channel credit refused" }); } catch { /* logged above */ }
