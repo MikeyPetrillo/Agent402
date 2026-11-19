@@ -19,7 +19,16 @@ Loaded when a sign-in, signed-agent, payer or PostHog file is read.
   EIP-4361 layout line by line, name BASE_URL's host and origin, a chain in `SIWE_CHAIN_IDS` (default
   8453,1,137,42161,10), and recover to its own address (EOA signatures only). The token
   (`X-Wallet-Session`) is HMAC-signed, bound to the host, lasts `SIWE_SESSION_SECONDS` (default 900, at
-  most 3600, never past the message's Expiration Time); nonces and sign-outs are per process (one replica).
+  most 3600, never past the message's Expiration Time); nonces are per process (one replica). A sign-out
+  is this process's map plus, with Redis, the shared flag `wsess-out` keyed by the token's id and expiring
+  with the token: `revoke` awaits the write (a miss answers the DELETE 503 `signedOutHere`, and a repeat
+  writes again), and the middleware `mountWalletSignIn` adds awaits `syncRevocation` before any route
+  registered after it, so a container that never saw the DELETE, or started after it, refuses the
+  token. Only a live token this server signed reaches the store. A store that does not answer the
+  READ leaves this process's record to decide and the session served (a refusal there would end every
+  valid session on a store miss; the window is a token signed out elsewhere, for the outage and at most
+  the token's life), noted under `wallet-session` (`scripts/test-wallet-sign-out-redis.js`, two servers
+  and a later-started third on one Redis). A route that reads a session is registered after the mount.
   `resolveRouteIdentity(req, scope, identityPayerOf(req))` is the only reader: a signed EVM payer always
   wins, a session naming another wallet is a 400, a PoW or trial call is a 402, a bad token a 401 (none
   charged). A session is read-only. Scopes: my-usage, receipts, and the memory reads in

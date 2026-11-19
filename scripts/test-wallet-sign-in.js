@@ -103,8 +103,72 @@ const svc = ws.createWalletSignIn({ env, baseUrl: BASE, now });
   clock += 901_000;
   ok(svc.sessionOf(s.token).error === "expired", "expired token: refused after its life");
   const s2 = await signIn(svc);
-  ok(svc.revoke(s2.token) === true && svc.sessionOf(s2.token).error === "signed_out", "sign-out ends the session");
+  const out2 = await svc.revoke(s2.token);
+  ok(out2?.signedOut === true && out2.shared === null && svc.sessionOf(s2.token).error === "signed_out", "sign-out ends the session (no shared store: this process's record)");
+  ok((await svc.revoke(s2.token))?.signedOut === true && (await svc.revoke("a402ws1.x.y"))?.signedOut === false, "signing out twice is the same answer; a token that is not a session signs nothing out");
   ok(svc.sessionOf("x".repeat(5000)).error === "malformed" && svc.sessionOf("a.b").error === "malformed", "malformed tokens are refused without work");
+}
+
+// --- sign-out across instances (one shared store) ---------------------------------
+// Two services with one secret are two containers: a token minted on one is
+// honored by both, so a sign-out on one must end it on the other. The store
+// is the shared flag store's own interface (src/shared-limits.js).
+{
+  const { createMemoryLimits } = await import("../src/shared-limits.js");
+  const mem = createMemoryLimits();
+  const calls = { put: 0, get: 0 };
+  let putFails = false, getFails = false, getThrows = false;
+  const revocations = {
+    put: async (jti, untilMs) => { calls.put++; if (putFails) return { ok: false, error: "store down" }; return mem.flagSet("wsess-out", jti, untilMs, { now: now() }); },
+    get: async (jti) => { calls.get++; if (getThrows) throw new Error("store down"); if (getFails) return { ok: false, error: "store down" }; return mem.flagGet("wsess-out", jti, { now: now() }); },
+  };
+  const a = ws.createWalletSignIn({ env, baseUrl: BASE, now, revocations });
+  const b = ws.createWalletSignIn({ env, baseUrl: BASE, now, revocations });
+  const s = await signIn(a);
+  ok(b.sessionOf(s.token).session?.address === alice.address.toLowerCase() && await b.syncRevocation?.(s.token) === "clean" && b.sessionOf(s.token).session, "CONTROL: a token minted on one instance is honored by the other, before and after it reads the store");
+  const out = await a.revoke(s.token);
+  ok(out?.signedOut === true && out.shared === true && calls.put === 1, `sign-out writes the shared record and waits for it (${JSON.stringify(out)})`);
+  ok(a.sessionOf(s.token).error === "signed_out", "the instance that took the sign-out refuses the token");
+  ok(await b.syncRevocation?.(s.token) === "revoked" && b.sessionOf(s.token).error === "signed_out", "the OTHER instance refuses it once it has read the shared record");
+  const gets = calls.get;
+  ok(await b.syncRevocation?.(s.token) === "revoked" && calls.get === gets, "a token this process knows to be signed out is not read again");
+  // The record lives exactly as long as the token could.
+  const exp = a.sessionOf((await signIn(a)).token).session.exp * 1000;
+  const s3 = await signIn(a);
+  await a.revoke(s3.token);
+  const jti3 = JSON.parse(Buffer.from(s3.token.split(".")[1], "base64url").toString("utf8")).jti;
+  const kept = await mem.flagGet("wsess-out", jti3, { now: now() });
+  ok(kept.until > now() && kept.until <= now() + 3600_000 && Math.abs(kept.until - exp) <= 1000, "the shared record expires with the token (at most an hour)");
+  ok((await mem.flagGet("wsess-out", jti3, { now: kept.until + 1 })).until === 0, "and is gone after that");
+  // Only a token this server signed, still alive, reaches the store.
+  const before = calls.get;
+  await b.syncRevocation?.("a402ws1.x.y"); await b.syncRevocation?.(s.token.slice(0, -2) + "AA"); await b.syncRevocation?.("x".repeat(5000)); await b.syncRevocation?.(null);
+  ok(calls.get === before, "an unsigned, altered, oversized or missing token never reaches the store");
+  // A store that does not answer a READ: this process's own record decides
+  // (the documented rule), the session is not refused, and the miss is reported.
+  const s4 = await signIn(a);
+  const misses = [];
+  const c = ws.createWalletSignIn({ env, baseUrl: BASE, now, revocations, onStoreMiss: (op, r) => misses.push([op, r?.error]) });
+  getFails = true;
+  ok(await c.syncRevocation?.(s4.token) === "unread" && c.sessionOf(s4.token).session && misses.length === 1 && misses[0][0] === "read", `a store that does not answer a read leaves a valid session valid, and says so (${JSON.stringify(misses)})`);
+  getFails = false; getThrows = true;
+  ok(await c.syncRevocation?.(s4.token) === "unread" && c.sessionOf(s4.token).session, "a store read that throws is the same");
+  getThrows = false;
+  // A store that does not take the WRITE: this process refuses the token at
+  // once, the caller is told the sign-out is not everywhere, and a repeat
+  // writes it again.
+  putFails = true;
+  const half = await c.revoke(s4.token);
+  ok(half?.signedOut === true && half.shared === false && c.sessionOf(s4.token).error === "signed_out", `a sign-out the store did not take still ends the session here, and reports shared: false (${JSON.stringify(half)})`);
+  ok(await b.syncRevocation?.(s4.token) === "clean" && b.sessionOf(s4.token).session, "CONTROL: the other instance has not learned of it");
+  putFails = false;
+  const again = await c.revoke(s4.token);
+  ok(again?.signedOut === true && again.shared === true && await b.syncRevocation?.(s4.token) === "revoked" && b.sessionOf(s4.token).error === "signed_out", "the repeated sign-out reaches the store, and the other instance refuses the token");
+  // The server wires the shared flag store, and reads it before any route.
+  const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/revocations: sharedLimitsEnabled\(\) \? \{/.test(src) && /sharedLimits\.flagSet\("wsess-out", jti, untilMs\)/.test(src) && /sharedLimits\.flagGet\("wsess-out", jti\)/.test(src), "server.js hands the service the shared flag store when one is configured");
+  const mod = readFileSync(new URL("../src/wallet-sign-in.js", import.meta.url), "utf8");
+  ok(/app\.use\(\(req, res, next\) => \{[\s\S]{0,400}svc\.syncRevocation\(/.test(mod), "the mounted middleware reads the shared record before any route resolves the session");
 }
 
 // --- route identity ---------------------------------------------------------------

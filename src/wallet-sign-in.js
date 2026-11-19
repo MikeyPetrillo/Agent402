@@ -26,6 +26,30 @@
 // default 900, at most 3600, never past the message's own Expiration Time)
 // and a random id that sign-out revokes. Sent as `X-Wallet-Session`.
 //
+// SIGN-OUT ACROSS CONTAINERS. The token is portable (every container holds
+// the secret), so its sign-out is too: `revoke` records the token's id in
+// this process's map and in the shared flag store (`revocations`, the server
+// hands it src/shared-limits.js when Redis is configured), valued and expiring
+// with the token's own expiry, so the store holds at most an hour of
+// sign-outs and nothing after. The map is the cache the synchronous
+// `sessionOf` reads; `syncRevocation` refreshes it from the store, and the
+// mounted middleware awaits that before any route resolves a session, so a
+// container that never saw the DELETE, or started after it, refuses the token.
+// Only a token this server signed, unexpired and not already known signed
+// out, reaches the store: one bounded read per request that carries one.
+//   - A store that does not take the WRITE: the token is refused by this
+//     process at once, and the DELETE answers 503 (`signedOut: false`,
+//     `signedOutHere: true`) so the caller repeats it; a repeat writes again.
+//   - A store that does not answer a READ: this process's own record decides
+//     and the session is served (decided, not an oversight). Refusing
+//     instead would turn every shared-store miss into a refusal of every
+//     valid session on every container, for a read-only identity whose
+//     token lives at most an hour; what stays open is a token signed out on
+//     ANOTHER container, for as long as the store is unreadable and no
+//     longer than the token's remaining life. The miss is reported
+//     (`onStoreMiss`), which feeds the sharedLimits word the pagers read.
+// With no shared store (one process, no Redis) the map alone is the record.
+//
 // Payer attribution is untouched: when a request carries a signed EVM payer
 // (identityPayerOf, src/payer.js) that payer is the identity, and a session
 // naming another wallet is refused; sales, refunds and the ledger keep the
@@ -56,6 +80,7 @@ const SKEW_MS = 60_000;
 const MAX_MESSAGE = 2048;
 const MAX_TOKEN = 1024;
 const TOKEN_PREFIX = "a402ws1";
+const JTI_RE = /^[0-9a-f]{24}$/;
 const STATEMENT = "Sign in to read this wallet's own usage, receipts and memory on this server. Read-only: writes still need a signed payment. Paid calls are still paid.";
 
 export function walletSignInEnabled(env = process.env) {
@@ -100,7 +125,7 @@ const b64u = (buf) => Buffer.from(buf).toString("base64url");
 const refuse = (status, code, message) => Object.assign(new Error(message), { statusCode: status, code });
 
 /** One sign-in service bound to an origin. `now` is injectable for tests. */
-export function createWalletSignIn({ env = process.env, baseUrl, now = () => Date.now() } = {}) {
+export function createWalletSignIn({ env = process.env, baseUrl, now = () => Date.now(), revocations = null, onStoreMiss = null } = {}) {
   if (!walletSignInEnabled(env)) return null;
   const secret = env.SIWE_SESSION_SECRET.trim();
   const origin = new URL(baseUrl).origin;
@@ -111,6 +136,12 @@ export function createWalletSignIn({ env = process.env, baseUrl, now = () => Dat
   const revoked = new Map(); // jti -> expiry ms
   const sweep = (map, t) => { for (const [k, exp] of map) if (exp <= t) map.delete(k); };
   const mac = (s) => createHmac("sha256", secret).update(s).digest();
+  const store = revocations && typeof revocations.put === "function" && typeof revocations.get === "function" ? revocations : null;
+  const storeMiss = (op, r) => { try { onStoreMiss?.(op, r); } catch { /* reporting never decides */ } };
+  const markRevoked = (jti, expMs) => {
+    if (revoked.size >= NONCE_MAX) sweep(revoked, now());
+    revoked.set(jti, expMs);
+  };
 
   function issueNonce() {
     const t = now();
@@ -164,8 +195,9 @@ export function createWalletSignIn({ env = process.env, baseUrl, now = () => Dat
     return { token: `${body}.${b64u(mac(body))}`, address: payload.sub, chainId: payload.cid, expiresAt: new Date(payload.exp * 1000).toISOString(), scopes: payload.scope, header: "X-Wallet-Session" };
   }
 
-  /** The session a token carries, or { error } naming why it is refused. */
-  function sessionOf(token) {
+  /** The record a token carries when this server signed it and it has not
+   *  expired, whether or not it was signed out; else { error }. */
+  function readToken(token) {
     if (typeof token !== "string" || !token || token.length > MAX_TOKEN) return { error: "malformed" };
     const parts = token.split(".");
     if (parts.length !== 3 || parts[0] !== TOKEN_PREFIX) return { error: "malformed" };
@@ -181,27 +213,61 @@ export function createWalletSignIn({ env = process.env, baseUrl, now = () => Dat
     if (p.aud !== host) return { error: "wrong_audience" };
     if (!Number.isFinite(p.exp) || p.exp * 1000 <= t) return { error: "expired" };
     if (!Number.isFinite(p.iat) || p.iat * 1000 > t + SKEW_MS) return { error: "malformed" };
-    if (revoked.has(p.jti)) return { error: "signed_out" };
+    if (typeof p.jti !== "string" || !JTI_RE.test(p.jti)) return { error: "malformed" };
     return { session: { address: p.sub, chainId: p.cid, scopes: Array.isArray(p.scope) ? p.scope : [], jti: p.jti, exp: p.exp } };
   }
 
-  function revoke(token) {
-    const r = sessionOf(token);
-    if (!r.session) return false;
-    const t = now();
-    if (revoked.size >= NONCE_MAX) sweep(revoked, t);
-    revoked.set(r.session.jti, r.session.exp * 1000);
-    return true;
+  /** The session a token carries, or { error } naming why it is refused.
+   *  Synchronous: sign-outs are read from this process's map, which
+   *  syncRevocation keeps current with the shared store. */
+  function sessionOf(token) {
+    const r = readToken(token);
+    if (r.session && revoked.has(r.session.jti)) return { error: "signed_out" };
+    return r;
   }
 
-  return { issueNonce, verify, sessionOf, revoke, host, origin, chainIds, _nonceCount: () => nonces.size };
+  /** Read the shared sign-out record for this token into the map. Resolves to
+   *  "revoked", "clean", "unread" (the store did not answer: the map stands)
+   *  or "skipped" (no store, or not a live token of ours). Never throws. */
+  async function syncRevocation(token) {
+    const r = readToken(token);
+    if (!r.session) return "skipped";
+    if (revoked.has(r.session.jti)) return "revoked";
+    if (!store) return "skipped";
+    let got;
+    try { got = await store.get(r.session.jti); } catch (e) { got = { ok: false, error: String(e?.message || e) }; }
+    if (!got?.ok) { storeMiss("read", got); return "unread"; }
+    if (!(Number(got.until) > now())) return "clean";
+    markRevoked(r.session.jti, r.session.exp * 1000);
+    return "revoked";
+  }
+
+  /** Sign a token out. Resolves to { signedOut, shared }: `signedOut` false
+   *  when the token is not a live session of ours; `shared` true once the
+   *  shared store took the record, false when it did not (this process
+   *  refuses the token either way), null with no shared store. A token
+   *  already signed out is written again, so a repeat completes a sign-out
+   *  the store missed. Never throws. */
+  async function revoke(token) {
+    const r = readToken(token);
+    if (!r.session) return { signedOut: false, shared: null };
+    const expMs = r.session.exp * 1000;
+    markRevoked(r.session.jti, expMs);
+    if (!store) return { signedOut: true, shared: null };
+    let put;
+    try { put = await store.put(r.session.jti, expMs); } catch (e) { put = { ok: false, error: String(e?.message || e) }; }
+    if (!put?.ok) storeMiss("write", put);
+    return { signedOut: true, shared: !!put?.ok };
+  }
+
+  return { issueNonce, verify, sessionOf, syncRevocation, revoke, host, origin, chainIds, _nonceCount: () => nonces.size };
 }
 
 // --- the process's service and the route hook ----------------------------------
 let service = null;
 /** Called once at boot by server.js; returns the service or null (off). */
-export function configureWalletSignIn({ env = process.env, baseUrl, now } = {}) {
-  service = createWalletSignIn({ env, baseUrl, now });
+export function configureWalletSignIn({ env = process.env, baseUrl, now, revocations = null, onStoreMiss = null } = {}) {
+  service = createWalletSignIn({ env, baseUrl, now, revocations, onStoreMiss });
   return service;
 }
 export function walletSignInService() { return service; }
@@ -245,6 +311,8 @@ export function sessionHeaderShape(value) {
  *   GET    /api/wallet-session/nonce   a nonce and the fields to sign
  *   POST   /api/wallet-session         { message, signature } -> session token
  *   DELETE /api/wallet-session         signs the X-Wallet-Session token out
+ * and, ahead of every route registered after this call, the read of the
+ * shared sign-out record for a request that carries a session token.
  */
 export function mountWalletSignIn(app, { express, limiter, clientIp }) {
   const svc = service;
@@ -263,10 +331,23 @@ export function mountWalletSignIn(app, { express, limiter, clientIp }) {
     if (limited(req, res)) return;
     try { res.json(await svc.verify(req.body || {})); } catch (e) { res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "sign-in failed", code: e.code || "error" }); }
   });
-  app.delete("/api/wallet-session", (req, res) => {
+  app.delete("/api/wallet-session", async (req, res) => {
     res.set("Cache-Control", "no-store");
     const token = headerOf(req, SESSION_HEADER);
-    res.json({ signedOut: token ? svc.revoke(token.trim()) : false });
+    const out = token ? await svc.revoke(token.trim()) : { signedOut: false, shared: null };
+    // The shared store did not take the record: this container refuses the
+    // token already, another may not yet, so the caller is asked to repeat it.
+    if (out.signedOut && out.shared === false) return res.status(503).set("Retry-After", "5").json({ signedOut: false, signedOutHere: true, error: "The sign-out is recorded on this server and could not be confirmed on every server. Send the same request again.", retryable: true });
+    res.json({ signedOut: out.signedOut });
+  });
+  // A sign-out taken by another container (or before this one started) is
+  // read from the shared store before any route resolves the session. Only a
+  // request carrying the header pays for it, and only a token this server
+  // signed reaches the store (syncRevocation).
+  app.use((req, res, next) => {
+    const token = headerOf(req, SESSION_HEADER);
+    if (token == null) return next();
+    svc.syncRevocation(token.trim()).then(() => next(), () => next());
   });
   return true;
 }

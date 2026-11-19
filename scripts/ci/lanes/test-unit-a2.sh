@@ -60,6 +60,8 @@ t node scripts/test-shared-limits-crossprocess.js
 t node scripts/test-spend-words-shared-redis.js
 # topBuyerFailures read the same on a container that served none of the failures; a refusing store leaves this process's own word.
 t node scripts/test-top-buyer-failures-redis.js
+# A wallet session signed out on one server is refused by a second and by one started later (REAL redis)
+t node scripts/test-wallet-sign-out-redis.js
 # A close made while a connect is still in flight ends that connect too.
 t node scripts/test-shared-redis-close.js
 # The in-flight run cover: memory, a store that does not answer (local ledger decides), and real Redis.

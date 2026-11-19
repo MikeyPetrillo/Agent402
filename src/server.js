@@ -3429,7 +3429,17 @@ app.get("/__operator/tweet-queue.json", (req, res) => {
 });
 // Wallet sign-in (EIP-4361) for the identity-bound routes: off unless
 // SIWE_SESSION_SECRET is set; off, nothing below mounts (src/wallet-sign-in.js).
-if (configureWalletSignIn({ baseUrl: BASE_URL })) {
+// A sign-out is shared across containers through the shared flag store
+// (Redis) when one is configured: the record expires with the token.
+if (configureWalletSignIn({
+  baseUrl: BASE_URL,
+  revocations: sharedLimitsEnabled() ? {
+    put: (jti, untilMs) => sharedLimitsWrite("wallet-session", sharedLimits.flagSet("wsess-out", jti, untilMs)),
+    get: (jti) => sharedLimits.flagGet("wsess-out", jti),
+  } : null,
+  // A write's miss is noted by sharedLimitsWrite itself.
+  onStoreMiss: (op, r) => { if (op === "read") noteSharedLimitsDegraded("wallet-session", r); },
+})) {
   mountWalletSignIn(app, { express, limiter: createRateLimiter("wallet-session", { perMin: 20, perHour: 200 }), clientIp });
 }
 const alertsSignupLimiter = createRateLimiter("alerts-signup", { perMin: 6, perHour: 40 });
