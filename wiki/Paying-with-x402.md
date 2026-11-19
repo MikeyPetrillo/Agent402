@@ -31,7 +31,10 @@ the settlement is not confirmed (`reason: "settlement-unconfirmed"`) and the tra
 do not sign a new authorization for that call before the expiry the body names (`authorizationValidBefore`,
 `lastValidRound` or `expirationLedger`), or, when it names none, before the paying wallet shows whether
 the transfer landed, and read `refundStatusUrl` (a free refund lookup) when it is there; the same payment
-sent again, in any encoding, gets the same answer without the call running; `fresh-authorization` means sign a new payment;
+sent again, in any encoding, gets the same answer without the call running; `fresh-authorization` means sign a new payment,
+and with `reason: "settled-refund-owed"` the earlier transfer of that payment landed and is booked as owed to the
+paying wallet, repaid after on-chain proof (`transactions` names it, `refundStatusUrl` shows where the repayment
+stands), so that call was charged and not served;
 `fund-wallet` means the paying wallet holds too little of the asset (`reason:
 "insufficient-funds"`) or has no account for it yet (`reason: "no-token-account"`: no USDC token account
 on Solana, no trustline on Stellar, not opted in on Algorand), so a new signature alone is refused the

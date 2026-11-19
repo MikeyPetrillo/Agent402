@@ -1122,6 +1122,13 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   ok(/`same-payment` means send the same payment again after `Retry-After`, with no new signature; `watch-transaction` \(the body lists `transactions`\) and `check-wallet` \(it lists none\) mean the settlement is not confirmed/.test(wiki)
     && /`fresh-authorization` means sign a new payment/.test(wiki),
     "the wiki's Paying-with-x402 page names the retry verbs and the unconfirmed settlement");
+  // The owed answer (settled-refund-owed) is named wherever the verbs are:
+  // that payment was charged, its transfer is owed back, and a new one makes the call.
+  ok(/reason settled-refund-owed the earlier transfer of that payment landed and is booked as owed to the paying wallet, repaid after on-chain proof \(transactions names it, refundStatusUrl shows where the repayment stands\), so that call was charged and not served/.test(NOTE),
+    "the retry-verbs note names settled-refund-owed: charged, owed back, the transfer and its refund lookup");
+  ok(/`reason: "settled-refund-owed"` the earlier transfer of that payment landed and is booked as owed to the paying wallet, repaid after on-chain proof/.test(readme)
+    && /`reason: "settled-refund-owed"` the earlier transfer of that payment landed and is booked as owed to the paying wallet, repaid after on-chain proof/.test(wiki),
+    "the client README and the wiki name settled-refund-owed");
 }
 
 console.log(`test-copy-absolutes: ${pass} passed, ${fail} failed`);

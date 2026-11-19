@@ -97,6 +97,10 @@ const addrOk = (rail, a) => (rail === "evm" ? ADDR : rail === "svm" ? SVM_ADDR :
 const assetOk = (rail, a) => (rail === "evm" ? ADDR : rail === "svm" ? SVM_ADDR : AVM_ASSET).test(String(a || ""));
 /** Hex is case-insensitive and is lowercased; base58 and base32 ids are kept exactly. */
 const txKeyOf = (network, tx) => (railOf(network) === "evm" ? String(tx).toLowerCase() : String(tx));
+/** A payer as a key on its network: a hex EVM address compares without case;
+ *  a base58 (Solana) or base32 (Algorand) address is kept exactly, since two
+ *  spellings that differ only in case are two wallets. */
+export const latePayerKey = (network, payer) => (railOf(network) === "evm" ? String(payer || "").toLowerCase() : String(payer || ""));
 
 export const SETTLED_AFTER_402 = "settled_after_402";
 /** The bound on OPEN (pending) entries. Unresolved entries wait for a human
@@ -267,12 +271,13 @@ export function lateSettleCandidates(ctx) {
   let noted = [];
   try { noted = ctx?.__a402LateAuth ? [] : pendingNotedTxsFor(ctx); } catch { noted = []; }
   const nonce = String(ctx?.paymentPayload?.payload?.authorization?.nonce || "");
-  const pin = (e) => (noted.includes(String(e.tx || "").toLowerCase()) && NONCE.test(nonce) ? { ...e, authNonce: nonce.toLowerCase() } : e);
+  const notedKeys = noted.map((t) => txKeyOf(c?.network ?? ctx?.requirements?.network, t));
+  const pin = (e) => (notedKeys.includes(txKeyOf(e.network, e.tx || "")) && NONCE.test(nonce) ? { ...e, authNonce: nonce.toLowerCase() } : e);
   if (c) out.push(pin(c));
   let viaOf = new Map();
   try { viaOf = new Map(peekPendingAnswers(ctx?.paymentPayload).filter((n) => n?.tx && n.via).map((n) => [n.tx, n.via])); } catch { /* labels only */ }
   for (const tx of noted) {
-    if (out.some((e) => String(e.tx || "").toLowerCase() === tx)) continue;
+    if (out.some((e) => txKeyOf(e.network, e.tx || "") === txKeyOf(e.network, tx))) continue;
     const base = lateSettleCandidate({ ...ctx, error: { transaction: tx }, __a402LateTx: null });
     if (base) out.push(pin({ ...base, tx, ...(viaOf.has(tx) ? { via: viaOf.get(tx) } : {}) }));
   }
@@ -424,10 +429,11 @@ export function createLateSettleBook({
     return heldImpl;
   };
   // An EVM payer's open entries from unconfirmed settle chains on one
-  // network (an EVM address compares without case; the bound is EVM-only).
+  // network (latePayerKey: an EVM address compares without case, any other
+  // exactly; the bound is EVM-only).
   const unconfirmedOf = (p, entry) => {
-    const who = String(entry.payer || "").toLowerCase();
-    return Object.values(p).filter((e) => e?.unconfirmed === true && e.state !== "unresolved" && e.network === entry.network && String(e.payer || "").toLowerCase() === who).length;
+    const who = latePayerKey(entry.network, entry.payer);
+    return Object.values(p).filter((e) => e?.unconfirmed === true && e.state !== "unresolved" && e.network === entry.network && latePayerKey(e.network, e.payer) === who).length;
   };
   // One entry into the store: "made" (or already there), "full" (the open
   // bound is reached), "payer_full" (this payer's bound on unconfirmed
@@ -476,7 +482,7 @@ export function createLateSettleBook({
   const drainOne = async (j, { summary }) => {
     const atBound = new Set();
     let tried = 0, held = 0;
-    const payerKey = (e) => `${e.network}\n${String(e.payer || "").toLowerCase()}`;
+    const payerKey = (e) => `${e.network}\n${latePayerKey(e.network, e.payer)}`;
     let landed = 0;
     try {
       landed = await j.drain(async (e) => {
@@ -557,7 +563,7 @@ export function createLateSettleBook({
       if (r === "payer_full") {
         // One line per payer per HELD_LOG_EVERY_MS, naming how many were
         // held since its last line.
-        const hk = `${network}\n${String(c.payer || "").toLowerCase()}`;
+        const hk = `${network}\n${latePayerKey(network, c.payer)}`;
         const h = heldLog.get(hk) || { at: -Infinity, since: 0 };
         h.since++;
         if (now() - h.at >= HELD_LOG_EVERY_MS) {

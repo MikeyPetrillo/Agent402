@@ -69,6 +69,14 @@ export function refundClauses({ gatewayBatched = false } = {}) {
       repaidTo: "paying-wallet",
     },
     {
+      id: "owed-not-served",
+      section: "Payments",
+      text: "A payment whose transfer is owed back this way is not used for a call: if the same payment is sent again, or an attempt with it settles that same transfer, the call is not served for it, the answer names the transfer and says it is owed, and the amount stays owed to the paying wallet and is repaid as described under refunds below; a new payment makes the call.",
+      appliesTo: ["x402-owed-transfer-resent"],
+      owed: true,
+      repaidTo: "paying-wallet",
+    },
+    {
       id: "finality",
       section: "Payments",
       text: "Micropayments are per call and, once settled on-chain, are final and non-refundable except as described in these terms or where required by law.",

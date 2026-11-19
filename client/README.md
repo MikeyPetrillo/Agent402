@@ -449,7 +449,9 @@ or `check-wallet` (`reason: "settlement-unconfirmed"`) means the settlement is n
 transfer may still land, so do not pay for that call again before the `authorizationValidBefore` time
 when the body names one (the hold covers that payment until then); `transactions` lists any transaction
 to watch and `refundStatusUrl` is a free refund lookup when the body has one. `same-payment` means send
-the same payment again, and `fresh-authorization` means sign a new one. A paid HTTP-success response that later fails byte,
+the same payment again, and `fresh-authorization` means sign a new one; with `reason: "settled-refund-owed"`
+the earlier transfer of that payment landed and is booked as owed to the paying wallet, repaid after on-chain
+proof (`transactions` names it, `refundStatusUrl` shows where the repayment stands). A paid HTTP-success response that later fails byte,
 JSON, or output validation remains settled spend. Free proof-of-work calls are
 never counted. Omit a cap (or leave it `null`) for no limit; with none set,
 behavior is unchanged.

@@ -1050,5 +1050,19 @@ await check("a transaction the late-settlement book booked owed is never also se
   assert.deepEqual([r.success, r.errorReason, r.transaction, r.network, r.payer], [false, claims.SETTLED_REFUND_OWED, txh(91), RH, "0x" + "ab".repeat(20)]);
 });
 
+await check("a payer or transaction is a key without case only on an EVM chain; base58 and base32 keep theirs", async () => {
+  const { latePayerKey, lateSettleCandidates } = await import("../src/late-settlements.js");
+  const evmA = "0x" + "Ab".repeat(20);
+  assert.equal(latePayerKey(RH, evmA), evmA.toLowerCase(), "an EVM address compares without case");
+  const solA = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", solB = "7xkxtg2cw87d97txjsdpbd5jbkhetqa83tzrujosgasu";
+  assert.notEqual(latePayerKey(SOL, solA), latePayerKey(SOL, solB), "two Solana addresses differing only in case stay two wallets");
+  assert.equal(latePayerKey(SOL, solA), solA);
+  assert.equal(latePayerKey(ALGO, "ABCDEF"), "ABCDEF", "an Algorand address is kept exactly");
+  // A Solana failure naming its signature books it as written, once.
+  const sig = solSig(77);
+  const c = lateSettleCandidates({ requirements: { network: SOL, scheme: "exact", payTo: solA, asset: solA, amount: "1000" }, paymentPayload: { payload: {} }, error: { transaction: sig, payer: solA } });
+  assert.ok(c.length <= 1 && (c.length === 0 || (c[0].tx === sig && c[0].payer === solA)), `the candidate keeps the signature and payer as written (${JSON.stringify(c)})`);
+});
+
 console.log(`test-late-settlements: ${failures ? `FAILED (${failures})` : "all passed"}`);
 process.exit(failures ? 1 : 0);

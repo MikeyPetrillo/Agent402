@@ -178,7 +178,7 @@ in 10 to 14 business days unless they tell us they have filed a court action to 
 <p><b>On-chain (x402 / MPP).</b> Paid calls settle on public blockchains${gatewayBatched ? " (except Circle Gateway batched payments, below)" : ""} - USDC on Base and the other
 chains listed at <a href="/pricing">/pricing</a>, USDG on Robinhood Chain, and MPP settlement on Base,
 Celo or Tempo. ${clause("settle-after-success")} ${clause("final-before-call")}
-${clause("late-landing")} ${clause("unconfirmed-eip3009")}
+${clause("late-landing")} ${clause("unconfirmed-eip3009")} ${clause("owed-not-served")}
 ${clause("finality")} Metered routes quote a ceiling before
 payment and settle at or under it. You are responsible for your own wallet and keys; we never receive or
 hold your private key.${publicIndex ? ` ${publicIndex}` : ""}</p>${gatewayBatched ? `

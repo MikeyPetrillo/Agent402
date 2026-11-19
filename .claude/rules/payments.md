@@ -580,8 +580,12 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   transaction (the normal settle: afterSettle aborts, on any rail; a recovery: `recoveredTxHeldElsewhere`
   answers `OWED_ELSEWHERE`) ends failed with errorReason `settled_refund_owed` (not the buyer's fault,
   src/settle-fault.js), and the 402 is `settled-refund-owed` (`settledRefundOwedRefusal`: the transfer,
-  `refundStatusUrl`, retry fresh-authorization, never "not charged"), kept for the same payment sent
-  again like an unconfirmed answer (section 8).
+  `refundStatusUrl`, retry fresh-authorization; it says the transfer is owed back, since that x402 payment
+  was charged), kept for the same payment sent again like an unconfirmed answer (section 8). /terms
+  states it (`owed-not-served`, src/refund-terms.js), /privacy keeps that answer with the unconfirmed
+  ones, and the retry-verbs note (src/tool-error-fields.js, on the 402 description, /llms-full.txt and
+  /agents.md), the client README and the wiki name the reason. Late-book keys fold case only on an
+  EVM chain (`latePayerKey`, `txKeyOf`): a base58 or base32 address or id is kept exactly.
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read. The key is the client
