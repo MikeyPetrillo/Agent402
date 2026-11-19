@@ -118,9 +118,20 @@ function definitionOf(slug, root) {
     for (let at = text.indexOf(marker); at >= 0; at = text.indexOf(marker, at + 1)) {
       const start = text.lastIndexOf('route: "', at);
       if (start < 0 || at - start > 400) continue;
+      // The route is this slug's own, not the previous definition's.
+      if (text.slice(start, at).includes('slug: "')) continue;
       const next = text.indexOf('route: "', at);
       return { own: text.slice(start, next < 0 ? text.length : next), kit: text };
     }
+  }
+  // A definition built by a factory writes no route literal beside its slug
+  // (`route: \`GET /api/${slug}\``): the call that names the slug, up to the
+  // next one, is the definition.
+  for (const text of kits(root)) {
+    const at = text.indexOf(marker);
+    if (at < 0) continue;
+    const next = text.indexOf('slug: "', at + marker.length);
+    return { own: text.slice(at, next < 0 ? text.length : next), kit: text };
   }
   return null;
 }
@@ -131,8 +142,58 @@ function definitionOf(slug, root) {
 export function upstreamHostsForSlug(slug, root = ROOT) {
   const def = definitionOf(slug, root);
   if (!def) return new Set();
+  const declared = DECLARED_HOSTS.exec(def.own);
+  if (declared) return hostsIn(declared[1]);
   const own = hostsIn(def.own);
   return own.size ? own : hostsIn(def.kit);
+}
+// A definition that reads its upstream through another module (a shared read
+// helper, or other tools' handlers) writes the hosts it reads as a literal
+// list: `upstreamHosts: ["api.example.org"]`. Where it is written, it is the
+// whole answer: a host the definition only cites or shows in an example is
+// not one it reads.
+const DECLARED_HOSTS = /\bupstreamHosts:\s*\[([^\]]*)\]/;
+/** True when the tool's own definition declares the hosts it reads. */
+export function declaresUpstreamHosts(slug, root = ROOT) {
+  const def = definitionOf(slug, root);
+  return Boolean(def && DECLARED_HOSTS.test(def.own) && upstreamHostsForSlug(slug, root).size);
+}
+
+// A BUNDLE PRODUCT'S FAILURE IS ITS LEG'S. A bundle runs other catalog tools
+// (its legs) in process and answers a leg's source-side failure in its own
+// words, naming the first unit, the leg and the leg's message:
+//   "N of M unit(s) could not be completed on the source's side (first:
+//    <unit>, <leg>: <the leg's message>). Nothing was charged; retry later"
+// as a 502, 503 or 504. That answer is read as the leg's own answer, by the
+// same rule: excused only when the leg's message is one of the shared fetch
+// helper's upstream answers, a failed request to a host the bundle declares
+// was recorded during the call, and the runner's direct read of that request
+// fails the same way. Any other answer of a bundle is not read here.
+const BUNDLE_FAILURE = /^\d+ of \d+ unit\(s\) could not be completed on the source's side \(first: ([^]*)\)\. Nothing was charged; retry later$/;
+/** The leg answer inside a bundle's source-side failure: { leg, status, body }
+ *  for a leg in `legs`, else null. */
+export function bundleLegAnswer(status, body, legs) {
+  if (![502, 503, 504].includes(status) || !Array.isArray(legs) || !legs.length) return null;
+  const m = BUNDLE_FAILURE.exec(String(body?.error || ""));
+  if (!m) return null;
+  let best = null;
+  for (const leg of legs) {
+    const at = m[1].indexOf(`, ${leg}: `);
+    if (at >= 0 && (!best || at < best.at)) best = { at, leg };
+  }
+  if (!best) return null;
+  return { leg: best.leg, status, body: { error: m[1].slice(best.at + best.leg.length + 4) } };
+}
+/** The verdict on a bundle's failed answer: null when it is not a leg's
+ *  upstream answer (the caller grades it by its other rules), else the outage
+ *  verdict, final either way, with the leg named. The failed request must be
+ *  to a host the BUNDLE declares, in the shape the leg's definition builds. */
+export async function bundleOutageVerdict({ slug, legs, status, body, ...rest }) {
+  const inner = bundleLegAnswer(status, body, legs);
+  if (!inner) return null;
+  if (!accessRefusalStatus(inner.status, inner.body) && !isUpstreamErrorShape(inner.status, inner.body)) return null;
+  const v = await upstreamOutageVerdict({ ...rest, slug, shapeSlug: inner.leg, status: inner.status, body: inner.body });
+  return { ...v, leg: inner.leg };
 }
 
 // The static path a definition writes before its first interpolation: after
@@ -202,7 +263,7 @@ export async function directReadFails(url, opts) {
 /** The verdict on a failed answer: { verdict: "upstream", evidence } when the
  *  conditions above hold (an outage, or an access refusal the runner is given
  *  too), else { verdict: "fail", reason }. */
-export async function upstreamOutageVerdict({ slug, status, body, t0, t1, logPath = upstreamFailureLogPath(), readFails = directReadFails, readStatus = directReadStatus, root = ROOT }) {
+export async function upstreamOutageVerdict({ slug, shapeSlug = slug, status, body, t0, t1, logPath = upstreamFailureLogPath(), readFails = directReadFails, readStatus = directReadStatus, root = ROOT }) {
   const refused = accessRefusalStatus(status, body);
   if (!refused && !isUpstreamErrorShape(status, body)) return { verdict: "fail", reason: "not an upstream-error answer" };
   const hosts = upstreamHostsForSlug(slug, root);
@@ -212,7 +273,7 @@ export async function upstreamOutageVerdict({ slug, status, body, t0, t1, logPat
   if (!rows.length) return { verdict: "fail", reason: refused ? `no request refused with HTTP ${refused} recorded during the call` : "no failed upstream request recorded during the call" };
   const row = rows[rows.length - 1];
   if (row.keyed || !row.url || row.method !== "GET") return { verdict: "fail", reason: `the failed request to ${row.host} is keyed or not a GET` };
-  if (!requestMatchesDefinition(slug, row.url, root)) return { verdict: "fail", reason: `the failed request to ${row.host} is not the shape the tool's definition builds (a URL we built wrong is ours)` };
+  if (!requestMatchesDefinition(shapeSlug, row.url, root)) return { verdict: "fail", reason: `the failed request to ${row.host} is not the shape the tool's definition builds (a URL we built wrong is ours)` };
   const opts = row.accept ? { accept: row.accept } : undefined;
   if (refused) {
     const got = await readStatus(row.url, opts);

@@ -84,6 +84,12 @@ LLC: credit the entity, never a personal name.
   `.statusCode`.
 - A tool whose answer is bytes (the `{ __binary, contentType }` sentinel) declares `mimeType`, the type its published example
   returns; listings, `/openapi.json` and `/api/pricing` read it (`src/tool-media-type.js`, `scripts/test-bazaar-contracts.js`).
+- A tool that reaches the network on its own example is in `WALLET_ONLY_SLUGS` (`src/pow.js`), the
+  egress set the strict example sweep grades by (`scripts/test-free-tier-egress.js` drives every tool on
+  neither list and fails one that egresses). A tool that reads its upstream through another module (a
+  shared read helper, or other tools' handlers as a bundle product does) writes the hosts in its own
+  definition as a literal `upstreamHosts: [...]`; a sweep excuses its upstream's refusal only against
+  the runner's direct read of a declared host (`scripts/lib/upstream-outage.js`).
 - **Honest claims.** Most tools are deterministic code; model-backed ones (the `/v1` LLM tiers,
   report products, media/embedding/answer tools) are marked `modelBacked` and public copy must
   say so. Never write an unscoped "no model in the serving path" or "every tool is

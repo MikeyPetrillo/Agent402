@@ -16,9 +16,11 @@ import { PACK_DISCOUNT, PACK_FLOOR_USD } from "./pack-prices.js";
 import { BUNDLE_DISCOUNT, BUNDLE_FLOOR_USD, bundlePriceUsd, unitPartsUsd, usdText, priceUsdOf } from "../src/bundle-pricing.js";
 import {
   BUNDLE_TOOLS, BUNDLE_LEGS, BUNDLE_MAX_UNITS, legTool, weatherSitesOf, filingTickersOf, coinIdsOf,
-  weatherSiteRow, filingCompanyRow, candleStats, tokenRow, yearEarlier, WEATHER_RISK_WEIGHTS, LEG_RETRY_PAUSE_MS,
+  weatherSiteRow, filingCompanyRow, candleStats, tokenRow, yearEarlier, WEATHER_RISK_WEIGHTS, LEG_RETRY_PAUSE_MS, WEATHER_CONCURRENCY,
 } from "../src/tools/bundle-kit.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
+import { WALLET_ONLY_SLUGS } from "../src/pow.js";
+import { bundleLegAnswer, accessRefusalStatus, upstreamHostsForSlug } from "./lib/upstream-outage.js";
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -54,6 +56,8 @@ for (const t of BUNDLE_TOOLS) {
   ok(t.quote({}) === bundlePriceUsd(1, legs, priceOf) && t.quote({ [key]: "x" }) > 0, `${t.slug}: an unreadable body is quoted at one unit (the handler then refuses it)`);
   ok(t.modelBacked !== true && !/\bmodel-backed\b/.test(t.description) && /no model/.test(t.description), `${t.slug}: deterministic, says so, not model-backed`);
   ok(!FREE_TIER_SLUGS.has(t.slug), `${t.slug}: not on the free tier (wallet-only)`);
+  ok(WALLET_ONLY_SLUGS.has(t.slug) && Array.isArray(t.upstreamHosts) && t.upstreamHosts.length > 0 && t.upstreamHosts.every((h) => upstreamHostsForSlug(t.slug).has(h)),
+    `${t.slug}: a network tool (WALLET_ONLY_SLUGS) that declares the hosts its legs read (${(t.upstreamHosts || []).join(", ")})`);
   examples[t.slug] = ex;
 }
 
@@ -150,6 +154,31 @@ try {
   ok(histArgs.start === "2025-11-18" && histArgs.end === "2025-11-19", "weather: history reads the same dates a year earlier");
   ok(w.pricing.units === 2 && w.pricing.priceUsd === tool("weather-risk-brief").quote({ sites: [{ lat: 1, lon: 2 }, { lat: 3, lon: 4 }] }), "weather: the answer's pricing block is the 402 quote");
   ok(w.portfolio.sitesWithFlag.frost === 2 && w.ranking.length === 2, "weather: the portfolio counts and ranking cover every site");
+  // pacing: one read per upstream host per site at a time, so no host holds
+  // more than WEATHER_CONCURRENCY of one call's reads, and five reads a site.
+  {
+    const HOST_OF = { "weather-daily": "forecast", "weather-thresholds": "forecast", "weather-air-quality": "air", "weather-history": "archive", "weather-probability": "ensemble" };
+    const open = new Map(), peak = new Map(), perSite = new Map(), peakSite = new Map();
+    let reads = 0;
+    const paced = (slug, answer) => {
+      const real = stubs.get(slug);
+      stub(slug, async (i) => {
+        const host = HOST_OF[slug], site = `${host} ${i.lat},${i.lon}`;
+        reads++;
+        open.set(host, (open.get(host) || 0) + 1); peak.set(host, Math.max(peak.get(host) || 0, open.get(host)));
+        perSite.set(site, (perSite.get(site) || 0) + 1); peakSite.set(site, Math.max(peakSite.get(site) || 0, perSite.get(site)));
+        await new Promise((r) => setTimeout(r, 15));
+        open.set(host, open.get(host) - 1); perSite.set(site, perSite.get(site) - 1);
+        return answer ? answer(i) : real(i);
+      });
+    };
+    for (const slug of Object.keys(HOST_OF)) paced(slug);
+    const six = Array.from({ length: 6 }, (_, k) => ({ lat: 10 + k, lon: 20 + k }));
+    const w6 = await tool("weather-risk-brief").handler({ sites: six });
+    ok(w6.sites === 6 && reads === 6 * BUNDLE_LEGS["weather-risk-brief"].length, `weather: six sites make five reads each, none repeated (${reads} reads)`);
+    ok([...peak.values()].every((n) => n <= WEATHER_CONCURRENCY) && peak.get("forecast") >= 2, `weather: no upstream host holds more than ${WEATHER_CONCURRENCY} of the call's reads at once (peaks ${[...peak].map(([h, n]) => `${h} ${n}`).join(", ")})`);
+    ok([...peakSite.values()].every((n) => n === 1), "weather: a site's two forecast-host reads are never in flight together");
+  }
   // a source failure on one site fails the call (never a partial 200)
   stub("weather-air-quality", async (i) => { if (i.lat === 3) throw err(502, "upstream broke"); return { airQuality: { usAqi: 30 } }; });
   await throwsStatus(() => tool("weather-risk-brief").handler({ sites: [{ lat: 1, lon: 2 }, { lat: 3, lon: 4 }] }), 502, /1 of 2 unit.*weather-air-quality.*Nothing was charged/, "weather: one site's source failure answers 502, uncharged, naming the leg");
@@ -180,6 +209,21 @@ try {
   const k = await tool("token-diligence").handler({ coins: ["a", "b", "a"] });
   ok(k.coins === 2 && k.comparison.byMarketCap.length === 2 && k.pricing.units === 2, "tokens: a complete answer, duplicates read once and priced once");
   restore();
+
+  // A leg the source rate-limits on every unit: the answer names the leg and
+  // carries the leg's own message whole, which is what a sweep reads to hold
+  // the failure against the runner's direct read (scripts/lib/upstream-outage.js).
+  const limited = "The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at api.example.org; retry later";
+  const inputs = { "weather-risk-brief": { sites: [{ name: "Chicago, IL", lat: 1, lon: 2 }, { lat: 3, lon: 4 }] }, "filings-brief": { tickers: ["MSFT", "AAPL"] }, "token-diligence": { coins: ["a", "b"] } };
+  for (const t of BUNDLE_TOOLS) {
+    for (const leg of BUNDLE_LEGS[t.slug]) stub(leg, async () => { throw err(503, limited, { noRetry: true, retryAfter: 60 }); });
+    let thrown = null;
+    try { await t.handler(inputs[t.slug]); } catch (e) { thrown = e; }
+    const inner = bundleLegAnswer(thrown?.statusCode, { error: thrown?.message }, BUNDLE_LEGS[t.slug]);
+    ok(thrown?.statusCode === 503 && BUNDLE_LEGS[t.slug].includes(inner?.leg) && inner.body.error === limited && accessRefusalStatus(inner.status, inner.body) === 429,
+      `${t.slug}: a rate-limited leg answers 503 naming the leg (${inner?.leg}) with its message whole, read back as the leg's 429`);
+    restore();
+  }
 } finally { restore(); }
 
 console.log(`\n${pass} passed, ${failed} failed`);

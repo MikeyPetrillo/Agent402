@@ -128,8 +128,11 @@ const RISK_RULES = Object.freeze({
 export const WEATHER_RISK_WEIGHTS = Object.freeze({ frost: 15, heat: 20, highGusts: 25, intenseRain: 15, snow: 15, heavyRainLikely: 15, poorAir: 10 });
 const POOR_AIR_AQI = 100;
 // Sites read at once: each runs five reads, and the keyless upstream refuses
-// bursts, so a site waits its turn rather than draw a 429 for the call.
-const WEATHER_CONCURRENCY = 3;
+// bursts, so a site waits its turn rather than draw a 429 for the call. A
+// site's reads go out in two steps, each holding one read per upstream host
+// (the two forecast-host reads are never in flight together), so no host has
+// more than WEATHER_CONCURRENCY of this call's reads open at once.
+export const WEATHER_CONCURRENCY = 3;
 const HEAVY_RAIN_LIKELY = 0.5;
 
 const numIn = (v, name, min, max) => {
@@ -220,15 +223,18 @@ async function weatherRiskBrief(input, ctx) {
     // One place lookup per site; every leg then reads the same coordinates.
     const loc = await resolveLocation(site.place ? { place: site.place } : { lat: site.lat, lon: site.lon });
     const at = { lat: loc.lat, lon: loc.lon };
-    const [daily, thresholds, air] = await Promise.all([
+    // Step one: the daily forecast (forecast host) beside air quality (its own host).
+    const [daily, air] = await Promise.all([
       runLeg("weather-daily", { ...at, days: 7, units }, ctx),
-      runLeg("weather-thresholds", { ...at, hours: 168, units, rules: rules.map(({ variable, op, value }) => ({ variable, op, value })) }, ctx),
       runLeg("weather-air-quality", at, ctx),
     ]);
     const dates = (daily?.days || []).map((d) => d.date).filter(Boolean);
     if (!dates.length) throw Object.assign(new Error("the forecast came back with no days"), { statusCode: 502, leg: "weather-daily" });
     const wettest = daily.days.reduce((w, d) => (Number(d.precipSum) > Number(w.precipSum) ? d : w), daily.days[0]);
-    const [history, probability] = await Promise.all([
+    // Step two: the hourly rules (forecast host, after the daily read has
+    // ended) beside the archive and the ensemble, one host each.
+    const [thresholds, history, probability] = await Promise.all([
+      runLeg("weather-thresholds", { ...at, hours: 168, units, rules: rules.map(({ variable, op, value }) => ({ variable, op, value })) }, ctx),
       runLeg("weather-history", { ...at, start: yearEarlier(dates[0]), end: yearEarlier(dates[dates.length - 1]), units }, ctx),
       runLeg("weather-probability", { ...at, date: wettest.date, variable: "precipitation_sum", op: ">=", value: HEAVY_RAIN_MM }, ctx),
     ]);
@@ -490,6 +496,8 @@ export const BUNDLE_TOOLS = [
     route: "POST /api/weather-risk-brief",
     name: "Weather risk brief (many sites)",
     slug: "weather-risk-brief",
+    // The hosts its legs read (scripts/lib/upstream-outage.js reads this list).
+    upstreamHosts: ["api.open-meteo.com", "archive-api.open-meteo.com", "air-quality-api.open-meteo.com", "ensemble-api.open-meteo.com", "geocoding-api.open-meteo.com"],
     category: "data",
     attribution: "open-meteo",
     ...quoted(WEATHER_RISK_LEGS, weatherUnitsCount, WEATHER_RISK_MAX_SITES),
@@ -532,6 +540,7 @@ export const BUNDLE_TOOLS = [
     route: "POST /api/filings-brief",
     name: "SEC filings brief (peer set)",
     slug: "filings-brief",
+    upstreamHosts: ["data.sec.gov", "www.sec.gov", "efts.sec.gov"],
     category: "data",
     ...quoted(FILINGS_BRIEF_LEGS, filingUnitsCount, FILINGS_BRIEF_MAX_COMPANIES),
     description:
@@ -566,6 +575,7 @@ export const BUNDLE_TOOLS = [
     route: "POST /api/token-diligence",
     name: "Token diligence (coin list)",
     slug: "token-diligence",
+    upstreamHosts: ["api.coingecko.com", "pro-api.coingecko.com"],
     category: "crypto",
     attribution: "coingecko",
     ...quoted(TOKEN_DILIGENCE_LEGS, coinUnitsCount, TOKEN_DILIGENCE_MAX_COINS),

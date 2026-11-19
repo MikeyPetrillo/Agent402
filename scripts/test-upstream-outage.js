@@ -14,7 +14,10 @@ import { fileURLToPath } from "node:url";
 import {
   isUpstreamErrorShape, isKeyedRequest, upstreamHostsForSlug, failuresBetween, requestMatchesDefinition,
   directReadFails, directReadStatus, upstreamOutageVerdict, accessRefusalStatus,
+  bundleLegAnswer, bundleOutageVerdict, declaresUpstreamHosts,
 } from "./lib/upstream-outage.js";
+import { BUNDLE_LEGS } from "../src/tools/bundle-kit.js";
+import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { isHost } from "./lib/url-host.js";
 import { runCheck, CHECKS } from "./live-public-data-check.js";
 
@@ -28,6 +31,7 @@ const down = await listen((req, res) => { res.writeHead(503); res.end("busy"); }
 const notFound = await listen((req, res) => { res.writeHead(404); res.end("no"); });
 const forbidden = await listen((req, res) => { res.writeHead(403); res.end("blocked"); });
 const unauth = await listen((req, res) => { res.writeHead(401); res.end("who"); });
+const limited = await listen((req, res) => { res.writeHead(429, { "retry-after": "60" }); res.end("slow down"); });
 const at = (s, p = "/alerts/active?area=CA") => `http://127.0.0.1:${s.address().port}${p}`;
 
 const work = mkdtempSync(join(tmpdir(), "upstream-outage-"));
@@ -67,7 +71,7 @@ try {
   // ---- a stub kit tree whose tool reads the loopback stub host
   const kitRoot = join(work, "root");
   mkdirSync(join(kitRoot, "src", "tools"), { recursive: true });
-  writeFileSync(join(kitRoot, "src", "tools", "stub-kit.js"), `export const T = [{ route: "GET /api/stub", slug: "stub-tool", handler: () => getJson("http://127.0.0.1:1/alerts") }, { route: "GET /api/other", slug: "other-tool", handler: () => getJson("https://other.example/x") }];\n`);
+  writeFileSync(join(kitRoot, "src", "tools", "stub-kit.js"), `export const T = [{ route: "GET /api/stub", slug: "stub-tool", handler: () => getJson("http://127.0.0.1:1/alerts") }, { route: "GET /api/other", slug: "other-tool", handler: () => getJson("https://other.example/x") }, { route: "POST /api/stub-bundle", slug: "stub-bundle", upstreamHosts: ["stub.example"], sources: ["https://cited.example/page"], handler: () => legs() }, made({ slug: "made-tool", upstreamHosts: ["made.example"] })];\n`);
   const log = join(work, "failures.jsonl");
   const row = (o) => writeFileSync(log, `${JSON.stringify({ t: 1000, host: "127.0.0.1", method: "GET", keyed: false, status: 503, ...o })}\n`, { flag: "a" });
 
@@ -118,6 +122,68 @@ try {
   ok(await verdictFor({}) === "fail", "(stub) a relayed 5xx with only a 403 recorded in the call excuses nothing");
   ok(await directReadStatus(at(forbidden)) === 403 && await directReadStatus("http://127.0.0.1:1/") === 0, "the runner's direct read status: 403 as answered, 0 for no answer");
 
+  // ---- a bundle product's failure is read as its leg's, against the hosts the bundle declares
+  {
+    const limitedWords = "The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at api.open-meteo.com; retry later";
+    const bundleBody = (leg, words, unit = "Chicago DC") => ({ error: `6 of 6 unit(s) could not be completed on the source's side (first: ${unit}, ${leg}: ${words}). Nothing was charged; retry later` });
+    const legs = ["stub-tool", "other-tool"];
+    const inner = bundleLegAnswer(503, bundleBody("stub-tool", limitedWords), legs);
+    ok(inner?.leg === "stub-tool" && inner.status === 503 && inner.body.error === limitedWords, "a bundle's source-side failure names its leg and carries the leg's own message");
+    ok(bundleLegAnswer(503, bundleBody("stub-tool", limitedWords, "41.88,-87.63"), legs)?.leg === "stub-tool" && bundleLegAnswer(503, bundleBody("stub-tool", limitedWords, "A, other-tool: B"), legs)?.leg === "other-tool", "the leg is the first one the answer names after the unit, whatever the unit's label holds");
+    ok(bundleLegAnswer(503, bundleBody("unknown-tool", limitedWords), legs) === null && bundleLegAnswer(503, bundleBody("stub-tool", limitedWords), []) === null && bundleLegAnswer(503, { error: limitedWords }, legs) === null, "a leg the bundle does not run, a tool with no legs, or an answer in other words is not a bundle failure");
+    ok(bundleLegAnswer(500, bundleBody("stub-tool", limitedWords), legs) === null && bundleLegAnswer(422, { error: "2 of 6 input(s) could not be read: X (bad). Fix or remove them and send again; nothing was charged" }, legs) === null, "a 500 in those words, or the bundle's caller-input 422, is not one");
+    const row0 = row;
+    // The bundle declares a named host; the stub rows carry it and a loopback URL to re-read.
+    const brow = (o) => row0({ host: "stub.example", ...o });
+    const bundleFor = (o = {}) => bundleOutageVerdict({ slug: "stub-bundle", legs, status: 503, body: bundleBody("stub-tool", limitedWords), t0: 900, t1: 1100, logPath: log, root: kitRoot, ...o });
+    rmSync(log, { force: true }); brow({ url: at(limited), status: 429 });
+    const excused = await bundleFor();
+    ok(excused?.verdict === "upstream" && excused.leg === "stub-tool", "(stub) a bundle whose leg was rate-limited (429 recorded in the call) while the runner's direct read gets 429 too: excused, leg named");
+    rmSync(log, { force: true }); brow({ url: at(up), status: 429 });
+    ok((await bundleFor())?.verdict === "fail", "(stub) a bundle whose leg was rate-limited while the host answers the runner's direct read 200: FAILS");
+    rmSync(log, { force: true }); brow({ url: at(down), status: 429 });
+    ok((await bundleFor())?.verdict === "fail", "(stub) a bundle's 429 while the runner's direct read gets a 503: FAILS");
+    rmSync(log, { force: true }); brow({ url: at(limited), status: 429, keyed: true });
+    ok((await bundleFor())?.verdict === "fail", "(stub) a bundle's 429 on a keyed request is never re-read: FAILS");
+    rmSync(log, { force: true }); brow({ url: at(limited), status: 429, host: "undeclared.example" });
+    ok((await bundleFor())?.verdict === "fail", "(stub) a 429 from a host the bundle does not declare excuses nothing");
+    rmSync(log, { force: true }); brow({ url: at(limited, "/wrong/place"), status: 429 });
+    ok((await bundleFor())?.verdict === "fail", "(stub) a 429 to a path the leg's definition never builds is ours: FAILS");
+    rmSync(log, { force: true }); brow({ url: at(down) });
+    ok((await bundleFor({ status: 502, body: bundleBody("stub-tool", relayed.error) }))?.verdict === "upstream", "(stub) a bundle whose leg relayed an upstream 5xx the runner is refused too: excused");
+    rmSync(log, { force: true }); brow({ url: at(up) });
+    ok((await bundleFor({ status: 502, body: bundleBody("stub-tool", relayed.error) }))?.verdict === "fail", "(stub) a bundle whose leg relayed a 5xx while the upstream answers the runner: FAILS");
+    rmSync(log, { force: true }); brow({ url: at(limited), status: 429 });
+    ok(await bundleFor({ body: bundleBody("stub-tool", "Upstream returned non-JSON"), status: 502 }) === null && await bundleFor({ body: { error: "Internal error" }, status: 500 }) === null, "(stub) a leg's own failure, or any other answer of the bundle, is not read as an outage (graded by the other rules)");
+    // The declared list is the whole answer: a host the definition only cites is not read.
+    ok([...upstreamHostsForSlug("stub-bundle", kitRoot)].join() === "stub.example" && declaresUpstreamHosts("stub-bundle", kitRoot) && !declaresUpstreamHosts("stub-tool", kitRoot), "a declared upstreamHosts list is the tool's hosts, without the hosts it cites");
+    ok([...upstreamHostsForSlug("made-tool", kitRoot)].join() === "made.example", "a definition built by a factory (no route literal) is found by its slug");
+
+    // The shipped tree: each bundle product is a network tool, declares the
+    // hosts its legs read, and every leg is a network tool too.
+    for (const [slug, own] of Object.entries(BUNDLE_LEGS)) {
+      ok(WALLET_ONLY_SLUGS.has(slug), `${slug} is classed as a network tool (WALLET_ONLY_SLUGS), so a sweep never grades it as pure computation`);
+      ok(declaresUpstreamHosts(slug), `${slug} declares the upstream hosts its legs read`);
+      ok(own.every((leg) => WALLET_ONLY_SLUGS.has(leg)), `${slug}'s legs are network tools`);
+    }
+    const hostsOf = (slug) => [...upstreamHostsForSlug(slug)];
+    ok(["api.open-meteo.com", "archive-api.open-meteo.com", "air-quality-api.open-meteo.com", "ensemble-api.open-meteo.com", "geocoding-api.open-meteo.com"].every((h) => hostsOf("weather-risk-brief").includes(h)), "weather-risk-brief declares every Open-Meteo host its legs read");
+    ok(hostsOf("filings-brief").includes("data.sec.gov") && hostsOf("filings-brief").includes("efts.sec.gov") && hostsOf("token-diligence").some((h) => h.endsWith("coingecko.com")), "filings-brief declares the SEC hosts and token-diligence the CoinGecko host");
+    for (const slug of ["bank-holidays", "school-holidays", "next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar"]) {
+      ok(WALLET_ONLY_SLUGS.has(slug) && declaresUpstreamHosts(slug) && hostsOf(slug).includes("nagerholidays.com") && !hostsOf(slug).includes("www.opm.gov"), `${slug} is a network tool and declares the holiday source's host, not the pages it cites`);
+    }
+    for (const slug of ["weather-thresholds", "weather-window", "weather-probability", "weather-market-brackets", "weather-market-board"]) {
+      ok(hostsOf(slug).some((h) => h.endsWith(".open-meteo.com")), `${slug} (reads through the weather kit's helper) names an Open-Meteo host`);
+    }
+    // The exact answer that failed a sweep: the forecast host rate-limited the runner.
+    const real = { error: "6 of 6 unit(s) could not be completed on the source's side (first: Chicago DC, weather-thresholds: The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at api.open-meteo.com; retry later). Nothing was charged; retry later" };
+    const realRow = { url: "https://api.open-meteo.com/v1/forecast?latitude=41.88&longitude=-87.63&hourly=temperature_2m&forecast_hours=168", host: "api.open-meteo.com", status: 429 };
+    const realFor = (got) => bundleOutageVerdict({ slug: "weather-risk-brief", legs: BUNDLE_LEGS["weather-risk-brief"], status: 503, body: real, t0: 900, t1: 1100, logPath: log, readStatus: async () => got });
+    rmSync(log, { force: true }); row(realRow);
+    ok((await realFor(429))?.verdict === "upstream", "weather-risk-brief's rate-limited leg is excused when the runner's direct read of the same request gets 429 too");
+    ok((await realFor(200))?.verdict === "fail", "weather-risk-brief's rate-limited leg FAILS when the forecast host answers the runner's direct read");
+  }
+
   ok(await directReadFails(at(down)) === true && await directReadFails(at(up)) === false && await directReadFails("http://127.0.0.1:1/") === true, "the runner's direct read: 503 and no answer fail, 200 answers");
 
   // ---- the preload records failed outbound requests, keyed ones without their URL
@@ -165,7 +231,7 @@ try {
   const sweep = readFileSync(join(ROOT, "scripts/test-non-metered-examples.js"), "utf8");
   ok(sweep.includes("upstreamOutageVerdict(") && sweep.includes("upstream-failure-log-preload.js"), "the strict sweep reads the outage verdict and boots its own server with the preload");
 } finally {
-  for (const s of [up, down, notFound, forbidden, unauth]) s.close();
+  for (const s of [limited, up, down, notFound, forbidden, unauth]) s.close();
   rmSync(work, { recursive: true, force: true });
 }
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");

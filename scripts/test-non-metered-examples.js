@@ -158,7 +158,32 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // (/api/reliability); re-exported here for the scripts that import it.
 import { METERED_SLUGS, meteredPackSlugs } from "../src/metered-slugs.js";
 import { isFredMaintenancePage, fredMaintenanceError } from "../src/tools/macro-kit.js";
-import { upstreamOutageVerdict } from "./lib/upstream-outage.js";
+import { upstreamOutageVerdict, bundleOutageVerdict } from "./lib/upstream-outage.js";
+import { BUNDLE_LEGS } from "../src/tools/bundle-kit.js";
+
+// WHICH TOOLS HAVE AN UPSTREAM. WALLET_ONLY_SLUGS (src/pow.js) is the egress
+// set: a tool outside it is graded below as pure computation, where a 429 or
+// a 5xx is ours and fails. test-free-tier-egress.js holds the set to that
+// meaning: it drives every tool outside it and fails one that reaches the
+// network on its own example.
+export function isPureCpuSlug(slug) { return !WALLET_ONLY_SLUGS.has(slug); }
+
+// A BUNDLE PRODUCT (src/tools/bundle-kit.js) runs other network tools in
+// process and answers a leg's source-side failure in its own words, naming
+// the leg. That answer is graded as the leg's, ahead of every softer rule
+// below: when the leg's message is the shared fetch helper's rate limit (429)
+// or upstream failure, it is excused only when a failed request to a host the
+// bundle declares was recorded during the call AND the runner's own direct
+// read of that request fails the same way; otherwise it fails. Resolves null
+// for any other answer, { skip } when excused, { fail } when not.
+export async function bundleFailureGrade(t, r, opts = {}) {
+  const legs = BUNDLE_LEGS[t.slug];
+  if (!legs) return null;
+  const v = await bundleOutageVerdict({ slug: t.slug, legs, status: r.status, body: r.body, t0: r.t0, t1: r.t1, ...opts });
+  if (!v) return null;
+  if (v.verdict === "upstream") return { skip: `${t.slug}: its leg ${v.leg} failed on the source's side and ${v.evidence} (upstream, not our defect)` };
+  return { fail: `${String(t.method).toUpperCase()} ${t.path} (${t.slug}, leg ${v.leg}) → ${r.status} ${errText(r.body, r.threw).slice(0, 200)} [not excused: ${v.reason}]` };
+}
 export { METERED_SLUGS };
 
 const BROWSER_SLUGS = new Set(["render", "screenshot", "page-speed", "html-frames"]);
@@ -705,6 +730,13 @@ function runControls() {
     "control: E2B code-run is excluded");
   ok(WALLET_ONLY_SLUGS.has("gov-data"),
     "control: gov-data is WALLET_ONLY (wallet-gated live) yet still in THIS suite's scope");
+  // A bundle product reads every upstream its legs read: it is never graded
+  // as pure computation, and neither is a leg.
+  for (const [slug, legs] of Object.entries(BUNDLE_LEGS)) {
+    ok(!isPureCpuSlug(slug) && legs.every((leg) => !isPureCpuSlug(leg)),
+      `control: ${slug} and its legs (${legs.join(", ")}) are network tools, never graded as pure-CPU`);
+  }
+  ok(isPureCpuSlug("hash") && isPureCpuSlug("xlsx-create"), "control: a tool with no upstream is still graded as pure-CPU");
 }
 
 
@@ -790,6 +822,46 @@ export async function runVerdictStubControls() {
       }
     }
   } finally { for (const s of [upstreamUp, upstreamDown, tool]) s.close(); }
+  await runBundleStubControls();
+}
+
+/** Stub controls for bundleFailureGrade: the exact answer a rate-limited
+ *  forecast host produced (2026-11-19, six of six sites), a recorded 429 to
+ *  that host, and a stub runner read that is refused too, or is answered. */
+export async function runBundleStubControls() {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "a402-bundle-grade-"));
+  const logPath = join(dir, "failures.jsonl");
+  const limitedWords = "The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at api.open-meteo.com; retry later";
+  const answer = (leg, words) => ({ status: 503, t0: 900, t1: 1100, threw: null, body: { error: `6 of 6 unit(s) could not be completed on the source's side (first: Chicago DC, ${leg}: ${words}). Nothing was charged; retry later` } });
+  const t = { slug: "weather-risk-brief", method: "post", path: "/api/weather-risk-brief" };
+  const record = (o) => writeFileSync(logPath, `${JSON.stringify({ t: 1000, host: "api.open-meteo.com", method: "GET", keyed: false, status: 429, url: "https://api.open-meteo.com/v1/forecast?latitude=41.88&longitude=-87.63&hourly=temperature_2m&forecast_hours=168", ...o })}\n`);
+  const runnerGets = (status) => ({ logPath, readStatus: async () => status, readFails: async () => status === 0 || status >= 500 || status === 429 });
+  try {
+    record({});
+    const refusedToo = await bundleFailureGrade(t, answer("weather-thresholds", limitedWords), runnerGets(429));
+    ok(Boolean(refusedToo?.skip) && /weather-thresholds/.test(refusedToo.skip), "control (stub): weather-risk-brief's leg was rate-limited (429) and the runner's direct read is refused 429 too: excused, leg named");
+    const answered = await bundleFailureGrade(t, answer("weather-thresholds", limitedWords), runnerGets(200));
+    ok(Boolean(answered?.fail) && /leg weather-thresholds/.test(answered.fail), "control (stub): weather-risk-brief's leg was rate-limited while the host answers the runner's direct read: it FAILS");
+    ok(Boolean((await bundleFailureGrade(t, answer("weather-thresholds", limitedWords), runnerGets(503)))?.fail), "control (stub): a 429 the runner is answered 503 for is not the same refusal: it FAILS");
+    record({ host: "elsewhere.example" });
+    ok(Boolean((await bundleFailureGrade(t, answer("weather-thresholds", limitedWords), runnerGets(429)))?.fail), "control (stub): a 429 from a host the bundle does not declare excuses nothing");
+    record({ keyed: true, url: undefined });
+    ok(Boolean((await bundleFailureGrade(t, answer("weather-thresholds", limitedWords), runnerGets(429)))?.fail), "control (stub): a keyed request is never re-read and excuses nothing");
+    rmSync(logPath, { force: true });
+    ok(Boolean((await bundleFailureGrade(t, answer("weather-thresholds", limitedWords), runnerGets(429)))?.fail), "control (stub): no refused request recorded during the call excuses nothing");
+    record({});
+    ok(await bundleFailureGrade(t, answer("weather-thresholds", "Open-Meteo returned no hourly data"), runnerGets(429)) === null
+      && await bundleFailureGrade(t, { status: 500, body: { error: "Internal error" }, t0: 900, t1: 1100 }, runnerGets(429)) === null,
+      "control (stub): a leg's own failure and the bundle's own 500 are not read as an outage (they fail by the rules below)");
+    ok(await bundleFailureGrade({ slug: "weather-daily", method: "get", path: "/api/weather-daily" }, answer("weather-thresholds", limitedWords), runnerGets(429)) === null,
+      "control (stub): a tool that is not a bundle product is never graded by the bundle rule");
+    record({ status: 503, url: "https://archive-api.open-meteo.com/v1/archive?latitude=41.88&longitude=-87.63", host: "archive-api.open-meteo.com" });
+    const relayed = { ...answer("weather-history", "Source URL's host returned HTTP 503 - upstream issue, try again later"), status: 502 };
+    ok(Boolean((await bundleFailureGrade(t, relayed, runnerGets(503)))?.skip) && Boolean((await bundleFailureGrade(t, relayed, runnerGets(200)))?.fail),
+      "control (stub): a leg's relayed upstream 5xx is excused only when the runner's direct read fails too");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
 async function main() {
@@ -901,8 +973,21 @@ async function main() {
     // test-all.js (2026-08-25) that file graded these routes strictly; this
     // keeps that grade now that it no longer drives them. WALLET_ONLY_SLUGS is
     // the egress set, CI-proven by test-free-tier-egress.js.
-    if (!WALLET_ONLY_SLUGS.has(t.slug)) {
+    if (isPureCpuSlug(t.slug)) {
       liveFails.push(`${t.method.toUpperCase()} ${t.path} (${t.slug}, pure-CPU) → ${r.status || "threw"} ${errText(r.body, r.threw).slice(0, 160)}`);
+      return;
+    }
+
+    // A bundle's leg failing on the source's side: read against the runner
+    // before the rate-limit skip below, which asks the runner nothing.
+    const bundle = await bundleFailureGrade(t, r);
+    if (bundle?.skip) {
+      skippedRunnerUnreachable++;
+      console.log(`\nskip - ${bundle.skip}`);
+      return;
+    }
+    if (bundle?.fail) {
+      liveFails.push(bundle.fail);
       return;
     }
 

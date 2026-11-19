@@ -30,6 +30,8 @@ import { readFileSync, existsSync, unlinkSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { WALLET_ONLY_SLUGS } from "../src/pow.js";
+import { METERED_SLUGS } from "../src/metered-slugs.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.EGRESS_TEST_PORT) || 3231;
@@ -124,6 +126,34 @@ try {
   }
   ok(records.length === 0,
     `no compute-payable tool reached the network or spawned a process (${records.length} egress record(s) across ${byReq.size} request(s))`);
+
+  // WALLET_ONLY_SLUGS IS THE EGRESS SET, and the strict example sweep
+  // (test-non-metered-examples.js) grades by it: a tool outside the set is
+  // graded as pure computation, with no excuse for an upstream's refusal. A
+  // tool that is wallet-only by default (on neither list) is therefore driven
+  // here too, and one that reaches the network on its own example fails until
+  // it is listed. Metered slugs are never called (no upstream spend).
+  if (existsSync(LOG)) unlinkSync(LOG);
+  const unlisted = (pricing.endpoints || []).filter((e) => !e.computePayable && !WALLET_ONLY_SLUGS.has(e.slug) && !METERED_SLUGS.has(e.slug));
+  const unlistedPaths = new Map(unlisted.map((e) => [e.path, e.slug]));
+  for (const e of unlisted) {
+    const { body, query } = exampleFor(e.path, e.method);
+    const url = `${B}${e.path}${query ? `?${query}` : ""}`;
+    try {
+      if (e.method === "GET") await fetch(url, { signal: AbortSignal.timeout(30_000) });
+      else await fetch(url, { method: e.method, headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}), signal: AbortSignal.timeout(30_000) });
+    } catch { /* an unanswered call still leaves its egress in the log */ }
+  }
+  await sleep(1200);
+  const leaks = new Map();
+  for (const r of readLog()) {
+    const path = String(r.req || "").replace(/^[A-Z]+ /, "").split("?")[0];
+    const slug = unlistedPaths.get(path) || path;
+    leaks.set(slug, [...(leaks.get(slug) || []), r]);
+  }
+  for (const [slug, hits] of leaks) console.error(`  EGRESS from ${slug} (not in WALLET_ONLY_SLUGS): ${hits.slice(0, 3).map((h) => `${h.kind} -> ${h.target}`).join("; ")}${hits.length > 3 ? ` (+${hits.length - 3})` : ""}`);
+  ok(leaks.size === 0,
+    `every tool that reaches the network on its own example is in WALLET_ONLY_SLUGS (${unlisted.length} tool(s) on neither list driven: ${unlisted.map((e) => e.slug).join(", ") || "none"}; ${leaks.size} reached the network: ${[...leaks.keys()].join(", ") || "none"})`);
 } catch (e) {
   failed++;
   console.error(`FAIL - ${String(e?.message || e).slice(0, 400)}`);
