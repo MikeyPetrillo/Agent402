@@ -71,7 +71,7 @@ export function sdkPlaygroundPage(baseUrl) {
   .sp-sub{color:var(--muted);margin:0 0 1.5rem;font-size:var(--fs-base)}
   .sp-sub a{color:var(--accent)}
   .sp-examples{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem}
-  .sp-example{background:transparent;border:1px solid var(--hairline);color:var(--faint);padding:.4rem .85rem;font-family:var(--font-mono);font-size:var(--fs-sm);cursor:pointer;transition:.15s}
+  .sp-example{background:transparent;border:1px solid var(--hairline);color:var(--faint);padding:.4rem .85rem;font-family:var(--font-mono);font-size:var(--fs-sm);cursor:pointer;transition:var(--dur-fast)}
   .sp-example:hover{border-color:var(--accent);color:var(--ink)}
   .sp-example.active{background:var(--panel);color:var(--on-panel);border-color:var(--ink);font-weight:700}
   .sp-editor-wrap{display:flex;gap:1rem;margin-bottom:1rem}
@@ -89,7 +89,7 @@ export function sdkPlaygroundPage(baseUrl) {
   .sp-run:hover{opacity:.85}
   .sp-run:disabled{opacity:.5;cursor:not-allowed}
   .sp-status{color:var(--faint);font-size:var(--fs-md);font-family:var(--font-mono)}
-  .sp-status .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--faint);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
+  .sp-status .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--faint);border-top-color:var(--accent);border-radius:50%;animation:spin var(--dur-spin) linear infinite;vertical-align:middle;margin-right:6px}
   @keyframes spin{to{transform:rotate(360deg)}}
   .sp-note{background:var(--card);border:1px solid var(--hairline);padding:1rem 1.25rem;color:var(--muted);font-size:var(--fs-md);margin-top:1.5rem}
   .sp-note a{color:var(--accent)}

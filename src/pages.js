@@ -21,7 +21,8 @@ import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
-import { RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly } from "./rails.js";
+import { RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly, x402RailsFor } from "./rails.js";
+import { paidCallFigure, paidCallScript, PAID_CALL_CSS } from "./paid-call-figure.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
 import { JOB_PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumUsdByNetwork as premiumUsdByNetworkName } from "./public-networks.js";
@@ -540,6 +541,9 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   ${codeBlock(curlExample(baseUrl, tool), { name: "the request" })}
   <p class="tp-sub">Without payment this returns <code>HTTP 402 Payment Required</code> with the exact price for ${e(tool.slug)}; any x402 v2${orMpp} client pays it and retries.</p>
 
+  <h2 class="tp-h2">Watch a call get paid</h2>
+  ${paidCallFigure({ method: tool.method, path: tool.path, price: pw.short, chains: x402RailsFor(tool).length === 1 ? railsOrFor(tool) : x402RailsFor(tool).length })}
+
   <h2 class="tp-h2">Example response</h2>
   ${binaryTypes
     ? `<p class="tp-sub">A 200 carries ${binaryPhrase}: the file itself.</p>`
@@ -584,7 +588,8 @@ await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}
   ${relatedCards ? `<h2 class="tp-h2">Related tools</h2>
   <div class="tp-grid">${relatedCards}</div>` : ""}
 </div>
-${ledgerFooterCompact()}`;
+${ledgerFooterCompact()}
+${paidCallScript()}`;
 
   return ledgerShell({
     title,
@@ -594,7 +599,7 @@ ${ledgerFooterCompact()}`;
     activePath: "/tools",
     ogImage: `${baseUrl}/tools/${tool.slug}/card.png`,
     jsonLd,
-    extraCss: TOOL_PAGE_CSS,
+    extraCss: TOOL_PAGE_CSS + PAID_CALL_CSS,
     body,
     mpp,
   });
@@ -734,7 +739,7 @@ export function faqPage(baseUrl) {
   .fq-group h2 { padding-bottom:6px; border-bottom:1px solid var(--hairline); }
   .fq-item > summary { list-style:none; cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:20px 0; font-family:var(--font-body); font-weight:800; font-size:var(--fs-lg); line-height:1.3; color:var(--ink); }
   .fq-item > summary::-webkit-details-marker { display:none; }
-  .fq-mark { font-family:var(--font-mono); font-weight:400; font-size:var(--fs-xl); line-height:1; color:var(--accent); flex:none; transition:transform .15s ease; display:inline-block; }
+  .fq-mark { font-family:var(--font-mono); font-weight:400; font-size:var(--fs-xl); line-height:1; color:var(--accent); flex:none; transition:transform var(--dur-fast) ease; display:inline-block; }
   .fq-item[open] .fq-mark { transform:rotate(45deg); }
   @media (prefers-reduced-motion:reduce){ .fq-mark { transition:none; } }
   .fq-item p { color:var(--muted); font-size:var(--fs-base); line-height:1.7; margin:0; padding:0 0 22px; max-width:760px; }

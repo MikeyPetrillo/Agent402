@@ -25,6 +25,9 @@ TARGET_URL=http://localhost:3000 t node scripts/test-tool-categories.js
 # @step 2: Offline suites (17 scripts, one process each)
 # Static page renders smoke (every HTML surface returns 200 with the right page-specific title)
 t node scripts/test-static-pages.js
+# Page weight: each site page's first-visit transfer inside its budget, the font set inside one budget, and no committed media over its kind's budget or 2 MB (boots a real server, offline)
+t node scripts/test-page-weight.js
+t node scripts/test-page-weight.js --self-test
 # Integration + learn pages and /llms-full.txt: 200, unique title, one H1, canonical, BreadcrumbList, in both sitemaps; llms-full lists every catalog route (boots a real server, offline)
 t node scripts/test-integration-learn-pages.js
 # Developer-docs code samples match the packages they import

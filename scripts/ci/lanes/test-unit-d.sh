@@ -57,6 +57,10 @@ t node scripts/test-farcaster-social-kit.js
 t node scripts/test-algorand-page.js
 # Homepage tests (offline, fixture snapshot)
 t node scripts/test-home-page.js
+# Paid-call figure on home, /101 and tool pages: steps, receipt switch, no cost or revenue figure, still under reduced motion (offline)
+t node scripts/test-paid-call-figure.js
+# Charts on /scorecard, /proof and /leaderboard: drawn only from published data, no dollar figure on the scorecard or proof charts, top ten without our own wallet (offline)
+t node scripts/test-svg-charts.js
 # Header: Pricing, Company, Status as plain links, one primary action, every earlier destination still linked (offline)
 t node scripts/test-nav-primary.js
 t node scripts/test-badge-contrast.js
@@ -256,6 +260,9 @@ t node scripts/test-scan-cap.js
 # Market terminal contract (palette resolves + clears WCAG AA in BOTH themes,
 # no literal hex, escaping, and a capped scan still reads as a floor — offline)
 t node scripts/test-terminal-tokens.js
+# Motion tokens (DESIGN.md "Motion"): token rules, reduced motion at 0ms, no literal time in any page module or browser script (offline)
+t node scripts/test-motion-tokens.js
+t node scripts/test-motion-tokens.js --self-test
 # Revenue buyers trend (rolling 14d recent-vs-prior comparison — offline)
 t node scripts/test-buyers-trend.js
 # Per-chain price premiums (fee-charging rails priced in; dormant default byte-identical — offline)

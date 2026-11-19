@@ -24,6 +24,7 @@
 import { explorerTxUrl, chainOf, lookupKeys } from "./refund-lookup.js";
 import { partialFields } from "./partial-answer.js";
 import { ledgerShell, ledgerFooterCompact, esc, fmtNum, breadcrumbTrail } from "./ledger-chrome.js";
+import { columnChart, CHART_CSS } from "./svg-charts.js";
 
 export const SCORECARD_MONTHS = 7;
 export const SCORECARD_MIN_GROUP = 3;
@@ -223,6 +224,22 @@ function monthDetailHtml(m) {
   </div>`;
 }
 
+/** The months as columns, oldest first: returning wallets under new ones. A
+ *  month published as "<3" (or with nothing paid) draws no bar. */
+export function scorecardChartHtml(months = []) {
+  const short = (m) => new Date(`${m}-01T00:00:00Z`).toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+  return columnChart({
+    label: "Outside paying wallets per month, returning and new",
+    columns: months.map((m) => {
+      const w = typeof m.wallets === "number" ? m.wallets : null;
+      const r = typeof m.returningWallets === "number" ? Math.min(m.returningWallets, w ?? 0) : null;
+      const parts = w == null || m.withheld ? [] : r == null ? [{ value: w, tone: "b" }] : [{ value: r, tone: "a" }, { value: w - r, tone: "b" }];
+      return { label: short(m.month), parts, valueText: w == null ? String(m.wallets ?? "") : fmtNum(w) };
+    }),
+    legend: [{ tone: "a", label: "returning" }, { tone: "b", label: "new" }],
+  });
+}
+
 export function scorecardPage(baseUrl, body) {
   const canonical = `${baseUrl}/scorecard`;
   const title = "Buyer scorecard: paying wallets by month";
@@ -239,6 +256,7 @@ export function scorecardPage(baseUrl, body) {
   </div>
 </header>
 <section style="max-width:1180px;margin:0 auto;padding:40px 30px 0;">
+  ${scorecardChartHtml(body?.months || [])}
   <div style="overflow-x:auto;">
     <table style="width:100%;border-collapse:collapse;font-size:var(--fs-md);color:var(--ink);">
       <thead><tr style="font-family:var(--font-mono);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.12em;color:var(--faint);">
@@ -260,5 +278,5 @@ export function scorecardPage(baseUrl, body) {
   <p class="ml-measure" style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:10px 0 0;">Returning wallets also paid in an earlier month; 2+ days counts wallets with paid calls on two or more days of the month. Every settlement is checkable on chain: our receiving wallets and transactions by rail are on <a href="/revenue" style="color:var(--ink);">/revenue</a>, metered receipts on <a href="/proof" style="color:var(--ink);">/proof</a>.</p>
 </section>
 ${ledgerFooterCompact()}`;
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/scorecard", body: page, jsonLd: [crumbs.ld] });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/scorecard", body: page, jsonLd: [crumbs.ld], extraCss: CHART_CSS });
 }

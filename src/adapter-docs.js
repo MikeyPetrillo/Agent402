@@ -52,7 +52,7 @@ export function adapterDocsIndex(baseUrl) {
   const extraCss = `
   .ml-ad-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:1.25rem;margin-bottom:3rem}
   @media(max-width:680px){.ml-ad-grid{grid-template-columns:1fr}}
-  .ml-ad-card{background:var(--card);border:1px solid var(--hairline);padding:1.5rem 1.6rem;text-decoration:none;color:var(--ink);transition:border-color .15s;display:block}
+  .ml-ad-card{background:var(--card);border:1px solid var(--hairline);padding:1.5rem 1.6rem;text-decoration:none;color:var(--ink);transition:border-color var(--dur-fast);display:block}
   .ml-ad-card:hover{border-color:var(--accent)}`;
 
   const crumbs = breadcrumbTrail(baseUrl, [["Home", "/"], ["Docs", "/docs"], ["Adapters", "/docs/adapters"]]);

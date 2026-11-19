@@ -234,6 +234,24 @@ html { overflow-x: clip; }
      primary (money) button alone; 50% only draws a dot. */
   --radius: 4px;
   --radius-pill: 999px;
+  /* Motion (DESIGN.md "Motion"): UI moves take 200 to 400 ms, an exit takes
+     70% of its entrance, and a staggered group of up to six starts inside
+     500 ms. The loops (a live dot, a spinner, a figure's beat) run at their
+     own steady pace. Under prefers-reduced-motion every one of these is 0ms,
+     so a page on the tokens goes still with no rule of its own. */
+  --dur-fast: 200ms;
+  --dur-base: 300ms;
+  --dur-slow: 400ms;
+  --dur-fast-exit: 140ms;
+  --dur-base-exit: 210ms;
+  --dur-slow-exit: 280ms;
+  --stagger: 60ms;
+  --dur-spin: 800ms;
+  --dur-pulse: 1800ms;
+  --dur-beat: 1000ms;
+  --ease-out: cubic-bezier(.22,.61,.36,1);
+  --ease-in: cubic-bezier(.55,0,1,.45);
+  --ease-in-out: cubic-bezier(.65,0,.35,1);
   --accent: #0F5E43;
   --accent-lit: #9EF0B0;
   --on-accent: #FFFFFF;
@@ -312,7 +330,11 @@ html { overflow-x: clip; }
   color-scheme: light;
 }
 
-body { transition: background-color .18s ease, color .18s ease; }
+body { transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease; }
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --dur-fast-exit: 0ms; --dur-base-exit: 0ms; --dur-slow-exit: 0ms; --stagger: 0ms; --dur-spin: 0ms; --dur-pulse: 0ms; --dur-beat: 0ms; }
+  html { scroll-behavior: auto !important; }
+}
 /* --- mobile hamburger menu (the hover nav dropdowns don't work on touch, and
    the inline links get squeezed to zero on a phone - so ≤880px collapses the
    whole nav into a tap menu) --- */
@@ -459,19 +481,19 @@ a { color: inherit; }
 .mlnav-faint { color: var(--faint); }
 .mlnav-row:hover { background: var(--card-zebra); }
 /* nowrap: a dropdown trigger and its caret are one unit; at 1180px with the CTA the row is tight and the caret used to wrap under the label. */
-.ml-nav-link { display: inline-block; min-height: 24px; white-space: nowrap; color: var(--muted); text-decoration: none; border-bottom: 1.5px solid transparent; padding-bottom: 2px; transition: color .15s ease, border-color .15s ease; }
+.ml-nav-link { display: inline-block; min-height: 24px; white-space: nowrap; color: var(--muted); text-decoration: none; border-bottom: 1.5px solid transparent; padding-bottom: 2px; transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease; }
 .ml-nav-link:hover { color: var(--ink); border-bottom-color: var(--dash); }
 .ml-nav-link-on { color: var(--ink); font-weight: 500; border-bottom-color: var(--ink); }
 .ml-nav-link-on:hover { border-bottom-color: var(--accent); }
 /* The Live link's dot: the accent, pulsing; still under reduced motion. */
 .ml-nav-live { display: inline-flex; align-items: center; gap: 6px; }
-.ml-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; animation: ml-pulse 2s ease-in-out infinite; }
+.ml-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; animation: ml-pulse var(--dur-pulse) ease-in-out infinite; }
 .ml-nav-glyph { display: inline-block; vertical-align: -2px; margin-right: 1px; opacity: .8; }
 .ml-nav-link-on .ml-nav-glyph, .ml-nav-link:hover .ml-nav-glyph { opacity: 1; }
-.mlr-row { transition: background-color .12s ease; }
+.mlr-row { transition: background-color var(--dur-fast) ease; }
 .mlr-row:hover { background: var(--card-zebra); }
-.ml-chip { transition: background-color .12s ease, color .12s ease, border-color .12s ease; }
-.ml-faq-mark { transition: transform .15s ease; display: inline-block; }
+.ml-chip { transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease, border-color var(--dur-fast) ease; }
+.ml-faq-mark { transition: transform var(--dur-fast) ease; display: inline-block; }
 @media (max-width: 600px) { .mlnav-g > .mlnav-dd { display: none !important; } }
 
 /* --- keyframes --- */
@@ -549,15 +571,14 @@ a { color: inherit; }
 @keyframes ml-rise { to { opacity: 1; transform: none; } }
 /* Starts at 1% rather than 0: a fully transparent element is not a paint, so the
    largest-paint measure would wait on the animation (and on a busy main thread). */
-.ml-stagger > * { opacity: .01; transform: translateY(8px); animation: ml-rise .6s ease forwards; }
-.ml-stagger > *:nth-child(1) { animation-delay: .02s; }
-.ml-stagger > *:nth-child(2) { animation-delay: .10s; }
-.ml-stagger > *:nth-child(3) { animation-delay: .18s; }
-.ml-stagger > *:nth-child(4) { animation-delay: .26s; }
-.ml-stagger > *:nth-child(5) { animation-delay: .34s; }
-.ml-stagger > *:nth-child(6) { animation-delay: .42s; }
+.ml-stagger > * { opacity: .01; transform: translateY(8px); animation: ml-rise var(--dur-slow) var(--ease-out) forwards; }
+.ml-stagger > *:nth-child(2) { animation-delay: calc(var(--stagger) * 1); }
+.ml-stagger > *:nth-child(3) { animation-delay: calc(var(--stagger) * 2); }
+.ml-stagger > *:nth-child(4) { animation-delay: calc(var(--stagger) * 3); }
+.ml-stagger > *:nth-child(5) { animation-delay: calc(var(--stagger) * 4); }
+.ml-stagger > *:nth-child(n+6) { animation-delay: calc(var(--stagger) * 5); }
 .ml-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
-.ml-cta { transition: transform .12s ease; }
+.ml-cta { transition: transform var(--dur-fast) ease; }
 .ml-cta:hover { transform: translateY(-2px); }
 .ml-spec-cell:last-child { border-right: none; margin-right: 0; }
 .ml-slip-cell:hover { background: var(--card); }
@@ -565,7 +586,7 @@ a { color: inherit; }
    applied by JS only (see a402InitReveal in ledgerShell's head script), never
    baked in here as a default-hidden state: a JS failure must leave the page
    fully visible, not blank. Class added by JS, transition lives in CSS. */
-.ml-reveal { opacity: .01; transform: translateY(18px); transition: opacity .75s cubic-bezier(.22,.61,.36,1), transform .75s cubic-bezier(.22,.61,.36,1); }
+.ml-reveal { opacity: .01; transform: translateY(18px); transition: opacity var(--dur-slow) var(--ease-out), transform var(--dur-slow) var(--ease-out); }
 .ml-reveal.ml-reveal-in { opacity: 1; transform: none; }
 /* A breadcrumb link is told apart from the plain crumbs by more than color
    (WCAG 1.4.1): an underline, whatever the page's inline style says. */
@@ -612,7 +633,7 @@ main:focus, main:focus-visible { outline: none !important; }
    faded out toward the bottom so the hero meets the page ground without an
    edge. Hidden until the script has drawn, so a browser without WebGL keeps
    the plain ground. */
-.hm-aura { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: 0; transition: opacity 1.2s ease; -webkit-mask-image: linear-gradient(to bottom, rgb(0 0 0) 45%, transparent 100%); mask-image: linear-gradient(to bottom, rgb(0 0 0) 45%, transparent 100%); }
+.hm-aura { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: 0; transition: opacity var(--dur-slow) ease; -webkit-mask-image: linear-gradient(to bottom, rgb(0 0 0) 45%, transparent 100%); mask-image: linear-gradient(to bottom, rgb(0 0 0) 45%, transparent 100%); }
 .hm-aura.is-on { opacity: .30; }
 :root[data-theme="dark"] .hm-aura.is-on { opacity: .42; }
 @media (prefers-reduced-motion: reduce) {
@@ -637,7 +658,7 @@ main:focus, main:focus-visible { outline: none !important; }
    money (buy, subscribe, add to your agent, list your API). Everything else is
    secondary: 4px, transparent, no color. On an obsidian panel, wrap the
    buttons in .on-panel (or add it to the button). */
-.btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; font-family:var(--font-body); font-weight:500; font-size:var(--fs-md); line-height:1.2; text-decoration:none; padding:11px 20px; border:1px solid transparent; cursor:pointer; white-space:nowrap; transition:transform .12s ease, border-color .15s ease; }
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; font-family:var(--font-body); font-weight:500; font-size:var(--fs-md); line-height:1.2; text-decoration:none; padding:11px 20px; border:1px solid transparent; cursor:pointer; white-space:nowrap; transition:transform var(--dur-fast) ease, border-color var(--dur-fast) ease; }
 .btn:hover { transform:translateY(-1px); }
 .btn:disabled { opacity:.5; cursor:default; transform:none; }
 .btn-sm { font-size:var(--fs-sm); padding:9px 14px; }

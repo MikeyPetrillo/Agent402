@@ -9,6 +9,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { standingBand } from "./standing.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
+import { barChart, CHART_CSS } from "./svg-charts.js";
 
 import { REPO_URL } from "./repo-link.js";
 const EXPLORER = {
@@ -63,12 +64,24 @@ function rowHtml(label, side, note) {
     <dt style="color:var(--muted);">quoted ceiling</dt><dd style="margin:0;color:var(--ink);font-family:var(--font-mono);">${esc(usd(l.quoteUsd))}</dd>
     <dt style="color:var(--muted);">settled</dt><dd style="margin:0;color:var(--ink);font-family:var(--font-mono);">${esc(usd(l.settledUsd))}${l.quoteUsd != null ? ` <span style="color:var(--muted);">(${esc(pct(l.settledUsd, l.quoteUsd))} of the ceiling)</span>` : ""}</dd>
     <dt style="color:var(--muted);">network / wire</dt><dd style="margin:0;color:var(--ink);font-family:var(--font-mono);">${esc(l.network || "n/a")} / ${esc(l.wire || l.rail || "n/a")}${l.settledOffChain ? ` <span style="color:var(--muted);">(settled off chain in a Circle Gateway batch; the id is Gateway's)</span>` : ""}</dd>
-    <dt style="color:var(--muted);">settle tx</dt><dd style="margin:0;font-family:var(--font-mono);font-size:var(--fs-sm);">${txCell}</dd>
+    <dt style="color:var(--muted);">settle tx</dt><dd style="margin:0;font-family:var(${l.tx ? "--font-mono" : "--font-body"});font-size:var(--fs-sm);">${txCell}</dd>
     <dt style="color:var(--muted);">when</dt><dd style="margin:0;color:var(--ink);font-family:var(--font-mono);">${esc(l.atPrecision === "hour" ? `${l.at.slice(0, 13).replace("T", " ")}:00` : l.at.slice(0, 16).replace("T", " "))} UTC${l.atPrecision === "hour" ? " (to the hour)" : ""}</dd>
   </dl>
   ${note ? `<p style="margin:14px 0 0;color:var(--muted);font-size:var(--fs-sm);line-height:1.5;">${esc(note)}</p>` : ""}
   <p style="margin:10px 0 0;color:var(--muted);font-size:var(--fs-sm);line-height:1.5;">Aggregate on this side of the ledger: ${side.count} settlement${side.count === 1 ? "" : "s"}, ${esc(usd(side.settledUsd))} settled${side.quotedUsd != null ? ` against ${esc(usd(side.quotedUsd))} quoted (${side.quotedCount} rows carry a quote)` : ""}.</p>
 </div>`;
+}
+
+/** Settled as a share of the quoted ceiling: the latest settlement and the
+ *  running total on each side, each bar against its own ceiling. */
+export function proofChartHtml(feed) {
+  const rows = [];
+  for (const [side, name] of [[feed?.external, "external"], [feed?.internal, "our canary"]]) {
+    const l = side?.latest;
+    if (l && Number(l.quoteUsd) > 0 && Number.isFinite(Number(l.settledUsd))) rows.push({ label: `Latest, ${name}`, value: Number(l.settledUsd), of: Number(l.quoteUsd), valueText: pct(Number(l.settledUsd), Number(l.quoteUsd)) });
+    if (side && Number(side.quotedUsd) > 0 && Number.isFinite(Number(side.settledUsd))) rows.push({ label: `All, ${name}`, value: Number(side.settledUsd), of: Number(side.quotedUsd), valueText: pct(Number(side.settledUsd), Number(side.quotedUsd)) });
+  }
+  return barChart({ label: "Settled amount as a share of the quoted ceiling", rows });
 }
 
 export function proofPage(baseUrl, feed, standing = null) {
@@ -89,12 +102,13 @@ export function proofPage(baseUrl, feed, standing = null) {
 </header>
 ${standingBand({ ...(standing || {}), eyebrow: "THE MARKET WE INDEX" })}
 <section style="max-width:1180px;margin:0 auto;padding:40px 30px 56px;display:grid;gap:18px;">
+  ${proofChartHtml(feed)}
   ${rowHtml("LATEST EXTERNAL SETTLEMENT (a buyer that is not us)", ext, ext.latest ? "" : "The metered route is new; this row fills in with the first outside buyer's settlement.")}
   ${rowHtml("LATEST INTERNAL SETTLEMENT (our own daily canary, paying with our own wallet)", int, "Internal by construction: our own test wallet buys this route every day to prove the settle-actual path, and the ledger files it as ours, never as revenue.")}
   <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:6px 0 0;">Nothing here identifies a buyer. The rest of the proof lives on <a href="/status" style="color:var(--ink);">/status</a> (uptime observed from outside production), <a href="/revenue" style="color:var(--ink);">/revenue</a> (transactions by rail and wire) and the <a href="${REPO_URL}" style="color:var(--ink);">source</a>.</p>
 </section>
 ${ledgerFooterCompact()}`;
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/proof", body, robots: undefined, jsonLd: [{ "@type": "BreadcrumbList", itemListElement: [
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/proof", body, extraCss: CHART_CSS, robots: undefined, jsonLd: [{ "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Why pay here", item: `${baseUrl}/docs#why` },
     { "@type": "ListItem", position: 3, name: "Receipts", item: canonical },

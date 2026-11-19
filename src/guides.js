@@ -2630,7 +2630,7 @@ const GUIDE_INDEX_CSS = `
 .gi-wrap h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;}
 .gi-desc{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
 .gi-list{display:flex;flex-direction:column;gap:20px;}
-.gi-card{display:block;background:var(--card);border:1px solid var(--hairline);padding:24px 26px;text-decoration:none;transition:border-color .2s;}
+.gi-card{display:block;background:var(--card);border:1px solid var(--hairline);padding:24px 26px;text-decoration:none;transition:border-color var(--dur-fast);}
 .gi-card:hover{border-color:var(--accent);}
 .gi-card h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-lg);line-height:1.15;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink);}
 .gi-card p{font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0;}
