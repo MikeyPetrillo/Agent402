@@ -6,6 +6,7 @@
 // hook and the exception hooks in server.js are wired (offline).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // A configured secret the scrubber must take out of any message.
 const SECRET = "sk-or-v1-" + "a1b2c3d4e5f6a7b8c9d0".repeat(3);
@@ -140,7 +141,7 @@ const keysOnlyFrom = (o, allowed) => Object.keys(o).every((k) => allowed.include
     const evs = ph._testEventsForTest().filter((e) => e.event.startsWith("$"));
     process.stdout.write(JSON.stringify(evs));
   `;
-  const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { cwd: new URL("..", import.meta.url).pathname, env: { ...process.env, POSTHOG_TEST_CAPTURE: "1", POSTHOG_API_KEY: "" }, encoding: "utf8", timeout: 60_000 });
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { cwd: fileURLToPath(new URL("..", import.meta.url)), env: { ...process.env, POSTHOG_TEST_CAPTURE: "1", POSTHOG_API_KEY: "" }, encoding: "utf8", timeout: 60_000 });
   let evs = [];
   try { evs = JSON.parse(r.stdout.split("\n").filter((l) => l.startsWith("[")).pop() || "[]"); } catch { evs = []; }
   const ai = evs.find((e) => e.event === "$ai_generation"), ex = evs.find((e) => e.event === "$exception");

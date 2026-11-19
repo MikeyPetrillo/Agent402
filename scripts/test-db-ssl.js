@@ -5,6 +5,7 @@
 //   node scripts/test-db-ssl.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { dbSsl } from "../src/db-ssl.js";
+import { fileURLToPath } from "node:url";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
@@ -31,7 +32,7 @@ ok(dbSsl("postgresql://u:p@localhost:5432/db?sslmode=disable") === false,
 {
   const { readdirSync, readFileSync, statSync } = await import("node:fs");
   const { join } = await import("node:path");
-  const root = new URL("../src/", import.meta.url).pathname;
+  const root = fileURLToPath(new URL("../src/", import.meta.url));
   const files = [];
   const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (/\.(?:c|m)?js$/.test(f)) files.push(p); } };
   walk(root);

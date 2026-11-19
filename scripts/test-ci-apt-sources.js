@@ -9,10 +9,11 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const HELPER = new URL("./ci-apt-install.sh", import.meta.url).pathname;
+const HELPER = fileURLToPath(new URL("./ci-apt-install.sh", import.meta.url));
 
 function run({ archiveListed }) {
   const root = mkdtempSync(join(tmpdir(), "a402-apt-"));

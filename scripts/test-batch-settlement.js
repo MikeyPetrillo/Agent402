@@ -16,6 +16,7 @@
 // gate refuses what it must.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
 import { x402ResourceServer } from "@x402/core/server";
 import { bootServer } from "./lib/boot-server.js";
 import { makeEscrowFacilitator, makeChannelBuyer, encodePayment, BASE, RECEIVER_AUTHORIZER } from "./lib/batch-channel-rig.js";
@@ -73,7 +74,7 @@ const PAY_TO = "0x000000000000000000000000000000000000dEaD";
 // table; no upstream is reached (fetch is stubbed).
 {
   process.env.UPSTREAM_COSTS_JSON = "";
-  process.env.UPSTREAM_COSTS_FILE = new URL("../docs/example-upstream-costs.json", import.meta.url).pathname;
+  process.env.UPSTREAM_COSTS_FILE = fileURLToPath(new URL("../docs/example-upstream-costs.json", import.meta.url));
   process.env.OPENAI_API_KEY = "test-key-not-real";
   const { EMBED_TOOLS } = await import("../src/tools/embed-kit.js");
   const { applyMeteredSettlement } = await import("../src/gateway-meter.js");

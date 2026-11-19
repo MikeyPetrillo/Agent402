@@ -6,6 +6,7 @@
 //
 //   node scripts/algorand-canary-classes.js rail-report.json
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
 export const CLASS_TEXT = {
   "rail-failure": "**rail failure**: we signed a valid AVM payment and still got a 402, so settlement was refused (facilitator, accept, validity window, or USDC opt-in).",
@@ -24,7 +25,7 @@ export function classesText(report) {
   return [lead, ...list.map((c) => `- ${CLASS_TEXT[c]}`)].join("\n");
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   let report = null;
   try { report = JSON.parse(readFileSync(process.argv[2] || "rail-report.json", "utf8")); } catch { /* unreadable: every class */ }
   console.log(classesText(report));
