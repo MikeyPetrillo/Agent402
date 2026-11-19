@@ -41,7 +41,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { sendEmail } from "./email.js";
 import { creditsTopupFields, creditsDailyMaxCents, creditsBalanceMaxCents, creditsTermsVersion, creditsSalesEnabled } from "./credits-sales.js";
 import { limiterKey } from "./rate-limit.js";
-import { chargeCancelledForClientGone, markSettleSent } from "./hangup-settlement.js";
+import { chargeCancelledForClientGone, clientGoneBeforeFirstByte, markSettleSent } from "./hangup-settlement.js";
 import { meteredUsdOf } from "./gateway-meter.js";
 import { envPositive } from "./env-num.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady, stateStatementOutsideTx, withLease } from "./state-db.js";
@@ -1582,6 +1582,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       };
       const priorEnd = res.end;
       let goneAfterHeaders = false;
+      // The settle-before-end debit's wait, and a close that landed in it.
+      let debitInFlight = false, goneDuringDebit = false;
       res.end = function creditsAwareEnd(...args) {
         // Debit first, then end: a settled 200 whose answer is still being
         // written, while signed receipts are served.
@@ -1595,6 +1597,18 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
             return priorEnd.apply(this, args);
           }
           const self = this;
+          // A buyer already gone with a granted forgiveness ticket is not
+          // debited: the hold is released and nothing is sent. Otherwise the
+          // debit leaves from here while the buyer is connected.
+          if (chargeCancelledForClientGone(req)) {
+            releaseHold();
+            return priorEnd.apply(this, args);
+          }
+          markSettleSent(req);
+          // A close during the wait below lands after the debit left: the
+          // hang-up hook books it as owed (creditsChargedOnClose), as on every
+          // rail whose settle call was in flight when the buyer left.
+          debitInFlight = true;
           let timer = null;
           const waitMs = Math.max(100, envPositive("CREDITS_DEBIT_WAIT_MS", 3000));
           markSettling(a.hash, a.holdId, chargeUsd, slug, via).catch(() => { /* the settle below retries */ });
@@ -1612,7 +1626,16 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
             }, () => {
               later(`debit of key ${a.keyId}`, () => settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId, via, debitId), (c) => { if (c) req.creditsCharged = c.chargedUsd; }, a.holdId, { persist: true });
             })
-            .finally(() => { clearTimeout(timer); try { priorEnd.apply(self, args); } catch (e) { log(`[credits] answer end failed: ${String(e?.message || e).slice(0, 120)}`); } });
+            .finally(() => {
+              clearTimeout(timer);
+              debitInFlight = false;
+              // The buyer left during the debit: the answer is not delivered
+              // and the debit stands, so the hang-up hook books what it took.
+              if (goneDuringDebit || clientGoneBeforeFirstByte(req)) {
+                req.creditsChargedOnClose = Number(req.creditsCharged) > 0 ? req.creditsCharged : (chargeUsd ?? microToUsd(a.heldMicro));
+              }
+              try { priorEnd.apply(self, args); } catch (e) { log(`[credits] answer end failed: ${String(e?.message || e).slice(0, 120)}`); }
+            });
           return this;
         }
         if (goneEarly) decideGone();
@@ -1624,6 +1647,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
         try { return priorEnd.apply(this, args); } finally { decideFinal(); }
       };
       res.on("close", () => {
+        if (debitInFlight && !res.headersSent) { goneDuringDebit = true; return; }
         if (done) return;
         if (res.headersSent) {
           if (res.writableEnded) { decideFinal(); return; }

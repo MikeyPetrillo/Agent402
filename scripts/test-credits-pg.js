@@ -16,6 +16,7 @@ import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-credits-pg" });
 const sdb = await import("../src/state-db.js");
 const { createCredits, hashKey, usdToMicro, emailKeyOf, ensureCreditsIndexes, CREDITS_INDEXES, CREDITS_LOOKUP_SQL } = await import("../src/credits.js");
+const { reserveHangupForgiveness, hangupForgiven } = await import("../src/hangup-forgiveness.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -135,6 +136,37 @@ try {
     await lockDone.catch(() => {});
     ok(await until(async () => (await B.balance(RKEY)).balanceUsd === Math.round((before - 0.002) * 1e6) / 1e6 && (await B.balance(RKEY)).heldUsd === 0, 5000), "pg receipts: the retried debit takes the hold once");
     delete process.env.CREDITS_DEBIT_WAIT_MS;
+    // A buyer who hangs up while the debit is in flight: the debit left while
+    // the buyer was connected, so it stands once and the hang-up hook is told
+    // what it took (creditsChargedOnClose), so the undelivered answer is
+    // booked as owed. Nothing is left held.
+    {
+      const b0 = (await B.balance(RKEY)).balanceUsd;
+      const g = A.gate(priceFor, { settleBeforeEnd: () => true });
+      const r3 = fakeRes(); const req3 = { method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${RKEY}` } };
+      let ended3 = false; r3.end = () => { ended3 = true; return r3; };
+      await g(req3, r3, () => {});
+      const lock3 = sdb.withStateTx(async (c) => { await c.query(`SELECT 1 FROM ${sdb.stateDbSchema()}.records WHERE collection = 'credits' AND id = $1 FOR UPDATE`, [`k_${RHASH}`]); await wait(500); });
+      await wait(30);
+      r3.statusCode = 200; r3.end("answer");
+      await wait(50); r3.emit("close");
+      await lock3.catch(() => {});
+      ok(await until(async () => ended3, 4000), "pg receipts hang-up: the answer still ends after the debit");
+      ok(req3.creditsChargedOnClose === 0.001, `pg receipts hang-up: a close during the debit wait is noted for the hang-up hook (${req3.creditsChargedOnClose})`);
+      ok(await until(async () => (await B.balance(RKEY)).balanceUsd === Math.round((b0 - 0.001) * 1e6) / 1e6 && (await B.balance(RKEY)).heldUsd === 0, 3000), "pg receipts hang-up: the debit is taken once and nothing stays held");
+      // A buyer already gone when the answer ends, holding a granted
+      // forgiveness ticket: the hold is released and nothing is debited.
+      const b1 = (await B.balance(RKEY)).balanceUsd;
+      const r4 = fakeRes(); const req4 = { method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${RKEY}` } };
+      let ended4 = false; r4.end = () => { ended4 = true; return r4; };
+      await g(req4, r4, () => {});
+      reserveHangupForgiveness(req4, { keys: ["credits-pg-test"], priceUsd: 0.001, slug: "whois" });
+      ok(hangupForgiven(req4), "pg receipts hang-up: the run holds a granted ticket");
+      req4.__a402ClientGoneAt = Date.now();
+      r4.statusCode = 200; r4.end("answer");
+      ok(ended4 && !req4.creditsDebitId && !req4.creditsChargedOnClose, "pg receipts hang-up: a forgiven buyer already gone is not debited");
+      ok(await until(async () => (await B.balance(RKEY)).balanceUsd === b1 && (await B.balance(RKEY)).heldUsd === 0, 3000), "pg receipts hang-up: the forgiven hold is released, the balance untouched");
+    }
     await sdb.stateQuery(`DELETE FROM ${sdb.stateDbSchema()}.records WHERE collection = 'credits' AND id = $1`, [`k_${RHASH}`]);
   }
 
