@@ -31,7 +31,19 @@ const networkNames = new Set(Object.keys(NETWORKS));
 const dedicated = [...payments.matchAll(/([A-Z0-9]+)_FACILITATOR_URL/g)]
   .map((m) => m[1].toLowerCase())
   .filter((n) => networkNames.has(n));
-const known = [...new Set(dedicated)];
+// A facilitator wired only through a per-request scope (wireSideFacilitator,
+// never addFacilitator) is not a routing client: the boot check never drops a
+// rail on its answer, so there is nothing for a restart to heal. Solana's
+// second facilitator (SOLANA_FACILITATOR_URL) is the one such list, asserted
+// below rather than trusted.
+const SIDE_ONLY = new Set(["solana"]);
+{
+  const at = payments.indexOf("facilitatorUrlList(process.env.SOLANA_FACILITATOR_URL)");
+  const block = at >= 0 ? payments.slice(at, payments.indexOf("let server = new x402ResourceServer", at)) : "";
+  ok(at >= 0 && /wireSideFacilitator\(label, client\)/.test(block) && !/addFacilitator\(/.test(block),
+    "SOLANA_FACILITATOR_URL clients are side-wired only (never a routing client), so solana needs no healer entry for them");
+}
+const known = [...new Set(dedicated)].filter((n) => !SIDE_ONLY.has(n));
 ok(known.length > 0, `found the dedicated-facilitator rails in payments.js (${known.join(", ")})`);
 
 for (const rail of known) {
