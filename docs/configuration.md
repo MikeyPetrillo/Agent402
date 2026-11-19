@@ -1305,7 +1305,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `TOOL_FREE_FAIL_RATE` | Tool free fail rate. |  | `src/tool-failure-monitor.js` |
 | `TOOL_OUTPUT_EXAMPLES_FILE` | Tool output examples file path. |  | `src/tool-output-examples.js` |
 | `TOOL_OUTPUT_EXAMPLES_TEST_BARE` | Tool output examples test bare. |  | `src/server.js` |
-| `TOOL_RELIABILITY_PUBLIC` | Per-tool reliability table on /api/reliability/tools; off withdraws it (the route answers available:false and /api/pricing drops its pointer). Unset = on. |  | `src/tool-reliability.js` |
+| `TOOL_RELIABILITY_PUBLIC` | Per-tool reliability table on /api/reliability/tools; off (or 0, false, no) withdraws it: the route answers available:false and every surface that points to it drops the pointer. Unset = on. |  | `src/tool-reliability.js` |
 
 ## TOP
 
@@ -1433,7 +1433,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `X402_BATCH_CLAIM_INTERVAL_SECONDS` | Interval between x402 payment channel claim passes, in seconds. |  | `src/batch-settlement.js` |
 | `X402_BATCH_IDLE_REFUND_SECONDS` | Idle time after which an x402 payment channel's balance is refunded, in seconds. |  | `src/batch-settlement.js` |
 | `X402_BATCH_REFUND_INTERVAL_SECONDS` | Interval between x402 payment channel refund passes, in seconds. |  | `src/batch-settlement.js` |
-| `X402_BATCH_SETTLEMENT_NETWORKS` | Networks offering x402 payment channels (comma list of CAIP-2 ids); unset turns them off. |  | `src/batch-settlement.js`, `src/payments.js` |
+| `X402_BATCH_SETTLEMENT_NETWORKS` | Networks offering x402 payment channels (comma list of CAIP-2 ids); unset, empty, 0, false, off or no turns them off, and an entry that is not a CAIP-2 id is ignored. |  | `src/batch-settlement.js` |
 | `X402_BATCH_SETTLEMENT_STORE` | Store for x402 payment channel state; memory names the single-process store. |  | `src/batch-settlement.js` |
 | `X402_BINARY_LISTINGS` | X402 binary listings. |  | `src/tool-media-type.js` |
 | `X402_ECONOMY_DB` | X402 economy database. |  | `src/x402-economy.js` |

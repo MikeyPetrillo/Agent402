@@ -32,17 +32,24 @@ export const BATCH_SCHEME = "batch-settlement";
 export const BATCH_WIRE = "x402-batch";
 const KEY_PREFIX = "a402-batch";
 
-/** The networks the operator asked for (CSV of CAIP-2 ids; unset = none). */
-export function batchNetworksWanted(env = process.env, evmCaip2 = []) {
-  const raw = String(env.X402_BATCH_SETTLEMENT_NETWORKS || "").trim();
-  if (!raw) return [];
-  const listed = raw.split(",").map((s) => s.trim()).filter(Boolean);
-  return listed.filter((c) => evmCaip2.includes(c));
+const CAIP2_ID = /^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$/;
+/** The CAIP-2 ids the switch lists, each once (CSV). An entry that is not a
+ *  CAIP-2 id (0, false, off, no, any other text) is not a network and is
+ *  dropped here, so unset, empty and such a word all name none, and nothing
+ *  downstream carries the variable's raw text. */
+export function batchNetworksListed(env = process.env) {
+  const raw = String(env.X402_BATCH_SETTLEMENT_NETWORKS ?? "").trim();
+  return [...new Set(raw.split(",").map((s) => s.trim()).filter((s) => CAIP2_ID.test(s)))];
 }
 
-/** True when the switch names anything at all. */
+/** The networks the operator asked for that the plain EVM offer carries. */
+export function batchNetworksWanted(env = process.env, evmCaip2 = []) {
+  return batchNetworksListed(env).filter((c) => evmCaip2.includes(c));
+}
+
+/** True when the switch names a network. */
 export function batchSettlementRequested(env = process.env) {
-  return String(env.X402_BATCH_SETTLEMENT_NETWORKS || "").trim() !== "";
+  return batchNetworksListed(env).length > 0;
 }
 
 /** "redis" (the default, needs REDIS_URL), "memory" (named only), or null

@@ -68,7 +68,7 @@ import { createRailRecheck, railRecheckSettings } from "./rail-recheck.js";
 import { bootReadSettings, readSupportedAtBoot } from "./boot-supported-read.js";
 import { svmPaymentAuthority, isSvmNetwork } from "./svm-payer.js";
 import { mcpX402Dispatch, mcpX402Knows } from "./mcp-x402-routes.js";
-import { batchSettlementRequested, batchNetworksWanted, batchStoreMode, makeBatchStores, selectBatchNetworks, newBatchScheme, setBatchOffer, startBatchManagers, batchIntervals } from "./batch-settlement.js";
+import { batchSettlementRequested, batchNetworksWanted, batchNetworksListed, batchStoreMode, makeBatchStores, selectBatchNetworks, newBatchScheme, setBatchOffer, startBatchManagers, batchIntervals } from "./batch-settlement.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -2484,8 +2484,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       batchNetworks = r.networks;
       refused = r.refused;
     }
-    const listed = String(process.env.X402_BATCH_SETTLEMENT_NETWORKS || "").split(",").map((x) => x.trim()).filter(Boolean);
-    for (const c of listed) if (!wanted.includes(c)) refused.push({ caip2: c, word: "not-in-offer", why: "not in the plain EVM offer" });
+    // A listed network the plain EVM offer does not carry is a line in the
+    // log, never a row on /api/rails: that surface lists only networks this
+    // server offers.
+    for (const c of batchNetworksListed(process.env)) if (!wanted.includes(c)) console.warn(`x402 batch-settlement: ${c} is not in the plain EVM offer; not offered.`);
     batchCaip2 = batchNetworks.map((n) => n.caip2);
     for (const { caip2, why } of refused) console.warn(`x402 batch-settlement: REFUSING ${caip2}, ${why}.`);
     setBatchOffer({ requested: true, networks: batchCaip2, refused, store: stores?.mode || null, stores });

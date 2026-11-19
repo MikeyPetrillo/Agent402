@@ -26,7 +26,7 @@ import { makeEscrowFacilitator, makeChannelBuyer, encodePayment, BASE, RECEIVER_
 import { newBatchScheme, makeBatchStores, selectBatchNetworks, runBatchPass, creditBatchChannel, batchNetworksWanted, batchStoreMode, batchAcceptEligible, isBatchSettlementRequest, batchChannelIdOf } from "../src/batch-settlement.js";
 import { isMeterable, mediaMeterEnabled } from "../src/gateway-meter.js";
 import { BATCH_ACCEPT_JSON_BYTES, acceptsForItem } from "../src/payments.js";
-import { setBatchOffer, creditHungUpBatchCall } from "../src/batch-settlement.js";
+import { setBatchOffer, creditHungUpBatchCall, batchNetworksListed, batchSettlementRequested } from "../src/batch-settlement.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -38,6 +38,12 @@ const PAY_TO = "0x000000000000000000000000000000000000dEaD";
 {
   ok(batchNetworksWanted({}, [BASE]).length === 0, "switch unset: no network wanted");
   ok(JSON.stringify(batchNetworksWanted({ X402_BATCH_SETTLEMENT_NETWORKS: `${BASE}, eip155:10` }, [BASE])) === JSON.stringify([BASE]), "switch keeps only networks in the plain EVM offer");
+  // The switch is a list of CAIP-2 ids: an off word or text that is no id names nothing.
+  const sw = (v) => ({ X402_BATCH_SETTLEMENT_NETWORKS: v });
+  ok(["", "  ", "0", "false", "off", "no", " OFF ", "No", "FALSE"].every((v) => !batchSettlementRequested(sw(v)) && batchNetworksListed(sw(v)).length === 0), "empty, 0, false, off and no (trimmed, any case) read as unset");
+  ok(["banana", "<script>alert(1)</script>", "true", "1", "base", "eip155:", ":8453", `eip155:${"9".repeat(40)}`, "eip155:84 53"].every((v) => !batchSettlementRequested(sw(v)) && batchNetworksListed(sw(v)).length === 0), "text that is not a CAIP-2 id names no network: the switch stays unset");
+  ok(JSON.stringify(batchNetworksListed(sw(` ${BASE} , banana,${BASE}, eip155:10, off `))) === JSON.stringify([BASE, "eip155:10"]) && batchSettlementRequested(sw(`junk,${BASE}`)), "a mixed list keeps its CAIP-2 ids, each once");
+  ok(JSON.stringify(batchNetworksWanted(sw(`banana, eip155:10, ${BASE}`), [BASE])) === JSON.stringify([BASE]), "and only those in the plain EVM offer are wanted");
   ok(batchStoreMode({}) === null, "no REDIS_URL and no named store: no durable store, nothing offered");
   ok(batchStoreMode({ REDIS_URL: "redis://x" }) === "redis", "REDIS_URL present: the shared Redis store");
   ok(batchStoreMode({ X402_BATCH_SETTLEMENT_STORE: "memory" }) === "memory", "memory store only when named");
@@ -372,7 +378,10 @@ const listedBuyer = makeChannelBuyer();
 const screenDir = mkdtempSync(join(tmpdir(), "bs-screen-"));
 writeFileSync(join(screenDir, "screen.json"), JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 1 }, addresses: [listedBuyer.address.toLowerCase()] }));
 const ON = { SANCTIONS_SCREEN_FILE: join(screenDir, "screen.json"), SANCTIONS_LIST_URL: "http://127.0.0.1:9/SDN.XML", AGENT402_OPERATOR_TOKEN: OP_TOKEN, X402_BATCH_SETTLEMENT_NETWORKS: BASE, X402_BATCH_SETTLEMENT_STORE: "memory", X402_BATCH_CLAIM_INTERVAL_SECONDS: "5", X402_BATCH_REFUND_INTERVAL_SECONDS: "5", X402_BATCH_IDLE_REFUND_SECONDS: "5" };
-const [off, on, noStore, floored] = await Promise.all([
+const JUNK = "banana<b>, false";
+const [junk, mixed, off, on, noStore, floored] = await Promise.all([
+  boot({ X402_BATCH_SETTLEMENT_NETWORKS: JUNK, X402_BATCH_SETTLEMENT_STORE: "memory" }, "bs-junk"),
+  boot({ X402_BATCH_SETTLEMENT_NETWORKS: `eip155:10, banana<b>, ${BASE}`, X402_BATCH_SETTLEMENT_STORE: "memory" }, "bs-mixed"),
   boot({}, "bs-off"),
   boot(ON, "bs-on"),
   boot({ X402_BATCH_SETTLEMENT_NETWORKS: BASE }, "bs-nostore"),
@@ -380,6 +389,18 @@ const [off, on, noStore, floored] = await Promise.all([
 ]);
 try {
   ok(off.up && on.up && noStore.up && floored.up, "four servers booted (switch off, on, on without a durable store, on over a floored network)");
+  {
+    // A value that names no network is the switch unset; a list is read for
+    // its CAIP-2 ids in the offer, and /api/rails never carries the rest.
+    ok(junk.up && mixed.up, "two more booted: a value that is no network, and a list mixing ids with other text");
+    const [rj, rm] = await Promise.all([fetch(`${junk.base}/api/rails`).then((r) => r.text()), fetch(`${mixed.base}/api/rails`).then((r) => r.text())]);
+    ok(!("batchSettlement" in JSON.parse(rj)) && !rj.includes("banana"), "a value that names no network: /api/rails carries no channel field and none of the value's text");
+    const bm = JSON.parse(rm).batchSettlement;
+    ok(bm && JSON.stringify(bm.networks) === JSON.stringify([BASE]) && !rm.includes("banana") && !rm.includes("eip155:10") && bm.dropped.every((d) => d.network === BASE), `a mixed list: the field lists only offered networks (${JSON.stringify(bm)})`);
+    ok(/eip155:10 is not in the plain EVM offer/.test(mixed.log()) && !mixed.log().includes("banana"), "a listed id outside the offer is a log line; text that is no id is in neither");
+    const aj = await acceptsOf(junk.base, "/api/uuid");
+    ok(aj.status === 402 && !aj.accepts.some((a) => a.scheme === "batch-settlement"), "and no channel accept is offered for it");
+  }
   const af = await acceptsOf(floored.base, "/api/uuid");
   ok(af.status === 402 && !af.accepts.some((a) => a.scheme === "batch-settlement") && /REFUSING eip155:8453, carries a price floor/.test(floored.log()), "a floored network is refused at boot with the reason");
   const a0 = await acceptsOf(off.base, "/api/uuid");
@@ -483,7 +504,7 @@ try {
   ok(fac.channels.get(id)?.balance === buyer.charged && fac.channels.get(id)?.totalClaimed === buyer.charged, "the escrow ends holding exactly what was charged, all of it claimed");
   ok(fac.calls.some((c) => c.op === "settle" && c.type === "settle"), "the claimed funds are settled to payTo");
 } finally {
-  await Promise.all([off, on, noStore, floored].map((s) => s.stop().catch(() => {})));
+  await Promise.all([junk, mixed, off, on, noStore, floored].map((s) => s.stop().catch(() => {})));
   facSrv.close();
   rmSync(screenDir, { recursive: true, force: true });
 }
