@@ -288,7 +288,7 @@ const gated = await envGatedSegments();
 // --- the wire, on a free boot ------------------------------------------------------
 const port = await getFreePort();
 const base = `http://127.0.0.1:${port}`;
-proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, FREE_MODE: "true", PORT: String(port), BASE_URL: "http://agent402.test", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" }, stdio: ["ignore", "ignore", "inherit"] });
+proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, FREE_MODE: "true", PORT: String(port), BASE_URL: "http://agent402.test", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", KALSHI_TOOLS: "" }, stdio: ["ignore", "ignore", "inherit"] });
 try {
   let up = false;
   for (let i = 0; i < 180 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
@@ -451,6 +451,19 @@ try {
       }
     }
     ok(STOCK_PACK_SLUGS.size > 0 && wrong.length === 0, `every gated stock route and pack answers 503 not-offered with no payment challenge (${wrong.join(", ") || `${STOCK_SLUGS.size} tools, ${STOCK_PACK_SLUGS.size} packs`})`);
+  }
+  // The same for a Kalshi route while KALSHI_TOOLS is off (this boot).
+  {
+    const { KALSHI_SLUGS } = await import("../src/kalshi-switch.js");
+    const wrong = [];
+    for (const path of [...KALSHI_SLUGS].map((s) => `/api/${s}`)) {
+      for (const method of ["GET", "POST"]) {
+        const r = await fetch(`${base}${path}`, { method, ...(method === "POST" ? { headers: { "content-type": "application/json" }, body: "{}" } : {}) });
+        const b = await r.json().catch(() => ({}));
+        if (!(r.status === 503 && b.error === "not-offered" && !r.headers.get("payment-required"))) wrong.push(`${method} ${path} ${r.status}`);
+      }
+    }
+    ok(KALSHI_SLUGS.size === 4 && wrong.length === 0, `every Kalshi route answers 503 not-offered with no payment challenge (${wrong.join(", ") || `${KALSHI_SLUGS.size} tools`})`);
   }
   // A converter call we can serve is untouched: it is served (free boot), never a 410.
   const served = await fetch(`${base}/api/convert-miles-to-kilometers?value=2`);

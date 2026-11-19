@@ -19,6 +19,8 @@ t node scripts/test-gateway-withdraw.js
 t node scripts/test-paid-phase-timing.js
 # Stock-data switch on real boots: off hides the tools and packs from every surface and their routes answer 503 with no payment challenge (paid boot, stub facilitator); on (stubbed upstream) restores them and their published examples answer - offline
 t node scripts/test-stock-switch.js
+# Kalshi switch: off hides the Kalshi tools from every surface, the kit reads no upstream and the routes answer 503 with no payment challenge (paid boot, stub facilitator); on lists them again and a call reaches the handler - offline
+t node scripts/test-kalshi-switch.js
 # A paid run that never gets paid meets a bound
 t node scripts/test-paytime-bounds.js
 # A wallet's runs in flight are covered by its balance together on every wire that settles after the handler, and the breaker's hard count holds for calls that arrive together (boots paid servers against chain-like stubs - offline)

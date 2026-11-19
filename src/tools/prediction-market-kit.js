@@ -18,6 +18,7 @@
 
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 import { upstreamErrorText } from "./redact.js";
+import { kalshiToolsEnabled, kalshiNotOffered } from "../kalshi-switch.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, so the one retry after a 429 or 5xx (its wait
@@ -65,6 +66,9 @@ function staleFields(meta) {
 }
 
 async function fetchJson(url, label, meta = null, step = "data") {
+  // KALSHI_TOOLS off (src/kalshi-switch.js): no read leaves this server, on
+  // any path that reaches a handler, and no cached copy is served.
+  if (!kalshiToolsEnabled()) throw kalshiNotOffered();
   const ctx = { label, step, timeoutMs: KALSHI_READ_MS, tag: "[prediction]" };
   const attempt = () => upstreamFetch(url, {
     headers: { accept: "application/json", "user-agent": "agent402/prediction-market-kit" },
@@ -674,6 +678,12 @@ export const PREDICTION_MARKET_TOOLS = [
     handler: kalshiWeatherIndex,
   },
 ];
+
+/** The kit as this server lists it: every tool with KALSHI_TOOLS=on, none
+ *  otherwise (src/kalshi-switch.js). */
+export function predictionMarketToolsEnabled(env = process.env) {
+  return kalshiToolsEnabled(env) ? PREDICTION_MARKET_TOOLS : [];
+}
 
 // Test-only exports
 export const __test = {

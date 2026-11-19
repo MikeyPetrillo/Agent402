@@ -681,7 +681,10 @@ import { PAGE_CHANGE_TOOLS } from "./tools/page-change-kit.js";
 import { EMAIL_GUARD_TOOLS } from "./tools/email-guard-kit.js";
 import { PRICE_FEED_TOOLS } from "./tools/price-feed-kit.js";
 import { DEX_TOOLS } from "./tools/dex-kit.js";
-import { PREDICTION_MARKET_TOOLS } from "./tools/prediction-market-kit.js";
+// Listed only with KALSHI_TOOLS=on (src/kalshi-switch.js).
+import { predictionMarketToolsEnabled } from "./tools/prediction-market-kit.js";
+import { KALSHI_SLUGS, kalshiToolsEnabled, kalshiNotOffered } from "./kalshi-switch.js";
+const PREDICTION_MARKET_TOOLS = predictionMarketToolsEnabled();
 import { MEV_AND_L2_TOOLS } from "./tools/mev-and-l2-kit.js";
 import { ONCHAIN_IDENTITY_TOOLS } from "./tools/onchain-identity-kit.js";
 import { NFT_MARKET_TOOLS } from "./tools/nft-market-kit.js";
@@ -4135,6 +4138,19 @@ if (!stockDataEnabled()) {
     if (!slug) return next();
     res.set("Cache-Control", "no-store");
     return res.status(503).json({ ok: false, error: "not-offered", slug, message: stockNotOffered().message, list: `${BASE_URL}/api/pricing` });
+  });
+}
+
+// With KALSHI_TOOLS off (src/kalshi-switch.js) the tools that read the Kalshi
+// API are not listed anywhere; a call to one of their routes answers the same
+// free 503 naming the slug, ahead of every payment gate.
+if (!kalshiToolsEnabled()) {
+  const notOffered = new Map([...KALSHI_SLUGS].map((slug) => [`/api/${slug}`, slug]));
+  app.use((req, res, next) => {
+    const slug = notOffered.get(String(req.path || "").toLowerCase().replace(/\/+$/, ""));
+    if (!slug) return next();
+    res.set("Cache-Control", "no-store");
+    return res.status(503).json({ ok: false, error: "not-offered", slug, message: kalshiNotOffered().message, list: `${BASE_URL}/api/pricing` });
   });
 }
 

@@ -67,6 +67,8 @@ export async function envGatedSegments() {
     import("../src/tools/market-tick-kit.js").then((m) => m.MARKET_TICK_TOOLS),
     // Listed only with an active stock provider (STOCK_DATA_PROVIDER and its key).
     import("../src/tools/finance-kit.js").then((m) => m.FINANCE_TOOLS),
+    // Listed only with KALSHI_TOOLS=on (src/kalshi-switch.js).
+    import("../src/tools/prediction-market-kit.js").then((m) => m.PREDICTION_MARKET_TOOLS),
     // Listed only when FLIGHT_SELLERS_JSON names sellers; built here with a
     // placeholder seller per kind just to read the route names.
     import("../src/tools/flights-kit.js").then((m) => m.buildFlightTools({

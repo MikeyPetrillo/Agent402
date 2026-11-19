@@ -50,6 +50,7 @@ import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/rugcheck-switch.js";
 import { MARKET_TICK_SLUG, marketTickEnabled } from "../src/market-tick-switch.js";
 import { STOCK_SLUGS, stockDataEnabled } from "../src/tools/stock-provider.js";
 import { STOCK_CORE_PACK_SLUGS } from "../src/skills.js";
+import { KALSHI_SLUGS, kalshiToolsEnabled } from "../src/kalshi-switch.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CORPUS_DIR = path.join(HERE, "corpus");
@@ -304,6 +305,12 @@ async function main() {
           // an active stock provider (src/tools/stock-provider.js).
           if ((STOCK_SLUGS.has(c.slug) || (c.slug.startsWith("skill-") && STOCK_CORE_PACK_SLUGS.has(c.slug.slice(6)))) && !stockDataEnabled()) {
             results.push({ ...c, kind: "skipped", note: "no stock provider is active on this boot (tool not listed)" });
+            counts.skipped++;
+            continue;
+          }
+          // The Kalshi tools are listed only with KALSHI_TOOLS=on (src/kalshi-switch.js).
+          if (KALSHI_SLUGS.has(c.slug) && !kalshiToolsEnabled()) {
+            results.push({ ...c, kind: "skipped", note: "KALSHI_TOOLS is off on this boot (tool not listed)" });
             counts.skipped++;
             continue;
           }

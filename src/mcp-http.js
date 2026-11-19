@@ -98,6 +98,7 @@ import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
 import { attributionOf, notCallersInput, faultAdvice } from "./tool-error-fields.js";
 import { redactSecrets } from "./tools/redact.js";
 import { STOCK_SLUGS, stockNotOffered } from "./tools/stock-provider.js";
+import { KALSHI_SLUGS, kalshiNotOffered } from "./kalshi-switch.js";
 import {
   FLAGSHIP_SLUGS,
   FLAGSHIP_MCP_NAMES,
@@ -1850,6 +1851,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           : (!entry && STOCK_SLUGS.has(resolvedSlug) ? resolvedSlug : null);
         if (unlistedStock) {
           return { content: [{ type: "text", text: `${stockNotOffered().message} (${unlistedStock})` }], isError: true };
+        }
+        // Same for a Kalshi tool while KALSHI_TOOLS is off (src/kalshi-switch.js).
+        const unlistedKalshi = name === "catalog.call" && !entry && KALSHI_SLUGS.has(resolvedSlug) ? resolvedSlug : null;
+        if (unlistedKalshi) {
+          return { content: [{ type: "text", text: `${kalshiNotOffered().message} (${unlistedKalshi})` }], isError: true };
         }
         if (name !== "catalog.call" && !isNamed) {
           return { content: [{ type: "text", text: `Unknown tool ${quotedEcho(rawName)}.` }], isError: true };
