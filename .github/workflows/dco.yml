@@ -32,22 +32,36 @@ permissions:
 
 jobs:
   dco:
+    # The job runs for every pull request so its check reports a result a
+    # required-check rule can read (a skipped job reports none). The owner's
+    # and bots' pull requests are exempt inside the job: the checks are skipped
+    # step by step and the job passes.
     if: >-
-      (github.event_name == 'pull_request' && github.event.pull_request.user.login != 'MikeyPetrillo' && github.event.pull_request.user.type != 'Bot') ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.issue.user.login != 'MikeyPetrillo' && github.event.issue.user.type != 'Bot')
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env:
+      SUBJECT_TO_CHECK: >-
+        ${{ (github.event_name == 'pull_request' && github.event.pull_request.user.login != 'MikeyPetrillo' && github.event.pull_request.user.type != 'Bot') ||
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.issue.user.login != 'MikeyPetrillo' && github.event.issue.user.type != 'Bot') }}
     steps:
+      - name: First-party or bot pull request (exempt)
+        if: env.SUBJECT_TO_CHECK != 'true'
+        run: echo "exempt - the owner's and bots' pull requests carry no sign-off or agreement check"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.SUBJECT_TO_CHECK == 'true'
         with:
           ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
           fetch-depth: 1
           persist-credentials: false
       - name: Check Signed-off-by on PR commits
+        if: env.SUBJECT_TO_CHECK == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ci/dco-check.sh
       - name: Check the contributor license agreement
+        if: env.SUBJECT_TO_CHECK == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ci/cla-check.sh
