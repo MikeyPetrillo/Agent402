@@ -21,6 +21,7 @@
 // Offline: nothing leaves the machine.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { bootServer } from "./lib/boot-server.js";
+import { isHost } from "./lib/url-host.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
@@ -70,7 +71,7 @@ try {
     `the http-check example reads this server's home page and reports the published URL (${hc.status} ${hcb.status} ${hcb.headers?.["content-type"]} ${hcb.finalUrl})`);
   const sm = await post("/api/site-map", { ...examples("/api/site-map"), limit: 5 });
   const smb = await sm.json().catch(() => ({}));
-  ok(sm.status === 200 && Array.isArray(smb.urls) && smb.urls.length > 0 && smb.urls.every((u) => u.startsWith("https://agent402.tools/")),
+  ok(sm.status === 200 && Array.isArray(smb.urls) && smb.urls.length > 0 && smb.urls.every((u) => isHost(u, "agent402.tools")),
     `the site-map example reads this server's robots.txt and sitemap (${sm.status} ${smb.urls?.length} urls)`);
 
   const p = await post("/api/pdf-info", { url: "https://agent402.tools/fixtures/sample-invoice.pdf" });

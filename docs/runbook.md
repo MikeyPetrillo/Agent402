@@ -110,8 +110,8 @@ on-chain proof of the payment (`src/payment-verify.js`).
 
 ## Emergency levers
 
-- `SIGNING_HALTED`: halts every outbound signing path at call time, no restart needed; paid
-  calls that would sign answer 503 and nothing is charged.
+- `SIGNING_HALTED`: halts every outbound signing path at call time, no restart needed; a paid
+  call that would sign answers 503, and a 503 is never settled on x402, MPP evm, card or credits.
 - `LOAD_SHED=off`, `MONITOR_SCHEDULER=off`, `X402_INDEX_CRAWL=off`, `MPP_INDEX_CRAWL=off`: each
   turns off one subsystem; see [configuration.md](configuration.md) for every switch.
 - Never block, cap or pause a paying buyer to protect spend: protect spend with the per-chain and
