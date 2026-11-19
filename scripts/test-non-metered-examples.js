@@ -177,15 +177,11 @@ const RUNNER_BLOCKED_SLUGS = new Set(["kalshi-markets", "kalshi-event", "kalshi-
 
 // A source that is down for everyone (not only for runners) is left out until a
 // date, then is in scope again with no edit: an entry cannot outlive its outage
-// unnoticed. 2026-11-14: api.fiscaldata.treasury.gov stopped resolving, then
-// answered 403 and 503, from every network tried. Remove the entry when the
-// source answers again.
-const SOURCE_OUTAGE_UNTIL = new Map([
-  ["treasury-debt", "2026-11-21"],
-  ["treasury-avg-rates", "2026-11-21"],
-]);
-export function sourceOutageExcluded(slug, now = new Date()) {
-  const until = SOURCE_OUTAGE_UNTIL.get(slug);
+// unnoticed. An entry is [slug, "YYYY-MM-DD"]; remove it when the source
+// answers again. None is open.
+const SOURCE_OUTAGE_UNTIL = new Map([]);
+export function sourceOutageExcluded(slug, now = new Date(), table = SOURCE_OUTAGE_UNTIL) {
+  const until = table.get(slug);
   return Boolean(until) && now.toISOString().slice(0, 10) < until;
 }
 
@@ -558,10 +554,16 @@ function stop() {
 // lenient sweep can import this file's scope without running a sweep.
 function runControls() {
   // ── Offline controls (run before any live call) ─────────────────────────────
-  ok(sourceOutageExcluded("treasury-debt", new Date("2026-11-20T23:59:59Z")) === true
-    && sourceOutageExcluded("treasury-debt", new Date("2026-11-21T00:00:00Z")) === false
-    && sourceOutageExcluded("hash", new Date("2026-11-14T00:00:00Z")) === false,
-    "control: a source-outage exclusion ends on its date and covers only the named slugs");
+  {
+    // A fixed past entry, never a live one: excused the day before its date,
+    // not on it, not today, and never for another slug.
+    const past = new Map([["control-outage-slug", "2026-01-15"]]);
+    ok(sourceOutageExcluded("control-outage-slug", new Date("2026-01-14T23:59:59Z"), past) === true
+      && sourceOutageExcluded("control-outage-slug", new Date("2026-01-15T00:00:00Z"), past) === false
+      && sourceOutageExcluded("control-outage-slug", new Date(), past) === false
+      && sourceOutageExcluded("hash", new Date("2026-01-01T00:00:00Z"), past) === false,
+      "control: a source-outage exclusion ends on its date, an expired one stops excusing a failure, and it covers only the named slugs");
+  }
   // Pin the NETWORK hole: a handler 502 MUST fail this suite.
   ok(isStrictFailure(502, { error: "data.gov is not returning results" }, null) === true,
     "control: HTTP 502 is a hard fail (the NETWORK-lenient hole that hid gov-data)");
