@@ -26,6 +26,12 @@ import { createPublicClient, http, fallback, namehash, getAddress, isAddress } f
 import { mainnet, base } from "viem/chains";
 import { normalize } from "viem/ens";
 
+// A wallet is looked up at most once per OPERATOR_CACHE_TTL_MS when it has a
+// name and once per OPERATOR_MISS_TTL_MS when it has none, OPERATOR_LOOKUP_CONCURRENCY
+// at a time, and only when the operator reads the scoreboard (itself cached).
+export const OPERATOR_CACHE_TTL_MS = 7 * 86_400_000;
+export const OPERATOR_MISS_TTL_MS = 86_400_000;
+export const OPERATOR_LOOKUP_CONCURRENCY = 4;
 export const OPERATOR_SOURCES = Object.freeze(["payTo", "ens", "basename"]);
 export const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";
 const BASE_REVERSE_SUFFIX = "80002105.reverse"; // ENSIP-11 coin type of Base (0x80000000 | 8453)
@@ -97,7 +103,7 @@ export function payToOperatorOf(address, payToOrigins, shared = null) {
  */
 export function createOperatorResolver({
   lookups = null, payTo = () => null, now = Date.now,
-  ttlMs = 7 * 86_400_000, missTtlMs = 86_400_000, cap = 20_000, concurrency = 4, perLookupMs = 8000,
+  ttlMs = OPERATOR_CACHE_TTL_MS, missTtlMs = OPERATOR_MISS_TTL_MS, cap = 20_000, concurrency = OPERATOR_LOOKUP_CONCURRENCY, perLookupMs = 8000,
 } = {}) {
   const names = lookups || defaultNameLookups();
   const cache = new Map(); // lowercased address -> { mapping|null, at, failed }
