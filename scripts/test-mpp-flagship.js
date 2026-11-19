@@ -61,6 +61,9 @@ async function boot() {
       MPP_SECRET_KEY: "test-mpp-secret", TEMPO_API_KEY: "test-tempo-key", TEMPO_RECIPIENT_ADDRESS: TREASURY, WALLET_ADDRESS: TREASURY,
       // judge is listed only with its key; a placeholder lists it (nothing here calls it).
       TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY || "test-placeholder",
+      // kalshi-markets is listed only with KALSHI_TOOLS=on (src/kalshi-switch.js);
+      // off, its row is left out like any unlisted route (test-kalshi-switch.js).
+      KALSHI_TOOLS: "on",
       X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", SOLANA_LEADERBOARD: "off", MONITOR_SCHEDULER: "off",
       FREE_ALERTS: "off", FOLLOWUPS: "off",
     },
