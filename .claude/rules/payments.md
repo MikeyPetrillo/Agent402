@@ -321,7 +321,14 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   attempt); the answer digest covers a canonical period statement shown beside it. The last
   `SUBSCRIPTION_RECEIPTS_KEPT` (3) are kept on the subscription record as `signedReceipts` (not in the
   issued-receipt store: no audit report reads them), shown on `/monitors/thanks`, the MPP status link and
-  in each monitor email (the newest). The hosted MCP connector relays a paid result's receipt in
+  in each monitor email (the newest). The receipts a payer's audit report reads are kept in
+  the issued-receipt store (`src/receipt-store.js`): table `issued_receipts` in the state database when
+  `STATE_DATABASE_URL` is set, else the SQLite file `RECEIPT_STORE_DB` (default
+  `/data/agent402-receipts.db` with a volume, `/tmp/agent402-receipts.db` without); a row holds the receipt
+  and its lookup fields, never the request or the answer, and goes after `RECEIPT_STORE_DAYS` (400) or past
+  `RECEIPT_STORE_MAX_ROWS` (2,000,000, oldest first); a write the store refuses waits in a queue of
+  `RECEIPT_STORE_PENDING_MAX` (5000) and is retried, never on the serving path. The operator perf view
+  (`/__operator/perf.json`) carries its counts as `receiptStore`. The hosted MCP connector relays a paid result's receipt in
   `_meta["tools.agent402/receipt"]`; an async job keeps it in `result.headers`. No receipt on a 4xx/5xx, a
   refused settle, a free, trial or allowance answer, `/ref` or FREE_MODE, nor on a keyed
   idempotent replay (it carries no settlement header; the first receipt covers the same bytes). The
