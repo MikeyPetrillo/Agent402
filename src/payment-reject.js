@@ -81,6 +81,7 @@ export const REJECTION_REASONS = Object.freeze([
   { reason: "not-checked", means: "The payment never got a verdict: this server's verify request to the facilitator did not complete (a connection error or this server's own time limit), the facilitator answered with an HTTP error, or an on-chain signature check could not finish. Nothing was charged and nothing is known to be wrong with the payment. retry is same-payment: send the same payment again after Retry-After, with no new signature, while its authorization is still valid." },
   { reason: "facilitator-quota", means: "The payment verified and the call ran, then the facilitator for that network refused to settle it under a billing quota on this server's own account. Nothing was charged and nothing is wrong with your wallet. Ask the route for a fresh 402 without paying and pay on another network it lists." },
   { reason: "settlement-unconfirmed", means: "The payment's settlement is not confirmed, so the answer was withheld, and the transfer may still land. Two cases. A facilitator broadcast the transfer and answered that it was still pending, and the transaction listed in `transactions` was not confirmed on chain within this server's wait: retry is watch-transaction, and if it lands the amount is booked as owed to the paying wallet and repaid after on-chain proof. Or a settle attempt ended on an answer that does not show whether a transfer was sent (a facilitator's HTTP error, a dropped connection, an unreadable answer, or a failure naming a transaction): retry is watch-transaction when `transactions` names one and check-wallet when none is named, the receipt's errorReason is settlement_unconfirmed, and the payment's own expiry is named when it carries one: `authorizationValidBefore` is the time after which the signed authorization can no longer move money (an EVM authorization's validBefore, or on Solana a time by which the transaction's recent blockhash has expired), `lastValidRound` an Algorand transaction's lastValid round and `expirationLedger` the ledger a Stellar authorization expires at; a new payment is safe once it has passed. `refundStatusUrl` is the free refund lookup for a named EVM transaction. In that second case the hint says whether the payment is recorded for the on-chain read (an EIP-3009 authorization on an EVM chain, or a transaction named on an EVM chain, Solana or Algorand); only then is a transfer that lands booked as owed. Either way, do not sign a new authorization for the same call before that point, or, when none is named, before the paying wallet shows whether the transfer landed: it is a second payment. The same payment sent again, in any encoding, is answered the same way without the call running." },
+  { reason: "settled-refund-owed", means: "The transfer this payment authorized landed on chain after an earlier attempt with the same payment was answered unconfirmed, and it was booked as owed to the paying wallet before this settle answered. The call is not served for that transfer: the amount is repaid after on-chain proof, with nothing more for you to send. `transactions` names the transfer and `refundStatusUrl` shows where the repayment stands; the receipt's errorReason is settled_refund_owed. That authorization is spent, so retry is fresh-authorization: sign a new one to make the call." },
 ]);
 
 // A verify failure that carries no verdict on the payment. Read from the
@@ -183,6 +184,36 @@ export function withPendingSettleRefusal(body, refusal) {
  *  (src/settle-fault.js), and no reader takes it for a refusal made before
  *  sending. */
 export const SETTLEMENT_UNCONFIRMED = "settlement_unconfirmed";
+
+/** The errorReason of a settle whose transfer the late-settlement book had
+ *  already booked owed (src/settlement-claims.js SETTLED_REFUND_OWED, same
+ *  value): charged and owed back, never served, never the buyer's fault
+ *  (src/settle-fault.js). */
+export const SETTLED_REFUND_OWED = "settled_refund_owed";
+
+/**
+ * The 402 body for a settled_refund_owed receipt: the transfer, its refund
+ * lookup, and a new authorization to make the call. Never says nothing was
+ * charged. Null for any other receipt.
+ */
+export function settledRefundOwedRefusal(receipt, { origin = null } = {}) {
+  if (!receipt || typeof receipt !== "object" || receipt.success !== false || receipt.errorReason !== SETTLED_REFUND_OWED) return null;
+  const net = typeof receipt.network === "string" && /^[a-z0-9-]{1,32}:[A-Za-z0-9-]{1,64}$/.test(receipt.network) ? receipt.network : null;
+  const tx = railTxOf(net, receipt.transaction);
+  const refundStatusUrl = tx ? refundStatusUrlOf(origin, tx) : null;
+  return {
+    reason: "settled-refund-owed",
+    retry: "fresh-authorization",
+    network: net,
+    ...(tx ? { transactions: [tx] } : {}),
+    ...(refundStatusUrl ? { refundStatusUrl } : {}),
+    detail:
+      "This payment's transfer landed on chain after an earlier attempt with it was answered unconfirmed, and it is booked as owed to the paying wallet, so the call was not served for it. "
+      + "The amount is repaid after on-chain proof, with nothing more for you to send"
+      + (refundStatusUrl ? "; refundStatusUrl shows where the repayment stands. " : ". ")
+      + "That authorization is spent: sign a new one to make the call.",
+  };
+}
 
 /** True for a settle receipt (decoded PAYMENT-RESPONSE) restated as
  *  settlement_unconfirmed: the transfer may still land, so no per-payer

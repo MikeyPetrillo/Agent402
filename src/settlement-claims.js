@@ -319,6 +319,7 @@ export function registerSettlementClaimHooks(server) {
   });
   server.onAfterSettle(async (ctx) => {
     let heldElsewhere = null;
+    let bookedOwed = null;
     try {
       const r = ctx?.result;
       if (!r || r.success !== true) return;
@@ -331,9 +332,17 @@ export function registerSettlementClaimHooks(server) {
       const network = String(r.network || ctx?.requirements?.network || "");
       if (typeof r.transaction === "string" && r.transaction && (network.startsWith("eip155:") || claimsTxAfterSettle(network))) {
         const c = await claimSettlementKey(txClaimKey(network, r.transaction), s?.id || `settled:${randomUUID()}`);
-        if (!c.claimed && claimsTxAfterSettle(network)) heldElsewhere = r.transaction;
+        // The late-settlement book holds a transaction it has booked owed
+        // (src/payments.js wasServed): the same transfer is never also
+        // served, on any rail; it is answered as owed.
+        if (!c.claimed && isLateSettleHolder(c.holder)) bookedOwed = r.transaction;
+        else if (!c.claimed && claimsTxAfterSettle(network)) heldElsewhere = r.transaction;
       }
     } catch { /* never touch a payment */ }
+    if (bookedOwed) {
+      console.warn(`[settlement-claims] ${String(ctx?.requirements?.network || "")} transaction ${bookedOwed} settled but the late-settlement book already holds it as owed; not served`);
+      throw new AfterSettleAbortError(SETTLED_REFUND_OWED, SETTLED_REFUND_OWED_MESSAGE);
+    }
     if (heldElsewhere) {
       console.warn(`[settlement-claims] ${String(ctx?.requirements?.network || "")} transaction ${heldElsewhere} settled but another request already holds it; not answering twice for one payment`);
       throw new AfterSettleAbortError(TX_SERVED_ELSEWHERE, "This payment's transaction already answered another request.");
@@ -443,10 +452,12 @@ export function namesUnsettledTx(ctx) {
 /**
  * A settlement a settle-failure hook recovered fires no afterSettle hook, so
  * its transaction is claimed here for this request, as afterSettle does for
- * the primary's. Returns true when another holder already has that
- * transaction (a request that served it, or the late-settlement book that
- * booked it owed): the recovery must not serve it.
+ * the primary's. Returns false when this request now holds it, OWED_ELSEWHERE
+ * when the late-settlement book holds it (booked owed: the transfer is the
+ * buyer's to be repaid), and true when another request holds it (it served
+ * that transfer). Either holder means the recovery must not serve it.
  */
+export const OWED_ELSEWHERE = "owed";
 export async function recoveredTxHeldElsewhere(ctx, result) {
   try {
     const network = String(result?.network || ctx?.requirements?.network || "");
@@ -455,8 +466,35 @@ export async function recoveredTxHeldElsewhere(ctx, result) {
     const s = stamp(reqOf(ctx));
     const r = await claimSettlementKey(txClaimKey(network, tx), s?.id || `settled:${randomUUID()}`);
     if (r.claimed && s) await extendHeld(s);
-    return !r.claimed;
+    if (r.claimed) return false;
+    if (isLateSettleHolder(r.holder)) { if (s) await extendHeld(s); return OWED_ELSEWHERE; }
+    return true;
   } catch { return false; /* never touch a payment */ }
+}
+
+/** The claim holder name of the late-settlement book (src/payments.js
+ *  wasServed): `late-settle:<entry key>`. */
+export const LATE_SETTLE_HOLDER = "late-settle:";
+export const lateSettleHolder = (key) => `${LATE_SETTLE_HOLDER}${key}`;
+export const isLateSettleHolder = (holder) => typeof holder === "string" && holder.startsWith(LATE_SETTLE_HOLDER);
+
+/** A settle whose transfer the late-settlement book already booked owed:
+ *  the call is not served for it, and the amount is repaid after on-chain
+ *  proof (src/payment-reject.js settledRefundOwedRefusal). */
+export const SETTLED_REFUND_OWED = "settled_refund_owed";
+export const SETTLED_REFUND_OWED_MESSAGE = "This payment's transfer is already booked as owed to the paying wallet; the call was not served for it.";
+/** The failed settle result a recovery answers with for such a transfer. */
+export function settledRefundOwedResult(ctx, result) {
+  const network = String(result?.network || ctx?.requirements?.network || "");
+  const payer = result?.payer || ctx?.paymentPayload?.payload?.authorization?.from;
+  return {
+    success: false,
+    errorReason: SETTLED_REFUND_OWED,
+    errorMessage: SETTLED_REFUND_OWED_MESSAGE,
+    ...(typeof payer === "string" && payer ? { payer } : {}),
+    network,
+    transaction: String(result?.transaction || ""),
+  };
 }
 
 /** Is a settlement tx already claimed by a request that served it? Claims the
