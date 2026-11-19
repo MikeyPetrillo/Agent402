@@ -31,6 +31,42 @@ for (const entry of market.plugins ?? []) {
   ok(read(`${dir}/.claude-plugin/plugin.json`).version === root, `${dir}/.claude-plugin/plugin.json version equals ${root}`);
   ok(read(`${dir}/.mcp.json`).mcpServers?.agent402?.url === "https://agent402.tools/mcp", `${dir}/.mcp.json points at the hosted /mcp connector`);
 }
+// Every manifest a registry or a coding agent reads leads with the approved
+// lead sentence and the supporting line (src/positioning.js), and the skill
+// the plugins ship is one real SKILL.md each manifest points at.
+{
+  const { LEAD_SENTENCE, SUPPORT_LINE } = await import("../src/positioning.js");
+  const lead = `${LEAD_SENTENCE} ${SUPPORT_LINE}`;
+  const descs = [
+    [".claude-plugin/marketplace.json metadata", market.metadata?.description],
+    ...(market.plugins ?? []).map((e) => [`.claude-plugin/marketplace.json plugin ${e.name}`, e.description]),
+    ...(market.plugins ?? []).map((e) => [`${e.source.replace(/^\.\//, "")}/.claude-plugin/plugin.json`, read(`${e.source.replace(/^\.\//, "")}/.claude-plugin/plugin.json`).description]),
+    [".codex-plugin/plugin.json", read(".codex-plugin/plugin.json").description],
+    [".cursor-plugin/plugin.json", read(".cursor-plugin/plugin.json").description],
+  ];
+  for (const [where, d] of descs) ok(typeof d === "string" && d.startsWith(lead), `${where} description leads with the lead sentence and the supporting line`);
+  const server = read("mcp/server.json");
+  ok(!/\d+\+? (?:agent |ready |web )?tools/i.test(server.title || "") && /^Agent402\.Tools: /.test(server.title || ""), `mcp/server.json title names the product, no tool count ("${server.title}")`);
+
+  const { existsSync, readdirSync } = await import("node:fs");
+  const SKILLS = "plugins/agent402/skills";
+  const skillDirs = existsSync(new URL(`../${SKILLS}`, import.meta.url)) ? readdirSync(new URL(`../${SKILLS}`, import.meta.url), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) : [];
+  ok(skillDirs.length >= 1, `the Claude Code plugin ships at least one skill under ${SKILLS} (${skillDirs.join(", ") || "none"})`);
+  for (const dir of skillDirs) {
+    const text = readFileSync(new URL(`../${SKILLS}/${dir}/SKILL.md`, import.meta.url), "utf8");
+    const fm = (text.match(/^---\n([\s\S]*?)\n---\n/) || [])[1] || "";
+    const name = (fm.match(/^name:\s*(.+)$/m) || [])[1]?.trim();
+    const desc = ((fm.match(/^description:\s*(.+)$/m) || [])[1] || "").trim().replace(/^"|"$/g, "");
+    ok(name === dir && /^[a-z0-9-]{1,64}$/.test(name), `${SKILLS}/${dir}/SKILL.md names itself "${dir}" in its frontmatter`);
+    ok(desc.length > 0 && desc.length <= 1024 && desc.startsWith(LEAD_SENTENCE), `${SKILLS}/${dir}/SKILL.md description leads with the lead sentence, 1024 characters at most (${desc.length})`);
+    ok(!/\$\d/.test(text), `${SKILLS}/${dir}/SKILL.md types no price (prices are read from the catalog)`);
+    ok(!/\u2014/.test(text), `${SKILLS}/${dir}/SKILL.md carries no em dash`);
+  }
+  for (const p of [".codex-plugin/plugin.json", ".cursor-plugin/plugin.json"]) {
+    const s = read(p).skills;
+    ok(s === `./${SKILLS}/`, `${p} points its skills at ./${SKILLS}/ (${s})`);
+  }
+}
 // When the checkout has tags, the newest release tag must not be AHEAD of
 // package.json (a release cut without moving the version). A shallow CI
 // checkout has none; the manifest checks above still hold there.
