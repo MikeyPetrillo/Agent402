@@ -136,7 +136,7 @@
     "src/tools/lending-rates-kit.js": "2026-11-16",
     "src/tools/linkedin-article-kit.js": "2026-11-12",
     "src/tools/llm-context-kit.js": "2026-11-18",
-    "src/tools/llm-gateway-kit.js": "2026-11-17",
+    "src/tools/llm-gateway-kit.js": "2026-11-18",
     "src/tools/llm-gemini-kit.js": "2026-11-10",
     "src/tools/llm-images-fast-kit.js": "2026-11-17",
     "src/tools/llm-kit.js": "2026-11-17",
