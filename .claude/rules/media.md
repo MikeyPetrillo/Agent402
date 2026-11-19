@@ -5,6 +5,7 @@ paths:
   - "src/tools/ocr-kit.js"
   - "src/tools/media-kit.js"
   - "src/tools/render.js"
+  - "src/tools/render-static.js"
   - "src/tools/frame-diff.js"
   - "src/tools/child-env.js"
   - "src/tools/image-*.js"
@@ -42,6 +43,14 @@ Loaded when a media, document or worker-pool tool file is read.
   then a 429 with Retry-After. ffmpeg, ffprobe and Chromium start with `childEnv()`
   (`src/tools/child-env.js`), an allowlist of environment variables, so no key reaches a child
   process (defense in depth: a same-user child can still read its parent's environment).
+- **Render without a browser:** `src/tools/render-static.js` fetches the page through `safeFetch`
+  (8 s) and answers from its served HTML (`rendered: false`) when the verdict allows it: at least
+  `STATIC_MIN_WORDS` (50) words, no empty single-page-app mount, no hydrated components, no
+  noscript JavaScript notice beside under 300 words. Every other outcome, a refused or failed
+  fetch included, runs the browser path unchanged. The markers are read from the first
+  `STATIC_SCAN_MAX_CHARS` (256 KB) with bounded attribute reads, so a crafted page cannot hold the
+  serving thread (`scripts/test-render-static.js` times it). `RENDER_STATIC_READ=off` (unset = on)
+  sends every page to the browser.
 - **Markdown:** one renderer configuration (`src/tools/markdown-render.js`: heading ids) serves
   `markdown-to-html`, the guide pages and the docs pages, so a document renders to the same bytes
   everywhere. The tool renders a document of up to `MARKDOWN_INLINE_MAX_CHARS` (2,500) characters

@@ -852,7 +852,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `RECEIPT_SIGNING_KEY_ID` | Key id published with the receipt key; required with RECEIPT_SIGNING_KEY. |  | `src/receipt-signing.js` |
 | `RECEIPT_SIGNING_KEY_VALID_FROM` | Optional ISO date the key signs from (published as validFrom). |  | `src/receipt-signing.js` |
 | `RECEIPT_STORE_DAYS` | Days a kept signed receipt is held before it is deleted. | `400` | `src/receipt-store.js` |
-| `RECEIPT_STORE_DB` | SQLite file for kept signed receipts when no state database is set. |  | `src/receipt-store.js` |
+| `RECEIPT_STORE_DB` | SQLite file for kept signed receipts when no state database is set. Default /data/agent402-receipts.db with a /data volume, else /tmp/agent402-receipts.db. |  | `src/receipt-store.js` |
 | `RECEIPT_STORE_MAX_ROWS` | Most kept signed receipts; past it the oldest are deleted first. | `2000000` | `src/receipt-store.js` |
 | `RECEIPT_STORE_PENDING_MAX` | Most signed receipts queued while the receipt store cannot take them. | `5000` | `src/receipt-store.js` |
 
@@ -1061,7 +1061,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `SELLER_REPUTATION_MAX_DELIVERY_ORIGINS` | Most seller origins with delivery outcomes kept. | `4000` | `src/seller-reputation.js` |
 | `SELLER_REPUTATION_MAX_SELLERS` | Most sellers with a reputation record kept. | `8000` | `src/seller-reputation.js` |
 | `SELLER_REPUTATION_META_FILE` | File for seller reputation re-check requests and the days a crawl cycle failed broadly on our side. | `/data/seller-reputation-meta.json` | `src/seller-reputation.js` |
-| `SELLER_REPUTATION_RECHECK_HOST_MS` | How long one accepted seller reputation re-check request holds before another is accepted for the same seller, in milliseconds. | `6` | `src/seller-reputation.js` |
+| `SELLER_REPUTATION_RECHECK_HOST_MS` | How long one accepted seller reputation re-check request holds before another is accepted for the same seller, in milliseconds. Default 21600000 (6 hours), at least 1000. | `6` | `src/seller-reputation.js` |
 | `SELLER_REVISIT_MAX_HOURS` | Seller revisit maximum, in hours. | `12` | `src/seller-load.js` |
 
 ## SETTLE
@@ -1304,7 +1304,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `TOOL_FREE_FAIL_RATE` | Tool free fail rate. |  | `src/tool-failure-monitor.js` |
 | `TOOL_OUTPUT_EXAMPLES_FILE` | Tool output examples file path. |  | `src/tool-output-examples.js` |
 | `TOOL_OUTPUT_EXAMPLES_TEST_BARE` | Tool output examples test bare. |  | `src/server.js` |
-| `TOOL_RELIABILITY_PUBLIC` | Per-tool reliability table on /api/reliability/tools; off hides it. |  | `src/tool-reliability.js` |
+| `TOOL_RELIABILITY_PUBLIC` | Per-tool reliability table on /api/reliability/tools; off withdraws it (the route answers available:false and /api/pricing drops its pointer). Unset = on. |  | `src/tool-reliability.js` |
 
 ## TOP
 

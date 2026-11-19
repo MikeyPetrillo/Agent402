@@ -10,6 +10,7 @@ paths:
   - "src/base-unproven.js"
   - "src/algorand-sellers.js"
   - "src/discovery*.js"
+  - "src/tool-reliability.js"
   - "src/find.js"
   - "src/listing-screen.js"
   - "src/dispatch-eligibility.js"
@@ -247,6 +248,12 @@ Loaded when an index, discovery, router or buyer file is read.
   Its phrase rules are a mitigation; the primary defense is each prompt's own rule that seller
   text is quoted data, never instructions. A paraphrase the rules miss is expected: add it to
   `scripts/redteam-corpus.json` and extend the rule, rather than treat each one as a blocker.
+- **Per-tool reliability:** `src/tool-reliability.js` serves `/api/reliability/tools`: per catalog
+  route over `TOOL_RELIABILITY_WINDOW_HOURS` (168), a measured share once a route has
+  `TOOL_RELIABILITY_MIN_SAMPLE` (20) calls, else "not enough data"; never a call count or a ranking
+  (the operator view adds `calls` and `serverErrors`). One grouped query per 10 minutes per process.
+  `TOOL_RELIABILITY_PUBLIC=off` (unset = on) withdraws the table: the route answers
+  `available: false` with reason off and `/api/pricing` drops its pointer.
 - **Seller reputation:** `src/seller-reputation.js`. A leased hourly pass (`seller-reputation-pass`,
   `SELLER_REPUTATION_INTERVAL_MS`, first after `SELLER_REPUTATION_FIRST_MS`, waiting for the index to
   load) folds each indexed seller's newest crawl, paywall probe (its `ms`, the probe's answer time)
@@ -263,8 +270,10 @@ Loaded when an index, discovery, router or buyer file is read.
   only past its minimum sample; no field is a payment, buyer or settlement count
   (`scripts/test-seller-reputation.js`). Method: `wiki/Seller-Reputation.md`. Correction path:
   `POST /api/reputation/recheck?seller=` (free; one accepted request per seller per
-  `SELLER_REPUTATION_RECHECK_HOST_MS`, a repeat answers the one scheduled; per-caller limit
-  across replicas) records the request in `seller-reputation-meta` (`SELLER_REPUTATION_META_FILE`);
+  `SELLER_REPUTATION_RECHECK_HOST_MS`, default 6 hours, a repeat answers the one scheduled; each
+  caller is held to `REPUTATION_RECHECK_PER_IP_HOUR` (default 10) re-check requests an hour across
+  every seller and all callers together to `REPUTATION_RECHECK_GLOBAL_HOUR` (default 300), shared
+  across replicas, a 429 past either) records the request in `seller-reputation-meta` (`SELLER_REPUTATION_META_FILE`);
   the crawl reads `pendingRecheckOrigins()` each cycle and `originsDueThisCycle`'s `prefer` gives
   the origin one of its operator's places (never an extra read; `crawlPlan` budgets still apply);
   the pass sets `rk`, served as `lastRecheckedAt`. A cycle whose `oursShare` reaches
