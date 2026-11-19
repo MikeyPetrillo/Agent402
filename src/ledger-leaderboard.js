@@ -19,6 +19,7 @@ import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
 import { standingBand } from "./standing.js";
 import { rankBy, DEFAULTS as LEADERBOARD_DEFAULTS } from "./leaderboard.js";
+import { barChart, CHART_CSS } from "./svg-charts.js";
 import { hostRowHtml, wideLabel } from "./host-entry.js";
 
 import { leaderboardCadence, cadenceBadge, LEADERBOARD_REFRESH_MS } from "./refresh-cadence.js";
@@ -43,6 +44,14 @@ function boardWithoutHost(snapshot, walletAddress) {
   const board = Array.isArray(snapshot?.leaderboard) ? snapshot.leaderboard : [];
   const self = (walletAddress || "").toLowerCase();
   return self ? board.filter((r) => (r.wallet || "").toLowerCase() !== self) : board;
+}
+/** The top ten by USDC settled, as bars against the first. */
+export function leaderboardChartHtml(snapshot, walletAddress) {
+  const top = rankBy(boardWithoutHost(snapshot, walletAddress), "usd").slice(0, 10).filter((r) => Number(r.totalUsd) > 0);
+  return barChart({
+    label: "The top sellers by USDC settled in the window",
+    rows: top.map((r) => ({ label: r.name || `${String(r.wallet || "").slice(0, 6)}…${String(r.wallet || "").slice(-4)}`, value: Number(r.totalUsd), valueText: fmtUsd(Number(r.totalUsd)), href: safeHref(r.homepage) || undefined })),
+  });
 }
 /** How many rows the table ranks from - the honest "of M". */
 function rankedBoardSize(snapshot, walletAddress) {
@@ -260,6 +269,7 @@ ${standingBand(standing || {})}
     <h2 class="lb-h2" style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Ranked by USDC settled.</h2>
     <div class="ml-meta" style="margin:10px 0 16px;"><span>${esc(windowLabel)} window</span><span>top ${rows.length} of ${fmtNum(boardRows)} ranked rows</span><span>include=external</span></div>
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:76ch;margin:0 0 26px;">Volume alone can be manufactured by paying yourself, so every row also carries distinct paying wallets and an organic ratio of buyers to calls. A thousand calls from two wallets reads very differently from a thousand from four hundred.</p>
+    ${hasData ? leaderboardChartHtml(snapshot, walletAddress) : ""}
     <div class="lb-scroll" style="border:1px solid var(--hairline);background:var(--panel);overflow-x:auto;">
       <div class="lb-head" style="display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:12px 18px;min-width:820px;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--on-panel-faint);border-bottom:1.5px solid var(--panel-rule-2);white-space:nowrap;"><span>#</span><span>seller · payTo</span><span style="text-align:right;">usdc settled</span><span style="text-align:right;">calls</span><span style="text-align:right;">buyers</span><span style="text-align:right;">avg ticket</span><span style="text-align:right;">organic</span></div>
       <div style="min-width:820px;">${hasData ? tableRows : warmingHtml}</div>
@@ -370,7 +380,7 @@ ${solanaSectionHtml(solana)}
     baseUrl,
     activePath: "/leaderboard",
     jsonLd: [orgLd, breadcrumbLd, datasetLd, faqLd],
-    extraCss,
+    extraCss: extraCss + CHART_CSS,
     body,
   });
 }

@@ -59,6 +59,8 @@ t node scripts/test-algorand-page.js
 t node scripts/test-home-page.js
 # Paid-call figure on home, /101 and tool pages: steps, receipt switch, no cost or revenue figure, still under reduced motion (offline)
 t node scripts/test-paid-call-figure.js
+# Charts on /scorecard, /proof and /leaderboard: drawn only from published data, no dollar figure on the scorecard or proof charts, top ten without our own wallet (offline)
+t node scripts/test-svg-charts.js
 # Header: Pricing, Company, Status as plain links, one primary action, every earlier destination still linked (offline)
 t node scripts/test-nav-primary.js
 t node scripts/test-badge-contrast.js
