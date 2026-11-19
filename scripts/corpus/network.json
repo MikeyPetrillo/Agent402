@@ -557,8 +557,9 @@
     {
       "slug": "x402-quote",
       "name": "a paid GET route quotes accepts",
+      "_why": "pointed at stock-quote until the stock tools were switched off and it answered 503; edgar-filings is a paid GET route on a public-domain source",
       "input": {
-        "url": "https://agent402.tools/api/stock-quote?symbol=AAPL",
+        "url": "https://agent402.tools/api/edgar-filings?ticker=AAPL",
         "method": "GET"
       },
       "expect": {
