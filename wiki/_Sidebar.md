@@ -31,6 +31,7 @@
 - [[Speech-to-Text|STT]]
 - [[Text Embeddings|Embeddings]]
 - [[Payments and x402]]
+- [[Audit Report|Audit-Report]] - a wallet's signed history
 - [[Memory and Coordination]]
 
 **Tollbooth (for site owners)**

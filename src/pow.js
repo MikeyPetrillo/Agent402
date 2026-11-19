@@ -482,6 +482,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // no wallet, so there is nothing it could ever report on.
   "my-usage",
   "receipts",
+  "audit-report",
   // Feedback: the verdict is bound to the wallet that paid for the call being
   // rated, so a PoW call has no standing to write one. (The TALLY,
   // feedback-summary, is counts only and stays free.)

@@ -13,6 +13,8 @@ t node scripts/test-dataset-snapshot.js
 t node scripts/test-dataset-health.js
 t node scripts/test-price-parse.js
 t node scripts/test-receipts.js
+# The audit report: the paying wallet's rows on every rail and nobody else's, kept receipts that verify, a summary receipt over the report and the CSV that fails on tamper, caps and cursors, receipts kept on a final 200 only and swept (offline)
+t node scripts/test-audit-report.js
 t node scripts/test-feedback-kit.js
 t node scripts/test-chain-namespace.js
 t node scripts/test-standing-band.js

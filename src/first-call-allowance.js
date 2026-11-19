@@ -115,7 +115,7 @@ export function firstCallAllowanceConfig() {
 export function firstCallAllowanceEnabled() { return firstCallAllowanceConfig().enabled; }
 
 const listMicroOf = (def) => Math.round((Number(String(def?.price ?? "").replace(/[^0-9.]/g, "")) || 0) * MICRO);
-const identityBound = (def) => def?.identityBound === true || def?.category === "memory" || ["my-usage", "attest", "receipts", "feedback"].includes(def?.slug);
+const identityBound = (def) => def?.identityBound === true || def?.category === "memory" || ["my-usage", "attest", "receipts", "feedback", "audit-report"].includes(def?.slug);
 
 /** Why this catalog route can never take a grant, or null when it can. */
 export function allowanceRouteRefusal(def, cfg = firstCallAllowanceConfig()) {

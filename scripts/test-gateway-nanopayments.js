@@ -1711,7 +1711,7 @@ await check("every catalog route's 402 stays under the challenge ceiling with th
             if (info && published !== offered) reject(new Error(`${r.path}: openapi's nanopayments block (${published}) disagrees with the 402's batched accept (${offered})`));
             // Identity-bound routes (memory, my-usage, attest, feedback) are
             // proven plain-only by the memory check above; here they may lack it.
-            const identityBound = /\/memory|my-usage|attest|feedback|receipts/.test(r.path);
+            const identityBound = /\/memory|my-usage|attest|feedback|receipts|audit-report/.test(r.path);
             if (lasting.has(r.slug)) lastingSeen.add(r.slug);
             if (lasting.has(r.slug) && offered) reject(new Error(`${r.path}: a batched accept on a route with a lasting effect (a pending answer's resend would run it twice)`));
             if (!lasting.has(r.slug) && !identityBound && !offered) reject(new Error(`${r.path}: no batched accept`));

@@ -32,7 +32,7 @@ export const CAPTURE_DENY = new Set([
   "seller-trust", "seller-dossier", "x402-market-pulse", "x402-trending", "x402-quote", "x402-verify", "x402-audit",
   "demand-radar", "bestsellers", "sellers-list",
   // wallet-keyed and identity-bound reads (the payer is the subject)
-  "my-usage", "receipts", "attest", "feedback", "feedback-summary",
+  "my-usage", "receipts", "audit-report", "attest", "feedback", "feedback-summary",
   "memory-write", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-revoke", "memory-grants",
   "memory-log", "memory-remember", "memory-recall", "memory-forget",
 ]);

@@ -1397,6 +1397,76 @@ export function payerUsage(payer, { days = 30, limit = 50 } = {}) {
   };
 }
 
+// The audit report (src/tools/audit-report-kit.js): one wallet's own paid
+// calls over a window, oldest first, a page at a time by (ts, id), plus the
+// window's totals by tool and by UTC day. Like payerUsage, every row the
+// wallet paid for (its own history, whichever way the call was classified),
+// on the buyer's rails at what the buyer paid (BUYER_AMOUNT_SQL).
+const qAuditPage = db.prepare(`
+  SELECT id, ts, slug, ${BUYER_AMOUNT_SQL} AS price_usd, quote_usd, rail, network, wire, tx, response_sha256
+    FROM sales /* buyer-view */
+   WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ? AND ts <= ? AND (ts > ? OR (ts = ? AND id > ?))
+   ORDER BY ts, id
+   LIMIT ?`);
+const qAuditTotals = db.prepare(`
+  SELECT COUNT(*) AS n, SUM(CAST(ROUND(${BUYER_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+    FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ? AND ts <= ?`);
+const qAuditBySlug = db.prepare(`
+  SELECT slug, COUNT(*) AS n, SUM(CAST(ROUND(${BUYER_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano
+    FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ? AND ts <= ?
+   GROUP BY slug ORDER BY slug`);
+const qAuditByDay = db.prepare(`
+  SELECT CAST(ts / 86400000 AS INTEGER) AS day, COUNT(*) AS n, SUM(CAST(ROUND(${BUYER_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano
+    FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ? AND ts <= ?
+   GROUP BY day ORDER BY day`);
+const usdOfNano = (n) => Number(((Number(n) || 0) / NANO_PER_USD).toFixed(6));
+
+/**
+ * One wallet's audit rows over [fromMs, toMs], oldest first, after the
+ * position `after` ({ ts, id }, exclusive; none for the first page), at most
+ * `limit`. ONLY ever called with a payer the payment middleware verified.
+ * Answers { rows, matched, totals, byTool, byDay }: `matched` and the totals
+ * cover the whole window, `rows` the page. Database mode: the mirror, at most
+ * REFRESH_MS behind another container's writes.
+ */
+export function payerAuditRows(payer, { fromMs, toMs, after = null, limit = 200 } = {}) {
+  const p = normalizePayerAddress(payer);
+  const empty = { rows: [], matched: 0, totals: { calls: 0, paidUsd: 0, firstAt: null, lastAt: null }, byTool: [], byDay: [] };
+  if (!p || !Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs < fromMs) return empty;
+  const aTs = Number.isFinite(after?.ts) ? after.ts : -1;
+  const aId = Number.isFinite(after?.id) ? after.id : -1;
+  const cap = Math.max(1, Math.min(5000, Math.floor(Number(limit) || 200)));
+  const rows = qAuditPage.all(p, fromMs, toMs, aTs, aTs, aId, cap).map((r) => {
+    const priv = PRIVATE_RAILS.includes(String(r.rail));
+    return {
+      id: r.id,
+      ts: Number(r.ts),
+      slug: r.slug,
+      priceUsd: Number(Number(r.price_usd || 0).toFixed(6)),
+      // A private rail's quote column holds the gross, already the amount.
+      quotedUsd: priv || r.quote_usd == null ? null : Number(Number(r.quote_usd).toFixed(6)),
+      rail: r.rail,
+      network: r.network || null,
+      wire: r.wire || null,
+      tx: r.tx || null,
+      responseSha256: r.response_sha256 || null,
+    };
+  });
+  const t = qAuditTotals.get(p, fromMs, toMs) || {};
+  return {
+    rows,
+    matched: Number(t.n) || 0,
+    totals: {
+      calls: Number(t.n) || 0,
+      paidUsd: usdOfNano(t.nano),
+      firstAt: t.first_ts ? new Date(Number(t.first_ts)).toISOString() : null,
+      lastAt: t.last_ts ? new Date(Number(t.last_ts)).toISOString() : null,
+    },
+    byTool: qAuditBySlug.all(p, fromMs, toMs).map((r) => ({ slug: r.slug, calls: Number(r.n) || 0, usd: usdOfNano(r.nano) })),
+    byDay: qAuditByDay.all(p, fromMs, toMs).map((r) => ({ day: new Date(Number(r.day) * 86_400_000).toISOString().slice(0, 10), calls: Number(r.n) || 0, usd: usdOfNano(r.nano) })),
+  };
+}
+
 /**
  * Public demand widget on /index — external tools ranked by DISTINCT verified
  * buyers over `days`. Breadth of demand, not revenue: the tools the most

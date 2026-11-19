@@ -92,6 +92,7 @@ export const EMPTY_RESULT_OK = new Map([
   ["memory-recall", true],
   ["receipts", true],
   ["my-usage", true],
+  ["audit-report", true],
   // A wallet, address or transaction with nothing of that kind.
   ["eas-attestations", true],
   ["asset-transfers", true],
