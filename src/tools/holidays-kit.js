@@ -357,7 +357,7 @@ export const HOLIDAY_TOOLS = [
     },
   },
   {
-    route: "GET /api/settlement-calendar", name: "Payment settlement calendar", slug: "settlement-calendar", category: "finance", price: "$0.002",
+    route: "GET /api/settlement-calendar", name: "Payment settlement calendar", slug: "settlement-calendar", category: "time", price: "$0.002",
     description: "Expected settlement date for a payment sent on a given date over ACH, Fedwire, SEPA Credit Transfer, SEPA Instant or CHAPS, from each rail's published operating days and the bank holidays that close it, with the rule and its official source in the answer. ?rail=ach&date=2026-12-24.",
     tags: ["settlement", "payments", "ach", "fedwire", "sepa", "chaps", "business-days", "finance"],
     discovery: {
@@ -403,7 +403,7 @@ export const HOLIDAY_TOOLS = [
     },
   },
   {
-    route: "GET /api/market-calendar", name: "Exchange trading calendar", slug: "market-calendar", category: "finance", price: "$0.001",
+    route: "GET /api/market-calendar", name: "Exchange trading calendar", slug: "market-calendar", category: "time", price: "$0.001",
     description: "Is an exchange open at a given moment, and when does it next open and close: NYSE, London Stock Exchange, Xetra, JPX (Tokyo) or HKEX, from each exchange's own published holidays, early closes and session hours, with the day's sessions in local time and UTC and the closures in the next month. Calendar facts only, no market data. ?exchange=NYSE&at=2026-11-27T17:30:00Z.",
     tags: ["market-hours", "trading-calendar", "exchange", "stock-market", "holidays", "finance"],
     discovery: {
