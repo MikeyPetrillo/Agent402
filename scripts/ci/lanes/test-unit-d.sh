@@ -57,6 +57,8 @@ t node scripts/test-farcaster-social-kit.js
 t node scripts/test-algorand-page.js
 # Homepage tests (offline, fixture snapshot)
 t node scripts/test-home-page.js
+# Paid-call figure on home, /101 and tool pages: steps, receipt switch, no cost or revenue figure, still under reduced motion (offline)
+t node scripts/test-paid-call-figure.js
 # Header: Pricing, Company, Status as plain links, one primary action, every earlier destination still linked (offline)
 t node scripts/test-nav-primary.js
 t node scripts/test-badge-contrast.js

@@ -4888,7 +4888,7 @@ app.get("/scorecard", async (_req, res) => {
 });
 app.get("/glossary", (_req, res) => htmlCache(res, 300, 900).send(glossaryPage(BASE_URL)));
 // x402 & MPP 101 - the presenter-mode walkthrough with the live demo (src/x402-101.js).
-app.get("/101", (_req, res) => htmlCache(res, 300, 900).send(x402101Page(BASE_URL)));
+app.get("/101", (_req, res) => htmlCache(res, 300, 900).send(x402101Page(BASE_URL, { demoTool: CATALOG["GET /api/uuid"] || null })));
 for (const alias of ["/x402-101", "/how-it-works", "/walkthrough"]) app.get(alias, (_req, res) => res.redirect(301, "/101"));
 // The Agentic Finance card - og:image of /agentic-finance + /glossary and the
 // announcement image (src/aifi-card.js); rasterized once per process like /card.png.

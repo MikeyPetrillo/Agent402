@@ -20,6 +20,8 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
 import { powCostPhrase } from "./pow.js";
 import { resolveRailCountTokens } from "./rails.js";
+import { paidCallFigure, paidCallScript, PAID_CALL_CSS } from "./paid-call-figure.js";
+import { priceWords } from "./pages.js";
 
 // [id, kicker, headline, bodyHtml (trusted, authored here), notesText, opts]
 // notesText is the presenter's talk track - shown only with the N key / print.
@@ -152,6 +154,7 @@ html{scroll-behavior:smooth}
 .s101-steps{padding-left:22px;max-width:820px}
 .s101-steps li{font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin-bottom:12px}
 .s101-steps li strong{color:var(--ink)}
+.s101-fig{max-width:820px;margin:8px 0 18px}
 .s101-table{overflow-x:auto;margin:0 0 18px}
 .s101-table table{border-collapse:collapse;width:100%;min-width:640px;font-size:var(--fs-base);border:1px solid var(--hairline);background:var(--card)}
 .s101-table th,.s101-table td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--hairline);vertical-align:top;color:var(--muted)}
@@ -191,7 +194,10 @@ body.s101-show-notes .s101-notes{display:block}
 @media print{.s101-slide{min-height:auto;page-break-inside:avoid;border-bottom:1px solid var(--dash)}.s101-notes{display:block!important}.s101-bar,.s101-btn{display:none!important}}
 `;
 
-export function x402101Page(baseUrl) {
+export function x402101Page(baseUrl, { demoTool = null } = {}) {
+  // The recap slide shows the demo's own call (the catalog's uuid tool) step
+  // by step, at its catalog price; with no such tool the figure is left out.
+  const recapFigure = demoTool ? `<div class="s101-fig">${paidCallFigure({ method: String(demoTool.route).split(" ")[0], path: String(demoTool.route).split(" ")[1], price: priceWords(demoTool).short })}</div>` : "";
   const canonical = `${baseUrl}/101`;
   const title = "x402 & MPP 101 - how software pays for things, in ten minutes";
   const description = "A plain-language walkthrough of how an AI agent pays for what it uses over the x402 and MPP protocols: the 402 quote, the payment, the receipt, with a live demo against a real server. Presenter mode with speaker notes.";
@@ -200,7 +206,7 @@ export function x402101Page(baseUrl) {
   <div class="s101-in">
     <div class="s101-kicker">${esc(s.kicker)}</div>
     ${i === 0 ? `<h1 class="s101-h">${s.headline}</h1>` : `<h2 class="s101-h">${s.headline}</h2>`}
-    ${resolveRailCountTokens(s.body)}
+    ${resolveRailCountTokens(s.body)}${s.id === "recap" ? recapFigure : ""}
     <aside class="s101-notes"><span>Speaker notes</span>${esc(s.notes)}</aside>
   </div>
 </section>`).join("");
@@ -226,9 +232,10 @@ ${slides}
   <span>x402 &amp; MPP 101 &middot; agent402.tools/101</span>
 </div>
 <script src="/js/x402-101.js" defer></script>
+${recapFigure ? paidCallScript() : ""}
 ${ledgerFooterCompact()}`;
   return ledgerShell({
-    title, description, canonical, baseUrl, activePath: "/what-is-x402", extraCss: CSS,
+    title, description, canonical, baseUrl, activePath: "/what-is-x402", extraCss: CSS + PAID_CALL_CSS,
     jsonLd: [orgLd, howToLd],
     body,
   });

@@ -10,7 +10,8 @@ import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, decideLive, sectionMeta, fmtNum } from "./ledger-chrome.js";
 import { whyHomeClaims } from "./why.js";
 import { decideConfig } from "./decide/config.js";
-import { toolList } from "./pages.js";
+import { toolList, priceWords } from "./pages.js";
+import { paidCallFigure, paidCallScript, PAID_CALL_CSS } from "./paid-call-figure.js";
 import { RAILS, RAILS_SHORT } from "./rails.js";
 import { CAIP2_NAMES } from "./stats.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
@@ -202,7 +203,18 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   ];
   const faqLd = { "@type": "FAQPage", "@id": `${baseUrl}/#faq`, mainEntity: faqs.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
 
-  const extraCss = `
+  // The paid-call figure follows one real tool (the cited answer) with the
+  // hero's own live readings; a reading the server lacks is left to the poll.
+  const pcTool = tools.find((t) => t.slug === "answer") || tools.find((t) => t.slug === "uuid");
+  const pcLatency = figures.find((f) => f.key === "latency");
+  const paidCallHtml = pcTool ? paidCallFigure({
+    method: pcTool.method, path: pcTool.path, price: priceWords(pcTool).short,
+    chains: Number(chainsOffered) > 0 ? Number(chainsOffered) : undefined,
+    receipts,
+    latencyMs: pcLatency ? Number(String(pcLatency.value).replace(/[^0-9]/g, "")) : null,
+    settled: hasExternal ? Number(external.count) : null,
+  }) : "";
+  const extraCss = `${PAID_CALL_CSS}
 .hm-hero { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; }
 .hm-live-stats { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px 10px; padding: 16px 22px 14px; border-top: 1px solid rgba(255,255,255,.07); }
 .hm-live-stats[hidden] { display: none; }
@@ -341,7 +353,12 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   </div>
 </section>
 
-<section id="why" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;scroll-margin-top:90px;">
+${paidCallHtml ? `<section id="paid-call" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
+  <h2 class="hm-h2" style="margin:0 0 22px;">Watch a call get paid.</h2>
+  ${paidCallHtml}
+</section>
+
+` : ""}<section id="why" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;scroll-margin-top:90px;">
   <h2 class="hm-h2" style="margin:0 0 22px;">Why pay here.</h2>
   <div class="hm-claims">${claimsHtml}</div>
   <div class="hm-marks"><span class="hm-marks-k">settles on</span>${railMarksHtml}${tempoMarkHtml}</div>
@@ -365,7 +382,8 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 ${ledgerFooterCompact()}
 
 <script src="/js/hero-aura.js" defer></script>
-<script src="/js/home-hero.js"></script>`;
+<script src="/js/home-hero.js"></script>
+${paidCallHtml ? paidCallScript() : ""}`;
 
   return ledgerShell({ title, description, canonical, baseUrl, activePath: "", jsonLd: [orgLd, websiteLd, appLd, surfacesLd, faqLd], extraCss, body });
 }
