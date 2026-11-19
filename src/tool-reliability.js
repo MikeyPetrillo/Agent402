@@ -1,7 +1,7 @@
 // Per-tool reliability (GET /api/reliability/tools): for every route in the
 // catalog, the share of calls answered without a fault on our side and the
-// median and 95th percentile latency, over a stated window, with the sample
-// the figures stand on.
+// median and 95th percentile latency, over a stated window, each row marked
+// "measured" or "not enough data".
 //
 // SOURCE. The tool-call rows the dispatcher already records
 // (src/analytics-db.js getToolOutcomes): no new data is collected. Synthetic
@@ -14,17 +14,18 @@
 // moves a tool's rate. Latency is over the same calls, end to end inside the
 // server, in milliseconds.
 //
-// HONEST WHEN THIN. Below MIN_SAMPLE calls in the window a row says
-// measured:false and its figures are null: a rate over three calls is noise
-// stated as a fact. A row with no calls at all says sample "0". With no
+// HONEST WHEN THIN. Below MIN_SAMPLE calls in the window a row reads
+// status "not enough data" and its figures are null: a rate over three calls
+// is noise stated as a fact. With no
 // analytics store configured, or a query that failed, the document says
 // available:false and why, and every row is unmeasured: never a figure from
 // another window or a guess.
 //
-// WHAT IS NOT PUBLISHED. Exact call counts and any ranking: the per-tool
-// volume table stays operator-only (redactAnalytics). Rows come in catalog
-// order by slug, every route listed whatever its traffic, and the sample is
-// a band ("1-19", "20-99", "100-999", "1000+").
+// WHAT IS NOT PUBLISHED. Call counts in any form (no count, no band) and any
+// ranking: per-tool volume stays operator-only (redactAnalytics). Rows come
+// in catalog order by slug, every route listed whatever its traffic. The
+// operator view (operatorView, X-Operator-Token) adds each row's exact
+// `calls` and `serverErrors`.
 //
 // COST. One grouped query per TOOL_RELIABILITY_CACHE_MS (10 minutes) per
 // process, single-flight, bounded by the analytics pool's statement timeout;
@@ -43,15 +44,8 @@ export function toolReliabilityEnabled(env = process.env) {
   return String(env.TOOL_RELIABILITY_PUBLIC || "").trim().toLowerCase() !== "off";
 }
 
-/** The sample band for a call count. */
-export function sampleBand(n) {
-  const c = Math.max(0, Number(n) || 0);
-  if (c === 0) return "0";
-  if (c < TOOL_RELIABILITY_MIN_SAMPLE) return `1-${TOOL_RELIABILITY_MIN_SAMPLE - 1}`;
-  if (c < 100) return `${TOOL_RELIABILITY_MIN_SAMPLE}-99`;
-  if (c < 1000) return "100-999";
-  return "1000+";
-}
+export const STATUS_MEASURED = "measured";
+export const STATUS_THIN = "not enough data";
 
 /** A rate floored to three places, so a tool with any failure never reads 1. */
 function floorRate(okCount, n) {
@@ -59,18 +53,20 @@ function floorRate(okCount, n) {
   return Math.floor((okCount / n) * 1000) / 1000;
 }
 
-/** One row of the table, from the outcome row for the slug (or none). */
-export function reliabilityRow({ slug, route }, outcome, available) {
+/** One row of the table, from the outcome row for the slug (or none).
+ *  `operator` adds the exact counts (the operator view only). */
+export function reliabilityRow({ slug, route }, outcome, available, { operator = false } = {}) {
   const n = outcome ? Number(outcome.n) || 0 : 0;
   const measured = available && n >= TOOL_RELIABILITY_MIN_SAMPLE;
   return {
     slug,
     route,
-    sample: available ? sampleBand(n) : null,
+    status: measured ? STATUS_MEASURED : STATUS_THIN,
     measured,
     successRate: measured ? floorRate(Number(outcome.ok) || 0, n) : null,
     p50Ms: measured && Number.isFinite(Number(outcome.p50)) ? Number(outcome.p50) : null,
     p95Ms: measured && Number.isFinite(Number(outcome.p95)) ? Number(outcome.p95) : null,
+    ...(operator && available ? { calls: n, serverErrors: outcome ? Number(outcome.serverErrored) || 0 : 0 } : {}),
   };
 }
 
@@ -79,12 +75,12 @@ export function reliabilityRow({ slug, route }, outcome, available) {
  * is getToolOutcomes()'s answer (or null when switched off). `slug` narrows
  * to one row.
  */
-export function toolReliabilityDocument({ baseUrl = "", tools = [], result = null, asOf = new Date().toISOString(), off = false, slug = null } = {}) {
+export function toolReliabilityDocument({ baseUrl = "", tools = [], result = null, asOf = new Date().toISOString(), off = false, slug = null, operator = false } = {}) {
   const available = !off && !!result?.ok;
   const byslug = new Map((available ? result.rows : []).map((r) => [r.slug, r]));
   const all = [...tools].sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
   const picked = slug ? all.filter((t) => t.slug === slug) : all;
-  const rows = picked.map((t) => reliabilityRow(t, byslug.get(t.slug), available));
+  const rows = picked.map((t) => reliabilityRow(t, byslug.get(t.slug), available, { operator }));
   return {
     document: "agent402-tool-reliability",
     url: `${baseUrl}${TOOL_RELIABILITY_PATH}`,
@@ -96,7 +92,7 @@ export function toolReliabilityDocument({ baseUrl = "", tools = [], result = nul
     basis: {
       successRate: "answers below 400 over answers below 400 plus answers of 500 or above, in the window; a 4xx (the caller's input, a payment refusal) is not counted either way; floored to three places",
       latency: "milliseconds inside the server, from the request reaching the tool to its answer, over the same calls",
-      sample: "the calls the figures stand on, as a band; below minSample a row is measured:false and its figures are null",
+      status: `measured, or not enough data when the tool had fewer than minSample calls in the window (its figures are then null)`,
       excluded: "this server's own monitoring and test calls, empty-input probes and refusals answered before payment",
       order: "by slug; every catalog route is listed whatever its traffic",
     },

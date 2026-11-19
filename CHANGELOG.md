@@ -21,10 +21,10 @@ Payments:
   address.
 Reliability:
 - `/api/reliability/tools` lists every tool with its success rate and median
-  and 95th percentile latency over the last seven days, and the sample each
-  stands on as a band; a tool with too few calls in the window reads
-  unmeasured, and an input the caller got wrong is not counted against the
-  tool. `?slug=` returns one tool.
+  and 95th percentile latency over the last seven days, each marked measured
+  or not enough data; a tool with too few calls in the window has no figure,
+  and an input the caller got wrong is not counted against the tool.
+  `?slug=` returns one tool.
 Docs:
 - A proposal for the receipt format and the refund terms document, with this
   server as the working implementation, is in the repository's docs folder.

@@ -203,7 +203,7 @@ ok(/node scripts\/advisory-triage-check\.js/.test(src(".github/workflows/heartbe
   const { PAYER_SCREEN_RAILS } = await import("../src/payer-screen-rails.js");
   ok(PAYER_SCREEN_RAILS.credits.identifier === null && PAYER_SCREEN_RAILS["mpp-stripe"].identifier === null && /carry no payer address/.test(trust), "/trust says the card and credits rails carry no payer address, as the screen table does");
   ok(["x402-evm", "x402-svm", "x402-stellar", "x402-avm", "mpp-tempo-relay"].every((k) => typeof PAYER_SCREEN_RAILS[k].identifier === "string") && /the paying wallet on Tempo/.test(trust), "every rail /trust says is screened has an identifier in the screen table");
-  ok(trust.includes(TOOL_RELIABILITY_PATH) && trust.includes(`fewer than ${TOOL_RELIABILITY_MIN_SAMPLE} calls`) && /last seven days/.test(trust), "/trust states the per-tool window and the sample floor the module runs");
+  ok(trust.includes(TOOL_RELIABILITY_PATH) && trust.includes(`fewer than ${TOOL_RELIABILITY_MIN_SAMPLE} calls`) && /last seven days/.test(trust) && /measured or not enough data/.test(trust) && !/sample/i.test(trust.slice(trust.indexOf(TOOL_RELIABILITY_PATH), trust.indexOf(TOOL_RELIABILITY_PATH) + 400)), "/trust states the per-tool window and the sample floor the module runs");
   process.env.TOOL_RELIABILITY_PUBLIC = "off";
   const offText = pageText(trustPage(BASE));
   delete process.env.TOOL_RELIABILITY_PUBLIC;

@@ -2,7 +2,8 @@
 //
 //   1. The document, from stub outcomes: every catalog route listed by slug
 //      whatever its traffic; a row under the sample floor is unmeasured with
-//      null figures; the sample is a band, never an exact count; the rate is
+//      null figures and reads "not enough data"; no count or band reaches
+//      the public answer (the operator view keeps exact counts); the rate is
 //      floored (a tool with one failure never reads 1); no store, a failed
 //      query and the off switch each say available:false and why, with no
 //      figure; ?slug narrows to one row; the partial-answer fields.
@@ -39,24 +40,26 @@ const MIN = R.TOOL_RELIABILITY_MIN_SAMPLE;
   ok(d.available === true && !("reason" in d) && d.window.hours === R.TOOL_RELIABILITY_WINDOW_HOURS && d.minSample === MIN, "a measured document states its window and sample floor");
   ok(JSON.stringify(d.tools.map((t) => t.slug)) === JSON.stringify(["alpha", "mid", "quiet", "zeta"]), `every catalog route, by slug, none from outside it (${d.tools.map((t) => t.slug).join(",")})`);
   const a = d.tools.find((t) => t.slug === "alpha");
-  ok(a.measured && a.successRate === 0.999 && a.p50Ms === 42 && a.p95Ms === 380 && a.sample === "1000+", `a measured row (${JSON.stringify(a)})`);
+  ok(a.measured && a.successRate === 0.999 && a.p50Ms === 42 && a.p95Ms === 380 && a.status === "measured", `a measured row (${JSON.stringify(a)})`);
   const one = R.toolReliabilityDocument({ tools: TOOLS, result: { ok: true, rows: [{ slug: "alpha", n: 5000, ok: 4999, p50: 1, p95: 2 }] } }).tools.find((t) => t.slug === "alpha");
   ok(one.successRate === 0.999 && one.successRate < 1, "one failure in 5000 is floored to 0.999, never rounded to 1");
   const z = d.tools.find((t) => t.slug === "zeta");
-  ok(!z.measured && z.successRate === null && z.p50Ms === null && z.p95Ms === null && z.sample === `1-${MIN - 1}`, `under the floor: unmeasured, no figure, a band (${JSON.stringify(z)})`);
+  ok(!z.measured && z.successRate === null && z.p50Ms === null && z.p95Ms === null && z.status === "not enough data", `under the floor: not enough data, no figure (${JSON.stringify(z)})`);
   const m = d.tools.find((t) => t.slug === "mid");
-  ok(m.measured && m.successRate === 1 && m.sample === `${MIN}-99`, "at the floor: measured");
+  ok(m.measured && m.successRate === 1 && m.status === "measured", "at the floor: measured");
   const q = d.tools.find((t) => t.slug === "quiet");
-  ok(!q.measured && q.sample === "0" && q.successRate === null, "no calls: sample 0, unmeasured");
+  ok(!q.measured && q.status === "not enough data" && q.successRate === null, "no calls: not enough data");
   const text = JSON.stringify(d);
-  ok(!/"(n|ok|serverErrored|calls)":/.test(text) && !text.includes("1234") && !text.includes("1233"), "no exact call count leaves the module");
+  ok(!/"(n|ok|serverErrored|serverErrors|calls|sample|sampleSize|count)":/.test(text) && !text.includes("1234") && !text.includes("1233") && !/\d+-\d+"|\d\+"/.test(text), "the public answer carries no count and no band field (status only)");
+  for (const row of d.tools) ok(JSON.stringify(Object.keys(row)) === JSON.stringify(["slug", "route", "status", "measured", "successRate", "p50Ms", "p95Ms"]), `${row.slug}: public row keys are exactly the status and figures`);
+  const op = R.toolReliabilityDocument({ tools: TOOLS, result, operator: true });
+  ok(op.tools.find((t) => t.slug === "alpha").calls === 1234 && op.tools.find((t) => t.slug === "alpha").serverErrors === 1 && op.tools.find((t) => t.slug === "quiet").calls === 0, "the operator view keeps the exact counts");
   ok(d.returned === 4 && d.matched === 4 && d.complete === true && d.truncated === false, "the partial-answer fields: the whole list");
   const s = R.toolReliabilityDocument({ tools: TOOLS, result, slug: "mid" });
   ok(s.tools.length === 1 && s.tools[0].slug === "mid" && s.matched === 1 && s.complete, "?slug narrows to one row");
-  ok(["0", "1-19", "20-99", "100-999", "1000+"].join() === [0, 19, 99, 999, 1000].map(R.sampleBand).join() && R.sampleBand(1) === "1-19" && R.sampleBand(20) === "20-99" && R.sampleBand(100) === "100-999", "the band edges");
   for (const [name, args, reason] of [["no store", { result: { ok: false, enabled: false, reason: "not-configured" } }, "not-configured"], ["a failed query", { result: { ok: false, enabled: true, reason: "query-failed" } }, "query-failed"], ["switched off", { result, off: true }, "off"], ["no result", { result: null }, "not-configured"]]) {
     const u = R.toolReliabilityDocument({ tools: TOOLS, ...args });
-    ok(u.available === false && u.reason === reason && u.tools.length === 4 && u.tools.every((t) => t.measured === false && t.successRate === null && t.p50Ms === null && t.sample === null), `${name}: available false, reason ${u.reason}, every row unmeasured with no figure and no band`);
+    ok(u.available === false && u.reason === reason && u.tools.length === 4 && u.tools.every((t) => t.measured === false && t.successRate === null && t.p50Ms === null && t.status === "not enough data" && !("calls" in t)), `${name}: available false, reason ${u.reason}, every row not enough data with no figure`);
   }
   ok(R.toolReliabilityEnabled({}) === true && R.toolReliabilityEnabled({ TOOL_RELIABILITY_PUBLIC: "off" }) === false && R.toolReliabilityEnabled({ TOOL_RELIABILITY_PUBLIC: " OFF " }) === false, "on by default; TOOL_RELIABILITY_PUBLIC=off withdraws it");
 }
@@ -95,6 +98,7 @@ const MIN = R.TOOL_RELIABILITY_MIN_SAMPLE;
   ok(/app\.get\(TOOL_RELIABILITY_PATH, async/.test(server) && /toolOutcomesCached\(getToolOutcomes\)/.test(server), "server.js serves the table under its path constant, through the cache");
   ok(/\.\.\.\(toolReliabilityEnabled\(\) \? \{ toolReliability: \{ url: `\$\{BASE_URL\}\$\{TOOL_RELIABILITY_PATH\}`/.test(server), "/api/pricing points to it only while the switch is on");
   ok(/status\(404\)\.json\(\{ error: `No tool with slug/.test(server), "an unknown ?slug is a 404 naming the list");
+  ok(/const operator = operatorView\(req, res\);\n  if \(!operator\) res\.set\("Cache-Control", "public, max-age=300"\);/.test(server), "exact counts only on the operator view, which is never cached shared");
 }
 
 // ---- 3. the query, against a real Postgres ----
@@ -134,10 +138,10 @@ try {
   ok(a.p50 === 50 && a.p95 === 1000, `alpha: p50 and p95 over the same ten calls (${a.p50}, ${a.p95})`);
   ok(l && l.n === 2 && l.ok === 2, `a legacy clean row and a 304 count as answered (${JSON.stringify(l)})`);
   const d = R.toolReliabilityDocument({ tools: [{ slug: "alpha", route: "POST /api/alpha" }], result: r });
-  ok(d.available && d.tools[0].sample === "1-19" && d.tools[0].measured === false, "ten calls stay under the floor: published unmeasured");
+  ok(d.available && d.tools[0].status === "not enough data" && d.tools[0].measured === false, "ten calls stay under the floor: published not enough data");
   for (let i = 0; i < 10; i++) await ins("alpha", 20, 200);
   const d2 = R.toolReliabilityDocument({ tools: [{ slug: "alpha", route: "POST /api/alpha" }], result: await adb.getToolOutcomes({ windowHours: R.TOOL_RELIABILITY_WINDOW_HOURS }) });
-  ok(d2.tools[0].measured && d2.tools[0].successRate === 0.9 && d2.tools[0].sample === "20-99", `twenty calls: measured, 18 of 20 answered (${JSON.stringify(d2.tools[0])})`);
+  ok(d2.tools[0].measured && d2.tools[0].successRate === 0.9 && d2.tools[0].status === "measured", `twenty calls: measured, 18 of 20 answered (${JSON.stringify(d2.tools[0])})`);
 } finally {
   await direct.end().catch(() => {});
   await adb.closeAnalyticsDb().catch(() => {});

@@ -7850,8 +7850,10 @@ app.get(TOOL_RELIABILITY_PATH, async (req, res) => {
   const tools = [...new Map(Object.entries(CATALOG).map(([route, def]) => [def.slug, { slug: def.slug, route }])).values()];
   if (slug && !tools.some((t) => t.slug === slug)) return res.status(404).json({ error: `No tool with slug ${JSON.stringify(slug)}.`, reason: "unknown-slug", list: `${BASE_URL}${TOOL_RELIABILITY_PATH}` });
   const result = off ? null : await toolOutcomesCached(getToolOutcomes);
-  res.set("Cache-Control", "public, max-age=300");
-  res.json(toolReliabilityDocument({ baseUrl: BASE_URL, tools, result, off, slug }));
+  // The operator view adds each row's exact counts and is never cached shared.
+  const operator = operatorView(req, res);
+  if (!operator) res.set("Cache-Control", "public, max-age=300");
+  res.json(toolReliabilityDocument({ baseUrl: BASE_URL, tools, result, off, slug, operator }));
 });
 // Synthetic self-check — runs a curated set of high-value tools' own examples
 // live (see src/selfcheck.js) so a paid tool that breaks in prod is caught even
