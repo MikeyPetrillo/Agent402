@@ -59,6 +59,8 @@ t env AGENT402_SHOW_ROUTER=1 node scripts/test-listing-text-serve.js
 t node scripts/test-seller-docs-url.js
 # Seller reputation: scoring math and minimum samples, the fold (our own failed reads, robots, registry-only records and verdict-less probes left out), store bounds, the delivery recorder's exclusions (off unless the production crawl runs, outside a request, a request that is ours), no payment/buyer/settlement field; /api/reputation cache header, capped rows, refusals and hostile values, ?seller= and the seller card (boots a server on a seeded index)
 t node scripts/test-seller-reputation.js
+# Reputation output and copy state measurements, never a judgment word (offline)
+t node scripts/test-reputation-wording.js
 # The listing screen's necessary-word hints answer exactly as the unhinted reading (implication per pattern on a generated corpus, agreement on the honest fixture; offline)
 t node scripts/test-listing-screen-hints.js
 # Well-known store (operator-published domain-verification docs; traversal impossible, reserved names refused, no shadowing of /.well-known/x402 — offline)

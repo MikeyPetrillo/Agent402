@@ -36,6 +36,7 @@ export function ownStoreEnv(label = "server") {
     // Seller reputation records and delivery outcomes (src/seller-reputation.js).
     SELLER_REPUTATION_FILE: join(dir, "seller-reputation.json"),
     SELLER_DELIVERY_FILE: join(dir, "seller-delivery-outcomes.json"),
+    SELLER_REPUTATION_META_FILE: join(dir, "seller-reputation-meta.json"),
     DISCOVERY_REFUSALS_FILE: join(dir, "discovery-refusals.json"),
     // The referral gate's open-settlement book (src/referral-book.js).
     REFERRAL_BOOK_FILE: join(dir, "referral-settlements.json"),

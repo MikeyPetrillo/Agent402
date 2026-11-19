@@ -1162,7 +1162,7 @@ export function openapiSpec(baseUrl, catalog) {
       operationId: "getSellerReputation",
       security: [],
       summary: "One outside seller's reputation, measured by this server",
-      description: "Free. What this server's own crawl and its router's own paid calls measured about one outside x402 seller over a rolling 30-day window: manifest uptime, paywall (402) uptime, responsiveness of the 402, price honesty (the live 402 price against the price the seller's own documents list) and delivery (measured from purchases Agent402's router made for buyers), with age. Each metric names its method, window, sample size, minimum sample and last measurement, and is scored (0 to 1) only past its minimum sample; below it reads not-enough-data. No metric counts payments or buyers: router purchases, our own wallets and test traffic are never buyer evidence, and settlement counts are not part of the record. Per-route rows are capped (returned, matched, complete and truncated say so). Computed off the request path by a scheduled pass.",
+      description: "Free. What this server's own crawl and its router's own paid calls measured about one outside x402 seller over a rolling 30-day window: manifest uptime, paywall (402) uptime, responsiveness of the 402, price matches listing (the live 402 price against the price the seller's own documents list) and delivery (measured from purchases Agent402's router made for buyers), with age. Each metric names its method, window, sample size, minimum sample and last measurement, and is scored (0 to 1) only past its minimum sample; below it reads not-enough-data. No metric counts payments or buyers: router purchases, our own wallets and test traffic are never buyer evidence, and settlement counts are not part of the record. Per-route rows are capped (returned, matched, complete and truncated say so). Computed off the request path by a scheduled pass.",
       tags: ["transparency"],
       parameters: [{ name: "seller", in: "query", required: true, description: "The seller's host or origin, as on /api/index?seller=.", schema: { type: "string", maxLength: 512 } }],
       responses: {
@@ -1170,6 +1170,23 @@ export function openapiSpec(baseUrl, catalog) {
         400: { description: "No seller named, or one longer than 512 characters." },
         404: { description: "The seller is not in this server's index (or names this server's own host)." },
         503: { description: "The index is still loading; retry after Retry-After seconds." },
+      },
+    },
+  };
+  paths["/api/reputation/recheck"] = {
+    post: {
+      operationId: "recheckSellerReputation",
+      security: [],
+      summary: "Ask for a fresh measurement of one indexed seller",
+      description: "Free. Schedules the crawl to read the seller on its next cycle, inside the seller's own per-operator crawl budget (one of its places that cycle, never an extra read; a Retry-After or daily budget it set still applies); the next reputation pass folds that read in. One accepted request per seller every 6 hours: a repeat inside that span answers the request already scheduled and changes nothing. Limited per caller.",
+      tags: ["transparency"],
+      parameters: [{ name: "seller", in: "query", required: true, description: "The seller's host or origin, as on /api/reputation?seller=.", schema: { type: "string", maxLength: 512 } }],
+      responses: {
+        202: { description: "Scheduled: when the crawl reads the seller (crawlBy) and when the record shows it (recordBy).", content: { "application/json": { schema: { type: "object", required: ["seller", "status", "accepted", "requestedAt", "crawlBy", "recordBy"], properties: { seller: { type: "string" }, status: { type: "string", enum: ["scheduled"] }, accepted: { type: "boolean" }, requestedAt: { type: "string", format: "date-time" }, crawlBy: { type: "string", format: "date-time" }, recordBy: { type: "string", format: "date-time" }, nextAcceptedAt: { type: "string", format: "date-time" }, lastRecheckedAt: { type: ["string", "null"], format: "date-time" } } } } } },
+        400: { description: "No seller named, or one longer than 512 characters." },
+        404: { description: "The seller is not in this server's index (or names this server's own host)." },
+        429: { description: "The caller's hourly limit; retry after Retry-After seconds." },
+        503: { description: "The index is still loading, reputation is not measured on this server, or the store could not record the request; retry after Retry-After seconds." },
       },
     },
   };

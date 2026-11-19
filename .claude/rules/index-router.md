@@ -261,7 +261,16 @@ Loaded when an index, discovery, router or buyer file is read.
   through two Maps rebuilt at most every 30 s, rows capped at 200 with the partial-answer fields),
   as `reputation` on `?seller=` and its rows, and on the chain page's seller card. A metric scores
   only past its minimum sample; no field is a payment, buyer or settlement count
-  (`scripts/test-seller-reputation.js`). Method: `wiki/Seller-Reputation.md`.
+  (`scripts/test-seller-reputation.js`). Method: `wiki/Seller-Reputation.md`. Correction path:
+  `POST /api/reputation/recheck?seller=` (free; one accepted request per seller per
+  `SELLER_REPUTATION_RECHECK_HOST_MS`, a repeat answers the one scheduled; per-caller limit
+  across replicas) records the request in `seller-reputation-meta` (`SELLER_REPUTATION_META_FILE`);
+  the crawl reads `pendingRecheckOrigins()` each cycle and `originsDueThisCycle`'s `prefer` gives
+  the origin one of its operator's places (never an extra read; `crawlPlan` budgets still apply);
+  the pass sets `rk`, served as `lastRecheckedAt`. A cycle whose `oursShare` reaches
+  `CRAWL_OURS_SIDE_SHARE` calls `noteOurSideIssue`: that day's crawl, paywall and latency samples
+  are left out of every seller's scores (`measurementIssue`, "measurement issue on our side").
+  Reputation output and copy carry no judgment words (`scripts/test-reputation-wording.js`).
 - **Seller docs link:** `src/seller-docs-url.js`. A tool row on `/api/index?seller=<host>` carries
   `sellerDocsUrl` when the seller's own OpenAPI operation names `externalDocs.url`, kept only as an
   https link on the seller's exact host (under its own path for a seller listed with a path) and

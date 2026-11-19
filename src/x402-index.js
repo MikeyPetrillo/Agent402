@@ -7704,8 +7704,11 @@ const CRAWL_ORIGINS_PER_OPERATOR = Math.max(1, Number(process.env.CRAWL_ORIGINS_
 
 /** At most `cap` origins per operator this cycle, rotating by cycle so every
  *  origin comes up in turn instead of the same few always winning. Input order
- *  is preserved, and anyone at or under the cap is unaffected. */
-export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_OPERATOR, { slowWaiting = (o) => sellerLoad.slowWaiting(o, "x402") } = {}) {
+ *  is preserved, and anyone at or under the cap is unaffected. `prefer(origin)`
+ *  (a seller's re-check request, src/seller-reputation.js) puts an origin
+ *  among its operator's places this cycle ahead of the rotation: it takes one
+ *  of the `cap` places, never an extra one. */
+export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_OPERATOR, { slowWaiting = (o) => sellerLoad.slowWaiting(o, "x402"), prefer = null } = {}) {
   const byOperator = new Map();
   for (const o of origins) {
     const k = operatorKey(o);
@@ -7715,8 +7718,10 @@ export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_
   const due = new Set();
   for (const [, list] of byOperator) {
     if (list.length <= cap) { for (const o of list) due.add(o); continue; }
+    const picked = new Set(typeof prefer === "function" ? list.filter((o) => prefer(o)).slice(0, cap) : []);
     const offset = (cycle * cap) % list.length;
-    for (let i = 0; i < cap; i++) due.add(list[(offset + i) % list.length]);
+    for (let i = 0; i < list.length && picked.size < cap; i++) picked.add(list[(offset + i) % list.length]);
+    for (const o of picked) due.add(o);
   }
   // A slow origin (its operator asked) waits SLOW_READ_INTERVAL_MS by the
   // clock from its last scheduled read, whichever container made it and
@@ -7773,6 +7778,28 @@ export function groupTurnGoesOn(read, size, othersOpen, slots = CRAWL_CONCURRENC
   return read < Math.ceil(size / Math.max(1, slots)) || othersOpen > 0;
 }
 
+// Hooks the server wires to the seller reputation record (kept out of this
+// module's imports): which origins a re-check asked for, and a cycle that
+// failed broadly on our side.
+let recheckSource = async () => new Map();
+let ourSideIssueHook = async () => {};
+/** `fn()` resolves to a Map origin -> requestedAt (ms). */
+export function setCrawlRecheckSource(fn) { recheckSource = typeof fn === "function" ? fn : async () => new Map(); }
+/** `fn(at)` is called once per crawl cycle that failed broadly on our side. */
+export function setOurSideIssueHook(fn) { ourSideIssueHook = typeof fn === "function" ? fn : async () => {}; }
+async function recheckWantedFor() {
+  try {
+    const m = await Promise.race([recheckSource(), new Promise((r) => setTimeout(() => r(null), 5000).unref?.())]);
+    return m instanceof Map ? m : new Map();
+  } catch { return new Map(); }
+}
+/** The crawl's own cycle health: the last cycle's share of reads that ended on
+ *  our side, and whether that is a broad failure of ours. */
+export function crawlCycleHealth() {
+  const s = lastCycleSummary;
+  return { at: s?.at || null, oursShare: s ? s.oursShare : null, broadOurSide: !!s && s.oursShare >= CRAWL_OURS_SIDE_SHARE, threshold: CRAWL_OURS_SIDE_SHARE };
+}
+
 /** True while a crawl cycle is running (every entry is being replaced). */
 export function crawlInProgress() { return !!crawlInFlight; }
 const runCrawlLeased = leased("x402-index-crawl", { ttlMs: 60 * 60_000, failOpen: true }, () => runCrawl());
@@ -7807,7 +7834,11 @@ async function runCrawl() {
     // less often when it shares an operator: 20 hosts at a cap of 4 means each is
     // seen every 5th cycle (~2.5h) instead of every 30 minutes. Single-host
     // sellers - almost all of them - are untouched.
-    const due = originsDueThisCycle(ordered, crawlCycle);
+    // A seller's re-check request (src/seller-reputation.js) takes one of its
+    // operator's places this cycle; a read made since the request ends it.
+    const rechecks = await recheckWantedFor();
+    const prefer = rechecks.size ? (o) => rechecks.has(o) && !((Number(cache.get(o)?.fetchedAt) || 0) >= rechecks.get(o)) : null;
+    const due = originsDueThisCycle(ordered, crawlCycle, CRAWL_ORIGINS_PER_OPERATOR, { prefer });
     // A slow origin left out while it waits its slow cycle is a turn we put
     // off: the hold of its last good listing counts from here (turnNotReadAt).
     if (SLOW_ORIGINS.size) { const dueSet = new Set(due); for (const o of ordered) if (!dueSet.has(o) && sellerLoad.slowWaiting(o, "x402")) noteTurnNotRead(o); }
@@ -7861,6 +7892,9 @@ async function runCrawl() {
       crawlCycleTally.ours += backedOff.length * rates.ours;
     }
     const oursShare = closeCrawlCycleTally();
+    // A cycle that failed broadly on our side: its day's readings say nothing
+    // about the sellers, so the reputation record leaves them out.
+    if (oursShare >= CRAWL_OURS_SIDE_SHARE) { try { await ourSideIssueHook(Date.now()); } catch { /* the cycle goes on */ } }
     // Each step is guarded on its own: a throw in one used to skip the release
     // silently for every later cycle, and the slots it should have freed stayed
     // held with nothing in the log to say why.

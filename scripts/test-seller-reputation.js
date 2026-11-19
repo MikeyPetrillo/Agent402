@@ -69,11 +69,11 @@ const PRIVATE_KEY_RE = /settle|buyer|payer|wallet|volume|usd|calls30d|payers30d|
   };
   rep = R.reputationOf({ rec: full, delivery: { d: series(1, 2) }, since: NOW - 90 * DAY, updatedAt: NOW, now: NOW });
   const W = R.OVERALL_WEIGHTS;
-  const expect = (W.manifestUptime * 1 + W.paywallUptime * 0.8 + W.responsiveness * 0.6 + W.priceHonesty * 0.75) / (W.manifestUptime + W.paywallUptime + W.responsiveness + W.priceHonesty);
+  const expect = (W.manifestUptime * 1 + W.paywallUptime * 0.8 + W.responsiveness * 0.6 + W.priceMatchesListing * 0.75) / (W.manifestUptime + W.paywallUptime + W.responsiveness + W.priceMatchesListing);
   ok(rep.overall.status === "scored" && Math.abs(rep.overall.score - Math.round(expect * 1000) / 1000) < 1e-9, `overall is the renormalized weighted mean of the scored components (${rep.overall.score} vs ${expect.toFixed(3)})`);
-  ok(JSON.stringify(rep.overall.components) === JSON.stringify(["paywallUptime", "manifestUptime", "priceHonesty", "responsiveness"]), `an unscored component (delivery, n=2) is left out of it (${rep.overall.components})`);
+  ok(JSON.stringify(rep.overall.components) === JSON.stringify(["paywallUptime", "manifestUptime", "priceMatchesListing", "responsiveness"]), `an unscored component (delivery, n=2) is left out of it (${rep.overall.components})`);
   ok(rep.metrics.responsiveness.score === 0.6 && rep.metrics.responsiveness.medianMs === 900 && rep.metrics.responsiveness.thresholdMs === R.RESPONSIVE_MS, `responsiveness: share within the threshold and the median (${rep.metrics.responsiveness.score}, ${rep.metrics.responsiveness.medianMs} ms)`);
-  ok(rep.metrics.priceHonesty.score === 0.75 && rep.metrics.priceHonesty.sampleSize === 4, "price honesty: matched routes over routes read");
+  ok(rep.metrics.priceMatchesListing.score === 0.75 && rep.metrics.priceMatchesListing.sampleSize === 4, "price matches listing: matched routes over routes read");
   ok(rep.metrics.delivery.status === "not-enough-data" && rep.metrics.delivery.sampleSize === 2, "delivery under its minimum reads not-enough-data");
   ok(rep.age.firstObservedAt === new Date(NOW - 60 * DAY).toISOString() && rep.age.observedDays === 60 && rep.age.recordsSince === new Date(NOW - 90 * DAY).toISOString(), "age: first observed, days observed and when records began");
   ok(rep.metrics.manifestUptime.lastMeasuredAt === new Date(NOW - 3600_000).toISOString(), "last measured is the newest recorded crawl's own time");
@@ -89,7 +89,7 @@ const PRIVATE_KEY_RE = /settle|buyer|payer|wallet|volume|usd|calls30d|payers30d|
   const old = R.reputationOf({ rec: { f: NOW - 90 * DAY, c: series(0, 20, day(NOW) - 31), p: [], l: [] }, now: NOW });
   ok(old.metrics.manifestUptime.sampleSize === 0 && old.metrics.manifestUptime.status === "not-enough-data", "samples outside the window are not counted");
   const stalePrice = R.reputationOf({ rec: { q: [5, 5, NOW - 31 * DAY] }, now: NOW });
-  ok(stalePrice.metrics.priceHonesty.sampleSize === 0, "a price snapshot older than the window is not counted");
+  ok(stalePrice.metrics.priceMatchesListing.sampleSize === 0, "a price snapshot older than the window is not counted");
 
   // Price matching and the per-row reading.
   ok(R.priceMatches(1000, 1000) && R.priceMatches(1005, 1000) && !R.priceMatches(1020, 1000) && !R.priceMatches(0, 1000), "a price within 1% matches; 2% does not; a zero never does");
@@ -228,6 +228,82 @@ const unlabeled = (t) => String(t).split(LABEL).join("");
   ok(uses(idx) === uses(detail) && uses(detail) === 3, "the index reads reputation only inside the ?seller= detail, never in routing or eligibility");
 }
 
+// ------------------------------------------- A2. corrections (offline)
+{
+  const series = (ok, n, endDay = day(NOW)) => { const s = []; for (let i = n - 1; i >= 0; i--) s.push(endDay - i, i < ok ? 1 : 0, 1); return s; };
+  // The rename: the price metric is "price matches listing", in fields and labels.
+  const rep0 = R.reputationOf({ rec: { f: NOW - 40 * DAY, c: [], p: [], l: [], q: [4, 3, NOW - DAY] }, now: NOW });
+  ok(rep0.metrics.priceMatchesListing?.score === 0.75 && !("priceHonesty" in rep0.metrics) && R.METRIC_LABELS.priceMatchesListing === "price matches listing" && "priceMatchesListing" in R.OVERALL_WEIGHTS && "priceMatchesListing" in R.MIN_SAMPLES,
+    "the price metric is priceMatchesListing in the record, the weights, the minimums and the label");
+
+  // A day our crawl failed broadly on our side is left out of the crawl,
+  // paywall and latency metrics, and named.
+  const today = day(NOW);
+  const rec = { f: NOW - 40 * DAY, lc: NOW - 60_000, lp: NOW - 60_000, c: series(10, 12), p: series(3, 6), l: [today - 2, 300, today - 1, 400, today, 9000, today, 9000, today - 3, 500, today - 4, 600] };
+  const before = R.reputationOf({ rec, now: NOW });
+  const after = R.reputationOf({ rec, now: NOW, ourSideDays: [today, today - 1] });
+  ok(before.measurementIssue === null && before.metrics.manifestUptime.sampleSize === 12 && !("excludedSamples" in before.metrics.manifestUptime), "control: no issue day, every sample counted");
+  ok(after.metrics.manifestUptime.sampleSize === 10 && after.metrics.manifestUptime.excludedSamples === 2 && after.metrics.manifestUptime.excludedReason === R.OUR_SIDE_ISSUE,
+    `the issue days' crawl samples are left out and counted as excluded (${after.metrics.manifestUptime.sampleSize}, excluded ${after.metrics.manifestUptime.excludedSamples})`);
+  ok(after.metrics.paywallUptime.sampleSize === 4 && after.metrics.paywallUptime.excludedSamples === 2, "the paywall samples of those days are left out too");
+  ok(before.metrics.responsiveness.sampleSize === 6 && after.metrics.responsiveness.sampleSize === 3 && after.metrics.responsiveness.excludedSamples === 3 && after.metrics.responsiveness.status === "not-enough-data", `the latencies of those days are left out (n ${after.metrics.responsiveness.sampleSize} of ${before.metrics.responsiveness.sampleSize}, so under the minimum)`);
+  ok(after.measurementIssue?.status === "measurement issue on our side" && after.measurementIssue.days.length === 2 && after.measurementIssue.days[1] === new Date(today * DAY).toISOString().slice(0, 10), "the record names the days as a measurement issue on our side");
+  ok(R.reputationOf({ rec, now: NOW, ourSideDays: [today - 400, "x", null] }).measurementIssue === null, "a day outside the window, or not a day, is ignored");
+  ok(after.metrics.manifestUptime.lastMeasuredAt !== new Date(rec.lc).toISOString(), "the last measurement time does not name a left-out reading");
+
+  // Re-check requests: one accepted per seller per span, a repeat changes nothing.
+  const S = "https://fix.example";
+  let a1 = R.applyRecheck(null, S, NOW, 6 * 3600_000);
+  ok(a1.accepted && a1.requestedAt === NOW && a1.body.rechecks[S].at === NOW, "the first request is accepted");
+  const a2 = R.applyRecheck(a1.body, S, NOW + 3600_000, 6 * 3600_000);
+  ok(!a2.accepted && a2.requestedAt === NOW && a2.body.rechecks[S].at === NOW && a2.nextAcceptedAt === NOW + 6 * 3600_000, "a repeat inside the span answers the scheduled request and changes nothing");
+  const a3 = R.applyRecheck(a2.body, S, NOW + 6 * 3600_000, 6 * 3600_000);
+  ok(a3.accepted && a3.requestedAt === NOW + 6 * 3600_000, "past the span a new request is accepted");
+  let big = null;
+  for (let i = 0; i < 5100; i++) big = R.applyRecheck(big?.body, `https://s${i}.example`, NOW + i, 6 * 3600_000);
+  ok(Object.keys(big.body.rechecks).length === 5000 && big.body.rechecks["https://s5099.example"], "the request store keeps at most 5000, newest first");
+
+  // The fold marks the newest crawl read after a request: lastRecheckedAt.
+  const f1 = R.foldEntry(null, { fetchedAt: NOW - 1000, tools: [] }, NOW, { recheckAt: NOW - 5000 });
+  const f2 = R.foldEntry(null, { fetchedAt: NOW - 9000, tools: [] }, NOW, { recheckAt: NOW - 5000 });
+  ok(f1.rk === NOW - 1000 && !("rk" in f2), "a crawl read at or after the request sets rk; an older one does not");
+  const shown = R.reputationOf({ rec: f1, now: NOW, recheck: { requestedAt: NOW - 5000 } });
+  ok(shown.lastRecheckedAt === new Date(NOW - 1000).toISOString() && shown.recheck.status === "measured" && shown.recheck.path === "/api/reputation/recheck", "the record shows lastRecheckedAt and the request as measured");
+  ok(R.reputationOf({ rec: f2, now: NOW, recheck: { requestedAt: NOW - 5000 } }).recheck.status === "scheduled" && R.reputationOf({ rec: f2, now: NOW }).lastRecheckedAt === null, "before a read it is scheduled; with no request lastRecheckedAt is null");
+
+  // The crawl gives a requested origin one of its operator's places, never an extra one.
+  const { originsDueThisCycle } = await import("../src/x402-index.js");
+  const many = Array.from({ length: 12 }, (_, i) => `https://h${i}.op.example`);
+  const noSlow = { slowWaiting: () => false };
+  const plain = originsDueThisCycle(many, 0, 4, noSlow);
+  const target = many.find((o) => !plain.includes(o));
+  const pref = originsDueThisCycle(many, 0, 4, { ...noSlow, prefer: (o) => o === target });
+  ok(plain.length === 4 && pref.length === 4 && pref.includes(target), `a requested origin takes one of the operator's ${pref.length} places (cap 4), not an extra one`);
+  ok(originsDueThisCycle(many, 0, 4, { ...noSlow, prefer: () => true }).length === 4, "every origin requested: still the cap");
+  ok(originsDueThisCycle(many, 0, 4, { slowWaiting: (o) => o === target, prefer: (o) => o === target }).every((o) => o !== target), "a slow origin's own wait still holds for a requested read");
+  const idx = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
+  ok(/const rechecks = await recheckWantedFor\(\);/.test(idx) && /if \(oursShare >= CRAWL_OURS_SIDE_SHARE\) \{ try \{ await ourSideIssueHook\(Date\.now\(\)\);/.test(idx), "runCrawl reads the requested origins and reports a broad failure on our side");
+  const srvSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/setCrawlRecheckSource\(\(\) => pendingRecheckOrigins\(\)\);/.test(srvSrc) && /setOurSideIssueHook\(\(at\) => noteOurSideIssue\(at\)\);/.test(srvSrc), "the server wires both hooks where reputation starts");
+  // The shared meta document: a broad failure is recorded once per day, a
+  // re-check is idempotent, and the crawl's pending list carries it.
+  const metaDir = mkdtempSync(join(tmpdir(), "a402-rep-meta-"));
+  process.env.SELLER_REPUTATION_META_FILE = join(metaDir, "meta.json");
+  R.__resetReputationForTest();
+  ok(await R.noteOurSideIssue(Date.now()) && await R.noteOurSideIssue(Date.now() + 1000), "a broad failure on our side is recorded");
+  const X = "https://x.example";
+  const q1 = await R.requestRecheck(X), q2 = await R.requestRecheck(X);
+  ok(q1.ok && q1.accepted && q2.ok && !q2.accepted && q2.requestedAt === q1.requestedAt, "requestRecheck is idempotent inside the span");
+  const pend = await R.pendingRecheckOrigins();
+  ok(pend instanceof Map && pend.get(X) === q1.requestedAt, "the crawl's pending list carries the request and its time");
+  const shownX = R.sellerReputation(X);
+  ok(shownX.recheck.status === "scheduled" && shownX.measurementIssue?.days.length === 1, "the served record shows the scheduled re-check and one issue day (recorded once)");
+  const stored = JSON.parse(readFileSync(process.env.SELLER_REPUTATION_META_FILE, "utf8"));
+  ok(keysOf(stored).filter((k) => PRIVATE_KEY_RE.test(k)).length === 0 && !JSON.stringify(stored).includes("127.0.0.1"), "the meta document holds no payer, buyer or caller field");
+  R.__resetReputationForTest();
+  delete process.env.SELLER_REPUTATION_META_FILE;
+}
+
 // ---------------------------------------------------------------- B. the server
 {
   const dir = mkdtempSync(join(tmpdir(), "a402-reputation-"));
@@ -257,7 +333,7 @@ const unlabeled = (t) => String(t).split(LABEL).join("");
       env: {
         FREE_MODE: "true", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
         X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"),
-        ROUTER_WORKERS: "0", LOAD_SHED: "off", SELLER_REPUTATION_FILE: repFile, SELLER_DELIVERY_FILE: delFile, SELLER_REPUTATION_FIRST_MS: "1500",
+        ROUTER_WORKERS: "0", LOAD_SHED: "off", SELLER_REPUTATION_FILE: repFile, SELLER_DELIVERY_FILE: delFile, SELLER_REPUTATION_FIRST_MS: "1500", REPUTATION_RECHECK_PER_IP_HOUR: "4",
       },
     });
   } catch (e) { ok(false, `server booted (${String(e?.message || e).slice(0, 400)})`); }
@@ -288,7 +364,7 @@ const unlabeled = (t) => String(t).split(LABEL).join("");
     ok(a.r.status === 200 && /public/.test(a.r.headers.get("cache-control") || "") && /max-age=300/.test(a.r.headers.get("cache-control") || ""), `200 with a public cache header (${a.r.headers.get("cache-control")})`);
     ok(rep?.metrics?.manifestUptime?.status === "scored" && rep.metrics.manifestUptime.sampleSize === 21, `a seller past every minimum is scored (manifest n=${rep?.metrics?.manifestUptime?.sampleSize})`);
     ok(rep?.metrics?.paywallUptime?.status === "scored" && rep?.metrics?.delivery?.status === "scored" && rep.metrics.delivery.score === 0.833, `paywall and delivery scored (delivery ${rep?.metrics?.delivery?.score})`);
-    ok(rep?.metrics?.priceHonesty?.status === "scored" && rep.metrics.priceHonesty.sampleSize === 3 && rep.metrics.priceHonesty.score === 0.667, `price honesty read from the live index (${rep?.metrics?.priceHonesty?.score})`);
+    ok(rep?.metrics?.priceMatchesListing?.status === "scored" && rep.metrics.priceMatchesListing.sampleSize === 3 && rep.metrics.priceMatchesListing.score === 0.667, `price matches listing read from the live index (${rep?.metrics?.priceMatchesListing?.score})`);
     ok(rep?.overall?.status === "scored" && rep.overall.score > 0 && rep.overall.score <= 1, `overall scored (${rep?.overall?.score})`);
     ok(rep?.recordState === "ready" && typeof rep?.methodDoc === "string" && /wiki\/Seller-Reputation$/.test(rep.methodDoc), "the record names its state and its method document");
     const leaked = keysOf(a.json).filter((k) => PRIVATE_KEY_RE.test(k));
@@ -314,6 +390,26 @@ const unlabeled = (t) => String(t).split(LABEL).join("");
     ok(missing.r.status === 400 && arr.r.status === 400 && long.r.status === 400, `a missing, repeated or oversized value is refused (${missing.r.status}, ${arr.r.status}, ${long.r.status})`);
     ok(self.r.status === 404 && /does not score its own host/.test(self.json?.error || ""), "this server's own host is not scored");
     ok(unknown.r.status === 404 && unknown.json?.indexing === false, "an unknown seller is a 404 that names the index state");
+    // The correction path: POST /api/reputation/recheck.
+    const post = async (p) => { const r = await fetch(`${base}${p}`, { method: "POST" }); const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch { /* html */ } return { r, text, json }; };
+    const rc1 = await post(`/api/reputation/recheck?seller=thin.example`);
+    ok(rc1.r.status === 202 && rc1.json?.accepted === true && rc1.json.seller === THIN && rc1.json.status === "scheduled" && Date.parse(rc1.json.crawlBy) > Date.parse(rc1.json.requestedAt) && Date.parse(rc1.json.recordBy) > Date.parse(rc1.json.crawlBy) && /no-store/.test(rc1.r.headers.get("cache-control") || ""),
+      `a re-check is accepted: 202 with when (${rc1.r.status}, crawlBy ${rc1.json?.crawlBy})`);
+    const rc2 = await post(`/api/reputation/recheck?seller=https://thin.example`);
+    ok(rc2.r.status === 202 && rc2.json?.accepted === false && rc2.json.requestedAt === rc1.json.requestedAt && rc2.json.nextAcceptedAt === rc1.json.nextAcceptedAt, "a repeat inside the span answers the same scheduled request (idempotent)");
+    const thinAfter = await get(`/api/reputation?seller=thin.example`);
+    ok(thinAfter.json?.reputation?.recheck?.status === "scheduled" && thinAfter.json.reputation.recheck.requestedAt === rc1.json.requestedAt && thinAfter.json.reputation.lastRecheckedAt === null, "the record shows the scheduled re-check, not yet measured");
+    const rcMissing = await post(`/api/reputation/recheck`);
+    const rcUnknown = await post(`/api/reputation/recheck?seller=nobody.example`);
+    const rcSelf = await post(`/api/reputation/recheck?seller=agent402.tools`);
+    ok(rcMissing.r.status === 400 && rcUnknown.r.status === 404 && rcSelf.r.status === 404, `missing, unknown and own-host values are refused (${rcMissing.r.status}, ${rcUnknown.r.status}, ${rcSelf.r.status})`);
+    const rc3 = await post(`/api/reputation/recheck?seller=scored.example`);
+    const rc4 = await post(`/api/reputation/recheck?seller=big.example`);
+    const rc5 = await post(`/api/reputation/recheck?seller=scored.example`);
+    ok(rc3.r.status === 202 && rc4.r.status === 202 && rc5.r.status === 429 && Number(rc5.r.headers.get("retry-after")) > 0, `the per-caller limit holds (4 an hour here): ${[rc1, rc2, rc3, rc4, rc5].map((x) => x.r.status).join(",")}`);
+    const pageAfter = await get(`/base?seller=thin.example`);
+    ok(/last re-checked never/.test(pageAfter.text), "the seller card shows last re-checked");
+
     const hostile = ["a.".repeat(255), `https://${"x".repeat(500)}`, "%".repeat(500), `${"/".repeat(500)}`, "\u0000".repeat(200)];
     const tH = Date.now();
     const answers = await Promise.all(hostile.map((v) => fetch(`${base}/api/reputation?seller=${encodeURIComponent(v)}`).then((r) => r.status)));
@@ -340,6 +436,7 @@ const unlabeled = (t) => String(t).split(LABEL).join("");
     ok(llms.text.includes("/api/reputation?seller="), "llms.txt names /api/reputation");
     const oa = await get(`/openapi.json`);
     ok(oa.json?.paths?.["/api/reputation"]?.get?.security?.length === 0, "openapi documents GET /api/reputation as free");
+    ok(oa.json?.paths?.["/api/reputation/recheck"]?.post?.security?.length === 0 && oa.json.paths["/api/reputation/recheck"].post.responses["202"], "openapi documents POST /api/reputation/recheck as free, answering 202");
   } catch (e) {
     ok(false, `server part ran to the end (${String(e?.message || e).slice(0, 200)})`);
   } finally {

@@ -742,7 +742,9 @@ export function sellerReputationLineHtml(seller, host) {
     return m.status === "scored" ? `${esc(label)} ${pct(m)} (n=${m.sampleSize})` : `${esc(label)}: not enough data (n=${m.sampleSize})`;
   });
   const overall = rep.overall.status === "scored" ? `overall ${pct(rep.overall)}` : "overall: not enough data";
-  return `<div id="seller-reputation" style="padding:10px 16px;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);line-height:1.7;border-top:1px solid var(--panel-rule-2);overflow-wrap:anywhere;">reputation, our own measurements over ${REPUTATION_WINDOW_DAYS} days &middot; ${overall} &middot; ${parts.join(" &middot; ")} &middot; <a href="/api/reputation?seller=${encodeURIComponent(host)}" rel="nofollow" style="color:var(--accent-lit);text-decoration:none;">method and data &rarr;</a></div>`;
+  const issue = rep.measurementIssue ? ` &middot; ${rep.measurementIssue.days.length} day(s) left out: ${esc(rep.measurementIssue.status)}` : "";
+  const rechecked = ` &middot; last re-checked ${rep.lastRecheckedAt ? esc(rep.lastRecheckedAt.slice(0, 10)) : "never"}`;
+  return `<div id="seller-reputation" style="padding:10px 16px;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);line-height:1.7;border-top:1px solid var(--panel-rule-2);overflow-wrap:anywhere;">reputation, our own measurements over ${REPUTATION_WINDOW_DAYS} days &middot; ${overall} &middot; ${parts.join(" &middot; ")}${issue}${rechecked} &middot; <a href="/api/reputation?seller=${encodeURIComponent(host)}" rel="nofollow" style="color:var(--accent-lit);text-decoration:none;">method and data &rarr;</a></div>`;
 }
 
 // The swappable panel = seller card (if a seller is picked) + Activity charts.

@@ -53,7 +53,7 @@ Docs:
 Seller index:
 - `GET /api/reputation?seller=<host>` publishes one outside seller's
   reputation as this server measured it over a rolling 30-day window:
-  manifest uptime, 402 uptime, responsiveness, price honesty (the live 402
+  manifest uptime, 402 uptime, responsiveness, price matches listing (the live 402
   price against the listed price) and delivery (measured from purchases
   Agent402's router made for buyers), with age. Each metric names its method, sample size and last measurement and is
   scored only past its minimum sample. No metric counts payments or buyers.

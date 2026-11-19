@@ -40,6 +40,8 @@ export const REPUTATION_METHOD_URL = repoUrl("wiki/Seller-Reputation");
 
 export const REPUTATION_DOC = "seller-reputation";
 export const DELIVERY_DOC = "seller-delivery-outcomes";
+// Re-check requests and the days a crawl cycle failed broadly on our side.
+export const META_DOC = "seller-reputation-meta";
 export const WINDOW_DAYS = 30;
 const DAY_MS = 86_400_000;
 // The smallest sample each metric is scored on.
@@ -47,7 +49,7 @@ export const MIN_SAMPLES = Object.freeze({
   manifestUptime: 10,
   paywallUptime: 5,
   responsiveness: 5,
-  priceHonesty: 3,
+  priceMatchesListing: 3,
   delivery: 5,
   toolDelivery: 5,
 });
@@ -59,7 +61,7 @@ export const OVERALL_WEIGHTS = Object.freeze({
   paywallUptime: 0.3,
   delivery: 0.25,
   manifestUptime: 0.2,
-  priceHonesty: 0.15,
+  priceMatchesListing: 0.15,
   responsiveness: 0.1,
 });
 // A live price within this share of the listed one reads as a match (a
@@ -68,6 +70,7 @@ export const PRICE_MATCH_TOLERANCE = 0.01;
 const LATENCY_KEEP = 30;          // newest paywall latencies per seller
 const MAX_ROUTES_PER_ORIGIN = 64; // delivery routes kept per seller
 const PENDING_MAX_ORIGINS = 500;  // unflushed delivery origins per process
+const RECHECKS_MAX = 5000;        // re-check requests kept (newest first)
 
 const envInt = (name, dflt, min = 0) => {
   const n = Number(process.env[name]);
@@ -78,6 +81,9 @@ export const MAX_DELIVERY_ORIGINS = () => envInt("SELLER_REPUTATION_MAX_DELIVERY
 export const REPUTATION_INTERVAL_MS = () => envInt("SELLER_REPUTATION_INTERVAL_MS", 3_600_000, 1000);
 export const REPUTATION_FIRST_MS = () => envInt("SELLER_REPUTATION_FIRST_MS", 600_000, 0);
 export const DELIVERY_FLUSH_MS = () => envInt("SELLER_REPUTATION_FLUSH_MS", 60_000, 1000);
+// One accepted re-check per seller in this span; a request inside it answers
+// the one already scheduled (idempotent).
+export const RECHECK_HOST_MS = () => envInt("SELLER_REPUTATION_RECHECK_HOST_MS", 6 * 3_600_000, 1000);
 // Sellers folded per event-loop turn in the pass.
 const PASS_STEP = 200;
 
@@ -91,10 +97,13 @@ export const METHODS = Object.freeze({
   manifestUptime: "each pass records the seller's newest crawl, if newer than the last one recorded: 1 when its own documents answered with routes, 0 when the seller's host answered with an error or nothing usable; a read that failed on our side (our time limit, resolver or size limit), a robots.txt exclusion and a registry-only record are left out",
   paywallUptime: "each pass records the newest unpaid probe of the seller's cheapest paid route, if newer than the last one recorded: 1 when it answered 402, 0 for any other status; a probe that read no status or a malformed-request answer (400, 415, 422) is left out",
   responsiveness: `time from our unpaid paywall probe to the seller's response headers, measured from this server; the score is the share of probes answered within ${RESPONSIVE_MS} ms, beside the median`,
-  priceHonesty: "routes whose 402 we read live in the window and whose own documents list a price: the share where the price the 402 asks matches the listed price",
+  priceMatchesListing: "routes whose 402 we read live in the window and whose own documents list a price: the share where the price the 402 asks matches the listed price",
   delivery: `${DELIVERY_LABEL}: 1 when the seller answered 200 after taking the payment, 0 when the router recorded a delivery failure (a 5xx after payment, or a 4xx the seller or the chain shows was charged); a caller's own input error, and calls made for our own probes, canaries and wallets, are left out`,
 });
-export const REPUTATION_LEGEND = `Measured by this server from its own crawl and paid calls, over a rolling ${WINDOW_DAYS}-day window. A metric is scored (0 to 1) only when its sample reaches minSampleSize; below that it reads not-enough-data. No metric counts payments or buyers: router purchases, our own wallets and test traffic are never buyer evidence, and settlement counts are not part of this record. Each metric's method field states how it is measured.`;
+export const REPUTATION_LEGEND = `Measured by this server from its own crawl and paid calls, over a rolling ${WINDOW_DAYS}-day window. A metric is scored (0 to 1) only when its sample reaches minSampleSize; below that it reads not-enough-data. No metric counts payments or buyers: router purchases, our own wallets and test traffic are never buyer evidence, and settlement counts are not part of this record. Each metric's method field states how it is measured. A day on which our own crawl cycle failed broadly on our side is left out of the crawl and paywall metrics and named under measurementIssue. A seller can ask for a fresh measurement with POST /api/reputation/recheck?seller=<host>.`;
+// What the record says about a day left out of the scores.
+export const OUR_SIDE_ISSUE = "measurement issue on our side";
+export const RECHECK_PATH = "/api/reputation/recheck";
 
 const dayOf = (ms) => Math.floor(Number(ms) / DAY_MS);
 const iso = (ms) => (Number(ms) > 0 ? new Date(Number(ms)).toISOString() : null);
@@ -117,19 +126,21 @@ function pruneSeries(series, now) {
   while (k < series.length && series[k] < from) k += 3;
   return k ? series.slice(k) : series;
 }
-/** { ok, n, lastDay } over the window. */
-export function seriesTotals(series, now = Date.now()) {
+/** { ok, n, lastDay, excluded } over the window; a day in `skip` (a Set of
+ *  day numbers) is left out and its samples counted in `excluded`. */
+export function seriesTotals(series, now = Date.now(), skip = null) {
   const from = dayOf(now) - WINDOW_DAYS + 1;
-  let ok = 0, n = 0, lastDay = null;
+  let ok = 0, n = 0, lastDay = null, excluded = 0;
   if (Array.isArray(series)) {
     for (let i = 0; i + 2 < series.length; i += 3) {
       if (series[i] < from) continue;
+      if (skip && skip.has(series[i])) { excluded += Number(series[i + 2]) || 0; continue; }
       ok += Number(series[i + 1]) || 0;
       n += Number(series[i + 2]) || 0;
       lastDay = series[i];
     }
   }
-  return { ok, n, lastDay };
+  return { ok, n, lastDay, excluded };
 }
 
 /** The seller's newest crawl as a sample: 1, 0, or null (not the seller's answer). */
@@ -188,14 +199,17 @@ export function priceSnapshot(tools, now = Date.now()) {
  * is empty). Pure apart from mutating `rec`; returns it.
  * Record: f first observed, s last seen in the index, lc/lp the newest crawl
  * and paywall timestamps recorded, c/p per-day crawl and paywall series,
- * l [day, ms, ...] newest paywall latencies, q the price snapshot.
+ * l [day, ms, ...] newest paywall latencies, q the price snapshot, rk the
+ * newest crawl read after a re-check request (`recheckAt`).
  */
-export function foldEntry(rec, entry, now = Date.now()) {
+export function foldEntry(rec, entry, now = Date.now(), { recheckAt = 0 } = {}) {
   const r = rec && typeof rec === "object" ? rec : { f: now, lc: 0, lp: 0, c: [], p: [], l: [] };
   r.s = now;
   const fetchedAt = Number(entry?.fetchedAt);
   if (fetchedAt > (Number(r.lc) || 0)) {
     r.lc = fetchedAt;
+    // rk: the newest crawl read at or after an accepted re-check request.
+    if (Number(recheckAt) > 0 && fetchedAt >= Number(recheckAt)) r.rk = fetchedAt;
     const o = crawlOutcome(entry);
     if (o !== null) r.c = addBucket(r.c, dayOf(fetchedAt), o === 1);
   }
@@ -250,29 +264,36 @@ function metric(name, { score = null, sampleSize = 0, minSampleSize, lastMeasure
   };
 }
 const lastDayIso = (day, exact) => (Number(exact) > 0 ? iso(exact) : day == null ? null : iso(day * DAY_MS));
-function ratioMetric(name, series, min, now, exactAt = 0) {
-  const t = seriesTotals(series, now);
-  return metric(name, { score: t.n ? t.ok / t.n : null, sampleSize: t.n, minSampleSize: min, lastMeasuredAt: t.n ? lastDayIso(t.lastDay, exactAt) : null });
+function ratioMetric(name, series, min, now, exactAt = 0, skip = null) {
+  const t = seriesTotals(series, now, skip);
+  const m = metric(name, { score: t.n ? t.ok / t.n : null, sampleSize: t.n, minSampleSize: min, lastMeasuredAt: t.n ? lastDayIso(t.lastDay, skip?.has(dayOf(exactAt)) ? 0 : exactAt) : null });
+  return t.excluded ? { ...m, excludedSamples: t.excluded, excludedReason: OUR_SIDE_ISSUE } : m;
 }
-function latencyMetric(l, now, exactAt = 0) {
+function latencyMetric(l, now, exactAt = 0, skip = null) {
   const from = dayOf(now) - WINDOW_DAYS + 1;
   const ms = [];
-  let lastDay = null;
-  if (Array.isArray(l)) for (let i = 0; i + 1 < l.length; i += 2) if (l[i] >= from && Number.isFinite(l[i + 1])) { ms.push(l[i + 1]); lastDay = l[i]; }
+  let lastDay = null, excluded = 0;
+  if (Array.isArray(l)) for (let i = 0; i + 1 < l.length; i += 2) {
+    if (!(l[i] >= from) || !Number.isFinite(l[i + 1])) continue;
+    if (skip && skip.has(l[i])) { excluded++; continue; }
+    ms.push(l[i + 1]); lastDay = l[i];
+  }
+  if (skip?.has(dayOf(exactAt))) exactAt = 0;
   const sorted = ms.slice().sort((a, b) => a - b);
   const median = sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : null;
   const fast = ms.filter((x) => x <= RESPONSIVE_MS).length;
-  return metric("responsiveness", {
+  const m = metric("responsiveness", {
     score: ms.length ? fast / ms.length : null, sampleSize: ms.length, minSampleSize: MIN_SAMPLES.responsiveness,
     lastMeasuredAt: ms.length ? lastDayIso(lastDay, exactAt) : null,
     extra: { medianMs: median, thresholdMs: RESPONSIVE_MS },
   });
+  return excluded ? { ...m, excludedSamples: excluded, excludedReason: OUR_SIDE_ISSUE } : m;
 }
 function priceMetric(q, now) {
   const fresh = Array.isArray(q) && now - (Number(q[2]) || 0) <= WINDOW_DAYS * DAY_MS ? q : null;
-  return metric("priceHonesty", {
+  return metric("priceMatchesListing", {
     score: fresh && fresh[0] ? fresh[1] / fresh[0] : null, sampleSize: fresh ? Number(fresh[0]) || 0 : 0,
-    minSampleSize: MIN_SAMPLES.priceHonesty, lastMeasuredAt: fresh ? iso(fresh[2]) : null,
+    minSampleSize: MIN_SAMPLES.priceMatchesListing, lastMeasuredAt: fresh ? iso(fresh[2]) : null,
   });
 }
 /** The overall score: a weighted mean of the scored components, published only
@@ -291,19 +312,44 @@ export function overallOf(metrics) {
   };
 }
 
-/** The reputation record served for one seller (rec and delivery may be absent). */
-export function reputationOf({ rec = null, delivery = null, since = null, updatedAt = null, state = "ready", now = Date.now() } = {}) {
+/** The days (day numbers, in the window) our crawl failed broadly on our side. */
+export function ourSideDaysIn(days, now = Date.now()) {
+  const from = dayOf(now) - WINDOW_DAYS + 1;
+  return [...new Set((Array.isArray(days) ? days : []).map(Number).filter((d) => Number.isInteger(d) && d >= from && d <= dayOf(now)))].sort((a, b) => a - b);
+}
+
+/** The reputation record served for one seller (rec and delivery may be absent).
+ *  `ourSideDays`: days a crawl cycle failed broadly on our side, left out of
+ *  the crawl and paywall metrics. `recheck`: { requestedAt } of the newest
+ *  accepted re-check request, if any. */
+export function reputationOf({ rec = null, delivery = null, since = null, updatedAt = null, state = "ready", now = Date.now(), ourSideDays = [], recheck = null } = {}) {
+  const days = ourSideDaysIn(ourSideDays, now);
+  const skip = days.length ? new Set(days) : null;
   const metrics = {
-    manifestUptime: ratioMetric("manifestUptime", rec?.c, MIN_SAMPLES.manifestUptime, now, rec?.lc),
-    paywallUptime: ratioMetric("paywallUptime", rec?.p, MIN_SAMPLES.paywallUptime, now, rec?.lp),
-    responsiveness: latencyMetric(rec?.l, now, rec?.lp),
-    priceHonesty: priceMetric(rec?.q, now),
+    manifestUptime: ratioMetric("manifestUptime", rec?.c, MIN_SAMPLES.manifestUptime, now, rec?.lc, skip),
+    paywallUptime: ratioMetric("paywallUptime", rec?.p, MIN_SAMPLES.paywallUptime, now, rec?.lp, skip),
+    responsiveness: latencyMetric(rec?.l, now, rec?.lp, skip),
+    priceMatchesListing: priceMetric(rec?.q, now),
     delivery: { ...ratioMetric("delivery", delivery?.d, MIN_SAMPLES.delivery, now), label: DELIVERY_LABEL },
   };
+  const requestedAt = Number(recheck?.requestedAt) || 0;
+  const rechecked = Number(rec?.rk) || 0;
   return {
     recordState: state,
     overall: overallOf(metrics),
     metrics,
+    // Days left out of the crawl and paywall metrics: our own crawl cycle
+    // failed broadly on our side, so those readings say nothing about the seller.
+    measurementIssue: days.length
+      ? { status: OUR_SIDE_ISSUE, days: days.map((d) => iso(d * DAY_MS).slice(0, 10)), note: "a crawl cycle on these days failed broadly on our side; its readings are left out of manifestUptime, paywallUptime and responsiveness" }
+      : null,
+    // The newest crawl read after an accepted re-check request.
+    lastRecheckedAt: iso(rechecked),
+    recheck: {
+      path: RECHECK_PATH,
+      requestedAt: iso(requestedAt),
+      status: !requestedAt ? "none" : rechecked >= requestedAt ? "measured" : "scheduled",
+    },
     age: {
       firstObservedAt: iso(rec?.f),
       observedDays: Number(rec?.f) > 0 ? Math.max(0, Math.floor((now - Number(rec.f)) / DAY_MS)) : 0,
@@ -322,7 +368,7 @@ export const METRIC_LABELS = Object.freeze({
   manifestUptime: "documents up",
   paywallUptime: "402 up",
   responsiveness: "responsive",
-  priceHonesty: "price as listed",
+  priceMatchesListing: "price matches listing",
   delivery: `delivered (${DELIVERY_LABEL})`,
 });
 
@@ -362,7 +408,8 @@ export const TOOL_REPUTATION_LEGEND = `Per route, measured by this server over a
 let enabled = false;
 let repDocument = null;
 let delDocument = null;
-let state = { loaded: false, body: null, delivery: null, version: 0, loadedAt: 0 };
+let state = { loaded: false, body: null, delivery: null, meta: null, version: 0, loadedAt: 0 };
+let metaDocument = null;
 let pending = {}; // origin -> { d: series, r: { routeKey: series } }
 let pendingOrigins = 0;
 let flushTimer = null;
@@ -373,12 +420,14 @@ let lastPass = { at: 0, sellers: 0, ms: 0, ok: null };
 
 const repDoc = () => (repDocument ||= createJsonDocument({ name: REPUTATION_DOC, file: process.env.SELLER_REPUTATION_FILE || "/data/seller-reputation.json", log: () => {} }));
 const delDoc = () => (delDocument ||= createJsonDocument({ name: DELIVERY_DOC, file: process.env.SELLER_DELIVERY_FILE || "/data/seller-delivery-outcomes.json", log: () => {} }));
+const metaDoc = () => (metaDocument ||= createJsonDocument({ name: META_DOC, file: process.env.SELLER_REPUTATION_META_FILE || "/data/seller-reputation-meta.json", log: () => {} }));
+const metaBody = (b) => (b && typeof b === "object" && b.rechecks && typeof b.rechecks === "object" && Array.isArray(b.ourSide) ? b : { v: 1, rechecks: {}, ourSide: [] });
 const repBody = (b) => (b && typeof b === "object" && b.sellers && typeof b.sellers === "object" ? b : { v: 1, since: null, updatedAt: null, sellers: {} });
 const delBody = (b) => (b && typeof b === "object" && b.o && typeof b.o === "object" ? b : { v: 1, o: {} });
 
 registerMemoryStore("seller-reputation", null, {
   note: "seller reputation records and delivery outcomes (bounded by SELLER_REPUTATION_MAX_SELLERS and the window)",
-  figure: () => ({ rows: Object.keys(state.body?.sellers || {}).length + Object.keys(state.delivery?.o || {}).length }),
+  figure: () => ({ rows: Object.keys(state.body?.sellers || {}).length + Object.keys(state.delivery?.o || {}).length + Object.keys(state.meta?.rechecks || {}).length }),
 });
 
 /** Is this process recording and computing reputation? */
@@ -393,16 +442,82 @@ export function reputationStatus() {
 /** Version of the state a lookup read (bumped on every adopted reload). */
 export function reputationVersion() { return state.version; }
 
-function adopt(body, delivery) {
-  state = { loaded: true, body: repBody(body), delivery: delBody(delivery), version: state.version + 1, loadedAt: Date.now() };
+function adopt(body, delivery, meta = state.meta) {
+  state = { loaded: true, body: repBody(body), delivery: delBody(delivery), meta: metaBody(meta), version: state.version + 1, loadedAt: Date.now() };
 }
 
-/** Re-read both documents (every replica). */
+/** Re-read the documents (every replica). */
 export async function reloadReputation() {
-  const [r, d] = await Promise.all([repDoc().read({ quiet: true }), delDoc().read({ quiet: true })]);
+  const [r, d, m] = await Promise.all([repDoc().read({ quiet: true }), delDoc().read({ quiet: true }), metaDoc().read({ quiet: true })]);
   if (!r?.ok) return { ok: false };
-  adopt(r.body, d?.ok ? d.body : state.delivery);
+  adopt(r.body, d?.ok ? d.body : state.delivery, m?.ok ? m.body : state.meta);
   return { ok: true };
+}
+
+// ---------------------------------------------------------------- re-checks
+/** Pure: apply one re-check request to a meta body. Accepted when the seller
+ *  has no request inside RECHECK_HOST_MS; otherwise the body is unchanged and
+ *  the answer names the request already scheduled. */
+export function applyRecheck(body, origin, now = Date.now(), spanMs = RECHECK_HOST_MS()) {
+  const b = metaBody(body);
+  const cur = Number(b.rechecks[origin]?.at) || 0;
+  if (cur > 0 && now - cur < spanMs) return { body: b, accepted: false, requestedAt: cur, nextAcceptedAt: cur + spanMs };
+  b.rechecks[origin] = { at: now };
+  const rows = Object.entries(b.rechecks).filter(([, v]) => now - (Number(v?.at) || 0) <= WINDOW_DAYS * DAY_MS);
+  rows.sort((x, y) => (Number(y[1].at) || 0) - (Number(x[1].at) || 0));
+  b.rechecks = Object.fromEntries(rows.slice(0, RECHECKS_MAX));
+  return { body: b, accepted: true, requestedAt: now, nextAcceptedAt: now + spanMs };
+}
+
+/**
+ * Ask for a fresh measurement of one seller (a key of the index). Recorded in
+ * the shared meta document, so every replica and the crawl see it; the crawl
+ * reads the seller on its next cycle inside the seller's own per-operator
+ * crawl budget (src/x402-index.js originsDueThisCycle: it takes one of the
+ * operator's places that cycle, never an extra read), and the next pass folds
+ * that read in. Idempotent: inside RECHECK_HOST_MS a request answers the one
+ * already scheduled. Returns { ok, accepted, requestedAt, nextAcceptedAt }.
+ */
+export async function requestRecheck(origin, { now = Date.now() } = {}) {
+  if (typeof origin !== "string" || !origin) return { ok: false };
+  let out = null;
+  const r = await metaDoc().update((b) => { out = applyRecheck(b, origin, now); return out.body; }, { fallback: null }).catch(() => null);
+  if (!r?.ok || !out) return { ok: false };
+  state = { ...state, meta: metaBody(r.body), version: state.version + 1 };
+  return { ok: true, accepted: out.accepted, requestedAt: out.requestedAt, nextAcceptedAt: out.nextAcceptedAt };
+}
+
+/** Origin -> requestedAt for each accepted re-check that no folded crawl has
+ *  read since, from the shared document (read fresh: the crawl may run on
+ *  another replica). The crawl also checks its own newest read against it. */
+export async function pendingRecheckOrigins({ now = Date.now() } = {}) {
+  const m = await metaDoc().read({ quiet: true }).catch(() => null);
+  const meta = m?.ok ? metaBody(m.body) : state.meta;
+  const out = new Map();
+  for (const [origin, v] of Object.entries(meta?.rechecks || {})) {
+    const at = Number(v?.at) || 0;
+    if (!(at > 0) || now - at > RECHECK_HOST_MS()) continue;
+    const rec = state.body?.sellers?.[origin];
+    if (Number(rec?.rk) >= at || Number(rec?.lc) >= at) continue;
+    out.set(origin, at);
+  }
+  return out;
+}
+
+/** Record that a crawl cycle failed broadly on our side at `at` (the crawl's
+ *  own cycle health, src/x402-index.js): that day's crawl and paywall readings
+ *  are left out of every seller's scores. Never throws. */
+export async function noteOurSideIssue(at = Date.now()) {
+  try {
+    const d = dayOf(at);
+    const r = await metaDoc().update((b) => {
+      const m = metaBody(b);
+      m.ourSide = ourSideDaysIn([...m.ourSide, d], at);
+      return m;
+    }, { fallback: null });
+    if (r?.ok) state = { ...state, meta: metaBody(r.body), version: state.version + 1 };
+    return !!r?.ok;
+  } catch { return false; }
 }
 
 /** The served record for one seller key, from this process's loaded state. */
@@ -412,6 +527,8 @@ export function sellerReputation(origin, { now = Date.now() } = {}) {
     rec: state.body?.sellers?.[origin] || null,
     delivery: state.delivery?.o?.[origin] || null,
     since: state.body?.since, updatedAt: state.body?.updatedAt, state: st, now,
+    ourSideDays: state.meta?.ourSide || [],
+    recheck: state.meta?.rechecks?.[origin] ? { requestedAt: state.meta.rechecks[origin].at } : null,
   });
 }
 /** The delivery routes recorded for one seller (for per-tool rows). */
@@ -540,12 +657,14 @@ export async function reputationPassUnleased({ entries, now = Date.now() } = {})
   if (!r?.ok) { lastPass = { at: now, sellers: 0, ms: Date.now() - t0, ok: false }; return { ok: false, reason: "store-unread" }; }
   const body = repBody(r.body);
   if (!body.since) body.since = now;
+  const m = await metaDoc().read({ quiet: true }).catch(() => null);
+  const meta = m?.ok ? metaBody(m.body) : metaBody(state.meta);
   const list = [];
   for (const row of (typeof entries === "function" ? entries() : []) || []) list.push(row);
   let n = 0;
   for (const [origin, entry] of list) {
     if (typeof origin !== "string" || !entry || typeof entry !== "object") continue;
-    body.sellers[origin] = foldEntry(body.sellers[origin], entry, now);
+    body.sellers[origin] = foldEntry(body.sellers[origin], entry, now, { recheckAt: Number(meta.rechecks[origin]?.at) || 0 });
     if (++n % PASS_STEP === 0) await turn();
   }
   body.sellers = pruneSellers(body.sellers, now);
@@ -564,7 +683,7 @@ export async function reputationPassUnleased({ entries, now = Date.now() } = {})
   const out = { v: 1, since: body.since, updatedAt: now, sellers: body.sellers };
   const saved = await repDoc().saveSerialized(out, pieces);
   const d = await delDoc().read({ quiet: true });
-  if (saved) adopt(out, d?.ok ? d.body : state.delivery);
+  if (saved) adopt(out, d?.ok ? d.body : state.delivery, meta);
   lastPass = { at: now, sellers: n, ms: Date.now() - t0, ok: !!saved };
   return { ok: !!saved, sellers: n };
 }
@@ -615,7 +734,7 @@ export function __adoptReputationForTest(body, delivery = null) { adopt(body, de
 export function __resetReputationForTest() {
   stopSellerReputation();
   enabled = false; pending = {}; pendingOrigins = 0; flushing = null;
-  state = { loaded: false, body: null, delivery: null, version: 0, loadedAt: 0 };
-  repDocument = null; delDocument = null;
+  state = { loaded: false, body: null, delivery: null, meta: null, version: 0, loadedAt: 0 };
+  repDocument = null; delDocument = null; metaDocument = null;
 }
 export function __pendingDeliveryForTest() { return pending; }

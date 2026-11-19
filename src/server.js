@@ -558,7 +558,9 @@ import { sellerLoad, sellerLoadStatus, sendRouterProbe } from "./seller-load.js"
 import { ROUTER_UA } from "./user-agents.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
 import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, removalPreview, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus, sellerEntriesForReputation, sellerEntryByKey } from "./x402-index.js";
-import { startSellerReputation, sellerReputation, sellerDeliveryRoutes, toolReputationOf, reputationVersion, TOOL_REPUTATION_LEGEND } from "./seller-reputation.js";
+import { startSellerReputation, sellerReputation, sellerDeliveryRoutes, toolReputationOf, reputationVersion, TOOL_REPUTATION_LEGEND, requestRecheck, pendingRecheckOrigins, noteOurSideIssue, reputationEnabled, REPUTATION_INTERVAL_MS, RECHECK_PATH } from "./seller-reputation.js";
+import { setCrawlRecheckSource, setOurSideIssueHook } from "./x402-index.js";
+import { CRAWL_INTERVAL_MS as REPUTATION_CRAWL_INTERVAL_MS } from "./crawl-cadence.js";
 import { partialFields } from "./partial-answer.js";
 import { crawlSwitch } from "./crawl-switch.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
@@ -9773,6 +9775,58 @@ app.get("/api/reputation", (req, res) => {
   res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600").json(hit.body);
 });
 registerMemoryStore("server.reputationMemo", () => reputationMemo, { note: "per-seller reputation answers (bounded LRU)" });
+// A seller's correction path: ask for a fresh measurement of one indexed
+// seller. Free. One accepted request per seller every RECHECK_HOST_MS (a
+// repeat inside it answers the one already scheduled, so the call is
+// idempotent), and a per-caller limit across replicas. It fetches nothing
+// here: the crawl reads the seller on its next cycle inside the seller's own
+// per-operator crawl budget (one of its places that cycle, never an extra
+// read; its Retry-After and daily budget still apply), and the next
+// reputation pass folds that read in. 202 with when.
+const RECHECK_CALLER_MAX = Math.max(1, Number(process.env.REPUTATION_RECHECK_PER_IP_HOUR || 10));
+const RECHECK_GLOBAL_MAX = Math.max(10, Number(process.env.REPUTATION_RECHECK_GLOBAL_HOUR || 300));
+const recheckLimiter = createRegistrationLimiter({ name: "reputation-recheck", perIpMax: RECHECK_CALLER_MAX, globalMax: RECHECK_GLOBAL_MAX, windowMs: 3600_000, maxKeys: 5000 });
+setInterval(() => { recheckLimiter.sweep(); }, 60_000).unref?.();
+app.post(RECHECK_PATH, async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const raw = typeof req.query.seller === "string" ? req.query.seller.trim() : "";
+  if (!raw) return res.status(400).json({ error: "name one seller: ?seller=<host or origin>", example: `${BASE_URL}${RECHECK_PATH}?seller=seller.example` });
+  if (raw.length > 512) return res.status(400).json({ error: "seller is at most 512 characters" });
+  if (isSelfSellerQuery(raw, BASE_URL)) return res.status(404).json({ error: "this server does not score its own host", seller: raw.slice(0, 253) });
+  const key = reputationKeyOf(raw);
+  if (!key) {
+    const r = indexReadiness();
+    if (!r.ready) return res.status(503).set("Retry-After", String(r.retryAfterSeconds)).json({ error: `the seller index is still loading on this server (${r.state}); retry in ${r.retryAfterSeconds}s`, seller: raw.slice(0, 253), retryAfterSeconds: r.retryAfterSeconds });
+    return res.status(404).json({ error: "seller not found in the index; list it with POST /api/index/register first", seller: raw.slice(0, 253) });
+  }
+  if (!reputationEnabled()) return res.status(503).set("Retry-After", "3600").json({ error: "reputation is not measured on this server, so there is nothing to re-check here", seller: key });
+  const now = Date.now();
+  const ip = limiterKey(req.ip || "?");
+  if (!(await recheckLimiter.ipAllowed(ip, now))) return res.status(429).set("Retry-After", "3600").json({ error: `rate limit: ${RECHECK_CALLER_MAX} re-check requests per hour per caller`, retryAfterSeconds: 3600 });
+  const taken = await recheckLimiter.take(ip, now);
+  if (!taken.ok) return res.status(429).set("Retry-After", taken.reason === "ip" ? "3600" : "600").json({ error: taken.reason === "ip" ? `rate limit: ${RECHECK_CALLER_MAX} re-check requests per hour per caller` : "rate limit: re-checks are busy, try again later", retryAfterSeconds: taken.reason === "ip" ? 3600 : 600 });
+  const r = await requestRecheck(key, { now });
+  if (!r.ok) { recheckLimiter.giveBack(taken.slot); return res.status(503).set("Retry-After", "30").json({ error: "the reputation store could not record the request; nothing was scheduled, retry shortly", seller: key, retryAfterSeconds: 30 }); }
+  const crawlBy = r.requestedAt + REPUTATION_CRAWL_INTERVAL_MS;
+  const iso = (ms) => new Date(ms).toISOString();
+  const rep = sellerReputation(key, { now });
+  res.status(202).json({
+    seller: key,
+    status: "scheduled",
+    accepted: r.accepted,
+    requestedAt: iso(r.requestedAt),
+    // When the crawl reads the seller (its next cycle, inside its operator's
+    // crawl budget) and when the reputation record shows that read.
+    crawlBy: iso(crawlBy),
+    recordBy: iso(crawlBy + REPUTATION_INTERVAL_MS()),
+    nextAcceptedAt: iso(r.nextAcceptedAt),
+    lastRecheckedAt: rep.lastRecheckedAt,
+    note: r.accepted
+      ? "a fresh measurement is scheduled: the crawl reads this seller on its next cycle within its operator's crawl budget (a Retry-After or daily budget it set still applies), and the next reputation pass folds that read in"
+      : "a re-check for this seller is already scheduled; this request changes nothing",
+    reputation: `${BASE_URL}/api/reputation?seller=${encodeURIComponent(key)}`,
+  });
+});
 // Self-serve listing: validate + rate-limit here; ALL probing happens inside
 // the crawler behind safeFetch (SSRF guard). 5/IP/hour, 30 new probes/hour
 // globally — a public crawl trigger must not become a fetch amplifier. Body
@@ -14072,11 +14126,16 @@ if (!x402Crawl.on) {
 // where the production crawl runs (the same switch), never on a CI, test or
 // local boot unless X402_INDEX_CRAWL=on says so; SELLER_REPUTATION=off turns
 // it off alone. A leased pass folds the index into the stored record hourly.
-startSellerReputation({
+if (startSellerReputation({
   enabled: x402Crawl.on && String(process.env.SELLER_REPUTATION || "").trim().toLowerCase() !== "off",
   entries: () => sellerEntriesForReputation(),
   ready: () => indexReadiness().ready,
-});
+})) {
+  // The crawl reads the sellers a re-check asked for, and tells the record
+  // which days a cycle failed broadly on our side (left out of the scores).
+  setCrawlRecheckSource(() => pendingRecheckOrigins());
+  setOurSideIssueHook((at) => noteOurSideIssue(at));
+}
 // Router worker pool (src/router-pool.js): route queries score in a worker
 // thread so a burst of them never holds this one. ROUTER_WORKERS=0 keeps them
 // here; until a worker is loaded (or when none is) queries run here anyway.

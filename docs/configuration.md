@@ -10,11 +10,11 @@ Scope: the server that runs as node src/server.js (every file under src/). The f
 Every value is set on the host, never in the repository. "Default" is the plain literal the code falls back to at
 its first read site when there is one; a helper may still clamp it, and the read site is the reference.
 
-1022 variables in 108 groups.
+1031 variables in 109 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -206,6 +206,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `CDP_API_KEY_ID` | Coinbase Developer Platform key id: settlement through its facilitator and Bazaar discovery. |  | `src/cdp-facilitator.js`, `src/guides.js`, `src/integration-pages.js` and 2 more |
 | `CDP_API_KEY_SECRET` | Coinbase Developer Platform key secret (a credential, set on the host). |  | `src/cdp-facilitator.js`, `src/guides.js`, `src/integration-pages.js` and 2 more |
 | `CDP_FACILITATOR_URL` | Cdp facilitator URL. |  | `src/payments.js` |
+| `CDP_SQL_SEND_GAP_MS` | Spacing between queries one replica sends to the onchain query service, in milliseconds (times RATE_LIMIT_REPLICAS). |  | `src/tools/cdp-kit.js` |
 
 ## CELO
 
@@ -713,6 +714,14 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `NETWORK_PRICE_FLOORS` | Network price floors. |  | `src/network-floors.js` |
 | `NETWORK_PRICE_PREMIUMS` | Network price premiums. |  | `src/payments.js` |
 
+## ONCHAIN
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `ONCHAIN_SQL_BUSY_MIN` | Busy refusals of onchain-sql to one top paying buyer, inside the failure window, that raise the onchainSqlBusy status word. |  | `src/top-buyer-failures.js` |
+| `ONCHAIN_SQL_BUSY_SPAN_MS` | Least time between the first and last of those busy refusals for onchainSqlBusy to read alert, in milliseconds. |  | `src/top-buyer-failures.js` |
+| `ONCHAIN_SQL_INFLIGHT_MAX` | Onchain-sql queries one server runs at once (1 to 16); past it a query is refused with a 429 before any payment is settled. |  | `src/tools/cdp-kit.js` |
+
 ## OPENROUTER
 
 | Variable | Purpose | Default | Read in |
@@ -1049,6 +1058,8 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `SELLER_REPUTATION_INTERVAL_MS` | Interval between seller reputation passes, in milliseconds. | `3600000` | `src/seller-reputation.js` |
 | `SELLER_REPUTATION_MAX_DELIVERY_ORIGINS` | Most seller origins with delivery outcomes kept. | `4000` | `src/seller-reputation.js` |
 | `SELLER_REPUTATION_MAX_SELLERS` | Most sellers with a reputation record kept. | `8000` | `src/seller-reputation.js` |
+| `SELLER_REPUTATION_META_FILE` | File for seller reputation re-check requests and the days a crawl cycle failed broadly on our side. | `/data/seller-reputation-meta.json` | `src/seller-reputation.js` |
+| `SELLER_REPUTATION_RECHECK_HOST_MS` | How long one accepted seller reputation re-check request holds before another is accepted for the same seller, in milliseconds. | `6` | `src/seller-reputation.js` |
 | `SELLER_REVISIT_MAX_HOURS` | Seller revisit maximum, in hours. | `12` | `src/seller-load.js` |
 
 ## SETTLE
@@ -1540,12 +1551,14 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `QUOTE_MAX_AGE_MS` | Quote maximum age, in milliseconds. |  | `src/crawl-cadence.js` |
 | `RAILS_TEST_GRADUATE` | Rails test graduate. |  | `src/rails.js` |
 | `RATE_LIMIT_MAX_KEYS` | Rate limit maximum keys. |  | `src/rate-limit.js` |
-| `RATE_LIMIT_REPLICAS` | Number of replicas the per-process rate limits are divided across (default 1). | `1` | `src/decide/ledger.js`, `src/state-db.js`, `src/tools/coingecko-rate.js` |
+| `RATE_LIMIT_REPLICAS` | Number of replicas the per-process rate limits are divided across (default 1). | `1` | `src/decide/ledger.js`, `src/state-db.js`, `src/tools/cdp-kit.js` and 1 more |
 | `READY_ROUTER_WAIT_MS` | Ready router wait, in milliseconds. | `30000` | `src/server.js` |
 | `RECONCILE_GRACE_MS` | Reconcile grace, in milliseconds. |  | `src/settlement-reconcile.js` |
 | `REMOVED_ORIGINS_FILE` | Removed origins file path. |  | `src/x402-index.js` |
 | `REPORT_GROUNDING_NOTE` | Report grounding note. |  | `src/report-grounding.js` |
 | `REPRICE_MAX_PER_CALL` | Reprice maximum per call. | `120` | `src/x402-index.js` |
+| `REPUTATION_RECHECK_GLOBAL_HOUR` | Seller reputation re-check requests accepted per hour across all callers. | `300` | `src/server.js` |
+| `REPUTATION_RECHECK_PER_IP_HOUR` | Seller reputation re-check requests one caller may send per hour. | `10` | `src/server.js` |
 | `RESEARCH_DEBUG` | Research debug. |  | `src/tools/domain-audit-kit.js`, `src/tools/dossier-kit.js`, `src/tools/fund-report-kit.js` and 4 more |
 | `RESEND_API_KEY` | Resend API key (a credential, set on the host). |  | `src/email.js` |
 | `ROUTABLE_SUMMARY_TTL_MS` | Routable summary lifetime, in milliseconds. |  | `src/x402-index.js` |
@@ -1565,6 +1578,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `STOCK_DATA_PROVIDER` | Stock data provider behind stock-quote and stock-history (off lists none of them). |  | `src/tools/stock-provider.js` |
 | `SUBSCRIPTIONS_REPLAY_MS` | Subscriptions replay, in milliseconds. |  | `src/stripe-subscriptions.js` |
 | `TELEMETRY_ID_SECRET` | Telemetry id secret (a credential, set on the host). |  | `src/payments.js`, `src/tools/llm-gateway-kit.js` |
+| `TRANSCRIBE_LONG` | Set to on to list and serve the thirty-minute transcription tier (/api/transcribe-long). |  | `src/tools/stt-kit.js` |
 | `TREASURY_YIELD_BUDGET_MS` | Treasury yield budget, in milliseconds. |  | `src/tools/macro-kit.js` |
 | `TREASURY_YIELD_REFRESH` | Treasury yield refresh. |  | `src/tools/macro-kit.js` |
 | `TRUST_PROXY_HOPS` | Number of reverse proxies that append X-Forwarded-For; 0 ignores the header. |  | `src/trust-proxy.js` |
