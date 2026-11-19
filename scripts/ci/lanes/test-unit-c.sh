@@ -13,3 +13,5 @@ t node scripts/test-upto-gas-sponsoring.js
 t node scripts/test-evm-preflight-inputs.js
 # x402 payment channels (batch-settlement) and the media work meter: dark by default, draw-down, refusals, claim and refund
 t node scripts/test-batch-settlement.js
+# batch-settlement readiness: the /supported reader against a stub (its live probe is operator-run)
+t node scripts/test-batch-settle-harness.js

@@ -58,6 +58,10 @@ export const EVM_RUN_SECONDS = Object.freeze({
   ...Object.fromEntries([...EXPENSIVE_COMPOSITE_SLUGS].filter((s) => !MEDIA_SLUGS.has(s)).map((s) => [s, 180])),
   "v1-videos": 240,
   "image-gen-premium": 75,
+  // The thirty-minute transcription tier (listed only with TRANSCRIBE_LONG=on):
+  // the fetch (25 s), the decode (60 s) and the upstream cap (140 s), in
+  // src/tools/stt-kit.js (TRANSCRIBE_LONG_RUN_SECONDS, pinned equal).
+  "transcribe-long": 230,
 });
 
 /** The sentence a slow route's description carries (server.js appends it). */

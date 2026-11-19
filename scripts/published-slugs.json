@@ -486,6 +486,7 @@
     "token-safety",
     "totp",
     "transcribe",
+    "transcribe-long",
     "transcribe-pro",
     "transfer-authorization",
     "treasury-avg-rates",

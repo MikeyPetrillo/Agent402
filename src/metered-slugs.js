@@ -24,7 +24,7 @@ export const METERED_SLUGS = new Set([
   // OpenAI
   "llm", "llm-pro", "llm-premium",
   "image-gen", "image-gen-hd", "image-gen-premium",
-  "tts", "tts-hd", "tts-lite", "transcribe", "transcribe-pro",
+  "tts", "tts-hd", "tts-lite", "transcribe", "transcribe-pro", "transcribe-long",
   "dub", // dub-kit.js: the v1-chat gateway tier, then a tts tier, both in-process
   "embed", "embed-large", "moderate",
   // OpenRouter gateway

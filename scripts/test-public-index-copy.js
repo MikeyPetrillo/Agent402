@@ -56,7 +56,7 @@ for (const value of [undefined, "", " , ", "base,stellar", "solana", "Solana"]) 
   ok(!ANY.test(r.llms) && !/public index/.test(pageText(r.rail)), `llms.txt and /robinhood ${tag}: nothing said`);
   ok(dateOf(r.p) === PRIVACY_OWN && dateOf(r.t) === TERMS_OWN, `${tag}: both pages keep their own dates though _SINCE is set`);
 }
-ok(TERMS_OWN === "2026-11-18", "terms keeps its own date: the refund sentences read from src/refund-terms.js and point to the conformance document; the late landing scoped to EVM, Solana, Algorand and Tempo, and an unconfirmed settle to EIP-3009; failed-call charge wording scoped per payment method; the copyright agent, notice and counter-notice steps; each subscription rail's cancel path and what canceling does");
+ok(TERMS_OWN === "2026-11-19", "terms keeps its own date: the owed-not-served clause; the refund sentences read from src/refund-terms.js and point to the conformance document; the late landing scoped to EVM, Solana, Algorand and Tempo, and an unconfirmed settle to EIP-3009; failed-call charge wording scoped per payment method; the copyright agent, notice and counter-notice steps; each subscription rail's cancel path and what canceling does");
 
 // --- robinhood: the paragraph, scoped no-sale line, terms, machine surfaces ---
 for (const value of ["robinhood", " Robinhood ,solana", "robinhood,stellar"]) {

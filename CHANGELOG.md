@@ -75,6 +75,18 @@ Privacy:
   is kept for the paying wallet's audit report and deleted 400 days after it
   was issued.
 
+### 2026-11-18 (onchain query capacity)
+Tools:
+- onchain-sql runs up to 8 queries at once on a server (was 2), and every
+  query the server sends to the query service is spaced to stay under that
+  service's rate limit. A query past either limit is refused 429 with
+  Retry-After, before any payment is settled.
+
+Status:
+- onchainSqlBusy on /api/gateway-status reads alert when a top paying buyer
+  keeps getting that refusal over a sustained stretch, not on a single
+  refusal.
+
 ### 2026-11-18 (signed receipts on every paid call)
 Payments:
 - A streamed paid answer ends with an `event: agent402-receipt` server-sent

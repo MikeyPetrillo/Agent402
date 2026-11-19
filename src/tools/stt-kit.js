@@ -5,6 +5,8 @@
 // Tiers:
 //   transcribe      $0.03  - gpt-transcribe  (4 min max)
 //   transcribe-pro  $0.10  - gpt-transcribe  (10 min max)
+//   transcribe-long $0.20  - gpt-transcribe  (30 min max; listed only with
+//                            TRANSCRIBE_LONG=on, see sttLongEnabled)
 //
 // The per-tier duration cap is a MARGIN bound, not just a UX limit: OpenAI
 // bills per audio minute, so an unchecked 25 MB file (~26 min at 128 kbps
@@ -54,7 +56,7 @@
 import { parseMultipartFile } from "../multipart.js";
 import { loadMusicMetadata } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
-import { measureAudio, transcodeSpeech, inputFormatOf } from "./media-kit.js";
+import { measureAudio, transcodeSpeech, inputFormatOf, SPEECH_CODECS } from "./media-kit.js";
 import { admissionCallerOf } from "../dispatch-caller.js";
 import { redactSecrets } from "./redact.js";
 import { NOT_CHARGED, notChargedOn } from "../not-charged.js";
@@ -88,10 +90,30 @@ export function upstreamUsdPerMinute(model) { return upstreamCosts().sttPerMinut
 /** Worst-case upstream spend may not exceed this share of the tier price - the
  *  same bound the LLM gateway's margin clamp holds. */
 export const STT_MARGIN = 0.7;
+// The thirty-minute tier (DECIDED 2026-11-15; built behind TRANSCRIBE_LONG,
+// off by default). Its price is the margin rule's: the cent at or above
+// 30 x the dearer model's per-minute rate / STT_MARGIN (scripts/test-stt-cap.js
+// pins it to the rule). Measured 2026-11-18 on a local boot, thirty-minute
+// files: a 96 kbps mp3 is 21.6 MB (25 MB holds thirty minutes at up to about
+// 110 kbps; 128 kbps does not fit and is refused at the fetch); measuring one
+// took 0.4 to 1.5 s and measuring with the cut 6 to 7 s; that cut as 16 kHz
+// mono FLAC was 65 MB on a noisy file, past the upstream's 25 MB upload limit,
+// so this tier's cut is Opus in Ogg (6.5 MB). The upstream cap (140 s per
+// path, both attempts) plus the fetch (at most 25 s with its lookup) and the
+// decode (at most 60 s) fit the route's run budget (EVM_RUN_SECONDS, 230 s),
+// which the payment window covers; past the CDN's 90 s answer window the call
+// runs as a job (Prefer: respond-async, src/slow-routes.js). The upstream's
+// time on a thirty-minute file is NOT measured here (no paid call was made):
+// one supervised paid run measures it before the switch goes on.
 export const STT_TIERS = Object.freeze({
   transcribe:       Object.freeze({ model: "gpt-transcribe", diarizeModel: DIARIZE_MODEL, maxMinutes: 4, priceUsd: 0.03 }),
   "transcribe-pro": Object.freeze({ model: "gpt-transcribe", diarizeModel: DIARIZE_MODEL, maxMinutes: 10, priceUsd: 0.10 }),
+  "transcribe-long": Object.freeze({ model: "gpt-transcribe", diarizeModel: DIARIZE_MODEL, maxMinutes: 30, priceUsd: 0.20, codec: "opus", upstreamCapMs: Object.freeze({ default: 140_000, diarize: 140_000 }) }),
 });
+/** The thirty-minute tier is listed and served only with TRANSCRIBE_LONG=on. */
+export function sttLongEnabled(env = process.env) { return String(env.TRANSCRIBE_LONG || "").trim().toLowerCase() === "on"; }
+/** The route's run budget, seconds (src/evm-validity.js EVM_RUN_SECONDS reads it). */
+export const TRANSCRIBE_LONG_RUN_SECONDS = 230;
 const TIERS = STT_TIERS;
 
 function validateInput(input, req = null) {
@@ -285,7 +307,14 @@ const CUT_REACHED_SLACK_SEC = 0.25;
 function overCapError(durationSec, tierSlug) {
   const tier = TIERS[tierSlug];
   const mins = (durationSec / 60).toFixed(1);
-  const upsell = tierSlug === "transcribe" ? " For up to 10 minutes, use /api/transcribe-pro." : "";
+  // The longer tier is named only while it is served (TRANSCRIBE_LONG=on),
+  // and only for a recording it takes.
+  const pro = TIERS["transcribe-pro"], long = TIERS["transcribe-long"];
+  const fits = (t) => durationSec <= t.maxMinutes * 60 + 2;
+  let upsell = "";
+  if (tierSlug === "transcribe" && fits(pro)) upsell = ` For up to ${pro.maxMinutes} minutes, use /api/transcribe-pro.`;
+  else if (tierSlug !== "transcribe-long" && sttLongEnabled() && fits(long)) upsell = ` For up to ${long.maxMinutes} minutes, use /api/transcribe-long (an audio URL).`;
+  else if (tierSlug === "transcribe") upsell = ` For up to ${pro.maxMinutes} minutes, use /api/transcribe-pro.`;
   return bad(`Audio is ${mins} minutes - this tier accepts up to ${tier.maxMinutes} minutes.${upsell} Split longer recordings into chunks.`, 422);
 }
 /** The charge sentence is made on a route call only (finalFailure's rule): a
@@ -354,13 +383,16 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
   // measured, never as it came (the upstream could read another); so is a
   // file whose header declared nothing.
   const multiTrack = container.audioTracks > 1 || headerless;
-  const asFlac = (t) => ({ buf: t.audio, filename: "audio.flac" });
+  // A converted file goes in the tier's speech encoding (FLAC, or Opus in Ogg
+  // for the thirty-minute tier, whose FLAC could pass the upload limit).
+  const codec = tier.codec || "flac";
+  const asFlac = (t) => ({ buf: t.audio, filename: `audio.${SPEECH_CODECS[codec].ext}` });
   // A PCM WAV whose bytes alone cannot play past the cap goes as it came,
   // without a decode (the measurement pool's state does not matter to it).
   const bound = sniffed === "wav" && !multiTrack ? pcmWavMaxSeconds(buf) : null;
   if (bound !== null && !overCap(bound)) return { buf, filename: upstreamNameFor(filename, "wav"), durationSec: container.durationSec };
   // A busy pool queues inside the call's budget, leaving the upstream its time.
-  const deadlineAt = decodeDeadlineAt(req, diarize);
+  const deadlineAt = decodeDeadlineAt(req, diarize, tierSlug);
   // The decode pool admits per caller (media-kit.js): this call's caller, or
   // the caller that dispatched it when it runs as a step with no request.
   const who = admissionCallerOf(req);
@@ -368,7 +400,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
   let measured = null, undecodable = null, unavailable = null, format = sniffed, cut = null;
   try {
     // A file that will be converted is measured and converted in one decode.
-    const m = await measureImpl(buf, !UPSTREAM_READY.has(sniffed) || multiTrack ? { cutSeconds: capSec + 2, deadlineAt, who } : { deadlineAt, who });
+    const m = await measureImpl(buf, !UPSTREAM_READY.has(sniffed) || multiTrack ? { cutSeconds: capSec + 2, deadlineAt, who, codec } : { deadlineAt, who });
     if (m && typeof m === "object") {
       measured = m.seconds ?? null; undecodable = m.undecodable || null; unavailable = m.unavailable || null;
       if (typeof m.format === "string") format = m.format;
@@ -383,7 +415,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
     if (overCap(durationSec)) throw overCapError(durationSec, tierSlug);
     if (ready) return { buf, filename: upstreamNameFor(filename, format), durationSec };
     if (cut) return { ...asFlac({ audio: cut }), durationSec };
-    const t = await transcodeImpl(buf, { maxSeconds: capSec + 2, format, deadlineAt, who });
+    const t = await transcodeImpl(buf, { maxSeconds: capSec + 2, format, deadlineAt, who, codec });
     if (t?.audio) return { ...asFlac(t), durationSec };
     if (t?.undecodable) throw unreadableError(t.undecodable, tierSlug, req);
     throw decoderBusyError(t?.unavailable || "the conversion did not run", tierSlug, req);
@@ -394,7 +426,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
     throw overCapError(byteFloorSeconds(buf.length, container.pictureBytes), tierSlug);
   }
   if (undecodable) throw unreadableError(undecodable, tierSlug, req);
-  const t = await transcodeImpl(buf, { maxSeconds: capSec, format, deadlineAt, who });
+  const t = await transcodeImpl(buf, { maxSeconds: capSec, format, deadlineAt, who, codec });
   if (t?.undecodable) throw unreadableError(t.undecodable, tierSlug, req);
   if (!t?.audio || !(Number.isFinite(t.seconds) && t.seconds > 0)) throw decoderBusyError(t?.unavailable || unavailable || "the decoder gave no answer", tierSlug, req);
   if (t.seconds < capSec - CUT_REACHED_SLACK_SEC) {
@@ -439,18 +471,23 @@ export function ourBillingLimit() {
 const UPSTREAM_CAP_MS = Object.freeze({ default: 60_000, diarize: 120_000 });
 /** The upstream's cap per path (default, diarize), for tests of the decode budget. */
 export const STT_UPSTREAM_CAP_MS = UPSTREAM_CAP_MS;
+/** The upstream cap of a tier's path: its own where it names one, else the path's. */
+export function sttUpstreamCapMs(tierSlug, diarize) {
+  const own = TIERS[tierSlug]?.upstreamCapMs;
+  return diarize ? (own?.diarize ?? UPSTREAM_CAP_MS.diarize) : (own?.default ?? UPSTREAM_CAP_MS.default);
+}
 
 /** The epoch ms by which this call's decode must end so its upstream call
  *  (the path's whole cap, both attempts) still fits: the route's budget (the
  *  payment window, src/upstream-deadline.js; a fresh one off a route), the
  *  CDN answer window and the payment authorization, whichever ends first,
  *  less that cap. The decode pool waits for a slot up to it. */
-function decodeDeadlineAt(req, diarize) {
+function decodeDeadlineAt(req, diarize, tierSlug = null) {
   const b = currentBudget();
   let left = b ? b.remaining() : handlerBudgetMs(PAYMENT_WINDOW_BUDGET_MS);
   try { const c = cdnSyncLeftMs(req); if (c !== null) left = Math.min(left, c); } catch { /* no bound to read */ }
   try { const p = req && typeof req === "object" && req.headers ? evmCredentialBudgetMs(req) : null; if (p !== null) left = Math.min(left, p); } catch { /* no bound to read */ }
-  const upstreamMs = retryKnobs.capMs ?? (diarize ? UPSTREAM_CAP_MS.diarize : UPSTREAM_CAP_MS.default);
+  const upstreamMs = retryKnobs.capMs ?? sttUpstreamCapMs(tierSlug, diarize);
   return Date.now() + left - upstreamMs;
 }
 const CONNECT_FAILURES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "UND_ERR_CONNECT_TIMEOUT"]);
@@ -695,7 +732,7 @@ function finalFailure(err, { attempts, diarize, req }) {
 async function transcribeWithRetry(buf, filename, tierSlug, language, diarize, probedDuration, req) {
   const tier = TIERS[tierSlug];
   const model = diarize ? tier.diarizeModel : tier.model;
-  const capMs = retryKnobs.capMs ?? (diarize ? UPSTREAM_CAP_MS.diarize : UPSTREAM_CAP_MS.default);
+  const capMs = retryKnobs.capMs ?? sttUpstreamCapMs(tierSlug, diarize);
   const attempt = (timeoutMs) => (diarize
     ? callScribe(buf, filename, model, language, probedDuration, timeoutMs)
     : callOpenAI(buf, filename, model, language, probedDuration, timeoutMs));
@@ -777,7 +814,7 @@ const TRIM_OUTPUT = Object.freeze({
 });
 const SHARED_TAGS = ["stt", "speech-to-text", "transcription", "audio", "whisper", "openai"];
 
-export const STT_TOOLS = [
+export const STT_TOOLS_BASE = [
   {
     route: "POST /api/transcribe",
     name: "Speech-to-text",
@@ -818,7 +855,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.100",
     description:
-      "Pro tier for longer recordings (model-backed, gpt-transcribe, the same model as the standard tier): transcribes an audio file at a URL. Max 10 minutes and 25 MB, the longer cap of the transcribe routes. Returns the transcript text, language and duration; diarize:true adds speaker labels, word timestamps and a language confidence score. No API key needed; pay per call via x402." + TRIM_NOTE + RETRY_NOTE,
+      `Pro tier for longer recordings (model-backed, gpt-transcribe, the same model as the standard tier): transcribes an audio file at a URL. Max 10 minutes and 25 MB, ${sttLongEnabled() ? "and /api/transcribe-long takes a URL to 30 minutes" : "the longer cap of the transcribe routes"}. Returns the transcript text, language and duration; diarize:true adds speaker labels, word timestamps and a language confidence score. No API key needed; pay per call via x402.` + TRIM_NOTE + RETRY_NOTE,
     tags: [...SHARED_TAGS, "gpt-transcribe", "pro"],
     discovery: {
       bodyType: "json",
@@ -879,7 +916,44 @@ export const STT_TOOLS = [
     handler: makeMultipartHandler("transcribe-pro"),
   },
 ];
+/** The thirty-minute tier: an audio URL only (a job replays a JSON body, and
+ *  past the CDN's answer window this route runs as one). Listed only with
+ *  TRANSCRIBE_LONG=on. */
+export const STT_LONG_TOOL = {
+  route: "POST /api/transcribe-long",
+  name: "Speech-to-text (long recordings)",
+  slug: "transcribe-long",
+  category: "ai",
+  price: "$0.200",
+  description:
+    "Long-recording tier (model-backed, gpt-transcribe, the same model as the other transcribe tiers): transcribes an audio file at a URL. Max 30 minutes and 25 MB (thirty minutes fit at up to about 110 kbps; a file that needs converting is sent as 16 kHz mono Opus). Returns the transcript text, language and duration; diarize:true adds speaker labels, word timestamps and a language confidence score (the scribe-v2 model, same price and cap). No API key needed; pay per call via x402." + TRIM_NOTE + RETRY_NOTE,
+  tags: [...SHARED_TAGS, "gpt-transcribe", "long-audio"],
+  discovery: {
+    bodyType: "json",
+    input: { url: "https://agent402.tools/fixtures/sample-speech.wav" },
+    inputSchema: {
+      properties: {
+        url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm), up to 30 minutes and 25 MB" },
+        language: { type: "string", description: "Optional ISO-639-1 language code (e.g. 'en', 'es', 'fr') for better accuracy" },
+        diarize: { type: "boolean", description: "true: transcribe with the scribe-v2 model and add speaker labels and word timestamps (`words`, `speakers`) and `language_confidence` (0 to 1, the model's confidence in the detected language). Same price and cap. Default false" },
+      },
+      required: ["url"],
+    },
+    output: {
+      example: {
+        model: "gpt-transcribe",
+        provider: "openai",
+        text: "Hi, this is the Agent402 sample recording. Can you hear me clearly? Yes, loud and clear. There are two of us on this clip, so the transcript can tell us apart.",
+        language: "en",
+        duration: 12.6,
+      },
+      optional: TRIM_OUTPUT,
+    },
+  },
+  handler: makeHandler("transcribe-long"),
+};
+export const STT_TOOLS = [...STT_TOOLS_BASE, ...(sttLongEnabled() ? [STT_LONG_TOOL] : [])];
 // Each call runs under its route's payment-window budget: the decode pool's
 // wait reads it (decodeDeadlineAt), so a queued decode still leaves the
 // upstream call its time.
-underBudgetAll(STT_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
+underBudgetAll([...STT_TOOLS_BASE, STT_LONG_TOOL], PAYMENT_WINDOW_BUDGET_MS);

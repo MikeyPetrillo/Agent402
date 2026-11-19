@@ -360,7 +360,7 @@ const NETWORK = new Set([
   // Dub composes the chat gateway and the speech tiers: keyless, the first step answers 503.
   "/api/dub",
   // STT kit: fetches external audio + hits OpenAI transcription API.
-  "/api/transcribe", "/api/transcribe-pro",
+  "/api/transcribe", "/api/transcribe-pro", "/api/transcribe-long",
   // Embeddings kit: every call hits OpenAI embeddings API upstream.
   "/api/embed", "/api/embed-large",
   // Moderation kit: every call hits OpenAI moderation API upstream.

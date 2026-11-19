@@ -63,7 +63,7 @@ const COVER_SETTLED_READ_SECONDS = (Number(inflightCover.ADMIT_SETTLED_READ_MAX_
 const LARGE_BODY_UNPAID_PER_HOUR = LARGE_BODY_UNPAID.PER_HOUR;
 // The content-pipeline guide reads the speech and transcription caps from their kits.
 import { TTS_TIERS, VOICES as TTS_VOICES, FORMATS as TTS_FORMATS, LITE_FORMATS as TTS_LITE_FORMATS } from "./tools/tts-kit.js";
-import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES } from "./tools/stt-kit.js";
+import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, sttLongEnabled } from "./tools/stt-kit.js";
 /** Where the buying-at-volume guide lives (the metered quote limiter's 429 links it). */
 export const BUYING_AT_VOLUME_PATH = "/guides/buying-at-volume";
 // Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
@@ -770,7 +770,7 @@ const edited = await a.call("v1-images-edit", { prompt: "Add a warm sunrise glow
 ## 5. Transcription
 
 \`transcribe\` reads audio from a public URL, up to ${STT_TIERS.transcribe.maxMinutes} minutes
-(\`transcribe-pro\` up to ${STT_TIERS["transcribe-pro"].maxMinutes}) and ${Math.round(STT_MAX_AUDIO_BYTES / 1024 / 1024)} MB. Add
+(\`transcribe-pro\` up to ${STT_TIERS["transcribe-pro"].maxMinutes}${sttLongEnabled() ? `, \`transcribe-long\` up to ${STT_TIERS["transcribe-long"].maxMinutes}` : ""}) and ${Math.round(STT_MAX_AUDIO_BYTES / 1024 / 1024)} MB. Add
 \`diarize: true\` for speaker labels and word timestamps, which the subtitle
 stage turns into timed cues.
 

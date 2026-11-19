@@ -435,20 +435,32 @@ export async function measureAudioSeconds(buffer) {
   const m = await measureAudio(buffer);
   return Number.isFinite(m.seconds) ? m.seconds : null;
 }
+/** The speech encodings a cut is written in. flac: 16 kHz mono FLAC, at most
+ *  32 KB a second, so ten minutes stay under the 25 MB upload limit. opus:
+ *  16 kHz mono Opus at 32 kbps in Ogg (both on the speech upstream's input
+ *  list), about 4 KB a second, so the thirty-minute tier's cut is about 7 MB
+ *  where FLAC could pass the limit. */
+export const SPEECH_CODECS = Object.freeze({
+  flac: Object.freeze({ file: "out.flac", ext: "flac", args: Object.freeze(["-c:a", "flac", "-f", "flac"]) }),
+  opus: Object.freeze({ file: "out.ogg", ext: "ogg", args: Object.freeze(["-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg"]) }),
+});
+const speechCodec = (codec) => SPEECH_CODECS[codec] || SPEECH_CODECS.flac;
 /** { seconds, format, audioTracks? } (format: the demuxer that read it). With
  *  `cutSeconds`, the same run also writes the first audio stream as 16 kHz
- *  mono FLAC cut at that length (transcodeSpeech's output), answered as
- *  `audio`: one decode measures the whole file and converts it, instead of a
- *  measurement followed by a second decode for the conversion. */
-export async function measureAudio(buffer, { cutSeconds = null, format = null, deadlineAt = null, who = null } = {}) {
+ *  mono speech audio (`codec`, SPEECH_CODECS: FLAC unless named) cut at that
+ *  length (transcodeSpeech's output), answered as `audio`: one decode
+ *  measures the whole file and converts it, instead of a measurement
+ *  followed by a second decode for the conversion. */
+export async function measureAudio(buffer, { cutSeconds = null, format = null, deadlineAt = null, who = null, codec = "flac" } = {}) {
   if (Number.isFinite(cutSeconds) && cutSeconds > 0) {
     let outPath = null;
+    const c = speechCodec(codec);
     return decodeInMeasurePool(buffer, "a402-measure-", (dir) => {
-      outPath = join(dir, "out.flac");
+      outPath = join(dir, c.file);
       // Output 0: the cut. Output 1: the whole stream at 100 one-byte samples
       // a second on stdout, so its byte count is the length (the progress
       // clock of a run with two outputs follows the shorter one).
-      return [...SAMPLE_CLOCK, "-t", String(cutSeconds), "-ac", "1", "-ar", "16000", "-c:a", "flac", "-f", "flac", "-y", outPath,
+      return [...SAMPLE_CLOCK, "-t", String(cutSeconds), "-ac", "1", "-ar", "16000", ...c.args, "-y", outPath,
         "-map", "0:a:0", "-vn", "-sn", "-dn", ...SAMPLE_CLOCK, "-ac", "1", "-ar", String(COUNTER_RATE), "-c:a", "pcm_u8", "-f", "u8", "pipe:1"];
     }, async (seconds) => {
       const audio = await readFile(outPath);
@@ -464,21 +476,22 @@ const COUNTER_RATE = 100;
  *  timestamps the container wrote (a file can stamp an hour of audio as minutes). */
 const SAMPLE_CLOCK = Object.freeze(["-af", "asetpts=N/SR/TB"]);
 
-/** The first audio stream as 16 kHz mono FLAC, cut at `maxSeconds` (ffmpeg
- *  `-t`), for a speech upstream: FLAC is on its documented input list, and
- *  16 kHz mono FLAC holds at most 32 KB a second, so a ten-minute cut stays
- *  under the 25 MB upload limit. It runs in the measurement's pool, under the
+/** The first audio stream as 16 kHz mono FLAC (or the `codec` named,
+ *  SPEECH_CODECS), cut at `maxSeconds` (ffmpeg `-t`), for a speech upstream:
+ *  FLAC is on its documented input list, and 16 kHz mono FLAC holds at most
+ *  32 KB a second, so a ten-minute cut stays under the 25 MB upload limit. It runs in the measurement's pool, under the
  *  same wait and deadline rules (`deadlineAt`); a cut reads only up to `maxSeconds` of audio, so it can
  *  finish where a full measurement outlasted the deadline. Answers
  *  { audio, seconds } (seconds: the length written, which is the file's whole
  *  length when it is shorter than the cut), or measureAudio's { undecodable }
  *  or { unavailable }. Never throws. */
-export async function transcodeSpeech(buffer, { maxSeconds, format = null, deadlineAt = null, who = null }) {
+export async function transcodeSpeech(buffer, { maxSeconds, format = null, deadlineAt = null, who = null, codec = "flac" }) {
   if (!(Number.isFinite(maxSeconds) && maxSeconds > 0)) return { unavailable: "no length to cut at was given" };
   let outPath = null;
+  const c = speechCodec(codec);
   return decodeInMeasurePool(buffer, "a402-speech-", (dir) => {
-    outPath = join(dir, "out.flac");
-    return [...SAMPLE_CLOCK, "-t", String(maxSeconds), "-ac", "1", "-ar", "16000", "-c:a", "flac", "-f", "flac", "-y", outPath];
+    outPath = join(dir, c.file);
+    return [...SAMPLE_CLOCK, "-t", String(maxSeconds), "-ac", "1", "-ar", "16000", ...c.args, "-y", outPath];
   }, async (seconds) => {
     const audio = await readFile(outPath);
     return audio.length > 0 ? { audio, seconds } : { undecodable: "the decoder wrote no audio" };

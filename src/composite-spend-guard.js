@@ -190,8 +190,10 @@ export const EXPENSIVE_COMPOSITE_SLUGS = new Set([
  *  credential) the buyer's authorization can be dead by the time we answer -
  *  we would have paid the seller and earned nothing. EVM exact only.
  *  `image-gen-premium` (2026-09-29) renders the larger frame under a 75 s
- *  upstream bound, past what an SVM or Tempo credential reliably covers. */
-export const LONG_RUNNING_SLUGS = new Set(["v1-videos", "seller-payability", "image-gen-premium", "decide-execute", "flight-search", "flight-status"]);
+ *  upstream bound, past what an SVM or Tempo credential reliably covers.
+ *  `transcribe-long` (2026-11-18, listed only with TRANSCRIBE_LONG=on) runs
+ *  up to 230 s on a thirty-minute file. */
+export const LONG_RUNNING_SLUGS = new Set(["v1-videos", "seller-payability", "image-gen-premium", "decide-execute", "flight-search", "flight-status", "transcribe-long"]);
 
 /** True when a route runs long enough that only EVM `exact` can settle it.
  *
