@@ -261,7 +261,7 @@ let sweepTimer = null;
 /** Start the hourly sweep (src/server.js, once, in paid mode). */
 export function startReceiptStoreSweep() {
   if (sweepTimer) return;
-  const run = USE_PG ? leased("receipt-store-sweep", { failOpen: true }, () => sweepIssuedReceipts()) : () => sweepIssuedReceipts();
+  const run = USE_PG ? leased("receipt-store-sweep", {}, () => sweepIssuedReceipts()) : () => sweepIssuedReceipts();
   const tick = () => { Promise.resolve().then(run).catch((e) => console.warn(`[receipt-store] sweep failed (${String(e?.message || e).slice(0, 120)})`)); };
   sweepTimer = setInterval(tick, SWEEP_MS);
   sweepTimer.unref?.();
