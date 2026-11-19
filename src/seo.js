@@ -1,5 +1,7 @@
 import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_SSE_EVENT } from "./receipt-signing.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
+import { REFUND_TERMS_PATH } from "./refund-terms-path.js";
+import { TOOL_RELIABILITY_PATH, TOOL_RELIABILITY_WINDOW_HOURS, TOOL_RELIABILITY_MIN_SAMPLE, toolReliabilityEnabled } from "./tool-reliability.js";
 import { smallHeaderLimitText } from "./payment-required-compact.js";
 import { whyPointsPlain } from "./why.js";
 import { networkPriceFloors } from "./network-floors.js";
@@ -695,7 +697,9 @@ ${toolSections}
 - [Security](${baseUrl}/security): disclosure policy with safe harbor, what data is held, key handling, controls in the serving path and on the code
 - [Trust](${baseUrl}/trust): subprocessors, what is stored and where, encryption, nightly backups and restore tests, incident response
 - [Conformance](${baseUrl}${CONFORMANCE_PATH}): per payment rail, the protocol features this server implements (settle after the answer, idempotency key, payment-identifier, replay guard, refund on a charged failure, hang-up forgiveness, payer sanctions screening, receipts) and the refund terms as data, computed from the serving code at each request
-- [Company](${baseUrl}/company): Havok Holdings LLC, what it sells, where the proof is, role mailboxes
+- [Refund terms](${baseUrl}${REFUND_TERMS_PATH}): per payment rail, whether an error answer is charged, whether a hang-up is forgiven and how a charged failure is repaid, with the refund ledger, credits and card report rules, computed from the serving code
+${toolReliabilityEnabled() ? `- [Per-tool reliability](${baseUrl}${TOOL_RELIABILITY_PATH}): every tool's success rate and p50/p95 latency over the last ${TOOL_RELIABILITY_WINDOW_HOURS / 24} days, with the sample each figure stands on; unmeasured below ${TOOL_RELIABILITY_MIN_SAMPLE} calls
+` : ""}- [Company](${baseUrl}/company): Havok Holdings LLC, what it sells, where the proof is, role mailboxes
 - [Press](${baseUrl}/press): press kit: how to write the name, logo and social card files, the press contact
 - [Markets](${baseUrl}/markets): the keyless crypto market-data calls (market pulse, perps, options, DeFi, stablecoins, news, indicators) with one curl to copy
 - [Agentic Finance](${baseUrl}/agentic-finance): what the category is and where Agent402 sits in it

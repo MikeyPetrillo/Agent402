@@ -52,6 +52,7 @@ import { sharedClaimRequired } from "./replay-topology.js";
 import { usdToBaseUnits, usdToTokenDecimalString } from "./base-units.js";
 import { drainSignal } from "./drain-abort.js";
 import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne, TEMPO_SCREEN_REFUSED_DETAIL, TEMPO_SCREEN_REFUSED_HINT } from "./sanctions-screen.js";
+import { relayPayerScreen } from "./payer-screen-rails.js";
 import { Secp256k1 } from "ox";
 import { lateWatchKey } from "./tempo-late-watches.js";
 import { SETTLE_FAULT, tempoRefusalFault } from "./settle-fault.js";
@@ -432,13 +433,15 @@ export const TEMPO_REFUSAL_CLASSES = Object.freeze({
     detail: "The signed transaction failed simulation on Tempo, so it would not settle.",
     hint: "Check the wallet's balance and that the transaction pays the challenge exactly, then pay a fresh challenge.",
   },
-  // Direct mode only (src/sanctions-screen.js): an address party to this
+  // Direct mode (src/sanctions-screen.js): an address party to this
   // payment (the source, the signer, the fee payer, the recipient, any
   // address the transaction's calls name) is on the OFAC SDN list, or a
   // recent sender of funds to the payer is (the one-hop funding check).
   // Checked before verification and the exact match again before the broadcast.
   // The same answer refuses a subscription's first payment when its paying
-  // wallet is screened out (src/mpp-subscriptions.js, in either mode).
+  // wallet is screened out (src/mpp-subscriptions.js, in either mode), and,
+  // in relay mode, a credential whose payer address is listed
+  // (src/payer-screen-rails.js).
   "screen-rejected": {
     kind: "verification-failed", status: 402,
     detail: TEMPO_SCREEN_REFUSED_DETAIL,
@@ -1196,6 +1199,10 @@ export async function validateTempoCredential(authorizationHeader) {
   if (direct) {
     const refused = screenTempoParties(authorizationHeader, "before validate") || await screenTempoFunding(authorizationHeader, "before validate");
     if (refused) return refused;
+  } else {
+    // Relay mode: the payer addresses only (src/payer-screen-rails.js); no list loaded serves unscreened.
+    const refused = relayPayerScreen(tempoPayerAddresses(authorizationHeader), "before validate");
+    if (refused) return refused;
   }
   try {
     const [validation] = await withRelayTrace(() => Method.validateCredential(tempoMethod(), authorizationHeader));
@@ -1206,6 +1213,9 @@ export async function validateTempoCredential(authorizationHeader) {
     if (direct) {
       const settledSenders = [validation?.details?.sender, validation?.receipt?.from, validation?.payer];
       const refused = screenTempoParties(authorizationHeader, "after validate", settledSenders) || await screenTempoFunding(authorizationHeader, "after validate", settledSenders);
+      if (refused) return refused;
+    } else {
+      const refused = relayPayerScreen([validation?.details?.sender, validation?.receipt?.from, validation?.payer], "after validate");
       if (refused) return refused;
     }
     return { ok: true, validation };

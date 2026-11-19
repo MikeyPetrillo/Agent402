@@ -449,7 +449,7 @@ import { operatorWishesPage } from "./operator-wishes.js";
 import { initLeadsDb } from "./leads-db.js";
 import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, cacheTtlFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
 import { fullAnswerMiddleware } from "./full-answer.js";
-import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redactAnalytics, startToolCallRetention } from "./analytics-db.js";
+import { initAnalyticsDb, recordToolCall, getAnalytics, getToolOutcomes, analyticsEnabled, redactAnalytics, startToolCallRetention } from "./analytics-db.js";
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { railOf, outcomeRailOf } from "./payment-rail.js";
@@ -473,6 +473,8 @@ import { trustPage } from "./trust-page.js";
 import { markGateMounted, gateMounted } from "./gate-mounts.js";
 import { receiptKeys, receiptKeyDocument, receiptSignerMiddleware, verifyReceipt, receiptsServed, createCheckoutReceipt, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
 import { conformanceDocumentCached, resetConformanceCache, CONFORMANCE_PATH } from "./conformance.js";
+import { refundTermsFullDocumentCached, resetRefundTermsCache, REFUND_TERMS_PATH } from "./refund-terms-doc.js";
+import { toolReliabilityDocument, toolOutcomesCached, toolReliabilityEnabled, TOOL_RELIABILITY_PATH, TOOL_RELIABILITY_WINDOW_HOURS, TOOL_RELIABILITY_MIN_SAMPLE } from "./tool-reliability.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
 import { pressPage } from "./press-page.js";
@@ -529,6 +531,7 @@ import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.j
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode, tempoRefusalProblem } from "./mpp-tempo.js";
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
+import { relayPayerScreenView } from "./payer-screen-rails.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
 import { tempoDataKey } from "./tempo-transfers.js";
 import { verifyInboundPayment } from "./payment-verify.js";
@@ -4377,7 +4380,7 @@ app.get("/api/gateway-status", async (req, res) => {
     // missing, while either is on. One word publicly; counts and the last
     // load time for the operator.
     ...(sanctionsScreenStarted()
-      ? { sanctionsScreen: (() => { try { return full ? { ...sanctionsScreenOperatorView(), x402: x402PayerScreenView(), ...(_mppSubs ? { mppSubscriptions: _mppSubs.payerScreenView() } : {}) } : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
+      ? { sanctionsScreen: (() => { try { return full ? { ...sanctionsScreenOperatorView(), x402: x402PayerScreenView(), tempoRelay: relayPayerScreenView(), ...(_mppSubs ? { mppSubscriptions: _mppSubs.payerScreenView() } : {}) } : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
       : {}),
     mppEvmDomainFallback: full ? mppFallbackStatus() : publicFallback(mppFallbackStatus()),
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
@@ -4676,6 +4679,9 @@ for (const p of A2A_WELL_KNOWN_PATHS) {
 // Per payment rail, the protocol features this server implements and the
 // refund terms as data, computed at each request (src/conformance.js).
 app.get(CONFORMANCE_PATH, (_req, res) => res.set("Cache-Control", "public, max-age=300").json(conformanceDocumentCached(BASE_URL, { freeMode: FREE_MODE })));
+// The refund terms per rail as data, from the same cells and switches
+// (src/refund-terms-doc.js).
+app.get(REFUND_TERMS_PATH, (_req, res) => res.set("Cache-Control", "public, max-age=300").json(refundTermsFullDocumentCached(BASE_URL, { freeMode: FREE_MODE })));
 // Signed receipts: the public keys and a free check (src/receipt-signing.js).
 // The settings are read once at boot; an unusable one leaves signing off and
 // says why here (never the value).
@@ -7836,6 +7842,17 @@ app.get("/api/reliability", async (_req, res) =>
     stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }),
   }))
 );
+// Per-tool success rate and latency over a stated window, every catalog route,
+// sample sizes as bands (src/tool-reliability.js). ?slug= narrows to one row.
+app.get(TOOL_RELIABILITY_PATH, async (req, res) => {
+  const off = !toolReliabilityEnabled();
+  const slug = typeof req.query.slug === "string" ? req.query.slug.slice(0, 128) : null;
+  const tools = [...new Map(Object.entries(CATALOG).map(([route, def]) => [def.slug, { slug: def.slug, route }])).values()];
+  if (slug && !tools.some((t) => t.slug === slug)) return res.status(404).json({ error: `No tool with slug ${JSON.stringify(slug)}.`, reason: "unknown-slug", list: `${BASE_URL}${TOOL_RELIABILITY_PATH}` });
+  const result = off ? null : await toolOutcomesCached(getToolOutcomes);
+  res.set("Cache-Control", "public, max-age=300");
+  res.json(toolReliabilityDocument({ baseUrl: BASE_URL, tools, result, off, slug }));
+});
 // Synthetic self-check — runs a curated set of high-value tools' own examples
 // live (see src/selfcheck.js) so a paid tool that breaks in prod is caught even
 // with zero organic traffic. Free/unpaywalled, so a public caller is served a
@@ -10735,6 +10752,10 @@ app.get("/api/pricing", (_req, res) => {
   return res.json({
     name: "Agent402.Tools",
     description: `Agent402.Tools - pay-per-call tools for AI agents over x402 or MPP (Machine Payments Protocol), both on the same 402; the applied layer of Agentic Finance - ${endpointCount} priced endpoints, most of them deterministic code (browser, search, PDFs, OCR, finance, EDGAR, crypto, macro, memory) and the model-backed ones marked modelBacked, an OpenAI-compatible LLM gateway at /v1 (flat-priced chat from $0.003, embeddings $0.002, images - no API key, the wallet is the account); ${SKILL_PACKS.length} of those endpoints are curated multi-tool skill packs, also callable as MCP prompts. Free via in-process proof-of-work or pay per call in ${RAILS_OR}. Open-source and self-hostable. MCP connector: ${BASE_URL}/mcp.`,
+    // What happens to a payment that does not deliver, per rail, and how each
+    // tool has answered: both documents are computed from the serving code.
+    refundTerms: `${BASE_URL}${REFUND_TERMS_PATH}`,
+    ...(toolReliabilityEnabled() ? { toolReliability: { url: `${BASE_URL}${TOOL_RELIABILITY_PATH}`, perTool: `${BASE_URL}${TOOL_RELIABILITY_PATH}?slug={slug}`, windowHours: TOOL_RELIABILITY_WINDOW_HOURS, minSample: TOOL_RELIABILITY_MIN_SAMPLE } } : {}),
     // The LLM gateway is the highest-frequency product agents buy — surface its
     // tiers at the top level instead of burying them among ${endpointCount}
     // endpoint rows. Flat per-call pricing (not token-metered): a buyer knows
@@ -13629,6 +13650,7 @@ const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
   // Every gate is mounted by now: a conformance document built earlier is dropped.
   resetConformanceCache();
+  resetRefundTermsCache();
   // The deploy overlap window (src/replay-topology.js) is counted from here,
   // not from the first import: a slow store load must not spend it.
   markListening(listenedAt);

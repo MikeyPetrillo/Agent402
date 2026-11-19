@@ -319,6 +319,8 @@ t node scripts/test-mppx-production-store.js
 t node scripts/test-sanctions-screen.js
 # An x402 payer on the same EVM set is refused after verify and before the handler, nothing settles; no list serves (paid-mode boot vs stub facilitator - offline)
 t node scripts/test-x402-payer-screen.js
+# Every rail that carries a payer address screens it (x402 EVM, Gateway, MPP evm, Solana, Stellar, Algorand, Tempo relay); a payer not listed is served; card and credits name no address (offline)
+t node scripts/test-payer-screen-rails.js
 # workflow_run references name a workflow that exists (GitHub matches on name:, a mismatch never fires - offline)
 t node scripts/test-workflow-run-refs.js
 # Every workflow job names a versioned runner image, never a moving -latest label (offline)
