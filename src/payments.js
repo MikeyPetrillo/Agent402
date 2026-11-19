@@ -3817,6 +3817,13 @@ export function cdpLabelOf(network) {
 // The Solana facilitator split (src/svm-facilitator-split.js), when
 // SOLANA_FACILITATOR_URL is set; null otherwise.
 let activeSvmSplit = null;
+/** The Solana facilitator split's health for the operator view: null when no
+ *  listed facilitator is configured; else which one takes quotes now, its
+ *  share, and per facilitator whether its /supported confirmed (labels and
+ *  reasons only, never a signer key). */
+export function svmSplitStatus() {
+  try { return activeSvmSplit ? activeSvmSplit.status() : null; } catch { return null; }
+}
 const FUNDING_RETRY = new Set(["fund-wallet", "fund-gateway-deposit"]);
 /**
  * A Solana payment its facilitator refused before broadcast, with the split

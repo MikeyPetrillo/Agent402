@@ -559,7 +559,7 @@ import { sellerLoad, sellerLoadStatus, sendRouterProbe } from "./seller-load.js"
 import { ROUTER_UA } from "./user-agents.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
 import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, removalPreview, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus, sellerEntriesForReputation, sellerEntryByKey } from "./x402-index.js";
-import { startSellerReputation, sellerReputation, sellerDeliveryRoutes, toolReputationOf, reputationVersion, TOOL_REPUTATION_LEGEND, requestRecheck, pendingRecheckOrigins, noteOurSideIssue, reputationEnabled, REPUTATION_INTERVAL_MS, RECHECK_PATH } from "./seller-reputation.js";
+import { reputationStatus, startSellerReputation, sellerReputation, sellerDeliveryRoutes, toolReputationOf, reputationVersion, TOOL_REPUTATION_LEGEND, requestRecheck, pendingRecheckOrigins, noteOurSideIssue, reputationEnabled, REPUTATION_INTERVAL_MS, RECHECK_PATH } from "./seller-reputation.js";
 import { setCrawlRecheckSource, setOurSideIssueHook } from "./x402-index.js";
 import { CRAWL_INTERVAL_MS as REPUTATION_CRAWL_INTERVAL_MS } from "./crawl-cadence.js";
 import { partialFields } from "./partial-answer.js";
@@ -594,7 +594,7 @@ const decideLedger = () => {
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
 import { fromUsdOf } from "./quoted-from.js";
-import { NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, gatewayBatchedRailStatus, onRailRestored, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
+import { svmSplitStatus, NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, gatewayBatchedRailStatus, onRailRestored, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { isSettlementUnconfirmedReceipt } from "./payment-reject.js";
@@ -783,7 +783,7 @@ import { STT_TOOLS, sttUnmeasuredSinceBoot } from "./tools/stt-kit.js";
 import { EMBED_TOOLS } from "./tools/embed-kit.js";
 import { USAGE_TOOLS } from "./tools/usage-kit.js";
 import { AUDIT_TOOLS, setAuditReportContext } from "./tools/audit-report-kit.js";
-import { keepReceiptOnFinalOk, startReceiptStoreSweep } from "./receipt-store.js";
+import { keepReceiptOnFinalOk, startReceiptStoreSweep, receiptStoreCounts } from "./receipt-store.js";
 import { FEEDBACK_TOOLS } from "./tools/feedback-kit.js";
 import { CHAIN_RPC_TOOLS } from "./tools/chain-rpc-kit.js";
 import { chainNamespaceMiddleware, chainNamespaceMap, chainVerbAliasesByRoute } from "./chain-namespace.js";
@@ -6989,7 +6989,12 @@ app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).
   if (req.query.reset === "1") resetLoopLag();
-  res.set("Cache-Control", "no-store").json({ stateQueries: stateQueryStats(), loop: loopLagStatus(), recentStalls: recentStalls(), activeJobs: activeJobs(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), slowPaid: { verdict: slowPaidVerdict(3600_000, Date.now(), SERVING.slowPaidMs), recent: recentSlowPaidCalls() }, stockQuoteWarmer: quoteWarmerStatus(), containedTurns: containedTurnsSummary(), brokenListings: brokenListingsSummary(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
+  res.set("Cache-Control", "no-store").json({ stateQueries: stateQueryStats(), loop: loopLagStatus(), recentStalls: recentStalls(), activeJobs: activeJobs(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), slowPaid: { verdict: slowPaidVerdict(3600_000, Date.now(), SERVING.slowPaidMs), recent: recentSlowPaidCalls() }, stockQuoteWarmer: quoteWarmerStatus(), containedTurns: containedTurnsSummary(), brokenListings: brokenListingsSummary(),
+    // Counts and labels only: the signed-receipt store's backend and its
+    // stored, skipped, failed and dropped counts; the reputation pass's state;
+    // the Solana facilitator split's health (null when it is not configured).
+    receiptStore: receiptStoreCounts(), reputation: reputationStatus(), solanaFacilitatorSplit: svmSplitStatus(),
+    routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
 });
 // One short CPU-profile window on demand (stall attribution without the
 // per-minute cost of continuous profiling). Answers the longest busy run:
