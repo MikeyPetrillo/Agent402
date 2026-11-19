@@ -3,7 +3,9 @@
 // /wholesale) and the stable error codes (src/stable-error-code.js):
 //   - the v1 field set and the error code table are pinned (a v1 field or
 //     code may be added, never removed or renamed);
-//   - reliability is bounded and honest: a rate needs the minimum sample,
+//   - reliability agrees with /api/reliability/tools (seven days, 20 calls,
+//     the same status words and rounding) and publishes no call volume in
+//     any form (no count, no band): a rate needs the minimum sample,
 //     reads only outside lanes inside 24 hours, rounds down, lies in [0, 1];
 //     latency rounds up; volume is a band, never a count;
 //   - on a FREE_MODE boot: every listed price is /api/pricing's own, no
@@ -13,8 +15,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { bootServer } from "./lib/boot-server.js";
 import { ERROR_CODES, stableErrorCode, errorCodeField } from "../src/stable-error-code.js";
-import { reliabilityOf, outsideCounts, callsBand, toolRow, wholesaleIndex, wholesaleFamily, WHOLESALE_FAMILIES, WHOLESALE_MIN_SAMPLE } from "../src/wholesale.js";
-import { TOOL_CLASSES, createToolFailureMonitor } from "../src/tool-failure-monitor.js";
+import { reliabilityOf, toolRow, wholesaleIndex, wholesaleFamily, WHOLESALE_FAMILIES, WHOLESALE_MIN_SAMPLE, WHOLESALE_WINDOW_HOURS, STATUS_MEASURED, STATUS_THIN } from "../src/wholesale.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { preValidateInput } from "../src/handler-input.js";
 
@@ -36,40 +37,39 @@ ok(JSON.stringify(errorCodeField(200)) === "{}" && errorCodeField(504).errorCode
 
 // ---- reliability, pure
 const now = Date.parse("2026-11-18T12:00:00Z");
-const B = (msAgo) => Math.floor((now - msAgo) / (5 * 60_000));
-const lane = (o) => TOOL_CLASSES.map((k) => o[k] || 0);
-const rows = {
-  [B(60_000)]: { o: lane({ ok: 30, fail: 2, timeout: 1, buyer: 50, payment: 9, gone: 4, shed: 7 }), s: lane({ ok: 0, fail: 500 }), f: lane({ ok: 5 }) },
-  [B(25 * 3600_000)]: { o: lane({ fail: 1000 }), s: lane({}), f: lane({}) }, // outside the window
-};
-const c = outsideCounts(rows, now);
-ok(c.ok === 35 && c.fail === 2 && c.timeout === 1 && c.buyer === 50, "counts read the outside and free lanes inside 24 hours only (synthetic and old buckets left out)");
-const r = reliabilityOf(rows, { window: 40, totalMs: { p50: 101.2, p95: 999.1 } }, now);
-ok(r.successRate === Math.floor((35 / 38) * 1000) / 1000 && r.successRate <= 35 / 38, `success rate is ok over ok+fail+timeout, rounded down (${r.successRate})`);
-ok(r.calls === "20-99" && !Object.values(r).some((v) => v === 38), "volume is a band, never the count");
-ok(r.latencyMs.p50 === 110 && r.latencyMs.p95 === 1000, "latency rounds up to 10 ms");
-const thin = reliabilityOf({ [B(1000)]: { o: lane({ ok: WHOLESALE_MIN_SAMPLE - 1 }), s: lane({}), f: lane({}) } }, { window: 5, totalMs: { p50: 1, p95: 2 } }, now);
-ok(thin.successRate === null && /fewer than/.test(thin.successRateNote) && thin.latencyMs === null && /fewer than/.test(thin.latencyNote) && thin.calls === `<${WHOLESALE_MIN_SAMPLE}`, "under the minimum sample: null with the reason, never a rate");
-const allFail = reliabilityOf({ [B(1000)]: { o: lane({ fail: 25 }), s: lane({}), f: lane({}) } }, null, now);
-ok(allFail.successRate === 0 && allFail.latencyMs === null, "every call failing reads 0, not null");
-const allBuyer = reliabilityOf({ [B(1000)]: { o: lane({ buyer: 500 }), s: lane({}), f: lane({}) } }, null, now);
-ok(allBuyer.successRate === null && allBuyer.calls === "<20", "caller mistakes count neither way");
-ok(callsBand(19) === "<20" && callsBand(20) === "20-99" && callsBand(100) === "100-999" && callsBand(5000) === "1000+", "volume bands");
-for (let i = 0; i < 200; i++) {
-  const o = { ok: Math.floor(Math.random() * 50), fail: Math.floor(Math.random() * 50), timeout: Math.floor(Math.random() * 5) };
-  const x = reliabilityOf({ [B(1000)]: { o: lane(o), s: lane({}), f: lane({}) } }, null, now);
-  if (x.successRate !== null && !(x.successRate >= 0 && x.successRate <= 1 && x.successRate <= o.ok / (o.ok + o.fail + o.timeout))) { ok(false, `rate out of bounds for ${JSON.stringify(o)}: ${x.successRate}`); break; }
-  if (i === 199) ok(true, "200 random samples: every rate in [0, 1] and never above the true share");
+ok(WHOLESALE_WINDOW_HOURS === 168 && WHOLESALE_MIN_SAMPLE === 20, "seven days and a 20-call minimum, as /api/reliability/tools");
+{
+  // When the per-tool reliability table is in this build, its constants are ours.
+  const shared = await import("../src/tool-reliability.js").catch(() => null);
+  if (shared) ok(shared.TOOL_RELIABILITY_WINDOW_HOURS === WHOLESALE_WINDOW_HOURS && shared.TOOL_RELIABILITY_MIN_SAMPLE === WHOLESALE_MIN_SAMPLE && shared.STATUS_MEASURED === STATUS_MEASURED && shared.STATUS_THIN === STATUS_THIN, "the same window, minimum and status words as src/tool-reliability.js");
+  if (shared) {
+    const o = { slug: "x", n: 40, ok: 37, serverErrored: 3, p50: 120, p95: 900 };
+    const theirs = shared.reliabilityRow({ slug: "x", route: "GET /api/x" }, o, true);
+    const ours = reliabilityOf(o, true);
+    ok(["status", "measured", "successRate", "p50Ms", "p95Ms"].every((k) => theirs[k] === ours[k]), "the same row figures as /api/reliability/tools for the same outcome");
+  }
 }
-
-// ---- the real monitor's rows read the same way
-const mon = createToolFailureMonitor({ now: () => now, replicaId: "test" });
-for (let i = 0; i < 24; i++) mon.noteTool("probe-tool", 200, { at: now - 1000 });
-mon.noteTool("probe-tool", 502, { at: now - 1000 });
-for (let i = 0; i < 40; i++) mon.noteTool("probe-tool", 500, { synthetic: true, at: now - 1000 });
-mon.noteTool("probe-tool", 400, { at: now - 1000 });
-const real = reliabilityOf(mon.merged(now).tools["probe-tool"], null, now);
-ok(real.successRate === 0.96 && real.calls === "20-99", `the failure monitor's own rows give 24 of 25 (${real.successRate}), our probes and caller mistakes left out`);
+const r = reliabilityOf({ n: 38, ok: 35, p50: 101, p95: 999 }, true);
+ok(r.status === STATUS_MEASURED && r.measured === true && r.successRate === Math.floor((35 / 38) * 1000) / 1000 && r.p50Ms === 101 && r.p95Ms === 999, `measured: rate floored to three places, latency as read (${JSON.stringify(r)})`);
+const thin = reliabilityOf({ n: WHOLESALE_MIN_SAMPLE - 1, ok: WHOLESALE_MIN_SAMPLE - 1, p50: 5, p95: 9 }, true);
+ok(thin.status === STATUS_THIN && thin.measured === false && thin.successRate === null && thin.p50Ms === null && thin.p95Ms === null, "under the minimum: not enough data, every figure null");
+ok(reliabilityOf({ n: 500, ok: 500 }, false).status === STATUS_THIN && reliabilityOf(undefined, true).status === STATUS_THIN, "unreadable outcomes or no row: not enough data, never a figure");
+ok(reliabilityOf({ n: 25, ok: 0, p50: 1, p95: 2 }, true).successRate === 0, "every call failing reads 0, not null");
+ok(reliabilityOf({ n: 1000, ok: 999 }, true).successRate === 0.999 && reliabilityOf({ n: 10000, ok: 9999 }, true).successRate < 1, "any failure keeps the rate under 1");
+// No call volume in any form.
+const VOLUME_KEY = /^(n|calls?|count|counts|volume|sample|samples|sampleSize|band|callsBand|serverErrors|requests|total)$/i;
+const BAND_VALUE = /^(<\d+|\d+-\d+|\d+\+)$/;
+const noVolume = (o, path = "") => {
+  const bad = [];
+  const walk = (v, p) => {
+    if (Array.isArray(v)) return v.forEach((x, i) => walk(x, `${p}[${i}]`));
+    if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) { if (VOLUME_KEY.test(k)) bad.push(`${p}.${k}`); walk(x, `${p}.${k}`); }
+    else if (typeof v === "string" && BAND_VALUE.test(v)) bad.push(`${p}=${v}`);
+  };
+  walk(o, path);
+  return bad;
+};
+ok(noVolume(reliabilityOf({ n: 12345, ok: 12000, p50: 1, p95: 2 }, true)).length === 0 && !JSON.stringify(reliabilityOf({ n: 12345, ok: 12000, p50: 1, p95: 2 }, true)).includes("12345"), "a reliability block carries no count and no band, and never the count it read");
 
 // ---- field contract (v1 only grows)
 const ROW_KEYS = ["slug", "name", "method", "path", "url", "price", "modelBacked", "docs", "reliability"];
@@ -79,8 +79,8 @@ const fakeCatalog = {
   "POST /api/m": { slug: "edgar-search", name: "M", price: "$0.005", modelBacked: true },
   "GET /api/c": { slug: "hash", name: "C", price: "$0.001" },
 };
-const ctx = { catalog: fakeCatalog, powSlugs: new Set(["hash"]), baseUrl: "https://x.test", toolRows: {}, timingByRoute: new Map(), now };
-const row = toolRow("POST /api/b", fakeCatalog["POST /api/b"], { baseUrl: "https://x.test", rows: {}, timing: null, now });
+const ctx = { catalog: fakeCatalog, powSlugs: new Set(["hash"]), baseUrl: "https://x.test", outcomes: { ok: true, rows: [{ slug: "edgar-filings", n: 777, ok: 770, serverErrored: 7, p50: 80, p95: 400 }] }, now };
+const row = toolRow("POST /api/b", fakeCatalog["POST /api/b"], { baseUrl: "https://x.test", outcome: undefined, available: true });
 ok(ROW_KEYS.every((k) => k in row), `a tool row carries every v1 field (${ROW_KEYS.join(", ")})`);
 ok(row.price.text === "$0.027" && row.price.usd === 0.027 && row.price.perRequest.maxUsd === 1.08, "the price is the catalog's own, with the per-request range when quoted");
 const idx = wholesaleIndex(ctx);
@@ -88,6 +88,10 @@ for (const k of ["version", "stability", "pricing", "errorCodes", "reliabilityDe
 ok(idx.version === "v1" && /no wholesale discount/.test(idx.pricing), "v1, and the pricing sentence says no discount");
 const fam = wholesaleFamily("sec-filings", ctx);
 ok(fam.tools.map((t) => t.slug).join(",") === "edgar-filings,filings-brief", "a family lists its tools, never a model-backed one");
+ok(fam.tools[0].reliability.status === STATUS_MEASURED && fam.tools[0].reliability.successRate === 0.990 && fam.tools[1].reliability.status === STATUS_THIN, "a family row reads its own outcome; a tool with none reads not enough data");
+ok(noVolume(fam).length === 0 && noVolume(idx).length === 0 && !JSON.stringify(fam).includes("777"), `no family or index answer carries a count or a band (${noVolume(fam).concat(noVolume(idx)).join(", ") || "none"})`);
+const off = wholesaleFamily("sec-filings", { ...ctx, outcomes: { ok: false, reason: "not-configured" } });
+ok(off.reliabilityAvailable === false && off.reliabilityReason === "not-configured" && off.tools.every((t) => t.reliability.status === STATUS_THIN), "outcomes that cannot be read: every row not enough data, with the reason");
 ok(wholesaleFamily("compute", ctx).tools.map((t) => t.slug).join(",") === "hash", "compute is the proof-of-work set");
 ok(wholesaleFamily("nope", ctx) === null, "an unknown family reads null");
 ok(WHOLESALE_FAMILIES.every((f) => ["public-domain", "cc-by-4.0", "own-computation"].includes(f.redistribution)), "every family's basis is public domain, CC BY 4.0 or our own computation");
@@ -112,14 +116,15 @@ try {
   const all = [];
   for (const f of computeIdx.families) {
     const j = await (await fetch(`${U}/api/wholesale/v1/${f.id}`)).json();
-    ok(j.version === "v1" && j.family.id === f.id && j.count === j.tools.length && j.count === f.tools, `${f.id}: v1 answer, count matches rows and the index (${j.count})`);
+    ok(j.version === "v1" && j.family.id === f.id && j.toolCount === j.tools.length && j.toolCount === f.tools, `${f.id}: v1 answer, toolCount matches rows and the index (${j.toolCount})`);
     all.push(...j.tools.map((t) => ({ ...t, family: f.id })));
   }
   const measured = all.find((t) => t.slug === probe.slug);
   // FREE_MODE counts no outcomes (the failure monitor's lane is the paid
   // dispatcher's), so the rate stays null with its reason; timing is counted.
-  ok(measured && measured.reliability.latencyMs && measured.reliability.latencyMs.p50 > 0 && measured.reliability.latencyMs.p95 >= measured.reliability.latencyMs.p50, `${probe.slug}: the timed calls show as latency (${JSON.stringify(measured?.reliability?.latencyMs)})`);
-  ok(measured && measured.reliability.successRate === null && /fewer than/.test(measured.reliability.successRateNote), "with no counted outcomes the rate is null with its reason, never a guess");
+  // A boot with no analytics store reads every row not enough data, with the reason.
+  ok(measured && measured.reliability.status === STATUS_THIN && measured.reliability.successRate === null && measured.reliability.p50Ms === null, `${probe.slug}: with no outcome store, not enough data (${JSON.stringify(measured?.reliability)})`);
+  ok(all.every((t) => noVolume(t).length === 0), "no served row carries a count or a band");
   ok(all.every((t) => bySlug.get(t.slug)?.price === t.price.text), "every listed price is /api/pricing's own price (no discount, no drift)");
   ok(all.every((t) => t.modelBacked === false && bySlug.get(t.slug)?.modelBacked !== true), "no listed tool is model-backed");
   ok(!all.some((t) => t.family !== "compute" && /coingecko|databento|brave/i.test(bySlug.get(t.slug)?.description || "")), "no vendor-licensed market data or search results outside the compute family");

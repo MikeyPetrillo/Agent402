@@ -649,7 +649,8 @@ import { WEATHER_PROBABILITY_TOOLS } from "./tools/weather-probability-kit.js";
 import { WEATHER_PLAN_TOOLS } from "./tools/weather-plan-kit.js";
 import { BUNDLE_TOOLS } from "./tools/bundle-kit.js";
 import { errorCodeField } from "./stable-error-code.js";
-import { wholesaleIndex, wholesaleFamily, WHOLESALE_FAMILIES } from "./wholesale.js";
+import { wholesaleIndex, wholesaleFamily, WHOLESALE_FAMILIES, WHOLESALE_WINDOW_HOURS } from "./wholesale.js";
+import * as analyticsDbModule from "./analytics-db.js";
 import { wholesalePage } from "./wholesale-page.js";
 import { WEATHER_CALC_TOOLS } from "./tools/weather-calc-kit.js";
 import { DATE_TIME_TOOLS } from "./tools/date-time-kit.js";
@@ -7837,13 +7838,24 @@ app.get("/api/rails", (_req, res) => {
 // per family is kept for 60 s, so a caller polling it never re-reads the
 // counters more often than that.
 const wholesaleCache = new Map(); // key -> { at, body }
+// Reliability is read from the per-tool reliability table's own cached
+// outcomes (src/tool-reliability.js over analytics-db getToolOutcomes) when
+// this build has them, so the two surfaces show the same figures; without
+// them every row reads "not enough data" with the reason.
+let wholesaleSharedReliability = null;
+async function wholesaleOutcomes() {
+  wholesaleSharedReliability ||= import("./tool-reliability.js").catch(() => null);
+  const shared = await wholesaleSharedReliability;
+  const load = analyticsDbModule.getToolOutcomes;
+  if (typeof load !== "function") return { ok: false, reason: "not-configured" };
+  if (shared && typeof shared.toolReliabilityEnabled === "function" && !shared.toolReliabilityEnabled()) return { ok: false, reason: "off" };
+  try {
+    if (shared && typeof shared.toolOutcomesCached === "function") return await shared.toolOutcomesCached(load);
+    return await load({ windowHours: WHOLESALE_WINDOW_HOURS });
+  } catch { return { ok: false, reason: "query-failed" }; }
+}
 async function wholesaleCtx() {
-  const monitor = toolFailureMonitor();
-  try { await monitor.refreshRemote(); } catch { /* the local counts still answer */ }
-  let toolRows = {};
-  try { toolRows = monitor.merged().tools || {}; } catch { toolRows = {}; }
-  const timingByRoute = new Map(routeTimings({ top: 300, minSamples: 1 }).map((r) => [r.route, r]));
-  return { catalog: CATALOG, powSlugs: POW_SLUGS, baseUrl: BASE_URL, toolRows, timingByRoute, now: Date.now() };
+  return { catalog: CATALOG, powSlugs: POW_SLUGS, baseUrl: BASE_URL, outcomes: await wholesaleOutcomes(), now: Date.now() };
 }
 async function wholesaleAnswer(key, build) {
   const kept = wholesaleCache.get(key);

@@ -1,9 +1,8 @@
 // The wholesale surface: a stable, versioned JSON read per tool family for a
 // reseller that builds on this catalog. Each tool row carries the same price
 // the public route charges (no wholesale discount: one price for everyone),
-// its source credit, and its measured reliability: success rate over the last
-// 24 hours of outside calls and latency percentiles, both from the counters
-// the server already keeps (src/tool-failure-monitor.js, src/request-timing.js).
+// its source credit, and its reliability: success rate and p50/p95 latency
+// over the last seven days, marked "measured" or "not enough data".
 //
 // Only families whose sources allow their answers to be passed on are
 // listed: public-domain government data (SEC EDGAR, the US Treasury, the
@@ -11,18 +10,20 @@
 // own computation. Licensed market data, search results and model output are
 // not offered here.
 //
-// Honest by construction: a rate needs WHOLESALE_MIN_SAMPLE calls in its
-// window or it reads null with the reason; a rate is rounded down and a
-// latency rounded up, never in the tool's favor; call volume is a band, never
-// a count. The v1 field set only grows (scripts/test-wholesale.js pins it).
-import { TOOL_CLASSES } from "./tool-failure-monitor.js";
+// Reliability agrees with GET /api/reliability/tools: the same tool-call
+// outcomes (the server hands in that table's cached read), the same window
+// (WHOLESALE_WINDOW_HOURS) and minimum sample (WHOLESALE_MIN_SAMPLE), the
+// same status words and the same rounding. No call volume in any form (no
+// count, no band) and no ranking: per-tool volume stays operator-only. The
+// v1 field set only grows (scripts/test-wholesale.js pins it).
 import { ERROR_CODES } from "./stable-error-code.js";
 import { OPEN_METEO_ATTRIBUTION, US_TREASURY_ATTRIBUTION } from "./data-attribution.js";
 
 export const WHOLESALE_VERSION = "v1";
 export const WHOLESALE_MIN_SAMPLE = 20;
-const WINDOW_MS = 24 * 3600_000;
-const BUCKET_MS = 5 * 60_000; // the failure monitor's bucket size
+export const WHOLESALE_WINDOW_HOURS = 168;
+export const STATUS_MEASURED = "measured";
+export const STATUS_THIN = "not enough data";
 
 /** Families: id, title, source, redistribution basis, the credit a reseller
  *  keeps with every answer, and the slugs (a function of the server's facts). */
@@ -50,57 +51,37 @@ export const WHOLESALE_FAMILIES = Object.freeze([
 ]);
 
 export const RELIABILITY_DEFINITION = Object.freeze({
-  window: "24h",
-  successRate: `answers under 400 divided by answers under 400 plus server-side failures (5xx and timeouts), over outside calls (buyers and free-tier callers; our own probes are left out) in the last 24 hours, rounded down to 0.001. Caller mistakes (4xx), refused payments and callers who hung up are not counted either way. Null with a reason below ${WHOLESALE_MIN_SAMPLE} counted calls.`,
-  calls: `a band of the counted calls in the window ("<${WHOLESALE_MIN_SAMPLE}", "20-99", "100-999", "1000+"), never an exact count`,
-  latencyMs: `p50 and p95 of server time per call (handler start to the last byte, payment round trip excluded) over the most recent calls this server answered (up to 512 per route since it started, every caller), rounded up to 10 ms. Null below ${WHOLESALE_MIN_SAMPLE} calls.`,
+  windowHours: WHOLESALE_WINDOW_HOURS,
+  minSample: WHOLESALE_MIN_SAMPLE,
+  successRate: "answers below 400 over answers below 400 plus answers of 500 or above, in the last seven days; a 4xx (the caller's input, a payment refusal) is not counted either way; floored to three places",
+  latency: "p50Ms and p95Ms: milliseconds inside the server, from the request reaching the tool to its answer, over the same calls",
+  status: `measured, or not enough data when the tool had fewer than ${WHOLESALE_MIN_SAMPLE} calls in the window (its figures are then null)`,
+  excluded: "this server's own monitoring and test calls, empty-input probes and refusals answered before payment",
+  sameAs: "/api/reliability/tools",
 });
 
-const roundDown3 = (x) => Math.floor(x * 1000) / 1000;
-const roundUp10 = (x) => (Number.isFinite(x) ? Math.ceil(x / 10) * 10 : null);
-export function callsBand(n) {
-  if (!(n >= WHOLESALE_MIN_SAMPLE)) return `<${WHOLESALE_MIN_SAMPLE}`;
-  if (n < 100) return "20-99";
-  if (n < 1000) return "100-999";
-  return "1000+";
-}
+const floorRate = (okCount, n) => (n ? Math.floor((okCount / n) * 1000) / 1000 : null);
 
-/** Outside outcome counts for one slug over the last 24 hours, from the
- *  failure monitor's merged rows ({ bucket: { o, s, f } } of TOOL_CLASSES). */
-export function outsideCounts(rows, now = Date.now()) {
-  const floor = Math.floor((now - WINDOW_MS) / BUCKET_MS);
-  const out = Object.fromEntries(TOOL_CLASSES.map((k) => [k, 0]));
-  for (const [b, row] of Object.entries(rows || {})) {
-    if (!(Number(b) > floor)) continue;
-    for (const lane of ["o", "f"]) {
-      const arr = Array.isArray(row?.[lane]) ? row[lane] : [];
-      TOOL_CLASSES.forEach((k, i) => { const v = Number(arr[i]); if (Number.isFinite(v) && v > 0) out[k] += v; });
-    }
-  }
-  return out;
-}
-
-/** The reliability block for one tool (pure). `timing` is a routeTimings()
- *  row for its route or null. */
-export function reliabilityOf(rows, timing, now = Date.now()) {
-  const c = outsideCounts(rows, now);
-  const counted = c.ok + c.fail + c.timeout;
-  const enough = counted >= WHOLESALE_MIN_SAMPLE;
-  const latencyOk = timing && Number(timing.window) >= WHOLESALE_MIN_SAMPLE && Number.isFinite(timing.totalMs?.p50) && Number.isFinite(timing.totalMs?.p95);
+/** The reliability block for one tool (pure), from its outcome row
+ *  ({ n, ok, p50, p95 }, or none) and whether the outcomes could be read.
+ *  The count is read to decide "measured" and never published. */
+export function reliabilityOf(outcome, available) {
+  const n = outcome ? Number(outcome.n) || 0 : 0;
+  const measured = !!available && n >= WHOLESALE_MIN_SAMPLE;
   return {
-    window: RELIABILITY_DEFINITION.window,
-    calls: callsBand(counted),
-    successRate: enough ? roundDown3(c.ok / counted) : null,
-    ...(enough ? {} : { successRateNote: `fewer than ${WHOLESALE_MIN_SAMPLE} counted calls in the window` }),
-    latencyMs: latencyOk ? { p50: roundUp10(timing.totalMs.p50), p95: roundUp10(timing.totalMs.p95) } : null,
-    ...(latencyOk ? {} : { latencyNote: `fewer than ${WHOLESALE_MIN_SAMPLE} timed calls since this server started` }),
+    windowHours: WHOLESALE_WINDOW_HOURS,
+    status: measured ? STATUS_MEASURED : STATUS_THIN,
+    measured,
+    successRate: measured ? floorRate(Number(outcome.ok) || 0, n) : null,
+    p50Ms: measured && Number.isFinite(Number(outcome.p50)) ? Number(outcome.p50) : null,
+    p95Ms: measured && Number.isFinite(Number(outcome.p95)) ? Number(outcome.p95) : null,
   };
 }
 
 const priceUsd = (p) => { const n = Number(String(p ?? "").replace(/[^0-9.]/g, "")); return Number.isFinite(n) ? n : null; };
 
 /** One tool's wholesale row (pure). */
-export function toolRow(key, def, { baseUrl, rows, timing, now }) {
+export function toolRow(key, def, { baseUrl, outcome, available }) {
   const [method, path] = key.split(" ");
   const quoted = def.quoteRange && Number.isFinite(def.quoteRange.minUsd) && Number.isFinite(def.quoteRange.maxUsd);
   return {
@@ -111,7 +92,7 @@ export function toolRow(key, def, { baseUrl, rows, timing, now }) {
     },
     modelBacked: def.modelBacked === true,
     docs: `${baseUrl}/openapi.json`,
-    reliability: reliabilityOf(rows, timing, now),
+    reliability: reliabilityOf(outcome, available),
   };
 }
 
@@ -149,12 +130,16 @@ export function wholesaleFamily(id, ctx) {
   const f = WHOLESALE_FAMILIES.find((x) => x.id === id);
   if (!f) return null;
   const now = ctx.now ?? Date.now();
-  const tools = familyTools(f, ctx).map(([key, def]) => toolRow(key, def, { baseUrl: ctx.baseUrl, rows: ctx.toolRows?.[def.slug], timing: ctx.timingByRoute?.get(key) || null, now }));
+  const available = !!ctx.outcomes?.ok;
+  const bySlug = new Map((available ? ctx.outcomes.rows || [] : []).map((r) => [r.slug, r]));
+  const tools = familyTools(f, ctx).map(([key, def]) => toolRow(key, def, { baseUrl: ctx.baseUrl, outcome: bySlug.get(def.slug), available }));
   return {
     ...COMMON(ctx.baseUrl),
     asOf: new Date(now).toISOString(),
     family: { id: f.id, title: f.title, source: f.source, redistribution: f.redistribution, credit: f.credit },
-    count: tools.length,
+    reliabilityAvailable: available,
+    ...(available ? {} : { reliabilityReason: String(ctx.outcomes?.reason || "not-configured").slice(0, 40) }),
+    toolCount: tools.length,
     tools,
   };
 }

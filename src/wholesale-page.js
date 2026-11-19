@@ -30,7 +30,7 @@ function table(head, rows) {
 export function wholesalePage(baseUrl, catalog = {}, powSlugs = new Set()) {
   const canonical = `${baseUrl}/wholesale`;
   const title = "Wholesale tool data";
-  const description = "A stable, versioned JSON read per tool family for resellers: each tool's price (the public price, no hidden discount), the credit to keep with its answers, its success rate and latency, and stable error codes.";
+  const description = "A stable, versioned JSON read per tool family for resellers: each tool's price (the public price, no hidden discount), the credit to keep with its answers, its seven-day success rate and latency, and stable error codes.";
   const index = `${baseUrl}/api/wholesale/${WHOLESALE_VERSION}`;
   const toolCount = (f) => {
     const wanted = new Set(f.slugs({ powSlugs }));
@@ -54,7 +54,7 @@ export function wholesalePage(baseUrl, catalog = {}, powSlugs = new Set()) {
 </header>
 ${section("Families", `${P("Each family lists only sources whose answers may be passed on: public-domain government data, CC BY 4.0 weather data with its credit, and our own computation. Keep the family's credit line with every answer you pass on. Market data under a vendor license, search results and model output are not offered on this surface.")}${families}`)}
 ${section("Price", P(`Every price is the public route's own price, the same for every buyer; there is no wholesale discount. A route priced per request (the bundle products, priced per site, company or coin) lists its range and quotes the exact amount in each 402 from the body you send. Pay per call over x402 or MPP as on the public route; <a href="/how-to-pay" style="color:var(--ink);">how to pay</a>.`))}
-${section("Reliability", `${P(`Success rate: ${esc(RELIABILITY_DEFINITION.successRate)}`)}${P(`Volume: ${esc(RELIABILITY_DEFINITION.calls)}.`)}${P(`Latency: ${esc(RELIABILITY_DEFINITION.latencyMs)}`)}${P(`Service-wide uptime, measured from outside production, is on <a href="/status" style="color:var(--ink);">/status</a> and <a href="/api/reliability" style="color:var(--ink);">/api/reliability</a>.`)}`)}
+${section("Reliability", `${P(`Each tool reads ${CODE("measured")} or ${CODE("not enough data")}: ${esc(RELIABILITY_DEFINITION.status)}.`)}${P(`Success rate: ${esc(RELIABILITY_DEFINITION.successRate)}.`)}${P(`Latency: ${esc(RELIABILITY_DEFINITION.latency)}.`)}${P(`The same figures, window and threshold as <a href="/api/reliability/tools" style="color:var(--ink);">/api/reliability/tools</a>.`)}${P(`Service-wide uptime, measured from outside production, is on <a href="/status" style="color:var(--ink);">/status</a> and <a href="/api/reliability" style="color:var(--ink);">/api/reliability</a>.`)}`)}
 ${section("Error codes", `${P(`Every tool error answer carries ${CODE("errorCode")} beside the message. Branch on the code; the message text may change. An answer of 400 or above is never charged.`)}${codes}`)}
 ${section("Stability", P(`This is ${CODE(WHOLESALE_VERSION)}. Within it, fields are only added, never renamed, retyped or removed; a breaking change ships as a new version beside this one. Each tool's input and output schema is in <a href="/openapi.json" style="color:var(--ink);">/openapi.json</a>.`))}
 ${ledgerFooterCompact()}`;
