@@ -11,7 +11,7 @@ import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { createFunnel, funnelEventOf, emptyFunnelRow, ARRIVALS as FUNNEL_ARRIVALS } from "./funnel.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf, workerEgressAddressKeyOf } from "./unpaid-quote-budget.js";
 import { createPaidQuoteTrust, paidAndSettled } from "./paid-quote-trust.js";
-import { stripMcpMarker } from "./mcp-loopback.js";
+import { stripMcpMarker, watchLoopbackOutcome, loopbackCallCut, noteLoopbackCounted } from "./mcp-loopback.js";
 import { createMcpX402Gate, mcpX402PaymentSpecs } from "./mcp-x402-routes.js";
 import { canonicalizePaymentHeaders, decodePaymentHeader, encodePaymentHeader } from "./payment-header.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
@@ -293,7 +293,7 @@ function x402WireOf(req) {
   if (isGatewayBatchedRequest(req)) return GATEWAY_WIRE;
   return req.mppCredential ? "mpp" : "x402";
 }
-function recordHangupDebt(req, res) {
+function recordHangupDebt(req, res, { reason = null } = {}) {
   const def = CATALOG[`${req.method} ${req.path}`];
   if (!def) return null;
   // A first-call allowance grant was never settled: nothing to owe.
@@ -301,7 +301,7 @@ function recordHangupDebt(req, res) {
   // The debt names the chain-read sender: book it once that read is done.
   // Truthy meanwhile, so recordHangupOutcome does not log it as uncharged.
   if (req.tempoSettled && tempoLedgerPayerPending(req)) {
-    whenTempoLedgerPayerKnown(req, "hangup", () => { recordHangupDebt(req, res); });
+    whenTempoLedgerPayerKnown(req, "hangup", () => { recordHangupDebt(req, res, { reason }); });
     return { deferred: true };
   }
   const synthetic = isSyntheticRequest(req);
@@ -349,7 +349,7 @@ function recordHangupDebt(req, res) {
   // Stored on the row: the refund planner holds a budget denial (a repeat
   // hang-up) for review instead of repaying it as an ordinary debt.
   const denied = hangupTicketDenial(req);
-  const hangupReason = denied || (hangupForgiven(req) ? "settled in flight" : "no ticket");
+  const hangupReason = reason || denied || (hangupForgiven(req) ? "settled in flight" : "no ticket");
   // The same push transfer was refused on input earlier and booked as owed
   // under its hash; INSERT OR IGNORE kept that 400 row. It is a disconnect
   // now: promote it, or the hang-up holds never see it.
@@ -359,7 +359,7 @@ function recordHangupDebt(req, res) {
   // How long the buyer waited and which phase it left in: the figure that
   // names the client's own timeout (src/paid-phase-timing.js hangupWaitOf).
   const wait = (() => { try { return hangupWaitOf(req); } catch { return null; } })();
-  console.warn(`[hangup] CHARGED-BUT-NOT-SERVED: client disconnected before the settled response was delivered (${req.method} ${req.path} rail=${row.wire} tx=${row.tx || "?"}${wait ? ` net=${wait.network || "-"} waited=${wait.waitedMs ?? "-"}ms left-during=${wait.during}` : ""}) - ${created ? "recorded as owed in the refund ledger" : "already on the books"}${denied ? `; not forgiven: ${denied}` : ""}${lookupKeys(row.tx) ? `; buyer status: GET /api/refunds?tx=${row.tx}` : ""}`);
+  console.warn(`[hangup] CHARGED-BUT-NOT-SERVED: ${reason ? `the ${reason} for the settled response` : "client disconnected before the settled response was delivered"} (${req.method} ${req.path} rail=${row.wire} tx=${row.tx || "?"}${wait ? ` net=${wait.network || "-"} waited=${wait.waitedMs ?? "-"}ms left-during=${wait.during}` : ""}) - ${created ? "recorded as owed in the refund ledger" : "already on the books"}${denied ? `; not forgiven: ${denied}` : ""}${lookupKeys(row.tx) ? `; buyer status: GET /api/refunds?tx=${row.tx}` : ""}`);
   return row;
 }
 // Every close-before-the-first-byte on a paid request ends here (the hang-up
@@ -10659,9 +10659,11 @@ const mcpMountOpts = {
   // under the connector's own class, so a connector that cuts every paid
   // call off shows on the failure monitor; a probe's own cut-off is
   // synthetic, as its route booking would be.
-  onPaidCutoff: (slug, { statusCode = 504, errorMessage = "paid loopback timed out", heartbeatToken = null } = {}) => {
+  onPaidCutoff: (slug, { statusCode = 504, errorMessage = "paid loopback timed out", heartbeatToken = null, routeCounted = false } = {}) => {
     const synthetic = Boolean(heartbeatToken) && verifyHeartbeatToken(heartbeatToken);
-    try { toolFailureMonitor().noteTool(slug, statusCode, { synthetic, path: "mcp" }); } catch { /* bookkeeping only */ }
+    // One outcome per call: a route that already counted its own (it wrote
+    // its answer before this connector stopped waiting) is not counted again.
+    if (!routeCounted) { try { toolFailureMonitor().noteTool(slug, statusCode, { synthetic, path: "mcp" }); } catch { /* bookkeeping only */ } }
     logToolError(slug, statusCode, errorMessage, undefined, synthetic, false);
   },
   onServed: (slug, meta = {}) => {
@@ -12765,12 +12767,24 @@ function noteToolOutcomeOnClose(req, res, slug, def = null) {
   // serialized) and read only after the response closed, so classifying it
   // never delays, changes or bills the answer.
   const answer = def ? observeJsonAnswer(res) : null;
+  // The hosted MCP connector's paid replay (src/mcp-loopback.js): a settled
+  // answer written in full that the connector stopped waiting for is booked
+  // as owed, in whichever order the two ends land.
+  watchLoopbackOutcome(req, res, {
+    settled: (r) => r.statusCode === 200,
+    onSettledCut: () => { try { recordHangupDebt(req, res, { reason: "connector stopped waiting" }); } catch { /* bookkeeping only */ } },
+  });
   res.once("close", () => {
     try {
       const status = res.headersSent ? res.statusCode : 499;
       // Free (proof-of-work, trial) outcomes count on their own lane, which
-      // the toolFailures word does not read.
-      toolFailureMonitor().noteTool(slug, status, { synthetic, shed: !!res.locals?.shed || drainSignal().aborted, path: salePathOf(req), rail: outcomeRailOf(req, res) });
+      // the toolFailures word does not read. A connector replay the connector
+      // already stopped waiting for is counted there, once (onPaidCutoff).
+      if (loopbackCallCut(req)) { /* counted by the connector */ }
+      else {
+        toolFailureMonitor().noteTool(slug, status, { synthetic, shed: !!res.locals?.shed || drainSignal().aborted, path: salePathOf(req), rail: outcomeRailOf(req, res) });
+        noteLoopbackCounted(req);
+      }
       // onchain-sql's busy refusal (the handler marks the request scope),
       // counted by caller in either branch below.
       const sqlBusy = status === 429 && scope?.onchainSqlBusy === true;

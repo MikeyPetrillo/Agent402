@@ -331,18 +331,16 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   sections) and one `records` row per open entry, booked-payment mark and dropped record
   (collection `referral-settlements.rows`, `src/json-rows-document.js`): every write locks the head
   row (`SELECT ... FOR UPDATE`, 5 s lock wait), reads only the rows written since this process's
-  copy, and writes only the rows it changes (about 600 bytes a paid call's write at 2,000 entries
-  once the mirror is off); a failed write that carried several changes writes each again on its
-  own, once. OVERLAP AND ROLLBACK (this release): every write also puts the whole body in the head
-  (the mirror, marked `__rowsAt` with the head version it wrote), so a build before rows, which
-  reads and writes the book as one document, sees every entry during a deploy's overlap or after a
-  rollback; a head without this build's mark was written last by such a build, and its sections are
-  taken as written (a key it added or changed is written to its row, a row it no longer holds is
-  deleted). The first write folds the old whole-book document into rows the same way. The next
-  release turns the mirror off (`mirror: false`): a write made with it off rewrites a head that
-  still carries a mirror's mark without the mirror, whatever it changed (a mirror left beside a
-  newer version would be read as an older build's book and taken over the rows), so a process with
-  the mirror off runs beside one that still writes it; from then on a rollback past this build reads no
+  copy, and writes only the rows it changes (about 600 bytes a paid call's write at 2,000 entries,
+  pinned with the shipped setting in `scripts/test-referral-book-pg.js`); a failed write that
+  carried several changes writes each again on its own, once. The MIRROR (`mirror: true`, the
+  release that brought rows) put the whole body in the head on every write (marked `__rowsAt`
+  with the head version it wrote) so a build before rows saw every entry during that deploy's
+  overlap; it is OFF by default now (about 1.8 MB a write while on). A head without this build's
+  mark was written last by such a build, and its sections are taken as written (a key it added or
+  changed is written to its row, a row it no longer holds is deleted); the first write folds an old
+  whole-book document into rows the same way, and a write made with the mirror off rewrites a head
+  that still carries a mirror's mark without it. A rollback past the release that brought rows reads no
   open entries: fix forward (`scripts/state-export.js` writes the book back as one document, by the
   same rule, for a file-mode restore). Without a database it is the file
   `REFERRAL_BOOK_FILE`, else `/data/agent402-referral-settlements.json`, else the same name under

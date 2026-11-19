@@ -133,6 +133,7 @@ import {
 import { maxHeaderSize } from "node:http";
 import { mcpX402Entries, mcpX402PathOf, MCP_X402_PREFIX, isFixedPriceDef } from "./mcp-x402-routes.js";
 import { decodesAsMppCredential, decodesAsX402Payment } from "./payment-attempt.js";
+import { openLoopbackCall, closeLoopbackCall, cutLoopbackCall } from "./mcp-loopback.js";
 
 // serverInfo reports the agent402-mcp package version in the deployed build
 // (mcp/package.json, which the image copies) with the server's build as
@@ -1029,14 +1030,20 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const x402Target = !credentialHeader && x402Loopback && !isLongCall(entry.def) ? x402TargetOf(entry.def, isNamed) : null;
       const twinAsk = x402Target && x402Target !== entry.def ? x402Offer(x402Target, params, ip, signal) : null;
       let r;
+      // A credential rides this replay: it is named (src/mcp-loopback.js), so a
+      // settled answer this connector stops waiting for is booked as owed.
+      const callId = credentialHeader ? openLoopbackCall() : null;
       try {
-        r = await mppLoopback({ def: entry.def, params, credentialHeader, ip, signal, idempotencyKey, timeoutMs: PAID_LOOPBACK_TIMEOUT_MS, heartbeatToken });
+        r = await mppLoopback({ def: entry.def, params, credentialHeader, ip, signal, idempotencyKey, timeoutMs: PAID_LOOPBACK_TIMEOUT_MS, heartbeatToken, callId });
+        if (callId) closeLoopbackCall(callId);
       } catch (err) {
         const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
         console.warn(`[mcp] tools/call failed class=${timedOut ? "paid-timeout" : "paid-loopback-error"} tool=${entry.def.slug} after=${Date.now() - startedAt}ms`);
-        // The loopback returned no answer, so no route booked this outcome:
-        // the connector books it (the one failure class that is its own).
-        onPaidCutoff(entry.def.slug, { statusCode: timedOut ? 504 : 502, errorMessage: timedOut ? "paid loopback timed out" : "paid loopback failed", latencyMs: Date.now() - startedAt, heartbeatToken });
+        // The loopback returned no answer to this connector: the connector
+        // books the outcome, once (a route that already counted its own
+        // outcome is not counted again; one that ends later leaves it here).
+        const { routeCounted } = callId ? cutLoopbackCall(callId) : { routeCounted: false };
+        onPaidCutoff(entry.def.slug, { statusCode: timedOut ? 504 : 502, errorMessage: timedOut ? "paid loopback timed out" : "paid loopback failed", latencyMs: Date.now() - startedAt, heartbeatToken, routeCounted });
         // "Not charged" is only true when no payment credential rode along:
         // with one, the server-side request may have settled after this
         // connector stopped waiting.
@@ -1115,12 +1122,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const paymentSignature = paymentSignatureHeader(read.payment);
       const idempotencyKey = reqParams?._meta?.["org.agent402/idempotency-key"];
       let r;
+      const callId = openLoopbackCall();
       try {
-        r = await x402Loopback({ def: target, params, paymentSignature, ip, signal, idempotencyKey, timeoutMs: PAID_LOOPBACK_TIMEOUT_MS, heartbeatToken });
+        r = await x402Loopback({ def: target, params, paymentSignature, ip, signal, idempotencyKey, timeoutMs: PAID_LOOPBACK_TIMEOUT_MS, heartbeatToken, callId });
+        closeLoopbackCall(callId);
       } catch (err) {
         const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
         console.warn(`[mcp] tools/call failed class=${timedOut ? "paid-timeout" : "paid-loopback-error"} wire=x402 tool=${def.slug} after=${Date.now() - startedAt}ms`);
-        onPaidCutoff(def.slug, { statusCode: timedOut ? 504 : 502, errorMessage: timedOut ? "paid loopback timed out" : "paid loopback failed", latencyMs: Date.now() - startedAt, heartbeatToken });
+        const { routeCounted } = cutLoopbackCall(callId);
+        onPaidCutoff(def.slug, { statusCode: timedOut ? 504 : 502, errorMessage: timedOut ? "paid loopback timed out" : "paid loopback failed", latencyMs: Date.now() - startedAt, heartbeatToken, routeCounted });
         return {
           content: [{ type: "text", text: connectorCutoffText({
             label: `Agent402 (${def.slug})`, seconds: Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000), paid: true,

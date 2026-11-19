@@ -178,6 +178,39 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
   }
 }
 
+// ---- A3h. A shared store that is connected and never answers -----------------
+// A hung Redis (the connection stays up, no command answers) used to hold
+// every paid call at its claim for as long as the socket lived. Each command
+// is bounded (SHARED_LIMITS_OP_MS, default 1 s, measured in loop time): the
+// claim then reads as a failed store, so a route that requires the shared
+// store is refused and every other route claims on this process.
+{
+  const g = createReplayGuard({ consumedRetryDelaysMs: [], pendingRetryMs: 50 });
+  const never = () => new Promise(() => {});
+  const hung = { isReady: true, get: never, set: never, del: never, expire: never, mGet: never, eval: never };
+  __setTestClient(hung);
+  const timed = async (fn) => { const t0 = performance.now(); const v = await Promise.race([fn(), new Promise((r) => setTimeout(() => r("still-waiting"), 4_000))]); return { v, ms: Math.round(performance.now() - t0) }; };
+  try {
+    const a = await timed(() => g.begin("n:hung-long", undefined, { requireShared: true }));
+    ok(a.v === "unavailable" && a.ms < 2_500, `a hung store: a route that requires it is refused within the command bound (${a.v} after ${a.ms} ms)`);
+    const b = await timed(() => g.begin("n:hung-fast"));
+    ok(b.v === "ok" && b.ms < 2_500, `a hung store: another route claims on this process within the command bound (${b.v} after ${b.ms} ms)`);
+    const c = await timed(() => g.held("n:hung-other"));
+    ok(c.v === "unavailable" && c.ms < 2_500, `a hung store: the read-only check answers unavailable within the bound (${c.v} after ${c.ms} ms)`);
+    const d = await timed(() => g.settle("n:hung-fast").then(() => "settled"));
+    ok(d.v === "settled" && d.ms < 2_500 && g._state().pendingConsumed === 1, `a hung store: the settle keeps its mark here and queues the store write (${d.v} after ${d.ms} ms)`);
+    const e = await timed(() => g.release("n:hung-long").then(() => "released"));
+    ok(e.v === "released" && e.ms < 2_500, `a hung store: a release returns within the bound (${e.v} after ${e.ms} ms)`);
+    // The store answers again: the queued mark is written and the queue empties.
+    const kv = new Map();
+    __setTestClient({ isReady: true, get: async (k) => kv.get(k) ?? null, set: async (k, v, o = {}) => { if (o.NX && kv.has(k)) return null; kv.set(k, v); return "OK"; }, del: async (k) => (kv.delete(k) ? 1 : 0), expire: async () => 1 });
+    for (let i = 0; i < 200 && g._state().pendingConsumed > 0; i++) await new Promise((r) => setTimeout(r, 20));
+    ok(g._state().pendingConsumed === 0 && [...kv.keys()].some((k) => k.includes("hung-fast")), "once the store answers, the queued mark is written");
+  } finally {
+    __setTestClient(null);
+  }
+}
+
 // ---- A3b. The store fails AFTER the claim landed ------------------------------
 // A command that throws once the SET NX has claimed the key must not leave
 // that claim behind: the buyer's retry of the same unused authorization would

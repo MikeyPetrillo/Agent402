@@ -97,9 +97,8 @@ export const EXPIRY_SLACK_MS = 120_000;
 
 // With a state database the document is a head row and one row per entry,
 // booked-payment mark and dropped record (src/json-rows-document.js: a write
-// under the head's row lock, the size of what it changes; for one release the
-// head also carries the whole body, so a build before rows running beside this
-// one during a deploy's overlap reads and writes the same book). Without one it is a file:
+// under the head's row lock, the size of what it changes; the head carries no
+// copy of the whole body). Without one it is a file:
 // REFERRAL_BOOK_FILE, else under /data when that volume exists, else under the
 // system temp directory (as the other file stores do), so the book survives a
 // restart in every mode.

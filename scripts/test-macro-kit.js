@@ -5,7 +5,9 @@
 // integration is broken, not one upstream).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { stubGuardResolver, offlineGuardAnswer } from "./lib/guard-resolver-stub.js";
-import { MACRO_TOOLS, retryTransient, withStaleFallback, parseTreasuryYieldCsv, treasuryYieldCsvUrl, TREASURY_YIELD_SOURCE, _resetTreasuryYieldCacheForTest, _ageTreasuryYieldCacheForTest, refreshTreasuryYields, startTreasuryYieldRefresh, stopTreasuryYieldRefresh } from "../src/tools/macro-kit.js";
+import { MACRO_TOOLS, retryTransient, withStaleFallback, parseTreasuryYieldCsv, treasuryYieldCsvUrl, TREASURY_YIELD_SOURCE, _resetTreasuryYieldCacheForTest, _ageTreasuryYieldCacheForTest, refreshTreasuryYields, startTreasuryYieldRefresh, stopTreasuryYieldRefresh, TREASURY_YIELD_MAX_AGE_MS } from "../src/tools/macro-kit.js";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const h = (slug) => MACRO_TOOLS.find((t) => t.slug === slug).handler;
 let assertFail = 0, liveOk = 0, liveErr = 0;
@@ -208,6 +210,26 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
       ok(bg.join() === [Y - 1, Y].sort().join(), `the boot pass reads this year and last year once each, with no request (${bg.join(", ")})`);
       t0 = Date.now(); r = await h("treasury-yield-history")({ days: 250 });
       ok(r.count === 250 && Date.now() - t0 < 50 && slowReads.length === before + 2, "after the boot pass a 250-day window is served from memory");
+      // 5. Stale has an age limit: held rows whose last good read is older than
+      //    TREASURY_YIELD_MAX_AGE_MS are not served (503, nothing charged), and
+      //    the call still starts a read; under the limit they are served stale.
+      failWith = 502; delay = 0;
+      _ageTreasuryYieldCacheForTest(TREASURY_YIELD_MAX_AGE_MS - 3_600_000);
+      r = await h("treasury-yield-curve")({}); await tick();
+      ok(r.recordDate && r.stale === true, `held rows under the age limit are served marked stale (${r.staleAsOf})`);
+      _ageTreasuryYieldCacheForTest(2 * 3_600_000);
+      for (const slug of ["treasury-yield-curve", "treasury-yield-history", "yield-curve-spread"]) {
+        err = null; r = null; mark = slowReads.length;
+        try { r = await h(slug)(slug === "treasury-yield-history" ? { days: 5 } : {}); } catch (x) { err = x; }
+        await tick();
+        ok(!r && err?.statusCode === 503 && err.retryAfter > 0 && /nothing was charged/.test(err.message), `${slug}: held rows past the age limit answer 503, never the old yields (${err?.statusCode ?? JSON.stringify(r)})`);
+        _ageTreasuryYieldCacheForTest(61_000);
+      }
+      failWith = 0; _ageTreasuryYieldCacheForTest(61_000);
+      try { await h("treasury-yield-curve")({}); } catch { /* starts the read */ }
+      await tick();
+      r = await h("treasury-yield-curve")({});
+      ok(r.recordDate && !r.stale, "a read that succeeds serves the curve again");
     } finally {
       if (realBudget === undefined) delete process.env.TREASURY_YIELD_BUDGET_MS; else process.env.TREASURY_YIELD_BUDGET_MS = realBudget;
     }
@@ -216,6 +238,30 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
     undoDns();
     _resetTreasuryYieldCacheForTest();
   }
+}
+
+// --- the background refresh starts at import in production only (each case a
+// process of its own: the switch is read once, at import). No read is made:
+// the child exits before the first pass is due.
+{
+  const kit = fileURLToPath(new URL("../src/tools/macro-kit.js", import.meta.url));
+  const probe = `const m = await import(${JSON.stringify(kit)}); process.stdout.write(String(m.treasuryYieldRefreshRunning())); m.stopTreasuryYieldRefresh();`;
+  const runs = (env) => {
+    const base = { ...process.env };
+    for (const k of ["NODE_ENV", "RAILWAY_ENVIRONMENT_NAME", "FREE_MODE", "TREASURY_YIELD_REFRESH"]) delete base[k];
+    try { return execFileSync(process.execPath, ["--input-type=module", "-e", probe], { env: { ...base, ...env }, encoding: "utf8", timeout: 60_000 }).trim(); }
+    catch (e) { return `error: ${String(e?.stderr || e?.message || e).slice(0, 200)}`; }
+  };
+  const cases = [
+    [{ NODE_ENV: "production" }, "true", "NODE_ENV=production starts it"],
+    [{ RAILWAY_ENVIRONMENT_NAME: "production" }, "true", "a Railway environment starts it"],
+    [{ NODE_ENV: "production", FREE_MODE: "true" }, "false", "a FREE_MODE production boot leaves it off"],
+    [{ NODE_ENV: "production", TREASURY_YIELD_REFRESH: "off" }, "false", "TREASURY_YIELD_REFRESH=off disarms it in production"],
+    [{}, "false", "a development boot or a test leaves it off"],
+    [{ TREASURY_YIELD_REFRESH: "on" }, "true", "TREASURY_YIELD_REFRESH=on starts it anywhere"],
+    [{ TREASURY_YIELD_REFRESH: "on", FREE_MODE: "true" }, "true", "TREASURY_YIELD_REFRESH=on starts it in FREE_MODE too"],
+  ];
+  for (const [env, want, label] of cases) { const got = runs(env); ok(got === want, `start at import: ${label} (${JSON.stringify(env)} -> ${got})`); }
 }
 
 // --- stale fallback (offline, deterministic) — locks the fix for the

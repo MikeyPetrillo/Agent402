@@ -53,6 +53,12 @@ import algosdk from "algosdk";
 import { getTransactionDecoder } from "@solana/kit";
 import { paymentHeaderOf } from "./payer.js";
 import { getSharedRedisClient, sharedLimitEnabled } from "./shared-limit.js";
+import { boundedRedisClient } from "./bounded-redis.js";
+// Every command this guard sends is bounded (SHARED_LIMITS_OP_MS, loop time):
+// a connected Redis that stops answering fails the command, which each path
+// below reads as a store that did not answer, instead of holding the paid
+// call at its claim for as long as the socket lives.
+const storeClient = async () => boundedRedisClient(await getSharedRedisClient());
 import { decodePaymentHeader, isEvmNetworkName, canonicalNonce } from "./payment-header.js";
 import { stellarAuthorizationsOf } from "./stellar-confirm.js";
 import { base64BytesOf } from "./base64-bytes.js";
@@ -517,7 +523,7 @@ export function createReplayGuard({
       const claim = claims.get(key);
       if (!claim || Date.now() >= until) { stopRenew(key); return; }
       try {
-        const c = await getSharedRedisClient();
+        const c = await storeClient();
         if (!c) return;
         if (!claim.shared) {
           // Taken here while the store did not answer: written there now,
@@ -560,7 +566,7 @@ export function createReplayGuard({
       if (claims.get(key) !== claim || claim.shared || Date.now() >= until) { stopDeferredWrite(key); return; }
       busy = true;
       try {
-        const c = await getSharedRedisClient();
+        const c = await storeClient();
         if (!c) return;
         const took = await c.set(REDIS_PREFIX + "f:" + primary, claim.token, { NX: true, EX: inflightTtlSeconds });
         if (deferredWriters.get(key) === t) stopDeferredWrite(key);
@@ -647,7 +653,7 @@ export function createReplayGuard({
         lastError = e;
         if (i >= delays.length) break;
         await sleep(delays[i]);
-        try { c = await getSharedRedisClient(); } catch { c = null; }
+        try { c = await storeClient(); } catch { c = null; }
       }
     }
     if (lastError) return { written: false, error: lastError };
@@ -687,7 +693,7 @@ export function createReplayGuard({
       }
       if (pending.size === 0) return;
       let c = null;
-      try { c = await getSharedRedisClient(); } catch { c = null; }
+      try { c = await storeClient(); } catch { c = null; }
       if (!c) return;
       for (const [key, entry] of [...pending]) {
         if (pending.get(key) !== entry) continue;
@@ -737,7 +743,7 @@ export function createReplayGuard({
       // when they were made.
       if (isConsumedLocal(lk, now)) return "consumed";
       if (inFlight.has(lk)) return "inflight";
-      const c = await getSharedRedisClient();
+      const c = await storeClient();
       if (!c && requireShared && sharedLimitEnabled()) return "unavailable";
       if (c) {
         const names = namesOf(key);
@@ -819,7 +825,7 @@ export function createReplayGuard({
       // does not answer): they hold whatever backend answered when made.
       const local = () => (isConsumedLocal(lk, now) ? "consumed" : inFlight.has(lk) ? "inflight" : null);
       let c = null;
-      try { c = await getSharedRedisClient(); } catch { return local() || (sharedLimitEnabled() ? "unavailable" : null); }
+      try { c = await storeClient(); } catch { return local() || (sharedLimitEnabled() ? "unavailable" : null); }
       if (!c) return local() || (sharedLimitEnabled() ? "unavailable" : null);
       try {
         // Every name in one round trip (MGET): this read runs before the
@@ -859,7 +865,7 @@ export function createReplayGuard({
       // payment again while the mark is held.
       markConsumedLocal(lk, until, holdMs > ttlMs);
       let c = null;
-      try { c = await getSharedRedisClient(); } catch { c = null; }
+      try { c = await storeClient(); } catch { c = null; }
       // No store configured: the local mark is the guarantee.
       if (!c && !sharedLimitEnabled()) return;
       const r = await writeConsumed(c, key, now, until, claim, consumedRetryDelaysMs);
@@ -881,7 +887,7 @@ export function createReplayGuard({
       inFlight.delete(localKeyOf(key));
       if (!claim?.shared) return;
       try {
-        const c = await getSharedRedisClient();
+        const c = await storeClient();
         if (!c) return;
         const { primary, legacy } = namesOf(key);
         await delIfValue(c, REDIS_PREFIX + "f:" + primary, claim.token);

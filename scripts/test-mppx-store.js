@@ -111,6 +111,18 @@ const { createMppxStore, MPPX_STORE_PREFIX } = await import("../src/mppx-store.j
   const broken = createMppxStore({ getClient: async () => ({ get: async () => { throw new Error("ECONNRESET"); }, set: async () => { throw new Error("ECONNRESET"); }, del: async () => { throw new Error("ECONNRESET"); }, eval: async () => { throw new Error("ECONNRESET"); } }), log: (m) => logs.push(m) });
   ok(await broken.tryClaim("mppx:charge:0xcc", exp) === true && await broken.tryClaim("mppx:charge:0xcc", exp) === false, "redis failing: claims still hold within this process");
   ok(logs.length === 1 && /redis tryClaim failed/.test(logs[0]) && /not shared/.test(logs[0]), "the degraded path logs once (rate-limited), naming that claims are not shared");
+  // Redis connected and never answering: each command is bounded (SHARED_LIMITS_OP_MS),
+  // so the claim falls back to this process's memory instead of holding the payment.
+  const never = () => new Promise(() => {});
+  const hung = createMppxStore({ getClient: async () => ({ isReady: true, get: never, set: never, del: never, eval: never }), log: () => {} });
+  const race = (p) => Promise.race([p, new Promise((r) => setTimeout(() => r("still-waiting"), 4_000))]);
+  let t0 = performance.now();
+  const claimed = await race(hung.tryClaim("mppx:charge:0xdd", exp));
+  const claimMs = Math.round(performance.now() - t0);
+  t0 = performance.now();
+  const updated = await race(hung.update("mppx:charge:0xde", () => ({ op: "set", value: { n: 1 }, result: "set" })));
+  const updateMs = Math.round(performance.now() - t0);
+  ok(claimed === true && claimMs < 2_500 && updated === "set" && updateMs < 2_500, `redis hung: a claim and an update fall back within the command bound (${claimed} after ${claimMs} ms, ${updated} after ${updateMs} ms)`);
 }
 
 // --- the caller path: a push credential through the real gate functions --------

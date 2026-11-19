@@ -44,7 +44,7 @@ import { limiterKey } from "./rate-limit.js";
 import { chargeCancelledForClientGone, markSettleSent } from "./hangup-settlement.js";
 import { meteredUsdOf } from "./gateway-meter.js";
 import { envPositive } from "./env-num.js";
-import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady } from "./state-db.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady, stateStatementOutsideTx, withLease } from "./state-db.js";
 import { getSharedRedisClient } from "./shared-limit.js";
 import { sharedLimitsEnabled } from "./shared-limits.js";
 import { retryingLoad } from "./store-retry.js";
@@ -150,6 +150,63 @@ export function noteEvent(rec, ev, at = Date.now()) {
 import { LOW_BALANCE_MICRO } from "./credits-figures.js";
 export { LOW_BALANCE_MICRO };
 export const usdToMicro = (usd) => Math.round(Number(usd) * MICRO);
+
+// ONE NORMALIZED EMAIL. The email a balance is found by is normalized once,
+// here (trimmed, NFC, lowercased by JS), stored on the key's record as
+// `emailKey` beside the email as given, and compared as stored: the balance
+// page never lowercases in SQL, whose lower() follows the database's locale
+// and does not agree with JS for every letter ("İ"). A row an older build
+// wrote without the field is given it at the next load (computed here); until
+// then the lookup falls back to lower() of its email.
+export function emailKeyOf(email) {
+  const e = String(email ?? "").trim().normalize("NFC").toLowerCase();
+  return e || null;
+}
+const sameEmail = (a, b) => { const k = emailKeyOf(a); return k !== null && k === emailKeyOf(b); };
+const recEmailKey = (rec) => (typeof rec?.emailKey === "string" && rec.emailKey ? rec.emailKey : emailKeyOf(rec?.email));
+
+// THE BALANCE PAGE'S TWO LOOKUPS and the expression indexes they use (partial,
+// on the credits rows of the shared records table). The collection is written
+// into the statement so the planner can match the indexes' predicate.
+export const CREDITS_LOOKUP_SQL = Object.freeze({
+  keyId: (t) => `SELECT id, body FROM ${t} WHERE collection = 'credits' AND id LIKE 'k\\_%' ESCAPE '\\' AND (body->>'keyId') = $1`,
+  email: (t) => `SELECT id, body FROM ${t} WHERE collection = 'credits' AND id LIKE 'k\\_%' ESCAPE '\\' AND COALESCE(body->>'emailKey', lower(body->>'email')) = $1`,
+});
+export const CREDITS_INDEXES = Object.freeze([
+  { name: "credits_email_key_idx", expr: "(COALESCE(body->>'emailKey', lower(body->>'email')))" },
+  { name: "credits_key_id_idx", expr: "((body->>'keyId'))" },
+]);
+// Built CONCURRENTLY (writes go on during the build), each statement on a
+// connection of its own outside any transaction (Postgres refuses one inside
+// a transaction block), never in the boot's schema setup, which runs in one
+// transaction under the schema lock. One container builds at a time (the
+// lease); an index a failed build left INVALID is dropped and built again.
+// The store starts it in the background CREDITS_INDEX_DELAY_MS (default 60 s)
+// after its first load; CREDITS_INDEXES=off leaves it to an operator.
+export async function ensureCreditsIndexes({ log = console.log } = {}) {
+  if (!stateDbEnabled()) return { ran: false, reason: "no-db" };
+  const schema = stateDbSchema();
+  return withLease("credits-indexes", { ttlMs: 120_000, log }, async () => {
+    const have = async () => new Map((await stateQuery(
+      `SELECT c.relname AS name, i.indisvalid AS valid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = ANY($2)`,
+      [schema, CREDITS_INDEXES.map((x) => x.name)],
+    )).rows.map((r) => [r.name, r.valid === true]));
+    const found = await have();
+    const built = [], rebuilt = [];
+    for (const ix of CREDITS_INDEXES) {
+      if (found.get(ix.name) === true) continue;
+      if (found.has(ix.name)) {
+        await stateStatementOutsideTx(`DROP INDEX CONCURRENTLY IF EXISTS ${schema}.${ix.name}`);
+        rebuilt.push(ix.name);
+      }
+      const t0 = Date.now();
+      await stateStatementOutsideTx(`CREATE INDEX CONCURRENTLY IF NOT EXISTS ${ix.name} ON ${schema}.records ${ix.expr} WHERE collection = 'credits'`);
+      built.push(ix.name);
+      log(`[credits] index ${ix.name} built concurrently in ${Date.now() - t0} ms${rebuilt.includes(ix.name) ? " (an invalid one was dropped first)" : ""}`);
+    }
+    return { built, rebuilt };
+  });
+}
 export const microToUsd = (m) => Math.round(Number(m) / 100) / 10000; // 4 dp
 
 /**
@@ -198,7 +255,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     if (!fileIdx) return;
     idxForget(hash);
     if (!rec) return;
-    const k = typeof rec.keyId === "string" ? rec.keyId : "", e = String(rec.email || "").toLowerCase();
+    const k = typeof rec.keyId === "string" ? rec.keyId : "", e = recEmailKey(rec) || "";
     fileIdx.of.set(hash, { k, e });
     if (k) fileIdx.byKeyId.set(k, hash);
     if (e) { let set = fileIdx.byEmail.get(e); if (!set) fileIdx.byEmail.set(e, (set = new Set())); set.add(hash); }
@@ -228,8 +285,22 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   const pgKeysLite = async () => (await stateQuery(`SELECT id, body - 'history' AS body FROM ${RT()} WHERE collection = $1 AND id LIKE 'k\\_%' ESCAPE '\\' ORDER BY id`, [COLL])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
   // The key rows one balance-page lookup needs, found by the database: by key
   // id, or every row bought with an email.
-  const pgKeysByKeyId = async (keyId) => (await stateQuery(`SELECT id, body FROM ${RT()} WHERE collection = $1 AND id LIKE 'k\\_%' ESCAPE '\\' AND body->>'keyId' = $2`, [COLL, keyId])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
-  const pgKeysByEmail = async (email) => (await stateQuery(`SELECT id, body FROM ${RT()} WHERE collection = $1 AND id LIKE 'k\\_%' ESCAPE '\\' AND lower(body->>'email') = $2`, [COLL, email])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
+  // (CREDITS_LOOKUP_SQL, on their expression indexes once built.)
+  const pgKeysByKeyId = async (keyId) => (await stateQuery(CREDITS_LOOKUP_SQL.keyId(RT()), [keyId])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
+  const pgKeysByEmail = async (email) => (await stateQuery(CREDITS_LOOKUP_SQL.email(RT()), [email])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
+  // Every key row an older build wrote without `emailKey` is given it,
+  // computed in JS, in one merge per row that leaves every other field as it is.
+  async function backfillEmailKeys() {
+    const rows = (await stateQuery(`SELECT id, body->>'email' AS email FROM ${RT()} WHERE collection = $1 AND id LIKE 'k\\_%' ESCAPE '\\' AND NOT (body ? 'emailKey') AND COALESCE(body->>'email', '') <> ''`, [COLL])).rows;
+    let n = 0;
+    for (const r of rows) {
+      const k = emailKeyOf(r.email);
+      if (!k) continue;
+      n += (await stateQuery(`UPDATE ${RT()} SET body = body || jsonb_build_object('emailKey', $3::text) WHERE collection = $1 AND id = $2 AND NOT (body ? 'emailKey')`, [COLL, r.id, k])).rowCount;
+    }
+    if (n) log(`[credits] gave ${n} key record(s) their normalized email`);
+    return n;
+  }
   // Write-through to the directory while it is there, so a rollback reads
   // current balances. Best effort: a failure is logged once, never the verdict.
   let throughWarned = false;
@@ -283,10 +354,19 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   const loader = usePg ? retryingLoad("[credits]", async () => {
     await importOnce(basename(dir), { source: dir, run: importDir });
     await rollForwardIfFilesNewer();
+    await backfillEmailKeys();
     await sweepAbandonedHolds().catch((e) => log(`[credits] hold sweep failed: ${String(e?.message || e).slice(0, 120)}`));
   }, { log }) : null;
   const readyP = () => (loader ? loader.ready() : Promise.resolve());
   if (loader) { trackStoreReady(loader.eventually); readyP().catch(() => {}); }
+  // The lookup indexes, in the background once the store has loaded (ensureCreditsIndexes).
+  if (loader && String(process.env.CREDITS_INDEXES || "").toLowerCase() !== "off") {
+    const delay = Math.max(0, Number(process.env.CREDITS_INDEX_DELAY_MS ?? 60_000) || 0);
+    Promise.resolve(loader.eventually).then(() => {
+      const t = setTimeout(() => { ensureCreditsIndexes({ log }).catch((e) => log(`[credits] index build failed (the lookups run without it): ${String(e?.message || e).slice(0, 160)}`)); }, delay);
+      t.unref?.();
+    }, () => {});
+  }
 
   // ---- abandoned holds (database only) --------------------------------------
   // Each hold on the database is also an entry `holds[id] = { m, at }` on the
@@ -419,8 +499,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   }
   async function keysByEmail(email) {
     if (!email) return [];
-    if (usePg) { await readyP(); return (await pgKeysByEmail(email)).filter((x) => String(x.rec?.email || "").toLowerCase() === email); }
-    return [...(fileIndex().byEmail.get(email) || [])].map((hash) => ({ hash, rec: load(hash) })).filter((x) => x.rec && String(x.rec.email || "").toLowerCase() === email);
+    const k = emailKeyOf(email);
+    if (!k) return [];
+    if (usePg) { await readyP(); return (await pgKeysByEmail(k)).filter((x) => recEmailKey(x.rec) === k); }
+    return [...(fileIndex().byEmail.get(k) || [])].map((hash) => ({ hash, rec: load(hash) })).filter((x) => x.rec && recEmailKey(x.rec) === k);
   }
   const answer = (v) => (usePg ? Promise.resolve(v) : v);
   const note = (rec, ev) => noteEvent(rec, ev, now());
@@ -495,7 +577,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // session carries, and how much of the payment Stripe has refunded already
   // (cents). A read that fails leaves a field null; the other still matches.
   async function buyerOf(session, paymentIntent) {
-    const email = String(session.customer_details?.email || session.customer_email || "").trim().toLowerCase() || null;
+    const email = emailKeyOf(session.customer_details?.email || session.customer_email);
     let cardFingerprint = null, refundedCents = 0;
     if (paymentIntent && stripe.paymentIntents?.retrieve) {
       try {
@@ -512,7 +594,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     let micro = 0;
     for (const { rec } of await allKeys()) {
       if (!rec) continue;
-      const same = (buyer.email && rec.email && String(rec.email).toLowerCase() === buyer.email)
+      const same = (buyer.email && recEmailKey(rec) === buyer.email)
         || (buyer.cardFingerprint && rec.cardFingerprint === buyer.cardFingerprint);
       if (!same) continue;
       // A key topped up counts each payment on its own day.
@@ -658,7 +740,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const buyer = await buyerOf(session, paymentIntent);
     // A top-up (started from the balance page) adds to the balance it names.
     const topupOf = session.metadata?.credits_topup;
-    if (typeof topupOf === "string" && topupOf) return withBuyerLock(buyer, () => topUp({ session, sessionId, packKey, p, paymentIntent, buyer, keyId: topupOf, account: String(session.metadata?.credits_account || "").toLowerCase() }));
+    if (typeof topupOf === "string" && topupOf) return withBuyerLock(buyer, () => topUp({ session, sessionId, packKey, p, paymentIntent, buyer, keyId: topupOf, account: emailKeyOf(session.metadata?.credits_account) }));
     return withBuyerLock(buyer, () => issue({ session, sessionId, packKey, p, email, loadedMicro, paymentIntent, buyer }));
   }
 
@@ -700,7 +782,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     // The buyer's answers to the required checkout fields (business use, terms).
     const fields = Object.fromEntries((Array.isArray(session.custom_fields) ? session.custom_fields : []).map((f) => [String(f?.key || ""), String(f?.dropdown?.value || "")]));
     const consent = { use: fields.use || null, terms: fields.terms === "agreed" ? session.metadata?.terms || null : null };
-    const rec = { keyId, balanceMicro: loadedMicro - refundedMicro, loadedMicro, ...(refundedMicro ? { refundedMicro } : {}), spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, cardFingerprint: buyer.cardFingerprint, billing, consent, taxIds, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
+    const rec = { keyId, balanceMicro: loadedMicro - refundedMicro, loadedMicro, ...(refundedMicro ? { refundedMicro } : {}), spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, emailKey: emailKeyOf(email), cardFingerprint: buyer.cardFingerprint, billing, consent, taxIds, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
     note(rec, { k: "purchase", m: loadedMicro - refundedMicro });
     if (usePg) {
       // The record first (nobody holds its key yet), then the claim; a claim
@@ -766,7 +848,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const out = hash ? await mutate(hash, (rec) => {
       if (!rec || rec.keyId !== keyId) return { result: { why: "topup_target" } };
       if (Array.isArray(rec.sessions) && rec.sessions.includes(sessionId)) return { result: { dup: true } };
-      if (!account || String(rec.email || "").toLowerCase() !== account || rec.disabled || rec.refundRequest) return { result: { why: "topup_target" } };
+      if (!account || !sameEmail(recEmailKey(rec), account) || rec.disabled || rec.refundRequest) return { result: { why: "topup_target" } };
       if ((Number(rec.balanceMicro) || 0) + (Number(rec.heldMicro) || 0) + p.cents * 10_000 > creditsBalanceMaxCents() * 10_000) return { result: { why: "balance_cap" } };
       const pays = Array.isArray(rec.payments) && rec.payments.length ? rec.payments : (() => {
         const first = Array.isArray(rec.paymentIntents) ? rec.paymentIntents[0] || null : null;
@@ -807,7 +889,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     if (!p) throw bad(`Unknown credit pack. Valid packs: ${Object.keys(sellablePacks()).join(", ")}`, { validPacks: Object.keys(sellablePacks()) });
     const hash = await keyHashById(String(keyId || ""));
     const rec = hash ? await readRec(hash) : null;
-    if (!rec || !account || String(rec.email || "").toLowerCase() !== account) throw Object.assign(new Error("No balance with that id is on this account."), { statusCode: 404, buyerSafe: true });
+    if (!rec || !account || !sameEmail(recEmailKey(rec), account)) throw Object.assign(new Error("No balance with that id is on this account."), { statusCode: 404, buyerSafe: true });
     if (rec.disabled || rec.refundRequest) throw bad("This balance is closed (refunded or switched off), so it cannot be topped up.");
     const capCents = creditsBalanceMaxCents();
     const usedCents = Math.ceil(((Number(rec.balanceMicro) || 0) + (Number(rec.heldMicro) || 0)) / 10_000);
@@ -1599,15 +1681,15 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // or its hash; the key id is the handle the page acts on.
   const capRoomUsd = (rec) => Math.max(0, creditsBalanceMaxCents() - Math.ceil(((Number(rec.balanceMicro) || 0) + (Number(rec.heldMicro) || 0)) / 10_000)) / 100;
   async function balancesForEmail(email) {
-    const e = String(email || "").trim().toLowerCase();
+    const e = emailKeyOf(email);
     if (!e) return [];
     return (await keysByEmail(e))
       .map(({ rec }) => ({ ...balanceOf(rec), roomUsd: rec.disabled || rec.refundRequest ? 0 : capRoomUsd(rec), lowNotice: !rec.lowNoticeOff, disabledReason: rec.disabled ? rec.disabledReason || "operator" : null }))
       .sort((a, b) => String(b.lastUsedAt || b.createdAt).localeCompare(String(a.lastUsedAt || a.createdAt)));
   }
   async function ownedRec(keyId, email) {
-    const e = String(email || "").trim().toLowerCase();
-    const hit = e ? (await keysByKeyId(keyId)).find((x) => String(x.rec.email || "").toLowerCase() === e) : null;
+    const e = emailKeyOf(email);
+    const hit = e ? (await keysByKeyId(keyId)).find((x) => recEmailKey(x.rec) === e) : null;
     return hit || null;
   }
   /** One balance's history (newest first), its totals by tool and what is held now; null when the email does not hold it. */
@@ -1650,7 +1732,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const key = `a402_${randomBytes(24).toString("base64url")}`;
     const next = hashKey(key);
     const move = (rec) => {
-      if (!rec || rec.keyId !== keyId || String(rec.email || "").toLowerCase() !== String(email).trim().toLowerCase()) return { status: "unknown" };
+      if (!rec || rec.keyId !== keyId || !sameEmail(recEmailKey(rec), email)) return { status: "unknown" };
       if ((Number(rec.heldMicro) || 0) > 0) return { status: "in_flight" };
       const out = { ...rec, rotatedAt: new Date(now()).toISOString() };
       delete out.holds; delete out.settledHolds;

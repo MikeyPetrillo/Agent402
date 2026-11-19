@@ -30,9 +30,10 @@ function secretOf(env = process.env) {
 const SECRET = secretOf();
 const MARKER = `mcp;k=${SECRET}`;
 
-/** The marker header the connector's loopback replay sends (src/mcp-mpp.js). */
-export function mcpLoopbackHeaders() {
-  return { "X-Agent402-Via": MARKER };
+/** The marker header the connector's loopback replay sends (src/mcp-mpp.js),
+ *  with the paid replay's call id when it has one (openLoopbackCall). */
+export function mcpLoopbackHeaders({ callId = null } = {}) {
+  return { "X-Agent402-Via": MARKER, ...(typeof callId === "string" && CALL_RE.test(callId) ? { "X-Agent402-Via-Call": callId } : {}) };
 }
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
@@ -57,6 +58,12 @@ export function isMcpLoopback(req) {
     genuine = typeof raw === "string" && sameMarker(raw.trim()) && LOOPBACK.has(String(req.socket?.remoteAddress || ""));
     delete headers[MCP_VIA_HEADER];
   }
+  // The call id is read only beside a genuine marker, and removed either way.
+  const call = headers ? headers[MCP_CALL_HEADER] : undefined;
+  if (call !== undefined) {
+    if (genuine && typeof call === "string" && CALL_RE.test(call.trim())) callIdOf.set(req, call.trim());
+    delete headers[MCP_CALL_HEADER];
+  }
   verdicts.set(req, genuine);
   return genuine;
 }
@@ -66,3 +73,106 @@ export function stripMcpMarker(req, _res, next) {
   isMcpLoopback(req);
   next();
 }
+
+// ---- A paid replay the connector stopped waiting for -------------------------
+// The connector names each paid replay (a random call id, sent beside the
+// marker and read only with it) and says how it ended for the connector: the
+// answer arrived (closeLoopbackCall) or the connector stopped waiting
+// (cutLoopbackCall: its deadline, a loopback error). The route says how it
+// ended for the route (watchLoopbackOutcome). Whichever side ends second acts:
+//   - CHARGED, NOT RECEIVED. A route that wrote a settled 200 in full and a
+//     connector that stopped waiting for it, in either order (a stall of the
+//     event loop can let the connector's deadline fire after the answer was
+//     written to the socket, and the route then saw an ordinary delivery):
+//     the route's `onSettledCut` runs once (the server books the charge as
+//     owed). A close before the first byte is the hang-up recorder's
+//     (src/hangup-settlement.js), as on any other request.
+//   - ONE OUTCOME PER CALL. A route ending after the cut leaves the outcome
+//     to the connector's own count (loopbackCallCut); a cut after the route
+//     counted its outcome is not counted again (cutLoopbackCall answers
+//     routeCounted).
+// Bounded: an entry ends when both sides have spoken, or after
+// LOOPBACK_CALL_TTL_MS; past LOOPBACK_CALLS_MAX the oldest goes first.
+export const MCP_CALL_HEADER = "x-agent402-via-call";
+const CALL_RE = /^[0-9a-f]{32}$/;
+export const LOOPBACK_CALL_TTL_MS = 15 * 60_000;
+export const LOOPBACK_CALLS_MAX = 5_000;
+const loopCalls = new Map(); // call id -> { at, cut, routeEnded, counted, onSettledCut }
+const callIdOf = new WeakMap(); // request -> call id (a genuine replay's only)
+
+function pruneCalls(now = Date.now()) {
+  for (const [id, e] of loopCalls) {
+    if (loopCalls.size <= LOOPBACK_CALLS_MAX && now - e.at < LOOPBACK_CALL_TTL_MS) break;
+    loopCalls.delete(id);
+  }
+}
+/** A new paid replay's call id (the connector, before the loopback). */
+export function openLoopbackCall() {
+  const id = randomBytes(16).toString("hex");
+  loopCalls.set(id, { at: Date.now(), cut: false, routeEnded: false, counted: false, onSettledCut: null });
+  pruneCalls();
+  return id;
+}
+/** The connector received the route's answer: nothing is owed for it. */
+export function closeLoopbackCall(id) { loopCalls.delete(String(id)); }
+/** The connector stopped waiting. Runs the route's booking when the route
+ *  already wrote a settled answer; answers whether the route counted the
+ *  call's outcome (the connector then does not count it again). */
+export function cutLoopbackCall(id) {
+  const e = loopCalls.get(String(id));
+  if (!e) return { routeCounted: false };
+  e.cut = true;
+  const counted = e.counted;
+  if (e.routeEnded) {
+    loopCalls.delete(String(id));
+    const fn = e.onSettledCut;
+    if (fn) { try { fn(); } catch { /* booking never breaks the connector */ } }
+  }
+  return { routeCounted: counted };
+}
+/** The connector's call id on a genuine replay, or null. */
+export function loopbackCallIdOf(req) {
+  if (!isMcpLoopback(req)) return null;
+  return callIdOf.get(req) || null;
+}
+/** True when the connector already stopped waiting for this replay. */
+export function loopbackCallCut(req) {
+  const id = loopbackCallIdOf(req);
+  return Boolean(id && loopCalls.get(id)?.cut);
+}
+/** The route counted this replay's outcome. */
+export function noteLoopbackCounted(req) {
+  const id = loopbackCallIdOf(req);
+  const e = id ? loopCalls.get(id) : null;
+  if (e) e.counted = true;
+}
+/**
+ * The route side, registered before the gates: when the answer was written
+ * in full (`finish`), `settled(res)` says whether it carries a settled
+ * charge; if so and the connector stopped (or stops) waiting,
+ * `onSettledCut()` runs once. A response that closes without finishing ends
+ * the route's side with nothing to book. No-op off a genuine replay.
+ */
+export function watchLoopbackOutcome(req, res, { settled, onSettledCut }) {
+  const id = loopbackCallIdOf(req);
+  if (!id || !res || typeof res.once !== "function") return false;
+  let done = false;
+  const end = (book) => {
+    if (done) return;
+    done = true;
+    const e = loopCalls.get(id);
+    if (!e) return; // the connector received the answer
+    if (e.cut) {
+      loopCalls.delete(id);
+      if (book) { try { onSettledCut(); } catch { /* booking never breaks serving */ } }
+      return;
+    }
+    e.routeEnded = true;
+    e.onSettledCut = book ? onSettledCut : null;
+  };
+  res.once("finish", () => { let book = false; try { book = Boolean(settled(res)); } catch { book = false; } end(book); });
+  res.once("close", () => end(false));
+  return true;
+}
+/** Test seam: the open entries. */
+export function _loopbackCallsForTest() { return loopCalls; }

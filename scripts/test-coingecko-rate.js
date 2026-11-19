@@ -190,13 +190,15 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
   const pfPrice = H(PRICE_FEED_TOOLS, "price-coingecko");
   const orig = globalThis.fetch;
   const paths = [];
+  const listed = new Set(); // coins the list names later in the day (section 9)
   let slow = 0;
   globalThis.fetch = async (input) => {
     const u = new URL(typeof input === "string" ? input : input.url ?? String(input));
     const p = u.pathname.replace(/^\/api\/v3/, "");
     paths.push(p + u.search);
     if (slow) await new Promise((r) => setTimeout(r, slow));
-    if (p === "/coins/list") return J(200, [{ id: "bitcoin", symbol: "btc", name: "Bitcoin" }, { id: "ethereum", symbol: "eth", name: "Ethereum" }, { id: "tether", symbol: "usdt", name: "Tether" }]);
+    if (p === "/coins/list") return J(200, [{ id: "bitcoin", symbol: "btc", name: "Bitcoin" }, { id: "ethereum", symbol: "eth", name: "Ethereum" }, { id: "tether", symbol: "usdt", name: "Tether" }, ...[...listed].map((id) => ({ id, symbol: "x", name: id }))]);
+    if (listed.has(p.slice("/coins/".length))) return J(200, { id: p.slice("/coins/".length), symbol: "x", name: "x", market_data: {} });
     if (p === "/exchanges/list") return J(200, [{ id: "gdax", name: "Coinbase Exchange" }]);
     if (p === "/simple/supported_vs_currencies") return J(200, ["usd", "eur", "btc"]);
     if (p === "/simple/price") {
@@ -312,6 +314,42 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
     const boards2 = [];
     for (let k = 0; k < 40; k++) boards2.push(await call(board, { network: `nb${k}`, pools: 20 }));
     eq(boards2.filter((s) => s === 200).length, caps.screens - 10, `after 10 other reads the screens answer ${caps.screens - 10} more: the ceiling is total reads, not a share of their own`);
+
+    // 9. Per caller and per id, with the share NOT full (a day of 400: a share
+    //    of 40). Each caller (its address, the request's caller key) holds at
+    //    most COINGECKO_UNSETTLED_PER_CALLER_HOUR (default 8) places an hour;
+    //    past them its unconfirmed ids go to the list first (a real id is
+    //    still read and served: no paid call is refused). An id the upstream
+    //    or a list called unknown is remembered for the UTC day: asked again,
+    //    it is answered with no read of its own, until its list names it.
+    process.env.COINGECKO_DAILY_MAX = "400";
+    fresh();
+    const { requestTimingMiddleware } = await import("../src/request-timing.js");
+    const asCaller = (ip, fn, input) => new Promise((resolve) => {
+      requestTimingMiddleware(() => "t")({ ip, socket: {}, headers: {} }, { on() {}, locals: {} }, () => { call(fn, input).then(resolve); });
+    });
+    const fromA = [];
+    for (let k = 0; k < 20; k++) fromA.push(await asCaller("198.51.100.7", profile, { coin: `made-up-a-${k}` }));
+    ok(fromA.every((s) => s === 422), `one address's 20 made-up ids are each a 422 (${[...new Set(fromA)].join(",")})`);
+    eq(count(/^\/coins\/made-up-a-/), rate.CG_UNSETTLED_PER_CALLER_HOUR_DEFAULT, "only that address's hourly places read upstream; the rest were checked against the list");
+    ok(!(await rate.cgUnsettledSpent()), "and the day's share is not full: other callers keep it");
+    const fromB = [];
+    for (let k = 0; k < 5; k++) fromB.push(await asCaller("203.0.113.20", profile, { coin: `made-up-b-${k}` }));
+    ok(fromB.every((s) => s === 422) && count(/^\/coins\/made-up-b-/) === 5, `another address reads its own ids as asked (${count(/^\/coins\/made-up-b-/)} reads)`);
+    clearCryptoMarketsCache();
+    eq(await asCaller("198.51.100.7", profile, { coin: "bitcoin" }), 200, "the first address's call for a real coin is read and served: never refused");
+    // The day's memory of unknown ids.
+    let r0 = count(/^\/coins\/made-up-b-0(\?|$)/);
+    ok(r0 === 1, `control: that id was read once, when first asked (${r0})`);
+    const again = [];
+    for (let k = 0; k < 5; k++) again.push(await asCaller("192.0.2.55", profile, { coin: "made-up-b-0" }));
+    ok(again.every((s) => s === 422) && count(/^\/coins\/made-up-b-0(\?|$)/) === r0, `an id the upstream called unknown today is answered again with no read of its own (${count(/^\/coins\/made-up-b-0(\?|$)/) - r0} reads in 5 calls)`);
+    // A coin listed later the same day: its list names it (the list's cache ended), and it is read again.
+    listed.add("made-up-b-1"); clearCryptoMarketsCache();
+    r0 = count(/^\/coins\/made-up-b-1(\?|$)/);
+    eq(await asCaller("192.0.2.56", profile, { coin: "made-up-b-1" }), 200, "a remembered id that its list now names is read and served");
+    ok(count(/^\/coins\/made-up-b-1(\?|$)/) === r0 + 1, "with one read");
+    process.env.COINGECKO_DAILY_MAX = "40";
 
     // 8. The board is sold at its listed price for every pool count (no per-input quote).
     const def = CRYPTO_SCREENS_TOOLS.find((t) => t.slug === "dex-volume-board");
