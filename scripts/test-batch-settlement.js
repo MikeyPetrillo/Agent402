@@ -16,10 +16,8 @@
 // gate refuses what it must.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
 import { x402ResourceServer } from "@x402/core/server";
-import { getFreePorts } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 import { makeEscrowFacilitator, makeChannelBuyer, encodePayment, BASE, RECEIVER_AUTHORIZER } from "./lib/batch-channel-rig.js";
 import { newBatchScheme, makeBatchStores, selectBatchNetworks, runBatchPass, creditBatchChannel, batchNetworksWanted, batchStoreMode, batchAcceptEligible, isBatchSettlementRequest, batchChannelIdOf } from "../src/batch-settlement.js";
 import { isMeterable, mediaMeterEnabled } from "../src/gateway-meter.js";
@@ -319,7 +317,6 @@ const channelOf = (r, id) => r.stores.storage.get(id);
 
 // ---------------------------------------------------------------------------
 // Part 2: the real server.
-const [p1, p2, p3, p4, fp] = await getFreePorts(5);
 const fac = makeEscrowFacilitator();
 const facSrv = createServer((req, res) => {
   let body = "";
@@ -336,33 +333,27 @@ const facSrv = createServer((req, res) => {
     res.end(JSON.stringify(out));
   });
 });
-await new Promise((r) => facSrv.listen(fp, "127.0.0.1", r));
+await new Promise((r) => facSrv.listen(0, "127.0.0.1", r));
+const facPort = facSrv.address().port;
 
-async function boot(port, extra, label) {
+async function boot(extra, label) {
   const env = { ...process.env };
+  const blank = { STATE_DATABASE_URL: "", REDIS_URL: "" };
   delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
-  let log = "";
-  const child = spawn(process.execPath, ["src/server.js"], {
+  const srv = await bootServer({
+    stores: label,
     env: {
-      ...env, ...ownStoreEnv(label),
-      PORT: String(port), FREE_MODE: "", NODE_ENV: "test", NETWORK: "base", PAYMENT_NETWORKS: "base",
-      WALLET_ADDRESS: PAY_TO, FACILITATOR_URL: `http://127.0.0.1:${fp}`,
+      ...blank,
+      FREE_MODE: "", NODE_ENV: "test", NETWORK: "base", PAYMENT_NETWORKS: "base",
+      WALLET_ADDRESS: PAY_TO, FACILITATOR_URL: `http://127.0.0.1:${facPort}`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "",
       FACILITATOR_GAS_CHECK: "off", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off",
       FREE_ALERTS: "off", FOLLOWUPS: "off", STATS_ALLOW_EPHEMERAL: "true", INFLIGHT_COVER: "off",
       ...extra,
     },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout.on("data", (d) => { log += d; });
-  child.stderr.on("data", (d) => { log += d; });
-  const base = `http://127.0.0.1:${port}`;
-  let up = false;
-  for (let i = 0; i < 240 && !up; i++) {
-    try { up = (await fetch(`${base}/health`)).ok; } catch { /* booting */ }
-    if (!up) await wait(250);
-  }
-  return { child, base, up, log: () => log };
+  }).catch((e) => ({ failed: e }));
+  if (srv.failed) return { child: null, base: "http://127.0.0.1:9", up: false, log: () => String(srv.failed?.message || srv.failed), stop: async () => {} };
+  return { child: srv.child, base: srv.url, up: true, log: srv.log, stop: srv.stop };
 }
 const acceptsOf = async (base, path) => {
   const r = await fetch(`${base}${path}`);
@@ -373,10 +364,10 @@ const acceptsOf = async (base, path) => {
 const OP_TOKEN = `op-${process.pid}-${Date.now()}`;
 const ON = { AGENT402_OPERATOR_TOKEN: OP_TOKEN, X402_BATCH_SETTLEMENT_NETWORKS: BASE, X402_BATCH_SETTLEMENT_STORE: "memory", X402_BATCH_CLAIM_INTERVAL_SECONDS: "5", X402_BATCH_REFUND_INTERVAL_SECONDS: "5", X402_BATCH_IDLE_REFUND_SECONDS: "5" };
 const [off, on, noStore, floored] = await Promise.all([
-  boot(p1, {}, "bs-off"),
-  boot(p2, ON, "bs-on"),
-  boot(p3, { X402_BATCH_SETTLEMENT_NETWORKS: BASE }, "bs-nostore"),
-  boot(p4, { X402_BATCH_SETTLEMENT_NETWORKS: BASE, X402_BATCH_SETTLEMENT_STORE: "memory", NETWORK_PRICE_FLOORS: `${BASE}=0.001` }, "bs-floor"),
+  boot({}, "bs-off"),
+  boot(ON, "bs-on"),
+  boot({ X402_BATCH_SETTLEMENT_NETWORKS: BASE }, "bs-nostore"),
+  boot({ X402_BATCH_SETTLEMENT_NETWORKS: BASE, X402_BATCH_SETTLEMENT_STORE: "memory", NETWORK_PRICE_FLOORS: `${BASE}=0.001` }, "bs-floor"),
 ]);
 try {
   ok(off.up && on.up && noStore.up && floored.up, "four servers booted (switch off, on, on without a durable store, on over a floored network)");
@@ -464,7 +455,7 @@ try {
   ok(fac.channels.get(id)?.balance === buyer.charged && fac.channels.get(id)?.totalClaimed === buyer.charged, "the escrow ends holding exactly what was charged, all of it claimed");
   ok(fac.calls.some((c) => c.op === "settle" && c.type === "settle"), "the claimed funds are settled to payTo");
 } finally {
-  for (const s of [off, on, noStore, floored]) { try { s.child.kill("SIGKILL"); } catch { /* gone */ } }
+  await Promise.all([off, on, noStore, floored].map((s) => s.stop().catch(() => {})));
   facSrv.close();
 }
 
