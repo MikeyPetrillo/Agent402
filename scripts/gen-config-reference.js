@@ -42,7 +42,7 @@ export function defaultOf(name, texts) {
 }
 
 const GROUP_MIN = 3;
-const esc = (s) => String(s).replace(/\|/g, "\\|");
+const esc = (s) => String(s).replace(/[\\|]/g, "\\$&");
 
 export function buildReference({ root = ROOT, config = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) } = {}) {
   const scan = scanTree(join(root, "src"), root);

@@ -13,6 +13,7 @@
 // and its output schema names it.
 import "./lib/offline-stores.js";
 import { bootServer } from "./lib/boot-server.js";
+import { textNamesUrl } from "./lib/url-host.js";
 import { nextStepForRefusal, emptyWalletGuide, NEXT_STEP_STATES, NEXT_STEP_ACTORS } from "../src/next-step.js";
 import { noteVerifyFailure, verifyHintMiddleware, _testResetForTest } from "../src/verify-hint.js";
 import { META_OUTPUT_SCHEMAS } from "../src/mcp-flagship.js";
@@ -51,7 +52,7 @@ for (const retry of ["fresh-authorization", "same-payment", "rebuild-payment", "
 ok(nextStepForRefusal(null) === null, "no hint: no nextStep");
 {
   const g = emptyWalletGuide("https://example.test/");
-  ok(shape(g) && g.state === "wallet-empty" && g.meanwhile.includes("https://example.test/api/pow"), "the general empty-wallet guide names the free proof-of-work path on this origin");
+  ok(shape(g) && g.state === "wallet-empty" && textNamesUrl(g.meanwhile, "example.test", "/api/pow"), "the general empty-wallet guide names the free proof-of-work path on this origin");
 }
 
 // ---- middleware --------------------------------------------------------------------

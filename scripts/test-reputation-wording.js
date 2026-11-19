@@ -7,6 +7,7 @@
 // Offline.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { stripTags } from "./lib/html-text.js";
 
 const R = await import("../src/seller-reputation.js");
 const { sellerReputationLineHtml } = await import("../src/market-page.js");
@@ -45,7 +46,7 @@ for (const t of [{ price: 0.002, originDeclaredPrice: 0.001, quoteObservedAt: NO
   check(`route row ${JSON.stringify(t).slice(0, 40)}`, JSON.stringify(R.toolReputationOf(t, { now: NOW })));
 }
 ok(R.METRIC_LABELS.priceMatchesListing === "price matches listing" && !Object.keys(R.METRIC_LABELS).some((k) => /honest/i.test(k)), "the price metric's field and label read price matches listing");
-check("seller card line", sellerReputationLineHtml({ origin: "https://seller.example" }, "seller.example").replace(/<[^>]+>/g, " "));
+check("seller card line", stripTags(sellerReputationLineHtml({ origin: "https://seller.example" }, "seller.example")));
 
 // The pages that describe it.
 check("wiki/Seller-Reputation.md", read("wiki/Seller-Reputation.md"));

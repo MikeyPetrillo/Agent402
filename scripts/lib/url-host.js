@@ -22,6 +22,21 @@ export function isHost(url, host) {
   return hostOf(url) === String(host).toLowerCase();
 }
 
+/** Every http(s) URL written in `text`, parsed; trailing sentence punctuation is not part of one. */
+export function urlsIn(text) {
+  const out = [];
+  for (const m of String(text ?? "").match(/https?:\/\/[^\s"'<>()]+/g) || []) {
+    try { out.push(new URL(m.replace(/[.,;:!?]+$/, ""))); } catch { /* not a URL */ }
+  }
+  return out;
+}
+
+/** True when `text` writes a URL whose host is exactly `host` and whose path is exactly `path`. */
+export function textNamesUrl(text, host, path) {
+  const h = String(host).toLowerCase();
+  return urlsIn(text).some((u) => u.hostname.toLowerCase() === h && u.pathname === path);
+}
+
 /**
  * True when `url`'s host is `host` and its path starts with `pathPrefix`
  * (compared on the parsed pathname, so a query string cannot satisfy it).

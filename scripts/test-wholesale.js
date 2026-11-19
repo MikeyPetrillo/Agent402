@@ -18,6 +18,7 @@ import { ERROR_CODES, stableErrorCode, errorCodeField } from "../src/stable-erro
 import { reliabilityOf, toolRow, wholesaleIndex, wholesaleFamily, WHOLESALE_FAMILIES, WHOLESALE_MIN_SAMPLE, WHOLESALE_WINDOW_HOURS, STATUS_MEASURED, STATUS_THIN } from "../src/wholesale.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { preValidateInput } from "../src/handler-input.js";
+import { stripScripts } from "./lib/html-text.js";
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -141,7 +142,7 @@ try {
   const page = await fetch(`${U}/wholesale`);
   const html = await page.text();
   ok(page.status === 200 && WHOLESALE_FAMILIES.every((f) => html.includes(`/api/wholesale/v1/${f.id}`)) && ERROR_CODES.every((e) => html.includes(e.code)), "the page renders every family and every error code");
-  ok(!/\$\d/.test(html.replace(/<script[\s\S]*?<\/script>/g, "")), "the page types no price");
+  ok(!/\$\d/.test(stripScripts(html, "")), "the page types no price");
   const sitemap = await (await fetch(`${U}/sitemap.xml`)).text();
   ok(/\/wholesale</.test(sitemap) || /sitemap-pages/.test(sitemap), "the page is in the sitemap");
 } catch (e) {

@@ -29,6 +29,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
+import { textNamesUrl } from "./lib/url-host.js";
 import { loadReceiptKeys, verifyReceipt, receiptSignerMiddleware, splitSseReceipt, createCheckoutReceipt, requestDigest, RECEIPT_HEADER, RECEIPT_SSE_EVENT, RECEIPT_VERIFY_PATH, RECEIPT_KEYS_PATH, SIGNED_RAILS, CHECKOUT_RECEIPT_PATH } from "../src/receipt-signing.js";
 import { verifyStreamedReceipt, splitStreamedReceipt, verifyReceipt as clientVerify } from "../client/receipt.js";
 import { createCredits, hashKey } from "../src/credits.js";
@@ -223,7 +224,7 @@ const listen = (app) => new Promise((r) => { const s = app.listen(0, "127.0.0.1"
   const pub = reportDoneHtml({ ...rec, publicView: true }, { origin: "https://agent402.tools" });
   await ok(!pub.includes(rec.receipt) && !pub.includes("purchase-receipt"), "a public view of the report never shows it");
   const mail = buildReportReadyEmail({ reportUrl: "https://agent402.tools/r/cs_receipt_paid", productLabel: "Dossier", subjectOf: "AAPL", kind: "dossier", baseUrl: "https://agent402.tools", receipt: rec.receipt });
-  await ok(mail.text.includes(rec.receipt) && mail.html.includes(rec.receipt) && mail.text.includes("https://agent402.tools/api/receipts/verify"), "the ready email carries the receipt and where to check it");
+  await ok(mail.text.includes(rec.receipt) && mail.html.includes(rec.receipt) && textNamesUrl(mail.text, "agent402.tools", "/api/receipts/verify"), "the ready email carries the receipt and where to check it");
   const plain = buildReportReadyEmail({ reportUrl: "https://agent402.tools/r/x", productLabel: "Dossier", subjectOf: "AAPL", kind: "dossier", baseUrl: "https://agent402.tools" });
   await ok(!/Signed receipt/.test(plain.text + plain.html), "an email with no receipt says nothing about one");
   await ok(requestDigest("POST", CHECKOUT_RECEIPT_PATH, { product: "dossier", input: "AAPL" }) === v.record.requestSha256, "the request digest is the checkout's product and input");

@@ -16,6 +16,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { textNamesUrl } from "./lib/url-host.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -145,7 +146,7 @@ ok(/s\.signedReceipt/.test(thanksJs) && /signedReceipt: last/.test(confirmSrc), 
   const { buildMonitorEmail } = await import("../src/email.js");
   const base = { reason: "scheduled", label: "Domain security monitor", target: "example.com", reportUrl: "https://agent402.tools/m/abc", manageUrl: "https://agent402.tools/monitors/manage?report=abc&k=T" };
   const withR = buildMonitorEmail({ ...base, signedReceipt: { receipt: "aa.bb.cc", statement: "{\"kind\":\"monitor-subscription-period\"}" } });
-  ok(withR.text.includes("aa.bb.cc") && withR.text.includes("monitor-subscription-period") && withR.text.includes("https://agent402.tools/api/receipts/verify") && withR.html.includes("aa.bb.cc"), "a monitor email carries the latest period's signed receipt, its statement and where to check them");
+  ok(withR.text.includes("aa.bb.cc") && withR.text.includes("monitor-subscription-period") && textNamesUrl(withR.text, "agent402.tools", "/api/receipts/verify") && withR.html.includes("aa.bb.cc"), "a monitor email carries the latest period's signed receipt, its statement and where to check them");
   const noR = buildMonitorEmail(base);
   ok(!/Signed receipt/.test(noR.text) && !/Signed receipt/.test(noR.html), "a monitor email with no receipt says nothing about one");
 }
