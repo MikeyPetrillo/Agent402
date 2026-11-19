@@ -111,6 +111,15 @@ ok(opBody?.ledgerDeadLetter?.journalRedis && typeof opBody.ledgerDeadLetter.jour
 // --- Solana history reads: one word publicly, per-lane counts for the operator ---
 ok(typeof pubBody?.solanaHistory?.status === "string" && Object.keys(pubBody.solanaHistory).join(",") === "status", `solanaHistory publishes its word only (${JSON.stringify(pubBody?.solanaHistory)})`);
 ok(opBody?.solanaHistory && typeof opBody.solanaHistory.lanes === "object" && "publicShare" in opBody.solanaHistory, "the operator view of solanaHistory carries the per-lane counts");
+ok(typeof opBody?.solanaHistory?.backgroundShare?.budget === "number" && typeof opBody.solanaHistory.heldForBudget === "number" && typeof opBody.solanaHistory.activity?.scans === "number" && typeof opBody.solanaHistory.activityStore?.waiting === "number",
+  `the operator view of solanaHistory carries the background share, the held reads and the activity scan and store counts (${JSON.stringify(opBody?.solanaHistory?.backgroundShare)})`);
+{
+  // The on-chain data provider's budget row: the day's count with where it was read, its callers, and a week of days. Operator only.
+  const a = opBody?.upstreamBudgets?.upstreams?.alchemy;
+  ok(a && typeof a.processCallsToday === "number" && typeof a.shared === "boolean" && a.callersToday && typeof a.callersToday === "object" && Array.isArray(a.history) && a.history.length === 8 && a.history.every((d) => /^\d{4}-\d{2}-\d{2}$/.test(d.day) && typeof d.calls === "number"),
+    `the operator view of upstreamBudgets carries the provider's callers today and today plus seven days of history (${a?.history?.length} days)`);
+  ok(!/callersToday|processCallsToday|"history"|backgroundShare|activityStore/.test(JSON.stringify(pubBody)), "the public response carries none of them");
+}
 ok(typeof pubBody?.evmLogs?.status === "string" && Object.keys(pubBody.evmLogs).join(",") === "status", `evmLogs publishes its word only (${JSON.stringify(pubBody?.evmLogs)})`);
 ok(opBody?.evmLogs && typeof opBody.evmLogs.callers === "object" && typeof opBody.evmLogs.leaderboardLogCache === "object" && typeof opBody.evmLogs.activityScan === "object", "the operator view of evmLogs carries the per-caller counts, the board's log cache and the activity scans");
 

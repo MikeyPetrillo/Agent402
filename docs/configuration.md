@@ -10,7 +10,7 @@ Scope: the server that runs as node src/server.js (every file under src/). The f
 Every value is set on the host, never in the repository. "Default" is the plain literal the code falls back to at
 its first read site when there is one; a helper may still clamp it, and the read site is the reference.
 
-1038 variables in 109 groups.
+1056 variables in 109 groups.
 
 ## Contents
 
@@ -922,6 +922,8 @@ its first read site when there is one; a helper may still clamp it, and the read
 | --- | --- | --- | --- |
 | `REFUND_ALGORAND_INDEXERS` | Refund algorand indexers. | `https://mainnet-idx.4160.nodely.dev` | `src/payment-verify.js` |
 | `REFUND_DB_DIR` | Refund database directory. |  | `src/refund-ledger.js` |
+| `REFUND_OWED_ALARM_HOURS` | Hours a refund may stay owed before the refundsOwed status word reads aging. Unset = 48. |  | `src/server.js` |
+| `REFUND_OWED_NOTICE_MINUTES` | Minutes a refund may stay owed before the refundsOwed status word reads owed. Unset = 15. |  | `src/server.js` |
 | `REFUND_SOLANA_RPCS` | Refund solana RPC endpoints. |  | `src/payment-verify.js` |
 
 ## RENDER
@@ -1096,12 +1098,22 @@ its first read site when there is one; a helper may still clamp it, and the read
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
+| `SOLANA_ACTIVITY_COLD_FAST_READS` | Transaction reads at the start of a never-read Solana wallet's activity scan that do not queue for the public history lane. Unset = 40; 0 queues every read. | `40` | `src/revenue-live.js` |
+| `SOLANA_ACTIVITY_FILE` | File holding the Solana activity scans' state without a state database (default /data/solana-activity.json, the temp directory without a volume). |  | `src/solana-activity-store.js` |
+| `SOLANA_ACTIVITY_PUBLIC_WAIT_MS` | Longest a Solana activity scan's read queues for the public history lane before the keyed lane is tried under the background share, in milliseconds. Unset = 10000. | `10000` | `src/revenue-live.js` |
+| `SOLANA_ACTIVITY_SCAN_BUDGET_MS` | Clock for one Solana activity scan, which runs behind the page, in milliseconds. Unset = 120000. |  | `src/revenue-live.js` |
+| `SOLANA_ACTIVITY_STORE` | off keeps the Solana activity scans' state in memory only (a restart reads each wallet's window again). Unset = stored. |  | `src/solana-activity-store.js` |
+| `SOLANA_ACTIVITY_STORE_FLUSH_MS` | How often waiting Solana activity scan states are written to the store, a bounded number a tick, in milliseconds. Unset = 60000. |  | `src/solana-activity-store.js` |
+| `SOLANA_ACTIVITY_STORE_MAX_WALLETS` | Wallets whose Solana activity scan state is kept; the least recently written are dropped first. Unset = 500, at most 5000. |  | `src/solana-activity-store.js` |
+| `SOLANA_ACTIVITY_STUCK_SCANS` | Scans in a row a transaction read may fail before the Solana activity scan skips and counts it. Unset = 3. |  | `src/revenue-live.js` |
 | `SOLANA_FACILITATOR_RECHECK_MS` | How often the second Solana facilitator's /supported is read again, in milliseconds. Unset = 10 minutes. |  | `src/payments.js` |
 | `SOLANA_FACILITATOR_SHARE` | Percent of Solana quotes that name the second Solana facilitator (integer 0 to 100). Unset = 50. |  | `src/payments.js` |
 | `SOLANA_FACILITATOR_URL` | Ordered list of a second Solana mainnet facilitator that takes a share of Solana quotes and settles the payments whose fee payer it names (src/svm-facilitator-split.js). Unset = unchanged. |  | `src/payments.js` |
 | `SOLANA_HISTORY_ALCHEMY_FIRST` | Solana history alchemy first. |  | `src/solana-history-rpc.js` |
+| `SOLANA_HISTORY_BACKGROUND_KEYED_DAILY_MAX` | Keyed-lane Solana history reads a day for readers nobody is waiting on, the activity scans and the Solana board (unset: a twentieth of HARDCAP_ALCHEMY_CALLS; never over half of it; 0 = public lanes only). Past it those views serve what they hold with its age. |  | `src/changelog.js`, `src/upstream-hard-caps.js` |
+| `SOLANA_HISTORY_BACKGROUND_MAX_WAIT_MS` | Longest a background Solana history read queues for the public lane before the keyed lane is tried under the background share, in milliseconds. Unset = 30000. | `30000` | `src/solana-history-rpc.js` |
 | `SOLANA_HISTORY_CACHE` | Solana history cache. |  | `src/solana-history-rpc.js` |
-| `SOLANA_HISTORY_PUBLIC_MAX_WAIT_MS` | Solana history public maximum wait, in milliseconds. |  | `src/solana-history-rpc.js` |
+| `SOLANA_HISTORY_PUBLIC_MAX_WAIT_MS` | Solana history public maximum wait, in milliseconds. | `10000` | `src/solana-history-rpc.js` |
 | `SOLANA_HISTORY_PUBLIC_RPCS` | Solana history public RPC endpoints. |  | `src/solana-history-rpc.js` |
 | `SOLANA_HISTORY_PUBLIC_RPS` | Solana history public requests per second. |  | `src/solana-history-rpc.js` |
 | `SOLANA_HISTORY_PUBLIC_TIMEOUT_MS` | Solana history public timeout, in milliseconds. |  | `src/solana-history-rpc.js` |
@@ -1115,6 +1127,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `SOLANA_LB_REFRESH_MS` | Solana lb refresh, in milliseconds. |  | `src/solana-leaderboard.js` |
 | `SOLANA_LB_RETRY_PAUSE_MS` | Solana lb retry pause, in milliseconds. |  | `src/solana-leaderboard.js` |
 | `SOLANA_LB_STUCK_READ_SCANS` | Solana lb stuck read scans. |  | `src/solana-leaderboard.js` |
+| `SOLANA_LB_TX_CONCURRENCY` | Transaction reads in flight per payTo in a Solana board scan (1 to 32). Unset = 2, which keeps the paced public lane's queue short for other readers. |  | `src/solana-leaderboard.js` |
 | `SOLANA_LEADERBOARD` | Solana leaderboard. | `on` | `src/solana-leaderboard.js` |
 | `SOLANA_RPCS` | Solana RPC endpoints. |  | `src/solana-history-rpc.js` |
 | `SOLANA_RPC_URL` | Solana RPC endpoint URL. | `https://api.mainnet-beta.solana.com` | `src/solana-buyer.js`, `src/solana-history-rpc.js`, `src/tools/solana-intel-kit.js` |
@@ -1374,10 +1387,13 @@ its first read site when there is one; a helper may still clamp it, and the read
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
+| `UPSTREAM_BUDGET_SYNC_MS` | How often each process adds its calls to the upstream budgets' shared day counters and reads the totals back, in milliseconds. Unset = 15000. |  | `src/upstream-budgets.js` |
 | `UPSTREAM_BUYER_DROP_READS` | Upstream buyer drop reads. | `3` | `src/upstream-buyer-status.js` |
 | `UPSTREAM_BUYER_DROP_TOLERANCE_USD` | Upstream buyer drop tolerance, in USD. | `0.5` | `src/upstream-buyer-status.js` |
 | `UPSTREAM_BUYER_LOW_USD` | Upstream buyer low, in USD. |  | `src/upstream-buyer-status.js` |
 | `UPSTREAM_BUYER_TREND_FILE` | Unset with no state database: process memory (a restart forgets the trend). |  | `src/upstream-buyer-status.js` |
+| `UPSTREAM_CALL_DAYS_FILE` | File holding the per-caller daily call counts without a state database (default /data/upstream-call-days.json, the temp directory without a volume). |  | `src/upstream-call-days.js` |
+| `UPSTREAM_CALL_DAYS_FLUSH_MS` | How often the per-caller daily call counts are folded into their document, in milliseconds. Unset = 60000. |  | `src/upstream-call-days.js` |
 | `UPSTREAM_COSTS_FILE` | Path to the private upstream cost table, read when UPSTREAM_COSTS_JSON is unset. |  | `src/upstream-costs.js` |
 | `UPSTREAM_COSTS_JSON` | The private upstream cost table as JSON (never committed; see docs/example-upstream-costs.json for its shape). |  | `src/upstream-costs.js` |
 | `UPSTREAM_FAIL_DEGRADED` | Upstream fail degraded. |  | `src/tool-failure-monitor.js` |
@@ -1470,6 +1486,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `CHAIN_SELLER_VIEW_MEMO_MAX` | Chain seller view memo maximum. |  | `src/server.js` |
 | `CHAIN_SELLER_VIEW_MEMO_MAX_MB` | Chain seller view memo maximum MB. |  | `src/server.js` |
 | `CHALLENGE_VARIABLE_MAX_BYTES` | Challenge variable maximum bytes. |  | `src/payments.js` |
+| `CHARGED_FAILURE_ALARM_HOURS` | Hours a paid call that settled and then answered an error keeps the chargedFailures status word on recent. Unset = 6. | `6` | `src/server.js` |
 | `CHUNK_BLOCKS` | Chunk blocks. | `9000` | `src/leaderboard.js` |
 | `CI` | Set by CI runners; while set, the index crawlers stay off unless their switch is on. |  | `src/crawl-switch.js` |
 | `COHORT_CALLS_PER_HOUR` | Cohort calls per hour. |  | `src/sales-ledger.js` |
@@ -1498,6 +1515,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `GA_MEASUREMENT_ID` | Analytics measurement id. |  | `src/ledger-chrome.js` |
 | `GITHUB_TRAFFIC_TOKEN` | Github traffic token (a credential, set on the host). |  | `src/transparency.js` |
 | `GIT_COMMIT_SHA` | Build id for /health, the MCP version and asset URLs when the host platform does not provide one. | `dev` | `src/ledger-chrome.js`, `src/mcp-http.js`, `src/server.js` |
+| `GLAMA_MAINTAINER_EMAIL` | Maintainer address published in /.well-known/glama.json (a fork sets its own). | `mike@agent402.tools` | `src/server.js` |
 | `GOOGLE_SITE_VERIFICATION` | Google site verification. |  | `src/ledger-chrome.js` |
 | `GSC_SERVICE_ACCOUNT_JSON` | Search Console service account JSON. |  | `src/search-data.js` |
 | `GSC_SITE_URL` | Search Console site URL. | `sc-domain:agent402.tools` | `src/search-data.js` |

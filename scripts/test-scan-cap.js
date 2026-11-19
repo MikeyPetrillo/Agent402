@@ -324,6 +324,9 @@ ok(mergeScanEntries([row("x", 1)], [row("y", 1)], cut)[0].uid === "x", "merge: f
 // Solana is bounded per TRANSACTION rather than per page, so its old ceiling
 // was a far tighter sixty records - the same class of defect, a different
 // number. The clock is the bound there now and maxTx is only a backstop.
+// The public history lane is paced; the pace is the subject of
+// scripts/test-solana-history-rpc.js, so these walks run it wide open.
+process.env.SOLANA_HISTORY_PUBLIC_RPS = "5000";
 installStub({ total: 400 });
 const sol = await solanaActivity("SWALLET", { budgetMs: 60_000 });
 ok(!sol.error, `solana: stub scan succeeded (${sol.error || "no error"})`);
@@ -339,33 +342,32 @@ const solStarved = await solanaActivity("SWALLET", { budgetMs: 150 });
 ok(solStarved.truncated === true, `solana: a budget-stopped walk reports truncated:true (got ${solStarved.truncated})`);
 ok(solStarved.totals.tx < 400, `solana: and returns an honest partial floor (got ${solStarved.totals.tx})`);
 
-// Lane choice (src/solana-history-rpc.js): a cold scan has a page view waiting
-// on it and asks the keyed lane first; a background refresh takes the public
-// lane when its slot is open now and the keyed lane otherwise, never queueing,
-// and reports the same chart. The history module's cache is cleared between
-// the two so every read reaches a lane.
+// Lane choice (src/solana-history-rpc.js): every decode is a background read,
+// the public lane first. A cold scan's first reads do not queue for a public
+// slot (public when its slot is open now, the keyed lane otherwise); the rest
+// of its window queues for the public lane. A refresh resumes from the cold
+// scan's state, reads nothing again and reports the same chart
+// (scripts/test-solana-activity-resume.js covers the resume in full).
 {
   const H = await import("../src/solana-history-rpc.js");
   const laneOf = (url) => (/alchemy\.com/.test(url) ? "keyed" : "public");
   const seen = { cold: { keyed: 0, public: 0 }, refresh: { keyed: 0, public: 0 } };
   let phase = "cold";
+  process.env.SOLANA_HISTORY_PUBLIC_RPS = "50";
   installStub({ total: 60 });
   const stubFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => { const b = init?.body ? JSON.parse(init.body) : null; if (b?.method === "getTransaction") seen[phase][laneOf(String(url))]++; return stubFetch(url, init); };
   H.__resetSolanaHistoryForTest();
   const cold = await solanaActivity("SWALLET", { budgetMs: 60_000 });
-  ok(cold.totals.tx === 60 && seen.cold.keyed === 60 && seen.cold.public === 0, `solana cold: every decode read asks the keyed lane first (${JSON.stringify(seen.cold)})`);
   let st = H.solanaHistoryStatus({ full: true });
-  ok(st.callers["activity-cold"]?.keyedBecause.keyedFirst === 60, `solana cold: counted under activity-cold as keyedFirst (${JSON.stringify(st.callers["activity-cold"])})`);
+  ok(cold.totals.tx === 60 && seen.cold.keyed + seen.cold.public === 60 && seen.cold.keyed <= 40 && seen.cold.public >= 20, `solana cold: at most the first forty reads go to the keyed lane without queueing, the rest wait for the public lane (${JSON.stringify(seen.cold)})`);
+  ok(st.callers["activity-cold"]?.keyedBecause.keyedFirst === 0 && st.callers["activity-cold"]?.keyedBecause.paced === seen.cold.keyed && st.callers["activity-cold"]?.public === seen.cold.public, `solana cold: counted under activity-cold, public first, a keyed read only for a slot not open (${JSON.stringify(st.callers["activity-cold"])})`);
   phase = "refresh";
   H.__resetSolanaHistoryForTest();
-  const t0 = Date.now();
-  const warm = await solanaActivity("SWALLET", { budgetMs: 60_000, background: true });
-  const ms = Date.now() - t0;
-  st = H.solanaHistoryStatus({ full: true });
-  ok(JSON.stringify(warm) === JSON.stringify(cold), "solana refresh: the chart is the one the cold scan reported");
-  ok(seen.refresh.public >= 1 && seen.refresh.keyed === 60 - seen.refresh.public && ms < 5_000, `solana refresh: the public lane takes the reads whose slot is open now, the keyed lane the rest, nothing queues (${JSON.stringify(seen.refresh)}, ${ms} ms)`);
-  ok(st.callers["activity-refresh"]?.keyedBecause.paced === seen.refresh.keyed && st.callers["activity-refresh"]?.public === seen.refresh.public, `solana refresh: counted under activity-refresh as public or paced (${JSON.stringify(st.callers["activity-refresh"])})`);
+  const warm = await solanaActivity("SWALLET", { budgetMs: 60_000, prior: cold.__scanState });
+  const chart = (x) => JSON.stringify({ buckets: x.buckets, totals: x.totals, truncated: x.truncated });
+  ok(chart(warm) === chart(cold), "solana refresh: the chart is the one the cold scan reported");
+  ok(seen.refresh.public + seen.refresh.keyed === 0, `solana refresh: a wallet with nothing new reads no transaction again (${JSON.stringify(seen.refresh)})`);
 }
 
 restore();

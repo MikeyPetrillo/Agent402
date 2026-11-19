@@ -97,6 +97,8 @@ t node scripts/test-replay-consumed-hold.js
 docker exec "$REDIS_CONTAINER_ID" redis-cli CONFIG SET appendonly yes
 t node scripts/test-state-db.js
 t node scripts/test-stores-pg.js
+# The Solana activity scans' stored state: one row a wallet, written in chunks under a lease, read one wallet at a time, bounded.
+t node scripts/test-solana-activity-store-pg.js
 # The sanctions lists' stored copies on the database: the row from pieces, the write-through off the loop on a stalled disk, saves in order.
 t node scripts/test-sanctions-store-pg.js
 # The boot step drops the retired tollbooth_leads table, logs only its count, never recreates it.

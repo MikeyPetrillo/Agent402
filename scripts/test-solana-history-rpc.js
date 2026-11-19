@@ -360,6 +360,67 @@ await new Promise((r) => setTimeout(r, 1500));
   ok(own.length === 1 && own[0].keyed, "SOLANA_HISTORY_PUBLIC_RPCS='' leaves only the keyed lane");
 }
 
+// ---- 11. the board as a background reader -----------------------------------
+// The board's reads queue for the public lane; the keyed lane serves them only
+// under the day's background share. A read held for that share fails its batch
+// (the cursor does not move), is never marked against the transaction, and the
+// seller's row is kept as it was, marked stale, with no second pass.
+{
+  const caps = await import("../src/upstream-hard-caps.js");
+  const lb = await import("../src/solana-leaderboard.js");
+  const bgLanes = [{ url: pub.url, keyed: false }, { url: keyed.url, keyed: true, cap: "alchemy" }];
+  const bg = { lanes: bgLanes, publicTimeoutMs: 400, timeoutMs: 2000, background: true, caller: "leaderboard" };
+  const read = (st, extra = {}) => readPayToIncremental(PAYTO, st, { rpc: H.historyAwareRpc(direct(keyed.url), bg), creditFromTx, budget: { left: 1000 }, backfillDays: 1, txConcurrency: 2, ...extra });
+
+  reset(); caps._resetHardCaps();
+  const st0 = {};
+  const whole = await read(st0);
+  ok(whole.credits === JSON.parse(baseline.r).credits && keyed.txHits === 0 && pub.txHits === SIGS.length, `a background board read is served by the public lane alone (${pub.txHits} public, ${keyed.txHits} keyed) with the same credits`);
+
+  // The public lane stops answering and the share allows four keyed reads.
+  reset(); caps._resetHardCaps();
+  process.env.SOLANA_HISTORY_BACKGROUND_KEYED_DAILY_MAX = "4";
+  pub.mode = "error";
+  const st = {};
+  let err = null;
+  for (let scan = 1; scan <= 4; scan++) { try { await read(st, { scanId: `s${scan}`, stuckScans: 2 }); err = null; } catch (e) { err = e; } }
+  ok(err?.backgroundBudgetSpent === true, "with the share spent the batch fails with the held mark, scan after scan");
+  ok(keyed.txHits === 4, `the keyed lane served exactly the share (${keyed.txHits} of 4) over four scans`);
+  ok(!st.lastSig && Object.keys(st.hours || {}).length === 0 && (st.skipped || 0) === 0 && Object.keys(st.stuck || {}).length === 0, "nothing is folded, the cursor does not move, and no read is marked stuck or skipped for a spent share");
+  // The live control: the same lanes failing for a reason that is not the share does mark and skip.
+  reset(); caps._resetHardCaps();
+  delete process.env.SOLANA_HISTORY_BACKGROUND_KEYED_DAILY_MAX;
+  pub.mode = "error"; keyed.mode = "error";
+  const st2 = {};
+  for (let scan = 1; scan <= 2; scan++) { try { await read(st2, { scanId: `c${scan}`, stuckScans: 2 }); } catch { /* the first scan fails its batch */ } }
+  ok((st2.skipped || 0) > 0, `control: reads that fail on every lane for two scans are skipped as before (${st2.skipped})`);
+
+  // A held read is not tried a second time in the same scan, and a retry that
+  // is held (after a first failure of another kind) leaves no mark either.
+  {
+    const heldErr = () => Object.assign(new Error("solana history read failed on every lane"), { backgroundBudgetSpent: true });
+    let txCalls = 0;
+    const countRpc = (first) => async (m, p) => { if (m !== "getTransaction") return direct(keyed.url)(m, p); txCalls++; throw (first && txCalls % 2 === 1 ? new Error("Solana RPC HTTP 500") : heldErr()); };
+    const stA = {}; let eA = null;
+    try { await readPayToIncremental(PAYTO, stA, { rpc: countRpc(false), creditFromTx, budget: { left: 1000 }, backfillDays: 1, txConcurrency: 2, scanId: "h1", stuckScans: 1 }); } catch (e) { eA = e; }
+    ok(eA?.backgroundBudgetSpent === true && txCalls === 2, `a held read is not retried in the same scan (${txCalls} reads for a chunk of two)`);
+    txCalls = 0;
+    const stB = {}; let eB = null;
+    try { await readPayToIncremental(PAYTO, stB, { rpc: countRpc(true), creditFromTx, budget: { left: 1000 }, backfillDays: 1, txConcurrency: 1, scanId: "h2", stuckScans: 1 }); } catch (e) { eB = e; }
+    ok(eB?.backgroundBudgetSpent === true && txCalls === 2 && Object.keys(stB.stuck || {}).length === 0 && (stB.skipped || 0) === 0, "a retry that is held fails the batch with no stuck mark and nothing skipped, even where one failed scan would skip");
+  }
+
+  // The scan keeps a held seller's previous row, stale, and does not read it twice.
+  let calls = 0;
+  const held = Object.assign(new Error("solana history read failed on every lane"), { backgroundBudgetSpent: true });
+  const snap = await lb.scanSolanaSellers(new Map([[PAYTO, new Set(["https://seller.example"])]]), { readFn: async () => { calls++; throw held; }, previous: [{ payTo: PAYTO, origins: ["https://seller.example"], credits: 9, payers: 2, at: 123 }], retryPauseMs: 0 });
+  ok(calls === 1 && snap.heldForBudget === 1 && snap.rows[0].stale === true && snap.rows[0].credits === 9 && snap.rows[0].at === 123, `a held seller is read once, and its previous row is kept with its own time, marked stale (${calls} read, stale ${snap.rows[0].stale})`);
+  let other = 0;
+  await lb.scanSolanaSellers(new Map([[PAYTO, new Set(["https://seller.example"])]]), { readFn: async () => { other++; throw new Error("Solana RPC HTTP 429"); }, retryPauseMs: 0 });
+  ok(other === 2, "control: any other failure is still retried once");
+  reset(); caps._resetHardCaps();
+}
+
 for (const l of [pub, keyed]) { l.server.closeAllConnections?.(); l.server.close(); }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

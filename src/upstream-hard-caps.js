@@ -53,8 +53,15 @@ export const HARD_CAPS = [
 // the ceilings are; past the budget the caller makes no read (the coverage
 // check then judges as when reads are down). The ceiling itself still counts
 // every call that reaches the host, these included.
+//
+// `history-background`: the keyed fallback of the Solana history reads nobody
+// is waiting on (the activity scans and the Solana board;
+// src/solana-history-rpc.js). Those reads go to the public lane first; past
+// this budget the keyed lane is not tried for them, and the views serve what
+// they hold with its age.
 export const HARD_CAP_SHARES = [
   { name: "cover-reads", of: "alchemy", env: "INFLIGHT_COVER_READS_DAILY_MAX", fraction: 0.2 },
+  { name: "history-background", of: "alchemy", env: "SOLANA_HISTORY_BACKGROUND_KEYED_DAILY_MAX", fraction: 0.05 },
 ];
 
 const SYNC_MS = () => Math.max(1_000, Number(process.env.HARDCAP_SYNC_MS) || 5_000);

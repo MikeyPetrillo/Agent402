@@ -147,6 +147,10 @@ t node scripts/test-solana-leaderboard.js
 t node scripts/test-solana-leaderboard-checkpoint.js
 # Solana history reads public RPC first: keyed lane on 429/timeout/null, identical board, throws when every lane is down, pacing, counters (offline stub RPCs)
 t node scripts/test-solana-history-rpc.js
+# The Solana activity scan resumes from its state (one process and across a restart), queues for the public lane, and keeps the keyed fallback inside the day's background share
+t node scripts/test-solana-activity-resume.js
+# Two boots on one store: the second serves a wallet's chart from its stored scan state with no transaction read
+t node scripts/test-solana-activity-restart.js
 # Base board keeps its read log window: identical board to a full read across head advances, new/returning wallets, failed reads, restart, store mismatch, row cap, switch (offline stub RPC)
 t node scripts/test-leaderboard-log-cache.js
 # Base board log cache at the row cap: kept rows folded by index (identical order to a full read), only changed segments re-hashed and saved, no stale digest after any invalidation,
