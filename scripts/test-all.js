@@ -504,8 +504,9 @@ for (const [path, methods] of paths) {
     if (cat === "jobs") continue;
     // GET /api/reputation answers for a seller in this server's index, and a
     // FREE_MODE boot holds none (its crawler is off), so the honest answer
-    // here is 404. scripts/test-seller-reputation.js drives it on a seeded index.
-    if (path === "/api/reputation") continue;
+    // here is 404. scripts/test-seller-reputation.js drives it on a seeded index,
+    // with its re-check route (a POST that needs an indexed seller too).
+    if (path === "/api/reputation" || path === "/api/reputation/recheck") continue;
     if (strictCovered.has(`${method} ${path}`)) { strictSkipped++; continue; }
     if (coingeckoHanded.has(`${method} ${path}`)) { coingeckoSkipped++; continue; }
     cats[cat] = cats[cat] || { pass: 0, total: 0 };

@@ -146,7 +146,7 @@ const KNOWN_NON_CATALOG = new Set([
   "/api/sales", "/api/revenue", "/api/revenue/daily", "/api/revenue/mpp", "/api/calls/daily",
   "/api/reliability", "/api/rails", "/api/status", "/api/status/probe", "/api/leaderboard", "/api/analytics",
   // Free seller reputation (src/seller-reputation.js), outside CATALOG.
-  "/api/reputation",
+  "/api/reputation", "/api/reputation/recheck",
   // Free signed-receipt check (src/receipt-signing.js RECEIPT_VERIFY_PATH), outside CATALOG.
   "/api/receipts/verify",
   "/api/cacheable", "/api/cache-stats", "/api/pow", "/api/pow/challenge", "/api/skill-packs.json",
