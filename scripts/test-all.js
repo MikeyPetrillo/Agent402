@@ -146,6 +146,8 @@ const NETWORK = new Set([
   "/api/weather-history", "/api/weather-air-quality",
   "/api/place-lookup", "/api/weather-probability", "/api/weather-market-brackets", "/api/weather-market-board",
   "/api/weather-window", "/api/weather-thresholds",
+  // bundle-kit: the weather risk brief runs five Open-Meteo tools per site.
+  "/api/weather-risk-brief",
   // B20 log scans: chunked eth_getLogs against public Base RPCs — flappy in CI.
   "/api/b20-new-tokens", "/api/b20-memos",
   // B20 eth_call tools: the SAME public-RPC egress (15s abort x 3 RPCs x 2
@@ -174,6 +176,8 @@ const NETWORK = new Set([
   "/api/edgar-company-lookup", "/api/edgar-filings", "/api/edgar-company-concept",
   "/api/edgar-company-facts", "/api/edgar-xbrl-frame",
   "/api/edgar-insider-trades", "/api/edgar-13f-holdings", "/api/edgar-recent-ipos", "/api/edgar-search",
+  // bundle-kit: the filings brief runs three EDGAR tools per company.
+  "/api/filings-brief",
   "/api/edgar-13f-datasets", "/api/edgar-13f-dataset-head",
   "/api/company-financials",
   // Finance-kit: Databento equities (quote + history)
@@ -184,6 +188,8 @@ const NETWORK = new Set([
   // Tolerate transient 429/502/503/504 (rate limit + Cloudflare hiccups).
   "/api/crypto-price", "/api/crypto-market", "/api/crypto-history", "/api/crypto-trending", "/api/crypto-global",
   "/api/stablecoin-peg",
+  // bundle-kit: token-diligence runs two CoinGecko tools per coin.
+  "/api/token-diligence",
   // market-tick reads crypto-price and stock-quote in-process (listed only with MARKET_TICK=on).
   "/api/market/tick",
   // Network-kit: live DNS resolution against 1.1.1.1/8.8.8.8/9.9.9.9. Public

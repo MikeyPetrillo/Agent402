@@ -459,10 +459,12 @@ async function tokenDiligence(input, ctx) {
 
 // ---------------------------------------------------------------- catalog
 // Price per request: the rule over the units the body names (the 402 quotes
-// the body); the list price is one unit's, the ceiling the most units a call takes.
+// the body); the list price is one unit's, the ceiling the most units a call
+// takes. `count` never passes the ceiling: a body over it is unreadable (the
+// handler refuses it, uncharged) and is quoted as one unit.
 const quoted = (legs, count, max) => ({
   price: usdText(bundlePriceUsd(1, legs, legPrice)),
-  quote: (body) => bundlePriceUsd(Math.min(max, count(body)), legs, legPrice),
+  quote: (body) => bundlePriceUsd(count(body), legs, legPrice),
   quoteMaxUsd: bundlePriceUsd(max, legs, legPrice),
 });
 const perUnit = (legs) => usdText(bundlePriceUsd(1, legs, legPrice));
