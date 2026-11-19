@@ -872,7 +872,7 @@ export const ALCHEMY_DATA_TOOLS = [
     name: "Token price history (USD)",
     slug: "token-price-history",
     category: "crypto",
-    price: "$0.004",
+    price: "$0.001",
     description:
       "Historical USD price series for a token, by ticker symbol (ETH, BTC, SOL, ...) or by ERC-20 contract + network, at 5-minute (up to 2 days), hourly (up to 30 days) or daily (up to 365 days) resolution. Returns the points plus first/last/high/low and the percent change over the window - the data behind 'how did this token move over the last N days' without a separate market-data subscription. 404 (not charged) when the token is not in the price feed.",
     tags: ["crypto", "price", "history", "ohlc", "usd", "token", "erc20", "chart", "timeseries"],

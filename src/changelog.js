@@ -26,6 +26,13 @@ const ENTRIES = [
   },
   {
     date: "2026-11-19",
+    title: "Lower prices on 40 tools",
+    items: [
+      "Pricing: Lower prices on 40 tools, among them extract, render, screenshot, pdf, image OCR, whois, DNS lookup, FX rates, FRED series, the Treasury yield curve, EDGAR filings, company financials and the crypto market tools. Every skill pack that runs one of them is repriced by the pack rule, and each listing, 402 answer and the OpenAPI document quote the new prices.",
+    ],
+  },
+  {
+    date: "2026-11-19",
     title: "Reputation corrections, transcript language, gateway models",
     items: [
       "Seller index: A seller's reputation record reads the price metric as `priceMatchesListing` (\"price matches listing\"): the share of routes whose live 402 price matches the price the seller's own documents list. `POST /api/reputation/recheck?seller=<host>` asks for a fresh measurement: free, one accepted request per seller every 6 hours (a repeat answers the one already scheduled), limited per caller; the crawl reads the seller on its next cycle inside its operator's crawl budget, and the answer is 202 with `crawlBy` and `recordBy`. The record shows `lastRecheckedAt`, and a day on which our own crawl cycle failed broadly on our side is left out of the crawl and paywall metrics and named under `measurementIssue` (\"measurement issue on our side\"). The method page names the correction contact.",

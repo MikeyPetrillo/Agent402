@@ -70,7 +70,7 @@ server names the variable on stderr. Set `AGENT402_BUDGET` to cap the session to
 the server runs in proof-of-work mode (pure-CPU tools stay free). Use dedicated
 low-value wallets for `AGENT_KEY` / `SOLANA_AGENT_KEY`, funded only with what
 you intend to spend. Most tools cost $0.001 to $0.02. The routing tiers top out
-at $3.30 (`route-execute-pro`); multi-tool skill packs run $0.003 to $0.101; and the
+at $3.30 (`route-execute-pro`); multi-tool skill packs run $0.001 to $0.093; and the
 report products run $0.60 to $2.00 per report (domain-audit $0.60 up to the ticker pack at $2.00),
 so the default per-call cap of $5 covers every tool; set `AGENT402_MAX_PER_CALL` lower for a
 tighter ceiling, or `off` for none.

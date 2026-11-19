@@ -32,7 +32,7 @@ export const SELFCHECK_SLUGS = [
   // High-value paid tools the reliability review flagged as unmonitored — added so
   // a break in EDGAR / crypto / on-chain / DeFi is caught proactively (synthetically,
   // no real traffic needed), not only when an agent happens to pay-and-fail. Keyless.
-  "company-financials",    // SEC EDGAR — the priciest tool ($0.02)
+  "company-financials",    // SEC EDGAR
   "edgar-company-lookup",  // SEC EDGAR
   "price-coingecko",       // CoinGecko price
   "lending-rates",         // Aave v3 + Compound v3 contract reads (public RPC)

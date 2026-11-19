@@ -641,7 +641,7 @@ export const MEDIA_TOOLS = [
     handler: async (i) => probeMedia(await fetchMedia(need(i, "url"))),
   },
   {
-    route: "POST /api/audio-convert", name: "Audio convert (to MP3)", slug: "audio-convert", category: "web", price: "$0.02",
+    route: "POST /api/audio-convert", name: "Audio convert (to MP3)", slug: "audio-convert", category: "web", price: "$0.002",
     description:
       "Extract/convert the audio track of any media URL (mp4, mov, wav, m4a, ogg…) to MP3 - the \"mp4 to mp3\" conversion, deterministic ffmpeg, no AI. Body: {\"url\":\"https://…/video.mp4\",\"bitrate\":\"192k\"?}. Returns the MP3 as base64.",
     tags: ["ffmpeg", "mp4-to-mp3", "audio", "convert", "mp3"],

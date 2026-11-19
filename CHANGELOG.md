@@ -34,6 +34,10 @@ Payments:
   the listed facilitators is answered as a 402 and the x402 payment is not
   settled.
 
+### 2026-11-19 (lower prices on 40 tools)
+Pricing:
+- Lower prices on 40 tools, among them extract, render, screenshot, pdf, image OCR, whois, DNS lookup, FX rates, FRED series, the Treasury yield curve, EDGAR filings, company financials and the crypto market tools. Every skill pack that runs one of them is repriced by the pack rule, and each listing, 402 answer and the OpenAPI document quote the new prices.
+
 ### 2026-11-19 (reputation corrections, transcript language, gateway models)
 Seller index:
 - A seller's reputation record reads the price metric as

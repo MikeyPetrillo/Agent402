@@ -5400,7 +5400,8 @@ jobs:
       # seller: src/lasting-effect-slugs.js), are exempt
       # (scripts/lib/keepalive-plan.js). Same buyer as the keep-alive
       # (scripts/refresh-bazaar.js, the burner, Base), the whole set capped by
-      # BAZAAR_PRICE_CHANGE_MAX_USD and by MAX_ROUTES routes: over either,
+      # BAZAAR_PRICE_CHANGE_MAX_USD and by BAZAAR_PRICE_CHANGE_MAX_ROUTES routes
+      # (default 25; a repricing raises it for one deploy): over either,
       # nothing is bought and the warning names the hand pass. Never fails the
       # deploy, which has already shipped (continue-on-error, its own timeout);
       # a refusal or a failed buy is a warning on the run. The logs carry route
@@ -5422,7 +5423,7 @@ jobs:
           WALLET_ADDRESS: ""
           TARGET_URL: https://agent402.tools
           MAX_SPEND_USD: ${{ vars.BAZAAR_PRICE_CHANGE_MAX_USD || '5' }}
-          MAX_ROUTES: "25"
+          MAX_ROUTES: ${{ vars.BAZAAR_PRICE_CHANGE_MAX_ROUTES || '25' }}
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
           POW_SECRET: ${{ secrets.POW_SECRET }}
         run: |

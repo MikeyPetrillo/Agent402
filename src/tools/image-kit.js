@@ -240,7 +240,7 @@ export const IMAGE_TOOLS = [
       transformOffThread("resize", i.image, { width: i.width, height: i.height, format: i.format, quality: i.quality }),
   },
   {
-    route: "POST /api/image-convert", name: "Image convert", slug: "image-convert", category: "web", price: "$0.005",
+    route: "POST /api/image-convert", name: "Image convert", slug: "image-convert", category: "web", price: "$0.003",
     description:
       "Convert an image between formats (PNG, JPEG, BMP). Send a base64 image and the target format; returns the converted image. Optional jpeg quality (1-100). Deterministic, no network.",
     tags: ["image", "convert", "format", "png", "jpeg", "bmp"],

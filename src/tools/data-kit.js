@@ -139,7 +139,7 @@ export const DATA_TOOLS = [
     },
   },
   {
-    route: "GET /api/fx-rate", name: "Currency exchange rate", slug: "fx-rate", category: "data", attribution: "ecb", price: "$0.002",
+    route: "GET /api/fx-rate", name: "Currency exchange rate", slug: "fx-rate", category: "data", attribution: "ecb", price: "$0.001",
     description:
       "Live currency conversion using European Central Bank reference rates. Converts an amount between two currencies and returns the rate, its date and its source. ?from=USD&to=EUR&amount=100. Source: European Central Bank.",
     tags: ["currency", "forex", "fx", "exchange-rate", "convert", "ecb"],

@@ -209,8 +209,9 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
 - `heartbeat.yml` probes prod on a schedule and opens issues for outages and low balances; a
   daily paid canary (`scripts/paid-canary.js`) buys across every rail. No open issues = healthy.
 - Keep-alive knobs (repo variables): `BAZAAR_PRICE_CHANGE_MAX_USD` caps the deploy job's one buy
-  of each route whose fixed price changed (default 5; that step also refuses more than 25
-  routes). `CANARY_BURNER_LOW_USD` (default 1) is now a floor: the heartbeat's burner low-water
+  of each route whose fixed price changed (default 5), and
+  `BAZAAR_PRICE_CHANGE_MAX_ROUTES` its route count (default 25; raised for one repricing
+  deploy, then unset). `CANARY_BURNER_LOW_USD` (default 1) is now a floor: the heartbeat's burner low-water
   mark is one above-ceiling keep-alive pass plus a margin, read from the live catalog
   (`scripts/keepalive-plan.js low-water`), never under it, and the variable alone when the
   catalog cannot be read.

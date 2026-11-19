@@ -293,7 +293,7 @@ export const CRYPTO_TOOLS = [
     name: "Crypto market overview",
     slug: "crypto-market",
     category: "data",
-    price: "$0.015",
+    price: "$0.003",
     description:
       "Top N coins by market capitalization with full market snapshot per coin: rank, price, 24h change, 7d change, 24h volume, market cap, circulating supply, and all-time high. Default 10, max 100 per call.",
     tags: ["crypto", "market", "ranking", "marketcap", "top-coins"],
@@ -446,7 +446,7 @@ export const CRYPTO_TOOLS = [
     name: "Crypto global market",
     slug: "crypto-global",
     category: "data",
-    price: "$0.008",
+    price: "$0.003",
     description:
       "Global crypto market snapshot: total market cap, total 24h volume, BTC dominance, ETH dominance, active coin count, active exchange count, and 24h market-cap change %. Returned in a chosen vs_currency (default usd).",
     tags: ["crypto", "global", "market", "dominance", "macro"],

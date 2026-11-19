@@ -381,7 +381,7 @@ const text = [
     },
   },
   {
-    route: "POST /api/redact", name: "Redact PII", slug: "redact", category: "text", price: "$0.002",
+    route: "POST /api/redact", name: "Redact PII", slug: "redact", category: "text", price: "$0.001",
     description: "Mask emails, phone numbers, credit-card-like numbers, IPs, and SSNs in text. Returns the redacted text and counts by type.",
     tags: ["redact", "pii", "mask", "privacy"],
     discovery: { bodyType: "json", input: { text: "reach me at ada@x.com or 555-123-4567" }, inputSchema: { properties: { text: { type: "string" } }, required: ["text"] }, output: { example: { result: "reach me at [EMAIL] or [PHONE]", counts: { email: 1, phone: 1 } } } },
