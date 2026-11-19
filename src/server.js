@@ -647,6 +647,10 @@ import { NFT_MARKET_TOOLS } from "./tools/nft-market-kit.js";
 import { WEATHER_TOOLS, openMeteoStatus } from "./tools/weather-kit.js";
 import { WEATHER_PROBABILITY_TOOLS } from "./tools/weather-probability-kit.js";
 import { WEATHER_PLAN_TOOLS } from "./tools/weather-plan-kit.js";
+import { BUNDLE_TOOLS } from "./tools/bundle-kit.js";
+import { errorCodeField } from "./stable-error-code.js";
+import { wholesaleIndex, wholesaleFamily, WHOLESALE_FAMILIES } from "./wholesale.js";
+import { wholesalePage } from "./wholesale-page.js";
 import { WEATHER_CALC_TOOLS } from "./tools/weather-calc-kit.js";
 import { DATE_TIME_TOOLS } from "./tools/date-time-kit.js";
 import { TEXT_ANALYSIS_TOOLS } from "./tools/text-analysis-kit.js";
@@ -822,7 +826,7 @@ const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePr
 // status probe's mark) or a payer that is one of our wallets. Stats only.
 const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -7828,6 +7832,37 @@ app.get("/api/rails", (_req, res) => {
     ...gatewayBatchedRailField(),
   });
 });
+// The wholesale surface (src/wholesale.js): a versioned JSON read per tool
+// family with each tool's price, credit and measured reliability. One answer
+// per family is kept for 60 s, so a caller polling it never re-reads the
+// counters more often than that.
+const wholesaleCache = new Map(); // key -> { at, body }
+async function wholesaleCtx() {
+  const monitor = toolFailureMonitor();
+  try { await monitor.refreshRemote(); } catch { /* the local counts still answer */ }
+  let toolRows = {};
+  try { toolRows = monitor.merged().tools || {}; } catch { toolRows = {}; }
+  const timingByRoute = new Map(routeTimings({ top: 300, minSamples: 1 }).map((r) => [r.route, r]));
+  return { catalog: CATALOG, powSlugs: POW_SLUGS, baseUrl: BASE_URL, toolRows, timingByRoute, now: Date.now() };
+}
+async function wholesaleAnswer(key, build) {
+  const kept = wholesaleCache.get(key);
+  if (kept && Date.now() - kept.at < 60_000) return kept.body;
+  const body = build(await wholesaleCtx());
+  wholesaleCache.set(key, { at: Date.now(), body });
+  return body;
+}
+app.get("/api/wholesale/v1", async (_req, res) => {
+  res.set("Cache-Control", "public, max-age=60").json(await wholesaleAnswer("", (ctx) => wholesaleIndex(ctx)));
+});
+app.get("/api/wholesale/v1/:family", async (req, res) => {
+  const id = String(req.params.family || "");
+  if (!WHOLESALE_FAMILIES.some((f) => f.id === id)) {
+    return res.status(404).json({ error: `No wholesale family "${id.slice(0, 40)}"`, errorCode: "not_found", families: WHOLESALE_FAMILIES.map((f) => f.id), index: `${BASE_URL}/api/wholesale/v1` });
+  }
+  res.set("Cache-Control", "public, max-age=60").json(await wholesaleAnswer(id, (ctx) => wholesaleFamily(id, ctx)));
+});
+app.get("/wholesale", (_req, res) => htmlCache(res, 300, 900).send(wholesalePage(BASE_URL, CATALOG, POW_SLUGS)));
 app.get("/api/reliability", async (_req, res) =>
   res.json(reliabilityReport({
     baseUrl: BASE_URL, network: NETWORK, wallet: WALLET_ADDRESS,
@@ -12835,7 +12870,7 @@ function withToolCallLog(slugOf, handler) {
       // its summary line.
       if (err?.coverRefusal && status === 429) logToolError(def?.slug || "unknown", status, redactSecrets(err?.message), undefined, isSyntheticRequest(req), false, { quiet: !noteCoverRefusalLog(req, err) });
       // (A buyer who left while the call waited to start: the 499 goes to a closed socket.)
-      try { return res.status(status).json({ error: redactSecrets(err?.message), tool: def?.slug, ...(status === 499 ? { charged: false } : {}), ...toolErrorFields(err) }); } catch { return undefined; }
+      try { return res.status(status).json({ error: redactSecrets(err?.message), tool: def?.slug, ...(status === 499 ? { charged: false } : {}), ...toolErrorFields(err), ...errorCodeField(status) }); } catch { return undefined; }
     }
     try { return await handler(req, res, ...rest); }
     finally { latencyMs = Date.now() - startedAt; coverRelease?.settling?.(); }
@@ -12875,6 +12910,7 @@ function sendToolError(res, err, slug) {
     error: errorMessage || "request failed",
     ...(slug ? { tool: slug } : {}),
     ...toolErrorFields(err),
+    ...errorCodeField(status),
   });
 }
 
@@ -13420,7 +13456,7 @@ for (const tool of ALL_KIT) {
       if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
       // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
       if (err?.shed === true) res.locals.shed = true;
-      const provenance = toolErrorFields(err);
+      const provenance = { ...toolErrorFields(err), ...errorCodeField(status) };
       if (status >= 400 && status < 500 && !fromUpstream) {
         res.status(status).json({
           error: errorMessage,
