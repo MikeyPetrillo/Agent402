@@ -2287,11 +2287,14 @@ try {
       const acct = newAccount();
       const before = settles();
       for (let i = 0; i < 10; i++) { await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: acct })).header, "x-test-ip": "8.8.4.4" }, 120); await wait(450); }
+      // Each settle lands after its client left: wait for the count, not a fixed time.
+      for (let i = 0; i < 50 && settles() - before < 9; i++) await wait(100);
       const st = app8.gate.stats();
       ok(st.forgivenHangups === 1 && settles() - before === 9 && st.forgivenUsd === 0.03, `10 hang-ups in a row by one payer and address: 1 forgiven, 9 settled (${st.forgivenHangups} forgiven, ${settles() - before} settled)`);
       // Another payer on the same address is bound by the address's budget; another payer elsewhere has its own.
       await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": "8.8.4.4" }, 120); await wait(450);
       await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": "8.8.4.5" }, 120); await wait(450);
+      for (let i = 0; i < 50 && settles() - before < 10; i++) await wait(100);
       ok(app8.gate.stats().forgivenHangups === 2 && settles() - before === 10, `the address's budget binds whatever wallet signs, and another payer on another address has its own (${app8.gate.stats().forgivenHangups} forgiven, ${settles() - before} settled)`);
     } finally { await app8.close(); }
   }
