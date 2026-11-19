@@ -9,6 +9,7 @@
 // SVM/Stellar payments carry no signed payer the server can verify, so they
 // get a self-explaining 400 instead of a report.
 import { identityPayerOf, freeModeOn, FREE_MODE_IDENTITY_NOTE } from "../payer.js";
+import { resolveRouteIdentity } from "../wallet-sign-in.js";
 import { payerUsage, payerReceipts, salesLedgerRefresh } from "../sales-ledger.js";
 import { refundsForPayer, refundLedgerRefresh } from "../refund-ledger.js";
 
@@ -81,7 +82,11 @@ export const USAGE_TOOLS = [
       },
     },
     handler: async (input, req) => {
-      const wallet = identityPayerOf(req);
+      // A wallet session (src/wallet-sign-in.js, off by default) names the
+      // wallet when the payment carries no signed payer.
+      const id = resolveRouteIdentity(req, "my-usage", identityPayerOf(req));
+      if (id.error) throw Object.assign(new Error(id.error.message), { statusCode: id.error.status });
+      const wallet = id.wallet;
       if (!wallet) {
         if (freeModeOn()) throw bad(FREE_MODE_IDENTITY_NOTE);
         throw bad(
@@ -137,7 +142,11 @@ export const USAGE_TOOLS = [
       },
     },
     handler: async (input, req) => {
-      const wallet = identityPayerOf(req);
+      // A wallet session (src/wallet-sign-in.js, off by default) names the
+      // wallet when the payment carries no signed payer.
+      const id = resolveRouteIdentity(req, "receipts", identityPayerOf(req));
+      if (id.error) throw Object.assign(new Error(id.error.message), { statusCode: id.error.status });
+      const wallet = id.wallet;
       if (!wallet) {
         if (freeModeOn()) throw bad(FREE_MODE_IDENTITY_NOTE);
         throw bad(

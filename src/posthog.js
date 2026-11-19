@@ -50,6 +50,7 @@ export function meterUpstreamSpend(source, usd) {
 export function setMeterSpendSinkForTest(fn) { __meterSink = typeof fn === "function" ? fn : null; }
 import { isCountedRail } from "./paid-rails.js";
 import { OWN_UA, indexerFor, isBrowserUa } from "./traffic-classifier.js";
+import { registerObservabilitySink, captureAiGeneration, flushObservability, flushWebBotAuthRollup } from "./posthog-observability.js";
 
 const API_KEY = process.env.POSTHOG_API_KEY || "";
 const HOST = process.env.POSTHOG_HOST || "https://us.i.posthog.com";
@@ -107,6 +108,9 @@ function capture(event, properties, distinctId = DISTINCT_ID) {
 
 // True when captures should be built at all — real client or the test sink.
 const active = () => TEST_MODE || (enabled && client);
+// LLM analytics, error tracking and the verified-agent rollup
+// (src/posthog-observability.js) send through this same capture.
+registerObservabilitySink((event, props) => capture(event, props), () => !!active());
 
 export function initPostHog() {
   if (initialized) return { ok: enabled, reason: enabled ? undefined : "no-key" };
@@ -797,6 +801,7 @@ export function capturePostHogGatewayUsage({ tier, routeTier, model, priceUsd, u
   const src = source ? String(source) : "gateway";
   if (upstreamUsd != null) meterSpend(src, upstreamUsd);
   if (!active()) return;
+  captureAiGeneration({ tier, routeTier, model, promptTokens, completionTokens, servedBy, source: src, serviceTier, defaulted });
   const price = Number(priceUsd) || 0;
   const upstream = Number(upstreamUsd) || 0;
   capture("gateway_usage", {
@@ -835,6 +840,7 @@ export function capturePostHogGatewayUsage({ tier, routeTier, model, priceUsd, u
 // paywall_402 rollup so a redeploy doesn't drop up to a window of counts.
 export async function shutdownPostHog() {
   flushPaywallRollup();
+  try { flushWebBotAuthRollup(); flushObservability(); } catch { /* telemetry never throws */ }
   if (!client) return;
   try {
     await client.shutdown();

@@ -103,7 +103,7 @@ function shaped(n) {
 const HEADERS = ["user-agent", "accept", "accept-language", "referer", "origin", "x-forwarded-for", "authorization", "x-payment", "payment-signature", "x-operator-token", "cookie", "if-none-match", "range", "idempotency-key"];
 // Further headers a gate, the connector or the edge code reads; each gets the
 // general shapes.
-const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt", "x-payment-compact", "x-agent402-via", "x-agent402-via-call"];
+const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt", "x-payment-compact", "x-agent402-via", "x-agent402-via-call", "signature", "signature-input", "signature-agent", "x-wallet-session"];
 
 // --- the readers the surfaces do not reach, timed directly --------------------
 // Synchronous functions, so a reading is the time this thread had a core.
@@ -114,6 +114,10 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
   const refusals = await import("../src/discovery-refusals.js");
   const traffic = await import("../src/traffic-classifier.js");
   const compact = await import("../src/payment-required-compact.js");
+  // Read only with WEB_BOT_AUTH=on or SIWE_SESSION_SECRET set (off on the boots below).
+  const webBotAuth = await import("../src/web-bot-auth.js");
+  const walletSignIn = await import("../src/wallet-sign-in.js");
+  const walletSvc = walletSignIn.createWalletSignIn({ env: { SIWE_SESSION_SECRET: "r".repeat(40) }, baseUrl: "https://redos.example.test" });
   const readers = {
     "posthog uaFamilyOf": (v) => posthog.uaFamilyOf(v),
     "posthog toolGoneSourceOf (user-agent)": (v) => posthog.toolGoneSourceOf({ headers: { "user-agent": v } }),
@@ -123,6 +127,12 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
     // Runs only on a paywall 402 (src/payment-required-compact.js).
     "payment-required-compact wantsCompactHeader (user-agent)": (v) => compact.wantsCompactHeader({ headers: { "user-agent": v } }),
     "payment-required-compact wantsCompactHeader (x-payment-compact)": (v) => compact.wantsCompactHeader({ headers: { "x-payment-compact": v } }),
+    "web-bot-auth readSignatureHeaders (signature-input)": (v) => webBotAuth.readSignatureHeaders({ "signature-input": v, signature: "sig1=:AAAA:" }),
+    "web-bot-auth readSignatureHeaders (signature)": (v) => webBotAuth.readSignatureHeaders({ "signature-input": 'sig1=("@authority");tag="web-bot-auth"', signature: v }),
+    "web-bot-auth readSignatureHeaders (signature-agent)": (v) => webBotAuth.readSignatureHeaders({ "signature-input": 'sig1=("@authority");tag="web-bot-auth"', signature: "sig1=:AAAA:", "signature-agent": v }),
+    "web-bot-auth check (all three)": (v) => webBotAuth.createWebBotAuth({ fetchDirectory: async () => null, note: () => {} }).check({ headers: { "signature-input": v, signature: v, "signature-agent": v } }),
+    "wallet-sign-in sessionOf (x-wallet-session)": (v) => walletSvc.sessionOf(v),
+    "wallet-sign-in sessionHeaderShape (x-wallet-session)": (v) => walletSignIn.sessionHeaderShape(v),
   };
   for (const [name, fn] of Object.entries(traffic)) {
     // Every exported reader of the traffic classifier that takes one string.

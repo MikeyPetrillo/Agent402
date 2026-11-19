@@ -30,7 +30,7 @@ t node scripts/test-mcp-x402-connector.js
 # A paid replay the hosted MCP connector stopped waiting for: the call id rides only the genuine marker, a settled answer the connector never read is booked as owed in either order (an event-loop stall reproduced over the real loopback client), one outcome per call, bounded entries, server and connector wiring pins (offline, port 0)
 t node scripts/test-mcp-loopback-cut.js
 
-# @step 2: Offline suites (17 scripts, one process each)
+# @step 2: Offline suites (20 scripts, one process each)
 # /llms.txt content lock (tool count + discovery URLs + PoW/MCP/wallet signals)
 t node scripts/test-llms-txt.js
 # Every HTML page names /llms.txt (head link + Link header); /api/pricing and the x402 manifest name EVM-only routes
@@ -68,3 +68,9 @@ t node scripts/test-leaderboard-memory.js
 # Conversion tools (~970 endpoints, exact + round-trip)
 t node scripts/test-convert.js
 t node scripts/test-json-canonical.js
+# PostHog LLM analytics and error tracking: each event carries only its allowlisted fields and no prompt, answer, body, header value, payer address or secret; sampling, hourly ceilings, the fingerprint window and the bounded queue hold; off switches and an absent key send nothing (offline)
+t node scripts/test-posthog-observability.js
+# Wallet sign-in (EIP-4361): nonce replay, cross-domain message, wrong URI, wrong chain, expired message and token, altered and foreign tokens, sign-out; a signed payer wins and a different session wallet is refused; off mounts nothing (two FREE_MODE boots)
+t node scripts/test-wallet-sign-in.js
+# Web Bot Auth verification: the RFC 9421 Ed25519 example, draft-shaped signatures and each refusal, bounded directory fetches, never refusing a request; every switch off and on answers pricing, openapi, llms.txt and the identity-bound 402s byte for byte alike (two paid boots, stub facilitator)
+t node scripts/test-web-bot-auth.js

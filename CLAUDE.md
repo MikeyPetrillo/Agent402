@@ -108,7 +108,7 @@ LLC: credit the entity, never a personal name.
   stays a 500 and is counted as a tool failure; a tool checks its own inputs for everything else.
 - **Identity-bound routes** (memory, my-usage, attest, feedback) are keyed on the signed
   EIP-3009 `authorization.from` (`src/payer.js` `identityPayerOf`: null in FREE_MODE, where no
-  header is verified); they are EVM-exact only and refused on Tempo/credits gates. Never weaken payer attribution. Never case-fold base58/Stellar addresses.
+  header is verified); they are EVM-exact only and refused on Tempo/credits gates. A wallet session (`src/wallet-sign-in.js`, off by default) names the wallet only where no signed payer does, and never for attribution. Never weaken payer attribution. Never case-fold base58/Stellar addresses.
 - Catalog floor: 400 entries, CI-checked by `node scripts/sync-count.js --check`. Marketing leads
   with the payment and trust layer; catalog size appears only as a supporting line, as "500+ tools",
   never an exact number. The lead sentence lives in `src/positioning.js` (its signed-receipt clause
@@ -330,7 +330,7 @@ Subsystem detail lives in `.claude/rules/`, and each file loads only when a file
 replay and idempotency, 402 bodies), `index-router.md` (seller index, submissions, parts and tool
 cap, paywall probe, router, route-execute and its buyers), `gateway.md` (LLM gateway, metering,
 model catalog, report products), `ops.md` (state database, scheduled loops, drain and containment,
-monitors, backups, status, live view, workflows and workers), `cdn.md` (CDN and client address,
+monitors, backups, status, live view, workflows and workers), `identity-telemetry.md` (wallet sessions, Web Bot Auth, PostHog LLM and error events), `cdn.md` (CDN and client address,
 async jobs and sync windows, large bodies, outbound fetches), `media.md` (OCR, PDF, Office and
 media workers), `mcp.md` (connector modules, front door, shareable answers). Read the matching
 file before changing a subsystem it names. The batch procedure is the `/batch` skill
