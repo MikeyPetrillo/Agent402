@@ -130,12 +130,13 @@ jobs:
             gh issue close "$FUND_OPEN" --repo "$GITHUB_REPOSITORY" --comment "The sweep paid again at $(date -u +%FT%TZ)."
           fi
           if [ "$RESULT" = "fail" ]; then
+            # Only the classes this run actually failed on (the report's own
+            # failedClasses), each with what it means; the full list when the
+            # report could not be read.
+            CLASSES=$(node scripts/algorand-canary-classes.js rail-report.json)
             BODY="The weekly Algorand rail sweep found problems. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-          Three failure classes, all real defects:
-          - **rail failure**: we signed a valid AVM payment and still got a 402, so settlement was refused (facilitator, accept, validity window, or USDC opt-in).
-          - **tool failure**: the payment path was fine but the handler did not deliver a payload. A >=400 cancels settlement, so no buyer was charged.
-          - **unexpected missing accept**: a tool that is not wallet-keyed stopped offering an \`algorand:*\` accept, meaning the rail silently went away for it.
+          ${CLASSES}
 
           The per-tool breakdown is in the \`algorand-rail-report\` artifact on that run."
             if [ -n "$OPEN" ]; then

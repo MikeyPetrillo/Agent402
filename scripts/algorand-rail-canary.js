@@ -94,7 +94,7 @@ import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.
 
 import { ALGORAND_INDEXERS } from "../src/payment-verify.js";
 
-import { FAST_REJECT_MS, isThrottle, isUpstreamOutage, isOurSettleBreaker, outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
+import { FAST_REJECT_MS, isThrottle, isUpstreamOutage, isOurSettleBreaker, outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, subcentBudget, rotateSubcent, isBuyerNetworkError, errorText, failedClasses } from "./avm-canary-classify.js";
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "algorand-rail-canary");
 const AVM_CAIP2_PREFIX = "algorand:";
@@ -312,6 +312,9 @@ console.log(`catalog: ${tools.length} routes · dry=${DRY} · total cap $${MAX_U
 const report = {
   target: TARGET, payer: payerAddress, dry: DRY,
   ok: [], railFail: [], rateLimited: [], toolFail: [], throttled: [], upstreamFail: [], noAvm: [], skipped: [], unfunded: [],
+  // The runner could not reach the chain to prepare a payment, twice: no paid
+  // request was sent, nothing was charged. Printed, does not fail the run.
+  buyerNetwork: [],
   // Paid requests that got no HTTP answer (see the header rule). All three
   // fail the run: the payment landed; a charge could not be ruled out; the
   // tool's last attempt got no answer with nothing charged.
@@ -522,7 +525,8 @@ for (const t of tools) {
     // A throw from the request (no HTTP answer) is shaped as an attempt that
     // carries its payment's id, so the chain can be asked what became of it. A
     // throw from SIGNING is not caught here and stays a failure on first sight.
-    const signed = await signOnce();
+    let signed;
+    try { signed = await signOnce(); } catch (e) { if (isBuyerNetworkError(e)) e.buyerSide = true; throw e; }
     let paid;
     try { paid = await signed.send(); } catch (e) { return transportAttempt(e, Date.now() - startedMs, signed.txid); }
     if (paid.status === 200 && signed.txid) deliveredTxids.add(signed.txid);
@@ -560,8 +564,19 @@ for (const t of tools) {
     }
     return verdict;
   };
+  // A throw before the paid request left (the runner could not reach the
+  // chain to prepare the payment) gets one retry after a pause, and is logged
+  // with its cause; a persisting one is the runner's network (buyerNetwork).
+  const attemptOnce = async () => {
+    try { return await attempt(); } catch (e) {
+      if (!e?.buyerSide) throw e;
+      console.log(`WAIT ${key.padEnd(46)} could not prepare the payment (${errorText(e, 140)}); no paid request was sent - retrying in ${THROTTLE_BACKOFF_MS}ms`);
+      await sleep(THROTTLE_BACKOFF_MS);
+      return await attempt();
+    }
+  };
   try {
-    let a = await attempt();
+    let a = await attemptOnce();
     let out = outcomeOf(a);
     let retried = false;
     // The sweep's own wallet could not pay (isBuyerUnfunded): no retry, since
@@ -595,7 +610,7 @@ for (const t of tools) {
       // No answer: the payment's fate decides whether anything is signed again.
       const first = out === "no-answer" ? await settleNoAnswer(a, false) : "retry";
       if (first === "retry") {
-        a = await attempt();
+        a = await attemptOnce();
         out = outcomeOf(a);
         retried = true;
         if (out === "unfunded") { unfunded(); break; }
@@ -653,7 +668,15 @@ for (const t of tools) {
     if (out === "ok") consecutiveBlind = 0;
     else if (out === "breaker" || out === "slow-402" || out === "fast-402") consecutiveBlind++;
     else consecutiveBlind = 0;
-  } catch (e) { report.toolFail.push({ key, slug: t.slug, reason: `pay: ${String(e.message).slice(0, 160)}` }); }
+  } catch (e) {
+    if (e?.buyerSide) {
+      report.buyerNetwork.push({ key, slug: t.slug, reason: `prepare: ${errorText(e, 160)} (twice; no paid request sent)` });
+      console.log(`BUYER ${key.padEnd(44)} the runner could not prepare the payment, twice (${errorText(e, 100)}); nothing sent, nothing charged`);
+    } else {
+      report.toolFail.push({ key, slug: t.slug, reason: `pay: ${errorText(e, 160)}` });
+      console.log(`FAIL ${key.padEnd(46)} pay: ${errorText(e, 120)}`);
+    }
+  }
 
   processed++;
   if (consecutiveBlind >= ABORT_AFTER_CONSECUTIVE) {
@@ -762,6 +785,12 @@ if (unexpectedNoAvm.length) {
   for (const n of unexpectedNoAvm) console.log(`  ${n.key} (${n.slug})`);
 }
 
+if (report.buyerNetwork.length) {
+  console.log(`\nRUNNER NETWORK (the runner could not reach the chain to prepare a payment, twice; no paid request was sent and nothing was charged, so these do NOT fail the run):`);
+  for (const f of report.buyerNetwork) console.log(`  ${f.key} — ${f.reason}`);
+}
+// The classes that fail the run, by name, for the alert's text.
+report.failedClasses = failedClasses(report, unexpectedNoAvm);
 if (OUT) { writeFileSync(OUT, JSON.stringify(report, null, 2)); console.log(`\nwrote ${OUT}`); }
 
 // Rail failures and tool failures are both real defects. Unexpected missing

@@ -2515,7 +2515,12 @@ jobs:
           # The committed contract artifact must be REPRODUCIBLE from the committed
           # source: a bytecode edit that leaves the .sol alone would pass the
           # source-hash pin, so recompile with the pinned solc and diff the blob.
-          ( cd examples/agentkit-data-to-deploy && npm i --no-save --ignore-scripts --no-audit --no-fund --silent solc@0.8.28 && node contracts/compile.js && rm -rf node_modules )
+          # The install prints its own output and is retried once, so a registry
+          # hiccup names itself in the log instead of a silent exit 1.
+          ( cd examples/agentkit-data-to-deploy
+            install_solc() { npm i --no-save --ignore-scripts --no-audit --no-fund solc@0.8.28; }
+            install_solc || { rc=$?; echo "::warning::solc@0.8.28 install failed (exit $rc); retrying once"; sleep 5; install_solc; }
+            node contracts/compile.js && rm -rf node_modules )
           git diff --exit-code -- examples/agentkit-data-to-deploy/contracts/artifact.json
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/eliza/test.js
           # Paid calls in the zero-dependency adapters and the OpenClaw proxy refuse redirects (offline, loopback)

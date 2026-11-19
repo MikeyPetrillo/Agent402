@@ -86,7 +86,7 @@ export const METERED_SLUGS = new Set([
   "wallet-balance", "token-metadata", "token-price", "wallet-transactions",
   "asset-transfers", "token-balances", "token-allowance", "tx-receipt",
   "block-receipts", "token-price-history",
-  "nft-holdings", "nft-metadata", "gas-snapshot", "eth-call",
+  "nft-holdings", "nft-metadata", "gas-snapshot",
   "dex-pair", "dex-pool", "dex-quote",
   "nft-collection", "nft-floor",
   "l2-gas-comparison",

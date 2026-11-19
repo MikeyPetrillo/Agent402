@@ -80,12 +80,46 @@ const FIAT_CODES = new Set([
 const FIAT_NAME_CODES = { dollar: "usd", dollars: "usd", euro: "eur", euros: "eur", yen: "jpy", rupee: "inr", rupees: "inr", yuan: "cny", franc: "chf", francs: "chf", sterling: "gbp" };
 const CRYPTO_WORDS = new Set(["crypto", "cryptocurrency", "cryptocurrencies", "coin", "coins", "token", "tokens", "bitcoin", "btc", "eth", "ether", "ethereum", "sol", "solana", "usdc", "usdt", "stablecoin", "stablecoins", "onchain", "chain", "wallet"]);
 const CONVERT_FORMS = new Set(["exchange", "converter", "converters", "conversion", "conversions", "converting", "converts", "converted"]);
-export function applyCurrencyTerms(terms) {
+// Two DIFFERENT currencies are also a conversion when the query joins them
+// ("rupee to peso", "eur/jpy", "euro vs yen") or asks for their rate ("euro
+// yen rate"); listed side by side with neither ("a currency usd eur
+// dashboard") or joined by "and" ("translate it in dollars and euros") they
+// stay words of the task. A name and its code are one currency.
+const PAIR_JOIN_RE = /^\s*(?:to|into|in|vs\.?|versus|per|against|for|\/|->|=>|→)\s*$/u;
+const RATE_WORDS = new Set(["rate", "rates", "fx", "forex", "exchange"]);
+function currencyOf(t) { return FIAT_NAME_CODES[t] || (t === "pesos" ? "peso" : t); }
+function joinedPair(q) {
+  const s = String(q || "").toLowerCase();
+  if (!s || s.length > 512) return false;
+  const runs = [...s.matchAll(/[\p{L}\p{N}]+/gu)];
+  for (let i = 0; i < runs.length; i++) {
+    if (!FIAT_CODES.has(runs[i][0])) continue;
+    for (let j = i + 1; j < runs.length && j <= i + 2; j++) {
+      if (!FIAT_CODES.has(runs[j][0])) continue;
+      if (currencyOf(runs[i][0]) === currencyOf(runs[j][0])) continue;
+      if (j === i + 1 && PAIR_JOIN_RE.test(s.slice(runs[i].index + runs[i][0].length, runs[j].index))) return true;
+      if (j === i + 2 && /^(?:to|into|vs|versus|per|against)$/.test(runs[i + 1][0])
+        && /^\s+$/.test(s.slice(runs[i].index + runs[i][0].length, runs[i + 1].index))
+        && /^\s+$/.test(s.slice(runs[i + 1].index + runs[i + 1][0].length, runs[j].index))) return true;
+    }
+  }
+  return false;
+}
+export function applyCurrencyTerms(terms, q) {
   if (terms.some((t) => CRYPTO_WORDS.has(t))) return false;
-  if (!terms.includes("convert") && !terms.some((t) => CONVERT_FORMS.has(t))) return false;
+  const pair = new Set(terms.filter((t) => FIAT_CODES.has(t)).map(currencyOf)).size >= 2;
+  const asked = terms.includes("convert") || terms.some((t) => CONVERT_FORMS.has(t))
+    || (pair && (joinedPair(q) || terms.some((t) => RATE_WORDS.has(t))));
+  if (!asked) return false;
   if (!terms.some((t) => CURRENCY_WORDS.has(t)) && terms.filter((t) => FIAT_CODES.has(t)).length < 2) return false;
   if (!terms.includes("forex")) terms.push("forex");
-  if (!terms.includes("convert") && terms.some((t) => CONVERT_FORMS.has(t))) terms.push("convert");
+  // A conversion asked by a joined pair or a rate word is the same task as
+  // "convert": it reads the converter's curated tag too.
+  if (!terms.includes("convert")) terms.push("convert");
+  // A currency the fx tools do not spell out ("rupees to pesos") leaves only
+  // "forex" and "convert", and "convert" is a whole slug word on every
+  // *-convert tool: "currency" (an fx-rate tag) is the task's own word.
+  if (!terms.includes("currency")) terms.push("currency");
   // A currency named in words also reads as its code, which the fx tools describe.
   for (const t of [...terms]) { const code = FIAT_NAME_CODES[t]; if (code && !terms.includes(code)) terms.push(code); }
   return true;
@@ -249,7 +283,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   // score tie against the other *-convert tools without distorting queries
   // that never mention a unit.
   if (!terms.includes("units") && terms.some((t) => UNIT_WORDS.has(t))) terms.push("units");
-  const currencyIntent = applyCurrencyTerms(terms);
+  const currencyIntent = applyCurrencyTerms(terms, q);
   // Same mechanism for DELEGATED PURCHASE intent: "buy a tool from another
   // seller", "pay an external api on my behalf" are asking for the Smart Order
   // Router (it resolves a seller, pays them over x402, relays the result), but

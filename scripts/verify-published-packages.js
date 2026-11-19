@@ -54,7 +54,7 @@ try {
   console.log(`installed agent402-mcp@${mcpVer}  agent402-client@${cliVer}`);
 
   // --- 1. the published stdio MCP server, spoken to over real stdio ---------
-  const proc = spawn("node", [join(dir, "node_modules", "agent402-mcp", "index.js")], {
+  const proc = spawn(process.execPath, [join(dir, "node_modules", "agent402-mcp", "index.js")], {
     // The server reads AGENT402_URL; TARGET must reach it, or a run aimed at
     // another host silently tests production.
     env: { ...process.env, AGENT402_URL: TARGET },

@@ -433,7 +433,7 @@ function shapeLockers(report, limit) {
 // ---------------------------------------------------------------------------
 function shapePair(p) {
   const created = num(p?.pairCreatedAt);
-  return {
+  const row = {
     pairAddress: p?.pairAddress ?? null,
     dex: p?.dexId ?? null,
     labels: Array.isArray(p?.labels) ? p.labels.slice(0, 5) : [],
@@ -459,6 +459,81 @@ function shapePair(p) {
     hasProfile: Boolean(p?.info && (p.info.imageUrl || (p.info.websites || []).length || (p.info.socials || []).length)),
     url: p?.url ?? null,
   };
+  row.signals = pairSignals(row);
+  return row;
+}
+
+// ---------------------------------------------------------------------------
+// Computed signals. Each list route answers what the pair index's figures
+// mean, not only the figures: depth and age bands, the 24h buy share, how
+// many times the pool's liquidity traded in a day (a very high turnover on a
+// thin pool is the usual wash-trading shape), and named flags. Thresholds are
+// fixed here so the same figures always read the same way.
+// ---------------------------------------------------------------------------
+const LIQUIDITY_BANDS = [[1_000_000, "deep"], [100_000, "moderate"], [10_000, "thin"], [0, "dust"]];
+const NEW_PAIR_HOURS = 24, YOUNG_PAIR_HOURS = 168;
+const HIGH_TURNOVER = 10;           // 24h volume over liquidity
+const ONE_SIDED_MIN_TXNS = 50, ONE_SIDED_SHARE = 0.85;
+const PAIR_SIGNAL_FLAGS = Object.freeze(["dust-liquidity", "thin-liquidity", "new-pair", "no-profile", "one-sided-flow", "high-turnover"]);
+function liquidityBand(usd) {
+  if (typeof usd !== "number" || !Number.isFinite(usd) || usd < 0) return null;
+  return LIQUIDITY_BANDS.find(([min]) => usd >= min)[1];
+}
+function pairSignals(r) {
+  const liq = r.liquidityUsd, vol = r.volume?.h24;
+  const buys = r.txns24h?.buys, sells = r.txns24h?.sells;
+  const txns = (buys || 0) + (sells || 0);
+  const buyShare = txns > 0 && buys != null && sells != null ? round(buys / txns, 2) : null;
+  const turnover = liq > 0 && vol != null ? round(vol / liq, 2) : null;
+  const band = liquidityBand(liq);
+  const age = r.ageHours == null ? null : r.ageHours < NEW_PAIR_HOURS ? "new" : r.ageHours < YOUNG_PAIR_HOURS ? "young" : "established";
+  const flags = [];
+  if (band === "dust") flags.push("dust-liquidity");
+  else if (band === "thin") flags.push("thin-liquidity");
+  if (age === "new") flags.push("new-pair");
+  if (!r.hasProfile) flags.push("no-profile");
+  if (buyShare != null && txns >= ONE_SIDED_MIN_TXNS && (buyShare >= ONE_SIDED_SHARE || buyShare <= 1 - ONE_SIDED_SHARE)) flags.push("one-sided-flow");
+  if (turnover != null && turnover >= HIGH_TURNOVER) flags.push("high-turnover");
+  return { liquidityBand: band, age, buyShare24h: buyShare, turnover24h: turnover, flags };
+}
+/** Across one token's pairs: where its liquidity sits. `topPairSharePct` is
+ *  the deepest pair's share of the total; `concentration` is the
+ *  Herfindahl index of the pairs' liquidity shares (1 = all in one pair). */
+function pairsAnalysis(rows) {
+  const liq = rows.map((r) => r.liquidityUsd || 0);
+  const total = liq.reduce((a, b) => a + b, 0);
+  const shares = total > 0 ? liq.map((x) => x / total) : [];
+  const ages = rows.map((r) => r.ageHours).filter((x) => x != null);
+  const flagged = {};
+  for (const r of rows) for (const f of r.signals?.flags || []) flagged[f] = (flagged[f] || 0) + 1;
+  return {
+    dexCount: new Set(rows.map((r) => r.dex).filter(Boolean)).size,
+    topPairSharePct: shares.length ? round(Math.max(...shares) * 100, 1) : null,
+    concentration: shares.length ? round(shares.reduce((a, x) => a + x * x, 0), 3) : null,
+    deepPairs: rows.filter((r) => r.signals?.liquidityBand === "deep").length,
+    oldestPairAgeHours: ages.length ? Math.max(...ages) : null,
+    flaggedPairs: flagged,
+  };
+}
+/** Across a search's rows: how many distinct mints answer to the query's
+ *  ticker, and which of them holds the most liquidity. A row whose base token
+ *  shares that ticker with a deeper mint is marked `tickerShadow` (the usual
+ *  impostor shape: a copied ticker on a thinner pool). */
+function searchAnalysis(rows, query) {
+  const want = searchKey(query);
+  const byMint = new Map();
+  for (const r of rows) {
+    const mint = r.base?.address;
+    if (!mint || searchKey(r.base?.symbol) !== want) continue;
+    byMint.set(mint, (byMint.get(mint) || 0) + (r.liquidityUsd || 0));
+  }
+  let deepest = null;
+  for (const [mint, liq] of byMint) if (!deepest || liq > deepest.liq) deepest = { mint, liq };
+  for (const r of rows) {
+    if (!r.signals) continue;
+    r.signals.tickerShadow = Boolean(deepest && byMint.size > 1 && byMint.has(r.base?.address) && r.base.address !== deepest.mint);
+  }
+  return { tickerMints: byMint.size, deepestTickerMint: deepest ? deepest.mint : null, deepestTickerLiquidityUsd: deepest ? round(deepest.liq, 2) : null };
 }
 
 const byLiquidity = (a, b) => (b.liquidityUsd || 0) - (a.liquidityUsd || 0);
@@ -951,7 +1026,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Every DEX pair trading a Solana token mint (Raydium, Orca, Meteora, Pump.fun AMM and the rest), sorted by liquidity: pair address, DEX, price in USD and in the quote token, liquidity, FDV and market cap, 5m/1h/6h/24h volume and price change, buy/sell transaction counts, pair age in hours, plus totals across pairs. One request to a public DEX pair index, keyless.",
+      "Every DEX pair trading a Solana token mint (Raydium, Orca, Meteora, Pump.fun AMM and the rest), sorted by liquidity: pair address, DEX, price in USD and in the quote token, liquidity, FDV and market cap, 5m/1h/6h/24h volume and price change, buy/sell transaction counts, pair age in hours, plus totals across pairs. Computed on top: per pair a liquidity band, an age band, the 24h buy share, the 24h turnover (volume over liquidity) and named flags (thin or dust liquidity, new pair, no profile, one-sided flow, high turnover); per token where its liquidity sits (the deepest pair's share, a concentration index from 0 to 1, deep pairs, DEX count, oldest pair). One request to a public DEX pair index, keyless.",
     tags: ["solana", "dex", "pairs", "liquidity", "volume", "raydium", "memecoin", "spl"],
     discovery: {
       bodyType: "json",
@@ -966,7 +1041,8 @@ export const SOLANA_INTEL_TOOLS = [
       output: {
         example: {
           mint: MINTS.JUP, totalPairs: 30, totals: { liquidityUsd: 95000000, volume24hUsd: 160000000, txns24h: 40000 },
-          pairs: [{ pairAddress: "EoFt...", dex: "meteora", labels: ["DLMM"], base: { address: MINTS.JUP, symbol: "JUP", name: "Jupiter" }, quote: { address: "METv...", symbol: "MET" }, priceUsd: 0.2034, priceNative: 0.9139, liquidityUsd: 71508214.54, fdv: 1395785031, marketCap: 675335464, volume: { m5: 257492.32, h1: 1424742.93, h6: 37797815.88, h24: 149471020.95 }, priceChangePct: { m5: 0.1, h1: -0.4, h6: -0.01, h24: -6.39 }, txns24h: { buys: 1180, sells: 1249 }, txns1h: { buys: 23, sells: 43 }, pairCreatedAt: "2025-10-28T04:06:45.000Z", ageHours: 7160.2, hasProfile: true, url: "https://dexscreener.com/solana/eoft..." }],
+          analysis: { dexCount: 6, topPairSharePct: 75.3, concentration: 0.58, deepPairs: 4, oldestPairAgeHours: 14000, flaggedPairs: { "thin-liquidity": 9, "no-profile": 3 } },
+          pairs: [{ pairAddress: "EoFt...", dex: "meteora", labels: ["DLMM"], base: { address: MINTS.JUP, symbol: "JUP", name: "Jupiter" }, quote: { address: "METv...", symbol: "MET" }, priceUsd: 0.2034, priceNative: 0.9139, liquidityUsd: 71508214.54, fdv: 1395785031, marketCap: 675335464, volume: { m5: 257492.32, h1: 1424742.93, h6: 37797815.88, h24: 149471020.95 }, priceChangePct: { m5: 0.1, h1: -0.4, h6: -0.01, h24: -6.39 }, txns24h: { buys: 1180, sells: 1249 }, txns1h: { buys: 23, sells: 43 }, pairCreatedAt: "2025-10-28T04:06:45.000Z", ageHours: 7160.2, hasProfile: true, url: "https://dexscreener.com/solana/eoft...", signals: { liquidityBand: "deep", age: "established", buyShare24h: 0.49, turnover24h: 2.09, flags: [] } }],
           source: "dexscreener", fetchedAt: "2026-08-22T12:00:00.000Z",
         },
       },
@@ -980,6 +1056,7 @@ export const SOLANA_INTEL_TOOLS = [
         mint,
         totalPairs: rows.length,
         totals: sumPairs(rows),
+        analysis: pairsAnalysis(rows),
         pairs: rows.slice(0, limit),
         source: "dexscreener",
         fetchedAt: stamp(),
@@ -997,7 +1074,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Find Solana tokens and pairs by name, ticker or address across every DEX a public pair index covers, filtered to Solana only, in the index's relevance order. When that search holds no matching Solana pair (a ticker busy on other chains), the mints come from a Solana token index, verified first, and their pairs are read by mint. Each row: base and quote token, mint addresses, DEX, price, liquidity, 24h volume and change, transaction counts, pair age and whether the token has a filled-in profile (ticker impostors usually do not). Resolve a ticker to a mint before calling sol-token-safety or sol-swap-quote. Keyless.",
+      "Find Solana tokens and pairs by name, ticker or address across every DEX a public pair index covers, filtered to Solana only, in the index's relevance order. When that search holds no matching Solana pair (a ticker busy on other chains), the mints come from a Solana token index, verified first, and their pairs are read by mint. Each row: base and quote token, mint addresses, DEX, price, liquidity, 24h volume and change, transaction counts, pair age and whether the token has a filled-in profile (ticker impostors usually do not), with computed signals per row (liquidity and age bands, 24h buy share, turnover, flags). When several mints answer to the query's ticker, the answer names the one with the most liquidity and marks every other one's rows tickerShadow. Resolve a ticker to a mint before calling sol-token-safety or sol-swap-quote. Keyless.",
     tags: ["solana", "search", "token", "ticker", "dex", "memecoin", "spl"],
     discovery: {
       bodyType: "json",
@@ -1012,7 +1089,8 @@ export const SOLANA_INTEL_TOOLS = [
       output: {
         example: {
           query: "JUP", totalSolanaPairs: 28,
-          pairs: [{ pairAddress: "EoFt...", dex: "meteora", labels: ["DLMM"], base: { address: MINTS.JUP, symbol: "JUP", name: "Jupiter" }, quote: { address: MINTS.SOL, symbol: "SOL" }, priceUsd: 0.2034, priceNative: 0.00217, liquidityUsd: 1260729.15, fdv: 1395785031, marketCap: 675335464, volume: { m5: 1000, h1: 20000, h6: 100000, h24: 500000 }, priceChangePct: { m5: 0, h1: -0.3, h6: 0.2, h24: -2.4 }, txns24h: { buys: 900, sells: 850 }, txns1h: { buys: 30, sells: 28 }, pairCreatedAt: "2025-01-01T00:00:00.000Z", ageHours: 14000, hasProfile: true, url: "https://dexscreener.com/solana/eoft..." }],
+          pairs: [{ pairAddress: "EoFt...", dex: "meteora", labels: ["DLMM"], base: { address: MINTS.JUP, symbol: "JUP", name: "Jupiter" }, quote: { address: MINTS.SOL, symbol: "SOL" }, priceUsd: 0.2034, priceNative: 0.00217, liquidityUsd: 1260729.15, fdv: 1395785031, marketCap: 675335464, volume: { m5: 1000, h1: 20000, h6: 100000, h24: 500000 }, priceChangePct: { m5: 0, h1: -0.3, h6: 0.2, h24: -2.4 }, txns24h: { buys: 900, sells: 850 }, txns1h: { buys: 30, sells: 28 }, pairCreatedAt: "2025-01-01T00:00:00.000Z", ageHours: 14000, hasProfile: true, url: "https://dexscreener.com/solana/eoft...", signals: { liquidityBand: "deep", age: "established", buyShare24h: 0.51, turnover24h: 0.4, flags: [], tickerShadow: false } }],
+          analysis: { tickerMints: 3, deepestTickerMint: MINTS.JUP, deepestTickerLiquidityUsd: 1260729.15 },
           returned: 5, matched: 28, complete: false, truncated: true,
           fallback: { ran: false, why: null, status: "not-needed", mints: [] },
           note: "Rows keep DexScreener relevance order.",
@@ -1038,9 +1116,11 @@ export const SOLANA_INTEL_TOOLS = [
       // no Solana row's base token matches the query, the mints come from a
       // Solana token index instead and their pairs are read by mint.
       if (searchRows.some((r) => pairMatchesQuery(r, query))) {
+        const analysis = searchAnalysis(searchRows, query);
         return {
           query,
           totalSolanaPairs: searchRows.length,
+          analysis,
           pairs: searchRows.slice(0, limit),
           ...partialFields(searchRows.length, Math.min(searchRows.length, limit)),
           fallback: { ran: false, why: null, status: "not-needed", mints: [] },
@@ -1074,9 +1154,11 @@ export const SOLANA_INTEL_TOOLS = [
         throw Object.assign(bad(`Solana token search found no pairs and the ${fb.unavailable.upstream} ${fb.unavailable.step} read gave no usable answer - retry shortly`, 503), { attribution: "unknown" });
       }
       const incomplete = fb.status === "unavailable" || fb.status === "partial";
+      const analysis = searchAnalysis(rows, query);
       return {
         query,
         totalSolanaPairs: rows.length,
+        analysis,
         pairs: rows.slice(0, limit),
         ...partialFields(rows.length, Math.min(rows.length, limit)),
         // A mint read that did not answer leaves pairs unread: this answer is
@@ -1102,7 +1184,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "What Solana tokens are being pushed right now: a public DEX pair index's top boosted tokens (paid promotion, ranked by boost amount - a signal of marketing spend, not quality) and the latest token profiles (fresh listings with a filled-in profile), both filtered to Solana. Each row carries the mint, the index's token page URL, description snippet and links. Feed the mints into sol-token-safety to separate the promoted from the sound. Keyless; two small reads in parallel.",
+      "What Solana tokens are being pushed right now: a public DEX pair index's top boosted tokens (paid promotion, ranked by boost amount - a signal of marketing spend, not quality) and the latest token profiles (fresh listings with a filled-in profile), both filtered to Solana. Each row carries the mint, the index's token page URL, description snippet and links. Computed on top: each boost's share of the Solana boost spend and the top five's share, the mints that are both boosted and newly profiled, community takeovers, and per row the link count and whether it lists a website and socials. Feed the mints into sol-token-safety to separate the promoted from the sound. Keyless; two small reads in parallel.",
     tags: ["solana", "trending", "boosts", "new-tokens", "memecoin", "discovery", "spl"],
     discovery: {
       bodyType: "json",
@@ -1115,9 +1197,10 @@ export const SOLANA_INTEL_TOOLS = [
       },
       output: {
         example: {
-          boosts: [{ mint: "918p...pump", boostAmount: 500, description: "The cats have arrived", links: [{ type: "website", url: "https://example.com" }], url: "https://dexscreener.com/solana/918p..." }],
-          profiles: [{ mint: "AiRG...pump", description: "", communityTakeover: false, links: [{ type: "twitter", url: "https://x.com/..." }], url: "https://dexscreener.com/solana/airg..." }],
+          boosts: [{ mint: "918p...pump", boostAmount: 500, boostSharePct: 21.7, description: "The cats have arrived", links: [{ type: "website", url: "https://example.com" }], linkCount: 1, hasWebsite: true, hasSocials: false, alsoNewProfile: false, url: "https://dexscreener.com/solana/918p..." }],
+          profiles: [{ mint: "AiRG...pump", description: "", communityTakeover: false, links: [{ type: "twitter", url: "https://x.com/..." }], linkCount: 1, hasWebsite: false, hasSocials: true, alsoBoosted: false, url: "https://dexscreener.com/solana/airg..." }],
           counts: { boostsSolana: 24, boostsAll: 30, profilesSolana: 30, profilesAll: 30 },
+          analysis: { boostTotal: 2300, top5BoostSharePct: 64.1, boostedAndNewlyProfiled: [], communityTakeovers: 2 },
           source: "dexscreener", fetchedAt: "2026-08-22T12:00:00.000Z",
         },
       },
@@ -1137,12 +1220,29 @@ export const SOLANA_INTEL_TOOLS = [
       const pAll = Array.isArray(profiles) ? profiles : [];
       const bSol = bAll.filter((t) => t?.chainId === "solana");
       const pSol = pAll.filter((t) => t?.chainId === "solana");
+      // Computed over every Solana row the index returned, not only the rows
+      // shown: each boost's share of the Solana boost spend, how much of it
+      // the top five hold, the mints that are both boosted and newly
+      // profiled, and how complete each row's links are.
+      const amountOf = (t) => num(t.totalAmount ?? t.amount) || 0;
+      const boostTotal = bSol.reduce((a, t) => a + amountOf(t), 0);
+      const top5 = bSol.map(amountOf).sort((a, b) => b - a).slice(0, 5).reduce((a, b) => a + b, 0);
+      const boostedMints = new Set(bSol.map((t) => t.tokenAddress).filter(Boolean));
+      const inBoth = [...new Set(pSol.map((t) => t.tokenAddress).filter((m) => m && boostedMints.has(m)))];
+      const linkSignals = (links) => {
+        const shaped = shapeLinks(links);
+        const kinds = new Set(shaped.map((l) => String(l.type || "").toLowerCase()));
+        return { linkCount: shaped.length, hasWebsite: kinds.has("website"), hasSocials: [...kinds].some((k) => k && k !== "website") };
+      };
       return {
         boosts: wantBoosts ? bSol.slice(0, limit).map((t) => ({
           mint: t.tokenAddress ?? null,
           boostAmount: num(t.totalAmount ?? t.amount),
+          boostSharePct: boostTotal > 0 ? round((amountOf(t) / boostTotal) * 100, 1) : null,
           description: t.description ? String(t.description).slice(0, 200) : null,
           links: shapeLinks(t.links),
+          ...linkSignals(t.links),
+          alsoNewProfile: inBoth.includes(t.tokenAddress),
           url: t.url ?? null,
         })) : null,
         profiles: wantProfiles ? pSol.slice(0, limit).map((t) => ({
@@ -1150,9 +1250,17 @@ export const SOLANA_INTEL_TOOLS = [
           description: t.description ? String(t.description).slice(0, 200) : null,
           communityTakeover: Boolean(t.cto),
           links: shapeLinks(t.links),
+          ...linkSignals(t.links),
+          alsoBoosted: boostedMints.has(t.tokenAddress),
           url: t.url ?? null,
         })) : null,
         counts: { boostsSolana: bSol.length, boostsAll: bAll.length, profilesSolana: pSol.length, profilesAll: pAll.length },
+        analysis: {
+          boostTotal: wantBoosts ? round(boostTotal, 2) : null,
+          top5BoostSharePct: wantBoosts && boostTotal > 0 ? round((top5 / boostTotal) * 100, 1) : null,
+          boostedAndNewlyProfiled: wantBoosts && wantProfiles ? inBoth.slice(0, limit) : null,
+          communityTakeovers: wantProfiles ? pSol.filter((t) => t.cto).length : null,
+        },
         note: "Boosts are paid promotion ranked by amount; profiles are the newest tokens with a filled-in DexScreener profile. Neither is a safety signal.",
         source: "dexscreener",
         fetchedAt: stamp(),
@@ -1339,7 +1447,7 @@ const JUPITER_SLUGS = new Set(["sol-token-safety", "sol-price", "sol-swap-quote"
 for (const t of SOLANA_INTEL_TOOLS) if (JUPITER_SLUGS.has(t.slug)) attribute(t, "jupiter");
 
 // Exported for offline unit tests (pure shaping, no network).
-export const __test = { takeMint, takeLimit, searchKeys, pairMatchesQuery, mergeFallbackRows, shapeHolders, shapeMarkets, shapePair, shapeJupToken, authorityState, riskCounts, BASE58_RE, budgetOf, topAccountsFromRpc,
+export const __test = { PAIR_SIGNAL_FLAGS, pairSignals, takeMint, takeLimit, searchKeys, pairMatchesQuery, mergeFallbackRows, shapeHolders, shapeMarkets, shapePair, shapeJupToken, authorityState, riskCounts, BASE58_RE, budgetOf, topAccountsFromRpc,
   DEADLINES: Object.freeze({ HANDLER_BUDGET_MS, RUGCHECK_SUMMARY_MS, RUGCHECK_REPORT_MS, JUPITER_MS, DEXSCREENER_MS, RPC_MS, RPC_FLOOR_MS, FULL_REPORT_FLOOR_MS, RUGCHECK_FALLBACK_MS }), reportReadsInflight: () => reportReads.inflightSize() };
 
 // Free text in these results is written by third parties (headlines, posts,

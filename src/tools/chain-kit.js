@@ -1,8 +1,9 @@
 // Chain kit — wallet balances, token metadata + price, NFT ownership + metadata,
 // gas snapshot, and read-only JSON-RPC passthroughs for power users. Backed by
-// Alchemy (single key, every supported chain), except evm-rpc which rides
-// keyless public RPC endpoints with failover (Alchemy lane first when the key
-// is set) so it answers on every deployment. Wallet-only (egress = external
+// Alchemy (single key, every supported chain), except the JSON-RPC reads
+// (evm-rpc, eth-call, block-number and the other node reads) which ride keyless
+// public RPC endpoints with failover, the Alchemy lane LAST when the key is
+// set, so they answer on every deployment. Wallet-only (egress = external
 // quota), never PoW-eligible.
 //
 // Supported networks: ethereum, base, polygon, arbitrum, optimism. Mainnets only —
@@ -155,8 +156,9 @@ const RPC_METHOD_WHITELIST = new Set([
 // ============================================================================
 // evm-rpc transport — keyless public RPC endpoints with failover, following
 // the x402-kit rpc() pattern. Distinct from jsonRpc() above: it does NOT
-// require ALCHEMY_API_KEY (the Alchemy lane simply goes first when the key is
-// set), so the passthrough answers on every deployment. 8s per-endpoint
+// require ALCHEMY_API_KEY: the public nodes are asked first and the Alchemy
+// lane, when the key is set, only after every one of them, so the passthrough
+// answers on every deployment and the keyed quota is the last resort. 8s per-endpoint
 // timeout, one full retry pass over the endpoint list on transport/5xx
 // failures. A well-formed JSON-RPC *error* from a node is the node's verdict
 // on the request (bad params, reverted call) — consistent across nodes, so it
@@ -174,8 +176,8 @@ const PUBLIC_RPCS = {
 export async function publicJsonRpc(network, method, params) {
   const key = process.env.ALCHEMY_API_KEY;
   const urls = [
-    ...(key ? [`https://${network.subdomain}.g.alchemy.com/v2/${key}`] : []),
     ...PUBLIC_RPCS[network.name],
+    ...(key ? [`https://${network.subdomain}.g.alchemy.com/v2/${key}`] : []),
   ];
   let lastErr;
   // Each endpoint read runs under its own cap AND what is left of the handler
@@ -215,7 +217,10 @@ export async function publicJsonRpc(network, method, params) {
         // "unauthorized"/"quota" are left out because contracts revert with
         // exactly those words (independent review, 2026-09-06).
         // HTTP 429 or JSON-RPC code 429 is the provider throttling us, whatever the message says.
-      if (!isRevert && (res.status === 429 || data.error.code === 429 || /api key|tenant disabled|\b403\b|rate limit|too many requests|archive requests require|personal token/i.test(msg))) { lastErr = new Error(`provider refused: ${msg}`); continue; }
+        // A public node's own size limit on a log query ("block range is too
+        // large", "query returned more than 10000 results") is the node's
+        // plan, not the answer: the next endpoint (the keyed lane last) is asked.
+      if (!isRevert && (res.status === 429 || data.error.code === 429 || /api key|tenant disabled|\b403\b|rate limit|too many requests|archive requests require|personal token|block range|range (?:is )?too (?:large|wide|big)|returned more than|exceeds? (?:the )?(?:max(?:imum)?|limit)|limit exceeded/i.test(msg))) { lastErr = new Error(`provider refused: ${msg}`); continue; }
         const err = bad(`Node error: ${msg}`, 502);
         // Carry the JSON-RPC error code so callers (tx-simulate) can tell a
         // revert verdict (code 3) from node-side failures like rate limits.
@@ -734,7 +739,7 @@ export const CHAIN_TOOLS = [
       }
       const params = Array.isArray(i.params) ? i.params : [];
       const network = pickNetwork(i.network);
-      const result = await jsonRpc(network, method, params);
+      const result = await publicJsonRpc(network, method, params);
       return { network: network.name, method, result };
     },
   },

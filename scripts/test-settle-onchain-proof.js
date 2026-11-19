@@ -332,7 +332,7 @@ facilitator = createServer((req, res) => {
 await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
 
 async function boot(port) {
-  const proc = spawn("node", ["src/server.js"], {
+  const proc = spawn(process.execPath, ["src/server.js"], {
     env: {
       ...process.env, PORT: String(port), FREE_MODE: "",
       WALLET_ADDRESS: PAY_TO, NETWORK: "base", PAYMENT_NETWORKS: "base",

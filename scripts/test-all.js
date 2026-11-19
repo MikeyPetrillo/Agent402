@@ -203,10 +203,10 @@ const NETWORK = new Set([
   // post-deploy verification once the key is set in Railway.
   "/api/wallet-balance", "/api/token-metadata", "/api/token-price",
   "/api/wallet-transactions", "/api/nft-holdings", "/api/nft-metadata",
-  "/api/gas-snapshot", "/api/eth-call",
-  // evm-rpc rides keyless public RPC endpoints (no Alchemy key needed) but
-  // shares per-IP rate limits — tolerate transient upstream failures.
-  "/api/evm-rpc",
+  "/api/gas-snapshot",
+  // evm-rpc and eth-call ride keyless public RPC endpoints first (no Alchemy
+  // key needed) but share per-IP rate limits: tolerate transient upstream failures.
+  "/api/evm-rpc", "/api/eth-call",
   // Contract-kit egress: Sourcify (contract-source / contract-abi), the
   // openchain.xyz + 4byte.directory signature DBs (selector-lookup, and
   // calldata-decode's no-ABI fallback), and the shared public RPC pool

@@ -610,7 +610,7 @@ async function listen(app) {
   });
   await new Promise((r) => rpc.listen(0, "127.0.0.1", r));
 
-  const proc = spawn("node", ["src/server.js"], {
+  const proc = spawn(process.execPath, ["src/server.js"], {
     env: {
       ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, MPP_SECRET_KEY: REAL_SECRET, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base",

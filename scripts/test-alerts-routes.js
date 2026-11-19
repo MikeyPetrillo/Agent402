@@ -31,7 +31,7 @@ const confirmK = fa.sign(id, "confirm"), unsubK = fa.sign(id, "unsubscribe");
 
 const PORT = await getFreePort();
 const B = `http://127.0.0.1:${PORT}`;
-proc = spawn("node", ["src/server.js"], { env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", POW_SECRET: SECRET, FREE_ALERTS_SECRET: "", MPP_SECRET_KEY: "", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", FREE_ALERTS: "off" }, stdio: "ignore" });
+proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", POW_SECRET: SECRET, FREE_ALERTS_SECRET: "", MPP_SECRET_KEY: "", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", FREE_ALERTS: "off" }, stdio: "ignore" });
 try {
   for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
   ok((await fetch(`${B}/health`)).ok, "server booted with the test secret");

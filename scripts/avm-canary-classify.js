@@ -312,3 +312,39 @@ export function rotateSubcent(tools, { week, cap }) {
   for (let i = 0; i < Math.min(c, n); i++) chosen.add(sub[(start + i) % n].slug);
   return tools.map((t) => ({ ...t, subcentSkip: Number(t.priceUsd) < 0.01 && !chosen.has(t.slug) }));
 }
+
+// A THROW BEFORE ANY PAID REQUEST LEFT THE RUNNER. Preparing a payment reads
+// the chain (suggested params) from the runner; when that read cannot connect
+// ("fetch failed", a reset, a DNS miss, a timeout) nothing was sent to us and
+// nothing was charged. Such a throw gets one retry; one that persists is the
+// runner's network, reported apart and not a tool failure. Any other throw
+// while signing (an offer the client cannot sign) stays a failure.
+const NETWORK_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "EPIPE", "ENETUNREACH", "EHOSTUNREACH", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_CLOSED"]);
+/** True when the error, or one in its cause chain, is a transport failure. */
+export function isBuyerNetworkError(e) {
+  for (let x = e, depth = 0; x && depth < 5; x = x.cause, depth++) {
+    if (NETWORK_CODES.has(String(x.code || ""))) return true;
+    if (x.name === "AbortError" || x.name === "TimeoutError") return true;
+    if (x.name === "TypeError" && /^fetch failed$/i.test(String(x.message || ""))) return true;
+  }
+  return false;
+}
+/** The error's message with its cause chain's codes and messages, for a log line. */
+export function errorText(e, max = 200) {
+  const parts = [];
+  for (let x = e, depth = 0; x && depth < 4; x = x.cause, depth++) parts.push([x.code, x.message || String(x)].filter(Boolean).join(" "));
+  return parts.join(" <- ").slice(0, max);
+}
+/** The failure classes a finished report holds, by the report's own buckets,
+ *  for an alert that names only what failed. */
+export function failedClasses(report, unexpectedNoAvm = []) {
+  const out = [];
+  if (report.railFail?.length) out.push("rail-failure");
+  if (report.toolFail?.length) out.push("tool-failure");
+  if (unexpectedNoAvm.length) out.push("unexpected-missing-accept");
+  if ((report.chargedNoAnswer?.length || 0) + (report.chargeUnverified?.length || 0)) out.push("charged-no-answer");
+  if (report.noAnswer?.length) out.push("no-answer");
+  if (report.chargedEmpty?.length) out.push("charged-empty");
+  if (report.aborted && !out.length) out.push("aborted");
+  return out;
+}

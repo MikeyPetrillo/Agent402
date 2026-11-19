@@ -146,7 +146,7 @@ for (const g of GATES) {
     if (g.bootMutatedServer) {
       const port = 3300 + Math.floor(Math.random() * 200);
       mutantTarget = `http://127.0.0.1:${port}`;
-      mutant = spawn("node", ["src/server.js"], {
+      mutant = spawn(process.execPath, ["src/server.js"], {
         cwd: ROOT, stdio: "ignore",
         env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off",
                AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999" },
@@ -160,7 +160,7 @@ for (const g of GATES) {
     }
 
     try {
-      execFileSync("node", [join("scripts", g.gate)], {
+      execFileSync(process.execPath, [join("scripts", g.gate)], {
         cwd: ROOT, stdio: "pipe", timeout: 900_000,
         env: { ...process.env, TARGET_URL: mutantTarget },
       });

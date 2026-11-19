@@ -425,7 +425,7 @@ stubs = [fac, rpcSrv];
 await new Promise((r) => fac.listen(FAC_PORT, "127.0.0.1", r));
 await new Promise((r) => rpcSrv.listen(RPC_PORT, "127.0.0.1", r));
 
-const proc = spawn("node", ["src/server.js"], {
+const proc = spawn(process.execPath, ["src/server.js"], {
   env: {
     ...process.env, PORT: String(PORT), FREE_MODE: "",
     WALLET_ADDRESS: PAY_TO, NETWORK: "base", PAYMENT_NETWORKS: "base",

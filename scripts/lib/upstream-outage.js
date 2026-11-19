@@ -36,11 +36,31 @@ export function upstreamFailureLogPath() {
 }
 
 const KEYED_NAME = /key|token|secret|sig|auth|passw|credential|session|cookie/i;
+// Hosts whose credential rides in the URL PATH ("/v2/{key}"), which no
+// parameter or header name shows.
+const PATH_KEYED_HOSTS = ["g.alchemy.com"];
+const SECRET_MIN_CHARS = 12;
+/** The values of this process's credential-like environment variables
+ *  (names as KEYED_NAME, values of SECRET_MIN_CHARS or more). */
+function configuredSecrets(env) {
+  const out = [];
+  for (const [name, value] of Object.entries(env || {})) {
+    if (KEYED_NAME.test(name) && typeof value === "string" && value.length >= SECRET_MIN_CHARS) out.push(value);
+  }
+  return out;
+}
 /** True when a request carries a credential: a key-like query parameter or
- *  header name. Such a request is never logged by URL nor re-read. */
-export function isKeyedRequest(u, headers) {
+ *  header name, a host that takes its key in the path, or a configured
+ *  credential's value anywhere in the URL (a key in a path segment). Such a
+ *  request is never logged by URL nor re-read. */
+export function isKeyedRequest(u, headers, env = process.env) {
   for (const name of u.searchParams.keys()) if (KEYED_NAME.test(name)) return true;
   if (u.username || u.password) return true;
+  const host = u.hostname.toLowerCase();
+  if (PATH_KEYED_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))) return true;
+  let href = u.href;
+  try { href = `${href}\n${decodeURIComponent(u.href)}`; } catch { /* the raw form is still read */ }
+  if (configuredSecrets(env).some((v) => href.includes(v) || href.includes(encodeURIComponent(v)))) return true;
   let names = [];
   if (headers && typeof headers.keys === "function") names = [...headers.keys()];
   else if (Array.isArray(headers)) names = headers.map((h) => h?.[0]);
@@ -87,13 +107,11 @@ function kits(root) {
 // `host: "api.open-meteo.com"`); a bare name must end in a letter TLD, so a
 // version string never reads as a host.
 const HOST_LITERAL = /https?:\/\/([a-z0-9-]+(?:\.[a-z0-9-]+)+)|["'`]((?:[a-z0-9-]+\.)+[a-z]{2,})["'`]/gi;
-/** The upstream hosts a tool's definition names, read from src/tools/: the
- *  hosts in the tool's own definition (from its `route: "` to the next
- *  one), or, when that names none (a kit-wide base URL), every host in
- *  its kit file. Empty when the slug is not defined there. */
-export function upstreamHostsForSlug(slug, root = ROOT) {
+const hostsIn = (s) => new Set([...s.matchAll(HOST_LITERAL)].map((m) => (m[1] || m[2]).toLowerCase()));
+/** A tool's definition text in src/tools/ (from its `route: "` to the next
+ *  one) and its kit file's, or null when the slug is not defined there. */
+function definitionOf(slug, root) {
   const marker = `slug: "${slug}"`;
-  const hostsIn = (s) => new Set([...s.matchAll(HOST_LITERAL)].map((m) => (m[1] || m[2]).toLowerCase()));
   for (const text of kits(root)) {
     // The definition, not a reference (a skill step also says `slug: "x"`):
     // the marker sits in the same object as a `route: "` just before it.
@@ -101,11 +119,51 @@ export function upstreamHostsForSlug(slug, root = ROOT) {
       const start = text.lastIndexOf('route: "', at);
       if (start < 0 || at - start > 400) continue;
       const next = text.indexOf('route: "', at);
-      const own = hostsIn(text.slice(start, next < 0 ? text.length : next));
-      return own.size ? own : hostsIn(text);
+      return { own: text.slice(start, next < 0 ? text.length : next), kit: text };
     }
   }
-  return new Set();
+  return null;
+}
+/** The upstream hosts a tool's definition names, read from src/tools/: the
+ *  hosts in the tool's own definition, or, when that names none (a kit-wide
+ *  base URL), every host in its kit file. Empty when the slug is not defined
+ *  there. */
+export function upstreamHostsForSlug(slug, root = ROOT) {
+  const def = definitionOf(slug, root);
+  if (!def) return new Set();
+  const own = hostsIn(def.own);
+  return own.size ? own : hostsIn(def.kit);
+}
+
+// The static path a definition writes before its first interpolation: after
+// a URL literal's host ("https://api.weather.gov/alerts/active?area=${...}"
+// gives /alerts/active), or after a base constant ("${DEXSCREENER}/token-pairs/v1/solana/${mint}").
+const URL_PATH_LITERAL = /https?:\/\/([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?::\d+)?(\/[^\s"'`$?#]*)?/gi;
+const BASE_PATH_LITERAL = /\$\{[A-Za-z_][\w.]*\}(\/[^\s"'`$?#]*)/g;
+// What an interpolation of a missing or unshaped value leaves in a URL.
+const URL_RESIDUE = /(?:^|[/=,&:;])(?:undefined|null|NaN)(?=$|[/,&;?#])|\[object(?:%20| )Object\]|%5Bobject%20Object%5D/i;
+/** Does the failed request have the shape the tool's definition builds? A
+ *  URL with an interpolation's residue in it (undefined, null, NaN, an
+ *  object's string form) or an empty path segment is a URL we built wrong,
+ *  and so is one whose path starts with none of the static paths the
+ *  definition writes for it (when it writes any). A wrong URL's 5xx is ours,
+ *  whatever the upstream answers the runner. */
+export function requestMatchesDefinition(slug, url, root = ROOT) {
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  if (/\/\//.test(u.pathname) || URL_RESIDUE.test(u.pathname) || URL_RESIDUE.test(u.search)) return false;
+  const def = definitionOf(slug, root);
+  if (!def) return false;
+  const host = u.hostname.toLowerCase();
+  const prefixes = new Set();
+  const read = (text) => {
+    for (const m of text.matchAll(URL_PATH_LITERAL)) if (m[1].toLowerCase() === host && m[2] && m[2].length > 1) prefixes.add(m[2]);
+    for (const m of text.matchAll(BASE_PATH_LITERAL)) if (m[1].length > 1) prefixes.add(m[1]);
+  };
+  read(def.own);
+  if (!prefixes.size) read(def.kit);
+  if (!prefixes.size) return true;
+  return [...prefixes].some((p) => u.pathname.startsWith(p));
 }
 
 /** The log rows recorded in [t0, t1]. */
@@ -154,6 +212,7 @@ export async function upstreamOutageVerdict({ slug, status, body, t0, t1, logPat
   if (!rows.length) return { verdict: "fail", reason: refused ? `no request refused with HTTP ${refused} recorded during the call` : "no failed upstream request recorded during the call" };
   const row = rows[rows.length - 1];
   if (row.keyed || !row.url || row.method !== "GET") return { verdict: "fail", reason: `the failed request to ${row.host} is keyed or not a GET` };
+  if (!requestMatchesDefinition(slug, row.url, root)) return { verdict: "fail", reason: `the failed request to ${row.host} is not the shape the tool's definition builds (a URL we built wrong is ours)` };
   const opts = row.accept ? { accept: row.accept } : undefined;
   if (refused) {
     const got = await readStatus(row.url, opts);

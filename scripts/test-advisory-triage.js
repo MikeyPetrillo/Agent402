@@ -70,7 +70,7 @@ function collect(child) {
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });
 }
-const runNode = (args, env) => collect(spawn("node", args, { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] }));
+const runNode = (args, env) => collect(spawn(process.execPath, args, { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] }));
 const runBash = (stepText, env) => collect(spawn("bash", ["-eo", "pipefail", "-c", stepText], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] }));
 
 const baseEnv = (extra = {}) => {

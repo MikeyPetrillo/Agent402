@@ -80,7 +80,7 @@ const celo = await stubFacilitator(3963);
 
 async function bootServer(port, extraEnv = {}) {
   const log = { text: "" };
-  proc = spawn("node", ["src/server.js"], {
+  proc = spawn(process.execPath, ["src/server.js"], {
     env: {
       ...process.env, PORT: String(port), FREE_MODE: "",
       WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,celo",

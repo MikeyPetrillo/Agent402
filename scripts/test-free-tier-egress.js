@@ -43,7 +43,7 @@ const ok = (cond, msg) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const srv = spawn("node", ["--import", "./scripts/egress-probe-preload.js", "src/server.js"], {
+const srv = spawn(process.execPath, ["--import", "./scripts/egress-probe-preload.js", "src/server.js"], {
   cwd: ROOT,
   env: {
     ...process.env,

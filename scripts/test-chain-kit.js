@@ -115,12 +115,42 @@ await throws(
   503,
   "gas-snapshot: valid input, no key → 503"
 );
-await throws(
-  h("eth-call")({ method: "eth_blockNumber", network: "base" }),
-  503,
-  "eth-call: valid input, no key → 503"
-);
 if (origKey) process.env.ALCHEMY_API_KEY = origKey;
+
+// ----------------------------------------------------------------------------
+// The node reads (evm-rpc, eth-call, block-number) ask the keyless public
+// nodes first and the Alchemy lane only after every one of them; with no key
+// they answer from the public nodes alone. Stubbed fetch, no egress.
+// ----------------------------------------------------------------------------
+{
+  const realFetch = globalThis.fetch;
+  const savedKey = process.env.ALCHEMY_API_KEY;
+  let hosts = [], refuse = () => false;
+  globalThis.fetch = async (url) => {
+    const host = new URL(String(url)).host;
+    hosts.push(host);
+    if (refuse(host)) return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32005, message: "block range is too large" } }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x10" }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    process.env.ALCHEMY_API_KEY = "test-key-not-real";
+    for (const [slug, input] of [["evm-rpc", { method: "eth_blockNumber", network: "base" }], ["eth-call", { method: "eth_blockNumber", network: "base" }], ["block-number", { network: "base" }]]) {
+      hosts = []; refuse = () => false;
+      const r = await h(slug)(input);
+      ok(r && hosts.length === 1 && !/alchemy/.test(hosts[0]), `${slug}: a public node answers first with the key set (asked ${hosts.join(", ")})`);
+      hosts = []; refuse = (host) => !/alchemy/.test(host);
+      await h(slug)(input);
+      ok(hosts.length >= 2 && /alchemy/.test(hosts.at(-1)) && hosts.slice(0, -1).every((x) => !/alchemy/.test(x)), `${slug}: the keyed lane is asked last, after every public node refuses (${hosts.join(", ")})`);
+    }
+    delete process.env.ALCHEMY_API_KEY;
+    hosts = []; refuse = () => false;
+    const r = await h("eth-call")({ method: "eth_blockNumber", network: "base" });
+    ok(r?.result === "0x10" && hosts.every((x) => !/alchemy/.test(x)), `eth-call: answers with no key from a public node (${hosts.join(", ")})`);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (savedKey === undefined) delete process.env.ALCHEMY_API_KEY; else process.env.ALCHEMY_API_KEY = savedKey;
+  }
+}
 
 // ----------------------------------------------------------------------------
 // Live opt-in — exercises real Alchemy with a real key.

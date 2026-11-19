@@ -92,7 +92,7 @@ const relayStub = createServer((req, res) => {
 await new Promise((r) => relayStub.listen(0, "127.0.0.1", r));
 const RELAY_URL = `http://127.0.0.1:${relayStub.address().port}`;
 
-let proc = spawn("node", ["src/server.js"], {
+let proc = spawn(process.execPath, ["src/server.js"], {
   env: { ...bootBaseEnv, TEMPO_API_KEY: "test-tempo-key", TEMPO_RECIPIENT_ADDRESS: TREASURY, TEMPO_CURRENCY, TEMPO_API_BASE_URL: RELAY_URL },
   stdio: "ignore",
 });
@@ -173,7 +173,7 @@ try {
   proc.kill("SIGKILL");
 }
 
-proc = spawn("node", ["src/server.js"], {
+proc = spawn(process.execPath, ["src/server.js"], {
   env: { ...bootBaseEnv, TEMPO_API_KEY: "", TEMPO_RECIPIENT_ADDRESS: "", TEMPO_CURRENCY: "" },
   stdio: "ignore",
 });
@@ -188,7 +188,7 @@ try {
 }
 
 const PATH_USD_ADDRESS = "0x20c0000000000000000000000000000000000000";
-proc = spawn("node", ["src/server.js"], {
+proc = spawn(process.execPath, ["src/server.js"], {
   env: { ...bootBaseEnv, TEMPO_API_KEY: "test-tempo-key", TEMPO_RECIPIENT_ADDRESS: TREASURY, TEMPO_CURRENCY: "" },
   stdio: "ignore",
 });
@@ -209,7 +209,7 @@ try {
 // balance check, auto-swap off by default), so ORDER is the operator's
 // "which currency do my buyers hold" decision - the ecosystem's is USDC.e.
 const USDC_E = "0x20C000000000000000000000b9537d11c60E8b50";
-proc = spawn("node", ["src/server.js"], {
+proc = spawn(process.execPath, ["src/server.js"], {
   env: { ...bootBaseEnv, TEMPO_API_KEY: "test-tempo-key", TEMPO_RECIPIENT_ADDRESS: TREASURY, TEMPO_CURRENCY: `usdc, ${PATH_USD_ADDRESS}` },
   stdio: "ignore",
 });
