@@ -9786,7 +9786,7 @@ registerMemoryStore("server.reputationMemo", () => reputationMemo, { note: "per-
 const RECHECK_CALLER_MAX = Math.max(1, Number(process.env.REPUTATION_RECHECK_PER_IP_HOUR || 10));
 const RECHECK_GLOBAL_MAX = Math.max(10, Number(process.env.REPUTATION_RECHECK_GLOBAL_HOUR || 300));
 const recheckLimiter = createRegistrationLimiter({ name: "reputation-recheck", perIpMax: RECHECK_CALLER_MAX, globalMax: RECHECK_GLOBAL_MAX, windowMs: 3600_000, maxKeys: 5000 });
-setInterval(() => { recheckLimiter.sweep(); }, 60_000).unref?.();
+setInterval(contained("reputation-recheck-sweep", () => recheckLimiter.sweep()), 60_000).unref?.();
 app.post(RECHECK_PATH, async (req, res) => {
   res.set("Cache-Control", "no-store");
   // ?seller= or a JSON body {"seller": ...}; a repeated query value is refused.
