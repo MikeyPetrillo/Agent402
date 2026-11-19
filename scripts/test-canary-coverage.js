@@ -36,6 +36,7 @@ import { CHAIN_TOOLS } from "../src/tools/chain-kit.js";
 import { TOOLS as CANARY_LEGS } from "./paid-canary.js";
 import { STOCK_SLUGS } from "../src/tools/stock-provider.js";
 import { STOCK_CORE_PACK_SLUGS } from "../src/skills.js";
+import { KALSHI_SLUGS } from "../src/kalshi-switch.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -125,7 +126,8 @@ ok(!!sq && sq.whenListed === true, "canary has a stock-quote leg, bought only wh
 // production with no provider answers those routes 503, and an unlisted leg
 // would fail every canary run.
 {
-  const stockOnly = new Set([...[...STOCK_SLUGS].map((s) => `/api/${s}`), ...[...STOCK_CORE_PACK_SLUGS].map((s) => `/api/skill/${s}`)]);
+  // The Kalshi tools follow the same rule (KALSHI_TOOLS, src/kalshi-switch.js).
+  const stockOnly = new Set([...[...STOCK_SLUGS].map((s) => `/api/${s}`), ...[...STOCK_CORE_PACK_SLUGS].map((s) => `/api/skill/${s}`), ...[...KALSHI_SLUGS].map((s) => `/api/${s}`)]);
   const unguarded = CANARY_LEGS.filter((l) => stockOnly.has(String(l.path).split("?")[0]) && l.whenListed !== true).map((l) => l.path);
   ok(STOCK_CORE_PACK_SLUGS.size > 0 && unguarded.length === 0, `every canary leg on a stock-only route is whenListed (${unguarded.join(", ") || "none unguarded"})`);
 }

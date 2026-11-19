@@ -341,7 +341,8 @@ Configuration and secrets are set on Railway (and, where a workflow needs them, 
 Actions secrets), never in the repo. Rollout switches are generally "key present = feature on"
 (for example `MPP_SECRET_KEY`, `TEMPO_API_KEY`, `STRIPE_SECRET_KEY`, `OPENROUTER_API_KEY`,
 `X_BEARER_TOKEN`). `STOCK_DATA_PROVIDER` (`off` default, `databento`) selects the stock data adapter
-(`src/tools/stock-provider.js`); it is active only with its own key, else the stock tools and packs are unlisted. `COINGECKO_API_TIER` (`demo`, the default, or `pro`) picks the CoinGecko
+(`src/tools/stock-provider.js`); it is active only with its own key, else the stock tools and packs are unlisted. `KALSHI_TOOLS=on`
+(`src/kalshi-switch.js`) lists the Kalshi tools; unset, they are unlisted and answer 503. `COINGECKO_API_TIER` (`demo`, the default, or `pro`) picks the CoinGecko
 host and key header for `COINGECKO_API_KEY` (`src/tools/coingecko-endpoint.js`, the only file
 that names them): a paid key needs `pro`, and a keyless call uses the public host whatever the
 tier. `OPEN_METEO_API_KEY` present = the weather tools read Open-Meteo's keyed

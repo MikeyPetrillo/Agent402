@@ -10,6 +10,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-18",
+    title: "Prediction-market tools not offered",
+    items: [
+      "Tools: The prediction-market tools are not offered for now: kalshi-markets, kalshi-event, kalshi-live-data and kalshi-weather-index. Their routes answer 503 with no payment asked, and the catalog, /api/pricing, /openapi.json, llms.txt, the MCP tool lists and the sitemap do not list them. The retired Polymarket routes answer 410 with no replacement named.",
+    ],
+  },
+  {
+    date: "2026-11-18",
     title: "Signed receipts on every paid call",
     items: [
       "Payments: A streamed paid answer ends with an `event: agent402-receipt` server-sent event whose data is the signed receipt over every byte streamed before it, and also carries it as an `Agent402-Receipt` trailer when the client sends `TE: trailers`.",

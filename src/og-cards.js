@@ -21,6 +21,7 @@ import { RAILS } from "./rails.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { sellablePacks } from "./credits.js";
 import { SKILL_PACKS } from "./skills.js";
+import { kalshiToolsEnabled } from "./kalshi-switch.js";
 // Evergreen floor (a multiple of ten at or under the live count), never an exact
 // number. A function, not a constant: skills.js reaches this module through an
 // import cycle, so SKILL_PACKS is not initialized while this file first runs.
@@ -88,7 +89,7 @@ function sectionCopy(id, ctx) {
       lines: [["$ curl agent402.tools/api/index?perPage=25", "faint"], ["routable · health · dispatch verdict per row", "muted"], ["read from their own 402, never from a form", "accent"]], badge: ["x402 · MPP", "we rank others"] },
     "mpp-marketplace": { h1: "Every MPP seller", h2: "on Tempo.", sub: "Live Payment challenges, ranked by inbound USDC.e, routable when our router can pay.",
       lines: [["$ curl agent402.tools/api/mpp-index", "faint"], ["WWW-Authenticate: Payment  tempo/charge · USDC.e", "amber"], ["Payment-Receipt on every settled answer", "accent"]], badge: ["MPP · x402", "Tempo mainnet"] },
-    markets: { h1: "Market data,", h2: "priced per call.", sub: "Perps, options, prediction markets, DeFi, tokenized assets. Keyless upstreams.",
+    markets: { h1: "Market data,", h2: "priced per call.", sub: `Perps, options, ${kalshiToolsEnabled() ? "prediction markets, " : ""}DeFi, tokenized assets. Keyless upstreams.`,
       lines: [["$ curl -X POST agent402.tools/api/crypto-market-pulse", "faint"], [`HTTP/2 402  usdc · base · ${price("crypto-market-pulse", "$0.004").replace("$", "")}`, "amber"], ["HTTP/2 200  breadth · open interest · funding", "accent"]], badge: ["x402 · MPP · card", "24 keyless tools"] },
     decide: { h1: "Describe the job.", h2: "Get the plan.", sub: "Which tools, in what order, with fallbacks and valid params, across this catalog and outside x402 sellers.",
       lines: [["$ curl -X POST agent402.tools/api/decide", "faint"], [ctx.decide ? `HTTP/2 402  usdc · base · ${ctx.decide.quick} to ${ctx.decide.full}` : "HTTP/2 402  priced per decision", "amber"], ["HTTP/2 200  plan · fallbacks · gaps · firstParty on every tool", "accent"]], badge: ["x402 · MPP · card", "one formula for every seller"] },

@@ -6,6 +6,14 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-18 (prediction-market tools not offered)
+Tools:
+- The prediction-market tools are not offered for now: kalshi-markets,
+  kalshi-event, kalshi-live-data and kalshi-weather-index. Their routes
+  answer 503 with no payment asked, and the catalog, /api/pricing,
+  /openapi.json, llms.txt, the MCP tool lists and the sitemap do not list
+  them. The retired Polymarket routes answer 410 with no replacement named.
+
 ### 2026-11-18 (signed receipts on every paid call)
 Payments:
 - A streamed paid answer ends with an `event: agent402-receipt` server-sent

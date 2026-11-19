@@ -22,8 +22,10 @@
 // here fails that test.
 
 import { stockDataEnabled } from "./tools/stock-provider.js";
+import { kalshiToolsEnabled } from "./kalshi-switch.js";
 
 const STOCK_ON = stockDataEnabled();
+const KALSHI_ON = kalshiToolsEnabled();
 
 /** Tools: /api/<slug>. `replacement` is a live catalog slug or null; an
  *  optional `note` (one sentence, plain text) is added to the 410's hint when
@@ -73,11 +75,12 @@ export const RETIRED_TOOLS = Object.freeze({
   "options-volume": { retiredAt: "2026-11-16", replacement: null },
   "crypto-orderbook": { retiredAt: "2026-11-16", replacement: null },
   // 2026-09-24: the Polymarket tools. The nearest live question is a Kalshi
-  // read; a Kalshi market is a different venue, so each names the closest tool.
-  "polymarket-search": { retiredAt: "2026-09-24", replacement: "kalshi-markets" },
-  "polymarket-market": { retiredAt: "2026-09-24", replacement: "kalshi-event" },
-  "polymarket-orderbook": { retiredAt: "2026-09-24", replacement: "kalshi-markets" },
-  "polymarket-price-history": { retiredAt: "2026-09-24", replacement: "kalshi-live-data" },
+  // read; a Kalshi market is a different venue, so each names the closest tool,
+  // only while it is listed (KALSHI_TOOLS=on, src/kalshi-switch.js).
+  "polymarket-search": { retiredAt: "2026-09-24", replacement: KALSHI_ON ? "kalshi-markets" : null },
+  "polymarket-market": { retiredAt: "2026-09-24", replacement: KALSHI_ON ? "kalshi-event" : null },
+  "polymarket-orderbook": { retiredAt: "2026-09-24", replacement: KALSHI_ON ? "kalshi-markets" : null },
+  "polymarket-price-history": { retiredAt: "2026-09-24", replacement: KALSHI_ON ? "kalshi-live-data" : null },
   // 2026-09-22: the paid explorer upstream these five bought per call was
   // removed. Where another live tool answers the nearest question it is named;
   // no live EVM tool ranks a token's holders, so token-holders names none.

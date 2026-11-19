@@ -9,6 +9,9 @@
 //     but live tests share the rate-limit pool so CI doesn't burn them).
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+// The kit reads its upstream only with KALSHI_TOOLS=on (src/kalshi-switch.js;
+// scripts/test-kalshi-switch.js covers the off state); this suite tests it on.
+process.env.KALSHI_TOOLS = "on";
 import { PREDICTION_MARKET_TOOLS, __test } from "../src/tools/prediction-market-kit.js";
 
 import { readFileSync } from "node:fs";
