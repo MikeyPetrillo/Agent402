@@ -121,7 +121,7 @@ export function wholesaleIndex(ctx) {
       id: f.id, title: f.title, source: f.source, redistribution: f.redistribution, credit: f.credit,
       tools: familyTools(f, ctx).length, url: `${ctx.baseUrl}/api/wholesale/v1/${f.id}`,
     })),
-    notOffered: "Market data under a vendor license, search results and model output are not offered on this surface.",
+    notOffered: "Market data, search results and model output are not offered on this surface.",
   };
 }
 

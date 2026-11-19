@@ -199,7 +199,7 @@ ok(/node scripts\/advisory-triage-check\.js/.test(src(".github/workflows/heartbe
 
 // ---- refund terms, payer screening, per-tool reliability ------------------------------
 {
-  ok(trust.includes(REFUND_TERMS_PATH) && /Every 402 links it/.test(trust) && /refundTerms: `\$\{origin\}\$\{REFUND_TERMS_PATH\}`/.test(src("src/payment-guide.js")), "/trust names the refund terms document and the 402 block links it (src/payment-guide.js)");
+  ok(trust.includes(REFUND_TERMS_PATH) && /Every first-contact 402 links it/.test(trust) && /refundTerms: `\$\{origin\}\$\{REFUND_TERMS_PATH\}`/.test(src("src/payment-guide.js")), "/trust names the refund terms document and the 402 block links it (src/payment-guide.js)");
   const { PAYER_SCREEN_RAILS } = await import("../src/payer-screen-rails.js");
   ok(PAYER_SCREEN_RAILS.credits.identifier === null && PAYER_SCREEN_RAILS["mpp-stripe"].identifier === null && /carry no payer address/.test(trust), "/trust says the card and credits rails carry no payer address, as the screen table does");
   ok(["x402-evm", "x402-svm", "x402-stellar", "x402-avm", "mpp-tempo-relay"].every((k) => typeof PAYER_SCREEN_RAILS[k].identifier === "string") && /the paying wallet on Tempo/.test(trust), "every rail /trust says is screened has an identifier in the screen table");
