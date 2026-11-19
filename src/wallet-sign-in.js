@@ -35,10 +35,20 @@ import { parseSiweMessage } from "viem/siwe";
 import { recoverMessageAddress } from "viem";
 
 export const SESSION_HEADER = "x-wallet-session";
-export const SESSION_SCOPES = Object.freeze(["my-usage", "receipts", "memory"]);
-// Memory routes a session may act on: reads and writes of the wallet's own
-// namespace. Grants and revocations (who else may read it) stay payer-only.
-export const MEMORY_SESSION_SLUGS = Object.freeze(["memory-write", "memory-read", "memory-incr", "memory-cas", "memory-log", "memory-remember", "memory-grants"]);
+// A session is read-only: it names the wallet for reads of the wallet's own
+// usage, receipts and memory. Every write (memory writes, grants,
+// revocations, attest, feedback) acts only on a payment's signed payer.
+export const SESSION_SCOPES = Object.freeze(["my-usage", "receipts", "memory-read"]);
+// Memory routes a session may act on: the value read and the grants listing.
+export const MEMORY_SESSION_SLUGS = Object.freeze(["memory-read", "memory-grants"]);
+// Memory routes that change state: they pass WRITE_SCOPE, which a session
+// never covers; a session sent to one with no signed payer is refused (403).
+export const MEMORY_WRITE_SLUGS = Object.freeze(["memory-write", "memory-incr", "memory-cas", "memory-log", "memory-remember", "memory-forget", "memory-grant", "memory-revoke"]);
+export const WRITE_SCOPE = "write";
+/** The session scope a memory route passes to resolveRouteIdentity. */
+export function memoryScopeOf(slug) {
+  return MEMORY_SESSION_SLUGS.includes(slug) ? "memory-read" : MEMORY_WRITE_SLUGS.includes(slug) ? WRITE_SCOPE : "";
+}
 export const DEFAULT_CHAIN_IDS = Object.freeze([8453, 1, 137, 42161, 10]);
 const NONCE_TTL_MS = 300_000;
 const NONCE_MAX = 10_000;
@@ -46,7 +56,7 @@ const SKEW_MS = 60_000;
 const MAX_MESSAGE = 2048;
 const MAX_TOKEN = 1024;
 const TOKEN_PREFIX = "a402ws1";
-const STATEMENT = "Sign in to read and write this wallet's own usage, receipts and memory on this server. Paid calls are still paid.";
+const STATEMENT = "Sign in to read this wallet's own usage, receipts and memory on this server. Read-only: writes still need a signed payment. Paid calls are still paid.";
 
 export function walletSignInEnabled(env = process.env) {
   return typeof env.SIWE_SESSION_SECRET === "string" && env.SIWE_SESSION_SECRET.trim().length >= 32;
@@ -213,6 +223,7 @@ export function resolveRouteIdentity(req, scope, payer) {
   const svc = service;
   const token = svc ? headerOf(req, SESSION_HEADER) : null;
   if (!svc || token == null) return { wallet: payer || null, via: payer ? "payment" : null };
+  if (scope === WRITE_SCOPE && !payer) return { error: { status: 403, message: "A wallet session is read-only: this route changes state and acts only on a signed payment's payer." } };
   if (!SESSION_SCOPES.includes(scope)) return { wallet: payer || null, via: payer ? "payment" : null };
   if (wasUnpaidCall(req)) return { error: { status: 402, message: "A wallet session names who you are, not payment: this route is paid with a wallet payment." } };
   const r = svc.sessionOf(token.trim());

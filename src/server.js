@@ -488,7 +488,7 @@ import { noteVerifiedPaidOutcome, errorTextOf, attributionTextOf, topBuyerFailur
 import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
 import { captureServerException } from "./posthog-observability.js";
 import { webBotAuthEnabled, createWebBotAuth } from "./web-bot-auth.js";
-import { configureWalletSignIn, mountWalletSignIn, resolveRouteIdentity, MEMORY_SESSION_SLUGS } from "./wallet-sign-in.js";
+import { configureWalletSignIn, mountWalletSignIn, resolveRouteIdentity, memoryScopeOf } from "./wallet-sign-in.js";
 import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, toolGoneSourceOf, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage, operatorLoginPage } from "./operator.js";
@@ -13409,9 +13409,10 @@ app.post("/api/pdf", withToolCallLog("pdf", async (req, res) => {
 // there and the only identity is the demo namespace (src/payer.js).
 function memoryActor(req, res) {
   // A wallet session (src/wallet-sign-in.js, off by default) names the wallet
-  // on a call whose payment carries no signed payer; grants stay payer-only.
+  // on a read whose payment carries no signed payer; a session is read-only,
+  // so every memory route that changes state takes the signed payer only.
   const slug = CATALOG[`${req.method} ${req.path}`]?.slug;
-  const id = resolveRouteIdentity(req, MEMORY_SESSION_SLUGS.includes(slug) ? "memory" : "", identityPayerOf(req));
+  const id = resolveRouteIdentity(req, memoryScopeOf(slug), identityPayerOf(req));
   if (id.error) { res.status(id.error.status).json({ error: id.error.message }); return null; }
   const payer = id.wallet;
   if (payer) return payer;

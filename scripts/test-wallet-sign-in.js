@@ -123,16 +123,32 @@ const svc = ws.createWalletSignIn({ env, baseUrl: BASE, now });
   ok(r.wallet === them && !r.error, "a route outside the session scopes keeps the payer and ignores the session");
   r = ws.resolveRouteIdentity(req(), "", null);
   ok(r.wallet === null && !r.error, "an unscoped memory route (grants) takes no session");
-  r = ws.resolveRouteIdentity(req({ "x-pow-accepted": "1" }), "memory", null);
+  r = ws.resolveRouteIdentity(req({ "x-pow-accepted": "1" }), "memory-read", null);
   ok(r.error?.status === 402, "a proof-of-work call takes no session");
-  r = ws.resolveRouteIdentity(req({}, { "X-Trial-Accepted": "1" }), "memory", null);
+  r = ws.resolveRouteIdentity(req({}, { "X-Trial-Accepted": "1" }), "memory-read", null);
   ok(r.error?.status === 402, "a trial call takes no session");
-  r = ws.resolveRouteIdentity({ headers: { "x-wallet-session": "a402ws1.bad.bad" } }, "memory", null);
+  r = ws.resolveRouteIdentity({ headers: { "x-wallet-session": "a402ws1.bad.bad" } }, "memory-read", null);
   ok(r.error?.status === 401, "an invalid token is a 401 (a 4xx is never charged)");
   ok(!ws.MEMORY_SESSION_SLUGS.includes("memory-grant") && !ws.MEMORY_SESSION_SLUGS.includes("memory-revoke"), "memory grants and revocations stay payer-only");
+  // A session is read-only: its scopes are reads, and every memory route that
+  // changes state refuses a session with no signed payer.
+  ok(JSON.stringify(ws.SESSION_SCOPES) === JSON.stringify(["my-usage", "receipts", "memory-read"]), "session scopes are reads only");
+  ok(JSON.stringify(ws.MEMORY_SESSION_SLUGS) === JSON.stringify(["memory-read", "memory-grants"]), "memory session slugs are the read and the grants listing only");
+  ok(JSON.stringify(s.scopes) === JSON.stringify(["my-usage", "receipts", "memory-read"]), "the signed token carries the read-only scopes");
+  ok(/read-only/i.test(ws.walletSignInService().issueNonce().statement) && !/write/i.test(ws.walletSignInService().issueNonce().statement.replace(/writes still need a signed payment/i, "")), "the signed statement says read-only");
+  for (const slug of ["memory-write", "memory-incr", "memory-cas", "memory-log", "memory-remember", "memory-forget", "memory-grant", "memory-revoke"]) {
+    const w = ws.resolveRouteIdentity(req(), ws.memoryScopeOf(slug), null);
+    ok(w.error?.status === 403 && !w.wallet, `a session cannot write: ${slug} is refused 403 without a signed payer`);
+    const p = ws.resolveRouteIdentity(req(), ws.memoryScopeOf(slug), them);
+    ok(p.wallet === them && p.via === "payment", `${slug}: the signed payer still writes, the session unread`);
+  }
+  for (const slug of ["memory-read", "memory-grants"]) {
+    const rd = ws.resolveRouteIdentity(req(), ws.memoryScopeOf(slug), null);
+    ok(rd.wallet === me && rd.via === "session", `${slug}: a session reads the wallet's own namespace`);
+  }
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   const kit = readFileSync(new URL("../src/tools/usage-kit.js", import.meta.url), "utf8");
-  ok(/resolveRouteIdentity\(req, MEMORY_SESSION_SLUGS\.includes\(slug\) \? "memory" : "", identityPayerOf\(req\)\)/.test(src), "memory reads the payer first through identityPayerOf");
+  ok(/resolveRouteIdentity\(req, memoryScopeOf\(slug\), identityPayerOf\(req\)\)/.test(src), "memory reads the payer first through identityPayerOf");
   ok((kit.match(/resolveRouteIdentity\(req, "(my-usage|receipts)", identityPayerOf\(req\)\)/g) || []).length === 2, "my-usage and receipts read the payer first through identityPayerOf");
   ok(!/resolveRouteIdentity/.test(readFileSync(new URL("../src/payer.js", import.meta.url), "utf8")), "payer.js (attribution) is unchanged");
 }
@@ -158,7 +174,8 @@ const bootEnv = { FREE_MODE: "true", BASE_URL: BASE, X402_INDEX_CRAWL: "off", MP
     const w = await fetch(`${srv.url}/api/memory`, { method: "POST", headers: { "content-type": "application/json", "x-wallet-session": v.token }, body: JSON.stringify({ key: "k1", value: "v1" }) });
     const rd = await fetch(`${srv.url}/api/memory?key=k1`, { headers: { "x-wallet-session": v.token } });
     const rb = await rd.json().catch(() => ({}));
-    ok(w.status === 200 && rd.status === 200 && JSON.stringify(rb).includes("v1"), `on: memory writes and reads the session wallet's namespace (${w.status}/${rd.status})`);
+    ok(w.status === 403 && /read-only/.test((await w.json()).error || ""), `on: a session cannot write memory (${w.status})`);
+    ok(rd.status === 404 && !JSON.stringify(rb).includes("v1"), `on: a session reads the session wallet's namespace, where the refused write left nothing (${rd.status})`);
     const bad = await fetch(`${srv.url}/api/my-usage`, { method: "POST", headers: { "content-type": "application/json", "x-wallet-session": v.token + "x" }, body: "{}" });
     ok(bad.status === 401, "on: an altered token is a 401");
     const out = await fetch(`${srv.url}/api/wallet-session`, { method: "DELETE", headers: { "x-wallet-session": v.token } });

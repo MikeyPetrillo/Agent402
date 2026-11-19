@@ -22,8 +22,9 @@ Loaded when a sign-in, signed-agent, payer or PostHog file is read.
   most 3600, never past the message's Expiration Time); nonces and sign-outs are per process (one replica).
   `resolveRouteIdentity(req, scope, identityPayerOf(req))` is the only reader: a signed EVM payer always
   wins, a session naming another wallet is a 400, a PoW or trial call is a 402, a bad token a 401 (none
-  charged). Scopes: my-usage, receipts, and the memory slugs in `MEMORY_SESSION_SLUGS` (grants and
-  revocations stay payer-only); attest, feedback and every attribution reader (sales, refunds, ledger,
+  charged). A session is read-only. Scopes: my-usage, receipts, and the memory reads in
+  `MEMORY_SESSION_SLUGS` (memory-read, the memory-grants listing); every memory route in
+  `MEMORY_WRITE_SLUGS` passes `WRITE_SCOPE` and refuses a session with no signed payer (403); attest, feedback and every attribution reader (sales, refunds, ledger,
   `payer.js`) never read a session. A session is identity, never payment: the route's price is unchanged.
 - **Web Bot Auth:** `src/web-bot-auth.js`, off unless `WEB_BOT_AUTH=on` (exactly). Verification only (the
   protocol is an Internet-Draft): RFC 9421 signatures tagged `web-bot-auth`, Ed25519 only, keys from the

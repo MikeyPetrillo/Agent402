@@ -297,7 +297,8 @@ so every claim below is verifiable in code.</p>
   type, its message with any quoted text, address, link, email, long token or long number removed, and the
   places in our code it passed through; it carries no request body, header value or wallet address.` : ""}</li>
 ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sign a one-time message with an Ethereum wallet so that
-  routes keyed to a wallet (your usage, your receipts, your memory) answer for that wallet on a call paid another way.
+  routes that read what is keyed to a wallet (your usage, your receipts, your memory) answer for that wallet on a call
+  paid another way. The session only reads: a write still takes a payment signed by that wallet.
   We keep each one-time code for at most five minutes and until it is used, and we give you a signed session token that
   names the wallet address and chain and lasts at most an hour; we do not store the token. When you sign out we keep
   a random id of the token until it would have expired, so it is refused. The signed message is checked and not kept.</li>
