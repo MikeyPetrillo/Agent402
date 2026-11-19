@@ -277,7 +277,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `CREDITS_HOLD_REFRESH_MAX_MS` | Credits hold refresh maximum, in milliseconds. |  | `src/credits.js` |
 | `CREDITS_INDEXES` | Prepaid credits table indexes built in the background; off leaves them to an operator. |  | `src/credits.js` |
 | `CREDITS_INDEX_DELAY_MS` | Delay before the prepaid credits index build starts after the store's first load, in milliseconds. | `60000` | `src/credits.js` |
-| `CREDITS_SALES` | 1, true, on or yes sells prepaid card credits; unset keeps credit sales off. |  | `src/credits-sales.js` |
+| `CREDITS_SALES` | 1, true, on or yes turns prepaid credit sales on; unset keeps them off. |  | `src/credits-sales.js` |
 
 ## DATABENTO
 

@@ -235,7 +235,7 @@
     "CREDITS_HOLD_REFRESH_MAX_MS": "Credits hold refresh maximum, in milliseconds.",
     "CREDITS_INDEXES": "Prepaid credits table indexes built in the background; off leaves them to an operator.",
     "CREDITS_INDEX_DELAY_MS": "Delay before the prepaid credits index build starts after the store's first load, in milliseconds.",
-    "CREDITS_SALES": "1, true, on or yes sells prepaid card credits; unset keeps credit sales off.",
+    "CREDITS_SALES": "1, true, on or yes turns prepaid credit sales on; unset keeps them off.",
     "CRYPTO_USER_AGENT": "Crypto user agent.",
     "DATABASE_URL": "Postgres connection string the analytics stores fall back to and the boot reachability ping reads.",
     "DATABENTO_API_KEY": "Key for the stock data provider (a credential, set on the host).",
