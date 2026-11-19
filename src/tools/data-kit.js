@@ -19,7 +19,7 @@ import { safeFetch } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
 import { ratesUrl, latestShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
 import { attribute } from "../data-attribution.js";
-import { holidaysForYear, parseCountry, parseYear, parseSubdivision, parseTypes, appliesIn, hasAnyType } from "./holiday-source.js";
+import { publicHolidaysCompat, parseCountry, parseYear, parseSubdivision, parseTypes, appliesIn, hasAnyType } from "./holiday-source.js";
 
 // Committed open dataset (see src/data/LICENSE.md — ODbL attribution).
 // Regenerate with scripts/build-countries-data.js. Loaded once at module load;
@@ -248,14 +248,14 @@ export const DATA_TOOLS = [
   {
     route: "GET /api/public-holidays", name: "Public holidays", slug: "public-holidays", category: "time", price: "$0.001",
     description:
-      "Public holidays for a country and year from an open public-holiday dataset (keyless, 100+ countries): date, English name, nationwide flag, the ISO 3166-2 regions each applies to, and holiday types (Public, Bank, School, Authorities, Optional, Observance). Optional filters: one region, holiday types. Pairs with /api/country-business-days and /api/country-info. ?country=US&year=2026.",
+      "Public holidays for a country and year from an open public-holiday dataset (keyless, 100+ countries): observed date and calendar date, local and English name, nationwide flag, the ISO 3166-2 regions each applies to, and holiday types (Public, Bank, School, Authorities, Optional, Observance). Optional filters: one region, holiday types. Pairs with /api/country-business-days and /api/country-info. ?country=US&year=2026.",
     tags: ["holidays", "public-holidays", "calendar", "country", "time"],
     discovery: {
       input: { country: "US", year: 2026 },
       inputSchema: {
         properties: {
           country: { type: "string", description: "ISO 3166-1 alpha-2 country code, e.g. US, DE, JP" },
-          year: { type: "integer", description: "calendar year (1975-2099; the dataset serves a rolling window of years around the current one)" },
+          year: { type: "integer", description: "calendar year (1975-2099; years outside the dataset's rolling window are answered until 2027-01-31, then refused)" },
           subdivision: { type: "string", description: "optional ISO 3166-2 region, e.g. DE-BY: nationwide holidays plus that region's" },
           types: { type: "string", description: "optional comma list of holiday types to keep: Public, Bank, School, Authorities, Optional, Observance" },
         },
@@ -264,7 +264,7 @@ export const DATA_TOOLS = [
       output: {
         example: {
           country: "US", year: 2026, count: 17,
-          holidays: [{ date: "2026-01-01", localName: null, name: "New Year's Day", global: true, counties: null, types: ["Public", "Bank"], nationalHoliday: true, subdivisionCodes: null, holidayTypes: ["Public", "Bank"] }],
+          holidays: [{ date: "2026-01-01", calendarDate: "2026-01-01", localName: "New Year's Day", name: "New Year's Day", global: true, counties: null, types: ["Public", "Bank"], nationalHoliday: true, subdivisionCodes: null, holidayTypes: ["Public", "Bank"] }],
         },
       },
     },
@@ -273,14 +273,15 @@ export const DATA_TOOLS = [
       const year = parseYear(i.year);
       const subdivision = parseSubdivision(i.subdivision, country);
       const types = parseTypes(i.types);
-      const { rows, stale } = await holidaysForYear(country, year);
-      // The v3 fields stay for existing callers: global = nationalHoliday,
-      // counties = subdivisionCodes, types = holidayTypes. The v4 dataset
-      // carries English names only, so localName is null.
+      const { rows, stale } = await publicHolidaysCompat(country, year);
+      // The v3 contract holds: `date` is the observed date (v3's own while it
+      // answers, then the published observance rule), `calendarDate` the
+      // holiday's calendar date, global/counties/types mirror the v4 fields,
+      // and localName is v3's until its end of life (2027-01-31), then null.
       const holidays = rows
         .filter((r) => (!subdivision || appliesIn(r, subdivision)) && hasAnyType(r, types))
         .map((r) => ({
-          date: r.date, localName: null, name: r.name, global: r.nationalHoliday, counties: r.subdivisionCodes, types: r.holidayTypes,
+          date: r.date, calendarDate: r.calendarDate, localName: r.localName, name: r.name, global: r.nationalHoliday, counties: r.subdivisionCodes, types: r.holidayTypes,
           nationalHoliday: r.nationalHoliday, subdivisionCodes: r.subdivisionCodes, holidayTypes: r.holidayTypes,
         }));
       return {

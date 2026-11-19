@@ -55,12 +55,13 @@ async function defaultRead(url) {
 }
 let read = defaultRead;
 /** Tests only: replace the upstream read (url -> parsed JSON | null, or throw) and clear the caches. */
-export function __setHolidayReadForTests(fn) { read = fn || defaultRead; YEAR_CACHE.clear(); NEXT_CACHE.clear(); }
+export function __setHolidayReadForTests(fn) { read = fn || defaultRead; YEAR_CACHE.clear(); NEXT_CACHE.clear(); V3_CACHE.clear(); }
 
 // ── cache ────────────────────────────────────────────────────────────────────
 const YEAR_CACHE = new Map(); // "CC:YYYY" -> { rows, fetchedAt }
 const NEXT_CACHE = new Map(); // "CC:YYYY-MM-DD" -> { rows, fetchedAt }
-export const __caches = { YEAR_CACHE, NEXT_CACHE };
+const V3_CACHE = new Map(); // "CC:YYYY" -> { rows, fetchedAt } (v3 rows, until its end of life)
+export const __caches = { YEAR_CACHE, NEXT_CACHE, V3_CACHE };
 let now = () => Date.now();
 /** Tests only: a clock for cache ageing. */
 export function __setNowForTests(fn) { now = fn || (() => Date.now()); }
@@ -141,7 +142,7 @@ function rowsOf(j) {
 }
 function mapSourceError(e, country, what) {
   if (e?.upstreamStatus === 404) return bad(`no holiday data for country "${country}" - the source covers about 120 countries by ISO 3166-1 alpha-2 code`);
-  if (e?.upstreamStatus === 400) return bad(`${what} is outside the years the holiday source publishes (a rolling window around the current year)`);
+  if (e?.upstreamStatus === 400) return Object.assign(bad(`${what} is outside the years the holiday source publishes (a rolling window around the current year)`), { outsideWindow: true });
   return e;
 }
 
@@ -178,6 +179,104 @@ export async function nextHolidays(country) {
   }
   cachePut(NEXT_CACHE, key, rows);
   return { rows, fetchedAt: now(), stale: false };
+}
+
+// ── v3 compatibility (public-holidays only, until v3's end of life) ──────────
+// The v3 API (same publisher, same terms and sponsorship) answers until
+// 2027-01-31. Until then public-holidays keeps v3's meaning from it: `date` is
+// the date v3 lists (the observed weekday where v3 moved a holiday), `localName`
+// is v3's local name, and a year outside v4's window is answered from v3. From
+// 2027-02-01 `date` is computed with the observance rules below where a country
+// has one (else the calendar date), `localName` is null, and such a year is a 400.
+export const V3_API = "https://date.nager.at/api/v3";
+export const V3_END_OF_LIFE = "2027-01-31";
+const V3_LAST_MS = Date.parse("2027-02-01T00:00:00Z");
+export const v3Alive = () => now() < V3_LAST_MS;
+
+function normalizeV3(h) {
+  if (!h || typeof h !== "object" || typeof h.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(h.date)) return null;
+  const counties = Array.isArray(h.counties) ? h.counties.filter((x) => typeof x === "string").slice(0, 100) : null;
+  return {
+    date: h.date, localName: typeof h.localName === "string" ? h.localName : null, name: typeof h.name === "string" ? h.name : null,
+    nationalHoliday: h.global === true, subdivisionCodes: counties && counties.length ? counties : null,
+    holidayTypes: Array.isArray(h.types) ? h.types.filter((t) => HOLIDAY_TYPES.includes(t)) : [],
+  };
+}
+async function v3Year(country, year) {
+  const key = `${country}:${year}`;
+  const hit = cacheGet(V3_CACHE, key);
+  if (hit && now() - hit.fetchedAt < FRESH_MS) return { rows: hit.rows, stale: false };
+  let rows;
+  try {
+    const j = await read(`${V3_API}/PublicHolidays/${year}/${country}`);
+    if (j !== null && !Array.isArray(j)) throw bad("The holiday source returned an unexpected shape", 502);
+    rows = (j || []).slice(0, MAX_ROWS).map(normalizeV3).filter(Boolean);
+  } catch (e) {
+    const mapped = e?.upstreamStatus >= 400 && e?.upstreamStatus < 500 ? bad(`no holiday data for country "${country}" in ${year}`) : e;
+    if (mapped.statusCode === 400 || !hit) throw mapped;
+    return { rows: hit.rows, stale: true };
+  }
+  cachePut(V3_CACHE, key, rows);
+  return { rows, stale: false };
+}
+
+/** The observed date of each listed row under the country's published rule
+ *  (index -> YYYY-MM-DD): the US federal rule for nationwide public holidays,
+ *  GOV.UK substitute days for any UK row, Japan's substitute holiday for a
+ *  nationwide Sunday holiday. Rows with no rule keep their calendar date. */
+export function observedDates(country, rows) {
+  const rule = observanceFor(country, "public");
+  const out = rows.map((r) => r.date);
+  if (!rule) return out;
+  const listed = new Set(rows.map((r) => toDay(r.date)));
+  const taken = new Set();
+  const order = rows.map((r, i) => i).sort((a, b) => rows[a].date.localeCompare(rows[b].date));
+  for (const i of order) {
+    const r = rows[i], d = toDay(r.date), wd = weekdayOf(d);
+    if (rule === "us-federal" && r.nationalHoliday && r.holidayTypes.includes("Public") && r.holidayTypes.includes("Bank") && (wd === 6 || wd === 0)) {
+      out[i] = fromDay(wd === 6 ? d - 1 : d + 1);
+    } else if (rule === "gb-substitute" && (wd === 6 || wd === 0)) {
+      let x = d + 1;
+      while (weekdayOf(x) === 6 || weekdayOf(x) === 0 || listed.has(x) || taken.has(x)) x++;
+      taken.add(x); out[i] = fromDay(x);
+    } else if (rule === "jp-substitute" && r.nationalHoliday && wd === 0) {
+      let x = d + 1;
+      while (listed.has(x) || taken.has(x)) x++;
+      taken.add(x); out[i] = fromDay(x);
+    }
+  }
+  return out;
+}
+
+/** public-holidays rows with v3's meaning kept: { rows, stale, source }. Each
+ *  row: date (observed), calendarDate (v4's date; null when only v3 answered),
+ *  localName, name, nationalHoliday, subdivisionCodes, holidayTypes. */
+export async function publicHolidaysCompat(country, year) {
+  let v4;
+  try {
+    v4 = await holidaysForYear(country, year);
+  } catch (e) {
+    if (!e.outsideWindow) throw e;
+    if (!v3Alive()) throw bad(`year ${year} is outside the years the holiday source publishes (a rolling window around the current year); other years were answered from the earlier source until it closed on ${V3_END_OF_LIFE}`);
+    const v3 = await v3Year(country, year);
+    return { rows: v3.rows.map((r) => ({ ...r, calendarDate: null })), stale: v3.stale, source: "v3" };
+  }
+  let v3rows = null, v3stale = false;
+  if (v3Alive()) {
+    try { const v3 = await v3Year(country, year); v3rows = v3.rows; v3stale = v3.stale; } catch { v3rows = null; }
+  }
+  const observed = observedDates(country, v4.rows);
+  const used = new Set();
+  const key = (r) => (r.subdivisionCodes || []).slice().sort().join(",");
+  const find = (r, sameRegions) => (v3rows || []).findIndex((x, k) => !used.has(k) && x.name === r.name && Math.abs(toDay(x.date) - toDay(r.date)) <= 7 && (!sameRegions || key(x) === key(r)));
+  const rows = v4.rows.map((r, i) => {
+    let k = find(r, true);
+    if (k < 0) k = find(r, false);
+    const m = k >= 0 ? v3rows[k] : null;
+    if (m) used.add(k);
+    return { date: m ? m.date : observed[i], calendarDate: r.date, localName: m ? m.localName : null, name: r.name, nationalHoliday: r.nationalHoliday, subdivisionCodes: r.subdivisionCodes, holidayTypes: r.holidayTypes };
+  });
+  return { rows, stale: v4.stale || v3stale, source: v3rows ? "v4+v3" : "v4" };
 }
 
 /** True when `row` applies in the region: nationwide, or listed for `subdivision`. */

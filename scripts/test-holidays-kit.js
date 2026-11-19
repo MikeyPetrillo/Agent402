@@ -10,7 +10,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { HOLIDAY_TOOLS, t2Closed } from "../src/tools/holidays-kit.js";
 import { DATA_TOOLS } from "../src/tools/data-kit.js";
-import { __setHolidayReadForTests, __setNowForTests, __caches, MAX_ENTRIES, FRESH_MS, MAX_AGE_MS, toDay, HOLIDAY_API } from "../src/tools/holiday-source.js";
+import { __setHolidayReadForTests, __setNowForTests, __caches, MAX_ENTRIES, FRESH_MS, MAX_AGE_MS, toDay, HOLIDAY_API, V3_API, observedDates } from "../src/tools/holiday-source.js";
 import { EXCHANGES, daySchedule } from "../src/tools/exchange-calendars.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { KIT2 } from "../src/tools/kit2.js";
@@ -210,11 +210,179 @@ const FIXTURE = {
     ["11-15", "Saint Leopold's Day", "AT-3,AT-9", "School"],
   ],
 };
+// v3 answers captured 2026-11-18 (date.nager.at/api/v3/PublicHolidays/<year>/<cc>):
+// [date, localName, name, counties ("" = nationwide), types]
+const V3_FIXTURE = {
+  "US:2026": [
+    ["2026-01-01", "New Year's Day", "New Year's Day", "", "Public/Bank"],
+    ["2026-01-19", "Martin Luther King, Jr. Day", "Martin Luther King, Jr. Day", "", "Public/Bank"],
+    ["2026-02-12", "Lincoln's Birthday", "Lincoln's Birthday", "US-CA,US-CT,US-IL,US-IN,US-KY,US-MI,US-NY,US-MO,US-OH", "Observance"],
+    ["2026-02-16", "Washington's Birthday", "Presidents Day", "", "Public/Bank"],
+    ["2026-04-03", "Good Friday", "Good Friday", "US-CT,US-DE,US-HI,US-IN,US-KY,US-LA,US-NC,US-ND,US-NJ,US-TN", "Public"],
+    ["2026-04-03", "Good Friday", "Good Friday", "US-TX", "Optional"],
+    ["2026-05-08", "Truman Day", "Truman Day", "US-MO", "School/Authorities"],
+    ["2026-05-25", "Memorial Day", "Memorial Day", "", "Public/Bank"],
+    ["2026-06-19", "Juneteenth National Independence Day", "Juneteenth National Independence Day", "", "Public/Bank"],
+    ["2026-07-03", "Independence Day", "Independence Day", "", "Public/Bank"],
+    ["2026-09-07", "Labor Day", "Labour Day", "", "Public/Bank"],
+    ["2026-10-12", "Columbus Day", "Columbus Day", "US-AL,US-AZ,US-CO,US-CT,US-GA,US-ID,US-IL,US-IN,US-IA,US-KS,US-KY,US-LA,US-ME,US-MD,US-MA,US-MS,US-MO,US-MT,US-NE,US-NH,US-NJ,US-NM,US-NY,US-NC,US-OH,US-OK,US-PA,US-RI,US-SC,US-TN,US-UT,US-VA,US-WV", "Public"],
+    ["2026-10-12", "Columbus Day", "Columbus Day", "", "Bank"],
+    ["2026-10-12", "Indigenous Peoples' Day", "Indigenous Peoples' Day", "US-AK,US-AL,US-CA,US-HI,US-IA,US-LA,US-ME,US-MI,US-MN,US-NC,US-NE,US-NM,US-OK,US-OR,US-SD,US-TX,US-VA,US-VT,US-WI", "Public"],
+    ["2026-11-11", "Veterans Day", "Veterans Day", "", "Public/Bank"],
+    ["2026-11-26", "Thanksgiving Day", "Thanksgiving Day", "", "Public/Bank"],
+    ["2026-12-25", "Christmas Day", "Christmas Day", "", "Public/Bank"],
+  ],
+  "US:2027": [
+    ["2027-01-01", "New Year's Day", "New Year's Day", "", "Public/Bank"],
+    ["2027-01-18", "Martin Luther King, Jr. Day", "Martin Luther King, Jr. Day", "", "Public/Bank"],
+    ["2027-02-12", "Lincoln's Birthday", "Lincoln's Birthday", "US-CA,US-CT,US-IL,US-IN,US-KY,US-MI,US-NY,US-MO,US-OH", "Observance"],
+    ["2027-02-15", "Washington's Birthday", "Presidents Day", "", "Public/Bank"],
+    ["2027-03-26", "Good Friday", "Good Friday", "US-CT,US-DE,US-HI,US-IN,US-KY,US-LA,US-NC,US-ND,US-NJ,US-TN", "Public"],
+    ["2027-03-26", "Good Friday", "Good Friday", "US-TX", "Optional"],
+    ["2027-05-08", "Truman Day", "Truman Day", "US-MO", "School/Authorities"],
+    ["2027-05-31", "Memorial Day", "Memorial Day", "", "Public/Bank"],
+    ["2027-06-18", "Juneteenth National Independence Day", "Juneteenth National Independence Day", "", "Public/Bank"],
+    ["2027-07-05", "Independence Day", "Independence Day", "", "Public/Bank"],
+    ["2027-09-06", "Labor Day", "Labour Day", "", "Public/Bank"],
+    ["2027-10-11", "Columbus Day", "Columbus Day", "US-AL,US-AZ,US-CO,US-CT,US-GA,US-ID,US-IL,US-IN,US-IA,US-KS,US-KY,US-LA,US-ME,US-MD,US-MA,US-MS,US-MO,US-MT,US-NE,US-NH,US-NJ,US-NM,US-NY,US-NC,US-OH,US-OK,US-PA,US-RI,US-SC,US-TN,US-UT,US-VA,US-WV", "Public"],
+    ["2027-10-11", "Columbus Day", "Columbus Day", "", "Bank"],
+    ["2027-10-11", "Indigenous Peoples' Day", "Indigenous Peoples' Day", "US-AK,US-AL,US-CA,US-HI,US-IA,US-LA,US-ME,US-MI,US-MN,US-NC,US-NE,US-NM,US-OK,US-OR,US-SD,US-TX,US-VA,US-VT,US-WI", "Public"],
+    ["2027-11-11", "Veterans Day", "Veterans Day", "", "Public/Bank"],
+    ["2027-11-25", "Thanksgiving Day", "Thanksgiving Day", "", "Public/Bank"],
+    ["2027-12-24", "Christmas Day", "Christmas Day", "", "Public/Bank"],
+  ],
+  "US:2028": [
+    ["2027-12-31", "New Year's Day", "New Year's Day", "", "Public/Bank"],
+    ["2028-01-17", "Martin Luther King, Jr. Day", "Martin Luther King, Jr. Day", "", "Public/Bank"],
+    ["2028-02-12", "Lincoln's Birthday", "Lincoln's Birthday", "US-CA,US-CT,US-IL,US-IN,US-KY,US-MI,US-NY,US-MO,US-OH", "Observance"],
+    ["2028-02-21", "Washington's Birthday", "Presidents Day", "", "Public/Bank"],
+    ["2028-04-14", "Good Friday", "Good Friday", "US-CT,US-DE,US-HI,US-IN,US-KY,US-LA,US-NC,US-ND,US-NJ,US-TN", "Public"],
+    ["2028-04-14", "Good Friday", "Good Friday", "US-TX", "Optional"],
+    ["2028-05-08", "Truman Day", "Truman Day", "US-MO", "School/Authorities"],
+    ["2028-05-29", "Memorial Day", "Memorial Day", "", "Public/Bank"],
+    ["2028-06-19", "Juneteenth National Independence Day", "Juneteenth National Independence Day", "", "Public/Bank"],
+    ["2028-07-04", "Independence Day", "Independence Day", "", "Public/Bank"],
+    ["2028-09-04", "Labor Day", "Labour Day", "", "Public/Bank"],
+    ["2028-10-09", "Columbus Day", "Columbus Day", "US-AL,US-AZ,US-CO,US-CT,US-GA,US-ID,US-IL,US-IN,US-IA,US-KS,US-KY,US-LA,US-ME,US-MD,US-MA,US-MS,US-MO,US-MT,US-NE,US-NH,US-NJ,US-NM,US-NY,US-NC,US-OH,US-OK,US-PA,US-RI,US-SC,US-TN,US-UT,US-VA,US-WV", "Public"],
+    ["2028-10-09", "Columbus Day", "Columbus Day", "", "Bank"],
+    ["2028-10-09", "Indigenous Peoples' Day", "Indigenous Peoples' Day", "US-AK,US-AL,US-CA,US-HI,US-IA,US-LA,US-ME,US-MI,US-MN,US-NC,US-NE,US-NM,US-OK,US-OR,US-SD,US-TX,US-VA,US-VT,US-WI", "Public"],
+    ["2028-11-10", "Veterans Day", "Veterans Day", "", "Public/Bank"],
+    ["2028-11-23", "Thanksgiving Day", "Thanksgiving Day", "", "Public/Bank"],
+    ["2028-12-25", "Christmas Day", "Christmas Day", "", "Public/Bank"],
+  ],
+  "GB:2026": [
+    ["2026-01-01", "New Year's Day", "New Year's Day", "GB-ENG,GB-NIR,GB-SCT,GB-WLS", "Public"],
+    ["2026-01-02", "2 January", "2 January", "GB-SCT", "Public"],
+    ["2026-03-17", "Saint Patrick's Day", "Saint Patrick's Day", "GB-NIR", "Public"],
+    ["2026-04-03", "Good Friday", "Good Friday", "", "Public"],
+    ["2026-04-06", "Easter Monday", "Easter Monday", "GB-ENG,GB-WLS,GB-NIR", "Public"],
+    ["2026-05-04", "Early May Bank Holiday", "Early May Bank Holiday", "", "Public"],
+    ["2026-05-25", "Spring Bank Holiday", "Spring Bank Holiday", "", "Public"],
+    ["2026-06-15", "World Cup Bank Holiday", "World Cup Bank Holiday", "GB-SCT", "Public"],
+    ["2026-07-13", "Battle of the Boyne", "Battle of the Boyne", "GB-NIR", "Public"],
+    ["2026-08-03", "Summer Bank Holiday", "Summer Bank Holiday", "GB-SCT", "Public"],
+    ["2026-08-31", "Summer Bank Holiday", "Summer Bank Holiday", "GB-ENG,GB-WLS,GB-NIR", "Public"],
+    ["2026-11-30", "Saint Andrew's Day", "Saint Andrew's Day", "GB-SCT", "Public"],
+    ["2026-12-25", "Christmas Day", "Christmas Day", "", "Public"],
+    ["2026-12-28", "Boxing Day", "St. Stephen's Day", "", "Public"],
+  ],
+  "GB:2027": [
+    ["2027-01-01", "New Year's Day", "New Year's Day", "GB-ENG,GB-NIR,GB-SCT,GB-WLS", "Public"],
+    ["2027-01-02", "2 January", "2 January", "GB-SCT", "Public"],
+    ["2027-03-17", "Saint Patrick's Day", "Saint Patrick's Day", "GB-NIR", "Public"],
+    ["2027-03-26", "Good Friday", "Good Friday", "", "Public"],
+    ["2027-03-29", "Easter Monday", "Easter Monday", "GB-ENG,GB-WLS,GB-NIR", "Public"],
+    ["2027-05-03", "Early May Bank Holiday", "Early May Bank Holiday", "", "Public"],
+    ["2027-05-31", "Spring Bank Holiday", "Spring Bank Holiday", "", "Public"],
+    ["2027-07-12", "Battle of the Boyne", "Battle of the Boyne", "GB-NIR", "Public"],
+    ["2027-08-02", "Summer Bank Holiday", "Summer Bank Holiday", "GB-SCT", "Public"],
+    ["2027-08-30", "Summer Bank Holiday", "Summer Bank Holiday", "GB-ENG,GB-WLS,GB-NIR", "Public"],
+    ["2027-11-30", "Saint Andrew's Day", "Saint Andrew's Day", "GB-SCT", "Public"],
+    ["2027-12-27", "Christmas Day", "Christmas Day", "", "Public"],
+    ["2027-12-28", "Boxing Day", "St. Stephen's Day", "", "Public"],
+  ],
+  "GB:2028": [
+    ["2028-01-03", "New Year's Day", "New Year's Day", "GB-ENG,GB-NIR,GB-SCT,GB-WLS", "Public"],
+    ["2028-01-04", "2 January", "2 January", "GB-SCT", "Public"],
+    ["2028-03-17", "Saint Patrick's Day", "Saint Patrick's Day", "GB-NIR", "Public"],
+    ["2028-04-14", "Good Friday", "Good Friday", "", "Public"],
+    ["2028-04-17", "Easter Monday", "Easter Monday", "GB-ENG,GB-WLS,GB-NIR", "Public"],
+    ["2028-05-01", "Early May Bank Holiday", "Early May Bank Holiday", "", "Public"],
+    ["2028-05-29", "Spring Bank Holiday", "Spring Bank Holiday", "", "Public"],
+    ["2028-07-12", "Battle of the Boyne", "Battle of the Boyne", "GB-NIR", "Public"],
+    ["2028-08-07", "Summer Bank Holiday", "Summer Bank Holiday", "GB-SCT", "Public"],
+    ["2028-08-28", "Summer Bank Holiday", "Summer Bank Holiday", "GB-ENG,GB-WLS,GB-NIR", "Public"],
+    ["2028-11-30", "Saint Andrew's Day", "Saint Andrew's Day", "GB-SCT", "Public"],
+    ["2028-12-25", "Christmas Day", "Christmas Day", "", "Public"],
+    ["2028-12-26", "Boxing Day", "St. Stephen's Day", "", "Public"],
+  ],
+  "JP:2026": [
+    ["2026-01-01", "元日", "New Year's Day", "", "Public"],
+    ["2026-01-12", "成人の日", "Coming of Age Day", "", "Public"],
+    ["2026-02-11", "建国記念の日", "Foundation Day", "", "Public"],
+    ["2026-02-23", "天皇誕生日", "The Emperor's Birthday", "", "Public"],
+    ["2026-03-20", "春分の日", "Vernal Equinox Day", "", "Public"],
+    ["2026-04-29", "昭和の日", "Shōwa Day", "", "Public"],
+    ["2026-05-06", "憲法記念日", "Constitution Memorial Day", "", "Public"],
+    ["2026-05-04", "みどりの日", "Greenery Day", "", "Public"],
+    ["2026-05-05", "こどもの日", "Children's Day", "", "Public"],
+    ["2026-07-20", "海の日", "Marine Day", "", "Public"],
+    ["2026-08-11", "山の日", "Mountain Day", "", "Public"],
+    ["2026-09-21", "敬老の日", "Respect for the Aged Day", "", "Public"],
+    ["2026-09-23", "秋分の日", "Autumnal Equinox Day", "", "Public"],
+    ["2026-10-12", "スポーツの日", "Sports Day", "", "Public"],
+    ["2026-11-03", "文化の日", "Culture Day", "", "Public"],
+    ["2026-11-23", "勤労感謝の日", "Labour Thanksgiving Day", "", "Public"],
+  ],
+  "JP:2027": [
+    ["2027-01-01", "元日", "New Year's Day", "", "Public"],
+    ["2027-01-11", "成人の日", "Coming of Age Day", "", "Public"],
+    ["2027-02-11", "建国記念の日", "Foundation Day", "", "Public"],
+    ["2027-02-23", "天皇誕生日", "The Emperor's Birthday", "", "Public"],
+    ["2027-03-21", "春分の日", "Vernal Equinox Day", "", "Public"],
+    ["2027-04-29", "昭和の日", "Shōwa Day", "", "Public"],
+    ["2027-05-03", "憲法記念日", "Constitution Memorial Day", "", "Public"],
+    ["2027-05-04", "みどりの日", "Greenery Day", "", "Public"],
+    ["2027-05-05", "こどもの日", "Children's Day", "", "Public"],
+    ["2027-07-19", "海の日", "Marine Day", "", "Public"],
+    ["2027-08-11", "山の日", "Mountain Day", "", "Public"],
+    ["2027-09-20", "敬老の日", "Respect for the Aged Day", "", "Public"],
+    ["2027-09-23", "秋分の日", "Autumnal Equinox Day", "", "Public"],
+    ["2027-10-11", "スポーツの日", "Sports Day", "", "Public"],
+    ["2027-11-03", "文化の日", "Culture Day", "", "Public"],
+    ["2027-11-23", "勤労感謝の日", "Labour Thanksgiving Day", "", "Public"],
+  ],
+  "US:2020": [
+    ["2020-01-01", "New Year's Day", "New Year's Day", "", "Public/Bank"],
+    ["2020-01-20", "Martin Luther King, Jr. Day", "Martin Luther King, Jr. Day", "", "Public/Bank"],
+    ["2020-02-12", "Lincoln's Birthday", "Lincoln's Birthday", "US-CA,US-CT,US-IL,US-IN,US-KY,US-MI,US-NY,US-MO,US-OH", "Observance"],
+    ["2020-02-17", "Washington's Birthday", "Presidents Day", "", "Public/Bank"],
+    ["2020-04-10", "Good Friday", "Good Friday", "US-CT,US-DE,US-HI,US-IN,US-KY,US-LA,US-NC,US-ND,US-NJ,US-TN", "Public"],
+    ["2020-04-10", "Good Friday", "Good Friday", "US-TX", "Optional"],
+    ["2020-05-08", "Truman Day", "Truman Day", "US-MO", "School/Authorities"],
+    ["2020-05-25", "Memorial Day", "Memorial Day", "", "Public/Bank"],
+    ["2020-07-03", "Independence Day", "Independence Day", "", "Public/Bank"],
+    ["2020-09-07", "Labor Day", "Labour Day", "", "Public/Bank"],
+    ["2020-10-12", "Columbus Day", "Columbus Day", "US-AL,US-AZ,US-CO,US-CT,US-GA,US-ID,US-IL,US-IN,US-IA,US-KS,US-KY,US-LA,US-ME,US-MD,US-MA,US-MS,US-MO,US-MT,US-NE,US-NH,US-NJ,US-NM,US-NY,US-NC,US-OH,US-OK,US-PA,US-RI,US-SC,US-TN,US-UT,US-VA,US-WV", "Public"],
+    ["2020-10-12", "Columbus Day", "Columbus Day", "", "Bank"],
+    ["2020-10-12", "Indigenous Peoples' Day", "Indigenous Peoples' Day", "US-AK,US-AL,US-CA,US-HI,US-IA,US-LA,US-ME,US-MI,US-MN,US-NC,US-NE,US-NM,US-OK,US-SD,US-VA,US-VT,US-WI", "Public"],
+    ["2020-11-11", "Veterans Day", "Veterans Day", "", "Public/Bank"],
+    ["2020-11-26", "Thanksgiving Day", "Thanksgiving Day", "", "Public/Bank"],
+    ["2020-12-25", "Christmas Day", "Christmas Day", "", "Public/Bank"],
+  ],
+};
 const reads = [];
-let failing = false;
+let failing = false, v3Down = false;
 function fixtureRead(url) {
   reads.push(url);
   if (failing) throw Object.assign(new Error("Source URL's host returned HTTP 503"), { statusCode: 502, upstreamStatus: 503 });
+  const v3m = /\/api\/v3\/PublicHolidays\/(\d{4})\/([A-Z]{2})$/.exec(url);
+  if (v3m) {
+    if (v3Down) throw Object.assign(new Error("Source URL's host returned HTTP 503"), { statusCode: 502, upstreamStatus: 503 });
+    const rows = V3_FIXTURE[`${v3m[2]}:${v3m[1]}`];
+    if (!rows) throw Object.assign(new Error("Source URL returned HTTP 404"), { statusCode: 422, upstreamStatus: 404 });
+    return rows.map(([date, localName, name, counties, types]) => ({ date, localName, name, countryCode: v3m[2], global: !counties, counties: counties ? counties.split(",") : null, types: types.split("/") }));
+  }
   const m = /\/Holidays\/([A-Z]{2})\/(\d{4}|Next)$/.exec(url);
   if (!m) throw new Error(`unexpected url ${url}`);
   const [, cc, y] = m;
@@ -230,6 +398,8 @@ function fixtureRead(url) {
 }
 const row = (cc, y, [md, name, subs, types]) => ({ date: `${y}-${md}`, name, countryCode: cc, nationalHoliday: !subs, subdivisionCodes: subs ? subs.split(",") : null, holidayTypes: types.split("/") });
 __setHolidayReadForTests(fixtureRead);
+const BEFORE_EOL = Date.parse("2026-11-18T12:00:00Z"), AFTER_EOL = Date.parse("2027-02-01T00:00:00Z");
+__setNowForTests(() => BEFORE_EOL);
 
 const tool = (slug) => [...DATA_TOOLS, ...HOLIDAY_TOOLS].find((t) => t.slug === slug);
 const call = (slug, input) => tool(slug).handler(input);
@@ -239,12 +409,16 @@ async function status(slug, input) { try { await call(slug, input); return 200; 
 {
   ok(reads.length === 0, "no read at import");
   const r = await call("public-holidays", { country: "us", year: "2026" });
-  ok(reads.at(-1) === `${HOLIDAY_API}/Holidays/US/2026`, "public-holidays reads the v4 holiday route");
+  ok(reads.includes(`${HOLIDAY_API}/Holidays/US/2026`) && reads.includes(`${V3_API}/PublicHolidays/2026/US`), "before v3's end of life public-holidays reads the v4 route and the v3 route");
   ok(r.country === "US" && r.year === 2026 && r.count === r.holidays.length && r.count === 17, "country, year, count as before");
   const h = r.holidays[0];
   for (const k of ["date", "localName", "name", "global", "counties", "types"]) ok(k in h, `v3 field ${k} kept`);
-  for (const k of ["nationalHoliday", "subdivisionCodes", "holidayTypes"]) ok(k in h, `v4 field ${k} added`);
-  ok(h.date === "2026-01-01" && h.global === true && h.counties === null && h.types.join() === "Public,Bank" && h.localName === null, "v3 fields carry the v4 values");
+  for (const k of ["calendarDate", "nationalHoliday", "subdivisionCodes", "holidayTypes"]) ok(k in h, `field ${k} added`);
+  ok(h.date === "2026-01-01" && h.global === true && h.counties === null && h.types.join() === "Public,Bank" && h.localName === "New Year's Day", "v3 fields carry v3's values");
+  const ind = r.holidays.find((x) => x.name === "Independence Day");
+  ok(ind.date === "2026-07-03" && ind.calendarDate === "2026-07-04", "date keeps v3's observed weekday (2026-07-03); calendarDate carries the calendar date");
+  const jp = await call("public-holidays", { country: "JP", year: 2026 });
+  ok(jp.holidays[0].localName === "元日" && jp.holidays.find((x) => x.name === "Constitution Memorial Day").date === "2026-05-06", "localName and observed date come from v3 while it answers (JP)");
   const gf = r.holidays.find((x) => x.name === "Good Friday" && x.holidayTypes.includes("Public"));
   ok(gf && gf.global === false && gf.counties.includes("US-CT") && gf.subdivisionCodes.includes("US-CT"), "a regional row keeps its regions in counties and subdivisionCodes");
   const bank = await call("public-holidays", { country: "US", year: 2026, types: "bank" });
@@ -266,12 +440,13 @@ async function status(slug, input) { try { await call(slug, input); return 200; 
   __setNowForTests(() => t);
   __setHolidayReadForTests(fixtureRead);
   reads.length = 0;
+  const v4reads = () => reads.filter((u) => u.startsWith(HOLIDAY_API)).length;
   await call("public-holidays", { country: "US", year: 2027 });
   await call("public-holidays", { country: "US", year: 2027 });
-  ok(reads.length === 1, "a second call inside the fresh window reads nothing");
+  ok(v4reads() === 1 && reads.length === 2, "a second call inside the fresh window reads nothing (one v4 and one v3 read in all)");
   t += FRESH_MS + 1000;
   await call("public-holidays", { country: "US", year: 2027 });
-  ok(reads.length === 2, "past the fresh window the next call refetches");
+  ok(v4reads() === 2, "past the fresh window the next call refetches");
   failing = true;
   t += FRESH_MS + 1000; // older than the fresh window, younger than 24 h
   const stale = await call("public-holidays", { country: "US", year: 2027 });
@@ -286,8 +461,51 @@ async function status(slug, input) { try { await call(slug, input); return 200; 
   for (let k = 0; k < MAX_ENTRIES + 25; k++) { t += 1; await call("public-holidays", { country: code(k), year: 2026 }); }
   ok(__caches.YEAR_CACHE.size === MAX_ENTRIES, `the year cache holds at most ${MAX_ENTRIES} entries (${__caches.YEAR_CACHE.size})`);
   ok(!__caches.YEAR_CACHE.has(`${code(0)}:2026`) && __caches.YEAR_CACHE.has(`${code(MAX_ENTRIES + 24)}:2026`), "the oldest entry is evicted first");
-  __setNowForTests(null);
+  __setNowForTests(() => BEFORE_EOL);
   __setHolidayReadForTests(fixtureRead);
+}
+
+// ── v3 compatibility: observed dates, localName, years outside v4 ─────────────
+{
+  // The observance rules reproduce v3's dates on the captured samples, except
+  // where v3 differs from the published calendar: Scotland's 2 January 2027
+  // substitute (GOV.UK lists 2027-01-04) and Japan's 2027 Vernal Equinox
+  // substitute (JPX lists 2027-03-22).
+  const KNOWN_V3_GAPS = new Set(["GB:2027-01-04|2 January", "JP:2027-03-22|Vernal Equinox Day"]);
+  let agree = 0, total = 0;
+  const gaps = [];
+  for (const key of Object.keys(V3_FIXTURE)) {
+    if (!FIXTURE[key]) continue;
+    const [cc, y] = key.split(":");
+    const v4rows = FIXTURE[key].map((x) => row(cc, +y, x)).map((h) => ({ date: h.date, name: h.name, nationalHoliday: h.nationalHoliday, subdivisionCodes: h.subdivisionCodes, holidayTypes: h.holidayTypes }));
+    const want = new Set(V3_FIXTURE[key].map(([d, , n]) => `${d}|${n}`));
+    observedDates(cc, v4rows).forEach((d, i) => { total++; const k = `${d}|${v4rows[i].name}`; if (want.has(k)) agree++; else gaps.push(`${cc}:${k}`); });
+  }
+  ok(gaps.every((g) => KNOWN_V3_GAPS.has(g)) && agree === total - KNOWN_V3_GAPS.size, `observance rules reproduce v3's dates on US, GB, JP 2026-2028 samples (${agree}/${total}; differences only where v3 differs from the official calendar: ${gaps.join(", ")})`);
+  const gb27 = await call("public-holidays", { country: "GB", year: 2027 });
+  ok(gb27.holidays.find((x) => x.name === "2 January").date === "2027-01-02", "while v3 answers, date is exactly v3's, even where the rule would differ");
+  // v3 down (or past its end of life): the rules give the observed date.
+  v3Down = true; __caches.V3_CACHE.clear();
+  const us27 = await call("public-holidays", { country: "US", year: 2027 });
+  eq(["Juneteenth National Independence Day", "Independence Day", "Christmas Day"].map((n) => us27.holidays.find((x) => x.name === n).date), ["2027-06-18", "2027-07-05", "2027-12-24"], "without v3, US 2027 observed dates come from the federal rule (v3's own dates)");
+  const gb28 = await call("public-holidays", { country: "GB", year: 2028 });
+  eq([gb28.holidays.find((x) => x.name === "New Year's Day").date, gb28.holidays.find((x) => x.name === "2 January").date], ["2028-01-03", "2028-01-04"], "without v3, GB 2028 substitutes come from the GOV.UK rule (v3's own dates)");
+  ok(gb28.holidays.every((x) => x.localName === null), "without v3, localName is null");
+  v3Down = false;
+  // A year outside v4's window: v3 until its end of life, then a 400 with the reason.
+  const old = await call("public-holidays", { country: "US", year: 2020 });
+  ok(old.count > 5 && old.holidays[0].calendarDate === null && old.holidays.some((x) => x.date === "2020-07-03" && x.name === "Independence Day"), "before 2027-02-01 a year outside v4's window is answered from v3");
+  __setNowForTests(() => AFTER_EOL);
+  __caches.V3_CACHE.clear(); __caches.YEAR_CACHE.clear();
+  reads.length = 0;
+  let msg = "";
+  try { await call("public-holidays", { country: "US", year: 2020 }); } catch (e) { msg = `${e.statusCode} ${e.message}`; }
+  ok(/^400 /.test(msg) && /2027-01-31/.test(msg), `from 2027-02-01 that year is a 400 naming the end date (${msg})`);
+  const after = await call("public-holidays", { country: "US", year: 2027 });
+  ok(!reads.some((u) => u.startsWith(V3_API)), "from 2027-02-01 no v3 read is made");
+  ok(after.holidays.find((x) => x.name === "Independence Day").date === "2027-07-05" && after.holidays.every((x) => x.localName === null), "from 2027-02-01: observed dates by rule, localName null");
+  __setNowForTests(() => BEFORE_EOL);
+  __caches.V3_CACHE.clear(); __caches.YEAR_CACHE.clear();
 }
 
 // ── business days on published calendars ─────────────────────────────────────

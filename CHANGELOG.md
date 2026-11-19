@@ -9,13 +9,15 @@ carries its own version on npm.
 ### 2026-11-18 (holiday, business-day and market calendars)
 Tools:
 - public-holidays reads the v4 holiday dataset: each holiday adds
-  `nationalHoliday`, `subdivisionCodes` and `holidayTypes` (Public, Bank,
-  School, Authorities, Optional, Observance), and the call takes optional
-  `subdivision` and `types` filters. The existing fields stay: `global`,
-  `counties` and `types` carry the same values, and `localName` is null
-  because the dataset now carries English names only. Each holiday is listed
-  on its calendar date; a year outside the dataset's rolling window answers
-  400.
+  `calendarDate`, `nationalHoliday`, `subdivisionCodes` and `holidayTypes`
+  (Public, Bank, School, Authorities, Optional, Observance), and the call
+  takes optional `subdivision` and `types` filters. Every existing field
+  keeps its meaning: `date` is still the observed date. Until 2027-01-31
+  `date` and `localName` come from the earlier source and years outside the
+  v4 window are answered from it; from 2027-02-01 `date` follows the
+  published observance rule where a country has one (US federal, UK
+  substitute days, Japan substitute holidays), `localName` is null, and
+  those years answer 400.
 - New holiday tools: bank-holidays, school-holidays, next-holidays (upcoming
   holidays with days until each), long-weekends (runs of three or more days
   off with bridge days), country-business-days (check a date, add or
