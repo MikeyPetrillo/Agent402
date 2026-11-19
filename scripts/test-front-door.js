@@ -415,7 +415,7 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
     const r = await fetch(`${B}${e.path}${e.method === "GET" ? "?q=test" : ""}`, e.method === "GET" ? {} : { method: e.method, headers: { "content-type": "application/json" }, body: "{}" });
     const hdr = decode(r);
     const info = hdr?.extensions?.bazaar?.info;
-    ok(hdr?.resource?.description === BAZAAR_DESCRIPTIONS[slug] && /^One call (returns|loads)/.test(BAZAAR_DESCRIPTIONS[slug]), `${slug}: the listing says what one call gets, untrimmed`);
+    ok(hdr?.resource?.description === BAZAAR_DESCRIPTIONS[slug] && /^(?:[A-Z][a-z]+(?: [a-z]+)*: one|One) call (returns|loads)/.test(BAZAAR_DESCRIPTIONS[slug]), `${slug}: the listing says what one call gets, untrimmed`);
     const ex = info?.output?.example;
     ok(ex && !isExamplePointer(ex), `${slug}: the listing carries the full sample output, not the pointer`);
     if (Array.isArray(ex?.results)) ok(ex.results.length === ex.count && ex.count > 1, `${slug}: the sample's count matches its results (${ex.count} vs ${ex.results.length})`);

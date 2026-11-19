@@ -36,8 +36,7 @@ records the need.
 3. Pure-compute tools (no outbound calls, keys or models) run free through
    proof-of-work. Every other tool is paid per call in USDC over x402 or MPP;
    `payment.info` reports the mode, the caps and what has been spent.
-4. A paid answer carries its receipt. On x402, a call the server answers with
-   an error is not charged: settlement runs only after a successful answer.
+4. A paid answer carries its receipt. A call paid over x402 that the server answers with an error is not charged: x402 settlement runs only after a successful answer.
 
 ## Prices and caps
 
