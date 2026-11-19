@@ -144,7 +144,7 @@ let ALL = 0, OPERATORS = 0;
   ok(urls.join() === "https://shop.example/health,https://one.example/ping,https://two.example/", `the control URLs: our own /health and the listed https hosts, one per host (${urls.join(" ")})`);
   ok(C.ourSideControlUrls({ baseUrl: "http://127.0.0.1:3000", env: {} }).length === 0 && C.ourSideControlUrls({ baseUrl: "https://10.0.0.1", env: {} }).length === 0, "a loopback or address BASE_URL is never a control");
   const seen = [];
-  const answered = await C.readOurSideControl(urls, { request: async (url, init) => { seen.push([url, init.redirect, !!init.signal]); return { status: url.includes("one") ? 503 : 200 }; } });
+  const answered = await C.readOurSideControl(urls, { request: async (url, init) => { seen.push([url, init.redirect, !!init.signal]); return { status: new URL(url).hostname === "one.example" ? 503 : 200 }; } });
   ok(answered.checked === 3 && answered.failed === 0 && seen.every(([, redirect, signal]) => redirect === "manual" && signal), `any status is an answer, each read with a time limit and no redirect followed (${JSON.stringify(answered)})`);
   const cut = await C.readOurSideControl(urls, { request: async () => { throw Object.assign(new Error("getaddrinfo EAI_AGAIN"), { code: "EAI_AGAIN" }); } });
   ok(cut.checked === 3 && cut.failed === 3, `CONTROL: no answer from any host reads as failed (${JSON.stringify(cut)})`);
