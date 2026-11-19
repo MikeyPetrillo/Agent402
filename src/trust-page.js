@@ -18,6 +18,8 @@ import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { directUpstreamConfigured, directUpstreamName } from "./gateway-direct-upstream.js";
 import { COMPANY_MAILBOXES } from "./company.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
+import { REFUND_TERMS_PATH } from "./refund-terms-path.js";
+import { TOOL_RELIABILITY_PATH, TOOL_RELIABILITY_WINDOW_HOURS, TOOL_RELIABILITY_MIN_SAMPLE, toolReliabilityEnabled } from "./tool-reliability.js";
 import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_SSE_EVENT } from "./receipt-signing.js";
 
 /** The processors the server sends buyer data to, as the privacy policy names
@@ -57,7 +59,7 @@ export function hstsYears() {
   const m = /max-age=(\d+)/.exec(HSTS);
   return m ? Math.floor(Number(m[1]) / (365 * 86400)) : 0;
 }
-const NUM = ["zero", "one", "two", "three", "four", "five"];
+const NUM = ["zero", "one", "two", "three", "four", "five", "six", "seven"];
 const words = (n) => NUM[n] || String(n);
 const hh = (h) => `${String(h).padStart(2, "0")}:00 UTC`;
 
@@ -135,15 +137,18 @@ export function trustPage(baseUrl) {
       p: [
         `${link("/status", "/status")} shows only what two observers outside production saw: a scheduled heartbeat and an outside probe that runs every five minutes. A day with no observation shows as no data. Service alarms are public words on ${link("/api/gateway-status", "/api/gateway-status")}, and the observers page the operator on the ones that need a person, one issue per alarm.`,
         `A paid call that was charged but failed is recorded as a debt in the refund ledger and repaid only after the charge is proven on chain. Once a debt has waited past a short grace period, the ${code("refundsOwed")} word reads ${code("owed")} and pages until it is repaid. A card report that fails to generate is refunded to the card.`,
+        ...(toolReliabilityEnabled() ? [`${link(TOOL_RELIABILITY_PATH, code(TOOL_RELIABILITY_PATH))} lists every tool with its success rate and median and 95th percentile latency over the last ${words(Math.round(TOOL_RELIABILITY_WINDOW_HOURS / 24))} days, each marked measured or not enough data. A tool with fewer than ${TOOL_RELIABILITY_MIN_SAMPLE} calls in the window reads not enough data, with no figure; an input the caller got wrong is not counted against the tool.`] : []),
       ],
-      links: [["/status", "Status"], ["/api/gateway-status", "Alarm words"]],
+      links: [["/status", "Status"], ["/api/gateway-status", "Alarm words"], ...(toolReliabilityEnabled() ? [[TOOL_RELIABILITY_PATH, "Per-tool reliability"]] : [])],
     },
     {
       h: "Payment conformance",
       p: [
         `${link(CONFORMANCE_PATH, code(CONFORMANCE_PATH))} lists each payment rail this server accepts and, for each, whether it settles after a successful answer, honors an idempotency key and the x402 payment-identifier, guards against a replayed credential, repays a charged failure and how, forgives a hang-up, screens the payer and returns a receipt. Each cell is computed at request time from the serving code and its switches, and the document carries the refund terms as data, in the words of the ${link("/terms", "terms")}.`,
+        `${link(REFUND_TERMS_PATH, code(REFUND_TERMS_PATH))} states, per rail, whether an error answer is charged, whether a hang-up is forgiven and how a charged failure is repaid, with the rules of the refund ledger, prepaid credits and card reports, read from the same switches. Every 402 links it.`,
+        `Every rail that carries a payer address screens it against the OFAC SDN list before the paid route runs: the signed payer on an EVM chain, the signers on Solana, Stellar and Algorand, the paying wallet on Tempo. Each row's ${code("sanctionsScreening")} cell names the ${code("identifier")} it reads. A payer that is not listed is never refused by the screen. A card payment and a prepaid credits key carry no payer address, so their cells say there is none.`,
       ],
-      links: [[CONFORMANCE_PATH, "Conformance JSON"], [repoUrl("blob/main/src/conformance.js"), "Conformance code"]],
+      links: [[CONFORMANCE_PATH, "Conformance JSON"], [REFUND_TERMS_PATH, "Refund terms JSON"], [repoUrl("blob/main/src/conformance.js"), "Conformance code"]],
     },
     {
       h: "Security reports",

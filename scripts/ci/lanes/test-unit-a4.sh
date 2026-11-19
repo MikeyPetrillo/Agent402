@@ -293,6 +293,8 @@ t node scripts/test-legal-dates.js
 t node scripts/test-legal-claims.js
 # /trust and the /company contact block state only what the code runs (offline)
 t node scripts/test-trust-page.js
+# The refund terms document follows each switch it reads and the refund run's own families (offline)
+t node scripts/test-refund-terms-doc.js
 # Sentences a review found contradicting the code, pinned to its constants
 t node scripts/test-copy-truth.js
 # FACILITATOR_PUBLIC_INDEX_CHAINS: the privacy paragraph and terms pointer appear only for the listed chains, with their exact wording (offline)

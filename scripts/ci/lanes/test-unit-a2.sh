@@ -108,6 +108,8 @@ t node scripts/test-email-links-outage-pg.js
 t node scripts/test-leased-loops.js
 # The call log: rows past the retention are deleted in batches under a lease; the pool's statement limit cuts a slow statement and the insert path never throws.
 t node scripts/test-analytics-retention.js
+# Per-tool reliability: answered over answered plus 5xx, p50/p95 over the same rows, bands not counts, unmeasured below the floor (REAL postgres)
+t node scripts/test-tool-reliability-pg.js
 # With more than one replica, a database error never lets a singleton (backup, reconcile) run on both.
 t node scripts/test-lease-failopen-replicas.js
 # A tick whose lease was lost stops before its next send, pull or paid run.

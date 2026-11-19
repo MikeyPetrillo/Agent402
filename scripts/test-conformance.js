@@ -20,9 +20,12 @@
 //      them, and the x402 rows follow the offer.
 //   4. FREE_MODE: no paid rail is offered, and the document says it runs
 //      in free mode.
-//   5. The x402 sanctions cell with a list loaded (a stored list file), and
-//      without one (section 2: it says the screen fails open); the document
-//      is built once per window and dropped when the server listens.
+//   5. The x402 and Tempo relay sanctions cells with a list loaded (a stored
+//      list file), and without one (section 2: they say the screen fails
+//      open); the document is built once per window and dropped when the
+//      server listens. Section 2 also reads the refund terms document
+//      (src/refund-terms-doc.js): its rails are these rows, and every wire
+//      whose error answer is shown unsettled reads chargedOnErrorAnswer false.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports
 import "./lib/file-mode.js";
 import { bootPaidWires } from "./lib/paid-wires-rig.js";
@@ -36,8 +39,9 @@ import { refundClauses, REPAYMENT_FAMILIES, LATE_LANDING_FAMILIES, OUTBOUND_PROO
 import { familyOf } from "./refund-run.js";
 import { RAILS } from "../src/rails.js";
 import { termsPage } from "../src/terms.js";
+import { REFUND_TERMS_PATH } from "../src/refund-terms-path.js";
 
-let pass = 0, rig = null;
+let pass = 0, rig = null, refundTermsServed = null;
 const fail = async (m) => { console.error(`FAIL - ${m}`); for (const l of (rig?.log() || "").split("\n").filter(Boolean).slice(-20)) console.error("  server:", l.slice(0, 300)); await rig?.stop().catch(() => {}); process.exit(1); };
 const ok = async (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else await fail(m); };
 const text = (html) => html.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ");
@@ -89,7 +93,18 @@ try {
   }
   for (const id of ["x402:exact:eip155:137", "mpp:evm:eip155:42220", "mpp:stripe", "credits", "card:checkout"]) await ok(row(doc, id)?.offered === false, `${id} is not offered (not configured on this boot)`);
   await ok(row(doc, "x402:exact:eip155:8453").features.hangupForgiveness.supported === true && row(doc, "mpp:tempo:pull").features.hangupForgiveness.supported === true, "hang-up forgiveness reads on (the default)");
-  await ok(row(doc, "mpp:tempo:pull").features.sanctionsScreening.supported === false, "Tempo through the relay: no screen of our own, and the cell says so");
+  {
+    const t = row(doc, "mpp:tempo:pull").features.sanctionsScreening;
+    await ok(t.supported === false && /fails open/.test(t.detail) && typeof t.identifier === "string", `Tempo through the relay with no list loaded: the payer screen fails open, and the cell says so (${JSON.stringify(t)})`);
+  }
+  // The refund terms document: the same rails and money cells, served.
+  {
+    const r = await fetch(`${rig.url}${REFUND_TERMS_PATH}`);
+    const terms = await r.json();
+    await ok(r.status === 200 && terms.document === "agent402-refund-terms" && /max-age/.test(r.headers.get("cache-control") || ""), `the refund terms document is served (${r.status})`);
+    await ok(JSON.stringify(terms.rails.map((x) => x.id)) === JSON.stringify(doc.rails.map((x) => x.id)) && terms.rails.every((x) => JSON.stringify(x.settleAfterAnswer) === JSON.stringify(row(doc, x.id).features.settleAfterAnswer) && x.offered === row(doc, x.id).offered), "its rails are the conformance rows, offered and settle cells alike");
+    refundTermsServed = terms;
+  }
   {
     const c = row(doc, "x402:exact:eip155:8453").features.sanctionsScreening;
     await ok(c.supported === false && /no sanctions list is loaded/.test(c.detail) && /fails open/.test(c.detail), `the x402 payer screen is mounted with no list loaded: the cell says it fails open (${JSON.stringify(c)})`);
@@ -105,7 +120,7 @@ try {
   const receiptHeaderOf = (cellDetail) => cellDetail.split(/[:,]/)[0].trim().toLowerCase();
   for (const [wire, id] of Object.entries(WIRE_ROW)) {
     const f = row(doc, id).features;
-    await ok(f.settleAfterAnswer.supported === true, `${id}: the cell claims settle after a successful answer`);
+    await ok(f.settleAfterAnswer.supported === true && refundTermsServed.rails.find((x) => x.id === id).chargedOnErrorAnswer === false, `${id}: the cell claims settle after a successful answer, and the refund terms say an error answer is not charged`);
     const w = await rig.wallet(wire);
     rig.fund(w, 10n ** 12n);
     rig.st.llmStatus = 500;
@@ -177,6 +192,8 @@ try {
       const c = row(doc, id).features.sanctionsScreening;
       await ok(c.supported === true && /refused 403/.test(c.detail) && /no list is loaded the screen fails open/.test(c.detail), `${id}: a list loaded, the cell reads yes and names the fail-open case (${JSON.stringify(c)})`);
     }
+    const t = row(doc, "mpp:tempo:pull").features.sanctionsScreening;
+    await ok(t.supported === true && /relay/.test(t.detail) && /fails open/.test(t.detail), `Tempo through the relay, a list loaded: the payer screen cell reads yes (${JSON.stringify(t)})`);
   } finally { await srv.stop(); }
 }
 {

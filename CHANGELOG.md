@@ -24,6 +24,29 @@ Tools:
   an hour before their ids are checked against their lists; a real id is
   always read.
 
+### 2026-11-18 (refund terms, per-tool reliability and payer screening per rail)
+Payments:
+- `/.well-known/agent402-refund-terms.json` states per payment rail whether
+  an error answer is charged, whether a hang-up is forgiven and how a
+  charged failure is repaid, with the rules of the refund ledger, prepaid
+  credits and card reports, computed from the serving code and its switches.
+  Every 402 body's `payment` block and `/api/pricing` link it.
+- An MPP Tempo payment settled through Tempo's relay now has its paying
+  wallet screened against the OFAC SDN list before the relay is asked; a
+  payer that is not listed is served as before. Each rail's
+  `sanctionsScreening` cell in the conformance document names the
+  `identifier` its screen reads, and says so where a rail carries no payer
+  address.
+Reliability:
+- `/api/reliability/tools` lists every tool with its success rate and median
+  and 95th percentile latency over the last seven days, each marked measured
+  or not enough data; a tool with too few calls in the window has no figure,
+  and an input the caller got wrong is not counted against the tool.
+  `?slug=` returns one tool.
+Docs:
+- A proposal for the receipt format and the refund terms document, with this
+  server as the working implementation, is in the repository's docs folder.
+
 ### 2026-11-18 (signed receipts on every paid call)
 Payments:
 - A streamed paid answer ends with an `event: agent402-receipt` server-sent

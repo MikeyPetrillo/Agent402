@@ -330,6 +330,20 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `POST /api/receipts/verify`; `verifyReceipt()` in the client package. The conformance `signedReceipt`
   cell reads `receiptsServed()` (key loaded AND signer mounted) and the rail being in `SIGNED_RAILS`;
   /trust and llms-full.txt offer receipts only under the same switch (`scripts/test-receipt-signing.js`).
+- **Refund terms document:** `/.well-known/agent402-refund-terms.json` (`src/refund-terms-doc.js`,
+  path in `src/refund-terms-path.js`): per rail the conformance rows' `settleAfterAnswer`,
+  `hangupForgiveness` and `refundOnChargedFailure` cells with `chargedOnErrorAnswer` derived from the
+  first, plus rules read from the running switches (`HANGUP_FORGIVE`, the lasting-effect list,
+  `CREDITS_SALES` for the refund route, card checkout) and the refund families held to
+  `scripts/refund-run.js`'s own constants (`scripts/test-refund-terms-doc.js`). No budget, cap or dollar
+  figure is published. Linked from the 402 `payment` block, `/api/pricing` and the conformance document.
+- **Payer screening per rail:** `src/payer-screen-rails.js` `PAYER_SCREEN_RAILS` names the identifier
+  each rail screens; every conformance `sanctionsScreening` cell carries it as `identifier` (null on
+  MPP card, credits and card checkout, which carry no payer address). Tempo through the relay (the
+  default) screens the payer addresses the credential names before the relay is asked and the
+  relay's settled sender after (`relayPayerScreen`, hooked in `validateTempoCredential`); no list
+  loaded serves unscreened and counts it (operator view `tempoRelay`). Only Tempo direct mode fails
+  closed. A payer not on the list is never refused (`scripts/test-payer-screen-rails.js`).
 - **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
   in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
   route that outlives the claim's expiry cannot run twice on one payment. Every command the guard
@@ -613,7 +627,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   (this request's dollar price on the primary network through `priceForNetwork`, or on the first
   network offered when the route does not offer the primary; one sentence on paying; `noWallet`
   on a proof-of-work tool; `quote` with the caller's own model, request bytes and output cap on a
-  body-quoted route, never a rate or cost; links to `/llms.txt`, `/agents.md#pay` and `/mcp`).
+  body-quoted route, never a rate or cost; links to `/llms.txt`, `/agents.md#pay`, `/mcp` and the
+  refund terms document `/.well-known/agent402-refund-terms.json`).
   Body only, keyed on the PAYMENT-REQUIRED header. A refused payment carries none: an x402
   header that decodes and is refused, or an `Authorization` credential, keeps its own
   explanation. An x402 header that does not decode is removed at intake

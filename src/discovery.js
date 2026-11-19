@@ -473,6 +473,10 @@ export function reliabilityReport({ baseUrl, network, wallet, stats, observedSta
       statusPage: `${baseUrl}/status`,
       openapi: `${baseUrl}/openapi.json`,
       manifest: `${baseUrl}/.well-known/x402`,
+      // Per tool: success rate and p50/p95 latency over a stated window, with
+      // the sample each stands on (src/tool-reliability.js).
+      toolReliability: `${baseUrl}/api/reliability/tools`,
+      refundTerms: `${baseUrl}/.well-known/agent402-refund-terms.json`,
     },
     incidents: `${REPO}/issues?q=label%3Aheartbeat`,
   };
