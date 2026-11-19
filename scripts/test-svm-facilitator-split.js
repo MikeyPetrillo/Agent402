@@ -211,7 +211,8 @@ function stubFacilitator(port, { feePayer, base = true, solFeePayer = true }) {
       if (req.url === "/verify") { state.verify.push(parsed); return reply({ isValid: true, payer: BUYER }); }
       if (req.url === "/settle") {
         state.settle.push(parsed);
-        if (state.mode === "refuse") return reply({ success: false, errorReason: "invalid_exact_svm_payload_transaction_simulation_failed", transaction: "", network: SOL, payer: BUYER });
+        // An HTTP 402 with no transaction: the refusal the settle fallback acts on.
+        if (state.mode === "refuse") return reply({ success: false, errorReason: "invalid_exact_svm_payload_transaction_simulation_failed", transaction: "", network: SOL, payer: BUYER }, 402);
         if (state.mode === "5xx") return reply({ error: "upstream" }, 502);
         return reply({ success: true, transaction: `sig-${feePayer.slice(0, 8)}-${state.settle.length}`, network: parsed?.paymentRequirements?.network || SOL, payer: BUYER });
       }
