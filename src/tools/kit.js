@@ -416,7 +416,7 @@ const encodingTools = [
     slug: "ulid",
     category: "identifiers",
     price: "$0.001",
-    description: "ULIDs on demand: 26-character identifiers that sort by creation time to the millisecond (a timestamp followed by random characters), up to 100 per call. ?count=1..100.",
+    description: "ULIDs on demand: 26-character ULID identifiers that sort by creation time to the millisecond (a 48-bit timestamp, then 80 bits of entropy), up to 100 per call. ?count=1..100.",
     tags: ["ulid", "id", "generator", "sortable"],
     discovery: {
       input: { count: "3" },

@@ -14,10 +14,12 @@
 //   D   watches another payer with no failures: reads ok
 //   E   a store that refuses the connection: its own failures still raise
 //       the word, from this process alone, inside a bounded wait
-//   F   serves one busy refusal of onchain-sql for another top payer:
+//   F1  serves one busy refusal of onchain-sql for another top payer:
+//       onchainSqlBusy reads ok (one refusal is a buyer told to retry)
+//   F   serves three, their first and last ONCHAIN_SQL_BUSY_SPAN_MS apart:
 //       onchainSqlBusy reads alert; G, a new process that served nothing,
-//       reads alert from the shared store with F's refusal (its kind is kept
-//       in the shared window); H, watching only the first payer, reads ok
+//       reads alert from the shared store with F's refusals (their kind is
+//       kept in the shared window); H, watching only the first payer, reads ok
 //
 //   REDIS_URL=redis://127.0.0.1:6379 node scripts/test-top-buyer-failures-redis.js
 //
@@ -32,6 +34,7 @@ import { childJson } from "./lib/child-json.js";
 const SELF = fileURLToPath(import.meta.url);
 const PAYER = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"; // a Solana address shape, mixed case
 const BUSY_PAYER = "0x00000000000000000000000000000000000000b5"; // another top payer, for onchainSqlBusy
+const BUSY_GAP_MS = 600; // three refusals span 1,200 ms, past the 1,000 ms span set below
 
 if (process.env.TOP_BUYER_CHILD) {
   const job = JSON.parse(process.env.TOP_BUYER_CHILD);
@@ -41,7 +44,10 @@ if (process.env.TOP_BUYER_CHILD) {
   T.setTopBuyers(job.top);
   const t0 = Date.now();
   for (let i = 0; i < (job.fail || 0); i++) T.noteVerifiedPaidOutcome({ payer: PAYER, slug: "onchain-sql", status: 502, error: `we said ${i}`, at: t0 + i });
-  for (let i = 0; i < (job.busy || 0); i++) T.noteVerifiedPaidOutcome({ payer: BUSY_PAYER, slug: "onchain-sql", status: 429, kind: T.SQL_BUSY_KIND, error: "busy", at: t0 + i });
+  // Busy refusals spaced BUSY_GAP_MS apart, the last at t0: the sustained
+  // rule reads their first and last against ONCHAIN_SQL_BUSY_SPAN_MS.
+  const nb = job.busy || 0;
+  for (let i = 0; i < nb; i++) T.noteVerifiedPaidOutcome({ payer: BUSY_PAYER, slug: "onchain-sql", status: 429, kind: T.SQL_BUSY_KIND, error: "busy", at: t0 - (nb - 1 - i) * BUSY_GAP_MS });
   await T._flushTopBuyerWrites();
   const started = performance.now();
   const pub = await T.topBuyerFailuresStatus({ now: t0 + 1_000 });
@@ -63,11 +69,12 @@ if (!String(process.env.REDIS_URL || "").trim()) {
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const prefix = `top-buyer-${randomBytes(5).toString("hex")}`;
-function container(job, { redisUrl = process.env.REDIS_URL, timeoutMs = 30_000 } = {}) {
+function container(job, { redisUrl = process.env.REDIS_URL, timeoutMs = 30_000, prefixOverride = null } = {}) {
   return new Promise((resolve) => {
-    const env = { ...process.env, TOP_BUYER_CHILD: JSON.stringify(job), SHARED_LIMITS_PREFIX: prefix, REDIS_URL: redisUrl, SHARED_LIMITS_OP_MS: "1000",
+    const env = { ...process.env, TOP_BUYER_CHILD: JSON.stringify(job), SHARED_LIMITS_PREFIX: prefixOverride || prefix, REDIS_URL: redisUrl, SHARED_LIMITS_OP_MS: "1000",
       // Short windows, so this run's keys expire within minutes.
-      TOP_BUYER_FAIL_WINDOW_MS: "60000", TOP_BUYER_FAIL_HOLD_MS: "60000", TOP_BUYER_FAIL_MIN: "3" };
+      TOP_BUYER_FAIL_WINDOW_MS: "60000", TOP_BUYER_FAIL_HOLD_MS: "60000", TOP_BUYER_FAIL_MIN: "3",
+      ONCHAIN_SQL_BUSY_MIN: "3", ONCHAIN_SQL_BUSY_SPAN_MS: "1000" };
     delete env.SHARED_LIMITS; delete env.STATE_DATABASE_URL;
     const child = spawn(process.execPath, [SELF], { env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "";
@@ -99,12 +106,15 @@ ok(d.out?.pub?.status === "ok", `D: another top payer with no failures reads ok 
 const e = await container({ top: [PAYER], fail: 3 }, { redisUrl: "redis://127.0.0.1:1" });
 ok(e.out?.pub?.status === "alert" && e.out.full?.sharedStore === "unread" && e.out.ms < 5_000, `E: with the store refusing, its own failures still read alert inside a bounded wait (${show(e)}, ${e.out?.ms} ms)`);
 
-// onchainSqlBusy reads the same per-payer window, by the refusal's kind.
-const f = await container({ top: [PAYER, BUSY_PAYER], busy: 1 });
-ok(f.out?.busyPub?.status === "alert" && f.out.busyFull?.alerting?.length === 1 && f.out.busyFull.alerting[0].rank === 2, `F: one busy refusal it served reads onchainSqlBusy alert, for that payer only; A's 502s for the other payer are not busy refusals (${JSON.stringify(f.out?.busyFull?.alerting)})`);
+// onchainSqlBusy reads the same per-payer window, by the refusal's kind, and
+// only a sustained stretch of refusals raises it.
+const f1 = await container({ top: [BUSY_PAYER], busy: 1 }, { prefixOverride: `${prefix}-single` });
+ok(f1.out?.busyPub?.status === "ok", `F1: one busy refusal reads ok (${JSON.stringify(f1.out?.busyFull)})`);
+const f = await container({ top: [PAYER, BUSY_PAYER], busy: 3 });
+ok(f.out?.busyPub?.status === "alert" && f.out.busyFull?.alerting?.length === 1 && f.out.busyFull.alerting[0].rank === 2, `F: three busy refusals over the span read onchainSqlBusy alert, for that payer only; A's 502s for the other payer are not busy refusals (${JSON.stringify(f.out?.busyFull?.alerting)})`);
 const g = await container({ top: [PAYER, BUSY_PAYER], busy: 0 });
 const gRow = g.out?.busyFull?.alerting?.[0];
-ok(g.out?.busyPub?.status === "alert" && g.out.busyFull?.sharedStore === "on" && gRow?.payer === BUSY_PAYER.slice(0, 6) && gRow.rank === 2 && gRow.refusals?.length === 1 && gRow.refusals[0].status === 429, `G: a process that served none reads alert from the shared store, with the kind kept (${JSON.stringify(g.out?.busyFull)})`);
+ok(g.out?.busyPub?.status === "alert" && g.out.busyFull?.sharedStore === "on" && gRow?.payer === BUSY_PAYER.slice(0, 6) && gRow.rank === 2 && gRow.refusals?.length === 3 && gRow.refusals.every((r) => r.status === 429), `G: a process that served none reads alert from the shared store, with the kind kept (${JSON.stringify(g.out?.busyFull)})`);
 ok(Object.keys(g.out?.busyPub || {}).join() === "status", "G: the public answer is the word alone");
 const h = await container({ top: [PAYER], busy: 0 });
 ok(h.out?.busyPub?.status === "ok", `H: watching only the other payer reads ok (${JSON.stringify(h.out?.busyPub)})`);

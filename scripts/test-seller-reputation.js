@@ -399,14 +399,15 @@ const unlabeled = (t) => String(t).split(LABEL).join("");
     ok(rc2.r.status === 202 && rc2.json?.accepted === false && rc2.json.requestedAt === rc1.json.requestedAt && rc2.json.nextAcceptedAt === rc1.json.nextAcceptedAt, "a repeat inside the span answers the same scheduled request (idempotent)");
     const thinAfter = await get(`/api/reputation?seller=thin.example`);
     ok(thinAfter.json?.reputation?.recheck?.status === "scheduled" && thinAfter.json.reputation.recheck.requestedAt === rc1.json.requestedAt && thinAfter.json.reputation.lastRecheckedAt === null, "the record shows the scheduled re-check, not yet measured");
+    const rcBody = await fetch(`${base}/api/reputation/recheck`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ seller: "thin.example" }) }).then(async (r) => ({ r, json: await r.json().catch(() => null) }));
+    ok(rcBody.r.status === 202 && rcBody.json?.seller === THIN && rcBody.json.accepted === false, "the seller can also be sent as a JSON body");
     const rcMissing = await post(`/api/reputation/recheck`);
     const rcUnknown = await post(`/api/reputation/recheck?seller=nobody.example`);
     const rcSelf = await post(`/api/reputation/recheck?seller=agent402.tools`);
     ok(rcMissing.r.status === 400 && rcUnknown.r.status === 404 && rcSelf.r.status === 404, `missing, unknown and own-host values are refused (${rcMissing.r.status}, ${rcUnknown.r.status}, ${rcSelf.r.status})`);
     const rc3 = await post(`/api/reputation/recheck?seller=scored.example`);
     const rc4 = await post(`/api/reputation/recheck?seller=big.example`);
-    const rc5 = await post(`/api/reputation/recheck?seller=scored.example`);
-    ok(rc3.r.status === 202 && rc4.r.status === 202 && rc5.r.status === 429 && Number(rc5.r.headers.get("retry-after")) > 0, `the per-caller limit holds (4 an hour here): ${[rc1, rc2, rc3, rc4, rc5].map((x) => x.r.status).join(",")}`);
+    ok(rc3.r.status === 202 && rc4.r.status === 429 && Number(rc4.r.headers.get("retry-after")) > 0, `the per-caller limit holds (4 an hour here, refusals spend none): ${[rc1, rc2, rcBody, rc3, rc4].map((x) => x.r.status).join(",")}`);
     const pageAfter = await get(`/base?seller=thin.example`);
     ok(/last re-checked never/.test(pageAfter.text), "the seller card shows last re-checked");
 

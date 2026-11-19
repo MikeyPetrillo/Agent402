@@ -9789,7 +9789,9 @@ const recheckLimiter = createRegistrationLimiter({ name: "reputation-recheck", p
 setInterval(() => { recheckLimiter.sweep(); }, 60_000).unref?.();
 app.post(RECHECK_PATH, async (req, res) => {
   res.set("Cache-Control", "no-store");
-  const raw = typeof req.query.seller === "string" ? req.query.seller.trim() : "";
+  // ?seller= or a JSON body {"seller": ...}; a repeated query value is refused.
+  const q = req.query.seller, bodySeller = req.body && typeof req.body === "object" ? req.body.seller : undefined;
+  const raw = typeof q === "string" ? q.trim() : q === undefined && typeof bodySeller === "string" ? bodySeller.trim() : "";
   if (!raw) return res.status(400).json({ error: "name one seller: ?seller=<host or origin>", example: `${BASE_URL}${RECHECK_PATH}?seller=seller.example` });
   if (raw.length > 512) return res.status(400).json({ error: "seller is at most 512 characters" });
   if (isSelfSellerQuery(raw, BASE_URL)) return res.status(404).json({ error: "this server does not score its own host", seller: raw.slice(0, 253) });
