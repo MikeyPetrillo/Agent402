@@ -26,7 +26,7 @@ export const FREE_TIER_SLUGS = new Set([
   "isbn-validate", "iso-week", "json-diff", "json-flatten", "json-format", "json-merge",
   "json-pointer", "json-query", "json-schema-infer", "json-to-csv", "json-to-yaml", "json-validate",
   "jsonl", "jwt-decode", "jwt-sign", "jwt-verify", "keywords", "leap-year",
-  "levenshtein", "linear-regression", "loan-payment", "lorem", "markdown-to-html", "mime",
+  "levenshtein", "linear-regression", "loan-payment", "lorem", "markdown-to-html", "market-calendar", "mime",
   "morse", "moving-average", "npv", "number-format", "openapi-diff", "openapi-extract",
   "openapi-lint", "openapi-mock-response", "openapi-redact", "openapi-required-params", "openapi-resolve-refs", "openapi-search",
   "openapi-security-summary", "openapi-to-curl", "openapi-validate-payload", "outliers", "password", "password-strength",

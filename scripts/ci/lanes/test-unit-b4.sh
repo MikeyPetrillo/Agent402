@@ -4,11 +4,13 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (43 scripts, one process each)
+# @step 1: Offline suites (44 scripts, one process each)
 # "Router Sybil resistance (M6 — Attack IV: per-seller diversity cap, metadata-injection listings dropped)"
 t node scripts/test-router-sybil.js
 # Data-kit tests (barcode-lookup, fx-rate, weather-forecast — live keyless APIs)
 t node scripts/test-data-kit.js
+# Holidays kit: public-holidays v4 contract, cache bounds, business-day math on published calendars, rails, exchanges (offline)
+t node scripts/test-holidays-kit.js
 # The sweeps' server answers examples naming its own /samples/ and /fixtures/ files from itself, never production (offline)
 t node scripts/test-own-examples-preload.js
 # A keyless upstream's 5xx is excused only when the runner's direct read of the same request fails too (offline, loopback)

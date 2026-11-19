@@ -36,6 +36,10 @@
   "1e9cc37678c0112d7a39": [
    "^(sol-token-safety|sol-price|sol-swap-quote|sol-token-lookup|sol-token-search|token-brief)$::^description$"
   ],
+  "5baf133faf32df5bd738": [
+   "^(public-holidays|bank-holidays|school-holidays|next-holidays|long-weekends|country-business-days|business-day-planner|settlement-calendar)$::^description$",
+   "^skill-locale-brief$::^description$"
+  ],
   "7f871cbf905f6e0cd598": [
    "^v1-::^input\\.(model|zdr|tools)$"
   ],
