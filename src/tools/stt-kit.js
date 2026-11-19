@@ -53,6 +53,7 @@
 // to be the buyer's 502. It now gets one more attempt on the same model; see
 // transcribeWithRetry for the bounds.
 
+import { answerLanguage } from "../text-language.js";
 import { parseMultipartFile } from "../multipart.js";
 import { loadMusicMetadata } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
@@ -587,7 +588,9 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
     model,
     provider: "openai",
     text: data.text ?? "",
-    language: data.language ?? null,
+    // The json response format carries no language: the caller's hint, else a
+    // guess from the transcript's words (null when no language clearly leads).
+    language: answerLanguage(data.language, language, data.text),
     // OpenAI's json response carries no duration; we measured it locally for
     // the cap, so the promised field is populated (corpus, 2026-09-06).
     duration: data.duration ?? (Number.isFinite(probedDuration) ? Math.round(probedDuration * 100) / 100 : null),
@@ -643,7 +646,7 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
     model,
     provider: "openrouter",
     text: data.text ?? "",
-    language: data.language ?? null,
+    language: answerLanguage(data.language, language, data.text),
     // Scribe's 0-1 confidence in the detected language; null when not scored.
     language_confidence: Number.isFinite(data.language_confidence) && data.language_confidence >= 0 && data.language_confidence <= 1 ? Math.round(data.language_confidence * 1e4) / 1e4 : null,
     duration: Number.isFinite(data.duration) ? data.duration : (Number.isFinite(probedDuration) ? Math.round(probedDuration * 100) / 100 : null),

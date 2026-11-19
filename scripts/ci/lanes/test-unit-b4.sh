@@ -298,6 +298,8 @@ t node scripts/test-robots-redos.js
 t node scripts/test-stt-billing-limit.js
 # transcribe makes one more upstream attempt on a transient failure, inside its cap and its counters (offline)
 t node scripts/test-stt-retry.js
+# transcription answers carry a language: upstream, hint, or the transcript's words
+t node scripts/test-stt-language.js
 # rwa-asset joins only the requested asset's market row (offline)
 t node scripts/test-rwa-asset-own-row.js
 # filing-watch form filter reads the full recent list and older filing files, bounded reads (offline)
