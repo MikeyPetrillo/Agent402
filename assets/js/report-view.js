@@ -230,6 +230,10 @@
   function inputNoun(kind) {
     return { dossier: "ticker", insider: "ticker", fund: "fund name or ticker", domain: "domain", research: "question", recall: "drug, food or device", filing: "ticker", token: "token mint", ticker: "ticker", linkedin: "topic" }[kind] || "subject";
   }
+  // Google Analytics key events (assets/js/ga-loader.js defines gtag only
+  // where GA is configured and allowed): the product and the kind only, never
+  // what the buyer typed. Sent as a beacon so it survives the redirect.
+  function ga(ev, props) { try { if (typeof window.gtag === "function") window.gtag("event", ev, Object.assign({ transport_type: "beacon" }, props)); } catch (e) { /* telemetry never blocks a buy */ } }
   function wireSampleBuy(s) {
     var form = document.getElementById("sample-buy");
     if (!form) return;
@@ -240,10 +244,11 @@
       if (!input) { err.textContent = "Enter your own " + inputNoun(s.kind) + " first."; return; }
       var btn = form.querySelector("button"); var label = btn.textContent; btn.disabled = true; btn.textContent = "Redirecting to checkout…";
       try { if (window.posthog && window.posthog.capture) window.posthog.capture("report_buy_click", { product: s.product, kind: "sample" }); } catch (e) { /* telemetry never blocks a buy */ }
+      ga("report_buy_click", { product: s.product, kind: "sample" });
       try {
         var r = await fetch("/api/buy", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ product: s.product, input: input }) });
         var j = await r.json();
-        if (j && j.url) { window.location = j.url; return; }
+        if (j && j.url) { ga("checkout_started", { product: s.product, kind: "sample" }); window.location = j.url; return; }
         err.textContent = (j && j.error) || "Could not start checkout.";
       } catch (e) { err.textContent = "Network error, please try again."; }
       btn.disabled = false; btn.textContent = label;

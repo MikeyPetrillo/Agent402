@@ -61,6 +61,8 @@ t node scripts/test-home-page.js
 t node scripts/test-nav-primary.js
 t node scripts/test-badge-contrast.js
 t node scripts/test-ga-snippet.js
+# GA key events: buy clicks and checkout starts reach GA with the product only (stub DOM, offline)
+t node scripts/test-ga-key-events.js
 # Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
 t node scripts/test-analytics-privacy.js
 # Age, self-hosted fonts, analytics off-switches, recurring-mail stop links, renewal terms after purchase, the copyright agent

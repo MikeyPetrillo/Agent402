@@ -103,7 +103,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-18.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-19.</p>
 </section>
 
 <section>
@@ -117,7 +117,7 @@ cut the same way. It keeps a random per-visit id in session storage, never a coo
 events and forwards only their body and content type, so your IP address is not passed on to the
 analytics provider. It keeps no session
 replay: nothing you click, type or see on a page is recorded. Pages also run
-<b>Google Analytics</b> (advertising features off) to count visits and see how people find the site. It sets a measurement cookie
+<b>Google Analytics</b> (advertising features off) to count visits, see how people find the site and count clicks that start a report or monitor checkout (the product name only, never what you type). It sets a measurement cookie
 (<code>_ga</code>) and Google receives your IP address and browser details under
 <a href="https://policies.google.com/privacy" rel="noopener">Google's privacy policy</a>. Advertising
 features, ad personalization and Google signals are off. If your browser's time zone is in Europe, the
