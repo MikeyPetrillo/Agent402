@@ -57,8 +57,8 @@ export interface Agent402Options {
   tlsDistrust?: boolean;
   /** Resend the SDK's own request once on a connection reset (default true). */
   retryResets?: boolean;
-  /** Opt-in per-call ceiling in USD (no cap unless set). */
-  maxPerCallUsd?: number | null;
+  /** Per-call ceiling in USD (default 5; 0, "off" or null turns it off; a malformed value keeps the default and warns). */
+  maxPerCallUsd?: number | string | null;
   /** Opt-in rolling-24h ceiling in USD (no cap unless set). */
   dailyLimitUsd?: number | null;
   /** Opt-in rolling-24h ceiling per seller host in USD (no cap unless set). */
@@ -229,6 +229,10 @@ export class AsyncJobPendingError extends Error {
 }
 
 export const DEFAULT_BASE_URL: string;
+/** The per-call ceiling a client gets when maxPerCallUsd is not set (USD). */
+export const DEFAULT_MAX_PER_CALL_USD: number;
+/** The per-call ceiling a maxPerCallUsd value gives: the default when unset or malformed (warns), null when 0, "off" or null. */
+export function perCallCeilingOf(value: unknown, warn?: (message: string) => void): number | null;
 export const DEFAULT_REQUEST_TIMEOUT_MS: number;
 export const DEFAULT_HOST_BLIND_HOLD_MS: number;
 export const HOLD_SLACK_MS: number;

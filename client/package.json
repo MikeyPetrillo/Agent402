@@ -1,6 +1,6 @@
 {
   "name": "agent402-client",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Agent402 buyer SDK, the buy side of Agentic Finance: resolve a task to one of 500+ ready tools, call it with payment handled and verify its signed receipt - free via proof-of-work, or over x402 or MPP (a stock mppx fetch works) with a wallet you keep. Caching, idempotent retries (Idempotency-Key), non-custodial, zero dependencies.",
   "type": "module",
   "main": "index.js",

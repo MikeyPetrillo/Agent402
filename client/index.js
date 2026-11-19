@@ -35,7 +35,7 @@ export { MAX_POW_DIFFICULTY, MAX_POW_TRIES_FACTOR, solvePowAsync } from "./pow-s
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.9.0";
+const VERSION = "0.10.0";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // A package built on this SDK (an adapter) names itself first: its own
 // product token, then this one. Anything that is not one well-formed token
@@ -47,6 +47,21 @@ const userAgentOf = (product) => (typeof product === "string" && PRODUCT_TOKEN_R
 // caller, while still stopping the class it exists for. A ceiling that is off
 // by default protects nobody, so this one is on; pass null to disable it.
 const DEFAULT_MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+// The per-call ceiling a client gets when the caller sets none: it covers
+// every catalog price on the default host and stops a 402 that asks for far
+// more. 0, "off" or null turns it off; a malformed value keeps it and warns.
+export const DEFAULT_MAX_PER_CALL_USD = 5;
+export function perCallCeilingOf(value, warn = (m) => console.warn(m)) {
+  if (value === undefined) return DEFAULT_MAX_PER_CALL_USD;
+  if (value === null) return null;
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : value;
+  if (raw === "off" || raw === 0 || raw === "0") return null;
+  const n = typeof raw === "number" ? raw : (typeof raw === "string" && raw !== "" ? Number(raw) : NaN);
+  if (Number.isFinite(n) && n >= 0) return n === 0 ? null : n;
+  const shown = typeof value === "string" && value.length <= 16 ? JSON.stringify(value) : typeof value;
+  warn(`[agent402-client] maxPerCallUsd ${shown} is not a USD amount, 0 or "off"; keeping the default ($${DEFAULT_MAX_PER_CALL_USD} per call)`);
+  return DEFAULT_MAX_PER_CALL_USD;
+}
 
 // Each request the SDK sends is given this long before it is abandoned: the
 // published client timeout for metered calls on Agent402 (src/metered-lead.js
@@ -213,8 +228,9 @@ export class Agent402 {
    *                                         chain through a distrusted intermediate CA); false sends it as is
    * @param {boolean} [opts.retryResets=true] resend the SDK's own request once when its connection failed
    *                                         before any answer (see resetRetryFetch); false sends each once
-   * @param {number|null} [opts.maxPerCallUsd]  opt-in ceiling on a single paid call (USD); over → SpendingLimitError
-   *                                         before paying. No cap unless set
+   * @param {number|string|null} [opts.maxPerCallUsd=5]  ceiling on a single paid call (USD); over → SpendingLimitError
+   *                                         before paying. Default $5; 0, "off" or null turns it off; a
+   *                                         malformed value keeps the default and warns
    * @param {number|null} [opts.dailyLimitUsd]  opt-in ceiling on rolling-24h paid spend (USD). No cap unless set
    * @param {number} [opts.maxPerHostUsd]    hard ceiling on rolling-24h paid spend to one seller host (USD)
    * @param {object} [opts.x402Client]       the @x402/core x402Client your `fetch` wraps: the caps are then
@@ -251,7 +267,7 @@ export class Agent402 {
    *        abandoned (RequestTimeoutError); null waits as long as the connection stays open
    */
   constructor({ baseUrl = DEFAULT_BASE_URL, fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
-    maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null, payNetworks = null,
+    maxPerCallUsd = undefined, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null, payNetworks = null,
     maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null,
     respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null, gateway = null, userAgent = null, retryResets = true,
     timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
@@ -293,15 +309,16 @@ export class Agent402 {
     // Spending policy (defends the x402 "wallet drain via uncapped spending"
     // failure mode): hard ceilings enforced BEFORE any payment is signed. A
     // malicious or misconfigured 402 that quotes an inflated price is refused
-    // instead of paid. Every cap is opt-in: null (the default) is no limit,
-    // so a client nobody configured never refuses a purchase.
+    // instead of paid. The per-call ceiling defaults to
+    // DEFAULT_MAX_PER_CALL_USD ($5, above every catalog price; 0, "off" or
+    // null turns it off); the rolling caps are opt-in (null is no limit).
     // A call refused before any payment left this process never counts. Once
     // a payment header has been sent, its signed amount counts whatever the
     // seller answers: "settled" on a delivered answer, otherwise "held" (the
     // authorization can still be redeemed) until it can no longer settle and
     // the rolling window has passed it.
     this._spend = {
-      maxPerCall: numOrNull(maxPerCallUsd),
+      maxPerCall: perCallCeilingOf(maxPerCallUsd),
       daily: numOrNull(dailyLimitUsd),
       perHost: numOrNull(maxPerHostUsd),
       log: [], // [{ ts, host, usd, state: "reserved"|"held"|"settled", until? }]
@@ -1020,8 +1037,9 @@ export class Agent402 {
       ? ` (this request is quoted $${usd}; the catalog lists $${listUsd})` : "";
     if (s.maxPerCall != null && usd > s.maxPerCall) {
       const name = limits.allowed ? "maxUsd" : "maxPerCallUsd";
+      const raise = limits.allowed ? "" : `; pass { maxUsd } for this call, or raise maxPerCallUsd (0 or "off" turns it off)`;
       throw new SpendingLimitError(
-        `refusing to pay $${usd} for "${slug}" - exceeds ${name} $${s.maxPerCall}${quotedNote}`,
+        `refusing to pay $${usd} for "${slug}" - exceeds ${name} $${s.maxPerCall}${quotedNote}${raise}`,
         { limit: "maxPerCallUsd", slug, priceUsd: usd, cap: s.maxPerCall, ...(listUsd != null ? { listPriceUsd: listUsd } : {}) });
     }
     // Held payments count: each is a signed authorization that was sent and

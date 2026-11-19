@@ -416,21 +416,40 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(counters.preflights === 0 && counters.paid === 1, "with both caps turned off (null) nothing is preflighted");
   }
 
-  // Caps are opt-in: a client built with no cap option never refuses a
-  // purchase (no preflight, no ceiling), and a cap the caller sets still holds.
+  // The per-call ceiling defaults to $5 (the rolling caps stay opt-in): a
+  // client built with no cap option pays every catalog price, refuses a quote
+  // above $5 before signing and names the setting that raises it; 0, "off"
+  // and null turn it off; a malformed value keeps the default and warns.
   {
     const plain = mk(3.3, {}).c.spendingSummary().limits;
-    ok(plain.maxPerCallUsd === null && plain.dailyLimitUsd === null && plain.maxPerHostUsd === null, `a client with no cap option has no caps (${JSON.stringify(plain)})`);
-    const { DEFAULT_MAX_PER_CALL_USD, DEFAULT_DAILY_LIMIT_USD } = await import("./index.js");
-    ok(DEFAULT_MAX_PER_CALL_USD === undefined && DEFAULT_DAILY_LIMIT_USD === undefined, "no default cap is exported");
+    ok(plain.maxPerCallUsd === 5 && plain.dailyLimitUsd === null && plain.maxPerHostUsd === null, `a client with no cap option has the $5 per-call ceiling only (${JSON.stringify(plain)})`);
+    const { DEFAULT_MAX_PER_CALL_USD, DEFAULT_DAILY_LIMIT_USD, perCallCeilingOf } = await import("./index.js");
+    ok(DEFAULT_MAX_PER_CALL_USD === 5 && DEFAULT_DAILY_LIMIT_USD === undefined, "the default per-call ceiling is $5 and no daily cap is exported");
     {
       const { c, counters } = mk(3.3, {});
       c._catalog.set("pro", { method: "POST", path: "/api/route-execute-pro", computePayable: false, price: "$3.30" });
       const out = await c.call("pro", { task: "t" });
-      ok(out?.ok === true && counters.paid === 1 && counters.preflights === 0, "an uncapped default client pays a $3.30 call with no refusal and no preflight");
+      ok(out?.ok === true && counters.paid === 1, "a default client pays a $3.30 call with no refusal");
       for (let i = 0; i < 100; i++) await c.call("chat", { n: i });
-      ok(counters.paid === 101 && counters.preflights === 0, `the same client pays 100 more calls in a day with no refusal (${counters.paid} paid)`);
+      ok(counters.paid === 101, `the same client pays 100 more calls in a day with no refusal (${counters.paid} paid)`);
     }
+    {
+      const { c, counters } = mk(7, {});
+      let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+      ok(e?.name === "SpendingLimitError" && e.cap === 5 && counters.paid === 0 && /maxPerCallUsd/.test(e.message) && /"off"/.test(e.message), `a default client refuses a $7 quote before signing and names the setting (${e?.message})`);
+      const out = await c.call("chat", {}, { maxUsd: 8 });
+      ok(out?.ok === true && counters.paid === 1, "the same call with maxUsd: 8 is paid");
+    }
+    for (const off of [0, "0", "off", " OFF ", null]) {
+      const { c, counters } = mk(7, { maxPerCallUsd: off });
+      const out = await c.call("chat", {});
+      ok(out?.ok === true && counters.paid === 1 && c.spendingSummary().limits.maxPerCallUsd === null, `maxPerCallUsd ${JSON.stringify(off)} turns the ceiling off and a $7 call is paid`);
+    }
+    for (const bad of [-1, "five", "", NaN, {}, "1e999x"]) {
+      const warned = [];
+      ok(perCallCeilingOf(bad, (m) => warned.push(m)) === 5 && warned.length === 1 && /keeping the default/.test(warned[0]), `a malformed maxPerCallUsd (${typeof bad === "object" ? "{}" : JSON.stringify(String(bad))}) keeps the $5 default and warns`);
+    }
+    ok(perCallCeilingOf(12) === 12 && perCallCeilingOf("2.5") === 2.5 && perCallCeilingOf(undefined) === 5, "a valid amount is used as given; unset is the default");
     {
       const { c, counters } = mk(5, { maxPerCallUsd: 4 });
       let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }

@@ -99,9 +99,9 @@ async function main() {
   console.log(`PASS — agent402-strands: ${tools.length} tool(s) generated, callback() and execute() returned the real result.`);
 }
 
-// Spending caps are opt-in and pass through to agent402-client: none by
-// default (a caller who sets none is never refused a purchase), and the ones
-// a caller sets reach the client.
+// Spending caps pass through to agent402-client: with none set the client's
+// own default holds (a $5 per-call ceiling from agent402-client 0.10.0, none
+// before it), and the ones a caller sets reach the client.
 {
   const { agent402Tools: tools402 } = await import("./index.js");
   const base = BASE;
@@ -109,9 +109,10 @@ async function main() {
   for (let i = 0; i < 120; i++) { try { if ((await fetch(`${base}/health`)).ok) break; } catch { /* not up yet */ } await new Promise((r) => setTimeout(r, 500)); }
   const plain = (await tools402({ baseUrl: base, slugs: ["hash"] })).client.spendingSummary().limits;
   const capped = (await tools402({ baseUrl: base, slugs: ["hash"], maxPerCallUsd: 0.5, dailyLimitUsd: 2, maxPerHostUsd: 1 })).client.spendingSummary().limits;
-  if (plain.maxPerCallUsd !== null || plain.dailyLimitUsd !== null || plain.maxPerHostUsd !== null) { console.error("FAIL: no spending cap by default", plain); process.exit(1); }
+  const clientDefault = (await import("agent402-client")).DEFAULT_MAX_PER_CALL_USD ?? null;
+  if (plain.maxPerCallUsd !== clientDefault || plain.dailyLimitUsd !== null || plain.maxPerHostUsd !== null) { console.error("FAIL: with no cap set, only the client's own per-call default holds", plain, clientDefault); process.exit(1); }
   if (capped.maxPerCallUsd !== 0.5 || capped.dailyLimitUsd !== 2 || capped.maxPerHostUsd !== 1) { console.error("FAIL: caller-set caps reach the client", capped); process.exit(1); }
-  console.log("ok - spending caps are opt-in and pass through to agent402-client");
+  console.log("ok - spending caps pass through to agent402-client; with none set only its own per-call default holds");
 }
 
 main().then(() => { if (proc) proc.kill(); process.exit(0); }).catch((e) => { console.error("FAIL:", e); if (proc) proc.kill(); process.exit(1); });
