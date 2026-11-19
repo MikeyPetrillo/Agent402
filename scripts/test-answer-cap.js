@@ -100,6 +100,11 @@ try {
       started.length = 0;
       const out = await toMp3(readFileSync(lowPath), { bitrate: "192k" });
       ok(out.format === "mp3" && out.bytes > 20 * MB && out.bytes <= AUDIO_ANSWER_MAX_BYTES && Buffer.from(out.mp3Base64, "base64").length === out.bytes, `an hour of 8 kHz audio converts (${capText(out.bytes)}: the encoder holds that sample rate to 64k)`);
+      // The loudness filter writes 48 kHz whatever came in, so the same
+      // file normalized is 192k for the hour: refused before the encode.
+      const before = started.length;
+      const n = await caught(() => normalizeAudio(readFileSync(lowPath)));
+      ok(n?.statusCode === 413 && started.length === before + 1 && started.at(-1).bin === "ffprobe", `the same hour normalized is a 413 before the encode (${n?.message})`);
       const enc = started.find((s) => s.bin === "ffmpeg");
       const at = enc ? enc.args.indexOf("-fs") : -1;
       ok(at > 0 && enc.args[at + 1] === String(AUDIO_ANSWER_MAX_BYTES + 1), "the encoder is given the size limit (-fs, one byte past the cap)");
