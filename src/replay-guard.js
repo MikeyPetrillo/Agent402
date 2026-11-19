@@ -53,7 +53,7 @@ import algosdk from "algosdk";
 import { getTransactionDecoder } from "@solana/kit";
 import { paymentHeaderOf } from "./payer.js";
 import { getSharedRedisClient, sharedLimitEnabled } from "./shared-limit.js";
-import { boundedRedisClient } from "./shared-limits.js";
+import { boundedRedisClient } from "./bounded-redis.js";
 // Every command this guard sends is bounded (SHARED_LIMITS_OP_MS, loop time):
 // a connected Redis that stops answering fails the command, which each path
 // below reads as a store that did not answer, instead of holding the paid

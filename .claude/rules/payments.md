@@ -334,7 +334,7 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
   route that outlives the claim's expiry cannot run twice on one payment. Every command the guard
   and the mppx replay store (`src/mppx-store.js`) send is bounded (`boundedRedisClient` in
-  `src/shared-limits.js`, `SHARED_LIMITS_OP_MS`, loop time), so a connected Redis that stops
+  `src/bounded-redis.js`, `SHARED_LIMITS_OP_MS`, loop time), so a connected Redis that stops
   answering reads as unreachable instead of holding the call (a paid x402 call answered in about
   6 s with Redis stopped, where it waited past 30 s before). With Redis configured
   but unreachable, a paid call is refused 503 with `Retry-After` before any payment is taken (x402

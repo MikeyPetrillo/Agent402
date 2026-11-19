@@ -63,8 +63,10 @@ export function sharedLimitsMode() { return MODE; }
 /** True when a control should write its state through to the shared store. */
 export function sharedLimitsEnabled() { return MODE === "redis"; }
 
-/** A Redis command that neither answers nor fails within this is a failure (SHARED_LIMITS_OP_MS). */
-export const OP_MS = () => Math.max(50, Number(process.env.SHARED_LIMITS_OP_MS) || 1_000);
+// A Redis command that neither answers nor fails within OP_MS is a failure
+// (SHARED_LIMITS_OP_MS); defined beside boundedRedisClient, which holds no state.
+import { OP_MS, boundedRedisClient } from "./bounded-redis.js";
+export { OP_MS, boundedRedisClient };
 /** How long after a failed command the word reads degraded (SHARED_LIMITS_DEGRADED_HOLD_MS). */
 export const DEGRADED_HOLD_MS = () => Math.max(1_000, Number(process.env.SHARED_LIMITS_DEGRADED_HOLD_MS) || 60_000);
 /** A window read hands back its entries only up to this many (count and sum always). */
@@ -287,28 +289,6 @@ return out`;
 // not answer (which read the word degraded for a minute on a healthy Redis).
 function withTimeout(p, ms) {
   return withLoopTimeout(p, ms, () => new Error("shared-limits: command timed out"));
-}
-/**
- * The shared Redis client with every command bounded: a method that answers a
- * promise rejects "command timed out" when no answer came within `ms` of loop
- * time (default OP_MS), so a connected Redis that stops answering fails the
- * caller's command instead of holding it for as long as the socket lives.
- * Anything else (a property, a method that answers no promise) passes
- * through. Null stays null.
- */
-export function boundedRedisClient(c, ms = OP_MS) {
-  if (!c || typeof c !== "object") return c ?? null;
-  const limit = () => (typeof ms === "function" ? ms() : ms);
-  return new Proxy(c, {
-    get(target, prop) {
-      const v = Reflect.get(target, prop, target);
-      if (typeof v !== "function") return v;
-      return function boundedCommand(...args) {
-        const out = v.apply(target, args);
-        return out && typeof out.then === "function" ? withTimeout(out, limit()) : out;
-      };
-    },
-  });
 }
 const parseSummary = (r) => {
   const count = Number(r?.[0]) || 0, sum = Number(r?.[1]) || 0;

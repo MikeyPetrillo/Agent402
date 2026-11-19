@@ -24,7 +24,7 @@
 import { Json } from "ox";
 import { Store } from "mppx";
 import { getSharedRedisClient } from "./shared-limit.js";
-import { boundedRedisClient } from "./shared-limits.js";
+import { boundedRedisClient } from "./bounded-redis.js";
 
 export const MPPX_STORE_PREFIX = "mppx-store:";
 // A value that is not a replay marker carries no expiry of its own (mppx's
