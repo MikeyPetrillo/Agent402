@@ -127,7 +127,9 @@ async function boot(setup, { firstHost = "127.0.0.1", extraEnv = {} } = {}) {
 // 4. The live control: with the URL set, the same primary is offered and named.
 for (const [label, urlSet] of [["boot 3 (robinhood primary, no URL)", false], ["boot 4 (robinhood primary, URL set)", true]]) {
   const before = failed;
-  const b = await boot(() => {}, { extraEnv: { NETWORK: "robinhood", PAYMENT_NETWORKS: "robinhood,base", ...(urlSet ? {} : { ROBINHOOD_FACILITATOR_URL: "" }) } });
+  // A floor is set (ROBINHOOD_MIN_PRICE_USD; none by default) so /api/pricing
+  // shows it is published only while the chain is offered.
+  const b = await boot(() => {}, { extraEnv: { NETWORK: "robinhood", PAYMENT_NETWORKS: "robinhood,base", ROBINHOOD_MIN_PRICE_USD: "0.004", ...(urlSet ? {} : { ROBINHOOD_FACILITATOR_URL: "" }) } });
   try {
     check(b.up, `${label}: the paid-mode server booted`);
     if (b.up) {

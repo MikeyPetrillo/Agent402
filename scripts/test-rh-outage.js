@@ -336,6 +336,23 @@ await check("the buyer left holding a forgiveness ticket -> our relayer is not u
   assert.equal(ctx.__a402LateAuth?.nonce, p.nonce);
 });
 
+await check("a sale under our relayer's minimum -> our relayer is not used, 402, the authorization booked; at the minimum it is used (control)", async () => {
+  __resetSettlementClaims();
+  const p = payment(); const relayer = makeRelayer("settles", p);
+  const amount = BigInt(p.requirements.amount);
+  relayer.covers = (rq) => BigInt(rq.amount) >= amount + 1n;
+  const { recovered, ctx } = await settleFails({ p, error: ambiguous5xx(), outage: outageWith(relayer, 100) });
+  assert.equal(recovered, null, "not served: the refusal stands");
+  assert.equal(relayer.sends, 0, "our relayer sends nothing under its minimum");
+  assert.equal(ctx.__a402LateAuth?.nonce, p.nonce, "the authorization is booked for the late read");
+  __resetSettlementClaims();
+  const q = payment(); const atMin = makeRelayer("settles", q);
+  atMin.covers = (rq) => BigInt(rq.amount) >= BigInt(q.requirements.amount);
+  const ok = await settleFails({ p: q, error: ambiguous5xx(), outage: outageWith(atMin, 100) });
+  assert.ok(ok.recovered?.result?.success, "served at exactly the minimum");
+  assert.equal(atMin.sends, 1);
+});
+
 await check("a CDN answer window shorter than our relayer's worst case -> relayer skipped, the authorization booked", async () => {
   __resetSettlementClaims();
   const p = payment(); const relayer = makeRelayer("settles", p);

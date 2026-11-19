@@ -8,7 +8,11 @@
 // the same authorization from our relayer wallet (ROBINHOOD_RELAYER_KEY; key
 // present = on). It settles our own sales only: the network, the token and the
 // recipient (our treasury for 4663) are fixed at boot and anything else is
-// refused before any read or write.
+// refused before any read or write. It pays the gas of every sale it settles,
+// so a sale whose price is under ROBINHOOD_RELAYER_MIN_PRICE_USD
+// (src/network-floors.js, default 0.004) is refused the same way, nothing
+// sent: the listed facilitators' answer then stands (covers() lets the
+// settle order and the outage read skip it before asking).
 //
 // Verify and settle are the package's own exact EVM facilitator scheme
 // (@x402/evm/exact/facilitator): signature against the token's EIP-712 domain,
@@ -34,6 +38,7 @@ const AUTH_STATE_ABI = parseAbi(["function authorizationState(address authorizer
 import { privateKeyToAccount } from "viem/accounts";
 import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
 import { positiveNum as num } from "./env-num.js";
+import { robinhoodRelayerMinUnits } from "./network-floors.js";
 
 export const OWN_RELAYER_NAME = "own relayer";
 
@@ -101,8 +106,10 @@ const alreadyKnown = (e) => /already known|known transaction|already imported/i.
  * @param {string} o.asset - the USDG contract
  * @param {string} o.payTo - our treasury for this network
  * @param {string} o.rpcUrl - the chain's JSON-RPC endpoint
+ * @param {bigint} [o.minUnits] - the least amount (USDG base units) a sale must
+ *   carry for this relayer to settle it; under it nothing is sent
  */
-export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, settings = relayerSettings(), leaseImpl = null, log = console.warn } = {}) {
+export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, settings = relayerSettings(), minUnits = robinhoodRelayerMinUnits(), leaseImpl = null, log = console.warn } = {}) {
   if (network !== "eip155:4663") throw new Error("the own relayer settles eip155:4663 only");
   if (!rpcUrl) throw new Error("no RPC for eip155:4663");
   const account = privateKeyToAccount(key);
@@ -218,9 +225,20 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
     return null;
   }
 
+  const minAmount = typeof minUnits === "bigint" && minUnits > 0n ? minUnits : 0n;
+  /** True when the sale's amount pays for this relayer: at least the
+   *  minimum. An amount that cannot be read is never covered. */
+  function covers(requirements) {
+    const amount = String(requirements?.amount ?? "");
+    if (!/^[0-9]{1,30}$/.test(amount)) return false;
+    return BigInt(amount) >= minAmount;
+  }
+
   return {
     name: OWN_RELAYER_NAME,
     address: account.address,
+    minUnits: minAmount,
+    covers,
     async getSupported() { return { kinds: [{ x402Version: 2, scheme: "exact", network }], extensions: [], signers: { [network]: [account.address] } }; },
     async verify(paymentPayload, requirements) {
       const why = ours(requirements);
@@ -232,6 +250,9 @@ export function createOwnRelayerClient({ key, network, asset, payTo, rpcUrl, set
       const why = ours(requirements);
       if (why) return refuse("own_relayer_refused", why, payer);
       if (paymentPayload?.accepted?.network && paymentPayload.accepted.network !== network) return refuse("own_relayer_refused", "payload names another network", payer);
+      // A sale under the minimum is never ours to pay gas for: nothing is
+      // read or sent, and the caller's earlier refusal stands.
+      if (!covers(requirements)) return refuse("own_relayer_below_minimum", "the sale's price is under the own relayer's minimum (ROBINHOOD_RELAYER_MIN_PRICE_USD)", payer);
       const key = authKey(payer, paymentPayload?.payload?.authorization?.nonce);
       refusedAuth.delete(key);
       const result = await scheme.settle(paymentPayload, requirements);

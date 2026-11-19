@@ -3,7 +3,8 @@
 // wiring the kit suite (test-tts-quote.js) cannot see.
 //
 //   - the 402 on Base asks exactly the quote for the body's text; Optimism adds
-//     its configured premium and Robinhood Chain is raised to its floor; the
+//     its configured premium and Robinhood Chain is raised to the floor this
+//     boot sets (ROBINHOOD_MIN_PRICE_USD; none by default); the
 //     Tempo challenge carries the same quote (it prices through
 //     server.js quotedPriceUsd, as the card and credits gates do);
 //   - a payment at the quote is served and settled, and the sale is booked at
@@ -91,7 +92,7 @@ proc = spawn(process.execPath, ["--import", "./scripts/lib/openrouter-stub-prelo
     ...env, ...STORES, PORT: String(PORT), FREE_MODE: "", NODE_ENV: "test",
     WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,optimism,robinhood",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, SOLVADOR_KEY: "test-key", SOLVADOR_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, ROBINHOOD_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
-    NETWORK_PRICE_PREMIUMS: `${OP}=${PREMIUM_USD}`,
+    NETWORK_PRICE_PREMIUMS: `${OP}=${PREMIUM_USD}`, ROBINHOOD_MIN_PRICE_USD: "0.006", NETWORK_PRICE_FLOORS: "",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", PAYAI_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
     OPENROUTER_API_KEY: "test-key-stubbed", OPENROUTER_STUB_URL: `http://127.0.0.1:${OR_PORT}`,
     MPP_SECRET_KEY: "test-tts-quote-paid-secret", TEMPO_API_KEY: "test-tempo-key", TEMPO_RECIPIENT_ADDRESS: TREASURY,
@@ -136,7 +137,7 @@ try {
   ok((await fetch(`${B}/health`)).ok, "server booted (paid mode, stub facilitator, stub speech upstream)");
   const pricing = await (await fetch(`${B}/api/pricing`)).json();
   const rhFloor = Number(pricing.payment?.minPriceUsdByNetwork?.robinhood);
-  ok(rhFloor > 0 && Number(pricing.payment?.premiumUsdByNetwork?.optimism) === PREMIUM_USD, "the boot offers Base, Optimism with a premium and Robinhood Chain with a floor");
+  ok(rhFloor === 0.006 && Number(pricing.payment?.premiumUsdByNetwork?.optimism) === PREMIUM_USD, "the boot offers Base, Optimism with a premium and Robinhood Chain with a floor");
 
   // 1. the 402 asks the quote for the text, per chain
   for (const [slug, path] of [["tts", "/api/tts"], ["tts-hd", "/api/tts-hd"]]) {
