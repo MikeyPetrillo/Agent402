@@ -2,12 +2,24 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { OFFER_SWEEP_FIRST_MS, OFFER_SWEEP_INTERVAL_MS } from "./mpp-subscription-retention.js";
 import { READBACK_FIRST_MS, READBACK_INTERVAL_MS } from "./card-refund-readback.js";
 import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel as span, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
+import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, TRANSCRIBE_LONG_RUN_SECONDS, sttLongEnabled } from "./tools/stt-kit.js";
 import { REVISIT_CAP_MS, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, revisitIntervalMs, probeShareLabel } from "./seller-load.js";
 
 // A timer figure as an entry prints it, read from the module that runs it.
 const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a minute" : `${n} minutes`; };
 
+// An entry with `shownWhen` describes something a switch sells: the page and
+// the feed show it only while that function reads true (CHANGELOG.md scopes
+// the same item to a server that sets the switch).
 const ENTRIES = [
+  {
+    date: "2026-11-20",
+    title: "Long recordings transcription",
+    shownWhen: sttLongEnabled,
+    items: [
+      `Tools: A server that sets \`TRANSCRIBE_LONG=on\` lists and serves \`/api/transcribe-long\` (model-backed), the long-recording transcription tier: an audio file at a URL, up to ${STT_TIERS["transcribe-long"].maxMinutes} minutes and ${Math.round(STT_MAX_AUDIO_BYTES / 1024 / 1024)} MB, answered like the other tiers (\`diarize: true\` adds speaker labels and word timestamps). It runs up to ${TRANSCRIBE_LONG_RUN_SECONDS} seconds on a long file, so it is paid on the EVM \`exact\` rails only, and \`Prefer: respond-async\` returns a job link at once. Without the switch the route is not listed or served.`,
+    ],
+  },
   {
     date: "2026-11-20",
     title: "Solana activity charts across restarts, call budgets across deploys",
@@ -1727,9 +1739,12 @@ const ENTRIES = [
 /** The dated groups the page and the feed render (read by scripts/test-changelog-parity.js). */
 export const CHANGELOG_ENTRIES = ENTRIES;
 
+/** The groups the page and the feed render now: an entry whose switch is off is left out. */
+function shownEntries() { return ENTRIES.filter((e) => typeof e.shownWhen !== "function" || e.shownWhen()); }
+
 export function changelogRss(baseUrl) {
   const xmlEsc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const items = ENTRIES.map((e) =>
+  const items = shownEntries().map((e) =>
     `  <item>
     <title>${xmlEsc(e.title)}</title>
     <link>${baseUrl}/changelog</link>
@@ -1765,7 +1780,7 @@ export function changelogPage(baseUrl) {
     isPartOf: { "@type": "WebSite", url: baseUrl },
   };
 
-  const timelineHtml = ENTRIES.map((entry) => {
+  const timelineHtml = shownEntries().map((entry) => {
     const itemsHtml = entry.items.map((item) => `<li>${esc(item)}</li>`).join("\n              ");
     return `
           <div class="tl-entry">

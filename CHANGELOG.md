@@ -6,6 +6,16 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-20 (long recordings transcription)
+Tools:
+- A server that sets `TRANSCRIBE_LONG=on` lists and serves
+  `/api/transcribe-long` (model-backed), the long-recording transcription
+  tier: an audio file at a URL, up to 30 minutes and 25 MB, answered like
+  the other tiers (`diarize: true` adds speaker labels and word timestamps).
+  It runs up to 230 seconds on a long file, so it is paid on the EVM `exact`
+  rails only, and `Prefer: respond-async` returns a job link at once.
+  Without the switch the route is not listed or served.
+
 ### 2026-11-20 (Solana activity charts across restarts, call budgets across deploys)
 Site:
 - A Solana chain page's 30-day activity chart keeps its history across
