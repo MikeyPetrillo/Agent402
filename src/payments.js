@@ -11,7 +11,7 @@ import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
-import { attributionTailOf, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION } from "./data-attribution.js";
+import { attributionTailOf, ATTRIBUTIONS, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION } from "./data-attribution.js";
 import { isBinaryListing, listingMimeTypeOf, binaryOutputExample, binaryOutputSchema, binaryListingsEnabled, withBinaryOutputType, JSON_MIME } from "./tool-media-type.js";
 import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute, uptoNetworkKept } from "./upto-gas-sponsoring.js";
 import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
@@ -1274,6 +1274,9 @@ export function bazaarTagsFor(item) {
  *  /api/find) is untouched. scripts/test-bazaar-descriptions.js pins every
  *  key to a real slug and the cap. */
 export const BAZAAR_DESCRIPTIONS = Object.freeze({
+  // The catalog text's lead is cut to fit the four-source data credit, which
+  // left the listing without the score and the ranking it sells.
+  "weather-risk-brief": `Ranked 7-day weather risk for up to 50 sites in one call: each site gets a 0-100 risk score from frost, heat, gust, heavy rain, snow and air-quality checks. Use it to triage many sites at once. ${ATTRIBUTIONS["open-meteo-copernicus-geonames"]}`,
   // 2026-09-22: the slugs buyers pay for most had catalog fallbacks; these
   // say what comes back and when to pick the tool.
   "crypto-price": `Live spot price for one or many coins in any quote currency: last price, 24h change, 24h volume and market cap per coin, from a maintained market feed and answered in under a second. Use it when an agent needs a current crypto price to size, compare or display, or a cheap read to poll on a schedule. ${COINGECKO_ATTRIBUTION}`,
@@ -3071,7 +3074,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       if (offeredAtInit.has(String(k?.network)) && !firstAnswering.has(key)) firstAnswering.set(key, j);
     }
   });
-  const cannotWinAnOfferedPair = (i) => i >= 0 && [...firstAnswering.values()].every((j) => j < i);
+  // Every pair the offer carries through these clients: exact on each
+  // offered network, upto on each upto network. A pair no answering
+  // facilitator lists can only be won by one that did not answer.
+  const offeredPairs = [...[...offeredAtInit].map((n) => `${n} exact`), ...uptoCaip2.map((n) => `${n} upto`)];
+  const cannotWinAnOfferedPair = (i) => i >= 0 && offeredPairs.every((p) => firstAnswering.has(p)) && [...firstAnswering.values()].every((j) => j < i);
   const heldAtInit = failedReads.filter(({ client }) => cannotWinAnOfferedPair(facilitatorClients.indexOf(client))).map(({ client, label }) => {
     const own = Object.prototype.hasOwnProperty.call(client, "getSupported");
     const read = client.getSupported;

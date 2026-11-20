@@ -179,10 +179,45 @@ try {
     ok(verifies.primary === before.primary + 1 && verifies.F === before.F, `C: a Base payment is verified at the facilitator first on Base, not the one after it (first ${verifies.primary - before.primary}, next ${verifies.F - before.F})`);
     s.child.kill("SIGKILL");
   }
+  // --- Leg D: the only facilitator listing upto on Base is a later one -------
+  // It gives no boot /supported answer within the limit, then answers while
+  // the upto gate reads it, so upto on Base is offered. Passing it over in the
+  // first init would leave that pair with no facilitator: the route check
+  // fails the init and every paid route answers 500 until the retry.
+  {
+    const primary = stellarFacilitator(false, EVM_KINDS);
+    // Answers 1.8 s after its first read: past the boot read's 1.2 s, inside the upto gate's read.
+    let firstRead = 0;
+    const lateUrl = await listen((req, res) => { req.resume(); req.on("end", () => {
+      if (req.url !== "/supported") return json(res, 404, {});
+      if (!firstRead) firstRead = Date.now();
+      setTimeout(() => json(res, 200, { kinds: [...EVM_KINDS, { x402Version: 2, scheme: "upto", network: "eip155:8453" }], extensions: [], signers: {} }), Math.max(0, firstRead + 1800 - Date.now()));
+    }); });
+    const s = await boot("first-402-d", await stellarFacilitator(false).urlP, { CDP_FACILITATOR_URL: await primary.urlP, PAYAI_FACILITATOR_URL: lateUrl, X402_UPTO_NETWORKS: "eip155:8453", PAYMENT_NETWORKS: "base,polygon", STELLAR_FACILITATOR_URL: "", STELLAR_WALLET_ADDRESS: "" });
+    ok(s.up, "D: the paid server booted with the only upto facilitator late");
+    if (!s.up) { console.log(s.log().slice(-1500)); process.exit(1); }
+    ok(/gave no \/supported answer/.test(s.log()) && /upto: variable-amount settlement offered on eip155:8453/.test(s.log()), "D: control: its boot read got no answer, and upto on Base is offered");
+    const first = await render402(s.base, FIRST_ABORT_MS);
+    ok(first.status === 402 && first.accepts.some((a) => a.scheme === "upto"), `D: the first unpaid request after boot is a 402 offering upto (got ${first.status})`);
+    ok(!/init attempt \d+ failed/.test(s.log()), "D: the first init does not fail on the upto pair");
+    s.child.kill("SIGKILL");
+  }
 } catch (e) {
   failed++;
   console.log(`FAIL - ${e?.stack || e}`);
 }
 stopAll();
+// The changelog says what leg C proves: only a fallback settlement service is
+// passed over at the first init; the first one listed for a network is
+// still waited for.
+{
+  const { readFileSync } = await import("node:fs");
+  const { CHANGELOG_ENTRIES } = await import("../src/changelog.js");
+  const md = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  const page = CHANGELOG_ENTRIES.flatMap((e) => e.items || []).join("\n");
+  for (const [label, text] of [["CHANGELOG.md", md], ["src/changelog.js", page]]) {
+    ok(/even when a fallback settlement service is slow to answer \(the first service listed for a network is still waited for\)/.test(text) && !/even when a payment network's settlement service is slow to answer/.test(text), `${label}: the first-paid-request item scopes the claim to a fallback settlement service`);
+  }
+}
 console.log(`${failed ? "FAILED" : "OK"}: ${pass} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
