@@ -75,6 +75,51 @@
    "pace": 5000
   },
   {
+   "slug": "crypto-price",
+   "name": "usd prices are checked against the second source",
+   "input": {
+    "coins": "SOL,DOGE"
+   },
+   "expect": {
+    "matches": {
+     "check": "^(hyperliquid-oracle|unavailable)$"
+    },
+    "populated": [
+     "coins.solana.price"
+    ],
+    "falsy": [
+     "coins.solana.stale"
+    ],
+    "gt": {
+     "coins.solana.divergencePct": -5
+    },
+    "lt": {
+     "coins.solana.divergencePct": 5
+    }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "crypto-price",
+   "name": "a non-usd answer says no check ran",
+   "input": {
+    "coins": "BTC",
+    "currency": "gbp"
+   },
+   "expect": {
+    "equals": {
+     "check": "usd-only",
+     "coins.bitcoin.divergencePct": null
+    },
+    "populated": [
+     "coins.bitcoin.price"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
    "slug": "crypto-history",
    "name": "30 days of SOL",
    "input": {
@@ -91,6 +136,29 @@
     "matches": {
      "coin": "^(SOL|solana)$"
     }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "crypto-history",
+   "name": "90 days of ETH lead with return, volatility and drawdown",
+   "input": {
+    "coin": "ETH",
+    "days": "90"
+   },
+   "expect": {
+    "gt": {
+     "summary.volatilityPct": 0
+    },
+    "lt": {
+     "summary.maxDrawdownPct": 0.0001
+    },
+    "populated": [
+     "summary.changePct",
+     "summary.high",
+     "bars[0].price"
+    ]
    },
    "paceKey": "coingecko",
    "pace": 5000

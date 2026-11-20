@@ -17,14 +17,16 @@
 // use the same assertPublicUrl + native fetch pattern as finance-kit for
 // consistency and to keep the per-host UA option open.
 import { assertPublicUrl } from "./fetch-guard.js";
-import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 const CRYPTO_READ_MS = 10_000;
 const CRYPTO_RETRY_READ_MS = 12_000;
 import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll, cgNoteUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
-import { knownIdsGate, knownIdGate } from "./crypto-markets-kit.js";
+import { knownIdsGate, knownIdGate, seriesSummary } from "./crypto-markets-kit.js";
+import { hlSharedInfo } from "./hyperliquid-shared.js";
+import { partialFields } from "../partial-answer.js";
 import { upstreamErrorText } from "./redact.js";
 
 function bad(message, statusCode = 400) {
@@ -70,6 +72,8 @@ const SYMBOL_TO_ID = {
 export function isKnownCryptoSymbol(symbol) {
   return typeof symbol === "string" && Object.hasOwn(SYMBOL_TO_ID, symbol.trim().toUpperCase());
 }
+
+const ID_TO_SYMBOL = Object.freeze(Object.fromEntries(Object.entries(SYMBOL_TO_ID).map(([sym, id]) => [id, sym])));
 
 export function resolveCoinId(raw) {
   if (typeof raw !== "string") throw bad('"coin" is required (e.g. "BTC", "bitcoin")');
@@ -220,6 +224,144 @@ async function jsonLoad(safeUrl, host, { isCg }) {
   return { text, data };
 }
 
+// --- crypto-price's second source ------------------------------------------------
+// A USD price is checked against the oracle price of the same coin's
+// perpetual on Hyperliquid, an on-chain perp exchange whose validators publish
+// a spot index every few seconds. The document is the universe-wide one the
+// derivatives and signals kits already read, through the cache they share
+// (src/tools/hyperliquid-shared.js: one read per 5 s for every caller, a copy
+// at most a minute old when the host refuses for rate), so the check rarely
+// spends a read of its own. It runs after the price read, under its own short
+// cap; a check that cannot be read leaves the price answer as it is
+// (`check: "unavailable"`) and is not tried again for CHECK_BACKOFF_MS.
+// Only coins in the symbol map above are matched, by ticker, to a listed
+// (not delisted) perp: "BTC", or "kPEPE" quoted per 1,000 units.
+const HL_INFO = "https://api.hyperliquid.xyz/info";
+export const CHECK_READ_MS = 1_500;
+export const CHECK_BACKOFF_MS = 30_000;
+// A price whose upstream timestamp is older than this reads stale: true.
+export const STALE_AFTER_SECONDS = 600;
+export const CHECK_SOURCE = "hyperliquid-oracle";
+let checkDownUntil = 0;
+const referenceMaps = new WeakMap(); // a universe document -> Map(name -> oracle price)
+
+// The shared cache stores what a transport returns, for every kit that reads
+// it, so this one returns only a document of the expected shape.
+async function hlReferenceDoc(payload) {
+  const ctx = { label: "Hyperliquid", step: "reference price", timeoutMs: CHECK_READ_MS, tag: "[crypto]" };
+  const res = await upstreamFetch(HL_INFO, {
+    method: "POST",
+    headers: { "User-Agent": cryptoUserAgent(), Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }, ctx);
+  const text = await bodyUnderDeadline(res.text(), ctx);
+  if (res.status === 429) throw Object.assign(bad("Hyperliquid rate limit reached upstream - retry shortly", 503), { rateLimited: true, retryAfter: 5 });
+  if (!res.ok) throw bad(`Hyperliquid upstream HTTP ${res.status}`, 502);
+  let json;
+  try { json = JSON.parse(text); } catch { throw bad("Hyperliquid returned a non-JSON response", 502); }
+  if (!referenceMapOf(json)) throw bad("Hyperliquid returned an unexpected response shape", 502);
+  return json;
+}
+
+function referenceMapOf(doc) {
+  if (doc && typeof doc === "object" && referenceMaps.has(doc)) return referenceMaps.get(doc);
+  const universe = Array.isArray(doc) ? doc[0]?.universe : null;
+  const ctxs = Array.isArray(doc) ? doc[1] : null;
+  if (!Array.isArray(universe) || !Array.isArray(ctxs)) return null;
+  const map = new Map();
+  for (let k = 0; k < universe.length; k++) {
+    const u = universe[k], c = ctxs[k];
+    if (!u || !c || u.isDelisted || typeof u.name !== "string") continue;
+    const px = Number(c.oraclePx);
+    if (Number.isFinite(px) && px > 0) map.set(u.name, px);
+  }
+  referenceMaps.set(doc, map);
+  return map;
+}
+
+/** The reference USD price for a coin id from a reference map, or null. */
+export function referencePriceOf(map, id) {
+  const sym = ID_TO_SYMBOL[id];
+  if (!map || !sym) return null;
+  if (map.has(sym)) return map.get(sym);
+  if (map.has(`k${sym}`)) return map.get(`k${sym}`) / 1000;
+  return null;
+}
+
+/** The reference map, or null when it cannot be read inside the cap (then
+ *  not tried again for CHECK_BACKOFF_MS). Never throws. */
+async function readReferenceMap() {
+  if (Date.now() < checkDownUntil) return null;
+  let timer;
+  const read = hlSharedInfo({ type: "metaAndAssetCtxs" }, hlReferenceDoc)
+    .then(referenceMapOf, () => null)
+    .then((map) => { if (!map) checkDownUntil = Date.now() + CHECK_BACKOFF_MS; return map; });
+  // A read joined in flight from another kit runs under that kit's cap, so
+  // the wait here has its own bound (cleared as soon as the read settles).
+  const bound = new Promise((resolve) => { timer = setTimeout(resolve, CHECK_READ_MS + 250, null); });
+  const map = await Promise.race([read, bound]);
+  clearTimeout(timer);
+  return map;
+}
+/** Test seam: forget a failed check, so the next call reads again. */
+export function resetPriceCheck() { checkDownUntil = 0; }
+
+// --- crypto-market's screen ---------------------------------------------------------
+// With any screen field (or a sort other than rank), crypto-market reads the
+// top SCREEN_UNIVERSE coins by market cap in one upstream read, applies the
+// screen and the sort here, and answers at most `limit` rows with the fields
+// that say how many matched and that coins below that rank were not read
+// (src/partial-answer.js).
+export const SCREEN_UNIVERSE = 250;
+const SCREEN_SORTS = Object.freeze({
+  rank: (a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9),
+  change24h_desc: (a, b) => (b.change24hPct ?? -Infinity) - (a.change24hPct ?? -Infinity),
+  change24h_asc: (a, b) => (a.change24hPct ?? Infinity) - (b.change24hPct ?? Infinity),
+  change7d_desc: (a, b) => (b.change7dPct ?? -Infinity) - (a.change7dPct ?? -Infinity),
+  change7d_asc: (a, b) => (a.change7dPct ?? Infinity) - (b.change7dPct ?? Infinity),
+  volume_desc: (a, b) => (b.volume24h ?? -Infinity) - (a.volume24h ?? -Infinity),
+  turnover_desc: (a, b) => (b.turnoverPct ?? -Infinity) - (a.turnoverPct ?? -Infinity),
+});
+// field -> [row key, comparison]: a row passes when its value exists and meets the bound.
+const SCREEN_FIELDS = Object.freeze({
+  minMarketCap: ["marketCap", "min"],
+  minVolume24h: ["volume24h", "min"],
+  minTurnoverPct: ["turnoverPct", "min"],
+  minChange24hPct: ["change24hPct", "min"],
+  maxChange24hPct: ["change24hPct", "max"],
+  maxBelowAthPct: ["athDrawdownPct", "nearAth"],
+});
+function screenNumber(raw, field) {
+  if (raw == null || raw === "") return null;
+  const n = typeof raw === "number" ? raw : (typeof raw === "string" && /^\s*-?\d+(\.\d+)?(e\d+)?\s*$/i.test(raw) ? Number(raw) : NaN);
+  if (!Number.isFinite(n)) throw bad(`"${field}" must be a number`);
+  if (field !== "minChange24hPct" && field !== "maxChange24hPct" && n < 0) throw bad(`"${field}" must not be negative`);
+  if (field === "maxBelowAthPct" && n > 100) throw bad('"maxBelowAthPct" must be 0-100');
+  return n;
+}
+function takeScreen(i) {
+  const filters = {};
+  for (const field of Object.keys(SCREEN_FIELDS)) {
+    const n = screenNumber(i?.[field], field);
+    if (n != null) filters[field] = n;
+  }
+  const sort = i?.sort == null || i.sort === "" ? "rank" : String(i.sort).trim().toLowerCase();
+  if (!Object.hasOwn(SCREEN_SORTS, sort)) throw bad(`"sort" must be one of ${Object.keys(SCREEN_SORTS).join(", ")}`);
+  if (filters.minChange24hPct != null && filters.maxChange24hPct != null && filters.minChange24hPct > filters.maxChange24hPct) throw bad('"minChange24hPct" is above "maxChange24hPct"');
+  return { filters, sort, active: Object.keys(filters).length > 0 || sort !== "rank" };
+}
+function passesScreen(row, filters) {
+  for (const [field, bound] of Object.entries(filters)) {
+    const [key, how] = SCREEN_FIELDS[field];
+    const v = row[key];
+    if (v == null) return false;
+    if (how === "min" && v < bound) return false;
+    if (how === "max" && v > bound) return false;
+    if (how === "nearAth" && v < -bound) return false;
+  }
+  return true;
+}
+
 
 export const CRYPTO_TOOLS = [
   {
@@ -229,10 +371,10 @@ export const CRYPTO_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "Live crypto prices for one or many coins in any vs_currency (usd, eur, btc, eth, etc). Returns last price, 24h change %, 24h volume, and market cap per coin. The simplest crypto price read - for ranked market-cap tables use crypto-market, for candles use crypto-history. Accepts ticker symbols (BTC, ETH, SOL) for the top ~50 by market cap, or canonical coin ids (e.g. \"render-token\") for any of the ~15k tracked coins. Batched: up to 25 coins per call.",
+      "Checked live crypto prices for one or many coins in any vs_currency (usd, eur, btc, eth, etc). Returns last price, 24h change %, 24h volume, and market cap per coin, each with stale (upstream timestamp older than 10 minutes) and, in usd, divergencePct: the gap to the oracle price of the coin's perpetual on Hyperliquid, an on-chain perp exchange (null where it lists none); check names that second source or says why no check ran. For ranked market-cap tables use crypto-market, for candles use crypto-history. Accepts ticker symbols (BTC, ETH, SOL) for the top ~50 by market cap, or canonical coin ids (e.g. \"render-token\") for any of the ~15k tracked coins. Batched: up to 25 coins per call.",
     tags: ["crypto", "price", "market-data", "bitcoin", "ethereum", "defi", "cryptocurrency", "btc", "eth", "spot"],
     discovery: {
-      input: { coins: "BTC,ETH,SOL", currency: "usd" },
+      input: { coins: "BTC,ETH", currency: "usd" },
       inputSchema: {
         properties: {
           coins: { type: "string", description: "Comma-separated symbols or ids (e.g. \"BTC,ETH\" or \"bitcoin,ethereum\"). Max 25." },
@@ -243,11 +385,11 @@ export const CRYPTO_TOOLS = [
       output: {
         example: {
           currency: "usd",
-          count: 3,
+          count: 2,
+          check: "hyperliquid-oracle",
           coins: {
-            bitcoin: { price: 67234.12, change24hPct: 1.42, volume24h: 28100000000, marketCap: 1320000000000, lastUpdated: "2026-06-20T00:30:00Z" },
-            ethereum: { price: 3520.45, change24hPct: 2.18, volume24h: 14200000000, marketCap: 423000000000, lastUpdated: "2026-06-20T00:30:00Z" },
-            solana:   { price: 148.20, change24hPct: -0.65, volume24h: 2400000000, marketCap: 68000000000, lastUpdated: "2026-06-20T00:30:00Z" },
+            bitcoin: { price: 67234.12, change24hPct: 1.42, volume24h: 28100000000, marketCap: 1320000000000, lastUpdated: "2026-06-20T00:30:00Z", stale: false, divergencePct: 0.03 },
+            ethereum: { price: 3520.45, change24hPct: 2.18, volume24h: 14200000000, marketCap: 423000000000, lastUpdated: "2026-06-20T00:30:00Z", stale: false, divergencePct: -0.05 },
           },
         },
       },
@@ -284,7 +426,22 @@ export const CRYPTO_TOOLS = [
       const unknown = ids.filter((id) => !out[id]);
       if (!Object.keys(out).length) throw bad(`unknown coin(s): ${unknown.join(", ")} - use a CoinGecko id or a listed symbol`, 404);
       if (Object.values(out).every((row) => row.price === null)) throw bad(`currency "${currency}" is not supported by CoinGecko's simple price endpoint (try usd, eur, gbp, btc, eth)`);
-      return { currency, count: Object.keys(out).length, coins: out, ...(unknown.length ? { unknown } : {}) };
+      // The check: every price says whether its upstream timestamp is stale,
+      // and a USD price says how far it sits from the second source (null
+      // where that source has no listed market for the coin, or no check ran).
+      let check = "usd-only", map = null;
+      if (currency === "usd") {
+        if (!Object.keys(out).some((id) => ID_TO_SYMBOL[id])) check = "no-reference";
+        else { map = await readReferenceMap(); check = map ? CHECK_SOURCE : "unavailable"; }
+      }
+      const now = Date.now();
+      for (const [id, row] of Object.entries(out)) {
+        const at = row.lastUpdated ? Date.parse(row.lastUpdated) : NaN;
+        row.stale = Number.isFinite(at) ? (now - at) / 1000 > STALE_AFTER_SECONDS : null;
+        const ref = referencePriceOf(map, id);
+        row.divergencePct = ref && typeof row.price === "number" ? +(((row.price - ref) / ref) * 100).toFixed(4) : null;
+      }
+      return { currency, count: Object.keys(out).length, check, coins: out, ...(unknown.length ? { unknown } : {}) };
     },
   },
 
@@ -295,23 +452,29 @@ export const CRYPTO_TOOLS = [
     category: "data",
     price: "$0.003",
     description:
-      "Top N coins by market capitalization with full market snapshot per coin: rank, price, 24h change, 7d change, 24h volume, market cap, circulating supply, and all-time high. Default 10, max 100 per call.",
-    tags: ["crypto", "market", "ranking", "marketcap", "top-coins"],
+      "Top N coins by market capitalization with full market snapshot per coin: rank, price, 24h change, 7d change, 24h volume, market cap, circulating supply, and all-time high, plus computed turnover and distance below that high. Default 10, max 100 per call, or screen the top 250 with min/max filters and a sort. As a screener, any of minMarketCap, minVolume24h, minTurnoverPct (24h volume as a percent of market cap), minChange24hPct, maxChange24hPct, maxBelowAthPct, or a sort (change24h_desc, change24h_asc, change7d_desc, change7d_asc, volume_desc, turnover_desc) screens the top 250 by market cap and answers up to limit rows, with matched, returned, complete and truncated, and scan fields that say no coin below rank 250 was read.",
+    tags: ["crypto", "market", "ranking", "marketcap", "top-coins", "screener"],
     discovery: {
       input: { limit: 10, currency: "usd" },
       inputSchema: {
         properties: {
           limit: { type: "number", description: "Number of coins to return (1-100, default 10)" },
           currency: { type: "string", description: "vs_currency (default: usd)" },
+          minMarketCap: { type: "number", description: "Screen: market cap at least this" },
+          minVolume24h: { type: "number", description: "Screen: 24h volume at least this" },
+          minTurnoverPct: { type: "number", description: "Screen: 24h volume / market cap, percent" },
+          minChange24hPct: { type: "number", description: "Screen: 24h change at least this percent" },
+          maxChange24hPct: { type: "number", description: "Screen: 24h change at most this percent" },
+          maxBelowAthPct: { type: "number", description: "Screen: at most this percent below the all-time high" },
+          sort: { type: "string", description: "rank (default), change24h_desc, change24h_asc, change7d_desc, change7d_asc, volume_desc, turnover_desc" },
         },
       },
       output: {
         example: {
           currency: "usd",
-          count: 2,
+          count: 1,
           coins: [
-            { rank: 1, id: "bitcoin", symbol: "btc", name: "Bitcoin", price: 67234.12, change24hPct: 1.42, change7dPct: 4.81, volume24h: 28100000000, marketCap: 1320000000000, circulatingSupply: 19700000, ath: 73750, athDate: "2024-03-14T07:10:36Z" },
-            { rank: 2, id: "ethereum", symbol: "eth", name: "Ethereum", price: 3520.45, change24hPct: 2.18, change7dPct: 1.92, volume24h: 14200000000, marketCap: 423000000000, circulatingSupply: 120300000, ath: 4878.26, athDate: "2021-11-10T14:24:11Z" },
+            { rank: 1, id: "bitcoin", symbol: "btc", name: "Bitcoin", price: 67234.12, change24hPct: 1.42, change7dPct: 4.81, volume24h: 28100000000, marketCap: 1320000000000, circulatingSupply: 19700000, ath: 73750, athDate: "2024-03-14T07:10:36Z", turnoverPct: 2.1288, athDrawdownPct: -8.835 },
           ],
         },
       },
@@ -320,25 +483,47 @@ export const CRYPTO_TOOLS = [
       const limit = Number.isFinite(i.limit) ? Math.floor(i.limit) : (typeof i.limit === "string" ? parseInt(i.limit, 10) : 10);
       if (!Number.isFinite(limit) || limit < 1 || limit > 100) throw bad('"limit" must be an integer 1-100');
       const currency = normalizeCurrency(i.currency);
+      const screen = takeScreen(i);
       await currencyGate(currency);
-      const url = `${cgBase()}/coins/markets?vs_currency=${encodeURIComponent(currency)}&order=market_cap_desc&per_page=${limit}&page=1&price_change_percentage=24h,7d`;
+      // A screen reads the whole universe it screens; a plain call reads only the top `limit`.
+      const perPage = screen.active ? SCREEN_UNIVERSE : limit;
+      const url = `${cgBase()}/coins/markets?vs_currency=${encodeURIComponent(currency)}&order=market_cap_desc&per_page=${perPage}&page=1&price_change_percentage=24h,7d`;
       const data = await jsonGet(url);
       if (!Array.isArray(data)) throw bad("CoinGecko returned unexpected shape for /coins/markets", 502);
-      const coins = data.map((c) => ({
-        rank: c.market_cap_rank ?? null,
-        id: c.id,
-        symbol: c.symbol,
-        name: c.name,
-        price: c.current_price ?? null,
-        change24hPct: c.price_change_percentage_24h_in_currency != null ? +c.price_change_percentage_24h_in_currency.toFixed(4) : null,
-        change7dPct: c.price_change_percentage_7d_in_currency != null ? +c.price_change_percentage_7d_in_currency.toFixed(4) : null,
-        volume24h: c.total_volume ?? null,
-        marketCap: c.market_cap ?? null,
-        circulatingSupply: c.circulating_supply ?? null,
-        ath: c.ath ?? null,
-        athDate: c.ath_date ?? null,
-      }));
-      return { currency, count: coins.length, coins };
+      const pctOf = (part, whole) => (typeof part === "number" && typeof whole === "number" && whole > 0 ? +((part / whole) * 100).toFixed(4) : null);
+      const rows = data.map((c) => {
+        const price = c.current_price ?? null, ath = c.ath ?? null;
+        const volume24h = c.total_volume ?? null, marketCap = c.market_cap ?? null;
+        return {
+          rank: c.market_cap_rank ?? null,
+          id: c.id,
+          symbol: c.symbol,
+          name: c.name,
+          price,
+          change24hPct: c.price_change_percentage_24h_in_currency != null ? +c.price_change_percentage_24h_in_currency.toFixed(4) : null,
+          change7dPct: c.price_change_percentage_7d_in_currency != null ? +c.price_change_percentage_7d_in_currency.toFixed(4) : null,
+          volume24h,
+          marketCap,
+          circulatingSupply: c.circulating_supply ?? null,
+          ath,
+          athDate: c.ath_date ?? null,
+          // Computed here: a day's volume as a share of market cap, and the
+          // distance below the all-time high (0 at a new high).
+          turnoverPct: pctOf(volume24h, marketCap),
+          athDrawdownPct: typeof price === "number" && typeof ath === "number" && ath > 0 ? +(Math.min(0, (price / ath - 1) * 100)).toFixed(4) : null,
+        };
+      });
+      if (!screen.active) return { currency, count: rows.length, coins: rows };
+      const matched = rows.filter((r) => passesScreen(r, screen.filters)).sort(SCREEN_SORTS[screen.sort]);
+      const coins = matched.slice(0, limit);
+      return {
+        currency, count: coins.length,
+        screen: { sort: screen.sort, filters: screen.filters },
+        ...partialFields(matched.length, coins.length),
+        scanned: rows.length, scanCap: SCREEN_UNIVERSE, scanCoversAll: false,
+        scanNote: `Only the top ${rows.length} coins by market cap were screened; a coin below that rank is not in this answer even when it would pass.`,
+        coins,
+      };
     },
   },
 
@@ -349,7 +534,7 @@ export const CRYPTO_TOOLS = [
     category: "data",
     price: "$0.015",
     description:
-      "Crypto price chart series over a window of days: bars[] of {time, price, marketCap, volume} for charts and backtests. Granularity is automatic: <=1 day = 5-min bars, 2-90 days = hourly, >90 days = daily. Days: 1, 7, 14, 30, 90, 180, 365, or \"max\".",
+      "Crypto price series over a window of days, led by its summary (return, annualized volatility, max drawdown, first/last/high/low), then bars[] of {time, price, marketCap, volume}. Granularity is automatic: <=1 day = 5-min bars, 2-90 days = hourly, >90 days = daily. Days: 1, 7, 14, 30, 90, 180, 365, or \"max\".",
     tags: ["crypto", "history", "chart", "backtest", "timeseries"],
     discovery: {
       input: { coin: "BTC", days: "7", currency: "usd" },
@@ -366,6 +551,7 @@ export const CRYPTO_TOOLS = [
           coin: "bitcoin",
           currency: "usd",
           days: "7",
+          summary: { first: 66120.45, last: 67234.12, high: 68010.2, low: 65480.9, changePct: 1.6843, volatilityPct: 38.21, maxDrawdownPct: -3.72 },
           count: 1,
           bars: [
             { time: "2026-06-13T00:00:00Z", price: 66120.45, marketCap: 1298000000000, volume: 27400000000 },
@@ -397,7 +583,9 @@ export const CRYPTO_TOOLS = [
         marketCap: caps[idx]?.[1] ?? null,
         volume: vols[idx]?.[1] ?? null,
       }));
-      return { coin: id, currency, days: daysRaw, count: bars.length, bars };
+      // The series leads with its statistics (crypto-markets-kit seriesSummary).
+      const summary = seriesSummary(prices.map(([t]) => t), prices.map(([, p]) => p));
+      return { coin: id, currency, days: daysRaw, summary, count: bars.length, bars };
     },
   },
 

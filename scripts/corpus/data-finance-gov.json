@@ -64,6 +64,35 @@
       "pace": 5000
     },
     {
+      "slug": "crypto-market",
+      "name": "a screen over the top 250 says it was cut",
+      "input": {
+        "limit": 5,
+        "minMarketCap": 1000000000,
+        "sort": "change24h_desc"
+      },
+      "expect": {
+        "equals": {
+          "scanCap": 250,
+          "scanCoversAll": false,
+          "screen.sort": "change24h_desc",
+          "count": 5
+        },
+        "gte": {
+          "matched": 6
+        },
+        "truthy": [
+          "truncated"
+        ],
+        "populated": [
+          "coins[0].turnoverPct",
+          "scanNote"
+        ]
+      },
+      "paceKey": "coingecko",
+      "pace": 5000
+    },
+    {
       "slug": "device-recalls",
       "name": "pacemaker recalls",
       "input": {
