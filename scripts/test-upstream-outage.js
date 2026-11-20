@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import {
   isUpstreamErrorShape, isKeyedRequest, upstreamHostsForSlug, failuresBetween, requestMatchesDefinition,
   directReadFails, directReadStatus, upstreamOutageVerdict, accessRefusalStatus,
-  bundleLegAnswer, bundleOutageVerdict, declaresUpstreamHosts,
+  bundleLegAnswer, bundleOutageVerdict, declaresUpstreamHosts, legRefusalStatus,
 } from "./lib/upstream-outage.js";
 import { BUNDLE_LEGS } from "../src/tools/bundle-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
@@ -182,6 +182,21 @@ try {
     rmSync(log, { force: true }); row(realRow);
     ok((await realFor(429))?.verdict === "upstream", "weather-risk-brief's rate-limited leg is excused when the runner's direct read of the same request gets 429 too");
     ok((await realFor(200))?.verdict === "fail", "weather-risk-brief's rate-limited leg FAILS when the forecast host answers the runner's direct read");
+    // A leg that reads through its own helper names the limit in that helper's words.
+    const cgWords = "Market data upstream rate-limited this request - retry in about 60 seconds";
+    ok(legRefusalStatus(503, { error: cgWords }) === 429 && legRefusalStatus(503, { error: limitedWords }) === 429 && legRefusalStatus(502, { error: cgWords }) === null && legRefusalStatus(503, { error: "Market data is not configured on this deployment. You were not charged." }) === null && legRefusalStatus(503, { error: "This server paces its Market data requests and has no room this moment; retry in 1 s." }) === null,
+      "a market leg's rate-limit answer reads as the source's 429; its other 503s (not configured, our own pacing) do not");
+    const cgBody = { error: `4 of 4 unit(s) could not be completed on the source's side (first: bitcoin, coin-profile: ${cgWords}). Nothing was charged; retry later` };
+    const cgRow = { url: "https://api.coingecko.com/api/v3/coins/bitcoin?localization=false&tickers=false&market_data=true", host: "api.coingecko.com", status: 429 };
+    const cgFor = (got, o = {}) => bundleOutageVerdict({ slug: "token-diligence", legs: BUNDLE_LEGS["token-diligence"], status: 503, body: cgBody, t0: 900, t1: 1100, logPath: log, readStatus: async () => got, ...o });
+    rmSync(log, { force: true }); row(cgRow);
+    const cgExcused = await cgFor(429);
+    ok(cgExcused?.verdict === "upstream" && cgExcused.leg === "coin-profile", "token-diligence's rate-limited leg is excused when the runner's direct read of the same request gets 429 too");
+    ok((await cgFor(200))?.verdict === "fail", "token-diligence's rate-limited leg FAILS when the market host answers the runner's direct read");
+    rmSync(log, { force: true }); row({ ...cgRow, keyed: true, url: undefined });
+    ok((await cgFor(429))?.verdict === "fail", "token-diligence's rate-limited leg on a keyed request is never re-read: FAILS");
+    rmSync(log, { force: true }); row({ ...cgRow, status: 503 });
+    ok((await cgFor(429))?.verdict === "fail", "a rate-limit answer with only a 5xx recorded in the call excuses nothing");
   }
 
   ok(await directReadFails(at(down)) === true && await directReadFails(at(up)) === false && await directReadFails("http://127.0.0.1:1/") === true, "the runner's direct read: 503 and no answer fail, 200 answers");

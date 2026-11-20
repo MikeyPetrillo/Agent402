@@ -54,20 +54,27 @@ const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArr
 const statusOf = (e) => (Number.isInteger(e?.statusCode) ? e.statusCode : 502);
 
 // Run one leg through its own handler. The leg's own error (status, message,
-// fields) is kept so the bundle can name the unit and the cause. A leg the
-// source throttled or failed on its side (429, 502, 503, 504, not marked
-// noRetry) is tried once more after a short pause: one bundle sends many
-// reads at once, and a burst refusal for one of them should not fail the call.
+// fields) is kept so the bundle can name the unit and the cause. A leg that
+// failed on the source's side (502, 503, 504, or our own 429, not marked
+// noRetry) is tried once more after a short pause.
+//
+// The source's rate limit is the exception (its 429, which a read helper
+// answers as a 503 marked upstreamStatus 429 or throttled): the leg's own
+// helper has made whatever second read it allows, and running the leg again
+// a moment later only re-sends reads the source has just refused. Such a leg
+// is run once, and its failure is marked so no further unit is started.
 export const LEG_RETRY_PAUSE_MS = 1_500;
 const RETRYABLE = new Set([429, 502, 503, 504]);
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+const isThrottled = (e) => e?.upstreamStatus === 429 || e?.throttled === true;
 async function runLeg(slug, input, ctx, { retries = 1 } = {}) {
   for (let attempt = 0; ; attempt++) {
     try {
       return await legTool(slug).handler(input, ctx);
     } catch (e) {
-      if (attempt < retries && RETRYABLE.has(statusOf(e)) && e?.noRetry !== true && !ctx?.signal?.aborted) { await pause(LEG_RETRY_PAUSE_MS); continue; }
-      throw Object.assign(new Error(String(e?.message || "leg failed").slice(0, 300)), { statusCode: statusOf(e), leg: slug, retryAfter: Number.isInteger(e?.retryAfter) ? e.retryAfter : undefined });
+      const throttled = isThrottled(e);
+      if (attempt < retries && RETRYABLE.has(statusOf(e)) && !throttled && e?.noRetry !== true && !ctx?.signal?.aborted) { await pause(LEG_RETRY_PAUSE_MS); continue; }
+      throw Object.assign(new Error(String(e?.message || "leg failed").slice(0, 300)), { statusCode: statusOf(e), leg: slug, retryAfter: Number.isInteger(e?.retryAfter) ? e.retryAfter : undefined, ...(throttled ? { throttled: true } : {}) });
     }
   }
 }
@@ -75,12 +82,18 @@ async function runLeg(slug, input, ctx, { retries = 1 } = {}) {
 // Run every unit (at most `concurrency` at once) under the bundle ceiling.
 // Any unit's failure fails the call: the caller's input (4xx) as one 422 that
 // names every such unit, the source's side (5xx) as the worst status seen.
+// Once the source has rate-limited one unit, no further unit is started (its
+// reads would go to a source that is refusing them); the units in flight end
+// on their own, and the ones not started count as not completed.
 async function runUnits(units, concurrency, runUnit, label) {
+  let refusing = false;
   const results = await withBudgetCeiling(BUNDLE_CEILING_MS, () => mapLimit(units, concurrency, async (u, i) => {
-    try { return { ok: true, value: await runUnit(u, i) }; } catch (e) { return { ok: false, error: e, unit: u }; }
+    if (refusing) return { ok: false, notStarted: true, unit: u };
+    try { return { ok: true, value: await runUnit(u, i) }; } catch (e) { if (e?.throttled === true) refusing = true; return { ok: false, error: e, unit: u }; }
   }));
-  const failed = results.filter((r) => !r.ok);
-  if (!failed.length) return results.map((r) => r.value);
+  const notDone = results.filter((r) => !r.ok);
+  if (!notDone.length) return results.map((r) => r.value);
+  const failed = notDone.filter((r) => !r.notStarted);
   const callers = failed.filter((r) => statusOf(r.error) < 500 && statusOf(r.error) !== 429);
   if (callers.length) {
     const named = callers.slice(0, 10).map((r) => `${label(r.unit)} (${r.error.message})`).join("; ");
@@ -89,7 +102,7 @@ async function runUnits(units, concurrency, runUnit, label) {
   const worst = failed.map((r) => statusOf(r.error)).sort((a, b) => b - a)[0];
   const first = failed[0];
   const retryAfter = failed.map((r) => r.error.retryAfter).filter(Number.isInteger).sort((a, b) => b - a)[0];
-  throw Object.assign(new Error(`${failed.length} of ${units.length} unit(s) could not be completed on the source's side (first: ${label(first.unit)}, ${first.error.leg || "leg"}: ${first.error.message}). Nothing was charged; retry later`), {
+  throw Object.assign(new Error(`${notDone.length} of ${units.length} unit(s) could not be completed on the source's side (first: ${label(first.unit)}, ${first.error.leg || "leg"}: ${first.error.message}). Nothing was charged; retry later`), {
     statusCode: worst === 429 ? 503 : worst >= 500 ? worst : 502, attribution: "upstream", ...(Number.isInteger(retryAfter) ? { retryAfter } : {}),
   });
 }
@@ -266,6 +279,8 @@ export const FILINGS_BRIEF_MAX_COMPANIES = 40;
 const TICKER_RE = /^[A-Za-z][A-Za-z0-9.-]{0,9}$/;
 // The most filings one edgar-filings call reads (its own limit).
 const FILINGS_READ = 200;
+// Companies read at once; each holds one read per upstream host at a time.
+export const FILINGS_CONCURRENCY = 6;
 const RECENT_SHOWN = 5;
 
 /** The tickers a filings-brief body names, validated and deduplicated. */
@@ -342,10 +357,11 @@ export function filingCompanyRow(ticker, { financials, filings, insiders }, now 
 
 async function filingsBrief(input, ctx) {
   const tickers = filingTickersOf(input);
-  const rows = await runUnits(tickers, 6, async (ticker) => {
-    const [financials, filings, insiders] = await Promise.all([
-      runLeg("company-financials", { ticker }, ctx),
-      runLeg("edgar-filings", { ticker, limit: FILINGS_READ }, ctx),
+  const rows = await runUnits(tickers, FILINGS_CONCURRENCY, async (ticker) => {
+    // The financials and the filing list are read from one host, one after
+    // the other; the Form 4 search is on its own host and runs beside them.
+    const [[financials, filings], insiders] = await Promise.all([
+      (async () => [await runLeg("company-financials", { ticker }, ctx), await runLeg("edgar-filings", { ticker, limit: FILINGS_READ }, ctx)])(),
       runLeg("edgar-insider-trades", { ticker, days: 90, limit: 20 }, ctx),
     ]);
     return filingCompanyRow(ticker, { financials, filings, insiders });
@@ -369,6 +385,8 @@ async function filingsBrief(input, ctx) {
 
 // ---------------------------------------------------------------- tokens
 export const TOKEN_DILIGENCE_LEGS = Object.freeze(["coin-profile", "coin-ohlc"]);
+// Coins read at once; each holds one read at a time (both legs read one host).
+export const TOKEN_CONCURRENCY = 4;
 export const TOKEN_DILIGENCE_MAX_COINS = 20;
 const COIN_ID_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;
 
@@ -445,11 +463,12 @@ export function tokenRow(id, { profile, ohlc }) {
 
 async function tokenDiligence(input, ctx) {
   const coins = coinIdsOf(input);
-  const rows = await runUnits(coins, 4, async (coin) => {
-    const [profile, ohlc] = await Promise.all([
-      runLeg("coin-profile", { coin }, ctx),
-      runLeg("coin-ohlc", { coin, days: 365 }, ctx),
-    ]);
+  const rows = await runUnits(coins, TOKEN_CONCURRENCY, async (coin) => {
+    // Both legs read one host, so the candles are read after the profile: a
+    // coin holds one read at a time, the call at most TOKEN_CONCURRENCY, and
+    // a coin whose profile fails sends no second read.
+    const profile = await runLeg("coin-profile", { coin }, ctx);
+    const ohlc = await runLeg("coin-ohlc", { coin, days: 365 }, ctx);
     return tokenRow(coin, { profile, ohlc });
   }, (c) => c);
   const rankBy = (pick, asc = false) => rows.map((r) => ({ id: r.id, value: pick(r) })).filter((x) => Number.isFinite(x.value)).sort((a, b) => (asc ? a.value - b.value : b.value - a.value)).map((x, i) => ({ rank: i + 1, ...x }));

@@ -191,9 +191,24 @@ export function bundleLegAnswer(status, body, legs) {
 export async function bundleOutageVerdict({ slug, legs, status, body, ...rest }) {
   const inner = bundleLegAnswer(status, body, legs);
   if (!inner) return null;
-  if (!accessRefusalStatus(inner.status, inner.body) && !isUpstreamErrorShape(inner.status, inner.body)) return null;
-  const v = await upstreamOutageVerdict({ ...rest, slug, shapeSlug: inner.leg, status: inner.status, body: inner.body });
+  const refused = legRefusalStatus(inner.status, inner.body);
+  if (!refused && !isUpstreamErrorShape(inner.status, inner.body)) return null;
+  const v = await upstreamOutageVerdict({ ...rest, slug, shapeSlug: inner.leg, status: inner.status, body: inner.body, refused });
   return { ...v, leg: inner.leg };
+}
+// A leg that reads through its own helper says its source's rate limit in
+// that helper's words (src/tools/crypto-markets-kit.js), a 503 like the
+// shared fetch helper's: read as the same refusal, the source's 429.
+const LEG_RATE_LIMIT_SHAPES = [
+  [503, /^Market data upstream rate-limited this request\b/],
+];
+/** The upstream status a leg's refusal names: the shared fetch helper's
+ *  (401, 403, 429), or 429 for a leg helper's own rate-limit answer; else null. */
+export function legRefusalStatus(status, body) {
+  const named = accessRefusalStatus(status, body);
+  if (named) return named;
+  const msg = String(body?.error || "");
+  return LEG_RATE_LIMIT_SHAPES.some(([st, re]) => st === status && re.test(msg)) ? 429 : null;
 }
 
 // The static path a definition writes before its first interpolation: after
@@ -263,8 +278,7 @@ export async function directReadFails(url, opts) {
 /** The verdict on a failed answer: { verdict: "upstream", evidence } when the
  *  conditions above hold (an outage, or an access refusal the runner is given
  *  too), else { verdict: "fail", reason }. */
-export async function upstreamOutageVerdict({ slug, shapeSlug = slug, status, body, t0, t1, logPath = upstreamFailureLogPath(), readFails = directReadFails, readStatus = directReadStatus, root = ROOT }) {
-  const refused = accessRefusalStatus(status, body);
+export async function upstreamOutageVerdict({ slug, shapeSlug = slug, status, body, refused = accessRefusalStatus(status, body), t0, t1, logPath = upstreamFailureLogPath(), readFails = directReadFails, readStatus = directReadStatus, root = ROOT }) {
   if (!refused && !isUpstreamErrorShape(status, body)) return { verdict: "fail", reason: "not an upstream-error answer" };
   const hosts = upstreamHostsForSlug(slug, root);
   if (!hosts.size) return { verdict: "fail", reason: "no upstream host in the tool's definition" };

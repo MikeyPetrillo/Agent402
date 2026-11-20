@@ -17,6 +17,7 @@ import { BUNDLE_DISCOUNT, BUNDLE_FLOOR_USD, bundlePriceUsd, unitPartsUsd, usdTex
 import {
   BUNDLE_TOOLS, BUNDLE_LEGS, BUNDLE_MAX_UNITS, legTool, weatherSitesOf, filingTickersOf, coinIdsOf,
   weatherSiteRow, filingCompanyRow, candleStats, tokenRow, yearEarlier, WEATHER_RISK_WEIGHTS, LEG_RETRY_PAUSE_MS, WEATHER_CONCURRENCY,
+  TOKEN_CONCURRENCY, FILINGS_CONCURRENCY,
 } from "../src/tools/bundle-kit.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
@@ -192,6 +193,22 @@ try {
   stub("weather-air-quality", async () => { calls++; throw err(503, "key refused", { noRetry: true, retryAfter: 60 }); });
   await throwsStatus(() => tool("weather-risk-brief").handler({ sites: [{ lat: 1, lon: 2 }] }), 503, /key refused/, "weather: a leg marked noRetry is not retried and stays a 503");
   ok(calls === 1, "weather: noRetry means one call");
+  // The source's rate limit (its 429, answered by the read helper as a 503
+  // marked upstreamStatus 429): the leg is run once, with no second run after
+  // the pause, and no further site is started.
+  {
+    const limited429 = () => err(503, "The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at api.example.org; retry in 60s", { upstreamStatus: 429, attribution: "upstream", retryAfter: 60 });
+    const runs = [];
+    stub("weather-daily", async (i) => { runs.push(`${i.lat}`); throw limited429(); });
+    const tThrottle = Date.now();
+    let refused = null;
+    try { await tool("weather-risk-brief").handler({ sites: Array.from({ length: 9 }, (_, k) => ({ lat: 50 + k, lon: 1 })) }); } catch (e) { refused = e; }
+    ok(refused?.statusCode === 503 && refused.retryAfter === 60 && /^9 of 9 unit\(s\) could not be completed on the source's side \(first: 50,1, weather-daily: /.test(refused.message),
+      `weather: a rate-limited leg fails the call 503, uncharged, with the source's retry time (${refused?.statusCode}, retryAfter ${refused?.retryAfter})`);
+    ok(runs.length === WEATHER_CONCURRENCY && new Set(runs).size === WEATHER_CONCURRENCY, `weather: a rate-limited leg is run once and no further site is started (${runs.length} runs for 9 sites, ${WEATHER_CONCURRENCY} in flight when the limit was met)`);
+    ok(Date.now() - tThrottle < LEG_RETRY_PAUSE_MS, "weather: no pause is spent waiting to re-send refused reads");
+  }
+  restore();
   restore();
 
   // filings: a caller mistake is one 422 naming each unit
@@ -208,6 +225,79 @@ try {
   stub("coin-ohlc", async () => ({ bars, summary: { changePct: 5 }, days: 365, granularity: "1d" }));
   const k = await tool("token-diligence").handler({ coins: ["a", "b", "a"] });
   ok(k.coins === 2 && k.comparison.byMarketCap.length === 2 && k.pricing.units === 2, "tokens: a complete answer, duplicates read once and priced once");
+  // pacing: both legs read one host, so a coin holds one read at a time and
+  // the call at most TOKEN_CONCURRENCY; two reads a coin, none repeated.
+  {
+    let open = 0, peak = 0, reads = 0; const perCoin = new Map(), peakCoin = new Map();
+    const paced = (slug) => { const real = stubs.get(slug); stub(slug, async (i) => {
+      reads++; open++; peak = Math.max(peak, open);
+      perCoin.set(i.coin, (perCoin.get(i.coin) || 0) + 1); peakCoin.set(i.coin, Math.max(peakCoin.get(i.coin) || 0, perCoin.get(i.coin)));
+      await new Promise((r) => setTimeout(r, 15));
+      open--; perCoin.set(i.coin, perCoin.get(i.coin) - 1);
+      return real(i);
+    }); };
+    paced("coin-profile"); paced("coin-ohlc");
+    const ten = Array.from({ length: 10 }, (_, n) => `coin-${n}`);
+    const k10 = await tool("token-diligence").handler({ coins: ten });
+    ok(k10.coins === 10 && reads === 20, `tokens: ten coins make two reads each, none repeated (${reads} reads)`);
+    ok(peak <= TOKEN_CONCURRENCY && peak >= 2 && [...peakCoin.values()].every((n) => n === 1), `tokens: at most ${TOKEN_CONCURRENCY} reads open at once, one per coin (peak ${peak})`);
+  }
+  // The source's rate limit, in the market kit's own words (marked throttled):
+  // each leg is run once, the coin's second read is not sent, and no further
+  // coin is started.
+  {
+    const sent = [];
+    const limitedCg = () => err(503, "Market data upstream rate-limited this request - retry in about 60 seconds", { throttled: true });
+    stub("coin-profile", async (i) => { sent.push(`profile ${i.coin}`); throw limitedCg(); });
+    stub("coin-ohlc", async (i) => { sent.push(`ohlc ${i.coin}`); throw limitedCg(); });
+    const tCg = Date.now();
+    let refused = null;
+    try { await tool("token-diligence").handler({ coins: Array.from({ length: 12 }, (_, n) => `coin-${n}`) }); } catch (e) { refused = e; }
+    ok(refused?.statusCode === 503 && /^12 of 12 unit\(s\) could not be completed on the source's side \(first: coin-0, coin-profile: Market data upstream rate-limited this request/.test(refused.message),
+      `tokens: a rate-limited leg fails the call 503, uncharged, naming the leg (${refused?.statusCode})`);
+    ok(sent.length === TOKEN_CONCURRENCY && sent.every((x) => x.startsWith("profile ")) && new Set(sent).size === sent.length,
+      `tokens: a rate-limited call sends one read per coin in flight and nothing after (${sent.length} reads for 12 coins: ${sent.join(", ")})`);
+    ok(Date.now() - tCg < LEG_RETRY_PAUSE_MS, "tokens: no pause is spent waiting to re-send refused reads");
+  }
+  restore();
+  // The same through the real legs, the market host stubbed to answer 429:
+  // the requests the source receives are counted. Each coin in flight sends
+  // its profile read and the market kit's own single re-read of it, and
+  // nothing else goes out: no candles read, no second run, no further coin.
+  {
+    const realFetch = globalThis.fetch;
+    const got = [];
+    globalThis.fetch = async (input, init) => {
+      const url = String(typeof input === "string" ? input : input?.url ?? input);
+      if (!/^https:\/\/(pro-)?api\.coingecko\.com\//.test(url)) return realFetch(input, init);
+      got.push(new URL(url).pathname.replace("/api/v3", ""));
+      return new Response(JSON.stringify({ status: { error_code: 429 } }), { status: 429, headers: { "content-type": "application/json", "retry-after": "60" } });
+    };
+    let refused = null;
+    try { await tool("token-diligence").handler({ coins: Array.from({ length: 12 }, (_, n) => `stub-coin-${n}`) }); } catch (e) { refused = e; } finally { globalThis.fetch = realFetch; }
+    const coinsRead = new Set(got.map((p) => p.split("/")[2]));
+    ok(refused?.statusCode === 503 && /coin-profile: Market data upstream rate-limited this request/.test(refused.message), `tokens (real legs): the market host's 429 fails the call 503, uncharged, naming the leg (${refused?.statusCode}: ${String(refused?.message).slice(0, 90)})`);
+    ok(got.length <= TOKEN_CONCURRENCY * 2 && got.length >= TOKEN_CONCURRENCY && coinsRead.size === TOKEN_CONCURRENCY && got.every((p) => !p.endsWith("/ohlc")),
+      `tokens (real legs): a rate-limited 12-coin call sends the market host ${got.length} requests (${TOKEN_CONCURRENCY} coins' profile reads and the kit's own re-read of each), no candles read and no further coin`);
+  }
+
+  // filings pacing: the two data.sec.gov legs of a company are never in
+  // flight together; the Form 4 search (its own host) runs beside them.
+  {
+    const hostOf = { "company-financials": "data", "edgar-filings": "data", "edgar-insider-trades": "efts" };
+    const openBy = new Map(), peakBy = new Map(); let reads = 0;
+    for (const slug of Object.keys(hostOf)) stub(slug, async (i) => {
+      const key = `${hostOf[slug]} ${i.ticker}`; reads++;
+      openBy.set(key, (openBy.get(key) || 0) + 1); peakBy.set(key, Math.max(peakBy.get(key) || 0, openBy.get(key)));
+      await new Promise((r) => setTimeout(r, 15));
+      openBy.set(key, openBy.get(key) - 1);
+      return slug === "company-financials" ? fin : slug === "edgar-filings" ? filings : { total: 3, trades: [] };
+    });
+    const eight = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG", "HHH"];
+    const f8 = await tool("filings-brief").handler({ tickers: eight });
+    ok(f8.companies === 8 && reads === 24 && [...peakBy.values()].every((n) => n === 1) && FILINGS_CONCURRENCY === 6,
+      `filings: eight companies make three reads each and a company holds one read per host at a time (${reads} reads)`);
+  }
   restore();
 
   // A leg the source rate-limits on every unit: the answer names the leg and

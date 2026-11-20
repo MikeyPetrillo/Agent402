@@ -208,7 +208,9 @@ async function cgLoad(key, path, reduce = null) {
       if (named) cgNoteUnknownId(named.kind, named.id);
       throw Object.assign(bad("Unknown id: the coin, exchange or platform is not tracked upstream", 422), { unknownId: true });
     }
-    if (s === 429) throw bad("Market data upstream rate-limited this request - retry in about 60 seconds", 503);
+    // `throttled` marks the source's own rate limit for an in-process caller
+    // (src/tools/bundle-kit.js runs this read once and starts no further unit).
+    if (s === 429) throw Object.assign(bad("Market data upstream rate-limited this request - retry in about 60 seconds", 503), { throttled: true });
     if (s === 401 || s === 403) {
       // Plan/range codes are about the request; any other 401/403 is this
       // server's key, which no buyer input can fix.

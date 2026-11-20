@@ -861,6 +861,16 @@ export async function runBundleStubControls() {
     const relayed = { ...answer("weather-history", "Source URL's host returned HTTP 503 - upstream issue, try again later"), status: 502 };
     ok(Boolean((await bundleFailureGrade(t, relayed, runnerGets(503)))?.skip) && Boolean((await bundleFailureGrade(t, relayed, runnerGets(200)))?.fail),
       "control (stub): a leg's relayed upstream 5xx is excused only when the runner's direct read fails too");
+    // token-diligence: the market kit's own rate-limit words, a recorded 429
+    // from the keyless market host, and the runner's read of the same request.
+    const tk = { slug: "token-diligence", method: "post", path: "/api/token-diligence" };
+    const tkAnswer = { status: 503, t0: 900, t1: 1100, threw: null, body: { error: "4 of 4 unit(s) could not be completed on the source's side (first: bitcoin, coin-profile: Market data upstream rate-limited this request - retry in about 60 seconds). Nothing was charged; retry later" } };
+    record({ host: "api.coingecko.com", url: "https://api.coingecko.com/api/v3/coins/bitcoin?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false&sparkline=false" });
+    const tkRefused = await bundleFailureGrade(tk, tkAnswer, runnerGets(429));
+    ok(Boolean(tkRefused?.skip) && /coin-profile/.test(tkRefused.skip), "control (stub): token-diligence's leg was rate-limited (429) and the runner's direct read is refused 429 too: excused, leg named");
+    ok(Boolean((await bundleFailureGrade(tk, tkAnswer, runnerGets(200)))?.fail), "control (stub): token-diligence's leg was rate-limited while the market host answers the runner's direct read: it FAILS");
+    ok(await bundleFailureGrade(tk, { ...tkAnswer, body: { error: tkAnswer.body.error.replace("Market data upstream rate-limited this request - retry in about 60 seconds", "This server paces its Market data requests and has no room this moment; retry in 1 s. This is on our side, not your input. You were not charged.") } }, runnerGets(429)) === null,
+      "control (stub): token-diligence's leg refused by this server's own pacing is not read as the source's limit (it fails by the rules below)");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
@@ -874,7 +884,9 @@ async function main() {
 
   const pricing = await (await fetch(`${TARGET}/api/pricing`)).json();
   const spec = await (await fetch(`${TARGET}/openapi.json`)).json();
-  const { work, excluded } = strictScope(spec, pricing);
+  const scope = strictScope(spec, pricing);
+  const { excluded } = scope;
+  let { work } = scope;
   // Every weather tool is swept here on every commit, so test-all.js (which
   // skips what strictScopeKeys names and tolerates a 502/503/504) never
   // grades one of them.
@@ -894,6 +906,17 @@ async function main() {
     "metered Brave/OpenAI/E2B slugs are absent from the work list");
   ok(excluded.some((e) => e.slug === "search"),
     "Brave search was excluded by the filter (not merely absent from catalog)");
+
+  // NON_METERED_ONLY=slug,slug narrows the run to the named in-scope tools
+  // (a trace of one tool, driven and graded exactly as in the full sweep, a
+  // sampled family member included). It is refused under CI, where a narrowed
+  // run would pass with almost nothing asserted.
+  const only = new Set(String(process.env.NON_METERED_ONLY || "").split(",").map((s) => s.trim()).filter(Boolean));
+  if (only.size) {
+    if (process.env.CI) throw new Error("NON_METERED_ONLY narrows the sweep and is refused under CI");
+    work = work.filter((t) => only.has(t.slug));
+    ok(work.length === only.size, `NON_METERED_ONLY: every named tool is in scope (${work.map((t) => t.slug).join(", ") || "none"})`);
+  }
 
   console.log(`[non-metered] sweeping ${work.length} tools (excluded metered=${excluded.length})…`);
 
@@ -917,13 +940,14 @@ async function main() {
   await mapPool(work, CONCURRENCY, async (t) => {
     // Sampled out of this run's CoinGecko allowance. Skipped BEFORE the call,
     // because the whole point is not to spend the request.
-    if (COINGECKO_SLUGS.has(t.slug) && !CG_LIVE.has(t.slug)) {
+    if (COINGECKO_SLUGS.has(t.slug) && !CG_LIVE.has(t.slug) && !only.has(t.slug)) {
       skippedCoingecko++;
       done++;
       return;
     }
     const r = await callExample(t.path, t.method, t.op, t.slug);
     done++;
+    if (only.size) console.log(`\nattempts - ${t.slug}: ${r.attempts} (answered ${r.status || "nothing"})`);
     if (done % 40 === 0 || done === work.length) {
       process.stdout.write(`\r[non-metered] ${done}/${work.length}`);
     }
@@ -1133,7 +1157,8 @@ async function main() {
   for (const m of shapeMismatches.slice(0, 40)) console.error(`  shape - ${m}`);
 
   const accounted = asserted + skippedCoingecko;
-  ok(accounted >= Math.floor(MIN_IN_SCOPE * 0.8),
+  if (only.size) console.log(`# narrowed run (NON_METERED_ONLY): ${asserted} of ${work.length} named tool(s) asserted; the coverage floor is a full sweep's`);
+  else ok(accounted >= Math.floor(MIN_IN_SCOPE * 0.8),
     `enough tools were actually asserted (${asserted} run + ${skippedCoingecko} deliberately sampled out = ${accounted}), not soft-skipped away`);
 
   console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed — in-scope=${work.length} excluded=${excluded.length}`);
