@@ -70,10 +70,13 @@ const listen = (app) => new Promise((r) => { const s = app.listen(0, "127.0.0.1"
 // and dispatches nothing; `data:` lines build an event that a blank line
 // dispatches; an event still open when the stream ends is dropped. A client
 // that JSON-parses every event's data (the AI SDK's OpenAI-compatible
-// provider) reads exactly these.
-const sseEvents = (bytes) => {
+// provider) reads exactly these. `lenient` models a parser that flushes at
+// the end of the stream: the unfinished last line is read and an open event
+// is dispatched.
+const sseEvents = (bytes, { lenient = false } = {}) => {
   const lines = Buffer.from(bytes).toString("utf8").split(/\r\n|\r|\n/);
-  lines.pop(); // the bytes after the last line end: an unfinished line
+  const tail = lines.pop(); // the bytes after the last line end: an unfinished line
+  if (lenient) lines.push(...(tail ? [tail] : []), "");
   const out = [];
   let data = null, event = "";
   for (const line of lines) {
@@ -113,6 +116,7 @@ const strictJson = (events) => events.every((e) => e.data === "[DONE]" || (() =>
     await ok(r.status === 200 && !r.headers[RECEIPT_HEADER.toLowerCase()] && sp.receipt && sp.body.equals(want), "a settled event stream ends with the receipt after the streamed bytes, which arrive unchanged");
     await ok(r.body.toString("utf8").endsWith(`\n: ${RECEIPT_SSE_COMMENT} ${sp.receipt}\n`) && RECEIPT_SSE_COMMENT === "agent402-receipt" && CLIENT_SSE_COMMENT === RECEIPT_SSE_COMMENT, "the receipt rides as an SSE comment line, `: agent402-receipt <receipt>`, the same tag in the server and the client");
     await ok(JSON.stringify(sseEvents(r.body)) === JSON.stringify(sseEvents(want)) && sseEvents(r.body).length === 3 && strictJson(sseEvents(r.body)), `an event-stream parser dispatches the same events with the receipt as without it, each JSON or [DONE] (${sseEvents(r.body).map((e) => e.event).join(", ")})`);
+    await ok(JSON.stringify(sseEvents(r.body, { lenient: true })) === JSON.stringify(sseEvents(want, { lenient: true })) && strictJson(sseEvents(r.body, { lenient: true })), `...and so does a parser that flushes an open event at the end of the stream (${sseEvents(r.body, { lenient: true }).length} events)`);
     const v = verifyReceipt(sp.receipt, { keys, responseBody: sp.body, request: { method: "POST", path: "/sse", body: {} } });
     await ok(v.valid && v.checks.response && v.checks.request && v.record.rail === "x402" && v.record.settlement === SETTLED.settlement, `the receipt verifies against the bytes streamed before it and the request sent (${v.reason})`);
     const cv = await verifyStreamedReceipt(r.body, { keys, request: { method: "POST", path: "/sse", body: {} } });
@@ -283,7 +287,7 @@ try {
     const cv = await verifyStreamedReceipt(bytes, { keys: keyDoc.keys, request: { method: "POST", path: CHAT.path, body: CHAT.body } });
     const { body, receipt } = splitStreamedReceipt(bytes);
     await ok(r.status === 200 && /text\/event-stream/.test(r.headers.get("content-type") || "") && Buffer.from(body).toString().includes('"content":" answer"') && cv.valid, `${wire}: a settled streamed chat answer ends with a receipt line that verifies against the bytes streamed and the request sent (${r.status}, ${cv.reason})`);
-    await ok(JSON.stringify(sseEvents(bytes)) === JSON.stringify(sseEvents(body)) && strictJson(sseEvents(bytes)) && sseEvents(bytes).at(-1)?.data === "[DONE]", `${wire}: a client that JSON-parses every event reads the answer's events and [DONE] last, never the receipt (${sseEvents(bytes).length} events)`);
+    await ok(JSON.stringify(sseEvents(bytes)) === JSON.stringify(sseEvents(body)) && JSON.stringify(sseEvents(bytes, { lenient: true })) === JSON.stringify(sseEvents(body, { lenient: true })) && strictJson(sseEvents(bytes, { lenient: true })) && sseEvents(bytes, { lenient: true }).at(-1)?.data === "[DONE]", `${wire}: a client that JSON-parses every event reads the answer's events and [DONE] last, never the receipt, flushing at the end or not (${sseEvents(bytes).length} events)`);
     const settleRef = r.headers.get("payment-response") ? JSON.parse(Buffer.from(r.headers.get("payment-response"), "base64").toString("utf8")).transaction : r.headers.get("payment-receipt") ? JSON.parse(Buffer.from(r.headers.get("payment-receipt"), "base64url").toString("utf8")).reference : null;
     await ok(cv.record.settlement && cv.record.settlement === settleRef && cv.record.slug && cv.record.priceUsd, `${wire}: rail ${cv.record.rail}, the settlement the wire's own receipt names`);
     const api = await (await fetch(`${rig.url}${RECEIPT_VERIFY_PATH}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ receipt, body: Buffer.from(body).toString("utf8") }) })).json();
