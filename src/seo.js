@@ -748,6 +748,23 @@ export function mppRailsProse(m = mppMethodsSummary()) {
   return parts.length ? `, or MPP on ${parts.join(" or ")}` : "";
 }
 
+/** The most characters a machine surface's clause keeps in /llms.txt. */
+export const SURFACE_CLAUSE_MAX = 120;
+/** A surface line's description cut to its first clause for /llms.txt: up to
+ *  the first " - ", "; " or ". ", then, while still past SURFACE_CLAUSE_MAX,
+ *  before the first parenthesis, then at the last comma inside the bound. A
+ *  cut that leaves a code span or a parenthesis open ends before it. */
+export function surfaceClause(text) {
+  let s = String(text || "").trim();
+  const cutAt = (re) => { const i = s.search(re); if (i > 0) s = s.slice(0, i); };
+  cutAt(/ - |; |\. /);
+  if (s.length > SURFACE_CLAUSE_MAX) cutAt(/ \(/);
+  if (s.length > SURFACE_CLAUSE_MAX) { const i = s.lastIndexOf(", ", SURFACE_CLAUSE_MAX); s = i > 0 ? s.slice(0, i) : s.slice(0, s.lastIndexOf(" ", SURFACE_CLAUSE_MAX)); }
+  const open = (s.match(/`/g) || []).length % 2 === 1 || (s.match(/\(/g) || []).length !== (s.match(/\)/g) || []).length;
+  if (open) cutAt(/ ?[`(]/);
+  return s.replace(/[\s.,;:]+$/, "");
+}
+
 /** /llms.txt: the short index an agent reads first (about 16 KB). Its title,
  *  summary line and sections are taken from the full text, so they never drift;
  *  the skill-pack and per-category tool lists sit in /llms-full.txt. */
@@ -757,21 +774,44 @@ export function llmsTxt(baseUrl, catalog) {
   const summary = full.find((l) => l.startsWith("> "));
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
   const keep = ["Call a model (metered, the default)", "Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];
-  // Entries the short index names in one clause; /llms-full.txt keeps each in full.
+  // Key machine surfaces: the short index names each surface in one clause
+  // and /llms-full.txt keeps every line whole. An entry below is that
+  // surface's own brief; any other line keeps its first clause
+  // (surfaceClause), so a surface added later stays short here too.
   const brief = [
+    [`- [/api/search](`, `- [/api/search](${baseUrl}/api/search): **front door**: live web search (title, URL, snippet)`],
+    [`- [/api/answer](`, `- [/api/answer](${baseUrl}/api/answer): **front door**: cited answer grounded in live web search results`],
+    [`- [/api/route](`, `- [/api/route](${baseUrl}/api/route): Smart Order Router: rank tools across every crawled x402 seller`],
+    [`- [/api/index](`, `- [/api/index](${baseUrl}/api/index): the crawled x402 seller index, one page per call; one origin with \`?seller=<host>\``],
+    // Each depth's price stays here (from the decide configuration).
+    [`- [/api/decide](`, (line) => {
+      const depth = (line.match(/ Depth quick \$[\d.]+ \/ plan \$[\d.]+ \/ full \$[\d.]+\./) || [""])[0];
+      return `- [/api/decide](${baseUrl}/api/decide): a paid decision: describe a job, get a call-ready plan over this catalog and outside x402 sellers${depth ? `.${depth.replace(/\.$/, "")}` : ""}`;
+    }],
+    // The tier prices stay here (each tier's route and price, from the catalog).
+    [`- [/api/route/execute](`, (line) => {
+      const tiers = (line.match(/ Proportional tiers: .* naming the tier that fits/) || [""])[0];
+      return `- [/api/route/execute](${baseUrl}/api/route/execute): the SOR that also PAYS: buys the best-matching tool's answer from any proven seller over x402 and resells it with a receipt${tiers ? `.${tiers}` : ""}`;
+    }],
     [`- [/api/scorecard](`, `- [/api/scorecard](${baseUrl}/api/scorecard): monthly buyer scorecard`],
     [`- [/mcp/server-card](`, `- [/mcp/server-card](${baseUrl}/mcp/server-card): MCP server card`],
     [`- [/api/refunds](`, `- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments`],
     // The counting method, the filters and the SDK and MCP readers are in /llms-full.txt.
-    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\` on Base USDC, by payTo), the top 25 by default (50 the ceiling, \`totalSellers\` for how many rank in all); \`?sort=usd|calls\`, \`?top=N\`; also the SDK's \`topSellers()\` and MCP \`sellers.list\` (listed on hosted /mcp only with \`AGENT402_SHOW_ROUTER=1\`); the counting window and filters are in /llms-full.txt`],
+    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\`), the top 25 (\`?top=N\`, \`?sort=usd|calls\`); also the SDK's \`topSellers()\` and MCP \`sellers.list\``],
   ];
-  const briefOf = (line) => (brief.find(([prefix]) => line.startsWith(prefix)) || [])[1] || line;
+  const surfaceBrief = (line) => {
+    const hit = brief.find(([prefix]) => line.startsWith(prefix));
+    if (hit) return typeof hit[1] === "function" ? hit[1](line) : hit[1];
+    const m = line.match(/^(- \[[^\]]+\]\([^)\s]+\)): (.+)$/);
+    return m ? `${m[1]}: ${surfaceClause(m[2])}` : line;
+  };
   const sections = keep.map((name) => {
     const start = full.indexOf(`## ${name}`);
     if (start < 0) return "";
     let end = start + 1;
     while (end < full.length && !full[end].startsWith("## ")) end += 1;
-    return full.slice(start, end).map(briefOf).join("\n").trimEnd();
+    if (name !== "Key machine surfaces") return full.slice(start, end).join("\n").trimEnd();
+    return [full[start], `Each in one clause; in full, with parameters and limits: ${baseUrl}/llms-full.txt`, ...full.slice(start + 1, end).map(surfaceBrief)].join("\n").trimEnd();
   }).filter(Boolean);
   const identity = `## Identity and receiving wallet
 - Receiving wallet: agent402.base.eth on Base, verifiable on Basescan. Every stablecoin call settles to the payTo its 402 names.

@@ -6,10 +6,14 @@
 //
 // Part 1 renders the block in-process from a synthetic catalog (the price,
 // the free-tier count and the allowance clause must follow their sources).
+// Part 1c checks /llms.txt names each machine surface in one clause while
+// /llms-full.txt keeps every line whole.
 // Part 2 boots this tree twice in paid mode against a stub facilitator (one
 // rail, nothing settles), FIRST_CALL_ALLOWANCE off and then on, and reads:
 // /llms.txt, /agents.md, the MCP server.describe answer, the unpaid 402
 // (header and body), /openapi.json info and /.well-known/x402.
+// Part 3 boots it once more with production's switches (receipt key, every
+// rail a stub can stand in for) and holds /llms.txt under its 16,384 bytes.
 // Offline: no upstream is called; only free surfaces and unpaid 402s are read.
 //
 //   node scripts/test-front-door.js
@@ -214,11 +218,39 @@ function assertAccess(label, text, powCount, wires) {
 }
 
 // ---------------------------------------------------------------------------
-// Part 2: two paid boots.
+// Part 1c: /llms.txt names each machine surface in one clause and points at
+// /llms-full.txt, which keeps every line whole, so the short index stays
+// short as surfaces are added.
+{
+  const { llmsTxt, llmsFullTxt } = await import("../src/seo.js");
+  const B = "https://agent402.tools";
+  const sectionOf = (t, name) => { const a = t.indexOf(`\n## ${name}\n`); if (a < 0) return ""; const b = t.indexOf("\n## ", a + 4); return t.slice(a + 1, b < 0 ? undefined : b); };
+  const short = sectionOf(llmsTxt(B, {}), "Key machine surfaces"), full = sectionOf(llmsFullTxt(B, {}), "Key machine surfaces");
+  const entries = (s) => s.split("\n").filter((l) => /^- \[/.test(l));
+  const linkOf = (l) => (l.match(/^- \[[^\]]+\]\([^)\s]+\)/) || [""])[0];
+  const S = entries(short), F = entries(full);
+  ok(F.length >= 20 && S.length === F.length && F.every((l, i) => linkOf(S[i]) === linkOf(l)), `unit: /llms.txt lists every machine surface /llms-full.txt does, in order (${S.length} of ${F.length})`);
+  // Two briefs carry what other suites pin in the short index: the
+  // leaderboard's method and readers, the route-execute tier prices.
+  const KEPT = ["- [/api/leaderboard](", "- [/api/route/execute]("];
+  const long = S.filter((l) => !KEPT.some((p) => l.startsWith(p)) && l.length - linkOf(l).length > 140);
+  ok(!long.length, `unit: each other /llms.txt surface line is one clause, at most 140 characters after its link${long.length ? ` (over: ${long.map(linkOf).join(", ")})` : ""}`);
+  ok(S.every((l) => !/[.,;:]$/.test(l) && (l.match(/`/g) || []).length % 2 === 0 && (l.match(/\(/g) || []).length === (l.match(/\)/g) || []).length), "unit: no surface line is cut mid-clause (no trailing mark, balanced code and parentheses)");
+  ok(Buffer.byteLength(short) <= 4_000, `unit: the /llms.txt surfaces section stays short (${Buffer.byteLength(short)} bytes, at most 4,000)`);
+  ok(/\/llms-full\.txt/.test(short.split("\n").slice(0, 3).join("\n")), "unit: the short section points at /llms-full.txt for each line in full");
+  ok(F.some((l) => l.length > 400) && full.includes("Proportional tiers") && full.length > short.length * 1.5, "unit: /llms-full.txt keeps each surface line in full");
+}
+
+// ---------------------------------------------------------------------------
+// Part 2: two paid boots, then one with production's switches (Part 3).
 const [FAC_PORT] = await getFreePorts(1);
+// Every EVM chain a local stub can stand in for; the first two boots offer Base alone.
+const EVM_KINDS = ["eip155:8453", "eip155:137", "eip155:42161", "eip155:143", "eip155:42220", "eip155:43114", "eip155:1329", "eip155:10", "eip155:57073", "eip155:4663"];
 const fac = createServer((req, res) => {
-  res.writeHead(req.url === "/supported" ? 200 : 404, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(req.url === "/supported" ? { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} } : {}));
+  const known = req.url === "/supported" || req.url === "/rpc";
+  res.writeHead(known ? 200 : 404, { "Content-Type": "application/json" });
+  if (req.url === "/rpc") return res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x0" }));
+  res.end(JSON.stringify(req.url === "/supported" ? { kinds: EVM_KINDS.map((network) => ({ x402Version: 2, scheme: "exact", network })), extensions: [], signers: {} } : {}));
 });
 await new Promise((r) => fac.listen(FAC_PORT, "127.0.0.1", r));
 const BASE_URL = "http://agent402.test";
@@ -226,10 +258,10 @@ let proc = null;
 const stopProc = () => { try { proc?.kill("SIGKILL"); } catch {} proc = null; };
 process.on("exit", () => { stopProc(); try { fac.close(); } catch {} });
 
-async function boot(extraEnv) {
+async function boot(extraEnv, args = []) {
   const [PORT] = await getFreePorts(1);
   const TMP = mkdtempSync(join(tmpdir(), "front-door-"));
-  proc = spawn(process.execPath, ["src/server.js"], {
+  proc = spawn(process.execPath, [...args, "src/server.js"], {
     cwd: ROOT,
     env: {
       ...process.env, PORT: String(PORT), FREE_MODE: "", TARGET_URL: "", BASE_URL,
@@ -457,6 +489,60 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
   ok(named.length > 0 && named.includes(FLAGSHIP_MCP_NAMES[FRONT_DOOR_SLUG]) && named.every((n) => priceOf(n) > 0 && priceOf(n) <= cap), `on: every tool the clause names is a catalog route at or under the cap, web.search among them (${named.join(", ")})`);
   ok(named.every((n) => Object.values(FLAGSHIP_MCP_NAMES).includes(n)), "on: with no slug list set, the clause names flagships only");
   stopProc();
+}
+
+// --- boot 3: production's switches --------------------------------------------
+// /llms.txt has a 16,384-byte bound, and production serves it with switches
+// the two boots above leave off: a receipt signing key, MPP with Tempo (both
+// currencies) and card, every EVM chain, the first-call allowance, a chain
+// premium, the public settlement index, the registry id and the key-gated
+// routes. This boot turns each of them on (nothing leaves the machine), so
+// the bound covers what production serves. The two offers a local stub
+// cannot stand in for (the Circle Gateway batched option and payment
+// channels) are each added by the bytes their own block renders.
+{
+  const { generateKeyPairSync } = await import("node:crypto");
+  const pem = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" });
+  const F = `http://127.0.0.1:${FAC_PORT}`;
+  const B = await boot({
+    NODE_ENV: "test", RECEIPT_SIGNING_KEY: Buffer.from(pem).toString("base64"), RECEIPT_SIGNING_KEY_ID: "front-door",
+    PAYMENT_NETWORKS: "base,polygon,arbitrum,monad,celo,avalanche,sei,optimism,ink,robinhood",
+    PAYAI_FACILITATOR_URL: F, INK_FACILITATOR_URL: F, CELO_FACILITATOR_URL: F, MONAD_FACILITATOR_URL: F, ROBINHOOD_FACILITATOR_URL: F, AGENT402_BASE_RPC: `${F}/rpc`,
+    PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", ROBINHOOD_RELAYER_KEY: "", CIRCLE_FACILITATOR_API_KEY: "", FACILITATOR_GAS_CHECK: "off",
+    SOLVADOR_KEY: "front-door-placeholder", SOLVADOR_FACILITATOR_URL: F, CELO_FACILITATOR_KEY: "front-door-placeholder",
+    DECIDE_SERVICE_URL: "http://127.0.0.1:1", DECIDE_INTERNAL_TOKEN: "front-door-placeholder-token-0123456789",
+    MPP_SECRET_KEY: "front-door-test-mpp-secret", TEMPO_API_KEY: "front-door-placeholder", TEMPO_RECIPIENT_ADDRESS: "0x000000000000000000000000000000000000dEaD", TEMPO_CURRENCY: "usdc,pathusd", TEMPO_RELAY: "",
+    STRIPE_SECRET_KEY: "sk_test_front_door_placeholder", STRIPE_PROFILE_ID: "profile_front_door",
+    FIRST_CALL_ALLOWANCE: "on", FRONT_DOOR_402: "on", NETWORK_PRICE_PREMIUMS: "eip155:10=0.001", FACILITATOR_PUBLIC_INDEX_CHAINS: "ink,robinhood", ERC8004_AGENT_ID: "1",
+    X_BEARER_TOKEN: "front-door-placeholder", NEYNAR_API_KEY: "front-door-placeholder", EXA_API_KEY: "front-door-placeholder", TYPESAFE_API_KEY: "front-door-placeholder", RUGCHECK_TOOLS: "on", OPENROUTER_TTS_ENABLED: "true",
+    REVENUE_WARMUP: "off", REVENUE_LEDGER: "off",
+  }, ["--import", "./scripts/lib/loopback-only-preload.js"]);
+  const llms = await (await fetch(`${B}/llms.txt`)).text();
+  const { leadSentence } = await import("../src/positioning.js");
+  ok(llms.includes(`> ${leadSentence({ mpp: true, receipts: true })}`), "prod: /llms.txt carries the lead sentence with both wires and the receipt clause (the key is loaded)");
+  ok(/or Tempo \(USDC\.e or PathUSD, native\)/.test(llms) && /`stripe` charge/.test(llms) && /\*\*MPP: start here\.\*\*/.test(llms), "prod: /llms.txt carries Tempo with both currencies, the card method and the MPP start-here block");
+  ok(FIRST_CALL_FREE_COPY.test(llms) && /Prices by chain: /.test(llms) && /publishes each settlement on its public index/.test(llms) && /Ink/.test(llms), "prod: /llms.txt carries the allowance clause, the chain premium and the public index lines");
+  ok(/- \[\/api\/decide\]\(/.test(llms), "prod: the key-gated decide route is in the catalog and on /llms.txt");
+  stopProc();
+  // The two offers a stub cannot stand in for: each block's own bytes.
+  const { llmsTxt } = await import("../src/seo.js");
+  const { setGatewayOffer } = await import("../src/gateway-nanopayments.js");
+  const { setBatchOffer } = await import("../src/batch-settlement.js");
+  const bytes = () => Buffer.byteLength(llmsTxt(BASE_URL, {}));
+  const before = bytes();
+  const gwKind = (network) => ({ network, name: "GatewayWalletBatched", version: "1", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", verifyingContract: "0x0077777d7EBA4688BDeF3E311b846F25870A19B9", maxTimeoutSeconds: 604900, minValiditySeconds: 604800 });
+  setGatewayOffer(new Map([["base", gwKind("eip155:8453")], ["arc", gwKind("eip155:5042")]]));
+  const gateway = bytes() - before;
+  setGatewayOffer(new Map());
+  setBatchOffer({ networks: ["eip155:8453"] });
+  const channels = bytes() - before;
+  setBatchOffer({ networks: [] });
+  ok(gateway > 300 && channels > 200, `prod: the batched option (${gateway} bytes) and payment channels (${channels} bytes) each render a block`);
+  // Production's origin is longer than this boot's: each URL in the text grows by the difference.
+  const PROD_ORIGIN = "https://agent402.tools";
+  const hostGrowth = (llms.split(BASE_URL).length - 1) * (PROD_ORIGIN.length - BASE_URL.length);
+  const total = Buffer.byteLength(llms) + hostGrowth + gateway + channels;
+  ok(total < 16_384, `prod: /llms.txt with every rail on stays under 16,384 bytes (${Buffer.byteLength(llms)} served here, ${total} on production's origin with the batched option and channels)`);
 }
 
 console.log(`\n${pass} passed, ${failed} failed`);
