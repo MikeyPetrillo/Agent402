@@ -87,7 +87,7 @@ export function refundTermsFullDocument(baseUrl = "", { freeMode = false, rails 
         enabled: hang.enabled,
         budgeted: true,
         note: hang.enabled
-          ? `On x402, MPP evm, a Tempo pull, a card capture and credits, a buyer whose connection closes before the first answer byte is not charged, within a per-wallet, per-address and service-wide budget; past the budget the charge stands and the undelivered answer is ${OWED_REPAID}. A Tempo push transfer is final before the call, so its undelivered answer is ${OWED_REPAID}.`
+          ? `On x402, MPP evm, a Tempo pull, a card capture and credits, a buyer whose connection closes before the first answer byte is not charged, within a per-wallet, per-address and service-wide budget; past the budget the charge stands and the undelivered answer is recorded as owed and reviewed before it is repaid: after on-chain proof, or for a credits debit by re-crediting its key. A Tempo push transfer is final before the call, so its undelivered answer is ${OWED_REPAID}.`
           : `Off on this server: a charge whose answer was not delivered is ${OWED_REPAID}, as the refund ledger below says.`,
         neverForgivenSlugs: LASTING_EFFECT_SLUG_LIST.slice(),
         neverForgivenAlso: "any route that spends this server's own wallet or buys from an outside seller: its effect outlives the answer, so it is settled and, when the answer was not delivered, reviewed before any repayment",
