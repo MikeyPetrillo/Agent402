@@ -52,7 +52,8 @@
   ],
   "d76719767962ec08da79": [
    "^place-lookup$::^description$",
-   "^skill-(location-intel|trip-planner)$::^description$"
+   "^skill-(location-intel|trip-planner)$::^description$",
+   "^weather-risk-brief$::^description$"
   ],
   "f80f21938e5248ec70b8": [
    "^eas-attestations$::^description$",
