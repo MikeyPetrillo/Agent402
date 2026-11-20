@@ -12651,20 +12651,27 @@ if (FREE_MODE) {
         // its nonce is spent on chain, but the gateway cache reader takes a
         // still-valid authorization the guard does not hold as its payer's
         // proof, and a far validBefore must not keep a key per paid call.
-        if (res.statusCode === 200) replayGuard.settle(replayKey, undefined, consumedHoldFor(req, { settled: !grantedUnsettled(req) })).catch(() => {});
+        if (granted()) replayGuard.settle(replayKey, undefined, consumedHoldFor(req, { settled: !grantedUnsettled(req) })).catch(() => {});
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
+      // Granted: any 2xx, since the paywall settles every handler answer
+      // under 400 (a 201 or 204 is as paid as a 200). The one 2xx that grants
+      // nothing is the async front's 202 (Prefer: respond-async, answered
+      // with Preference-Applied before the run; its loopback carries the
+      // payment), which is released so that loopback can claim it.
+      const granted = () => res.statusCode >= 200 && res.statusCode < 300
+        && !(res.statusCode === 202 && /respond-async/i.test(String(res.getHeader("Preference-Applied") || "")));
       res.on("finish", finishGuard);
-      // A refusal (anything but a 200) is released when it is ended: "finish"
+      // A refusal (anything not granted) is released when it is ended: "finish"
       // waits for the socket write, and a buyer that resent the same payment
       // as soon as the 402's headers arrived was refused as a replay in that
       // window. The paywall buffers the handler's answer and ends the
       // response through this wrapper once settlement is decided, so the
-      // status read here is the final one; a 200 still waits for "finish".
+      // status read here is the final one; a granted 2xx still waits for "finish".
       const endBeforeGuard = res.end;
       res.end = function replayGuardEnd(...args) {
         const out = endBeforeGuard.apply(this, args);
-        if (res.statusCode !== 200) finishGuard();
+        if (!granted()) finishGuard();
         return out;
       };
       // Client left before the response finished. On a close before the first
