@@ -26,7 +26,10 @@
 import { createPrivateKey, createSign, randomBytes, sign as edSign, createHash } from "node:crypto";
 import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
-import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, currentBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, currentBudget, withBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
+import { paymentHeaderOf } from "../payer.js";
+import { decodePaymentHeader } from "../payment-header.js";
+import { isSvmNetwork } from "../svm-payer.js";
 import { onFinalResponse, currentRequestScope } from "../request-timing.js";
 import { clientGoneError, clientGoneBeforeFirstByte } from "../hangup-settlement.js";
 import { noteSqlCall } from "../sql-query-stats.js";
@@ -236,7 +239,7 @@ async function queryServiceHealth(sql = "", now = Date.now()) {
           headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
           body: JSON.stringify({ sql: QUERY_HEALTH_SQL[table] }),
         }, ctx);
-        await r.text().catch(() => "");
+        await readBounded(r);
         verdict = r.ok ? "ok" : r.status >= 500 ? "failing" : "unknown";
         if (!r.ok) console.warn(`[cdp] query health: the known-good ${table} query answered HTTP ${r.status}: ${verdict === "failing" ? "the query service is failing" : "verdict unknown"}`);
       } catch (e) {
@@ -274,13 +277,33 @@ export function _ageQueryHealthForTest(ms) { for (const v of queryHealth.values(
 // (37 MB at cap 2, 126 MB at 16). At cap 2 a query that takes 1.5 s caps the
 // server at 1.3 queries a second, and a slower one far lower, under the
 // project's rate; at 8 the pacer is what holds the rate.
-// ONCHAIN_SQL_INFLIGHT_MAX overrides it (1 to 16). Past the cap a query is
-// refused at once (429, never charged) and told when to retry.
+// ONCHAIN_SQL_INFLIGHT_MAX overrides it (1 to 16). Past the cap a query
+// waits for a place, first come first served, as far out as a send slot may
+// be (the slot reach, within the handler budget): a place that comes free is
+// handed to the first waiting query. Past that it is refused (429, never
+// charged) and told when to retry.
 const intIn = (v, def, lo, hi) => { const n = Number(v); return v != null && v !== "" && Number.isInteger(n) && n >= lo && n <= hi ? n : def; };
 export const BUYER_QUERY_INFLIGHT_DEFAULT = 8;
 export const BUYER_QUERY_INFLIGHT_MAX = intIn(process.env.ONCHAIN_SQL_INFLIGHT_MAX, BUYER_QUERY_INFLIGHT_DEFAULT, 1, 16);
 let buyerQueriesInflight = 0;
 export function _buyerQueriesInflightForTest() { return buyerQueriesInflight; }
+const placeWaiters = []; // first come first served: { resolve, timer }
+/** Takes an in-flight place, waiting up to maxWaitMs for one; false when none came. */
+function takeBuyerPlace(maxWaitMs) {
+  if (buyerQueriesInflight < BUYER_QUERY_INFLIGHT_MAX && placeWaiters.length === 0) { buyerQueriesInflight++; return Promise.resolve(true); }
+  if (!(maxWaitMs > 0)) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const w = { resolve, timer: null };
+    w.timer = setTimeout(() => { const i = placeWaiters.indexOf(w); if (i >= 0) placeWaiters.splice(i, 1); resolve(false); }, maxWaitMs);
+    placeWaiters.push(w);
+  });
+}
+/** Gives a place back: to the first waiting query, else to the count. */
+function releaseBuyerPlace() {
+  const w = placeWaiters.shift();
+  if (w) { clearTimeout(w.timer); w.resolve(true); return; }
+  buyerQueriesInflight--;
+}
 
 // The send pacer: every query this server sends to the query service (a
 // buyer's query, its retry and recovery runs, the health check, the
@@ -292,7 +315,12 @@ export function _buyerQueriesInflightForTest() { return buyerQueriesInflight; }
 // (four), so a wider gap (more replicas) leaves a query the same number of
 // sends ahead of it, never fewer. A send whose slot is further off than that
 // (or than the handler budget less a read) takes no slot and is refused as
-// busy. This server's own reads (ownSqlQuery) take a slot only when no
+// busy. At one replica two sends may go back to back (SQL_SEND_BURST): a send
+// waits only for the send two before it plus two gaps, the same long-run
+// rate, at most two sends in any two gaps (under 2 a second at the default
+// gap), and never a later slot than one gap per send would give, so a pair
+// of calls never waits. At more replicas each keeps one gap per send: a pair
+// on every replica would add up past the project's rate. This server's own reads (ownSqlQuery) take a slot only when no
 // other query is waiting for one (a wait of at most one gap: the spacing
 // after the last send), so they never queue ahead of a buyer's query.
 export const SQL_QUERY_PATH = "/platform/v2/data/query/run";
@@ -309,6 +337,7 @@ export function sqlSlotWaitMs(gapMs) { return Math.max(SQL_SLOT_WAIT_MS, SQL_SLO
 // between them: its own 429 then answers (retried once, then the uncharged
 // 503), and the boot line names the setting.
 export const SQL_SEND_GAP_MAX_MS = 2_500;
+export const SQL_SEND_BURST = 2;
 /** The send gap in force, and what was not taken as set (logged at boot by
  *  name, never by value): CDP_SQL_SEND_GAP_MS when it is not a whole number
  *  of at least SQL_SEND_GAP_MIN_MS (`invalid`: the default is used), and the
@@ -324,7 +353,7 @@ export function sqlSendGapConfig(env = process.env) {
   const replicas = Math.max(1, Math.floor(Number(env.RATE_LIMIT_REPLICAS)) || 1);
   const product = (valid ? asked : SQL_SEND_GAP_DEFAULT_MS) * replicas;
   if (product > SQL_SEND_GAP_MAX_MS) rejected.push({ name: [valid ? "CDP_SQL_SEND_GAP_MS" : null, replicas > 1 ? "RATE_LIMIT_REPLICAS" : null].filter(Boolean).join(" times "), why: "over" });
-  return { gapMs: Math.min(product, SQL_SEND_GAP_MAX_MS), rejected };
+  return { gapMs: Math.min(product, SQL_SEND_GAP_MAX_MS), burst: replicas > 1 ? 1 : SQL_SEND_BURST, rejected };
 }
 export function sqlSendGapMs(env = process.env) { return sqlSendGapConfig(env).gapMs; }
 /** One line per setting not taken as set: its name and the gap in force. */
@@ -335,20 +364,33 @@ export function sqlSendGapWarnings(env = process.env) {
     : `[cdp] the send gap set by ${name} is past ${SQL_SEND_GAP_MAX_MS} ms (a send waits up to ${SQL_SLOT_WAIT_SLOTS} gaps for its slot) and is held there`)
     + `; queries to the query service are sent ${gapMs} ms apart`);
 }
-let nextSqlSlotAt = 0;
+// The slots given out last (at most sqlSendBurst of them, ascending).
+let lastSqlSlots = [];
 let sqlSendGap = sqlSendGapMs();
+let sqlSendBurst = sqlSendGapConfig().burst;
 for (const line of sqlSendGapWarnings()) console.warn(line);
 // The pacer's clock and its wait, replaceable in a test so a schedule is
 // read as the slot times it gave, not as timer firings on a loaded machine.
-const realPacerClock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
+// A monotonic clock: a wall clock stepped back (or forward) never moves the
+// slots already given out.
+const realPacerClock = { now: () => performance.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
 let pacerClock = realPacerClock;
 export function _setSqlPacerClockForTest(clock = null) { pacerClock = clock ? { ...realPacerClock, ...clock } : realPacerClock; }
-export function _resetSqlPacerForTest(gapMs = null) { nextSqlSlotAt = 0; sqlSendGap = gapMs ?? sqlSendGapMs(); }
+export function _resetSqlPacerForTest(gapMs = null, burst = null) { lastSqlSlots = []; sqlSendGap = gapMs ?? sqlSendGapMs(); sqlSendBurst = burst ?? sqlSendGapConfig().burst; }
+/** The next send slot at `now`: after the last slot given, and the burst-th
+ *  slot back plus that many gaps. */
+function nextSqlSlot(now) {
+  const n = lastSqlSlots.length;
+  let at = n ? Math.max(now, lastSqlSlots[n - 1]) : now;
+  if (n >= sqlSendBurst) at = Math.max(at, lastSqlSlots[n - sqlSendBurst] + sqlSendBurst * sqlSendGap);
+  return at;
+}
 /** Waits for the next send slot; resolves false (no slot taken) when it is further off than maxWaitMs. */
 export async function takeSqlSendSlot(maxWaitMs = sqlSlotWaitMs(sqlSendGap), now = pacerClock.now()) {
-  const at = Math.max(now, nextSqlSlotAt);
+  const at = nextSqlSlot(now);
   if (at - now > Math.max(0, maxWaitMs)) return false;
-  nextSqlSlotAt = at + sqlSendGap;
+  lastSqlSlots.push(at);
+  if (lastSqlSlots.length > sqlSendBurst) lastSqlSlots.splice(0, lastSqlSlots.length - sqlSendBurst);
   if (at > now) await pacerClock.sleep(at - now);
   return true;
 }
@@ -357,14 +399,20 @@ function slotWaitMs() {
   const reach = sqlSlotWaitMs(sqlSendGap);
   return budget ? Math.min(reach, budget.remaining() - OPTIONAL_READ_FLOOR_MS) : reach;
 }
-// The busy refusal (429, shed, never charged): the in-flight cap, or a
-// buyer's first send with no slot in reach. The request is marked so
+// The busy refusal (429, shed, never charged): no in-flight place within
+// reach, or a buyer's first send with no slot in reach. Retry-After is 4 s
+// plus a random 0 to 2 s, so callers refused together (a burst, or two
+// replicas' worth) do not all come back in the same second. The request is
+// marked so
 // server.js counts the refusal by caller once its response has ended
 // (src/sql-query-stats.js noteSqlBusy) and a top payer's feeds
 // onchainSqlBusy (src/top-buyer-failures.js).
+export const SQL_BUSY_RETRY_AFTER_MIN_S = 4;
+export const SQL_BUSY_RETRY_AFTER_SPREAD_S = 2;
 function sqlBusyRefusal(text) {
   const e = bad(`${text} Nothing was charged.`, 429);
-  e.retryAfter = 5; e.hint = "busy"; e.shed = true; // a capacity refusal, not a tool failure
+  e.retryAfter = SQL_BUSY_RETRY_AFTER_MIN_S + Math.floor(Math.random() * (SQL_BUSY_RETRY_AFTER_SPREAD_S + 1));
+  e.hint = "busy"; e.shed = true; // a capacity refusal, not a tool failure
   try { const scope = currentRequestScope(); if (scope) scope.onchainSqlBusy = true; } catch { /* bookkeeping only */ }
   return e;
 }
@@ -454,7 +502,16 @@ export const SQL_QUERY_BUDGET = 3;
 // The budget also carries how the call's sends are paced: `own` (this
 // server's own read) and `callerGone` (the buyer's connection closed before
 // any byte of the answer).
-function newQueryBudget({ own = false, callerGone = () => false } = {}) { return { sent: 0, max: SQL_QUERY_BUDGET, own, callerGone, left() { return this.max - this.sent; } }; }
+// `ms` is the time the call's sends spent at the query service, named on
+// its uncharged 422 (upstreamMs) so an agent reads the number, not only the
+// sentence.
+function newQueryBudget({ own = false, callerGone = () => false } = {}) { return { sent: 0, max: SQL_QUERY_BUDGET, own, callerGone, ms: 0, left() { return this.max - this.sent; } }; }
+/** The machine fields of an uncharged answer to narrow the query. */
+function unchargedFields(e, queries) {
+  e.charged = false;
+  if (queries && Number.isFinite(queries.ms)) e.upstreamMs = Math.max(0, Math.round(queries.ms));
+  return e;
+}
 // Wraps the onchain-sql handler so every run inside a request is counted once
 // its response has ENDED (src/sql-query-stats.js): the queries it sent (0 for
 // a refusal before any query), by the response's final status and what the
@@ -468,11 +525,31 @@ function newQueryBudget({ own = false, callerGone = () => false } = {}) { return
 // query; refused 429 otherwise, and its caller tries again later), and it
 // takes no place in the buyers' in-flight cap and is never refused by it.
 const OWN_READ = Symbol("own sql read");
+// A call paid on Solana runs under SVM_SQL_BUDGET_MS, not the EVM payment
+// window the routes are wrapped with: its signed transaction lands only while
+// its recent blockhash is valid (about 60 s from the blockhash, which the
+// stock client fetches some seconds before it signs), so an answer later
+// than that is work whose payment can no longer settle. Measured 2026-11-19:
+// the slowest served call took about 14 s end to end. Read from the payment
+// header the paywall verified; an EVM payment keeps its own window.
+export const SVM_SQL_BUDGET_MS = 40_000;
+function paidOnSolana(req) {
+  const header = paymentHeaderOf(req);
+  if (!header || header.length > 65_536) return false;
+  try { const p = decodePaymentHeader(header); return isSvmNetwork(String(p?.accepted?.network || p?.network || "")); } catch { return false; }
+}
+/** Runs `fn` under the Solana payment's budget when the request paid on Solana. */
+function underPaymentLife(req, fn) {
+  if (!paidOnSolana(req)) return fn();
+  const budget = currentBudget();
+  const left = budget ? budget.remaining() : SVM_SQL_BUDGET_MS;
+  return withBudget(fn, Math.max(1, Math.floor(Math.min(left, SVM_SQL_BUDGET_MS))));
+}
 function countedSqlCall(run) {
   return async (input, ctx, mark) => {
     const own = mark === OWN_READ;
     const call = { queries: newQueryBudget({ own, callerGone: own ? () => false : () => clientGoneBeforeFirstByte(ctx) }), budgetSpent: false, own };
-    try { return await run(input, call); }
+    try { return await (own ? run(input, call) : underPaymentLife(ctx, () => run(input, call))); }
     catch (e) { if (e?.queryBudgetSpent) call.budgetSpent = true; throw e; }
     finally {
       try {
@@ -484,10 +561,10 @@ function countedSqlCall(run) {
 }
 let maxQueriesPerCall = 0;
 export function _maxQueriesPerCallForTest() { return maxQueriesPerCall; }
-function queryBudgetSpentError() {
+function queryBudgetSpentError(queries = null) {
   const e = bad(`This query could not be answered inside the ${SQL_QUERY_BUDGET} queries a call may send to the query service (the query itself and its recovery runs): narrow it (fewer or narrower columns, a smaller range or LIMIT) and send it again. Nothing was charged.`, 422);
   e.hint = "narrow-query"; e.queryBudgetSpent = true;
-  return e;
+  return unchargedFields(e, queries);
 }
 // The query service refuses to send a result that holds a row over 64 KB
 // (measured 2026-11-03: a 65,520-byte row is sent, a 65,540-byte row answers
@@ -558,6 +635,53 @@ function unreadableAnswerError() {
   return bad("CDP upstream error: the query service's answer could not be read (cut off, empty or not JSON); retry shortly. Nothing was charged.", 502);
 }
 
+// Bytes read from the query service's answer at most. Its own sends fail
+// past a few megabytes (measured 2026-11-03: about 2 MB answered, 5,000 rows
+// failed), and the row cap keeps a wrapped query far under that, but a query
+// sent as written (WITH, SETTINGS, a UNION) carries no row cap, and up to
+// BUYER_QUERY_INFLIGHT_MAX answers are held at once. Past the bound the read
+// stops (the rest is never buffered) and the call ends 502, uncharged.
+export const SQL_READ_MAX_BYTES = 16 * 1024 * 1024;
+function answerTooLargeError() {
+  const e = bad(`CDP's query service sent an answer larger than this server reads (${Math.round(SQL_READ_MAX_BYTES / (1024 * 1024))} MB), so it was not read: lower the LIMIT or select fewer or narrower columns. Nothing was charged.`, 502);
+  e.hint = "narrow-query";
+  return e;
+}
+/** The body as text, read up to `maxBytes`: `{ text }`, or `{ over: true }`
+ *  once more arrives (the stream is cancelled there). A read that fails (cut
+ *  off, our deadline) is the empty text, read by the caller as unreadable. */
+async function readBounded(res, maxBytes = SQL_READ_MAX_BYTES) {
+  const declared = Number(res.headers?.get?.("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) { try { await res.body?.cancel?.(); } catch { /* already closed */ } return { over: true }; }
+  const body = res.body;
+  if (!body || typeof body.getReader !== "function") {
+    const text = await res.text().catch(() => "");
+    return Buffer.byteLength(text, "utf8") > maxBytes ? { over: true } : { text };
+  }
+  const reader = body.getReader();
+  const chunks = [];
+  let n = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      n += value.byteLength;
+      if (n > maxBytes) { reader.cancel().catch(() => {}); return { over: true }; }
+      chunks.push(value);
+    }
+  } catch { return { text: "" }; }
+  return { text: Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))).toString("utf8") };
+}
+
+/** The query service's 408 (its documented answer for a query cut off at its
+ *  time limit, `timed_out`): the caller's query to narrow, never resent. */
+function timedOutQueryError(tookMs, sql = "") {
+  const e = narrowQueryError(408, tookMs, sql, 422);
+  e.message = e.message.replace(/^CDP's query service could not return this result \(HTTP 408 after ([\d.]+) s\)\. It answers this way when[^.]*\./, "CDP's query service cut this query off at its time limit (HTTP 408 timed_out after $1 s).");
+  e.hint = "timed-out";
+  return e;
+}
+
 async function cdpFetch(method, path, body, { idempotent = method === "GET", buyerQuery = false, attempts = null, lineOffset = 0, rewritten = false, queries = null } = {}) {
   // A query the handler rewrote (the row-size measure and filter) is ours:
   // its failure is never logged as the buyer's query.
@@ -602,7 +726,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     // A buyer's call sends at most SQL_QUERY_BUDGET queries, retries
     // included: the budget is spent here, where the query goes out.
     if (queries) {
-      if (queries.left() <= 0) throw queryBudgetSpentError();
+      if (queries.left() <= 0) throw queryBudgetSpentError(queries);
       queries.sent++;
     }
     const jwt = await mintCdpJwt({ method, path });
@@ -619,12 +743,17 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
         ...(buyerQuery ? { [NO_OUTCOME]: true } : {}),
       }, { label: "Coinbase Developer Platform", step: cdpStep(path), timeoutMs: cdpReadMs, tag: "[cdp]" });
     } catch (e) {
+      if (queries) queries.ms += Date.now() - started;
       lastErr = e;
       // The request may have reached CDP and taken effect: never resend it.
       if (!idempotent) throw lastErr;
       continue; // network error / timeout: retry while the budget holds
     }
-    const text = await res.text().catch(() => "");
+    const isQuery = /\/data\/query\//.test(path);
+    const read = isQuery ? await readBounded(res) : { text: await res.text().catch(() => "") };
+    if (queries) queries.ms += Date.now() - started;
+    if (read.over) throw answerTooLargeError();
+    const text = read.text;
     let json = {}, parsed = false;
     try { if (text) { json = JSON.parse(text); parsed = true; } } catch { /* a gateway's HTML page */ }
     // A 2xx from the query service whose body was cut off, stalled past the
@@ -667,6 +796,12 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
       throw e;
     }
     const tookMs = Date.now() - started;
+    // The service's documented answer to a query cut off at its time limit
+    // (408 timed_out): the buyer's to narrow, answered once.
+    if (buyerQuery && res.status === 408) {
+      logFailed(res.status, tookMs);
+      throw unchargedFields(timedOutQueryError(tookMs, body?.sql), queries);
+    }
     if (buyerQuery && res.status >= 500) {
       if ((res.status === 502 || res.status === 504) && tookMs >= slowQueryGatewayMs) {
         logFailed(res.status, tookMs);
@@ -674,17 +809,21 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
         // service answers with a 5xx makes this an outage; answered, or not
         // known (our check timed out), a query at the gateway's time limit
         // is the common cause and is the buyer's to narrow.
-        if (await queryServiceHealth(body?.sql) !== "failing") throw narrowQueryError(res.status, tookMs, body?.sql, 422);
+        if (await queryServiceHealth(body?.sql) !== "failing") throw unchargedFields(narrowQueryError(res.status, tookMs, body?.sql, 422), queries);
         throw bad(`CDP's query service is failing (HTTP ${res.status} after ${(tookMs / 1000).toFixed(1)} s, and a known-good query failed too); retry later. Nothing was charged.`, 502);
       }
       // An instant 500 is the result too large to send: never resent as is
       // (the handler re-runs it with a small row cap instead).
       if (res.status === 500) { logFailed(res.status, tookMs); throw resultTooLargeError(res.status, tookMs); }
       // A 503 is the service being unavailable, not the query: retried, and
-      // answered as an upstream error to retry, never "narrow it".
+      // answered as an upstream error to retry, never "narrow it". So is a
+      // 502 or 504 that came back before the service's time window could
+      // have run out: the query did not run into it.
       lastErr = res.status === 503
         ? bad(`CDP upstream error (HTTP 503): the query service is unavailable; retry shortly. Nothing was charged.`, 502)
-        : narrowQueryError(res.status, tookMs, body?.sql);
+        : res.status === 502 || res.status === 504
+          ? bad(`CDP upstream error (HTTP ${res.status} after ${(tookMs / 1000).toFixed(1)} s, too soon to be a query that ran past the service's time limit): retry shortly. Nothing was charged.`, 502)
+          : narrowQueryError(res.status, tookMs, body?.sql);
       if (attempt + 1 >= ATTEMPTS) { logFailed(res.status, tookMs); throw lastErr; }
       continue;
     }
@@ -1202,11 +1341,8 @@ export const CDP_TOOLS = [
       }
       let capped = cappedSql(sql);
       body.sql = capped.sql;
-      if (!call.own) {
-        if (buyerQueriesInflight >= BUYER_QUERY_INFLIGHT_MAX) {
-          throw sqlBusyRefusal(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds.`);
-        }
-        buyerQueriesInflight++;
+      if (!call.own && !(await takeBuyerPlace(slotWaitMs()))) {
+        throw sqlBusyRefusal(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds.`);
       }
       // One query budget for the call: the buyer's query, its retry, and
       // every recovery run spend it where they are sent.
@@ -1247,7 +1383,7 @@ export const CDP_TOOLS = [
               const text = tries
                 ? `Even ${SQL_RECOVER_ROWS} rows of this query could not be sent by the query service${tries > 1 ? `, ${tries} times` : ""} (it answers its internal error, HTTP ${last.cdpStatus}; ${sendRuleText()}): select fewer or narrower columns (map and array columns are the usual cause). Nothing was charged.`
                 : queryBudgetSpentError().message;
-              if (await queryServiceHealth(sql) !== "failing") { const e3 = bad(text, 422); e3.hint = "narrow-query"; e3.queryBudgetSpent = true; throw e3; }
+              if (await queryServiceHealth(sql) !== "failing") { const e3 = bad(text, 422); e3.hint = "narrow-query"; e3.queryBudgetSpent = true; throw unchargedFields(e3, queries); }
               throw bad(`CDP's query service is failing (HTTP ${last?.cdpStatus ?? 500} on this query and on a known-good query); retry later. Nothing was charged.`, 502);
             }
             tries++;
@@ -1292,7 +1428,7 @@ export const CDP_TOOLS = [
           }
         }
       } finally {
-        if (!call.own) buyerQueriesInflight--;
+        if (!call.own) releaseBuyerPlace();
         if (queries.sent > maxQueriesPerCall) maxQueriesPerCall = queries.sent;
       }
       const rows = res?.result ?? res?.rows ?? res?.data ?? res;
@@ -1322,10 +1458,10 @@ export const CDP_TOOLS = [
       inputSchema: { properties: {}, required: [] },
       output: { example: { schema: { "base.events": [{ name: "block_number", type: "UInt64" }] } } },
     },
-    handler: async () => {
+    handler: async (input, req) => underPaymentLife(req, async () => {
       const res = await cdpFetch("GET", "/platform/v2/data/query/schema");
       return { schema: res };
-    },
+    }),
   },
 ];
 
