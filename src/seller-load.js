@@ -195,11 +195,35 @@ export function retryAfterSecondsAt(value, now) {
   return secs > 0 ? secs : null;
 }
 
-function encodeState(s) { return `${s.streak}:${s.nextAt}:${s.mh || "-"}:${s.oh || "-"}`; }
+// `h` is the seller's own revisit hint in force (ms, 0 for none); a state
+// written before it existed reads 0.
+function encodeState(s) { return `${s.streak}:${s.nextAt}:${s.mh || "-"}:${s.oh || "-"}:${Math.max(0, Math.round(Number(s.h) || 0))}`; }
 function decodeState(member) {
-  const [streak, nextAt, mh, oh] = String(member || "").split(":");
-  const st = { streak: Math.max(0, Math.floor(Number(streak) || 0)), nextAt: Math.max(0, Number(nextAt) || 0), mh: mh && mh !== "-" ? mh : null, oh: oh && oh !== "-" ? oh : null };
+  const [streak, nextAt, mh, oh, h] = String(member || "").split(":");
+  const st = { streak: Math.max(0, Math.floor(Number(streak) || 0)), nextAt: Math.max(0, Number(nextAt) || 0), mh: mh && mh !== "-" ? mh : null, oh: oh && oh !== "-" ? oh : null, h: Math.max(0, Math.floor(Number(h) || 0)) };
   return st;
+}
+
+// THE SELLER'S OWN CADENCE HINT. A seller's x402 manifest may carry
+// `revisitAfterSeconds`: how long it would like us to wait between reads.
+// It only ever LENGTHENS the wait, and never past the back-off cap
+// (REVISIT_CAP_MS): a hint shorter than our own wait is ignored, and so is
+// any value that is not a positive number. A changed document, a failed
+// crawl, a purchase that did not deliver or a re-registration still puts the
+// origin back on the regular cycle, and a read made for a registration is
+// never held by it.
+export const REVISIT_HINT_FIELD = "revisitAfterSeconds";
+/** The hint a manifest declares, in ms, or 0 for none or an unusable value. */
+export function revisitHintMsOf(manifest) {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) return 0;
+  const raw = manifest[REVISIT_HINT_FIELD];
+  const n = typeof raw === "number" ? raw : typeof raw === "string" && /^\s*\d{1,9}(\.\d+)?\s*$/.test(raw) ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 1000) : 0;
+}
+/** The wait a hint sets, bounded by the cap (0 when the back-off is off). */
+export function revisitHintWaitMs(hintMs, capMs = REVISIT_CAP_MS) {
+  const h = Number(hintMs) || 0;
+  return capMs > 0 && h > 0 ? Math.min(capMs, Math.round(h)) : 0;
 }
 
 /** How long a cycle's prefetch of the shared state waits before deciding on
@@ -249,7 +273,7 @@ export function createSellerLoad({
   let clock = now;
   const shares = store && store !== local;
   const counts = {
-    unchangedReads: 0, changedReads: 0,
+    unchangedReads: 0, changedReads: 0, hintedReads: 0,
     skipped: { unchanged: 0, throttled: 0, budget: 0, landing: 0, slow: 0 },
     resets: {},
     throttles: { noted: 0, withRetryAfter: 0, scoped: 0 },
@@ -307,7 +331,7 @@ export function createSellerLoad({
   async function writeRevisit(origin, st) {
     const key = normOrigin(origin);
     const t = clock();
-    if (st.streak > 0) { backedOff.set(key, st.nextAt); bounded(backedOff); } else backedOff.delete(key);
+    if (st.streak > 0 || st.nextAt > t) { backedOff.set(key, st.nextAt); bounded(backedOff); } else backedOff.delete(key);
     const member = encodeState(st);
     await setLocalRevisit(key, member, t);
     void behind(`r|${key}`, async (s) => {
@@ -446,7 +470,7 @@ export function createSellerLoad({
         if (!mine || theirs.score > mine.score) {
           await setLocalRevisit(key, theirs.member, theirs.score);
           const st = decodeState(theirs.member);
-          if (st.streak > 0) { backedOff.set(key, st.nextAt); bounded(backedOff); }
+          if (st.streak > 0 || st.nextAt > t) { backedOff.set(key, st.nextAt); bounded(backedOff); }
           counts.prefetch.merged++;
         }
       }),
@@ -509,9 +533,10 @@ export function createSellerLoad({
      *  origin with no state, or one whose state cannot be read, is due. */
     async revisitDue(origin) {
       const st = await readRevisit(origin).catch(() => null);
-      if (!st || st.streak <= 0) return { due: true, streak: 0, nextAt: 0, intervalMs: 0 };
-      const intervalMs = revisitIntervalMs(st.streak, { baseMs: revisitBaseMs, capMs: revisitCapMs });
-      return { due: clock() >= st.nextAt, streak: st.streak, nextAt: st.nextAt, intervalMs };
+      if (!st || (st.streak <= 0 && !(st.nextAt > 0))) return { due: true, streak: 0, nextAt: 0, intervalMs: 0 };
+      // The wait the origin is on: its back-off, or its own hint when longer.
+      const intervalMs = Math.max(revisitIntervalMs(st.streak, { baseMs: revisitBaseMs, capMs: revisitCapMs }), revisitHintWaitMs(st.h, revisitCapMs));
+      return { due: clock() >= st.nextAt, streak: st.streak, nextAt: st.nextAt, intervalMs, ...(st.h > 0 ? { hintMs: st.h } : {}) };
     },
 
     /** Record a completed read of the discovery documents. Each hash is the
@@ -519,26 +544,30 @@ export function createSellerLoad({
      *  document as before), or null when it was not read. Unchanged = every
      *  document the same as the last read; the wait then doubles. `advance`
      *  false (a read the seller asked for) records the hashes and keeps the
-     *  origin on the normal cycle. */
-    async noteDiscoveryRead(origin, { manifestHash, openapiHash, advance = true } = {}) {
+     *  origin on the normal cycle. `hintMs` is the seller's own revisit hint
+     *  (revisitHintMsOf): the next read waits at least that long, up to the
+     *  cap, never less than the back-off says. */
+    async noteDiscoveryRead(origin, { manifestHash, openapiHash, advance = true, hintMs = 0 } = {}) {
       const prev = await readRevisit(origin).catch(() => null);
       const mh = manifestHash === undefined ? prev?.mh ?? null : manifestHash;
       const oh = openapiHash === undefined ? prev?.oh ?? null : openapiHash;
       const unchanged = Boolean(prev) && (manifestHash === undefined || mh === prev.mh) && (openapiHash === undefined || oh === prev.oh)
         && (mh !== null || oh !== null);
       const streak = unchanged && advance && revisitCapMs > 0 ? (prev.streak || 0) + 1 : 0;
-      const intervalMs = revisitIntervalMs(streak, { baseMs: revisitBaseMs, capMs: revisitCapMs });
+      const h = advance ? revisitHintWaitMs(hintMs, revisitCapMs) : 0;
+      const intervalMs = Math.max(revisitIntervalMs(streak, { baseMs: revisitBaseMs, capMs: revisitCapMs }), h);
       const nextAt = intervalMs > 0 ? clock() + Math.max(0, intervalMs - REVISIT_SLACK_MS) : 0;
       if (unchanged) counts.unchangedReads++; else counts.changedReads++;
-      await writeRevisit(origin, { streak, nextAt, mh, oh });
-      return { unchanged, streak, nextAt, intervalMs };
+      if (h > 0) counts.hintedReads++;
+      await writeRevisit(origin, { streak, nextAt, mh, oh, h });
+      return { unchanged, streak, nextAt, intervalMs, ...(h > 0 ? { hintMs: h } : {}) };
     },
 
     /** Back to the normal cycle: a changed document, a failed crawl, a failed
      *  router purchase or a re-registration. The document hashes are kept. */
     async resetRevisit(origin, reason = "other") {
       const prev = await readRevisit(origin).catch(() => null);
-      if (!prev || prev.streak <= 0) { backedOff.delete(normOrigin(origin)); return false; }
+      if (!prev || (prev.streak <= 0 && !(prev.nextAt > 0))) { backedOff.delete(normOrigin(origin)); return false; }
       bump(counts.resets, String(reason).slice(0, 40));
       await writeRevisit(origin, { ...prev, streak: 0, nextAt: 0 });
       return true;
@@ -880,7 +909,7 @@ export function createSellerLoad({
       let backedOffNow = 0;
       for (const [, at] of backedOff) if (at > t) backedOffNow++;
       return {
-        revisit: { capHours: revisitCapMs / HOUR_MS, firstWaitMinutes: revisitIntervalMs(1, { baseMs: revisitBaseMs, capMs: revisitCapMs }) / 60_000, originsBackedOff: backedOffNow, unchangedReads: counts.unchangedReads, changedReads: counts.changedReads, resets: { ...counts.resets } },
+        revisit: { capHours: revisitCapMs / HOUR_MS, firstWaitMinutes: revisitIntervalMs(1, { baseMs: revisitBaseMs, capMs: revisitCapMs }) / 60_000, originsBackedOff: backedOffNow, unchangedReads: counts.unchangedReads, changedReads: counts.changedReads, hintedReads: counts.hintedReads, resets: { ...counts.resets } },
         budget: { perOperatorPerDay: dailyBudget, probesPerOperatorPerDay: probeCap, registrationReadsPerRegistrantPerHour: registrationHourlyMax, registrationReadsPerOperatorPerHourAtFullPace: registrationHostHourlyMax, registrationPaceSeconds: registrationPaceMs / 1000, hostsCountedToday, hostsOverBudgetToday, requests: { ...counts.requests }, refused: { ...counts.refused }, routerProbesCountedApart: true },
         throttle: { defaultMinutes: THROTTLE_DEFAULT_MS / 60_000, maxHours: THROTTLE_MAX_MS / HOUR_MS, ...counts.throttles },
         crawlsSkipped: { ...counts.skipped },

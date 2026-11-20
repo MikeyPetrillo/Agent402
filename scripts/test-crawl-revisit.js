@@ -125,6 +125,58 @@ const turn = async (o) => idx.__crawlScheduledForTest(o);
   ok((await turn(O)) === null, "and puts the origin back on the cycle");
 }
 
+// ---- the seller's own cadence hint: lengthens the wait, up to the cap, never shortens it ----
+{
+  const { revisitHintMsOf, REVISIT_HINT_FIELD, REVISIT_CAP_MS } = await import("../src/seller-load.js");
+  ok(REVISIT_HINT_FIELD === "revisitAfterSeconds" && revisitHintMsOf({ revisitAfterSeconds: 21600 }) === 6 * H && revisitHintMsOf({ revisitAfterSeconds: "3600" }) === H, "the manifest's revisitAfterSeconds reads as milliseconds");
+  ok([undefined, 0, -5, "soon", "1e9", null, {}, [1]].every((v) => revisitHintMsOf({ revisitAfterSeconds: v }) === 0) && revisitHintMsOf(null) === 0 && revisitHintMsOf([]) === 0, "anything but a positive number of seconds is no hint");
+  const hinted = (o, seconds) => ({ ...manifest(o), revisitAfterSeconds: seconds });
+  // Six hours: a CHANGED manifest every read would put it on the cycle; the
+  // hint holds each read six hours apart instead.
+  const O = "https://paced.example";
+  serve(O, hinted(O, 21600));
+  ok((await turn(O)) === null, "the first turn reads the hinted origin");
+  const readAt = [];
+  for (let i = 1; i <= 48; i++) {
+    clock += CYCLE;
+    // A different manifest every cycle: without the hint each would be read.
+    docs.set(`${O}/.well-known/x402`, { body: JSON.stringify({ ...hinted(O, 21600), description: `v${i}` }), etag: `"m${++etagN}"` });
+    if ((await turn(O)) === null) readAt.push(i);
+  }
+  const gaps = readAt.map((c, i) => (c - (i ? readAt[i - 1] : 0)) / 2);
+  ok(gaps.length >= 3 && gaps.every((g) => g === 6), `a six-hour hint reads a changing origin every six hours (gaps ${gaps.join(",")} h)`);
+  const due = await sellerLoad.revisitDue(O);
+  ok(due.hintMs === 6 * H && due.intervalMs === 6 * H, `the origin's plan names the hint and the wait it sets (${JSON.stringify(due)})`);
+  // A hint past the cap waits the cap, never longer.
+  const L = "https://slowest.example";
+  serve(L, hinted(L, 7 * 86400));
+  await turn(L);
+  const longDue = await sellerLoad.revisitDue(L);
+  ok(longDue.intervalMs === REVISIT_CAP_MS && longDue.nextAt - clock <= REVISIT_CAP_MS, `a hint past the cap waits ${REVISIT_CAP_MS / H} h, not a week (${longDue.intervalMs / H} h)`);
+  // A hint shorter than the back-off changes nothing: unchanged reads still double.
+  const S = "https://eager.example";
+  serve(S, hinted(S, 60));
+  const sReads = [];
+  await turn(S);
+  for (let i = 1; i <= 48; i++) { clock += CYCLE; if ((await turn(S)) === null) sReads.push(i); }
+  const sGaps = sReads.map((c, i) => (c - (i ? sReads[i - 1] : 0)) / 2);
+  ok(sGaps.slice(0, 5).join(",") === "0.5,1,2,4,8", `a one-minute hint never shortens the back-off (gaps ${sGaps.join(",")} h)`);
+  // A re-registration still brings the next read forward.
+  idx.__resetForcedCrawlForTest();
+  await idx.registerOrigin(O).catch(() => null);
+  clock += CYCLE;
+  ok((await turn(O)) === null, "a re-registration still puts a hinted origin back on the cycle");
+  // A read the seller asked for is never held by its hint.
+  const R = "https://asked.example";
+  serve(R, hinted(R, 21600));
+  await idx.__crawlSellerForTest(R);
+  clock += CYCLE;
+  ok((await turn(R)) === null, "an unscheduled read (registration) does not start the hinted wait");
+  // A state written before the hint existed (four fields) still decodes.
+  await sellerLoad.noteDiscoveryRead("https://legacy.example", { manifestHash: "a", openapiHash: "b" });
+  ok((await sellerLoad.revisitDue("https://legacy.example")).due === true, "an unhinted changed read stays on the cycle");
+}
+
 // ---- a failed crawl resets -------------------------------------------------------
 {
   const O = "https://flaky.example";

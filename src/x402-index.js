@@ -307,7 +307,7 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
-import { sellerLoad, bodyHash, landingGate, RequestHeld, runAsRegistrant } from "./seller-load.js";
+import { sellerLoad, bodyHash, landingGate, RequestHeld, runAsRegistrant, revisitHintMsOf } from "./seller-load.js";
 // Reads made for a registration (anyone may register any origin, with no proof
 // of control) run inside this scope: they are counted on a day count of their
 // own (src/seller-load.js takeBudget `unscheduled`), never on the day the
@@ -6994,7 +6994,9 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     });
     // The revisit back-off (src/seller-load.js): the same manifest and OpenAPI
     // as the last read doubles the wait before the next crawl; a change resets it.
-    await sellerLoad.noteDiscoveryRead(originUrl, { manifestHash, openapiHash, advance: scheduled });
+    // The seller's own cadence hint (`revisitAfterSeconds` in its manifest)
+    // may lengthen that wait up to the cap, never shorten it.
+    await sellerLoad.noteDiscoveryRead(originUrl, { manifestHash, openapiHash, advance: scheduled, hintMs: revisitHintMsOf(manifest) });
   } catch (e) {
     // No /.well-known/x402 — two fallback surfaces, richest metadata wins:
     //
