@@ -373,9 +373,15 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   6 s with Redis stopped, where it waited past 30 s before). The commands of a claim the route
   requires (`begin` with `requireShared`) have a longer bound of their own (`REPLAY_CLAIM_OP_MS`,
   default 5 s, never under `SHARED_LIMITS_OP_MS`; `REQUIRED_CLAIM_OP_MS`): a store that pauses for
-  less than that and then answers is waited for and the call is served, and one that never answers
-  is the 503 below after that bound. A claim that was sent and never answered is dropped by its
-  own token (it may land late), so the retry of that payment is not read as in flight. With Redis configured
+  less than that and then answers is waited for and the call is served, and one that stops
+  answering is the 503 below once the claim's command it did not answer passes that bound (the
+  call's store steps before the claim, such as the idempotency claim, keep the short bound each). A
+  claim that was sent and never answered is dropped by its own token (it may land late); the drop
+  is sent and not waited for, and on one connection it runs right after the claim, so the retry of
+  that payment is not read as in flight. The idempotency store's in-flight claim
+  (`src/idempotency-store.js`) is written under a token of its own and dropped the same way, so a
+  call refused this way and sent again as is runs once the store answers, never a 409 for the
+  claim's life. With Redis configured
   but unreachable, a paid call is refused 503 with `Retry-After` before any payment is taken (x402
   dispatcher, Tempo gate and card gate, each through `sharedClaimRequired`) on a long-running or
   composite route (`isLongRunningSlug`), and on any route while another container may be serving
