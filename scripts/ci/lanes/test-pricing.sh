@@ -105,6 +105,8 @@ t node scripts/test-verify-refusal-reason.js
 t node scripts/test-paid-settle-breaker.js
 # onchain-sql queries per call on a booted server
 t node scripts/test-onchain-sql-queries-route.js
+# onchain-sql paid on Solana with the keyed CDP facilitator client at its production URL: a query leaves within 300 ms of its own verify answer and is served beside other facilitator traffic; an unreadable 200 is an unsettled 502 (paid boot, CDP origin answered by the test, offline)
+t node scripts/test-onchain-sql-paid-path.js
 # Refund debts for sales named by settle tx: dry by default, ledger row decides payer and price, skips named, idempotent, operator only (FREE_MODE boot, seeded ledger)
 t node scripts/test-refund-backfill-sales.js
 # Algorand leaves sub-cent 402s while the facilitator's sponsored sub-cent allowance is spent; a quota refusal is never the buyer's (paid boot, stub facilitators + stub sponsorship status)

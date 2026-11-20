@@ -109,6 +109,8 @@ function retryAfterMs(res) {
 // attributed upstream, never a 504. Outside a handler (a scheduled read) an
 // attempt keeps its own cap.
 const CDP_READ_MS = 15_000;
+let cdpReadMs = CDP_READ_MS;
+export function _setCdpReadMsForTest(ms) { cdpReadMs = ms || CDP_READ_MS; }
 // A 502 or 504 on a SQL query that took this long is the data API's answer
 // to a query that ran past its time limit: resending the same query fails
 // the same way, so it is answered once, with how to narrow it.
@@ -261,8 +263,7 @@ export function _ageQueryHealthForTest(ms) { for (const v of queryHealth.values(
 // Buyer queries in flight at once. The query service rate-limits the
 // project (its documented default is 2 queries a second), whose keys also
 // sign facilitator calls, so the RATE of queries sent is held by the send
-// pacer below (which also yields to every facilitator verify and settle: the
-// settlement lane), and this cap bounds what a burst holds on this server: a
+// pacer below, and this cap bounds what a burst holds on this server: a
 // query and its answer (the service sends at most about 1 MB; SQL_SEND_LIMIT_BYTES)
 // in memory, and one parse of it on the event loop. Measured 2026-11-18 on a
 // local boot, every query answered 1,000 rows (about 1 MB) after 1.5 s: a
@@ -289,65 +290,58 @@ export function _buyerQueriesInflightForTest() { return buyerQueriesInflight; }
 // handler budget less a read) takes no slot and is refused as busy.
 export const SQL_QUERY_PATH = "/platform/v2/data/query/run";
 export const SQL_SLOT_MAX_WAIT_MS = 3_000;
-export function sqlSendGapMs(env = process.env) {
+export const SQL_SEND_GAP_DEFAULT_MS = 625;
+export const SQL_SEND_GAP_MIN_MS = 100;
+// The widest gap a replica runs. A send waits at most SQL_SLOT_MAX_WAIT_MS
+// for its slot, and a call's retry or recovery run is one gap behind its own
+// first send: at a gap past that wait every such send, and every query that
+// arrives behind another, would be refused. So the gap in force (the knob
+// times the replicas) is held under the wait, whatever the two are set to.
+// Held there, more than four replicas at the default gap send past the
+// service's documented 2 a second between them: its own 429 then answers
+// (retried once, then the uncharged 503), and the boot line names the setting.
+export const SQL_SEND_GAP_MAX_MS = SQL_SLOT_MAX_WAIT_MS - 500;
+/** The send gap in force, and what was not taken as set (logged at boot by
+ *  name, never by value): CDP_SQL_SEND_GAP_MS when it is not a whole number
+ *  of at least SQL_SEND_GAP_MIN_MS (`invalid`: the default is used), and the
+ *  gap times the replicas when it is past SQL_SEND_GAP_MAX_MS (`over`: held
+ *  there), named by the settings that made it. */
+export function sqlSendGapConfig(env = process.env) {
+  const rejected = [];
+  const raw = env.CDP_SQL_SEND_GAP_MS;
+  const set = raw != null && raw !== "";
+  const asked = Number(raw);
+  const valid = set && Number.isInteger(asked) && asked >= SQL_SEND_GAP_MIN_MS;
+  if (set && !valid) rejected.push({ name: "CDP_SQL_SEND_GAP_MS", why: "invalid" });
   const replicas = Math.max(1, Math.floor(Number(env.RATE_LIMIT_REPLICAS)) || 1);
-  return intIn(env.CDP_SQL_SEND_GAP_MS, 625, 100, 60_000) * replicas;
+  const product = (valid ? asked : SQL_SEND_GAP_DEFAULT_MS) * replicas;
+  if (product > SQL_SEND_GAP_MAX_MS) rejected.push({ name: [valid ? "CDP_SQL_SEND_GAP_MS" : null, replicas > 1 ? "RATE_LIMIT_REPLICAS" : null].filter(Boolean).join(" times "), why: "over" });
+  return { gapMs: Math.min(product, SQL_SEND_GAP_MAX_MS), rejected };
+}
+export function sqlSendGapMs(env = process.env) { return sqlSendGapConfig(env).gapMs; }
+/** One line per setting not taken as set: its name and the gap in force. */
+export function sqlSendGapWarnings(env = process.env) {
+  const { gapMs, rejected } = sqlSendGapConfig(env);
+  return rejected.map(({ name, why }) => (why === "invalid"
+    ? `[cdp] ${name} is not a whole number of milliseconds of at least ${SQL_SEND_GAP_MIN_MS} and is not used`
+    : `[cdp] the send gap set by ${name} is past ${SQL_SEND_GAP_MAX_MS} ms (a send waits at most ${SQL_SLOT_MAX_WAIT_MS} ms for its slot) and is held there`)
+    + `; queries to the query service are sent ${gapMs} ms apart`);
 }
 let nextSqlSlotAt = 0;
 let sqlSendGap = sqlSendGapMs();
-export function _resetSqlPacerForTest(gapMs = null) { nextSqlSlotAt = 0; sqlSendGap = gapMs ?? sqlSendGapMs(); priorityInflight = 0; priorityClearAt = 0; }
-
-// The settlement lane. The same project keys sign the facilitator's verify
-// and settle calls (src/cdp-facilitator.js), so those calls come first: a
-// settlement call never waits on anything here (beginPriorityCdpCall is
-// synchronous and only marks it), and while one is in flight, and for one
-// send gap after it ends, no query is sent. A query whose slot falls in that
-// time waits for the lane to clear inside its own wait, or is refused as
-// busy (uncharged); it never holds the settlement call back.
-let priorityInflight = 0;
-let priorityClearAt = 0;
-const priorityWaiters = new Set();
-/** Marks a settlement-side call in flight; returns its end (idempotent). */
-export function beginPriorityCdpCall() {
-  priorityInflight++;
-  let ended = false;
-  return () => {
-    if (ended) return;
-    ended = true;
-    priorityInflight = Math.max(0, priorityInflight - 1);
-    priorityClearAt = Math.max(priorityClearAt, Date.now() + sqlSendGap);
-    for (const w of [...priorityWaiters]) w();
-  };
-}
-export function _priorityLaneForTest() { return { inflight: priorityInflight, clearAt: priorityClearAt }; }
-const sleepMs = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
-/** Resolves when the settlement lane has no call in flight and its gap has passed, or false at `deadline`. */
-async function yieldToSettlement(deadline) {
-  for (;;) {
-    const t = Date.now();
-    if (priorityInflight === 0 && t >= priorityClearAt) return true;
-    if (t >= deadline) return false;
-    if (priorityInflight > 0) {
-      let wake;
-      const ended = new Promise((r) => { wake = r; priorityWaiters.add(r); });
-      let timer;
-      await Promise.race([ended, new Promise((r) => { timer = setTimeout(r, deadline - t); })]);
-      clearTimeout(timer);
-      priorityWaiters.delete(wake);
-    } else {
-      await sleepMs(Math.min(priorityClearAt, deadline) - t);
-    }
-  }
-}
+for (const line of sqlSendGapWarnings()) console.warn(line);
+// The pacer's clock and its wait, replaceable in a test so a schedule is
+// read as the slot times it gave, not as timer firings on a loaded machine.
+const realPacerClock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
+let pacerClock = realPacerClock;
+export function _setSqlPacerClockForTest(clock = null) { pacerClock = clock ? { ...realPacerClock, ...clock } : realPacerClock; }
+export function _resetSqlPacerForTest(gapMs = null) { nextSqlSlotAt = 0; sqlSendGap = gapMs ?? sqlSendGapMs(); }
 /** Waits for the next send slot; resolves false (no slot taken) when it is further off than maxWaitMs. */
-export async function takeSqlSendSlot(maxWaitMs = SQL_SLOT_MAX_WAIT_MS, now = Date.now()) {
-  const deadline = now + Math.max(0, maxWaitMs);
-  const at = Math.max(now, nextSqlSlotAt, priorityInflight > 0 ? now : priorityClearAt);
-  if (at > deadline) return false;
+export async function takeSqlSendSlot(maxWaitMs = SQL_SLOT_MAX_WAIT_MS, now = pacerClock.now()) {
+  const at = Math.max(now, nextSqlSlotAt);
+  if (at - now > Math.max(0, maxWaitMs)) return false;
   nextSqlSlotAt = at + sqlSendGap;
-  if (at > now) await sleepMs(at - now);
-  // A settlement call that began while this query waited goes first.
-  if (priorityInflight > 0 || Date.now() < priorityClearAt) return yieldToSettlement(Date.now() + Math.max(0, deadline - at));
+  if (at > now) await pacerClock.sleep(at - now);
   return true;
 }
 function slotWaitMs() {
@@ -544,6 +538,11 @@ function resultTooLargeError(status, tookMs) {
   return e;
 }
 
+/** A 2xx from the query service with no readable JSON body: an upstream failure to retry, never an empty result. */
+function unreadableAnswerError() {
+  return bad("CDP upstream error: the query service's answer could not be read (cut off, empty or not JSON); retry shortly. Nothing was charged.", 502);
+}
+
 async function cdpFetch(method, path, body, { idempotent = method === "GET", buyerQuery = false, attempts = null, lineOffset = 0, rewritten = false, queries = null } = {}) {
   // A query the handler rewrote (the row-size measure and filter) is ours:
   // its failure is never logged as the buyer's query.
@@ -593,7 +592,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
         // not counted in the upstream's health lane; the health probe below
         // and the service's own reads are.
         ...(buyerQuery ? { [NO_OUTCOME]: true } : {}),
-      }, { label: "Coinbase Developer Platform", step: cdpStep(path), timeoutMs: CDP_READ_MS, tag: "[cdp]" });
+      }, { label: "Coinbase Developer Platform", step: cdpStep(path), timeoutMs: cdpReadMs, tag: "[cdp]" });
     } catch (e) {
       lastErr = e;
       // The request may have reached CDP and taken effect: never resend it.
@@ -601,8 +600,13 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
       continue; // network error / timeout: retry while the budget holds
     }
     const text = await res.text().catch(() => "");
-    let json = {};
-    try { json = text ? JSON.parse(text) : {}; } catch { /* a gateway's HTML page */ }
+    let json = {}, parsed = false;
+    try { if (text) { json = JSON.parse(text); parsed = true; } } catch { /* a gateway's HTML page */ }
+    // A 2xx from the query service whose body was cut off, stalled past the
+    // read limit, empty or not JSON is not an answer: read as one it is a
+    // complete result with no rows (or an empty schema), served and charged.
+    // A real answer with no rows is JSON and is served as before.
+    if (res.ok && !parsed && /\/data\/query\//.test(path)) throw unreadableAnswerError();
     if (res.ok) return json;
     // A 5xx is logged with what identifies it on both sides: the attempt's
     // time, CDP's request id, the start of its body, and the query's shape
