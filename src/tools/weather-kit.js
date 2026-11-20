@@ -63,24 +63,30 @@ function logKeyedRefusal(req, status) {
   console.warn(`[open-meteo] keyed request refused (HTTP ${status}) for the ${req.api} API (${req.publicHost}): OPEN_METEO_API_KEY is not accepted there or does not cover that API; answered 503, not charged`);
 }
 
-// The openMeteo word on /api/gateway-status, from the last keyed outcome in
-// this process (production runs one replica): off (no key); unknown until the
-// first keyed outcome (a fresh process has not tried the key yet, so the
-// pagers neither open nor close on it); ok after a keyed success; refused
-// after two keyed refusals in a row, or at once on a 400 whose reason names
-// the API key. A word changes only on the next keyed outcome, never with time.
-let keyedOutcome = null; // null | "ok" | "refused"
-let refusalRun = 0;
+// The openMeteo word on /api/gateway-status, from the last keyed outcome of
+// each Open-Meteo API in this process (production runs one replica): off (no
+// key); unknown until the first keyed outcome (a fresh process has not tried
+// the key yet, so the pagers neither open nor close on it); refused while any
+// API's last keyed outcome is a refusal (two in a row on that API, or one 400
+// whose reason names the API key); ok when every API with an outcome last
+// succeeded. Each API keeps its own outcome and run, so a key that covers some
+// APIs and not others reads refused however many reads succeed on the others.
+// A word changes only on the next keyed outcome, never with time.
+const keyedOutcomes = new Map(); // api -> { outcome: null | "ok" | "refused", run }
+const apiState = (api) => { let st = keyedOutcomes.get(api); if (!st) { st = { outcome: null, run: 0 }; keyedOutcomes.set(api, st); } return st; };
 export function openMeteoStatus({ env = process.env } = {}) {
   if (!openMeteoKey(env)) return { status: "off" };
-  return { status: keyedOutcome ?? "unknown" };
+  const outcomes = [...keyedOutcomes.values()].map((st) => st.outcome).filter(Boolean);
+  if (outcomes.includes("refused")) return { status: "refused" };
+  return { status: outcomes.length ? "ok" : "unknown" };
 }
-function noteKeyedSuccess() { keyedOutcome = "ok"; refusalRun = 0; }
-function noteKeyedRefusal(namesKey) {
-  refusalRun += 1;
-  if (namesKey || refusalRun >= 2) keyedOutcome = "refused";
+function noteKeyedSuccess(api) { const st = apiState(api); st.outcome = "ok"; st.run = 0; }
+function noteKeyedRefusal(api, namesKey) {
+  const st = apiState(api);
+  st.run += 1;
+  if (namesKey || st.run >= 2) st.outcome = "refused";
 }
-export function _resetOpenMeteoStatus({ logs = false } = {}) { keyedOutcome = null; refusalRun = 0; if (logs) refusalLoggedAt.clear(); }
+export function _resetOpenMeteoStatus({ logs = false } = {}) { keyedOutcomes.clear(); if (logs) refusalLoggedAt.clear(); }
 
 // Open-Meteo answers a key it does not accept (unknown, revoked, or a plan
 // that does not cover the API) with 400 and a JSON reason naming the key or
@@ -103,7 +109,7 @@ function openMeteoFailure(err, req) {
   const up = err?.upstreamStatus;
   const reason = up === 400 ? refusalReason(err?.upstreamBody) : "";
   if (req.keyed && (up === 401 || up === 403 || (up === 400 && KEY_REFUSAL_REASON_RE.test(reason)))) {
-    noteKeyedRefusal(up === 400 && NAMES_KEY_RE.test(reason));
+    noteKeyedRefusal(req.api, up === 400 && NAMES_KEY_RE.test(reason));
     logKeyedRefusal(req, up);
     return Object.assign(new Error("Weather data is temporarily unavailable because of a service problem on our side, not your input - retry later"), {
       statusCode: 503, upstreamStatus: up, attribution: "ours", noRetry: true, retryAfter: 60,
@@ -126,7 +132,7 @@ export async function openMeteoJson(api, path, params, env = process.env) {
   } catch (err) {
     throw openMeteoFailure(err, req);
   }
-  if (req.keyed) noteKeyedSuccess();
+  if (req.keyed) noteKeyedSuccess(req.api);
   let data;
   try {
     data = JSON.parse(html);

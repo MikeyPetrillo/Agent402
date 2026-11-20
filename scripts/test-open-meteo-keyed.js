@@ -198,6 +198,33 @@ const word = () => openMeteoStatus().status;
   ok(word() === "refused", "the unkeyed success left the keyed word as it was");
   _resetOpenMeteoStatus();
 }
+// The word holds per API: a key that covers the forecast but not air quality
+// reads refused while air quality's last keyed outcome is a refusal, however
+// many forecast reads succeed after it (one shared outcome let any success
+// clear another API's refusal, so the word flapped between ok and refused).
+{
+  _resetOpenMeteoStatus();
+  const aq = async (status) => {
+    reply = () => (status === 200 ? new Response(JSON.stringify(BODY), { status: 200, headers: { "content-type": "application/json" } }) : new Response(JSON.stringify({ error: true, reason: "This API requires the API Professional or Enterprise plan" }), { status }));
+    try { await tool("weather-air-quality").handler({ lat: 3, lon: 4 }); } catch { /* the refusal is the point */ }
+  };
+  await succeed();
+  // 401 here, so the block below still sees its own first air-quality 403 log line.
+  await aq(401); await aq(401);
+  ok(word() === "refused", "per API: two air-quality refusals read refused");
+  await succeed();
+  ok(word() === "refused", "per API: a forecast success does not clear air quality's refusal");
+  await aq(401);
+  await succeed();
+  ok(word() === "refused", "per API: forecast successes between air-quality refusals leave the word refused");
+  await aq(200);
+  ok(word() === "ok", "per API: the refused API's own success reads ok again");
+  _resetOpenMeteoStatus();
+  await succeed();
+  await aq(401);
+  ok(word() === "ok", "per API: one air-quality refusal after a forecast success stays ok (its own run of one)");
+  _resetOpenMeteoStatus();
+}
 // The keyed host refusing an API the key does not cover: the body names the
 // plan; the buyer gets our 503 (never a 502), and the operator line its reason.
 {
