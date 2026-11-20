@@ -354,6 +354,17 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
   ok(privacy.includes(`a signing key our server made for that subscription and the signed receipts of its ${SUBSCRIPTION_RECEIPTS_KEPT} most recent paid periods`), "/privacy names the period receipts on an MPP subscription's record");
 }
 
+// The privacy page's sanctions item names every payer screen the code runs:
+// x402, the MPP evm wire, Tempo settled by our server, Tempo settled through
+// Tempo's relay, and MPP monitor subscriptions.
+{
+  ok(/sanctionsScreening: x402ScreenCell\(L, "mpp-evm", true\)/.test(src("src/conformance.js")), "control: the MPP evm wire is screened by the x402 payer screen");
+  ok(/Tempo relay payer screen/.test(src("src/payer-screen-rails.js")) && /mpp-tempo-relay/.test(src("src/conformance.js")), "control: a Tempo payment settled through the relay has its paying wallet screened");
+  const item = privacy.slice(privacy.indexOf("Sanctions screening."), privacy.indexOf("Memory tools."));
+  ok(/[Tt]he paying address of an x402 payment or of an MPP evm payment/.test(item), "/privacy: the sanctions item names the MPP evm payer");
+  ok(/the paying wallet of a Tempo payment settled through Tempo's relay \(and the sender the relay settled on\)/.test(item), "/privacy: the sanctions item names the Tempo relay screen");
+}
+
 // Signed receipts cover the direct routes. A referral copy (/ref/<slug>) is
 // never signed (src/server.js receiptFieldsOf), and a streamed answer that is
 // neither an event stream nor sent with TE: trailers carries none: the

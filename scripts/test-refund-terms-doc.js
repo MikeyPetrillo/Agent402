@@ -100,6 +100,17 @@ ok(JSON.stringify(doc.clauses) === JSON.stringify(refundClauses({ gatewayBatched
   ok(/refundTerms: `\$\{BASE_URL\}\$\{REFUND_TERMS_PATH\}`/.test(server), "/api/pricing links it");
 }
 ok(conformanceDocument("https://a.example").refundTerms.perRail === `https://a.example${D.REFUND_TERMS_PATH}`, "the conformance document points to it");
+// The hang-up note says what happens past the budget, as the code does it: the
+// refund planner holds a budget-denied disconnect for review
+// (scripts/refund-run.js REPEAT_HANGUP_REASONS), and a credits debit is booked
+// on the "credits" network and given back to its key by hand (src/server.js).
+{
+  const { REPEAT_HANGUP_REASONS } = await import("../scripts/refund-run.js");
+  const note = doc.rules.hangupForgiveness.note;
+  ok(REPEAT_HANGUP_REASONS.includes("payer budget") && REPEAT_HANGUP_REASONS.includes("global budget"), "control: the refund planner holds a disconnect past a forgiveness budget for review");
+  ok(/network: "credits",[\s\S]{0,200}tx: `credits-hangup:/.test(src("src/server.js")) && /repaid by hand\n\s+\/\/ \(re-credit the key\)/.test(src("src/server.js")), "control: a credits hang-up past the budget is booked to be re-credited to its key");
+  ok(/past the budget the charge stands and the undelivered answer is recorded as owed and reviewed before it is repaid: after on-chain proof, or for a credits debit by re-crediting its key\./.test(note), `the hang-up note says a disconnect past the budget is reviewed, and how a credits debit is repaid ("${note.slice(0, 120)}...")`);
+}
 ok(src("src/well-known-store.js").includes('"agent402-refund-terms.json"'), "the well-known store refuses an entry that would shadow it");
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

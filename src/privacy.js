@@ -374,8 +374,9 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   and dropped when the wallet has been idle ${COVER_IDLE_MINUTES} minutes (with no paid call in flight), at a later paid call to
   the server, which clears the longest idle wallets a few at a time; sooner when the server holds ${COVER_WALLETS_MAX.toLocaleString("en-US")}
   wallets (the longest idle first); or on restart.</li>
-  <li><b>Sanctions screening.</b> The paying address of an x402 payment, each address party to a Tempo
-  per-call payment our server settles itself, and the paying wallet of an MPP monitor subscription (before its
+  <li><b>Sanctions screening.</b> The paying address of an x402 payment or of an MPP evm payment, each address
+  party to a Tempo per-call payment our server settles itself, the paying wallet of a Tempo payment settled through
+  Tempo's relay (and the sender the relay settled on), and the paying wallet of an MPP monitor subscription (before its
   first payment and before each renewal) are checked against the US Treasury OFAC SDN list, which we download and
   hold on our server. For such a Tempo payment and for a subscription payment we also read the paying wallet's recent
   inbound transfers (up to ${oneHop.maxTransfers}, from the last ${oneHop.lookbackDays} days) from Tempo's transfer data feed, which
