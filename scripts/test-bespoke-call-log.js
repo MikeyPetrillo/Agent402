@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-// The seventeen tool routes served outside the kit binder (extract, meta, dns,
-// render, screenshot, pdf and the eleven memory tools) write the same
+// The sixteen tool routes served outside the kit binder (extract, meta,
+// render, screenshot, pdf and the eleven memory tools; dns is a kit tool since
+// it moved to src/tools/network-kit.js) write the same
 // call-log row every other tool writes: one recordToolCall row per call that
 // reached the handler, with the route's slug and the FINAL response status.
 //
 // Rows are read through the recorder's test sink (ANALYTICS_TEST_CAPTURE=1,
 // src/analytics-db.js): the server prints each row it would insert. Two boots,
 // both with outbound fetches held to loopback:
-//   - free mode: one call to each of the seventeen routes, 2xx and 4xx alike,
+//   - free mode: one call to each of the sixteen routes, 2xx and 4xx alike,
 //     gives exactly one row; a kit tool beside them still gives exactly one;
 //   - paid mode (x402 exact, stub facilitator): an unpaid 402 gives no row
 //     (kit control: none either), a settled call gives one row with 200, and
@@ -59,11 +60,10 @@ try {
   const kit4 = await call(free, "POST", "/api/hash", { body: {} });
   ok(kit4.status >= 400 && kit4.status < 500 && oneRow(kit4, "hash"), `control: a kit tool's 4xx writes exactly one row (${show(kit4)})`);
 
-  // The six URL tools. No page is fetched: a missing input or a refused address.
+  // The five URL tools. No page is fetched: a missing input or a refused address.
   const urlCalls = [
     ["extract", "POST", "/api/extract", { body: { url: REFUSED_URL } }],
     ["meta", "GET", `/api/meta?url=${encodeURIComponent(REFUSED_URL)}`, {}],
-    ["dns", "GET", "/api/dns", {}],
     ["render", "POST", "/api/render", { body: {} }],
     ["screenshot", "GET", "/api/screenshot", {}],
     ["pdf", "POST", "/api/pdf", { body: { url: REFUSED_URL } }],
@@ -77,7 +77,7 @@ try {
     ok(r.status >= 400 && oneRow(r, slug), `${slug}: one call writes exactly one row with its slug and final status (${show(r)})`);
   }
   // The probe flag follows the kit binder's rule: a 4xx that named no declared key.
-  const bare = await call(free, "GET", "/api/dns");
+  const bare = await call(free, "GET", "/api/screenshot");
   const keyed = await call(free, "GET", `/api/meta?url=${encodeURIComponent(REFUSED_URL)}`);
   ok(bare.status === 400 && bare.rows[0]?.probe === true, `a 4xx with no input is marked probe (${show(bare)})`);
   ok(keyed.status >= 400 && keyed.status < 500 && keyed.rows[0]?.probe === false, `a 4xx that named a declared key is not (${show(keyed)})`);
@@ -106,8 +106,8 @@ try {
     seen.add(slug);
     ok(oneRow(r, slug), `${slug}: one call writes exactly one row with its slug and final status (${show(r)})`);
   }
-  ok(seen.size === 17, `all seventeen routes were called (${seen.size})`);
-  ok(twoXx >= 6 && fourXx >= 6, `the calls covered 200s and 4xx (${twoXx} x 200, ${fourXx} x 4xx)`);
+  ok(seen.size === 16, `all sixteen routes were called (${seen.size})`);
+  ok(twoXx >= 6 && fourXx >= 5, `the calls covered 200s and 4xx (${twoXx} x 200, ${fourXx} x 4xx)`);
   // A memory call with no identity is the handler's own 400: one row.
   const noId = await call(free, "GET", "/api/memory?key=k");
   ok(noId.status === 400 && oneRow(noId, "memory-read"), `memory-read with no namespace: the 400 writes one row (${show(noId)})`);

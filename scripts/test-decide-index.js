@@ -510,8 +510,12 @@ for (const t of ["Detects prompt-injection patterns in text", "Web search for cu
   // call them (they read as "call directly" before), and they stay wallet-only.
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  const routes = ["POST /api/extract", "GET /api/meta", "GET /api/dns", "POST /api/render", "POST /api/pdf"];
-  ok(routes.every((r) => src.includes(`set("${r}",`)), "extract, meta, dns, render and pdf get handlers that execute can call");
+  const routes = ["POST /api/extract", "GET /api/meta", "POST /api/render", "POST /api/pdf"];
+  ok(routes.every((r) => src.includes(`set("${r}",`)), "extract, meta, render and pdf get handlers that execute can call");
+  // dns is a kit tool (src/tools/network-kit.js), with its own handler.
+  const { NETWORK_TOOLS } = await import("../src/tools/network-kit.js");
+  const dnsDef = NETWORK_TOOLS.find((t) => t.slug === "dns");
+  ok(dnsDef?.route === "GET /api/dns" && typeof dnsDef.handler === "function" && !src.includes('app.get("/api/dns"'), "dns is a kit tool with a handler execute can call, and no bespoke route remains");
   const { WALLET_ONLY_SLUGS } = await import("../src/pow.js");
   ok(["extract", "meta", "dns", "render", "pdf"].every((s) => WALLET_ONLY_SLUGS.has(s)), "and every one of them stays wallet-only (no free path)");
 }
