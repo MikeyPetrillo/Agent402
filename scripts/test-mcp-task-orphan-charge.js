@@ -164,8 +164,8 @@ ok(reworded === 3, `the sweep read the sales ledger for every orphan with a paye
   const t0 = Date.now() - 1000;
   for (let i = 0; i < 5; i++) ledger.recordSale({ slug: "dossier", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: W, tx: `0x${String(i).repeat(64)}`, wire: "x402", via: i === 4 ? "mcp" : "http" });
   await ledger.salesLedgerFlush?.();
-  const all = await salesLedgerChargeOf({ slug: "dossier", payer: W.toLowerCase(), sinceMs: t0, untilMs: Date.now() + 1000 });
-  ok(all === undefined, `f3. a full page of sales in the window reads as unknown (${JSON.stringify(all)})`);
+  const all = await salesLedgerChargeOf({ slug: "dossier", payer: W.toLowerCase(), sinceMs: t0, untilMs: Date.now() + 1000, via: "mcp" });
+  ok(all === undefined, `f3. a full page of sales in the window reads as unknown, even with one on the path asked for (${JSON.stringify(all)})`);
   const none = await salesLedgerChargeOf({ slug: "dossier", payer: W.toLowerCase(), sinceMs: Date.now() + 5_000, untilMs: Date.now() + 10_000 });
   ok(none === null, "f3. control: an empty window reads as no sale");
 }
