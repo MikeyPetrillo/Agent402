@@ -158,13 +158,15 @@ ok(__test.TTL.price === 60_000 && __test.TTL.list === 300_000 && __test.TTL.coin
   ok(calls.length === 1 && lq.count === 1 && lq.assets[0].id === "nvidia" && lq.cached === true, "rwa-list: q matches symbol, projected from the cached list");
   await throws(h("rwa-list")({ type: "bond" }), 400, "rwa-list: unknown type");
   const m = await h("rwa-markets")({ type: "stock", order: "volume_desc", perPage: 10, currency: "eur" });
-  const mu = calls.at(-1).url.searchParams;
+  // The last markets read (a gold row also reads its reference, the exchange-rate table).
+  const marketsCall = () => calls.filter((c) => c.url.pathname === "/api/v3/rwas/markets").at(-1);
+  const mu = marketsCall().url.searchParams;
   ok(mu.get("vs_currency") === "eur" && mu.get("asset_type") === "stock" && mu.get("order") === "volume_desc" && mu.get("per_page") === "10" && mu.get("page") === "1", "rwa-markets: every filter rides as a query parameter");
   ok(m.count === 1 && m.markets[0].price === 4376.6 && m.markets[0].change24hPct === 0.98698 && m.markets[0].symbol === "XAU" && m.markets[0].currency === "eur", "rwa-markets: tokenized_market_data flattened");
   await throws(h("rwa-markets")({ order: "alphabetical" }), 400, "rwa-markets: unknown order");
   await throws(h("rwa-markets")({ perPage: 500 }), 400, "rwa-markets: perPage bound");
   const ids = await h("rwa-markets")({ ids: "gold,nvidia" });
-  ok(calls.at(-1).url.searchParams.get("ids") === "gold,nvidia" && ids.ids.length === 2, "rwa-markets: ids list");
+  ok(marketsCall().url.searchParams.get("ids") === "gold,nvidia" && ids.ids.length === 2, "rwa-markets: ids list");
   const a = await h("rwa-asset")({ id: "gold" });
   ok(a.id === "gold" && a.webSlug === "gold" && a.image === "https://img/gold-large.png" && a.market?.price === 4376.6 && a.market.currency === "usd", "rwa-asset: metadata joined with its market row");
   ok(calls.filter((c) => c.url.pathname === "/api/v3/rwas/gold").length === 1 && calls.filter((c) => c.url.pathname === "/api/v3/rwas/markets").length === 3, "rwa-asset: two upstream reads, both through the cache");
@@ -176,6 +178,48 @@ ok(__test.TTL.price === 60_000 && __test.TTL.list === 300_000 && __test.TTL.coin
   routes["/api/v3/rwas/issuers/nope"] = jsonRes(404, {});
   await throws(h("rwa-issuer")({ id: "nope" }), 422, "rwa-issuer: unknown id -> 422");
   for (const t of CRYPTO_MARKETS_TOOLS.filter((x) => x.slug.startsWith("rwa-"))) ok(!/\u2014/.test(t.description) && t.discovery.output.example.source === "coingecko" && typeof t.discovery.output.example.fetchedAt === "string", `${t.slug}: description + example envelope`);
+}
+
+// ----------------------------------------------------------------------------
+// Real-world assets: tracking against the reference asset
+// ----------------------------------------------------------------------------
+{
+  const { rwaTracking } = await import("../src/tools/crypto-markets-kit.js");
+  const row = (id, type, price) => ({ id, symbol: id, name: id, asset_type: type, tokenized_market_data: { current_price: price, market_cap: 1, total_volume: 1 } });
+  const rates = { rates: { btc: { value: 1, type: "crypto" }, usd: { value: 77000, type: "fiat" }, eur: { value: 66000, type: "fiat" }, xau: { value: 22.9, type: "commodity" }, xag: { value: 1540, type: "commodity" } } };
+  const refOf = (per, oz) => +(per / oz).toPrecision(8);
+  const premOf = (price, per, oz) => +(((price - per / oz) / (per / oz)) * 10_000).toFixed(2);
+  reset();
+  routes = {
+    "/api/v3/rwas/markets": jsonRes(200, [row("gold", "commodity", 3400), row("silver", "commodity", 49), row("nvidia", "stock", 141.2)]),
+    "/api/v3/exchange_rates": jsonRes(200, rates),
+  };
+  const m = await h("rwa-markets")({});
+  const [g, s, n] = m.markets;
+  ok(g.tracking?.reference === "XAU spot" && g.tracking.referencePrice === refOf(77000, 22.9) && g.tracking.premiumBps === premOf(3400, 77000, 22.9), `rwa-markets: tokenized gold against the troy-ounce spot rate (${JSON.stringify(g.tracking)})`);
+  ok(s.tracking?.reference === "XAG spot" && s.tracking.premiumBps === premOf(49, 77000, 1540), `rwa-markets: tokenized silver against its spot rate (${JSON.stringify(s.tracking)})`);
+  ok(n.tracking === null, "rwa-markets: a stock carries tracking null (no listed-share price is read)");
+  ok(calls.filter((c) => c.url.pathname === "/api/v3/exchange_rates").length === 1, "rwa-markets: one reference read for the whole page");
+  const eur = await h("rwa-markets")({ currency: "eur" });
+  ok(eur.markets[0].tracking.referencePrice === refOf(66000, 22.9) && calls.filter((c) => c.url.pathname === "/api/v3/exchange_rates").length === 1, "rwa-markets: the reference is quoted in the asked currency, from the cached table");
+  reset();
+  routes = { "/api/v3/rwas/markets": jsonRes(200, [row("nvidia", "stock", 141.2)]), "/api/v3/exchange_rates": jsonRes(200, rates) };
+  await h("rwa-markets")({ type: "stock" });
+  ok(calls.every((c) => c.url.pathname !== "/api/v3/exchange_rates"), "rwa-markets: a page with no commodity reads no reference");
+  reset();
+  routes = { "/api/v3/rwas/markets": jsonRes(200, [row("gold", "commodity", 3400)]), "/api/v3/exchange_rates": jsonRes(500, { error: "down" }) };
+  const down = await h("rwa-markets")({});
+  ok(down.count === 1 && down.markets[0].price === 3400 && down.markets[0].tracking.reference === "XAU spot" && down.markets[0].tracking.referencePrice === null && down.markets[0].tracking.premiumBps === null, "rwa-markets: a reference that cannot be read leaves the market answer whole, with null figures");
+  reset();
+  routes = {
+    "/api/v3/rwas/gold": jsonRes(200, { id: "gold", symbol: "xau", name: "Gold", asset_type: "commodity" }),
+    "/api/v3/rwas/markets": jsonRes(200, [row("gold", "commodity", 3400)]),
+    "/api/v3/exchange_rates": jsonRes(200, rates),
+  };
+  const a = await h("rwa-asset")({ id: "gold" });
+  ok(a.market.tracking.premiumBps === premOf(3400, 77000, 22.9), "rwa-asset: the market row carries the same tracking");
+  ok(rwaTracking({ id: "gold", price: 10 }, null).referencePrice === null && rwaTracking({ id: "tesla", price: 10 }, { xau: 1 }) === null, "rwaTracking: no table -> null figures; no reference asset -> null");
+  ok(["constructor", "toString", "__proto__"].every((id) => rwaTracking({ id, price: 10 }, { xau: 1 }) === null), "rwaTracking: an id named like an object property has no reference");
 }
 
 // ----------------------------------------------------------------------------
@@ -409,6 +453,36 @@ const fromSec = Math.floor(Date.parse(fromIso + "T00:00:00Z") / 1000), toSec = f
 routes = { "/api/v3/coins/ethereum/market_chart/range": (u) => { ok(u.searchParams.get("from") === String(fromSec) && u.searchParams.get("to") === String(toSec), "coin-market-chart-range: ISO from + unix-string to -> unix seconds"); return jsonRes(200, { prices: [], market_caps: [], total_volumes: [] }); } };
 const rng2 = await h("coin-market-chart-range")({ coin: "ethereum", from: fromIso, to: String(toSec) });
 ok(rng2.count === 0 && rng2.summary.first === null && rng2.granularity === null, "coin-market-chart-range: empty series is a valid answer");
+ok(rng2.summary.volatilityPct === null && rng2.summary.maxDrawdownPct === null, "coin-market-chart-range: an empty series has no volatility or drawdown, never a made-up 0");
+
+// ----------------------------------------------------------------------------
+// Series statistics: what the series tools lead with
+// ----------------------------------------------------------------------------
+{
+  const { riskStats, seriesSummary } = await import("../src/tools/crypto-markets-kit.js");
+  const HOUR = 3_600_000, DAY = 86_400_000;
+  const sampleVol = (vals, periodsPerYear) => {
+    const rets = []; for (let k = 1; k < vals.length; k++) rets.push(Math.log(vals[k] / vals[k - 1]));
+    const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+    return +(Math.sqrt(rets.reduce((a, x) => a + (x - mean) ** 2, 0) / (rets.length - 1)) * Math.sqrt(periodsPerYear) * 100).toFixed(4);
+  };
+  const t4 = (step) => [0, step, 2 * step, 3 * step];
+  const r = riskStats(t4(HOUR), [100, 120, 90, 130]);
+  ok(r.maxDrawdownPct === -25, `riskStats: the fall from the running high to a later low (${r.maxDrawdownPct})`);
+  ok(r.volatilityPct === sampleVol([100, 120, 90, 130], 8760), `riskStats: hourly log-return volatility annualized over 8,760 hours (${r.volatilityPct})`);
+  ok(riskStats(t4(DAY), [100, 120, 90, 130]).volatilityPct === sampleVol([100, 120, 90, 130], 365), "riskStats: daily points annualize over 365 days (the median spacing)");
+  ok(riskStats(t4(HOUR), [1, 2, 3, 4]).maxDrawdownPct === 0, "riskStats: a series that never fell has a 0 drawdown");
+  const short = riskStats([0, HOUR], [100, 90]);
+  ok(short.volatilityPct === null && short.maxDrawdownPct === -10, "riskStats: two points give a drawdown but no volatility");
+  const holes = riskStats(t4(HOUR), [100, null, 0, 50]);
+  ok(holes.maxDrawdownPct === -50 && holes.volatilityPct === null, "riskStats: missing and non-positive prices are skipped");
+  const sum = seriesSummary(t4(HOUR), [100, 120, 90, 130]);
+  ok(sum.first === 100 && sum.last === 130 && sum.high === 130 && sum.low === 90 && sum.changePct === 30 && sum.maxDrawdownPct === -25, "seriesSummary: first, last, high, low, % change and the risk figures");
+  ok(rng.summary.maxDrawdownPct === 0 && rng.summary.volatilityPct === sampleVol([1900, 1950, 2000], 8760), `coin-market-chart-range: the summary carries volatility and drawdown of its points (${rng.summary.volatilityPct})`);
+  ok(ohlc.summary.maxDrawdownPct === +((98 / 115 - 1) * 100).toFixed(4) && ohlc.summary.volatilityPct === sampleVol([105, 115, 98], 17520), `coin-ohlc: volatility and drawdown read the closes at their 30-minute spacing (${ohlc.summary.volatilityPct}, ${ohlc.summary.maxDrawdownPct})`);
+  const keys = Object.keys(rng);
+  ok(keys.indexOf("summary") < keys.indexOf("points") && Object.keys(ohlc).indexOf("summary") < Object.keys(ohlc).indexOf("bars"), "series tools: the summary comes before the series");
+}
 
 reset();
 routes = {

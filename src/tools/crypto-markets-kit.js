@@ -370,6 +370,68 @@ function granularityOf(timesMs) {
 const trim = (s, n) => (typeof s === "string" ? (s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s) : null);
 const upper = (s) => (typeof s === "string" && s ? s.toUpperCase() : null);
 
+// --- series statistics ----------------------------------------------------------
+// A series tool leads with what a buyer would otherwise compute from the
+// points it carries: the window's return (changePct), realized volatility and
+// the largest peak-to-trough fall. Volatility is the sample standard deviation
+// of the log returns between consecutive points, annualized over a 365-day
+// year from the median spacing of the points (crypto trades every day), in
+// percent. maxDrawdownPct is the largest fall from a running high to a later
+// low, as a negative percent (0 when the series never fell). Each is null
+// when the series is too short to say.
+const YEAR_MS = 365 * DAY_MS;
+function medianSpacingMs(timesMs) {
+  const deltas = [];
+  for (let k = 1; k < timesMs.length; k++) {
+    const d = timesMs[k] - timesMs[k - 1];
+    if (Number.isFinite(d) && d > 0) deltas.push(d);
+  }
+  if (!deltas.length) return null;
+  deltas.sort((a, b) => a - b);
+  return deltas[Math.floor(deltas.length / 2)];
+}
+/** Volatility and drawdown of a price series given as parallel arrays of
+ *  times (ms) and prices; points with no positive price are skipped. */
+export function riskStats(timesMs, values) {
+  const ts = [], vs = [];
+  for (let k = 0; k < values.length; k++) {
+    const v = num(values[k]);
+    if (v != null && v > 0 && Number.isFinite(timesMs[k])) { ts.push(timesMs[k]); vs.push(v); }
+  }
+  let volatilityPct = null;
+  const spacing = medianSpacingMs(ts);
+  if (vs.length >= 3 && spacing) {
+    const rets = [];
+    for (let k = 1; k < vs.length; k++) rets.push(Math.log(vs[k] / vs[k - 1]));
+    const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+    const variance = rets.reduce((a, r) => a + (r - mean) ** 2, 0) / (rets.length - 1);
+    volatilityPct = pct(Math.sqrt(variance) * Math.sqrt(YEAR_MS / spacing) * 100);
+  }
+  let maxDrawdownPct = null;
+  if (vs.length >= 2) {
+    let peak = vs[0], worst = 0;
+    for (const v of vs) {
+      if (v > peak) peak = v;
+      const dd = (v / peak - 1) * 100;
+      if (dd < worst) worst = dd;
+    }
+    maxDrawdownPct = worst === 0 ? 0 : pct(worst);
+  }
+  return { volatilityPct, maxDrawdownPct };
+}
+/** The summary a price series leads with: first, last, high, low, the
+ *  window's return and riskStats, from parallel arrays of times and prices. */
+export function seriesSummary(timesMs, values) {
+  const vals = values.map(num).filter((v) => v != null);
+  const first = vals[0] ?? null, last = vals.length ? vals[vals.length - 1] : null;
+  return {
+    first, last,
+    high: vals.length ? Math.max(...vals) : null, low: vals.length ? Math.min(...vals) : null,
+    changePct: first && last != null ? +(((last - first) / first) * 100).toFixed(4) : null,
+    ...riskStats(timesMs, values),
+  };
+}
+
 // --- tools --------------------------------------------------------------------
 export const CRYPTO_MARKETS_TOOLS = [
   // ===========================================================================
@@ -606,7 +668,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "OHLC candles for a coin: days 1 (30-min candles), 7 or 14 (4-hour), 30 / 90 / 180 / 365 (daily), in any vs currency. Returns aligned {time, open, high, low, close} bars plus the window's high/low/first/last and % change. The candle sibling of crypto-history, which returns close-only points: use OHLC for technical indicators, range/volatility work and charting. Cached in-process for 60 seconds.",
+      "OHLC candles for a coin: days 1 (30-min candles), 7 or 14 (4-hour), 30 / 90 / 180 / 365 (daily), in any vs currency. Leads with the window's % change, annualized volatility and max drawdown, then aligned {time, open, high, low, close} bars. The candle sibling of crypto-history, which returns close-only points: use OHLC for technical indicators, range/volatility work and charting. Cached in-process for 60 seconds.",
     tags: ["crypto", "ohlc", "candles", "chart", "technical-analysis", "volatility", "timeseries"],
     discovery: {
       input: { coin: "bitcoin", days: 7, currency: "usd" },
@@ -622,7 +684,7 @@ export const CRYPTO_MARKETS_TOOLS = [
         example: {
           source: "coingecko", fetchedAt: "2026-08-22T13:20:00.000Z", cached: false,
           coin: "bitcoin", currency: "usd", days: 7, count: 42, granularity: "4h",
-          summary: { first: 66120.4, last: 68210.0, high: 69850.0, low: 64995.9, changePct: 3.16 },
+          summary: { first: 66120.4, last: 68210.0, high: 69850.0, low: 64995.9, changePct: 3.16, volatilityPct: 41.2, maxDrawdownPct: -4.1 },
           bars: [{ time: "2026-08-15T16:00:00.000Z", open: 66120.4, high: 66500.1, low: 65900.0, close: 66210.3 }],
         },
       },
@@ -651,6 +713,8 @@ export const CRYPTO_MARKETS_TOOLS = [
           high: highs.length ? Math.max(...highs) : null,
           low: lows.length ? Math.min(...lows) : null,
           changePct: first && last != null ? +(((last - first) / first) * 100).toFixed(4) : null,
+          // Volatility and drawdown read the closes.
+          ...riskStats(bars.map((b) => Date.parse(b.time)), bars.map((b) => b.close)),
         },
         bars,
       };
@@ -667,10 +731,10 @@ export const CRYPTO_MARKETS_TOOLS = [
     category: "crypto",
     price: "$0.008",
     description:
-      "Price, market cap and volume series for a coin over an ARBITRARY time window: `from`/`to` as unix seconds or ISO dates, or `lookback` (\"6h\", \"3d\", \"2w\") ending now. Granularity is automatic upstream: 5-minute points for a window of 1 day or less, hourly up to 90 days, daily beyond. The windowed sibling of crypto-history (which counts days back from now): use it to align with a specific event, a filing date or another series. Window must lie within the past 365 days on this plan, enforced before the call. Cached in-process for 60 seconds.",
+      "A coin's price, market cap and volume over an ARBITRARY window, led by return, volatility and drawdown. The window is `from`/`to` as unix seconds or ISO dates, or `lookback` (\"6h\", \"3d\", \"2w\") ending now. Granularity is automatic upstream: 5-minute points for a window of 1 day or less, hourly up to 90 days, daily beyond. The summary also carries first, last, high and low; volatility is annualized from the spacing of the points. The windowed sibling of crypto-history (which counts days back from now): use it to align with a specific event, a filing date or another series. Window must lie within the past 365 days on this plan, enforced before the call. Cached in-process for 60 seconds.",
     tags: ["crypto", "history", "range", "chart", "timeseries", "backtest", "event-study"],
     discovery: {
-      input: { coin: "ethereum", lookback: "3d", currency: "usd" },
+      input: { coin: "ethereum", lookback: "3d" },
       inputSchema: {
         properties: {
           coin: { type: "string", description: "Coin id (bitcoin, ethereum, ...)." },
@@ -685,8 +749,8 @@ export const CRYPTO_MARKETS_TOOLS = [
         example: {
           source: "coingecko", fetchedAt: "2026-08-22T13:20:00.000Z", cached: false,
           coin: "ethereum", currency: "usd", from: "2026-08-19T13:20:00.000Z", to: "2026-08-22T13:20:00.000Z", count: 73, granularity: "1h",
-          summary: { first: 2380.1, last: 2424.5, high: 2480.1, low: 2350.0, changePct: 1.87 },
-          points: [{ time: "2026-08-19T14:00:00.000Z", price: 2380.1, marketCap: 287000000000, volume: 13800000000 }],
+          summary: { first: 2380, last: 2424, high: 2480, low: 2350, changePct: 1.85, volatilityPct: 52.6, maxDrawdownPct: -5.2 },
+          points: [{ time: "2026-08-19T14:00:00.000Z", price: 2380, marketCap: 287000000000, volume: 13800000000 }],
         },
       },
     },
@@ -709,17 +773,11 @@ export const CRYPTO_MARKETS_TOOLS = [
       const caps = Array.isArray(data.market_caps) ? data.market_caps : [];
       const vols = Array.isArray(data.total_volumes) ? data.total_volumes : [];
       const points = prices.map(([t, p], idx) => ({ time: iso(t), price: num(p), marketCap: num(caps[idx]?.[1]), volume: num(vols[idx]?.[1]) }));
-      const vals = points.map((p) => p.price).filter((v) => v != null);
-      const first = vals[0] ?? null, last = vals.length ? vals[vals.length - 1] : null;
       return {
         source: SOURCE, fetchedAt, cached, coin, currency,
         from: new Date(from * 1000).toISOString(), to: new Date(to * 1000).toISOString(),
         count: points.length, granularity: granularityOf(prices.map((r) => r?.[0])),
-        summary: {
-          first, last,
-          high: vals.length ? Math.max(...vals) : null, low: vals.length ? Math.min(...vals) : null,
-          changePct: first && last != null ? +(((last - first) / first) * 100).toFixed(4) : null,
-        },
+        summary: seriesSummary(prices.map((r) => num(r?.[0])), points.map((p) => p.price)),
         points,
       };
     },
@@ -1124,6 +1182,51 @@ function shapeRwaMarket(r, currency) {
     lastUpdated: m.last_updated ?? null,
   };
 }
+// Tracking against the reference asset. A tokenized commodity is measured
+// against the spot price of what it tracks: the troy-ounce cross rate in the
+// upstream's exchange-rate table (units of the quote currency per BTC divided
+// by ounces per BTC), read only when an answer holds such a row and cached
+// with that table (TTL.price). `premiumBps` is the tokenized price's distance
+// from that reference in basis points (positive = above it). Stocks and ETFs
+// carry `tracking: null`: no price for the listed share is read here.
+const RWA_SPOT_UNITS = Object.freeze({ gold: "xau", silver: "xag" });
+const RWA_SPOT_NAMES = Object.freeze({ xau: "XAU spot", xag: "XAG spot" });
+/** Whether an RWA row has a reference this kit reads. */
+export const rwaHasReference = (id) => Object.hasOwn(RWA_SPOT_UNITS, String(id ?? ""));
+/** The reference price per unit in `currency`, read from the exchange-rate
+ *  table: { xau, xag } (null where the table lacks one), or null when the
+ *  table cannot be read. Never throws: the market answer stands without it. */
+async function rwaSpotPrices(currency) {
+  let data;
+  try { ({ data } = await cgGet("/exchange_rates", {}, TTL.price)); } catch { return null; }
+  const r = data?.rates;
+  const per = num(r?.[currency]?.value);
+  const out = {};
+  for (const unit of Object.values(RWA_SPOT_UNITS)) {
+    const oz = num(r?.[unit]?.value);
+    out[unit] = per != null && oz != null && oz > 0 ? per / oz : null;
+  }
+  return out;
+}
+/** The `tracking` block for one shaped RWA row, given rwaSpotPrices' answer
+ *  (null when it could not be read). */
+export function rwaTracking(row, spot) {
+  const unit = rwaHasReference(row?.id) ? RWA_SPOT_UNITS[row.id] : null;
+  if (!unit) return null;
+  const ref = spot ? spot[unit] : null;
+  const price = num(row?.price);
+  const sig = (v) => (v == null ? null : +v.toPrecision(8));
+  return {
+    reference: RWA_SPOT_NAMES[unit],
+    referencePrice: sig(ref),
+    premiumBps: ref && price != null ? +(((price - ref) / ref) * 10_000).toFixed(2) : null,
+  };
+}
+/** Add `tracking` to every shaped row, reading the reference only when a row needs it. */
+async function withRwaTracking(rows, currency) {
+  const spot = rows.some((r) => rwaHasReference(r?.id)) ? await rwaSpotPrices(currency) : null;
+  return rows.map((r) => ({ ...r, tracking: rwaTracking(r, spot) }));
+}
 const RWA_TOOLS = [
   {
     route: "GET /api/rwa-list",
@@ -1173,7 +1276,7 @@ const RWA_TOOLS = [
     category: "crypto",
     price: "$0.006",
     description:
-      "Live market rows for tokenized real-world assets (stocks, ETFs and commodities such as gold), ranked by market cap or volume a page at a time: price, market cap, 24h volume, 24h high and low and change, in your currency. Filter by type or pass ids. Figures are the onchain wrappers' markets (what is tokenized and trading), not the underlying's exchange listing. Cached in-process for 60 seconds.",
+      "Live market rows for tokenized real-world assets (stocks, ETFs and commodities such as gold), ranked by market cap or volume a page at a time: price, market cap, 24h volume, 24h high and low and change, in your currency. Filter by type or pass ids. Figures are the onchain wrappers' markets (what is tokenized and trading), not the underlying's exchange listing. Each row carries tracking against its reference asset: a tokenized commodity (gold, silver) against the troy-ounce spot rate, with referencePrice and premiumBps (positive = above the reference); a stock or ETF has tracking: null, since no price for the listed share is read here. Cached in-process for 60 seconds.",
     tags: ["crypto", "rwa", "tokenized", "stocks", "etf", "commodities", "market-data", "price"],
     discovery: {
       input: { type: "stock", order: "market_cap_desc", perPage: 10 },
@@ -1191,7 +1294,7 @@ const RWA_TOOLS = [
         example: {
           source: "coingecko", fetchedAt: "2026-09-02T18:50:00.000Z", cached: false,
           currency: "usd", type: "stock", order: "market_cap_desc", page: 1, perPage: 10, count: 1,
-          markets: [{ id: "circle-internet-group", symbol: "CRCL", name: "Circle Internet Group", type: "stock", image: "https://coin-images.coingecko.com/coins/images/68595/large/crclon_160x160.png", currency: "usd", price: 89.14, marketCap: 274735360, volume24h: 32316372, high24h: 90.12, low24h: 86.22, change24h: 0.3088, change24hPct: 0.34762, marketCapChange24h: 3496406, marketCapChange24hPct: 1.28905, lastUpdated: "2026-09-02T18:49:30Z" }],
+          markets: [{ id: "circle-internet-group", symbol: "CRCL", name: "Circle Internet Group", type: "stock", image: "https://coin-images.coingecko.com/coins/images/68595/large/crclon_160x160.png", currency: "usd", price: 89.14, marketCap: 274735360, volume24h: 32316372, high24h: 90.12, low24h: 86.22, change24h: 0.3088, change24hPct: 0.34762, marketCapChange24h: 3496406, marketCapChange24hPct: 1.28905, lastUpdated: "2026-09-02T18:49:30Z", tracking: null }],
         },
       },
     },
@@ -1207,7 +1310,8 @@ const RWA_TOOLS = [
         vs_currency: currency, asset_type: type || undefined, ids: ids ? ids.join(",") : undefined, order, per_page: perPage, page,
       }, TTL.price);
       const rows = Array.isArray(data) ? data : [];
-      return { source: SOURCE, fetchedAt, cached, currency, type, ids, order, page, perPage, count: rows.length, markets: rows.map((r) => shapeRwaMarket(r, currency)) };
+      const markets = await withRwaTracking(rows.map((r) => shapeRwaMarket(r, currency)), currency);
+      return { source: SOURCE, fetchedAt, cached, currency, type, ids, order, page, perPage, count: rows.length, markets };
     },
   },
   {
@@ -1217,7 +1321,7 @@ const RWA_TOOLS = [
     category: "crypto",
     price: "$0.006",
     description:
-      "One tokenized real-world asset by id (gold, nvidia, tesla, spy ...): identity, type, image and web slug joined with its onchain market row - price, market cap, 24h volume and change in your currency. Two cached upstream reads, one answer. Use rwa-list to find the id.",
+      "One tokenized real-world asset by id (gold, nvidia, tesla, spy ...): identity, type, image and web slug joined with its onchain market row - price, market cap, 24h volume and change in your currency, and tracking against its reference asset (gold and silver against the troy-ounce spot rate: referencePrice and premiumBps; null for a stock or ETF). Cached upstream reads, one answer. Use rwa-list to find the id.",
     tags: ["crypto", "rwa", "tokenized", "stock", "commodity", "market-data", "profile"],
     discovery: {
       input: { id: "gold", currency: "usd" },
@@ -1232,7 +1336,7 @@ const RWA_TOOLS = [
         example: {
           source: "coingecko", fetchedAt: "2026-09-02T18:50:00.000Z", cached: false,
           id: "gold", symbol: "XAU", name: "Gold", type: "commodity", image: "https://coin-images.coingecko.com/coins/images/10481/large/logo.png", webSlug: "gold", lastUpdated: "2026-09-02T18:49:00Z",
-          market: { id: "gold", symbol: "XAU", name: "Gold", type: "commodity", image: "https://coin-images.coingecko.com/coins/images/10481/large/logo.png", currency: "usd", price: 4376.6, marketCap: 5219552133, volume24h: 557496353, high24h: 4394.94, low24h: 4289.36, change24h: 42.77, change24hPct: 0.98698, marketCapChange24h: 44135859, marketCapChange24hPct: 0.8528, lastUpdated: "2026-09-02T18:49:00Z" },
+          market: { id: "gold", symbol: "XAU", name: "Gold", type: "commodity", image: "https://coin-images.coingecko.com/coins/images/10481/large/logo.png", currency: "usd", price: 4376.6, marketCap: 5219552133, volume24h: 557496353, high24h: 4394.94, low24h: 4289.36, change24h: 42.77, change24hPct: 0.98698, marketCapChange24h: 44135859, marketCapChange24hPct: 0.8528, lastUpdated: "2026-09-02T18:49:00Z", tracking: { reference: "XAU spot", referencePrice: 4361.2, premiumBps: 35.31 } },
         },
       },
     },
@@ -1245,11 +1349,12 @@ const RWA_TOOLS = [
       // Only the row for this id: a markets answer without it means no market
       // data for this asset, never another asset's row.
       const row = Array.isArray(mk.data) ? mk.data.find((r) => r?.id === id) || null : null;
+      const market = row ? (await withRwaTracking([shapeRwaMarket(row, currency)], currency))[0] : null;
       return {
         source: SOURCE, fetchedAt: mk.fetchedAt, cached: meta.cached && mk.cached,
         id: d.id ?? id, symbol: typeof d.symbol === "string" ? d.symbol.toUpperCase() : null, name: d.name ?? null, type: d.asset_type ?? null,
         image: d.image?.large ?? d.image?.small ?? (typeof d.image === "string" ? d.image : null), webSlug: d.web_slug ?? null, lastUpdated: d.last_updated ?? null,
-        market: row ? shapeRwaMarket(row, currency) : null,
+        market,
       };
     },
   },
