@@ -354,5 +354,37 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
   ok(privacy.includes(`a signing key our server made for that subscription and the signed receipts of its ${SUBSCRIPTION_RECEIPTS_KEPT} most recent paid periods`), "/privacy names the period receipts on an MPP subscription's record");
 }
 
+// Signed receipts cover the direct routes. A referral copy (/ref/<slug>) is
+// never signed (src/server.js receiptFieldsOf), and a streamed answer that is
+// neither an event stream nor sent with TE: trailers carries none: the
+// lead sentence stays the owner's line, and the surfaces that detail the
+// receipt state both exceptions. This block runs last: it loads a key.
+{
+  ok(/function receiptFieldsOf\(req, res\) \{\n\s+if \(FREE_MODE \|\| String\(req\.path \|\| ""\)\.startsWith\("\/ref\/"\)\) return null;/.test(src("src/server.js")), "control: a /ref answer is never signed");
+  ok(/A streamed answer that is[\s/]+neither \(no event stream, no trailers asked for\) carries none\./.test(src("src/receipt-signing.js")) && /A streamed answer that is neither carries no receipt\./.test(src("src/conformance.js")), "control: a stream that is neither an event stream nor asked trailers carries no receipt");
+  const readme = src("README.md").replace(/\*\*/g, "");
+  const bullet = readme.split("\n").find((l) => /signed receipt/.test(l) && /^- /.test(l)) || "";
+  ok(!/Buyer protection/.test(readme), "README: no \"Buyer protection\" heading (it reads as a guarantee program)");
+  ok(/on the direct routes carries a signed receipt/.test(bullet) && /a tool bought through a referral link carries none/.test(bullet) && /event-stream comment line/.test(bullet) && /TE: trailers/.test(bullet), `README: the money-path bullet scopes the signed receipt to the direct routes and names both exceptions ("${bullet.slice(0, 80)}...")`);
+  ok(!/every paid path is signed/.test(src("src/positioning.js")) && /\/ref\/ copy is never signed/.test(src("src/positioning.js")), "positioning.js: the lead's comment states the receipt's scope, not every paid path");
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { resetReceiptKeys, receiptsServed } = await import("../src/receipt-signing.js");
+  const { markGateMounted } = await import("../src/gate-mounts.js");
+  const { trustPage } = await import("../src/trust-page.js");
+  const pem = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" });
+  resetReceiptKeys({ RECEIPT_SIGNING_KEY: Buffer.from(pem).toString("base64"), RECEIPT_SIGNING_KEY_ID: "legal-test" });
+  markGateMounted("receiptSigner");
+  ok(receiptsServed(), "control: a key is loaded and the signer mounted");
+  const REF = { REFERRAL_PAY_TO: "0x00000000000000000000000000000000000000a1", REFERRAL_FACILITATOR_URL: "http://127.0.0.1:9/", REFERRAL_SIGNER_KEY: "11".repeat(32), REFERRAL_SLUGS: "hash", REFERRAL_PARITY_GRANDFATHERED: "hash", REFERRAL_SETUP_URL: "https://setup.example/referral", REFERRAL_COMMISSION_BPS: "default:1234", REFERRAL_MERCHANT_ID: "4242", REFERRAL_PAYOUT_ADDRESS: "0x00000000000000000000000000000000000000b2" };
+  const NOTE = "A tool bought through a referral link carries no signed receipt from this server; the payment's transaction on chain is its record.";
+  const off = text(trustPage("https://agent402.tools"));
+  const saved = Object.fromEntries(Object.keys(REF).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, REF);
+  const on = text(trustPage("https://agent402.tools"));
+  for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  ok(on.includes(NOTE), "/trust: with referral links offered, the receipt step says a referral purchase carries no signed receipt");
+  ok(!off.includes(NOTE) && !/referral/i.test(off), "/trust: with no referral links, the page names none");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

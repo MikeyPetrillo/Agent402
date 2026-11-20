@@ -10,7 +10,13 @@
 // clause follows receiptsServed() (src/receipt-signing.js), so a server with
 // no signing key loaded never promises one (and says "paid calls" rather than
 // "every paid call"). The published sentence is the one with both wires and
-// the receipt clause: every paid path is signed (src/receipt-signing.js).
+// the receipt clause, the owner's line word for word. What the clause covers:
+// every settled paid answer on the direct routes is signed
+// (src/receipt-signing.js). A /ref/ copy is never signed (src/server.js
+// receiptFieldsOf: a tool bought through a referral link is that network's
+// sale), and a streamed answer that is neither an event stream nor sent with
+// TE: trailers carries none; the README's money-path line and /trust's
+// receipt step state both.
 //
 // The catalog's size is a supporting line, never the lead: SUPPORT_LINE.
 
