@@ -67,7 +67,7 @@ try {
 
   // The new container of a deploy: a different boot id over the same directory.
   const s2Charged = [];
-  const s2 = createTaskStore({ dir: DIR, bootId: "the-next-container", log: quiet, chargeOf: ({ payer }) => (payer === PAYER.replace("5a1e", "5a2e") ? { tx: "0x" + "cd".repeat(32), network: "eip155:8453", priceUsd: 0.5 } : null), onChargedFailure: (x) => s2Charged.push(x) });
+  const s2 = createTaskStore({ dir: DIR, bootId: "the-next-container", log: quiet, chargeOf: ({ payer }) => ([PAYER.replace("5a1e", "5a2e"), PAYER.replace("5a1e", "5a3e")].includes(payer) ? { tx: "0x" + "cd".repeat(32), network: "eip155:8453", priceUsd: 0.5 } : null), onChargedFailure: (x) => s2Charged.push(x) });
   await s2.ready();
   const seen = await s2.get(rec.taskId);
   ok(seen?.status === "working", "a fresh instance (the other container) reads the working task from the row, NOT as an orphan: the owner's lease stands");
@@ -106,10 +106,18 @@ try {
   const live = await s1.create({ slug: "research", payer: PAYER });
   // ... and one whose payment the sales ledger shows settled before the container died.
   const paidLive = await s1.create({ slug: "research", payer: PAYER.replace("5a1e", "5a2e") });
+  // ... and two runs of one tool by one wallet: the one sale in their window
+  // cannot be tied to either, so neither claims it and nothing is booked.
+  const sibA = await s1.create({ slug: "research", payer: PAYER.replace("5a1e", "5a3e") });
+  const sibB = await s1.create({ slug: "research", payer: PAYER.replace("5a1e", "5a3e") });
   await s1.close();
   ok((await leases.holder(`${COLLECTION}:boot:${s1.bootId}`)) === null, "closing the store releases its lease");
   const r = await s2.sweep();
-  ok(r.orphaned === 2, `once the lease is gone the sweep resolves the dead container's working runs (${JSON.stringify(r)})`);
+  ok(r.orphaned === 4, `once the lease is gone the sweep resolves the dead container's working runs (${JSON.stringify(r)})`);
+  for (const sib of [sibA, sibB]) {
+    const g = await s2.get(sib.taskId);
+    ok(g?.status === "failed" && !/settled before the restart/.test(g.statusMessage || "") && !/not charged/i.test(g.statusMessage || ""), `two overlapping runs of one tool by one wallet: neither claims the sale (${String(g?.statusMessage).slice(0, 80)})`);
+  }
   const dead = await s2.get(live.taskId);
   ok(dead?.status === "failed" && /not charged/i.test(dead.statusMessage || ""), "...as failed and not charged when the sales ledger holds no sale for it");
   const paidDead = await s2.get(paidLive.taskId);

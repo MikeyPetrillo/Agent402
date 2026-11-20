@@ -1042,6 +1042,14 @@ const qPayerReceipts = db.prepare(`
    WHERE payer = ? AND internal = 0 AND ts >= ? AND ts <= ?
    ORDER BY ts DESC
    LIMIT ?`);
+// One tool's sales to one wallet in a window, with the path each arrived on
+// (read only by the interrupted-run sweep, src/mcp-tasks.js).
+const qPayerToolSales = db.prepare(`
+  SELECT ts, ${BUYER_AMOUNT_SQL} AS price_usd, network, tx, via
+    FROM sales /* buyer-view */
+   WHERE payer = ? AND slug = ? AND internal = 0 AND ts >= ? AND ts <= ?
+   ORDER BY ts ASC
+   LIMIT ?`);
 const qPayerTotals = db.prepare(`
   SELECT COUNT(*) AS n, SUM(${BUYER_AMOUNT_SQL}) AS usd, MIN(ts) AS first_ts, MAX(ts) AS last_ts
   FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ?`);
@@ -1326,6 +1334,16 @@ export function badFeedback({ days = 30, limit = 50 } = {}) {
   return selectBadFeedback.all(since, Math.max(1, Math.min(500, Number(limit) || 50))).map((r) => ({
     at: new Date(r.ts).toISOString(), item: r.slug, reason: r.reason,
     settlementTx: r.tx, responseSha256: r.response_sha256 || null,
+  }));
+}
+
+/** Sales of `slug` to `payer` between two times (ms), oldest first, at most
+ *  `limit`: [{ ts, priceUsd, network, tx, via }]. Database mode reads the
+ *  in-memory mirror, as payerReceipts does. */
+export function payerSalesOfTool(payer, slug, { fromMs, toMs, limit = 5 } = {}) {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return null;
+  return qPayerToolSales.all(payer, slug, fromMs, toMs, Math.min(Math.max(limit, 1), 50)).map((r) => ({
+    ts: r.ts, priceUsd: Number(r.price_usd) || null, network: r.network || null, tx: r.tx || null, via: r.via || null,
   }));
 }
 

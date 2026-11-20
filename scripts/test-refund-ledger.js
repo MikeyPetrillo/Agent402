@@ -47,6 +47,29 @@ __resetRefunds();
   ok(!odd.endsWith("|x|y") && /^P\|s\|\d+\|[0-9a-f-]{36}$/.test(odd), "a request id outside the server's alphabet is not used (a fresh one stands in)");
 }
 
+// 2b. Every caller that books a debt on a request passes that request's id,
+//     so a debt with no settle tx is keyed to it (a missing id is a fresh key
+//     per detection: one request detected twice would book two debts). Read
+//     from the source: each recordRefundOwed({ ... }) call names requestId.
+{
+  const spansOf = (src) => {
+    const out = [];
+    for (let at = src.indexOf("recordRefundOwed({"); at >= 0; at = src.indexOf("recordRefundOwed({", at + 1)) {
+      let depth = 0, i = at + "recordRefundOwed(".length;
+      for (; i < src.length; i++) { if (src[i] === "{") depth++; else if (src[i] === "}" && --depth === 0) break; }
+      out.push(src.slice(at, i + 1));
+    }
+    return out;
+  };
+  const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+  for (const [file, want] of [["src/server.js", 5], ["src/mcp-http.js", 1]]) {
+    const spans = spansOf(read(file));
+    const missing = spans.filter((sp) => !/\brequestId\b/.test(sp));
+    ok(spans.length >= want && missing.length === 0, `${file}: every debt booking passes its request id (${spans.length} bookings${missing.length ? `; missing in: ${missing.map((m) => m.replace(/\s+/g, " ").slice(0, 70)).join(" | ")}` : ""})`);
+  }
+  ok(spansOf("recordRefundOwed({ slug, tx: null });").filter((sp) => !/\brequestId\b/.test(sp)).length === 1, "control: a booking without a request id is caught");
+}
+
 // 3. Addresses are stored verbatim - case-folding merges distinct buyers on
 //    base58/base32 rails and misdirects a refund.
 {

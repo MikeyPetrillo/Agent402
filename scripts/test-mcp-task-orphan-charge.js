@@ -14,7 +14,16 @@
 //   d. a sale of another tool, by another wallet, or from before the run:
 //      not this run's (b's words);
 //   e. the payer is never on the wire, and an EVM payer is stored as the
-//      ledger books it (lower case) while a base32 one is kept as given.
+//      ledger books it (lower case) while a base32 one is kept as given;
+//   f. a sale that cannot be tied to this run claims neither and books
+//      nothing: another run of the same tool by the same wallet overlaps it
+//      (its delivered sale is not this run's), or two sales fall in the window;
+//   g. a store told the path its runs are sold on (the connector's "mcp")
+//      reads only sales booked on that path, so a direct retry is not the run's;
+//   h. a sale with no transaction is booked under the run's own key, so two
+//      sweeps of one run book one debt;
+//   i. the connector labels a task with the wallet an MPP evm credential
+//      names, and nothing for any other credential.
 // Real sales ledger (SQLite, a file of this run's own), real file task store.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
@@ -106,6 +115,88 @@ ok(reworded === 3, `the sweep read the sales ledger for every orphan with a paye
   await second.orphansChecked?.();
   const r = second.get(rec.taskId);
   ok(r?.status === "failed" && !/not charged/i.test(r.statusMessage) && /restart/.test(r.statusMessage), "a ledger that cannot be read leaves the words claiming neither");
+}
+
+// f. a sibling run of the same tool by the same wallet: its delivered sale
+// is not this run's, so the orphan claims neither and nothing is booked.
+{
+  const dirF = join(TMP, "f");
+  const PAYER_F = PAYER.replace("5A1e", "5AF1");
+  const TX_F = "0x" + "cd".repeat(32);
+  const first = createTaskStore({ dir: dirF, bootId: "boot-fa", log: quiet });
+  const recA = first.create({ slug: "research", payer: PAYER_F });
+  first.complete(recA.taskId, { content: [{ type: "text", text: "done" }] });
+  ledger.recordSale({ slug: "research", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: PAYER_F, tx: TX_F, wire: "x402" });
+  await ledger.salesLedgerFlush?.();
+  const recB = first.create({ slug: "research", payer: PAYER_F });
+  const bookedF = [];
+  const logs = [];
+  const second = createTaskStore({ dir: dirF, bootId: "boot-fb", log: (l) => logs.push(l), onChargedFailure: (x) => bookedF.push(x) });
+  await second.orphansChecked?.();
+  const r = second.get(recB.taskId);
+  ok(second.get(recA.taskId)?.status === "completed", "f. control: the sibling run completed");
+  ok(r?.status === "failed" && !/settled before the restart/.test(r.statusMessage) && !/not charged/i.test(r.statusMessage) && /\/api\/refunds\/lookup\?tx=/.test(r.statusMessage), `f. an orphan beside a sibling run of the same tool and wallet claims neither (${String(r?.statusMessage).slice(0, 120)})`);
+  ok(bookedF.length === 0, `f. ...and the sibling's delivered sale is not booked as owed (${JSON.stringify(bookedF)})`);
+  ok(logs.some((l) => /cannot be tied to the run/.test(l)), "f. ...and the sweep logs it for a human");
+}
+// f2. two sales of the tool to the wallet in the run's window: which one is
+// the run's cannot be told, so neither claim and nothing booked.
+{
+  const dirF2 = join(TMP, "f2");
+  const PAYER_F2 = PAYER.replace("5A1e", "5AF2");
+  const first = createTaskStore({ dir: dirF2, bootId: "boot-f2a", log: quiet });
+  const rec = first.create({ slug: "research", payer: PAYER_F2 });
+  ledger.recordSale({ slug: "research", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: PAYER_F2, tx: "0x" + "e1".repeat(32), wire: "x402" });
+  ledger.recordSale({ slug: "research", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: PAYER_F2, tx: "0x" + "e2".repeat(32), wire: "x402" });
+  await ledger.salesLedgerFlush?.();
+  const bookedF2 = [];
+  const second = createTaskStore({ dir: dirF2, bootId: "boot-f2b", log: quiet, onChargedFailure: (x) => bookedF2.push(x) });
+  await second.orphansChecked?.();
+  const r = second.get(rec.taskId);
+  ok(r?.status === "failed" && !/settled before the restart/.test(r.statusMessage) && !/not charged/i.test(r.statusMessage) && bookedF2.length === 0, `f2. two sales in the window: neither claim, nothing booked (${bookedF2.length})`);
+}
+// g. a store whose runs are sold on the connector's path reads only those sales.
+{
+  const dirG = join(TMP, "g");
+  const PAYER_G = PAYER.replace("5A1e", "5A61");
+  const TX_G = "0x" + "a7".repeat(32);
+  const first = createTaskStore({ dir: dirG, bootId: "boot-ga", log: quiet, saleVia: "mcp" });
+  const recHttp = first.create({ slug: "research", payer: PAYER_G });
+  ledger.recordSale({ slug: "research", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: PAYER_G, tx: "0x" + "a6".repeat(32), wire: "x402", via: "http" });
+  await ledger.salesLedgerFlush?.();
+  const bookedG = [];
+  const second = createTaskStore({ dir: dirG, bootId: "boot-gb", log: quiet, saleVia: "mcp", onChargedFailure: (x) => bookedG.push(x) });
+  await second.orphansChecked?.();
+  const r = second.get(recHttp.taskId);
+  ok(r?.status === "failed" && /You were not charged/.test(r.statusMessage) && bookedG.length === 0, `g. a direct (http) sale of the tool is not the connector run's (${String(r?.statusMessage).slice(0, 80)})`);
+  const dirG2 = join(TMP, "g2");
+  const PAYER_G2 = PAYER.replace("5A1e", "5A62");
+  const third = createTaskStore({ dir: dirG2, bootId: "boot-g2a", log: quiet, saleVia: "mcp" });
+  const recMcp = third.create({ slug: "research", payer: PAYER_G2 });
+  ledger.recordSale({ slug: "research", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: PAYER_G2, tx: TX_G, wire: "mpp", via: "mcp" });
+  await ledger.salesLedgerFlush?.();
+  const fourth = createTaskStore({ dir: dirG2, bootId: "boot-g2b", log: quiet, saleVia: "mcp", onChargedFailure: (x) => bookedG.push(x) });
+  await fourth.orphansChecked?.();
+  const r2 = fourth.get(recMcp.taskId);
+  ok(r2?.statusMessage.includes(TX_G) && bookedG.length === 1 && bookedG[0].receipt.transaction === TX_G, "g. control: a sale booked on the connector's path is the run's");
+}
+// h. a sale with no transaction is booked under the run's own key.
+{
+  const dirH = join(TMP, "h");
+  const first = createTaskStore({ dir: dirH, bootId: "boot-ha", log: quiet });
+  const rec = first.create({ slug: "research", payer: PAYER });
+  const bookedH = [];
+  const second = createTaskStore({ dir: dirH, bootId: "boot-hb", log: quiet, chargeOf: () => ({ tx: null, network: "eip155:8453", priceUsd: 0.5 }), onChargedFailure: (x) => bookedH.push(x) });
+  await second.orphansChecked?.();
+  ok(bookedH.length === 1 && bookedH[0].requestId === `task-${rec.taskId}`, `h. a tx-less sale is booked under the run's key (${bookedH[0]?.requestId})`);
+}
+// i. the connector's task label: the wallet an MPP evm credential names.
+{
+  const { evmPayerOfCredential } = await import("../src/mcp-http.js");
+  const cred = (c) => `Payment ${Buffer.from(JSON.stringify(c)).toString("base64url")}`;
+  ok(evmPayerOfCredential(cred({ challenge: { method: "evm" }, payload: { from: PAYER } })) === PAYER, "i. an MPP evm credential labels the task with its signed from");
+  ok(evmPayerOfCredential(cred({ challenge: { method: "tempo" }, payload: { from: PAYER } })) === null, "i. a Tempo credential labels nothing");
+  ok(evmPayerOfCredential("Payment !!!") === null && evmPayerOfCredential("") === null && evmPayerOfCredential(undefined) === null, "i. garbage labels nothing");
 }
 
 try { rmSync(TMP, { recursive: true, force: true }); } catch { /* temp */ }

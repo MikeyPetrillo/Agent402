@@ -166,7 +166,16 @@ try {
     const v = await verifySignedReceipt(g1.result?.headers?.["agent402-receipt"] || "", { keys, body: typeof g1.result?.body === "object" ? JSON.stringify(g1.result.body) : undefined });
     ok(v.valid && v.record.settlement && v.record.replay === false, `the run's signed receipt is kept with the result and verifies against it (${v.reason})`);
   }
-  ok(!("owner" in g1) && !("pid" in g1), "the job document exposes no owner or process id");
+  ok(!("owner" in g1) && !("pid" in g1) && !("payer" in g1), "the job document exposes no owner, process id or payer");
+  // The record keeps the paying wallet (never on the wire), so a run a restart
+  // cut off is read against the sales ledger (src/mcp-tasks.js).
+  {
+    const { readFileSync, readdirSync } = await import("node:fs");
+    const dir = join(TMP, "tasks", "async-jobs");
+    let stored = null;
+    try { stored = JSON.parse(readFileSync(join(dir, `${j1.jobId}.json`), "utf8")); } catch { stored = { files: (() => { try { return readdirSync(dir); } catch { return []; } })() }; }
+    ok(stored?.payer === wallet(1).toLowerCase(), `the job record keeps the paying wallet the credential names (${JSON.stringify(stored?.payer ?? stored)})`);
+  }
 
   // 1b. A poller written before the progress fields (waits for status
   // "completed" or "failed", reads only status/result) still finishes.

@@ -66,10 +66,13 @@ Loaded when a connector or front-door file is read.
   and points at /llms-full.txt, which keeps every line whole. `scripts/test-front-door.js` boot 3 runs
   production's switches plus the batched and channel blocks under the 16,384-byte bound.
 - **Orphaned tasks and jobs:** an orphaned task or job is worded from a sales-ledger read of its
-  payer and slug since the run began (charged, not charged, or neither claim when unread), and a
-  found sale is booked once through `onChargedFailure` (`src/mcp-tasks.js`; the payer rides on the
-  record from `evmPayerOfCredential` in `src/mcp-http.js` and `payerFromRequest` in
-  `src/async-jobs.js`; `scripts/test-mcp-task-orphan-charge.js`).
+  payer and slug since the run began (a sale found, none found, or neither claim when unread), and a
+  found sale is booked once through `onChargedFailure`, keyed `task-<taskId>` when it has no tx
+  (`src/mcp-tasks.js`; the payer rides on the record from `evmPayerOfCredential` in
+  `src/mcp-http.js` and `payerFromRequest` in `src/async-jobs.js`). A sale counts only when it can
+  be tied to the run: exactly one in the window, booked on the store's `saleVia` path (`mcp` for
+  the connector's tasks), and no other run of the tool by that wallet overlapping; otherwise the
+  words claim neither and nothing is booked (`scripts/test-mcp-task-orphan-charge.js`).
 - **Shareable answers:** `src/answer-share.js`, off unless `ANSWER_SHARE=on` (exactly); then web.answer takes
   `share=true` and writes a public page after a settled 200 (`/answers/:id`, record at `/answers/:id.json`);
   off, no surface offers it and existing pages serve until expiry. `ANSWER_SHARE_TTL_DAYS` (default 30)

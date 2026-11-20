@@ -497,10 +497,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   const tasks = mcpTasksEnabled() && mppLoopback
     ? (taskStore || (sharedTaskStore ??= createTaskStore({
       dir: taskStoreDir,
+      // The loopback books its sale on the "mcp" path (src/sale-path.js), so
+      // an interrupted run reads only those sales.
+      saleVia: "mcp",
       // A settled 200 whose result we could not retain is the one charged-but-
       // undelivered case this path can produce. The refund ledger demands
       // POSITIVE proof of a charge, so an unreadable receipt records nothing.
-      onChargedFailure: async ({ slug, receipt, priceUsd }) => {
+      // `requestId` keys a debt that has no settle transaction to the run.
+      onChargedFailure: async ({ slug, receipt, priceUsd, requestId = null }) => {
         try {
           const { recordRefundOwed, receiptProvesCharge } = await import("./refund-ledger.js");
           if (!receiptProvesCharge(receipt)) return;
@@ -511,6 +515,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             priceUsd,
             tx: receipt?.transaction ?? receipt?.tx ?? null,
             httpStatus: 500,
+            requestId,
           });
         } catch { /* recording a debt must never break the serving path */ }
       },
