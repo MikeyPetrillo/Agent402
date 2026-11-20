@@ -102,7 +102,7 @@ ok(monitorsPage("https://agent402.tools", { product: "insider-monitor", target: 
 // only renders, and the page module never touches the checkout creator.
 const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 const handler = serverSrc.match(/app\.get\("\/monitors",[\s\S]*?\n\}\);/)[0];
-ok(/monitorsPage\(BASE_URL, prefill\)/.test(handler), "the /monitors route renders the page with the query prefill");
+ok(/monitorsPage\(BASE_URL, prefill, \{ wallet: Boolean\(_mppSubs\) \}\)/.test(handler), "the /monitors route renders the page with the query prefill");
 ok(!/createCheckout|subscribe|stripe/i.test(handler), "the /monitors GET never creates a checkout session");
 const pageSrc = readFileSync(new URL("../src/monitors-page.js", import.meta.url), "utf8");
 ok(!/createCheckout|new Stripe/.test(pageSrc), "the storefront page module never reaches Stripe");

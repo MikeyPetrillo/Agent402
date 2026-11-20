@@ -5399,7 +5399,7 @@ app.get("/monitors", (req, res) => {
   const product = String(req.query.product || "").slice(0, 64);
   const target = String(req.query.target || "").slice(0, 200);
   const prefill = product ? { product, target } : null;
-  res.set("Cache-Control", prefill ? "no-store" : "public, max-age=120").type("html").send(monitorsPage(BASE_URL, prefill));
+  res.set("Cache-Control", prefill ? "no-store" : "public, max-age=120").type("html").send(monitorsPage(BASE_URL, prefill, { wallet: Boolean(_mppSubs) }));
 });
 app.get("/monitors/thanks", (req, res) => res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(monitorThanksPage(String(req.query.session || ""), BASE_URL)));
 // Programmatic SEO landing pages for the SEC-filing products: one free,

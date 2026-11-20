@@ -3,7 +3,7 @@
 // shared ledger shell (2026-08-22 redesign); shares REPORTS_CSS with the
 // one-shot reports pages. External JS (site CSP drops inline script).
 import { MONITOR_PRODUCTS, RENEWAL_TERMS, CANCEL_EFFECT } from "./stripe-subscriptions.js";
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { REPORTS_CSS, cardField, cardError, NO_SCRIPT_CHECKOUT } from "./human-reports-page.js";
 import { MAX_FULL_PER_SUB_30D, MIN_FULL_GAP_MS } from "./monitor-scheduler.js";
 
@@ -30,7 +30,9 @@ const MONITORS_CSS = `
 // email carries must never be able to start a checkout on someone's behalf, so
 // nothing here touches Stripe. The target is escaped into the value attribute,
 // and only the matching product's field is filled.
-export function monitorsPage(baseUrl = "https://agent402.tools", prefill = null) {
+// `wallet` is whether the wallet path (MPP tempo/subscription, the routes under
+// /api/mpp/monitors) is mounted on this server: the page offers it only then.
+export function monitorsPage(baseUrl = "https://agent402.tools", prefill = null, { wallet = false } = {}) {
   // DERIVED, never typed: this is the meta + og description. It said "$3 a
   // month" for a full day after the 2026-08-23 repricing moved every monitor to
   // $5, because the prose that quotes a price is not where prices live.
@@ -49,20 +51,30 @@ export function monitorsPage(baseUrl = "https://agent402.tools", prefill = null)
       <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center" data-sub="${esc(key)}">Subscribe →</button></form>
       <p class="renew">${esc(RENEWAL_TERMS)} <a href="/terms">Terms</a></p>
     </div>`).join("");
+  const firstKey = Object.keys(MONITOR_PRODUCTS)[0];
+  const first = MONITOR_PRODUCTS[firstKey];
+  const exampleTarget = /e\.g\. ([^,\s]+)/.exec(first.inputLabel)?.[1] || "example";
+  const walletSection = wallet ? `
+  <section class="manage" id="wallet">
+    <h2>Subscribe with a wallet over MPP</h2>
+    <p>Agents and wallets subscribe to the same monitors from a Tempo account, at the same monthly price. The first month settles on-chain when you subscribe; each later month is pulled once, up to the amount and term you sign. Cancel any time with the manage token the subscription returns.</p>
+    ${codeBlock(`curl -i -X POST ${baseUrl}/api/mpp/monitors/subscribe \\\n  -H 'content-type: application/json' \\\n  -d '${JSON.stringify({ product: firstKey, target: exampleTarget, email: "you@example.com" })}'`, { name: "the subscribe request", size: "xs" })}
+    <p>The first answer is a 402 with a tempo/subscription challenge: sign it with an MPP client and send the same request with the credential. Product names: ${Object.keys(MONITOR_PRODUCTS).map((k) => `<code>${esc(k)}</code>`).join(", ")}. Prices, the billing period and each product's input: <a href="/api/mpp/monitors" style="color:var(--ink);">/api/mpp/monitors</a>.</p>
+  </section>` : "";
   const body = `
 <div class="wrap">
   <section class="hero">
     <div class="eyebrow eyebrow-tags"><span>Recurring monitoring</span><span>cancel anytime</span></div>
     <h1>Set it once. <em>We watch it for you.</em></h1>
-    <p class="lede">Standing reports that re-run on their own and email you when something changes. <b>No account</b> beyond your card, self-serve cancel any time.</p>
+    <p class="lede">Standing reports that re-run on their own and email you when something changes. <b>No account</b> beyond your card${wallet ? " or wallet" : ""}, self-serve cancel any time.</p>
   </section>
   <section>
     <h2 class="sr-section">Every monitor you can subscribe to</h2>
     ${NO_SCRIPT_CHECKOUT}
     <div class="products">${cards}</div>
     <p class="note">${esc(CAP_NOTE)}</p>
-    <p class="note">Monthly subscription · card via Stripe · cancel anytime from the link in your email · one-off reports at <a href="/reports" style="color:var(--ink);">/reports</a></p>
-  </section>
+    <p class="note">Monthly subscription · card via Stripe${wallet ? ` or a wallet over MPP (<a href="#wallet" style="color:var(--ink);">subscribe with a wallet</a>)` : ""} · cancel anytime from the link in your email · one-off reports at <a href="/reports" style="color:var(--ink);">/reports</a></p>
+  </section>${walletSection}
   <section class="manage" id="manage">
     <h2>Already subscribed? Manage or cancel</h2>
     <p>Enter the email you used at checkout. If it has an active card subscription, we email you a new link to change your card or cancel.</p>
