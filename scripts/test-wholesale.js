@@ -230,7 +230,7 @@ ok(WHOLESALE_FAMILIES.every((f) => ["public-domain", "cc-by-4.0", "own-computati
     const missing = WHOLESALE_FAMILIES.filter((f) => !lower.includes(f.title.toLowerCase())).map((f) => f.id);
     ok(missing.length === 0, `${label} names every family by its title${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
     ok(/`errorCode`/.test(text) && ["invalid_input", "upstream_error"].every((c) => text.includes(`\`${c}\``)), `${label} announces the errorCode field on tool error answers`);
-    ok(/other than a 402/.test(text) && /402[^.]*x402 and MPP wire formats/.test(text) && !/every tool error answer carries/i.test(text), `${label} claims errorCode only where it is served, and says the 402 carries none`);
+    ok(/other than a 402/.test(text) && /\b402\b[^.]*x402 and MPP wire formats and carries no `?errorCode`?/.test(text) && !/every tool error answer carries/i.test(text), `${label} claims errorCode only where it is served, and says the 402 carries none`);
   }
 }
 
