@@ -524,11 +524,16 @@ const orphanId = orphan.result.taskId;
 ok(JSON.parse(readFileSync(join(STORE_DIR, `${orphanId}.json`), "utf8")).status === "working", "the orphan-to-be is on disk as working");
 
 // Simulated restart: a NEW store over the SAME directory is a new boot.
-const rebooted = createTaskStore({ dir: STORE_DIR, bootId: "a-different-process", log: () => {} });
+// The sales ledger holds no sale for this run (the loopback never settled).
+const rebooted = createTaskStore({ dir: STORE_DIR, bootId: "a-different-process", log: () => {}, chargeOf: () => null });
+const sweptNow = rebooted.get(orphanId);
+ok(sweptNow && sweptNow.status === "failed", "after a restart, a run orphaned by the old process is resolved as FAILED (never a handle that polls forever)");
+await rebooted.orphansChecked();
 const swept = rebooted.get(orphanId);
-ok(swept && swept.status === "failed", "after a restart, a run orphaned by the old process is resolved as FAILED (never a handle that polls forever)");
 ok(/restart/i.test(swept.statusMessage || ""), "the record says plainly that a restart interrupted it");
-ok(/not charged/i.test(swept.statusMessage || ""), "and that the buyer was not charged (the run never delivered a 200, so settlement was cancelled)");
+// With the paying wallet on the record the sales ledger was read: no sale,
+// not charged. Without it neither claim is made (test-mcp-task-orphan-charge.js).
+ok(swept.payer ? /not charged/i.test(swept.statusMessage || "") : !/not charged/i.test(swept.statusMessage || "") && /refunds\/lookup/.test(swept.statusMessage || ""), `and says it was not charged only when the sales ledger was read for its payment (payer recorded: ${Boolean(swept.payer)})`);
 const doneRec = rebooted.get(handle.taskId);
 ok(doneRec && doneRec.status === "completed" && doneRec.result, "a COMPLETED task and its result survive the restart intact");
 
@@ -702,7 +707,7 @@ rmSync(TMP, { recursive: true, force: true });
 {
   const { readFileSync: rf } = await import("node:fs");
   const src = rf(new URL("../src/mcp-tasks.js", import.meta.url), "utf8");
-  ok(/ORPHAN_MESSAGE = `[^`]*not charged[^`]*\$\{PUSH_EXCEPTION\}/.test(src) && /ORPHAN_ERROR[^\n]*not charged\$\{PUSH_EXCEPTION\}/.test(src), "the restart-orphan messages carry the Tempo push exception");
+  ok(/ORPHAN_MESSAGE = `[^`]*not charged[^`]*\$\{PUSH_EXCEPTION\}/.test(src) && /ORPHAN_ERROR[^\n]*not charged\$\{PUSH_EXCEPTION\}/.test(src) && /ORPHAN_UNREAD_MESSAGE = `[^`]*\$\{PUSH_EXCEPTION\}/.test(src), "the restart-orphan messages carry the Tempo push exception");
 }
 
 console.log(`\ntest-mcp-tasks: ${pass} passed, ${fail} failed`);

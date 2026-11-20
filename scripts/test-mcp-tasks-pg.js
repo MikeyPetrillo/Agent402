@@ -22,11 +22,15 @@ const DIR = join(TMP, "mcp-tasks");
 const COLLECTION = basename(DIR);
 const now = Date.now();
 const iso = new Date(now).toISOString();
+// The orphan's paying wallet, and a sales ledger that holds no sale for it
+// (the sweep reads it to word the orphan: src/mcp-tasks.js orphanSale).
+const PAYER = "0x5a1ec0ffee0000000000000000000000000beef1";
+const noSale = () => null;
 const fileRec = (over) => ({ taskId: newTaskId(), status: "working", statusMessage: "Running research.", createdAt: iso, lastUpdatedAt: iso, createdAtMs: now, ttlMs: 3_600_000, pollIntervalMs: 5000, slug: "research", owner: "a-boot-before-the-database", pid: 1, ...over });
 
 try {
   // ---- 1. the directory is imported once ----------------------------------
-  const orphan = fileRec({});
+  const orphan = fileRec({ payer: PAYER });
   const done = fileRec({ status: "completed", result: { content: [{ type: "text", text: "kept" }] } });
   const stale = fileRec({ createdAtMs: now - 7_200_000 }); // past its ttl: never imported
   rmSync(DIR, { recursive: true, force: true });
@@ -34,7 +38,7 @@ try {
   mkdirSync(DIR, { recursive: true });
   for (const r of [orphan, done, stale]) writeFileSync(join(DIR, `${r.taskId}.json`), JSON.stringify(r));
 
-  const s1 = createTaskStore({ dir: DIR, log: quiet });
+  const s1 = createTaskStore({ dir: DIR, log: quiet, chargeOf: noSale });
   ok(s1.backend === "pg", "with STATE_DATABASE_URL set the store is on the database");
   await s1.ready();
   const mark = await imports.done(COLLECTION);
@@ -62,7 +66,8 @@ try {
   ok(s1.activeCount() === 1 && s1.atCapacity() === false, "the synchronous capacity view counts this container's live run");
 
   // The new container of a deploy: a different boot id over the same directory.
-  const s2 = createTaskStore({ dir: DIR, bootId: "the-next-container", log: quiet });
+  const s2Charged = [];
+  const s2 = createTaskStore({ dir: DIR, bootId: "the-next-container", log: quiet, chargeOf: ({ payer }) => (payer === PAYER.replace("5a1e", "5a2e") ? { tx: "0x" + "cd".repeat(32), network: "eip155:8453", priceUsd: 0.5 } : null), onChargedFailure: (x) => s2Charged.push(x) });
   await s2.ready();
   const seen = await s2.get(rec.taskId);
   ok(seen?.status === "working", "a fresh instance (the other container) reads the working task from the row, NOT as an orphan: the owner's lease stands");
@@ -98,13 +103,17 @@ try {
   }
 
   // (b) an orphan is one whose owner's lease is gone: close the first store.
-  const live = await s1.create({ slug: "research" });
+  const live = await s1.create({ slug: "research", payer: PAYER });
+  // ... and one whose payment the sales ledger shows settled before the container died.
+  const paidLive = await s1.create({ slug: "research", payer: PAYER.replace("5a1e", "5a2e") });
   await s1.close();
   ok((await leases.holder(`${COLLECTION}:boot:${s1.bootId}`)) === null, "closing the store releases its lease");
   const r = await s2.sweep();
-  ok(r.orphaned === 1, `once the lease is gone the sweep resolves the dead container's working run (${JSON.stringify(r)})`);
+  ok(r.orphaned === 2, `once the lease is gone the sweep resolves the dead container's working runs (${JSON.stringify(r)})`);
   const dead = await s2.get(live.taskId);
-  ok(dead?.status === "failed" && /not charged/i.test(dead.statusMessage || ""), "...as failed and not charged: the paid loopback never delivered a 200");
+  ok(dead?.status === "failed" && /not charged/i.test(dead.statusMessage || ""), "...as failed and not charged when the sales ledger holds no sale for it");
+  const paidDead = await s2.get(paidLive.taskId);
+  ok(paidDead?.status === "failed" && /payment settled before the restart/.test(paidDead.statusMessage || "") && !/not charged/i.test(paidDead.statusMessage || "") && s2Charged.length === 1 && s2Charged[0].receipt?.success === true && s2Charged[0].receipt.transaction === "0x" + "cd".repeat(32), `...and as charged, booked once, when the sales ledger holds its sale (${String(paidDead?.statusMessage).slice(0, 90)}; ${s2Charged.length} booked)`);
   ok((await s2.get(rec.taskId))?.status === "completed", "a completed task survives the sweep");
 
   // (c) a settled 200 whose result cannot be retained records a refund debt.
