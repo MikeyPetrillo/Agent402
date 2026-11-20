@@ -50,3 +50,40 @@ export function jobsDuring(fromMs, toMs = Date.now()) {
   }
   return names;
 }
+
+// SYNCHRONOUS TURNS, named. A stall inside a scheduled callback (a crawl
+// slice, the route-index shadow build) named no job when the callback is not a
+// leased loop, and a job name says a loop ran, not which turn held the thread.
+// contained() (src/contained-turn.js) times the synchronous part of each turn
+// it runs, and a few long synchronous stretches inside one (spans) are timed
+// the same way; those of TURN_NOTE_MS or more are kept in a short ring, so a
+// [loop-lag] line can say which turn, and for how long, filled its window.
+// One performance.now() pair per turn, never throws.
+export const TURN_NOTE_MS = 20;
+const TURN_RING = 64;
+const turns = []; // [{ name, at, ms }], at = epoch start, oldest first
+/** Record one synchronous stretch: `name` ran `ms` from epoch `at`. */
+export function noteTurn(name, at, ms) {
+  const d = Number(ms);
+  if (!(d >= TURN_NOTE_MS)) return;
+  turns.push({ name: String(name || "turn").slice(0, 80), at: Number(at) || Date.now(), ms: Math.round(d) });
+  if (turns.length > TURN_RING) turns.shift();
+}
+/** Time fn's synchronous run as the span `name` (its value, or its throw, passes through). */
+export function timeSpan(name, fn) {
+  const at = Date.now(), t0 = performance.now();
+  try { return fn(); }
+  finally { try { noteTurn(name, at, performance.now() - t0); } catch { /* timing is best-effort */ } }
+}
+/**
+ * The longest turns and spans that overlap [fromMs, toMs], longest first, as
+ * `name ms` strings, at most `max`.
+ */
+export function turnsDuring(fromMs, toMs = Date.now(), max = 3) {
+  const hits = [];
+  for (const t of turns) if (t.at + t.ms >= fromMs && t.at <= toMs) hits.push(t);
+  hits.sort((a, b) => b.ms - a.ms);
+  return hits.slice(0, max).map((t) => `${t.name} ${t.ms}ms`);
+}
+/** Test hook: forget the recorded turns. */
+export function _resetTurnsForTest() { turns.length = 0; }

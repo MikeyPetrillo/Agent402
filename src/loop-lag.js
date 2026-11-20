@@ -20,7 +20,7 @@
 // for N ms and see how late it actually fires. Lateness IS the lag.
 
 import { monitorEventLoopDelay, PerformanceObserver, constants as perfConstants } from "node:perf_hooks";
-import { jobsDuring } from "./active-jobs.js";
+import { jobsDuring, turnsDuring } from "./active-jobs.js";
 
 const TICK_MS = Number(process.env.LOOP_LAG_TICK_MS) || 500;
 const WARN_MS = Number(process.env.LOOP_LAG_WARN_MS) || 1000;
@@ -54,8 +54,8 @@ export function stallsInWindow(windowMs = 3600_000, now = Date.now()) {
 const STALL_RING = 50;
 const stallRing = [];
 /** Record one stall (the monitor calls this; tests feed it directly). */
-export function recordStall({ at = Date.now(), ms, gcMs = 0, inFlight = [], jobs = [] } = {}) {
-  const row = { at: new Date(at).toISOString(), atMs: at, ms: Math.round(Number(ms) || 0), gcMs: Math.round(Number(gcMs) || 0), inFlight: [...inFlight].slice(0, 5).map(String), jobs: [...jobs].slice(0, 5).map(String) };
+export function recordStall({ at = Date.now(), ms, gcMs = 0, inFlight = [], jobs = [], turns = [] } = {}) {
+  const row = { at: new Date(at).toISOString(), atMs: at, ms: Math.round(Number(ms) || 0), gcMs: Math.round(Number(gcMs) || 0), inFlight: [...inFlight].slice(0, 5).map(String), jobs: [...jobs].slice(0, 5).map(String), turns: [...turns].slice(0, 3).map(String) };
   row.mostlyGc = gcDominated(row);
   stallTimes.push([at, row.ms]); if (stallTimes.length > 1000) stallTimes.shift();
   stallRing.push(row); if (stallRing.length > STALL_RING) stallRing.shift();
@@ -73,7 +73,7 @@ export function stallOverlapping(fromMs, toMs) {
 }
 /** The last stalls, newest first (copies, without the internal epoch field). */
 export function recentStalls() {
-  return stallRing.slice().reverse().map(({ atMs, ...r }) => ({ ...r, inFlight: [...r.inFlight], jobs: [...r.jobs] }));
+  return stallRing.slice().reverse().map(({ atMs, ...r }) => ({ ...r, inFlight: [...r.inFlight], jobs: [...r.jobs], turns: [...r.turns] }));
 }
 /**
  * ALERT_STALL_MS: one stall at least this long in the last hour degrades
@@ -227,13 +227,17 @@ export function startLoopLagMonitor({ tickMs = TICK_MS, warnMs = WARN_MS, statsM
       // failure by timestamp. The in-flight list names what was being served,
       // the jobs list the background work running (or ending) inside the
       // stall; the stall profiler (src/stall-profiler.js) names the code.
-      let inFlight = [], jobs = [], gcMs = 0;
+      // `turns` names the longest synchronous turns and spans timed inside the
+      // window (contained() callbacks, src/active-jobs.js), so a stall with no
+      // request and no leased job still says which turn held the thread.
+      let inFlight = [], jobs = [], turns = [], gcMs = 0;
       try { const c = stallContext ? stallContext({ fromMs: now - late - 50 }) : null; if (Array.isArray(c)) inFlight = c; } catch { /* context is best-effort */ }
       try { jobs = jobsDuring(now - late - 50, now); } catch { /* context is best-effort */ }
+      try { turns = turnsDuring(now - late - 50, now); } catch { /* context is best-effort */ }
       let gc = "";
       try { gc = gcPhrase(late, now); gcMs = gcDuring(now - late - 50, now).ms; } catch { /* attribution is best-effort */ }
-      try { recordStall({ at: now, ms: late, gcMs, inFlight, jobs }); } catch { stallTimes.push([now, Math.round(late)]); }
-      const ctx = `${inFlight.length ? ` in-flight: ${inFlight.join(", ")}` : ""}${jobs.length ? ` jobs: ${jobs.join(", ")}` : ""}`;
+      try { recordStall({ at: now, ms: late, gcMs, inFlight, jobs, turns }); } catch { stallTimes.push([now, Math.round(late)]); }
+      const ctx = `${inFlight.length ? ` in-flight: ${inFlight.join(", ")}` : ""}${jobs.length ? ` jobs: ${jobs.join(", ")}` : ""}${turns.length ? ` turns: ${turns.join(", ")}` : ""}`;
       log(`[loop-lag] event loop blocked ${Math.round(late)}ms (stall #${state.stalls})${gc}${gcDominated({ ms: late, gcMs }) ? " (mostly garbage collection)" : ""} - in-flight sockets can hit connect timeouts while this lasts${ctx}`);
     }
   }, tickMs);

@@ -324,6 +324,9 @@ export { sellerDocsUrlFor, SELLER_DOCS_URL_MAX, SELLER_DOCS_URL_LEGEND };
 import { timSortSteps } from "./timsort-steps.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
 import { contained } from "./contained-turn.js";
+import { noteTurn } from "./active-jobs.js";
+// A seller's host for a span name (bounded; the origin itself when it does not parse).
+const hostOfOriginForSpan = (origin) => { try { return new URL(origin).host.slice(0, 60); } catch { return String(origin || "").slice(0, 60); } };
 
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
@@ -6930,6 +6933,11 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // a manifest, because their openapi covered 2 of the 9 routes the Bazaar
     // had settled. Openapi metadata still wins per-route; Bazaar rows without
     // an openapi match pass through.
+    // The merge passes below run in one synchronous stretch per seller; it is
+    // timed as a span for the [loop-lag] line (src/active-jobs.js noteTurn),
+    // named with the seller's host, so a stall at a repeatable position in a
+    // crawl names the document it was reading.
+    const manifestPassAt = Date.now(), manifestPassT0 = performance.now();
     tools = mergeOpenapiIntoBazaar(tools, bazaarToolsByOrigin.get(originUrl) || [], {
       allRoutes: openapiRoutes || [],
     });
@@ -6951,6 +6959,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // Which routes the seller's own documents name; the rest must prove
     // themselves live (see stampDeclared / needsLiveProof).
     stampDeclared(tools, [...normaliseManifestTools(manifest, originUrl), ...(openapiRoutes || []), ...(openapiTools || [])]);
+    noteTurn(`crawl-manifest-passes ${hostOfOriginForSpan(originUrl)}`, manifestPassAt, performance.now() - manifestPassT0);
     // Keep what earlier crawls already learned, THEN spend the probe budget on
     // routes we still know nothing about.
     tools = carryForwardLearnedQuotes(tools, prev);
@@ -11496,6 +11505,8 @@ function routeIndexStartShadow() {
     // answering) and clears routeIdx.shadow, which gates every later rebuild:
     // left set, no rebuild would ever start again. contained() counts it.
     let stale = 0;
+    // The finish is unsliced: timed as its own span for the [loop-lag] line.
+    const finishAt = Date.now(), finishT0 = performance.now();
     try {
       if (shadowFinishFaultForTest) { const e = shadowFinishFaultForTest; shadowFinishFaultForTest = null; throw e; }
       // Entries the current index took from `pending` while the shadow was
@@ -11510,6 +11521,8 @@ function routeIndexStartShadow() {
     } catch (e) {
       if (routeIdx.shadow === shadow) routeIdx.shadow = null;
       throw e;
+    } finally {
+      noteTurn("route-index-shadow-finish", finishAt, performance.now() - finishT0);
     }
     routeIdx.postings = shadow.postings;
     routeIdx.indexed = shadow.indexed;
