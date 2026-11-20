@@ -288,6 +288,11 @@ try {
     await ok(cv.record.settlement && cv.record.settlement === settleRef && cv.record.slug && cv.record.priceUsd, `${wire}: rail ${cv.record.rail}, the settlement the wire's own receipt names`);
     const api = await (await fetch(`${rig.url}${RECEIPT_VERIFY_PATH}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ receipt, body: Buffer.from(body).toString("utf8") }) })).json();
     await ok(api.valid === true && api.checks.response === true, `${wire}: POST ${RECEIPT_VERIFY_PATH} agrees on the streamed bytes`);
+    // A one-piece paid tool answer on the same wire: signed, and on an EVM
+    // wire kept for the audit report (the keeper's finish listener rides a
+    // response that already carries the tool path's own).
+    const h = await rig.pay(w, HASH);
+    await ok(h.status === 200 && verifyReceipt(h.headers.get(RECEIPT_HEADER) || "", { keys: keyDoc.keys, responseBody: h.text }).valid, `${wire}: a paid ${HASH.path} answer carries a receipt that verifies (${h.status})`);
   }
   // Credits on the booted server: the header on a one-piece answer, the receipt line on a stream.
   {
