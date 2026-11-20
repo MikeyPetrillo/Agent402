@@ -201,10 +201,17 @@ export function storeIssuedReceipt(jws, record) {
  * The response signer's onSigned hook (src/server.js): keep the receipt when
  * the response finishes with a final 200, and only then. Node emits no
  * "finish" for a response whose connection closed first, so a receipt its
- * buyer never received is not kept. Never throws.
+ * buyer never received is not kept. A receipt the store would not keep (a
+ * rail no audit report reads, a payer that is not an EVM wallet) adds no
+ * listener. A kept one raises the response's listener bound by its own one,
+ * so a response that already carries Node's default ten does not log a
+ * listener-leak warning per paid answer. Never throws.
  */
 export function keepReceiptOnFinalOk(jws, record, _req, res, keep = storeIssuedReceipt) {
   try {
+    if (!issuedReceiptRow(jws, record)) return;
+    const bound = res.getMaxListeners?.();
+    if (Number.isFinite(bound) && bound > 0) res.setMaxListeners(bound + 1);
     res.once("finish", () => { try { if (res.statusCode === 200) keep(jws, record); } catch { /* bookkeeping only */ } });
   } catch { /* never break the answer */ }
 }

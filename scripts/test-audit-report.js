@@ -248,16 +248,41 @@ const full = await call(A, WIN);
   const kept = [];
   const keep = (j, r) => kept.push(r.id);
   const mk = () => Object.assign(new EventEmitter(), { statusCode: 200 });
-  const rec = (id) => ({ id });
-  const r1 = mk(); store.keepReceiptOnFinalOk("j", rec("one"), null, r1, keep);
+  const J = "aaa.bbb.ccc";
+  const rec = (id, more = {}) => ({ id, rail: "x402", payer: A, settlement: `0x${id}`, iat: new Date(T0).toISOString(), ...more });
+  const r1 = mk(); store.keepReceiptOnFinalOk(J, rec("one"), null, r1, keep);
   ok(kept.length === 0, "nothing is kept before the response finished");
   r1.emit("finish");
-  const r2 = mk(); store.keepReceiptOnFinalOk("j", rec("two"), null, r2, keep); r2.statusCode = 402; r2.emit("finish");
-  const r3 = mk(); store.keepReceiptOnFinalOk("j", rec("three"), null, r3, keep); r3.statusCode = 500; r3.emit("finish");
-  const r4 = mk(); store.keepReceiptOnFinalOk("j", rec("four"), null, r4, keep); r4.emit("close");
+  const r2 = mk(); store.keepReceiptOnFinalOk(J, rec("two"), null, r2, keep); r2.statusCode = 402; r2.emit("finish");
+  const r3 = mk(); store.keepReceiptOnFinalOk(J, rec("three"), null, r3, keep); r3.statusCode = 500; r3.emit("finish");
+  const r4 = mk(); store.keepReceiptOnFinalOk(J, rec("four"), null, r4, keep); r4.emit("close");
   eq(kept, ["one"], "kept on a final 200 finish only: a final 402 or 500 keeps nothing, nor a connection closed before the finish");
   r1.emit("finish");
   eq(kept, ["one"], "kept once per response");
+
+  // A receipt the store never keeps (a Solana payer, a card rail) adds no
+  // listener at all; one it keeps adds its own without tripping Node's
+  // listener-leak warning on a response that already carries the default ten.
+  const warnings = [];
+  const onWarn = (w) => { if (w?.name === "MaxListenersExceededWarning") warnings.push(String(w.message).slice(0, 120)); };
+  process.on("warning", onWarn);
+  try {
+    const busy = () => { const r = mk(); for (let i = 0; i < r.getMaxListeners(); i++) r.on("finish", () => {}); return r; };
+    const sol = busy(); const before = sol.listenerCount("finish");
+    store.keepReceiptOnFinalOk(J, rec("sol", { payer: SOL }), null, sol, keep);
+    const card = busy();
+    store.keepReceiptOnFinalOk(J, rec("card", { rail: "mpp-stripe", payer: null }), null, card, keep);
+    ok(sol.listenerCount("finish") === before && card.listenerCount("finish") === before, `a receipt the store never keeps adds no finish listener (${sol.listenerCount("finish")}, ${card.listenerCount("finish")} of ${before})`);
+    const evm = busy();
+    store.keepReceiptOnFinalOk(J, rec("evm"), null, evm, keep);
+    await new Promise((r) => setImmediate(r));
+    ok(evm.listenerCount("finish") === before + 1 && warnings.length === 0, `a kept receipt's listener on a response with ten already raises no listener-leak warning (${warnings.join(" | ") || "none"})`);
+    evm.emit("finish"); sol.emit("finish"); card.emit("finish");
+    eq(kept, ["one", "evm"], "the kept one is still kept on its final 200; the never-kept ones are not");
+    const unlimited = mk(); unlimited.setMaxListeners(0);
+    store.keepReceiptOnFinalOk(J, rec("u"), null, unlimited, keep);
+    ok(unlimited.getMaxListeners() === 0 && unlimited.listenerCount("finish") === 1, "a response with no listener bound (0) stays unbounded");
+  } finally { process.off("warning", onWarn); }
 
   const before = (await store.receiptsForSettlements(A, ["0xold"])).get("0xold")?.length || 0;
   const s1 = await store.sweepIssuedReceipts({ now: T0 + 10 * DAY, days: 100, maxRows: 1_000_000 });
