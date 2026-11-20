@@ -48,7 +48,7 @@ every setting is listed in [configuration.md](configuration.md). To report a vul
 | CSRF | No buyer state rides on a cookie. An operator write carrying the session cookie needs `Sec-Fetch-Site: same-origin` or an Origin equal to the configured base URL; a header-token caller needs neither. | `scripts/test-operator-auth.js` |
 | CORS | API surfaces answer with a wildcard origin and no credentials; operator and probe routes get no CORS headers (`src/cors.js`). | `scripts/test-cors.js`, `scripts/test-security-headers.js` |
 | Security headers | Set per surface class (pages, API, binary answers, errors); `X-Powered-By` is removed. | `scripts/test-security-header-surfaces.js`, `scripts/test-security-headers.js` |
-| Rate limits | Unpaid surfaces are limited (card checkout, the free MCP tier, operator login, proof-of-work challenges; `src/rate-limit.js`); paid calls are never limited. | `scripts/test-checkout-limiter.js`, `scripts/test-mcp-limits.js`, `scripts/test-operator-auth.js`, `scripts/test-pow-challenge-envelope.js` |
+| Rate limits | Unpaid surfaces are limited (card checkout, the free MCP tier, operator login, proof-of-work challenges; `src/rate-limit.js`). Paid calls carry no per-caller rate limit; capacity limits can refuse one, among them the onchain-sql in-flight cap (429 with Retry-After, `src/tools/cdp-kit.js`) and a daily upstream ceiling (503, `src/upstream-hard-caps.js`). | `scripts/test-checkout-limiter.js`, `scripts/test-mcp-limits.js`, `scripts/test-operator-auth.js`, `scripts/test-pow-challenge-envelope.js`, `scripts/test-cdp-kit.js`, `scripts/test-upstream-hard-caps.js` |
 
 ## Before launch
 

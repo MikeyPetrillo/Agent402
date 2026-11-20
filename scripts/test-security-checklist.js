@@ -104,11 +104,16 @@ const CHECKLIST = [
     ["scripts/test-security-header-surfaces.js", "x-content-type-options"],
     ["scripts/test-security-headers.js", "X-Powered-By"],
   ] },
-  { area: "web", item: "rate limits on unpaid surfaces (checkout, MCP free tier, operator login, proof-of-work); paid calls are never limited", guards: [
+  // Paid calls carry no per-caller rate limit, but capacity limits do refuse
+  // them: the onchain-sql in-flight cap answers 429, a daily upstream ceiling
+  // answers 503. The item names both, with the guards that hold them.
+  { area: "web", item: "rate limits on unpaid surfaces (checkout, MCP free tier, operator login, proof-of-work); no per-caller rate limit on paid calls, and the capacity limits that can refuse one (the onchain-sql in-flight cap 429, a daily upstream ceiling 503)", guards: [
     ["scripts/test-checkout-limiter.js", "this is a ceiling, not a wall"],
     ["scripts/test-mcp-limits.js"],
     ["scripts/test-operator-auth.js", "login is rate-limited"],
     ["scripts/test-pow-challenge-envelope.js"],
+    ["scripts/test-cdp-kit.js", "is refused 429 busy"],
+    ["scripts/test-upstream-hard-caps.js", "calls past the ceiling are refused with 503"],
   ] },
   // Before launch
   { area: "launch", item: "no stack, module path or framework fingerprint in an error answer; no source map served", guards: [
@@ -192,6 +197,12 @@ for (const n of NOT_APPLICABLE) ok(n.holds(), `[${n.area}] ${n.item} is n/a: ${n
   ok(named.length >= 30 && missing.length === 0, `docs/security-checklist.md names ${named.length} files, all present${missing.length ? `; missing: ${missing.join(", ")}` : ""}`);
   const unlisted = [...new Set(CHECKLIST.flatMap((e) => e.guards.map(([f]) => f)))].filter((f) => f !== "docs/security-checklist.md" && f !== "docs/runbook.md" && f !== "docs/configuration.md" && !doc.includes(f));
   ok(unlisted.length === 0, `every guard in this checklist is named in docs/security-checklist.md${unlisted.length ? `: ${unlisted.join(", ")}` : ""}`);
+  // A capacity limit refuses a paid call (429 busy, 503 at a daily ceiling),
+  // so the mapping never says a paid call is never limited.
+  const ABSOLUTE = /\bpaid calls?\b[^|]{0,40}\b(?:are|is)\s+never\s+(?:rate[- ])?limited/i;
+  ok(ABSOLUTE.test("| Rate limits | Unpaid surfaces are limited; paid calls are never limited. |") && !ABSOLUTE.test("| Rate limits | paid calls carry no per-caller rate limit; a capacity limit can refuse one |"), "control: the absolute is read, the scoped wording is not");
+  const absolute = doc.split("\n").find((l) => ABSOLUTE.test(l));
+  ok(!absolute, `docs/security-checklist.md states no "paid calls are never limited" absolute${absolute ? `: "${absolute.slice(0, 160)}"` : ""}`);
 }
 
 // This guard runs in exactly one lane.
