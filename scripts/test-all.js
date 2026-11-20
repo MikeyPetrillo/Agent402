@@ -92,7 +92,7 @@ const NETWORK = new Set([
   "/api/perp-dexs", "/api/perp-dex-markets", "/api/perp-dex-limits",
   "/api/options-summary", "/api/crypto-options-chain", "/api/options-ticker",
   "/api/token-safety", "/api/sol-token-safety", "/api/sol-token-report", "/api/sol-token-holders", "/api/sol-token-pairs", "/api/sol-token-search", "/api/sol-trending", "/api/sol-price", "/api/sol-swap-quote", "/api/sol-token-lookup",
-  "/api/x-search-recent", "/api/x-user", "/api/x-user-tweets", "/api/x-tweet", "/api/x-users-lookup",
+  "/api/x-search-recent", "/api/x-user", "/api/x-user-tweets", "/api/x-tweet", "/api/x-users-lookup", "/api/x-post-counts", "/api/x-trends",
   "/api/hunter-domain-search", "/api/hunter-email-finder", "/api/hunter-email-verify", "/api/hunter-company", "/api/apollo-people-search", "/api/apollo-org-enrich", "/api/apollo-person-match",
   "/api/extract", "/api/meta", "/api/dns", "/api/render", "/api/screenshot", "/api/pdf",
   "/api/http-check", "/api/fetch-json", "/api/tls-cert", "/api/whois", "/api/robots-check", "/api/sitemap",

@@ -228,7 +228,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "perp-dexs", "perp-dex-markets", "perp-dex-limits",  // HIP-3 builder-deployed perp dexs (Hyperliquid info egress) - 2026-09-18
   "options-summary", "crypto-options-chain", "options-ticker",
   "sol-token-safety", "sol-token-report", "sol-token-holders", "sol-token-pairs", "sol-token-search", "sol-trending", "sol-price", "sol-swap-quote", "sol-token-lookup",
-  "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup",
+  "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup", "x-post-counts", "x-trends",
   "hunter-domain-search", "hunter-email-finder", "hunter-email-verify", "hunter-company", "apollo-people-search", "apollo-org-enrich", "apollo-person-match",
   "extract", "meta", "dns", "render", "screenshot", "pdf", "multi-search",
   // Browser pool (a held Chromium slot per call): browser-measure-kit.js.
