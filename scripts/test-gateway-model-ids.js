@@ -467,8 +467,10 @@ ok(expiring.length === 0, `no ranked/fallback model expires within 14 days${expi
 //     such an id fails unless RETIRING_MODELS already names the successor that
 //     takes over on or before the upstream date (rule 5a grades that successor).
 {
-  const advertised = advertisedIds(advertisedTiers, modelsList().data.map((m) => m.id));
-  ok(advertised.size >= 20 && Object.values(advertisedTiers).every((t) => t.prefixes.filter((p) => !p.endsWith("/")).every((p) => advertised.has(p))), `the expiry watch covers every id a tier advertises by name (${advertised.size})`);
+  // Every id a list names, a retired one included: RETIRING_MODELS covers a
+  // retired id here (its successor took over on its date), so it is a note.
+  const advertised = advertisedIds(TIERS, modelsList().data.map((m) => m.id));
+  ok(advertised.size >= 20 && Object.values(TIERS).every((t) => t.prefixes.filter((p) => !p.endsWith("/")).every((p) => advertised.has(p))), `the expiry watch covers every id a tier lists by name (${advertised.size})`);
   const due = advertisedExpiring({ models, advertised, retiring: RETIRING_MODELS, now: Date.now() });
   for (const d of due.filter((x) => x.covered)) console.log(`note - advertised id ${d.id} expires upstream ${d.expires}; RETIRING_MODELS serves ${d.successor} from its date`);
   const open = due.filter((x) => !x.covered);
