@@ -338,5 +338,21 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
   ok(rf.read === "unavailable" && rf.count === 0 && rf.netted === false, "audit-report: a refunds read that fails says unavailable, never zero owed as fact");
 }
 
+// Signed receipts kept outside the receipt store: a delivered card report
+// keeps the receipt issued at delivery on its record, and a monitor
+// subscription keeps its most recent paid periods' receipts (the count the
+// code keeps) until the record ends; /privacy names both.
+{
+  const { SUBSCRIPTION_RECEIPTS_KEPT } = await import("../src/receipt-signing.js");
+  const { TOMBSTONE_FIELDS } = await import("../src/mpp-subscriptions.js");
+  ok(/if \(typeof receipt === "string" && receipt\) rec\.receipt = receipt;/.test(src("src/human-checkout.js")), "control: a delivered card report keeps its signed receipt on the report record");
+  ok(/signedReceipts: appendPeriodReceipt\(kept, r\)/.test(src("src/stripe-subscriptions.js")) && /signedReceipts: appendPeriodReceipt\(rec\.signedReceipts, r\)/.test(src("src/mpp-subscriptions.js")), "control: card and MPP monitor subscriptions keep their period receipts on the record");
+  ok(SUBSCRIPTION_RECEIPTS_KEPT > 0 && !TOMBSTONE_FIELDS.includes("signedReceipts"), `control: ${SUBSCRIPTION_RECEIPTS_KEPT} period receipts are kept, and an ended MPP subscription's reduced record drops them`);
+  ok(/the report record on our server holds the session id, your input, the finished report and the signed receipt we issued for it at delivery \(SHA-256 digests of the request and of the report, the price and Stripe's payment id\), not the email/.test(privacy), "/privacy names the card report's signed receipt on the report record");
+  ok(privacy.includes(`and the signed receipts of its ${SUBSCRIPTION_RECEIPTS_KEPT} most recent paid periods (each a record of SHA-256 digests, the amount and the payment reference, kept with the period's statement, which names the subject and the period), for the life of the subscription`), `/privacy names the monitor's ${SUBSCRIPTION_RECEIPTS_KEPT} kept period receipts`);
+  ok(/the email, the subject you asked us to watch and the signed period receipts are removed/.test(privacy), "/privacy says an ended MPP subscription's reduced record drops its period receipts");
+  ok(privacy.includes(`a signing key our server made for that subscription and the signed receipts of its ${SUBSCRIPTION_RECEIPTS_KEPT} most recent paid periods`), "/privacy names the period receipts on an MPP subscription's record");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
