@@ -14,7 +14,7 @@ import { join, basename } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-human-checkout-pg" });
 const sdb = await import("../src/state-db.js");
-const { createHumanCheckout, readPublicReport, listPublicReports, refreshPublicMirror, STALE_CLAIM_MS } = await import("../src/human-checkout.js");
+const { createHumanCheckout, readPublicReport, listPublicReports, refreshPublicMirror, STALE_CLAIM_MS, ensureHumanCheckoutIndexes, HUMAN_CHECKOUT_INDEXES, HUMAN_CHECKOUT_ERROR_ROWS_SQL } = await import("../src/human-checkout.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -62,7 +62,8 @@ const generate = async (kind, slug, input) => {
   if (input === "SLOW") await wait(150);
   return { report: `# REPORT (${slug})\n\nAnalysis of ${input}. [1]`, title: `T:${input}`, sources: [], tables: [] };
 };
-const mk = () => createHumanCheckout({ stripe, generate, baseUrl: "https://agent402.tools", storeDir: DIR, onSale: (s) => sales.push(s), now, log: () => {} });
+// indexDelayMs null: the suite builds the owed list's index itself, below.
+const mk = () => createHumanCheckout({ stripe, generate, baseUrl: "https://agent402.tools", storeDir: DIR, onSale: (s) => sales.push(s), now, log: () => {}, indexDelayMs: null });
 // Polls until the record leaves "generating", up to a deadline: a busy CI
 // runner can take well over a second to land the final record.
 async function settle(hc, id, deadlineMs = 10_000) {
@@ -157,6 +158,16 @@ try {
   ok((await B.listIssues()).refundOwed.some((x) => x.id === "cs_unidx2"), "a write by this container drops its cache at once");
   await putRow("cs_unidx2", { ...unidx, paymentIntent: "pi_unidx2", refundId: "re_y", refundOwed: false });
   clock += 6_000;
+  // A refund Stripe holds and has not finished: the row's refundPending
+  // reaches the owed list (the refundsOwed word's card=pending) on the database.
+  await putRow("cs_pendrow", { ...unidx, paymentIntent: "pi_pendrow", refundPending: true });
+  await putRow("cs_plainrow", { ...unidx, paymentIntent: "pi_plainrow" });
+  clock += 6_000;
+  const pendList = Object.fromEntries((await B.owedRefunds()).filter((x) => x.id === "cs_pendrow" || x.id === "cs_plainrow").map((x) => [x.id, x.pending]));
+  ok(pendList.cs_pendrow === true && pendList.cs_plainrow === false, `pg: the owed list says which refund is pending at Stripe (${JSON.stringify(pendList)})`);
+  await putRow("cs_pendrow", { ...unidx, paymentIntent: "pi_pendrow", refundId: "re_p", refundOwed: false });
+  await putRow("cs_plainrow", { ...unidx, paymentIntent: "pi_plainrow", refundId: "re_q", refundOwed: false });
+  clock += 6_000;
 
   // ---- (4c) the background read-back past the retry cap ---------------------
   // Rows at refundAttempts 6 are no longer retried on a poll; the read-back
@@ -186,6 +197,21 @@ try {
   ok(readPublicReport(pubOn.publicId)?.publicId === pubOn.publicId && file("cs_paid")?.public === true, "a re-publish from the other instance reaches this mirror on refresh, and the file");
   ok(existsSync(join(DIR, "cs_paid.json")), "the record file exists for the write-through");
 
+  // ---- (5b) two toggles at once mint one public id ------------------------------
+  // Each read the row with no publicId; the id is minted by one conditional
+  // statement, so both answer the same id and the index holds one entry.
+  const race = { status: "done", kind: "dossier", slug: "dossier", input: "RACE", title: "T:RACE", report: "# race", sources: [], tables: [], at: new Date(clock).toISOString() };
+  await putRow("cs_race", race);
+  const [ra, rb2] = await Promise.all([A.setPublic("cs_race", true), B.setPublic("cs_race", true)]);
+  const raceRow = await row("cs_race");
+  const raceIdx = Object.entries((await row("_public")) || {}).filter(([, sid]) => sid === "cs_race").map(([k]) => k);
+  ok(ra.publicId && ra.publicId === rb2.publicId && raceRow?.publicId === ra.publicId && raceIdx.join() === ra.publicId,
+    `two toggles at once mint one public id, answered to both, on the row and once in the index (${ra.publicId} / ${rb2.publicId} / row ${raceRow?.publicId} / index ${raceIdx.join(",")})`);
+  ok(raceRow?.public === true && raceRow.report === "# race", "the toggle merges its flag into the row and keeps the report");
+  const raceOff = await A.setPublic("cs_race", false);
+  const raceOn = await B.setPublic("cs_race", true);
+  ok(raceOff.public === false && raceOn.publicId === ra.publicId && (await row("cs_race"))?.publicId === ra.publicId, "a revoke and a re-publish keep the one id");
+
   // ---- (6) roll-forward: files written in a rollback window win per id -----
   writeFileSync(join(DIR, "cs_paid.json"), JSON.stringify({ ...file("cs_paid"), title: "ROLLED" }));
   const C = mk();
@@ -201,6 +227,28 @@ try {
   await D.ready();
   ok((await row("cs_paid")).title === "ROLLED" && (await row("cs_rolled"))?.status === "done", "roll-forward: records dated past the grace win over the rows, and a record born in the window exists");
   ok((await row("_public"))?.[ROLLED] === "cs_rolled" && readPublicReport(ROLLED)?.input === "ROLL", "roll-forward: the public index written in the window is the index, and the mirror serves the report");
+
+  // ---- (7) the owed list's partial index, built CONCURRENTLY --------------------
+  // Built outside any transaction and the boot's schema lock, once; an
+  // INVALID one a failed build left is dropped and built again; the owed
+  // list's statement can use it.
+  ok(typeof ensureHumanCheckoutIndexes === "function" && Array.isArray(HUMAN_CHECKOUT_INDEXES), "the store exports its index build");
+  if (typeof ensureHumanCheckoutIndexes === "function") {
+    const schemaName = sdb.stateDbSchema();
+    const ix = HUMAN_CHECKOUT_INDEXES[0];
+    const idx = async () => Object.fromEntries((await sdb.stateQuery(`SELECT c.relname AS name, i.indisvalid AS valid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = ANY($2)`, [schemaName, HUMAN_CHECKOUT_INDEXES.map((x) => x.name)])).rows.map((r) => [r.name, r.valid]));
+    ok(Object.keys(await idx()).length === 0, "no owed-list index exists before the build runs (the stores here were made with the background build off)");
+    await sdb.stateStatementOutsideTx(`CREATE UNIQUE INDEX CONCURRENTLY ${ix.name} ON ${schemaName}.records ((body->>'status')) WHERE collection = 'human-checkout'`).catch(() => {});
+    ok((await idx())[ix.name] === false, "a failed concurrent build leaves an invalid index (the case the build repairs)");
+    const built = await ensureHumanCheckoutIndexes({ log: () => {} });
+    ok(built.ran === true && (await idx())[ix.name] === true && built.result?.rebuilt?.join() === ix.name, `the invalid one is dropped and the index built valid (${JSON.stringify(built.result)})`);
+    const again = await ensureHumanCheckoutIndexes({ log: () => {} });
+    ok(again.ran === true && again.result?.built?.length === 0, `a second run builds nothing (${JSON.stringify(again.result)})`);
+    const plan = (await sdb.withStateTx(async (c) => { await c.query("SET LOCAL enable_seqscan = off"); return (await c.query(`EXPLAIN ${HUMAN_CHECKOUT_ERROR_ROWS_SQL(`${schemaName}.records`)}`)).rows.map((r) => r["QUERY PLAN"]).join("\n"); }));
+    ok(plan.includes(ix.name), `the owed list's statement can use the index (${plan.split("\n")[0]})`);
+    clock += 6_000;
+    ok(Array.isArray((await B.listIssues()).refundOwed), "the owed list reads the same with the index in place");
+  }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();

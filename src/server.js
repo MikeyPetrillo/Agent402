@@ -4602,21 +4602,31 @@ app.get("/api/gateway-status", async (req, res) => {
     // (src/human-checkout.js owedRefunds, listed on
     // /__operator/human-checkout.json) is owed too, on the same notice and
     // aging; "unknown" when that list cannot be read.
-    // One word publicly, so the status Worker can page; counts for the operator.
+    // One word publicly, so the status Worker can page, and two words that
+    // say where it comes from, so the page gives the right advice: `ledger`
+    // (the refund ledger's own word) and `card` (none / pending: every card
+    // refund past the notice is one Stripe holds and has not finished, so
+    // nothing is needed / refused: at least one needs a refund by hand /
+    // unknown). Counts for the operator.
     refundsOwed: await (async () => {
       const notice = Number(process.env.REFUND_OWED_NOTICE_MINUTES);
       const noticeMinutes = Number.isFinite(notice) && notice >= 0 ? notice : 15;
       const owedHours = Number(process.env.REFUND_OWED_ALARM_HOURS) || 48;
       const r = refundAlarmStatus({ owedHours, noticeMinutes });
       const card = _humanCheckout ? await _humanCheckout.owedRefunds().catch(() => null) : [];
-      const ages = (card || []).map((x) => Date.now() - Date.parse(x.at)).filter((a) => Number.isFinite(a));
-      const cardOwed = ages.filter((a) => a >= noticeMinutes * 60_000).length;
-      const cardAging = ages.filter((a) => a >= owedHours * 3600_000).length;
+      const aged = (card || []).map((x) => ({ age: Date.now() - Date.parse(x.at), pending: x.pending === true })).filter((x) => Number.isFinite(x.age));
+      const noticed = aged.filter((x) => x.age >= noticeMinutes * 60_000);
+      const cardOwed = noticed.length;
+      const cardPending = noticed.filter((x) => x.pending).length;
+      const cardAging = aged.filter((x) => x.age >= owedHours * 3600_000).length;
       const status = r.status === "stuck" ? "stuck"
         : r.status === "aging" || cardAging ? "aging"
           : r.status === "owed" || cardOwed ? "owed"
             : card === null ? "unknown" : r.status;
-      return full ? { ...r, status, cardOwedCount: card === null ? null : cardOwed, cardAgingCount: card === null ? null : cardAging } : { status };
+      const cardWord = card === null ? "unknown" : !cardOwed ? "none" : cardPending === cardOwed ? "pending" : "refused";
+      return full
+        ? { ...r, status, ledger: r.status, card: cardWord, cardOwedCount: card === null ? null : cardOwed, cardPendingCount: card === null ? null : cardPending, cardAgingCount: card === null ? null : cardAging }
+        : { status, ledger: r.status, card: cardWord };
     })(),
     // Recipients our spending wallets paid for the first time
     // (src/outbound-destinations.js): ok / new (expected: a first buy from a

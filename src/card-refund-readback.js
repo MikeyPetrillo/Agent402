@@ -10,6 +10,10 @@
 export const READBACK_FIRST_MS = 5 * 60_000;
 /** How often the pass runs after that. */
 export const READBACK_INTERVAL_MS = 30 * 60_000;
+/** Between full passes, how often the records whose refund Stripe had not
+ *  finished are read again, so a refund that completes leaves the owed list
+ *  (and closes its page) within minutes. */
+export const READBACK_PENDING_INTERVAL_MS = 5 * 60_000;
 /** Owed records read back per pass. */
 export const READBACK_MAX_PER_PASS = 20;
 /** How long one record's Stripe read is waited for. */
