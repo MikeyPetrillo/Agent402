@@ -2469,9 +2469,13 @@ export function createMppSubscriptions({
       const p = MONITOR_PRODUCTS[rec.product];
       if (!p) continue;
       if (kind && p.kind !== kind) continue;
-      // Never list a subscription whose paid period has run out, even if the
-      // stored status still says active: refreshStatus is what flips it, and
-      // this must not hand the scheduler a sub to work on before then.
+      // Only an active record is listed. One whose paid period has run out
+      // while its stored status still reads active IS listed: renewals are
+      // pulled lazily, from the scheduler's stillActive gate (refreshStatus)
+      // before a paid run, and the scheduler only reaches a listed record, so
+      // leaving it out would leave its next period unpulled for good. A paid
+      // run is made only once that pull confirms (otherwise the gate answers
+      // past_due); the free checks run meanwhile.
       if (rec.status !== "active") continue;
       // Two cheap exclusions the stored status cannot express on its own,
       // because only refreshStatus rewrites it and a subscription with no paid
