@@ -136,10 +136,14 @@ Wholesale:
   not enough data. Only sources whose answers may be passed on are listed;
   market data, search results and model output are not offered. Within v1,
   fields are only added.
-- Every tool error answer carries `errorCode` beside the message: one
-  stable code per status (such as `invalid_input`, `upstream_error` and
-  `unavailable`), listed with its meaning in the wholesale contract. A code
-  is only ever added, never renamed or removed.
+- Every error answer a tool's route writes, other than a 402, now carries
+  `errorCode` beside the message (an input refused before payment, a run
+  that ended in an error, a retired route and a paused or switched-off
+  tool): one stable code per status (such as `invalid_input`,
+  `upstream_error` and `unavailable`), listed with its meaning in the
+  wholesale contract. A 402 is the payment-required answer: it follows the
+  x402 and MPP wire formats and carries no `errorCode`. A code is only ever
+  added, never renamed or removed.
 
 ### 2026-11-18 (yield age limit, MCP cut-offs, unknown coin ids)
 Tools:

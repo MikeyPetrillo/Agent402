@@ -4184,7 +4184,7 @@ if (!stockDataEnabled()) {
     const slug = notOffered.get(String(req.path || "").toLowerCase().replace(/\/+$/, ""));
     if (!slug) return next();
     res.set("Cache-Control", "no-store");
-    return res.status(503).json({ ok: false, error: "not-offered", slug, message: stockNotOffered().message, list: `${BASE_URL}/api/pricing` });
+    return res.status(503).json({ ok: false, error: "not-offered", slug, message: stockNotOffered().message, list: `${BASE_URL}/api/pricing`, ...errorCodeField(503) });
   });
 }
 
@@ -4197,7 +4197,7 @@ if (!kalshiToolsEnabled()) {
     const slug = notOffered.get(String(req.path || "").toLowerCase().replace(/\/+$/, ""));
     if (!slug) return next();
     res.set("Cache-Control", "no-store");
-    return res.status(503).json({ ok: false, error: "not-offered", slug, message: kalshiNotOffered().message, list: `${BASE_URL}/api/pricing` });
+    return res.status(503).json({ ok: false, error: "not-offered", slug, message: kalshiNotOffered().message, list: `${BASE_URL}/api/pricing`, ...errorCodeField(503) });
   });
 }
 
@@ -7812,7 +7812,7 @@ app.get("/api/skill-packs/:slug/prompt", (req, res) => {
       const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
       const replacement = rep ? { slug: rep.slug, route: rep.route, url: `${BASE_URL}${rep.route.split(" ")[1] || rep.route}` } : null;
       res.set(retirementHeaders(gone.retiredAt, replacement?.url));
-      return res.status(410).json({ ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement, list: `${BASE_URL}/api/skill-packs.json`, hint: `Skill pack ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : ""} Live packs: /api/skill-packs.json` });
+      return res.status(410).json({ ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement, list: `${BASE_URL}/api/skill-packs.json`, hint: `Skill pack ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : ""} Live packs: /api/skill-packs.json`, ...errorCodeField(410) });
     }
     // Indexes that read the documented template call it with the placeholder
     // itself; say so rather than answering as if the route were missing.
@@ -10802,6 +10802,7 @@ const retiredConvertGone = (req, res) => {
       route: "POST /api/unit-convert",
       input: { value: Number.isFinite(num) ? num : null, from, to },
     },
+    ...errorCodeField(410),
   });
 };
 
@@ -13370,10 +13371,10 @@ function contentsUrlOf(req, res, slug) {
   const def = CATALOG[`POST /api/${slug}`];
   let input;
   try { input = handlerInputOf(req, def); }
-  catch (e) { res.status(Number(e?.statusCode) === 400 ? 400 : 500).json({ error: e.message, tool: slug }); return null; }
+  catch (e) { const status = Number(e?.statusCode) === 400 ? 400 : 500; res.status(status).json({ error: e.message, tool: slug, ...errorCodeField(status) }); return null; }
   const refused = shapeRefusal(input, def);
-  if (refused) { res.status(400).json({ error: refused, tool: slug }); return null; }
-  if (!input.url) { res.status(400).json({ error: 'Missing "url" in JSON body' }); return null; }
+  if (refused) { res.status(400).json({ error: refused, tool: slug, ...errorCodeField(400) }); return null; }
+  if (!input.url) { res.status(400).json({ error: 'Missing "url" in JSON body', ...errorCodeField(400) }); return null; }
   return input.url;
 }
 
@@ -13389,7 +13390,7 @@ app.post("/api/extract", withToolCallLog("extract", async (req, res) => {
 
 app.get("/api/meta", withToolCallLog("meta", async (req, res) => {
   const { url } = req.query;
-  if (!url) return res.status(400).json({ error: 'Missing "url" query parameter' });
+  if (!url) return res.status(400).json({ error: 'Missing "url" query parameter', ...errorCodeField(400) });
   try {
     res.json(await fetchPageMeta(url));
   } catch (err) {
@@ -13399,7 +13400,7 @@ app.get("/api/meta", withToolCallLog("meta", async (req, res) => {
 
 app.get("/api/dns", withToolCallLog("dns", async (req, res) => {
   const { name, type } = req.query;
-  if (!name) return res.status(400).json({ error: 'Missing "name" query parameter' });
+  if (!name) return res.status(400).json({ error: 'Missing "name" query parameter', ...errorCodeField(400) });
   try {
     res.json(await dnsLookup(name, type));
   } catch (err) {
@@ -13437,7 +13438,7 @@ app.get("/api/screenshot", withToolCallLog("screenshot", async (req, res) => {
   const _t0 = Date.now();
   res.once("finish", () => { try { capturePostHogToolCall({ slug: "screenshot", latencyMs: Date.now() - _t0, cached: false, errored: res.statusCode >= 500, status: res.statusCode, synthetic: isSyntheticRequest(req) }); } catch { /* telemetry never breaks a response */ } });
   const { url, fullPage } = req.query;
-  if (!url) return res.status(400).json({ error: 'Missing "url" query parameter' });
+  if (!url) return res.status(400).json({ error: 'Missing "url" query parameter', ...errorCodeField(400) });
   const ac = new AbortController();
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
   try {
@@ -13456,7 +13457,7 @@ app.post("/api/pdf", withToolCallLog("pdf", async (req, res) => {
   const _t0 = Date.now();
   res.once("finish", () => { try { capturePostHogToolCall({ slug: "pdf", latencyMs: Date.now() - _t0, cached: false, errored: res.statusCode >= 500, status: res.statusCode, synthetic: isSyntheticRequest(req) }); } catch { /* telemetry never breaks a response */ } });
   const { url } = req.body ?? {};
-  if (!url) return res.status(400).json({ error: 'Missing "url" in JSON body' });
+  if (!url) return res.status(400).json({ error: 'Missing "url" in JSON body', ...errorCodeField(400) });
   try {
     res.json(await pdfToText(url));
   } catch (err) {
@@ -13491,7 +13492,7 @@ function memoryActor(req, res) {
   // so every memory route that changes state takes the signed payer only.
   const slug = CATALOG[`${req.method} ${req.path}`]?.slug;
   const id = resolveRouteIdentity(req, memoryScopeOf(slug), identityPayerOf(req));
-  if (id.error) { res.status(id.error.status).json({ error: id.error.message }); return null; }
+  if (id.error) { res.status(id.error.status).json({ error: id.error.message, ...errorCodeField(id.error.status) }); return null; }
   const payer = id.wallet;
   if (payer) return payer;
   if (FREE_MODE && req.query.ns) return `demo:${req.query.ns}`;
@@ -13499,6 +13500,7 @@ function memoryActor(req, res) {
     error: FREE_MODE
       ? `${FREE_MODE_IDENTITY_NOTE} For memory, pass ?ns=<name> to use a demo namespace.`
       : "No payer identity found on this request. Pay via x402 - the paying wallet is your identity.",
+    ...errorCodeField(400),
   });
   return null;
 }
@@ -13526,7 +13528,8 @@ const memHandler = (fn) => withToolCallLog((req) => CATALOG[`${req.method} ${req
   try {
     res.json(await fn(req, actor, targetOwner(req, actor)));
   } catch (err) {
-    res.status(err.statusCode || 500).json({ error: redactSecrets(err?.message) });
+    const status = err.statusCode || 500;
+    res.status(status).json({ error: redactSecrets(err?.message), ...errorCodeField(status) });
   }
 });
 
@@ -14025,7 +14028,7 @@ app.use((req, res) => {
         return res.status(410).json({
           ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement,
           hint: `${gone.kind === "pack" ? "Skill pack" : "Tool"} ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : " There is no direct replacement; the closest live tools are listed, or ask /api/find?q=<task>."}${!replacement && gone.note ? ` ${gone.note}` : ""}`,
-          find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions,
+          find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions, ...errorCodeField(410),
         });
       }
       try { capturePostHogToolGone({ route: req.path, replacement: "GET /api/find", source: toolGoneSourceOf({ headers: req.headers, surface: "http" }) }); } catch { /* telemetry never breaks a response */ }
