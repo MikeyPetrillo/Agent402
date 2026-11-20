@@ -63,6 +63,14 @@ const GATES = [
     defect: "a stale pack price on a /skills link (the shape that slipped past the first version)",
   },
   {
+    gate: "test-docs-truth.js",
+    needsServer: true,
+    file: "docs/base-mcp-plugin.md",
+    from: "4. User approves the ~$0.01 USDC payment",
+    to: "4. User approves the ~$0.10 USDC payment",
+    defect: "a walkthrough's approval step quoting another price than the route its block calls (no route on its own line)",
+  },
+  {
     gate: "test-sales-ledger.js",
     file: "src/sales-ledger.js",
     from: "rail: r.rail, network: r.network, tx: r.tx, internal: !!r.internal,",

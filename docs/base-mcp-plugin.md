@@ -300,7 +300,7 @@ Then call `complete_x402_request` with the returned `requestId` to get the resul
 1. Discover: `GET https://agent402.tools/api/find?q=extract%20article%20from%20url`
 2. Top result is `extract` (POST /api/extract, $0.001/call)
 3. Call `initiate_x402_request` with url `https://agent402.tools/api/extract`, method POST, body `{"url": "https://agent402.tools/guides/x402-in-5-minutes"}`, maxPayment `"0.02"`
-4. User approves the ~$0.010 USDC payment
+4. User approves the ~$0.001 USDC payment
 5. Call `complete_x402_request` to get clean markdown of the article
 
 **Prompt:** "What are the top x402 sellers right now?"
