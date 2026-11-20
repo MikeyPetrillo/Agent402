@@ -336,6 +336,12 @@ ok(!redactSecrets(`upstream said ${KEY}`).includes(KEY), "redactSecrets drops th
     await tool("weather-daily").handler({ lat: 11, lon: 21 });
     await tool("weather-daily").handler({ lat: 11, lon: 21 });
     ok(fetched.length === 3, `cache: a failed read is never kept (two failed tries, one success, then a hit: ${fetched.length} fetches)`);
+    fetched.length = 0;
+    reply = () => new Response(JSON.stringify({ error: true, reason: "Cannot initialize model" }), { status: 200, headers: { "content-type": "application/json" } });
+    try { await tool("weather-daily").handler({ lat: 12, lon: 22 }); } catch { /* an error body is not an answer */ }
+    reply = okBody;
+    await tool("weather-daily").handler({ lat: 12, lon: 22 });
+    ok(fetched.length === 2, `cache: an error body that came back with a 200 is never kept (${fetched.length} fetches)`);
 
     _resetOpenMeteoCache();
     for (let k = 0; k < OPEN_METEO_CACHE_MAX + 5; k++) await tool("weather-current").handler({ lat: 1 + k / 10000, lon: 2 });
