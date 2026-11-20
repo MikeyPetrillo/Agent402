@@ -223,7 +223,12 @@ jobs:
     needs: markers
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # The checkout alone took 3 min 46 s on run 44012918430 (github.com
+    # unreachable for 133 s, a 20 s wait, a 71 s fetch) and the 5-minute limit
+    # then cancelled the gate mid-read: a green main read as not green. The
+    # limit covers the checkout's three attempts at that worst, setup, and the
+    # gate's own bound (scripts/test-ci-gating.js derives it from ci-tree-gate.js).
+    timeout-minutes: 14
     permissions:
       contents: read
       actions: read
@@ -867,13 +872,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Full history: scripts/test-page-dates.js dates every page module
@@ -1081,13 +1079,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1220,7 +1211,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1416,7 +1406,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1452,6 +1441,50 @@ jobs:
           E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
+      # The real HTTP clients scripts/test-402-real-clients.js reads a full-rail
+      # 402 with (it fails under CI when one is missing): aiohttp, httpx and
+      # requests in a venv, wheels only, every one pinned by version and sha256
+      # (Linux x86_64, CPython 3.12, the runner image's python3) with no
+      # resolution of its own, so no dependency code runs here; and the image's
+      # newest Go for net/http. The suites read REAL_CLIENT_PYTHON and
+      # REAL_CLIENT_GO. Every shard: the suite may land on either.
+      - name: Install the real HTTP clients (secretless)
+        timeout-minutes: 5
+        env:
+          UPSTREAM_COSTS_JSON: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          E2B_API_KEY: ""
+        run: |
+          python3 -m venv "$RUNNER_TEMP/real-clients"
+          "$RUNNER_TEMP/real-clients/bin/python" -m pip install --quiet --disable-pip-version-check --no-deps --only-binary=:all: --require-hashes -r /dev/stdin <<'PINS'
+          aiohappyeyeballs==2.7.1 --hash=sha256:9243213661e29250eb41368e5daa826fc017156c3b8a11440826b2e3ed376472
+          aiohttp==3.14.5 --hash=sha256:20f085697d7e911f1f73c43ed03fafbed1e7121797e2eb5428efa80398060584
+          aiosignal==1.4.0 --hash=sha256:053243f8b92b990551949e63930a839ff0cf0b0ebbe0597b0f3fb19e1a0fe82e
+          anyio==4.16.0 --hash=sha256:c66ae634e0b8228396b801741beb3294326d4b6102f7bba4041c0dfb58c29026
+          attrs==26.1.0 --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309
+          certifi==2026.10.23 --hash=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1
+          charset-normalizer==3.5.2 --hash=sha256:3d31298449090ab8d47b7b1b2a555ff73cac7ed438a08b7ac160980c7ebed649
+          frozenlist==1.8.0 --hash=sha256:494a5952b1c597ba44e0e78113a7266e656b9794eec897b19ead706bd7074383
+          h11==0.16.0 --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
+          httpcore==1.0.9 --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55
+          httpx==0.28.1 --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
+          idna==3.20 --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+          multidict==7.2.1 --hash=sha256:1fb8c1a3480c130c3a6422d5f16f3cad6552bf08c2089dd288ba7134649183b5
+          propcache==0.5.4 --hash=sha256:2814ecd8e818f487bee4b0f921bc4d1c176cc5fc71ac0f072d0fa67eda4ac14b
+          requests==2.34.2 --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0
+          typing-extensions==4.16.0 --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+          urllib3==2.8.0 --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3
+          yarl==1.25.1 --hash=sha256:c6f117789d22dce188e5754e8bc65b7e6ebf8cb73963b9fa761f672a5883769d
+          PINS
+          "$RUNNER_TEMP/real-clients/bin/python" -I -c 'import aiohttp, httpx, requests; print("aiohttp", aiohttp.__version__, "httpx", httpx.__version__, "requests", requests.__version__)'
+          echo "REAL_CLIENT_PYTHON=$RUNNER_TEMP/real-clients/bin/python" >> "$GITHUB_ENV"
+          go_bin=$(ls -d /opt/hostedtoolcache/go/*/x64/bin/go 2>/dev/null | sort -V | tail -1)
+          [ -n "$go_bin" ] || go_bin=$(command -v go || true)
+          [ -n "$go_bin" ] || { echo "::error::no Go toolchain on the runner image"; exit 1; }
+          "$go_bin" version
+          echo "REAL_CLIENT_GO=$go_bin" >> "$GITHUB_ENV"
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
       # the reveal suite, burger-aria-label, compare-scroll,
@@ -1564,13 +1597,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1722,13 +1748,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1824,7 +1843,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1949,7 +1967,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2057,7 +2074,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2219,13 +2235,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2425,7 +2434,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2699,7 +2707,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2775,7 +2782,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2857,20 +2863,47 @@ jobs:
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
         run: bash scripts/ci-apt-install.sh --playwright-chromium
-      - name: Start server in free mode
+      # The CI data keys reach THIS step alone: the server it boots is the only
+      # process that reads them (scripts/test-ci-secretless-install.js). The CI
+      # CoinGecko key (never the production key) goes in as COINGECKO_API_KEY on
+      # the pro tier, with the strict sweep's per-run read cap as the server's
+      # day ceiling (a fresh server's day is this run) and its minute pacing
+      # (CG_RUN_READ_CAP, CG_RUN_MAX_PER_MIN in scripts/test-non-metered-examples.js).
+      # A fork PR gets no secrets and boots keyless. The log and the later steps
+      # get the words keyed or keyless, never a value.
+      - name: Start server in free mode (the strict sweep's server; the CI data keys)
+        env:
+          OPEN_METEO_API_KEY: ${{ secrets.OPEN_METEO_API_KEY }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_CI_API_KEY }}
+          COINGECKO_API_TIER: pro
+          COINGECKO_DAILY_MAX: "40"
+          COINGECKO_MAX_PER_MIN: "30"
         run: |
+          cg=keyless; if [ -n "$COINGECKO_API_KEY" ]; then cg=keyed; fi
+          om=keyless; if [ -n "$OPEN_METEO_API_KEY" ]; then om=keyed; fi
+          echo "CoinGecko: $cg; Open-Meteo: $om"
+          echo "NON_METERED_CG_MODE=$cg" >> "$GITHUB_ENV"
+          echo "NON_METERED_OM_MODE=$om" >> "$GITHUB_ENV"
+          # The run's own operator token: the CoinGecko check after the sweeps
+          # reads the server's read count from the operator view with it.
+          token=$(openssl rand -hex 24)
+          echo "::add-mask::$token"
+          echo "SWEEP_OPERATOR_TOKEN=$token" >> "$GITHUB_ENV"
+          # One failure log for this run, read by the strict sweep and the check.
+          echo "UPSTREAM_FAILURE_LOG=$RUNNER_TEMP/upstream-failures.jsonl" >> "$GITHUB_ENV"
           # Raise the MCP rate limit so the full-catalog connector test can sweep
           # every tool (production keeps the default 20/min, 120/hr).
           # The examples that fetch this server's own /samples/ and /fixtures/ files are
           # answered by this server, never production (own-examples-preload.js).
           # Failed upstream requests are logged for the strict sweep's outage
           # check (upstream-failure-log-preload.js, scripts/lib/upstream-outage.js).
+          AGENT402_OPERATOR_TOKEN="$token" UPSTREAM_FAILURE_LOG="$RUNNER_TEMP/upstream-failures.jsonl" \
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
-            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node --import ./scripts/lib/own-examples-preload.js --import ./scripts/lib/upstream-failure-log-preload.js src/server.js &
+            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node --import ./scripts/lib/own-examples-preload.js --import ./scripts/lib/upstream-failure-log-preload.js src/server.js > "$RUNNER_TEMP/sweep-server.log" 2>&1 &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       - name: Crypto-kit tests (CoinGecko price/market/history/trending/global — keyless live API)
-        # Keyless on purpose: the job-scope key is for the sampled sweep only,
-        # and these live calls ran against the monthly Demo quota on every push.
+        # Keyless on purpose: the CI key reaches the sweep's server only, and
+        # these live calls would draw on its quota on every push.
         env:
           COINGECKO_API_KEY: ""
         run: node scripts/test-crypto-kit.js
@@ -2926,6 +2959,14 @@ jobs:
       - name: Every tool responds to its own example (all ~1070 endpoints)
         run: TEST_ALL_SKIP_STRICT_COVERED=1 TARGET_URL=http://127.0.0.1:3000 node scripts/test-all.js
 
+      # After both sweeps: the server's own count of CoinGecko reads against
+      # the per-run cap. A spent cap or a keyed read refused 429 fails the run
+      # here even where the lenient sweep tolerated the answer; the count it
+      # prints is the measurement the cap is tuned from.
+      - name: CoinGecko reads stay under the per-run cap (keyed runs)
+        if: ${{ !cancelled() }}
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-non-metered-examples.js --coingecko-run-check
+
       - name: CSS tokens resolve (every :root custom property must actually resolve in a real browser, not just exist as text)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-css-tokens-resolve.js
       # Rendered text contrast: every visible text vs its real backdrop, both themes, 390 + 1280 px (Chromium; a dark-surface token on a light surface is invisible in light mode, /sell 2026-09-10)
@@ -2947,6 +2988,19 @@ jobs:
       # (Chromium, 1440 + 390 px). Boots its own server like the wrap check.
       - name: Sticky chrome (nav and panels hold after a scroll, 1440 + 390 px)
         run: node scripts/test-sticky-chrome.js
+      # The sweep server's own log (the boot step wrote it to a file), its last
+      # 200 lines through the shared secret redaction: configured secret values
+      # and anything shaped like a credential are replaced.
+      - name: Sweep server log (on failure; redacted tail)
+        if: failure()
+        run: |
+          node --input-type=module -e '
+          import { readFileSync, existsSync } from "node:fs";
+          import { redactSecrets, looksLikeCredential } from "./src/tools/redact.js";
+          const f = process.argv[1];
+          if (!existsSync(f)) { console.log(`no server log at ${f}`); process.exit(0); }
+          for (const l of readFileSync(f, "utf8").split("\n").slice(-200)) console.log(redactSecrets(l).replace(/\S{20,}/g, (t) => (looksLikeCredential(t) ? "[redacted]" : t)));
+          ' "$RUNNER_TEMP/sweep-server.log"
       - name: Runner kills and memory (on failure)
         if: failure()
         run: |
@@ -2983,7 +3037,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -3067,7 +3120,7 @@ jobs:
           # Failed upstream requests are logged for the live public-data check
           # (upstream-failure-log-preload.js, scripts/live-public-data-check.js).
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
-            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node --import ./scripts/lib/upstream-failure-log-preload.js src/server.js &
+            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node --import ./scripts/lib/upstream-failure-log-preload.js src/server.js > "$RUNNER_TEMP/sweep-server.log" 2>&1 &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       - name: Exercise tools against live sites
         run: |
@@ -3209,6 +3262,19 @@ jobs:
 
       - name: gov-data Catalog API v4 (retired CKAN v3 proxy 404s on catalog-old)
         run: node scripts/test-gov-data.js
+      # The sweep server's own log (the boot step wrote it to a file), its last
+      # 200 lines through the shared secret redaction: configured secret values
+      # and anything shaped like a credential are replaced.
+      - name: Sweep server log (on failure; redacted tail)
+        if: failure()
+        run: |
+          node --input-type=module -e '
+          import { readFileSync, existsSync } from "node:fs";
+          import { redactSecrets, looksLikeCredential } from "./src/tools/redact.js";
+          const f = process.argv[1];
+          if (!existsSync(f)) { console.log(`no server log at ${f}`); process.exit(0); }
+          for (const l of readFileSync(f, "utf8").split("\n").slice(-200)) console.log(redactSecrets(l).replace(/\S{20,}/g, (t) => (looksLikeCredential(t) ? "[redacted]" : t)));
+          ' "$RUNNER_TEMP/sweep-server.log"
       - name: Runner kills and memory (on failure)
         if: failure()
         run: |
@@ -3270,13 +3336,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -3357,13 +3416,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -3499,7 +3551,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -4100,17 +4151,31 @@ jobs:
           # "mcpName" to the server.json name and confirming the npm package is
           # published — so this runs after the npm publish above.
           VER=$(node -p "require('./mcp/package.json').version")
-          SEARCH_RESULT=$(curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402&limit=100")
-          if echo "$SEARCH_RESULT" | grep -q "\"version\":\"$VER\""; then
-            echo "io.github.mikeypetrillo/agent402@$VER already in the MCP Registry — nothing to do"; exit 0
+          SERVER_NAME=io.github.MikeyPetrillo/agent402
+          # Every page of the registry's entries for our name, one compact JSON
+          # document per line (at most five pages; a failed read ends the walk).
+          : > registry-pages.jsonl
+          cursor=""
+          for page in 1 2 3 4 5; do
+            q="search=$SERVER_NAME&limit=100"
+            [ -z "$cursor" ] || q="$q&cursor=$(printf '%s' "$cursor" | jq -sRr @uri)"
+            body=$(curl -s "https://registry.modelcontextprotocol.io/v0/servers?$q") || break
+            printf '%s' "$body" | jq -c . >> registry-pages.jsonl 2>/dev/null || break
+            cursor=$(printf '%s' "$body" | jq -r '.metadata.nextCursor // empty' 2>/dev/null || true)
+            [ -n "$cursor" ] || break
+          done
+          if node -e 'const [n, v] = process.argv.slice(1); const rows = require("fs").readFileSync("registry-pages.jsonl", "utf8").split("\n").filter(Boolean).flatMap((l) => { try { return JSON.parse(l).servers || []; } catch { return []; } }); process.exit(rows.some((r) => r?.server?.name === n && r?.server?.version === v) ? 0 : 1)' "$SERVER_NAME" "$VER"; then
+            echo "$SERVER_NAME@$VER already in the MCP Registry: nothing to do"; exit 0
           fi
           # Capture whichever version is isLatest RIGHT NOW - it's about to
-          # become stale the moment the new publish below lands. Deprecation
-          # tooling gap found 2026-08-16: nothing ever marked a superseded
-          # version deprecated, so 24 of 25 published versions were still
-          # "active" in the registry. Best-effort: a lookup failure here
-          # leaves PREV_LATEST empty and the deprecate step below just skips.
-          PREV_LATEST=$(echo "$SEARCH_RESULT" | node scripts/mcp-find-latest-version.js || true)
+          # become stale the moment the new publish below lands - and every
+          # older version still "active" (deprecation tooling gap found
+          # 2026-08-16: 24 of 25 published versions were still active, and
+          # 26 still were on 2026-11-20). Our name only: a search also returns
+          # other publishers' similar names. Best-effort: a lookup failure
+          # leaves both empty and the deprecations below just skip.
+          PREV_LATEST=$(node scripts/mcp-find-latest-version.js --name "$SERVER_NAME" < registry-pages.jsonl || true)
+          SUPERSEDED=$(node scripts/mcp-find-latest-version.js --superseded --name "$SERVER_NAME" --except "$VER" < registry-pages.jsonl || true)
           asset="mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz"
           if [ -n "${MCP_PUBLISHER_VERSION:-}" ]; then base="https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION"; else base="https://github.com/modelcontextprotocol/registry/releases/latest/download"; fi
           # Download to disk and fail fast (no curl|tar of unverified bytes).
@@ -4166,16 +4231,21 @@ jobs:
             echo "npm has not served $VER yet (attempt $attempt) - waiting 20s"; sleep 20
           done
           echo "published io.github.mikeypetrillo/agent402@$VER → https://registry.modelcontextprotocol.io"
-          # Deprecate the version this publish just superseded. Only ever
-          # touches the ONE immediately-previous version - never a bulk
-          # rewrite of history - and never fails the job: a registry hiccup
-          # here is a missed housekeeping step, not a publish failure.
-          if [ -n "$PREV_LATEST" ] && [ "$PREV_LATEST" != "$VER" ]; then
-            ../mcp-publisher status --status deprecated --message "Superseded by $VER" \
-              io.github.MikeyPetrillo/agent402 "$PREV_LATEST" \
-              && echo "deprecated superseded version $PREV_LATEST" \
-              || echo "::warning::failed to deprecate superseded version $PREV_LATEST (non-fatal)"
-          fi
+          # Deprecate every version this publish leaves behind: the one it just
+          # superseded and every older one still active, so the registry lists
+          # one current version. Status only (never a rewrite of an entry), at
+          # most 60 a run, and never fails the job: a registry hiccup here is a
+          # missed housekeeping step, not a publish failure.
+          deprecated=0
+          for old in $(printf '%s\n%s\n' "$PREV_LATEST" "$SUPERSEDED" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | sort -u -V | head -60); do
+            [ "$old" != "$VER" ] || continue
+            if ../mcp-publisher status --status deprecated --message "Superseded by $VER" "$SERVER_NAME" "$old"; then
+              deprecated=$((deprecated + 1))
+            else
+              echo "::warning::failed to deprecate superseded version $old (non-fatal)"
+            fi
+          done
+          echo "deprecated $deprecated superseded version(s)"
 
       # ClawHub is OpenClaw's discovery surface (`openclaw plugins install
       # clawhub:agent402-openclaw`); their docs keep no static third-party

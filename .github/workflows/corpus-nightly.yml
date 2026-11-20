@@ -55,12 +55,17 @@ jobs:
         id: corpus
         env:
           TIER: ${{ inputs.tier || '0,1' }}
-          # The CoinGecko Demo key (free plan, spends nothing): keyless CoinGecko
-          # from a shared GitHub egress IP rate-limited 13 of the 37 CoinGecko
-          # cases on the first nightly (2026-09-06), so those tools were never
-          # verified. With the key the server's own 25/min bucket is the bound
-          # and the cases' shared `paceKey` clock keeps under it.
-          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+          # The CI CoinGecko key (its own key, never production's), on the pro
+          # tier: keyless CoinGecko from a shared GitHub egress IP rate-limited
+          # most of the CoinGecko cases on a night, so those tools went
+          # unverified. The server's own caps bound the night: its day ceiling
+          # (CG_NIGHTLY_READ_CAP in scripts/test-non-metered-examples.js) and
+          # its minute pacing, which the cases' shared `paceKey` clock keeps
+          # under. Without the secret the run is keyless, as before.
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_CI_API_KEY }}
+          COINGECKO_API_TIER: pro
+          COINGECKO_DAILY_MAX: "200"
+          COINGECKO_MAX_PER_MIN: "30"
           # Our Solana RPC, read-only. RugCheck stopped publishing topHolders
           # for every mint on 2026-09-19, so sol-token-holders/-report build
           # their table from getTokenLargestAccounts + one batched
@@ -75,6 +80,8 @@ jobs:
           RUGCHECK_TOOLS: "on"
         run: |
           set +e
+          cg=keyless; if [ -n "$COINGECKO_API_KEY" ]; then cg=keyed; fi
+          echo "CoinGecko: $cg"
           # --server-log keeps the booted server's own stdout/stderr: a kit's
           # "[price-feed] upstream unreachable: … → TimeoutError" line is the
           # only thing that separates a slow upstream from our own event loop,

@@ -88,5 +88,25 @@ ok(findings === 0, findings ? `${findings} hidden character(s) in instruction fi
 const stale = [...ALLOW.keys()].filter((f) => !tracked.includes(f));
 ok(stale.length === 0, stale.length ? `ALLOW names a file outside the set: ${stale.join(", ")}` : "no stale allowance");
 
+// CLAUDE.md tells the next author what this scan reads: its sentence names
+// every root in PATHS, in the words a reader finds the files by. A root added
+// here without a phrase below fails, and so does a phrase CLAUDE.md drops.
+{
+  const sentence = readFileSync(new URL("../CLAUDE.md", import.meta.url), "utf8").replace(/\s+/g, " ").match(/No hidden character[^]*?is a listing finding/)?.[0] || "";
+  const PHRASE = {
+    "CLAUDE.md": "CLAUDE.md", ".claude": "`.claude/`", wiki: "`wiki/`", docs: "`docs/`",
+    "README.md": "the package READMEs", "mcp/README.md": "the package READMEs", "client/README.md": "the package READMEs",
+    "openclaw/README.md": "the package READMEs", "tollbooth/README.md": "the package READMEs", adapters: "the adapter READMEs",
+    plugins: "`plugins/`", ".claude-plugin": "the plugin manifests", ".codex-plugin": "the plugin manifests",
+    ".cursor-plugin": "the plugin manifests", "openclaw/openclaw.plugin.json": "the plugin manifests",
+    ...Object.fromEntries(SOURCE_FILES.map((f) => [f, `\`${f}\``])),
+  };
+  ok(sentence.length > 0, "CLAUDE.md carries the hidden-character sentence");
+  const unmapped = PATHS.filter((p) => !PHRASE[p]);
+  ok(unmapped.length === 0, `every scanned root has a phrase CLAUDE.md must carry${unmapped.length ? ` (none for: ${unmapped.join(", ")})` : ""}`);
+  const missing = PATHS.filter((p) => PHRASE[p] && !sentence.includes(PHRASE[p]));
+  ok(missing.length === 0, `CLAUDE.md's hidden-character sentence names every root the scan reads${missing.length ? ` (missing: ${[...new Set(missing.map((p) => PHRASE[p]))].join(", ")})` : ""}`);
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

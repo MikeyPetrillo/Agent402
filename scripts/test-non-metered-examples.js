@@ -106,7 +106,128 @@ const COINGECKO_SLUGS = new Set([
   // bundle-kit.js: token-diligence runs coin-profile and coin-ohlc per coin.
   "token-diligence",
 ]);
-const CG_SAMPLE_SIZE = Number(process.env.NON_METERED_CG_SAMPLE) || 2;
+// KEYED OR KEYLESS. CI holds a CoinGecko key of its own (COINGECKO_CI_API_KEY,
+// never the production key) and hands it ONLY to the server this sweep drives
+// in the sweep lane, as COINGECKO_API_KEY on the pro tier, with this file's
+// per-run read cap as the server's COINGECKO_DAILY_MAX (a fresh server's day is
+// the run) and its minute pacing as COINGECKO_MAX_PER_MIN. The boot step tells
+// the later steps which it got in one word (NON_METERED_CG_MODE=keyed|keyless,
+// and NON_METERED_OM_MODE for Open-Meteo's OPEN_METEO_API_KEY); a fork PR gets
+// no secrets and runs keyless. A self-booted sweep reads its own environment.
+//
+//   keyed:   CG_KEYED_SAMPLE_SIZE of the family per commit, still rotating.
+//            A CoinGecko rate limit on a keyed read FAILS (the pacing sits
+//            under the plan, so a keyed 429 is ours to explain), and so does
+//            the server's own cap refusal: a spent cap fails the run, never a skip.
+//   keyless: two per commit, and a CoinGecko rate limit is excused only when a
+//            keyless read to a CoinGecko API host was refused 429 during the
+//            call AND the runner's own direct read of that request is refused
+//            429 too (the outage rule); otherwise it fails.
+//
+// THE PER-RUN READ CAP is sized from the reads each example makes (counted from
+// the kits' read sites, CG_EXAMPLE_READS; one read unless listed) over
+// everything the keyed server serves in one run: the sampled family members
+// (the worst rotation), every non-metered skill pack that runs a family tool,
+// and the metered screens the lenient sweep still drives (CG_KEYED_METERED_SLUGS).
+// cgRunReadBound() adds them up and a control holds the cap above that bound
+// with room for one retry in two. After the lenient sweep,
+// `--coingecko-run-check` reads the server's own count of CoinGecko reads (the
+// operator view of /api/gateway-status) and fails the run when the cap is
+// spent or any keyed read was refused 429; it prints the count, which is the
+// measurement the cap is tuned from.
+export const CG_KEYLESS_SAMPLE_SIZE = 2;
+export const CG_KEYED_SAMPLE_SIZE = 6;
+export const CG_RUN_READ_CAP = 40;
+export const CG_RUN_MAX_PER_MIN = 30;
+// The nightly corpus drives every CoinGecko case once with its own server.
+export const CG_NIGHTLY_READ_CAP = 200;
+export const CG_EXAMPLE_READS = Object.freeze({
+  "crypto-price": 2, "stablecoin-peg": 2, "exchanges": 2, "rwa-asset": 2,
+  "chain-board": 3, "token-diligence": 4, "dex-volume-board": 3, "dex-pool-health": 3,
+});
+// Metered (excluded here), but the lenient sweep drives them on the keyed server.
+export const CG_KEYED_METERED_SLUGS = Object.freeze(["dex-volume-board", "dex-pool-health"]);
+const cgReads = (slug) => CG_EXAMPLE_READS[slug] ?? 1;
+
+/** "keyed" | "keyless" for the CoinGecko reads of the server this sweep
+ *  drives, or null when an external server's mode was not handed over. */
+export function cgMode(env = process.env, external = EXTERNAL) {
+  if (!external) return String(env.COINGECKO_API_KEY || "").trim() ? "keyed" : "keyless";
+  const m = String(env.NON_METERED_CG_MODE || "").trim();
+  return m === "keyed" || m === "keyless" ? m : null;
+}
+/** The same for Open-Meteo (OPEN_METEO_API_KEY). */
+export function omMode(env = process.env, external = EXTERNAL) {
+  if (!external) return String(env.OPEN_METEO_API_KEY || "").trim() ? "keyed" : "keyless";
+  const m = String(env.NON_METERED_OM_MODE || "").trim();
+  return m === "keyed" || m === "keyless" ? m : null;
+}
+/** How many of the family run live per commit in this mode (NON_METERED_CG_SAMPLE overrides). */
+export function cgSampleSize(mode, env = process.env) {
+  const n = Number(env.NON_METERED_CG_SAMPLE);
+  if (Number.isInteger(n) && n > 0) return n;
+  return mode === "keyed" ? CG_KEYED_SAMPLE_SIZE : CG_KEYLESS_SAMPLE_SIZE;
+}
+/** The most CoinGecko reads one keyed run can make: the worst rotation of
+ *  `size` family members, every non-metered pack that runs a family tool, and
+ *  the metered screens the lenient sweep drives. */
+export function cgRunReadBound(size = CG_KEYED_SAMPLE_SIZE, packs = SKILL_PACKS) {
+  const all = [...COINGECKO_SLUGS].sort();
+  let window = 0;
+  for (let s = 0; s < all.length; s++) {
+    let w = 0;
+    for (let i = 0; i < Math.min(size, all.length); i++) w += cgReads(all[(s + i) % all.length]);
+    window = Math.max(window, w);
+  }
+  const metered = meteredPackSlugs(packs);
+  let packReads = 0;
+  for (const p of packs) {
+    if (metered.has(p.slug)) continue;
+    for (const s of p.toolSlugs || []) if (COINGECKO_SLUGS.has(s)) packReads += cgReads(s);
+  }
+  const meteredReads = CG_KEYED_METERED_SLUGS.reduce((a, s) => a + cgReads(s), 0);
+  return { window, packs: packReads, metered: meteredReads, total: window + packReads + meteredReads };
+}
+/** The server's own refusal when its CoinGecko read cap or pacing is spent
+ *  (src/tools/coingecko-rate.js cgRefusalMessage). */
+export function isCgOwnRefusal(status, body) {
+  return status === 503 && /^This server's daily .+ allowance is used up|^This server paces its .+ requests and has no room/.test(String(body?.error || ""));
+}
+/** A family tool's answer that its CoinGecko read was rate-limited. */
+export function isCgRateLimitAnswer(slug, status, body, threw = null) {
+  return COINGECKO_SLUGS.has(slug) && status === 503 && isRateLimited(status, body, threw);
+}
+/** The verdict on a family tool's rate-limit answer: { verdict: "fail", reason }
+ *  or { verdict: "upstream", evidence }. Keyed always fails. Keyless is
+ *  excused only by a keyless GET to a CoinGecko API host refused 429 during
+ *  the call that the runner's own direct read is refused 429 for too. */
+export async function cgRateLimitVerdict({ mode, t0, t1, logPath = upstreamFailureLogPath(), readStatus = directReadStatus }) {
+  if (mode !== "keyless") return { verdict: "fail", reason: `a ${mode || "unknown-mode"} CoinGecko read was rate-limited (a keyed 429 fails: the pacing sits under the plan)` };
+  const rows = failuresBetween(t0, t1, logPath).filter((r) => CG_API_HOSTS.includes(String(r.host).toLowerCase()) && r.status === 429);
+  if (!rows.length) return { verdict: "fail", reason: "no CoinGecko read refused 429 recorded during the call" };
+  const row = rows[rows.length - 1];
+  if (row.keyed || !row.url || row.method !== "GET") return { verdict: "fail", reason: `the refused read to ${row.host} is keyed or not a GET` };
+  const got = await readStatus(row.url, row.accept ? { accept: row.accept } : undefined);
+  if (got !== 429) return { verdict: "fail", reason: `${row.host} refused the server 429 but answers the runner's direct read of the same request ${got || "nothing"}` };
+  return { verdict: "upstream", evidence: `${row.host} refused the server 429 and refuses the runner's direct read of the same request 429 too (keyless)` };
+}
+/** The run check after both sweeps: { ok, lines }. `used` is the server's
+ *  CoinGecko read count (null when unreadable), `keyed429` the keyed reads
+ *  refused 429 during the run. */
+export function cgRunCheckVerdict({ mode, used, cap = CG_RUN_READ_CAP, keyed429 = 0 }) {
+  if (mode === "keyless") return { ok: true, lines: ["ok - CoinGecko: keyless (no per-run read cap applies; each rate limit was read against the runner)"] };
+  if (mode !== "keyed") return { ok: false, lines: ["FAIL - CoinGecko: the sweep server's mode was not handed over (NON_METERED_CG_MODE unset)"] };
+  const lines = [];
+  if (!Number.isFinite(used)) lines.push("FAIL - CoinGecko: keyed, but the server's read count could not be read (fails closed)");
+  else if (used >= cap) lines.push(`FAIL - CoinGecko: keyed, the per-run read cap is spent (${used} of ${cap} reads): a spent cap fails the run`);
+  else lines.push(`ok - CoinGecko: keyed, ${used} of ${cap} reads this run`);
+  if (keyed429 > 0) lines.push(`FAIL - CoinGecko: ${keyed429} keyed read(s) refused 429 this run (a keyed 429 fails the run)`);
+  return { ok: !lines.some((l) => l.startsWith("FAIL")), lines };
+}
+
+const CG_MODE = cgMode();
+const OM_MODE = omMode();
+const CG_SAMPLE_SIZE = cgSampleSize(CG_MODE);
 
 /** `size` slugs of `family` to exercise live on commit `sha`: deterministic
  *  for a commit, rotating across commits. */
@@ -129,9 +250,12 @@ let skippedCoingecko = 0;
 
 // OPEN-METEO'S 5xx IS READ AGAINST THE RUNNER.
 //
-// Production reads Open-Meteo with a paid key (OPEN_METEO_API_KEY); CI never
-// holds it, so this sweep reads the keyless public hosts, whose per-IP budget
-// GitHub runners share. Keyless Open-Meteo answered a runner 503 on every one
+// Production reads Open-Meteo with a paid key (OPEN_METEO_API_KEY). In CI the
+// sweep lane's server gets that key too (NON_METERED_OM_MODE=keyed), and a
+// keyed weather tool's rate limit or relayed 5xx then FAILS: the keyless probe
+// below says nothing about the keyed host. Without it (a fork PR, a local
+// run) the tools read the keyless public hosts, whose per-IP budget GitHub
+// runners share, and the rule below applies. Keyless Open-Meteo answered a runner 503 on every one
 // of four attempts for weather-daily (2026-11-17) and failed main's deploy
 // while production served the same call. Every weather tool is swept here on
 // every commit (none sampled out, so none is handed to test-all.js, whose
@@ -158,7 +282,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // (/api/reliability); re-exported here for the scripts that import it.
 import { METERED_SLUGS, meteredPackSlugs } from "../src/metered-slugs.js";
 import { isFredMaintenancePage, fredMaintenanceError } from "../src/tools/macro-kit.js";
-import { upstreamOutageVerdict, bundleOutageVerdict } from "./lib/upstream-outage.js";
+import { upstreamOutageVerdict, bundleOutageVerdict, upstreamFailureLogPath, failuresBetween, directReadStatus } from "./lib/upstream-outage.js";
+import { CG_API_HOSTS } from "../src/tools/coingecko-endpoint.js";
 import { BUNDLE_LEGS } from "../src/tools/bundle-kit.js";
 
 // WHICH TOOLS HAVE AN UPSTREAM. WALLET_ONLY_SLUGS (src/pow.js) is the egress
@@ -627,9 +752,9 @@ function runControls() {
   // controls are about the sample being real, deterministic and honest rather
   // than about it being large.
   {
-    const s1 = coingeckoSample("abc123");
-    const s2 = coingeckoSample("abc123");
-    ok(s1.size === 2, `control: the CoinGecko sample is ${s1.size} tools per run, not the whole family`);
+    const s1 = coingeckoSample("abc123", CG_KEYLESS_SAMPLE_SIZE);
+    const s2 = coingeckoSample("abc123", CG_KEYLESS_SAMPLE_SIZE);
+    ok(s1.size === 2, `control: the keyless CoinGecko sample is ${s1.size} tools per run, not the whole family`);
     ok([...s1].join() === [...s2].join(),
       "control: the sample is DETERMINISTIC for a commit, so a re-run tests the same pair and a failure reproduces");
     const others = ["deadbeef", "cafe", "0f0f0f", "12345"].map((x) => [...coingeckoSample(x)].join());
@@ -643,6 +768,46 @@ function runControls() {
       `control: the family is the full 30 keyless CoinGecko-backed slugs (got ${COINGECKO_SLUGS.size})`);
     ok(coingeckoSample("x", 99).size === COINGECKO_SLUGS.size,
       "control: raising the sample past the family size sweeps all of them, so the cap is a budget and not a lock");
+  }
+
+  // Keyed or keyless: the mode, the sample it buys and the per-run read cap.
+  {
+    ok(cgMode({ COINGECKO_API_KEY: "k" }, false) === "keyed" && cgMode({ COINGECKO_API_KEY: " " }, false) === "keyless" && cgMode({}, false) === "keyless",
+      "control: a self-booted sweep is keyed exactly when its environment holds a CoinGecko key");
+    ok(cgMode({ NON_METERED_CG_MODE: "keyed", COINGECKO_API_KEY: "" }, true) === "keyed" && cgMode({ NON_METERED_CG_MODE: "keyless", COINGECKO_API_KEY: "k" }, true) === "keyless" && cgMode({ COINGECKO_API_KEY: "k" }, true) === null && cgMode({ NON_METERED_CG_MODE: "yes" }, true) === null,
+      "control: against an external server the mode is the boot step's word alone (this process never holds the key), and anything else is unknown");
+    ok(omMode({ OPEN_METEO_API_KEY: "k" }, false) === "keyed" && omMode({ NON_METERED_OM_MODE: "keyless" }, true) === "keyless" && omMode({}, true) === null,
+      "control: Open-Meteo's mode is read the same way");
+    ok(cgSampleSize("keyed", {}) === CG_KEYED_SAMPLE_SIZE && cgSampleSize("keyless", {}) === CG_KEYLESS_SAMPLE_SIZE && cgSampleSize(null, {}) === CG_KEYLESS_SAMPLE_SIZE && cgSampleSize("keyed", { NON_METERED_CG_SAMPLE: "3" }) === 3,
+      `control: keyed runs ${CG_KEYED_SAMPLE_SIZE} of the family per commit, keyless (or unknown) ${CG_KEYLESS_SAMPLE_SIZE}`);
+    ok(CG_KEYED_SAMPLE_SIZE > CG_KEYLESS_SAMPLE_SIZE && CG_KEYED_SAMPLE_SIZE < COINGECKO_SLUGS.size,
+      "control: the key buys a larger rotating sample, never the whole family on every push");
+    const bound = cgRunReadBound();
+    ok(bound.packs > 0 && bound.window >= CG_KEYED_SAMPLE_SIZE && bound.metered > 0,
+      `control: the read bound counts the sample's worst rotation (${bound.window}), the skill packs that run a family tool (${bound.packs}) and the metered screens the lenient sweep drives (${bound.metered})`);
+    ok(CG_RUN_READ_CAP >= Math.ceil(bound.total * 1.5) && CG_RUN_READ_CAP <= bound.total * 3,
+      `control: the per-run read cap (${CG_RUN_READ_CAP}) covers the worst keyed run (${bound.total} reads) with one retry in two, and is no looser than three times it`);
+    ok(cgRunReadBound(COINGECKO_SLUGS.size).total > CG_RUN_READ_CAP || CG_KEYED_SAMPLE_SIZE === COINGECKO_SLUGS.size,
+      "control: the cap is what keeps the keyed sample below the whole family (sweeping all of it would not fit)");
+    ok([...CG_KEYED_METERED_SLUGS].every((s) => METERED_SLUGS.has(s)) && Object.keys(CG_EXAMPLE_READS).every((s) => COINGECKO_SLUGS.has(s) || CG_KEYED_METERED_SLUGS.includes(s)),
+      "control: every read count names a family tool or a metered screen the lenient sweep drives");
+    ok(CG_NIGHTLY_READ_CAP >= cgRunReadBound(COINGECKO_SLUGS.size).total, `control: the nightly corpus cap (${CG_NIGHTLY_READ_CAP}) covers every family example once (${cgRunReadBound(COINGECKO_SLUGS.size).total})`);
+    ok(CG_RUN_MAX_PER_MIN >= 30 && CG_RUN_MAX_PER_MIN >= Math.ceil(cgRunReadBound().total * 1.25), `control: the minute pacing (${CG_RUN_MAX_PER_MIN}) holds a whole keyed run inside one minute, so the pacing never refuses the sweep`);
+    // The answers: our own cap refusal, the source's rate limit, anything else.
+    const ownDay = { error: "This server's daily CoinGecko allowance is used up; it renews at 00:00 UTC. This is on our side, not your input. You were not charged." };
+    const ownPace = { error: "This server paces its Market data requests and has no room this moment; retry in 1 s. This is on our side, not your input. You were not charged." };
+    ok(isCgOwnRefusal(503, ownDay) && isCgOwnRefusal(503, ownPace) && !isCgOwnRefusal(502, ownDay) && !isCgOwnRefusal(503, { error: "CoinGecko rate-limited the request - retry shortly" }),
+      "control: the server's own cap or pacing refusal is told apart from the source's rate limit");
+    ok(isCgRateLimitAnswer("crypto-price", 503, { error: "CoinGecko rate-limited the request - retry shortly" }) && isCgRateLimitAnswer("coin-profile", 503, { error: "Market data upstream rate-limited this request - retry in about 60 seconds" }),
+      "control: both CoinGecko kits' rate-limit answers are read as the source's rate limit");
+    ok(!isCgRateLimitAnswer("crypto-price", 503, ownDay) && !isCgRateLimitAnswer("gov-data", 503, { error: "rate-limited" }) && !isCgRateLimitAnswer("crypto-price", 502, { error: "CoinGecko upstream HTTP 502 - try again later" }),
+      "control: our own refusal, a tool outside the family and a 5xx are never the CoinGecko rate-limit rule's");
+    ok(cgRunCheckVerdict({ mode: "keyed", used: 12 }).ok && !cgRunCheckVerdict({ mode: "keyed", used: CG_RUN_READ_CAP }).ok && !cgRunCheckVerdict({ mode: "keyed", used: null }).ok && !cgRunCheckVerdict({ mode: "keyed", used: 3, keyed429: 1 }).ok,
+      "control: the run check fails a spent cap, an unreadable count and a keyed 429, and passes a keyed run under the cap");
+    ok(cgRunCheckVerdict({ mode: "keyless", used: null }).ok && !cgRunCheckVerdict({ mode: null, used: 1 }).ok,
+      "control: a keyless run has no cap to spend, and an unknown mode fails closed");
+    ok(cgRunCheckVerdict({ mode: "keyed", used: 7 }).lines.join(" ").match(/\b7 of \d+ reads\b/) && !/[A-Za-z0-9]{24,}/.test(cgRunCheckVerdict({ mode: "keyed", used: 7 }).lines.join(" ")),
+      "control: the run check prints the read count and the mode word, never a key");
   }
 
   // Open-Meteo's runner probes: a weather tool's relayed upstream 5xx is
@@ -871,12 +1036,31 @@ export async function runBundleStubControls() {
     ok(Boolean((await bundleFailureGrade(tk, tkAnswer, runnerGets(200)))?.fail), "control (stub): token-diligence's leg was rate-limited while the market host answers the runner's direct read: it FAILS");
     ok(await bundleFailureGrade(tk, { ...tkAnswer, body: { error: tkAnswer.body.error.replace("Market data upstream rate-limited this request - retry in about 60 seconds", "This server paces its Market data requests and has no room this moment; retry in 1 s. This is on our side, not your input. You were not charged.") } }, runnerGets(429)) === null,
       "control (stub): token-diligence's leg refused by this server's own pacing is not read as the source's limit (it fails by the rules below)");
+    // A standalone family tool's rate limit: keyed fails; keyless is excused
+    // only by a recorded keyless 429 the runner's direct read gets too.
+    const cgUrl = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd";
+    const cg = (mode, got) => cgRateLimitVerdict({ mode, t0: 900, t1: 1100, logPath, readStatus: async () => got });
+    record({ host: "api.coingecko.com", url: cgUrl });
+    ok((await cg("keyless", 429)).verdict === "upstream", "control (stub): keyless, a recorded keyless 429 the runner's direct read is refused 429 for too: excused");
+    ok((await cg("keyless", 200)).verdict === "fail" && (await cg("keyless", 503)).verdict === "fail", "control (stub): keyless, a 429 the runner is answered 200 (or another status) for: it FAILS");
+    ok((await cg("keyed", 429)).verdict === "fail" && (await cg(null, 429)).verdict === "fail", "control (stub): keyed (or an unknown mode), a CoinGecko rate limit FAILS whatever the runner reads");
+    record({ host: "api.coingecko.com", keyed: true, url: undefined });
+    ok((await cg("keyless", 429)).verdict === "fail", "control (stub): a keyed 429 row is never re-read and excuses nothing");
+    record({ host: "api.coingecko.com", url: cgUrl, status: 503 });
+    ok((await cg("keyless", 429)).verdict === "fail", "control (stub): a recorded 503 is not the 429 the tool reported");
+    rmSync(logPath, { force: true });
+    ok((await cg("keyless", 429)).verdict === "fail", "control (stub): no refused CoinGecko read recorded during the call excuses nothing");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
 async function main() {
   runControls();
   console.log(`[non-metered] target=${TARGET} external=${EXTERNAL} concurrency=${CONCURRENCY}`);
+  // The words only, never a key: keyed or keyless for each source.
+  console.log(`[non-metered] CoinGecko: ${CG_MODE || "unknown"} (${CG_LIVE.size} of ${COINGECKO_SLUGS.size} live this commit); Open-Meteo: ${OM_MODE || "unknown"}`);
+  if (process.env.CI && EXTERNAL) {
+    ok(CG_MODE !== null && OM_MODE !== null, `the sweep server's boot step handed over its modes (NON_METERED_CG_MODE=${CG_MODE || "unset"}, NON_METERED_OM_MODE=${OM_MODE || "unset"})`);
+  }
   console.log(`[non-metered] metered slugs=${METERED_SLUGS.size} metered packs=${METERED_PACK_SLUGS.size}`);
 
   await boot();
@@ -1015,6 +1199,32 @@ async function main() {
       return;
     }
 
+    // The server's own CoinGecko cap or pacing refused the read: in CI that is
+    // the per-run read cap (or its minute pacing) spent, which fails the run.
+    if (isCgOwnRefusal(r.status, r.body)) {
+      liveFails.push(`${t.method.toUpperCase()} ${t.path} (${t.slug}) → ${r.status} ${errText(r.body, r.threw).slice(0, 120)} [this server's CoinGecko read cap (${CG_RUN_READ_CAP} a run in CI) or its pacing is spent: a spent cap fails the run]`);
+      return;
+    }
+    // A family tool's CoinGecko rate limit: keyed fails, keyless is read
+    // against the runner (cgRateLimitVerdict). Never the soft-skip below.
+    if (isCgRateLimitAnswer(t.slug, r.status, r.body, r.threw)) {
+      const v = await cgRateLimitVerdict({ mode: CG_MODE, t0: r.t0, t1: r.t1 });
+      if (v.verdict === "upstream") {
+        skippedRunnerUnreachable++;
+        console.log(`\nskip - ${t.slug}: ${v.evidence} (upstream, not our defect)`);
+        return;
+      }
+      liveFails.push(`${t.method.toUpperCase()} ${t.path} (${t.slug}) → ${r.status} ${errText(r.body, r.threw).slice(0, 120)} [not excused: ${v.reason}]`);
+      return;
+    }
+    // A weather tool that read Open-Meteo keyed: a rate limit or an upstream
+    // 5xx is not excused by the runner's keyless probe, which says nothing
+    // about the keyed host. It fails.
+    if (OPEN_METEO_SLUGS.has(t.slug) && OM_MODE === "keyed" && (isRateLimited(r.status, r.body, r.threw) || runnerProbeLabel(r.status, r.body, t.slug))) {
+      liveFails.push(`${t.method.toUpperCase()} ${t.path} (${t.slug}) → ${r.status} ${errText(r.body, r.threw).slice(0, 120)} [not excused: Open-Meteo was read keyed, and a keyed refusal is ours to explain]`);
+      return;
+    }
+
     // Rate-limit after retry = soft skip (test-gov-data DEMO_KEY doctrine). A
     // bare 502 with no rate-limit wording still fails — that is the dead-tool class.
     if (isRateLimited(r.status, r.body, r.threw)) {
@@ -1123,7 +1333,7 @@ async function main() {
       ? `every in-scope example returns 200 without body.error — ${liveFails.length} FAILED:\n     ${liveFails.slice(0, 30).join("\n     ")}${liveFails.length > 30 ? `\n     …and ${liveFails.length - 30} more` : ""}`
       : `every in-scope example returns 200 without body.error (${asserted} asserted, ${skippedBrowser} browser-skipped, ${skippedRateLimit} rate-limit-skipped, ${skippedMediaSource} media-source-skipped, ${skippedPriceFeed} price-feed-skipped, ${skippedClientTimeout} client-timeout-skipped)`);
   if (skippedCoingecko) {
-    console.log(`\nskip - ${skippedCoingecko} CoinGecko tool(s) sampled out of this run (keyless is 30/min shared per IP)`);
+    console.log(`\nskip - ${skippedCoingecko} CoinGecko tool(s) sampled out of this run (${CG_MODE === "keyed" ? `keyed: ${CG_LIVE.size} a run under the per-run read cap` : "keyless is 30/min shared per IP"})`);
     console.log(`  exercised live this commit: ${[...CG_LIVE].join(", ")}`);
     console.log(`  the sample rotates by commit, so the family is covered across runs rather than in one`);
   }
@@ -1173,7 +1383,37 @@ async function main() {
 // for argv[1], so a run from a symlinked checkout (macOS /tmp -> /private/tmp)
 // would otherwise exit 0 having run nothing.
 const isMain = (() => { try { return Boolean(process.argv[1]) && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url); } catch { return false; } })();
-if (isMain) {
+
+/** --coingecko-run-check: after both sweeps, against the keyed server. Reads
+ *  the server's own CoinGecko read count (the operator view of
+ *  /api/gateway-status, with the run's own token) and the keyed 429s in the
+ *  upstream failure log, and fails the run on a spent cap or a keyed 429. */
+async function coingeckoRunCheck() {
+  let used = null;
+  if (CG_MODE === "keyed") {
+    try {
+      const res = await fetch(`${TARGET}/api/gateway-status`, { headers: { "X-Operator-Token": String(process.env.SWEEP_OPERATOR_TOKEN || "") }, signal: AbortSignal.timeout(15_000) });
+      const n = (await res.json())?.upstreamBudgets?.upstreams?.coingecko?.callsToday;
+      used = Number.isFinite(n) ? n : null;
+    } catch { used = null; }
+  }
+  const keyed429 = failuresBetween(0, Number.MAX_SAFE_INTEGER).filter((r) => CG_API_HOSTS.includes(String(r.host).toLowerCase()) && r.keyed && r.status === 429).length;
+  const v = cgRunCheckVerdict({ mode: CG_MODE, used, keyed429 });
+  for (const line of v.lines) console.log(line);
+  process.exit(v.ok ? 0 : 1);
+}
+
+if (isMain && process.argv.includes("--controls")) {
+  // The graders' own controls, offline (stub servers only): no sweep, no boot.
+  (async () => {
+    runControls();
+    await runVerdictStubControls();
+    console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed (controls only)`);
+    process.exit(failed ? 1 : 0);
+  })().catch((e) => { console.error(e); process.exit(1); });
+} else if (isMain && process.argv.includes("--coingecko-run-check")) {
+  coingeckoRunCheck().catch((e) => { console.error(e); process.exit(1); });
+} else if (isMain) {
   main().catch((e) => {
     console.error(e);
     stop();
