@@ -205,10 +205,15 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `Retry-After`, `hint: "busy"`, shed, never charged) and marks the request scope (`onchainSqlBusy`).
   The pacer spaces every query the server sends to the query service (buyer queries, retries,
   recovery runs, the health check, the revenue reads) `CDP_SQL_SEND_GAP_MS` apart (625 ms default,
-  times `RATE_LIMIT_REPLICAS`), under the project's documented 2 queries a second; a send whose
-  slot is more than 3 s off (or past the handler budget) is not sent. The gap in force is held at
-  2,500 ms (`SQL_SEND_GAP_MAX_MS`, under that 3 s wait) whatever the two settings multiply to, and
-  a value not taken as set is logged at boot by its setting's name (`sqlSendGapWarnings`). The
+  times `RATE_LIMIT_REPLICAS`), under the project's documented 2 queries a second at up to four
+  replicas; a send waits for its slot up to 3 s or four gaps, whichever is longer
+  (`sqlSlotWaitMs`: the same four slots out at any replica count), and one whose slot is further
+  off (or past the handler budget) is not sent. A buyer whose connection closes while its first
+  query waits for its slot is answered 499 and the query is not sent (nothing to deliver, so
+  nothing is charged); a send whose wait has started keeps its slot. The gap in force is held at
+  2,500 ms (`SQL_SEND_GAP_MAX_MS`, so a send waits at most 10 s) whatever the two settings
+  multiply to, and a value not taken as set is logged at boot by its setting's name
+  (`sqlSendGapWarnings`). The
   pacer is all a send waits on: a facilitator verify or settle holds no query back
   (`scripts/test-onchain-sql-paid-path.js` holds a paid query to 300 ms from its own verify answer
   on a boot wired as production is). A 2xx from the query service whose body is cut off, empty or
@@ -228,9 +233,11 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `heartbeat.yml` page once on `alert` ("onchainSqlBusy: a top paying buyer was told the query
   service is busy", fixed text) and close on `ok`. An alarm only: nothing is refused for it. The
   server's own reads through the handler (the economy snapshot, `ownSqlQuery` in
-  `src/tools/cdp-kit.js`) are paced like any query but take no place in the in-flight cap and are
-  never refused by it, so a buyer's query is never refused for one; a new own caller uses
-  `ownSqlQuery`, never the tool's handler. The test
+  `src/tools/cdp-kit.js`) take a send slot only when no other query is waiting for one (at most
+  one gap off; refused 429 otherwise, and `runSql` in `src/x402-economy.js` tries again after 4, 8
+  and 12 s), so they never queue ahead of a buyer's query and a buyer's query waits at most one
+  gap behind one; they take no place in the in-flight cap and are never refused by it. A new own caller uses `ownSqlQuery`,
+  never the tool's handler. The test
   preload `scripts/lib/cdp-sql-stub-preload.js` holds a `hold_<id>` query open until the file
   `<id>` exists in `CDP_SQL_STUB_HOLD_DIR`, and a query whose text holds `CDP_SQL_STUB_HOLD_TEXT`
   until the file `own` does (test only). The test preload `scripts/lib/cdp-origin-preload.js` leaves

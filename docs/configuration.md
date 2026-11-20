@@ -206,7 +206,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `CDP_API_KEY_ID` | Coinbase Developer Platform key id: settlement through its facilitator and Bazaar discovery. |  | `src/cdp-facilitator.js`, `src/guides.js`, `src/integration-pages.js` and 2 more |
 | `CDP_API_KEY_SECRET` | Coinbase Developer Platform key secret (a credential, set on the host). |  | `src/cdp-facilitator.js`, `src/guides.js`, `src/integration-pages.js` and 2 more |
 | `CDP_FACILITATOR_URL` | Cdp facilitator URL. |  | `src/payments.js` |
-| `CDP_SQL_SEND_GAP_MS` | Spacing between queries one replica sends to the onchain query service, in milliseconds (at least 100; multiplied by RATE_LIMIT_REPLICAS, and the result is held at 2500, under the 3 seconds a send may wait for its slot). |  | `src/tools/cdp-kit.js` |
+| `CDP_SQL_SEND_GAP_MS` | Spacing between queries one replica sends to the onchain query service, in milliseconds (at least 100; multiplied by RATE_LIMIT_REPLICAS, and the result is held at 2500; a send waits for its slot up to 3 seconds or four of these gaps, whichever is longer). |  | `src/tools/cdp-kit.js` |
 
 ## CELO
 

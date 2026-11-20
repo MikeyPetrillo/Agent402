@@ -164,8 +164,9 @@ Privacy:
 Tools:
 - onchain-sql runs up to 8 queries at once on a server (was 2), and every
   query the server sends to the query service is spaced to stay under that
-  service's rate limit. A query past either limit is refused 429 with
-  Retry-After, before any payment is settled.
+  service's rate limit (for up to four replicas at the default spacing). A
+  query past either limit is refused 429 with Retry-After, before any
+  payment is settled.
 
 Status:
 - onchainSqlBusy on /api/gateway-status reads alert when a top paying buyer
