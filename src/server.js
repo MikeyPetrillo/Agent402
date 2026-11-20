@@ -12618,9 +12618,12 @@ if (FREE_MODE) {
         requireShared: sharedClaimRequired({ longRunning: !!replayDef && isLongRunningSlug(replayDef.slug), draining: drainSignal().aborted }),
       });
       if (verdict === "unavailable") {
-        res.setHeader("Retry-After", "30");
+        // The claim waited its own bound (REQUIRED_CLAIM_OP_MS in
+        // src/replay-guard.js, 5 s); a store that answers again is waited for
+        // on the retry, so the retry is asked for after that long.
+        res.setHeader("Retry-After", "5");
         return res.status(503).json({
-          error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and nothing was charged. Retry in about 30 seconds.",
+          error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and nothing was charged. Retry in about 5 seconds.",
           reason: "replay-store-unavailable",
         });
       }
@@ -12648,20 +12651,27 @@ if (FREE_MODE) {
         // its nonce is spent on chain, but the gateway cache reader takes a
         // still-valid authorization the guard does not hold as its payer's
         // proof, and a far validBefore must not keep a key per paid call.
-        if (res.statusCode === 200) replayGuard.settle(replayKey, undefined, consumedHoldFor(req, { settled: !grantedUnsettled(req) })).catch(() => {});
+        if (granted()) replayGuard.settle(replayKey, undefined, consumedHoldFor(req, { settled: !grantedUnsettled(req) })).catch(() => {});
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
+      // Granted: any 2xx, since the paywall settles every handler answer
+      // under 400 (a 201 or 204 is as paid as a 200). The one 2xx that grants
+      // nothing is the async front's 202 (Prefer: respond-async, answered
+      // with Preference-Applied before the run; its loopback carries the
+      // payment), which is released so that loopback can claim it.
+      const granted = () => res.statusCode >= 200 && res.statusCode < 300
+        && !(res.statusCode === 202 && /respond-async/i.test(String(res.getHeader("Preference-Applied") || "")));
       res.on("finish", finishGuard);
-      // A refusal (anything but a 200) is released when it is ended: "finish"
+      // A refusal (anything not granted) is released when it is ended: "finish"
       // waits for the socket write, and a buyer that resent the same payment
       // as soon as the 402's headers arrived was refused as a replay in that
       // window. The paywall buffers the handler's answer and ends the
       // response through this wrapper once settlement is decided, so the
-      // status read here is the final one; a 200 still waits for "finish".
+      // status read here is the final one; a granted 2xx still waits for "finish".
       const endBeforeGuard = res.end;
       res.end = function replayGuardEnd(...args) {
         const out = endBeforeGuard.apply(this, args);
-        if (res.statusCode !== 200) finishGuard();
+        if (!granted()) finishGuard();
         return out;
       };
       // Client left before the response finished. On a close before the first
@@ -13034,6 +13044,7 @@ app.use((req, res, next) => {
 // A free proof-of-work or trial call is not a charge and takes no ticket.
 // The abandoned records are read back before the listener opens: a deploy is a
 // restart, and a budget every restart refilled would not bound anything.
+import { INFLIGHT_WINDOW_MS as HANGUP_INFLIGHT_WINDOW_MS } from "./hangup-forgiveness.js";
 if (!FREE_MODE) {
   try {
     const r = loadHangupForgiveness();
@@ -13086,13 +13097,32 @@ if (!FREE_MODE) {
     // caps, so the run is recorded as abandoned and the budget bounds the
     // credit as it bounds every withheld charge.
     const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) && (!settleSentWhileConnected(req) || isBatchSettlementRequest(req)) });
-    res.once("close", () => { closed = true; if (reserved) settle(); });
+    // The ticket is settled once the response's outcome is known (the gate
+    // ended it, or it finished), not at the close: a close that lands while
+    // the settle path still waits (the authorization claim's store wait,
+    // after the client-gone check and before the settlement mark) reads "no
+    // settlement sent" at that moment, and the charge that then goes out
+    // would be counted against the budget as withheld. A payment channel's
+    // ticket is still settled at the close: its charge is given back only on
+    // an abandoned ticket, which recordHangupDebt reads when the gate ends
+    // the response, before the outcome runs. A response that never ends is
+    // settled one in-flight window after the close, as it reads then.
+    let decided = false;
+    onResponseEnd(req, res, () => { decided = true; if (reserved) settle(); });
+    res.once("close", () => {
+      closed = true;
+      if (!reserved) return;
+      if (decided || isBatchSettlementRequest(req)) { settle(); return; }
+      const late = setTimeout(settle, HANGUP_INFLIGHT_WINDOW_MS());
+      late.unref?.();
+    });
     // Priced at what this chain charges (the signed amount, or the gated
     // price through the chain's premium and floor), so a ticket holds the
     // charge it may forgive.
     try { await reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: ticketPriceUsd({ basePriceUsd: quotedPriceUsd(def, req), paymentHeader: paymentHeaderOf(req) }), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true }); }
     catch (err) { console.warn(`[hangup] ticket reservation failed (${String(err?.message || err).slice(0, 80)}); the call runs without a ticket`); }
     reserved = true;
+    if (decided) settle();
     if (closed || res.destroyed) {
       settle();
       try { res.status(499).json({ error: "The connection closed before the call started; nothing ran and nothing was charged.", tool: def.slug, charged: false }); } catch { /* socket already gone */ }
