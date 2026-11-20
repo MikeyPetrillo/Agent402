@@ -85,7 +85,7 @@ export const METERED_SLUGS = new Set([
   "v1-images-fast", "v1-images-pro", "v1-images-edit", "v1-videos",
   // Alchemy hard-require (compute units) — publicJsonRpc-backed tools stay IN
   "wallet-balance", "token-metadata", "token-price", "wallet-transactions",
-  "asset-transfers", "token-balances", "token-allowance", "tx-receipt",
+  "asset-transfers", "wallet-transfers-multichain", "token-balances", "token-allowance", "tx-receipt",
   "block-receipts", "token-price-history",
   "nft-holdings", "nft-metadata", "gas-snapshot",
   "dex-pair", "dex-pool", "dex-quote",

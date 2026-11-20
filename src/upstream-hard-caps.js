@@ -41,6 +41,9 @@ export const HARD_CAPS = [
   { name: "brave", match: "api.search.brave.com", env: "HARDCAP_BRAVE_CALLS", dflt: 6000 },
   { name: "openai", match: "api.openai.com", env: "HARDCAP_OPENAI_CALLS", dflt: 6000 },
   { name: "e2b", match: null, env: "HARDCAP_E2B_SANDBOXES", dflt: 1500 },
+  // Network reads by the Alchemy multichain transfers read (alchemy-data-kit.js
+  // wallet-transfers-multichain): one unit per network a call asks for.
+  { name: "alchemy-multichain", match: null, env: "HARDCAP_ALCHEMY_MULTICHAIN_NETWORKS", dflt: 30000 },
 ];
 
 // BOUNDED SHARES. An internal reader of a capped upstream that must never

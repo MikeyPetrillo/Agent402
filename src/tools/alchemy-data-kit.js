@@ -30,6 +30,12 @@
 //                       capped.
 //   token-price-history Alchemy Prices API historical series by symbol or by
 //                       contract+network, interval 5m/1h/1d with span caps.
+//   wallet-transfers-multichain one Multichain Transfers read (data API,
+//                       beta): a wallet's transfers on up to 5 networks,
+//                       merged newest first, with each network's own state
+//                       when it did not answer. 1 request; its network reads
+//                       count against their own daily ceiling
+//                       (HARDCAP_ALCHEMY_MULTICHAIN_NETWORKS).
 //
 // CU discipline (why each tool looks the way it does): one upstream request
 // per call is the rule; the only fan-out is token metadata, capped at 20
@@ -48,6 +54,8 @@
 
 import { redactSecrets } from "./redact.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { takeHardCap, releaseHardCap, hardCapError, neverReachedUpstream } from "../upstream-hard-caps.js";
+import { scanCoverage } from "../partial-answer.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget (block-receipts reads the head, then the receipts;
@@ -67,6 +75,18 @@ export const NETWORKS = {
   optimism: { subdomain: "opt-mainnet",     chainId: 10,    pricesId: "opt-mainnet",     nativeSymbol: "ETH" },
 };
 const NETWORK_NAMES = Object.keys(NETWORKS);
+
+// The Multichain Transfers API's network ids (its own list: polygon is
+// matic-mainnet there). Mainnets only.
+export const MULTICHAIN_NETWORKS = Object.freeze({
+  ethereum: "eth-mainnet", base: "base-mainnet", polygon: "matic-mainnet", arbitrum: "arb-mainnet", optimism: "opt-mainnet",
+  bnb: "bnb-mainnet", celo: "celo-mainnet", gnosis: "gnosis-mainnet", arc: "arc-mainnet", robinhood: "robinhood-mainnet",
+  monad: "monad-mainnet", ronin: "ronin-mainnet",
+});
+const MULTICHAIN_BY_ID = Object.fromEntries(Object.entries(MULTICHAIN_NETWORKS).map(([k, v]) => [v, k]));
+const MULTICHAIN_MAX_NETWORKS = 5;
+const MULTICHAIN_DEFAULT_NETWORKS = ["ethereum", "base", "arbitrum", "optimism", "polygon"];
+const MULTICHAIN_STATES = new Set(["unsupported", "timeout", "error"]);
 
 const ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
 const TX_HASH_RE = /^0x[a-fA-F0-9]{64}$/;
@@ -238,7 +258,7 @@ async function alchemyFetch(url, opts = {}, { notFound, step = "data" } = {}) {
     ...opts,
     headers: { "Content-Type": "application/json", Accept: "application/json", ...(opts.headers || {}) },
   }, ctx);
-  if (res.status === 429) throw bad("Chain data rate limit reached upstream - retry shortly", 503);
+  if (res.status === 429) throw Object.assign(bad("Chain data rate limit reached upstream - retry shortly", 503), { upstreamStatus: 429 });
   if (res.status === 404 && notFound) throw bad(notFound, 404);
   if (!res.ok) {
     // Upstream 4xx/5xx bodies carry their own error text - log (redacted,
@@ -246,7 +266,7 @@ async function alchemyFetch(url, opts = {}, { notFound, step = "data" } = {}) {
     let excerpt = "";
     try { excerpt = redactSecrets(await res.text()).slice(0, 200); } catch { /* ignore */ }
     console.warn(`[alchemy-data] upstream HTTP ${res.status} from ${hostOf(url)}: ${excerpt}`);
-    throw bad(`Chain data upstream error (HTTP ${res.status})`, 502);
+    throw Object.assign(bad(`Chain data upstream error (HTTP ${res.status})`, 502), { upstreamStatus: res.status });
   }
   let data;
   try { data = await bodyUnderDeadline(res.json(), ctx); }
@@ -932,6 +952,138 @@ export const ALCHEMY_DATA_TOOLS = [
         changePct: first ? Number((((last - first) / first) * 100).toFixed(4)) : null,
         points,
         source: SOURCE, fetchedAt: nowIso(),
+      };
+    },
+  },
+  // =========================================================================
+  // wallet-transfers-multichain
+  // =========================================================================
+  {
+    route: "POST /api/wallet-transfers-multichain",
+    name: "Wallet transfers across chains",
+    slug: "wallet-transfers-multichain",
+    category: "crypto",
+    price: "$0.01",
+    description:
+      "A wallet's token and native transfers on up to 5 EVM networks in one call (Ethereum, Base, Arbitrum, Optimism, Polygon, BNB, Celo, Gnosis, Arc and more), merged newest first by block time: network, block, time, hash, from, to, category, asset, exact decimal value, token contract and NFT token ids. Filter by direction, category, token contracts and a time window; page with the cursor. Each network's state is in the answer, so a network that did not answer is never read as having no transfers.",
+    tags: ["crypto", "transfers", "multichain", "wallet", "history", "erc20", "erc721", "evm", "ethereum", "base", "arbitrum"],
+    discovery: {
+      bodyType: "json",
+      input: { address: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", networks: ["ethereum", "base", "arbitrum"], direction: "in", category: ["external", "erc20"], maxCount: 5 },
+      inputSchema: {
+        properties: {
+          address: { type: "string", description: "0x-prefixed 40-char EVM address." },
+          networks: { type: "array", items: { type: "string" }, description: `Up to ${MULTICHAIN_MAX_NETWORKS} of ${Object.keys(MULTICHAIN_NETWORKS).join(", ")} (default ${MULTICHAIN_DEFAULT_NETWORKS.join(", ")}).` },
+          direction: { type: "string", description: "in (received), out (sent) or both (default)." },
+          category: { type: "array", items: { type: "string" }, description: "Subset of external, internal, erc20, erc721, erc1155, specialnft. Default external+erc20+erc721+erc1155." },
+          contracts: { type: "array", items: { type: "string" }, description: "Optional token contract filter, up to 10 addresses (token categories only)." },
+          fromTime: { type: "string", description: "Window start, ISO 8601 (default: the start of chain history)." },
+          toTime: { type: "string", description: "Window end, ISO 8601 (default: now)." },
+          maxCount: { type: "number", description: "Rows per call, 1-100 (default 25)." },
+          order: { type: "string", description: "desc (newest first, default) or asc." },
+          includeZeroValue: { type: "boolean", description: "Include zero-value transfers. Default false." },
+          pageKey: { type: "string", description: "Cursor from a previous response to fetch the next page." },
+        },
+        required: ["address"],
+      },
+      output: {
+        example: {
+          address: "0xd8da6bf26964af9d7eed9e03e53415d37aa96045",
+          networks: ["ethereum", "base", "arbitrum"], direction: "in", categories: ["external", "erc20"], contracts: [],
+          fromTime: null, toTime: null, order: "desc", maxCount: 5, count: 1,
+          transfers: [
+            { network: "base", blockNum: 35000000, timestamp: "2026-11-19T20:01:02Z", hash: "0x214b…e56b", from: "0xa916…6081", to: "0xd8da…6045", category: "erc20", asset: "USDC", value: "0.42", rawValue: "420000", decimals: 6, contract: "0x8335…2913", tokens: null },
+          ],
+          networkStatus: [{ network: "ethereum", state: "ok" }, { network: "base", state: "ok" }, { network: "arbitrum", state: "ok" }],
+          scanned: 3, scanCandidates: 3, scanCap: MULTICHAIN_MAX_NETWORKS, scanCoversAll: true,
+          complete: false, truncated: true,
+          pageKey: "eyJvIjoxfQ", source: "alchemy", fetchedAt: "2026-11-20T12:00:00.000Z",
+        },
+      },
+    },
+    handler: async (i) => {
+      const address = takeAddress(i.address);
+      const names = takeList(i.networks, "networks");
+      const networks = names.length ? names : [...MULTICHAIN_DEFAULT_NETWORKS];
+      if (networks.length > MULTICHAIN_MAX_NETWORKS) throw bad(`"networks" accepts at most ${MULTICHAIN_MAX_NETWORKS} networks per call`);
+      for (const n of networks) if (!Object.hasOwn(MULTICHAIN_NETWORKS, n)) throw bad(`Unsupported network "${n}" - supported: ${Object.keys(MULTICHAIN_NETWORKS).join(", ")}`);
+      const directionRaw = typeof i.direction === "string" && i.direction.trim() ? i.direction.trim().toLowerCase() : "both";
+      const direction = { in: "to", out: "from", both: "both" }[directionRaw];
+      if (!direction) throw bad(`"direction" must be "in", "out" or "both"`);
+      const contracts = takeAddressList(i.contracts, "contracts", TRANSFERS_MAX_CONTRACTS);
+      const categories = takeCategories(i.category, { dflt: contracts.length ? ["erc20", "erc721", "erc1155"] : DEFAULT_CATEGORIES });
+      if (contracts.length && categories.some((c) => !TOKEN_CATEGORIES.has(c))) {
+        throw bad(`"contracts" only filters token categories (erc20, erc721, erc1155, specialnft) - drop external/internal from "category"`);
+      }
+      const from = parseTime(i.fromTime, "fromTime");
+      const to = parseTime(i.toTime, "toTime");
+      if (from !== null && to !== null && to <= from) throw bad(`"toTime" must be after "fromTime"`);
+      const maxCount = takeInt(i.maxCount, { field: "maxCount", min: 1, max: TRANSFERS_MAX_COUNT, dflt: TRANSFERS_DEFAULT_COUNT });
+      const order = typeof i.order === "string" && i.order.trim() ? i.order.trim().toLowerCase() : "desc";
+      if (order !== "asc" && order !== "desc") throw bad(`"order" must be "asc" or "desc"`);
+      const pageKey = typeof i.pageKey === "string" && i.pageKey.trim() ? i.pageKey.trim() : null;
+      if (pageKey && (pageKey.length > 500 || !/^[A-Za-z0-9_=-]+$/.test(pageKey))) throw bad(`"pageKey" is not a valid cursor`);
+      const key = requireKey();
+
+      // One unit per network read, all or none: a refusal gives back what it took.
+      const takenAt = Date.now();
+      let taken = 0;
+      for (; taken < networks.length; taken++) if (!takeHardCap("alchemy-multichain", takenAt)) break;
+      const giveBack = () => { for (let k = 0; k < taken; k++) releaseHardCap("alchemy-multichain", takenAt); };
+      if (taken < networks.length) { giveBack(); throw hardCapError(); }
+
+      const body = {
+        address, networks: networks.map((n) => MULTICHAIN_NETWORKS[n]), category: categories, direction,
+        order, maxCount, excludeZeroValue: i.includeZeroValue !== true,
+        ...(from !== null ? { fromTimestamp: new Date(from).toISOString() } : {}),
+        ...(to !== null ? { toTimestamp: new Date(to).toISOString() } : {}),
+        ...(contracts.length ? { contractAddresses: contracts } : {}),
+        ...(pageKey ? { pageKey } : {}),
+      };
+      let data;
+      try {
+        data = await alchemyFetch(`https://api.g.alchemy.com/data/v1/${key}/transfers/by-address`, { method: "POST", body: JSON.stringify(body) }, { step: "multichain transfers" });
+      } catch (e) {
+        // The upstream refused before any work (a 4xx), or the call never left: the network reads are given back.
+        if ((e?.upstreamStatus >= 400 && e.upstreamStatus < 500) || neverReachedUpstream(e)) giveBack();
+        throw e;
+      }
+      if (!data || typeof data !== "object" || !Array.isArray(data.transfers)) throw bad("Chain data upstream returned a malformed response", 502);
+      const failed = new Map();
+      for (const pe of Array.isArray(data.error?.partialErrors) ? data.error.partialErrors : []) {
+        const name = MULTICHAIN_BY_ID[pe?.network];
+        if (name && !failed.has(name)) failed.set(name, MULTICHAIN_STATES.has(pe?.state) ? pe.state : "error");
+      }
+      const transfers = data.transfers.filter((t) => t && typeof t === "object").map((t) => {
+        const f = t.fungible && typeof t.fungible === "object" ? t.fungible : null;
+        const decimals = Number.isInteger(f?.decimals) ? f.decimals : null;
+        const rawValue = typeof f?.rawValue === "string" && HEX_RE.test(f.rawValue) ? hexToDecString(f.rawValue) : null;
+        const value = rawValue !== null && decimals !== null ? formatUnits(rawValue, decimals) : (typeof f?.value === "number" ? String(f.value) : null);
+        const tokens = Array.isArray(t.nfts?.tokens) ? t.nfts.tokens.slice(0, 50).map((x) => ({ tokenId: x?.tokenId ?? null, amount: x?.amount ?? null })) : null;
+        return {
+          network: MULTICHAIN_BY_ID[t.network] ?? t.network ?? null,
+          blockNum: hexToNumber(t.blockNum),
+          timestamp: t.blockTimestamp ?? null,
+          hash: t.hash ?? null,
+          from: t.from ?? null,
+          to: t.to ?? null,
+          category: t.category ?? null,
+          asset: f?.asset ?? null,
+          value, rawValue, decimals,
+          contract: typeof t.contractAddress === "string" ? t.contractAddress.toLowerCase() : null,
+          tokens,
+        };
+      });
+      const networkStatus = networks.map((n) => ({ network: n, state: failed.get(n) ?? "ok" }));
+      const answered = networkStatus.filter((n) => n.state === "ok").length;
+      const nextKey = typeof data.pageKey === "string" && data.pageKey ? data.pageKey : null;
+      return {
+        address, networks, direction: directionRaw, categories, contracts,
+        fromTime: from !== null ? new Date(from).toISOString() : null, toTime: to !== null ? new Date(to).toISOString() : null,
+        order, maxCount, count: transfers.length, transfers, networkStatus,
+        ...scanCoverage(networks.length, answered, MULTICHAIN_MAX_NETWORKS, "networks"),
+        complete: !nextKey && answered === networks.length, truncated: Boolean(nextKey),
+        pageKey: nextKey, source: SOURCE, fetchedAt: nowIso(),
       };
     },
   },
