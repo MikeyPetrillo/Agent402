@@ -68,6 +68,20 @@ __resetRefunds();
     ok(spans.length >= want && missing.length === 0, `${file}: every debt booking passes its request id (${spans.length} bookings${missing.length ? `; missing in: ${missing.map((m) => m.replace(/\s+/g, " ").slice(0, 70)).join(" | ")}` : ""})`);
   }
   ok(spansOf("recordRefundOwed({ slug, tx: null });").filter((sp) => !/\brequestId\b/.test(sp)).length === 1, "control: a booking without a request id is caught");
+  // The id a booking on a request passes is the server's own (req.debtKey),
+  // never the caller's X-Request-Id (req.requestId): two card buyers who send
+  // the same id and fail on one route in one minute are two debts.
+  const fromReq = spansOf(read("src/server.js")).filter((sp) => /\breq\./.test(sp));
+  const callerKeyed = fromReq.filter((sp) => !/requestId:\s*req\.debtKey\b/.test(sp) || /req\.requestId\b/.test(sp));
+  ok(fromReq.length >= 4 && callerKeyed.length === 0, `src/server.js: every debt booked on a request is keyed by the server-made req.debtKey (${fromReq.length} bookings${callerKeyed.length ? `; caller-keyed: ${callerKeyed.map((m) => m.replace(/\s+/g, " ").slice(0, 90)).join(" | ")}` : ""})`);
+  const { requestIdMiddleware } = await import("../src/request-id.js");
+  const mw = requestIdMiddleware();
+  const run = (incoming) => { const hdr = {}; const req = { header: (n) => (n.toLowerCase() === "x-request-id" ? incoming : undefined) }; mw(req, { setHeader: (k, v) => { hdr[k] = v; } }, () => {}); return { req, hdr }; };
+  const a = run("same-id-123"), b = run("same-id-123"), c = run("x|y");
+  ok(a.req.requestId === "same-id-123" && b.req.requestId === "same-id-123" && a.hdr["X-Request-Id"] === "same-id-123", "the caller's well-formed X-Request-Id is kept for logs and echoed");
+  ok(/^[0-9a-f-]{36}$/.test(a.req.debtKey) && a.req.debtKey !== b.req.debtKey && a.req.debtKey !== a.req.requestId && c.req.requestId !== "x|y", "the debt key is made per request, never the caller's id");
+  const row = { slug: "uuid-dk", network: "stripe", payer: null, priceUsd: 0.01 };
+  ok(recordRefundOwed({ ...row, requestId: a.req.debtKey }) === true && recordRefundOwed({ ...row, requestId: b.req.debtKey }) === true && listRefunds().filter((r) => r.slug === "uuid-dk").length === 2, "two buyers with no payer who send the same X-Request-Id: two debts");
 }
 
 // 3. Addresses are stored verbatim - case-folding merges distinct buyers on

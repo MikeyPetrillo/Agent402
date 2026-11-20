@@ -261,6 +261,27 @@ let a2;
   process.env.SOLANA_HISTORY_PUBLIC_RPS = "1000";
 }
 
+// /privacy names what this store keeps (the sending wallet of each payment a
+// scanned wallet received), for how many wallets and for how long, from the
+// store's own figures, and only while the store is on.
+{
+  const { privacyPage } = await import("../src/privacy.js");
+  const text = (html) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  const before = process.env.SOLANA_ACTIVITY_STORE;
+  try {
+    delete process.env.SOLANA_ACTIVITY_STORE;
+    const on = text(privacyPage("https://agent402.tools"));
+    ok(/Solana wallet activity/.test(on) && on.includes(`up to ${store.solanaActivityMaxWallets()} wallets`) && /sending wallet address of each payment/.test(on) && on.includes(`for ${store.SOLANA_ACTIVITY_KEEP_DAYS} days`) && store.SOLANA_ACTIVITY_KEEP_DAYS === 35 && store.solanaActivityMaxWallets() === 500, `/privacy names the Solana activity store: the sending wallet, ${store.solanaActivityMaxWallets()} wallets, ${store.SOLANA_ACTIVITY_KEEP_DAYS} days`);
+    process.env.SOLANA_ACTIVITY_STORE_MAX_WALLETS = "120";
+    ok(text(privacyPage("https://agent402.tools")).includes("up to 120 wallets"), "...and the wallet bound the server runs with");
+    delete process.env.SOLANA_ACTIVITY_STORE_MAX_WALLETS;
+    process.env.SOLANA_ACTIVITY_STORE = "off";
+    ok(!/Solana wallet activity/.test(text(privacyPage("https://agent402.tools"))), "with the store off, /privacy does not describe it");
+  } finally {
+    if (before === undefined) delete process.env.SOLANA_ACTIVITY_STORE; else process.env.SOLANA_ACTIVITY_STORE = before;
+  }
+}
+
 for (const l of [pub, keyed, head]) await l.close();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

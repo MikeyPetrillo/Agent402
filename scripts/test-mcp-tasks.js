@@ -105,8 +105,8 @@ const jsonRes = (status, body, headers = {}) => ({
 // call records the abort signal so cancellation can be observed.
 const calls = [];
 let plan = {};
-async function stubLoopback({ def: d, params, signal, timeoutMs, progressKey, credentialHeader }) {
-  const rec = { slug: d.slug, params, signal, timeoutMs, aborted: false, progressKey, credentialHeader };
+async function stubLoopback({ def: d, params, signal, timeoutMs, progressKey, credentialHeader, runKey }) {
+  const rec = { slug: d.slug, params, signal, timeoutMs, aborted: false, progressKey, credentialHeader, runKey };
   calls.push(rec);
   const p = plan[d.slug] || { delayMs: 0, res: jsonRes(200, { ok: true, slug: d.slug }) };
   // What the real paid route does with the progress key: the middleware finds
@@ -439,6 +439,17 @@ ok(cutoffs.length === 0, "a cancel the buyer asked for is not a connector cut-of
   plan = { research: { delayMs: 700, res: jsonRes(200, { report: "x".repeat(5_000) }, { "payment-response": settle, "payment-receipt": mppReceipt }) } };
   const lost = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "research", params: { q: "hello" } }, _meta: { ...CLIENT_CAPS, "org.paymentauth/credential": credential } });
   ok(lost.result?.resultType === "task", "the paid run is handed back as a task");
+  {
+    // The connector's wiring: the run's key goes on the loopback (the route
+    // books it on the sale it makes) and on the stored record, and the record
+    // keeps no payer read from the credential (the gate has not verified it
+    // when the record is written).
+    const stored = JSON.parse(readFileSync(join(STORE_DIR, `${lost.result.taskId}.json`), "utf8"));
+    const sent = calls.filter((c) => c.slug === "research").at(-1);
+    ok(/^[0-9a-f]{32}$/.test(String(sent?.runKey)) && stored.runKey === sent.runKey, `the task's loopback names the run's key and the record keeps the same key (sent ${sent?.runKey}, stored ${stored.runKey})`);
+    ok(!("payer" in stored) && !JSON.stringify(stored).includes(payer.slice(2)), "the task record keeps no payer from the unverified credential");
+    ok(!JSON.stringify(lost.result).includes(stored.runKey), "the run's key is not on the wire");
+  }
   await sleep(900);
   const got = await rpc("tasks/get", { taskId: lost.result.taskId, _meta: CLIENT_CAPS });
   ok(got.result?.status === "failed", "its result could not be retained, so the task is failed");
@@ -531,9 +542,9 @@ ok(sweptNow && sweptNow.status === "failed", "after a restart, a run orphaned by
 await rebooted.orphansChecked();
 const swept = rebooted.get(orphanId);
 ok(/restart/i.test(swept.statusMessage || ""), "the record says plainly that a restart interrupted it");
-// With the paying wallet on the record the sales ledger was read: no sale,
-// not charged. Without it neither claim is made (test-mcp-task-orphan-charge.js).
-ok(swept.payer ? /not charged/i.test(swept.statusMessage || "") : !/not charged/i.test(swept.statusMessage || "") && /refunds\/lookup/.test(swept.statusMessage || ""), `and says it was not charged only when the sales ledger was read for its payment (payer recorded: ${Boolean(swept.payer)})`);
+// The run's key is on the record, so the sales ledger was read for the run's
+// own sale: none, not charged (test-mcp-task-orphan-charge.js covers the rest).
+ok(/^[0-9a-f]{32}$/.test(String(swept.runKey)) && /not charged/i.test(swept.statusMessage || ""), `and says it was not charged once the sales ledger was read for the run's own sale (run key recorded: ${Boolean(swept.runKey)})`);
 const doneRec = rebooted.get(handle.taskId);
 ok(doneRec && doneRec.status === "completed" && doneRec.result, "a COMPLETED task and its result survive the restart intact");
 

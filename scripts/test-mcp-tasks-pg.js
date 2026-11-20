@@ -29,6 +29,61 @@ const noSale = () => null;
 const fileRec = (over) => ({ taskId: newTaskId(), status: "working", statusMessage: "Running research.", createdAt: iso, lastUpdatedAt: iso, createdAtMs: now, ttlMs: 3_600_000, pollIntervalMs: 5000, slug: "research", owner: "a-boot-before-the-database", pid: 1, ...over });
 
 try {
+  // ---- 0. the sweep reads the sales ledger only once it has loaded ---------
+  // Another process (the container that died) books two sales in Postgres:
+  // one under a run's key, one by a wallet a record from before run keys
+  // names. This process has not loaded the sales ledger when its first sweep
+  // finds both orphans: the mirror is empty until its first pull, and an
+  // empty mirror read as "no sale" told a charged buyer "You were not
+  // charged" and booked nothing (src/mcp-tasks.js salesLedgerChargeOf).
+  {
+    const { spawnSync } = await import("node:child_process");
+    const { mkdirSync } = await import("node:fs");
+    const K = "5e".repeat(16);
+    const TX0 = "0x" + "5e".repeat(32);
+    const P0 = "0x5a1ec0ffee0000000000000000000000000beef0";
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      const l = await import(${JSON.stringify(new URL("../src/sales-ledger.js", import.meta.url).href)});
+      await l.salesLedgerReady();
+      l.recordSale({ slug: "s0-keyed", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: "0x5a1ec0ffee0000000000000000000000000beefa", tx: ${JSON.stringify(TX0)}, wire: "mpp", via: "mcp", runKey: ${JSON.stringify(K)} });
+      l.recordSale({ slug: "s0-legacy", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: ${JSON.stringify(P0)}, tx: "0x" + "5f".repeat(32), wire: "mpp", via: "mcp" });
+      await l.salesLedgerFlush();
+      process.exit(0);
+    `], { env: { ...process.env, SALES_LEDGER_DB: join(TMP, "s0-child-sales.db") }, encoding: "utf8", timeout: 60_000 });
+    ok(child.status === 0, `0: another process booked the two sales in the database (exit ${child.status}${child.status ? `: ${String(child.stderr).slice(-300)}` : ""})`);
+    const DIR0 = join(TMP, "mcp-tasks-s0");
+    mkdirSync(DIR0, { recursive: true });
+    const keyedOrphan = fileRec({ slug: "s0-keyed", runKey: K, owner: "a-container-that-died" });
+    const legacyOrphan = fileRec({ slug: "s0-legacy", payer: P0, owner: "a-container-that-died" });
+    for (const r of [keyedOrphan, legacyOrphan]) writeFileSync(join(DIR0, `${r.taskId}.json`), JSON.stringify(r));
+    process.env.SALES_LEDGER_DB = join(TMP, "s0-sales.db");
+    const booked0 = [];
+    const s0 = createTaskStore({ dir: DIR0, bootId: "s0-boot", log: quiet, onChargedFailure: (x) => booked0.push(x) });
+    await s0.ready();
+    const k0 = await s0.get(keyedOrphan.taskId);
+    ok(k0?.status === "failed" && /payment settled before the restart/.test(k0.statusMessage || "") && (k0.statusMessage || "").includes(TX0) && booked0.length === 1 && booked0[0].receipt?.transaction === TX0, `0: the first sweep, before this process loaded the sales ledger, words the run with its own sale charged and books it once (${String(k0?.statusMessage).slice(0, 100)}; ${booked0.length} booked)`);
+    const l0 = await s0.get(legacyOrphan.taskId);
+    ok(l0?.status === "failed" && !/not charged/i.test(l0.statusMessage || "") && !/settled before the restart/.test(l0.statusMessage || ""), `0: a record from before run keys with a sale of its tool on the books is never told "not charged" (${String(l0?.statusMessage).slice(0, 100)})`);
+    await s0.close();
+
+    // While the ledger has not loaded, the sweep leaves the orphan working
+    // (its words are written once) and words it unread past the wait.
+    const tasksMod = await import("../src/mcp-tasks.js");
+    const DIRW = join(TMP, "mcp-tasks-s0w");
+    mkdirSync(DIRW, { recursive: true });
+    const waitOrphan = fileRec({ slug: "s0-wait", runKey: "6e".repeat(16), owner: "a-container-that-died" });
+    writeFileSync(join(DIRW, `${waitOrphan.taskId}.json`), JSON.stringify(waitOrphan));
+    let clock = Date.now();
+    const sw = createTaskStore({ dir: DIRW, bootId: "s0w-boot", log: quiet, now: () => clock, limits: { ledgerWaitMs: 60_000 }, chargeOf: () => tasksMod.ORPHAN_LEDGER_UNLOADED });
+    await sw.ready();
+    ok((await sw.get(waitOrphan.taskId))?.status === "working", "0: an orphan found while the sales ledger has not loaded stays working for a later sweep");
+    clock += 61_000;
+    await sw.sweep();
+    const w1 = await sw.get(waitOrphan.taskId);
+    ok(w1?.status === "failed" && !/not charged/i.test(w1.statusMessage || "") && !/settled before the restart/.test(w1.statusMessage || ""), `0: past the wait it is worded with neither claim, never "not charged" (${String(w1?.statusMessage).slice(0, 80)})`);
+    await sw.close();
+  }
+
   // ---- 1. the directory is imported once ----------------------------------
   const orphan = fileRec({ payer: PAYER });
   const done = fileRec({ status: "completed", result: { content: [{ type: "text", text: "kept" }] } });
@@ -67,7 +122,10 @@ try {
 
   // The new container of a deploy: a different boot id over the same directory.
   const s2Charged = [];
-  const s2 = createTaskStore({ dir: DIR, bootId: "the-next-container", log: quiet, chargeOf: ({ payer }) => ([PAYER.replace("5a1e", "5a2e"), PAYER.replace("5a1e", "5a3e")].includes(payer) ? { tx: "0x" + "cd".repeat(32), network: "eip155:8453", priceUsd: 0.5 } : null), onChargedFailure: (x) => s2Charged.push(x) });
+  // The sales ledger as the next container reads it: a sale under the keys
+  // of the runs that settled before the first container died.
+  const PAID_KEYS = new Set(["2e".repeat(16), "3a".repeat(16)]);
+  const s2 = createTaskStore({ dir: DIR, bootId: "the-next-container", log: quiet, chargeOf: ({ runKey }) => (PAID_KEYS.has(runKey) ? { tx: `0x${runKey}${runKey}`, network: "eip155:8453", priceUsd: 0.5, payer: PAYER } : null), onChargedFailure: (x) => s2Charged.push(x) });
   await s2.ready();
   const seen = await s2.get(rec.taskId);
   ok(seen?.status === "working", "a fresh instance (the other container) reads the working task from the row, NOT as an orphan: the owner's lease stands");
@@ -103,25 +161,25 @@ try {
   }
 
   // (b) an orphan is one whose owner's lease is gone: close the first store.
-  const live = await s1.create({ slug: "research", payer: PAYER });
+  const live = await s1.create({ slug: "research", runKey: "1e".repeat(16) });
   // ... and one whose payment the sales ledger shows settled before the container died.
-  const paidLive = await s1.create({ slug: "research", payer: PAYER.replace("5a1e", "5a2e") });
-  // ... and two runs of one tool by one wallet: the one sale in their window
-  // cannot be tied to either, so neither claims it and nothing is booked.
-  const sibA = await s1.create({ slug: "research", payer: PAYER.replace("5a1e", "5a3e") });
-  const sibB = await s1.create({ slug: "research", payer: PAYER.replace("5a1e", "5a3e") });
+  const paidLive = await s1.create({ slug: "research", runKey: "2e".repeat(16) });
+  // ... and two runs of one tool: only the run whose key the sale carries is
+  // charged, whoever paid for the other.
+  const sibA = await s1.create({ slug: "research", runKey: "3a".repeat(16) });
+  const sibB = await s1.create({ slug: "research", runKey: "3b".repeat(16) });
+  ok(paidLive.runKey === "2e".repeat(16) && (await records.get(COLLECTION, paidLive.taskId))?.runKey === "2e".repeat(16) && !("payer" in ((await records.get(COLLECTION, paidLive.taskId)) || {})), "the row keeps the run's key and no payer");
   await s1.close();
   ok((await leases.holder(`${COLLECTION}:boot:${s1.bootId}`)) === null, "closing the store releases its lease");
   const r = await s2.sweep();
   ok(r.orphaned === 4, `once the lease is gone the sweep resolves the dead container's working runs (${JSON.stringify(r)})`);
-  for (const sib of [sibA, sibB]) {
-    const g = await s2.get(sib.taskId);
-    ok(g?.status === "failed" && !/settled before the restart/.test(g.statusMessage || "") && !/not charged/i.test(g.statusMessage || ""), `two overlapping runs of one tool by one wallet: neither claims the sale (${String(g?.statusMessage).slice(0, 80)})`);
-  }
+  const gA = await s2.get(sibA.taskId), gB = await s2.get(sibB.taskId);
+  ok(/settled before the restart/.test(gA?.statusMessage || "") && gB?.status === "failed" && /not charged/i.test(gB.statusMessage || ""), `two runs of one tool: the one whose key the sale carries is charged, the other is not (${String(gB?.statusMessage).slice(0, 60)})`);
   const dead = await s2.get(live.taskId);
   ok(dead?.status === "failed" && /not charged/i.test(dead.statusMessage || ""), "...as failed and not charged when the sales ledger holds no sale for it");
   const paidDead = await s2.get(paidLive.taskId);
-  ok(paidDead?.status === "failed" && /payment settled before the restart/.test(paidDead.statusMessage || "") && !/not charged/i.test(paidDead.statusMessage || "") && s2Charged.length === 1 && s2Charged[0].receipt?.success === true && s2Charged[0].receipt.transaction === "0x" + "cd".repeat(32), `...and as charged, booked once, when the sales ledger holds its sale (${String(paidDead?.statusMessage).slice(0, 90)}; ${s2Charged.length} booked)`);
+  const paidBooked = s2Charged.filter((x) => x.receipt?.transaction === `0x${"2e".repeat(32)}`);
+  ok(paidDead?.status === "failed" && /payment settled before the restart/.test(paidDead.statusMessage || "") && !/not charged/i.test(paidDead.statusMessage || "") && s2Charged.length === 2 && paidBooked.length === 1 && paidBooked[0].receipt.success === true && paidBooked[0].receipt.payer === PAYER, `...and as charged, booked once to the sale's payer, when the sales ledger holds its sale (${String(paidDead?.statusMessage).slice(0, 90)}; ${s2Charged.length} booked)`);
   ok((await s2.get(rec.taskId))?.status === "completed", "a completed task survives the sweep");
 
   // (c) a settled 200 whose result cannot be retained records a refund debt.

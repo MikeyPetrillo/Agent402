@@ -46,7 +46,8 @@ import { runAsJob, activeJobs } from "./active-jobs.js";
 import { contained, containedTurnsSummary, containedTurnsStatus } from "./contained-turn.js";
 import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, requestsDuring, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
 import { toolFailureMonitor, setIdenticalAnswerReader } from "./tool-failure-monitor.js";
-import { salePathOf } from "./sale-path.js";
+import { salePathOf, saleRunKeyOf } from "./sale-path.js";
+import { requestIdMiddleware } from "./request-id.js";
 import { answerContractOf, classifyAnswer, observeJsonAnswer } from "./answer-shape.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters, shedVerdict } from "./load-shed.js";
 import { createBoundedMemo, SHED } from "./bounded-memo.js";
@@ -352,7 +353,7 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
       onCredited: () => { console.warn(`[batch] hang-up on ${def.slug}: the charge is given back to the channel (the close landed inside the settle call)`); },
       onCreditRefused: (owedRow, how) => {
         console.warn(`[batch] hang-up on ${def.slug}: channel credit not taken (${how}); booked as owed`);
-        try { recordRefundOwed({ slug: def.slug, ...owedRow, httpStatus: 499, synthetic, hangupReason: "channel credit refused", requestId: req.requestId }); } catch { /* logged above */ }
+        try { recordRefundOwed({ slug: def.slug, ...owedRow, httpStatus: 499, synthetic, hangupReason: "channel credit refused", requestId: req.debtKey }); } catch { /* logged above */ }
       },
     });
     if (hung.credited) return hung;
@@ -398,7 +399,7 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
   // The same push transfer was refused on input earlier and booked as owed
   // under its hash; INSERT OR IGNORE kept that 400 row. It is a disconnect
   // now: promote it, or the hang-up holds never see it.
-  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason, requestId: req.requestId }), (made) => {
+  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason, requestId: req.debtKey }), (made) => {
     if (!made && req.tempoSettled && tempoPushHashOf(req) === row.tx) void tempoPushDebts?.hungUp(row.tx, hangupReason);
   });
   // How long the buyer waited and which phase it left in: the figure that
@@ -4100,18 +4101,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// Per-request id — useful for grepping logs when a buyer or operator forwards
-// a failing response. Honored from upstream (load balancer) if present and
-// well-formed; otherwise generated.
-app.use((req, res, next) => {
-  const incoming = req.header("x-request-id");
-  const rid = (typeof incoming === "string" && /^[A-Za-z0-9_.\-]{6,128}$/.test(incoming))
-    ? incoming
-    : randomUUID();
-  req.requestId = rid;
-  res.setHeader("X-Request-Id", rid);
-  next();
-});
+// Per-request ids (src/request-id.js): req.requestId for logs (honored from
+// upstream when well formed), and req.debtKey, made here and never read from
+// the request, which keys a debt that has no settle transaction.
+app.use(requestIdMiddleware());
 
 // Baseline security headers on every response. A loose CSP covers the HTML
 // landing/operator/leaderboard pages — they use inline styles + one inline
@@ -12930,6 +12923,9 @@ app.use((req, res, next) => {
             // The arrival path (src/sale-path.js): the connector's loopback,
             // one of our client packages by User-Agent token, or plain HTTP.
             via: salePathOf(req),
+            // The task or job run this sale was made for (our own loopback
+            // only), so a run a restart cut off reads its own sale.
+            runKey: saleRunKeyOf(req),
           });
           // A Tempo push transfer booked as owed when its first request was
           // refused on input is now claimed and served: void that debt.
@@ -13008,7 +13004,7 @@ app.use((req, res, next) => {
             synthetic,
             wire: x402WireOf(req),
             // The request it was charged on: the debt key when the receipt names no tx.
-            requestId: req.requestId,
+            requestId: req.debtKey,
           });
           // Mirror to PostHog with payer attribution so a spike is alertable in
           // near-real-time and traceable to a wallet (the local table keeps only
@@ -13050,7 +13046,7 @@ app.use((req, res, next) => {
             synthetic: isSyntheticRequest(req),
             wire: req.tempoSettled ? "mpp-tempo" : "mpp-stripe",
             // The request it was charged on: the debt key when the receipt names no tx (a card payment names no payer either).
-            requestId: req.requestId,
+            requestId: req.debtKey,
           }), (created) => {
             if (!created && req.tempoSettled && tempoPushDebts && typeof tx === "string") void tempoPushDebts.handlerFailed(tx, res.statusCode);
           });
@@ -14069,7 +14065,8 @@ app.use((req, res) => {
         });
       }
       try { capturePostHogToolGone({ route: req.path, replacement: "GET /api/find", source: toolGoneSourceOf({ headers: req.headers, surface: "http" }) }); } catch { /* telemetry never breaks a response */ }
-      return res.status(404).json({ ok: false, error: "not-found", hint: `No tool lives at ${req.path}. It may have been retired; the closest live tools are listed, or ask /api/find?q=<task>.`, find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions });
+      // errorCode: a tool switched off on this server (its route not mounted) answers here.
+      return res.status(404).json({ ok: false, error: "not-found", hint: `No tool lives at ${req.path}. It may have been retired; the closest live tools are listed, or ask /api/find?q=<task>.`, find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions, ...errorCodeField(404) });
     }
     return operatorNotFound(req, res);
   }
@@ -14110,7 +14107,7 @@ app.use((err, req, res, _next) => {
     // A 413 on a flat LLM tier is an agent with a big prompt (one client hit
     // it five times in 30 minutes, 2026-08-28): say where big bodies go.
     const tooLarge = status === 413 ? { hint: `Body over the ${req.path.startsWith("/v1/") ? "100 KB" : "size"} limit for ${req.path}. ${req.path.startsWith("/v1/") && !req.path.startsWith("/v1/metered") ? "The metered tier accepts 1 MB and prices from the body: POST /v1/metered/chat/completions (or /messages, /responses)." : "Split the input or use the route's documented size cap."}`, ...(req.path.startsWith("/v1/") && !req.path.startsWith("/v1/metered") ? { metered: `${BASE_URL}/v1/metered/chat/completions` } : {}) } : {};
-    res.status(status).json({ ok: false, error: status === 400 ? "bad-request" : status === 413 ? "payload-too-large" : status === 429 ? "rate-limited" : "internal", ...tooLarge });
+    res.status(status).json({ ok: false, error: status === 400 ? "bad-request" : status === 413 ? "payload-too-large" : status === 429 ? "rate-limited" : "internal", ...tooLarge, ...errorCodeField(status) });
   } else {
     const is404 = status === 404;
     const t = is404 ? "Page not found" : `Error ${status}`;

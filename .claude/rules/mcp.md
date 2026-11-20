@@ -65,14 +65,17 @@ Loaded when a connector or front-door file is read.
   (`surfaceClause`, `SURFACE_CLAUSE_MAX`; an entry in its `brief` list keeps that surface's own words)
   and points at /llms-full.txt, which keeps every line whole. `scripts/test-front-door.js` boot 3 runs
   production's switches plus the batched and channel blocks under the 16,384-byte bound.
-- **Orphaned tasks and jobs:** an orphaned task or job is worded from a sales-ledger read of its
-  payer and slug since the run began (a sale found, none found, or neither claim when unread), and a
-  found sale is booked once through `onChargedFailure`, keyed `task-<taskId>` when it has no tx
-  (`src/mcp-tasks.js`; the payer rides on the record from `evmPayerOfCredential` in
-  `src/mcp-http.js` and `payerFromRequest` in `src/async-jobs.js`). A sale counts only when it can
-  be tied to the run: exactly one in the window, booked on the store's `saleVia` path (`mcp` for
-  the connector's tasks), and no other run of the tool by that wallet overlapping; otherwise the
-  words claim neither and nothing is booked (`scripts/test-mcp-task-orphan-charge.js`).
+- **Orphaned tasks and jobs:** each run names a key (`newRunKey`, `src/mcp-tasks.js`) kept on its
+  record (never on the wire; no payer is recorded) and sent on its loopback (`X-Agent402-Via-Run`
+  beside the connector's marker, `x-agent402-async-run` beside the job token); the route books it
+  on that sale's `run_key` (`saleRunKeyOf`, `src/sale-path.js`; read only beside its proof). An
+  orphan is worded from the sales ledger by that key: a sale under it is charged and booked once
+  through `onChargedFailure` to the sale's own payer (keyed `task-<taskId>` when it has no tx); none
+  under it and no sale of the tool in the window that names no run is not charged; anything else
+  (an unkeyed sale of the tool in the window, a keyless record from before keys, an unreadable
+  ledger) claims neither and books nothing. The ledger is read only once loaded (bounded wait and
+  pull); the database sweep leaves an orphan working while it has not loaded, for up to
+  `limits.ledgerWaitMs` (5 minutes) (`scripts/test-mcp-task-orphan-charge.js`, `test-mcp-tasks-pg.js`).
 - **Shareable answers:** `src/answer-share.js`, off unless `ANSWER_SHARE=on` (exactly); then web.answer takes
   `share=true` and writes a public page after a settled 200 (`/answers/:id`, record at `/answers/:id.json`);
   off, no surface offers it and existing pages serve until expiry. `ANSWER_SHARE_TTL_DAYS` (default 30)

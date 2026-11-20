@@ -24,6 +24,7 @@ import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 import { directUpstreamPrivacyText, directUpstreamThirdPartyText, directUpstreamLocationText, withDirectUpstreamDate } from "./gateway-direct-upstream.js";
 import { taskRetentionPublic } from "./mcp-tasks.js";
+import { solanaActivityStoreEnabled, solanaActivityMaxWallets, SOLANA_ACTIVITY_KEEP_DAYS } from "./solana-activity-store.js";
 import { oneHopPublicBounds } from "./sanctions-screen.js";
 import { endedRecordRetentionPublic, offerRetentionPublic } from "./mpp-subscription-retention.js";
 import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
@@ -169,9 +170,9 @@ so every claim below is verifiable in code.</p>
     deleted ${wishRetentionDays()} days after it was sent, leaving only its counts, kept under a keyed hash
     of the text (never the text);</li>
     <li>a call sent with <code>Prefer: respond-async</code>, and a long call the MCP connector runs as a
-    task, keeps its result (up to ${jobs.maxSize}) under the job or task id so you can fetch it, and a job or task
-    paid from a wallet also keeps that wallet on its record, so a run a restart cut off can be checked against the
-    sales ledger; the record is deleted ${jobs.keptFor} after the job was created. It is stored in the state database, so a nightly backup
+    task, keeps its result (up to ${jobs.maxSize}) under the job or task id so you can fetch it, and a random key
+    for the run that the sales ledger also books on the sale made for it, so a run a restart cut off can be checked
+    against its own sale; the record is deleted ${jobs.keptFor} after the job was created. It is stored in the state database, so a nightly backup
     made inside that time copies it (see Backups below);</li>
     <li>for a decision bought on <code>/api/decide</code>, we keep the task you describe, the plan we
     returned, the paying wallet and any feedback you report on its steps, for 30 days;</li>
@@ -267,7 +268,12 @@ so every claim below is verifiable in code.</p>
   we keep a sales ledger of settled payments (wallet address, amount, chain, transaction id) for accounting
   and for refunding a call that was charged but failed.  The public <a href="/scorecard">buyer scorecard</a> is computed from that ledger and publishes monthly
   counts only (paying wallets, returning wallets, settled payments and amounts by chain), never a wallet
-  address; a count under 3 reads "&lt;3", and a month with fewer than 3 wallets is withheld.${scorecardPublishesTx() ? " It also links a few sample settlement transactions on public block explorers, which show the paying wallet on chain." : ""}</li>
+  address; a count under 3 reads "&lt;3", and a month with fewer than 3 wallets is withheld.${scorecardPublishesTx() ? " It also links a few sample settlement transactions on public block explorers, which show the paying wallet on chain." : ""}</li>${solanaActivityStoreEnabled() ? `
+  <li><b>Solana wallet activity.</b> To draw a Solana wallet's 30-day activity on its chain page, we read the payments that
+  wallet received from the public Solana chain, and keep, for up to ${solanaActivityMaxWallets()} wallets, the time, amount and
+  sending wallet address of each payment, in our state database, for ${SOLANA_ACTIVITY_KEEP_DAYS} days after it was last written
+  (a nightly backup made inside that time copies it, see Backups below). These are public on-chain records, read again
+  on the next view once they are deleted.</li>` : ""}
   <li><b>Card purchases (reports, monitors and prepaid credits).</b> Card details are entered on Stripe's
   hosted checkout and processed by <a href="https://stripe.com/privacy" rel="noopener">Stripe</a>; we never see card
   numbers. Stripe gives us the email address you entered, a customer and session id, and the payment

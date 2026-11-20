@@ -38,10 +38,14 @@ export const SOLANA_ACTIVITY_MAX_ENTRIES = 2000;
 /** Wallets written per flush tick. */
 export const FLUSH_CHUNK = 20;
 const KEEP_DAYS = 35;
+/** Days a stored row is kept (/privacy prints it). */
+export const SOLANA_ACTIVITY_KEEP_DAYS = KEEP_DAYS;
 const PRUNE_EVERY_MS = 60 * 60_000;
 const WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 const maxWallets = (env = process.env) => { const n = Math.floor(Number(env.SOLANA_ACTIVITY_STORE_MAX_WALLETS)); return Number.isFinite(n) && n > 0 ? Math.min(n, 5000) : 500; };
+/** Wallets whose scan state is kept (/privacy prints it). */
+export const solanaActivityMaxWallets = maxWallets;
 const flushMs = (env = process.env) => Math.max(1_000, Number(env.SOLANA_ACTIVITY_STORE_FLUSH_MS) || 60_000);
 /** `off` keeps the scan state in memory only, as before this module. */
 export const solanaActivityStoreEnabled = (env = process.env) => String(env.SOLANA_ACTIVITY_STORE || "").trim().toLowerCase() !== "off";

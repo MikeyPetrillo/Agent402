@@ -31,9 +31,15 @@ const SECRET = secretOf();
 const MARKER = `mcp;k=${SECRET}`;
 
 /** The marker header the connector's loopback replay sends (src/mcp-mpp.js),
- *  with the paid replay's call id when it has one (openLoopbackCall). */
-export function mcpLoopbackHeaders({ callId = null } = {}) {
-  return { "X-Agent402-Via": MARKER, ...(typeof callId === "string" && CALL_RE.test(callId) ? { "X-Agent402-Via-Call": callId } : {}) };
+ *  with the paid replay's call id when it has one (openLoopbackCall), and a
+ *  task run's key when the replay runs one (src/mcp-tasks.js newRunKey): the
+ *  route books that key on the sale it makes for the replay. */
+export function mcpLoopbackHeaders({ callId = null, runKey = null } = {}) {
+  return {
+    "X-Agent402-Via": MARKER,
+    ...(typeof callId === "string" && CALL_RE.test(callId) ? { "X-Agent402-Via-Call": callId } : {}),
+    ...(typeof runKey === "string" && RUN_RE.test(runKey) ? { "X-Agent402-Via-Run": runKey } : {}),
+  };
 }
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
@@ -64,8 +70,20 @@ export function isMcpLoopback(req) {
     if (genuine && typeof call === "string" && CALL_RE.test(call.trim())) callIdOf.set(req, call.trim());
     delete headers[MCP_CALL_HEADER];
   }
+  // So is a task run's key: caller text anywhere else.
+  const run = headers ? headers[MCP_RUN_HEADER] : undefined;
+  if (run !== undefined) {
+    if (genuine && typeof run === "string" && RUN_RE.test(run.trim())) runKeyOf.set(req, run.trim());
+    delete headers[MCP_RUN_HEADER];
+  }
   verdicts.set(req, genuine);
   return genuine;
+}
+
+/** The task run's key on a genuine replay that names one, or null. */
+export function loopbackRunKeyOf(req) {
+  if (!isMcpLoopback(req)) return null;
+  return runKeyOf.get(req) || null;
 }
 
 /** Middleware: read (and remove) the marker before any route runs. */
@@ -95,6 +113,9 @@ export function stripMcpMarker(req, _res, next) {
 // LOOPBACK_CALL_TTL_MS; past LOOPBACK_CALLS_MAX the oldest goes first.
 export const MCP_CALL_HEADER = "x-agent402-via-call";
 const CALL_RE = /^[0-9a-f]{32}$/;
+export const MCP_RUN_HEADER = "x-agent402-via-run";
+const RUN_RE = /^[0-9a-f]{32}$/;
+const runKeyOf = new WeakMap(); // request -> task run key (a genuine replay's only)
 export const LOOPBACK_CALL_TTL_MS = 15 * 60_000;
 export const LOOPBACK_CALLS_MAX = 5_000;
 const loopCalls = new Map(); // call id -> { at, cut, routeEnded, counted, onSettledCut }

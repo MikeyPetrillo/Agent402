@@ -41,7 +41,7 @@ import { NOT_CHARGED } from "./not-charged.js";
 import { PUSH_FAILURE_NOTE, PUSH_UNCLAIMED_OWED_NOTE, PUSH_UNCLAIMED_NOTE } from "./push-refusal-body.js";
 import { JOB_PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { PROGRESS_HEADER, registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
-import { payerFromRequest } from "./payer.js";
+import { newRunKey } from "./mcp-tasks.js";
 
 /** What a failed run's job says about the charge. The loopback answer is the
  *  source, read at the top level and under `details` (the Tempo gate's
@@ -70,6 +70,12 @@ export function failedRunSummary(status, body) {
 }
 
 export const LOOPBACK_HEADER = "x-agent402-async-loopback";
+// The job run's key (src/mcp-tasks.js newRunKey), sent beside the loopback
+// token and read only with it: the route books it on the sale it makes for
+// the replay (src/sale-path.js saleRunKeyOf), so a job a restart cut off is
+// read against its own sale and never another call's.
+export const RUN_HEADER = "x-agent402-async-run";
+const RUN_RE = /^[0-9a-f]{32}$/;
 const PREFER_ASYNC = /(^|[\s,;])respond-async(?=$|[\s,;=])/i;
 /** RFC 7240: the client asks for an asynchronous answer. */
 export const wantsAsync = (req) => PREFER_ASYNC.test(String(req?.headers?.prefer || ""));
@@ -155,10 +161,15 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
   async function middleware(req, res, next) {
     // Our own replay: pass it through to the normal paid chain. A forged marker
     // is stripped and the request is served as an ordinary synchronous call.
+    const run = req.headers[RUN_HEADER];
+    if (run !== undefined) delete req.headers[RUN_HEADER];
     if (req.headers[LOOPBACK_HEADER] !== undefined) {
       const genuine = sameToken(req.headers[LOOPBACK_HEADER], loopbackToken);
       delete req.headers[LOOPBACK_HEADER];
-      if (genuine) req.asyncJobLoopback = true;
+      if (genuine) {
+        req.asyncJobLoopback = true;
+        if (typeof run === "string" && RUN_RE.test(run.trim())) req.asyncRunKey = run.trim();
+      }
       return next();
     }
     if (req.method !== "POST" || !wantsAsync(req)) return next();
@@ -186,9 +197,11 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
 
     const ctl = new AbortController();
     let rec = null;
-    // The paying wallet rides on the record (never on the wire), so a job
-    // orphaned by a restart is worded from the sales ledger (src/mcp-tasks.js).
-    try { rec = await store.create({ slug: def.slug, controller: ctl, payer: payerFromRequest(req) }); } catch { rec = null; }
+    // The run's key rides on the record (never on the wire) and on the
+    // replay, so a job orphaned by a restart is worded from its own sale
+    // (src/mcp-tasks.js).
+    const runKey = newRunKey();
+    try { rec = await store.create({ slug: def.slug, controller: ctl, runKey }); } catch { rec = null; }
     if (!rec) return res.status(503).json({ error: "async_unavailable", hint: "A job could not be recorded. Send the call with Prefer: wait=<seconds> (the route's maxSeconds) instead of Prefer: respond-async to wait on this connection. Nothing was charged." });
     perIp.set(ip, (perIp.get(ip) || 0) + 1);
 
@@ -197,6 +210,7 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     headers["content-type"] = "application/json";
     headers["x-forwarded-for"] = ip || "127.0.0.1";
     headers[LOOPBACK_HEADER] = loopbackToken;
+    headers[RUN_HEADER] = runKey;
     // The handler's progress reaches this job's record through a sink keyed
     // on the loopback (src/job-progress.js); writes are throttled and never
     // reopen a terminal record.

@@ -73,6 +73,15 @@ const { OUR_EVM_WALLETS } = await import("../src/revenue-live.js");
   ok(sp.salePathOf(req({ "user-agent": `agent402-client/${"9".repeat(60)}` })) === null || sp.salePathOf(req({ "user-agent": `agent402-client/${"9".repeat(60)}` })).length <= 40, "a stored token is at most 40 characters");
   ok(sp.cleanSalePath("agent402-client/0.8.21<script>") === null && sp.cleanSalePath("http") === "http" && sp.cleanSalePath("weird") === null, "only a fixed word or a well-formed package token is stored");
   ok(sp.salePathGroup(null) === "unknown" && sp.salePathGroup("agent402-client/0.8.21") === "agent402-client" && sp.salePathGroup("mcp") === "mcp", "groups: unknown, package name, mcp");
+  // The run key a sale is booked under: read only beside its proof.
+  const RK = "7a".repeat(16);
+  const genuine = req({ "x-agent402-via": MCP_MARKER, "x-agent402-via-run": RK }, "127.0.0.1");
+  ok(sp.saleRunKeyOf(genuine) === RK && genuine.headers["x-agent402-via-run"] === undefined, "the connector's genuine replay books its task run's key, and the header is removed");
+  const forged = req({ "x-agent402-via-run": RK }, "127.0.0.1");
+  ok(sp.saleRunKeyOf(forged) === null && forged.headers["x-agent402-via-run"] === undefined, "a run key with no marker books none, and the header is removed");
+  ok(sp.saleRunKeyOf(req({ "x-agent402-via": `mcp;k=${"00".repeat(24)}`, "x-agent402-via-run": RK }, "127.0.0.1")) === null && sp.saleRunKeyOf(req({ "x-agent402-via": MCP_MARKER, "x-agent402-via-run": RK })) === null, "a wrong secret or a remote socket books none");
+  ok(sp.saleRunKeyOf(req({ "x-agent402-via": MCP_MARKER, "x-agent402-via-run": "not-a-key" }, "127.0.0.1")) === null, "a value that is not a run key books none");
+  ok(sp.saleRunKeyOf({ headers: {}, socket: {}, asyncJobLoopback: true, asyncRunKey: RK }) === RK && sp.saleRunKeyOf({ headers: {}, socket: {}, asyncRunKey: RK }) === null, "an async job's genuine replay books its run's key; without the job's token, none");
   const pkgs = ["client", "mcp", "openclaw", ...["agentkit", "ai-sdk", "anthropic-tools", "eliza", "google-adk", "langchain", "llamaindex", "openai-agents", "openai-tools", "strands"].map((a) => `adapters/${a}`)];
   for (const d of pkgs) {
     const name = JSON.parse(readFileSync(new URL(`../${d}/package.json`, import.meta.url), "utf8")).name;
@@ -210,17 +219,23 @@ try {
   })).toString("base64");
   const buy = (payer, headers) => fetch(`${B}/api/uuid`, { headers: { "payment-signature": credential(payer), ...headers } });
   // The connector's loopback: the marker the connector sets (src/mcp-mpp.js), on a local socket.
-  const r1 = await buy("0x00000000000000000000000000000000000b0001", { "x-agent402-via": MCP_MARKER, "user-agent": "node" });
+  // r1 names a task run's key beside the marker (as a task's replay does);
+  // r3 names one with no marker (caller text).
+  const RUN = "7b".repeat(16);
+  const r1 = await buy("0x00000000000000000000000000000000000b0001", { "x-agent402-via": MCP_MARKER, "x-agent402-via-run": RUN, "user-agent": "node" });
   const r2 = await buy("0x00000000000000000000000000000000000b0002", { "user-agent": "agent402-client/0.8.21" });
-  const r3 = await buy("0x00000000000000000000000000000000000b0003", { "user-agent": "curl/8.7.1" });
+  const r3 = await buy("0x00000000000000000000000000000000000b0003", { "user-agent": "curl/8.7.1", "x-agent402-via-run": RUN });
   ok(r1.status === 200 && r2.status === 200 && r3.status === 200, `three paid calls answered 200 (${r1.status}, ${r2.status}, ${r3.status})`);
   let rows = [];
   for (let i = 0; i < 40; i++) {
-    try { const d = new Database(BOOT_DB, { readonly: true }); rows = d.prepare("SELECT payer, via FROM sales WHERE slug = 'uuid' ORDER BY id").all(); d.close(); } catch { rows = []; }
+    try { const d = new Database(BOOT_DB, { readonly: true }); rows = d.prepare("SELECT payer, via, run_key FROM sales WHERE slug = 'uuid' ORDER BY id").all(); d.close(); } catch { rows = []; }
     if (rows.length >= 3) break;
     await sleep(100);
   }
   const viaOf = (p) => rows.find((r) => r.payer === p)?.via;
+  const runOf = (p) => rows.find((r) => r.payer === p)?.run_key;
+  ok(runOf("0x00000000000000000000000000000000000b0001") === RUN, `the loopback call books its task run's key (${runOf("0x00000000000000000000000000000000000b0001")})`);
+  ok(runOf("0x00000000000000000000000000000000000b0003") === null && runOf("0x00000000000000000000000000000000000b0002") === null, "a direct call books none, whatever header it sends");
   ok(viaOf("0x00000000000000000000000000000000000b0001") === "mcp", `the loopback call books mcp (${viaOf("0x00000000000000000000000000000000000b0001")})`);
   ok(viaOf("0x00000000000000000000000000000000000b0002") === "agent402-client/0.8.21", `the client call books its token (${viaOf("0x00000000000000000000000000000000000b0002")})`);
   ok(viaOf("0x00000000000000000000000000000000000b0003") === "http", `the bare call books http (${viaOf("0x00000000000000000000000000000000000b0003")})`);
@@ -237,7 +252,7 @@ try {
   ok(!/byPath|agent402-client\/0\.8|organicSales|cohortSales/.test(pub), "nothing of it reaches the public stats or gateway status");
   // The connector really sends that marker on its loopback (the caller path).
   const mpp = readFileSync(new URL("../src/mcp-mpp.js", import.meta.url), "utf8");
-  ok(/\.\.\.mcpLoopbackHeaders\(\{ callId \}\)/.test(mpp), "src/mcp-mpp.js sets the marker the ledger reads (with the paid replay's call id)");
+  ok(/\.\.\.mcpLoopbackHeaders\(\{ callId, runKey \}\)/.test(mpp), "src/mcp-mpp.js sets the marker the ledger reads (with the paid replay's call id and a task run's key)");
 } catch (e) {
   ok(false, e?.stack || String(e));
   for (const l of serverLog.slice(-25)) console.error("  server:", l);

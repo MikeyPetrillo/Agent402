@@ -3,214 +3,233 @@
 // resolved as failed by the next boot's sweep (src/mcp-tasks.js). Its words
 // used to say "You were not charged" every time, but the paid loopback can
 // settle its 200 and book the sale just before the process dies, before the
-// record is written: that buyer was charged. The sweep now reads the sales
-// ledger (read only) for a sale of the run's tool to its paying wallet since
-// the run began, and words the record from what it finds:
-//   a. a sale on the books: the words say the payment settled, name the
-//      transaction, and the charge is handed to onChargedFailure (the refund
-//      ledger's booking) on the sale's proof, once;
-//   b. no sale: "You were not charged", as before;
-//   c. no payer on the record (the ledger cannot be asked): neither claim;
-//   d. a sale of another tool, by another wallet, or from before the run:
-//      not this run's (b's words);
-//   e. the payer is never on the wire, and an EVM payer is stored as the
-//      ledger books it (lower case) while a base32 one is kept as given;
-//   f. a sale that cannot be tied to this run claims neither and books
-//      nothing: another run of the same tool by the same wallet overlaps it
-//      (its delivered sale is not this run's), or two sales fall in the window;
-//   g. a store told the path its runs are sold on (the connector's "mcp")
-//      reads only sales booked on that path, so a direct retry is not the run's;
+// record is written: that buyer was charged. Each run names a key
+// (newRunKey) on its record and on its loopback, and the route books that key
+// on the sale it makes for the run, so the sweep reads the run's OWN sale:
+//   a. a sale under the run's key: the words say the payment settled, name
+//      the transaction, and the charge is handed to onChargedFailure (the
+//      refund ledger's booking) once, on the sale's proof and to the payer
+//      the sale was booked to (the one the gate verified);
+//   b. no sale under the key and no sale of the tool in the window that
+//      names no run: "You were not charged", as before;
+//   c. a record with neither key nor payer: neither claim;
+//   d. a record made before runs named a key (a payer, no key): a sale found
+//      for it cannot be tied to it (neither claim, nothing booked), none
+//      found is "not charged";
+//   e. the key never crosses the wire, and no payer is recorded;
+//   f. a sale of the tool in the window that names no run (a path that books
+//      no key may have made it for this run) claims neither and books nothing;
+//   g. another call's delivered sale (a direct retry by the same wallet, the
+//      connector's own answer inside the gate window, another job) is never
+//      taken as the run's: the run's own keyed sale is, beside it;
 //   h. a sale with no transaction is booked under the run's own key, so two
 //      sweeps of one run book one debt;
-//   i. the connector labels a task with the wallet an MPP evm credential
-//      names, and nothing for any other credential.
+//   i. a ledger that has not loaded is never read as "no sale".
 // Real sales ledger (SQLite, a file of this run's own), real file task store.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 
 const TMP = mkdtempSync(join(tmpdir(), "a402-orphan-charge-"));
 process.env.SALES_LEDGER_DB = join(TMP, "sales.db");
 process.env.AGENT402_TASK_DATA_DIR = TMP;
 const ledger = await import("../src/sales-ledger.js");
-const { createTaskStore, detailedTask, createTaskResult } = await import("../src/mcp-tasks.js");
+const { createTaskStore, detailedTask, createTaskResult, newTaskId } = await import("../src/mcp-tasks.js");
+const tasksMod = await import("../src/mcp-tasks.js");
 
 let pass = 0;
 const fail = (m) => { console.error(`FAIL - ${m}`); try { rmSync(TMP, { recursive: true, force: true }); } catch { /* temp */ } process.exit(1); };
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 
-const DIR = join(TMP, "mcp-tasks");
 const PAYER = "0x5A1eC0FfEe0000000000000000000000000BeeF1";
-const ALGO = "ZKFACAZ3WSEG7KPN5QZNHQ7WRQOYKFLX2PD2S5SAWM4NNVJJL7AKMKU3T4";
-const TX = "0x" + "ab".repeat(32);
-const booked = [];
+const W = (n) => PAYER.replace("5A1e", n);
+const key = () => randomBytes(16).toString("hex");
 const quiet = () => {};
-// One boot creates the runs; a second boot over the same directory is the
-// restart that finds them orphaned.
-const before = createTaskStore({ dir: DIR, bootId: "boot-before", log: quiet });
-const recCharged = before.create({ slug: "research", payer: PAYER });
-const recClean = before.create({ slug: "research", payer: PAYER.replace("5A1e", "5A2e") });
-const recNoPayer = before.create({ slug: "research" });
-const recOther = before.create({ slug: "dossier", payer: ALGO });
-ok(recCharged && recClean && recNoPayer && recOther, "four working runs are recorded by the first boot");
+const sale = (o) => ledger.recordSale({ priceUsd: 0.5, rail: "usdc", network: "eip155:8453", wire: "x402", ...o });
+// A record as a build before run keys wrote it (a payer, no key): written to
+// the store's directory as that build's boot left it.
+const legacyRecord = (dir, { slug, payer = null, owner = "boot-legacy" }) => {
+  mkdirSync(dir, { recursive: true });
+  const now = Date.now();
+  const rec = { taskId: newTaskId(), status: "working", statusMessage: `Running ${slug}.`, createdAt: new Date(now).toISOString(), lastUpdatedAt: new Date(now).toISOString(), createdAtMs: now, ttlMs: 3_600_000, pollIntervalMs: 5000, slug, phase: "queued", owner, pid: 1, ...(payer ? { payer: payer.toLowerCase() } : {}) };
+  writeFileSync(join(dir, `${rec.taskId}.json`), JSON.stringify(rec));
+  return rec;
+};
+const restart = async (dir, opts = {}) => {
+  const booked = [];
+  const logs = [];
+  const s = createTaskStore({ dir, bootId: `boot-${key().slice(0, 8)}`, log: (l) => logs.push(l), onChargedFailure: (x) => booked.push(x), ...opts });
+  await s.orphansChecked?.();
+  return { s, booked, logs };
+};
+const charged = (r, tx) => r?.status === "failed" && /payment settled before the restart/.test(r.statusMessage) && (!tx || r.statusMessage.includes(tx)) && !/not charged/i.test(r.statusMessage);
+const notCharged = (r) => r?.status === "failed" && /You were not charged/.test(r.statusMessage) && /not charged/.test(r.error?.message || "");
+const neither = (r) => r?.status === "failed" && /restart/.test(r.statusMessage) && !/not charged/i.test(r.statusMessage) && !/settled before the restart/.test(r.statusMessage) && /\/api\/refunds\/lookup\?tx=/.test(r.statusMessage) && !/not charged/i.test(r.error?.message || "");
 
-// e. what the record holds, and what the wire shows.
-ok(recCharged.payer === PAYER.toLowerCase() && recOther.payer === ALGO && recNoPayer.payer === undefined, `the payer is stored as the ledger books it (EVM lower case, base32 as given) (${recCharged.payer}, ${recOther.payer})`);
-ok(!JSON.stringify(createTaskResult(recCharged)).includes(PAYER.toLowerCase().slice(2, 12)) && !JSON.stringify(detailedTask(recCharged)).includes(PAYER.toLowerCase().slice(2, 12)), "the payer never crosses the wire");
-
-// The ledger: a sale for recCharged's run (this tool, this wallet, after the
-// run began); for recOther's wallet only a sale of ANOTHER tool, and one of
-// its own tool from before its run began.
-ledger.recordSale({ slug: "research", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: PAYER, tx: TX, wire: "x402" });
-ledger.recordSale({ slug: "research", priceUsd: 0.5, rail: "usdc", network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", payer: ALGO, tx: "ALGOTX" + "Q".repeat(46), wire: "x402" });
-await ledger.salesLedgerFlush?.();
-
-const after = createTaskStore({ dir: DIR, bootId: "boot-after", log: quiet, onChargedFailure: (x) => booked.push(x) });
-const reworded = await (after.orphansChecked?.() ?? 0);
-ok(reworded === 3, `the sweep read the sales ledger for every orphan with a payer (${reworded} re-worded)`);
-
-// a. charged
+// a. charged: the run's own sale, under its key.
 {
-  const r = after.get(recCharged.taskId);
-  ok(r?.status === "failed" && /restart/.test(r.statusMessage) && /payment settled before the restart/.test(r.statusMessage) && r.statusMessage.includes(TX) && !/not charged/i.test(r.statusMessage), `a. a run whose sale is on the books says its payment settled and names the transaction (${String(r?.statusMessage).slice(0, 140)})`);
+  const dir = join(TMP, "a");
+  const K = key();
+  const TX = "0x" + "ab".repeat(32);
+  const first = createTaskStore({ dir, bootId: "boot-a1", log: quiet });
+  const rec = first.create({ slug: "research", runKey: K });
+  ok(rec?.runKey === K, "a. the record keeps the run's key");
+  sale({ slug: "research", payer: W("5A01"), tx: TX, via: "mcp", runKey: K });
+  await ledger.salesLedgerFlush?.();
+  const { s, booked } = await restart(dir);
+  const r = s.get(rec.taskId);
+  ok(charged(r, TX), `a. a run whose own sale is on the books says its payment settled and names the transaction (${String(r?.statusMessage).slice(0, 140)})`);
   ok(/recorded as owed in our refund ledger and repaid after review/.test(r.statusMessage) && r.statusMessage.includes(`/api/refunds/lookup?tx=${TX}`), "a. ...and that the charge is owed back after review, with the free lookup");
   ok(!/not charged/i.test(r.error?.message || "") && /payment settled/.test(r.error?.message || ""), `a. the error says the same (${r.error?.message})`);
-  const mine = booked.filter((b) => b.receipt?.transaction === TX);
-  ok(mine.length === 1 && mine[0].slug === "research" && mine[0].receipt.success === true && mine[0].receipt.payer === PAYER.toLowerCase() && mine[0].receipt.network === "eip155:8453" && mine[0].priceUsd === 0.5, `a. the charge is booked once, on the sale's proof (${JSON.stringify(mine)})`);
+  ok(booked.length === 1 && booked[0].slug === "research" && booked[0].receipt.success === true && booked[0].receipt.transaction === TX && booked[0].receipt.payer === W("5A01").toLowerCase() && booked[0].receipt.network === "eip155:8453" && booked[0].priceUsd === 0.5, `a. the charge is booked once, on the sale's proof, to the payer the sale was booked to (${JSON.stringify(booked)})`);
+  const again = await restart(dir);
+  ok(again.booked.length === 0, "a. a later boot books nothing more for a run already worded");
 }
-// b. no sale on the books for this wallet
+// b. no sale under the key, none of the tool that names no run.
 {
-  const r = after.get(recClean.taskId);
-  ok(r?.status === "failed" && /You were not charged/.test(r.statusMessage) && /not charged/.test(r.error?.message || ""), `b. a run with no sale on the books says it was not charged (${String(r?.statusMessage).slice(0, 100)})`);
-}
-// c. no payer: neither claim
-{
-  const r = after.get(recNoPayer.taskId);
-  ok(r?.status === "failed" && /restart/.test(r.statusMessage) && !/not charged/i.test(r.statusMessage) && !/settled before the restart/.test(r.statusMessage) && /\/api\/refunds\/lookup\?tx=/.test(r.statusMessage), `c. a run whose payer is unknown claims neither, and names the free lookup (${String(r?.statusMessage).slice(0, 140)})`);
-  ok(!/not charged/i.test(r.error?.message || ""), "c. ...in its error too");
-}
-// d. a sale of another tool by this wallet is not this run's
-{
-  const r = after.get(recOther.taskId);
-  ok(r?.status === "failed" && /You were not charged/.test(r.statusMessage), `d. a sale of another tool from the same wallet is not this run's charge (${String(r?.statusMessage).slice(0, 80)})`);
-  ok(booked.length === 1, `d. nothing else is booked (${booked.length})`);
-}
-// d2. a sale booked before the run began is not the run's either.
-{
-  const dir2 = join(TMP, "d2");
-  const early = createTaskStore({ dir: dir2, bootId: "boot-d2a", log: quiet, now: () => Date.now() + 120_000 });
-  const rec = early.create({ slug: "research", payer: PAYER });
-  const later = createTaskStore({ dir: dir2, bootId: "boot-d2b", log: quiet, onChargedFailure: (x) => booked.push(x), now: () => Date.now() + 120_000 });
-  await later.orphansChecked?.();
-  const r = later.get(rec.taskId);
-  ok(r?.status === "failed" && /You were not charged/.test(r.statusMessage) && booked.length === 1, `d2. a sale from before the run began is not the run's (${String(r?.statusMessage).slice(0, 80)})`);
-}
-// An injected lookup that throws reads as unread, never as "not charged".
-{
-  const dir3 = join(TMP, "d3");
-  const first = createTaskStore({ dir: dir3, bootId: "boot-d3a", log: quiet });
-  const rec = first.create({ slug: "research", payer: PAYER });
-  const second = createTaskStore({ dir: dir3, bootId: "boot-d3b", log: quiet, chargeOf: () => { throw new Error("ledger down"); } });
-  await second.orphansChecked?.();
-  const r = second.get(rec.taskId);
-  ok(r?.status === "failed" && !/not charged/i.test(r.statusMessage) && /restart/.test(r.statusMessage), "a ledger that cannot be read leaves the words claiming neither");
-}
-
-// f. a sibling run of the same tool by the same wallet: its delivered sale
-// is not this run's, so the orphan claims neither and nothing is booked.
-{
-  const dirF = join(TMP, "f");
-  const PAYER_F = PAYER.replace("5A1e", "5AF1");
-  const TX_F = "0x" + "cd".repeat(32);
-  const first = createTaskStore({ dir: dirF, bootId: "boot-fa", log: quiet });
-  const recA = first.create({ slug: "research", payer: PAYER_F });
-  first.complete(recA.taskId, { content: [{ type: "text", text: "done" }] });
-  ledger.recordSale({ slug: "research", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: PAYER_F, tx: TX_F, wire: "x402" });
+  const dir = join(TMP, "b");
+  const first = createTaskStore({ dir, bootId: "boot-b1", log: quiet });
+  const rec = first.create({ slug: "b-tool", runKey: key() });
+  sale({ slug: "b-tool", payer: W("5A02"), tx: "0x" + "b0".repeat(32), via: "mcp", runKey: key() }); // another run's sale of the tool
   await ledger.salesLedgerFlush?.();
-  const recB = first.create({ slug: "research", payer: PAYER_F });
-  const bookedF = [];
-  const logs = [];
-  const second = createTaskStore({ dir: dirF, bootId: "boot-fb", log: (l) => logs.push(l), onChargedFailure: (x) => bookedF.push(x) });
-  await second.orphansChecked?.();
-  const r = second.get(recB.taskId);
-  ok(second.get(recA.taskId)?.status === "completed", "f. control: the sibling run completed");
-  ok(r?.status === "failed" && !/settled before the restart/.test(r.statusMessage) && !/not charged/i.test(r.statusMessage) && /\/api\/refunds\/lookup\?tx=/.test(r.statusMessage), `f. an orphan beside a sibling run of the same tool and wallet claims neither (${String(r?.statusMessage).slice(0, 120)})`);
-  ok(bookedF.length === 0, `f. ...and the sibling's delivered sale is not booked as owed (${JSON.stringify(bookedF)})`);
+  const { s, booked } = await restart(dir);
+  const r = s.get(rec.taskId);
+  ok(notCharged(r) && booked.length === 0, `b. no sale under the run's key (another run's keyed sale of the tool is not this one's): not charged (${String(r?.statusMessage).slice(0, 90)})`);
+}
+// c. neither key nor payer: neither claim.
+{
+  const dir = join(TMP, "c");
+  const rec = legacyRecord(dir, { slug: "research" });
+  const { s, booked } = await restart(dir);
+  const r = s.get(rec.taskId);
+  ok(neither(r) && booked.length === 0, `c. a record with no key and no payer claims neither and names the free lookup (${String(r?.statusMessage).slice(0, 120)})`);
+}
+// d. a record from before run keys: a found sale cannot be tied to it.
+{
+  const dir = join(TMP, "d");
+  const P = W("5A04");
+  const found = legacyRecord(dir, { slug: "d-tool", payer: P });
+  const none = legacyRecord(dir, { slug: "d-other", payer: P });
+  sale({ slug: "d-tool", payer: P, tx: "0x" + "d0".repeat(32), via: "http" });
+  await ledger.salesLedgerFlush?.();
+  const { s, booked } = await restart(dir);
+  ok(neither(s.get(found.taskId)) && booked.length === 0, `d. a keyless record with a sale of its tool by its wallet in the window claims neither and books nothing (${String(s.get(found.taskId)?.statusMessage).slice(0, 90)})`);
+  ok(notCharged(s.get(none.taskId)), "d. a keyless record with no sale in its window is not charged");
+}
+// d2. a sale booked before the run began is not the run's.
+{
+  const dir = join(TMP, "d2");
+  sale({ slug: "d2-tool", payer: W("5A05"), tx: "0x" + "d2".repeat(32), via: "http" });
+  await ledger.salesLedgerFlush?.();
+  const first = createTaskStore({ dir, bootId: "boot-d2a", log: quiet, now: () => Date.now() + 120_000 });
+  const rec = first.create({ slug: "d2-tool", runKey: key() });
+  const { s, booked } = await restart(dir, { now: () => Date.now() + 120_000 });
+  ok(notCharged(s.get(rec.taskId)) && booked.length === 0, `d2. a sale from before the run began is not the run's (${String(s.get(rec.taskId)?.statusMessage).slice(0, 80)})`);
+}
+// d3. an injected lookup that throws reads as unread, never as "not charged".
+{
+  const dir = join(TMP, "d3");
+  const rec = createTaskStore({ dir, bootId: "boot-d3a", log: quiet }).create({ slug: "research", runKey: key() });
+  const { s } = await restart(dir, { chargeOf: () => { throw new Error("ledger down"); } });
+  ok(neither(s.get(rec.taskId)), "d3. a ledger that cannot be read leaves the words claiming neither");
+}
+// e. what the record holds, and what the wire shows.
+{
+  const dir = join(TMP, "e");
+  const K = key();
+  const rec = createTaskStore({ dir, bootId: "boot-e", log: quiet }).create({ slug: "research", runKey: K, payer: PAYER });
+  ok(rec.runKey === K && !("payer" in rec), `e. the record keeps the run's key and no payer (${Object.keys(rec).join(",")})`);
+  ok(!JSON.stringify(createTaskResult(rec)).includes(K) && !JSON.stringify(detailedTask(rec)).includes(K), "e. the run's key never crosses the wire");
+  const bad = createTaskStore({ dir, bootId: "boot-e2", log: quiet }).create({ slug: "research", runKey: "not-a-key" });
+  ok(!("runKey" in bad), "e. a value that is not a run key is not kept");
+}
+// f. a sale of the tool in the window that names no run: neither claim.
+{
+  const dir = join(TMP, "f");
+  const rec = createTaskStore({ dir, bootId: "boot-f1", log: quiet }).create({ slug: "f-tool", runKey: key() });
+  sale({ slug: "f-tool", payer: W("5A06"), tx: "0x" + "f0".repeat(32), rail: "usdc", via: "http" });
+  await ledger.salesLedgerFlush?.();
+  const { s, booked, logs } = await restart(dir);
+  ok(neither(s.get(rec.taskId)) && booked.length === 0, `f. a sale of the tool that names no run, in the run's window, claims neither and books nothing (${String(s.get(rec.taskId)?.statusMessage).slice(0, 90)})`);
   ok(logs.some((l) => /cannot be tied to the run/.test(l)), "f. ...and the sweep logs it for a human");
 }
-// f2. two sales of the tool to the wallet in the run's window: which one is
-// the run's cannot be told, so neither claim and nothing booked.
+// g. another call's delivered sale is never the run's.
 {
-  const dirF2 = join(TMP, "f2");
-  const PAYER_F2 = PAYER.replace("5A1e", "5AF2");
-  const first = createTaskStore({ dir: dirF2, bootId: "boot-f2a", log: quiet });
-  const rec = first.create({ slug: "research", payer: PAYER_F2 });
-  ledger.recordSale({ slug: "research", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: PAYER_F2, tx: "0x" + "e1".repeat(32), wire: "x402" });
-  ledger.recordSale({ slug: "research", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: PAYER_F2, tx: "0x" + "e2".repeat(32), wire: "x402" });
+  // g1. An async job (the store as src/server.js builds it, label async-jobs)
+  // cut off before its loopback settled; the same wallet's direct retry
+  // settles and is delivered (via http, no key). The job's own record names
+  // its key, and the retry's sale is not under it.
+  const dir = join(TMP, "g1");
+  const P = W("5A07");
+  const job = createTaskStore({ dir, bootId: "boot-g1a", log: quiet, label: "async-jobs" }).create({ slug: "g1-tool", runKey: key() });
+  sale({ slug: "g1-tool", payer: P, tx: "0x" + "c1".repeat(32), via: "http" });
   await ledger.salesLedgerFlush?.();
-  const bookedF2 = [];
-  const second = createTaskStore({ dir: dirF2, bootId: "boot-f2b", log: quiet, onChargedFailure: (x) => bookedF2.push(x) });
-  await second.orphansChecked?.();
-  const r = second.get(rec.taskId);
-  ok(r?.status === "failed" && !/settled before the restart/.test(r.statusMessage) && !/not charged/i.test(r.statusMessage) && bookedF2.length === 0, `f2. two sales in the window: neither claim, nothing booked (${bookedF2.length})`);
+  const { s, booked } = await restart(dir, { label: "async-jobs" });
+  const r = s.get(job.taskId);
+  ok(!/settled before the restart/.test(r?.statusMessage || "") && booked.length === 0, `g1. an interrupted job never takes the same wallet's delivered direct call as its charge (${String(r?.statusMessage).slice(0, 90)}; ${booked.length} booked)`);
+  // The same, from a record a build before run keys wrote with the job's payer.
+  const dirL = join(TMP, "g1-legacy");
+  const legacyJob = legacyRecord(dirL, { slug: "g1-tool", payer: P });
+  const L = await restart(dirL, { label: "async-jobs" });
+  ok(!/settled before the restart/.test(L.s.get(legacyJob.taskId)?.statusMessage || "") && L.booked.length === 0, "g1. ...nor does a job recorded with its payer before run keys");
 }
-// f3. the default lookup, read directly: five sales of the tool to the wallet
-// in the window (a full page, more may follow past it) say nothing; with a
-// path, only that path's sales count.
 {
-  const { salesLedgerChargeOf } = await import("../src/mcp-tasks.js");
-  const W = PAYER.replace("5A1e", "5AF3");
-  const t0 = Date.now() - 1000;
-  for (let i = 0; i < 5; i++) ledger.recordSale({ slug: "dossier", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: W, tx: `0x${String(i).repeat(64)}`, wire: "x402", via: i === 4 ? "mcp" : "http" });
+  // g2. The connector: a call answered inside the gate window gets no record,
+  // and its sale is booked on the connector's path with no run key; a long
+  // call of the same tool by the same wallet becomes a task and is cut off.
+  const dir = join(TMP, "g2");
+  const P = W("5A08");
+  const K = key();
+  const TXB = "0x" + "c3".repeat(32);
+  const task = createTaskStore({ dir, bootId: "boot-g2a", log: quiet }).create({ slug: "g2-tool", runKey: K });
+  sale({ slug: "g2-tool", payer: P, tx: "0x" + "c2".repeat(32), wire: "mpp", via: "mcp" }); // the short call's own sale
   await ledger.salesLedgerFlush?.();
-  const all = await salesLedgerChargeOf({ slug: "dossier", payer: W.toLowerCase(), sinceMs: t0, untilMs: Date.now() + 1000, via: "mcp" });
-  ok(all === undefined, `f3. a full page of sales in the window reads as unknown, even with one on the path asked for (${JSON.stringify(all)})`);
-  const none = await salesLedgerChargeOf({ slug: "dossier", payer: W.toLowerCase(), sinceMs: Date.now() + 5_000, untilMs: Date.now() + 10_000 });
-  ok(none === null, "f3. control: an empty window reads as no sale");
-}
-// g. a store whose runs are sold on the connector's path reads only those sales.
-{
-  const dirG = join(TMP, "g");
-  const PAYER_G = PAYER.replace("5A1e", "5A61");
-  const TX_G = "0x" + "a7".repeat(32);
-  const first = createTaskStore({ dir: dirG, bootId: "boot-ga", log: quiet, saleVia: "mcp" });
-  const recHttp = first.create({ slug: "research", payer: PAYER_G });
-  ledger.recordSale({ slug: "research", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: PAYER_G, tx: "0x" + "a6".repeat(32), wire: "x402", via: "http" });
+  const { s, booked } = await restart(dir);
+  ok(!/settled before the restart/.test(s.get(task.taskId)?.statusMessage || "") && booked.length === 0, `g2. a task never takes the short connector call's delivered sale as its own (${booked.length} booked)`);
+  // Its own sale lands under its key beside that one: it is the run's, by key.
+  const dir2 = join(TMP, "g2b");
+  const K2 = key();
+  const task2 = createTaskStore({ dir: dir2, bootId: "boot-g2c", log: quiet }).create({ slug: "g2-tool", runKey: K2 });
+  sale({ slug: "g2-tool", payer: P, tx: TXB, wire: "mpp", via: "mcp", runKey: K2 });
   await ledger.salesLedgerFlush?.();
-  const bookedG = [];
-  const second = createTaskStore({ dir: dirG, bootId: "boot-gb", log: quiet, saleVia: "mcp", onChargedFailure: (x) => bookedG.push(x) });
-  await second.orphansChecked?.();
-  const r = second.get(recHttp.taskId);
-  ok(r?.status === "failed" && /You were not charged/.test(r.statusMessage) && bookedG.length === 0, `g. a direct (http) sale of the tool is not the connector run's (${String(r?.statusMessage).slice(0, 80)})`);
-  const dirG2 = join(TMP, "g2");
-  const PAYER_G2 = PAYER.replace("5A1e", "5A62");
-  const third = createTaskStore({ dir: dirG2, bootId: "boot-g2a", log: quiet, saleVia: "mcp" });
-  const recMcp = third.create({ slug: "research", payer: PAYER_G2 });
-  ledger.recordSale({ slug: "research", priceUsd: 0.5, rail: "usdc", network: "eip155:8453", payer: PAYER_G2, tx: TX_G, wire: "mpp", via: "mcp" });
-  await ledger.salesLedgerFlush?.();
-  const fourth = createTaskStore({ dir: dirG2, bootId: "boot-g2b", log: quiet, saleVia: "mcp", onChargedFailure: (x) => bookedG.push(x) });
-  await fourth.orphansChecked?.();
-  const r2 = fourth.get(recMcp.taskId);
-  ok(r2?.statusMessage.includes(TX_G) && bookedG.length === 1 && bookedG[0].receipt.transaction === TX_G, "g. control: a sale booked on the connector's path is the run's");
+  const R = await restart(dir2);
+  ok(charged(R.s.get(task2.taskId), TXB) && R.booked.length === 1 && R.booked[0].receipt.transaction === TXB, `g2. control: the run's own sale under its key is its charge, whatever else the wallet bought (${JSON.stringify(R.booked.map((b) => b.receipt.transaction))})`);
+  // The same, from a record a build before run keys wrote (payer, no key):
+  // it is never worded charged on a found sale.
+  const dirL = join(TMP, "g2-legacy");
+  const legacyTask = legacyRecord(dirL, { slug: "g2-tool", payer: P });
+  const L = await restart(dirL);
+  ok(!/settled before the restart/.test(L.s.get(legacyTask.taskId)?.statusMessage || "") && L.booked.length === 0, "g2. ...and a keyless record never takes a sale found by wallet, tool and time");
 }
 // h. a sale with no transaction is booked under the run's own key.
 {
-  const dirH = join(TMP, "h");
-  const first = createTaskStore({ dir: dirH, bootId: "boot-ha", log: quiet });
-  const rec = first.create({ slug: "research", payer: PAYER });
-  const bookedH = [];
-  const second = createTaskStore({ dir: dirH, bootId: "boot-hb", log: quiet, chargeOf: () => ({ tx: null, network: "eip155:8453", priceUsd: 0.5 }), onChargedFailure: (x) => bookedH.push(x) });
-  await second.orphansChecked?.();
-  ok(bookedH.length === 1 && bookedH[0].requestId === `task-${rec.taskId}`, `h. a tx-less sale is booked under the run's key (${bookedH[0]?.requestId})`);
+  const dir = join(TMP, "h");
+  const rec = createTaskStore({ dir, bootId: "boot-ha", log: quiet }).create({ slug: "research", runKey: key() });
+  const { booked } = await restart(dir, { chargeOf: () => ({ tx: null, network: "eip155:8453", priceUsd: 0.5, payer: PAYER.toLowerCase() }) });
+  ok(booked.length === 1 && booked[0].requestId === `task-${rec.taskId}`, `h. a tx-less sale is booked under the run's key (${booked[0]?.requestId})`);
 }
-// i. the connector's task label: the wallet an MPP evm credential names.
+// i. a ledger that has not loaded is never read as "no sale".
 {
-  const { evmPayerOfCredential } = await import("../src/mcp-http.js");
-  const cred = (c) => `Payment ${Buffer.from(JSON.stringify(c)).toString("base64url")}`;
-  ok(evmPayerOfCredential(cred({ challenge: { method: "evm" }, payload: { from: PAYER } })) === PAYER, "i. an MPP evm credential labels the task with its signed from");
-  ok(evmPayerOfCredential(cred({ challenge: { method: "tempo" }, payload: { from: PAYER } })) === null, "i. a Tempo credential labels nothing");
-  ok(evmPayerOfCredential("Payment !!!") === null && evmPayerOfCredential("") === null && evmPayerOfCredential(undefined) === null, "i. garbage labels nothing");
+  const dir = join(TMP, "i");
+  const rec = createTaskStore({ dir, bootId: "boot-ia", log: quiet }).create({ slug: "research", runKey: key() });
+  const { s, booked } = await restart(dir, { chargeOf: () => tasksMod.ORPHAN_LEDGER_UNLOADED });
+  ok(typeof tasksMod.ORPHAN_LEDGER_UNLOADED === "string" && neither(s.get(rec.taskId)) && booked.length === 0, `i. an unloaded ledger leaves the words claiming neither (${String(s.get(rec.taskId)?.statusMessage).slice(0, 80)})`);
+}
+// The default lookup, read directly.
+{
+  const { salesLedgerChargeOf } = tasksMod;
+  const K = key();
+  const t0 = Date.now() - 1000;
+  for (let i = 0; i < 25; i++) sale({ slug: "busy-tool", payer: W("5A09"), tx: `0x${String(i % 10).repeat(64)}`, via: "http" });
+  sale({ slug: "busy-tool", payer: W("5A0a"), tx: "0x" + "ee".repeat(32), via: "mcp", runKey: K });
+  await ledger.salesLedgerFlush?.();
+  const own = await salesLedgerChargeOf({ slug: "busy-tool", runKey: K, sinceMs: t0, untilMs: Date.now() + 1000 });
+  ok(own && own.tx === "0x" + "ee".repeat(32) && own.payer === W("5A0a").toLowerCase(), `a run's own sale is found by its key among many sales of the tool (${JSON.stringify(own)})`);
+  ok((await salesLedgerChargeOf({ slug: "busy-tool", runKey: key(), sinceMs: t0, untilMs: Date.now() + 1000 })) === undefined, "a run with no sale under its key, in a window full of the tool's other sales, reads unknown");
+  ok((await salesLedgerChargeOf({ slug: "other-slug", runKey: K, sinceMs: t0, untilMs: Date.now() + 1000 })) === undefined, "a sale under the key for another tool reads unknown, never as the run's");
+  ok((await salesLedgerChargeOf({ slug: "busy-tool", runKey: key(), sinceMs: Date.now() + 5_000, untilMs: Date.now() + 10_000 })) === null, "control: an empty window with no sale under the key reads as no sale");
 }
 
 try { rmSync(TMP, { recursive: true, force: true }); } catch { /* temp */ }

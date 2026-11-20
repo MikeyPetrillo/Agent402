@@ -18,9 +18,9 @@
 // answer each sentence names on a booted server.
 
 /** The answers that carry errorCode. */
-export const ERROR_CODE_SCOPE = "Every error answer a tool's route writes, other than a 402, carries errorCode beside the message: an input refused before payment, a run that ended in an error, a retired route (410) and a tool that is paused or switched off (503).";
+export const ERROR_CODE_SCOPE = "Every error answer a tool's route writes, other than a 402, carries errorCode beside the message: an input refused before payment, a body the server cannot read (400) or that is over its size limit (413), a run that ended in an error, a retired route (410), a tool that is paused or switched off (503), and a tool whose route is not served on this server at all, which answers 404 as any unknown path under /api does.";
 /** The answers that carry none. */
-export const ERROR_CODE_NOT_CARRIED = "A 402 is the payment-required answer: it follows the x402 and MPP wire formats and carries no errorCode. Some refusals from the payment and request checks in front of a tool's route carry none either: a payment already used, a rate limit on unpaid or free calls, a body the server cannot read.";
+export const ERROR_CODE_NOT_CARRIED = "A 402 is the payment-required answer: it follows the x402 and MPP wire formats and carries no errorCode. Some refusals from the payment and request checks in front of a tool's route carry none either: a payment already used, a rate limit on unpaid or free calls.";
 
 export const ERROR_CODES = Object.freeze([
   { status: 400, code: "invalid_input", meaning: "The input is missing a field, has a wrong type or is out of range; the message names the field. Fix the input.", retry: "fix-input", carried: true },

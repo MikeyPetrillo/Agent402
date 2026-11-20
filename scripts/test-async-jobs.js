@@ -167,14 +167,38 @@ try {
     ok(v.valid && v.record.settlement && v.record.replay === false, `the run's signed receipt is kept with the result and verifies against it (${v.reason})`);
   }
   ok(!("owner" in g1) && !("pid" in g1) && !("payer" in g1), "the job document exposes no owner, process id or payer");
-  // The record keeps the paying wallet (never on the wire), so a run a restart
-  // cut off is read against the sales ledger (src/mcp-tasks.js).
+  // The record keeps the run's key (never on the wire) and the replay sends
+  // it, and the route books it on the job's sale, so a run a restart cut off
+  // is read against its own sale (src/mcp-tasks.js). No payer is recorded.
   {
     const { readFileSync, readdirSync } = await import("node:fs");
     const dir = join(TMP, "tasks", "async-jobs");
     let stored = null;
     try { stored = JSON.parse(readFileSync(join(dir, `${j1.jobId}.json`), "utf8")); } catch { stored = { files: (() => { try { return readdirSync(dir); } catch { return []; } })() }; }
-    ok(stored?.payer === wallet(1).toLowerCase(), `the job record keeps the paying wallet the credential names (${JSON.stringify(stored?.payer ?? stored)})`);
+    ok(/^[0-9a-f]{32}$/.test(String(stored?.runKey)) && !("payer" in (stored || {})), `the job record keeps the run's key and no payer (${JSON.stringify(stored?.runKey ?? stored)})`);
+    ok(!JSON.stringify(g1).includes(String(stored?.runKey)), "the run's key is not in the job document");
+    const { default: Database } = await import("better-sqlite3");
+    let row;
+    await waitFor(async () => {
+      const db = new Database(join(TMP, "sales.db"), { readonly: true });
+      try { row = db.prepare("SELECT run_key, payer FROM sales WHERE lower(payer) = lower(?) ORDER BY id DESC LIMIT 1").get(wallet(1)); } catch { row = undefined; } finally { db.close(); }
+      return row !== undefined;
+    });
+    ok(row && row.run_key === stored?.runKey, `the job's sale is booked under the run's key (sale ${JSON.stringify(row?.run_key)}, record ${JSON.stringify(stored?.runKey)})`);
+  }
+  // A direct call that names a run key without the job's token books none.
+  {
+    const payer = wallet(14);
+    const r = await post({ prefer: "wait=75", "x-forwarded-for": "10.9.0.14", "payment-signature": credential(payer), "x-agent402-async-run": "ab".repeat(16) });
+    await r.arrayBuffer();
+    const { default: Database } = await import("better-sqlite3");
+    let row;
+    await waitFor(async () => {
+      const db = new Database(join(TMP, "sales.db"), { readonly: true });
+      try { row = db.prepare("SELECT run_key FROM sales WHERE lower(payer) = lower(?) ORDER BY id DESC LIMIT 1").get(payer); } catch { row = undefined; } finally { db.close(); }
+      return row !== undefined;
+    });
+    ok(r.status === 200 && row && row.run_key === null, `a direct call's own run-key header is not booked (status ${r.status}, run_key ${JSON.stringify(row?.run_key)})`);
   }
 
   // 1b. A poller written before the progress fields (waits for status
