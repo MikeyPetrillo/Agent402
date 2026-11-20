@@ -455,9 +455,14 @@ function newQueryBudget() { return { sent: 0, max: SQL_QUERY_BUDGET, left() { re
 // server read from it (charged, free or neither), never by what the handler
 // returned. A call outside a request (the economy panel's refresh) is not
 // counted. Counting never changes or fails the call.
+// This server's own reads (the economy snapshot, src/x402-economy.js) run
+// the same handler through ownSqlQuery below. The mark is private to this
+// module, so no request can carry it: an own read is paced like any query but
+// takes no place in the buyers' in-flight cap and is never refused by it.
+const OWN_READ = Symbol("own sql read");
 function countedSqlCall(run) {
-  return async (input) => {
-    const call = { queries: newQueryBudget(), budgetSpent: false };
+  return async (input, _ctx, mark) => {
+    const call = { queries: newQueryBudget(), budgetSpent: false, own: mark === OWN_READ };
     try { return await run(input, call); }
     catch (e) { if (e?.queryBudgetSpent) call.budgetSpent = true; throw e; }
     finally {
@@ -1168,10 +1173,12 @@ export const CDP_TOOLS = [
       }
       let capped = cappedSql(sql);
       body.sql = capped.sql;
-      if (buyerQueriesInflight >= BUYER_QUERY_INFLIGHT_MAX) {
-        throw sqlBusyRefusal(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds.`);
+      if (!call.own) {
+        if (buyerQueriesInflight >= BUYER_QUERY_INFLIGHT_MAX) {
+          throw sqlBusyRefusal(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds.`);
+        }
+        buyerQueriesInflight++;
       }
-      buyerQueriesInflight++;
       // One query budget for the call: the buyer's query, its retry, and
       // every recovery run spend it where they are sent.
       const queries = call.queries;
@@ -1256,7 +1263,7 @@ export const CDP_TOOLS = [
           }
         }
       } finally {
-        buyerQueriesInflight--;
+        if (!call.own) buyerQueriesInflight--;
         if (queries.sent > maxQueriesPerCall) maxQueriesPerCall = queries.sent;
       }
       const rows = res?.result ?? res?.rows ?? res?.data ?? res;
@@ -1295,3 +1302,9 @@ export const CDP_TOOLS = [
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(CDP_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
+
+/** One of this server's own reads through the onchain-sql handler: the same
+ *  query handling and send pacing, outside the buyers' in-flight cap. */
+export function ownSqlQuery(input) {
+  return CDP_TOOLS.find((t) => t.slug === "onchain-sql").handler(input, undefined, OWN_READ);
+}

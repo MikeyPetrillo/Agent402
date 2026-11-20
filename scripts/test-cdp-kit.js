@@ -405,9 +405,38 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         ok(_buyerQueriesInflightForTest() === BUYER_QUERY_INFLIGHT_MAX, `${BUYER_QUERY_INFLIGHT_MAX} buyer queries are in flight (${_buyerQueriesInflightForTest()})`);
         const c = await Promise.race([sqlRun().catch((x) => x), new Promise((r) => setTimeout(() => r({ statusCode: "not refused" }), 500))]);
         ok(c?.statusCode === 429 && c?.retryAfter === 5 && c?.hint === "busy" && c?.shed === true && /answering 8 queries/.test(c?.message) && /Nothing was charged\.$/.test(c?.message), `the next is refused 429 with Retry-After 5, marked as shed load (${c?.statusCode})`);
+        // This server's own read (the economy snapshot) at the cap: it is
+        // not refused by the cap and takes no buyer's place in it.
+        const { ownSqlQuery } = await import("../src/tools/cdp-kit.js");
+        const own = ownSqlQuery({ sql: "SELECT block_number FROM base.blocks" });
+        const ownEarly = await Promise.race([own.then(() => "answered", (x) => x), new Promise((r) => setTimeout(() => r("in flight"), 60))]);
+        ok(ownEarly === "in flight" && _buyerQueriesInflightForTest() === BUYER_QUERY_INFLIGHT_MAX, `an own read at the cap is not refused and is not counted as a buyer's query (${ownEarly?.statusCode ?? ownEarly}, ${_buyerQueriesInflightForTest()} counted)`);
         release();
         const done = await Promise.all(held);
         ok(done.every((r) => r.rowCount === 1) && _buyerQueriesInflightForTest() === 0, "the ones in flight answer and the count returns to zero");
+        ok((await own).rowCount === 1 && _buyerQueriesInflightForTest() === 0, "the own read answers and the count stays at zero");
+        // Own reads in flight leave every buyer place free.
+        {
+          let free; const wait = new Promise((r) => { free = r; });
+          globalThis.fetch = async () => { await wait; return J(200, { result: [{ x: 1 }] }); };
+          const owns = Array.from({ length: BUYER_QUERY_INFLIGHT_MAX }, () => ownSqlQuery({ sql: "SELECT block_number FROM base.blocks" }));
+          await new Promise((r) => setTimeout(r, 20));
+          const buyer = sqlRun();
+          await new Promise((r) => setTimeout(r, 20));
+          ok(_buyerQueriesInflightForTest() === 1, `with ${BUYER_QUERY_INFLIGHT_MAX} own reads in flight a buyer's query still takes a place (${_buyerQueriesInflightForTest()} counted)`);
+          free();
+          const all = await Promise.all([buyer, ...owns].map((p) => p.catch((x) => x)));
+          ok(all.every((r) => r.rowCount === 1) && _buyerQueriesInflightForTest() === 0, "and all of them answer");
+        }
+        // A caller's own third argument is not the mark: it is counted as a buyer's query.
+        {
+          let free; const wait = new Promise((r) => { free = r; });
+          globalThis.fetch = async () => { await wait; return J(200, { result: [{ x: 1 }] }); };
+          const forged = tool("onchain-sql").handler({ sql: "SELECT block_number FROM base.blocks" }, { own: true }, "own sql read");
+          await new Promise((r) => setTimeout(r, 20));
+          ok(_buyerQueriesInflightForTest() === 1, "a call that passes its own mark is counted as a buyer's query");
+          free(); await forged;
+        }
       } finally { globalThis.fetch = realFetchC; }
     }
     // ONCHAIN_SQL_INFLIGHT_MAX overrides the cap inside 1..16; anything else keeps 8.

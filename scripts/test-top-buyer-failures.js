@@ -356,6 +356,9 @@ try {
     env: {
       FREE_MODE: "", NODE_ENV: "", CDP_SQL_STUB: "1",
       CDP_SQL_STUB_HOLD_DIR: HOLD_DIR,
+      // The server's own economy read is held in flight through the first
+      // busy round below (its first query names this event).
+      CDP_SQL_STUB_HOLD_TEXT: "AuthorizationUsed",
       CDP_API_KEY_ID: "organizations/test/apiKeys/test", CDP_API_KEY_SECRET: privateKey.export({ type: "pkcs8", format: "pem" }),
       SALES_LEDGER_DB: process.env.SALES_LEDGER_DB,
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base,solana", SOLANA_WALLET_ADDRESS: payTo.address,
@@ -454,11 +457,21 @@ try {
     const done = await Promise.all(holders);
     return { r, held: held.n, holders: done.map((x) => x.status) };
   };
+  // One of the server's own reads (the economy snapshot, which the boot
+  // warm-up or a visitor starts) is in flight, held at the query service,
+  // through the first round: it takes no place in the buyers' cap, so both
+  // holders are sent and only the third buyer query is refused.
+  const ownRead = fetch(`${B}/api/x402-economy`).then((r) => r.arrayBuffer()).catch(() => {});
+  const ownHeld = await waitFor(async () => ({ done: /\[cdp-sql-stub\] held own/.test(srv.log()) }), 30_000);
+  ok(ownHeld.done, "the server's own economy read is in flight, held at the query service");
   ok((await word(false))?.status === "ok" && Object.keys(await word(false)).join() === "status", `onchainSqlBusy reads ok and publishes its word only (${JSON.stringify(await word(false))})`);
   const b0 = await busyCounts();
   ok(b0 && b0.topBuyer === 0 && b0.other === 0, `no busy refusal is counted yet (${JSON.stringify(b0)})`);
   const nb = await busyRound(nonTopSol, "n1");
-  ok(nb.held === 2 && nb.r.status === 429 && nb.r.body?.hint === "busy" && nb.holders.every((s) => s === 200), `with two queries in flight a non-top payer's third gets the busy 429 and the two finish (${JSON.stringify({ held: nb.held, status: nb.r.status, hint: nb.r.body?.hint, holders: nb.holders })})`);
+  ok(nb.held === 2 && nb.r.status === 429 && nb.r.body?.hint === "busy" && nb.holders.every((s) => s === 200), `with two queries in flight (and the server's own read beside them) a non-top payer's third gets the busy 429 and the two finish (${JSON.stringify({ held: nb.held, status: nb.r.status, hint: nb.r.body?.hint, holders: nb.holders })})`);
+  ok(!/\[cdp-sql-stub\] held own[^]*\[cdp-sql-stub\] held own/.test(srv.log()), "the own read was still the one held read through that round");
+  writeFileSync(join(HOLD_DIR, "own"), "");
+  await ownRead;
   const b1 = await waitFor(async () => { const c = await busyCounts(); return { done: c?.other === 1, c }; });
   ok(b1.c?.other === 1 && b1.c.topBuyer === 0, `it is counted on the day as other (${JSON.stringify(b1.c)})`);
   ok((await word())?.status === "ok", "and onchainSqlBusy stays ok");
