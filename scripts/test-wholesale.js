@@ -162,6 +162,24 @@ ok(WHOLESALE_FAMILIES.every((f) => ["public-domain", "cc-by-4.0", "own-computati
   }
 }
 
+// ---- the changelog announces the surface, in both files (CHANGELOG.md and
+// the /changelog page, src/changelog.js): the page, the versioned JSON, every
+// family by its title, and the errorCode field every tool error answer now
+// carries.
+{
+  const { readFileSync } = await import("node:fs");
+  const md = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  const { CHANGELOG_ENTRIES } = await import("../src/changelog.js");
+  const page = CHANGELOG_ENTRIES.flatMap((e) => e.items || []).join("\n");
+  for (const [label, text] of [["CHANGELOG.md", md], ["src/changelog.js", page]]) {
+    const lower = text.toLowerCase();
+    ok(text.includes("`/wholesale`") && text.includes("`GET /api/wholesale/v1`") && text.includes("`GET /api/wholesale/v1/<family>`"), `${label} announces /wholesale and the versioned JSON`);
+    const missing = WHOLESALE_FAMILIES.filter((f) => !lower.includes(f.title.toLowerCase())).map((f) => f.id);
+    ok(missing.length === 0, `${label} names every family by its title${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
+    ok(/`errorCode`/.test(text) && ["invalid_input", "upstream_error"].every((c) => text.includes(`\`${c}\``)), `${label} announces the errorCode field on tool error answers`);
+  }
+}
+
 // ---- a FREE_MODE boot
 let srv = null;
 try {

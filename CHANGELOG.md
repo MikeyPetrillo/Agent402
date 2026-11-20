@@ -91,6 +91,37 @@ Site:
 - The "Watch a call get paid" figure lays every step out in one row from
   1024 px wide, and stacks them on phones.
 
+### 2026-11-18 (bundle products and wholesale tool data)
+Tools:
+- Three bundle tools each run many catalog tools in one call and return one
+  computed report: weather-risk-brief, a 7-day weather risk read for up to
+  50 sites (forecast, threshold hits, air quality, the same dates a year
+  earlier and the chance of heavy rain), scored and ranked; filings-brief,
+  the SEC picture of up to 40 US public companies (latest annual and
+  quarterly financials with ratios, filing activity and Form 4 activity),
+  flagged and ranked; and token-diligence, market diligence for up to 20
+  coins (profile and supply, one-year return, drawdown and volatility,
+  turnover and dilution), flagged and ranked. Each is priced per site,
+  company or coin by the skill-pack rule over the tools it runs, and the 402
+  quotes the amount for the units in the body. A ticker or coin the source
+  does not know answers 422 naming it. No model writes any part of a
+  report.
+Wholesale:
+- `/wholesale` and `GET /api/wholesale/v1` give a reseller one versioned
+  JSON read per tool family (computation tools; SEC filings and company
+  financials; US Treasury rates and debt; weather forecasts, history, air
+  quality and risk), and `GET /api/wholesale/v1/<family>` lists a family's
+  tools: each tool's price, which is the public route's own price with no
+  wholesale discount, the credit to keep with its answers, and its success
+  rate and p50 and p95 latency over the last seven days, marked measured or
+  not enough data. Only sources whose answers may be passed on are listed;
+  market data, search results and model output are not offered. Within v1,
+  fields are only added.
+- Every tool error answer carries `errorCode` beside the message: one
+  stable code per status (such as `invalid_input`, `upstream_error` and
+  `unavailable`), listed with its meaning in the wholesale contract. A code
+  is only ever added, never renamed or removed.
+
 ### 2026-11-18 (yield age limit, MCP cut-offs, unknown coin ids)
 Tools:
 - The Treasury yield tools (`treasury-yield-curve`,

@@ -68,6 +68,29 @@ for (const t of BUNDLE_TOOLS) {
   examples[t.slug] = ex;
 }
 
+// ---- the changelog announces each product, in both files (CHANGELOG.md and
+// the /changelog page, src/changelog.js): its slug and the most units one call
+// takes, read from the same constant the handler refuses past. It types no
+// price: the price is the rule's, quoted in the 402.
+{
+  const { readFileSync } = await import("node:fs");
+  // A markdown item runs from its "- " to the next item or heading.
+  const mdItems = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8").split(/\n(?=- |#|[A-Z][A-Za-z ]{0,40}:\n)/).map((s) => s.replace(/\s+/g, " "));
+  const { CHANGELOG_ENTRIES } = await import("../src/changelog.js");
+  const unitWord = { "weather-risk-brief": "sites", "filings-brief": "US public companies", "token-diligence": "coins" };
+  for (const [label, items] of [["CHANGELOG.md", mdItems], ["src/changelog.js", CHANGELOG_ENTRIES.flatMap((e) => e.items || [])]]) {
+    for (const t of BUNDLE_TOOLS) {
+      const item = items.find((i) => i.includes(t.slug) && /bundle/i.test(i)) || "";
+      const at = item.indexOf(t.slug);
+      const told = item.slice(at, at + 160);
+      ok(at >= 0 && new RegExp(`up to ${BUNDLE_MAX_UNITS[t.slug]} ${unitWord[t.slug]}`).test(told),
+        `${label} announces ${t.slug} with the most ${unitWord[t.slug]} one call takes (${BUNDLE_MAX_UNITS[t.slug]})`);
+    }
+    const bundleItem = items.find((i) => BUNDLE_TOOLS.every((t) => i.includes(t.slug))) || "";
+    ok(bundleItem && !/\$\d/.test(bundleItem), `${label}: one item names all three products and types no price`);
+  }
+}
+
 // ---- inputs
 await throwsStatus(() => weatherSitesOf({}), 400, /"sites"/, "weather: no sites is a 400 naming the field");
 await throwsStatus(() => weatherSitesOf({ sites: [{ lat: 91, lon: 0 }] }), 400, /sites\[0\]\.lat/, "weather: a latitude out of range names the site");
