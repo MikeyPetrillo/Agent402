@@ -178,12 +178,12 @@ export function composeSellerDossier(a) {
     crawlHealthScore: typeof detail.health === "number" ? detail.health : null,
     routable: detail.routable === true,
     paywallProbe: paywall
-      ? { ok: paywall.ok === true, unknown: paywallUnknown, status: paywall.status ?? null, url: paywall.url || null, at: PLAIN(paywall.at), mpp: paywall.mpp === true, error: paywall.error || null }
+      ? { ok: paywall.ok === true, unknown: paywallUnknown, status: paywall.status ?? null, url: paywall.url || null, at: PLAIN(paywall.at), mpp: paywall.mpp === true, error: paywall.error || null, reason: paywall.ok === true ? null : (paywall.reason || null) }
       : { probed: false },
     note: "crawlHealthScore says recent completed crawls read a catalog from the seller's own documents; paywallProbe says a paid route answered a real 402. Read both.",
   };
   if (paywallUnknown) flags.push("our last unpaid probe of a paid route read no verdict (our probe did not complete, or was not a well-formed request for the route); nothing is concluded about its paywall");
-  else if (paywall && paywall.ok === false) flags.push(`the last paywall probe failed (${paywall.error || `HTTP ${paywall.status}`}): paid routes may not be answering 402s`);
+  else if (paywall && paywall.ok === false) flags.push(`the last paywall probe failed (${paywall.reasonNote ? `${paywall.reasonNote}, HTTP ${paywall.status}` : paywall.error || `HTTP ${paywall.status}`}): paid routes may not be answering 402s`);
   if (!paywall) flags.push("no paywall probe on record yet");
   if (typeof detail.health === "number" && detail.health < 0.5) flags.push(`crawl health ${detail.health.toFixed(2)}: most recent completed crawls read no catalog from the seller's own documents`);
 

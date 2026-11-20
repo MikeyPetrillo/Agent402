@@ -5972,18 +5972,56 @@ async function probePaywall(tools, { redirectedTo = null, gated = false } = {}) 
     // says nothing about whether a well-formed call gets a 402. No verdict.
     if (PAYWALL_PROBE_SHAPE_STATUSES.has(res.status)) {
       await res.body?.cancel?.().catch?.(() => {});
-      return paywallUnknown(url, `our unpaid probe was not a well-formed request for this route (HTTP ${res.status} to ${method === "GET" ? "a request without parameters" : "an empty JSON body"}); no paywall verdict`, res.status);
+      return paywallUnknown(url, `our unpaid probe was not a well-formed request for this route (HTTP ${res.status} to ${method === "GET" ? "a request without parameters" : "an empty JSON body"}); no paywall verdict`, res.status, "probe_malformed");
     }
     // `url` is the URL that answered, which is the upgraded one after a 301/308.
     const ms = probeAnswerMs.get(res);
-    return { ok: res.status === 402, status: res.status, url, at: Date.now(), mpp, ...(Number.isFinite(ms) ? { ms } : {}) };
+    const reason = res.status === 402 ? null : paywallFailureReason(res.status);
+    return { ok: res.status === 402, status: res.status, url, at: Date.now(), mpp, ...(reason ? { reason } : {}), ...(Number.isFinite(ms) ? { ms } : {}) };
   } catch (e) {
     // Not sent (the host's load controls held it back): the stored verdict stands.
     if (e?.sellerLoadSkip) return PAYWALL_NOT_SENT;
     // No status was read: our time limit, a connection that did not finish,
     // our resolver. That is our probe not completing, not the route failing.
-    return paywallUnknown(e?.probedUrl || url, `our unpaid probe did not complete (${String(e?.message || e).slice(0, 100)}); no paywall verdict`, 0);
+    return paywallUnknown(e?.probedUrl || url, `our unpaid probe did not complete (${String(e?.message || e).slice(0, 100)}); no paywall verdict`, 0, "probe_incomplete");
   }
+}
+
+// WHY A PAYWALL PROBE DID NOT READ A 402, in a fixed vocabulary. A failed
+// verdict carried only its status, so a reader of ?seller= or the dossier had
+// to guess whether the route was free, asked for an account, moved or broke.
+// Every verdict other than a 402 carries one of these codes as `reason`; the
+// two probe_* codes are the no-verdict readings (ok null), never a failure.
+export const PAYWALL_REASONS = Object.freeze({
+  answered_free: "the paid route answered 2xx to an unpaid request, so it is not paywalled",
+  auth_required: "the paid route answered 401 or 403: it asks for an account credential, not a payment",
+  redirected: "the paid route answered a redirect instead of a 402",
+  client_error: "the paid route answered a 4xx other than 402",
+  server_error: "the paid route answered a 5xx",
+  probe_malformed: "our unpaid probe was not a well-formed request for this route; no verdict",
+  probe_incomplete: "our unpaid probe did not complete; no verdict",
+});
+/** The reason code for a non-402 HTTP status of a paywall probe, or null. */
+export function paywallFailureReason(status) {
+  const s = Number(status);
+  if (!Number.isInteger(s) || s === 402) return null;
+  if (s >= 200 && s < 300) return "answered_free";
+  if (s >= 300 && s < 400) return "redirected";
+  if (s === 401 || s === 403) return "auth_required";
+  if (s >= 400 && s < 500) return "client_error";
+  if (s >= 500 && s < 600) return "server_error";
+  return null;
+}
+/** A stored verdict as a reader sees it, with its reason code and the code's
+ *  sentence: one taken before reasons were recorded gets its code from its
+ *  own status and kind. */
+export function paywallWithReason(p) {
+  if (!p || typeof p !== "object" || p.ok === true) return p || null;
+  const reason = Object.hasOwn(PAYWALL_REASONS, p.reason) ? p.reason
+    : p.unknown === true || p.ok === null
+      ? (Number(p.status) > 0 ? "probe_malformed" : "probe_incomplete")
+      : (Number(p.status) > 0 ? paywallFailureReason(p.status) : "probe_incomplete");
+  return reason ? { ...p, reason, reasonNote: PAYWALL_REASONS[reason] } : p;
 }
 // probePaywall's answer when the probe was not sent (src/seller-load.js).
 const PAYWALL_NOT_SENT = Symbol("paywall-not-sent");
@@ -5998,8 +6036,8 @@ async function paywallForCrawl(prev, tools, { redirectedTo, force, pastDeadline,
 const PAYWALL_PROBE_SHAPE_STATUSES = new Set([400, 415, 422]);
 /** A paywall probe that read no verdict: `ok` is null, never a failure;
  *  paywallVerdictExpired re-probes it after the failure window. */
-function paywallUnknown(url, error, status) {
-  return { ok: null, unknown: true, status, url, at: Date.now(), error, mpp: false };
+function paywallUnknown(url, error, status, reason) {
+  return { ok: null, unknown: true, status, url, at: Date.now(), error, reason, mpp: false };
 }
 
 // BACK OFF FROM AN ORIGIN THAT KEEPS SAYING NO.
@@ -10320,7 +10358,8 @@ export function sellerDetail(originOrHost) {
       // Paywall liveness, measured separately from crawl health. `health` only
       // says the manifest parsed; a seller whose every paid route 500s scores a
       // perfect 1.0 on it. null = not probed yet (never assume healthy).
-      paywall: v.paywall || null,
+      // A verdict other than a 402 carries `reason` (PAYWALL_REASONS).
+      paywall: paywallWithReason(v.paywall),
       // What our own crawl and paid calls say about this seller over a rolling
       // window (src/seller-reputation.js): each metric with its method,
       // sample size and last measurement, scored only past its minimum
