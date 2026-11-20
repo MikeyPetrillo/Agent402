@@ -117,6 +117,11 @@ const neither = (r) => r?.status === "failed" && /restart/.test(r.statusMessage)
   const { s, booked } = await restart(dir);
   ok(neither(s.get(found.taskId)) && booked.length === 0, `d. a keyless record with a sale of its tool by its wallet in the window claims neither and books nothing (${String(s.get(found.taskId)?.statusMessage).slice(0, 90)})`);
   ok(notCharged(s.get(none.taskId)), "d. a keyless record with no sale in its window is not charged");
+  // Whatever a lookup answers, a keyless record is never worded charged.
+  const dirX = join(TMP, "d-injected");
+  const legacy = legacyRecord(dirX, { slug: "d-tool", payer: P });
+  const X = await restart(dirX, { chargeOf: () => ({ tx: "0x" + "d1".repeat(32), network: "eip155:8453", priceUsd: 0.5, payer: P.toLowerCase() }) });
+  ok(neither(X.s.get(legacy.taskId)) && X.booked.length === 0, "d. a keyless record is never worded charged, whatever the lookup answers");
 }
 // d2. a sale booked before the run began is not the run's.
 {
