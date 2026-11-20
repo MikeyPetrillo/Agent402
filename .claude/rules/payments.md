@@ -706,6 +706,19 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   mirror keeps the full offer; each accept is copied unchanged. On by default;
   `PAYMENT_REQUIRED_COMPACT=off` (or `PAYMENT_REQUIRED_BODY=off`) turns it off, and every text
   surface that describes it reads the same switch (`paymentRequiredCompactEnabled`).
+- **MPP offers by client:** `src/mpp-offer-gate.js`. A request whose User-Agent starts with a prefix
+  in `MPP_OFFER_WITHHOLD_USER_AGENTS` (comma list, matched without regard to case; default
+  `python-httpx/`; `off` turns it off) gets a 402 with no `WWW-Authenticate: Payment` challenge
+  (evm, tempo or card); the PAYMENT-REQUIRED header and the body are unchanged, and that 402 varies
+  on `X-Payment-Offers`. `X-Payment-Offers: mpp` (or `all`, a comma list) restores the challenges;
+  a request that arrived with `Authorization: Payment` is never gated (the raw header list and
+  `req.mppCredential` are read, since the shim removes the header). The evm shim, the Tempo
+  appender and the card appender all ask `mppChallengesSuppressed` (`src/mpp-fallback.js`), which
+  answers the wrong-domain steering and this gate, each decided once per request. The `/mcp`
+  loopback sends no client User-Agent, so connector answers are not gated. Counts (withheld,
+  optedIn) per process on the operator view of `/api/gateway-status`
+  (`mppEvmDomainFallback.offerGate`); the public view is unchanged
+  (`scripts/test-mpp-offer-gate.js`).
 - **402 `payment` block:** `src/payment-guide.js`: a first-contact 402 body carries `payment`
   (this request's dollar price on the primary network through `priceForNetwork`, or on the first
   network offered when the route does not offer the primary; one sentence on paying; `noWallet`

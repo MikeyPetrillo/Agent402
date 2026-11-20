@@ -10,7 +10,7 @@ Scope: the server that runs as node src/server.js (every file under src/). The f
 Every value is set on the host, never in the repository. "Default" is the plain literal the code falls back to at
 its first read site when there is one; a helper may still clamp it, and the read site is the reference.
 
-1039 variables in 109 groups.
+1040 variables in 109 groups.
 
 ## Contents
 
@@ -683,6 +683,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `MPP_LB_CACHE_FILE` | MPP lb cache file path. | `/data/mpp-leaderboard-cache.json` | `src/mpp-leaderboard.js` |
 | `MPP_LB_SOURCE` | MPP lb source. |  | `src/server.js`, `src/tempo-transfers.js` |
 | `MPP_LEADERBOARD` | MPP leaderboard. |  | `src/server.js` |
+| `MPP_OFFER_WITHHOLD_USER_AGENTS` | Comma list of User-Agent prefixes whose 402s carry no MPP challenge, only the x402 offer (default python-httpx/; off turns it off). The header X-Payment-Offers: mpp restores the challenges. |  | `src/mpp-offer-gate.js` |
 | `MPP_RECONCILE` | MPP reconcile. |  | `src/mpp-reconcile.js` |
 | `MPP_RECONCILE_EXPLAINED_FILE` | MPP reconcile explained file path. | `/data/mpp-reconcile-explained.json` | `src/mpp-reconcile.js` |
 | `MPP_RECONCILE_FILE` | MPP reconcile file path. | `/data/mpp-reconcile.json` | `src/mpp-reconcile.js` |

@@ -34,12 +34,12 @@ the request is retried with the payment proof - settling on-chain to the seller'
 own address. AgentCore Payments speaks **both x402 and MPP**, which are exactly the
 two rails Agent402 serves.
 
-> Note: on **Base**, the plugin's MPP path signs EIP-3009 under EIP-712 domain name
-> `"USDC"` while Base USDC's contract domain is `"USD Coin"`, so those payments cannot
-> verify (upstream: [awslabs/agentcore-samples#2002](https://github.com/awslabs/agentcore-samples/issues/2002)).
-> The same instrument settles fine over x402, and agent402.tools detects the mismatch and
-> steers the plugin to the x402 offer in the same 402 automatically, so `direct_buy.py`
-> works as written. Nothing to configure here.
+> Note: the plugin calls sellers with the `python-httpx` User-Agent, and agent402.tools
+> answers that client with the x402 offer alone (the `payment-required` header and the
+> full offer in the body, no `WWW-Authenticate: Payment` challenge), so the plugin pays
+> over x402 and `direct_buy.py` works as written. Nothing to configure here. To pay over
+> MPP on Tempo instead, send `X-Payment-Offers: mpp` with the request and hold Tempo
+> funds (see [`tempo-mpp-probe`](tempo-mpp-probe)).
 
 > Note: AgentCore's Gateway cannot pay a 402 on the Gateway→target hop - payment is
 > an **agent-side** capability (this Payments plugin). That's why this sample runs

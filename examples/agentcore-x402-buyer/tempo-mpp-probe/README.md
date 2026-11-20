@@ -4,6 +4,10 @@ Scripts for buying an Agent402 tool over **MPP on Tempo mainnet** from an AWS
 Bedrock AgentCore agent (Strands + the AgentCore Payments plugin, Stripe Privy
 instrument), and for reproducing a **Tempo relay bug** we found doing it.
 
+agent402.tools offers the MPP challenges to the plugin's client (User-Agent
+`python-httpx`) when the request carries `X-Payment-Offers: mpp`; without it the
+`402` carries the x402 offer alone. `mpp_tempo_buy.py` asks for that header.
+
 These are the working copies of what we ran; they build on the Payments stack
 provisioned by AWS's own Tutorial 00 + 08
 ([`awslabs/agentcore-samples` → `08-agents-that-transact`](https://github.com/awslabs/agentcore-samples/tree/main/01-features/08-agents-that-transact)).
