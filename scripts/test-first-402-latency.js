@@ -202,6 +202,33 @@ try {
     ok(!/init attempt \d+ failed/.test(s.log()), "D: the first init does not fail on the upto pair");
     s.child.kill("SIGKILL");
   }
+  // --- Leg E: the only facilitator listing batch-settlement on Base is a later one
+  // The same, for payment channels: it answers inside the batch gate's read,
+  // so channels on Base are offered, and the first init must wait for it.
+  {
+    const primary = stellarFacilitator(false, EVM_KINDS);
+    let firstRead = 0;
+    const lateUrl = await listen((req, res) => { req.resume(); req.on("end", () => {
+      if (req.url !== "/supported") return json(res, 404, {});
+      if (!firstRead) firstRead = Date.now();
+      setTimeout(() => json(res, 200, { kinds: [...EVM_KINDS, { x402Version: 2, scheme: "batch-settlement", network: "eip155:8453", extra: { receiverAuthorizer: "0x00000000000000000000000000000000000a1b2c", withdrawDelay: 86_400 } }], extensions: [], signers: {} }), Math.max(0, firstRead + 1800 - Date.now()));
+    }); });
+    const s = await boot("first-402-e", await stellarFacilitator(false).urlP, { CDP_FACILITATOR_URL: await primary.urlP, PAYAI_FACILITATOR_URL: lateUrl, X402_BATCH_SETTLEMENT_NETWORKS: "eip155:8453", X402_BATCH_SETTLEMENT_STORE: "memory", PAYMENT_NETWORKS: "base,polygon", STELLAR_FACILITATOR_URL: "", STELLAR_WALLET_ADDRESS: "" });
+    ok(s.up, "E: the paid server booted with the only channel facilitator late");
+    if (!s.up) { console.log(s.log().slice(-1500)); process.exit(1); }
+    ok(/gave no \/supported answer/.test(s.log()) && /batch-settlement: payment channels offered on eip155:8453/.test(s.log()), "E: control: its boot read got no answer, and channels on Base are offered");
+    // A plain route (render runs long, so it takes the EVM exact rails only).
+    let first = { status: 0, accepts: [] };
+    try {
+      const r = await fetch(`${s.base}/api/uuid`, { signal: AbortSignal.timeout(FIRST_ABORT_MS) });
+      await r.text();
+      const h = r.headers.get("payment-required");
+      first = { status: r.status, accepts: h ? JSON.parse(Buffer.from(h, "base64").toString("utf8")).accepts || [] : [] };
+    } catch { /* status 0 */ }
+    ok(first.status === 402 && first.accepts.some((a) => a.scheme === "batch-settlement"), `E: the first unpaid request after boot is a 402 offering channels (got ${first.status}: ${first.accepts.map((a) => a.scheme).join(",")})`);
+    ok(!/init attempt \d+ failed/.test(s.log()), "E: the first init does not fail on the channel pair");
+    s.child.kill("SIGKILL");
+  }
 } catch (e) {
   failed++;
   console.log(`FAIL - ${e?.stack || e}`);

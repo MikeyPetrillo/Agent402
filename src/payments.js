@@ -3075,9 +3075,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     }
   });
   // Every pair the offer carries through these clients: exact on each
-  // offered network, upto on each upto network. A pair no answering
-  // facilitator lists can only be won by one that did not answer.
-  const offeredPairs = [...[...offeredAtInit].map((n) => `${n} exact`), ...uptoCaip2.map((n) => `${n} upto`)];
+  // offered network, upto on each upto network, batch-settlement on each
+  // channel network. A pair no answering facilitator lists can only be won
+  // by one that did not answer.
+  const offeredPairs = [...[...offeredAtInit].map((n) => `${n} exact`), ...uptoCaip2.map((n) => `${n} upto`), ...batchCaip2.map((n) => `${n} batch-settlement`)];
   const cannotWinAnOfferedPair = (i) => i >= 0 && offeredPairs.every((p) => firstAnswering.has(p)) && [...firstAnswering.values()].every((j) => j < i);
   const heldAtInit = failedReads.filter(({ client }) => cannotWinAnOfferedPair(facilitatorClients.indexOf(client))).map(({ client, label }) => {
     const own = Object.prototype.hasOwnProperty.call(client, "getSupported");
