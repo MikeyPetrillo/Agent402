@@ -48,6 +48,11 @@ ok(dualStackIdx > 0 && noteIdx > dualStackIdx, "the note appears after the MPP d
   const note = on.slice(on.indexOf("How to read our 402"), on.indexOf("How to read our 402") + 1500);
   ok(note.includes("X-Payment-Offers: mpp") && note.includes("python-httpx/"), "the note names the gated prefix and the opt-in header");
   ok(!/BOTH headers, always/.test(on), "the note does not say every 402 carries both headers, always");
+  // The dual-stack paragraph says the 402 carries the challenges, so it names
+  // the exception itself, not only the note further down.
+  const pAt = on.indexOf("**MPP clients are first-class");
+  const para = pAt < 0 ? "" : on.slice(pAt, on.indexOf("\n\n", pAt));
+  ok(para.includes("X-Payment-Offers: mpp") && para.includes("python-httpx/") && para.includes("Accept-Payment"), "the 'MPP clients are first-class' paragraph names the gated prefix and both ways back");
   process.env.MPP_OFFER_WITHHOLD_USER_AGENTS = "off";
   const off = llmsFullTxt("https://agent402.tools", FIXTURE_CATALOG);
   ok(/BOTH headers, always/.test(off) && !off.includes("X-Payment-Offers"), "with the gate off the note says both headers, always, and names no opt-in header");

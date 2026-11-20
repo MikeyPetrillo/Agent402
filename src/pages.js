@@ -28,7 +28,7 @@ import { JOB_PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumUsdByNetwork as premiumUsdByNetworkName } from "./public-networks.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { defHasLastingEffect } from "./hangup-forgiveness.js";
-import { mppOffersFor, mppRailsPhrase, mppOfferShortProse } from "./mpp-offers.js";
+import { mppOffersFor, mppRailsPhrase, mppOfferShortProse, mppOfferGateClauseIfOffered, mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
 import { tempoOfferedFor, tempoDiscoveryInfo } from "./mpp-tempo.js";
 import { WALLET_ONLY_POLICY_REASON, powCostPhrase } from "./pow.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -45,7 +45,6 @@ import { kalshiToolsEnabled } from "./kalshi-switch.js";
 import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
 import { toolJudgeEnabled } from "./tool-judge.js";
 import { fromPriceLabel } from "./quoted-from.js";
-import { mppOfferGateClause, mppOfferGateSentence } from "./mpp-offer-gate.js";
 
 // A price in base units of an offer's token (src/base-units.js), or null
 // when the price is not a dollar figure.
@@ -900,6 +899,9 @@ export function openapiSpec(baseUrl, catalog) {
   // 402 offers tempo on. Marked per operation and indexed at the top level.
   const mppFlagship = mppFlagshipRows(catalog);
   const mppFlagshipBySlug = new Map(mppFlagship.map((r) => [r.slug, r]));
+  // Which clients get the x402 offer alone (src/mpp-offer-gate.js), read once.
+  const offerGateClause = mppOfferGateClauseIfOffered({ code: (x) => x });
+  const offerGateSentence = mppOfferGateSentenceIfOffered({ code: (x) => x });
   for (const tool of toolList(catalog)) {
     const { method, path, discovery } = tool;
     // Every MPP offer the live 402 makes on this route, in the order it lists
@@ -941,7 +943,7 @@ export function openapiSpec(baseUrl, catalog) {
             ? { schema: responseSchemaFor(path, discovery?.output?.example, discovery?.output?.optional), example: discovery?.output?.example ?? {}, ...(discovery?.output?.captured ? { "x-example-source": { kind: "captured-paid-answer", capturedAt: discovery.output.captured.capturedAt, modelBacked: discovery.output.captured.modelBacked === true } } : {}) }
             : { schema: { type: "string", format: "binary" } }])),
         },
-        402: { description: `Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment)${mppOfferGateClause({ code: (x) => x }) ? `; ${mppOfferGateClause({ code: (x) => x })}` : ""}. A first-contact body also carries payment: this request's price in dollars on the named network, how to pay, the proof-of-work path on a free-tier tool (noWallet), the caller's own inputs on a route quoted from its body (quote), and links to /llms.txt, the pay section of /agents.md and the MCP connector. ${PAYMENT_RETRY_VERBS_NOTE}` },
+        402: { description: `Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment)${offerGateClause ? `; ${offerGateClause}` : ""}. A first-contact body also carries payment: this request's price in dollars on the named network, how to pay, the proof-of-work path on a free-tier tool (noWallet), the caller's own inputs on a route quoted from its body (quote), and links to /llms.txt, the pay section of /agents.md and the MCP connector. ${PAYMENT_RETRY_VERBS_NOTE}` },
         400: { description: "Invalid input - the JSON body names the tool's input schema (expected, required), its example, and howToCall: the same example as a ready-to-run request (method, url, and a JSON body, or form parts for a multipart tool), with the other method under alternate where it is served; a call over 1024 bytes carries only method and url" },
         // One shared object (the description is the same on every route).
         429: OPENAPI_429,
@@ -1219,7 +1221,7 @@ export function openapiSpec(baseUrl, catalog) {
         // not pay-per-call. No credits sentence: credit sales are off by
         // default (CREDITS_SALES), so "buy at /credits" is not an instruction
         // an agent can follow.
-        `Every operation in this document that carries x-price is pay-per-call: request it unauthenticated, read the 402 (x402 PAYMENT-REQUIRED or MPP WWW-Authenticate: Payment), pay and retry.${mppOfferGateSentence({ code: (x) => x }) ? ` ${mppOfferGateSentence({ code: (x) => x })}` : ""} Find the right tool with GET /api/find?q=<task> and read prices at GET /api/pricing, both free (its payment.premiumUsdByNetwork names a chain's settlement premium, added to every price quoted on that chain, and payment.minPriceUsdByNetwork a chain's floor; an operation's x-payment-info carries the premium too); many tools also accept free proof-of-work (GET /api/pow). To call a model, use the metered routes (${meteredRoutesInline().replace(/`/g, "")}), the default. ${meteredQuoteSentence().replace(/`/g, "")} ${flatTiersLine().replace(/`/g, "")} Retries: an Idempotency-Key replays a served paid call without a second charge, and a request re-sent with the same signed EVM payment is replayed without one (X-Replayed-Answer: 1).`,
+        `Every operation in this document that carries x-price is pay-per-call: request it unauthenticated, read the 402 (x402 PAYMENT-REQUIRED or MPP WWW-Authenticate: Payment), pay and retry.${offerGateSentence ? ` ${offerGateSentence}` : ""} Find the right tool with GET /api/find?q=<task> and read prices at GET /api/pricing, both free (its payment.premiumUsdByNetwork names a chain's settlement premium, added to every price quoted on that chain, and payment.minPriceUsdByNetwork a chain's floor; an operation's x-payment-info carries the premium too); many tools also accept free proof-of-work (GET /api/pow). To call a model, use the metered routes (${meteredRoutesInline().replace(/`/g, "")}), the default. ${meteredQuoteSentence().replace(/`/g, "")} ${flatTiersLine().replace(/`/g, "")} Retries: an Idempotency-Key replays a served paid call without a second charge, and a request re-sent with the same signed EVM payment is replayed without one (X-Replayed-Answer: 1).`,
     },
     servers: [{ url: baseUrl }],
     // These exist ONLY so the openapi-resolve-refs tool's example (which

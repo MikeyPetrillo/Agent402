@@ -8,6 +8,7 @@ import { siteOrgRef } from "./site-org.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-door.js";
 import { connectorWires, connectorPayText, connectorLongCallText, X402_MCP_PAYMENT_KEY, X402_MCP_RECEIPT_KEY } from "./connector-pay.js";
+import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
 // Copy that names a prepaid key as a way in reads the switch that sells it:
 // while sales are off, a key is something a buyer already holds.
 const PREPAID = creditsSalesEnabled() ? "a prepaid key" : "a prepaid key bought earlier";
@@ -205,6 +206,9 @@ export const LEARN = [
         { code: RAW_402 },
         `<ul><li>${C("PAYMENT-REQUIRED")}: the x402 offer, base64 JSON with one entry per accepted chain.</li><li>${C("WWW-Authenticate: Payment")}: the MPP challenges for the same price, one per method and currency (Tempo first, then Base and Celo), each bound to this server by a signed id and an expiry.</li><li>${C("X-Pow-Challenge")}: on tools that accept proof-of-work, where to get a puzzle instead of paying money.</li></ul>`,
         P(`A client that speaks only one of the two protocols should look for the header it understands. An unfamiliar ${C("WWW-Authenticate")} scheme does not mean there is no way to pay.`),
+        // Read at render time: which clients get the x402 offer alone
+        // (src/mpp-offer-gate.js), when MPP is offered at all.
+        () => { const s = mppOfferGateSentenceIfOffered({ code: C }); return s ? P(s) : ""; },
       ]],
       ["A 402 costs nothing", [
         P(`Reading a 402 is free. It is a quote, not a charge, and no payment is taken until a request arrives carrying a signed payment that matches one of the offers. So an agent can learn the price of any route before it buys.`),
@@ -361,6 +365,7 @@ const LEARN_CSS = `
 `;
 
 function renderBlock(b) {
+  if (typeof b === "function") return renderBlock(b());
   if (typeof b === "string") return b;
   if (b && b.code) return codeBlock(`<code>${esc(b.code)}</code>`, { html: true, style: "margin:0 0 18px" });
   return "";
