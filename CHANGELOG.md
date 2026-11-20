@@ -267,8 +267,8 @@ Tools:
   GTIN-14 barcode number and returns the expected digit and the 14-digit
   form. It is pure computation and free through proof of work.
 Credits:
-- Holiday data by Nager.Date, which Agent402 sponsors; every tool that
-  serves it carries the credit.
+- Holiday data by Nager.Date, used under a sponsorship held for this
+  service; every tool that serves it carries the credit.
 
 ### 2026-11-18 (site motion and charts)
 Site:

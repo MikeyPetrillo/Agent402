@@ -15,7 +15,9 @@
 // not offered here, and neither is a proof-of-work tool that serves a
 // committed outside dataset under its own license (COMMITTED_DATASET_SLUGS)
 // or carries a source's attribution: the compute family's basis is our own
-// computation, with no credit line to keep.
+// computation, some of it over public facts (exchange calendars typed in
+// from each exchange's page, sellers' own published listings), with no
+// credit line to keep.
 //
 // Whether a failed call was charged depends on the rail (a Tempo push
 // transfer is final before the call runs), so the error codes carry no such
@@ -53,7 +55,7 @@ export const WHOLESALE_NOT_CHARGED_RAILS = Object.freeze(["x402", "MPP", "a prep
  *  carries its own), and the slugs (a function of the server's facts). */
 export const WHOLESALE_FAMILIES = Object.freeze([
   {
-    id: "compute", title: "Computation tools", source: "our own code; no outside data source",
+    id: "compute", title: "Computation tools", source: "our own code; some tools compute over public facts (published exchange calendars, sellers' own published listings)",
     redistribution: "own-computation", credit: null,
     slugs: ({ powSlugs }) => [...powSlugs].filter((s) => !COMMITTED_DATASET_SLUGS.includes(s)),
   },

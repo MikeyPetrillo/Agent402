@@ -52,8 +52,9 @@ export const C3S_ATTRIBUTION = "Contains modified Copernicus Climate Change Serv
 // GeoNames (CC BY 4.0, geonames.org: "give credit to GeoNames"), the place
 // data behind Open-Meteo's geocoding API (open-meteo.com/en/docs/geocoding-api).
 export const GEONAMES_ATTRIBUTION = "Place data from GeoNames (CC BY 4.0).";
-// Nager.Date (holiday lists, src/tools/holiday-source.js): served under the
-// commercial sponsorship its terms require (https://date.nager.at/Legal/TermsOfService);
+// Nager.Date (holiday lists, src/tools/holiday-source.js): served under a
+// sponsorship held for this service, which its terms require for commercial
+// use (https://date.nager.at/Legal/TermsOfService);
 // the credit names the dataset wherever its rows or answers computed from them are served.
 export const NAGER_ATTRIBUTION = "Holiday data by Nager.Date.";
 export const COPERNICUS_DISCLAIMER = "Neither the European Commission nor ECMWF is responsible for any use that may be made of the Copernicus information or data it contains.";
