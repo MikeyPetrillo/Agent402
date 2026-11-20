@@ -252,3 +252,19 @@ console.log("model-backed pack derivation checked");
   ok(!(late.principal > 0) && !(late.termYears > 0), `the parsers read only the first 500 characters of a scenario (got principal ${late.principal}, term ${late.termYears})`);
 }
 console.log("finance scenario bounds checked");
+// A step's error is printed inside a pack answer that is itself charged, so
+// a kit's "Nothing was charged." (true of a direct route call) is taken out
+// there: the real onchain-analyst pack, its onchain-sql step refusing with
+// the kit's too-large answer.
+{
+  const { SKILL_PACKS: ALL } = await import("../src/skills.js");
+  const packIndex = new Map(ALL.map((p) => [p.slug, p]));
+  const big = Object.assign(new Error("CDP's query service sent an answer larger than this server reads (16 MB), so it was not read: lower the LIMIT or select fewer or narrower columns. Nothing was charged."), { statusCode: 502 });
+  const out = await __test.runPack("onchain-analyst", { sql: "select 1" }, { packIndex, catalog: {}, inlineHandlers: {
+    "onchain-sql-schema": async () => ({ tables: ["base.events"] }),
+    "onchain-sql": async () => { throw big; },
+    "stats-summary": async () => ({ n: 0 }),
+  } });
+  const failedStep = out.steps.find((st) => st.slug === "onchain-sql");
+  ok(failedStep && failedStep.ok === false && /larger than this server reads/.test(failedStep.error) && !/\b(?:not|never) charged\b|\bnothing (?:is|was|has been) charged\b/i.test(failedStep.error), `a step error inside a charged pack answer carries no "not charged" claim (${failedStep?.error})`);
+}

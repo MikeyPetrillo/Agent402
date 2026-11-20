@@ -137,6 +137,37 @@ try {
     ok(_buyerQueriesInflightForTest() === 0, `and its place is returned (${_buyerQueriesInflightForTest()})`);
     fetchImpl = async () => J(200, { result: [{ x: 1 }] });
   }
+  // The same with a send gap: a gone waiter takes no send slot when its place
+  // comes, so a live query behind it keeps the slot it would have had.
+  {
+    const clock = clockOf();
+    _setSqlPacerClockForTest(clock);
+    _resetSqlPacerForTest(200, 2);
+    const gates = [], sentTags = [];
+    fetchImpl = async (_url, init) => { sentTags.push(String(init?.body).match(/AS (\w+)/)?.[1]); await new Promise((r) => gates.push(r)); return J(200, { result: [{ x: 1 }] }); };
+    const q = (tag, req) => tool.handler({ sql: `SELECT block_number AS ${tag} FROM base.blocks` }, req);
+    const held = Array.from({ length: BUYER_QUERY_INFLIGHT_MAX }, (_, i) => q(`held${i}`));
+    await sleep(30);
+    const g1 = {}, g2 = {};
+    const gone1 = q("gone1", g1).catch((x) => x), gone2 = q("gone2", g2).catch((x) => x);
+    await sleep(10);
+    const live = q("live").catch((x) => x);
+    await sleep(10);
+    g1.__a402ClientGoneAt = realDateNow(); g2.__a402ClientGoneAt = realDateNow();
+    const before = clock.slots.length;
+    gates.shift()();
+    await sleep(50);
+    const [e1, e2] = await Promise.all([gone1, gone2]);
+    const liveSlot = clock.slots[clock.slots.length - 1];
+    // The held sends took slots T0, T0, +400, +400, ... +1200, +1200: the next free pair is +1600.
+    ok(e1?.statusCode === 499 && e2?.statusCode === 499 && sentTags.includes("live") && clock.slots.length - before === 1 && liveSlot === T0 + 1600,
+      `gone place waiters take no send slot, and the live query keeps its slot (${e1?.statusCode}, ${e2?.statusCode}; ${clock.slots.length - before} slot wait after the release; live +${liveSlot - T0} ms, want +1600)`);
+    while (gates.length) { gates.shift()(); await sleep(2); }
+    await Promise.all([...held, live]);
+    _setSqlPacerClockForTest(null);
+    _resetSqlPacerForTest(0);
+    fetchImpl = async () => J(200, { result: [{ x: 1 }] });
+  }
 
   // ---------------------------------------------------------------- d-18
   // The pacer's clock is monotonic: a wall clock stepped back 5 s after a

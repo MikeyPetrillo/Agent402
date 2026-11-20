@@ -34,6 +34,7 @@ import { safeFetch } from "./fetch-guard.js";
 import { capturePostHogPackStep } from "../posthog.js";
 import { callerInputError } from "../caller-input-errors.js";
 import { runAsCallerOf } from "../dispatch-caller.js";
+import { withoutChargeClaim } from "../not-charged.js";
 
 // Cap for the media-pipeline URL→base64 bridge below. Must route through
 // safeFetch (SSRF guard + size cap), never raw fetch — the URL is caller-supplied.
@@ -2145,7 +2146,9 @@ async function runPack(packSlug, args, ctx) {
         slug: step.slug,
         ...tag(step),
         ok: false,
-        error: err.message,
+        // The pack answer is charged: a kit's "Nothing was charged." (true of
+        // its own route call) would describe the wrong call here.
+        error: withoutChargeClaim(err.message),
         statusCode: err.statusCode || 500,
       };
     }

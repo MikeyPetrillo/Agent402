@@ -712,6 +712,11 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     // server's own read takes a slot only when no other query is waiting for
     // one: its slot is at most one gap off.
     const own = queries?.own === true;
+    // A buyer who left while its first query waited for an in-flight place
+    // takes no send slot: the slot would push every query behind it later.
+    if (path === SQL_QUERY_PATH && buyerQuery && queries && queries.sent === 0 && queries.callerGone?.()) {
+      throw clientGoneError("The connection closed before the query took its send slot; it was not sent and nothing was charged.");
+    }
     if (path === SQL_QUERY_PATH && !(await takeSqlSendSlot(own ? sqlSendGap : slotWaitMs()))) {
       if (own && queries.sent === 0) throw Object.assign(bad("Queries are waiting for the query service, so this server's own read is tried again later.", 429), { retryAfter: 5 });
       if (buyerQuery && queries && queries.sent === 0) throw sqlBusyRefusal("The query service is taking this server's queries as fast as its rate limit allows; retry in a few seconds.");
