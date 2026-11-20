@@ -44,6 +44,9 @@ on:
       only_chain:
         description: "Optional CAIP-2 filter (e.g. eip155:8453)"
         default: ""
+      only_rows:
+        description: "Optional row filter: row ids, id ranges and payer tags as the dry run prints them (e.g. 12,40-45,payer:1a2b3c4d). Never a wallet address: this log is public"
+        default: ""
       include_synthetic:
         description: "Also refund canary self-harm rows (churn - normally leave false)"
         type: boolean
@@ -101,6 +104,14 @@ jobs:
           REFUND_MAX_EACH_USD: ${{ inputs.max_each_usd }}
           REFUND_MAX_PER_PAYER_USD: ${{ inputs.max_per_payer_usd }}
           REFUND_ONLY_CHAIN: ${{ inputs.only_chain }}
+          # Parsed before the ledger is read; a token that is not a row id, an
+          # id range or a printed payer tag refuses the run.
+          REFUND_ONLY_ROWS: ${{ inputs.only_rows }}
+          # No row is started after this many seconds, so the job's 15 minute
+          # limit never stops a send halfway (a stopped send strands its row in
+          # `sending`); the rows left wait, still owed, for the next dispatch.
+          # scripts/test-refund-run-chains.js keeps it under timeout-minutes.
+          REFUND_TIME_BUDGET_SECONDS: "480"
           REFUND_INCLUDE_SYNTHETIC: ${{ inputs.include_synthetic && 'true' || 'false' }}
           # Held by default and listed in their own bucket on every run, dry or
           # live (planRefunds in scripts/refund-run.js); repaid only when the
@@ -119,6 +130,13 @@ jobs:
           REFUND_SOLANA_KEY: ${{ secrets.REFUND_SOLANA_KEY != '' && secrets.REFUND_SOLANA_KEY || secrets.SOLANA_BURNER_KEY }}
           # The Solana RPC the canaries use (falls back to the public one).
           SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
+          # A Celo host that keeps receipt history: the public host answered
+          # receipts older than a few days only some of the time, so an older
+          # Celo debt read empty and held. Read first by the inbound proof
+          # (then the public host, each read again on an empty answer)
+          # and used for the send. A secret: a keyed URL carries its key, and
+          # the job never prints it. Unset: the public host alone.
+          REFUND_RPC_42220: ${{ secrets.REFUND_RPC_42220 }}
           # The router tiers settle to our spending wallets, not the treasury
           # (src/payments.js), so the pre-send proof must count those public
           # addresses as ours (ourPayToSet in scripts/refund-run.js). Repository

@@ -434,5 +434,153 @@ const planOptions = { senders: ALL_SENDERS, maxEachUsd: 0.25, maxTotalUsd: 2, ma
   ok(marked === 0 && out.ok === 0, `a reverted refund is never marked paid (${JSON.stringify(out)})`);
 }
 
+// ---- a run narrowed to named rows (REFUND_ONLY_ROWS, refund.yml only_rows) ---------------
+{
+  const { parseRowFilter, rowFilterMatches, payerTag } = rr;
+  // One payment each (its own settle transaction); row 3 is another payer's.
+  const rows = [1, 2, 3, 40, 41, 42, 43].map((id) => ({ ...ROWS()[2], id, evidence: `0x${id.toString(16).padStart(64, "0")}`, payer: id === 3 ? "0x" + "ef".repeat(20) : "0x" + "cd".repeat(20) }));
+  ok(parseRowFilter("") === null && parseRowFilter("   ") === null && parseRowFilter(undefined) === null, "an empty filter is no filter");
+  ok(/^payer:[0-9a-f]{8}$/.test(payerTag(rows[2].payer)), "a payer is named by the tag the plan prints");
+  const f = parseRowFilter(`2, 41-42 ${payerTag(rows[2].payer)}`);
+  const sent = planRefunds(rows, { ...planOptions, onlyRows: f }).send.map((r) => r.id).join(",");
+  ok(sent === "2,3,41,42", `ids, an inclusive range and a printed payer tag select exactly those rows (${sent})`);
+  const held = planRefunds(rows, { ...planOptions, onlyRows: f }).held["filtered by row"]?.map((r) => r.id).join(",");
+  ok(held === "1,40,43", `every other row is held by name, still owed (${held})`);
+  ok(rowFilterMatches(null, rows[0]) && !rowFilterMatches(parseRowFilter("99"), rows[0]), "no filter passes every row; a filter passes only what it names");
+  const refuses = (raw) => { try { parseRowFilter(raw); return false; } catch (e) { return /refusing to run/.test(e.message) && !e.message.includes(String(raw).slice(0, 12)); } };
+  ok(refuses("12,abc") && refuses("45-40") && refuses("payer:XYZ") && refuses("0x" + "cd".repeat(20)) && refuses("*"), "a token that is not an id, a range or a printed tag (a wallet address, a reversed range, a wildcard) refuses the run, without echoing it");
+  ok(planRefunds(rows, { ...planOptions, onlyRows: parseRowFilter("40-43"), onlyChain: "eip155:8453" }).send.length === 4, "the row filter and the chain filter combine");
+}
+
+// ---- one run, one job: no row is started past the time budget --------------------------
+{
+  const ledger = fakeLedger(ROWS());
+  const { calls, deps } = stubDeps(ledger);
+  let t = 0;
+  const lines = [];
+  const capture = { log: () => {}, warn: (m) => lines.push(String(m)), error: (m) => lines.push(String(m)) };
+  // Each verify takes 100 s on the stub clock; the budget ends at 150 s.
+  const out = await executeRefunds(planRefunds(ROWS(), planOptions).send, {
+    ...deps, now: () => t, deadlineAt: 150_000, log: capture,
+    verifyInbound: async (row) => { calls.order.push(`verify:${row.id}`); t += 100_000; return { verified: true, token: "0x20c000000000000000000000b9537d11c60e8b50", decimals: 6 }; },
+  });
+  ok(out.ok === 2 && out.deferred === 1 && ledger.status.get(3) === "owed", `rows started inside the budget finish; the rest are deferred, still owed (${JSON.stringify(out)})`);
+  ok(!calls.order.some((x) => x.endsWith(":3")), "a deferred row is not verified, prepared or claimed");
+  ok(lines.some((l) => /DEFER 1 row\(s\)/.test(l)), "the run says how many rows wait for the next one");
+  const none = await executeRefunds(planRefunds(ROWS(), planOptions).send, { ...stubDeps(fakeLedger(ROWS())).deps, log: quiet });
+  ok(none.deferred === 0 && none.ok === 3, "with no deadline every row runs, as before");
+
+  // The budget the workflow sets, plus the install before it and the slowest
+  // single row after it, fits inside the job's own limit.
+  const wf = load(readFileSync(new URL("../.github/workflows/refund.yml", import.meta.url), "utf8"));
+  const job = Object.values(wf.jobs)[0];
+  const step = job.steps.find((s) => s.name === "Run refunds");
+  const budget = Number(step?.env?.REFUND_TIME_BUDGET_SECONDS);
+  ok(budget === rr.DEFAULT_TIME_BUDGET_SECONDS, `refund.yml sets the budget the job defaults to (${budget}s)`);
+  // The slowest single row the budget must leave room for: the inbound proof
+  // reading two hosts that both answer empty (every retry delay, and 2 s a
+  // read), the payout screen's first list load and the prepare reads (40 s),
+  // the send's 120 s receipt wait and the pauses; the install before the
+  // budget starts is given 150 s.
+  const readsPerHost = rr.RECEIPT_RETRY_DELAYS_MS.length + 1;
+  const proofS = 2 * (rr.RECEIPT_RETRY_DELAYS_MS.reduce((a, b) => a + b, 0) / 1000 + readsPerHost * 2);
+  const slowestRowS = proofS + 40 + 120 + 3;
+  ok(budget + 150 + slowestRowS < job["timeout-minutes"] * 60, `budget ${budget}s + install 150s + slowest row ${Math.round(slowestRowS)}s < the job's ${job["timeout-minutes"]} minutes`);
+  const src = readFileSync(new URL("./refund-run.js", import.meta.url), "utf8");
+  ok(/deadlineAt: STARTED_AT \+ TIME_BUDGET_SECONDS \* 1000,/.test(src) && /onlyRows,\n/.test(src) && /const onlyRows = parseRowFilter\(process\.env\.REFUND_ONLY_ROWS\);/.test(src), "main runs the executor under the budget and plans with the row filter");
+  const inputs = (wf.on || wf[true] || {}).workflow_dispatch?.inputs || {};
+  ok(String(step?.env?.REFUND_ONLY_ROWS || "").replace(/\s+/g, "") === "${{inputs.only_rows}}" && inputs.only_rows?.default === "" && /never a wallet address/i.test(inputs.only_rows?.description || ""), "refund.yml passes the only_rows input, empty by default, and its description says never an address");
+}
+
+// ---- the real job: a malformed row filter refuses before anything is read ------------------
+{
+  const { spawn } = await import("node:child_process");
+  const seen = [];
+  const stub = http.createServer((req, res) => { seen.push(req.url); res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ refunds: ROWS(), totals: {} })); });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  const run = (rows) => new Promise((resolve) => {
+    const env = { ...process.env, TARGET_URL: `http://127.0.0.1:${stub.address().port}`, AGENT402_OPERATOR_TOKEN: "t", REFUND_EVM_KEY: "0x" + "22".repeat(32), REFUND_ONLY_ROWS: rows };
+    delete env.REFUND_LIVE;
+    const c = spawn(process.execPath, [fileURLToPath(new URL("./refund-run.js", import.meta.url))], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let s = ""; c.stdout.on("data", (d) => { s += d; }); c.stderr.on("data", (d) => { s += d; });
+    c.on("exit", (code) => resolve({ code, s }));
+  });
+  const bad = await run("3, 0x" + "cd".repeat(20));
+  ok(bad.code !== 0 && /refusing to run/.test(bad.s) && seen.length === 0 && !bad.s.includes("cd".repeat(20)), `a filter naming a wallet address refuses before the ledger is read, and the address is not echoed (exit ${bad.code}, requests ${seen.length})`);
+  const good = await run("3");
+  ok(good.code === 0 && /HELD \(filtered by row\): 2/.test(good.s) && /TO SEND: 1 refund/.test(good.s) && /time budget: no row is started after 480s/.test(good.s), "a valid filter: the dry run sends only the named row and states the time budget");
+  stub.close();
+}
+
+// ---- Stellar and Algorand read what a send needs BEFORE the claim ------------------------
+{
+  const { prepareStellar, sendStellar, prepareAlgorand, sendAlgorand } = rr;
+  process.env.REFUND_STELLAR_SECRET ||= "S-test-not-a-key";
+  process.env.REFUND_ALGORAND_MNEMONIC ||= "test words not a mnemonic";
+  const reads = { loadAccount: 0, params: 0, submitted: 0, sent: 0 };
+  let horizonDown = false, algodDown = false;
+  class Builder {
+    constructor(account) { this.account = account; }
+    addOperation() { return this; } addMemo() { return this; } setTimeout() { return this; }
+    build() { return { sign: () => {} }; }
+  }
+  const stellarSdk = { default: {
+    Horizon: { Server: class { async loadAccount() { reads.loadAccount++; if (horizonDown) throw new Error("Horizon answered 503"); return { id: "G-ours", sequence: "1" }; } async submitTransaction() { reads.submitted++; return { hash: "stellar-tx" }; } } },
+    Keypair: { fromSecret: () => ({ publicKey: () => "G-ours" }) },
+    Asset: class {}, TransactionBuilder: Builder, Networks: { PUBLIC: "p" }, Operation: { payment: () => ({}) }, Memo: { text: () => ({}) }, BASE_FEE: "100",
+  } };
+  const algoSdk = { default: {
+    mnemonicToSecretKey: () => ({ addr: "A-ours", sk: new Uint8Array(64) }),
+    Algodv2: class { getTransactionParams() { return { do: async () => { reads.params++; if (algodDown) throw new Error("algod answered 503"); return { fee: 1000 }; } }; } sendRawTransaction() { return { do: async () => { reads.sent++; return { txid: "ALGO-TX" }; } }; } },
+    makeAssetTransferTxnWithSuggestedParamsFromObject: () => ({ signTxn: () => new Uint8Array(1) }),
+    waitForConfirmation: async () => ({}),
+  } };
+  const stellarRow = { id: 61, slug: "hash", network: "stellar:pubnet", payer: "GPAYER", priceUsd: 0.01, evidence: "a".repeat(64), status: "owed" };
+  const algoRow = { id: 62, slug: "hash", network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k", payer: "APAYER", priceUsd: 0.01, evidence: "B".repeat(52), status: "owed" };
+  const runOne = async (row, prepare, send) => {
+    const ledger = fakeLedger([row]);
+    const order = [];
+    const out = await executeRefunds([row], {
+      verifyInbound: async () => ({ verified: true }), pause: nopause, log: quiet,
+      prepare: async (r) => { order.push("prepare"); return prepare(r); },
+      claim: async (id) => { order.push("claim"); return ledger.claim(id); },
+      send: async (r, proof, prep) => { order.push("send"); return send(r, prep); },
+      markPaid: async (id, tx) => { order.push("paid"); return ledger.markPaid(id, tx); },
+    });
+    return { out, order, status: ledger.status.get(row.id) };
+  };
+  const loadStellar = () => Promise.resolve(stellarSdk), loadAlgo = () => Promise.resolve(algoSdk);
+
+  horizonDown = true;
+  let r = await runOne(stellarRow, (row) => prepareStellar(row, { loadSdk: loadStellar }), (row, prep) => sendStellar(row, prep));
+  ok(r.order.join(" ") === "prepare" && r.status === "owed" && r.out.failed === 1, `Stellar: a Horizon read that fails is before the claim, so the row stays owed (${r.order.join(" ")}; ${r.status})`);
+  horizonDown = false; reads.loadAccount = 0;
+  r = await runOne(stellarRow, (row) => prepareStellar(row, { loadSdk: loadStellar }), (row, prep) => sendStellar(row, prep));
+  ok(r.order.join(" ") === "prepare claim send paid" && r.status === "paid" && reads.loadAccount === 1 && reads.submitted === 1, `Stellar: the account is read once, before the claim, and the send uses it (${reads.loadAccount} reads)`);
+
+  algodDown = true;
+  r = await runOne(algoRow, (row) => prepareAlgorand(row, { loadSdk: loadAlgo }), (row, prep) => sendAlgorand(row, prep));
+  ok(r.order.join(" ") === "prepare" && r.status === "owed" && reads.sent === 0, `Algorand: an algod read that fails is before the claim, so the row stays owed (${r.order.join(" ")}; ${r.status})`);
+  algodDown = false; reads.params = 0;
+  r = await runOne(algoRow, (row) => prepareAlgorand(row, { loadSdk: loadAlgo }), (row, prep) => sendAlgorand(row, prep));
+  ok(r.order.join(" ") === "prepare claim send paid" && r.status === "paid" && reads.params === 1 && reads.sent === 1, `Algorand: the parameters are read once, before the claim, and the send uses them (${reads.params} reads)`);
+
+  // A build that fails after the claim never left this process: the claim is handed back.
+  const broken = { ...stellarSdk.default, TransactionBuilder: class extends Builder { build() { throw new Error("bad destination"); } } };
+  const ledger = fakeLedger([stellarRow]);
+  const released = [];
+  const out = await executeRefunds([stellarRow], {
+    verifyInbound: async () => ({ verified: true }), pause: nopause, log: quiet,
+    prepare: (row) => prepareStellar(row, { loadSdk: () => Promise.resolve({ default: broken }) }),
+    claim: (id) => ledger.claim(id), send: (row, proof, prep) => sendStellar(row, prep),
+    release: async (id, note) => { released.push(id); return ledger.release(id, note); }, markPaid: (id, tx) => ledger.markPaid(id, tx),
+  });
+  ok(out.released === 1 && released[0] === 61 && ledger.status.get(61) === "owed", "Stellar: a build that fails after the claim is pre-broadcast, so the row goes back to owed");
+
+  const src = readFileSync(new URL("./refund-run.js", import.meta.url), "utf8");
+  ok(/if \(family === "stellar"\) return prepareStellar\(row\);/.test(src) && /if \(family === "algorand"\) return prepareAlgorand\(row\);/.test(src), "main prepares Stellar and Algorand sends before the claim");
+  ok(/if \(family === "stellar"\) return sendStellar\(row, prep\);/.test(src) && /if \(family === "algorand"\) return sendAlgorand\(row, prep\);/.test(src), "and sends them from what prepare read");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

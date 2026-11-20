@@ -73,6 +73,7 @@ import { hasLastingEffect } from "../src/hangup-forgiveness.js";
 import { EVM_RPCS } from "../src/evm-rpcs.js";
 import { isGatewayWire } from "../src/gateway-wire.js";
 import { ALGORAND_MAINNET_CAIP2, canonicalAvmNetwork } from "../src/avm-network.js";
+import { withoutUrls } from "../src/payment-verify.js";
 
 const GATEWAY_TRANSFER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const GATEWAY_NO_ID_HOLD = "Circle Gateway debt with no Gateway transfer id recorded - cannot be proven; resolve by hand from Gateway's transfer history";
@@ -99,6 +100,8 @@ const tag = (a) => {
     : createHash("sha256").update(String(a)).digest("hex");
   return `payer:${h.slice(0, 8)}`;
 };
+/** The tag a log line prints for a payer (what REFUND_ONLY_ROWS names a payer by). */
+export const payerTag = tag;
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
 const TOKEN = (process.env.AGENT402_OPERATOR_TOKEN || "").trim();
@@ -126,12 +129,81 @@ const MAX_PER_PAYER = capUsd(process.env.REFUND_MAX_PER_PAYER_USD, "0.5", "REFUN
 // gas genuinely outweighs the debt, and the held rows say so out loud.
 const MIN_REFUND = capUsd(process.env.REFUND_MIN_USD, "0", "REFUND_MIN_USD");
 const ONLY_CHAIN = (process.env.REFUND_ONLY_CHAIN || "").trim(); // optional CAIP-2 filter
+// When this process started: the time budget below is counted from here.
+const STARTED_AT = Date.now();
+
+/**
+ * REFUND_ONLY_ROWS: the rows a run may send, as row ids ("12"), inclusive id
+ * ranges ("40-45") and payer tags exactly as this job prints them
+ * ("payer:1a2b3c4d"), separated by commas or spaces. Empty: every row. A
+ * token of any other shape refuses the run, so a typo can never widen it to
+ * every row; a wallet address is refused too (the job's log is public, and
+ * the tag names the same payer).
+ */
+export function parseRowFilter(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  const ids = new Set(), ranges = [], tags = new Set();
+  const tokens = text.split(/[\s,]+/).filter(Boolean);
+  tokens.forEach((tok, i) => {
+    const range = /^(\d{1,12})-(\d{1,12})$/.exec(tok);
+    if (/^\d{1,12}$/.test(tok)) ids.add(Number(tok));
+    else if (range && Number(range[1]) <= Number(range[2])) ranges.push([Number(range[1]), Number(range[2])]);
+    else if (/^payer:[0-9a-f]{8}$/.test(tok)) tags.add(tok);
+    else throw new Error(`REFUND_ONLY_ROWS token ${i + 1} of ${tokens.length} is not a row id, an id range (40-45) or a payer tag as this job prints it (payer: and 8 hex digits) - refusing to run rather than send to rows it did not name`);
+  });
+  return { ids, ranges, tags };
+}
+/** Does `row` pass the REFUND_ONLY_ROWS filter (parseRowFilter)? */
+export function rowFilterMatches(filter, row) {
+  if (!filter) return true;
+  const id = Number(row?.id);
+  if (Number.isInteger(id) && (filter.ids.has(id) || filter.ranges.some(([a, b]) => id >= a && id <= b))) return true;
+  return !!row?.payer && filter.tags.has(tag(row.payer));
+}
+
+// ONE RUN, ONE JOB. refund.yml stops its job at 15 minutes, and a job stopped
+// mid-send leaves that row `sending` for a human. So a run claims no new row
+// once this many seconds have passed since it started; every row left is
+// deferred, still owed, to the next dispatch. The budget leaves room for the
+// install before it and for the slowest single row after it (scripts/
+// test-refund-run-chains.js pins the sum under the job's limit).
+export const DEFAULT_TIME_BUDGET_SECONDS = 480;
+const TIME_BUDGET_SECONDS = capUsd(process.env.REFUND_TIME_BUDGET_SECONDS, String(DEFAULT_TIME_BUDGET_SECONDS), "REFUND_TIME_BUDGET_SECONDS");
 
 // Public RPCs for the EVM rails we can refund on (src/evm-rpcs.js, shared
 // with the settle path). Overridable per chain via REFUND_RPC_<id> (e.g.
 // REFUND_RPC_8453). A chain with no RPC entry holds its rows - refusing loudly
 // beats broadcasting through a guessed endpoint.
 export { EVM_RPCS };
+
+/**
+ * Where the inbound proof reads an EVM receipt, in order: the job's own host
+ * for the chain (REFUND_RPC_<id>, a host that keeps receipt history, often a
+ * keyed URL: it is never printed), then the public host the settle path reads.
+ * A public node can keep no receipts older than a few days, or answer from a
+ * backend that does not, so an empty answer is read again after each of
+ * RECEIPT_RETRY_DELAYS_MS before the next host (src/payment-verify.js
+ * readReceipt).
+ */
+export const RECEIPT_RETRY_DELAYS_MS = Object.freeze([1000, 2000, 3000, 5000, 8000]);
+export function proofRpcsFor(network, env = process.env) {
+  const n = String(network || "");
+  if (n === TEMPO_NETWORK) return [TEMPO_RPC()];
+  if (!n.startsWith("eip155:")) return [];
+  const out = [];
+  for (const u of [env[`REFUND_RPC_${n.split(":")[1]}`], EVM_RPCS[n]]) {
+    const s = typeof u === "string" ? u.trim() : "";
+    if (s && !out.includes(s)) out.push(s);
+  }
+  return out;
+}
+
+// No URL in anything this job prints or writes back (withoutUrls,
+// src/payment-verify.js): an RPC URL can carry a provider key, a cut-off copy
+// of one is not masked by the log's own secret filter, and an SDK error can
+// quote the URL it failed on.
+export { withoutUrls };
 
 // The sales ledger records SHORT chain names ("base", "solana"); settle
 // receipts record CAIP-2 ("eip155:8453"). Debts minted by the charged-failure
@@ -250,6 +322,7 @@ export function planRefunds(rawRows, {
   maxPerPayerUsd = MAX_PER_PAYER,
   minRefundUsd = MIN_REFUND,
   onlyChain = "",
+  onlyRows = null,           // parseRowFilter(REFUND_ONLY_ROWS): null sends every row
   includeSynthetic = false,
   includeLastingHangups = false,
   includeRepeatHangups = false,
@@ -283,6 +356,7 @@ export function planRefunds(rawRows, {
     const evmKey = evmEvidenceKey(row.evidence);
     if (evmKey && firstOfKey.get(evmKey) !== row) { hold(DUPLICATE_EVIDENCE_HOLD, row); continue; }
     if (onlyChain && row.network !== onlyChain) { hold("filtered by chain", row); continue; }
+    if (onlyRows && !rowFilterMatches(onlyRows, row)) { hold("filtered by row", row); continue; }
     if (row.synthetic && !includeSynthetic) { hold("synthetic (our own canary - opt in to refund it)", row); continue; }
     // A disconnect on a route whose effect outlives the answer: the handler
     // had already acted (a purchase from an outside seller on our wallet, a
@@ -531,41 +605,66 @@ export async function sendEvm(row, accepts, prep) {
   return hash;
 }
 
-async function sendStellar(row) {
-  const sdk = await import("@stellar/stellar-sdk");
-  const { Horizon, Keypair, TransactionBuilder, Networks, Operation, Asset, Memo, BASE_FEE } = sdk.default || sdk;
-  const server = new Horizon.Server("https://horizon.stellar.org");
-  const kp = Keypair.fromSecret(process.env.REFUND_STELLAR_SECRET.trim());
-  const usdc = new Asset("USDC", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN");
+/** Reads before the claim for a Stellar refund: the sending account (its
+ *  sequence number) from Horizon. A read that fails here leaves the row owed;
+ *  after the claim it stranded the row in `sending`. */
+export async function prepareStellar(row, { loadSdk = () => import("@stellar/stellar-sdk") } = {}) {
+  const mod = await loadSdk();
+  const sdk = mod.default || mod;
+  const server = new sdk.Horizon.Server("https://horizon.stellar.org");
+  const kp = sdk.Keypair.fromSecret(process.env.REFUND_STELLAR_SECRET.trim());
+  const usdc = new sdk.Asset("USDC", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN");
   const account = await server.loadAccount(kp.publicKey());
-  const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.PUBLIC })
-    .addOperation(Operation.payment({ destination: row.payer, asset: usdc, amount: row.priceUsd.toFixed(7) }))
-    .addMemo(Memo.text("agent402 refund"))
-    .setTimeout(60)
-    .build();
-  tx.sign(kp);
-  const res = await server.submitTransaction(tx);
+  return { sdk, server, kp, usdc, account };
+}
+
+export async function sendStellar(row, prep) {
+  const p = prep?.account ? prep : await prepareStellar(row);
+  const { TransactionBuilder, Networks, Operation, Memo, BASE_FEE } = p.sdk;
+  // Built and signed from what prepare read: a failure here never left this
+  // process, so it is marked pre-broadcast and the claim is handed back.
+  let tx;
+  try {
+    tx = new TransactionBuilder(p.account, { fee: BASE_FEE, networkPassphrase: Networks.PUBLIC })
+      .addOperation(Operation.payment({ destination: row.payer, asset: p.usdc, amount: row.priceUsd.toFixed(7) }))
+      .addMemo(Memo.text("agent402 refund"))
+      .setTimeout(60)
+      .build();
+    tx.sign(p.kp);
+  } catch (e) { throw markPreBroadcast(e); }
+  const res = await p.server.submitTransaction(tx);
   return res.hash;
 }
 
-async function sendAlgorand(row) {
-  const algosdk = (await import("algosdk")).default;
+/** Reads before the claim for an Algorand refund: the suggested parameters
+ *  from algod. A read that fails here leaves the row owed. */
+export async function prepareAlgorand(row, { loadSdk = () => import("algosdk") } = {}) {
+  const mod = await loadSdk();
+  const algosdk = mod.default || mod;
   const account = algosdk.mnemonicToSecretKey(process.env.REFUND_ALGORAND_MNEMONIC.trim());
   const client = new algosdk.Algodv2("", "https://mainnet-api.4160.nodely.dev", "");
   const params = await client.getTransactionParams().do();
+  return { algosdk, account, client, params };
+}
+
+export async function sendAlgorand(row, prep) {
+  const { algosdk, account, client, params } = prep?.params ? prep : await prepareAlgorand(row);
   // algosdk v3 field names. v2 used from/to and returned { txId }; this file
   // was written against v2 while v3.6 is installed, so the builder threw
   // "Address must not be null or undefined" on EVERY Algorand refund - and it
   // threw AFTER the row was claimed, stranding the debt in `sending` with no
   // path back. Verified against the installed SDK: from/to throws,
-  // sender/receiver builds.
-  const txn = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
-    sender: account.addr, receiver: row.payer, amount: Math.round(row.priceUsd * 1e6),
-    assetIndex: 31566704, // USDC ASA
-    note: new TextEncoder().encode("agent402 refund"),
-    suggestedParams: params,
-  });
-  const signed = txn.signTxn(account.sk);
+  // sender/receiver builds. Building and signing never leave this process.
+  let signed;
+  try {
+    const txn = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+      sender: account.addr, receiver: row.payer, amount: Math.round(row.priceUsd * 1e6),
+      assetIndex: 31566704, // USDC ASA
+      note: new TextEncoder().encode("agent402 refund"),
+      suggestedParams: params,
+    });
+    signed = txn.signTxn(account.sk);
+  } catch (e) { throw markPreBroadcast(e); }
   const res = await client.sendRawTransaction(signed).do();
   // v3 returns `txid`. Reading the v2 name gave undefined, which would have
   // been waited on and then written to the ledger as the string "undefined" -
@@ -724,7 +823,9 @@ export async function proveRefundSent(row, tx, prep, { verify, attempts = 10, de
  * (isPreBroadcastFailure) is released back to owed through `release`, with
  * the reason as its note, so the next run retries it; any other failure after
  * the claim leaves the row `sending` for a human.
- * Returns { ok, failed, unverified, stuck, released }.
+ * No row is started at or past `deadlineAt` (the run's time budget): the rest
+ * are deferred, still owed and unclaimed, to the next run.
+ * Returns { ok, failed, unverified, stuck, released, deferred }.
  */
 export async function executeRefunds(rows, {
   verifyInbound, claim, send, markPaid,
@@ -735,10 +836,19 @@ export async function executeRefunds(rows, {
   prove = async () => ({ verified: false, reason: "no outbound verifier" }),
   release = null,
   pause = (ms) => new Promise((r) => setTimeout(r, ms)),
+  deadlineAt = Infinity,
+  now = Date.now,
   log = console,
 } = {}) {
-  let ok = 0, failed = 0, unverified = 0, stuck = 0, released = 0;
-  for (const row of rows || []) {
+  let ok = 0, failed = 0, unverified = 0, stuck = 0, released = 0, deferred = 0;
+  const list = rows || [];
+  for (let i = 0; i < list.length; i++) {
+    const row = list[i];
+    if (!(now() < deadlineAt)) {
+      deferred = list.length - i;
+      log.warn(`DEFER ${deferred} row(s): this run's time budget is spent, so no further row is claimed; each stays owed for the next run (no row is cut off mid-send)`);
+      break;
+    }
     let claimedRow = false; // this run holds the row's claim (set once the claim succeeds)
     try {
       // PROVE THE PAYMENT BEFORE REPAYING IT. The debt was recorded on the
@@ -751,7 +861,7 @@ export async function executeRefunds(rows, {
       const proof = await verifyInbound(row);
       if (!proof?.verified) {
         await pause(1500);
-        log.warn(`HOLD  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: UNVERIFIED - ${proof?.reason || "no proof"}`);
+        log.warn(`HOLD  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: UNVERIFIED - ${withoutUrls(proof?.reason || "no proof")}`);
         unverified++;
         continue;
       }
@@ -786,7 +896,7 @@ export async function executeRefunds(rows, {
       if (OUTBOUND_PROOF_FAMILIES.includes(familyOf(row.network))) {
         const out = await prove(row, tx, prep, proof);
         if (!out?.verified) {
-          log.error(`STUCK #${row.id}: sent, but the refund is not proven on chain yet (${out?.reason || "no proof"}) - the row stays 'sending', is never re-sent, and is resolved by hand from the sending wallet's history`);
+          log.error(`STUCK #${row.id}: sent, but the refund is not proven on chain yet (${withoutUrls(out?.reason || "no proof")}) - the row stays 'sending', is never re-sent, and is resolved by hand from the sending wallet's history`);
           stuck++;
           continue;
         }
@@ -797,14 +907,16 @@ export async function executeRefunds(rows, {
       ok++;
       await pause(1500);
     } catch (e) {
-      const msg = (e?.shortMessage || e?.message || String(e)).slice(0, 160);
+      // Redacted BEFORE the cut: a URL cut in half is no longer the secret
+      // value the log masks.
+      const msg = withoutUrls(e?.shortMessage || e?.message || String(e)).slice(0, 160);
       // A claimed row whose send failed before anything was broadcast cannot
       // have moved money, so it goes back to owed with the reason as its note
       // and the next run retries it. Only that class is released here.
       if (claimedRow && typeof release === "function" && isPreBroadcastFailure(e)) {
         let back = false;
         try { back = await release(row.id, `refund-run: released, the send failed before broadcast (${msg.slice(0, 100)})`); }
-        catch (re) { log.error(`      release of #${row.id} failed: ${(re?.message || String(re)).slice(0, 120)}`); }
+        catch (re) { log.error(`      release of #${row.id} failed: ${withoutUrls(re?.message || String(re)).slice(0, 120)}`); }
         if (back) {
           log.error(`FAIL  #${row.id}: ${msg}`);
           log.error(`      -> released back to owed: nothing was broadcast; the next run retries it once the wallet can pay`);
@@ -820,14 +932,14 @@ export async function executeRefunds(rows, {
       failed++;
     }
   }
-  return { ok, failed, unverified, stuck, released };
+  return { ok, failed, unverified, stuck, released, deferred };
 }
 
 /**
  * Plan, print, and (live only) execute. A dry run prints the plan and returns
  * before any step that reads a chain or touches the ledger.
  */
-export async function refundRun({ rows, totals = {}, live = false, planOptions = {}, deps = {}, log = console } = {}) {
+export async function refundRun({ rows, totals = {}, live = false, planOptions = {}, deps = {}, timeBudgetSeconds = null, log = console } = {}) {
   log.log(`refund-run against ${TARGET} - ledger: ${JSON.stringify(totals)}`);
   const plan = planRefunds(rows, planOptions);
   // Each line names the response status the debt was recorded on, so a
@@ -840,10 +952,11 @@ export async function refundRun({ rows, totals = {}, live = false, planOptions =
   }
   log.log(`\nTO SEND: ${plan.send.length} refund(s), $${plan.totalUsd} total`);
   for (const r of plan.send) log.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${tag(r.payer)} (${what(r)})`);
+  if (Number.isFinite(timeBudgetSeconds)) log.log(`time budget: no row is started after ${timeBudgetSeconds}s; the rows left then wait, still owed, for the next run (narrow a run with only_rows)`);
   if (!live) { log.log("\nDRY RUN - no money moved. Set REFUND_LIVE=true to execute."); return { plan, executed: false }; }
   if (!plan.send.length) { log.log("nothing to send."); return { plan, executed: false }; }
   const result = await executeRefunds(plan.send, { ...(await (typeof deps === "function" ? deps(plan) : deps)), log });
-  log.log(`\ndone: ${result.ok} paid, ${result.failed} failed (${result.released || 0} released back to owed), ${result.unverified} held unverified, ${result.stuck} sent and awaiting proof (all unpaid rows remain owed or sending)`);
+  log.log(`\ndone: ${result.ok} paid, ${result.failed} failed (${result.released || 0} released back to owed), ${result.unverified} held unverified, ${result.stuck} sent and awaiting proof, ${result.deferred || 0} deferred to the next run (all unpaid rows remain owed or sending)`);
   return { plan, executed: true, result };
 }
 
@@ -891,6 +1004,8 @@ async function releaseClaim(id, note) {
 
 async function main() {
   if (!TOKEN) { console.error("AGENT402_OPERATOR_TOKEN is required"); process.exit(2); }
+  // Parsed before anything is read: a malformed filter refuses the run.
+  const onlyRows = parseRowFilter(process.env.REFUND_ONLY_ROWS);
   const senders = {
     evm: !!(process.env.REFUND_EVM_KEY || "").trim(),
     stellar: !!(process.env.REFUND_STELLAR_SECRET || "").trim(),
@@ -910,8 +1025,9 @@ async function main() {
     const payToSets = ourPayToSet(accepts);
     const { verifyInboundPayment } = await import("../src/payment-verify.js");
     const { confirmStellarTransfer } = await import("../src/stellar-confirm.js");
-    const rpcFor = (n) => (n === TEMPO_NETWORK ? TEMPO_RPC() : (process.env[`REFUND_RPC_${String(n).split(":")[1]}`] || EVM_RPCS[n] || "").trim() || null);
+    const rpcFor = (n) => proofRpcsFor(n);
     return {
+      deadlineAt: STARTED_AT + TIME_BUDGET_SECONDS * 1000,
       verifyInbound: (row) => verifyInboundPayment({
         network: row.network, payer: row.payer, amountUsd: row.priceUsd,
         tx: row.evidence, createdAt: row.createdAt,
@@ -926,6 +1042,7 @@ async function main() {
         referralPayout: (process.env.REFERRAL_PAYOUT_ADDRESS || "").trim() || null,
         referralRoutedTopic: (process.env.REFERRAL_ROUTED_TOPIC || "").trim() || null,
         rpcFor,
+        receiptRetryDelaysMs: RECEIPT_RETRY_DELAYS_MS,
         stellarConfirm: confirmStellarTransfer,
       }),
       claim: claimForSend,
@@ -940,13 +1057,15 @@ async function main() {
         if (family === "tempo") return prepareTempo(row, proof, accepts[row.network]);
         if (family === "solana") return prepareSolana(row, proof, accepts[row.network]);
         if (family === "evm") return prepareEvm(row, accepts[row.network]);
+        if (family === "stellar") return prepareStellar(row);
+        if (family === "algorand") return prepareAlgorand(row);
         return null;
       },
       send: (row, proof, prep) => {
         const family = familyOf(row.network);
         if (family === "evm") return sendEvm(row, accepts[row.network], prep);
-        if (family === "stellar") return sendStellar(row);
-        if (family === "algorand") return sendAlgorand(row);
+        if (family === "stellar") return sendStellar(row, prep);
+        if (family === "algorand") return sendAlgorand(row, prep);
         if (family === "tempo") return sendTempo(row, prep);
         if (family === "solana") return sendSolana(row, prep);
         throw new Error(`no sender for ${family}`);
@@ -957,9 +1076,10 @@ async function main() {
   };
 
   const out = await refundRun({
-    rows: refunds, totals, live: LIVE, deps,
+    rows: refunds, totals, live: LIVE, deps, timeBudgetSeconds: TIME_BUDGET_SECONDS,
     planOptions: {
       onlyChain: ONLY_CHAIN,
+      onlyRows,
       maxPerPayerUsd: MAX_PER_PAYER,
       minRefundUsd: MIN_REFUND,
       includeSynthetic: /^(1|true|yes)$/i.test(process.env.REFUND_INCLUDE_SYNTHETIC || ""),
@@ -978,5 +1098,5 @@ async function main() {
 
 // Importing for tests must not run the CLI.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((e) => { console.error(e); process.exit(1); });
+  main().catch((e) => { console.error(withoutUrls(e?.stack || e)); process.exit(1); });
 }

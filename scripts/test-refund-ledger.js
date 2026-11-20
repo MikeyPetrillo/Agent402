@@ -27,11 +27,24 @@ __resetRefunds();
   ok(listRefunds().length === 1, "exactly one row on the books");
 }
 
-// 2. Without a tx the fallback identity still cannot double-book a burst.
+// 2. Without a tx the fallback key carries the request: one request is one
+//    debt however often it is detected, and two charged failures of one payer
+//    on one route in one minute are two debts (the second used to share the
+//    first one's key and was never booked).
 {
+  const { fallbackEvidence } = await import("../src/refund-ledger.js");
   const row = { slug: "uuid", network: "stellar:pubnet", payer: "GBUYER", priceUsd: 0.002 };
-  recordRefundOwed(row); recordRefundOwed(row);
-  ok(listRefunds().filter((r) => r.slug === "uuid").length === 1, "no-tx fallback identity dedupes within the minute");
+  const reqA = "6f1c2b0e-0000-4000-8000-00000000000a", reqB = "6f1c2b0e-0000-4000-8000-00000000000b";
+  ok(recordRefundOwed({ ...row, requestId: reqA }) === true && recordRefundOwed({ ...row, requestId: reqA }) === false, "the same request detected twice is one debt");
+  ok(recordRefundOwed({ ...row, requestId: reqB }) === true, "a second request by the same payer on the same route in the same minute is its own debt");
+  ok(listRefunds().filter((r) => r.slug === "uuid").length === 2, "two failures in one minute: two rows on the books");
+  ok(recordRefundOwed({ ...row, slug: "uuid-2" }) === true && recordRefundOwed({ ...row, slug: "uuid-2" }) === true && listRefunds().filter((r) => r.slug === "uuid-2").length === 2, "a caller with no request id books each failure as its own request");
+  // A payer the rail does not name (a card payment): two buyers, one route, one minute.
+  ok(recordRefundOwed({ slug: "uuid-3", network: "stripe", payer: null, priceUsd: 0.01, requestId: reqA }) === true && recordRefundOwed({ slug: "uuid-3", network: "stripe", payer: null, priceUsd: 0.01, requestId: reqB }) === true, "two buyers with no payer recorded are never merged into one debt");
+  const key = listRefunds().find((r) => r.slug === "uuid" && r.evidence.endsWith(reqA))?.evidence || "";
+  ok(key.split("|").length === 4 && key.startsWith("GBUYER|uuid|"), `the fallback key is payer|slug|minute|request (${key.replace(/\|\d+\|/, "|<minute>|")})`);
+  const odd = fallbackEvidence({ payer: "P", slug: "s", requestId: "x|y" });
+  ok(!odd.endsWith("|x|y") && /^P\|s\|\d+\|[0-9a-f-]{36}$/.test(odd), "a request id outside the server's alphabet is not used (a fresh one stands in)");
 }
 
 // 3. Addresses are stored verbatim - case-folding merges distinct buyers on
