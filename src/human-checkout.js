@@ -1485,9 +1485,9 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // private again (the id stays reserved and dead: a revoked link never
   // resolves, and a re-publish reuses it so old links work again).
   // The public id is minted only where none is stored: on the database by
-  // one conditional statement (the row is a delivered report with no
-  // publicId), so two toggles at once mint one id between them and both
-  // answer it; on the files by comparing with the record on disk at the
+  // one statement that sets the flag and adds an id only to a row with none
+  // (the row lock orders toggles), so toggles at once mint one id between
+  // them and all answer it; on the files by comparing with the record on disk at the
   // moment of the write. The flag and date are merged into the stored row,
   // never a whole record read earlier.
   const mintPublicId = () => `rp_${randomBytes(12).toString("base64url")}`;
@@ -1497,19 +1497,16 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     if (USE_PG) {
       return (async () => {
         await readyP();
-        const first = await readRec(sessionId);
-        if (!first || first.status !== "done") return { status: first?.status || "not_found" };
-        if (want && !first.publicId) {
-          await stateQuery(
-            `UPDATE ${RT()} SET body = jsonb_set(body, '{publicId}', to_jsonb($3::text)), updated_at = now()
-             WHERE collection = $1 AND id = $2 AND body ->> 'status' = 'done' AND body ->> 'publicId' IS NULL`,
-            [COLL, sessionId, mintPublicId()]);
-        }
         const patch = want ? { public: true, publishedAt: new Date(now()).toISOString() } : { public: false };
+        // One statement: the row lock orders toggles, and each sees the
+        // row as the one before it left it, so an id is minted only on a
+        // row that has none.
         const r = await stateQuery(
-          `UPDATE ${RT()} SET body = body || $3::jsonb, updated_at = now()
+          `UPDATE ${RT()} SET body = body || $3::jsonb
+             || CASE WHEN $4::text IS NOT NULL AND body ->> 'publicId' IS NULL THEN jsonb_build_object('publicId', $4::text) ELSE '{}'::jsonb END,
+             updated_at = now()
            WHERE collection = $1 AND id = $2 AND body ->> 'status' = 'done' RETURNING body`,
-          [COLL, sessionId, JSON.stringify(patch)]);
+          [COLL, sessionId, JSON.stringify(patch), want ? mintPublicId() : null]);
         const rec = r.rows[0]?.body;
         if (!rec) { const cur = await readRec(sessionId); return { status: cur?.status || "not_found" }; }
         through(recPath(sessionId), rec);

@@ -208,6 +208,21 @@ try {
   ok(ra.publicId && ra.publicId === rb2.publicId && raceRow?.publicId === ra.publicId && raceIdx.join() === ra.publicId,
     `two toggles at once mint one public id, answered to both, on the row and once in the index (${ra.publicId} / ${rb2.publicId} / row ${raceRow?.publicId} / index ${raceIdx.join(",")})`);
   ok(raceRow?.public === true && raceRow.report === "# race", "the toggle merges its flag into the row and keeps the report");
+  // Many at once, on several rows: every toggle of a row answers that row's one id.
+  const many = [];
+  for (let k = 0; k < 4; k++) {
+    const id = `cs_race${k}`;
+    await putRow(id, { ...race, input: `RACE${k}` });
+    many.push(Promise.all(Array.from({ length: 6 }, (_, j) => (j % 2 ? A : B).setPublic(id, true))).then((outs) => ({ id, ids: [...new Set(outs.map((o) => o.publicId))] })));
+  }
+  const manyOut = await Promise.all(many);
+  const pubIdx = (await row("_public")) || {};
+  const manyBad = [];
+  for (const { id, ids } of manyOut) {
+    const indexed = Object.entries(pubIdx).filter(([, sid]) => sid === id).map(([k]) => k);
+    if (ids.length !== 1 || indexed.length !== 1 || indexed[0] !== ids[0] || (await row(id))?.publicId !== ids[0]) manyBad.push(`${id}: answered ${ids.join(",")} indexed ${indexed.join(",")}`);
+  }
+  ok(manyBad.length === 0, `six toggles at once on each of four rows mint one id per row (${manyBad.join("; ") || "one each"})`);
   const raceOff = await A.setPublic("cs_race", false);
   const raceOn = await B.setPublic("cs_race", true);
   ok(raceOff.public === false && raceOn.publicId === ra.publicId && (await row("cs_race"))?.publicId === ra.publicId, "a revoke and a re-publish keep the one id");
