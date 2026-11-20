@@ -17,7 +17,8 @@
 // Design rules:
 //   * IDEMPOTENT on evidence: one settle tx = one debt, however many times the
 //     detection path fires. Without a tx (some rails omit it), the fallback
-//     identity is payer+slug+minute, which cannot double-record a burst.
+//     identity is payer+slug+minute+request (fallbackEvidence): one request is
+//     one debt, and two requests in one minute are two.
 //   * synthetic (canary/heartbeat) rows are recorded but FLAGGED - the ledger
 //     must reflect reality, and the executor skips them by default because
 //     refunding our own burner is churn, not justice.
@@ -45,6 +46,7 @@
 // (reconcileFile: insert-if-absent by evidence, forward-only status). A debt
 // Postgres refuses is kept in a local dead-letter and replayed.
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
@@ -325,9 +327,18 @@ const OWED_CHANGES = {
 async function pgEvidenceKey(ev) {
   if (typeof ev !== "string" || !EVM_HEX_EVIDENCE.test(ev)) return ev;
   const lc = ev.toLowerCase();
-  const r = await stateQuery(`SELECT evidence FROM ${T("refunds")} WHERE lower(evidence) = $1 ORDER BY id ASC LIMIT 1`, [lc]);
+  const r = await stateQuery(EVIDENCE_LC_SQL(), [lc]);
   return r.rows[0]?.evidence ?? lc;
 }
+// The matches are found by the lower(evidence) index and only then sorted by
+// id. With ORDER BY id LIMIT 1 on the bare filter, a table whose expression
+// has no statistics yet (the index is new, or never analyzed) is walked in id
+// order by its primary key looking for a match, the whole table for a new
+// key, and almost every debt is a new key. OFFSET 0 keeps the filter its own
+// query, planned without the LIMIT (scripts/test-refund-ledger-pg.js).
+const EVIDENCE_LC_SQL = () => `SELECT evidence FROM (SELECT id, evidence FROM ${T("refunds")} WHERE lower(evidence) = $1 OFFSET 0) m ORDER BY id ASC LIMIT 1`;
+/** Test seam: the statement pgEvidenceKey runs (database mode). */
+export function __evidenceKeySql() { return EVIDENCE_LC_SQL(); }
 /** Insert-if-absent of one debt, under the key Postgres resolves (pgEvidenceKey). */
 async function insertOwedPg(row) {
   row.evidence = await pgEvidenceKey(row.evidence);
@@ -516,10 +527,14 @@ const writer = createLedgerWriter({
   enqueue, ready: () => readyP(), deadLetter, warnOnce, label: "refund-ledger",
   before: async () => { if (deadLetter.hasWaiting()) await replayDeadLetters(); },
 });
-/** One queued Postgres write: lands after every earlier write, never rejects (a failed write resolves false, logged once a minute). */
-function pgWrite(label, fn) {
-  return writer.write(label, fn);
+/** One queued Postgres write: lands after every earlier write, never rejects (a failed write resolves `failed`, false unless the caller names another value; logged once a minute). */
+function pgWrite(label, fn, failed = false) {
+  return writer.write(label, fn, { onError: failed });
 }
+// What a write that the store did not take returns to a caller that asked to
+// tell it apart from "no row changed" (recordRefundOwedVerdict,
+// refundRowUpdate); every boolean export returns false for both, as always.
+const FAILED = Symbol("refund ledger write failed");
 /** One change to an owed debt (OWED_CHANGES), dead-lettered while it is queued; resolves true when it changed the row. */
 function owedChange(label, op, params) {
   return writer.write(label, async () => {
@@ -572,16 +587,48 @@ export function receiptProvesCharge(receipt) {
   return !!receipt && typeof receipt === "object" && receipt.success === true;
 }
 
+// A request id as the server stamps it (X-Request-Id: a UUID, or the load
+// balancer's id in this alphabet). Anything else is not used as one.
+const REQUEST_ID_RE = /^[A-Za-z0-9_.-]{6,128}$/;
+/**
+ * The ledger key of a debt with no settle transaction: payer, slug and minute,
+ * and the request it was charged on. Without the request two failures of one
+ * payer on one route in one minute were one key, so the second debt was never
+ * booked (and a payer the rail does not name, a card payment, shared it with
+ * every other such buyer). A caller that has the request's id passes it, so
+ * a second detection of the same request is still one debt; without one each
+ * call is its own request.
+ */
+export function fallbackEvidence({ payer, slug, requestId, now = Date.now() } = {}) {
+  const rid = typeof requestId === "string" && REQUEST_ID_RE.test(requestId) ? requestId : randomUUID();
+  return `${payer || "unknown"}|${slug || "unknown"}|${Math.floor(now / 60_000)}|${rid}`;
+}
+
 /** Record a debt. Returns true when a NEW row was created (false = duplicate
  *  evidence, already on the books). Addresses are stored exactly as given -
  *  base58/base32 rails are case-sensitive and must never be folded.
  *  Database mode: returns a Promise of that verdict, resolved only once the
- *  row is in Postgres (the write is queued behind earlier writes). */
-export function recordRefundOwed({ slug, network, payer, priceUsd, tx, httpStatus, synthetic, wire, hangupReason, note = null } = {}) {
+ *  row is in Postgres (the write is queued behind earlier writes).
+ *  `requestId`: the request the charge was made on (fallbackEvidence), read
+ *  only when there is no `tx`. */
+export function recordRefundOwed(args = {}) { return recordOwed(args, false); }
+/**
+ * recordRefundOwed's verdict by name: "minted" (a new row), "exists" (the
+ * evidence is already on the books, or was voided before this debt landed),
+ * or "failed" (the store did not take the write; in database mode the debt
+ * waits in the dead-letter and lands on replay). A failed write is never
+ * reported as already recorded. Database mode: a Promise of it.
+ */
+export function recordRefundOwedVerdict(args = {}) {
+  const name = (v) => (v === FAILED ? "failed" : v ? "minted" : "exists");
+  const v = recordOwed(args, FAILED);
+  return v && typeof v.then === "function" ? v.then(name) : name(v);
+}
+function recordOwed({ slug, network, payer, priceUsd, tx, httpStatus, synthetic, wire, hangupReason, note = null, requestId = null } = {}, failed) {
   try {
     const evidence = (typeof tx === "string" && tx.trim())
       ? evidenceKey(tx)
-      : `${payer || "unknown"}|${slug || "unknown"}|${Math.floor(Date.now() / 60_000)}`;
+      : fallbackEvidence({ payer, slug, requestId });
     const row = cleanRow({
       evidence,
       slug: String(slug || "unknown"),
@@ -602,12 +649,13 @@ export function recordRefundOwed({ slug, network, payer, priceUsd, tx, httpStatu
       return writer.write("record", async () => {
         const r = await insertOwedPg(row);
         return applyOrRefresh(r, "evidence = $1", [row.evidence]);
-      }, { kind: "refund", payload: row });
+      }, { kind: "refund", payload: row, onError: failed });
     }
     const info = insertOwed.run(row);
     return info.changes > 0;
   } catch {
-    return refuse(); // recording a debt must never break the serving path
+    // recording a debt must never break the serving path
+    return USE_PG ? Promise.resolve(failed) : failed;
   }
 }
 
@@ -640,7 +688,8 @@ export function listRefunds({ status = "owed", limit = 200 } = {}) {
  * request it paid, see voidOwedOnClaim) is never claimed, even in the moment
  * between the mark and the row's own void.
  */
-export function claimRefundForSend(id, note = null) {
+export function claimRefundForSend(id, note = null) { return claimFor(id, note, false); }
+function claimFor(id, note, failed) {
   if (USE_PG) {
     return pgWrite("claim", async () => {
       const r = await stateQuery(
@@ -651,9 +700,9 @@ export function claimRefundForSend(id, note = null) {
         [Number(id), note, Date.now()],
       );
       return applyOrRefresh(r, "id = $1", [Number(id)]);
-    });
+    }, failed);
   }
-  try { return claimRow.run({ id, note, claimedAt: Date.now() }).changes > 0; } catch { return false; }
+  try { return claimRow.run({ id, note, claimedAt: Date.now() }).changes > 0; } catch { return failed; }
 }
 
 /**
@@ -663,8 +712,9 @@ export function claimRefundForSend(id, note = null) {
  * any other debt. Requires a note saying what was checked. Never touches an
  * owed, paid or void row. Database mode: a Promise of the verdict.
  */
-export function releaseStuckSend(id, note) {
-  if (!note || typeof note !== "string" || !note.trim()) return refuse();
+export function releaseStuckSend(id, note) { return releaseFor(id, note, false); }
+function releaseFor(id, note, failed) {
+  if (!usableNote(note)) return refuse();
   if (USE_PG) {
     return pgWrite("release", async () => {
       const r = await stateQuery(
@@ -673,12 +723,12 @@ export function releaseStuckSend(id, note) {
         [Number(id), note.trim()],
       );
       return applyOrRefresh(r, "id = $1", [Number(id)]);
-    });
+    }, failed);
   }
-  try { return releaseRow.run({ id, note: note.trim() }).changes > 0; } catch { return false; }
+  try { return releaseRow.run({ id, note: note.trim() }).changes > 0; } catch { return failed; }
 }
 
-function resolvePg(label, id, status, paidTx, note) {
+function resolvePg(label, id, status, paidTx, note, failed) {
   return pgWrite(label, async () => {
     const r = await stateQuery(
       `UPDATE ${T("refunds")} SET status = $2, paid_tx = $3, note = $4, resolved_at = $5, updated_at = ${PG_NOW_MS}
@@ -686,34 +736,61 @@ function resolvePg(label, id, status, paidTx, note) {
       [Number(id), status, paidTx, note, Date.now()],
     );
     return applyOrRefresh(r, "id = $1", [Number(id)]);
-  });
+  }, failed);
 }
+
+const usableNote = (note) => typeof note === "string" && !!note.trim();
+// "undefined"/"null" as a STRING is what a sender produces when it reads the
+// wrong field off an SDK response. It passes a non-empty check while being
+// no evidence at all, in the one column the ledger treats as proof.
+const NOT_A_TX = new Set(["undefined", "null", "nan", "false", "0"]);
+const usablePaidTx = (tx) => typeof tx === "string" && !!tx.trim() && !NOT_A_TX.has(tx.trim().toLowerCase());
 
 /** Mark a debt repaid. Requires the outbound transaction - a refund without
  *  evidence is a deletion wearing a nicer name. Only `owed` rows transition.
  *  Database mode: a Promise of the verdict. */
-export function markRefundPaid(id, paidTx, note = null) {
-  // "undefined"/"null" as a STRING is what a sender produces when it reads the
-  // wrong field off an SDK response. It passes a non-empty check while being
-  // no evidence at all, in the one column the ledger treats as proof.
-  const bad = new Set(["undefined", "null", "nan", "false", "0"]);
-  if (!paidTx || typeof paidTx !== "string" || !paidTx.trim()) return refuse();
-  if (bad.has(paidTx.trim().toLowerCase())) return refuse();
-  if (USE_PG) return resolvePg("paid", id, "paid", paidTx.trim(), note);
+export function markRefundPaid(id, paidTx, note = null) { return markPaidFor(id, paidTx, note, false); }
+function markPaidFor(id, paidTx, note, failed) {
+  if (!usablePaidTx(paidTx)) return refuse();
+  if (USE_PG) return resolvePg("paid", id, "paid", paidTx.trim(), note, failed);
   try {
     return resolveRow.run({ id, status: "paid", paidTx: paidTx.trim(), note, resolvedAt: Date.now() }).changes > 0;
-  } catch { return false; }
+  } catch { return failed; }
 }
 
 /** Void a debt (bad detection, unreachable payer, dust). Requires a note -
  *  writing off a customer's money silently is exactly what this ledger exists
  *  to prevent. Database mode: a Promise of the verdict. */
-export function markRefundVoid(id, note) {
-  if (!note || typeof note !== "string" || !note.trim()) return refuse();
-  if (USE_PG) return resolvePg("void", id, "void", null, note.trim());
+export function markRefundVoid(id, note) { return markVoidFor(id, note, false); }
+function markVoidFor(id, note, failed) {
+  if (!usableNote(note)) return refuse();
+  if (USE_PG) return resolvePg("void", id, "void", null, note.trim(), failed);
   try {
     return resolveRow.run({ id, status: "void", paidTx: null, note: note.trim(), resolvedAt: Date.now() }).changes > 0;
-  } catch { return false; }
+  } catch { return failed; }
+}
+
+/**
+ * One operator change to a row (POST /__operator/refunds/update), by verdict:
+ *  - "updated": the row moved;
+ *  - "invalid": paid without a usable outbound tx, void or release without a
+ *    note, or an unknown action (nothing was written);
+ *  - "conflict": no row in the state the action moves from (missing, already
+ *    resolved, claimed by another run, not sending for a release);
+ *  - "store_failed": the store did not confirm the write. In database mode a
+ *    statement that timed out may still have landed, so the row is read
+ *    before anything is retried.
+ * Every mode: a Promise of it.
+ */
+export async function refundRowUpdate({ id, action, tx, note } = {}) {
+  const rowId = Number(id);
+  let v;
+  if (action === "paid") { if (!usablePaidTx(tx)) return "invalid"; v = await markPaidFor(rowId, tx, note || null, FAILED); }
+  else if (action === "void") { if (!usableNote(note)) return "invalid"; v = await markVoidFor(rowId, note, FAILED); }
+  else if (action === "claim") v = await claimFor(rowId, note || null, FAILED);
+  else if (action === "release") { if (!usableNote(note)) return "invalid"; v = await releaseFor(rowId, note, FAILED); }
+  else return "invalid";
+  return v === FAILED ? "store_failed" : v ? "updated" : "conflict";
 }
 
 /** The row recorded under this evidence (a settle tx or push hash), or null.

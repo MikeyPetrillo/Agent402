@@ -7709,18 +7709,20 @@ app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), async (r
   const { id, action, tx, note } = req.body || {};
   const rowId = Number(id);
   if (!Number.isInteger(rowId) || rowId <= 0) return res.status(400).json({ error: "id required" });
-  let ok = false;
-  if (action === "paid") ok = await markRefundPaid(rowId, tx, note || null);
-  else if (action === "void") ok = await markRefundVoid(rowId, note);
   // `claim` moves owed -> sending before any broadcast, so a crash between
   // sending and marking paid cannot be re-sent by the next run. Only one
-  // caller can win a given row.
-  else if (action === "claim") ok = await claimRefundForSend(rowId, note || null);
-  // `release` puts a row stuck in `sending` back to owed, after a human has
-  // checked the chain and found nothing was sent. It needs that note.
-  else if (action === "release") ok = await releaseStuckSend(rowId, note);
-  else return res.status(400).json({ error: 'action must be "claim", "release" (requires note), "paid" (requires tx) or "void" (requires note)' });
-  if (!ok) return res.status(409).json({ error: "not updated - row missing, already resolved, not sending (release), or evidence missing (paid needs tx, void and release need a note)" });
+  // caller can win a given row. `release` puts a row stuck in `sending` back
+  // to owed, after a human has checked the chain and found nothing was sent.
+  // `paid` needs the outbound tx; `void` and `release` need a note.
+  if (!["paid", "void", "claim", "release"].includes(action)) return res.status(400).json({ error: 'action must be "claim", "release" (requires note), "paid" (requires tx) or "void" (requires note)' });
+  // 409 is a state conflict and nothing else (the runner reads it as "another
+  // run has this row"); a store that did not confirm the write is a 503.
+  const { refundRowUpdate } = await import("./refund-ledger.js");
+  const verdict = await refundRowUpdate({ id: rowId, action, tx, note });
+  res.set("Cache-Control", "private, no-store");
+  if (verdict === "invalid") return res.status(400).json({ error: "evidence missing: paid needs the outbound tx, void and release need a note" });
+  if (verdict === "store_failed") return res.status(503).json({ error: "the refund ledger did not confirm this write; read the row (refunds.json) before retrying, a write that timed out may have landed" });
+  if (verdict !== "updated") return res.status(409).json({ error: "not updated - row missing, already resolved, claimed by another run, or not sending (release)" });
   res.json({ ok: true, id: rowId, action, totals: refundTotals() });
 });
 app.get("/__operator/ledger-sync.json", async (req, res) => {

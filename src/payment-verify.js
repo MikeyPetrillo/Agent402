@@ -80,6 +80,51 @@ export async function rpc(url, method, params, fetchImpl, timeoutMs, delays = RP
   return j.result;
 }
 
+// An RPC URL can carry a provider key, and a reason from here reaches logs
+// (the refund job's log is public): no URL is ever part of one. A cut-off
+// copy of a URL is not masked by the log's own secret filter, and a fetch of
+// a URL it cannot parse quotes all of it, spaces included, after "Failed to
+// parse URL from", so the rest of that line goes too.
+const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]{1,20}:\/\/[^\s"'<>]+/gi;
+const UNPARSED_URL = /(Failed to parse URL from)[^\n]*/gi;
+/** `text` with every URL in it replaced by "<url>". */
+export function withoutUrls(text) { return String(text ?? "").replace(UNPARSED_URL, "$1 <url>").replace(URL_IN_TEXT, "<url>"); }
+const errText = (e) => withoutUrls(e?.message || String(e));
+
+/** The RPC URLs `rpcFor` named: one URL or a list, blanks and repeats dropped, in order. */
+export function rpcUrlList(v) {
+  const out = [];
+  for (const u of Array.isArray(v) ? v : [v]) {
+    const s = typeof u === "string" ? u.trim() : "";
+    if (s && !out.includes(s)) out.push(s);
+  }
+  return out;
+}
+
+/**
+ * A transaction receipt, read from each host in turn. A host that answers
+ * none (the transaction not yet seen, or a node that keeps no history that
+ * old) is read again after each of `emptyDelaysMs`, then the next host is
+ * read; a host that cannot be read is passed over. Returns `{ receipt, url }`
+ * from the first host that holds it, else `{ receipt: null, error }` (the
+ * last read error, or null when every host answered none).
+ */
+async function readReceipt(urls, tx, { fetchImpl, timeoutMs, emptyDelaysMs = [], pause }) {
+  let error = null;
+  for (const url of urls) {
+    for (let attempt = 0; ; attempt++) {
+      let receipt;
+      try { receipt = await rpc(url, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs); }
+      catch (e) { error = errText(e); break; }
+      if (receipt) return { receipt, url };
+      if (attempt >= emptyDelaysMs.length) break;
+      await pause(emptyDelaysMs[attempt]);
+    }
+  }
+  return { receipt: null, error };
+}
+const receiptFail = (read) => fail(read.error ? `could not read the transaction: ${read.error}` : "transaction not found on chain");
+
 /**
  * Sum of `token` Transfer logs in a receipt that move from `from` to any
  * address in `toSet` (EVM addresses, compared lowercased).
@@ -105,27 +150,28 @@ export function evmTransferredInReceipt(receipt, { token, from, toSet }) {
  * payer to our payTo. Everything is taken from the transaction itself - we
  * never trust the ledger row's own claim about what happened.
  */
-async function verifyEvm({ tx, payer, payToSet, amountUsd, asset, rpcUrl, fetchImpl, timeoutMs }) {
+async function verifyEvm({ tx, payer, payToSet, amountUsd, asset, rpcUrls, fetchImpl, timeoutMs, emptyDelaysMs, pause }) {
   const ours = new Set([...payToSet].map((a) => String(a).toLowerCase()));
   if (!/^0x[0-9a-fA-F]{64}$/.test(String(tx || ""))) return fail("no usable transaction hash recorded");
   if (!/^0x[0-9a-fA-F]{40}$/.test(String(payer || ""))) return fail("payer is not an EVM address");
   if (![...ours].some((a) => /^0x[0-9a-fA-F]{40}$/.test(a))) return fail("no EVM payTo to check against");
   if (!/^0x[0-9a-fA-F]{40}$/.test(String(asset || ""))) return fail("no token address for this network");
 
-  let receipt, decimalsHex;
-  try {
-    receipt = await rpc(rpcUrl, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs);
-  } catch (e) { return fail(`could not read the transaction: ${e.message}`); }
-  if (!receipt) return fail("transaction not found on chain");
+  // An empty answer is read again, then from the next host: a public node can
+  // keep no receipts past a few days, or answer from a backend that does not.
+  const read = await readReceipt(rpcUrls, tx, { fetchImpl, timeoutMs, emptyDelaysMs, pause });
+  const receipt = read.receipt;
+  if (!receipt) return receiptFail(read);
   // status 0x0 is a REVERTED transaction: the facilitator may have broadcast
   // it and called that success, but no tokens moved.
   if (String(receipt.status) !== "0x1") return fail(`transaction did not succeed on chain (status ${receipt.status})`);
 
+  let decimalsHex;
   try {
     // decimals() - never assumed. Assuming 6 and being wrong by a factor of a
     // million is the kind of mistake that only shows up in the loss column.
-    decimalsHex = await rpc(rpcUrl, "eth_call", [{ to: asset, data: "0x313ce567" }, "latest"], fetchImpl, timeoutMs);
-  } catch (e) { return fail(`could not read token decimals: ${e.message}`); }
+    decimalsHex = await rpc(read.url, "eth_call", [{ to: asset, data: "0x313ce567" }, "latest"], fetchImpl, timeoutMs);
+  } catch (e) { return fail(`could not read token decimals: ${errText(e)}`); }
   const decimals = Number(BigInt(decimalsHex || "0x0"));
   if (!Number.isFinite(decimals) || decimals > 36) return fail("token decimals unreadable");
   const expected = usdToBaseUnits(Number(amountUsd), decimals);
@@ -148,17 +194,16 @@ async function verifyEvm({ tx, payer, payToSet, amountUsd, asset, rpcUrl, fetchI
  * its own and the larger counts (never both). Returns the token that moved,
  * so a refund goes back in the currency that was paid.
  */
-async function verifyTempo({ tx, payer, payToSet, amountUsd, tokens, rpcUrl, fetchImpl, timeoutMs }) {
+async function verifyTempo({ tx, payer, payToSet, amountUsd, tokens, rpcUrls, fetchImpl, timeoutMs, emptyDelaysMs, pause }) {
   const ours = new Set([...payToSet].map((a) => String(a).toLowerCase()));
   const allowed = new Set([...(tokens || [])].map((t) => String(t).toLowerCase()).filter((t) => /^0x[0-9a-f]{40}$/.test(t)));
   if (!/^0x[0-9a-fA-F]{64}$/.test(String(tx || ""))) return fail("no usable transaction hash recorded");
   if (!/^0x[0-9a-fA-F]{40}$/.test(String(payer || ""))) return fail("payer is not an EVM address");
   if (![...ours].some((a) => /^0x[0-9a-f]{40}$/.test(a))) return fail("no Tempo payTo to check against");
   if (!allowed.size) return fail("no Tempo currency to check against");
-  let receipt;
-  try { receipt = await rpc(rpcUrl, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs); }
-  catch (e) { return fail(`could not read the transaction: ${e.message}`); }
-  if (!receipt) return fail("transaction not found on chain");
+  const read = await readReceipt(rpcUrls, tx, { fetchImpl, timeoutMs, emptyDelaysMs, pause });
+  const receipt = read.receipt;
+  if (!receipt) return receiptFail(read);
   if (String(receipt.status) !== "0x1") return fail(`transaction did not succeed on chain (status ${receipt.status})`);
   const from = String(payer).toLowerCase();
   const moved = new Map(); // token -> { transfer, memo }
@@ -180,8 +225,8 @@ async function verifyTempo({ tx, payer, payToSet, amountUsd, tokens, rpcUrl, fet
   for (const [t, m] of moved) { const v = m.transfer > m.memo ? m.transfer : m.memo; if (v > best) { best = v; token = t; } }
   if (!token) return fail("no transfer from this payer to our payTo in that transaction");
   let decimalsHex;
-  try { decimalsHex = await rpc(rpcUrl, "eth_call", [{ to: token, data: "0x313ce567" }, "latest"], fetchImpl, timeoutMs); }
-  catch (e) { return fail(`could not read token decimals: ${e.message}`); }
+  try { decimalsHex = await rpc(read.url, "eth_call", [{ to: token, data: "0x313ce567" }, "latest"], fetchImpl, timeoutMs); }
+  catch (e) { return fail(`could not read token decimals: ${errText(e)}`); }
   const decimals = Number(BigInt(decimalsHex || "0x0"));
   if (!Number.isFinite(decimals) || decimals > 36) return fail("token decimals unreadable");
   const expected = usdToBaseUnits(Number(amountUsd), decimals);
@@ -205,7 +250,7 @@ async function verifySolana({ tx, payer, payToSet, amountUsd, asset, rpcs, fetch
     try {
       txn = await rpc(url, "getTransaction", [tx, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1 }], fetchImpl, timeoutMs);
       if (txn) break;
-    } catch (e) { lastErr = e.message; }
+    } catch (e) { lastErr = errText(e); }
   }
   if (!txn) return { ...fail(`transaction not found on chain${lastErr ? ` (${lastErr})` : ""}`), ...(lastErr || !rpcs.length ? {} : { absent: true }) };
   const meta = txn.meta || {};
@@ -251,7 +296,7 @@ async function verifyAlgorand({ tx, payer, payToSet, amountUsd, asset, indexers,
       if (!res.ok) { lastErr = `HTTP ${res.status}`; continue; }
       body = await res.json();
       if (body) break;
-    } catch (e) { lastErr = e.message; }
+    } catch (e) { lastErr = errText(e); }
   }
   const t = body?.transaction;
   // The indexer answers 404 for a transaction it does not hold.
@@ -319,9 +364,13 @@ async function verifyGatewayBatched({ tx, payer, payToSet, amountUsd, network, f
  * Confirm the inbound payment a refund row claims. Returns
  * `{ verified:true, … }` or `{ verified:false, reason }` - never throws.
  *
- * `rpcFor(network)` supplies the RPC URL, `acceptsFor(network)` the live 402
- * accepts entry (asset + payTo) so the token and recipient come from our own
- * offer rather than a hand-maintained table.
+ * `rpcFor(network)` supplies the RPC URL, or a list of them read in order (a
+ * receipt a host does not hold is read from the next), `acceptsFor(network)`
+ * the live 402 accepts entry (asset + payTo) so the token and recipient come
+ * from our own offer rather than a hand-maintained table.
+ * `receiptRetryDelaysMs`: an empty receipt is read again from the same host
+ * after each delay before the next host is read (none by default: a serving
+ * path's caller reads once).
  */
 export async function verifyInboundPayment({
   network, payer, amountUsd, tx, createdAt,
@@ -329,6 +378,8 @@ export async function verifyInboundPayment({
   gatewayBase = GATEWAY_API_BASE_URL,
   acceptsFor = () => null,
   rpcFor = () => null,
+  receiptRetryDelaysMs = [],
+  pause = (ms) => new Promise((r) => setTimeout(r, ms)),
   stellarConfirm = null,       // injected: (opts) => Promise<{transaction}|null>
   payToSetFor = null,          // (network) => iterable of every payTo WE control
   referralPayTo = null,        // the split contract a "referral" row was paid to (src/referral-gate.js)
@@ -368,16 +419,15 @@ export async function verifyInboundPayment({
     if (wire === "referral-operator") {
       if (String(network || "") !== "eip155:8453") return fail(`referral debt on ${network || "an unknown network"} - the referral rail settles on Base only`);
       if (!/^0x[0-9a-fA-F]{40}$/.test(String(referralPayTo || ""))) return fail("no referral pay-to address configured (REFERRAL_PAY_TO) - cannot prove where the money went");
-      const rpcUrl = rpcFor(network);
-      if (!rpcUrl) return fail(`no RPC configured for ${network}`);
+      const rpcUrls = rpcUrlList(rpcFor(network));
+      if (!rpcUrls.length) return fail(`no RPC configured for ${network}`);
       if (!/^0x[0-9a-fA-F]{64}$/.test(String(tx || ""))) return fail("no usable transaction hash recorded");
       if (!/^0x[0-9a-fA-F]{40}$/.test(String(payer || ""))) return fail("payer is not an EVM address");
       const units = usdToBaseUnits(Number(amountUsd), 6);
       if (units <= 0n) return fail("expected amount is zero");
-      let receipt;
-      try { receipt = await rpc(rpcUrl, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs); }
-      catch (e) { return fail(`could not read the transaction: ${e.message}`); }
-      if (!receipt) return fail("transaction not found on chain");
+      const read = await readReceipt(rpcUrls, tx, { fetchImpl, timeoutMs, emptyDelaysMs: receiptRetryDelaysMs, pause });
+      const receipt = read.receipt;
+      if (!receipt) return receiptFail(read);
       const proof = proveReceipt(receipt, { tx, from: payer, nonce: referralNonce, payTo: referralPayTo, amount: units.toString() });
       if (proof.moved !== true) return fail(`the transaction does not show this payer's own transfer of the amount into the split contract (${proof.why})`);
       return pass({ movedAtomic: units.toString(), decimals: 6, tx });
@@ -385,17 +435,16 @@ export async function verifyInboundPayment({
     if (wire === "referral") {
       if (String(network || "") !== "eip155:8453") return fail(`referral debt on ${network || "an unknown network"} - the referral rail settles on Base only`);
       if (!/^0x[0-9a-fA-F]{40}$/.test(String(referralPayTo || ""))) return fail("no referral pay-to address configured (REFERRAL_PAY_TO) - cannot prove where the money went");
-      const rpcUrl = rpcFor(network);
-      if (!rpcUrl) return fail(`no RPC configured for ${network}`);
+      const rpcUrls = rpcUrlList(rpcFor(network));
+      if (!rpcUrls.length) return fail(`no RPC configured for ${network}`);
       if (!/^\d{1,78}$/.test(String(referralMerchantId ?? "")) || !/^0x[0-9a-fA-F]{40}$/.test(String(referralPayout || ""))) return fail("no referral merchant id or payout address configured (REFERRAL_MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS) - cannot prove the payment was routed to us");
       if (!/^0x[0-9a-fA-F]{64}$/.test(String(tx || ""))) return fail("no usable transaction hash recorded");
       if (!/^0x[0-9a-fA-F]{40}$/.test(String(payer || ""))) return fail("payer is not an EVM address");
       const units = usdToBaseUnits(Number(amountUsd), 6);
       if (units <= 0n) return fail("expected amount is zero");
-      let receipt;
-      try { receipt = await rpc(rpcUrl, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs); }
-      catch (e) { return fail(`could not read the transaction: ${e.message}`); }
-      if (!receipt) return fail("transaction not found on chain");
+      const read = await readReceipt(rpcUrls, tx, { fetchImpl, timeoutMs, emptyDelaysMs: receiptRetryDelaysMs, pause });
+      const receipt = read.receipt;
+      if (!receipt) return receiptFail(read);
       // The routed event and the payout of the amount it states decide; the
       // refund row carries no commission, so the least net asked here is 1.
       const proof = proveReceipt(receipt, { tx, from: payer, nonce: referralNonce, payTo: referralPayTo, amount: units.toString(), merchantId: String(referralMerchantId), payoutAddress: referralPayout, minNet: "1", ...(referralRoutedTopic ? { routedTopic: referralRoutedTopic } : {}) });
@@ -425,16 +474,16 @@ export async function verifyInboundPayment({
     }
 
     if (n === TEMPO_NETWORK) {
-      const rpcUrl = rpcFor(network);
-      if (!rpcUrl) return fail(`no RPC configured for ${network}`);
+      const rpcUrls = rpcUrlList(rpcFor(network));
+      if (!rpcUrls.length) return fail(`no RPC configured for ${network}`);
       const tokens = Array.isArray(accepts?.assets) ? accepts.assets : accepts?.asset ? [accepts.asset] : [];
-      return await verifyTempo({ tx, payer, payToSet, amountUsd, tokens, rpcUrl, fetchImpl, timeoutMs });
+      return await verifyTempo({ tx, payer, payToSet, amountUsd, tokens, rpcUrls, fetchImpl, timeoutMs, emptyDelaysMs: receiptRetryDelaysMs, pause });
     }
 
     if (n.startsWith("eip155:")) {
-      const rpcUrl = rpcFor(network);
-      if (!rpcUrl) return fail(`no RPC configured for ${network}`);
-      return await verifyEvm({ tx, payer, payToSet, amountUsd, asset: accepts.asset, rpcUrl, fetchImpl, timeoutMs });
+      const rpcUrls = rpcUrlList(rpcFor(network));
+      if (!rpcUrls.length) return fail(`no RPC configured for ${network}`);
+      return await verifyEvm({ tx, payer, payToSet, amountUsd, asset: accepts.asset, rpcUrls, fetchImpl, timeoutMs, emptyDelaysMs: receiptRetryDelaysMs, pause });
     }
 
     if (n.startsWith("stellar:")) {
@@ -496,6 +545,6 @@ export async function verifyInboundPayment({
     // someone can prove it.
     return fail(`no on-chain verifier for ${n.split(":")[0] || "unknown"} yet - debt held, not written off`);
   } catch (e) {
-    return fail(`verification error: ${(e?.message || String(e)).slice(0, 120)}`);
+    return fail(`verification error: ${errText(e).slice(0, 120)}`);
   }
 }

@@ -13,7 +13,11 @@
 // (An unsupported chain is held before the row is even claimed, so recording a
 // Solana debt cannot strand it in `sending`.)
 import { externalSalesForSlugs, salesByTx, salesLedgerRefresh } from "./sales-ledger.js";
-import { recordRefundOwed, refundByEvidence, refundLedgerRefresh } from "./refund-ledger.js";
+import { recordRefundOwedVerdict, refundByEvidence, refundLedgerRefresh } from "./refund-ledger.js";
+// A booking write the store did not take is counted (writeFailed) and named,
+// never read as "already recorded": a run that reported it booked would leave
+// the debt unbooked with nothing saying so. A rerun is safe (idempotent on
+// the settle tx); in database mode the write also waits in the dead-letter.
 
 // Total non-delivery only. Packs that returned SOME real work are deliberately
 // out: crypto-dossier delivered 5 of its 6 steps, and refunding a partial in
@@ -36,7 +40,7 @@ export async function backfillBrokenPackRefunds({
 } = {}) {
   const rows = externalSalesForSlugs(slugs, from, until);
   const byPayer = {};
-  let owedUsd = 0, minted = 0, already = 0, noTx = 0;
+  let owedUsd = 0, minted = 0, already = 0, noTx = 0, writeFailed = 0;
 
   for (const r of rows) {
     const usd = Number(r.priceUsd) || 0;
@@ -50,10 +54,11 @@ export async function backfillBrokenPackRefunds({
     // loud rather than minted as something unverifiable.
     if (!r.tx) { noTx++; continue; }
     if (!write) continue;
-    if (await recordRefundOwed({
+    const verdict = await recordRefundOwedVerdict({
       slug: r.slug, network: r.network, payer: r.payer,
       priceUsd: usd, tx: r.tx, httpStatus: 200, synthetic: false,
-    })) minted++; else already++;
+    });
+    if (verdict === "minted") minted++; else if (verdict === "exists") already++; else writeFailed++;
   }
 
   return {
@@ -65,6 +70,7 @@ export async function backfillBrokenPackRefunds({
     byPayer,
     minted,
     alreadyRecorded: already,
+    writeFailed,
     skippedNoTx: noTx,
   };
 }
@@ -103,7 +109,7 @@ export async function backfillNamedSales({ txs, note, write = false } = {}) {
   const seen = new Set();
   const byPayer = {};
   const skipped = [];
-  let matched = 0, owedUsd = 0, minted = 0, already = 0;
+  let matched = 0, owedUsd = 0, minted = 0, already = 0, writeFailed = 0;
   const skip = (tx, reason) => skipped.push({ tx, reason });
 
   for (const raw of txs) {
@@ -120,16 +126,17 @@ export async function backfillNamedSales({ txs, note, write = false } = {}) {
     if (!(sale.priceUsd > 0)) { skip(tx, "no_amount"); continue; }
     matched++;
     const recorded = !!refundByEvidence(tx);
-    let didMint = false;
+    let verdict = null;
     if (write && !recorded) {
-      didMint = !!(await recordRefundOwed({
+      verdict = await recordRefundOwedVerdict({
         slug: sale.slug, network: sale.network, payer: sale.payer,
         priceUsd: sale.priceUsd, tx, httpStatus: 200, synthetic: false,
         wire: sale.wire, note: why,
-      }));
+      });
     }
-    if (recorded || (write && !didMint)) { already++; continue; }
-    if (didMint) minted++;
+    if (verdict === "failed") { writeFailed++; skip(tx, "write_failed"); continue; }
+    if (recorded || verdict === "exists") { already++; continue; }
+    if (verdict === "minted") minted++;
     // byPayer and owedUsd count what this request mints (write) or would mint (dry).
     owedUsd += sale.priceUsd;
     const p = (byPayer[sale.payer] ||= { settlements: 0, usd: 0, network: sale.network });
@@ -145,6 +152,7 @@ export async function backfillNamedSales({ txs, note, write = false } = {}) {
     wouldMint: write ? 0 : matched - already,
     minted,
     alreadyRecorded: already,
+    writeFailed,
     owedUsd: Math.round(owedUsd * 1e6) / 1e6,
     byPayer,
     skipped,
