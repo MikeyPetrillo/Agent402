@@ -1211,7 +1211,7 @@ async function rwaSpotPrices(currency) {
 /** The `tracking` block for one shaped RWA row, given rwaSpotPrices' answer
  *  (null when it could not be read). */
 export function rwaTracking(row, spot) {
-  const unit = RWA_SPOT_UNITS[row?.id];
+  const unit = rwaHasReference(row?.id) ? RWA_SPOT_UNITS[row.id] : null;
   if (!unit) return null;
   const ref = spot ? spot[unit] : null;
   const price = num(row?.price);

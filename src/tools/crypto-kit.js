@@ -281,7 +281,7 @@ function referenceMapOf(doc) {
 
 /** The reference USD price for a coin id from a reference map, or null. */
 export function referencePriceOf(map, id) {
-  const sym = ID_TO_SYMBOL[id];
+  const sym = Object.hasOwn(ID_TO_SYMBOL, id) ? ID_TO_SYMBOL[id] : null;
   if (!map || !sym) return null;
   if (map.has(sym)) return map.get(sym);
   if (map.has(`k${sym}`)) return map.get(`k${sym}`) / 1000;
@@ -431,7 +431,7 @@ export const CRYPTO_TOOLS = [
       // where that source has no listed market for the coin, or no check ran).
       let check = "usd-only", map = null;
       if (currency === "usd") {
-        if (!Object.keys(out).some((id) => ID_TO_SYMBOL[id])) check = "no-reference";
+        if (!Object.keys(out).some((id) => Object.hasOwn(ID_TO_SYMBOL, id))) check = "no-reference";
         else { map = await readReferenceMap(); check = map ? CHECK_SOURCE : "unavailable"; }
       }
       const now = Date.now();

@@ -7,7 +7,7 @@
 // Assertions break the build if our validation/parsing changes. Live calls only
 // break the build if EVERY one fails — that would mean our integration broke.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { CRYPTO_TOOLS, clearCryptoCache, resetPriceCheck, CHECK_READ_MS, CHECK_SOURCE, STALE_AFTER_SECONDS, SCREEN_UNIVERSE } from "../src/tools/crypto-kit.js";
+import { CRYPTO_TOOLS, clearCryptoCache, resetPriceCheck, CHECK_READ_MS, CHECK_SOURCE, STALE_AFTER_SECONDS, SCREEN_UNIVERSE, referencePriceOf } from "../src/tools/crypto-kit.js";
 import { resetCgRateLimit } from "../src/tools/crypto-markets-kit.js";
 import { __hlShared } from "../src/tools/hyperliquid-shared.js";
 import { COINGECKO_CREDIT } from "../src/data-attribution.js";
@@ -97,6 +97,7 @@ for (const [slug, args, label] of [
     fresh(); cg = priceRows; hl = hlOk;
     const nr = await price({ coins: "jupiter-exchange-solana" });
     ok(nr.check === "no-reference" && nr.coins["jupiter-exchange-solana"].divergencePct === null && hlCalls() === 0, "crypto-price: no mapped coin, no reference read");
+    ok(referencePriceOf(new Map([["BTC", 1]]), "constructor") === null && referencePriceOf(new Map([["BTC", 1]]), "bitcoin") === 1, "crypto-price: an id named like an object property maps to no reference");
     // 5. A failed reference leaves the answer whole, then backs off.
     fresh(); cg = priceRows; hl = () => res(500, "boom");
     const un = await price({ coins: "BTC" });

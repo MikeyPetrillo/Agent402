@@ -219,6 +219,7 @@ ok(__test.TTL.price === 60_000 && __test.TTL.list === 300_000 && __test.TTL.coin
   const a = await h("rwa-asset")({ id: "gold" });
   ok(a.market.tracking.premiumBps === premOf(3400, 77000, 22.9), "rwa-asset: the market row carries the same tracking");
   ok(rwaTracking({ id: "gold", price: 10 }, null).referencePrice === null && rwaTracking({ id: "tesla", price: 10 }, { xau: 1 }) === null, "rwaTracking: no table -> null figures; no reference asset -> null");
+  ok(["constructor", "toString", "__proto__"].every((id) => rwaTracking({ id, price: 10 }, { xau: 1 }) === null), "rwaTracking: an id named like an object property has no reference");
 }
 
 // ----------------------------------------------------------------------------
