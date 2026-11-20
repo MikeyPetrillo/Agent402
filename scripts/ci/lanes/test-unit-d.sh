@@ -440,6 +440,8 @@ t node scripts/test-brave-leak.js
 t node scripts/test-ci-key-exposure.js
 # Daily call budgets for every paid upstream (Brave, Alchemy, CoinGecko, OpenAI, E2B, Neynar)
 t node scripts/test-upstream-budgets.js
+# Per-caller call counts by UTC day for the on-chain data provider: labels, a deploy adds to the stored day, seven days of history
+t node scripts/test-upstream-call-days.js
 t node scripts/test-upstream-hard-caps.js
 # /api/gateway-status is public: verdicts only, never limits or balances
 t node scripts/test-gateway-status-privacy.js

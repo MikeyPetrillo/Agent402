@@ -793,7 +793,8 @@ import { spendWindowStatus, refreshSpendWindowShared } from "./router-spend-wind
 import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus, refreshXDataSpendShared } from "./tools/x-data-kit.js";
 import { jevSpendStatus, refreshJevSpendShared, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
-import { upstreamBudgetStatus } from "./upstream-budgets.js";
+import { upstreamBudgetStatus, startUpstreamBudgetSync } from "./upstream-budgets.js";
+import { flushUpstreamCallDays, upstreamCallDaysReport } from "./upstream-call-days.js";
 import { hardCapStatus, startHardCapSync } from "./upstream-hard-caps.js";
 import { b2bEnrichEnabled } from "./tools/b2b-enrich-kit.js";
 const X_DATA_TOOLS_ENABLED = xDataEnabled() ? X_DATA_TOOLS : [];
@@ -2848,6 +2849,9 @@ installEgressMeter();
 }
 // The pay-as-you-go ceilings the meter enforces read and feed a shared daily total.
 startHardCapSync();
+// The upstream call budgets' shared day (src/upstream-budgets.js): each
+// process adds its calls to a shared daily counter and reads the total back.
+startUpstreamBudgetSync();
 // Composite runs inherit the drain signal on every outbound fetch (src/drain-abort.js).
 installDrainAwareFetch();
 // Outbound wait is charged to the request that made it (src/request-timing.js).
@@ -4465,6 +4469,11 @@ app.get("/api/gateway-status", async (req, res) => {
   await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshJevSpendShared(), refreshSpendWindowShared(), refreshDirectSpendShared()]);
   const spend = { xDataSpend: xDataSpendStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
+  // Operator view only: which module made the day's calls to the on-chain
+  // data provider, and the last seven days (src/upstream-call-days.js).
+  if (full && budgets.upstreams?.alchemy) {
+    try { const h = await upstreamCallDaysReport("alchemy", { days: 7 }); budgets.upstreams.alchemy.callersToday = h.days[0]?.callers || {}; budgets.upstreams.alchemy.history = h.days; budgets.upstreams.alchemy.historyStored = h.stored; } catch { /* the counts above stand */ }
+  }
   // The global unsettled external-spend ceiling: one word, never a figure.
   const externalSpendGlobal = await globalUnsettledStatus().catch(() => ({ status: "unknown" }));
   const body = {
@@ -14442,7 +14451,7 @@ let drainDeadlineMs = DRAIN_DEADLINE_MS;
 // reads held; the flush round below waits on that write with the others.
 let boardSaveAtDrain = false;
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals()]).then(() => flushJsonDocuments({ timeoutMs }))]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals(), flushUpstreamCallDays()]).then(() => flushJsonDocuments({ timeoutMs }))]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });
