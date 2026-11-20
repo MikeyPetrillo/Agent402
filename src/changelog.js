@@ -14,6 +14,81 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-20",
+    title: "First paid request after a restart",
+    items: [
+      "Payments: The first paid request after a restart is answered at once, even when a payment network's settlement service is slow to answer; that network rejoins the offer as soon as its service answers.",
+    ],
+  },
+  {
+    date: "2026-11-20",
+    title: "Retired model ids leave the model list",
+    items: [
+      "Gateway: `meta-llama/llama-3.2-1b-instruct` and `meta-llama/llama-3.2-3b-instruct` reached their upstream expiration and are no longer listed on the nano tier or `GET /v1/models`. A call naming either is served by `mistralai/ministral-3b-2512` at the tier and price of the route called, the swap named in `agent402_model_substituted`.",
+      "Gateway: From a model's retirement date `GET /v1/models` lists its successor in its place (or leaves it out on a tier that does not serve the successor), so every id it prints is served as itself.",
+    ],
+  },
+  {
+    date: "2026-11-20",
+    title: "Settled answers and interrupted runs",
+    items: [
+      "Payments: A buyer who leaves while a payment is still settling no longer spends hang-up forgiveness when the charge went through; the charge is booked as owed and repaid.",
+      "Payments: A task or job interrupted by a restart now checks whether its payment settled: if it did, the task says so, names the transaction, and the charge is booked for repayment.",
+      "Payments: When the shared payment store is briefly unavailable, paid routes now ask for a retry after 5 seconds instead of 30.",
+      "Payments: A paid call answered with any success status now uses up its payment authorization, so it cannot run a second time.",
+    ],
+  },
+  {
+    date: "2026-11-20",
+    title: "Refund pipeline",
+    items: [
+      "Payments: A refund run reads each payment's receipt from a configured source first and reads an empty answer again before it tries the next, so an older Celo debt can be proven and repaid instead of held.",
+      "Payments: Two failed paid calls by one wallet on one route in the same minute are recorded as two refunds owed.",
+      "Payments: A refund run can be narrowed to named rows, and stops starting new refunds before its time limit, so no refund is cut off halfway.",
+    ],
+  },
+  {
+    date: "2026-11-20",
+    title: "Legal claims, receipts and llms.txt",
+    items: [
+      "Site: /trust says when payer sanctions screening is in force. While no list is loaded, Tempo direct settlement is not offered and the other screens serve payments unscreened. The `sanctionsScreen` word on `/api/gateway-status` says which case holds.",
+      "Surfaces: The audit report lists the wallet's own repayments in a refunds block (owed and repaid, with the repayment transaction). They are never netted from the totals.",
+      "Site: The privacy policy names the signed receipt kept with a delivered card report, the receipts of a monitor's most recent paid periods, and the MPP evm and Tempo relay payer screens.",
+      "Site: The README and /trust say a signed receipt covers the direct routes. A tool bought through a referral link carries none, and a stream carries its receipt as a final event-stream comment line or a trailer.",
+      "Surfaces: /llms.txt names each machine surface in one clause and points at /llms-full.txt for every line in full.",
+      "Site: The refund terms say a disconnect past the hang-up budget is reviewed before it is repaid, and a credits debit is re-credited to its key.",
+    ],
+  },
+  {
+    date: "2026-11-20",
+    title: "Crypto answers you can check",
+    items: [
+      "Tools: `crypto-price` now checks each USD price against a second source, Hyperliquid's oracle price, and adds `divergencePct`, a `stale` flag per coin and a `check` field naming the source.",
+      "Tools: `crypto-market` adds turnover and distance below the all-time high, and works as a screener over the top 250 coins (market cap, volume, turnover, 24h change band, distance from the high, sort) with `matched` and `truncated` fields.",
+      "Tools: `crypto-history`, `coin-market-chart-range` and `coin-ohlc` lead with the window's return, annualized volatility and max drawdown.",
+      "Tools: `rwa-markets` and `rwa-asset` show tokenized gold and silver against the spot price, as a premium in basis points.",
+    ],
+  },
+  {
+    date: "2026-11-20",
+    title: "Onchain-sql answers and pacing",
+    items: [
+      "Tools: `onchain-sql`: two calls sent close together are no longer spaced apart; the query service still receives at most two queries a second.",
+      "Tools: `onchain-sql`: when every query place is busy, a call waits up to about 3 seconds for one instead of being refused at once; a busy refusal asks for a retry in 4 to 6 seconds.",
+      "Tools: `onchain-sql`: a query the service cuts off at its time limit answers 422 with hint `timed-out`, a 502 that returns at once says to retry, and narrow-query answers carry `charged: false` and `upstreamMs`.",
+      "Tools: `onchain-sql`: an answer larger than 16 MB is answered 502 and not charged.",
+      "Tools: `onchain-sql` and `onchain-sql-schema`: a call paid on Solana finishes within 40 seconds, inside the payment's valid life.",
+    ],
+  },
+  {
+    date: "2026-11-20",
+    title: "agent402-mcp 0.14.1 and the CI catalog sweep",
+    items: [
+      "Packages: agent402-mcp 0.14.1 is a version-only release, so the MCP Registry entry carries the current title; each publish now marks every older registry version deprecated, so the registry lists one current version.",
+      "Operations: CI's catalog sweep reads CoinGecko and Open-Meteo under a per-run CoinGecko read cap, and a run that spends the cap or meets a rate limit fails.",
+    ],
+  },
+  {
+    date: "2026-11-20",
     title: "Long recordings transcription",
     shownWhen: sttLongEnabled,
     items: [
