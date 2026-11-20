@@ -209,12 +209,12 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   replicas; a send waits for its slot up to 3 s or four gaps, whichever is longer
   (`sqlSlotWaitMs`: the same four slots out at any replica count), and one whose slot is further
   off (or past the handler budget) is not sent. A buyer whose connection closes while its first
-  query waits for its slot is answered 499 and the query is not sent (nothing to deliver, so
-  nothing is charged); a send whose wait has started keeps its slot. The gap in force is held at
-  2,500 ms (`SQL_SEND_GAP_MAX_MS`, so a send waits at most 10 s) whatever the two settings
-  multiply to, and a value not taken as set is logged at boot by its setting's name
-  (`sqlSendGapWarnings`). The
-  pacer is all a send waits on: a facilitator verify or settle holds no query back
+  query waits for its slot is answered 499 and the query is not sent (the 499 cancels settlement,
+  as `clientGoneError` does for a buyer gone before the call started); its slot stays taken. The
+  gap in force is held at 2,500 ms (`SQL_SEND_GAP_MAX_MS`, so a send waits at most 10 s) whatever
+  the two settings multiply to, and a value not taken as set is logged at boot by its setting's
+  name (`sqlSendGapWarnings`). The pacer is all a send waits on: a facilitator verify or settle
+  holds no query back
   (`scripts/test-onchain-sql-paid-path.js` holds a paid query to 300 ms from its own verify answer
   on a boot wired as production is). A 2xx from the query service whose body is cut off, empty or
   not JSON is an uncharged 502 (`unreadableAnswerError`), never a result with no rows. When a busy
