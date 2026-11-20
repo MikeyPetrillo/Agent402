@@ -169,8 +169,9 @@ so every claim below is verifiable in code.</p>
     deleted ${wishRetentionDays()} days after it was sent, leaving only its counts, kept under a keyed hash
     of the text (never the text);</li>
     <li>a call sent with <code>Prefer: respond-async</code>, and a long call the MCP connector runs as a
-    task, keeps its result (up to ${jobs.maxSize}) under the job or task id so you can fetch it; the record is
-    deleted ${jobs.keptFor} after the job was created. It is stored in the state database, so a nightly backup
+    task, keeps its result (up to ${jobs.maxSize}) under the job or task id so you can fetch it, and a job or task
+    paid from a wallet also keeps that wallet on its record, so a run a restart cut off can be checked against the
+    sales ledger; the record is deleted ${jobs.keptFor} after the job was created. It is stored in the state database, so a nightly backup
     made inside that time copies it (see Backups below);</li>
     <li>for a decision bought on <code>/api/decide</code>, we keep the task you describe, the plan we
     returned, the paying wallet and any feedback you report on its steps, for 30 days;</li>
@@ -378,7 +379,7 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   party to a Tempo per-call payment our server settles itself, the paying wallet of a Tempo payment settled through
   Tempo's relay (and the sender the relay settled on), and the paying wallet of an MPP monitor subscription (before its
   first payment and before each renewal) are checked against the US Treasury OFAC SDN list, which we download and
-  hold on our server. For such a Tempo payment and for a subscription payment we also read the paying wallet's recent
+  hold on our server. For a Tempo per-call payment our server settles itself and for a subscription payment we also read the paying wallet's recent
   inbound transfers (up to ${oneHop.maxTransfers}, from the last ${oneHop.lookbackDays} days) from Tempo's transfer data feed, which
   receives the wallet address, and check their senders against the same list. The result for that wallet
   (clean, flagged or listed) is kept under the wallet address for ${oneHop.ttlDays} days, then read again on its next payment.</li>

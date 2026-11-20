@@ -29,6 +29,14 @@ ok(nagerItems.every((i) => !COMPANY_SPONSORS.test(i)), `no /changelog item says 
 const md = read("CHANGELOG.md").replace(/\n\s*/g, " ");
 const mdHits = md.split(/ - /).filter((s) => /Nager\.Date/.test(s) && COMPANY_SPONSORS.test(s));
 ok(mdHits.length === 0, `no CHANGELOG.md item says the company sponsors Nager.Date${mdHits.map((s) => `\n    ${s.slice(0, 120)}`).join("")}`);
+// README and every other tracked markdown file (wiki/, docs/, the package
+// READMEs) say the same: the sponsorship is held for this service.
+{
+  const { execFileSync } = await import("node:child_process");
+  const files = execFileSync("git", ["ls-files", "*.md"], { cwd: new URL("..", import.meta.url), encoding: "utf8" }).split("\n").filter((f) => f && f !== "CHANGELOG.md");
+  const hits = files.filter((f) => COMPANY_SPONSORS.test(read(f).replace(/\n\s*/g, " ")));
+  ok(files.includes("README.md") && hits.length === 0, `no markdown file says the company sponsors a source (${hits.join(", ") || `${files.length} files read`})`);
+}
 const attr = read("src/data-attribution.js");
 ok(!COMPANY_SPONSORS.test(attr), "src/data-attribution.js does not say the company sponsors a source");
 ok(nagerItems.some((i) => /sponsorship (?:held )?for this service/.test(i)), "the changelog's Nager.Date credit says the sponsorship is held for this service");

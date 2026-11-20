@@ -377,6 +377,23 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
   const bullet = readme.split("\n").find((l) => /signed receipt/.test(l) && /^- /.test(l)) || "";
   ok(!/Buyer protection/.test(readme), "README: no \"Buyer protection\" heading (it reads as a guarantee program)");
   ok(/on the direct routes carries a signed receipt/.test(bullet) && /a tool bought through a referral link carries none/.test(bullet) && /event-stream comment line/.test(bullet) && /TE: trailers/.test(bullet), `README: the money-path bullet scopes the signed receipt to the direct routes and names both exceptions ("${bullet.slice(0, 80)}...")`);
+  // Every markdown tree: a sentence that says every settled paid answer is
+  // signed scopes it to the direct routes, and its paragraph names the
+  // referral exception (a /ref answer carries no receipt).
+  {
+    const { execFileSync } = await import("node:child_process");
+    const mdFiles = execFileSync("git", ["ls-files", "*.md"], { cwd: new URL("..", import.meta.url), encoding: "utf8" }).split("\n").filter((f) => f && !f.startsWith(".claude/") && f !== "CHANGELOG.md");
+    const unscoped = [];
+    for (const f of mdFiles) {
+      const paras = src(f).split(/\n\s*\n/).map((p) => p.replace(/\s+/g, " "));
+      for (const para of paras) {
+        for (const m of para.matchAll(/[^.]*\bevery (?:settled )?paid answer\b[^.]*\./gi)) {
+          if (!/on the direct routes/i.test(m[0]) || !/referral/i.test(para)) unscoped.push(`${f}: "${m[0].trim().slice(0, 90)}"`);
+        }
+      }
+    }
+    ok(mdFiles.length > 20 && unscoped.length === 0, `markdown: every "every settled paid answer" scopes the receipt to the direct routes and names the referral exception (${unscoped.join("; ") || `${mdFiles.length} files read`})`);
+  }
   ok(!/every paid path is signed/.test(src("src/positioning.js")) && /\/ref\/ copy is never signed/.test(src("src/positioning.js")), "positioning.js: the lead's comment states the receipt's scope, not every paid path");
   const { generateKeyPairSync } = await import("node:crypto");
   const { resetReceiptKeys, receiptsServed } = await import("../src/receipt-signing.js");
