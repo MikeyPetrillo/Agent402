@@ -54,6 +54,28 @@ for (const job of jobs) {
   }
 }
 ok(adapterSteps >= 1, `the scan found the adapter step (${adapterSteps})`);
+// The class, by what a step runs rather than its name: any deploy.yml step
+// that installs packages (npm or pip) with install-time code allowed blanks
+// every job-level secret. `npm ci --ignore-scripts` runs no dependency code
+// (the repo's supply-chain rule), so it is the one install exempt here.
+{
+  const wfParsed = load(text);
+  const PKG_INSTALL = /\bnpm (ci|install|i)\b|\bpip3? install\b|-m pip install\b/;
+  const installsWithCode = (run) => run.split("\n").some((l) => !/^\s*#/.test(l) && PKG_INSTALL.test(l) && !/\bnpm ci --ignore-scripts\b/.test(l));
+  let pkgSteps = 0, pipSteps = 0;
+  for (const [jn, job] of Object.entries(wfParsed.jobs || {})) {
+    const jobSecrets = Object.entries(job.env || {}).filter(([, v]) => /secrets\./.test(String(v))).map(([k]) => k);
+    for (const st of job.steps || []) {
+      const run = String(st.run || "");
+      if (!installsWithCode(run)) continue;
+      pkgSteps++;
+      if (/pip install/.test(run)) pipSteps++;
+      const missing = jobSecrets.filter((k) => String(st.env?.[k] ?? "x") !== "");
+      ok(missing.length === 0, `${jn}: "${String(st.name || "").slice(0, 48)}" installs packages with every job-level secret blanked${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
+    }
+  }
+  ok(pkgSteps >= 10 && pipSteps >= 1, `the scan found the package-install steps by what they run (${pkgSteps}, ${pipSteps} pip)`);
+}
 ok(checkedSteps >= 10, `the scan found the secretless install steps (${checkedSteps}) - zero would mean it is blind`);
 
 // Package code in a job that holds a deploy-class secret (a job under the

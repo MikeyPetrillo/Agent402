@@ -532,6 +532,52 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(deadlineMs({ MARKER_BASE_DEADLINE_MS: "1500" }) === 1500 && deadlineMs({ MARKER_BASE_DEADLINE_MS: "999999" }) === DEADLINE_MS_DEFAULT && deadlineMs({ MARKER_BASE_DEADLINE_MS: "nope" }) === DEADLINE_MS_DEFAULT && deadlineMs({ MARKER_BASE_DEADLINE_MS: "0" }) === DEADLINE_MS_DEFAULT, "a deadline setting can shorten the lookup, never lengthen it");
 }
 
+// THE REAL HTTP CLIENTS. scripts/test-402-real-clients.js reads a full-rail
+// 402 with aiohttp, httpx and requests (python -I) and Go net/http, and fails
+// under CI when one is missing. The lane that runs test-challenge-fit.js
+// (test-unit-a4, step 2, every shard) installs them first: wheels only, every
+// one pinned by version and sha256 with no resolution of its own (no
+// dependency code runs at install), in a venv whose interpreter the suites
+// read from REAL_CLIENT_PYTHON, and the runner image's newest Go as REAL_CLIENT_GO.
+{
+  const a4 = jobs["test-unit-a4"]?.steps || [];
+  const iInstall = a4.findIndex((st) => /pip install/.test(String(st.run || "")));
+  const iFit = a4.findIndex((st) => /scripts\/test-challenge-fit\.js/.test(String(st.run || "")));
+  ok(iInstall >= 0 && iFit > iInstall, `test-unit-a4 installs the real HTTP clients before the step that runs test-challenge-fit.js (install ${iInstall}, suites ${iFit})`);
+  const st = a4[iInstall] || {};
+  const run = String(st.run || "");
+  ok(!st.if, "the client install runs on every shard of the lane (no if:)");
+  ok(/--require-hashes/.test(run) && /--only-binary=:all:/.test(run) && /--no-deps/.test(run), "the client install is hash-pinned wheels with no resolution of its own (--require-hashes --only-binary=:all: --no-deps)");
+  const pins = [...run.matchAll(/^\s*([a-z0-9-]+)==([0-9][\w.]*) --hash=sha256:([0-9a-f]{64})\s*$/gm)].map((m) => m[1]);
+  for (const name of ["aiohttp", "httpx", "requests", "httpcore", "h11", "anyio", "yarl", "multidict", "urllib3", "certifi", "idna", "charset-normalizer"]) {
+    ok(pins.includes(name), `the client install pins ${name} by version and sha256`);
+  }
+  ok(/python3 -m venv /.test(run) && /REAL_CLIENT_PYTHON=.*GITHUB_ENV/.test(run) && /REAL_CLIENT_GO=.*GITHUB_ENV/.test(run), "the clients live in a venv the suites read from REAL_CLIENT_PYTHON, and Go is handed over as REAL_CLIENT_GO");
+  ok(/import aiohttp, httpx, requests/.test(run) && /version/.test(run), "the install step proves the three clients import under -I, and Go answers its version");
+}
+
+// THE TREE GATE'S BOUND. Run 44012918430 (2026-11-17): the gate job's checkout
+// could not reach github.com for 133 s, waited 20 s, fetched in 71 s (3 min 46 s
+// in all), and the gate itself then had 73 s of the job's 5 minutes; it was
+// cancelled mid-read, which reads as a main run that is not green although every
+// lane passed. The job's limit covers the checkout's own three attempts at that
+// worst (actions/checkout retries a failed fetch twice, after 10 to 20 s), the
+// setup and cache steps, and the gate script's own bound: its read budget
+// plus one call in flight at the budget's end and one tree fetch.
+{
+  const gate = jobs["tree-gate"] || {};
+  const src = readFileSync(new URL("./ci-tree-gate.js", import.meta.url), "utf8");
+  const budgetMs = Number(/TREE_GATE_BUDGET_MS \|\| ([\d_]+)\)/.exec(src)?.[1]?.replace(/_/g, ""));
+  const callMs = Number(/TREE_GATE_CALL_TIMEOUT_MS \|\| ([\d_]+)\)/.exec(src)?.[1]?.replace(/_/g, ""));
+  ok(budgetMs > 0 && callMs > 0, `the gate's read budget (${budgetMs} ms) and call bound (${callMs} ms) are read from ci-tree-gate.js`);
+  const CHECKOUT_WORST_S = 3 * 133 + 2 * 20 + 71; // three unreachable attempts' connect timeouts, two waits, one slow fetch
+  const SETUP_S = 60;
+  const gateWorstS = budgetMs / 1000 + 2 * callMs / 1000;
+  const limitS = Number(gate["timeout-minutes"]) * 60;
+  ok(limitS >= CHECKOUT_WORST_S + SETUP_S + gateWorstS, `the tree-gate job's limit (${limitS} s) covers the checkout's worst (${CHECKOUT_WORST_S} s), setup (${SETUP_S} s) and the gate's own bound (${gateWorstS} s)`);
+  ok(limitS <= 20 * 60, `the tree-gate job's limit stays a bound, not a wait (${limitS} s)`);
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 
 
