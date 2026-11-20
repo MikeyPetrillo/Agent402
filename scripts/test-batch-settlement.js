@@ -130,7 +130,7 @@ const PAY_TO = "0x000000000000000000000000000000000000dEaD";
   const { settlementKindOf } = await import("../src/gateway-wire.js");
   ok(settlementKindOf("x402-batch") === "offchain" && settlementKindOf("x402") === "onchain", "and that wire reads settled off chain (claimed on chain later, in a batch)");
   const hang = server.slice(server.indexOf("function recordHangupDebt("), server.indexOf("function recordHangupDebt(") + 6000);
-  ok(/isBatchSettlementRequest\(req\)[\s\S]*creditHungUpBatchCall\(req, channelReceipt\)/.test(hang), "a hang-up after a channel charge credits the channel back before any owed row");
+  ok(/isBatchSettlementRequest\(req\)[\s\S]*hungUpBatchCall\(req, channelReceipt, \{[\s\S]*forgiven: hangupForgiven\(req\)/.test(hang), "a hang-up after a channel charge is credited back only on the request's granted forgiveness ticket (scripts/test-batch-hangup.js)");
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +270,8 @@ const channelOf = (r, id) => r.stores.storage.get(id);
   ok(await creditBatchChannel(r.stores.storage, id, "1") === "no-channel", "nothing to credit on a closed channel");
 }
 
-// A hang-up after the charge committed is credited back to the channel.
+// The credit itself, from a hung-up call's settle answer (whether a hang-up
+// may take it is scripts/test-batch-hangup.js).
 {
   const stores = await makeBatchStores("memory");
   setBatchOffer({ stores });

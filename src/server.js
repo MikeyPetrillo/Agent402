@@ -104,7 +104,7 @@ import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
 import { backfillBrokenPackRefunds, backfillNamedSales } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
-import { batchSettlementStatus, isBatchSettlementRequest, creditHungUpBatchCall, batchOfferPublic, BATCH_WIRE } from "./batch-settlement.js";
+import { batchSettlementStatus, isBatchSettlementRequest, hungUpBatchCall, batchOfferPublic, BATCH_WIRE } from "./batch-settlement.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
 import { configureHowToCall, howToCall402Field, howToCallField } from "./how-to-call.js";
 import { paymentGuide, quoteInputs, usdText } from "./payment-guide.js";
@@ -325,26 +325,36 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
       priceUsd: settledPriceUsd(def, req, res),
     };
   } else if (settleReceipt && isBatchSettlementRequest(req)) {
-    // A channel charge (x402 batch-settlement) moved nothing on chain: it is
-    // given back to the channel, and the buyer's next voucher is signed on
-    // the lower total (the corrective 402 carries it). Only a credit the
-    // channel cannot take (already claimed on chain) is booked as owed, under
-    // evidence unique to this request, and repaid by hand.
+    // A channel charge (x402 batch-settlement) moved nothing on chain. It is
+    // given back to the channel (the buyer's next voucher is signed on the
+    // lower total; the corrective 402 carries it) only on a GRANTED
+    // forgiveness ticket, a close before the first byte and a route whose
+    // effect does not outlive the answer: the close landed inside the settle
+    // call, where the forgiveness rule had already decided not to charge.
+    // Without one (the budget is spent, a lasting effect, no ticket) the
+    // charge stays on the buyer and is booked as owed below, as on every
+    // other rail. A credit the channel cannot take (already claimed on
+    // chain) is booked as owed by hand. Once per request
+    // (src/batch-settlement.js hungUpBatchCall).
     const channelReceipt = decodeSettleReceipt(settleReceipt);
     if (!receiptProvesCharge(channelReceipt)) return null;
-    const owedRow = {
-      network: networkFromPaymentResponse(settleReceipt),
-      payer: payerFromPaymentResponse(settleReceipt),
-      tx: `batch-hangup:${randomUUID()}`,
-      wire: BATCH_WIRE,
-      priceUsd: paidUsdOf(def, req, res, channelReceipt?.network),
-    };
-    void creditHungUpBatchCall(req, channelReceipt).then((how) => {
-      if (how === "credited") return;
-      console.warn(`[batch] hang-up on ${def.slug}: channel credit not taken (${how}); booked as owed`);
-      try { recordRefundOwed({ slug: def.slug, ...owedRow, httpStatus: 499, synthetic, hangupReason: "channel credit refused" }); } catch { /* logged above */ }
-    }).catch(() => {});
-    return { credited: true };
+    const hung = hungUpBatchCall(req, channelReceipt, {
+      forgiven: hangupForgiven(req),
+      lastingEffect: defHasLastingEffect(def),
+      reason,
+      row: {
+        network: networkFromPaymentResponse(settleReceipt),
+        payer: payerFromPaymentResponse(settleReceipt),
+        priceUsd: paidUsdOf(def, req, res, channelReceipt?.network),
+      },
+      onCredited: () => { console.warn(`[batch] hang-up on ${def.slug}: the charge is given back to the channel (the close landed inside the settle call)`); },
+      onCreditRefused: (owedRow, how) => {
+        console.warn(`[batch] hang-up on ${def.slug}: channel credit not taken (${how}); booked as owed`);
+        try { recordRefundOwed({ slug: def.slug, ...owedRow, httpStatus: 499, synthetic, hangupReason: "channel credit refused" }); } catch { /* logged above */ }
+      },
+    });
+    if (hung.credited) return hung;
+    row = hung.row;
   } else if (settleReceipt) {
     if (!receiptProvesCharge(decodeSettleReceipt(settleReceipt))) return null;
     row = {

@@ -23,6 +23,7 @@
 //   4. no price floor and no settlement premium (the same rule as upto);
 //   5. a durable shared store: Redis, or X402_BATCH_SETTLEMENT_STORE=memory
 //      for a single process (tests, a one-container self-host).
+import { randomUUID } from "node:crypto";
 import { BatchSettlementEvmScheme, InMemoryChannelStorage } from "@x402/evm/batch-settlement/server";
 import { RedisChannelStorage } from "@x402/evm/batch-settlement/server/redis-storage";
 import { paymentHeaderOf } from "./payer.js";
@@ -280,17 +281,57 @@ export async function creditBatchChannel(storage, channelId, amountAtomic) {
 }
 
 /**
- * A buyer who left after its call's charge was committed (no forgiveness
- * ticket, or a close during the settle itself): the charge goes back to the
- * channel instead of a refund on chain. `receipt` is the decoded settle
- * answer (its `extra.chargedAmount` is what this call added). Returns
- * "credited", or why not (the caller then books it as owed by hand).
+ * Give a hung-up call's committed charge back to its channel. `receipt` is
+ * the decoded settle answer (its `extra.chargedAmount` is what this call
+ * added). Returns "credited", or why not. Reached from a hang-up only
+ * through hungUpBatchCall, which decides whether the charge may be given back.
  */
 export async function creditHungUpBatchCall(req, receipt) {
   const id = batchChannelIdOf(req);
   const amount = receipt?.extra?.chargedAmount;
   if (!id || typeof amount !== "string" || !/^\d+$/.test(amount)) return "unreadable";
   try { return await creditBatchChannel(offer.stores?.storage, id, amount); } catch { return "store-failed"; }
+}
+
+// The decision for each hung-up request, kept off the request object.
+const hungUpDecided = new WeakMap();
+
+/**
+ * A buyer who left after its channel call's charge was committed. The charge
+ * goes back to the channel only where every other rail would not have taken
+ * it: the request holds a GRANTED forgiveness ticket (src/hangup-forgiveness.js;
+ * with one, the settle hook withholds the charge, so a committed charge means
+ * the close landed inside the settle call), the buyer left before the first
+ * byte (`reason` null: not a connector that stopped waiting for an answer
+ * written in full and stored), and the route's effect does not outlive the
+ * answer. Anything else (a ticket denied on a budget or for a lasting
+ * effect, or none at all) keeps the charge on the buyer: the answer is
+ * `{ row }`, the caller books it as owed exactly as every other rail books an
+ * undelivered charge, and the channel is not touched. A credit that lands
+ * calls `onCredited()`; one the channel cannot take (already claimed on
+ * chain) is handed to `onCreditRefused(row, how)` to be booked as owed. One
+ * decision per request: a second call answers the first one again, under
+ * the same evidence, and credits nothing. `row` is the owed row's fields;
+ * its evidence is unique to the request.
+ */
+export function hungUpBatchCall(req, receipt, { forgiven = false, lastingEffect = false, reason = null, row = {}, onCredited = () => {}, onCreditRefused = () => {} } = {}) {
+  const keyed = req !== null && typeof req === "object";
+  const prior = keyed ? hungUpDecided.get(req) : undefined;
+  if (prior) return prior;
+  const owed = { ...row, tx: `batch-hangup:${randomUUID()}`, wire: BATCH_WIRE };
+  const credit = forgiven === true && lastingEffect !== true && !reason;
+  let answer;
+  if (credit) {
+    const credited = creditHungUpBatchCall(req, receipt).catch(() => "store-failed").then((how) => {
+      try { if (how === "credited") onCredited(); else onCreditRefused(owed, how); } catch { /* booking only */ }
+      return how;
+    });
+    answer = { credited: true, outcome: credited };
+  } else {
+    answer = { row: owed };
+  }
+  if (keyed) hungUpDecided.set(req, answer);
+  return answer;
 }
 
 /** The public description of the channel offer while it is on (null off):

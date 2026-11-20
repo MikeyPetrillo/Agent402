@@ -13,5 +13,7 @@ t node scripts/test-upto-gas-sponsoring.js
 t node scripts/test-evm-preflight-inputs.js
 # x402 payment channels (batch-settlement) and the media work meter: dark by default, draw-down, refusals, claim and refund
 t node scripts/test-batch-settlement.js
+# x402 payment channels: a hung-up channel call is credited back only on a granted forgiveness ticket; past the budget, on a lasting effect or with no ticket it keeps its charge and is booked as owed, once per request (boots paid servers - offline)
+t node scripts/test-batch-hangup.js
 # batch-settlement readiness: the /supported reader against a stub (its live probe is operator-run)
 t node scripts/test-batch-settle-harness.js
