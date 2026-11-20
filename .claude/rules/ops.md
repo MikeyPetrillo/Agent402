@@ -219,9 +219,14 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   before the first read of the top payers, `off` in FREE_MODE; publicly the word only, the
   operator view names the short payer, rank and refusal times. The status Worker and
   `heartbeat.yml` page once on `alert` ("onchainSqlBusy: a top paying buyer was told the query
-  service is busy", fixed text) and close on `ok`. An alarm only: nothing is refused for it. The test
+  service is busy", fixed text) and close on `ok`. An alarm only: nothing is refused for it. The
+  server's own reads through the handler (the economy snapshot, `ownSqlQuery` in
+  `src/tools/cdp-kit.js`) are paced like any query but take no place in the in-flight cap and are
+  never refused by it, so a buyer's query is never refused for one; a new own caller uses
+  `ownSqlQuery`, never the tool's handler. The test
   preload `scripts/lib/cdp-sql-stub-preload.js` holds a `hold_<id>` query open until the file
-  `<id>` exists in `CDP_SQL_STUB_HOLD_DIR` (test only).
+  `<id>` exists in `CDP_SQL_STUB_HOLD_DIR`, and a query whose text holds `CDP_SQL_STUB_HOLD_TEXT`
+  until the file `own` does (test only).
 - **Per-call count documents:** `src/sql-query-stats.js` (onchain-sql queries per call) and
   `src/x-search-stats.js` (x-search-recent authors and posts per call) keep per-UTC-day
   histograms as state documents (`src/json-document.js`), folded into the document on a timer
