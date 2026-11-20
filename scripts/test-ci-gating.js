@@ -571,6 +571,19 @@ for (const lane of ["test-sweeps", "test-sweeps2"]) {
   ok(Boolean(tail) && steps.indexOf(tail) > steps.indexOf(boot), `${lane}: the log tail step comes after the boot`);
 }
 
+// THE REGISTRY'S SUPERSEDED VERSIONS. The publish step deprecates the version
+// it superseded AND every older version of our name still active (26 were on
+// 2026-11-20), read from every page of the search, our name only, capped and
+// never failing the job.
+{
+  const st = (jobs.publish?.steps || []).find((x) => /mcp-publisher publish/.test(String(x.run || "")));
+  const run = String(st?.run || "");
+  ok(/mcp-find-latest-version\.js --superseded --name "\$SERVER_NAME" --except "\$VER"/.test(run), "the registry publish lists every superseded active version of our name (--superseded --name --except)");
+  ok(/mcp-find-latest-version\.js --name "\$SERVER_NAME"/.test(run), "the latest version is read from our own entries, never another publisher's");
+  ok(/nextCursor/.test(run) && /for page in 1 2 3 4 5/.test(run), "the registry walk reads every page (bounded)");
+  ok(/head -60/.test(run) && /status --status deprecated/.test(run) && /::warning::failed to deprecate/.test(run) && run.indexOf("status --status deprecated") > run.indexOf("mcp-publisher publish"), "the deprecations run after the publish, at most 60 a run, each failure a warning");
+}
+
 // THE TREE GATE'S BOUND. Run 44012918430 (2026-11-17): the gate job's checkout
 // could not reach github.com for 133 s, waited 20 s, fetched in 71 s (3 min 46 s
 // in all), and the gate itself then had 73 s of the job's 5 minutes; it was

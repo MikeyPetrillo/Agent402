@@ -4151,17 +4151,31 @@ jobs:
           # "mcpName" to the server.json name and confirming the npm package is
           # published — so this runs after the npm publish above.
           VER=$(node -p "require('./mcp/package.json').version")
-          SEARCH_RESULT=$(curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402&limit=100")
-          if echo "$SEARCH_RESULT" | grep -q "\"version\":\"$VER\""; then
-            echo "io.github.mikeypetrillo/agent402@$VER already in the MCP Registry — nothing to do"; exit 0
+          SERVER_NAME=io.github.MikeyPetrillo/agent402
+          # Every page of the registry's entries for our name, one compact JSON
+          # document per line (at most five pages; a failed read ends the walk).
+          : > registry-pages.jsonl
+          cursor=""
+          for page in 1 2 3 4 5; do
+            q="search=$SERVER_NAME&limit=100"
+            [ -z "$cursor" ] || q="$q&cursor=$(printf '%s' "$cursor" | jq -sRr @uri)"
+            body=$(curl -s "https://registry.modelcontextprotocol.io/v0/servers?$q") || break
+            printf '%s' "$body" | jq -c . >> registry-pages.jsonl 2>/dev/null || break
+            cursor=$(printf '%s' "$body" | jq -r '.metadata.nextCursor // empty' 2>/dev/null || true)
+            [ -n "$cursor" ] || break
+          done
+          if node -e 'const [n, v] = process.argv.slice(1); const rows = require("fs").readFileSync("registry-pages.jsonl", "utf8").split("\n").filter(Boolean).flatMap((l) => { try { return JSON.parse(l).servers || []; } catch { return []; } }); process.exit(rows.some((r) => r?.server?.name === n && r?.server?.version === v) ? 0 : 1)' "$SERVER_NAME" "$VER"; then
+            echo "$SERVER_NAME@$VER already in the MCP Registry — nothing to do"; exit 0
           fi
           # Capture whichever version is isLatest RIGHT NOW - it's about to
-          # become stale the moment the new publish below lands. Deprecation
-          # tooling gap found 2026-08-16: nothing ever marked a superseded
-          # version deprecated, so 24 of 25 published versions were still
-          # "active" in the registry. Best-effort: a lookup failure here
-          # leaves PREV_LATEST empty and the deprecate step below just skips.
-          PREV_LATEST=$(echo "$SEARCH_RESULT" | node scripts/mcp-find-latest-version.js || true)
+          # become stale the moment the new publish below lands - and every
+          # older version still "active" (deprecation tooling gap found
+          # 2026-08-16: 24 of 25 published versions were still active, and
+          # 26 still were on 2026-11-20). Our name only: a search also returns
+          # other publishers' similar names. Best-effort: a lookup failure
+          # leaves both empty and the deprecations below just skip.
+          PREV_LATEST=$(node scripts/mcp-find-latest-version.js --name "$SERVER_NAME" < registry-pages.jsonl || true)
+          SUPERSEDED=$(node scripts/mcp-find-latest-version.js --superseded --name "$SERVER_NAME" --except "$VER" < registry-pages.jsonl || true)
           asset="mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz"
           if [ -n "${MCP_PUBLISHER_VERSION:-}" ]; then base="https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION"; else base="https://github.com/modelcontextprotocol/registry/releases/latest/download"; fi
           # Download to disk and fail fast (no curl|tar of unverified bytes).
@@ -4217,16 +4231,21 @@ jobs:
             echo "npm has not served $VER yet (attempt $attempt) - waiting 20s"; sleep 20
           done
           echo "published io.github.mikeypetrillo/agent402@$VER → https://registry.modelcontextprotocol.io"
-          # Deprecate the version this publish just superseded. Only ever
-          # touches the ONE immediately-previous version - never a bulk
-          # rewrite of history - and never fails the job: a registry hiccup
-          # here is a missed housekeeping step, not a publish failure.
-          if [ -n "$PREV_LATEST" ] && [ "$PREV_LATEST" != "$VER" ]; then
-            ../mcp-publisher status --status deprecated --message "Superseded by $VER" \
-              io.github.MikeyPetrillo/agent402 "$PREV_LATEST" \
-              && echo "deprecated superseded version $PREV_LATEST" \
-              || echo "::warning::failed to deprecate superseded version $PREV_LATEST (non-fatal)"
-          fi
+          # Deprecate every version this publish leaves behind: the one it just
+          # superseded and every older one still active, so the registry lists
+          # one current version. Status only (never a rewrite of an entry), at
+          # most 60 a run, and never fails the job: a registry hiccup here is a
+          # missed housekeeping step, not a publish failure.
+          deprecated=0
+          for old in $(printf '%s\n%s\n' "$PREV_LATEST" "$SUPERSEDED" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | sort -u -V | head -60); do
+            [ "$old" != "$VER" ] || continue
+            if ../mcp-publisher status --status deprecated --message "Superseded by $VER" "$SERVER_NAME" "$old"; then
+              deprecated=$((deprecated + 1))
+            else
+              echo "::warning::failed to deprecate superseded version $old (non-fatal)"
+            fi
+          done
+          echo "deprecated $deprecated superseded version(s)"
 
       # ClawHub is OpenClaw's discovery surface (`openclaw plugins install
       # clawhub:agent402-openclaw`); their docs keep no static third-party
