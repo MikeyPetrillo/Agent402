@@ -8,6 +8,13 @@
 //     any form (no count, no band): a rate needs the minimum sample,
 //     reads only outside lanes inside 24 hours, rounds down, lies in [0, 1];
 //     latency rounds up; volume is a band, never a count;
+//   - whether a failed call was charged depends on the rail (a Tempo push
+//     transfer is final before the call): no error code's meaning says it,
+//     the contract says it once, rail by rail, with the refund terms, and so
+//     does the page;
+//   - the compute family is our own computation only: a proof-of-work tool
+//     that serves a committed outside dataset (country-info, ODbL) or a
+//     source's data (an attribution) is not in it;
 //   - on a FREE_MODE boot: every listed price is /api/pricing's own, no
 //     listed tool is model-backed or market data, a family's rates move with
 //     real calls, a tool error carries its errorCode, the page renders.
@@ -15,6 +22,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { bootServer } from "./lib/boot-server.js";
 import { ERROR_CODES, stableErrorCode, errorCodeField } from "../src/stable-error-code.js";
+import { COMMITTED_DATASET_SLUGS } from "../src/wholesale.js";
 import { reliabilityOf, toolRow, wholesaleIndex, wholesaleFamily, WHOLESALE_FAMILIES, WHOLESALE_MIN_SAMPLE, WHOLESALE_WINDOW_HOURS, STATUS_MEASURED, STATUS_THIN } from "../src/wholesale.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { toolReliabilityEnabled, TOOL_RELIABILITY_PATH } from "../src/tool-reliability.js";
@@ -23,6 +31,9 @@ import { wholesalePage } from "../src/wholesale-page.js";
 import { reliabilityReport } from "../src/discovery.js";
 import { preValidateInput } from "../src/handler-input.js";
 import { stripScripts } from "./lib/html-text.js";
+import { failedCallFootnote, TEMPO_PUSH_EXCEPTION } from "../src/settlement-footnote.js";
+import { REFUND_TERMS_PATH } from "../src/refund-terms-path.js";
+import { ATTRIBUTION_TAILS } from "../src/data-attribution.js";
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -31,6 +42,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { faile
 const V1_CODES = { 400: "invalid_input", 402: "payment_required", 404: "not_found", 409: "conflict", 410: "retired", 413: "input_too_large", 415: "unsupported_media_type", 422: "input_not_resolvable", 429: "rate_limited", 499: "client_closed", 500: "internal_error", 502: "upstream_error", 503: "unavailable", 504: "timeout" };
 for (const [s, c] of Object.entries(V1_CODES)) ok(stableErrorCode(Number(s)) === c && ERROR_CODES.some((e) => e.status === Number(s) && e.code === c), `status ${s} reads ${c}`);
 ok(new Set(ERROR_CODES.map((e) => e.code)).size === ERROR_CODES.length && ERROR_CODES.every((e) => /^[a-z_]+$/.test(e.code) && e.meaning && /^[a-z-]+$/.test(e.retry)), "codes are unique snake_case words, each with a meaning and a retry verb");
+ok(ERROR_CODES.every((e) => !/\bcharg(?:e|ed|es|ing)\b/i.test(e.meaning)), `no code's meaning says whether the call was charged, which depends on the rail (${ERROR_CODES.filter((e) => /\bcharg/i.test(e.meaning)).map((e) => e.status).join(", ") || "none"})`);
 ok(stableErrorCode(418) === "invalid_input" && stableErrorCode(507) === "internal_error" && stableErrorCode(200) === null && stableErrorCode("x") === null, "an unlisted status reads its class; under 400 reads none");
 ok(JSON.stringify(errorCodeField(200)) === "{}" && errorCodeField(504).errorCode === "timeout", "the field spreads to nothing under 400");
 {
@@ -99,6 +111,25 @@ ok(noVolume(fam).length === 0 && noVolume(idx).length === 0 && !JSON.stringify(f
 const off = wholesaleFamily("sec-filings", { ...ctx, outcomes: { ok: false, reason: "not-configured" } });
 ok(off.reliabilityAvailable === false && off.reliabilityReason === "not-configured" && off.tools.every((t) => t.reliability.status === STATUS_THIN), "outcomes that cannot be read: every row not enough data, with the reason");
 ok(wholesaleFamily("compute", ctx).tools.map((t) => t.slug).join(",") === "hash", "compute is the proof-of-work set");
+{
+  // A proof-of-work tool that serves a committed outside dataset, or carries
+  // a source's attribution, is not our own computation.
+  const cat = { ...fakeCatalog, "GET /api/country-info": { slug: "country-info", name: "Country info", price: "$0.001" }, "GET /api/fx": { slug: "fx-like", name: "F", price: "$0.001", attribution: "ecb" } };
+  const c2 = { ...ctx, catalog: cat, powSlugs: new Set(["hash", "country-info", "fx-like"]) };
+  ok(wholesaleFamily("compute", c2).tools.map((t) => t.slug).join(",") === "hash" && wholesaleIndex(c2).families.find((f) => f.id === "compute").tools === 1, `the compute family leaves out a dataset tool and an attributed one (${wholesaleFamily("compute", c2).tools.map((t) => t.slug).join(",")})`);
+  ok(wholesalePage("https://x.test", cat, c2.powSlugs).includes(">1</td>"), "the page counts the same compute tools as the JSON");
+}
+{
+  // Charged or not on a failure depends on the rail: said once, rail by rail.
+  const charging = idx.errorCodes.charging || "";
+  ok(idx.errorCodes.refundTerms === `https://x.test${REFUND_TERMS_PATH}`, `the error codes link the refund terms (${idx.errorCodes.refundTerms})`);
+  ok(charging === failedCallFootnote({ rails: ["x402", "MPP", "a prepaid credits key"], tempoPush: true }) && charging.includes(TEMPO_PUSH_EXCEPTION), "the contract says which rails a failed call is not charged on, with the Tempo push exception");
+  ok(wholesaleIndex({ ...ctx, tempoPush: false }).errorCodes.charging === failedCallFootnote({ rails: ["x402", "MPP", "a prepaid credits key"] }), "with no Tempo push offered the exception is left out");
+  ok(JSON.stringify(wholesaleFamily("sec-filings", ctx).errorCodes) === JSON.stringify(idx.errorCodes), "a family answer carries the same error-code contract");
+  const page = stripScripts(wholesalePage("https://x.test"), "");
+  ok(page.includes(failedCallFootnote({ rails: ["x402", "MPP", "a prepaid credits key"], tempoPush: true })) && !/never charged/i.test(page) && page.includes(REFUND_TERMS_PATH), "the page says it the same way, names the refund terms, and never says an error answer is never charged");
+  ok(!stripScripts(wholesalePage("https://x.test", {}, new Set(), { tempoPush: false }), "").includes(TEMPO_PUSH_EXCEPTION), "the page leaves out the exception where Tempo push is not offered");
+}
 ok(wholesaleFamily("nope", ctx) === null, "an unknown family reads null");
 ok(WHOLESALE_FAMILIES.every((f) => ["public-domain", "cc-by-4.0", "own-computation"].includes(f.redistribution)), "every family's basis is public domain, CC BY 4.0 or our own computation");
 
@@ -141,7 +172,7 @@ try {
   // Twenty-five real calls to one compute tool BEFORE its family is first
   // read (a family answer is kept 60 s), then the read must show them.
   const openapi = await (await fetch(`${U}/openapi.json`)).json();
-  const probe = [...FREE_TIER_SLUGS].map((s) => bySlug.get(s)).find((e) => e && e.method === "GET" && (openapi.paths[e.path]?.get?.parameters || []).some((p) => p.example !== undefined));
+  const probe = [...FREE_TIER_SLUGS].filter((s) => !COMMITTED_DATASET_SLUGS.includes(s)).map((s) => bySlug.get(s)).find((e) => e && e.method === "GET" && (openapi.paths[e.path]?.get?.parameters || []).some((p) => p.example !== undefined));
   const params = (openapi.paths[probe.path].get.parameters || []).filter((p) => p.in === "query" && p.example !== undefined).map((p) => `${p.name}=${encodeURIComponent(p.example)}`).join("&");
   let good = 0;
   for (let i = 0; i < 25; i++) { const res = await fetch(`${U}${probe.path}?${params}`); if (res.status < 400) good++; await res.arrayBuffer(); }
@@ -166,6 +197,13 @@ try {
   ok(!all.some((t) => t.slug === "token-diligence" || t.slug.startsWith("crypto-") || t.slug.startsWith("coin-") || t.slug.startsWith("stock-")), "the CoinGecko-backed and stock tools are not offered");
   ok(all.some((t) => t.slug === "weather-risk-brief" && t.price.perRequest) && all.some((t) => t.slug === "filings-brief" && t.price.perRequest), "the bundle products are listed with their per-request range");
   ok(all.every((t) => t.reliability.successRate === null || (t.reliability.successRate >= 0 && t.reliability.successRate <= 1)), "every rate is null or in [0, 1]");
+  {
+    // The compute family is ours: no tool whose description names an outside
+    // dataset or its license, or ends with a source's attribution sentence.
+    const DATASET = /\bODbL\b|Open Database License|\bCC[ -]BY\b|world-countries/i;
+    const borrowed = all.filter((t) => t.family === "compute" && (DATASET.test(bySlug.get(t.slug)?.description || "") || ATTRIBUTION_TAILS.some((x) => (bySlug.get(t.slug)?.description || "").includes(x))));
+    ok(borrowed.length === 0 && !all.some((t) => t.family === "compute" && t.slug === "country-info") && bySlug.has("country-info"), `no compute-family tool serves an outside dataset; country-info (ODbL) is served but not listed here (${borrowed.map((t) => t.slug).join(", ") || "none"})`);
+  }
   const err = await fetch(`${U}/api/edgar-filings`);
   const ej = await err.json();
   ok(err.status === 400 && ej.errorCode === "invalid_input" && typeof ej.error === "string", "a tool error answer carries its errorCode beside the message");

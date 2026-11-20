@@ -8,7 +8,15 @@
 // listed: public-domain government data (SEC EDGAR, the US Treasury, the
 // National Weather Service), CC BY 4.0 weather data with its credit, and our
 // own computation. Licensed market data, search results and model output are
-// not offered here.
+// not offered here, and neither is a proof-of-work tool that serves a
+// committed outside dataset under its own license (COMMITTED_DATASET_SLUGS)
+// or carries a source's attribution: the compute family's basis is our own
+// computation, with no credit line to keep.
+//
+// Whether a failed call was charged depends on the rail (a Tempo push
+// transfer is final before the call runs), so the error codes carry no such
+// claim; the contract states it once, rail by rail (failedCallFootnote), with
+// the refund terms beside it.
 //
 // Reliability agrees with GET /api/reliability/tools: the same tool-call
 // outcomes (the server hands in that table's cached read), the same window
@@ -19,6 +27,8 @@
 import { ERROR_CODES } from "./stable-error-code.js";
 import { toolReliabilityEnabled, TOOL_RELIABILITY_PATH } from "./tool-reliability.js";
 import { OPEN_METEO_ATTRIBUTION, US_TREASURY_ATTRIBUTION } from "./data-attribution.js";
+import { failedCallFootnote } from "./settlement-footnote.js";
+import { REFUND_TERMS_PATH } from "./refund-terms-path.js";
 
 export const WHOLESALE_VERSION = "v1";
 export const WHOLESALE_MIN_SAMPLE = 20;
@@ -26,13 +36,21 @@ export const WHOLESALE_WINDOW_HOURS = 168;
 export const STATUS_MEASURED = "measured";
 export const STATUS_THIN = "not enough data";
 
+/** Proof-of-work tools that serve a committed outside dataset under that
+ *  dataset's own license, so their answers are not our own computation:
+ *  country-info serves world-countries (ODbL 1.0, src/data/LICENSE.md). */
+export const COMMITTED_DATASET_SLUGS = Object.freeze(["country-info"]);
+/** The rails a failed wholesale call is not charged on (the Tempo push
+ *  exception is added where that credential is offered). */
+export const WHOLESALE_NOT_CHARGED_RAILS = Object.freeze(["x402", "MPP", "a prepaid credits key"]);
+
 /** Families: id, title, source, redistribution basis, the credit a reseller
  *  keeps with every answer, and the slugs (a function of the server's facts). */
 export const WHOLESALE_FAMILIES = Object.freeze([
   {
     id: "compute", title: "Computation tools", source: "our own code; no outside data source",
     redistribution: "own-computation", credit: null,
-    slugs: ({ powSlugs }) => [...powSlugs],
+    slugs: ({ powSlugs }) => [...powSlugs].filter((s) => !COMMITTED_DATASET_SLUGS.includes(s)),
   },
   {
     id: "sec-filings", title: "SEC filings and company financials", source: "SEC EDGAR (data.sec.gov, efts.sec.gov)",
@@ -104,18 +122,26 @@ export function toolRow(key, def, { baseUrl, outcome, available }) {
   };
 }
 
-function familyTools(family, ctx) {
+/** A family's tools in the catalog, as [route key, def] sorted by slug: never
+ *  a model-backed one, and in the own-computation family never one that
+ *  carries a source's attribution. The page counts the same list. */
+export function familyTools(family, ctx) {
   const wanted = new Set(family.slugs(ctx));
-  return Object.entries(ctx.catalog)
-    .filter(([, d]) => d && wanted.has(d.slug) && !d.modelBacked)
+  return Object.entries(ctx.catalog || {})
+    .filter(([, d]) => d && wanted.has(d.slug) && !d.modelBacked && !(family.redistribution === "own-computation" && d.attribution))
     .sort(([, a], [, b]) => a.slug.localeCompare(b.slug));
 }
 
-const COMMON = (baseUrl) => ({
+/** The one sentence on what a failed call costs, rail by rail. `tempoPush`:
+ *  whether a Tempo push credential is offered (its transfer is final before
+ *  the call, so a failure on it is recorded as a refund owed). */
+export const wholesaleChargingSentence = (tempoPush = true) => failedCallFootnote({ rails: [...WHOLESALE_NOT_CHARGED_RAILS], tempoPush: tempoPush !== false });
+
+const COMMON = (baseUrl, tempoPush = true) => ({
   version: WHOLESALE_VERSION,
   stability: "Within v1, fields are only added, never renamed, retyped or removed. A breaking change ships as v2 beside v1.",
   pricing: "Every price here is the public route's own price, the same for every buyer (a payment network's premium, where one applies, applies here as it does there); there is no wholesale discount. Pay per call as on the public route.",
-  errorCodes: { field: "errorCode", note: "every tool error answer carries errorCode beside the message; branch on the code, not the text", codes: ERROR_CODES },
+  errorCodes: { field: "errorCode", note: "every tool error answer carries errorCode beside the message; branch on the code, not the text", codes: ERROR_CODES, charging: wholesaleChargingSentence(tempoPush), refundTerms: `${baseUrl}${REFUND_TERMS_PATH}` },
   reliabilityDefinition: reliabilityDefinition(),
   docs: `${baseUrl}/wholesale`,
 });
@@ -123,7 +149,7 @@ const COMMON = (baseUrl) => ({
 /** GET /api/wholesale/v1: the families and the contract. */
 export function wholesaleIndex(ctx) {
   return {
-    ...COMMON(ctx.baseUrl),
+    ...COMMON(ctx.baseUrl, ctx.tempoPush),
     asOf: new Date(ctx.now ?? Date.now()).toISOString(),
     families: WHOLESALE_FAMILIES.map((f) => ({
       id: f.id, title: f.title, source: f.source, redistribution: f.redistribution, credit: f.credit,
@@ -142,7 +168,7 @@ export function wholesaleFamily(id, ctx) {
   const bySlug = new Map((available ? ctx.outcomes.rows || [] : []).map((r) => [r.slug, r]));
   const tools = familyTools(f, ctx).map(([key, def]) => toolRow(key, def, { baseUrl: ctx.baseUrl, outcome: bySlug.get(def.slug), available }));
   return {
-    ...COMMON(ctx.baseUrl),
+    ...COMMON(ctx.baseUrl, ctx.tempoPush),
     asOf: new Date(now).toISOString(),
     family: { id: f.id, title: f.title, source: f.source, redistribution: f.redistribution, credit: f.credit },
     reliabilityAvailable: available,

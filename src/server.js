@@ -8058,7 +8058,7 @@ async function wholesaleOutcomes() {
   } catch { return { ok: false, reason: "query-failed" }; }
 }
 async function wholesaleCtx() {
-  return { catalog: CATALOG, powSlugs: POW_SLUGS, baseUrl: BASE_URL, outcomes: await wholesaleOutcomes(), now: Date.now() };
+  return { catalog: CATALOG, powSlugs: POW_SLUGS, baseUrl: BASE_URL, outcomes: await wholesaleOutcomes(), now: Date.now(), tempoPush: !!tempoDiscoveryInfo() };
 }
 async function wholesaleAnswer(key, build) {
   const kept = wholesaleCache.get(key);
@@ -8077,7 +8077,7 @@ app.get("/api/wholesale/v1/:family", async (req, res) => {
   }
   res.set("Cache-Control", "public, max-age=60").json(await wholesaleAnswer(id, (ctx) => wholesaleFamily(id, ctx)));
 });
-app.get("/wholesale", (_req, res) => htmlCache(res, 300, 900).send(wholesalePage(BASE_URL, CATALOG, POW_SLUGS)));
+app.get("/wholesale", (_req, res) => htmlCache(res, 300, 900).send(wholesalePage(BASE_URL, CATALOG, POW_SLUGS, { tempoPush: !!tempoDiscoveryInfo() })));
 app.get("/api/reliability", async (_req, res) =>
   res.json(reliabilityReport({
     baseUrl: BASE_URL, network: NETWORK, wallet: WALLET_ADDRESS,

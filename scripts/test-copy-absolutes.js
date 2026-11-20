@@ -146,14 +146,15 @@ const FORBIDDEN = [
     // "a run where no step succeeds is not charged", "a 4xx or 5xx is never
     // charged", "answers 422 and is not charged", "so nothing is charged",
     // and the bare sentences "Nothing was charged" / "You were not charged" /
-    // "Not charged" with no rail named beside them. A Tempo push transfer is
+    // "Not charged" with no rail named beside them, and the status form "an
+    // answer of 400 or above is never charged". A Tempo push transfer is
     // final before the call and a failure on it is booked as owed, so the
     // claim holds only with its rail (x402, MPP evm, card, credits) or the
     // push exception in the same line or the next. A handler's refusal line
     // (bad(...), throw, res.status(n).json) is not copy: the Tempo push gate
     // restates it for that payer at send (src/push-refusal-body.js), which
     // the block below proves against every such phrasing in the tree.
-    re: /\b(?:failures?|errors?|refusals?|timeouts?|(?:a |an |any |every |each |the )?(?:failed|failing|errored|timed-out|refused|cancell?ed|rejected|unsuccessful)(?:\s+or\s+[\w-]+)?\s+(?:[\w-]+\s+)?(?:call|request|generation|run|job|step|attempt|buy|purchase)s?|(?:a |any |every |the )?(?:call|run|request|job|step|attempt|generation)s? (?:that|which|where) (?:fails?|errors?|times? out|no step succeeds)|a 4xx or 5xx|4xx\S*\s*(?:or|\/)\s*5xx\S*|[45]xx(?:es)?)\b[^.;]{0,40}?\b(?:is|are|was|were|get|gets) (?:not|never) charged\b|\b(?:fails?|failing|errors?|times? out|is refused|refused|cancels? settlement|answers? (?:a |an )?\S*[45]\d\d\S*)[^.;]{0,30}?\b(?:so |and |[-:,] )?(?:nothing|no charge|not|never)\s*(?:is|was|has been)?\s*charged\b|\bnothing is charged\b[^.]{0,30}\b(?:fail|error|[45]xx)|\bno charge is applied\b/i,
+    re: /\b(?:failures?|errors?|refusals?|timeouts?|(?:a |an |any |every |each |the )?(?:failed|failing|errored|timed-out|refused|cancell?ed|rejected|unsuccessful)(?:\s+or\s+[\w-]+)?\s+(?:[\w-]+\s+)?(?:call|request|generation|run|job|step|attempt|buy|purchase)s?|(?:a |any |every |the )?(?:call|run|request|job|step|attempt|generation)s? (?:that|which|where) (?:fails?|errors?|times? out|no step succeeds)|a 4xx or 5xx|4xx\S*\s*(?:or|\/)\s*5xx\S*|[45]xx(?:es)?|(?:an? |any |every |the )?(?:answer|response)s? of [45]\d\d or (?:above|over|higher|more))\b[^.;]{0,40}?\b(?:is|are|was|were|get|gets) (?:not|never) charged\b|\b(?:fails?|failing|errors?|times? out|is refused|refused|cancels? settlement|answers? (?:a |an )?\S*[45]\d\d\S*)[^.;]{0,30}?\b(?:so |and |[-:,] )?(?:nothing|no charge|not|never)\s*(?:is|was|has been)?\s*charged\b|\bnothing is charged\b[^.]{0,30}\b(?:fail|error|[45]xx)|\bno charge is applied\b/i,
     why: "unscoped: a Tempo push transfer is final before the call and a failure on it is recorded as owed; name the rail (x402, MPP evm, card, credits) or the push exception in the same sentence",
     scopedBy: NOT_CHARGED_SCOPE,
     scopeWindow: 0,
@@ -508,6 +509,7 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "A 4xx is never charged, nothing owed."],
                        ["<control>", "Any failed call is not charged (we accept proof-of-work)."],
                        ["<control>", "If the seller does not answer, nothing is charged."],
+                       ["<control>", "Branch on the code; the message text may change. An answer of 400 or above is never charged."],
                        ["<control>", "Flat pricing for ${n} deterministic web tools."],
                        ["<control>", "Every tool is deterministic."],
                        ["<control>", "If it was, the charge is recorded as owed and refunded automatically."],
@@ -527,8 +529,8 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["src/<control>.js", "<p><strong>Twelve chains.</strong> A buyer pays on whichever chain"],
                        ["src/<control>.js", "settling USDC on Base (plus eleven more rails), across all twelve chains"],
                        ["src/<control>.js", "// a comment that says twelve chains is not served copy"]]);
-const CONTROL_EXPECTED = 38;
-ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 29 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
+const CONTROL_EXPECTED = 39;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 30 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);
