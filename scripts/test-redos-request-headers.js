@@ -119,7 +119,12 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
   const walletSignIn = await import("../src/wallet-sign-in.js");
   const walletSvc = walletSignIn.createWalletSignIn({ env: { SIWE_SESSION_SECRET: "r".repeat(40) }, baseUrl: "https://redos.example.test" });
   const sources = await import("../src/funnel-sources.js");
+  // Read only for a gated User-Agent (python-httpx/ by default), which the boots below never send.
+  const offerGate = await import("../src/mpp-offer-gate.js");
   const readers = {
+    "mpp-offer-gate requestOptsIntoMppOffers (x-payment-offers)": (v) => offerGate.requestOptsIntoMppOffers({ headers: { "x-payment-offers": v } }),
+    "mpp-offer-gate mppOffersWithheldFor (x-payment-offers, authorization)": (v) => offerGate.mppOffersWithheldFor({ headers: { "user-agent": "python-httpx/1", "x-payment-offers": v, authorization: v }, rawHeaders: ["Authorization", v] }),
+    "mpp-offer-gate mppOffersWithheldFor (user-agent)": (v) => offerGate.mppOffersWithheldFor({ headers: { "user-agent": v }, rawHeaders: ["User-Agent", v] }),
     // The paid-call funnel's source words (src/funnel-sources.js), read on every paid-route finish.
     "funnel-sources uaFamilyOf": (v) => sources.uaFamilyOf(v),
     "funnel-sources referrerClassOf": (v) => sources.referrerClassOf(v, "agent402.tools"),
