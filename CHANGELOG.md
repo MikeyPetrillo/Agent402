@@ -6,6 +6,35 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-20 (long recordings transcription)
+Tools:
+- A server that sets `TRANSCRIBE_LONG=on` lists and serves
+  `/api/transcribe-long` (model-backed), the long-recording transcription
+  tier: an audio file at a URL, up to 30 minutes and 25 MB, answered like
+  the other tiers (`diarize: true` adds speaker labels and word timestamps).
+  It runs up to 230 seconds on a long file, so it is paid on the EVM `exact`
+  rails only, and `Prefer: respond-async` returns a job link at once.
+  Without the switch the route is not listed or served.
+
+### 2026-11-20 (Solana activity charts across restarts, call budgets across deploys)
+Site:
+- A Solana chain page's 30-day activity chart keeps its history across
+  restarts, and a wallet too busy for one scan continues from where the last
+  scan stopped until its window is covered. When the newest payments could
+  not be read, the panel prints when they were last read in full (`as of
+  <time> UTC`).
+Operations:
+- The Solana activity scans and the Solana leaderboard read transaction
+  history through the public RPC lane first and queue for it. The keyed lane
+  serves those background reads only up to a daily share of its ceiling
+  (`SOLANA_HISTORY_BACKGROUND_KEYED_DAILY_MAX`); past it the views serve
+  what they hold with its age. `SOLANA_ACTIVITY_STORE=off` keeps scan state
+  in memory only.
+- The `upstreamBudgets` word on `/api/gateway-status` is built from the UTC
+  day's call count across deploys and replicas when a shared store is
+  configured. The operator view adds which module made the day's calls to
+  the on-chain data provider and seven days of daily counts.
+
 ### 2026-11-19 (onchain query answers that cannot be read)
 Tools:
 - `onchain-sql` and `onchain-sql-schema` answer 502, uncharged, when the
@@ -117,10 +146,14 @@ Wholesale:
   not enough data. Only sources whose answers may be passed on are listed;
   market data, search results and model output are not offered. Within v1,
   fields are only added.
-- Every tool error answer carries `errorCode` beside the message: one
-  stable code per status (such as `invalid_input`, `upstream_error` and
-  `unavailable`), listed with its meaning in the wholesale contract. A code
-  is only ever added, never renamed or removed.
+- Every error answer a tool's route writes, other than a 402, now carries
+  `errorCode` beside the message (an input refused before payment, a run
+  that ended in an error, a retired route and a paused or switched-off
+  tool): one stable code per status (such as `invalid_input`,
+  `upstream_error` and `unavailable`), listed with its meaning in the
+  wholesale contract. A 402 is the payment-required answer: it follows the
+  x402 and MPP wire formats and carries no `errorCode`. A code is only ever
+  added, never renamed or removed.
 
 ### 2026-11-18 (yield age limit, MCP cut-offs, unknown coin ids)
 Tools:
@@ -234,8 +267,8 @@ Tools:
   GTIN-14 barcode number and returns the expected digit and the 14-digit
   form. It is pure computation and free through proof of work.
 Credits:
-- Holiday data by Nager.Date, which Agent402 sponsors; every tool that
-  serves it carries the credit.
+- Holiday data by Nager.Date, used under a sponsorship held for this
+  service; every tool that serves it carries the credit.
 
 ### 2026-11-18 (site motion and charts)
 Site:

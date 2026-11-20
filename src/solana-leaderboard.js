@@ -66,6 +66,12 @@ const BACKFILL_TX_PER_CYCLE = Number(process.env.SOLANA_LB_BACKFILL_TX_PER_CYCLE
 const BACKFILL_DAYS = Number(process.env.SOLANA_LB_BACKFILL_DAYS) || 7;
 const RETAIN_DAYS = 30;
 const NO_ACCOUNT_RECHECK_MS = Number(process.env.SOLANA_LB_NO_ACCOUNT_RECHECK_MS) || 24 * 60 * 60_000;
+// Transaction reads in flight per payTo. The public history lane is paced
+// (src/solana-history-rpc.js), so more in flight reads no faster there: they
+// only queue for slots, and a long queue leaves no slot inside the wait of
+// the other background readers (the activity scans), which then fall back to
+// the keyed lane. Two keeps the queue about two slots deep.
+const TX_CONCURRENCY = Math.max(1, Math.min(32, Number(process.env.SOLANA_LB_TX_CONCURRENCY) || 2));
 const SIG_PAGE = 1000;
 const STALE_MS = 3 * REFRESH_MS;
 // How often a running scan saves its cursors (0 = after every payTo).
@@ -156,7 +162,7 @@ function mergeHours(into, from) {
  * the fold, so a failure part-way leaves nothing half-counted - the next
  * cycle repeats that batch.
  */
-export async function readPayToIncremental(payTo, st, { rpc, creditFromTx, windowMs = 168 * 3600e3, now = Date.now(), noAccountRecheckMs = NO_ACCOUNT_RECHECK_MS, txConcurrency = 12, budget = { left: BACKFILL_TX_PER_CYCLE }, backfillDays = BACKFILL_DAYS, scanId = null, stuckScans = STUCK_READ_SCANS } = {}) {
+export async function readPayToIncremental(payTo, st, { rpc, creditFromTx, windowMs = 168 * 3600e3, now = Date.now(), noAccountRecheckMs = NO_ACCOUNT_RECHECK_MS, txConcurrency = TX_CONCURRENCY, budget = { left: BACKFILL_TX_PER_CYCLE }, backfillDays = BACKFILL_DAYS, scanId = null, stuckScans = STUCK_READ_SCANS } = {}) {
   let rpcCalls = 0, txReads = 0;
   const call = async (m, p) => { rpcCalls++; return rpc(m, p); };
   const nowSec = Math.floor(now / 1000);
@@ -198,11 +204,17 @@ export async function readPayToIncremental(payTo, st, { rpc, creditFromTx, windo
         const args = [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1 }];
         let tx;
         try { tx = await call("getTransaction", args); }
-        catch {
+        catch (e0) {
+          // The keyed lane's background share is spent and the public lane
+          // did not serve: nothing is wrong with this transaction. The batch
+          // fails without a retry and without a mark against the read, and
+          // the next scan reads it.
+          if (e0?.backgroundBudgetSpent) throw e0;
           // One retry; a second failure fails the batch, unless this read has
           // now failed in `stuckScans` scans: then it is skipped like a null.
           try { tx = await call("getTransaction", args); }
           catch (e) {
+            if (e?.backgroundBudgetSpent) throw e;
             const stuck = (st.stuck ||= {});
             const rec = stuck[s.signature] || { n: 0, scan: null };
             if (scanId == null || rec.scan !== scanId) { rec.n++; rec.scan = scanId; }
@@ -287,7 +299,7 @@ export async function scanSolanaSellers(payTos, { readFn, concurrency = CONCURRE
   const candidates = all.length;
   const list = all.slice(0, maxPayTos);
   const rows = [];
-  let errors = 0, cursor = 0, rpcCalls = 0, txReads = 0;
+  let errors = 0, cursor = 0, rpcCalls = 0, txReads = 0, held = 0;
   const started = now;
   const worker = async () => {
     for (;;) {
@@ -297,7 +309,13 @@ export async function scanSolanaSellers(payTos, { readFn, concurrency = CONCURRE
       try {
         let r;
         try { r = await readFn(payTo); }
-        catch { await new Promise((res) => setTimeout(res, retryPauseMs)); r = await readFn(payTo); }
+        catch (e0) {
+          // A read held for the background share is not retried at once (the
+          // retry would only read the payTo's signatures again): the row is
+          // kept as it was, marked stale, and the next scan reads it.
+          if (e0?.backgroundBudgetSpent) { held++; throw e0; }
+          await new Promise((res) => setTimeout(res, retryPauseMs)); r = await readFn(payTo);
+        }
         rpcCalls += Number(r?.rpcCalls) || 0;
         txReads += Number(r?.read) || 0;
         // `stale` is set EXPLICITLY on every row, including the happy path.
@@ -321,7 +339,7 @@ export async function scanSolanaSellers(payTos, { readFn, concurrency = CONCURRE
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, concurrency) }, worker));
-  return { at: Date.now(), rows, scanned: list.length, candidates, scanCap: maxPayTos, errors, windowHours, durationMs: Date.now() - started, warm: false, rpcCalls, txReads };
+  return { at: Date.now(), rows, scanned: list.length, candidates, scanCap: maxPayTos, errors, heldForBudget: held, windowHours, durationMs: Date.now() - started, warm: false, rpcCalls, txReads };
 }
 
 /** Evidence maps for the router: origin -> credits / payers (max across a seller's payTos). */
@@ -385,6 +403,9 @@ export function getSolanaLeaderboardSnapshot({ self = null, now = Date.now(), wi
     // contract was quiet.
     ...scanCoverage(current.candidates ?? current.scanned, current.scanned, current.scanCap ?? MAX_PAYTOS, "seller payTos"),
     errors: current.errors,
+    // PayTos the last scan could not finish because the keyed lane's
+    // background share was spent: their rows are the previous scan's, marked stale.
+    heldLastScan: current.heldForBudget || 0,
     rpcCallsLastScan: current.rpcCalls || 0,
     txReadsLastScan: current.txReads || 0,
     active: rows.filter((r) => (r.inboundTransfers || 0) > 0).length,

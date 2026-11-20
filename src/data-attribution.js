@@ -27,7 +27,13 @@
 // reanalysis) and, in clause 5.1.3, the disclaimer that neither the European
 // Commission nor ECMWF is responsible for any use of it. Those tools carry a
 // combined key (Open-Meteo's sentence, the Copernicus one, the disclaimer),
-// so the run of sentences stays one tail.
+// so the run of sentences stays one tail. A tool that serves both and
+// GeoNames place data (the weather-risk-brief bundle reads air quality and
+// the archive, and resolves a site named by place) carries
+// "open-meteo-copernicus-geonames": each source named, both Copernicus
+// services in one short sentence, the disclaimer once, so that a listing's
+// shortest cut (300 characters, src/payments.js) keeps the run whole; its
+// answers carry each full credit.
 export const FRED_NOTICE ="This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.";
 // CoinGecko's API terms ask for the credit with a link to its API page,
 // shown next to the data: the description sentence carries the link, and
@@ -46,14 +52,17 @@ export const C3S_ATTRIBUTION = "Contains modified Copernicus Climate Change Serv
 // GeoNames (CC BY 4.0, geonames.org: "give credit to GeoNames"), the place
 // data behind Open-Meteo's geocoding API (open-meteo.com/en/docs/geocoding-api).
 export const GEONAMES_ATTRIBUTION = "Place data from GeoNames (CC BY 4.0).";
-// Nager.Date (holiday lists, src/tools/holiday-source.js): served under the
-// commercial sponsorship its terms require (https://date.nager.at/Legal/TermsOfService);
+// Nager.Date (holiday lists, src/tools/holiday-source.js): served under a
+// sponsorship held for this service, which its terms require for commercial
+// use (https://date.nager.at/Legal/TermsOfService);
 // the credit names the dataset wherever its rows or answers computed from them are served.
 export const NAGER_ATTRIBUTION = "Holiday data by Nager.Date.";
 export const COPERNICUS_DISCLAIMER = "Neither the European Commission nor ECMWF is responsible for any use that may be made of the Copernicus information or data it contains.";
 /** The Copernicus credit an answer carries: its sentence, then the disclaimer. */
 export const CAMS_CREDIT = `${CAMS_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;
 export const C3S_CREDIT = `${C3S_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;
+/** Both Copernicus services in one sentence, for a description whose tool serves both. */
+export const CAMS_C3S_ATTRIBUTION = "Contains modified Copernicus CAMS and C3S information.";
 
 /** Source key (a tool's `attribution` field) -> the sentence its terms require. */
 export const ATTRIBUTIONS = Object.freeze({
@@ -66,6 +75,7 @@ export const ATTRIBUTIONS = Object.freeze({
   "us-treasury": US_TREASURY_ATTRIBUTION,
   "open-meteo-cams": `${OPEN_METEO_ATTRIBUTION} ${CAMS_CREDIT}`,
   "open-meteo-c3s": `${OPEN_METEO_ATTRIBUTION} ${C3S_CREDIT}`,
+  "open-meteo-copernicus-geonames": `${OPEN_METEO_ATTRIBUTION} ${GEONAMES_ATTRIBUTION} ${CAMS_C3S_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`,
   geonames: GEONAMES_ATTRIBUTION,
   nager: NAGER_ATTRIBUTION,
 });

@@ -22,6 +22,8 @@ import {
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { bundleLegAnswer, accessRefusalStatus, upstreamHostsForSlug } from "./lib/upstream-outage.js";
+import { stubGuardResolver } from "./lib/guard-resolver-stub.js";
+import { ATTRIBUTIONS, attributionTailOf, OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, COPERNICUS_DISCLAIMER } from "../src/data-attribution.js";
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -184,6 +186,41 @@ try {
   ok(histArgs.start === "2025-11-18" && histArgs.end === "2025-11-19", "weather: history reads the same dates a year earlier");
   ok(w.pricing.units === 2 && w.pricing.priceUsd === tool("weather-risk-brief").quote({ sites: [{ lat: 1, lon: 2 }, { lat: 3, lon: 4 }] }), "weather: the answer's pricing block is the 402 quote");
   ok(w.portfolio.sitesWithFlag.frost === 2 && w.ranking.length === 2, "weather: the portfolio counts and ranking cover every site");
+  // Credits: the published example's are what the handler returns for the
+  // example input; a site named by place adds the GeoNames credit (its
+  // coordinates and place name are GeoNames data), a lat/lon site does not;
+  // the description's attribution run names every credit an answer can carry.
+  {
+    const wt = tool("weather-risk-brief");
+    const ex = await wt.handler(wt.discovery.input);
+    ok(JSON.stringify(wt.discovery.output.example.credits) === JSON.stringify(ex.credits), `weather: the example's credits are the handler's for the example input (example ${JSON.stringify(wt.discovery.output.example.credits)}, handler ${JSON.stringify(ex.credits)})`);
+    ok([OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT].every((c) => ex.credits.includes(c)) && !ex.credits.includes(GEONAMES_ATTRIBUTION), "weather: sites by coordinates carry the Open-Meteo, CAMS and C3S credits and no GeoNames credit");
+    const keyBefore = process.env.OPEN_METEO_API_KEY;
+    delete process.env.OPEN_METEO_API_KEY;
+    const restoreResolver = stubGuardResolver((host, family) => (/(^|\.)open-meteo\.com$/.test(host) ? (family === 4 ? ["93.184.216.34"] : []) : undefined));
+    const realFetch = globalThis.fetch;
+    const geocoded = [];
+    globalThis.fetch = async (url) => {
+      const u = new URL(String(url));
+      if (u.host !== "geocoding-api.open-meteo.com") throw new TypeError(`unexpected fetch to ${u.host}`);
+      geocoded.push(u.searchParams.get("name"));
+      const r = new Response(JSON.stringify({ results: [{ name: "Springfield", latitude: 39.8, longitude: -89.6, country: "United States", country_code: "US", admin1: "Illinois", timezone: "America/Chicago" }] }), { status: 200, headers: { "content-type": "application/json" } });
+      Object.defineProperty(r, "url", { value: String(url) });
+      return r;
+    };
+    try {
+      const wp = await wt.handler({ sites: [{ name: "Plant", place: "Springfield, IL" }, { lat: 1, lon: 2 }] });
+      ok(geocoded.length === 1 && wp.rows[0].site.place === "Springfield, Illinois, US" && wp.credits.includes(GEONAMES_ATTRIBUTION) && [OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT].every((c) => wp.credits.includes(c)),
+        `weather: a site named by place carries the GeoNames place data and its credit (${JSON.stringify(wp.rows[0].site)}, ${wp.credits.length} credits)`);
+    } finally {
+      globalThis.fetch = realFetch;
+      restoreResolver();
+      if (keyBefore !== undefined) process.env.OPEN_METEO_API_KEY = keyBefore;
+    }
+    const tail = attributionTailOf(wt.description) || "";
+    ok(tail === ATTRIBUTIONS[wt.attribution] && tail.includes(OPEN_METEO_ATTRIBUTION) && tail.includes(GEONAMES_ATTRIBUTION) && /Copernicus\b[^.]*\bCAMS\b/.test(tail) && /\bC3S\b/.test(tail) && tail.includes(COPERNICUS_DISCLAIMER),
+      `weather: the description ends with every credit an answer can carry: Open-Meteo, GeoNames, CAMS and C3S, and the Copernicus disclaimer (${JSON.stringify(tail)})`);
+  }
   // pacing: one read per upstream host per site at a time, so no host holds
   // more than WEATHER_CONCURRENCY of one call's reads, and five reads a site.
   {

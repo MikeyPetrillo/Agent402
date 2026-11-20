@@ -1,8 +1,12 @@
 // The wholesale surface: a stable, versioned JSON read per tool family for a
 // reseller that builds on this catalog. Each tool row carries the same price
 // the public route charges (no wholesale discount: one price for everyone),
-// its source credit, and its reliability: success rate and p50/p95 latency
-// over the last seven days, marked "measured" or "not enough data".
+// its own credit line (toolCredit: the sentence its catalog entry's
+// attribution carries, else its family's line), and its reliability: success
+// rate and p50/p95 latency over the last seven days, marked "measured" or
+// "not enough data". A family's `credit` is a line every tool in it keeps,
+// or null where its tools' sources differ (weather: Open-Meteo, Copernicus,
+// GeoNames and the public-domain National Weather Service).
 //
 // Only families whose sources allow their answers to be passed on are
 // listed: public-domain government data (SEC EDGAR, the US Treasury, the
@@ -11,7 +15,9 @@
 // not offered here, and neither is a proof-of-work tool that serves a
 // committed outside dataset under its own license (COMMITTED_DATASET_SLUGS)
 // or carries a source's attribution: the compute family's basis is our own
-// computation, with no credit line to keep.
+// computation, some of it over public facts (exchange calendars typed in
+// from each exchange's page, sellers' own published listings), with no
+// credit line to keep.
 //
 // Whether a failed call was charged depends on the rail (a Tempo push
 // transfer is final before the call runs), so the error codes carry no such
@@ -24,9 +30,9 @@
 // same status words and the same rounding. No call volume in any form (no
 // count, no band) and no ranking: per-tool volume stays operator-only. The
 // v1 field set only grows (scripts/test-wholesale.js pins it).
-import { ERROR_CODES } from "./stable-error-code.js";
+import { ERROR_CODES, ERROR_CODE_SCOPE, ERROR_CODE_NOT_CARRIED } from "./stable-error-code.js";
 import { toolReliabilityEnabled, TOOL_RELIABILITY_PATH } from "./tool-reliability.js";
-import { OPEN_METEO_ATTRIBUTION, US_TREASURY_ATTRIBUTION } from "./data-attribution.js";
+import { ATTRIBUTIONS, US_TREASURY_ATTRIBUTION, attributionTailOf } from "./data-attribution.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
 import { REFUND_TERMS_PATH } from "./refund-terms-path.js";
 
@@ -44,11 +50,12 @@ export const COMMITTED_DATASET_SLUGS = Object.freeze(["country-info"]);
  *  exception is added where that credential is offered). */
 export const WHOLESALE_NOT_CHARGED_RAILS = Object.freeze(["x402", "MPP", "a prepaid credits key"]);
 
-/** Families: id, title, source, redistribution basis, the credit a reseller
- *  keeps with every answer, and the slugs (a function of the server's facts). */
+/** Families: id, title, source, redistribution basis, the credit line every
+ *  tool in the family keeps (null where the tools' sources differ: each row
+ *  carries its own), and the slugs (a function of the server's facts). */
 export const WHOLESALE_FAMILIES = Object.freeze([
   {
-    id: "compute", title: "Computation tools", source: "our own code; no outside data source",
+    id: "compute", title: "Computation tools", source: "our own code; some tools compute over public facts (published exchange calendars, sellers' own published listings)",
     redistribution: "own-computation", credit: null,
     slugs: ({ powSlugs }) => [...powSlugs].filter((s) => !COMMITTED_DATASET_SLUGS.includes(s)),
   },
@@ -64,7 +71,7 @@ export const WHOLESALE_FAMILIES = Object.freeze([
   },
   {
     id: "weather", title: "Weather forecasts, history, air quality and risk", source: "Open-Meteo (CC BY 4.0) and the National Weather Service",
-    redistribution: "cc-by-4.0", credit: OPEN_METEO_ATTRIBUTION,
+    redistribution: "cc-by-4.0", credit: null,
     slugs: () => ["weather-current", "weather-daily", "weather-hourly", "weather-history", "weather-air-quality", "weather-window", "weather-thresholds", "weather-probability", "place-lookup", "weather-forecast", "weather-alerts", "weather-risk-brief"],
   },
 ]);
@@ -106,8 +113,16 @@ export function reliabilityOf(outcome, available) {
 
 const priceUsd = (p) => { const n = Number(String(p ?? "").replace(/[^0-9.]/g, "")); return Number.isFinite(n) ? n : null; };
 
+/** The credit line a reseller keeps with a tool's answers: the sentence its
+ *  catalog attribution names (the same one its description ends with), else
+ *  the attribution run its description ends with, else its family's line,
+ *  else null (a source that asks for none). */
+export function toolCredit(def, familyCredit = null) {
+  return ATTRIBUTIONS[def?.attribution] || attributionTailOf(String(def?.description || "")) || familyCredit || null;
+}
+
 /** One tool's wholesale row (pure). */
-export function toolRow(key, def, { baseUrl, outcome, available }) {
+export function toolRow(key, def, { baseUrl, outcome, available, familyCredit = null }) {
   const [method, path] = key.split(" ");
   const quoted = def.quoteRange && Number.isFinite(def.quoteRange.minUsd) && Number.isFinite(def.quoteRange.maxUsd);
   return {
@@ -119,6 +134,7 @@ export function toolRow(key, def, { baseUrl, outcome, available }) {
     modelBacked: def.modelBacked === true,
     docs: `${baseUrl}/openapi.json`,
     reliability: reliabilityOf(outcome, available),
+    credit: toolCredit(def, familyCredit),
   };
 }
 
@@ -141,7 +157,7 @@ const COMMON = (baseUrl, tempoPush = true) => ({
   version: WHOLESALE_VERSION,
   stability: "Within v1, fields are only added, never renamed, retyped or removed. A breaking change ships as v2 beside v1.",
   pricing: "Every price here is the public route's own price, the same for every buyer (a payment network's premium, where one applies, applies here as it does there); there is no wholesale discount. Pay per call as on the public route.",
-  errorCodes: { field: "errorCode", note: "every tool error answer carries errorCode beside the message; branch on the code, not the text", codes: ERROR_CODES, charging: wholesaleChargingSentence(tempoPush), refundTerms: `${baseUrl}${REFUND_TERMS_PATH}` },
+  errorCodes: { field: "errorCode", note: `${ERROR_CODE_SCOPE} Branch on the code, not the text. ${ERROR_CODE_NOT_CARRIED}`, codes: ERROR_CODES, charging: wholesaleChargingSentence(tempoPush), refundTerms: `${baseUrl}${REFUND_TERMS_PATH}` },
   reliabilityDefinition: reliabilityDefinition(),
   docs: `${baseUrl}/wholesale`,
 });
@@ -166,7 +182,7 @@ export function wholesaleFamily(id, ctx) {
   const now = ctx.now ?? Date.now();
   const available = !!ctx.outcomes?.ok;
   const bySlug = new Map((available ? ctx.outcomes.rows || [] : []).map((r) => [r.slug, r]));
-  const tools = familyTools(f, ctx).map(([key, def]) => toolRow(key, def, { baseUrl: ctx.baseUrl, outcome: bySlug.get(def.slug), available }));
+  const tools = familyTools(f, ctx).map(([key, def]) => toolRow(key, def, { baseUrl: ctx.baseUrl, outcome: bySlug.get(def.slug), available, familyCredit: f.credit }));
   return {
     ...COMMON(ctx.baseUrl, ctx.tempoPush),
     asOf: new Date(now).toISOString(),

@@ -2,12 +2,33 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { OFFER_SWEEP_FIRST_MS, OFFER_SWEEP_INTERVAL_MS } from "./mpp-subscription-retention.js";
 import { READBACK_FIRST_MS, READBACK_INTERVAL_MS } from "./card-refund-readback.js";
 import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel as span, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
+import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, TRANSCRIBE_LONG_RUN_SECONDS, sttLongEnabled } from "./tools/stt-kit.js";
 import { REVISIT_CAP_MS, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, revisitIntervalMs, probeShareLabel } from "./seller-load.js";
 
 // A timer figure as an entry prints it, read from the module that runs it.
 const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a minute" : `${n} minutes`; };
 
+// An entry with `shownWhen` describes something a switch sells: the page and
+// the feed show it only while that function reads true (CHANGELOG.md scopes
+// the same item to a server that sets the switch).
 const ENTRIES = [
+  {
+    date: "2026-11-20",
+    title: "Long recordings transcription",
+    shownWhen: sttLongEnabled,
+    items: [
+      `Tools: A server that sets \`TRANSCRIBE_LONG=on\` lists and serves \`/api/transcribe-long\` (model-backed), the long-recording transcription tier: an audio file at a URL, up to ${STT_TIERS["transcribe-long"].maxMinutes} minutes and ${Math.round(STT_MAX_AUDIO_BYTES / 1024 / 1024)} MB, answered like the other tiers (\`diarize: true\` adds speaker labels and word timestamps). It runs up to ${TRANSCRIBE_LONG_RUN_SECONDS} seconds on a long file, so it is paid on the EVM \`exact\` rails only, and \`Prefer: respond-async\` returns a job link at once. Without the switch the route is not listed or served.`,
+    ],
+  },
+  {
+    date: "2026-11-20",
+    title: "Solana activity charts across restarts, call budgets across deploys",
+    items: [
+      "Site: A Solana chain page's 30-day activity chart keeps its history across restarts, and a wallet too busy for one scan continues from where the last scan stopped until its window is covered. When the newest payments could not be read, the panel prints when they were last read in full (`as of <time> UTC`).",
+      "Operations: The Solana activity scans and the Solana leaderboard read transaction history through the public RPC lane first and queue for it. The keyed lane serves those background reads only up to a daily share of its ceiling (`SOLANA_HISTORY_BACKGROUND_KEYED_DAILY_MAX`); past it the views serve what they hold with its age. `SOLANA_ACTIVITY_STORE=off` keeps scan state in memory only.",
+      "Operations: The `upstreamBudgets` word on `/api/gateway-status` is built from the UTC day's call count across deploys and replicas when a shared store is configured. The operator view adds which module made the day's calls to the on-chain data provider and seven days of daily counts.",
+    ],
+  },
   {
     date: "2026-11-19",
     title: "Onchain query answers that cannot be read",
@@ -68,7 +89,7 @@ const ENTRIES = [
     items: [
       "Tools: Three bundle tools each run many catalog tools in one call and return one computed report: weather-risk-brief, a 7-day weather risk read for up to 50 sites (forecast, threshold hits, air quality, the same dates a year earlier and the chance of heavy rain), scored and ranked; filings-brief, the SEC picture of up to 40 US public companies (latest annual and quarterly financials with ratios, filing activity and Form 4 activity), flagged and ranked; and token-diligence, market diligence for up to 20 coins (profile and supply, one-year return, drawdown and volatility, turnover and dilution), flagged and ranked. Each is priced per site, company or coin by the skill-pack rule over the tools it runs, and the 402 quotes the amount for the units in the body. A ticker or coin the source does not know answers 422 naming it. No model writes any part of a report.",
       "Wholesale: `/wholesale` and `GET /api/wholesale/v1` give a reseller one versioned JSON read per tool family (computation tools; SEC filings and company financials; US Treasury rates and debt; weather forecasts, history, air quality and risk), and `GET /api/wholesale/v1/<family>` lists a family's tools: each tool's price, which is the public route's own price with no wholesale discount, the credit to keep with its answers, and its success rate and p50 and p95 latency over the last seven days, marked measured or not enough data. Only sources whose answers may be passed on are listed; market data, search results and model output are not offered. Within v1, fields are only added.",
-      "Wholesale: Every tool error answer carries `errorCode` beside the message: one stable code per status (such as `invalid_input`, `upstream_error` and `unavailable`), listed with its meaning in the wholesale contract. A code is only ever added, never renamed or removed.",
+      "Wholesale: Every error answer a tool's route writes, other than a 402, now carries `errorCode` beside the message (an input refused before payment, a run that ended in an error, a retired route and a paused or switched-off tool): one stable code per status (such as `invalid_input`, `upstream_error` and `unavailable`), listed with its meaning in the wholesale contract. A 402 is the payment-required answer: it follows the x402 and MPP wire formats and carries no `errorCode`. A code is only ever added, never renamed or removed.",
     ],
   },
   {
@@ -123,7 +144,7 @@ const ENTRIES = [
       "Tools: settlement-calendar: the settlement date for a payment sent on a given date over ACH, Fedwire, SEPA Credit Transfer, SEPA Instant or CHAPS, from each rail's published operating days and bank holidays, with the rule and its official sources in the answer.",
       "Tools: market-calendar: whether NYSE, the London Stock Exchange, Xetra, JPX or HKEX is open at a given moment, the day's sessions, the next open and close, and closures in the coming month, from each exchange's own published calendar. It is pure computation and free through proof of work.",
       "Tools: gtin-validate: checks the GS1 check digit of a GTIN-8, UPC-A, EAN-13 or GTIN-14 barcode number and returns the expected digit and the 14-digit form. It is pure computation and free through proof of work.",
-      "Credits: Holiday data by Nager.Date, which Agent402 sponsors; every tool that serves it carries the credit.",
+      "Credits: Holiday data by Nager.Date, used under a sponsorship held for this service; every tool that serves it carries the credit.",
     ],
   },
   {
@@ -1718,9 +1739,12 @@ const ENTRIES = [
 /** The dated groups the page and the feed render (read by scripts/test-changelog-parity.js). */
 export const CHANGELOG_ENTRIES = ENTRIES;
 
+/** The groups the page and the feed render now: an entry whose switch is off is left out. */
+function shownEntries() { return ENTRIES.filter((e) => typeof e.shownWhen !== "function" || e.shownWhen()); }
+
 export function changelogRss(baseUrl) {
   const xmlEsc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const items = ENTRIES.map((e) =>
+  const items = shownEntries().map((e) =>
     `  <item>
     <title>${xmlEsc(e.title)}</title>
     <link>${baseUrl}/changelog</link>
@@ -1756,7 +1780,7 @@ export function changelogPage(baseUrl) {
     isPartOf: { "@type": "WebSite", url: baseUrl },
   };
 
-  const timelineHtml = ENTRIES.map((entry) => {
+  const timelineHtml = shownEntries().map((entry) => {
     const itemsHtml = entry.items.map((item) => `<li>${esc(item)}</li>`).join("\n              ");
     return `
           <div class="tl-entry">

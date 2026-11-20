@@ -255,6 +255,7 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   for E2B's create also the SDK's AuthenticationError, RateLimitError and ServiceBusyError). A 2xx, 3xx or 5xx
   answer, a timeout and a reset keep their unit. The operator view counts the units given back as `releasedToday`.
   Suite: `scripts/test-upstream-hard-caps.js`.
+- **CoinGecko unpaid reads per caller:** `COINGECKO_UNSETTLED_PER_CALLER_HOUR` (default 8) is the most places one caller holds an hour in the share of CoinGecko reads for unconfirmed coin ids; past it that caller's ids are checked against the coin lists first, and no call is refused for it (`src/tools/coingecko-rate.js`).
 - **Quoted material:** every report kit hands the model third-party text inside `quotedMaterial` blocks
   (`src/report-grounding.js`) and carries `QUOTED_MATERIAL_RULE`, or `QUOTED_DATA_RULE` (the same rule without its
   citation sentence) where the report lists no numbered sources: the domain audit's probe blocks and the token risk

@@ -74,6 +74,8 @@ t node scripts/test-settle-onchain-proof.js
 t node scripts/test-coingecko-shared.js
 # The hard daily upstream ceilings are one count across two containers on one Redis: A spends the ceiling, B refuses after its sync.
 t node scripts/test-upstream-hard-caps-redis.js
+# The upstream call budgets read the day's count across a deploy: a new process's word comes from the shared day, not its own count.
+t node scripts/test-upstream-budgets-shared-redis.js
 # A sub-cent Algorand settle refusal in one process withdraws that accept in another after one shared read.
 t node scripts/test-avm-subcent-shared-redis.js
 # Seller registration limits (x402 and MPP, per IP and global) are one count across two servers on one Redis, with each process's own count as the floor.
@@ -95,6 +97,8 @@ t node scripts/test-replay-consumed-hold.js
 docker exec "$REDIS_CONTAINER_ID" redis-cli CONFIG SET appendonly yes
 t node scripts/test-state-db.js
 t node scripts/test-stores-pg.js
+# The Solana activity scans' stored state: one row a wallet, written in chunks under a lease, read one wallet at a time, bounded.
+t node scripts/test-solana-activity-store-pg.js
 # The sanctions lists' stored copies on the database: the row from pieces, the write-through off the loop on a stalled disk, saves in order.
 t node scripts/test-sanctions-store-pg.js
 # The boot step drops the retired tollbooth_leads table, logs only its count, never recreates it.

@@ -229,7 +229,8 @@ const OP_TOKEN = ["op", "Canary", "Token", RUN].join("");
   const wish = server.slice(server.indexOf('app.post("/api/wish"'), server.indexOf('app.post("/api/wish"') + 600);
   ok(/json\(\{ error: redactSecrets\(err\?\.message\) \}\)/.test(wish), "/api/wish answers the scrubbed message");
   const mem = server.slice(server.indexOf("const memHandler = "), server.indexOf("const memHandler = ") + 2500);
-  ok(/json\(\{ error: redactSecrets\(err\?\.message\) \}\)/.test(mem), "the memory routes answer the scrubbed message");
+  // The answer may carry the stable errorCode beside the scrubbed message (src/stable-error-code.js).
+  ok(/json\(\{ error: redactSecrets\(err\?\.message\)(?:, \.\.\.errorCodeField\(status\))? \}\)/.test(mem) && !/error: err\?\.message/.test(mem), "the memory routes answer the scrubbed message");
   // No route block answers or logs a thrown message raw: inside every app
   // route (literal paths and the catalog binder's app[method](path, ...)), a
   // line that builds a json/send answer, a problem body, an error/detail/message field or a

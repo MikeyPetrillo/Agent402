@@ -793,7 +793,8 @@ import { spendWindowStatus, refreshSpendWindowShared } from "./router-spend-wind
 import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus, refreshXDataSpendShared } from "./tools/x-data-kit.js";
 import { jevSpendStatus, refreshJevSpendShared, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
-import { upstreamBudgetStatus } from "./upstream-budgets.js";
+import { upstreamBudgetStatus, startUpstreamBudgetSync } from "./upstream-budgets.js";
+import { flushUpstreamCallDays, upstreamCallDaysReport } from "./upstream-call-days.js";
 import { hardCapStatus, startHardCapSync } from "./upstream-hard-caps.js";
 import { b2bEnrichEnabled } from "./tools/b2b-enrich-kit.js";
 const X_DATA_TOOLS_ENABLED = xDataEnabled() ? X_DATA_TOOLS : [];
@@ -831,7 +832,7 @@ import { ledgerHomePage, socialCardText } from "./ledger-home.js";
 import { proofCell, homeProofFigures } from "./home-proof.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
-import { revenueSnapshot, revenueLiveStatus, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
+import { revenueSnapshot, revenueLiveStatus, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, solanaActivityView, solanaActivityStatus, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPageAsync, marketPanelHtml, catalogPayableOn } from "./market-page.js";
@@ -856,6 +857,7 @@ import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sha
 import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { flushSqlQueryStats, sqlQueryStatsReport, noteSqlBusy } from "./sql-query-stats.js";
+import { loadSolanaActivityState, noteSolanaActivityState, flushSolanaActivityStore, solanaActivityStoreStatus } from "./solana-activity-store.js";
 import { flushXSearchStats, xSearchStatsReport, xSearchAuthorsStatus } from "./x-search-stats.js";
 import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
@@ -2848,6 +2850,9 @@ installEgressMeter();
 }
 // The pay-as-you-go ceilings the meter enforces read and feed a shared daily total.
 startHardCapSync();
+// The upstream call budgets' shared day (src/upstream-budgets.js): each
+// process adds its calls to a shared daily counter and reads the total back.
+startUpstreamBudgetSync();
 // Composite runs inherit the drain signal on every outbound fetch (src/drain-abort.js).
 installDrainAwareFetch();
 // Outbound wait is charged to the request that made it (src/request-timing.js).
@@ -4179,7 +4184,7 @@ if (!stockDataEnabled()) {
     const slug = notOffered.get(String(req.path || "").toLowerCase().replace(/\/+$/, ""));
     if (!slug) return next();
     res.set("Cache-Control", "no-store");
-    return res.status(503).json({ ok: false, error: "not-offered", slug, message: stockNotOffered().message, list: `${BASE_URL}/api/pricing` });
+    return res.status(503).json({ ok: false, error: "not-offered", slug, message: stockNotOffered().message, list: `${BASE_URL}/api/pricing`, ...errorCodeField(503) });
   });
 }
 
@@ -4192,7 +4197,7 @@ if (!kalshiToolsEnabled()) {
     const slug = notOffered.get(String(req.path || "").toLowerCase().replace(/\/+$/, ""));
     if (!slug) return next();
     res.set("Cache-Control", "no-store");
-    return res.status(503).json({ ok: false, error: "not-offered", slug, message: kalshiNotOffered().message, list: `${BASE_URL}/api/pricing` });
+    return res.status(503).json({ ok: false, error: "not-offered", slug, message: kalshiNotOffered().message, list: `${BASE_URL}/api/pricing`, ...errorCodeField(503) });
   });
 }
 
@@ -4465,6 +4470,11 @@ app.get("/api/gateway-status", async (req, res) => {
   await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshJevSpendShared(), refreshSpendWindowShared(), refreshDirectSpendShared()]);
   const spend = { xDataSpend: xDataSpendStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
+  // Operator view only: which module made the day's calls to the on-chain
+  // data provider, and the last seven days (src/upstream-call-days.js).
+  if (full && budgets.upstreams?.alchemy) {
+    try { const h = await upstreamCallDaysReport("alchemy", { days: 7 }); budgets.upstreams.alchemy.callersToday = h.days[0]?.callers || {}; budgets.upstreams.alchemy.history = h.days; budgets.upstreams.alchemy.historyStored = h.stored; } catch { /* the counts above stand */ }
+  }
   // The global unsettled external-spend ceiling: one word, never a figure.
   const externalSpendGlobal = await globalUnsettledStatus().catch(() => ({ status: "unknown" }));
   const body = {
@@ -4493,7 +4503,7 @@ app.get("/api/gateway-status", async (req, res) => {
     externalSpendGlobal,
     // Solana history reads (getTransaction by signature): which lane serves
     // them. One word publicly; per-lane counts for the operator.
-    solanaHistory: (() => { try { return solanaHistoryStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    solanaHistory: (() => { try { const h = solanaHistoryStatus({ full }); return full ? { ...h, activity: solanaActivityStatus(), activityStore: solanaActivityStoreStatus() } : h; } catch { return { status: "unknown" }; } })(),
     // EVM log reads: which lane serves the revenue ledger's recent getLogs,
     // how the Base board read its window, and the activity scans. One word
     // publicly; per-caller counts for the operator.
@@ -7804,7 +7814,7 @@ app.get("/api/skill-packs/:slug/prompt", (req, res) => {
       const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
       const replacement = rep ? { slug: rep.slug, route: rep.route, url: `${BASE_URL}${rep.route.split(" ")[1] || rep.route}` } : null;
       res.set(retirementHeaders(gone.retiredAt, replacement?.url));
-      return res.status(410).json({ ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement, list: `${BASE_URL}/api/skill-packs.json`, hint: `Skill pack ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : ""} Live packs: /api/skill-packs.json` });
+      return res.status(410).json({ ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement, list: `${BASE_URL}/api/skill-packs.json`, hint: `Skill pack ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : ""} Live packs: /api/skill-packs.json`, ...errorCodeField(410) });
     }
     // Indexes that read the documented template call it with the placeholder
     // itself; say so rather than answering as if the route were missing.
@@ -9027,6 +9037,8 @@ app.get("/algorand", async (req, res) => {
 // wallets here.
 const CHAIN_ACTIVITY_TTL_MS = 10 * 60_000;
 const PAGE_ACTIVITY_WAIT_MS = 5_000;
+// The longest a page view waits for a wallet's stored Solana scan state.
+const SOLANA_ACTIVITY_STORE_READ_MS = 1_500;
 const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
 const SOLANA_ADDR_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const chainActivityByWallet = new Map(); // "chainKey:wallet" -> { at, value, inFlight }
@@ -9085,8 +9097,9 @@ function paidScanAllowed() {
   return true;
 }
 
-async function scanActivity(chainKey, wallet, prior = null, { background = false } = {}) {
-  if (chainKey === "solana") return solanaActivity(wallet, { background });
+async function scanActivity(chainKey, wallet, prior = null) {
+  // Solana resumes from the prior scan's cursors and rows, as the EVM scan does.
+  if (chainKey === "solana") return solanaActivity(wallet, { prior });
   if (chainKey === "robinhood") return robinhoodActivity(wallet);
   if (chainKey === "base") {
     // Budget checked BEFORE the query, not after: the point is to not spend.
@@ -9119,6 +9132,24 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
   }
   let entry = chainActivityByWallet.get(key);
   if (!entry) { entry = { at: 0, value: null, inFlight: null }; chainActivityByWallet.set(key, entry); }
+  // A Solana wallet this process has not seen: its stored scan state (one
+  // small read, bounded; src/solana-activity-store.js) is served at once and
+  // resumed from, so a restart does not read the wallet's window again.
+  if (chainKey === "solana" && !entry.storeRead) {
+    entry.storeRead = (async () => {
+      let timer;
+      try {
+        const st = await Promise.race([loadSolanaActivityState(wallet), new Promise((r) => { timer = setTimeout(() => r(null), SOLANA_ACTIVITY_STORE_READ_MS); timer.unref?.(); })]);
+        if (st && !entry.scanState) {
+          entry.scanState = st;
+          // The stored answer says how old it is (asOf) and is refreshed below once past its TTL.
+          entry.value = solanaActivityView(wallet, st);
+          entry.at = Number(st.at) || 0;
+        }
+      } catch { /* a wallet the store cannot answer for is a cold wallet */ } finally { clearTimeout(timer); }
+    })();
+  }
+  if (entry.storeRead && entry.storeRead !== true) { await entry.storeRead; entry.storeRead = true; }
   const stale = Date.now() - entry.at >= CHAIN_ACTIVITY_TTL_MS;
   if (stale && !entry.inFlight) {
     entry.inFlight = (async () => {
@@ -9130,11 +9161,15 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
         // A refresh behind a cached chart is background work (the page is
         // served from the cache meanwhile); only a cold wallet has a view
         // waiting on it, and the scanner picks its RPC lanes by that.
-        const a = await scanActivity(chainKey, wallet, entry.scanState || null, { background: entry.value != null });
+        const a = await scanActivity(chainKey, wallet, entry.scanState || null);
         entry.at = Date.now();
         if (a && !a.error) {
           entry.value = a; // success — refresh the cached value
-          if (a.__scanState) entry.scanState = a.__scanState;
+          if (a.__scanState) {
+            entry.scanState = a.__scanState;
+            // Written by the store's own timer, never on this path.
+            if (chainKey === "solana") noteSolanaActivityState(wallet, a.__scanState);
+          }
         }
         // else: keep the prior good value (stale-serve) or stay null
       } catch {
@@ -10769,6 +10804,7 @@ const retiredConvertGone = (req, res) => {
       route: "POST /api/unit-convert",
       input: { value: Number.isFinite(num) ? num : null, from, to },
     },
+    ...errorCodeField(410),
   });
 };
 
@@ -13367,10 +13403,10 @@ function contentsUrlOf(req, res, slug) {
   const def = CATALOG[`POST /api/${slug}`];
   let input;
   try { input = handlerInputOf(req, def); }
-  catch (e) { res.status(Number(e?.statusCode) === 400 ? 400 : 500).json({ error: e.message, tool: slug }); return null; }
+  catch (e) { const status = Number(e?.statusCode) === 400 ? 400 : 500; res.status(status).json({ error: e.message, tool: slug, ...errorCodeField(status) }); return null; }
   const refused = shapeRefusal(input, def);
-  if (refused) { res.status(400).json({ error: refused, tool: slug }); return null; }
-  if (!input.url) { res.status(400).json({ error: 'Missing "url" in JSON body' }); return null; }
+  if (refused) { res.status(400).json({ error: refused, tool: slug, ...errorCodeField(400) }); return null; }
+  if (!input.url) { res.status(400).json({ error: 'Missing "url" in JSON body', ...errorCodeField(400) }); return null; }
   return input.url;
 }
 
@@ -13386,7 +13422,7 @@ app.post("/api/extract", withToolCallLog("extract", async (req, res) => {
 
 app.get("/api/meta", withToolCallLog("meta", async (req, res) => {
   const { url } = req.query;
-  if (!url) return res.status(400).json({ error: 'Missing "url" query parameter' });
+  if (!url) return res.status(400).json({ error: 'Missing "url" query parameter', ...errorCodeField(400) });
   try {
     res.json(await fetchPageMeta(url));
   } catch (err) {
@@ -13396,7 +13432,7 @@ app.get("/api/meta", withToolCallLog("meta", async (req, res) => {
 
 app.get("/api/dns", withToolCallLog("dns", async (req, res) => {
   const { name, type } = req.query;
-  if (!name) return res.status(400).json({ error: 'Missing "name" query parameter' });
+  if (!name) return res.status(400).json({ error: 'Missing "name" query parameter', ...errorCodeField(400) });
   try {
     res.json(await dnsLookup(name, type));
   } catch (err) {
@@ -13434,7 +13470,7 @@ app.get("/api/screenshot", withToolCallLog("screenshot", async (req, res) => {
   const _t0 = Date.now();
   res.once("finish", () => { try { capturePostHogToolCall({ slug: "screenshot", latencyMs: Date.now() - _t0, cached: false, errored: res.statusCode >= 500, status: res.statusCode, synthetic: isSyntheticRequest(req) }); } catch { /* telemetry never breaks a response */ } });
   const { url, fullPage } = req.query;
-  if (!url) return res.status(400).json({ error: 'Missing "url" query parameter' });
+  if (!url) return res.status(400).json({ error: 'Missing "url" query parameter', ...errorCodeField(400) });
   const ac = new AbortController();
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
   try {
@@ -13453,7 +13489,7 @@ app.post("/api/pdf", withToolCallLog("pdf", async (req, res) => {
   const _t0 = Date.now();
   res.once("finish", () => { try { capturePostHogToolCall({ slug: "pdf", latencyMs: Date.now() - _t0, cached: false, errored: res.statusCode >= 500, status: res.statusCode, synthetic: isSyntheticRequest(req) }); } catch { /* telemetry never breaks a response */ } });
   const { url } = req.body ?? {};
-  if (!url) return res.status(400).json({ error: 'Missing "url" in JSON body' });
+  if (!url) return res.status(400).json({ error: 'Missing "url" in JSON body', ...errorCodeField(400) });
   try {
     res.json(await pdfToText(url));
   } catch (err) {
@@ -13488,7 +13524,7 @@ function memoryActor(req, res) {
   // so every memory route that changes state takes the signed payer only.
   const slug = CATALOG[`${req.method} ${req.path}`]?.slug;
   const id = resolveRouteIdentity(req, memoryScopeOf(slug), identityPayerOf(req));
-  if (id.error) { res.status(id.error.status).json({ error: id.error.message }); return null; }
+  if (id.error) { res.status(id.error.status).json({ error: id.error.message, ...errorCodeField(id.error.status) }); return null; }
   const payer = id.wallet;
   if (payer) return payer;
   if (FREE_MODE && req.query.ns) return `demo:${req.query.ns}`;
@@ -13496,6 +13532,7 @@ function memoryActor(req, res) {
     error: FREE_MODE
       ? `${FREE_MODE_IDENTITY_NOTE} For memory, pass ?ns=<name> to use a demo namespace.`
       : "No payer identity found on this request. Pay via x402 - the paying wallet is your identity.",
+    ...errorCodeField(400),
   });
   return null;
 }
@@ -13523,7 +13560,8 @@ const memHandler = (fn) => withToolCallLog((req) => CATALOG[`${req.method} ${req
   try {
     res.json(await fn(req, actor, targetOwner(req, actor)));
   } catch (err) {
-    res.status(err.statusCode || 500).json({ error: redactSecrets(err?.message) });
+    const status = err.statusCode || 500;
+    res.status(status).json({ error: redactSecrets(err?.message), ...errorCodeField(status) });
   }
 });
 
@@ -14022,7 +14060,7 @@ app.use((req, res) => {
         return res.status(410).json({
           ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement,
           hint: `${gone.kind === "pack" ? "Skill pack" : "Tool"} ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : " There is no direct replacement; the closest live tools are listed, or ask /api/find?q=<task>."}${!replacement && gone.note ? ` ${gone.note}` : ""}`,
-          find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions,
+          find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions, ...errorCodeField(410),
         });
       }
       try { capturePostHogToolGone({ route: req.path, replacement: "GET /api/find", source: toolGoneSourceOf({ headers: req.headers, surface: "http" }) }); } catch { /* telemetry never breaks a response */ }
@@ -14284,10 +14322,11 @@ if (!mppCrawl.on) {
     // payTo the index knows, primed into the pay-time gate (src/solana-leaderboard.js).
     startSolanaLeaderboard({
       listPayTos: async () => (await import("./x402-index.js")).allSolanaPayToOriginsAsync(),
-      // getTransaction (immutable, by signature) goes public RPC first with the
-      // keyed lane behind it (src/solana-history-rpc.js); the signature and
+      // getTransaction (immutable, by signature) goes public RPC first, queued
+      // for its slot, with the keyed lane behind it only under the day's
+      // background share (src/solana-history-rpc.js); the signature and
       // token-account reads stay on the configured lane.
-      rpc: historyAwareRpc((method, params) => import("./solana-buyer.js").then((m) => m.solanaRpc(method, params)), { caller: "leaderboard" }),
+      rpc: historyAwareRpc((method, params) => import("./solana-buyer.js").then((m) => m.solanaRpc(method, params)), { caller: "leaderboard", background: true }),
       creditFromTx: (meta, payTo) => solanaCreditFromTx(meta, payTo),
       prime: (payTo, count) => import("./solana-buyer.js").then((m) => m.primeSvmInboundCount(payTo, count)),
       windowHours: Number(process.env.SOR_SVM_WINDOW_HOURS) || 168,
@@ -14474,7 +14513,7 @@ let drainDeadlineMs = DRAIN_DEADLINE_MS;
 // reads held; the flush round below waits on that write with the others.
 let boardSaveAtDrain = false;
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals()]).then(() => flushJsonDocuments({ timeoutMs }))]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals(), flushSolanaActivityStore({ max: 100 }), flushUpstreamCallDays()]).then(() => flushJsonDocuments({ timeoutMs }))]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });

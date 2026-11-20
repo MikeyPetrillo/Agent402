@@ -609,6 +609,21 @@ function payableSentence(p, C) {
   return `<a href="/tools">Our tools</a> take ${esc(C.asset)} on ${esc(C.chainName)}`;
 }
 
+// A scan whose newest payments could not be read this time (the read lanes
+// were busy or the day's background read share was spent), or one served from
+// the store that was last current more than ACTIVITY_AS_OF_AFTER_MS ago (a
+// restart after a long stop), says when they were last read in full, so a
+// chart is never read as fresher than it is. A scan that carries no such time
+// (every chain but Solana) prints nothing.
+export const ACTIVITY_AS_OF_AFTER_MS = 30 * 60_000;
+export function activityAsOfNote(activity, now = Date.now()) {
+  if (!activity) return "";
+  const t = Date.parse(activity.asOf || "");
+  if (!activity.refreshHeld && !(Number.isFinite(t) && now - t > ACTIVITY_AS_OF_AFTER_MS)) return "";
+  if (!Number.isFinite(t)) return "newest payments not read yet";
+  return `as of ${new Date(t).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
 // Activity section — x402scan-style Transactions / Volume / Buyers cards
 // with per-day bars. Same honesty rules as the receipts: no data → say so
 // plainly, capped scan → "a floor".
@@ -647,6 +662,7 @@ export function marketActivityHtml(chainKey, activity, selected) {
       : `all inbound ${C.asset} settlements to this host's ${C.chainName} wallet`,
     t.internalTx ? `includes ${t.internalTx} internal canary buy${t.internalTx === 1 ? "" : "s"}` : "",
     activity.truncated ? "scan capped - totals are a floor" : "",
+    activityAsOfNote(activity),
   ].filter(Boolean).join(" · ");
   return `
   <div id="activity" style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">
@@ -1063,6 +1079,7 @@ function* marketPageChainSteps(chainKey, baseUrl, opts = {}) {
       ? `all inbound ${C.asset} to this seller's advertised x402 payTo - may include non-x402 transfers`
       : `all inbound ${C.asset} settlements to this host's ${C.chainName} wallet`,
     activity && activity.truncated ? "scan stopped at its time budget - totals are a floor" : "",
+    activityAsOfNote(activity),
   ].filter(Boolean).join(" \u00b7 ");
   const terminalHtml = marketTerminalHtml({
     chainName: C.chainName, asset: C.asset, rows: terminalRows, totalSellers: sellerCount, measured, selectedHost: selHost,

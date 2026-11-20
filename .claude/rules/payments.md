@@ -59,6 +59,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `CREDITS_ABANDONED_HOLD_MS` (default 10 minutes). A running request keeps its hold fresh against
   that sweep for at most `CREDITS_HOLD_REFRESH_MAX_MS` (default 6 hours, never under the abandoned
   window) (`src/credits.js`).
+- **Credits indexes:** `CREDITS_INDEXES` (default on; `off` leaves the build to an operator) builds the prepaid credits lookup indexes in the background (`ensureCreditsIndexes`, `src/credits.js`).
+- **Credits index delay:** `CREDITS_INDEX_DELAY_MS` (default 60000, 60 s) is how long after the credits store's first load that build starts.
 - **Credits key balance cap:** `CREDITS_BALANCE_MAX_USD` (default 100, the largest pack;
   `src/credits-sales.js`) is the most one key may hold: every purchase issues a new key, a pack above
   the cap is not offered, a checkout for it is refused, and a paid session above it is refunded in full
@@ -724,6 +726,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `command`, `fund` from `needs`, `wait` with the Retry-After); the request is marked
   `__paymentNextStepState` for the funnel. payment.info carries the general `emptyWallet` block
   (`scripts/test-next-step.js`).
+- **Funnel discovery window:** `FUNNEL_FOUND_WINDOW_MS` (default 21600000, 6 hours; at least 1 minute) is how long the funnel links a caller's last discovery read to its later paid-route calls (`src/funnel-sources.js`).
+- **Funnel discovery cap:** `FUNNEL_FOUND_CAP` (default 50000; at least 100) is the most callers that trail holds, in memory per replica, keyed on a per-process hash of the address.
 - **Tempo push refusals:** `src/push-refusal-body.js`: for a push credential the Tempo gate
   restates a 4xx JSON body's not-charged sentence and sets `charged`, `transferClaimed`, `refundOwed`.
 - **Algorand network id:** `src/avm-network.js`: the CAIP-2 (32-character) id is what every 402

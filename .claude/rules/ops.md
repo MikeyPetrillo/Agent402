@@ -19,6 +19,12 @@ paths:
   - "src/sql-query-stats.js"
   - "src/tweet-queue.js"
   - "src/x-oauth.js"
+  - "src/solana-history-rpc.js"
+  - "src/solana-activity-store.js"
+  - "src/solana-leaderboard.js"
+  - "src/upstream-budgets.js"
+  - "src/upstream-hard-caps.js"
+  - "src/upstream-call-days.js"
   - "services/**"
   - "scripts/*-deploy-paths.js"
   - "scripts/backup-restore.js"
@@ -44,6 +50,43 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   under `largeRowTimeoutMs`: the default limit plus `STATE_DB_MS_PER_MB` (500) per megabyte past the
   first, at most `STATE_DB_LARGE_ROW_MAX_MS` (120000); after a warm-start page times out, the rows
   that page covered are read one at a time, then full pages resume.
+- **Solana history reads:** `src/solana-history-rpc.js` reads a transaction by signature from the
+  public lane first (paced, cooled on a rate limit) and the keyed lane behind it. A reader nobody
+  waits on passes `background` (the activity scans in `src/revenue-live.js`, the Solana board):
+  it queues for the public lane (`SOLANA_HISTORY_BACKGROUND_MAX_WAIT_MS`, default 30000; the
+  activity scans `SOLANA_ACTIVITY_PUBLIC_WAIT_MS`, default 10000) and takes the keyed lane only
+  under the share `history-background` of the keyed provider's daily ceiling
+  (`HARD_CAP_SHARES` in `src/upstream-hard-caps.js`; `SOLANA_HISTORY_BACKGROUND_KEYED_DAILY_MAX`,
+  default a twentieth of `HARDCAP_ALCHEMY_CALLS`, counted in the shared store). With the share
+  spent the read throws `backgroundBudgetSpent`: the activity chart keeps what it holds
+  (`asOf`, `refreshHeld`, printed on the panel), the board keeps the seller's previous row
+  marked stale and never counts the read as stuck, and the `solanaHistory` word does not read
+  failing for it. The revenue card and the revenue ledger are not background readers. The board
+  reads `SOLANA_LB_TX_CONCURRENCY` (default 2) transactions at a time so the paced lane's queue
+  stays short for the other readers.
+- **Solana activity state:** the activity scan is incremental (a head cursor read with `until`, a
+  far cursor continued downward, at most 2,000 rows a wallet) and its state is kept by
+  `src/solana-activity-store.js`: with a state database one `records` row a wallet (collection
+  `solana-activity`), read one wallet at a time on that wallet's first view in a process (at most
+  1.5 s of a page view), never at boot; without one the file `SOLANA_ACTIVITY_FILE`. A finished
+  scan marks its wallet waiting; the timer (`SOLANA_ACTIVITY_STORE_FLUSH_MS`, default 60000)
+  writes at most 20 wallets a tick under the lease `solana-activity-store-flush`, prunes hourly to
+  `SOLANA_ACTIVITY_STORE_MAX_WALLETS` (default 500) and 35 days, and the drain writes up to 100.
+  A cold scan's first `SOLANA_ACTIVITY_COLD_FAST_READS` (default 40) reads do not queue; one scan
+  runs at most `SOLANA_ACTIVITY_SCAN_BUDGET_MS` (default 120000) behind the page.
+  `SOLANA_ACTIVITY_STORE=off` is the rollback (state in memory only); an older build ignores the
+  rows. Operator view: `solanaHistory.activity`, `.activityStore`, `.backgroundShare` on
+  `/api/gateway-status` (`scripts/test-solana-activity-resume.js`, `-restart.js`, `-store-pg.js`).
+- **Upstream budgets' day:** `upstreamBudgets` is built from the UTC day's count across deploys
+  and replicas: each process adds its new calls to a shared daily counter per budget every
+  `UPSTREAM_BUDGET_SYNC_MS` (default 15000) and reads the total back, and a budget whose host has
+  a hard ceiling also reads that ceiling's shared day; never less than the process's own count,
+  which is all there is without a shared store (`shared: false` on the row). The public word stays
+  one word. `src/upstream-call-days.js` keeps, for the on-chain data provider, each day's calls by
+  caller (the label a module set with `egressCaller`, else the first file of ours on the stack)
+  in the `upstream-call-days` state document, eight days, folded on a timer and at the drain; the
+  operator view carries `callersToday` and `history` on that budget's row
+  (`scripts/test-upstream-budgets-shared-redis.js`, `scripts/test-upstream-call-days.js`).
 - **Store deadlines:** `src/loop-deadline.js` (`withLoopTimeout`, `withLoopDeadline`, `loopDeadline`)
   bounds every Redis wait (shared limits, the hang-up ticket, the spend reserve, journals,
   idempotency, the first-call allowance, the shared Databento read, the cache, the

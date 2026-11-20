@@ -24,6 +24,7 @@
 // State is per process; each replica learns from its own reads.
 // RUGCHECK_PAUSE=off disables the pause (reads still report, nothing pauses).
 import { RUGCHECK_SLUGS } from "./rugcheck-switch.js";
+import { errorCodeField } from "./stable-error-code.js";
 
 const DEFAULT_AFTER = 3;
 const DEFAULT_PAUSE_MS = 5 * 60_000;
@@ -133,6 +134,7 @@ export function rugcheckPauseMiddleware(routes, pause = rugcheckPause) {
       error: `RugCheck, the source of this tool, is not answering right now, so the RugCheck-backed tools are paused. Not charged - retry in about ${s.retryAfterSeconds} s.`,
       attribution: "upstream",
       retryAfterSeconds: s.retryAfterSeconds,
+      ...errorCodeField(503),
     });
   };
 }

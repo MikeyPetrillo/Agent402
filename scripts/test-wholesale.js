@@ -15,13 +15,28 @@
 //   - the compute family is our own computation only: a proof-of-work tool
 //     that serves a committed outside dataset (country-info, ODbL) or a
 //     source's data (an attribution) is not in it;
+//   - the contract claims errorCode exactly where it is served: every error
+//     answer a tool's route writes other than a 402 (the input check, a run's
+//     error, a retired route's 410, a switched-off tool's 503); the 402
+//     follows the x402 and MPP wire formats and carries none, and the table
+//     lists no code for it;
+//   - every tool row carries its own credit line, read from the catalog's
+//     attribution, and a family credit line is one every tool in it keeps;
 //   - on a FREE_MODE boot: every listed price is /api/pricing's own, no
 //     listed tool is model-backed or market data, a family's rates move with
-//     real calls, a tool error carries its errorCode, the page renders.
+//     real calls, every catalog route's JSON error carries its errorCode, and
+//     so does every retired route and every switched-off tool, the page
+//     renders; on a paid boot (stub facilitator) the 402 carries none.
 //   node scripts/test-wholesale.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { createServer } from "node:http";
 import { bootServer } from "./lib/boot-server.js";
 import { ERROR_CODES, stableErrorCode, errorCodeField } from "../src/stable-error-code.js";
+import * as ERROR_CONTRACT from "../src/stable-error-code.js";
+import { RETIRED_TOOLS, RETIRED_PACKS } from "../src/retired-tools.js";
+import { KALSHI_SLUGS } from "../src/kalshi-switch.js";
+import { STOCK_SLUGS } from "../src/tools/stock-provider.js";
+import { STOCK_CORE_PACK_SLUGS } from "../src/skills.js";
 import { COMMITTED_DATASET_SLUGS } from "../src/wholesale.js";
 import { reliabilityOf, toolRow, wholesaleIndex, wholesaleFamily, WHOLESALE_FAMILIES, WHOLESALE_MIN_SAMPLE, WHOLESALE_WINDOW_HOURS, STATUS_MEASURED, STATUS_THIN } from "../src/wholesale.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
@@ -33,14 +48,28 @@ import { preValidateInput } from "../src/handler-input.js";
 import { stripScripts } from "./lib/html-text.js";
 import { failedCallFootnote, TEMPO_PUSH_EXCEPTION } from "../src/settlement-footnote.js";
 import { REFUND_TERMS_PATH } from "../src/refund-terms-path.js";
-import { ATTRIBUTION_TAILS } from "../src/data-attribution.js";
+import { ATTRIBUTION_TAILS, ATTRIBUTIONS, attributionTailOf, OPEN_METEO_ATTRIBUTION, C3S_CREDIT } from "../src/data-attribution.js";
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
 
-// ---- error codes: the v1 table only grows
-const V1_CODES = { 400: "invalid_input", 402: "payment_required", 404: "not_found", 409: "conflict", 410: "retired", 413: "input_too_large", 415: "unsupported_media_type", 422: "input_not_resolvable", 429: "rate_limited", 499: "client_closed", 500: "internal_error", 502: "upstream_error", 503: "unavailable", 504: "timeout" };
+// ---- error codes: the v1 table only grows. It lists a code only for a
+// status whose answers carry one: a 402 is the payment-required answer, which
+// follows the x402 and MPP wire formats and carries no errorCode.
+const V1_CODES = { 400: "invalid_input", 404: "not_found", 409: "conflict", 410: "retired", 413: "input_too_large", 415: "unsupported_media_type", 422: "input_not_resolvable", 429: "rate_limited", 499: "client_closed", 500: "internal_error", 502: "upstream_error", 503: "unavailable", 504: "timeout" };
 for (const [s, c] of Object.entries(V1_CODES)) ok(stableErrorCode(Number(s)) === c && ERROR_CODES.some((e) => e.status === Number(s) && e.code === c), `status ${s} reads ${c}`);
+ok(stableErrorCode(402) === null && JSON.stringify(errorCodeField(402)) === "{}" && !ERROR_CODES.some((e) => e.status === 402), `a 402 reads no code and the table lists none (table: ${ERROR_CODES.filter((e) => e.status === 402).map((e) => e.code).join(", ") || "no 402 row"})`);
+// What the contract says about where errorCode rides: one wording, read by
+// the JSON, the page and the changelog alike, that claims no answer it is
+// not on (src/stable-error-code.js).
+const SCOPE = ERROR_CONTRACT.ERROR_CODE_SCOPE, NOT_CARRIED = ERROR_CONTRACT.ERROR_CODE_NOT_CARRIED;
+ok(typeof SCOPE === "string" && /\berrorCode\b/.test(SCOPE) && /other than a 402/.test(SCOPE) && /retired route/.test(SCOPE) && /switched off/.test(SCOPE) && !/every tool error answer/i.test(SCOPE),
+  `the scope names the answers that carry errorCode and leaves the 402 out (${JSON.stringify(SCOPE)})`);
+ok(typeof NOT_CARRIED === "string" && /\b402\b/.test(NOT_CARRIED) && /x402 and MPP wire formats/.test(NOT_CARRIED) && /carries no errorCode/.test(NOT_CARRIED),
+  `the contract says the 402 follows the x402 and MPP wire formats and carries no errorCode (${JSON.stringify(NOT_CARRIED)})`);
+// The idempotency layer's 409 is a request check in front of the route and
+// carries no code, so the 409 row does not cite it.
+ok(!/idempotency/i.test(ERROR_CODES.find((e) => e.status === 409)?.meaning || ""), "the 409 row cites no answer that carries no errorCode (the idempotency layer's 409)");
 ok(new Set(ERROR_CODES.map((e) => e.code)).size === ERROR_CODES.length && ERROR_CODES.every((e) => /^[a-z_]+$/.test(e.code) && e.meaning && /^[a-z-]+$/.test(e.retry)), "codes are unique snake_case words, each with a meaning and a retry verb");
 ok(ERROR_CODES.every((e) => !/\bcharg(?:e|ed|es|ing)\b/i.test(e.meaning)), `no code's meaning says whether the call was charged, which depends on the rail (${ERROR_CODES.filter((e) => /\bcharg/i.test(e.meaning)).map((e) => e.status).join(", ") || "none"})`);
 ok(stableErrorCode(418) === "invalid_input" && stableErrorCode(507) === "internal_error" && stableErrorCode(200) === null && stableErrorCode("x") === null, "an unlisted status reads its class; under 400 reads none");
@@ -89,7 +118,21 @@ const noVolume = (o, path = "") => {
 ok(noVolume(reliabilityOf({ n: 12345, ok: 12000, p50: 1, p95: 2 }, true)).length === 0 && !JSON.stringify(reliabilityOf({ n: 12345, ok: 12000, p50: 1, p95: 2 }, true)).includes("12345"), "a reliability block carries no count and no band, and never the count it read");
 
 // ---- field contract (v1 only grows)
-const ROW_KEYS = ["slug", "name", "method", "path", "url", "price", "modelBacked", "docs", "reliability"];
+const ROW_KEYS = ["slug", "name", "method", "path", "url", "price", "modelBacked", "docs", "reliability", "credit"];
+// The credit a tool's catalog entry says its source requires: its attribution
+// key's sentence, else the attribution run its description ends with.
+const catalogCredit = (def) => ATTRIBUTIONS[def?.attribution] || attributionTailOf(String(def?.description || "")) || null;
+// A row keeps that credit whole (a family-level line in its place does not).
+const creditCovers = (row, def) => { const need = catalogCredit(def); return !need || (typeof row?.credit === "string" && row.credit.includes(need)); };
+{
+  const c3sTool = { slug: "weather-history", name: "H", price: "$0.002", attribution: "open-meteo-c3s", description: `History. ${ATTRIBUTIONS["open-meteo-c3s"]}` };
+  const r3 = toolRow("GET /api/weather-history", c3sTool, { baseUrl: "https://x.test", outcome: undefined, available: true, familyCredit: OPEN_METEO_ATTRIBUTION });
+  ok(creditCovers(r3, c3sTool) && r3.credit.includes(C3S_CREDIT), `a tool row carries its own source's whole credit, not the family's shorter line (${JSON.stringify(r3.credit)})`);
+  ok(!creditCovers({ credit: OPEN_METEO_ATTRIBUTION }, c3sTool) && !creditCovers({}, c3sTool), "control: a row carrying only the family's Open-Meteo line, or no credit, does not cover a Copernicus tool");
+  const plain = toolRow("GET /api/edgar-filings", { slug: "edgar-filings", name: "E", price: "$0.005", description: "Filings." }, { baseUrl: "https://x.test", outcome: undefined, available: true, familyCredit: "Source: SEC EDGAR." });
+  ok(plain.credit === "Source: SEC EDGAR." && toolRow("GET /api/w", { slug: "weather-alerts", name: "W", price: "$0.001", description: "Alerts." }, { baseUrl: "https://x.test", outcome: undefined, available: true }).credit === null,
+    "a tool whose source asks for no credit of its own keeps its family's line, or none");
+}
 const fakeCatalog = {
   "GET /api/a": { slug: "edgar-filings", name: "A", price: "$0.005" },
   "POST /api/b": { slug: "filings-brief", name: "B", price: "$0.027", quoteRange: { minUsd: 0.027, maxUsd: 1.08 } },
@@ -130,6 +173,15 @@ ok(wholesaleFamily("compute", ctx).tools.map((t) => t.slug).join(",") === "hash"
   ok(page.includes(failedCallFootnote({ rails: ["x402", "MPP", "a prepaid credits key"], tempoPush: true })) && !/never charged/i.test(page) && page.includes(REFUND_TERMS_PATH), "the page says it the same way, names the refund terms, and never says an error answer is never charged");
   ok(!stripScripts(wholesalePage("https://x.test", {}, new Set(), { tempoPush: false }), "").includes(TEMPO_PUSH_EXCEPTION), "the page leaves out the exception where Tempo push is not offered");
 }
+{
+  // The contract's own words on where errorCode rides, in the JSON and on the page.
+  const note = idx.errorCodes?.note || "";
+  ok(note.includes(SCOPE) && note.includes(NOT_CARRIED) && !/every tool error answer/i.test(note), `the JSON's errorCode note is the scoped claim (${JSON.stringify(note.slice(0, 120))})`);
+  const pageText = stripScripts(wholesalePage("https://x.test"), "").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  ok(typeof SCOPE === "string" && pageText.includes(SCOPE) && pageText.includes(NOT_CARRIED) && !/every tool error answer/i.test(pageText), "the page states the same scoped claim and the 402 exception");
+  // Credit: each tool's own line, never one family line for every answer.
+  ok(/\beach tool's credit line\b/i.test(pageText) && !/Keep the family's credit line/i.test(pageText), "the page asks for each tool's credit line, not one family line");
+}
 ok(wholesaleFamily("nope", ctx) === null, "an unknown family reads null");
 ok(WHOLESALE_FAMILIES.every((f) => ["public-domain", "cc-by-4.0", "own-computation"].includes(f.redistribution)), "every family's basis is public domain, CC BY 4.0 or our own computation");
 
@@ -164,8 +216,9 @@ ok(WHOLESALE_FAMILIES.every((f) => ["public-domain", "cc-by-4.0", "own-computati
 
 // ---- the changelog announces the surface, in both files (CHANGELOG.md and
 // the /changelog page, src/changelog.js): the page, the versioned JSON, every
-// family by its title, and the errorCode field every tool error answer now
-// carries.
+// family by its title, and the errorCode field, claimed exactly where it is
+// served: every error answer a tool's route writes other than a 402, which
+// follows the x402 and MPP wire formats and carries none.
 {
   const { readFileSync } = await import("node:fs");
   const md = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8").replace(/\s+/g, " ");
@@ -177,13 +230,21 @@ ok(WHOLESALE_FAMILIES.every((f) => ["public-domain", "cc-by-4.0", "own-computati
     const missing = WHOLESALE_FAMILIES.filter((f) => !lower.includes(f.title.toLowerCase())).map((f) => f.id);
     ok(missing.length === 0, `${label} names every family by its title${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
     ok(/`errorCode`/.test(text) && ["invalid_input", "upstream_error"].every((c) => text.includes(`\`${c}\``)), `${label} announces the errorCode field on tool error answers`);
+    ok(/other than a 402/.test(text) && /\b402\b[^.]*x402 and MPP wire formats and carries no `?errorCode`?/.test(text) && !/every tool error answer carries/i.test(text), `${label} claims errorCode only where it is served, and says the 402 carries none`);
   }
 }
 
-// ---- a FREE_MODE boot
+// ---- a FREE_MODE boot. Outbound fetches are held to loopback: the sweep
+// below calls every catalog route, and none of it may reach an upstream.
+const PRELOAD = ["--import", "./scripts/lib/loopback-only-preload.js"];
+const QUIET = { X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", POSTHOG_API_KEY: "", STATS_ALLOW_EPHEMERAL: "true", SOLANA_LEADERBOARD: "off", LEADERBOARD_FIRST_REFRESH_DELAY_MS: "3600000", KALSHI_TOOLS: "", STOCK_DATA_PROVIDER: "", DATABENTO_API_KEY: "" };
+// A JSON answer's errorCode against its final status: a 402 carries none, any
+// other error answer carries the table's code for its status.
+const readAnswer = async (res) => { const text = await res.text(); let json = null; try { json = JSON.parse(text); } catch { /* not JSON */ } return { status: res.status, json }; };
+const codeRight = (a) => a.status === 402 ? !(a.json && typeof a.json === "object" && "errorCode" in a.json) : a.json?.errorCode === stableErrorCode(a.status);
 let srv = null;
 try {
-  srv = await bootServer({ env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", POSTHOG_API_KEY: "", STATS_ALLOW_EPHEMERAL: "true", SOLANA_LEADERBOARD: "off", LEADERBOARD_FIRST_REFRESH_DELAY_MS: "3600000" }, stores: "wholesale" });
+  srv = await bootServer({ args: PRELOAD, env: { FREE_MODE: "true", ...QUIET }, stores: "wholesale" });
   const U = srv.url;
   const pricing = await (await fetch(`${U}/api/pricing`)).json();
   const bySlug = new Map((pricing.endpoints || pricing.tools).map((e) => [e.slug, e]));
@@ -222,9 +283,63 @@ try {
     const borrowed = all.filter((t) => t.family === "compute" && (DATASET.test(bySlug.get(t.slug)?.description || "") || ATTRIBUTION_TAILS.some((x) => (bySlug.get(t.slug)?.description || "").includes(x))));
     ok(borrowed.length === 0 && !all.some((t) => t.family === "compute" && t.slug === "country-info") && bySlug.has("country-info"), `no compute-family tool serves an outside dataset; country-info (ODbL) is served but not listed here (${borrowed.map((t) => t.slug).join(", ") || "none"})`);
   }
+  {
+    // Every row carries its own credit line, covering what its catalog entry
+    // says its source requires; a family credit line is one every tool in it keeps.
+    const uncovered = all.filter((t) => !creditCovers(t, bySlug.get(t.slug))).map((t) => `${t.slug} (${JSON.stringify(t.credit)})`);
+    ok(all.every((t) => "credit" in t) && uncovered.length === 0, `every row in every family carries its catalog credit whole${uncovered.length ? `: ${uncovered.join(", ")}` : ""}`);
+    ok(all.filter((t) => catalogCredit(bySlug.get(t.slug))).length >= 10, `the coverage check reads real attributions (${all.filter((t) => catalogCredit(bySlug.get(t.slug))).length} credited rows)`);
+    const untrue = computeIdx.families.filter((f) => f.credit && all.some((t) => t.family === f.id && !String(t.credit || "").includes(f.credit))).map((f) => f.id);
+    ok(untrue.length === 0, `a family credit line is one every tool in the family keeps (${untrue.join(", ") || "all true"})`);
+  }
   const err = await fetch(`${U}/api/edgar-filings`);
   const ej = await err.json();
   ok(err.status === 400 && ej.errorCode === "invalid_input" && typeof ej.error === "string", "a tool error answer carries its errorCode beside the message");
+  {
+    // Class-wide: every catalog route, called with an empty input, answers a
+    // JSON error with the code for its status (the kit dispatcher's, the
+    // bespoke content routes' and the memory routes' own refusals alike).
+    const routes = (pricing.endpoints || pricing.tools).map((e) => ({ slug: e.slug, method: String(e.method || "GET").toUpperCase(), path: e.path })).filter((r) => r.path);
+    const memory = routes.filter((r) => r.path.startsWith("/api/memory")).map((r) => ({ ...r, path: `${r.path}?ns=wholesale` }));
+    const queue = [...routes, ...memory];
+    const wrong = [];
+    let errors = 0;
+    await Promise.all(Array.from({ length: 8 }, async () => {
+      while (queue.length) {
+        const r = queue.shift();
+        const a = await readAnswer(await fetch(`${U}${r.path}`, { method: r.method, headers: r.method === "GET" ? {} : { "content-type": "application/json" }, body: r.method === "GET" ? undefined : "{}" }));
+        if (a.status < 400 || !a.json || typeof a.json !== "object") continue;
+        errors++;
+        if (!codeRight(a)) wrong.push(`${r.method} ${r.path} ${a.status}`);
+      }
+    }));
+    ok(errors >= 300 && wrong.length === 0, `every catalog route's JSON error answer carries the code for its status (${errors} error answers; wrong: ${wrong.slice(0, 20).join(", ") || "none"})`);
+    ok(memory.length >= 10, `the memory routes are swept with a demo namespace too (${memory.length})`);
+  }
+  {
+    // Class-wide: every retired route (a tool, a pack, a pack's prompt, a
+    // pairwise converter) answers 410 with errorCode "retired".
+    const gone = [
+      ...Object.keys(RETIRED_TOOLS).map((s) => ["GET", `/api/${s}`]),
+      ...Object.keys(RETIRED_PACKS).map((s) => ["POST", `/api/skill/${s}`]),
+      ...Object.keys(RETIRED_PACKS).map((s) => ["GET", `/api/skill-packs/${s}/prompt`]),
+      ["GET", "/api/convert/furlongs-to-parsecs"],
+    ];
+    const wrong = [];
+    for (const [method, path] of gone) {
+      const a = await readAnswer(await fetch(`${U}${path}`, { method, headers: method === "GET" ? {} : { "content-type": "application/json" }, body: method === "GET" ? undefined : "{}" }));
+      if (a.status !== 410 || a.json?.errorCode !== "retired") wrong.push(`${method} ${path} ${a.status} ${JSON.stringify(a.json?.errorCode)}`);
+    }
+    ok(gone.length >= 100 && wrong.length === 0, `every retired route answers 410 with errorCode "retired" (${gone.length} routes; wrong: ${wrong.slice(0, 12).join(", ") || "none"})`);
+    // Class-wide: every switched-off tool answers 503 with errorCode "unavailable".
+    const off = [...[...KALSHI_SLUGS].map((s) => `/api/${s}`), ...[...STOCK_SLUGS].map((s) => `/api/${s}`), ...[...STOCK_CORE_PACK_SLUGS].map((s) => `/api/skill/${s}`)];
+    const wrongOff = [];
+    for (const path of off) {
+      const a = await readAnswer(await fetch(`${U}${path}`));
+      if (a.status !== 503 || a.json?.error !== "not-offered" || a.json?.errorCode !== "unavailable") wrongOff.push(`${path} ${a.status} ${JSON.stringify(a.json?.errorCode)}`);
+    }
+    ok(off.length >= 6 && wrongOff.length === 0, `every switched-off tool answers its not-offered 503 with errorCode "unavailable" (${off.length} routes; wrong: ${wrongOff.join(", ") || "none"})`);
+  }
   const nf = await fetch(`${U}/api/wholesale/v1/nope`);
   const nj = await nf.json();
   ok(nf.status === 404 && nj.errorCode === "not_found" && nj.families.length === WHOLESALE_FAMILIES.length, "an unknown family is a 404 with the code and the family list");
@@ -243,6 +358,39 @@ try {
   ok(false, `boot: ${e?.message || e}`);
 } finally {
   await srv?.stop().catch(() => {});
+}
+
+// ---- a paid boot (x402 exact on Base, stub facilitator): the payment-required
+// answer is the wire format, unchanged, with no errorCode, and the contract
+// that boot serves says so instead of listing a code for it.
+let paid = null, facilitator = null;
+try {
+  facilitator = createServer((req, res) => {
+    let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
+      const reply = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+      if (req.url === "/supported") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} });
+      if (req.url === "/rpc") return reply(200, { jsonrpc: "2.0", id: 1, result: "0x0" });
+      return reply(200, { isValid: false, invalidReason: "stub", success: false });
+    });
+  });
+  await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+  const STUB = `http://127.0.0.1:${facilitator.address().port}`;
+  paid = await bootServer({ args: PRELOAD, stores: "wholesale-paid", env: {
+    ...QUIET, FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
+    FACILITATOR_URL: STUB, AGENT402_BASE_RPC: `${STUB}/rpc`, PAYMENT_SETTLE_FALLBACK: "", FACILITATOR_GAS_CHECK: "off",
+    CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "",
+    STRIPE_SECRET_KEY: "", OPENROUTER_API_KEY: "", CIRCLE_FACILITATOR_API_KEY: "", REDIS_URL: "", STATE_DATABASE_URL: "", DATABASE_URL: "", ANALYTICS_DATABASE_URL: "", NODE_ENV: "test",
+  } });
+  const r = await fetch(`${paid.url}/api/edgar-filings?ticker=AAPL`);
+  const a = await readAnswer(r);
+  ok(a.status === 402 && r.headers.get("payment-required") && codeRight(a), `an unpaid call to a wholesale tool is the 402 payment challenge with no errorCode (${a.status}, body keys ${a.json && typeof a.json === "object" ? Object.keys(a.json).join(",") || "none" : typeof a.json})`);
+  const contract = (await (await fetch(`${paid.url}/api/wholesale/v1`)).json()).errorCodes || {};
+  ok(!(contract.codes || []).some((c) => c.status === 402) && String(contract.note || "").includes(NOT_CARRIED), `the contract that boot serves lists no code for the 402 and says why (${(contract.codes || []).filter((c) => c.status === 402).map((c) => c.code).join(", ") || "no 402 row"})`);
+} catch (e) {
+  ok(false, `paid boot: ${e?.message || e}`);
+} finally {
+  await paid?.stop().catch(() => {});
+  facilitator?.close();
 }
 
 console.log(`\n${pass} passed, ${failed} failed`);
