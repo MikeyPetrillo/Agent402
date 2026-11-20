@@ -27,6 +27,7 @@ import { WEATHER_PLAN_TOOLS } from "./weather-plan-kit.js";
 import { WEATHER_PROBABILITY_TOOLS } from "./weather-probability-kit.js";
 import { EDGAR_TOOLS } from "./edgar-kit.js";
 import { CRYPTO_MARKETS_TOOLS } from "./crypto-markets-kit.js";
+import { CG_API_HOSTS } from "./coingecko-endpoint.js";
 import { partialFields } from "../partial-answer.js";
 import { withBudgetCeiling } from "../upstream-deadline.js";
 import { bundlePriceUsd, unitPartsUsd, usdText, BUNDLE_DISCOUNT } from "../bundle-pricing.js";
@@ -597,7 +598,7 @@ export const BUNDLE_TOOLS = [
     route: "POST /api/token-diligence",
     name: "Token diligence (coin list)",
     slug: "token-diligence",
-    upstreamHosts: ["api.coingecko.com", "pro-api.coingecko.com"],
+    upstreamHosts: CG_API_HOSTS,
     category: "crypto",
     attribution: "coingecko",
     ...quoted(TOKEN_DILIGENCE_LEGS, coinUnitsCount, TOKEN_DILIGENCE_MAX_COINS),

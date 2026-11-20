@@ -143,7 +143,7 @@ export function upstreamHostsForSlug(slug, root = ROOT) {
   const def = definitionOf(slug, root);
   if (!def) return new Set();
   const declared = DECLARED_HOSTS.exec(def.own);
-  if (declared) return hostsIn(declared[1]);
+  if (declared) return hostsIn(declared[1] ?? namedHostList(declared[2], root));
   const own = hostsIn(def.own);
   return own.size ? own : hostsIn(def.kit);
 }
@@ -152,7 +152,15 @@ export function upstreamHostsForSlug(slug, root = ROOT) {
 // list: `upstreamHosts: ["api.example.org"]`. Where it is written, it is the
 // whole answer: a host the definition only cites or shows in an example is
 // not one it reads.
-const DECLARED_HOSTS = /\bupstreamHosts:\s*\[([^\]]*)\]/;
+// A source whose hosts one module alone may name is declared by that module's
+// exported list instead (`upstreamHosts: CG_API_HOSTS`): the list's literal,
+// `const CG_API_HOSTS = Object.freeze([...])` in src/tools/, is read the same way.
+const DECLARED_HOSTS = /\bupstreamHosts:\s*(?:\[([^\]]*)\]|([A-Z][A-Z0-9_]*)\b)/;
+function namedHostList(name, root) {
+  const re = new RegExp(`\\bconst ${name}\\s*=\\s*(?:Object\\.freeze\\()?\\[([^\\]]*)\\]`);
+  for (const text of kits(root)) { const m = re.exec(text); if (m) return m[1]; }
+  return "";
+}
 /** True when the tool's own definition declares the hosts it reads. */
 export function declaresUpstreamHosts(slug, root = ROOT) {
   const def = definitionOf(slug, root);

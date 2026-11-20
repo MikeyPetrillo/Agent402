@@ -71,7 +71,8 @@ try {
   // ---- a stub kit tree whose tool reads the loopback stub host
   const kitRoot = join(work, "root");
   mkdirSync(join(kitRoot, "src", "tools"), { recursive: true });
-  writeFileSync(join(kitRoot, "src", "tools", "stub-kit.js"), `export const T = [{ route: "GET /api/stub", slug: "stub-tool", handler: () => getJson("http://127.0.0.1:1/alerts") }, { route: "GET /api/other", slug: "other-tool", handler: () => getJson("https://other.example/x") }, { route: "POST /api/stub-bundle", slug: "stub-bundle", upstreamHosts: ["stub.example"], sources: ["https://cited.example/page"], handler: () => legs() }, made({ slug: "made-tool", upstreamHosts: ["made.example"] })];\n`);
+  writeFileSync(join(kitRoot, "src", "tools", "stub-kit.js"), `export const T = [{ route: "GET /api/stub", slug: "stub-tool", handler: () => getJson("http://127.0.0.1:1/alerts") }, { route: "GET /api/other", slug: "other-tool", handler: () => getJson("https://other.example/x") }, { route: "POST /api/stub-bundle", slug: "stub-bundle", upstreamHosts: ["stub.example"], sources: ["https://cited.example/page"], handler: () => legs() }, made({ slug: "made-tool", upstreamHosts: ["made.example"] }), { route: "GET /api/named", slug: "named-tool", upstreamHosts: NAMED_HOSTS, handler: () => legs() }, { route: "GET /api/unnamed", slug: "unnamed-tool", upstreamHosts: NO_SUCH_LIST, handler: () => legs() }];\n`);
+  writeFileSync(join(kitRoot, "src", "tools", "named-endpoint.js"), `export const NAMED_HOSTS = Object.freeze(["named.example", "alt.named.example"]);\n`);
   const log = join(work, "failures.jsonl");
   const row = (o) => writeFileSync(log, `${JSON.stringify({ t: 1000, host: "127.0.0.1", method: "GET", keyed: false, status: 503, ...o })}\n`, { flag: "a" });
 
@@ -158,6 +159,8 @@ try {
     // The declared list is the whole answer: a host the definition only cites is not read.
     ok([...upstreamHostsForSlug("stub-bundle", kitRoot)].join() === "stub.example" && declaresUpstreamHosts("stub-bundle", kitRoot) && !declaresUpstreamHosts("stub-tool", kitRoot), "a declared upstreamHosts list is the tool's hosts, without the hosts it cites");
     ok([...upstreamHostsForSlug("made-tool", kitRoot)].join() === "made.example", "a definition built by a factory (no route literal) is found by its slug");
+    ok([...upstreamHostsForSlug("named-tool", kitRoot)].sort().join() === "alt.named.example,named.example" && declaresUpstreamHosts("named-tool", kitRoot), "a declaration that names another module's exported list reads that list's hosts");
+    ok(upstreamHostsForSlug("unnamed-tool", kitRoot).size === 0 && !declaresUpstreamHosts("unnamed-tool", kitRoot), "a declaration naming a list no module defines declares no host");
 
     // The shipped tree: each bundle product is a network tool, declares the
     // hosts its legs read, and every leg is a network tool too.
@@ -168,7 +171,7 @@ try {
     }
     const hostsOf = (slug) => [...upstreamHostsForSlug(slug)];
     ok(["api.open-meteo.com", "archive-api.open-meteo.com", "air-quality-api.open-meteo.com", "ensemble-api.open-meteo.com", "geocoding-api.open-meteo.com"].every((h) => hostsOf("weather-risk-brief").includes(h)), "weather-risk-brief declares every Open-Meteo host its legs read");
-    ok(hostsOf("filings-brief").includes("data.sec.gov") && hostsOf("filings-brief").includes("efts.sec.gov") && hostsOf("token-diligence").some((h) => h.endsWith("coingecko.com")), "filings-brief declares the SEC hosts and token-diligence the CoinGecko host");
+    ok(hostsOf("filings-brief").includes("data.sec.gov") && hostsOf("filings-brief").includes("efts.sec.gov") && ["api.coingecko.com", "pro-api.coingecko.com"].every((h) => hostsOf("token-diligence").includes(h)), "filings-brief declares the SEC hosts and token-diligence the CoinGecko host");
     for (const slug of ["bank-holidays", "school-holidays", "next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar"]) {
       ok(WALLET_ONLY_SLUGS.has(slug) && declaresUpstreamHosts(slug) && hostsOf(slug).includes("nagerholidays.com") && !hostsOf(slug).includes("www.opm.gov"), `${slug} is a network tool and declares the holiday source's host, not the pages it cites`);
     }

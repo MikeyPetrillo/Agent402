@@ -13,7 +13,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { UPSTREAM_BUDGETS } from "../src/upstream-budgets.js";
-import { cgTier, cgBase, cgKeyHeaders, CG_DEMO_BASE, CG_PRO_BASE } from "../src/tools/coingecko-endpoint.js";
+import { cgTier, cgBase, cgKeyHeaders, CG_DEMO_BASE, CG_PRO_BASE, CG_API_HOSTS } from "../src/tools/coingecko-endpoint.js";
 import { CRYPTO_TOOLS, clearCryptoCache } from "../src/tools/crypto-kit.js";
 import { CRYPTO_MARKETS_TOOLS, clearCryptoMarketsCache, resetCgRateLimit } from "../src/tools/crypto-markets-kit.js";
 import { CRYPTO_SCREENS_TOOLS } from "../src/tools/crypto-screens-kit.js";
@@ -285,6 +285,9 @@ const offenders = [];
   }
 })(join(root, "src"));
 ok(offenders.length === 0, `no src/ file outside ${HELPER} names a CoinGecko API host or key header${offenders.length ? `: ${offenders.join(", ")}` : ""}`);
+// The host list a definition declares by name is the two bases' hosts, no more.
+ok(Object.isFrozen(CG_API_HOSTS) && [...CG_API_HOSTS].sort().join() === [new URL(CG_DEMO_BASE).hostname, new URL(CG_PRO_BASE).hostname].sort().join(),
+  `the exported host list is the hosts of the two API bases (${CG_API_HOSTS.join(", ")})`);
 {
   // The daily call budget finds CoinGecko hosts by its own suffix rule: both
   // hosts the endpoint helper can name must fall under it.
