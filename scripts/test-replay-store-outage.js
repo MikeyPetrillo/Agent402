@@ -20,8 +20,10 @@
 // waited out and the call is served and settled once; a pause longer than
 // that bound (set to 1 s on its own server) is refused 503 before any
 // verify, the replay guard holds nothing for the payment, and the same
-// payment sent again once the store answers is served and settled once,
-// then refused as consumed on a third send.
+// request sent again as is once the store answers is served and settled
+// once (its idempotency claim, sent during the pause, is dropped by its
+// token), then replays its answer, and is refused as consumed under a key
+// of its own.
 // Part 2 drives the REAL Tempo and card gates (src/mpp-tempo.js,
 // src/mpp-stripe.js) in this process against a shared store that throws:
 // inside the deploy overlap window a Tempo pull credential, a Tempo push
@@ -251,10 +253,12 @@ try {
         ok((againH.status !== 200 || againH.headers.get("x-replayed-answer") === "1") && settles === h1 + 1, `the same payment buys no second run there (${againH.status}; settle +${settles - h1})`);
 
         // A 5 s pause against a 1 s bound: refused before any verify, while
-        // the store is still paused. The resends below each carry an
-        // Idempotency-Key of their own, so the replay guard alone decides
-        // them (a resend under the first send's own key is the idempotency
-        // store's to decide, src/idempotency-store.js).
+        // the store is still paused. The first resend is the same request as
+        // is, as a buyer sends it (no Idempotency-Key): the idempotency claim
+        // the refused call sent during the pause lands late and must be
+        // dropped by its token, or the resend is refused 409 as still
+        // running for the claim's life. The third send carries an
+        // Idempotency-Key of its own, so the replay guard alone decides it.
         const credI = credential(accept || {});
         const i1 = settles, vi = verifies;
         await admin.sendCommand(["CLIENT", "PAUSE", "5000", "ALL"]);
@@ -265,9 +269,11 @@ try {
         ok(ri.status === 503 && bi.reason === "replay-store-unavailable" && ri.headers.get("retry-after") === "30" && tookI < 4_500, `a store paused past the bound on a required claim: the paid call is refused 503 with Retry-After while the store is still paused (${ri.status} ${bi.reason || ""} after ${tookI} ms)`);
         ok(verifies === vi && settles === i1, `nothing was verified or settled for it (verify +${verifies - vi}, settle +${settles - i1})`);
         await admin.ping(); // answers once the pause has ended
-        const ri2 = await send(I, { "payment-signature": credI, "idempotency-key": `outage-${randomBytes(8).toString("hex")}` });
+        const ri2 = await send(I, { "payment-signature": credI });
         const bi2 = await ri2.json().catch(() => ({}));
-        ok(ri2.status === 200 && settles === i1 + 1, `the refused payment was not consumed: sent again once the store answers it is served and settled once, never refused as a replay of itself (${ri2.status} ${bi2.reason || ""} ${ri2.headers.get("x-payment-replay") || ""} ${String(bi2.error || "").slice(0, 120)}; settle +${settles - i1})`);
+        ok(ri2.status === 200 && ri2.headers.get("x-replayed-answer") !== "1" && settles === i1 + 1, `the refused payment was not consumed: sent again as is once the store answers it is served and settled once, never refused as a replay or a run of itself (${ri2.status} ${bi2.reason || ""} ${bi2.error || ""} ${ri2.headers.get("x-payment-replay") || ""}; settle +${settles - i1})`);
+        const ri2b = await send(I, { "payment-signature": credI });
+        ok(ri2b.status === 200 && ri2b.headers.get("x-replayed-answer") === "1" && settles === i1 + 1, `sent as is once more it replays the stored answer, settled once (${ri2b.status} replayed ${ri2b.headers.get("x-replayed-answer") || "-"}; settle +${settles - i1})`);
         const ri3 = await send(I, { "payment-signature": credI, "idempotency-key": `outage-${randomBytes(8).toString("hex")}` });
         ok(ri3.status === 409 && ri3.headers.get("x-payment-replay") === "consumed" && settles === i1 + 1, `and sent a third time it is the replay it is: refused as consumed, never settled twice (${ri3.status} ${ri3.headers.get("x-payment-replay") || ""}; settle +${settles - i1})`);
       } finally {

@@ -294,6 +294,8 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
   };
   // This section's own claims (an earlier section's guard may still write a claim of its own here).
   const claimsIn = () => [...kv.keys()].filter((k) => k.includes(":f:") && /landed|held|:t2:|:c:b{64}/.test(k));
+  // The drop by token is sent and not waited for: the store is read once it has run.
+  const dropsRun = () => new Promise((r) => setTimeout(r, 20));
   process.env.SHARED_LIMITS_OP_MS = "100";
   process.env.REPLAY_CLAIM_OP_MS = "300";
   __setTestClient(store);
@@ -302,6 +304,7 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
     const g = createReplayGuard();
     swallow = 1;
     const v = await g.begin("n2:landed", undefined, { requireShared: true });
+    await dropsRun();
     ok(v === "unavailable" && g._state().inFlight === 0, `a claim whose answer never came refuses a route that requires the store, claiming nothing here (${v})`);
     ok(claimsIn().length === 0, `the claim that landed is dropped by its own token (left: ${claimsIn().join(",") || "none"})`);
     ok(await g.begin("n2:landed", undefined, { requireShared: true }) === "ok", "so the buyer's retry of the same payment is claimed, never refused as a replay of itself");
@@ -311,6 +314,7 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
     const tk = `t2:${"a".repeat(64)}:${"b".repeat(64)}`;
     swallow = 1;
     const vt = await g.begin(tk, undefined, { requireShared: true });
+    await dropsRun();
     ok(vt === "unavailable" && claimsIn().length === 0, `the same for a key with a legacy name (${vt}, left: ${claimsIn().join(",") || "none"})`);
     // The legacy twin's answer is the one that never comes: both names are dropped.
     const sets = store.set;
@@ -318,12 +322,14 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
     store.set = (k, v2, o = {}) => { if (o.NX && ++nx === 2) swallow = 1; return sets(k, v2, o); };
     const vl = await g.begin(tk, undefined, { requireShared: true });
     store.set = sets;
+    await dropsRun();
     ok(vl === "unavailable" && claimsIn().length === 0, `and when the legacy name's claim is the one never answered (${vl}, left: ${claimsIn().join(",") || "none"})`);
     ok(await g.begin(tk, undefined, { requireShared: true }) === "ok", "the retry is claimed");
     await g.release(tk);
     // On a route that does not require the store the call is claimed here, and the landed claim is dropped too.
     swallow = 1;
     const vf = await g.begin("n2:landed-fast");
+    await dropsRun();
     ok(vf === "ok" && claimsIn().length === 0 && g._state().inFlight === 1, `on a route that does not require the store the call is claimed on this process and the unanswered claim is dropped (${vf}, left: ${claimsIn().join(",") || "none"})`);
     await g.release("n2:landed-fast");
     ok(await g.begin("n2:landed-fast") === "ok", "its retry after a release is claimed");
@@ -334,11 +340,66 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
     const held = claimsIn().map((k) => `${k}=${kv.get(k)}`).join();
     swallow = 1;
     const vr = await createReplayGuard().begin("n2:held", undefined, { requireShared: true });
+    await dropsRun();
     ok(vr === "unavailable" && claimsIn().map((k) => `${k}=${kv.get(k)}`).join() === held, `a second request whose claim is never answered is refused and the first request's claim is untouched (${vr})`);
     ok(await createReplayGuard().begin("n2:held", undefined, { requireShared: true }) === "inflight", "so the payment still reads in flight: it runs once");
     await holder.release("n2:held");
   } finally {
     clearInterval(keepQ);
+    __setTestClient(null);
+    delete process.env.SHARED_LIMITS_OP_MS; delete process.env.REPLAY_CLAIM_OP_MS;
+  }
+}
+
+// ---- A3r. A store that stops answering mid-claim: refused after one bound ------
+// The store answers the reads, then holds every command from the claim on.
+// The claim passes its bound and the call is refused; the drop by token that
+// follows is sent (on one connection it runs right after a claim that lands
+// late) and not waited for, so the refusal comes one bound after the claim
+// was sent, not one more bound for each name dropped.
+{
+  const BOUND = 1_000;
+  const never = () => new Promise(() => {});
+  const make = (hangOnNx) => {
+    const kv = new Map();
+    const s = { hung: false, dropAt: null, nx: 0 };
+    s.client = {
+      isReady: true,
+      get: (k) => (s.hung ? never() : Promise.resolve(kv.get(k) ?? null)),
+      set: (k, v, o = {}) => {
+        if (s.hung) return never();
+        if (o.NX && ++s.nx === hangOnNx) { s.hung = true; return never(); }
+        if (o.NX && kv.has(k)) return Promise.resolve(null);
+        kv.set(k, v); return Promise.resolve("OK");
+      },
+      del: () => never(),
+      expire: () => never(),
+      eval: () => { if (s.dropAt === null) s.dropAt = performance.now(); return never(); },
+    };
+    return s;
+  };
+  process.env.SHARED_LIMITS_OP_MS = "100";
+  process.env.REPLAY_CLAIM_OP_MS = String(BOUND);
+  const keepR = setInterval(() => {}, 1000); // a command bound alone does not hold the loop
+  try {
+    for (const [label, key, hangOnNx] of [
+      ["its claim is the command never answered", "n2:mid-claim", 1],
+      ["the claim of its legacy name is the command never answered", `t2:${"c".repeat(64)}:${"d".repeat(64)}`, 2],
+    ]) {
+      const s = make(hangOnNx);
+      __setTestClient(s.client);
+      const g = createReplayGuard();
+      const t0 = performance.now();
+      const v = await g.begin(key, undefined, { requireShared: true });
+      const doneAt = performance.now();
+      const ms = Math.round(doneAt - t0);
+      const afterDrop = s.dropAt === null ? null : Math.round(doneAt - s.dropAt);
+      ok(v === "unavailable" && ms >= BOUND - 50, `${label}: refused once the claim passes its ${BOUND} ms bound (${v} after ${ms} ms)`);
+      ok(afterDrop !== null && afterDrop < BOUND / 2, `${label}: the drop by token is sent and the refusal does not wait on it (refused ${afterDrop ?? "-"} ms after the drop was sent)`);
+      __setTestClient(null);
+    }
+  } finally {
+    clearInterval(keepR);
     __setTestClient(null);
     delete process.env.SHARED_LIMITS_OP_MS; delete process.env.REPLAY_CLAIM_OP_MS;
   }
@@ -363,6 +424,7 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
   try {
     failOnce = true;
     ok(await g.begin("n2:partial", undefined, { requireShared: true }) === "unavailable", "a store error after the claim refuses the call");
+    await new Promise((r) => setTimeout(r, 20)); // the drop is sent and not waited for
     ok(![...store.keys()].some((k) => k.includes(":f:")), `and drops the claim it took (left: ${[...store.keys()].join(",") || "none"})`);
     ok(await g.begin("n2:partial", undefined, { requireShared: true }) === "ok", "so the buyer's retry of the same authorization is claimed, not refused as in flight");
     await g.release?.("n2:partial");

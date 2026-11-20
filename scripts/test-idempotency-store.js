@@ -115,6 +115,68 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await B.release("h"); A.stop(); B.stop();
   }
 }
+// ---- shared, a store that pauses: a claim sent and never answered -----------
+// The store holds every command while paused and runs them in order once it
+// answers (CLIENT PAUSE). A claim sent while it is paused passes its bound
+// (the local claim guards this process) and lands once the pause ends, under
+// this call's own token. Its release drops it by that token, so the same
+// call sent again once the store answers (an answer that was not a 200 is
+// not stored, so it runs again) is claimed, never refused 409 as in flight
+// for the claim's whole life. A name another container holds is never
+// dropped by a call whose own claim was only sent.
+{
+  const kv = new Map();
+  let paused = false;
+  const queued = [];
+  const run = (fn) => (paused ? new Promise((r) => queued.push(() => r(fn()))) : Promise.resolve().then(fn));
+  const unpause = () => { paused = false; for (const f of queued.splice(0)) f(); };
+  const fake = {
+    get: (k) => run(() => kv.get(k) ?? null),
+    set: (k, v, o = {}) => run(() => { if (o.NX && kv.has(k)) return null; kv.set(k, v); return "OK"; }),
+    del: (k) => run(() => (kv.delete(k) ? 1 : 0)),
+    expire: () => run(() => 1),
+    // The store's own compare-and-delete (one command, as on a real Redis).
+    eval: (script, { keys, arguments: args }) => run(() => (/'del'/.test(script) && kv.get(keys[0]) === args[0] ? (kv.delete(keys[0]) ? 1 : 0) : 0)),
+  };
+  const keep = setInterval(() => {}, 1000); // a command's bound alone does not hold the loop
+  try {
+    const A = createIdempotencyStore({ redis: async () => fake, opTimeoutMs: 40, releaseRetryMs: 20 });
+    paused = true;
+    ok(await A.claim("p") === true, "paused store: a claim whose answer never comes is guarded by this process's own claim");
+    await A.release("p"); // the run ended on a refusal: nothing was stored for it
+    unpause();
+    await sleep(10);
+    ok(!kv.has("idem:f:p"), `paused store: the claim that landed once the store answered is dropped by its own token (left: ${kv.get("idem:f:p") ?? "none"})`);
+    ok(await A.claim("p") === true, "paused store: so the same call sent again is claimed, never refused as still running");
+    await A.release("p");
+    const B = createIdempotencyStore({ redis: async () => fake, opTimeoutMs: 40, releaseRetryMs: 20 });
+    ok(await B.claim("p") === true, "paused store: and another container claims it too once that run is released");
+    await B.release("p");
+    // The release is the one never answered, and the retry runs before the claim lands: still by token.
+    paused = true;
+    ok(await A.claim("q") === true, "paused store: claim q");
+    await A.release("q");
+    await sleep(60); // the release's retry passes its bound too
+    unpause();
+    await sleep(60);
+    ok(!kv.has("idem:f:q") && await B.claim("q") === true, "paused store: a release whose drop passed its bound is retried by token and the name is free");
+    await B.release("q");
+    // Another container holds the name: a call whose own claim was only sent leaves it in place.
+    ok(await B.claim("t") === true, "control: B claims t in the store");
+    const heldByB = kv.get("idem:f:t");
+    paused = true;
+    ok(await A.claim("t") === true, "A's claim of t is never answered (A's own claim guards A)");
+    await A.release("t");
+    unpause();
+    await sleep(60);
+    ok(kv.get("idem:f:t") === heldByB, "A's release leaves B's claim of t in place");
+    ok(await A.claim("t") === false, "and the same call sent to A while B runs it is refused as in flight");
+    await B.release("t");
+    A.stop(); B.stop();
+  } finally {
+    clearInterval(keep);
+  }
+}
 // ---- shared, real Redis -----------------------------------------------------
 const url = String(process.env.REDIS_URL || "").trim();
 if (!url) {
@@ -140,6 +202,31 @@ if (!url) {
   const ttl = await c.pTTL("idem:b:" + key);
   ok(ttl > 0 && ttl <= IDEM_TTL_MS, `the Redis entry carries the ttl (${ttl} ms)`);
   await c.del("idem:b:" + key);
+  // The store pauses (CLIENT PAUSE) past a claim's bound: the claim and then
+  // its release are each sent and never answered. Once the store answers,
+  // the claim lands and its drop runs right after it on the same connection,
+  // so another container claims the key at once.
+  {
+    const admin = createClient({ url }); admin.on("error", () => {}); await admin.connect();
+    const P = createIdempotencyStore({ redis, local: createLocalIdempotencyStore({ ttlMs: 60_000 }), opTimeoutMs: 100, releaseRetryMs: 50 });
+    const pk = key + "p";
+    const keepR = setInterval(() => {}, 1000);
+    try {
+      await admin.sendCommand(["CLIENT", "PAUSE", "500", "ALL"]);
+      const claimed = await P.claim(pk);
+      await P.release(pk);
+      await admin.ping(); // answers once the pause has ended
+      await sleep(100);
+      ok(claimed === true && (await c.exists("idem:f:" + pk)) === 0, `real Redis paused past the bound: the claim that landed late is dropped by its token (claimed ${claimed}, left ${await c.get("idem:f:" + pk)})`);
+      ok(await B.claim(pk) === true, "real Redis paused past the bound: the same call is claimed by another container, never refused as in flight");
+      await B.release(pk);
+    } finally {
+      clearInterval(keepR);
+      try { await admin.sendCommand(["CLIENT", "UNPAUSE"]); } catch { /* not paused */ }
+      await admin.quit().catch(() => {});
+      P.stop();
+    }
+  }
   A.stop(); B.stop(); await c.quit();
 }
 console.log(`${pass} passed, ${fail} failed`);

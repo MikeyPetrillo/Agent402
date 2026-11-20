@@ -53,7 +53,7 @@ import algosdk from "algosdk";
 import { getTransactionDecoder } from "@solana/kit";
 import { paymentHeaderOf } from "./payer.js";
 import { getSharedRedisClient, sharedLimitEnabled } from "./shared-limit.js";
-import { boundedRedisClient, OP_MS } from "./bounded-redis.js";
+import { boundedRedisClient, OP_MS, delIfValue } from "./bounded-redis.js";
 // Every command this guard sends is bounded (SHARED_LIMITS_OP_MS, loop time):
 // a connected Redis that stops answering fails the command, which each path
 // below reads as a store that did not answer, instead of holding the paid
@@ -64,9 +64,11 @@ const storeClient = async () => boundedRedisClient(await getSharedRedisClient())
 // SHARED_LIMITS_OP_MS). A required claim that times out is a 503 to a paying
 // caller, while a store that pauses for a few seconds and then answers can
 // simply be waited for: the claim is taken when it answers and the call is
-// served. A store that never answers is still refused, after this bound. A
-// claim that is not required keeps the short bound: it falls back to this
-// process's own claim, which serves the call either way.
+// served. A store that stops answering is still refused, once the claim's
+// command it did not answer passes this bound (the drop by token that
+// follows is sent, not waited for). A claim that is not required keeps the
+// short bound: it falls back to this process's own claim, which serves the
+// call either way.
 export const REQUIRED_CLAIM_OP_MS = () => Math.max(OP_MS(), Number(process.env.REPLAY_CLAIM_OP_MS) || 5_000);
 const claimClient = async (required) => (required ? boundedRedisClient(await getSharedRedisClient(), REQUIRED_CLAIM_OP_MS) : storeClient());
 import { decodePaymentHeader, isEvmNetworkName, canonicalNonce } from "./payment-header.js";
@@ -458,13 +460,8 @@ export function consumedHoldFor(req, { settled = true } = {}) {
  */
 // Act on one name only while it still holds `value`: one script on a real
 // Redis; a read then the command on a client without EVAL (test doubles).
-const DEL_IF = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+// The drop is delIfValue (src/bounded-redis.js).
 const EXPIRE_IF = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end";
-async function delIfValue(c, name, value) {
-  if (typeof c.eval === "function") return c.eval(DEL_IF, { keys: [name], arguments: [String(value)] });
-  if ((await c.get(name)) === value) return c.del(name);
-  return 0;
-}
 async function expireIfValue(c, name, value, seconds) {
   if (typeof c.eval === "function") return c.eval(EXPIRE_IF, { keys: [name], arguments: [String(value), String(seconds)] });
   if ((await c.get(name)) === value) return c.expire(name, seconds);
@@ -808,10 +805,14 @@ export function createReplayGuard({
           // that was sent and never answered: on one connection the drop is
           // queued behind the claim, so a claim that lands late is dropped
           // right after it. Only a name still holding this call's own token
-          // is dropped, never another request's claim.
+          // is dropped, never another request's claim. The drops are sent and
+          // not waited for: a store that stopped answering would hold the
+          // refusal one more bound for each, and the retry of this payment is
+          // queued behind them on the same connection.
+          const drop = (name, value) => { try { Promise.resolve(delIfValue(c, name, value)).catch(() => {}); } catch { /* expires with its TTL */ } };
           if (claimedPrimary || sentPrimary) {
-            try { await delIfValue(c, REDIS_PREFIX + "f:" + primary, token); } catch { /* expires with its TTL */ }
-            if (legacyHeld || sentLegacy) { try { await delIfValue(c, REDIS_PREFIX + "f:" + legacy, legacyTag); } catch { /* expires with its TTL */ } }
+            drop(REDIS_PREFIX + "f:" + primary, token);
+            if (legacyHeld || sentLegacy) drop(REDIS_PREFIX + "f:" + legacy, legacyTag);
           }
           if (requireShared) {
             console.error("[replay-guard] redis begin failed; refusing a route that requires the shared store:", e.message);
