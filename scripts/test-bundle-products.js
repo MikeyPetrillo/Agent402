@@ -47,8 +47,14 @@ for (const t of BUNDLE_TOOLS) {
   ok(!/\$\d/.test(JSON.stringify(t.description).replace(usdText(bundlePriceUsd(1, legs, priceOf)), "")), `${t.slug}: the only price in the description is the derived per-unit price`);
   const max = BUNDLE_MAX_UNITS[t.slug];
   ok(t.quoteMaxUsd === bundlePriceUsd(max, legs, priceOf), `${t.slug}: the published ceiling is ${max} units (${t.quoteMaxUsd})`);
+  // The listing tells a buyer the real most units one call takes, whatever
+  // the size of the published example.
+  const listProp = Object.values(t.discovery.inputSchema.properties)[0];
+  ok(new RegExp(`\\bup to ${max} `).test(t.description) && new RegExp(`^1 to ${max} `).test(listProp.description),
+    `${t.slug}: the description and the input schema state the most units one call takes (${max})`);
   const ex = t.discovery.input;
   const n = (ex.sites || ex.tickers || ex.coins).length;
+  ok(n >= 2 && n <= max, `${t.slug}: the published example is a list (${n} units), inside the maximum`);
   ok(t.quote(ex) === bundlePriceUsd(n, legs, priceOf), `${t.slug}: the example (${n} units) is quoted at ${t.quote(ex)}`);
   ok(t.discovery.output.example.pricing.priceUsd === t.quote(ex) && t.discovery.output.example.pricing.units === n, `${t.slug}: the example answer's pricing block is the quote, derived`);
   const key = ex.sites ? "sites" : ex.tickers ? "tickers" : "coins";
@@ -260,27 +266,105 @@ try {
     ok(Date.now() - tCg < LEG_RETRY_PAUSE_MS, "tokens: no pause is spent waiting to re-send refused reads");
   }
   restore();
-  // The same through the real legs, the market host stubbed to answer 429:
-  // the requests the source receives are counted. Each coin in flight sends
-  // its profile read and the market kit's own single re-read of it, and
-  // nothing else goes out: no candles read, no second run, no further coin.
+  // ---- token-diligence through the REAL legs, the market host stubbed ----
+  // The published example is two coins; the multi-coin path is held here,
+  // offline: 4 and 12 coins through coin-profile and coin-ohlc as shipped,
+  // with the requests the market host receives counted where it answers.
   {
+    const { clearCryptoMarketsCache, resetCgRateLimit } = await import("../src/tools/crypto-markets-kit.js");
+    const DAY = 86_400_000, T0 = Date.parse("2026-01-01T00:00:00Z");
+    // Three daily candles: open 100, a high of 120, a low of 60, last close 99.
+    const candles = [[T0, 100, 120, 90, 110], [T0 + DAY, 110, 115, 60, 66], [T0 + 2 * DAY, 66, 99, 66, 99]];
+    const capOf = (n) => (n + 1) * 1e9;
+    const coinBody = (id, n) => ({
+      id, symbol: `s${n}`, name: `Coin ${n}`, market_cap_rank: 100 - n, genesis_date: "2020-01-01", categories: ["Stub"],
+      detail_platforms: { ethereum: { contract_address: `0x${String(n).padStart(40, "0")}`, decimal_place: 18 } }, links: { homepage: [`https://coin-${n}.example/`] },
+      market_data: {
+        current_price: { usd: 10 + n }, market_cap: { usd: capOf(n) }, fully_diluted_valuation: { usd: capOf(n) * (n === 1 ? 3 : 1) }, total_volume: { usd: capOf(n) * 0.05 },
+        ath: { usd: 100 }, ath_change_percentage: { usd: n === 2 ? -80 : -10 }, circulating_supply: 500, total_supply: 1000, max_supply: 1000,
+      },
+    });
     const realFetch = globalThis.fetch;
-    const got = [];
-    globalThis.fetch = async (input, init) => {
-      const url = String(typeof input === "string" ? input : input?.url ?? input);
-      if (!/^https:\/\/(pro-)?api\.coingecko\.com\//.test(url)) return realFetch(input, init);
-      got.push(new URL(url).pathname.replace("/api/v3", ""));
-      return new Response(JSON.stringify({ status: { error_code: 429 } }), { status: 429, headers: { "content-type": "application/json", "retry-after": "60" } });
+    // `refuseAfter`: the host answers 429 to every coin read after that many.
+    const marketHost = (ids, { refuseAfter = Infinity } = {}) => {
+      const seen = { reads: [], refused: [], open: 0, peak: 0, perCoin: new Map(), peakCoin: 0 };
+      globalThis.fetch = async (input, init) => {
+        const url = String(typeof input === "string" ? input : input?.url ?? input);
+        if (!/^https:\/\/(pro-)?api\.coingecko\.com\//.test(url)) return realFetch(input, init);
+        const path = new URL(url).pathname.replace("/api/v3", "");
+        const J = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+        if (path === "/coins/list") return J(200, ids.map((id) => ({ id, symbol: id, name: id })));
+        if (path === "/simple/supported_vs_currencies") return J(200, ["usd"]);
+        const [, , id, tail] = path.split("/");
+        const n = ids.indexOf(id);
+        if (n < 0) return J(404, { error: "coin not found" });
+        if (seen.reads.length + seen.refused.length >= refuseAfter) { seen.refused.push(path); return J(429, { status: { error_code: 429 } }); }
+        seen.reads.push(path);
+        seen.open++; seen.peak = Math.max(seen.peak, seen.open);
+        seen.perCoin.set(id, (seen.perCoin.get(id) || 0) + 1); seen.peakCoin = Math.max(seen.peakCoin, seen.perCoin.get(id));
+        await new Promise((r) => setTimeout(r, 15));
+        seen.open--; seen.perCoin.set(id, seen.perCoin.get(id) - 1);
+        return tail === "ohlc" ? J(200, candles) : J(200, coinBody(id, n));
+      };
+      return seen;
     };
-    let refused = null;
-    try { await tool("token-diligence").handler({ coins: Array.from({ length: 12 }, (_, n) => `stub-coin-${n}`) }); } catch (e) { refused = e; } finally { globalThis.fetch = realFetch; }
-    const coinsRead = new Set(got.map((p) => p.split("/")[2]));
-    ok(refused?.statusCode === 503 && /coin-profile: Market data upstream rate-limited this request/.test(refused.message), `tokens (real legs): the market host's 429 fails the call 503, uncharged, naming the leg (${refused?.statusCode}: ${String(refused?.message).slice(0, 90)})`);
-    ok(got.length <= TOKEN_CONCURRENCY * 2 && got.length >= TOKEN_CONCURRENCY && coinsRead.size === TOKEN_CONCURRENCY && got.every((p) => !p.endsWith("/ohlc")),
-      `tokens (real legs): a rate-limited 12-coin call sends the market host ${got.length} requests (${TOKEN_CONCURRENCY} coins' profile reads and the kit's own re-read of each), no candles read and no further coin`);
+    const fresh = () => { clearCryptoMarketsCache(); resetCgRateLimit(); };
+    try {
+      for (const ids of [["bitcoin", "ethereum", "chainlink", "uniswap"], Array.from({ length: 12 }, (_, n) => `real-coin-${n}`)]) {
+        fresh();
+        const seen = marketHost(ids);
+        const out = await tool("token-diligence").handler({ coins: ids });
+        const N = ids.length;
+        ok(out.coins === N && out.rows.length === N && out.pricing.units === N && out.pricing.priceUsd === tool("token-diligence").quote({ coins: ids }) && out.rows.every((r, n) => r.id === ids[n]),
+          `tokens (real legs, ${N} coins): every coin is answered, in order, priced per coin`);
+        const r1 = out.rows[1], r2 = out.rows[2];
+        ok(out.rows.every((r, n) => r.market.marketCap === capOf(n) && r.market.price === 10 + n && r.supply.circulatingShare === 0.5 && r.computed.turnover24h === 0.05 && r.symbol === `S${n}` && r.profile.homepage === `https://coin-${n}.example/` && r.profile.chains === 1),
+          `tokens (real legs, ${N} coins): each row carries its own coin's market, supply and profile values`);
+        ok(out.rows.every((r) => r.computed.return1yPct === -1 && r.computed.maxDrawdown1yPct === 50 && r.computed.candles.bars === 3 && r.computed.volatilityAnnualizedPct === candleStats(candles.map(([t, o, h, l, c]) => ({ time: new Date(t).toISOString(), open: o, high: h, low: l, close: c }))).volatilityAnnualizedPct && r.computed.volatilityAnnualizedPct > 1000),
+          `tokens (real legs, ${N} coins): the candles reduce to return -1%, drawdown 50% and the annualized volatility (${out.rows[0].computed.volatilityAnnualizedPct}%)`);
+        ok(r1.computed.fdvToMarketCap === 3 && r1.flags.includes("highDilution") && r2.flags.includes("farBelowATH") && !out.rows[0].flags.includes("highDilution") && out.rows.every((r) => r.flags.includes("highVolatility")),
+          `tokens (real legs, ${N} coins): flags follow each coin's own values (${r1.flags.join(",")} / ${r2.flags.join(",")})`);
+        ok(out.comparison.byMarketCap.length === N && out.comparison.byMarketCap[0].id === ids[N - 1] && out.comparison.byMarketCap[N - 1].id === ids[0] && out.comparison.flagged.length === N,
+          `tokens (real legs, ${N} coins): the list is ranked by market cap across every coin`);
+        const profiles = seen.reads.filter((x) => !x.endsWith("/ohlc")), ohlcs = seen.reads.filter((x) => x.endsWith("/ohlc"));
+        ok(seen.reads.length === 2 * N && new Set(seen.reads).size === 2 * N && profiles.length === N && ohlcs.length === N && seen.refused.length === 0,
+          `tokens (real legs, ${N} coins): the market host receives two reads a coin, each once (${seen.reads.length} reads)`);
+        ok(seen.peak <= TOKEN_CONCURRENCY && seen.peak >= Math.min(2, N) && seen.peakCoin === 1,
+          `tokens (real legs, ${N} coins): at most ${TOKEN_CONCURRENCY} reads are open at the market host at once, one per coin (peak ${seen.peak})`);
+      }
+      // The host starts refusing mid-call: the call fails uncharged, each refused
+      // read is sent once more by the market kit's own helper and never again,
+      // and the coins not yet started are never read.
+      {
+        fresh();
+        const ids = Array.from({ length: 12 }, (_, n) => `stop-coin-${n}`);
+        const seen = marketHost(ids, { refuseAfter: 6 });
+        let refused = null;
+        try { await tool("token-diligence").handler({ coins: ids }); } catch (e) { refused = e; }
+        const touched = new Set([...seen.reads, ...seen.refused].map((x) => x.split("/")[2]));
+        const perPath = new Map(); for (const x of seen.refused) perPath.set(x, (perPath.get(x) || 0) + 1);
+        ok(refused?.statusCode === 503 && /unit\(s\) could not be completed on the source's side \(first: stop-coin-\d+, coin-(profile|ohlc): Market data upstream rate-limited this request/.test(refused.message) && /^12 of 12 /.test(refused.message) === false,
+          `tokens (real legs): the market host refusing mid-call fails the call 503, uncharged, naming the leg (${String(refused?.message).slice(0, 80)})`);
+        ok(seen.reads.length === 6 && [...perPath.values()].every((k) => k <= 2) && perPath.size <= TOKEN_CONCURRENCY && seen.refused.length <= TOKEN_CONCURRENCY * 2,
+          `tokens (real legs): each refused read goes out at most twice (the kit's own re-read) and no more than ${TOKEN_CONCURRENCY} reads are refused (${seen.refused.length} refused requests over ${perPath.size} reads)`);
+        ok(touched.size <= TOKEN_CONCURRENCY * 2 && ids.slice(TOKEN_CONCURRENCY * 2).every((id) => !touched.has(id)),
+          `tokens (real legs): coins not started when the limit was met are never read (${touched.size} of 12 coins read)`);
+      }
+      // The host refusing from the first read: one profile read per coin in
+      // flight and the kit's own re-read of each; no candles, no further coin.
+      {
+        fresh();
+        const ids = Array.from({ length: 12 }, (_, n) => `stub-coin-${n}`);
+        const seen = marketHost(ids, { refuseAfter: 0 });
+        let refused = null;
+        try { await tool("token-diligence").handler({ coins: ids }); } catch (e) { refused = e; }
+        const coinsRead = new Set(seen.refused.map((x) => x.split("/")[2]));
+        ok(refused?.statusCode === 503 && /^12 of 12 unit\(s\) could not be completed on the source's side \(first: stub-coin-0, coin-profile: Market data upstream rate-limited this request/.test(refused.message), `tokens (real legs): the market host's 429 on every read fails the call 503, uncharged, naming the leg (${refused?.statusCode})`);
+        ok(seen.refused.length === TOKEN_CONCURRENCY * 2 && coinsRead.size === TOKEN_CONCURRENCY && seen.refused.every((x) => !x.endsWith("/ohlc")) && seen.reads.length === 0,
+          `tokens (real legs): a 12-coin call the host refuses sends it ${seen.refused.length} requests (${TOKEN_CONCURRENCY} coins' profile reads and the kit's own re-read of each), no candles read and no further coin`);
+      }
+    } finally { globalThis.fetch = realFetch; fresh(); }
   }
-
   // filings pacing: the two data.sec.gov legs of a company are never in
   // flight together; the Form 4 search (its own host) runs beside them.
   {

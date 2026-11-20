@@ -508,7 +508,10 @@ const WEATHER_EXAMPLE_SITES = [
   { name: "Seattle DC", lat: 47.61, lon: -122.33 }, { name: "Phoenix DC", lat: 33.45, lon: -112.07 },
 ];
 const FILINGS_EXAMPLE = ["MSFT", "AAPL", "GOOGL", "AMZN", "META"];
-const COINS_EXAMPLE = ["bitcoin", "ethereum", "chainlink", "uniswap"];
+// Two coins: the example is four reads of the market source, inside what its
+// keyless host allows one address in a minute (a self-hosted server with no
+// key, and the example sweep, read that host).
+const COINS_EXAMPLE = ["bitcoin", "chainlink"];
 
 export const BUNDLE_TOOLS = [
   {
@@ -610,7 +613,7 @@ export const BUNDLE_TOOLS = [
       },
       output: {
         example: {
-          product: "token-diligence", generatedAt: "2026-11-18T23:40:00.000Z", coins: 4,
+          product: "token-diligence", generatedAt: "2026-11-18T23:40:00.000Z", coins: COINS_EXAMPLE.length,
           comparison: { byMarketCap: [{ rank: 1, id: "bitcoin", value: 1810000000000 }], byReturn1y: [{ rank: 1, id: "bitcoin", value: -1.2 }], byVolatilityLowFirst: [{ rank: 1, id: "bitcoin", value: 41.7 }], flagged: [{ id: "chainlink", flags: ["farBelowATH", "deepDrawdown1y"] }] },
           rows: [{
             id: "chainlink", symbol: "LINK", name: "Chainlink", rank: 17, flags: ["farBelowATH"],
