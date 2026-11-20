@@ -352,7 +352,7 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
       onCredited: () => { console.warn(`[batch] hang-up on ${def.slug}: the charge is given back to the channel (the close landed inside the settle call)`); },
       onCreditRefused: (owedRow, how) => {
         console.warn(`[batch] hang-up on ${def.slug}: channel credit not taken (${how}); booked as owed`);
-        try { recordRefundOwed({ slug: def.slug, ...owedRow, httpStatus: 499, synthetic, hangupReason: "channel credit refused" }); } catch { /* logged above */ }
+        try { recordRefundOwed({ slug: def.slug, ...owedRow, httpStatus: 499, synthetic, hangupReason: "channel credit refused", requestId: req.requestId }); } catch { /* logged above */ }
       },
     });
     if (hung.credited) return hung;
@@ -398,7 +398,7 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
   // The same push transfer was refused on input earlier and booked as owed
   // under its hash; INSERT OR IGNORE kept that 400 row. It is a disconnect
   // now: promote it, or the hang-up holds never see it.
-  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason }), (made) => {
+  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason, requestId: req.requestId }), (made) => {
     if (!made && req.tempoSettled && tempoPushHashOf(req) === row.tx) void tempoPushDebts?.hungUp(row.tx, hangupReason);
   });
   // How long the buyer waited and which phase it left in: the figure that
@@ -1046,7 +1046,7 @@ import { withBudgetCeiling } from "./upstream-deadline.js";
 import { settleBreakerOtherLane } from "./gateway-settle-breaker.js";
 import { PAID_QUOTE_TRUST_MINUTES } from "./paid-quote-trust.js";
 import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush, recordReferralAnswer, referralAnswersByDay } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
@@ -13008,6 +13008,8 @@ app.use((req, res, next) => {
             httpStatus: res.statusCode,
             synthetic,
             wire: x402WireOf(req),
+            // The request it was charged on: the debt key when the receipt names no tx.
+            requestId: req.requestId,
           });
           // Mirror to PostHog with payer attribution so a spike is alertable in
           // near-real-time and traceable to a wallet (the local table keeps only
@@ -13048,6 +13050,8 @@ app.use((req, res, next) => {
             httpStatus: res.statusCode,
             synthetic: isSyntheticRequest(req),
             wire: req.tempoSettled ? "mpp-tempo" : "mpp-stripe",
+            // The request it was charged on: the debt key when the receipt names no tx (a card payment names no payer either).
+            requestId: req.requestId,
           }), (created) => {
             if (!created && req.tempoSettled && tempoPushDebts && typeof tx === "string") void tempoPushDebts.handlerFailed(tx, res.statusCode);
           });
