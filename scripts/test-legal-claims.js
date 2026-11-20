@@ -304,5 +304,39 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
   ok("missing" === (await import("../src/sanctions-screen.js")).sanctionsScreenStatus(), "control: with no list loaded the word reads missing");
 }
 
+// The audit report sums what the wallet paid; repayments of charged calls are
+// listed beside it, never netted from it, and the listing says so. It is a
+// record of paid calls, not a compliance product: no compliance tag or alias.
+{
+  const kit = await import("../src/tools/audit-report-kit.js");
+  const def = kit.AUDIT_TOOLS.find((t) => t.slug === "audit-report");
+  ok(!/hand to an auditor|ready to hand/i.test(def.description), "audit-report: the description does not sell the report as ready for an auditor");
+  ok(!def.tags.includes("compliance") && !def.aliases.includes("compliance-report") && !def.aliases.some((a) => /compliance/.test(a)), "audit-report: no compliance tag or alias");
+  ok(/not netted/.test(def.description) && /refunds/.test(def.description), "audit-report: the description says repayments are listed and not netted");
+  ok(!/compliance|hand to an auditor/i.test(src("src/tools/audit-report-kit.js").split("\n").slice(0, 3).join("\n")), "audit-report: the kit's header names no auditor hand-off");
+  const DAY = 86_400_000, T0 = Date.parse("2026-10-01T00:00:00Z");
+  const W = "0x" + "a1".repeat(20);
+  const sale = { id: 1, ts: T0 + 2 * DAY, slug: "hash", priceUsd: 0.05, quotedUsd: null, rail: "x402", wire: "x402", network: "eip155:8453", tx: "0x" + "11".repeat(32) };
+  const page = { rows: [sale], matched: 1, totals: { calls: 1, paidUsd: 0.05, firstAt: new Date(sale.ts).toISOString(), lastAt: new Date(sale.ts).toISOString() }, byTool: [{ slug: "hash", calls: 1, usd: 0.05 }], byDay: [{ day: "2026-10-03", calls: 1, usd: 0.05 }] };
+  const ref = (id, status, usd, at, paidTx = null) => ({ evidence: "0x" + String(id).padStart(2, "0").repeat(32), network: "eip155:8453", priceUsd: usd, status, paidTx, createdAt: at, resolvedAt: paidTx ? at + 1000 : null });
+  const inWindow = [ref(21, "paid", 0.05, T0 + 2 * DAY, "0x" + "22".repeat(32)), ref(23, "owed", 0.02, T0 + 3 * DAY)];
+  const outside = [ref(24, "paid", 0.4, T0 - 5 * DAY, "0x" + "25".repeat(32))];
+  let asked = null;
+  const run = (refundsForPayer) => kit.makeAuditReportHandler({ payerOf: () => W, signer: () => null, refresh: async () => {}, refundRefresh: async () => {}, now: () => T0 + 10 * DAY, payerAuditRows: () => page, receiptsForSettlements: async () => new Map(), refundsForPayer })({ from: "2026-10-01", to: "2026-10-10" }, { headers: {} });
+  const r = await run((p, o) => { asked = { p, o }; return [...inWindow, ...outside]; });
+  const b = r.report.refunds || {};
+  ok(asked?.p === W, "audit-report: the refunds read is the paying wallet's own");
+  ok(b.netted === false && b.count === 2 && b.repaidUsd === 0.05 && b.owedUsd === 0.02, `audit-report: the refunds block lists the window's repaid and owed rows, not netted (${JSON.stringify({ netted: b.netted, count: b.count, repaidUsd: b.repaidUsd, owedUsd: b.owedUsd })})`);
+  ok(r.report.totals.paidUsd === 0.05 && !("netPaidUsd" in r.report.totals), "audit-report: totals stay what the wallet paid; nothing is subtracted");
+  ok(Array.isArray(b.rows) && b.rows.every((x) => x.tx !== outside[0].evidence) && b.rows.some((x) => x.status === "paid" && x.refundTx), "audit-report: a refund recorded outside the window is left out; a repaid row names its repayment");
+  ok(b.complete === true && b.truncated === false, "audit-report: a read under the cap is complete");
+  ok(r.reportSha256 === kit.reportDigest(r.report), "audit-report: the report digest covers the refunds block");
+  const capped = Array.from({ length: kit.AUDIT_REFUNDS_MAX }, (_, i) => ref(30 + (i % 60), "owed", 0.001, T0 + 9 * DAY - i));
+  const rc = (await run(() => capped)).report.refunds || {};
+  ok(rc.complete === false && rc.truncated === true && rc.count === kit.AUDIT_REFUNDS_MAX, `audit-report: a read that fills the cap inside the window says it may be partial (${rc.complete}, ${rc.count})`);
+  const rf = (await run(() => { throw new Error("store down"); })).report.refunds || {};
+  ok(rf.read === "unavailable" && rf.count === 0 && rf.netted === false, "audit-report: a refunds read that fails says unavailable, never zero owed as fact");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
