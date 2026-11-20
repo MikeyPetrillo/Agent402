@@ -34,7 +34,7 @@ t node scripts/test-error-attribution.js
 t node scripts/test-solana-kit-deps.js
 t node scripts/test-workflow-client-pins.js
 
-# @step 2: Offline suites (63 scripts, one process each)
+# @step 2: Offline suites (65 scripts, one process each)
 # images-fast kit (offline)
 t node scripts/test-images-fast-kit.js
 # Index openapi-fallback crawl tests (payment-signal gate, Bazaar merge, ranking — offline)
@@ -125,6 +125,10 @@ t node scripts/test-ink-rail.js
 t node scripts/test-ink-graduation.js
 # Every 402 fits with Ink graduated: worst routes project 300+ bytes under 16,200 total header bytes; a 402 exposes exactly the listed headers it carries; the MPP evm challenge
 t node scripts/test-challenge-fit.js
+# Real HTTP clients (aiohttp, httpx, requests, undici, Go) read the full-rail 402 at their defaults; compact 402 lines <= 8,190; 16,200 head read (paid boot vs stubs)
+t node scripts/test-402-real-clients.js
+# The first unpaid 402 after boot is within 1.5 s of the run's baseline; a facilitator silent at boot is not waited on unless it is first on an offered pair (paid boots vs stubs)
+t node scripts/test-first-402-latency.js
 # Robinhood refusals in words: no-verdict passes to the next listed before our relayer and is read on chain when none settles; buyer verdicts retried nowhere; 5xx and other networks
 t node scripts/test-rh-prose-refusal.js
 # A settle failure that names a transaction is booked and read from the chain
@@ -295,7 +299,7 @@ t node scripts/test-tls-cert-lookup.js
 # A cached repeat's "payment is not charged" copy names the Tempo transfer exception (offline)
 t node scripts/test-cache-repeat-copy.js
 t node scripts/test-legal-dates.js
-# Legal, security and machine copy state what the code does (backups, refunds, CSP, MPP chains; offline)
+# Legal, security, trust and machine copy state what the code does (backups, refunds, CSP, MPP chains, payer screens, kept receipts, receipt scope, audit refunds; offline)
 t node scripts/test-legal-claims.js
 # /trust and the /company contact block state only what the code runs (offline)
 t node scripts/test-trust-page.js

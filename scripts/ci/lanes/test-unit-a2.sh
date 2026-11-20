@@ -82,6 +82,8 @@ t node scripts/test-avm-subcent-shared-redis.js
 t node scripts/test-registration-limits-redis.js
 # Hang-up settlement with the booted server's forgiveness budget on the shared store (Part 2 keeps REDIS_URL under a per-run prefix).
 t node scripts/test-hangup-settlement.js
+# A buyer who leaves while the settle waits on the shared store is charged and booked as owed, and its forgiveness ticket is released, not counted as abandoned (REAL redis)
+t node scripts/test-hangup-claim-wait.js
 # The settle-failure breaker writes through to the shared store: a trip on one process pauses the other.
 t node scripts/test-gateway-settle-breaker.js
 # A burst alarm tripped on one container reads burst on another through the shared flag (settle breaker and report guard).
