@@ -166,9 +166,10 @@ LLC: credit the entity, never a personal name.
   is a bare badge line in README.md's "Independent records" section. No hidden
   character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an
   instruction file: `scripts/test-hidden-chars.js` scans CLAUDE.md, `.claude/`, `wiki/`, `docs/`,
-  the package READMEs, the adapter READMEs, `src/mcp-http.js`, `src/mcp-flagship.js`,
-  `src/server.js` and `mcp/index.js`; the same scan (`src/hidden-chars.js`) is a listing finding
-  in the index's injection screen.
+  the package READMEs, the adapter READMEs, the coding-agent plugins under `plugins/` and the
+  plugin manifests, `src/mcp-http.js`, `src/mcp-flagship.js`, `src/server.js` and
+  `mcp/index.js`; the same scan (`src/hidden-chars.js`) is a listing finding in the index's
+  injection screen.
 
 ## Key machine-readable surfaces (free)
 `/health`, `/api/pricing`, `/openapi.json`, `/llms.txt`, `/.well-known/x402`,
