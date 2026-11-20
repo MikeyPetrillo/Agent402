@@ -277,13 +277,33 @@ export function _ageQueryHealthForTest(ms) { for (const v of queryHealth.values(
 // (37 MB at cap 2, 126 MB at 16). At cap 2 a query that takes 1.5 s caps the
 // server at 1.3 queries a second, and a slower one far lower, under the
 // project's rate; at 8 the pacer is what holds the rate.
-// ONCHAIN_SQL_INFLIGHT_MAX overrides it (1 to 16). Past the cap a query is
-// refused at once (429, never charged) and told when to retry.
+// ONCHAIN_SQL_INFLIGHT_MAX overrides it (1 to 16). Past the cap a query
+// waits for a place, first come first served, as far out as a send slot may
+// be (the slot reach, within the handler budget): a place that comes free is
+// handed to the first waiting query. Past that it is refused (429, never
+// charged) and told when to retry.
 const intIn = (v, def, lo, hi) => { const n = Number(v); return v != null && v !== "" && Number.isInteger(n) && n >= lo && n <= hi ? n : def; };
 export const BUYER_QUERY_INFLIGHT_DEFAULT = 8;
 export const BUYER_QUERY_INFLIGHT_MAX = intIn(process.env.ONCHAIN_SQL_INFLIGHT_MAX, BUYER_QUERY_INFLIGHT_DEFAULT, 1, 16);
 let buyerQueriesInflight = 0;
 export function _buyerQueriesInflightForTest() { return buyerQueriesInflight; }
+const placeWaiters = []; // first come first served: { resolve, timer }
+/** Takes an in-flight place, waiting up to maxWaitMs for one; false when none came. */
+function takeBuyerPlace(maxWaitMs) {
+  if (buyerQueriesInflight < BUYER_QUERY_INFLIGHT_MAX && placeWaiters.length === 0) { buyerQueriesInflight++; return Promise.resolve(true); }
+  if (!(maxWaitMs > 0)) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const w = { resolve, timer: null };
+    w.timer = setTimeout(() => { const i = placeWaiters.indexOf(w); if (i >= 0) placeWaiters.splice(i, 1); resolve(false); }, maxWaitMs);
+    placeWaiters.push(w);
+  });
+}
+/** Gives a place back: to the first waiting query, else to the count. */
+function releaseBuyerPlace() {
+  const w = placeWaiters.shift();
+  if (w) { clearTimeout(w.timer); w.resolve(true); return; }
+  buyerQueriesInflight--;
+}
 
 // The send pacer: every query this server sends to the query service (a
 // buyer's query, its retry and recovery runs, the health check, the
@@ -343,7 +363,9 @@ let sqlSendGap = sqlSendGapMs();
 for (const line of sqlSendGapWarnings()) console.warn(line);
 // The pacer's clock and its wait, replaceable in a test so a schedule is
 // read as the slot times it gave, not as timer firings on a loaded machine.
-const realPacerClock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
+// A monotonic clock: a wall clock stepped back (or forward) never moves the
+// slots already given out.
+const realPacerClock = { now: () => performance.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
 let pacerClock = realPacerClock;
 export function _setSqlPacerClockForTest(clock = null) { pacerClock = clock ? { ...realPacerClock, ...clock } : realPacerClock; }
 export function _resetSqlPacerForTest(gapMs = null) { nextSqlSlotAt = 0; sqlSendGap = gapMs ?? sqlSendGapMs(); }
@@ -360,14 +382,20 @@ function slotWaitMs() {
   const reach = sqlSlotWaitMs(sqlSendGap);
   return budget ? Math.min(reach, budget.remaining() - OPTIONAL_READ_FLOOR_MS) : reach;
 }
-// The busy refusal (429, shed, never charged): the in-flight cap, or a
-// buyer's first send with no slot in reach. The request is marked so
+// The busy refusal (429, shed, never charged): no in-flight place within
+// reach, or a buyer's first send with no slot in reach. Retry-After is 4 s
+// plus a random 0 to 2 s, so callers refused together (a burst, or two
+// replicas' worth) do not all come back in the same second. The request is
+// marked so
 // server.js counts the refusal by caller once its response has ended
 // (src/sql-query-stats.js noteSqlBusy) and a top payer's feeds
 // onchainSqlBusy (src/top-buyer-failures.js).
+export const SQL_BUSY_RETRY_AFTER_MIN_S = 4;
+export const SQL_BUSY_RETRY_AFTER_SPREAD_S = 2;
 function sqlBusyRefusal(text) {
   const e = bad(`${text} Nothing was charged.`, 429);
-  e.retryAfter = 5; e.hint = "busy"; e.shed = true; // a capacity refusal, not a tool failure
+  e.retryAfter = SQL_BUSY_RETRY_AFTER_MIN_S + Math.floor(Math.random() * (SQL_BUSY_RETRY_AFTER_SPREAD_S + 1));
+  e.hint = "busy"; e.shed = true; // a capacity refusal, not a tool failure
   try { const scope = currentRequestScope(); if (scope) scope.onchainSqlBusy = true; } catch { /* bookkeeping only */ }
   return e;
 }
@@ -1296,11 +1324,8 @@ export const CDP_TOOLS = [
       }
       let capped = cappedSql(sql);
       body.sql = capped.sql;
-      if (!call.own) {
-        if (buyerQueriesInflight >= BUYER_QUERY_INFLIGHT_MAX) {
-          throw sqlBusyRefusal(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds.`);
-        }
-        buyerQueriesInflight++;
+      if (!call.own && !(await takeBuyerPlace(slotWaitMs()))) {
+        throw sqlBusyRefusal(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds.`);
       }
       // One query budget for the call: the buyer's query, its retry, and
       // every recovery run spend it where they are sent.
@@ -1386,7 +1411,7 @@ export const CDP_TOOLS = [
           }
         }
       } finally {
-        if (!call.own) buyerQueriesInflight--;
+        if (!call.own) releaseBuyerPlace();
         if (queries.sent > maxQueriesPerCall) maxQueriesPerCall = queries.sent;
       }
       const rows = res?.result ?? res?.rows ?? res?.data ?? res;

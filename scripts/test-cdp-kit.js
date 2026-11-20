@@ -403,8 +403,12 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         const held = Array.from({ length: BUYER_QUERY_INFLIGHT_MAX }, () => sqlRun());
         await new Promise((r) => setTimeout(r, 20));
         ok(_buyerQueriesInflightForTest() === BUYER_QUERY_INFLIGHT_MAX, `${BUYER_QUERY_INFLIGHT_MAX} buyer queries are in flight (${_buyerQueriesInflightForTest()})`);
-        const c = await Promise.race([sqlRun().catch((x) => x), new Promise((r) => setTimeout(() => r({ statusCode: "not refused" }), 500))]);
-        ok(c?.statusCode === 429 && c?.retryAfter === 5 && c?.hint === "busy" && c?.shed === true && /answering 8 queries/.test(c?.message) && /Nothing was charged\.$/.test(c?.message), `the next is refused 429 with Retry-After 5, marked as shed load (${c?.statusCode})`);
+        // The next waits for a place as far out as a send slot may be (here
+        // the handler budget leaves one second), then is refused.
+        process.env.UPSTREAM_HANDLER_BUDGET_MS = "2500";
+        const c = await sqlRun().catch((x) => x);
+        delete process.env.UPSTREAM_HANDLER_BUDGET_MS;
+        ok(c?.statusCode === 429 && c?.retryAfter >= 4 && c?.retryAfter <= 6 && c?.hint === "busy" && c?.shed === true && /answering 8 queries/.test(c?.message) && /Nothing was charged\.$/.test(c?.message), `the next, with no place free within its reach, is refused 429 with Retry-After 4 to 6 s, marked as shed load (${c?.statusCode}, ${c?.retryAfter})`);
         // This server's own read (the economy snapshot) at the cap: it is
         // not refused by the cap and takes no buyer's place in it.
         const { ownSqlQuery } = await import("../src/tools/cdp-kit.js");
