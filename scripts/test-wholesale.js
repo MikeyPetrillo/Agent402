@@ -213,6 +213,11 @@ try {
   const page = await fetch(`${U}/wholesale`);
   const html = await page.text();
   ok(page.status === 200 && WHOLESALE_FAMILIES.every((f) => html.includes(`/api/wholesale/v1/${f.id}`)) && ERROR_CODES.every((e) => html.includes(e.code)), "the page renders every family and every error code");
+  {
+    const fam = await (await fetch(`${U}/api/wholesale/v1/sec-filings`)).json();
+    const charging = computeIdx.errorCodes?.charging || "";
+    ok(charging.startsWith("A paid call that ends in any status of 400 or above is not charged over x402") && fam.errorCodes?.charging === charging && stripScripts(html, "").includes(charging) && String(computeIdx.errorCodes.refundTerms).endsWith(REFUND_TERMS_PATH), `the served index, a served family and the page state the same rail-scoped sentence and link the refund terms (Tempo push exception ${charging.includes(TEMPO_PUSH_EXCEPTION) ? "included" : "left out"})`);
+  }
   ok(!/\$\d/.test(stripScripts(html, "")), "the page types no price");
   const sitemap = await (await fetch(`${U}/sitemap.xml`)).text();
   ok(/\/wholesale</.test(sitemap) || /sitemap-pages/.test(sitemap), "the page is in the sitemap");
