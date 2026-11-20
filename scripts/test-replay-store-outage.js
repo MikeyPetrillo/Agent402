@@ -143,7 +143,8 @@ try {
     const r = await fetch(`${A}${path}`, { method, headers: { "content-type": "application/json", prefer: "wait=600", "payment-signature": credential(accept || {}) }, body: "{}" });
     const body = await r.json().catch(() => ({}));
     ok(r.status === 503 && body.reason === "replay-store-unavailable", `a paid call to ${slow.slug} is refused while the shared store is out (${r.status} ${body.reason || body.error || ""})`);
-    ok(r.headers.get("retry-after") === "30", `and says when to retry (Retry-After ${r.headers.get("retry-after")})`);
+    // The retry is asked for after the claim's own bound (REQUIRED_CLAIM_OP_MS, 5 s), in the header and the words.
+    ok(r.headers.get("retry-after") === "5" && /Retry in about 5 seconds\./.test(body.error || "") && !/30 seconds/.test(body.error || ""), `and says when to retry: after the claim's bound, header and words alike (Retry-After ${r.headers.get("retry-after")}; ${String(body.error || "").slice(-40)})`);
     ok(verifies === v0 && settles === s0, `nothing was verified or settled for it (verify +${verifies - v0}, settle +${settles - s0})`);
     // Routing ignores case and a trailing slash; so does the refusal.
     const v1 = verifies, s1 = settles;
@@ -176,7 +177,7 @@ try {
     const [ba, bb] = await Promise.all([ra.json().catch(() => ({})), rb.json().catch(() => ({}))]);
     ok(ra.status === 503 && rb.status === 503 && ba.reason === "replay-store-unavailable" && bb.reason === "replay-store-unavailable",
       `shared store out: one payment sent to two containers is refused on both (${ra.status} ${ba.reason || ""}, ${rb.status} ${bb.reason || ""})`);
-    ok(ra.headers.get("retry-after") === "30" && rb.headers.get("retry-after") === "30", "and each says when to retry");
+    ok(ra.headers.get("retry-after") === "5" && rb.headers.get("retry-after") === "5", "and each says when to retry (after the claim's 5 s bound)");
     ok(verifies === v0 && settles === s0, `nothing reached the facilitator (verify +${verifies - v0}, settle +${settles - s0})`);
 
     // Control: the same kind of payment on a server with no shared store
@@ -266,7 +267,7 @@ try {
         const ri = await send(I, { "payment-signature": credI });
         const tookI = Date.now() - tI;
         const bi = await ri.json().catch(() => ({}));
-        ok(ri.status === 503 && bi.reason === "replay-store-unavailable" && ri.headers.get("retry-after") === "30" && tookI < 4_500, `a store paused past the bound on a required claim: the paid call is refused 503 with Retry-After while the store is still paused (${ri.status} ${bi.reason || ""} after ${tookI} ms)`);
+        ok(ri.status === 503 && bi.reason === "replay-store-unavailable" && ri.headers.get("retry-after") === "5" && tookI < 4_500, `a store paused past the bound on a required claim: the paid call is refused 503 with Retry-After while the store is still paused (${ri.status} ${bi.reason || ""} after ${tookI} ms)`);
         ok(verifies === vi && settles === i1, `nothing was verified or settled for it (verify +${verifies - vi}, settle +${settles - i1})`);
         await admin.ping(); // answers once the pause has ended
         const ri2 = await send(I, { "payment-signature": credI });
@@ -380,7 +381,7 @@ try {
   const S = await listen(cardApp);
   const cardPost = () => fetch(`${S.url}/paid`, { method: "POST", headers: { Authorization: cardCred() } });
 
-  const refused = async (r) => { const b = await r.json().catch(() => ({})); return r.status === 503 && b.reason === "replay-store-unavailable" && r.headers.get("retry-after") === "30"; };
+  const refused = async (r) => { const b = await r.clone().json().catch(() => ({})); return r.status === 503 && b.reason === "replay-store-unavailable" && r.headers.get("retry-after") === "5" && /in about 5 seconds/.test(b.error || "") && !/30 seconds/.test(b.error || ""); };
   __setTestClient(broken);
   try {
     // Inside the overlap window: refused before the handler, nothing claimed,

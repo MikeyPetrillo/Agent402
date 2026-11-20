@@ -12618,9 +12618,12 @@ if (FREE_MODE) {
         requireShared: sharedClaimRequired({ longRunning: !!replayDef && isLongRunningSlug(replayDef.slug), draining: drainSignal().aborted }),
       });
       if (verdict === "unavailable") {
-        res.setHeader("Retry-After", "30");
+        // The claim waited its own bound (REQUIRED_CLAIM_OP_MS in
+        // src/replay-guard.js, 5 s); a store that answers again is waited for
+        // on the retry, so the retry is asked for after that long.
+        res.setHeader("Retry-After", "5");
         return res.status(503).json({
-          error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and nothing was charged. Retry in about 30 seconds.",
+          error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and nothing was charged. Retry in about 5 seconds.",
           reason: "replay-store-unavailable",
         });
       }

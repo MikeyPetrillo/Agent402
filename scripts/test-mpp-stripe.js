@@ -235,7 +235,7 @@ for (const seam of [true, false]) {
   try {
     const r = await quiet(() => fetch(`${url}/long`, { method: "POST", headers: { Authorization: credFor({ priceUsd: 5.00 }) } }));
     const b = await r.json().catch(() => ({}));
-    ok(r.status === 503 && b.reason === "replay-store-unavailable" && r.headers.get("retry-after") === "30" && runs === 0 && captures === 0, `gate G: a long-running route is refused while the shared store is out, before its handler, nothing captured (${r.status}, runs ${runs}, captures ${captures})`);
+    ok(r.status === 503 && b.reason === "replay-store-unavailable" && r.headers.get("retry-after") === "5" && /Retry in about 5 seconds\./.test(b.error || "") && runs === 0 && captures === 0, `gate G: a long-running route is refused while the shared store is out, before its handler, nothing captured (${r.status}, runs ${runs}, captures ${captures})`);
     // A lone container inside its deploy overlap window (an old container
     // may still serve) refuses a fast route too; past the window it serves it
     // on the per-process claim (src/replay-topology.js).
