@@ -217,10 +217,61 @@ const svc = ws.createWalletSignIn({ env, baseUrl: BASE, now });
   ok(!/resolveRouteIdentity/.test(readFileSync(new URL("../src/payer.js", import.meta.url), "utf8")), "payer.js (attribution) is unchanged");
 }
 
+// --- outstanding nonces: per caller, per network, global ----------------------------
+// A caller spread over many addresses and networks cannot fill the map and
+// get every other sign-in refused: each bound expires the oldest nonce in it
+// early, and the full map gives up the oldest nonce of the busiest network.
+{
+  const flood = ws.createWalletSignIn({ env, baseUrl: BASE, now });
+  const verifyWith = async (n) => { const message = msgFor(n); return flood.verify({ message, signature: await alice.signMessage({ message }) }); };
+  const signWith = (n) => verifyWith(n).catch((e) => ({ refused: e.code || String(e) }));
+  ok(ws.nonceNetworkOf("203.0.113.9") === "203.0.113.0/24" && ws.nonceNetworkOf("::ffff:203.0.113.9") === "203.0.113.0/24" && ws.nonceNetworkOf("2001:db8:1:2::/64") === "2001:db8:1::/48" && ws.nonceNetworkOf("?") === "?", "networks: an IPv4 /24 (mapped or not), an IPv6 /48 from the folded /64, any other key as given");
+
+  // One address: its own oldest nonces go, nobody else's.
+  const other = flood.issueNonce({ caller: "198.51.100.7" });
+  const own = Array.from({ length: ws.NONCE_PER_CALLER_MAX + 4 }, () => flood.issueNonce({ caller: "198.51.100.8" }));
+  ok(await refusedWith(verifyWith(own[0]), "nonce_unknown") === true, `one address past ${ws.NONCE_PER_CALLER_MAX} outstanding nonces loses its own oldest`);
+  ok((await signWith(own.at(-1))).address === alice.address.toLowerCase(), "its newest nonce still signs in");
+  ok((await signWith(other)).address === alice.address.toLowerCase(), "a neighbor's nonce on the same network is untouched");
+
+  // One network, many addresses: held to the network's bound.
+  for (let h = 0; h < 40; h++) for (let i = 0; i < 4; i++) flood.issueNonce({ caller: `192.0.2.${h + 1}` });
+  ok(flood._nonceCount() <= ws.NONCE_PER_NETWORK_MAX + ws.NONCE_PER_CALLER_MAX, `many addresses in one /24 hold at most ${ws.NONCE_PER_NETWORK_MAX} nonces there (map holds ${flood._nonceCount()})`);
+  // IPv6: addresses inside one /64 are one caller.
+  for (let i = 0; i < ws.NONCE_PER_CALLER_MAX * 3; i++) flood.issueNonce({ caller: `2001:db8:aa:bb:${(i + 1).toString(16)}::1` });
+  ok(flood._nonceCount() <= ws.NONCE_PER_NETWORK_MAX + 2 * ws.NONCE_PER_CALLER_MAX, `rotating addresses inside one IPv6 /64 counts as one caller (map holds ${flood._nonceCount()})`);
+
+  // Many networks, many addresses: past the global ceiling.
+  const nets = Math.ceil((ws.NONCE_MAX * 1.3) / ws.NONCE_PER_NETWORK_MAX);
+  let refused = 0;
+  const fill = (round) => {
+    for (let a = 0; a < nets; a++) for (let h = 0; h < 8; h++) for (let i = 0; i < 8; i++) {
+      const net = a + round * nets;   // each round from networks of its own
+      try { flood.issueNonce({ caller: `10.${(net >> 8) & 255}.${net & 255}.${h + 1}` }); } catch { refused++; }
+    }
+  };
+  fill(0);
+  ok(flood._nonceCount() <= ws.NONCE_MAX && refused === 0, `a flood from ${nets} networks keeps the map at its ceiling and refuses nobody (map ${flood._nonceCount()}, refused ${refused})`);
+  let fresh = null, freshErr = null;
+  try { fresh = flood.issueNonce({ caller: "203.0.113.50" }); } catch (e) { freshErr = e; }
+  ok(fresh && !freshErr, `a fresh address gets a nonce while the map is full (${freshErr ? `${freshErr.statusCode} ${freshErr.code}` : "issued"})`);
+  fill(1);
+  const freshIn = await signWith(fresh);
+  ok(freshIn.address === alice.address.toLowerCase(), `and signs in with it after a second flood from new networks: the busiest networks gave up their nonces first (${freshIn.refused || "signed in"})`);
+  ok(flood._nonceCount() <= ws.NONCE_MAX && refused === 0, `the map never passes its ceiling (${flood._nonceCount()})`);
+  // Expiry still clears every index.
+  clock += 6 * 60_000;
+  flood.issueNonce({ caller: "203.0.113.51" });
+  for (let i = 0; i < ws.NONCE_PER_CALLER_MAX; i++) flood.issueNonce({ caller: "203.0.113.51" });
+  const idx = flood._nonceIndexSizes();
+  ok(idx.callers === 1 && idx.networks === 1 && flood._nonceCount() === ws.NONCE_PER_CALLER_MAX, `expired nonces leave every index: one caller's ${ws.NONCE_PER_CALLER_MAX} remain (${JSON.stringify(idx)}, map ${flood._nonceCount()})`);
+  clock -= 6 * 60_000;
+}
+
 // --- HTTP: on and off boots -------------------------------------------------------
 const bootEnv = { FREE_MODE: "true", BASE_URL: BASE, X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", POSTHOG_API_KEY: "" };
 {
-  const srv = await bootServer({ env: { ...bootEnv, SIWE_SESSION_SECRET: SECRET }, stores: "wallet-sign-in-on" });
+  const srv = await bootServer({ env: { ...bootEnv, SIWE_SESSION_SECRET: SECRET, TRUST_PROXY_HOPS: "1" }, stores: "wallet-sign-in-on" });
   try {
     const nr = await fetch(`${srv.url}/api/wallet-session/nonce`);
     const n = await nr.json();
@@ -245,6 +296,15 @@ const bootEnv = { FREE_MODE: "true", BASE_URL: BASE, X402_INDEX_CRAWL: "off", MP
     const out = await fetch(`${srv.url}/api/wallet-session`, { method: "DELETE", headers: { "x-wallet-session": v.token } });
     const after = await fetch(`${srv.url}/api/my-usage`, { method: "POST", headers: { "content-type": "application/json", "x-wallet-session": v.token }, body: "{}" });
     ok((await out.json()).signedOut === true && after.status === 401, "on: after sign-out the token is refused");
+    // The route names its caller: one address past its bound loses its own
+    // oldest nonce over HTTP, and its newest still signs in.
+    const xff = { "x-forwarded-for": "198.51.100.9" };
+    const many = [];
+    for (let i = 0; i <= ws.NONCE_PER_CALLER_MAX; i++) many.push(await (await fetch(`${srv.url}/api/wallet-session/nonce`, { headers: xff })).json());
+    const post = async (nn) => { const msg = createSiweMessage({ domain: nn.domain, address: alice.address, statement: nn.statement, uri: nn.uri, version: "1", chainId: 8453, nonce: nn.nonce, issuedAt: new Date() }); return fetch(`${srv.url}/api/wallet-session`, { method: "POST", headers: { "content-type": "application/json", ...xff }, body: JSON.stringify({ message: msg, signature: await alice.signMessage({ message: msg }) }) }); };
+    const oldest = await post(many[0]);
+    const newest = await post(many.at(-1));
+    ok(oldest.status === 401 && (await oldest.json()).code === "nonce_unknown" && newest.status === 200, `on: the nonce route bounds each caller: past ${ws.NONCE_PER_CALLER_MAX} outstanding its oldest nonce is gone, its newest signs in (${oldest.status}, ${newest.status})`);
   } finally { await srv.stop(); }
 }
 {

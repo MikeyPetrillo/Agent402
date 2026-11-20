@@ -57,6 +57,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { parseSiweMessage } from "viem/siwe";
 import { recoverMessageAddress } from "viem";
+import { isIPv4 } from "node:net";
+import { limiterKey } from "./rate-limit.js";
 
 export const SESSION_HEADER = "x-wallet-session";
 // A session is read-only: it names the wallet for reads of the wallet's own
@@ -75,7 +77,25 @@ export function memoryScopeOf(slug) {
 }
 export const DEFAULT_CHAIN_IDS = Object.freeze([8453, 1, 137, 42161, 10]);
 const NONCE_TTL_MS = 300_000;
-const NONCE_MAX = 10_000;
+// Outstanding nonces are bounded three ways, and a full bound expires the
+// oldest nonce in it early instead of refusing anyone: each caller (its
+// address, an IPv6 /64 folded as the rate limiter folds it) holds at most
+// NONCE_PER_CALLER_MAX, each network (an IPv4 /24, an IPv6 /48) at most
+// NONCE_PER_NETWORK_MAX, and the whole map at most NONCE_MAX, where the
+// oldest nonce of the network holding the most goes first. A caller spread
+// over many addresses and networks therefore loses its own oldest nonces
+// before a fresh caller's, and no sign-in is ever refused for a full map.
+export const NONCE_MAX = 10_000;
+export const NONCE_PER_CALLER_MAX = 16;
+export const NONCE_PER_NETWORK_MAX = 64;
+/** The network a caller key belongs to: an IPv4 /24, an IPv6 /48, else the key. */
+export function nonceNetworkOf(caller) {
+  const k = String(caller ?? "");
+  const v4 = k.startsWith("::ffff:") ? k.slice(7) : k;
+  if (isIPv4(v4)) return `${v4.split(".").slice(0, 3).join(".")}.0/24`;
+  const m = /^([0-9a-f]{1,4}):([0-9a-f]{1,4}):([0-9a-f]{1,4}):[0-9a-f]{1,4}::\/64$/i.exec(k);
+  return m ? `${m[1]}:${m[2]}:${m[3]}::/48` : k;
+}
 const SKEW_MS = 60_000;
 const MAX_MESSAGE = 2048;
 const MAX_TOKEN = 1024;
@@ -132,7 +152,9 @@ export function createWalletSignIn({ env = process.env, baseUrl, now = () => Dat
   const host = new URL(baseUrl).host.toLowerCase();
   const chainIds = chainIdsOf(env);
   const sessionMs = sessionSecondsOf(env) * 1000;
-  const nonces = new Map(); // nonce -> expiry ms
+  const nonces = new Map(); // nonce -> { exp, caller, net }, oldest first
+  const byCaller = new Map(); // caller key -> Set of its nonces, oldest first
+  const byNet = new Map(); // network -> Set of its nonces, oldest first
   const revoked = new Map(); // jti -> expiry ms
   const sweep = (map, t) => { for (const [k, exp] of map) if (exp <= t) map.delete(k); };
   const mac = (s) => createHmac("sha256", secret).update(s).digest();
@@ -143,13 +165,57 @@ export function createWalletSignIn({ env = process.env, baseUrl, now = () => Dat
     revoked.set(jti, expMs);
   };
 
-  function issueNonce() {
+  const unindex = (index, key, nonce) => {
+    const set = key == null ? null : index.get(key);
+    if (!set) return;
+    set.delete(nonce);
+    if (set.size === 0) index.delete(key);
+  };
+  /** Forget one nonce everywhere; its entry, or undefined. */
+  function dropNonce(nonce) {
+    const e = nonces.get(nonce);
+    if (!e) return undefined;
+    nonces.delete(nonce);
+    unindex(byCaller, e.caller, nonce);
+    unindex(byNet, e.net, nonce);
+    return e;
+  }
+  const oldestOf = (set) => set.values().next().value;
+  function sweepNonces(t) {
+    for (const [n, e] of nonces) if (e.exp <= t) dropNonce(n);
+  }
+  /** Make room in the full map: the oldest nonce of the network holding the
+   *  most (with every network holding one, the oldest nonce of all). */
+  function evictForRoom() {
+    let worst = null, most = 1;
+    for (const set of byNet.values()) if (set.size > most) { most = set.size; worst = set; }
+    dropNonce(worst ? oldestOf(worst) : nonces.keys().next().value);
+  }
+
+  /** A nonce for one sign-in. `caller` is the client address the route
+   *  names; without one only the global bound applies (a direct caller in
+   *  this process, never the HTTP route). */
+  function issueNonce({ caller = null } = {}) {
     const t = now();
-    if (nonces.size >= NONCE_MAX) sweep(nonces, t);
-    if (nonces.size >= NONCE_MAX) throw refuse(503, "nonce_store_full", "Too many sign-ins are waiting; try again in a minute.");
+    const callerKey = caller == null || caller === "" ? null : limiterKey(String(caller).trim()) || "?";
+    const net = callerKey == null ? null : nonceNetworkOf(callerKey);
+    if (callerKey != null) {
+      const mine = byCaller.get(callerKey);
+      if (mine && mine.size >= NONCE_PER_CALLER_MAX) { sweepNonces(t); while (byCaller.get(callerKey)?.size >= NONCE_PER_CALLER_MAX) dropNonce(oldestOf(byCaller.get(callerKey))); }
+      const ours = byNet.get(net);
+      if (ours && ours.size >= NONCE_PER_NETWORK_MAX) { sweepNonces(t); while (byNet.get(net)?.size >= NONCE_PER_NETWORK_MAX) dropNonce(oldestOf(byNet.get(net))); }
+    }
+    if (nonces.size >= NONCE_MAX) sweepNonces(t);
+    while (nonces.size >= NONCE_MAX) evictForRoom();
     // 16 random bytes as 32 hex characters: alphanumeric, as EIP-4361 requires.
     const nonce = randomBytes(16).toString("hex");
-    nonces.set(nonce, t + NONCE_TTL_MS);
+    nonces.set(nonce, { exp: t + NONCE_TTL_MS, caller: callerKey, net });
+    if (callerKey != null) {
+      if (!byCaller.has(callerKey)) byCaller.set(callerKey, new Set());
+      byCaller.get(callerKey).add(nonce);
+      if (!byNet.has(net)) byNet.set(net, new Set());
+      byNet.get(net).add(nonce);
+    }
     return {
       nonce, domain: host, uri: origin, version: "1", chainIds: [...chainIds], statement: STATEMENT,
       issuedAt: new Date(t).toISOString(), expiresAt: new Date(t + NONCE_TTL_MS).toISOString(),
@@ -166,8 +232,7 @@ export function createWalletSignIn({ env = process.env, baseUrl, now = () => Dat
     if (!m || !m.address || !m.domain || !m.uri || !m.nonce || !m.issuedAt) throw refuse(400, "bad_message", "the message is not an EIP-4361 sign-in message");
     // The nonce is spent first: any message naming it is its one attempt.
     const t = now();
-    const exp = nonces.get(m.nonce);
-    nonces.delete(m.nonce);
+    const exp = dropNonce(m.nonce)?.exp;
     if (exp == null || exp <= t) throw refuse(401, "nonce_unknown", "the nonce is unknown, already used or expired; ask for a new one");
     if (m.version !== "1") throw refuse(401, "bad_version", "the message version must be 1");
     if (String(m.domain).toLowerCase() !== host || (m.scheme && `${m.scheme}:` !== new URL(origin).protocol)) throw refuse(401, "wrong_domain", `the message was not written for ${host}`);
@@ -260,7 +325,7 @@ export function createWalletSignIn({ env = process.env, baseUrl, now = () => Dat
     return { signedOut: true, shared: !!put?.ok };
   }
 
-  return { issueNonce, verify, sessionOf, syncRevocation, revoke, host, origin, chainIds, _nonceCount: () => nonces.size };
+  return { issueNonce, verify, sessionOf, syncRevocation, revoke, host, origin, chainIds, _nonceCount: () => nonces.size, _nonceIndexSizes: () => ({ callers: byCaller.size, networks: byNet.size }) };
 }
 
 // --- the process's service and the route hook ----------------------------------
@@ -324,7 +389,7 @@ export function mountWalletSignIn(app, { express, limiter, clientIp }) {
   app.get("/api/wallet-session/nonce", (req, res) => {
     res.set("Cache-Control", "no-store");
     if (limited(req, res)) return;
-    try { res.json(svc.issueNonce()); } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); }
+    try { res.json(svc.issueNonce({ caller: clientIp(req) || "?" })); } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); }
   });
   app.post("/api/wallet-session", express.json({ limit: "8kb" }), async (req, res) => {
     res.set("Cache-Control", "no-store");
