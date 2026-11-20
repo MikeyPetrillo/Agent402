@@ -55,6 +55,25 @@ const planted = scanSource([
 for (const n of ["PLANTED_MEMBER", "PLANTED_BRACKET", "PLANTED_DESTRUCTURED", "PLANTED_HELPER", "PLANTED_OPTIONAL"]) ok(planted.names.has(n), `control: the scan sees ${n}`);
 ok(!planted.names.has("PLANTED_COMMENT_ONLY") && !planted.names.has("PLANTED_BLOCK_COMMENT"), "control: a name only in a comment is not a read");
 ok(planted.templates.includes("PLANTED_TEMPLATE_<X>"), "control: a name built at run time is reported by its template");
+// Comment markers inside a string, a template or a regular expression are
+// text, not comments: the read after them is still seen, and a real comment
+// after a quote-bearing comment still hides its name.
+const literals = scanSource([
+  "const accept = \"image/*\";",
+  "const a = process.env.PLANTED_AFTER_STRING_STAR;",
+  "const glob = 'a//b', b = process.env.PLANTED_AFTER_STRING_SLASHES;",
+  "const t = `x/*${process.env.PLANTED_IN_TEMPLATE_EXPR}/*`, u = `${ { k: 1 }.k }//`;",
+  "const c = process.env.PLANTED_AFTER_TEMPLATE;",
+  "const re = /\\/*x/g, re2 = /[/*]/;",
+  "const d = process.env.PLANTED_AFTER_REGEX;",
+  "const q = n / 2 / 3; const e = process.env.PLANTED_AFTER_DIVISION;",
+  "// it's a comment with a quote and process.env.PLANTED_QUOTED_COMMENT",
+  "const f = process.env.PLANTED_AFTER_QUOTED_COMMENT; /* ' \" ` */",
+  "const g = process.env.PLANTED_AFTER_BLOCK; /* closes */ x = 1;",
+].join("\n"));
+for (const n of ["PLANTED_AFTER_STRING_STAR", "PLANTED_AFTER_STRING_SLASHES", "PLANTED_IN_TEMPLATE_EXPR", "PLANTED_AFTER_TEMPLATE", "PLANTED_AFTER_REGEX", "PLANTED_AFTER_DIVISION", "PLANTED_AFTER_QUOTED_COMMENT", "PLANTED_AFTER_BLOCK"]) ok(literals.names.has(n), `a comment marker inside a string, template or regex hides no read: the scan sees ${n}`);
+ok(!literals.names.has("PLANTED_QUOTED_COMMENT"), "control: a comment that holds a quote character is still a comment");
+ok(stripComments("const s = \"/*\"; /* gone */ const t = 1; // gone too").replace(/\s+/g, " ").trim() === "const s = \"/*\"; const t = 1;", "stripComments keeps string text and removes only real comments");
 ok(defaultOf("PLANTED_MEMBER", ["const a = process.env.PLANTED_MEMBER || 5;"]) === "5" && defaultOf("PLANTED_HELPER", ["envMs(\"PLANTED_HELPER\", 10_000)"]) === "10000", "control: the default is read from both fallback shapes");
 
 // A default that is not a plain literal at the read site (a named constant,

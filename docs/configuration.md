@@ -12,11 +12,11 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1057 variables in 109 groups.
+1072 variables in 110 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -26,6 +26,8 @@ may still clamp it, and the read site is the reference.
 | `AGENT402_MCP_DRAIN_MS` | Agent402 MCP drain, in milliseconds. |  | `src/mcp-http.js` |
 | `AGENT402_MCP_MAX_ANSWER_BYTES` | Agent402 MCP maximum answer bytes. |  | `src/mcp-answer-bound.js` |
 | `AGENT402_MCP_MAX_CONCURRENT` | Agent402 MCP maximum concurrent. |  | `src/mcp-http.js` |
+| `AGENT402_MCP_MAX_PER_HOUR` | Free-tier calls per hour, per IP, shared by the MCP free tier and proof-of-work calls. |  | `src/rate-limit.js` |
+| `AGENT402_MCP_MAX_PER_MIN` | Free-tier calls per minute, per IP, shared by the MCP free tier and proof-of-work calls. |  | `src/rate-limit.js` |
 | `AGENT402_MCP_PAID_REQ_PER_HOUR` | Agent402 MCP paid requests per hour. |  | `src/mcp-http.js` |
 | `AGENT402_MCP_PAID_REQ_PER_MIN` | Agent402 MCP paid requests per minute. |  | `src/mcp-http.js` |
 | `AGENT402_MCP_REQ_DEADLINE_MS` | Agent402 MCP requests deadline, in milliseconds. |  | `src/mcp-http.js` |
@@ -145,6 +147,7 @@ may still clamp it, and the read site is the reference.
 | --- | --- | --- | --- |
 | `BASE_BUILDER_CODE` | Base builder code. |  | `src/discovery.js`, `src/payments.js`, `src/server.js` |
 | `BASE_DENIM_ACTIVATION_TIMESTAMP` | Base denim activation timestamp. |  | `src/chain-block-time.js` |
+| `BASE_NOTIFICATIONS_API_KEY` | Base notifications API key (a credential, set on the host); /health reports only whether it is set. |  | `src/server.js` |
 | `BASE_RPCS` | Base RPC endpoints. |  | `src/leaderboard.js` |
 | `BASE_SEPOLIA_DENIM_ACTIVATION_TIMESTAMP` | Base sepolia denim activation timestamp. |  | `src/chain-block-time.js` |
 | `BASE_URL` | Public origin of this deployment, used in links, examples, the canonical host and operator Origin checks. | `https://agent402.tools` | `src/answer-share.js`, `src/mpp-stripe.js`, `src/server.js` and 2 more |
@@ -360,6 +363,7 @@ may still clamp it, and the read site is the reference.
 | `DISCOVERY_COMPUTE_DEADLINE_MS` | Discovery compute deadline, in milliseconds. |  | `src/server.js` |
 | `DISCOVERY_COMPUTE_PER_HOUR` | Discovery compute per hour. |  | `src/server.js` |
 | `DISCOVERY_COMPUTE_PER_MIN` | Discovery compute per minute. |  | `src/server.js` |
+| `DISCOVERY_CPU_BUDGET_MS` | Discovery search time across all callers per rolling second, in milliseconds, before discovery answers are shed. |  | `src/load-shed.js` |
 | `DISCOVERY_MAX_INFLIGHT` | Discovery maximum inflight. |  | `src/server.js` |
 | `DISCOVERY_REFUSALS_FILE` | Discovery refusals file path. | `/data/discovery-refusals.json` | `src/discovery-refusals.js` |
 | `DISCOVERY_REFUSALS_FLUSH_MS` | Discovery refusals flush, in milliseconds. |  | `src/discovery-refusals.js` |
@@ -729,7 +733,7 @@ may still clamp it, and the read site is the reference.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `OPENROUTER_API_KEY` | Model aggregator key behind the /v1 gateway and the model-backed tools; unset answers 503 on those routes. |  | `src/decision-one.js`, `src/model-catalog.js`, `src/tools/llm-gateway-kit.js` and 3 more |
+| `OPENROUTER_API_KEY` | Model aggregator key behind the /v1 gateway and the model-backed tools; unset answers 503 on those routes. |  | `src/decision-one.js`, `src/model-catalog.js`, `src/server.js` and 4 more |
 | `OPENROUTER_FLEX` | Openrouter flex. | `on` | `src/tools/llm-gateway-kit.js` |
 | `OPENROUTER_LOW_CREDITS_USD` | Openrouter low credits, in USD. |  | `src/tools/llm-gateway-kit.js` |
 | `OPENROUTER_LOW_KEY_LIMIT_FRACTION` | Openrouter low key limit fraction. |  | `src/tools/llm-gateway-kit.js` |
@@ -779,6 +783,7 @@ may still clamp it, and the read site is the reference.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
+| `PAYMENT_GUIDE_402` | First-contact 402 payment guide block; on unless set to off. |  | `src/server.js` |
 | `PAYMENT_NETWORKS` | Comma list of networks offered in each 402; the primary NETWORK is always first. |  | `src/mpp-shim.js`, `src/payments.js` |
 | `PAYMENT_REQUIRED_BODY` | Payment required body. |  | `src/payment-required-compact.js`, `src/server.js` |
 | `PAYMENT_REQUIRED_COMPACT` | Payment required compact. |  | `src/payment-required-compact.js` |
@@ -806,6 +811,11 @@ may still clamp it, and the read site is the reference.
 | `POSTHOG_FORCE` | Posthog force. |  | `src/posthog.js` |
 | `POSTHOG_HOST` | Posthog host. | `https://us.i.posthog.com` | `src/posthog.js` |
 | `POSTHOG_PAYWALL_FLUSH_MS` | Posthog paywall flush, in milliseconds. |  | `src/posthog.js` |
+| `POSTHOG_PROXY_INFLIGHT_STALE_MS` | PostHog proxy in-flight entry lifetime, in milliseconds. |  | `src/server.js` |
+| `POSTHOG_PROXY_MAX_BYTES` | PostHog proxy maximum answer bytes. |  | `src/server.js` |
+| `POSTHOG_PROXY_MAX_CONCURRENT` | PostHog proxy maximum concurrent requests. |  | `src/server.js` |
+| `POSTHOG_PROXY_MAX_PER_MIN` | PostHog proxy requests per minute, per IP. |  | `src/server.js` |
+| `POSTHOG_PROXY_TIMEOUT_MS` | PostHog proxy upstream timeout, in milliseconds. |  | `src/server.js` |
 | `POSTHOG_TEST_CAPTURE` | Posthog test capture. |  | `src/posthog.js` |
 
 ## POW
@@ -1087,6 +1097,15 @@ may still clamp it, and the read site is the reference.
 | `SHARED_LIMITS_PREFIX` | Key prefix for shared rate-limit counters, so two deployments on one Redis do not mix. |  | `src/shared-limits.js`, `src/tool-failure-monitor.js` |
 | `SHARED_LIMITS_PROBE_FIRST_MS` | Shared limits probe first, in milliseconds. | `2000` | `src/shared-limits.js` |
 | `SHARED_LIMITS_PROBE_MS` | Shared limits probe, in milliseconds. |  | `src/shared-limits.js` |
+
+## SHED
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `SHED_INFLIGHT` | Requests in flight at which load shedding starts. |  | `src/load-shed.js` |
+| `SHED_LAG_MS` | Event-loop lag at which load shedding starts, in milliseconds. |  | `src/load-shed.js` |
+| `SHED_LAG_WARMUP_MS` | Shed lag warmup, in milliseconds. | `60000` | `src/load-shed.js` |
+| `SHED_WARMUP_LAG_INFLIGHT` | Shed warmup lag inflight. |  | `src/load-shed.js` |
 
 ## SIWE
 
@@ -1511,10 +1530,12 @@ may still clamp it, and the read site is the reference.
 | `FOLLOWUPS` | off stops the follow-up loop. |  | `src/server.js` |
 | `FRED_API_KEY` | Fred API key (a credential, set on the host). |  | `src/selfcheck.js`, `src/tools/macro-kit.js` |
 | `FRED_API_KEY_V2` | Fred API key v2. |  | `src/tools/macro-kit.js` |
+| `FRONT_DOOR_402` | Adds the front-door block to a first-contact 402 body; off unless set to on. |  | `src/server.js` |
 | `FUNDING_HISTORY_CHUNK_BLOCKS` | Funding history chunk blocks. | `0` | `src/seller-funding.js` |
 | `FUNDING_HISTORY_FROM_BLOCK` | Funding history from block. |  | `src/seller-funding.js` |
 | `GATED_RAIL_HISTORY_FILE` | Gated rail history file path. | `/data/gated-rail-history.json` | `src/gated-rail-history.js` |
 | `GA_MEASUREMENT_ID` | Analytics measurement id. |  | `src/ledger-chrome.js` |
+| `GITHUB_TOKEN` | GitHub token (a credential, set on the host); the github-repo tool sends it to lift the keyless rate limit. |  | `src/tools/enrich-kit.js` |
 | `GITHUB_TRAFFIC_TOKEN` | Github traffic token (a credential, set on the host). |  | `src/transparency.js` |
 | `GIT_COMMIT_SHA` | Build id for /health, the MCP version and asset URLs when the host platform does not provide one. | `dev` | `src/ledger-chrome.js`, `src/mcp-http.js`, `src/server.js` |
 | `GLAMA_MAINTAINER_EMAIL` | Maintainer address published in /.well-known/glama.json (a fork sets its own). | `mike@agent402.tools` | `src/server.js` |
@@ -1578,7 +1599,7 @@ may still clamp it, and the read site is the reference.
 | `QUOTE_MAX_AGE_MS` | Quote maximum age, in milliseconds. |  | `src/crawl-cadence.js` |
 | `RAILS_TEST_GRADUATE` | Rails test graduate. |  | `src/rails.js` |
 | `RATE_LIMIT_MAX_KEYS` | Rate limit maximum keys. |  | `src/rate-limit.js` |
-| `RATE_LIMIT_REPLICAS` | Number of replicas the per-process rate limits are divided across (default 1). | `1` | `src/decide/ledger.js`, `src/state-db.js`, `src/tools/cdp-kit.js` and 1 more |
+| `RATE_LIMIT_REPLICAS` | Number of replicas the per-process rate limits are divided across (default 1). | `1` | `src/decide/ledger.js`, `src/rate-limit.js`, `src/server.js` and 3 more |
 | `READY_ROUTER_WAIT_MS` | Ready router wait, in milliseconds. | `30000` | `src/server.js` |
 | `RECONCILE_GRACE_MS` | Reconcile grace, in milliseconds. |  | `src/settlement-reconcile.js` |
 | `REMOVED_ORIGINS_FILE` | Removed origins file path. |  | `src/x402-index.js` |
@@ -1593,11 +1614,10 @@ may still clamp it, and the read site is the reference.
 | `SALES_LEDGER_DB` | Sales ledger database. |  | `src/sales-ledger.js` |
 | `SCORECARD_PUBLISH_TX` | Scorecard publish transaction. |  | `src/scorecard.js` |
 | `SCORECARD_REFRESH_MS` | Scorecard refresh, in milliseconds. |  | `src/scorecard.js` |
+| `SECURITY_CONTACT_EMAIL` | Contact address published in /.well-known/security.txt. |  | `src/server.js` |
 | `SEI_RELAY_TOKEN` | Sei relay token (a credential, set on the host). |  | `src/revenue-live.js` |
 | `SEI_RELAY_URL` | Sei relay URL. |  | `src/revenue-live.js` |
 | `SELF_SELLER_HOSTS` | Self seller hosts. |  | `src/x402-index.js` |
-| `SHED_LAG_WARMUP_MS` | Shed lag warmup, in milliseconds. | `60000` | `src/load-shed.js` |
-| `SHED_WARMUP_LAG_INFLIGHT` | Shed warmup lag inflight. |  | `src/load-shed.js` |
 | `SIGNING_HALTED` | Any value other than empty, 0, false, no or off halts every outbound signing path (an emergency lever; read at call time). |  | `src/signing-halt.js` |
 | `SLOW_SYNC_WINDOW_SECONDS` | Slow sync window, in seconds. |  | `src/slow-sync-window.js` |
 | `SPAN_BLOCKS` | Span blocks. |  | `src/leaderboard.js` |
