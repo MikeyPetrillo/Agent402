@@ -11384,10 +11384,10 @@ app.get("/api/cache-stats", (_req, res) => res.json(cacheCounters()));
 // A settled job result that cannot be delivered (not retained, or its body
 // lost on the loopback) is a debt, on the receipt's proof only. Resolves
 // false when nothing was booked.
-const bookAsyncChargedFailure = async ({ slug, receipt, priceUsd }) => {
+const bookAsyncChargedFailure = async ({ slug, receipt, priceUsd, requestId = null }) => {
   try {
     if (!receiptProvesCharge(receipt)) return false;
-    await recordRefundOwed({ slug, network: receipt?.network ?? null, payer: receipt?.payer ?? null, priceUsd, tx: receipt?.transaction ?? null, httpStatus: 500 });
+    await recordRefundOwed({ slug, network: receipt?.network ?? null, payer: receipt?.payer ?? null, priceUsd, tx: receipt?.transaction ?? null, httpStatus: 500, requestId });
     // A duplicate (false) is a debt already on the books: still recorded.
     return true;
   } catch { return false; /* recording a debt must never break the serving path */ }
@@ -12693,12 +12693,11 @@ if (FREE_MODE) {
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
       // Granted: any 2xx, since the paywall settles every handler answer
-      // under 400 (a 201 or 204 is as paid as a 200). The one 2xx that grants
-      // nothing is the async front's 202 (Prefer: respond-async, answered
-      // with Preference-Applied before the run; its loopback carries the
-      // payment), which is released so that loopback can claim it.
-      const granted = () => res.statusCode >= 200 && res.statusCode < 300
-        && !(res.statusCode === 202 && /respond-async/i.test(String(res.getHeader("Preference-Applied") || "")));
+      // under 400 (a 201 or 204 is as paid as a 200). The async front's 202
+      // (Prefer: respond-async) never reaches this guard: the front is mounted
+      // ahead of the paywall and answers before it (its loopback carries the
+      // payment and is the call this guard sees; scripts/test-replay-consumed-2xx.js).
+      const granted = () => res.statusCode >= 200 && res.statusCode < 300;
       res.on("finish", finishGuard);
       // A refusal (anything not granted) is released when it is ended: "finish"
       // waits for the socket write, and a buyer that resent the same payment
@@ -13149,13 +13148,15 @@ if (!FREE_MODE) {
     // an abandoned ticket, which recordHangupDebt reads when the gate ends
     // the response, before the outcome runs. A response that never ends is
     // settled one in-flight window after the close, as it reads then.
-    let decided = false;
-    onResponseEnd(req, res, () => { decided = true; if (reserved) settle(); });
+    // The late timer is cleared when the outcome lands first, so a buyer who
+    // left mid-run does not hold the request for the whole window.
+    let decided = false, late = null;
+    onResponseEnd(req, res, () => { decided = true; if (late) { clearTimeout(late); late = null; } if (reserved) settle(); });
     res.once("close", () => {
       closed = true;
       if (!reserved) return;
       if (decided || isBatchSettlementRequest(req)) { settle(); return; }
-      const late = setTimeout(settle, HANGUP_INFLIGHT_WINDOW_MS());
+      late = setTimeout(contained("hangup-ticket-late-settle", settle), HANGUP_INFLIGHT_WINDOW_MS());
       late.unref?.();
     });
     // Priced at what this chain charges (the signed amount, or the gated

@@ -57,6 +57,16 @@ try {
     const again = await rig.send(SQL, headers);
     await ok(r.status === 200 && rig.outcomesOf(w).attempts === 1 && rig.outcomesOf(w).settled === 1 && (again.status === 409 || again.headers.get("x-replayed-answer") === "1"), `c. a 200's payment sent again runs nothing more (${again.status}, ${JSON.stringify(rig.outcomesOf(w))})`);
   }
+  // d. Every 2xx the guard sees is granted: the async front's 202 (Prefer:
+  // respond-async) is answered before the guard is installed (the front is
+  // mounted ahead of the paywall block), so the guard holds no exception for it.
+  {
+    const { readFileSync } = await import("node:fs");
+    const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    const frontAt = server.indexOf("app.use(asyncJobs.middleware);"), guardAt = server.indexOf("const replayKey = await paymentReplayKeyAsync(req);");
+    const grantedAt = server.indexOf("const granted = () =>", guardAt);
+    await ok(frontAt > 0 && guardAt > frontAt && /^const granted = \(\) => res\.statusCode >= 200 && res\.statusCode < 300;/.test(server.slice(grantedAt)), `d. the async front is mounted before the replay guard, and the guard grants every 2xx (front ${frontAt}, guard ${guardAt})`);
+  }
 } catch (e) {
   await fail(`unexpected error: ${e?.stack || e}`);
 }
