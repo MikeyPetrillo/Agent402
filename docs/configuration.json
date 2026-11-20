@@ -1,5 +1,5 @@
 {
-  "note": "Purpose lines for docs/configuration.md (node scripts/gen-config-reference.js --write). vars: one line per environment variable src/ reads; notEnv: ALL_CAPS literals in src/ that are not settings this server reads, with the reason; patterns: names built at run time. Never a value, a rate or a cost. Enforced by scripts/test-config-reference.js.",
+  "note": "Purpose lines for docs/configuration.md (node scripts/gen-config-reference.js --write). vars: one line per environment variable src/ reads; notEnv: ALL_CAPS literals in src/ that are not settings this server reads, with the reason; patterns: names built at run time; defaults: the default the code falls back to where it is not a plain literal at the read site (a named constant, an expression or a branch), each checked against the code. Never a configured value, a rate or a cost. Enforced by scripts/test-config-reference.js.",
   "scope": "the server that runs as node src/server.js (every file under src/). The facilitator service (facilitator/), the Cloudflare workers (workers/), the scripts and the published packages are separate programs with their own settings.",
   "notEnv": {
     "ACCESSION_NUMBER": "a filing field name",
@@ -65,6 +65,13 @@
     "REVENUE_LEDGER_FROM_<X>": "Revenue ledger from.",
     "SOR_WALLET_DAILY_MAX_USD_<X>": "Router wallet daily maximum, in USD.",
     "UPSTREAM_BUYER_LOW_USD_<X>": "Upstream buyer low, in USD."
+  },
+  "defaults": {
+    "COINGECKO_UNSETTLED_PER_CALLER_HOUR": "8",
+    "CREDITS_INDEXES": "on",
+    "FUNNEL_FOUND_CAP": "50000",
+    "FUNNEL_FOUND_WINDOW_MS": "21600000",
+    "ROBINHOOD_RELAYER_MIN_PRICE_USD": "0.004"
   },
   "vars": {
     "ACCEPT_OUTPUT_SCHEMA": "Accept output schema.",

@@ -13,7 +13,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scanSource, scanTree, envNames } from "./lib/env-reads.js";
+import { scanSource, scanTree, envNames, stripComments } from "./lib/env-reads.js";
 import { buildReference, CONFIG_PATH, DOC_PATH, defaultOf } from "./gen-config-reference.js";
 
 let pass = 0, fail = 0;
@@ -56,6 +56,50 @@ for (const n of ["PLANTED_MEMBER", "PLANTED_BRACKET", "PLANTED_DESTRUCTURED", "P
 ok(!planted.names.has("PLANTED_COMMENT_ONLY") && !planted.names.has("PLANTED_BLOCK_COMMENT"), "control: a name only in a comment is not a read");
 ok(planted.templates.includes("PLANTED_TEMPLATE_<X>"), "control: a name built at run time is reported by its template");
 ok(defaultOf("PLANTED_MEMBER", ["const a = process.env.PLANTED_MEMBER || 5;"]) === "5" && defaultOf("PLANTED_HELPER", ["envMs(\"PLANTED_HELPER\", 10_000)"]) === "10000", "control: the default is read from both fallback shapes");
+
+// A default that is not a plain literal at the read site (a named constant,
+// an expression, a branch) is given in docs/configuration.json `defaults`,
+// and each one must equal what the code falls back to with the variable
+// unset, read here from the code itself. A name the literal scan already
+// reads takes no entry, and an entry with no check here fails.
+{
+  const srcText = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
+  const unset = async (names, fn) => {
+    const before = Object.fromEntries(names.map((n) => [n, process.env[n]]));
+    for (const n of names) delete process.env[n];
+    try { return await fn(); } finally { for (const n of names) if (before[n] !== undefined) process.env[n] = before[n]; }
+  };
+  const CODE_DEFAULTS = {
+    COINGECKO_UNSETTLED_PER_CALLER_HOUR: async () => {
+      const m = await import("../src/tools/coingecko-rate.js");
+      // The read falls back to the module's exported constant.
+      return /COINGECKO_UNSETTLED_PER_CALLER_HOUR\);\s*return [^;]*\?\s*n\s*:\s*CG_UNSETTLED_PER_CALLER_HOUR_DEFAULT;/.test(srcText("src/tools/coingecko-rate.js")) ? String(m.CG_UNSETTLED_PER_CALLER_HOUR_DEFAULT) : null;
+    },
+    // Unset reads as on: only "off" leaves the build to an operator.
+    CREDITS_INDEXES: async () => (/String\(process\.env\.CREDITS_INDEXES \|\| ""\)\.toLowerCase\(\) !== "off"/.test(srcText("src/credits.js")) ? "on" : null),
+    FUNNEL_FOUND_CAP: async () => unset(["FUNNEL_FOUND_CAP"], async () => String((await import("../src/funnel-sources.js?cap")).FOUND_CAP)),
+    FUNNEL_FOUND_WINDOW_MS: async () => unset(["FUNNEL_FOUND_WINDOW_MS"], async () => String((await import("../src/funnel-sources.js?window")).FOUND_WINDOW_MS)),
+    ROBINHOOD_RELAYER_MIN_PRICE_USD: async () => String((await import("../src/network-floors.js")).robinhoodRelayerMinPriceUsd({})),
+  };
+  const explicit = config.defaults || {};
+  const texts = new Map();
+  const literalOf = (n) => defaultOf(n, [...(scan.vars.get(n)?.files || [])].map((f) => { if (!texts.has(f)) texts.set(f, stripComments(readFileSync(new URL(`../${f}`, import.meta.url), "utf8"))); return texts.get(f); }));
+  const unknown = Object.keys(explicit).filter((n) => !(n in config.vars));
+  ok(unknown.length === 0, `every defaults entry names a documented variable${list(unknown)}`);
+  const shadow = Object.keys(explicit).filter((n) => literalOf(n) !== null);
+  ok(shadow.length === 0, `no defaults entry stands in for a literal the scan reads at the read site${list(shadow)}`);
+  const unchecked = Object.keys(explicit).filter((n) => !CODE_DEFAULTS[n]);
+  ok(unchecked.length === 0, `every defaults entry has a check against the code here${list(unchecked)}`);
+  for (const [n, read] of Object.entries(CODE_DEFAULTS)) {
+    const code = await read();
+    ok(code !== null && explicit[n] === code, `${n}: the documented default is what the code falls back to (doc ${JSON.stringify(explicit[n])}, code ${JSON.stringify(code)})`);
+  }
+  // The rows the code gives a default carry it in the reference.
+  const rowDefault = (n) => { const line = text.split("\n").find((l) => l.startsWith(`| \`${n}\` |`)); const cells = line ? line.split(" | ") : []; return cells.length >= 4 ? cells[2].trim() : null; };
+  const blank = [...Object.keys(CODE_DEFAULTS), "CREDITS_INDEX_DELAY_MS"].filter((n) => !/^`[^`]+`$/.test(rowDefault(n) || ""));
+  ok(blank.length === 0, `each of these rows carries its default in docs/configuration.md${list(blank)}`);
+  ok(rowDefault("FUNNEL_FOUND_CAP") === "`50000`" && rowDefault("ROBINHOOD_RELAYER_MIN_PRICE_USD") === "`0.004`", `the rows read the code's values (${rowDefault("FUNNEL_FOUND_CAP")}, ${rowDefault("ROBINHOOD_RELAYER_MIN_PRICE_USD")})`);
+}
 
 // Control: a planted tree with a new read fails the coverage check.
 const dir = mkdtempSync(join(tmpdir(), "a402-config-ref-"));

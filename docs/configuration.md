@@ -8,7 +8,9 @@ purpose line, and when a purpose line names a variable no code reads.
 Scope: the server that runs as node src/server.js (every file under src/). The facilitator service (facilitator/), the Cloudflare workers (workers/), the scripts and the published packages are separate programs with their own settings.
 
 Every value is set on the host, never in the repository. "Default" is the plain literal the code falls back to at
-its first read site when there is one; a helper may still clamp it, and the read site is the reference.
+its first read site when there is one, else the value `docs/configuration.json` `defaults` gives for a fallback that is a
+named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
+may still clamp it, and the read site is the reference.
 
 1057 variables in 109 groups.
 
@@ -239,7 +241,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `COINGECKO_OTHERS_RESERVE` | Coingecko others reserve. | `0.2` | `src/tools/coingecko-rate.js` |
 | `COINGECKO_SHARED_CACHE_MAX_BYTES` | Coingecko shared cache maximum bytes. |  | `src/tools/coingecko-cache.js` |
 | `COINGECKO_SHARED_DEADLINE_MS` | Coingecko shared deadline, in milliseconds. |  | `src/tools/coingecko-rate.js` |
-| `COINGECKO_UNSETTLED_PER_CALLER_HOUR` | CoinGecko reads one caller's unconfirmed coin ids may take per hour before they are checked against the coin lists. |  | `src/tools/coingecko-rate.js` |
+| `COINGECKO_UNSETTLED_PER_CALLER_HOUR` | CoinGecko reads one caller's unconfirmed coin ids may take per hour before they are checked against the coin lists. | `8` | `src/tools/coingecko-rate.js` |
 | `COINGECKO_UNSETTLED_SHARE` | Coingecko unsettled share. | `0.1` | `src/tools/coingecko-rate.js` |
 
 ## COMPOSITE
@@ -277,7 +279,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `CREDITS_DIR` | Card store directories when no state database is set (default <data root>/credits and <data root>/human-checkout; the legacy human-checkout.json is read beside the latter). |  | `src/credits.js` |
 | `CREDITS_EU_UK_REQUIRE_TAX_ID` | Credits eu uk require tax id. |  | `src/credits.js` |
 | `CREDITS_HOLD_REFRESH_MAX_MS` | Credits hold refresh maximum, in milliseconds. |  | `src/credits.js` |
-| `CREDITS_INDEXES` | Prepaid credits table indexes built in the background; off leaves them to an operator. |  | `src/credits.js` |
+| `CREDITS_INDEXES` | Prepaid credits table indexes built in the background; off leaves them to an operator. | `on` | `src/credits.js` |
 | `CREDITS_INDEX_DELAY_MS` | Delay before the prepaid credits index build starts after the store's first load, in milliseconds. | `60000` | `src/credits.js` |
 | `CREDITS_SALES` | 1, true, on or yes turns prepaid credit sales on; unset keeps them off. |  | `src/credits-sales.js` |
 
@@ -451,8 +453,8 @@ its first read site when there is one; a helper may still clamp it, and the read
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `FUNNEL_CALLER_CAP` | Funnel caller cap. |  | `src/funnel.js` |
-| `FUNNEL_FOUND_CAP` | Most callers the paid-call funnel remembers as having read a discovery document. |  | `src/funnel-sources.js` |
-| `FUNNEL_FOUND_WINDOW_MS` | How long the paid-call funnel links a discovery read to the same caller's later calls, in milliseconds. |  | `src/funnel-sources.js` |
+| `FUNNEL_FOUND_CAP` | Most callers the paid-call funnel remembers as having read a discovery document. | `50000` | `src/funnel-sources.js` |
+| `FUNNEL_FOUND_WINDOW_MS` | How long the paid-call funnel links a discovery read to the same caller's later calls, in milliseconds. | `21600000` | `src/funnel-sources.js` |
 | `FUNNEL_RETRY_WINDOW_MS` | Funnel retry window, in milliseconds. |  | `src/funnel.js` |
 
 ## GATEWAY
@@ -977,7 +979,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `ROBINHOOD_RELAYER_KEY` | Robinhood relayer key (a credential, set on the host). |  | `src/changelog.js`, `src/payments.js` |
 | `ROBINHOOD_RELAYER_LOCK_WAIT_MS` | Robinhood relayer lock wait, in milliseconds. |  | `src/robinhood-relayer.js` |
 | `ROBINHOOD_RELAYER_MAX_GWEI` | Robinhood relayer maximum gwei. |  | `src/robinhood-relayer.js` |
-| `ROBINHOOD_RELAYER_MIN_PRICE_USD` | Least sale price, in USD, the own Robinhood relayer settles (0: any). |  | `src/changelog.js`, `src/network-floors.js` |
+| `ROBINHOOD_RELAYER_MIN_PRICE_USD` | Least sale price, in USD, the own Robinhood relayer settles (0: any). | `0.004` | `src/changelog.js`, `src/network-floors.js` |
 | `ROBINHOOD_RELAYER_RECEIPT_MS` | Robinhood relayer receipt, in milliseconds. |  | `src/robinhood-relayer.js` |
 | `ROBINHOOD_SKIP_DRY_BELOW_SETTLEMENTS` | Robinhood skip dry below settlements. |  | `src/robinhood-order.js` |
 | `ROBINHOOD_USDG_ADDRESS` | Robinhood usdg address. | `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` | `src/payments.js` |
