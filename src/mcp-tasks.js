@@ -260,7 +260,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
   const ORPHAN_ERROR = () => ({ code: TASK_INTERNAL_ERROR, message: `Task run interrupted by a server restart; not charged${PUSH_EXCEPTION}.` });
   // Charged before the restart (a sale on the books for this run).
   const ORPHAN_CHARGED_MESSAGE = (tx) => `This run did not survive a server restart and was not completed, but its payment settled before the restart${tx ? ` (transaction ${tx})` : ""}. The charge is recorded as owed in our refund ledger and repaid after review.${tx ? ` Check it, free, at GET /api/refunds/lookup?tx=${tx}.` : ""} A new call is a new paid call.`;
-  const ORPHAN_CHARGED_ERROR = () => ({ code: TASK_INTERNAL_ERROR, message: "Task run interrupted by a server restart after its payment settled; the charge is recorded as owed." });
+  const ORPHAN_CHARGED_ERROR = () => ({ code: TASK_INTERNAL_ERROR, message: "Task run interrupted by a server restart after its payment settled; the charge is recorded as owed and repaid after review." });
   // The sales ledger could not say.
   const ORPHAN_UNREAD_MESSAGE = `This run did not survive a server restart and was not completed. Payment settles only on a delivered result${PUSH_EXCEPTION}; if a payment for this call did settle, check it, free, by its settlement transaction at GET /api/refunds/lookup?tx=<hash>. Please call again.`;
   const ORPHAN_UNREAD_ERROR = () => ({ code: TASK_INTERNAL_ERROR, message: "Task run interrupted by a server restart." });
