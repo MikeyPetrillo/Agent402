@@ -409,6 +409,8 @@ export async function classifyRenewalEvidence({ receipt, tx, currency, payer, re
 // (the disk-fill guard, same posture as the memory namespace byte budget).
 // (OFFER_SWEEP_AFTER_MS and the sweep timer: src/mpp-subscription-retention.js.)
 export const MAX_OPEN_OFFERS = 500;
+/** How long the offer sweep runs before it gives the event loop a turn. */
+export const OFFER_SWEEP_SLICE_MS = 20;
 /** How long one container's pull of a subscription's due period holds the
  *  cross-container lease (renewed while it runs): longer than a sync send
  *  can take, short enough that a crashed holder frees it. */
@@ -1285,7 +1287,15 @@ export function createMppSubscriptions({
     const snap = kv._snapshot();
     const live = new Set(Object.entries(snap).filter(([k]) => k.startsWith("a402:sub:")).map(([, v]) => String(v.accessKeyAddress || "").toLowerCase()));
     let open = 0;
+    // The file store writes the whole document on every delete, and its
+    // awaits resolve without ever leaving the microtask queue: a walk over
+    // the cap's worth of expired offers held the event loop for over a
+    // second. The walk gives the loop a turn once a slice has run for
+    // OFFER_SWEEP_SLICE_MS. Every offer it reaches here is past its
+    // challenge's life, so nothing a request does in between can pay it.
+    let sliceAt = Date.now();
     for (const [key, marker] of Object.entries(snap)) {
+      if (Date.now() - sliceAt >= OFFER_SWEEP_SLICE_MS) { await new Promise((r) => setImmediate(r)); sliceAt = Date.now(); }
       // A destroyed key's marker only has to outlive a renewal in flight.
       if (key.startsWith(KEY_GONE_PREFIX)) {
         if (now() - (Date.parse(marker?.at || "") || 0) > KEY_GONE_KEEP_MS) await kv.delete(key);

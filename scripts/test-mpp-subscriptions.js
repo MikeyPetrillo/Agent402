@@ -1457,5 +1457,34 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   ok(a2.status === "active" && Array.isArray(a2.signedReceipts) && a2.signedReceipts.length === 0, "signing off: the subscription activates with no receipt");
 }
 
+// ---------------------------------------------------------------------------
+// The offer sweep at the open-offer cap on the file store: every expired offer
+// and both of its key records are dropped, and the sweep gives the event loop
+// a turn as it goes instead of holding it for the whole walk.
+// ---------------------------------------------------------------------------
+{
+  const hex = (n) => Array.from({ length: n }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join("");
+  const seed = {};
+  for (let i = 0; i < MAX_OPEN_OFFERS; i++) {
+    const nonce = hex(24), addr = `0x${hex(40)}`;
+    const key = { accessKeyAddress: addr, keyType: "secp256k1", privateKey: `0x${hex(64)}` };
+    seed[`tempo:subscription:access-key:offer:${nonce}`] = key;
+    seed[`tempo:subscription:access-key:address:${addr}`] = key;
+    seed[`a402:offer:${nonce}`] = { at: clock - OFFER_SWEEP_AFTER_MS - 60_000, accessKeyAddress: addr, product: "domain-monitor", target: `t${i}.example.com`, email: null };
+  }
+  writeFileSync(join(tmp, "offer-loop.json"), JSON.stringify(seed));
+  const { engine } = makeEngine({ name: "offer-loop" });
+  let last = performance.now(), worst = 0, turns = 0;
+  const tick = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; turns++; }, 1);
+  const started = performance.now();
+  const open = await engine._sweepOffers();
+  const took = performance.now() - started;
+  worst = Math.max(worst, performance.now() - last);
+  clearInterval(tick);
+  const left = Object.keys(engine._store._snapshot()).length;
+  ok(open === 0 && left === 0, `the sweep at the cap drops all ${MAX_OPEN_OFFERS} expired offers and their key records (open ${open}, entries left ${left})`);
+  ok(worst < took / 3 && worst < 400, `the sweep yields as it goes: the longest event-loop turn was ${worst.toFixed(0)} ms over a ${took.toFixed(0)} ms sweep (${turns} timer turns)`);
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${pass} passed, 0 failed`);
