@@ -331,7 +331,10 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   and its lookup fields, never the request or the answer, and goes after `RECEIPT_STORE_DAYS` (400) or past
   `RECEIPT_STORE_MAX_ROWS` (2,000,000, oldest first); a write the store refuses waits in a queue of
   `RECEIPT_STORE_PENDING_MAX` (5000) and is retried, never on the serving path. The operator perf view
-  (`/__operator/perf.json`) carries its counts as `receiptStore`. The hosted MCP connector relays a paid result's receipt in
+  (`/__operator/perf.json`) carries its counts as `receiptStore`. The audit report's JSON `refunds`
+  block lists the paying wallet's own refund rows recorded in the window (`refundsForPayer`, newest
+  `AUDIT_REFUNDS_MAX` 500; a read that fills inside the window reads `complete: false`), never netted
+  from `totals` (`netted: false`); the CSV holds call rows only. The hosted MCP connector relays a paid result's receipt in
   `_meta["tools.agent402/receipt"]`; an async job keeps it in `result.headers`. No receipt on a 4xx/5xx, a
   refused settle, a free, trial or allowance answer, `/ref` or FREE_MODE, nor on a keyed
   idempotent replay (it carries no settlement header; the first receipt covers the same bytes). The
@@ -403,7 +406,12 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `src/hangup-settlement.js`: a forgiven hang-up, a first-call allowance) is held to its
   `validBefore` in full, since that authorization is still live on chain. The call site is
   `consumedHoldFor`; a longer hold is a longer TTL on the same writes
-  (`scripts/test-replay-consumed-hold.js`, on Redis).
+  (`scripts/test-replay-consumed-hold.js`, on Redis). The 503 when the store is unavailable carries
+  `Retry-After` 5 (the claim's own bound, `REQUIRED_CLAIM_OP_MS`). A granted call (any 2xx except the
+  async front's 202) consumes its payment (`scripts/test-replay-consumed-2xx.js`).
+- **Hang-up ticket settle:** the dispatcher settles a forgiveness ticket when the response's outcome
+  is known (`onResponseEnd`), never at the close itself; a payment channel's ticket at the close; one
+  in-flight window as the backstop (`scripts/test-hangup-claim-wait.js`).
 - **Per-chain price floors:** `src/network-floors.js`. Every accept is priced through
   `priceForNetwork` (`src/payments.js`: list or per-request quote, plus the chain's
   `NETWORK_PRICE_PREMIUMS` premium, raised to its floor). No chain has a floor by default,
@@ -519,6 +527,11 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   facilitator answered is never re-read. Left for the next restart: Arc (fails closed on Circle's
   own read; its contract-wallet gate is registered only with Arc in the boot offer) and, on a
   restored network, the `upto` and Gateway batched accepts (`scripts/test-rail-restore.js`).
+- **First init after boot** (`src/payments.js`, before `createGuardedInit`): a facilitator whose boot
+  `/supported` read got no answer is passed over in the first init attempt only if it cannot win an
+  offered (network, scheme) pair. Its read is put back after the attempt and the rail re-read restores
+  its rails. The facilitator first on an offered pair (CDP on Base) is still waited for
+  (`scripts/test-first-402-latency.js`).
 - **Facilitators:** boot guard in `src/payments.js` and `src/x402-boot-init.js`; diagnostics in
   `src/facilitator-diagnostics.js`; Stellar confirm in `src/stellar-confirm.js`; Tempo
   chain-truth confirm in `src/tempo-confirm.js`. Arc (`eip155:5042`) settles through Circle's
@@ -696,7 +709,11 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   the budget on the same address count, never a pass.
 - **Challenge size:** `scripts/test-challenge-size.js` keeps the 402 header under what a buyer
   can echo back; `scripts/test-bazaar-contracts.js` validates every 402 against the protocol's
-  own schema.
+  own schema. One header line, measured as `name: value`, is bounded at 8,190 bytes (aiohttp's
+  default) on every line but the default PAYMENT-REQUIRED (`scripts/test-challenge-size.js`), and on
+  every line of the compact 402 (`scripts/test-402-real-clients.js`, which also has five real clients
+  read the full-rail 402). The default PAYMENT-REQUIRED is never shortened: the Bazaar harvests its
+  accepts and extensions whole.
 - **402 body mirror:** `src/payment-required-body.js` copies the decoded PAYMENT-REQUIRED object
   into the JSON body of every paywall 402 (header authoritative, header keys win, our fields
   kept); a refusal that explains itself (a `hint`, or a problem's `detail`) gets the offer and

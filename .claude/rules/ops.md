@@ -113,6 +113,12 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   default 40000, also its most; half the job's 2-minute limit), it reads its own pushed range; `MARKER_WORKFLOW_FILE` (default
   `deploy.yml`) names the workflow whose runs it lists (`scripts/test-ci-gating.js` runs the
   step on a three-push sequence and evaluates the group for every mode a job reads).
+- **CI's data keys:** `OPEN_METEO_API_KEY` and `COINGECKO_CI_API_KEY` (never the production
+  CoinGecko key) reach only test-sweeps' strict-sweep server step and the nightly corpus step; the
+  server gets `COINGECKO_API_TIER=pro` and `COINGECKO_DAILY_MAX` = `CG_RUN_READ_CAP`
+  (`CG_NIGHTLY_READ_CAP` nightly) from `scripts/test-non-metered-examples.js`;
+  `--coingecko-run-check` fails a run that spent the cap or got a keyed 429
+  (`scripts/test-ci-secretless-install.js`).
 - **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
   immediately (`scripts/test-drain-on-sigterm.js`). An uncaught exception stays fatal, so every
   scheduled turn that reads seller data (the route index drain and shadow rebuild, the crawl timers,
@@ -242,10 +248,13 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   (explorer links, the month's first by ledger id) are public only with `SCORECARD_PUBLISH_TX=on`
   (default off: a buyer's transaction names its payer on chain); the operator view
   (`X-Operator-Token`, private, no-store) always lists them (`scripts/test-scorecard.js`).
-- **onchain-sql busy refusals:** onchain-sql refuses a query past `BUYER_QUERY_INFLIGHT_MAX`
-  buyer queries in flight on this server (8; `ONCHAIN_SQL_INFLIGHT_MAX`, 1 to 16), or when its
-  first send has no slot in reach of the send pacer (`src/tools/cdp-kit.js`; a 429 with
-  `Retry-After`, `hint: "busy"`, shed, never charged) and marks the request scope (`onchainSqlBusy`).
+- **onchain-sql busy refusals:** a query that finds every `BUYER_QUERY_INFLIGHT_MAX` place taken
+  (8 on this server; `ONCHAIN_SQL_INFLIGHT_MAX`, 1 to 16) waits for one first come first served
+  within the slot reach (`sqlSlotWaitMs`, within the handler budget), a freed place goes to the
+  first waiter, and only then is refused; so is a query whose first send has no slot in reach of the
+  send pacer (`src/tools/cdp-kit.js`; a 429 with `hint: "busy"`, shed, never charged; its
+  `Retry-After` is `SQL_BUSY_RETRY_AFTER_MIN_S` (4) plus a random 0 to
+  `SQL_BUSY_RETRY_AFTER_SPREAD_S` (2) s) and marks the request scope (`onchainSqlBusy`).
   The pacer spaces every query the server sends to the query service (buyer queries, retries,
   recovery runs, the health check, the revenue reads) `CDP_SQL_SEND_GAP_MS` apart (625 ms default,
   times `RATE_LIMIT_REPLICAS`), under the project's documented 2 queries a second at up to four
@@ -259,7 +268,13 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   name (`sqlSendGapWarnings`). The pacer is all a send waits on: a facilitator verify or settle
   holds no query back
   (`scripts/test-onchain-sql-paid-path.js` holds a paid query to 300 ms from its own verify answer
-  on a boot wired as production is). A 2xx from the query service whose body is cut off, empty or
+  on a boot wired as production is). At one replica two sends may go back to back
+  (`SQL_SEND_BURST`): a send waits for the send two before it plus two gaps; more replicas keep one
+  gap per send; the pacer reads `performance.now()` (`scripts/test-onchain-sql-pacer.js`). The
+  answer is read up to `SQL_READ_MAX_BYTES` (16 MB), past it 502 uncharged (`answerTooLargeError`);
+  a 408 is a 422 with hint `timed-out`; a fast 502/504 is a 502 to retry; narrow-query 422s carry
+  `charged: false` and `upstreamMs`; a Solana-paid call runs under `SVM_SQL_BUDGET_MS` (40 s) on
+  both SQL routes. A 2xx from the query service whose body is cut off, empty or
   not JSON is an uncharged 502 (`unreadableAnswerError`), never a result with no rows. When a busy
   refusal's response has ended, server.js counts it per UTC day by caller (`noteSqlBusy`,
   `src/sql-query-stats.js`: `busy.topBuyer` when the proven payer is one of the watched top
@@ -320,7 +335,19 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `more_than_one_sale`, `no_payer`, `no_amount`, `repeated_in_request`. Dry unless `?write=1`
   (`wouldMint`, `byPayer`, `owedUsd`); a write is idempotent on the tx. It records only:
   `scripts/refund-run.js` stays the sole payer. The pack backfill (`/__operator/refunds/backfill`)
-  is unchanged (`scripts/test-refund-backfill-sales.js`).
+  is unchanged (`scripts/test-refund-backfill-sales.js`). A booking write the store does not take is
+  skipped as `write_failed` and counted in `writeFailed`, never `alreadyRecorded` (database mode: it
+  waits in the dead-letter and lands on replay); the pack backfill counts it the same way.
+- **Refund run** (`refund.yml`, `scripts/refund-run.js`): the inbound proof reads an EVM receipt from
+  `REFUND_RPC_<id>` first (refund.yml passes `REFUND_RPC_42220` from the secret of that name), then
+  the public host, reading an empty answer again after each of `RECEIPT_RETRY_DELAYS_MS`
+  (`readReceipt`, `src/payment-verify.js`; one URL and no delays reads once). No reason, log line or
+  release note carries a URL (`withoutUrls`). `only_rows` (`REFUND_ONLY_ROWS`): ids, id ranges,
+  printed payer tags; anything else refuses the run. `REFUND_TIME_BUDGET_SECONDS` (480): no row
+  starts after it; the rest stay owed for the next run. Stellar and Algorand reads run before the
+  claim. `POST /__operator/refunds/update`: 409 only for a state conflict, 503 when the store did not
+  confirm, 400 for missing evidence (`refundRowUpdate`). A debt with no settle tx keys on payer,
+  slug, minute and request (`fallbackEvidence`).
 - **Search refusals:** `src/discovery-refusals.js` counts every search `/api/find` and `/api/route`
   turn away, per UTC day, by route and rule (`load-gate`, `client-rate`, `client-compute`,
   `shared-compute`, `inflight`, `deadline`) under a keyed, day-scoped digest of the limiter's client
