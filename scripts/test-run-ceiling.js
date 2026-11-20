@@ -84,7 +84,7 @@ async function drive(def, input, { ceilingMs, dnsMs, upstream }) {
 const describe = (r) => `ended ${r.endedMs} ms; ${r.started.map((e) => `${e.kind} ${e.what}@${e.at}${e.endedAt === null ? " NOT ENDED" : `-${e.endedAt}`}`).join(", ") || "nothing started"}; ${r.out.hung ? "NEVER CAME BACK" : r.out.error ? `error ${r.out.error.statusCode ?? r.out.error.message}` : `VALUE ${JSON.stringify(r.out.value).slice(0, 80)}`}`;
 
 try {
-  ok(MARKED.length === 41 && ceilingLeftMs() === Infinity, `41 tool definitions declare that their upstream work ends at a run's ceiling (${MARKED.length}), and this suite itself runs with none`);
+  ok(MARKED.length === 43 && ceilingLeftMs() === Infinity, `43 tool definitions declare that their upstream work ends at a run's ceiling (${MARKED.length}), and this suite itself runs with none`);
 
   // 1. A slow name lookup (longer than the ceiling) and an upstream that never answers.
   const CEILING = 300;

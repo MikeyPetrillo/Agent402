@@ -130,7 +130,7 @@ const NETWORK = new Set([
   "/api/gov-data", "/api/weather-alerts", "/api/earthquakes",
   "/api/drug-recalls", "/api/food-recalls", "/api/drug-adverse-events", "/api/vin-decode", "/api/vehicle-recalls",
   "/api/device-recalls", "/api/college-lookup", "/api/fec-candidates",
-  "/api/drug-label", "/api/drug-ndc", "/api/device-510k", "/api/device-adverse-events",
+  "/api/drug-label", "/api/drug-ndc", "/api/device-510k", "/api/device-adverse-events", "/api/drug-shortages", "/api/drug-orange-book",
   "/api/federal-awards", "/api/geo-lookup", "/api/fema-disasters",
   "/api/image-ocr",
   // Image-kit URL tools: the examples fetch sample-photo.jpg from our own
