@@ -270,5 +270,39 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
   ok(/The log line written for a refused payment, and the timing line written for each paid call, also hold the payment's network, the route and the first characters of the paying address\./.test(privacy), "/privacy states what the payment log lines hold");
 }
 
+// Payer sanctions screening. The x402, MPP evm and Tempo relay screens fail
+// open while no sanctions list is loaded (and an EVM payment whose payer the
+// screen cannot read is served unscreened), so a page sentence that says a
+// payer is screened before the paid route runs states that case beside it,
+// and names the live word that says whether a list is loaded.
+{
+  const { trustPage } = await import("../src/trust-page.js");
+  const trust = text(trustPage("https://agent402.tools"));
+  const pages = { "/trust": trust, "/privacy": privacy, "/terms": terms, "/security": security };
+  const CLAIM = /[^.]*\b(?:screens?|screened|checked)\b[^.]*before the (?:paid )?route runs[^.]*\./gi;
+  const FAIL_OPEN = /no (?:sanctions )?list is loaded[^.]*fails? open[^.]*unscreened/i;
+  let claims = 0; const bare = [];
+  for (const [name, t] of Object.entries(pages)) {
+    for (const m of t.matchAll(CLAIM)) {
+      claims++;
+      const around = t.slice(Math.max(0, m.index - 300), m.index + m[0].length + 600);
+      if (!FAIL_OPEN.test(around)) bare.push(`${name}: "${m[0].trim().slice(0, 90)}"`);
+    }
+  }
+  ok(claims >= 1, `class: the pages' screened-before-the-route claims are found (${claims})`);
+  ok(bare.length === 0, `class: every screened-before-the-route claim states the fail-open case beside it${bare.length ? ` (bare: ${bare.join(" | ")})` : ""}`);
+  ok(!/Every rail that carries a payer address screens it/.test(trust), "/trust does not open the screening sentence unconditionally");
+  ok(/as is an EVM payment whose payer the screen cannot read/.test(trust), "/trust names the unreadable-payer case the x402 screen serves unscreened");
+  ok(/Tempo direct settlement is not offered/.test(trust), "/trust says Tempo direct settlement is not offered while no list is loaded");
+  ok(/sanctionsScreen word on \/api\/gateway-status reads missing while no list is loaded/.test(trust), "/trust names the live word that says whether a list is loaded");
+  // Controls: the code still does what the scoped sentence says.
+  const screen = src("src/x402-payer-screen.js");
+  ok(/serving x402 payments unscreened/.test(screen) && /named no payer this screen reads[^\n]*served unscreened/.test(screen), "control: the x402 screen serves unscreened with no list, and an unreadable EVM payer unscreened");
+  ok(/serving Tempo payments unscreened/.test(src("src/payer-screen-rails.js")), "control: the Tempo relay screen serves unscreened with no list");
+  ok(/tempoSettlementMode\(\) === "relay" \|\| sanctionsScreenStatus\(\) !== "missing"/.test(src("src/mpp-tempo.js")), "control: Tempo direct mode offers no challenge while no list is loaded");
+  ok(/: \{ status: sanctionsScreenStatus\(\) \}/.test(src("src/server.js")), "control: /api/gateway-status publishes the sanctionsScreen word to everyone");
+  ok("missing" === (await import("../src/sanctions-screen.js")).sanctionsScreenStatus(), "control: with no list loaded the word reads missing");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
