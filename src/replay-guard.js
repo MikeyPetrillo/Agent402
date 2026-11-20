@@ -562,8 +562,10 @@ export function createReplayGuard({
   // there on the first try that reaches it (every deferredWriteMs), not at the
   // first renewal: until it is, a container beside this one (a deploy's
   // overlap, another replica) that reaches the store would claim the same
-  // payment there and run it too. Ends once written, once the name is found
-  // held by another request, or when the claim ends.
+  // payment there and run it too. Ends once written or when the claim ends.
+  // A name found held by another request is tried again on the next tick:
+  // when that request lets it go (a failed run releases it), this claim
+  // takes it within deferredWriteMs, not at the next renewal.
   function startDeferredWrite(key, claim, until) {
     stopDeferredWrite(key);
     const { primary } = namesOf(key);
@@ -576,7 +578,7 @@ export function createReplayGuard({
         const c = await storeClient();
         if (!c) return;
         const took = await c.set(REDIS_PREFIX + "f:" + primary, claim.token, { NX: true, EX: inflightTtlSeconds });
-        if (deferredWriters.get(key) === t) stopDeferredWrite(key);
+        if (took && deferredWriters.get(key) === t) stopDeferredWrite(key);
         if (took) {
           claim.shared = true;
           // Settled or released while the write was out: give it back.
