@@ -1944,6 +1944,34 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     const rv = ROW(id);
     ok(base.prompt === Math.min(rv.prompt, TIERS["v1-chat"].maxPrice.prompt) && base.completion === Math.min(rv.completion, TIERS["v1-chat"].maxPrice.completion) && metered.prompt === rv.prompt && metered.completion === rv.completion, "deepseek-v3.2: base clamps at min(row, tier bound); metered prices the row it sends as provider.max_price");
   }
+  // Rule 4 of the live-catalog guard on the metered tier (meteredRowFit): the
+  // tier sends a model's own row as provider.max_price (meteredBoundFor), so an
+  // endpoint dearer than the row is never routed to and cannot bill above it.
+  // The row is graded for service there instead: at least one endpoint, and at
+  // least METERED_MIN_FIT_SHARE of them, fit under it, and one that fits takes
+  // tools wherever any endpoint does. Invented prices, per 1M tokens.
+  {
+    const fit = K.meteredRowFit;
+    const R = (prompt, completion) => ({ prompt, completion });
+    const E = (prompt, completion, tools = false) => ({ prompt, completion, tools });
+    const row = R(4, 8);
+    ok(typeof fit === "function" && K.METERED_MIN_FIT_SHARE > 0 && K.METERED_MIN_FIT_SHARE <= 1, "the metered serviceability rule is exported for the guard");
+    if (typeof fit === "function") {
+      const v1 = fit(row, [...Array(22)].map(() => E(2, 6, true)).concat([E(5, 9, true)]));
+      ok(v1.serviceable && v1.fit === 22 && v1.routable === 23, `22 of 23 endpoints under the row: serviceable, the dearer one left out by provider.max_price (${v1.fit}/${v1.routable})`);
+      const v2 = fit(row, [E(5, 9), E(6, 10)]);
+      ok(!v2.serviceable && v2.fit === 0 && v2.reasons.includes("none_fit"), `no endpoint under the row: unservable, every metered call refused upstream (${v2.reasons})`);
+      const v3 = fit(row, [E(2, 6), E(5, 9), E(6, 10)]);
+      ok(!v3.serviceable && v3.fit === 1 && v3.reasons.includes("few_fit"), `one of three under the row: too few (${v3.reasons})`);
+      const v4 = fit(row, [E(2, 6), E(3, 7), E(5, 9, true)]);
+      ok(!v4.serviceable && v4.reasons.join() === "tools_unfit", `the only endpoint that takes tools sits above the row: a tool call cannot be served (${v4.reasons})`);
+      const v5 = fit(row, [E(4, 8, true), E(5, 9)]);
+      ok(v5.serviceable && v5.fit === 1, "an endpoint exactly at the row fits, and half of them is enough");
+      const v6 = fit(row, [E(2, 9), E(5, 6)]);
+      ok(!v6.serviceable && v6.fit === 0, "prompt and completion are each held to the row (an endpoint over on either unit is left out)");
+      ok(!fit(row, []).serviceable && fit(row, [E(NaN, 1), E(2, 6)]).routable === 1, "no priced endpoint is not serviceable; an unpriced one is not counted");
+    }
+  }
   // Opus 5.5 and Grok 4.5-4.7: own rows / reasoning rows.
   ok(tierFor("anthropic/claude-opus-5.5") === "v1-chat-premium" && cf("anthropic/claude-opus-5.5") === ROW("anthropic/claude-opus-5.5") && cf("anthropic/claude-opus-5") === ROW("anthropic/claude-opus-5"), "opus-5.5 homes on premium with its own row; opus-5 keeps its row");
   ok(tokenizerFactor("anthropic/claude-opus-5.5") === NEW_TOKENIZER_FACTOR && rp("anthropic/claude-opus-5.5")?.id === "anthropic/claude-opus-5.5" && dr("anthropic/claude-opus-5.5", "v1-chat-premium") === null && JSON.stringify(dr("anthropic/claude-opus-5.5", "v1-chat-metered")) === '{"effort":"low"}', "opus-5.5: newer tokenizer, reasoning row (premium leaves the default, metered injects low)");
@@ -1983,10 +2011,11 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     ok(b.model === MER_USE && b.__substitutedFrom === MER, `on ${tier}: mercury-2.5 served as ${MER_USE} with the swap named`);
   }
   // llama-3.2-1b-instruct and llama-3.2-3b-instruct (upstream expiration
-  // 2026-11-20 on both): SCHEDULED. Each is served as itself on nano, base and
-  // metered until the date, then by ministral-3b-2512 on the tier of the route
-  // called, the swap named. The 3B id is not the 1B id's successor: it retires
-  // the same day, and a successor is read from one entry, never a chain.
+  // 2026-11-20 on both): retired. Each was served as itself on nano, base and
+  // metered until the date; from it, by ministral-3b-2512 on the tier of the
+  // route called, the swap named. No tier lists either by name since (nano did,
+  // and metered through it). The 3B id is not the 1B id's successor: it
+  // retired the same day, and a successor is read from one entry, never a chain.
   {
     const L1 = "meta-llama/llama-3.2-1b-instruct", L3 = "meta-llama/llama-3.2-3b-instruct", USE = "mistralai/ministral-3b-2512";
     const HOMES = ["v1-chat-nano", "v1-chat", "v1-chat-metered"];
@@ -1999,14 +2028,11 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     for (const L of [L1, L3]) {
       ok(RETIRING_MODELS[L]?.until === "2026-11-20" && RETIRING_MODELS[L].use === USE && RETIRING_MODELS[L].asItselfUntil === true, `${short(L)}: scheduled to retire 2026-11-20, successor ministral-3b-2512`);
       ok(!Object.values(TIERS).some((t) => (t.fallbacks || []).includes(L) || t.defaultModel === L) && !Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()).includes(L) && !K.FLEX_MODELS.includes(L) && !Object.hasOwn(K.AVAILABILITY_SUCCESSORS, L) && !Object.values(K.AVAILABILITY_SUCCESSORS).flat().includes(L) && !rp(L), `no fallback, default, ranking, flex, availability or reasoning entry names ${short(L)}`);
+      const named = Object.entries(TIERS).filter(([, t]) => (t.prefixes || []).includes(L)).map(([s]) => s);
+      ok(named.length === 0, `no tier list names ${short(L)} (nano and metered did until its date)${named.length ? `: ${named.join(", ")}` : ""}`);
       const on = (tier) => validateRequest({ model: L, messages: [{ role: "user", content: "hi" }] }, tier);
-      K.setRetiringClockForTest(() => Date.parse("2026-11-19T23:59:59Z"));
-      ok(!retiringModel(L) && K.canonicalModel(L) === L && tierFor(L) === "v1-chat-nano" && JSON.stringify(Object.keys(TIERS).filter((t) => tierAllows(t, L))) === JSON.stringify(HOMES), `before 2026-11-20: ${short(L)} homes on nano, admitted on base and metered`);
-      for (const tier of HOMES) {
-        const b = on(tier);
-        ok(b.model === L && !b.__substitutedFrom, `before 2026-11-20 on ${tier}: ${short(L)} served as itself`);
-      }
       K.setRetiringClockForTest(() => Date.parse("2026-11-20T00:00:00Z"));
+      ok(!modelsList().data.some((m) => m.id === L), `from 2026-11-20: /v1/models does not print ${short(L)}`);
       ok(retiringModel(L)?.use === USE && K.canonicalModel(L) === USE && K.substitutedFrom(L) === L && Object.keys(TIERS).every((t) => tierAllows(t, L) === tierAllows(t, USE)), `from 2026-11-20: ${short(L)} is admitted exactly where its successor is`);
       for (const tier of HOMES) {
         const b = on(tier);
@@ -2015,6 +2041,53 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
       ok(K.flatTierQuoteUsd("v1-chat-nano", L) === TIERS["v1-chat-nano"].price && K.crossTierHome("v1-chat-nano", L) === null && K.meteredModelVerdict(L) === null, `from 2026-11-20: a nano call naming ${short(L)} keeps the nano price, and the metered pre-payment check leaves it to its successor`);
       K.setRetiringClockForTest(null);
     }
+  }
+  // Every retirement on its own date: an id a tier lists by name stops being
+  // advertised once canonicalModel serves its successor (the id is never sent
+  // upstream as itself again). /v1/models and the live-catalog guard read a
+  // tier's list through advertisedPrefixes: the successor takes the id's place
+  // where the tier admits it (once, beside its own entry), else the id is left
+  // out. A scheduled id is listed as itself the second before. Each id is put
+  // on a tier list for the check and taken off after.
+  {
+    const FLAT = ["v1-chat-nano", "v1-chat", "v1-chat-pro", "v1-chat-premium"];
+    const adv = (slug) => (typeof K.advertisedPrefixes === "function" ? K.advertisedPrefixes(slug) : null);
+    const listedOn = (slug) => modelsList().data.filter((m) => m.x402?.tier === slug).map((m) => m.id);
+    let graded = 0, dropped = 0;
+    for (const [id, r] of Object.entries(RETIRING_MODELS)) {
+      const at = Date.parse(`${r.until}T00:00:00Z`);
+      K.setRetiringClockForTest(() => at);
+      const home = FLAT.find((s) => tierAllows(s, r.use));
+      const away = FLAT.find((s) => !tierAllows(s, r.use));
+      K.setRetiringClockForTest(null);
+      for (const [slug, admits] of [[home, true], [away, false]]) {
+        if (!slug) continue;
+        const list = TIERS[slug].prefixes;
+        const had = list.includes(id);
+        if (!had) list.push(id);
+        try {
+          if (r.asItselfUntil) {
+            K.setRetiringClockForTest(() => at - 1000);
+            ok(listedOn(slug).includes(id) && !!adv(slug)?.includes(id), `${id} named on ${slug}, the second before ${r.until}: advertised as itself`);
+          }
+          K.setRetiringClockForTest(() => at);
+          const ids = listedOn(slug), a = adv(slug);
+          const once = ids.filter((x) => x === r.use).length === 1;
+          // A bare family name on the list may already advertise the successor (PREFIX_CANONICAL).
+          const shows = (p) => (PREFIX_CANONICAL[p.toLowerCase()] || p) === r.use;
+          const want = admits ? once && !!a?.some(shows) : !ids.includes(r.use) && !!a && !a.some(shows);
+          ok(!ids.includes(id) && !!a && !a.includes(id) && want, `${id} named on ${slug}, from ${r.until}: not advertised; ${admits ? `${r.use} listed in its place, once` : `left out (${slug} does not admit ${r.use})`}`);
+          graded++;
+          if (!admits) dropped++;
+        } finally {
+          if (!had) list.splice(list.indexOf(id), 1);
+          K.setRetiringClockForTest(null);
+        }
+      }
+    }
+    ok(graded >= Object.keys(RETIRING_MODELS).length && dropped > 0, `every retirement graded on its date on a tier that admits its successor, and the drop case on one that does not (${graded} graded, ${dropped} dropped)`);
+    const twice = [...FLAT, "v1-chat-metered"].flatMap((s) => { const a = adv(s) || []; return a.length ? a.filter((x, i) => a.indexOf(x) !== i).map((x) => `${s}:${x}`) : [`${s}: empty`]; });
+    ok(twice.length === 0, `advertisedPrefixes lists each entry once, on every flat tier and metered${twice.length ? ` (${twice.join(", ")})` : ""}`);
   }
   // qwen-2.5-7b-instruct (gone from the upstream catalog 2026-11-11): out of
   // every tier list, fallback, ranking, availability-successor row and

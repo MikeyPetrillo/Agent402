@@ -100,6 +100,37 @@ const NOTICE_2026_12_11 = {
     const r = K.RETIRING_MODELS[m];
     if (r && due(r.until)) { fail++; console.log(`FAIL ${where}: retired ${r.until}, still named`); } else pass++;
   }
+  // A tier list (metered's is the union of the flat lists) that names a
+  // retiring id by itself drops it on its date: /v1/models stops printing it
+  // then (advertisedPrefixes), and the entry would only be dead config.
+  for (const [slug, t] of Object.entries(K.TIERS)) {
+    for (const p of t.prefixes || []) {
+      const r = Object.hasOwn(K.RETIRING_MODELS, p) ? K.RETIRING_MODELS[p] : null;
+      if (!r) continue;
+      if (due(r.until)) { fail++; console.log(`FAIL ${slug} lists ${p} by name, retired ${r.until}: drop it from the list`); }
+      else console.log(`warn ${slug} lists ${p} by name; it retires ${r.until}: drop it from the list that day`);
+    }
+  }
+  // On the date of every retirement (and today), /v1/models and each tier's
+  // advertised list (what the live-catalog guard grades) name no id retired
+  // by then: an id the gateway serves as its successor is never advertised.
+  {
+    const retiredAt = (at) => Object.entries(K.RETIRING_MODELS).filter(([, r]) => !r.asItselfUntil || at >= Date.parse(`${r.until}T00:00:00Z`)).map(([id]) => id);
+    const days = [...new Set([...Object.values(K.RETIRING_MODELS).map((r) => Date.parse(`${r.until}T00:00:00Z`)), now])].sort((a, b) => a - b);
+    for (const at of days) {
+      K.setRetiringClockForTest(() => at);
+      try {
+        const gone = new Set(retiredAt(at));
+        const day = `${at === now ? "today, " : ""}${new Date(at).toISOString().slice(0, 10)}`;
+        const printed = K.modelsList().data.map((m) => m.id).filter((id) => gone.has(id));
+        const advertised = typeof K.advertisedPrefixes === "function"
+          ? Object.keys(K.TIERS).flatMap((s) => K.advertisedPrefixes(s).filter((p) => gone.has(p)).map((p) => `${s}:${p}`))
+          : ["advertisedPrefixes is not exported"];
+        if (!printed.length && !advertised.length) pass++;
+        else { fail++; console.log(`FAIL as of ${day}: retired ids still advertised (/v1/models: ${printed.join(", ") || "none"}; tier lists: ${advertised.join(", ") || "none"})`); }
+      } finally { K.setRetiringClockForTest(null); }
+    }
+  }
   K.setRetiringClockForTest(() => now);
   try {
     for (const [id, r] of Object.entries(K.RETIRING_MODELS)) {

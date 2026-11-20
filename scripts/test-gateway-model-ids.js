@@ -2,7 +2,8 @@
 // Live guard for the gateway's model tables. Network test (public OpenRouter
 // catalog, no key): fails the model-drift workflow (every 6 hours) when a model id we ADVERTISE or FAIL OVER TO no
 // longer exists upstream, when MODEL_COST underestimates a live price
-// inside a tier's max_price bound, when a MODEL_COST row sits more than 15%
+// inside a flat tier's max_price bound, when too few of a model's endpoints fit
+// under the row the metered tier sends as max_price, when a MODEL_COST row sits more than 15%
 // above the dearest live endpoint of every servable model it owns (stale high),
 // or when an endpoint bills a higher long-context price (pricing.overrides,
 // from a prompt size on) that the row's `tiers` do not cover for a prompt the
@@ -21,7 +22,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFileSync } from "node:fs";
 import {
   TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, retirementPending, flexModelIds, reasoningRows, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
-  IMAGES_MODEL, AVAILABILITY_SUCCESSORS, MARGIN, PREFIX_CANONICAL,
+  IMAGES_MODEL, AVAILABILITY_SUCCESSORS, MARGIN, PREFIX_CANONICAL, advertisedPrefixes, retiringModel, meteredRowFit,
 } from "../src/tools/llm-gateway-kit.js";
 import { meterMarkup } from "../src/gateway-meter.js";
 import { IMAGE_TIERS, IMAGES_FAST_TOOLS } from "../src/tools/llm-images-fast-kit.js";
@@ -98,12 +99,19 @@ console.log(`live catalog: ${ids.size} models, ${speechIds.size} speech models`)
 
 // 1. Every advertised concrete prefix resolves to at least one live id under
 //    the tier's own match rule (exact, "-suffix" or ":variant"). Family
-//    prefixes ("deepseek/") only need one live id under them.
+//    prefixes ("deepseek/") only need one live id under them. A tier's list is
+//    read as it is advertised (advertisedPrefixes): an id past its
+//    RETIRING_MODELS date is served as its successor and never sent upstream
+//    as itself, so it is graded as that successor (rule 5a grades the entry);
+//    a note asks for the stale entry to go.
 const resolves = (p) => p.endsWith("/")
   ? [...ids].some((id) => id.startsWith(p))
   : ids.has(p) || [...ids].some((id) => id.startsWith(p + "-") || id.startsWith(p + ":"));
+const advertisedTiers = Object.fromEntries(Object.keys(TIERS).map((slug) => [slug, { prefixes: advertisedPrefixes(slug) }]));
 for (const [slug, tier] of Object.entries(TIERS)) {
-  const allDead = tier.prefixes.filter((p) => !resolves(p));
+  const stale = tier.prefixes.filter((p) => !p.endsWith("/") && retiringModel(p));
+  if (stale.length) console.log(`note - ${slug} still lists ${stale.join(", ")} by name past the retirement date; advertised as the successor or left out (drop the entry)`);
+  const allDead = advertisedTiers[slug].prefixes.filter((p) => !resolves(p));
   const deadStealth = allDead.filter(isStealth);
   const dead = allDead.filter((p) => !isStealth(p));
   for (const p of deadStealth) {
@@ -261,6 +269,14 @@ for (const e of TTS_BACKUP_ENTRIES) {
 //    served at priority that day). Both facts pinned from source here, with
 //    the images route's flex literal as the control that the scan sees the
 //    field at all. Underestimating = the clamp lets too many tokens through.
+//
+//    The METERED tier is the exception: it sends the row itself as
+//    provider.max_price (meteredBoundFor), so an endpoint dearer than the row
+//    is left out upstream and can never bill above the quote. There the row is
+//    graded for service instead (meteredRowFit): it fails only when too few of
+//    the model's endpoints fit under it, none at all, or none that takes tools
+//    where any does (2026-11-20: deepseek-v4-pro-0813 had 22 of 23 under its
+//    row and failed the all-endpoints rule with no buyer at risk).
 {
   const wires = ["llm-gateway-kit.js", "llm-messages-kit.js", "llm-responses-kit.js"]
     .map((f) => readFileSync(new URL(`../src/tools/${f}`, import.meta.url), "utf8"));
@@ -289,7 +305,7 @@ async function endpointPrices(id) {
     if (!r.ok) return null;
     const eps = (await r.json())?.data?.endpoints;
     if (!Array.isArray(eps)) return null;
-    return eps.map((e) => ({ tag: String(e?.tag || ""), p: Number(e?.pricing?.prompt) * 1e6, c: Number(e?.pricing?.completion) * 1e6, o: overridesOf(e?.pricing), ctx: Number(e?.context_length) })).filter((e) => Number.isFinite(e.p) && Number.isFinite(e.c));
+    return eps.map((e) => ({ tag: String(e?.tag || ""), p: Number(e?.pricing?.prompt) * 1e6, c: Number(e?.pricing?.completion) * 1e6, o: overridesOf(e?.pricing), ctx: Number(e?.context_length), tools: (e?.supported_parameters || []).includes("tools") })).filter((e) => Number.isFinite(e.p) && Number.isFinite(e.c));
   } catch { return null; }
 }
 const admitted = models.filter((m) => {
@@ -310,7 +326,7 @@ const under = [];
 // (the stale-high half, graded after the loop).
 const owned = new Map();
 const rowKeyOf = (cost) => { for (const [prefix, c] of modelCostRows()) if (c === cost) return prefix; return null; };
-let endpointReads = 0, headlineOnly = 0, priorityExcluded = 0, priorityChecked = 0;
+let endpointReads = 0, headlineOnly = 0, priorityExcluded = 0, priorityChecked = 0, meteredGraded = 0, meteredLeftOut = 0;
 // Long-context findings, one per row key and unit, at the smallest prompt size
 // it starts (rule 4c below), and how many endpoint overrides were graded.
 const longGaps = new Map();
@@ -368,7 +384,17 @@ const admittedTokensFor = (tier, row, m, eps) => {
         prompt: Math.max(...prices.map((e) => e.p), ...priorityPrices.map((e) => e.p / PRIORITY_PRICE_FACTOR)),
         completion: Math.max(...prices.map((e) => e.c), ...priorityPrices.map((e) => e.c / PRIORITY_PRICE_FACTOR)),
       });
-      if (prices.length) {
+      if (tier.metered) {
+        // The metered tier sends the row itself as provider.max_price, so an
+        // endpoint above it is left out upstream and bills nothing: the row is
+        // graded for service there (meteredRowFit), against every non-priority
+        // endpoint the model lists (the tier-wide bound is never sent on it).
+        const listed = (eps || []).filter((e) => !PRIORITY_TAG.test(e.tag));
+        const v = meteredRowFit(table, (listed.length ? listed : prices).map((e) => ({ prompt: e.p, completion: e.c, tools: e.tools === true })));
+        meteredGraded++;
+        if (v.fit < v.routable) meteredLeftOut++;
+        if (!v.serviceable) under.push(brief(`${m.id} (${slug}: ${v.reasons.join(", ")})`, `${m.id} (${slug}): ${v.fit} of ${v.routable} endpoint(s) fit under the row it sends as provider.max_price (${v.reasons.join(", ")})`));
+      } else if (prices.length) {
         const p = Math.max(...prices.map((e) => e.p)), c = Math.max(...prices.map((e) => e.c));
         if (p > table.prompt + 1e-9 || c > table.completion + 1e-9) {
           const dearP = prices.find((e) => e.p === p)?.tag, dearC = prices.find((e) => e.c === c)?.tag;
@@ -402,7 +428,8 @@ const admittedTokensFor = (tier, row, m, eps) => {
   };
   await Promise.all(Array.from({ length: 6 }, worker));
 }
-console.log(`rule 4: ${admitted.length} admitted live models, ${endpointReads} endpoint lists read, ${headlineOnly} graded on the headline alone, ${priorityChecked} priority-tier endpoint(s) checked at ${PRIORITY_PRICE_FACTOR}x on the priority tiers, ${priorityExcluded} excluded elsewhere`);
+console.log(`rule 4: ${admitted.length} admitted live models, ${endpointReads} endpoint lists read, ${headlineOnly} graded on the headline alone, ${priorityChecked} priority-tier endpoint(s) checked at ${PRIORITY_PRICE_FACTOR}x on the priority tiers, ${priorityExcluded} excluded elsewhere; metered: ${meteredGraded} graded for service under the row, ${meteredLeftOut} with an endpoint the row leaves out`);
+ok(meteredGraded >= admitted.length / 2, `rule 4 graded the metered tier's rows for service (${meteredGraded} of ${admitted.length} admitted models); zero would mean the metered branch is blind`);
 ok(priorityChecked >= 3, `rule 4 checked priority endpoints on the priority tiers (${priorityChecked}; the 2026-09-18 read found openai/fast on sol, terra, astra and anthropic/fast on opus-5, google */priority on gemini-2.5-pro) - zero would mean the read is blind`);
 ok(endpointReads >= admitted.length / 2, `rule 4 read endpoint lists for most admitted models (${endpointReads} of ${admitted.length}); a headline-only run would be the old, weaker check`);
 ok(under.length === 0, `MODEL_COST never underestimates a live admitted model's dearest routable endpoint${under.length ? `:\n    ${under.join("\n    ")}` : ""}`);
@@ -440,8 +467,8 @@ ok(expiring.length === 0, `no ranked/fallback model expires within 14 days${expi
 //     such an id fails unless RETIRING_MODELS already names the successor that
 //     takes over on or before the upstream date (rule 5a grades that successor).
 {
-  const advertised = advertisedIds(TIERS, modelsList().data.map((m) => m.id));
-  ok(advertised.size >= 20 && Object.values(TIERS).every((t) => t.prefixes.filter((p) => !p.endsWith("/")).every((p) => advertised.has(p))), `the expiry watch covers every id a tier lists by name (${advertised.size})`);
+  const advertised = advertisedIds(advertisedTiers, modelsList().data.map((m) => m.id));
+  ok(advertised.size >= 20 && Object.values(advertisedTiers).every((t) => t.prefixes.filter((p) => !p.endsWith("/")).every((p) => advertised.has(p))), `the expiry watch covers every id a tier advertises by name (${advertised.size})`);
   const due = advertisedExpiring({ models, advertised, retiring: RETIRING_MODELS, now: Date.now() });
   for (const d of due.filter((x) => x.covered)) console.log(`note - advertised id ${d.id} expires upstream ${d.expires}; RETIRING_MODELS serves ${d.successor} from its date`);
   const open = due.filter((x) => !x.covered);
@@ -739,8 +766,8 @@ for (const [requested, succ] of Object.entries(AVAILABILITY_SUCCESSORS).flatMap(
 {
   const liveIds = new Set(models.map((m) => m.id));
   const exact = new Set([...Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()), ...Object.values(PREFIX_CANONICAL)]);
-  for (const t of Object.values(TIERS)) {
-    for (const p of t.prefixes || []) if (liveIds.has(p)) exact.add(p);
+  for (const [slug, t] of Object.entries(TIERS)) {
+    for (const p of advertisedTiers[slug].prefixes) if (liveIds.has(p)) exact.add(p);
     for (const m of [t.defaultModel, t.defaultModelCompat, ...(t.fallbacks || [])]) if (m) exact.add(m);
   }
   const untabled = [...exact].filter((id) => { const r = models.find((x) => x.id === id)?.reasoning; return r && (r.mandatory === true || r.default_enabled === true) && Array.isArray(r.supported_efforts) && !reasoningRows().some((row) => reasoningRowMatches(row, id)); });
