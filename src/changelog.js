@@ -9,6 +9,15 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 
 const ENTRIES = [
   {
+    date: "2026-11-20",
+    title: "Solana activity charts across restarts, call budgets across deploys",
+    items: [
+      "Site: A Solana chain page's 30-day activity chart keeps its history across restarts, and a wallet too busy for one scan continues from where the last scan stopped until its window is covered. When the newest payments could not be read, the panel prints when they were last read in full (`as of <time> UTC`).",
+      "Operations: The Solana activity scans and the Solana leaderboard read transaction history through the public RPC lane first and queue for it. The keyed lane serves those background reads only up to a daily share of its ceiling (`SOLANA_HISTORY_BACKGROUND_KEYED_DAILY_MAX`); past it the views serve what they hold with its age. `SOLANA_ACTIVITY_STORE=off` keeps scan state in memory only.",
+      "Operations: The `upstreamBudgets` word on `/api/gateway-status` is built from the UTC day's call count across deploys and replicas when a shared store is configured. The operator view adds which module made the day's calls to the on-chain data provider and seven days of daily counts.",
+    ],
+  },
+  {
     date: "2026-11-19",
     title: "Onchain query answers that cannot be read",
     items: [

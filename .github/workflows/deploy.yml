@@ -3304,7 +3304,7 @@ jobs:
           COINGECKO_API_KEY: ""
         run: npm ci
 
-      - name: Offline suites (62 scripts, one process each)
+      - name: Offline suites (64 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-pricing 1
       - name: Runner kills and memory (on failure)
         if: failure()

@@ -310,6 +310,7 @@ onGatedRailOffered(activateGatedEvm);
 // src/solana-history-rpc.js, which also routes getTransaction (an immutable
 // read by signature) public-first with the keyed lane behind it.
 import { SOLANA_RPCS, solanaHistoryRead } from "./solana-history-rpc.js";
+import { SOLANA_ACTIVITY_STATE_VERSION, SOLANA_ACTIVITY_MAX_ENTRIES } from "./solana-activity-store.js";
 import { REVENUE_SNAPSHOT_TTL_MS, revenueSnapshotCadence, revenueLedgerCadence } from "./refresh-cadence.js";
 import { registerMemoryStore } from "./memory-stores.js";
 export { SOLANA_RPCS };
@@ -1418,76 +1419,252 @@ export function parseSolanaTransfer(txn, owner) {
   return { when, usd, from };
 }
 
-// Trailing-window activity scan: page getSignaturesForAddress on the wallet's
-// USDC token account (limit 1000, `before` cursor, newest first), decoding
-// each signature with getTransaction — one RPC call each, so a busy page must
-// not fire hundreds of them unbounded. An RPC failure mid-scan keeps whatever
-// was collected so far (`truncated:true`); only a failure with nothing
-// collected is an error.
+// Trailing-window activity scan, INCREMENTAL: the decoded rows and two
+// cursors are kept between scans (in the page cache, and across restarts in
+// src/solana-activity-store.js), so a scan reads only what it has not read.
+//
 // Solana's cost is per TRANSACTION, not per page: each signature inside the
-// window needs its own getTransaction. Measured 2026-09-20 against the busiest
-// Solana payTo we index, that call runs a 65ms median, so the shared budget
-// below carries roughly 180 transactions where the old hard `maxTx = 60`
-// stopped at sixty on every wallet busier than that. maxTx stays as a backstop
-// only - the clock is what stops a long walk here.
-// Lane choice for the decode reads (src/solana-history-rpc.js): a cold wallet
-// has a page view waiting on it, so the keyed lane answers first and nothing
-// queues for a public slot. `background: true` is a refresh behind a cached
-// chart (stale-while-revalidate in server.js): the public lane is taken
-// whenever its slot is open now and the keyed lane otherwise, still without
-// queueing, so the clock above bounds the walk exactly as before.
-export async function solanaActivity(wallet, { days = 30, maxPages = SCAN_MAX_PAGES, maxTx = 2000, budgetMs = SCAN_BUDGET_MS, background = false } = {}) {
+// window needs its own getTransaction. The scan used to decode the whole
+// window again on every refresh (every ten minutes a wallet was viewed) and
+// again from nothing after every restart, leaning on a small shared cache of
+// recent transactions that a busy wallet's window does not fit in. Now:
+//   * the HEAD cursor (`newestSig`) is the newest signature already decoded.
+//     A refresh asks for the signatures after it (`until`), decodes them
+//     oldest first and moves the cursor with each one, so a refresh costs one
+//     signatures read plus one transaction read per NEW payment;
+//   * the FAR cursor (`farSig`) is the oldest signature decoded. A wallet too
+//     busy to cover its window inside one scan's clock continues downward
+//     from it on the next scan until the window is covered (`covered`),
+//     instead of starting over;
+//   * the wallet's USDC token account is kept, so it is looked up once.
+// A cursor moves only past a transaction that was read (or that failed, in
+// the node's own record): a read that fails stops that end of the scan there
+// and the next scan retries it. One that fails in SOLANA_ACTIVITY_STUCK_SCANS
+// scans in a row is skipped and counted, so a single unreadable transaction
+// never holds a wallet's history open for good.
+//
+// Lanes (src/solana-history-rpc.js): every decode is a background read, the
+// public lane first and queued for its slot (SOLANA_ACTIVITY_PUBLIC_WAIT_MS),
+// the keyed lane only under the day's background share. A wallet never read
+// before has a page view waiting on its first rows, so the first
+// SOLANA_ACTIVITY_COLD_FAST_READS decodes of a cold scan do not queue (the
+// public lane when its slot is open now, the keyed lane otherwise, still
+// under the share); the rest of its window queues like any refresh. When the
+// share is spent and the public lane is not answering, the scan keeps what it
+// holds: `asOf` is when the head was last current and `refreshHeld` says
+// the newest payments could not be read, so the chart is never passed off as
+// fresher than it is.
+//
+// The clock (SOLANA_ACTIVITY_SCAN_BUDGET_MS) bounds one scan; it runs behind
+// the page, which waits for a cold wallet only as long as it did before.
+const envCount = (k, dflt) => (process.env[k] != null && String(process.env[k]).trim() !== "" && Number.isFinite(Number(process.env[k])) ? Math.max(0, Math.floor(Number(process.env[k]))) : dflt);
+const SOLANA_ACTIVITY_SCAN_BUDGET_MS = Math.max(1000, Number(process.env.SOLANA_ACTIVITY_SCAN_BUDGET_MS) || 120_000);
+const SOLANA_ACTIVITY_PUBLIC_WAIT_MS = envCount("SOLANA_ACTIVITY_PUBLIC_WAIT_MS", 10_000);
+const SOLANA_ACTIVITY_COLD_FAST_READS = envCount("SOLANA_ACTIVITY_COLD_FAST_READS", 40);
+const SOLANA_ACTIVITY_STUCK_SCANS = Math.max(1, Number(process.env.SOLANA_ACTIVITY_STUCK_SCANS) || 3);
+const solanaActivityCounters = { scans: 0, cold: 0, resumed: 0, rejoined: 0, held: 0, heldForBudget: 0, txReads: 0, signatureReads: 0, accountReads: 0, skipped: 0 };
+/** Counts since restart, for the operator view. */
+export function solanaActivityStatus() { return { ...solanaActivityCounters }; }
+
+const emptySolanaState = (ata = null) => ({ v: SOLANA_ACTIVITY_STATE_VERSION, ata, newestSig: null, farSig: null, covered: false, full: false, fullFloor: 0, headAt: 0, headHeld: null, skipped: 0, stuck: null, entries: [], at: 0 });
+
+/**
+ * The activity answer a scan state stands for (also how a stored state is
+ * served before its first refresh in a new process). Pure but for the clock.
+ */
+export function solanaActivityView(wallet, state, { days = 30, now = Date.now(), headCurrent = !state?.headHeld, heldReason = state?.headHeld || null } = {}) {
   const out = { rail: "Solana", wallet: wallet || null, days, buckets: [], totals: { tx: 0, usd: 0, buyers: 0, internalTx: 0, internalUsd: 0 }, truncated: false, error: null };
-  if (!wallet) { out.error = "SOLANA_WALLET_ADDRESS unset"; return out; }
-  const cutoff = Date.now() - days * 86_400_000;
-  const laneOpts = background
-    ? { timeoutMs: 6000, maxWaitMs: 0, caller: "activity-refresh" }
-    : { timeoutMs: 6000, keyedFirst: true, caller: "activity-cold" };
-  const entries = [];
-  let tokenAccount;
-  try {
-    const res = await rpcCall(SOLANA_RPCS, "getTokenAccountsByOwner", [wallet, { mint: USDC_SOL_MINT }, { encoding: "jsonParsed" }], 6000);
-    tokenAccount = res?.value?.[0]?.pubkey || wallet;
-  } catch (e) {
-    out.error = pubErr(e, 120);
-    return out;
+  const cutoff = now - days * 86_400_000;
+  const rows = [];
+  for (const e of Array.isArray(state?.entries) ? state.entries : []) {
+    const t = Date.parse(e?.when || "");
+    if (!Number.isFinite(t) || t < cutoff) continue;
+    rows.push({ when: e.when, usd: e.usd, from: e.from, internal: e.from != null && OUR_SOLANA_WALLETS.has(e.from) });
   }
-  let txBudget = maxTx;
-  let capped = false;
-  const until = scanDeadline(budgetMs);
-  try {
-    let before;
-    scan: for (let page = 0; page < maxPages; page++) {
-      const params = before ? [tokenAccount, { limit: 1000, before }] : [tokenAccount, { limit: 1000 }];
-      const sigs = await rpcCall(SOLANA_RPCS, "getSignaturesForAddress", params, 8000);
-      if (!Array.isArray(sigs) || !sigs.length) break;
-      for (const s of sigs) {
-        const tms = s.blockTime ? s.blockTime * 1000 : null;
-        if (tms != null && tms < cutoff) break scan;
-        if (s.err) continue;
-        if (txBudget <= 0 || Date.now() >= until) { capped = true; break scan; }
-        txBudget--;
-        try {
-          const txn = await solanaHistoryRead("getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], laneOpts);
-          const entry = parseSolanaTransfer(txn, wallet);
-          if (entry) {
-            entry.internal = entry.from != null && OUR_SOLANA_WALLETS.has(entry.from);
-            entries.push(entry);
-          }
-        } catch { /* one bad tx fetch must not kill the scan */ }
-      }
-      before = sigs[sigs.length - 1]?.signature;
-      if (!before) break;
-      if (Date.now() >= until) { capped = true; break; }
-    }
-  } catch (e) {
-    if (!entries.length) { out.error = pubErr(e, 120); return out; }
-    capped = true; // partial results survive an RPC failure mid-scan
-  }
-  out.truncated = capped;
-  const bucketed = bucketStellarActivity(entries, { days });
+  const bucketed = bucketStellarActivity(rows, { days, now });
   out.buckets = bucketed.buckets;
   out.totals = bucketed.totals;
+  // A floor whenever the window is not covered or the newest payments are unread.
+  out.truncated = !state?.covered || !!state?.full || !headCurrent;
+  // When the newest payments were last read in full. Never the time of a scan
+  // that could not read them.
+  out.asOf = Number(state?.headAt) > 0 ? new Date(state.headAt).toISOString() : null;
+  if (!headCurrent) { out.refreshHeld = true; out.heldReason = heldReason || "read"; }
+  return out;
+}
+
+export async function solanaActivity(wallet, { days = 30, maxPages = SCAN_MAX_PAGES, maxTx = SOLANA_ACTIVITY_MAX_ENTRIES, budgetMs = SOLANA_ACTIVITY_SCAN_BUDGET_MS, prior = null, coldFastReads = SOLANA_ACTIVITY_COLD_FAST_READS, rpc = null, read = null } = {}) {
+  const fail = (msg) => ({ rail: "Solana", wallet: wallet || null, days, buckets: [], totals: { tx: 0, usd: 0, buyers: 0, internalTx: 0, internalUsd: 0 }, truncated: false, error: msg });
+  if (!wallet) return fail("SOLANA_WALLET_ADDRESS unset");
+  const cutoff = Date.now() - days * 86_400_000;
+  const call = rpc || ((method, params, timeoutMs) => rpcCall(SOLANA_RPCS, method, params, timeoutMs));
+  const readTx = read || solanaHistoryRead;
+  const priorOk = !!(prior && prior.v === SOLANA_ACTIVITY_STATE_VERSION && Array.isArray(prior.entries));
+  solanaActivityCounters.scans++;
+  if (priorOk) solanaActivityCounters.resumed++; else solanaActivityCounters.cold++;
+  const laneOpts = { timeoutMs: 6000, background: true, maxWaitMs: SOLANA_ACTIVITY_PUBLIC_WAIT_MS, caller: priorOk ? "activity-refresh" : "activity-cold" };
+  // A cold scan's first decodes do not queue for a public slot.
+  let fastLeft = priorOk ? 0 : Math.max(0, Number(coldFastReads) || 0);
+  // The prior state is never edited in place: a scan that fails leaves it as it was.
+  let st = priorOk
+    ? { ...emptySolanaState(), ...prior, stuck: prior.stuck ? { ...prior.stuck } : null, entries: prior.entries.filter((e) => Date.parse(e?.when || "") >= cutoff) }
+    : emptySolanaState();
+  const until = scanDeadline(budgetMs);
+  let txBudget = maxTx;
+  let capped = false, held = false, heldReason = null, progressed = false;
+  const hold = (why) => { held = true; heldReason ||= why; };
+
+  let tokenAccount = st.ata;
+  if (!tokenAccount) {
+    try {
+      solanaActivityCounters.accountReads++;
+      const res = await call("getTokenAccountsByOwner", [wallet, { mint: USDC_SOL_MINT }, { encoding: "jsonParsed" }], 6000);
+      const found = res?.value?.[0]?.pubkey || null;
+      if (found) st.ata = found;
+      tokenAccount = found || wallet;
+    } catch (e) {
+      if (!priorOk) return fail(pubErr(e, 120));
+      hold("read");
+    }
+  }
+
+  // One decode. True: the cursor may move past `s`. False: this end stops here.
+  const decode = async (s) => {
+    if (txBudget <= 0 || Date.now() >= until) { capped = true; return false; }
+    txBudget--;
+    let txn;
+    try {
+      solanaActivityCounters.txReads++;
+      const args = [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }];
+      if (fastLeft > 0) {
+        fastLeft--;
+        try { txn = await readTx("getTransaction", args, { ...laneOpts, maxWaitMs: 0 }); }
+        catch (e) {
+          // The share is spent: this read and the rest of the scan queue for the public lane.
+          if (!e?.backgroundBudgetSpent) throw e;
+          fastLeft = 0;
+          txn = await readTx("getTransaction", args, laneOpts);
+        }
+      } else txn = await readTx("getTransaction", args, laneOpts);
+    } catch (e) {
+      // The background share is spent: nothing is wrong with this transaction.
+      if (e?.backgroundBudgetSpent) { solanaActivityCounters.heldForBudget++; hold("budget"); return false; }
+      const rec = st.stuck && st.stuck.sig === s.signature ? st.stuck : { sig: s.signature, n: 0 };
+      rec.n++;
+      if (rec.n < SOLANA_ACTIVITY_STUCK_SCANS) { st.stuck = rec; hold("read"); return false; }
+      st.stuck = null; st.skipped++; solanaActivityCounters.skipped++;
+      return true;
+    }
+    if (st.stuck?.sig === s.signature) st.stuck = null;
+    const entry = parseSolanaTransfer(txn, wallet);
+    if (entry) st.entries.push({ when: entry.when || (s.blockTime ? new Date(s.blockTime * 1000).toISOString() : null), usd: entry.usd, from: entry.from });
+    return true;
+  };
+  const sigTime = (s) => (s.blockTime ? s.blockTime * 1000 : null);
+  const signatures = async (opts) => {
+    solanaActivityCounters.signatureReads++;
+    const sigs = await call("getSignaturesForAddress", [tokenAccount, { limit: 1000, ...opts }], 8000);
+    return Array.isArray(sigs) ? sigs : [];
+  };
+
+  // A state cut at the row cap dropped only rows older than the oldest it
+  // kept (`fullFloor`). Once the window's edge has passed that time, every
+  // dropped row is outside the window and the rows held cover it again.
+  if (st.full && Number(st.fullFloor) > 0 && cutoff > st.fullFloor) { st.full = false; st.fullFloor = 0; st.covered = true; st.farSig = null; }
+  // A state with a head but no far cursor and no covered window cannot be
+  // continued without reading rows twice: it is read again from the top.
+  if (st.newestSig && !st.covered && !st.full && !st.farSig) st = emptySolanaState(st.ata);
+  let headCurrent = !held;
+  try {
+    // 1. THE HEAD: everything newer than the newest signature decoded.
+    if (!held && st.newestSig) {
+      headCurrent = false;
+      const fresh = [];
+      let before, joined = false;
+      for (let page = 0; page < maxPages; page++) {
+        const sigs = await signatures({ until: st.newestSig, ...(before ? { before } : {}) });
+        let old = false, met = false;
+        for (const s of sigs) {
+          // A node that lists the cursor itself (one that does not honor
+          // `until`) has reached what is already decoded.
+          if (s.signature === st.newestSig) { met = true; break; }
+          const tms = sigTime(s);
+          // The cursor itself fell out of the window: what is newer covers it.
+          if (tms != null && tms < cutoff) { old = true; break; }
+          fresh.push(s);
+        }
+        if (old) { st.covered = true; st.full = false; st.farSig = null; joined = true; break; }
+        if (met || sigs.length < 1000) { joined = true; break; }
+        before = sigs[sigs.length - 1].signature;
+        if (Date.now() >= until) break;
+      }
+      if (!joined && Date.now() >= until) {
+        // The clock ended the listing: the state is kept and the next scan lists again.
+        capped = true;
+      } else if (!joined) {
+        // More new signatures than one scan can list: the two ends do not
+        // meet, so this scan stands alone, as a cold one does.
+        solanaActivityCounters.rejoined++;
+        st = emptySolanaState(st.ata);
+      } else {
+        let done = true;
+        for (let i = fresh.length - 1; i >= 0; i--) {
+          const s = fresh[i];
+          if (!s.err && !(await decode(s))) { done = false; break; }
+          st.newestSig = s.signature; progressed = true;
+        }
+        if (done) { headCurrent = true; st.headAt = Date.now(); }
+      }
+    }
+    // 2. THE FAR END (and a cold wallet's whole walk): downward from the
+    // oldest signature decoded until the window's edge or the end of history.
+    if (!held && !capped && !st.full && (!st.covered || !st.newestSig)) {
+      let before = st.newestSig ? st.farSig : null;
+      far: for (let page = 0; page < maxPages; page++) {
+        if (Date.now() >= until) { capped = true; break; }
+        const sigs = await signatures(before ? { before } : {});
+        if (!sigs.length) { st.covered = true; break; }
+        for (const s of sigs) {
+          const tms = sigTime(s);
+          if (tms != null && tms < cutoff) { st.covered = true; break far; }
+          if (!s.err && !(await decode(s))) break far;
+          st.farSig = s.signature; progressed = true;
+          // The first signature walked is the head: it was the newest when read.
+          if (!st.newestSig) { st.newestSig = s.signature; st.headAt = Date.now(); headCurrent = true; }
+        }
+        if (sigs.length < 1000) { st.covered = true; break; }
+        before = st.farSig;
+      }
+      // A wallet with no history at all is current as of this read.
+      if (!st.newestSig && st.covered && !held) { st.headAt = Date.now(); headCurrent = true; }
+    }
+  } catch (e) {
+    // A signatures read failed. With nothing held at all that is an error;
+    // otherwise what was read survives and the next scan continues.
+    if (!priorOk && !st.entries.length) return fail(pubErr(e, 120));
+    hold("read");
+  }
+  if (held) solanaActivityCounters.held++;
+  // A cold wallet whose first reads were all refused has nothing to show yet.
+  if (!priorOk && !progressed && !st.covered) return fail(heldReason === "budget" ? "activity scan waiting for a read slot" : "activity scan could not read the chain");
+  // A wallet whose window holds more rows than a state may keep is held at
+  // the newest rows and is a floor (no far-end walk that could never end)
+  // until the rows it dropped have left the window.
+  if (st.entries.length > SOLANA_ACTIVITY_MAX_ENTRIES) {
+    st.entries.sort((a, b) => Date.parse(b.when || "") - Date.parse(a.when || ""));
+    st.entries.length = SOLANA_ACTIVITY_MAX_ENTRIES;
+    st.full = true; st.covered = false;
+    st.fullFloor = Math.max(Number(st.fullFloor) || 0, Date.parse(st.entries[st.entries.length - 1].when || "") || 0);
+  }
+  if (st.newestSig && !st.headAt) headCurrent = false;
+  if (held && !st.headAt) headCurrent = false;
+  st.at = Date.now();
+  // Kept with the state, so the answer served from the store after a restart
+  // says the same thing this one does.
+  st.headHeld = headCurrent ? null : (held ? heldReason : capped ? "clock" : "read");
+  const out = solanaActivityView(wallet, st, { days });
+  // The state the NEXT scan resumes from. Non-enumerable, as the EVM scan's is.
+  Object.defineProperty(out, "__scanState", { enumerable: false, value: st });
   return out;
 }
 

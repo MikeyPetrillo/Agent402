@@ -832,7 +832,7 @@ import { ledgerHomePage, socialCardText } from "./ledger-home.js";
 import { proofCell, homeProofFigures } from "./home-proof.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
-import { revenueSnapshot, revenueLiveStatus, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
+import { revenueSnapshot, revenueLiveStatus, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, solanaActivityView, solanaActivityStatus, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPageAsync, marketPanelHtml, catalogPayableOn } from "./market-page.js";
@@ -857,6 +857,7 @@ import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sha
 import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { flushSqlQueryStats, sqlQueryStatsReport, noteSqlBusy } from "./sql-query-stats.js";
+import { loadSolanaActivityState, noteSolanaActivityState, flushSolanaActivityStore, solanaActivityStoreStatus } from "./solana-activity-store.js";
 import { flushXSearchStats, xSearchStatsReport, xSearchAuthorsStatus } from "./x-search-stats.js";
 import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
@@ -4502,7 +4503,7 @@ app.get("/api/gateway-status", async (req, res) => {
     externalSpendGlobal,
     // Solana history reads (getTransaction by signature): which lane serves
     // them. One word publicly; per-lane counts for the operator.
-    solanaHistory: (() => { try { return solanaHistoryStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    solanaHistory: (() => { try { const h = solanaHistoryStatus({ full }); return full ? { ...h, activity: solanaActivityStatus(), activityStore: solanaActivityStoreStatus() } : h; } catch { return { status: "unknown" }; } })(),
     // EVM log reads: which lane serves the revenue ledger's recent getLogs,
     // how the Base board read its window, and the activity scans. One word
     // publicly; per-caller counts for the operator.
@@ -9034,6 +9035,8 @@ app.get("/algorand", async (req, res) => {
 // wallets here.
 const CHAIN_ACTIVITY_TTL_MS = 10 * 60_000;
 const PAGE_ACTIVITY_WAIT_MS = 5_000;
+// The longest a page view waits for a wallet's stored Solana scan state.
+const SOLANA_ACTIVITY_STORE_READ_MS = 1_500;
 const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
 const SOLANA_ADDR_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const chainActivityByWallet = new Map(); // "chainKey:wallet" -> { at, value, inFlight }
@@ -9092,8 +9095,9 @@ function paidScanAllowed() {
   return true;
 }
 
-async function scanActivity(chainKey, wallet, prior = null, { background = false } = {}) {
-  if (chainKey === "solana") return solanaActivity(wallet, { background });
+async function scanActivity(chainKey, wallet, prior = null) {
+  // Solana resumes from the prior scan's cursors and rows, as the EVM scan does.
+  if (chainKey === "solana") return solanaActivity(wallet, { prior });
   if (chainKey === "robinhood") return robinhoodActivity(wallet);
   if (chainKey === "base") {
     // Budget checked BEFORE the query, not after: the point is to not spend.
@@ -9126,6 +9130,24 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
   }
   let entry = chainActivityByWallet.get(key);
   if (!entry) { entry = { at: 0, value: null, inFlight: null }; chainActivityByWallet.set(key, entry); }
+  // A Solana wallet this process has not seen: its stored scan state (one
+  // small read, bounded; src/solana-activity-store.js) is served at once and
+  // resumed from, so a restart does not read the wallet's window again.
+  if (chainKey === "solana" && !entry.storeRead) {
+    entry.storeRead = (async () => {
+      let timer;
+      try {
+        const st = await Promise.race([loadSolanaActivityState(wallet), new Promise((r) => { timer = setTimeout(() => r(null), SOLANA_ACTIVITY_STORE_READ_MS); timer.unref?.(); })]);
+        if (st && !entry.scanState) {
+          entry.scanState = st;
+          // The stored answer says how old it is (asOf) and is refreshed below once past its TTL.
+          entry.value = solanaActivityView(wallet, st);
+          entry.at = Number(st.at) || 0;
+        }
+      } catch { /* a wallet the store cannot answer for is a cold wallet */ } finally { clearTimeout(timer); }
+    })();
+  }
+  if (entry.storeRead && entry.storeRead !== true) { await entry.storeRead; entry.storeRead = true; }
   const stale = Date.now() - entry.at >= CHAIN_ACTIVITY_TTL_MS;
   if (stale && !entry.inFlight) {
     entry.inFlight = (async () => {
@@ -9137,11 +9159,15 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
         // A refresh behind a cached chart is background work (the page is
         // served from the cache meanwhile); only a cold wallet has a view
         // waiting on it, and the scanner picks its RPC lanes by that.
-        const a = await scanActivity(chainKey, wallet, entry.scanState || null, { background: entry.value != null });
+        const a = await scanActivity(chainKey, wallet, entry.scanState || null);
         entry.at = Date.now();
         if (a && !a.error) {
           entry.value = a; // success — refresh the cached value
-          if (a.__scanState) entry.scanState = a.__scanState;
+          if (a.__scanState) {
+            entry.scanState = a.__scanState;
+            // Written by the store's own timer, never on this path.
+            if (chainKey === "solana") noteSolanaActivityState(wallet, a.__scanState);
+          }
         }
         // else: keep the prior good value (stale-serve) or stay null
       } catch {
@@ -14261,10 +14287,11 @@ if (!mppCrawl.on) {
     // payTo the index knows, primed into the pay-time gate (src/solana-leaderboard.js).
     startSolanaLeaderboard({
       listPayTos: async () => (await import("./x402-index.js")).allSolanaPayToOriginsAsync(),
-      // getTransaction (immutable, by signature) goes public RPC first with the
-      // keyed lane behind it (src/solana-history-rpc.js); the signature and
+      // getTransaction (immutable, by signature) goes public RPC first, queued
+      // for its slot, with the keyed lane behind it only under the day's
+      // background share (src/solana-history-rpc.js); the signature and
       // token-account reads stay on the configured lane.
-      rpc: historyAwareRpc((method, params) => import("./solana-buyer.js").then((m) => m.solanaRpc(method, params)), { caller: "leaderboard" }),
+      rpc: historyAwareRpc((method, params) => import("./solana-buyer.js").then((m) => m.solanaRpc(method, params)), { caller: "leaderboard", background: true }),
       creditFromTx: (meta, payTo) => solanaCreditFromTx(meta, payTo),
       prime: (payTo, count) => import("./solana-buyer.js").then((m) => m.primeSvmInboundCount(payTo, count)),
       windowHours: Number(process.env.SOR_SVM_WINDOW_HOURS) || 168,
@@ -14451,7 +14478,7 @@ let drainDeadlineMs = DRAIN_DEADLINE_MS;
 // reads held; the flush round below waits on that write with the others.
 let boardSaveAtDrain = false;
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals(), flushUpstreamCallDays()]).then(() => flushJsonDocuments({ timeoutMs }))]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals(), flushSolanaActivityStore({ max: 100 }), flushUpstreamCallDays()]).then(() => flushJsonDocuments({ timeoutMs }))]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });
