@@ -71,7 +71,8 @@ Loaded when a connector or front-door file is read.
   on that sale's `run_key` (`saleRunKeyOf`, `src/sale-path.js`; read only beside its proof). An
   orphan is worded from the sales ledger by that key: a sale under it is charged and booked once
   through `onChargedFailure` to the sale's own payer (keyed `task-<taskId>` when it has no tx); none
-  under it and no sale of the tool in the window that names no run is not charged; anything else
+  under it and no sale of the tool in the window that names no run keeps the restart words it always
+  had (`ORPHAN_MESSAGE`, with the Tempo push exception); anything else
   (an unkeyed sale of the tool in the window, a keyless record from before keys, an unreadable
   ledger) claims neither and books nothing. The ledger is read only once loaded (bounded wait and
   pull); the database sweep leaves an orphan working while it has not loaded, for up to

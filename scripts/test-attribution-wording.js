@@ -47,10 +47,14 @@ ok(COMPANY_SPONSORS.test("Holiday data by Nager.Date, which Agent402 sponsors; e
 const compute = WHOLESALE_FAMILIES.find((f) => f.id === "compute");
 ok(!!compute, "the wholesale surface has a compute family");
 ok(!/no outside data/i.test(compute.source), `the compute family does not say it has no outside data source (${compute.source})`);
-ok(/public facts/i.test(compute.source) && /calendar/i.test(compute.source) && /listing/i.test(compute.source), `the compute family's source names the public facts some of its tools read (${compute.source})`);
-// The facts the source line names are in the proof-of-work set it is built from.
+ok(/public facts/i.test(compute.source) && /calendar/i.test(compute.source) && !/listing/i.test(compute.source), `the compute family's source names the public facts some of its tools read, and no seller listings (${compute.source})`);
+// The facts the source line names are in the proof-of-work set it is built
+// from; the tools that serve this server's read of other sellers (their
+// listings and settlement figures) are left out of it.
 const free = new Set(FREE_TIER_SLUGS || (read("src/free-tier.js").match(/"[a-z0-9-]+"/g) || []).map((s) => s.slice(1, -1)));
-ok(free.has("market-calendar") && (free.has("seller-trust") || free.has("x402-market-pulse")), "control: a calendar tool and a listings tool are proof-of-work tools, so the compute family holds them");
+const held = new Set(compute.slugs({ powSlugs: free }));
+ok(free.has("market-calendar") && held.has("market-calendar"), "control: a calendar tool is a proof-of-work tool the compute family holds");
+ok(free.has("seller-trust") && free.has("x402-market-pulse") && !held.has("seller-trust") && !held.has("x402-market-pulse"), "the seller-data tools are proof-of-work tools the compute family leaves out");
 
 console.log(`\ntest-attribution-wording: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
