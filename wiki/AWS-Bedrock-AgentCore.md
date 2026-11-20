@@ -14,7 +14,7 @@ We publish a runnable sample: [`examples/agentcore-x402-buyer`](https://github.c
 
 > **x402 works with no setup.** The Payments plugin calls sellers with the `python-httpx` User-Agent, and Agent402 answers that client with the x402 offer alone: the `402` carries the `PAYMENT-REQUIRED` header and the full offer in its body, with no `WWW-Authenticate: Payment` challenge, so the plugin pays over x402 in USDC on Base from the same wallet. Nothing to configure.
 >
-> **To pay over MPP on Tempo,** send the header `X-Payment-Offers: mpp` with the request and hold USDC.e or PathUSD on Tempo mainnet. The `402` then carries the MPP challenges, Tempo first, exactly as every other client gets them. See [[Paying with MPP]].
+> **To pay over MPP on Tempo,** send the header `X-Payment-Offers: mpp` with the request, hold USDC.e or PathUSD on Tempo mainnet, and configure the Payments plugin with `network_preferences_config=["tempo:4217", "eip155:4217"]` (Tempo first) and `buyer_pays_gas_fees=True`. The `402` then carries the MPP challenges, Tempo first, exactly as every other client gets them; the sample's [`tempo-mpp-probe/mpp_tempo_buy.py`](https://github.com/MikeyPetrillo/Agent402/tree/main/examples/agentcore-x402-buyer/tempo-mpp-probe) shows the configuration. See [[Paying with MPP]].
 
 > **Where payment happens matters:** AgentCore Gateway cannot pay a 402 on the Gateway→target hop - payment is an agent-side capability. Use Gateway for tool discovery, and the Payments plugin (or the adapters below) for settlement.
 
