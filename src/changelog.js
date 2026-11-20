@@ -16,7 +16,14 @@ const ENTRIES = [
     date: "2026-11-20",
     title: "First paid request after a restart",
     items: [
-      "Payments: The first paid request after a restart is answered at once, even when a payment network's settlement service is slow to answer; that network rejoins the offer as soon as its service answers.",
+      "Payments: The first paid request after a restart is answered at once, even when a fallback settlement service is slow to answer (the first service listed for a network is still waited for); that service rejoins the offer as soon as it answers.",
+    ],
+  },
+  {
+    date: "2026-11-20",
+    title: "Where errorCode rides",
+    items: [
+      "Wholesale: Every error answer a tool's route writes, other than a 402, carries `errorCode` beside the message (an input refused before payment, a run that ended in an error, a retired route and a paused or switched-off tool). A 402 is the payment-required answer: it follows the x402 and MPP wire formats and carries no `errorCode`. Its `payment_required` row stays in the contract's code table with the new field `carried: false`; every other row reads `carried: true`.",
     ],
   },
   {
@@ -32,7 +39,7 @@ const ENTRIES = [
     title: "Settled answers and interrupted runs",
     items: [
       "Payments: A buyer who leaves while a payment is still settling no longer spends hang-up forgiveness when the charge went through; the charge is booked as owed and repaid.",
-      "Payments: A task or job interrupted by a restart now checks whether its payment settled: if it did, the task says so, names the transaction, and the charge is booked for repayment.",
+      "Payments: A task or job interrupted by a restart now checks whether its payment settled: when a sale tied to that run is on the books, the task says so, names the transaction, and the charge is booked for repayment; when the sale cannot be tied to the run, the task makes neither claim and names the free refund lookup.",
       "Payments: When the shared payment store is briefly unavailable, paid routes now ask for a retry after 5 seconds instead of 30.",
       "Payments: A paid call answered with any success status now uses up its payment authorization, so it cannot run a second time.",
     ],
@@ -164,7 +171,7 @@ const ENTRIES = [
     items: [
       "Tools: Three bundle tools each run many catalog tools in one call and return one computed report: weather-risk-brief, a 7-day weather risk read for up to 50 sites (forecast, threshold hits, air quality, the same dates a year earlier and the chance of heavy rain), scored and ranked; filings-brief, the SEC picture of up to 40 US public companies (latest annual and quarterly financials with ratios, filing activity and Form 4 activity), flagged and ranked; and token-diligence, market diligence for up to 20 coins (profile and supply, one-year return, drawdown and volatility, turnover and dilution), flagged and ranked. Each is priced per site, company or coin by the skill-pack rule over the tools it runs, and the 402 quotes the amount for the units in the body. A ticker or coin the source does not know answers 422 naming it. No model writes any part of a report.",
       "Wholesale: `/wholesale` and `GET /api/wholesale/v1` give a reseller one versioned JSON read per tool family (computation tools; SEC filings and company financials; US Treasury rates and debt; weather forecasts, history, air quality and risk), and `GET /api/wholesale/v1/<family>` lists a family's tools: each tool's price, which is the public route's own price with no wholesale discount, the credit to keep with its answers, and its success rate and p50 and p95 latency over the last seven days, marked measured or not enough data. Only sources whose answers may be passed on are listed; market data, search results and model output are not offered. Within v1, fields are only added.",
-      "Wholesale: Every error answer a tool's route writes, other than a 402, now carries `errorCode` beside the message (an input refused before payment, a run that ended in an error, a retired route and a paused or switched-off tool): one stable code per status (such as `invalid_input`, `upstream_error` and `unavailable`), listed with its meaning in the wholesale contract. A 402 is the payment-required answer: it follows the x402 and MPP wire formats and carries no `errorCode`. A code is only ever added, never renamed or removed.",
+      "Wholesale: Every tool error answer carries `errorCode` beside the message: one stable code per status (such as `invalid_input`, `upstream_error` and `unavailable`), listed with its meaning in the wholesale contract. A code is only ever added, never renamed or removed.",
     ],
   },
   {

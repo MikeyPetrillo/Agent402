@@ -8,8 +8,10 @@
 // (a Tempo push transfer is final before the call runs), so the contract says
 // it once, rail by rail, beside a link to the refund terms (src/wholesale.js).
 //
-// A 402 carries no code and the table lists none: the payment-required answer
-// follows the x402 and MPP wire formats, which this server does not add to.
+// A 402 carries no code: the payment-required answer follows the x402 and
+// MPP wire formats, which this server does not add to. Its row stays in the
+// table (within v1 a code is never removed), marked `carried: false`; every
+// other row reads `carried: true`.
 // Where errorCode rides is said once, in ERROR_CODE_SCOPE and
 // ERROR_CODE_NOT_CARRIED (the wholesale JSON, /wholesale and the changelog
 // read the same words), and scripts/test-wholesale.js probes every kind of
@@ -21,22 +23,23 @@ export const ERROR_CODE_SCOPE = "Every error answer a tool's route writes, other
 export const ERROR_CODE_NOT_CARRIED = "A 402 is the payment-required answer: it follows the x402 and MPP wire formats and carries no errorCode. Some refusals from the payment and request checks in front of a tool's route carry none either: a payment already used, a rate limit on unpaid or free calls, a body the server cannot read.";
 
 export const ERROR_CODES = Object.freeze([
-  { status: 400, code: "invalid_input", meaning: "The input is missing a field, has a wrong type or is out of range; the message names the field. Fix the input.", retry: "fix-input" },
-  { status: 404, code: "not_found", meaning: "The thing the input names does not exist at the source.", retry: "fix-input" },
-  { status: 409, code: "conflict", meaning: "The request conflicts with the state of what it acts on; the message says what.", retry: "fix-input" },
-  { status: 410, code: "retired", meaning: "The route is retired; the body names its replacement.", retry: "use-replacement" },
-  { status: 413, code: "input_too_large", meaning: "The input is over a size limit the body names.", retry: "fix-input" },
-  { status: 415, code: "unsupported_media_type", meaning: "The body's content type is not one the route reads.", retry: "fix-input" },
-  { status: 422, code: "input_not_resolvable", meaning: "The input is well formed but the source cannot resolve it (an unknown ticker, coin or place).", retry: "fix-input" },
-  { status: 429, code: "rate_limited", meaning: "Too many requests; wait the Retry-After seconds.", retry: "after-retry-after" },
-  { status: 499, code: "client_closed", meaning: "The caller closed the connection before the answer.", retry: "same-request" },
-  { status: 500, code: "internal_error", meaning: "A fault in our code.", retry: "later" },
-  { status: 502, code: "upstream_error", meaning: "The data source answered with an error or an unreadable answer.", retry: "later" },
-  { status: 503, code: "unavailable", meaning: "The tool or its source is unavailable for now.", retry: "after-retry-after" },
-  { status: 504, code: "timeout", meaning: "The source did not answer in time.", retry: "later" },
+  { status: 400, code: "invalid_input", meaning: "The input is missing a field, has a wrong type or is out of range; the message names the field. Fix the input.", retry: "fix-input", carried: true },
+  { status: 402, code: "payment_required", meaning: "No payment, or a payment that was refused; the body is the payment challenge in the x402 and MPP wire formats, which carries no errorCode.", retry: "pay", carried: false },
+  { status: 404, code: "not_found", meaning: "The thing the input names does not exist at the source.", retry: "fix-input", carried: true },
+  { status: 409, code: "conflict", meaning: "The request conflicts with the state of what it acts on; the message says what.", retry: "fix-input", carried: true },
+  { status: 410, code: "retired", meaning: "The route is retired; the body names its replacement.", retry: "use-replacement", carried: true },
+  { status: 413, code: "input_too_large", meaning: "The input is over a size limit the body names.", retry: "fix-input", carried: true },
+  { status: 415, code: "unsupported_media_type", meaning: "The body's content type is not one the route reads.", retry: "fix-input", carried: true },
+  { status: 422, code: "input_not_resolvable", meaning: "The input is well formed but the source cannot resolve it (an unknown ticker, coin or place).", retry: "fix-input", carried: true },
+  { status: 429, code: "rate_limited", meaning: "Too many requests; wait the Retry-After seconds.", retry: "after-retry-after", carried: true },
+  { status: 499, code: "client_closed", meaning: "The caller closed the connection before the answer.", retry: "same-request", carried: true },
+  { status: 500, code: "internal_error", meaning: "A fault in our code.", retry: "later", carried: true },
+  { status: 502, code: "upstream_error", meaning: "The data source answered with an error or an unreadable answer.", retry: "later", carried: true },
+  { status: 503, code: "unavailable", meaning: "The tool or its source is unavailable for now.", retry: "after-retry-after", carried: true },
+  { status: 504, code: "timeout", meaning: "The source did not answer in time.", retry: "later", carried: true },
 ]);
 
-const BY_STATUS = new Map(ERROR_CODES.map((e) => [e.status, e.code]));
+const BY_STATUS = new Map(ERROR_CODES.filter((e) => e.carried).map((e) => [e.status, e.code]));
 
 /** The stable code for an error answer's final status: the exact status's
  *  code, else the class fallback (other 4xx invalid_input, other 5xx

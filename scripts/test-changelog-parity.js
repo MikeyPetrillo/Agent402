@@ -108,5 +108,20 @@ for (const date of [...new Set([...mdBy.keys(), ...jsBy.keys()])].sort().reverse
   ok(compared > 0 && diffs.length === 0, `items dated ${TEXT_PARITY_FROM} or later read the same in both files (${compared} compared)${diffs.length ? `:\n    ${diffs.join("\n    ")}` : ""}`);
 }
 
+// A release heading ("## vX.Y.Z - date") sits above the groups it shipped:
+// no dated group under "## Unreleased" is dated on or before the newest
+// release heading's date (the release would leave its own changes unlisted).
+{
+  const text = readFileSync(mdPath, "utf8");
+  const lines = text.split("\n");
+  const rel = lines.map((l) => /^## v(\d+\.\d+\.\d+) - (\d{4}-\d{2}-\d{2})\b/.exec(l)).find(Boolean);
+  const relAt = rel ? lines.findIndex((l) => l.startsWith(`## v${rel[1]} `)) : -1;
+  const unrelAt = lines.findIndex((l) => /^## Unreleased\b/.test(l));
+  const stranded = unrelAt >= 0 && relAt > unrelAt
+    ? lines.slice(unrelAt, relAt).map((l) => /^### (\d{4}-\d{2}-\d{2})\b/.exec(l)?.[1]).filter((d) => d && d <= rel[2])
+    : [];
+  ok(!!rel && stranded.length === 0, `the newest release heading (v${rel?.[1]} - ${rel?.[2]}) sits above every group it shipped (${stranded.length} group(s) dated on or before it left under Unreleased)`);
+}
+
 console.log(`\ntest-changelog-parity: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

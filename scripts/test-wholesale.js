@@ -58,7 +58,13 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { faile
 // follows the x402 and MPP wire formats and carries no errorCode.
 const V1_CODES = { 400: "invalid_input", 404: "not_found", 409: "conflict", 410: "retired", 413: "input_too_large", 415: "unsupported_media_type", 422: "input_not_resolvable", 429: "rate_limited", 499: "client_closed", 500: "internal_error", 502: "upstream_error", 503: "unavailable", 504: "timeout" };
 for (const [s, c] of Object.entries(V1_CODES)) ok(stableErrorCode(Number(s)) === c && ERROR_CODES.some((e) => e.status === Number(s) && e.code === c), `status ${s} reads ${c}`);
-ok(stableErrorCode(402) === null && JSON.stringify(errorCodeField(402)) === "{}" && !ERROR_CODES.some((e) => e.status === 402), `a 402 reads no code and the table lists none (table: ${ERROR_CODES.filter((e) => e.status === 402).map((e) => e.code).join(", ") || "no 402 row"})`);
+// Within v1 a code is never removed: every (status, code) pair the contract
+// has published stays in the table. The 402's row stays, marked carried:
+// false (a field added to every row), and no 402 answer carries it.
+const V1_PUBLISHED = { ...V1_CODES, 402: "payment_required" };
+for (const [s, c] of Object.entries(V1_PUBLISHED)) ok(ERROR_CODES.some((e) => e.status === Number(s) && e.code === c), `the v1 table still lists ${s} ${c}`);
+ok(stableErrorCode(402) === null && JSON.stringify(errorCodeField(402)) === "{}" && ERROR_CODES.find((e) => e.status === 402)?.carried === false, `a 402 reads no code, and its row says it is not carried (${JSON.stringify(ERROR_CODES.find((e) => e.status === 402) || "no 402 row")})`);
+ok(ERROR_CODES.filter((e) => e.status !== 402).every((e) => e.carried === true), "every other row says its code is carried");
 // What the contract says about where errorCode rides: one wording, read by
 // the JSON, the page and the changelog alike, that claims no answer it is
 // not on (src/stable-error-code.js).
@@ -230,7 +236,17 @@ ok(WHOLESALE_FAMILIES.every((f) => ["public-domain", "cc-by-4.0", "own-computati
     const missing = WHOLESALE_FAMILIES.filter((f) => !lower.includes(f.title.toLowerCase())).map((f) => f.id);
     ok(missing.length === 0, `${label} names every family by its title${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
     ok(/`errorCode`/.test(text) && ["invalid_input", "upstream_error"].every((c) => text.includes(`\`${c}\``)), `${label} announces the errorCode field on tool error answers`);
-    ok(/other than a 402/.test(text) && /\b402\b[^.]*x402 and MPP wire formats and carries no `?errorCode`?/.test(text) && !/every tool error answer carries/i.test(text), `${label} claims errorCode only where it is served, and says the 402 carries none`);
+    ok(/other than a 402/.test(text) && /\b402\b[^.]*x402 and MPP wire formats and carries no `?errorCode`?/.test(text), `${label} claims errorCode only where it is served, and says the 402 carries none`);
+  }
+  // A dated entry is a record of what shipped that day and is never rewritten:
+  // the 2026-11-18 announcement keeps its words, and the scoped claim (with
+  // the 402 row kept, carried: false) is its own later entry. No entry from
+  // 2026-11-20 on makes the unscoped claim.
+  const mdGroups = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8").split(/\n(?=### \d{4}-\d{2}-\d{2})/).map((g) => ({ date: (/^### (\d{4}-\d{2}-\d{2})/.exec(g) || [])[1] || "", text: g.replace(/\s+/g, " ") }));
+  for (const [label, groups] of [["CHANGELOG.md", mdGroups], ["src/changelog.js", CHANGELOG_ENTRIES.map((e) => ({ date: e.date, text: (e.items || []).join("\n") }))]]) {
+    const late = groups.filter((g) => g.date >= "2026-11-20");
+    ok(late.every((g) => !/every tool error answer carries/i.test(g.text)) && late.some((g) => /`payment_required`/.test(g.text) && /`carried: false`/.test(g.text) && /other than a 402/.test(g.text)), `${label}: the 2026-11-20 entry scopes errorCode and names the kept 402 row; no later entry makes the unscoped claim`);
+    ok(groups.some((g) => g.date === "2026-11-18" && /Every tool error answer carries `errorCode`/.test(g.text) && /A code is only ever added, never renamed or removed/.test(g.text)), `${label}: the 2026-11-18 entry keeps the words it shipped with`);
   }
 }
 
@@ -385,7 +401,7 @@ try {
   const a = await readAnswer(r);
   ok(a.status === 402 && r.headers.get("payment-required") && codeRight(a), `an unpaid call to a wholesale tool is the 402 payment challenge with no errorCode (${a.status}, body keys ${a.json && typeof a.json === "object" ? Object.keys(a.json).join(",") || "none" : typeof a.json})`);
   const contract = (await (await fetch(`${paid.url}/api/wholesale/v1`)).json()).errorCodes || {};
-  ok(!(contract.codes || []).some((c) => c.status === 402) && String(contract.note || "").includes(NOT_CARRIED), `the contract that boot serves lists no code for the 402 and says why (${(contract.codes || []).filter((c) => c.status === 402).map((c) => c.code).join(", ") || "no 402 row"})`);
+  ok((contract.codes || []).find((c) => c.status === 402)?.carried === false && String(contract.note || "").includes(NOT_CARRIED), `the contract that boot serves keeps the 402 row marked not carried and says why (${JSON.stringify((contract.codes || []).find((c) => c.status === 402) || "no 402 row")})`);
 } catch (e) {
   ok(false, `paid boot: ${e?.message || e}`);
 } finally {

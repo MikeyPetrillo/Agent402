@@ -44,7 +44,7 @@ export function wholesalePage(baseUrl, catalog = {}, powSlugs = new Set(), { tem
     String(toolCount(f)),
     `<a href="/api/wholesale/${WHOLESALE_VERSION}/${esc(f.id)}" style="color:var(--ink);">${esc(f.id)}</a>`,
   ]));
-  const codes = table(["Status", "errorCode", "Meaning", "What helps"], ERROR_CODES.map((e) => [String(e.status), CODE(e.code), esc(e.meaning), CODE(e.retry)]));
+  const codes = table(["Status", "errorCode", "Carried", "Meaning", "What helps"], ERROR_CODES.map((e) => [String(e.status), CODE(e.code), e.carried ? "yes" : "no", esc(e.meaning), CODE(e.retry)]));
   const body = `
 <header style="border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">

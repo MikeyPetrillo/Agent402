@@ -4,13 +4,24 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
-## Unreleased
+## v2.9.0 - 2026-11-20
 
 ### 2026-11-20 (first paid request after a restart)
 Payments:
 - The first paid request after a restart is answered at once, even when a
-  payment network's settlement service is slow to answer; that network rejoins
-  the offer as soon as its service answers.
+  fallback settlement service is slow to answer (the first service listed for
+  a network is still waited for); that service rejoins the offer as soon as
+  it answers.
+
+### 2026-11-20 (where errorCode rides)
+Wholesale:
+- Every error answer a tool's route writes, other than a 402, carries
+  `errorCode` beside the message (an input refused before payment, a run
+  that ended in an error, a retired route and a paused or switched-off
+  tool). A 402 is the payment-required answer: it follows the x402 and MPP
+  wire formats and carries no `errorCode`. Its `payment_required` row stays
+  in the contract's code table with the new field `carried: false`; every
+  other row reads `carried: true`.
 
 ### 2026-11-20 (retired model ids leave the model list)
 Gateway:
@@ -29,8 +40,10 @@ Payments:
   hang-up forgiveness when the charge went through; the charge is booked as
   owed and repaid.
 - A task or job interrupted by a restart now checks whether its payment
-  settled: if it did, the task says so, names the transaction, and the charge
-  is booked for repayment.
+  settled: when a sale tied to that run is on the books, the task says so,
+  names the transaction, and the charge is booked for repayment; when the
+  sale cannot be tied to the run, the task makes neither claim and names the
+  free refund lookup.
 - When the shared payment store is briefly unavailable, paid routes now ask
   for a retry after 5 seconds instead of 30.
 - A paid call answered with any success status now uses up its payment
@@ -137,8 +150,6 @@ Operations:
   day's call count across deploys and replicas when a shared store is
   configured. The operator view adds which module made the day's calls to
   the on-chain data provider and seven days of daily counts.
-
-## v2.9.0 - 2026-11-20
 
 ### 2026-11-19 (onchain query answers that cannot be read)
 Tools:
@@ -251,14 +262,10 @@ Wholesale:
   not enough data. Only sources whose answers may be passed on are listed;
   market data, search results and model output are not offered. Within v1,
   fields are only added.
-- Every error answer a tool's route writes, other than a 402, now carries
-  `errorCode` beside the message (an input refused before payment, a run
-  that ended in an error, a retired route and a paused or switched-off
-  tool): one stable code per status (such as `invalid_input`,
-  `upstream_error` and `unavailable`), listed with its meaning in the
-  wholesale contract. A 402 is the payment-required answer: it follows the
-  x402 and MPP wire formats and carries no `errorCode`. A code is only ever
-  added, never renamed or removed.
+- Every tool error answer carries `errorCode` beside the message: one
+  stable code per status (such as `invalid_input`, `upstream_error` and
+  `unavailable`), listed with its meaning in the wholesale contract. A code
+  is only ever added, never renamed or removed.
 
 ### 2026-11-18 (yield age limit, MCP cut-offs, unknown coin ids)
 Tools:
