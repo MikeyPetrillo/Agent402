@@ -49,6 +49,23 @@ export function mppOfferGateEnabled(env = process.env) {
   return withheldUserAgentPrefixes(env).length > 0;
 }
 
+/** The clause every text that says a 402 carries the MPP challenges adds,
+ *  built from the switch: which clients get the x402 offer alone and the
+ *  header that restores the challenges. "" when the gate is off. `code` wraps
+ *  a literal (markdown backticks by default). */
+export function mppOfferGateClause({ code = (s) => `\`${s}\``, env = process.env } = {}) {
+  const prefixes = withheldUserAgentPrefixes(env).map((p) => code(p));
+  if (prefixes.length === 0) return "";
+  const names = prefixes.length === 1 ? prefixes[0] : `${prefixes.slice(0, -1).join(", ")} or ${prefixes.at(-1)}`;
+  return `a client whose User-Agent starts with ${names} gets the x402 offer alone, with no ${code("WWW-Authenticate: Payment")} challenge, unless it sends ${code(`${OFFER_REQUEST_HEADER}: mpp`)}`;
+}
+
+/** The same clause as a sentence; "" when the gate is off. */
+export function mppOfferGateSentence(opts) {
+  const c = mppOfferGateClause(opts);
+  return c ? `${c[0].toUpperCase()}${c.slice(1)}.` : "";
+}
+
 /** True when the request asks for the MPP offers by the opt-in header. */
 export function requestOptsIntoMppOffers(req) {
   const v = req?.headers?.[OFFER_REQUEST_HEADER.toLowerCase()];

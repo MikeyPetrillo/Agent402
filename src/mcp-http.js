@@ -136,6 +136,7 @@ import { maxHeaderSize } from "node:http";
 import { mcpX402Entries, mcpX402PathOf, MCP_X402_PREFIX, isFixedPriceDef } from "./mcp-x402-routes.js";
 import { decodesAsMppCredential, decodesAsX402Payment } from "./payment-attempt.js";
 import { openLoopbackCall, closeLoopbackCall, cutLoopbackCall } from "./mcp-loopback.js";
+import { mppOfferGateClause } from "./mpp-offer-gate.js";
 
 // serverInfo reports the agent402-mcp package version in the deployed build
 // (mcp/package.json, which the image copies) with the server's build as
@@ -1807,7 +1808,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             },
             pay: {
               model: "HTTP 402 + x402, settled in USDC on-chain, non-custodial (you hold the key)",
-              mpp: `every paid endpoint also accepts MPP (Machine Payments Protocol, the Payment HTTP auth scheme): the same 402 carries a WWW-Authenticate: Payment challenge, an mppx client pays out of the box, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo - see ${baseUrl}/what-is-mpp`,
+              mpp: `every paid endpoint also accepts MPP (Machine Payments Protocol, the Payment HTTP auth scheme): the same 402 carries a WWW-Authenticate: Payment challenge, an mppx client pays out of the box, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo - see ${baseUrl}/what-is-mpp${mppOfferGateClause({ code: (x) => x }) ? `; ${mppOfferGateClause({ code: (x) => x })}` : ""}`,
               rails: RAILS_PAREN,
               setup: `run the agent402-mcp npm server: \`npx agent402-mcp\` with ${npmEvmSetup} and/or SOLANA_AGENT_KEY=<base58 secret> for Solana. No signup, no API key.`,
               // DERIVED. Both ranges here were hand-typed and kept through two

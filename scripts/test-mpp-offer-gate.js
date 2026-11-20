@@ -28,6 +28,9 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { bootPaidServer } from "./lib/paid-boot.js";
 import { Challenge } from "mppx";
+import { readFileSync } from "node:fs";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 let pass = 0;
 let srv = null;
@@ -65,6 +68,30 @@ async function read(url, method, ua, extra = {}) {
   const r = await fetch(url, { method, headers, body: method === "GET" ? undefined : "{}" });
   const body = await r.text();
   return { status: r.status, methods: methodsOf(r), pr: r.headers.get("payment-required"), vary: varyOf(r), names: [...r.headers.keys()].filter((k) => !["date", "etag", "x-request-id"].includes(k)).sort(), body };
+}
+
+// Every agent-facing text that describes what a 402 carries: agents.md (the
+// 402 body's howToPay), llms.txt, llms-full.txt, the how-to-pay page, the
+// OpenAPI guidance and every operation's 402 description, and the connector's
+// payment.info.
+async function gateSurfaces(base) {
+  const out = {};
+  for (const path of ["/agents.md", "/llms.txt", "/llms-full.txt", "/how-to-pay"]) out[path] = await (await fetch(base + path)).text();
+  const spec = await (await fetch(`${base}/openapi.json`)).json();
+  out["/openapi.json info.x-guidance"] = String(spec?.info?.["x-guidance"] || "");
+  const descs = Object.values(spec?.paths || {}).flatMap((p) => Object.values(p || {})).map((o) => o?.responses?.[402]?.description).filter((d) => typeof d === "string");
+  if (descs.length < 400) fail(`/openapi.json lists ${descs.length} 402 responses`);
+  // Every operation's description, joined so a single one without it fails.
+  out["/openapi.json 402 descriptions"] = descs.every((d) => d.includes("X-Payment-Offers: mpp") && d.includes("python-httpx/")) ? descs[0] : descs.find((d) => !d.includes("X-Payment-Offers"));
+  const client = new Client({ name: "test-mpp-offer-gate", version: "0.0.0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+  try {
+    const pi = await client.callTool({ name: "payment.info", arguments: {} });
+    const mpp = (pi.structuredContent || JSON.parse(pi.content?.[0]?.text || "{}"))?.pay?.mpp;
+    if (typeof mpp !== "string" || !mpp) fail(`payment.info carries no pay.mpp text (${JSON.stringify(pi).slice(0, 200)})`);
+    out["payment.info pay.mpp"] = mpp;
+  } finally { await client.close(); }
+  return out;
 }
 
 async function pricedRoutes(base) {
@@ -134,6 +161,16 @@ try {
     const pub = await (await fetch(`${srv.url}/api/gateway-status`)).json();
     ok(JSON.stringify(Object.keys(pub?.mppEvmDomainFallback || {})) === JSON.stringify(["enabled"]), "the public view publishes no count and no list");
   }
+
+  // The agent-facing surfaces that say the 402 carries the MPP challenges name
+  // the gated prefix and the opt-in header (the 402 body points at /agents.md).
+  {
+    const s = await gateSurfaces(srv.url);
+    for (const [name, text] of Object.entries(s)) {
+      ok(text.includes("X-Payment-Offers: mpp") && text.includes("python-httpx/"), `${name} names the gated prefix and X-Payment-Offers: mpp`);
+    }
+    ok(!/BOTH headers, always/.test(s["/llms-full.txt"]), "/llms-full.txt no longer says every 402 carries both headers, always");
+  }
   await srv.stop();
   srv = null;
 
@@ -162,6 +199,9 @@ try {
     ok(httpx.methods.length > 0 && httpx.methods.join() === node.methods.join() && httpx.vary.join() === node.vary.join(), "off: python-httpx gets Node's 402, Vary included");
     const op = await (await fetch(`${srv.url}/api/gateway-status`, { headers: { "X-Operator-Token": TOKEN } })).json();
     ok(op?.mppEvmDomainFallback?.offerGate?.enabled === false && op.mppEvmDomainFallback.offerGate.withheld === 0, "off: the operator view says the gate is off and counts nothing");
+    const s = await gateSurfaces(srv.url);
+    for (const [name, text] of Object.entries(s)) ok(!String(text).includes("X-Payment-Offers"), `off: ${name} names no opt-in header`);
+    ok(/BOTH headers, always/.test(s["/llms-full.txt"]), "off: /llms-full.txt says every 402 carries both headers, always");
   }
   await srv.stop();
   srv = null;
@@ -237,6 +277,28 @@ try {
   _resetMppOfferGate();
   ok(mppOffersWithheldFor(req(HTTPX)) === false && mppOfferGateStatus().withheld === 0 && mppOfferGateStatus().enabled === false, "off: nothing is withheld or counted");
   if (saved === undefined) delete process.env.MPP_OFFER_WITHHOLD_USER_AGENTS; else process.env.MPP_OFFER_WITHHOLD_USER_AGENTS = saved;
+
+  // The hand-written docs that describe the gate name the code's header and
+  // its default prefixes, so a renamed header or a changed default fails here.
+  {
+    const ROOT = new URL("..", import.meta.url);
+    const DOCS = ["wiki/Paying-with-MPP.md", "wiki/AWS-Bedrock-AgentCore.md", "wiki/Self-Hosting.md", "src/guides.js", "examples/agentcore-x402-buyer/README.md", "examples/agentcore-x402-buyer/tempo-mpp-probe/README.md", ".claude/rules/payments.md", "docs/configuration.json", "docs/configuration.md"];
+    for (const f of DOCS) {
+      const t = readFileSync(new URL(f, ROOT), "utf8");
+      ok(t.includes(`${OFFER_REQUEST_HEADER}: mpp`), `${f} names ${OFFER_REQUEST_HEADER}: mpp`);
+      for (const p of DEFAULT_WITHHELD_USER_AGENT_PREFIXES) ok(t.includes(p.replace(/\/$/, "")), `${f} names the default prefix ${p}`);
+    }
+    // The opt-in alone does not make the payments plugin pay over Tempo: with
+    // its default preferences it picks the evm challenge. The AgentCore pages
+    // name the two settings the working probe (mpp_tempo_buy.py) sets.
+    const probe = readFileSync(new URL("examples/agentcore-x402-buyer/tempo-mpp-probe/mpp_tempo_buy.py", ROOT), "utf8");
+    const SETTINGS = ['network_preferences_config=["tempo:4217", "eip155:4217"]', "buyer_pays_gas_fees=True"];
+    ok(SETTINGS.every((s) => probe.includes(s)), "the Tempo probe sets Tempo-first preferences and buyer-paid gas");
+    for (const f of ["wiki/AWS-Bedrock-AgentCore.md", "src/guides.js", "examples/agentcore-x402-buyer/README.md"]) {
+      const t = readFileSync(new URL(f, ROOT), "utf8");
+      ok(SETTINGS.every((s) => t.includes(s)), `${f} names the plugin settings the Tempo opt-in needs`);
+    }
+  }
 
   console.log(`\n${pass} passed`);
   process.exit(0);
