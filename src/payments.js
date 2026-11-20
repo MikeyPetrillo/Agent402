@@ -3044,7 +3044,42 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   scheduleBazaarRouteCheck(routes);
   if (mcpHttpServer) scheduleBazaarRouteCheck(mcpRouteConfigs);
   if (!syncOnStart) return withMcpTwins(vendorMw, mcpVendorMw);
+  // The first init never waits on a facilitator the boot read gave up on.
+  // initialize() reads every facilitator's /supported through its memo, one
+  // after another, and a boot read that got no answer within our limit is
+  // still in flight there: the init, and every paid request waiting on it
+  // (withGuardedInit), would wait for that facilitator to answer, though the
+  // guard has already dropped the rails only it lists. Measured on a local
+  // boot: one facilitator silent past the boot read held the first unpaid 402
+  // for about 6 s (76 s with one silent for two minutes), where the build is
+  // a few milliseconds. So for the first attempt such a facilitator's read
+  // fails at once, exactly as a read that fails outright does (the init warns
+  // and goes on with the others), and its own read is put back when the
+  // attempt ends; the rail re-read below restores a rail it lists once it
+  // answers. Only a facilitator that cannot win any (network, scheme) the
+  // offer still carries is passed over: the init gives each pair to the
+  // first facilitator in order that lists it, so one placed before every
+  // facilitator that answered for some offered pair (CDP, first on Base, is
+  // the case that matters: the Bazaar indexes what settles through it) is
+  // still waited for, as before, and keeps its routes when it answers.
+  // Nothing an offer carries changes, and no offered pair changes facilitator.
+  const offeredAtInit = new Set([...evmCaip2, ...svmCaip2, ...stellarCaip2, ...avmCaip2]);
+  const firstAnswering = new Map();
+  (probedReads || []).forEach((r, j) => {
+    for (const k of r?.supported?.kinds || []) {
+      const key = `${k?.network} ${String(k?.scheme || "").toLowerCase()}`;
+      if (offeredAtInit.has(String(k?.network)) && !firstAnswering.has(key)) firstAnswering.set(key, j);
+    }
+  });
+  const cannotWinAnOfferedPair = (i) => i >= 0 && [...firstAnswering.values()].every((j) => j < i);
+  const heldAtInit = failedReads.filter(({ client }) => cannotWinAnOfferedPair(facilitatorClients.indexOf(client))).map(({ client, label }) => {
+    const own = Object.prototype.hasOwnProperty.call(client, "getSupported");
+    const read = client.getSupported;
+    client.getSupported = () => Promise.reject(new Error(`${label} gave no /supported answer at boot; it is read again in the background`));
+    return () => { if (own) client.getSupported = read; else delete client.getSupported; };
+  });
   const init = createGuardedInit(httpServer);
+  if (heldAtInit.length) void init.ensure().finally(() => { for (const putBack of heldAtInit) putBack(); });
 
   // ---- A rail dropped on a FAILED /supported read rejoins the offer live ----
   //
