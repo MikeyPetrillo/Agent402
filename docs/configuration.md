@@ -727,7 +727,7 @@ may still clamp it, and the read site is the reference.
 | --- | --- | --- | --- |
 | `ONCHAIN_SQL_BUSY_MIN` | Busy refusals of onchain-sql to one top paying buyer, inside the failure window, that raise the onchainSqlBusy status word (1 when unset: the first refusal raises it). |  | `src/top-buyer-failures.js` |
 | `ONCHAIN_SQL_BUSY_SPAN_MS` | Least time between the first and last of those busy refusals for onchainSqlBusy to read alert, in milliseconds (0 when unset: no span is asked for). |  | `src/top-buyer-failures.js` |
-| `ONCHAIN_SQL_INFLIGHT_MAX` | Onchain-sql queries one server runs at once (1 to 16); past it a query is refused with a 429 before any payment is settled. |  | `src/tools/cdp-kit.js` |
+| `ONCHAIN_SQL_INFLIGHT_MAX` | Onchain-sql queries one server runs at once (1 to 16); past it a query waits up to the send-slot reach (about 3 s) for a place, then is refused with a 429 before any payment is settled. |  | `src/tools/cdp-kit.js` |
 
 ## OPENROUTER
 
