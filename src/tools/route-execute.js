@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import { paymentHeaderOf, payerFromRequest } from "../payer.js";
 import { decodePaymentHeader } from "../payment-header.js";
 import { maySpend, noteSpend, adjustSpend, reserveSpend } from "../external-spend-guard.js";
+import { spendRefusalFields, spendRuleOf } from "../refusal-reason.js";
 import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../avm-network.js";
 import { findTools } from "../find.js";
@@ -794,9 +795,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // cannot both pass a ceiling that has room for one.
           const allowed = await reserveSpend(spendPayer, cap, { chain });
           if (!allowed.ok) {
-            if (allowed.code === "global_unsettled_ceiling") throw bad(`External routing is paused for everyone right now, not for this wallet in particular: ${allowed.reason}${notChargedOn(req)}`, 429);
-            if (allowed.code === "wallet_daily_ceiling" || allowed.code === "spend_ledger_unreadable") throw bad(`External routing on ${chain} is paused for everyone right now, not for this wallet in particular: ${allowed.reason}${notChargedOn(req)}`, 429);
-            throw bad(`External routing is paused for this wallet: ${allowed.reason}`, 429);
+            // Each refusal names its rule as a code (spendRule), with
+            // attribution "ours", a hint and a next step: this server's own
+            // ceiling, never the caller's input (src/tool-error-fields.js).
+            const ruled = (e) => Object.assign(e, spendRefusalFields(allowed));
+            if (allowed.code === "global_unsettled_ceiling") throw ruled(bad(`External routing is paused for everyone right now, not for this wallet in particular: ${allowed.reason}${notChargedOn(req)}`, 429));
+            if (allowed.code === "wallet_daily_ceiling" || allowed.code === "spend_ledger_unreadable") throw ruled(bad(`External routing on ${chain} is paused for everyone right now, not for this wallet in particular: ${allowed.reason}${notChargedOn(req)}`, 429));
+            throw ruled(bad(`External routing is paused for this wallet: ${allowed.reason}`, 429));
           }
           const spendHandle = allowed.handle;
           // Handed to server.js on the REQUEST, because a tool handler is called
@@ -953,6 +958,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // Carry the payer's own stamps onto the error a caller sees: an
             // in-process caller (the decide executor) must know a payment may
             // have left, or it would treat the leg as unpaid and pay another.
+            // A spend rule of ours that refused inside the payer (its
+            // per-minute window) keeps its rule fields on the rewrapped error.
+            if (spendRuleOf(e)) Object.assign(lastErr, spendRefusalFields({ code: spendRuleOf(e) }));
             if (spentMaybe) lastErr.committed = true;
             if (unanswered) lastErr.paidUnanswered = true;
             if (spentMaybe && Number.isFinite(signedUsd) && signedUsd >= 0) lastErr.signedUsd = signedUsd;

@@ -57,6 +57,7 @@ import { reserveUnprovenSellerSpend, releaseUnprovenSellerSpend } from "./base-u
 import { usdFigure } from "./price-usd.js";
 import { EVM_BUYER_CHAINS, isEvmBuyerChain, evmBuyerChainEnabled, evmAcceptDomainCheck } from "./evm-buyer-chains.js";
 import { markNotSellerBody } from "./response-observation.js";
+import { spendRefusalFields } from "./refusal-reason.js";
 import { noteSellerDeliveryOutcome } from "./seller-reputation.js";
 
 /** The buyer-visible 409 when a Base unproven daily cap refuses: every figure
@@ -1027,7 +1028,7 @@ export function reserveSpend(atomic) {
   if (now - spendWindowStart > SPEND_WINDOW_MS) { spendWindowStart = now; spentThisWindow = 0n; }
   const amt = BigInt(atomic);
   const { alarmAtomic, hardAtomic } = spendWindowCeilings();
-  const refuse = () => { if (alarmAtomic !== 0n) noteSpendWindowRefused(now); return bad(SPEND_REFUSED, 429); };
+  const refuse = () => { if (alarmAtomic !== 0n) noteSpendWindowRefused(now); return Object.assign(bad(SPEND_REFUSED, 429), spendRefusalFields({ code: "router_minute_ceiling" })); };
   if (spentThisWindow + amt > hardAtomic) throw refuse();
   spentThisWindow += amt;
   if (spentThisWindow > alarmAtomic) noteSpendWindowOver(now);

@@ -70,6 +70,35 @@ export const REFUSAL_REASONS = Object.freeze([
 // Gemini path alias. Forty characters is far past any real field name.
 // `err.coverRefusal` (src/inflight-cover.js) -> its class.
 const COVER_REASONS = Object.freeze({ short: "cover_short", settling: "cover_settling", beside: "cover_beside", unread: "cover_unread", kept: "cover_kept" });
+// WHICH SPEND RULE OF OURS REFUSED, as a word a caller can branch on. A spend
+// refusal read as prose only, and its 429 read as rate_limited, so an
+// integrator could not tell this server's own spend ceiling from a limit on
+// its calls or from its input. Each rule carries its hint, the next step and a
+// Retry-After; the answer carries the code as `rule` beside reason
+// routing_paused (src/tool-error-fields.js). Codes are only ever added, never
+// renamed. The decisions come from src/external-spend-guard.js (the first
+// four) and the router's per-minute window in src/x402-buyer.js.
+export const SPEND_RULES = Object.freeze({
+  payer_unsettled_ceiling: Object.freeze({ hint: "spend-payer-ceiling", retryAfter: 30, fix: "Your input is fine. This wallet's earlier calls here have not settled yet; retry the same call after Retry-After, once they have." }),
+  global_unsettled_ceiling: Object.freeze({ hint: "spend-global-ceiling", retryAfter: 30, fix: "Your input is fine. This server's own ceiling on unsettled outside spend paused purchases from outside sellers for every buyer; retry the same call after Retry-After." }),
+  wallet_daily_ceiling: Object.freeze({ hint: "spend-wallet-day-ceiling", retryAfter: 3600, fix: "Your input is fine. This server's spending wallet on this chain reached its daily ceiling, which pauses purchases there for every buyer; retry the same call after Retry-After." }),
+  spend_ledger_unreadable: Object.freeze({ hint: "spend-ledger-unreadable", retryAfter: 30, fix: "Your input is fine. This server could not read its own spend ledger for this chain, which pauses purchases there for every buyer; retry the same call after Retry-After." }),
+  router_minute_ceiling: Object.freeze({ hint: "spend-minute-ceiling", retryAfter: 60, fix: "Your input is fine. This server's own per-minute ceiling on outside purchases was reached for every buyer; retry the same call after Retry-After." }),
+});
+/** The fields a thrown spend refusal carries into its answer: attribution
+ *  "ours", and for a decision with a known code the rule (`spendRule`), its
+ *  hint, a next step and a Retry-After. */
+export function spendRefusalFields(decision) {
+  const code = decision && typeof decision.code === "string" && Object.hasOwn(SPEND_RULES, decision.code) ? decision.code : null;
+  if (!code) return { attribution: "ours" };
+  const r = SPEND_RULES[code];
+  return { attribution: "ours", spendRule: code, hint: r.hint, fix: r.fix, retryAfter: r.retryAfter };
+}
+/** The spend refusal's rule code from the error's own `spendRule`, else null. */
+export function spendRuleOf(err) {
+  const c = err && typeof err.spendRule === "string" ? err.spendRule : null;
+  return c && Object.hasOwn(SPEND_RULES, c) ? c : null;
+}
 /** The coverage refusal's reason code (`cover_short` ...) from the error's own
  *  `coverRefusal`, else null: a fixed word of ours, never the error's text. */
 export function coverReasonOf(err) {
@@ -136,6 +165,7 @@ export function refusalReason(message, status, err = null) {
   // ours; anything else falls through to the text).
   const cover = code === 429 && err && typeof err.coverRefusal === "string" && Object.hasOwn(COVER_REASONS, err.coverRefusal) ? COVER_REASONS[err.coverRefusal] : null;
   if (cover) return cover;
+  if (code === 429 && spendRuleOf(err)) return "routing_paused";
   if (code === 413) return "too_large";
   if (code === 404) return "not_found";
   const text = typeof message === "string" ? message : "";
