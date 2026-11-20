@@ -90,6 +90,12 @@ LLC: credit the entity, never a personal name.
   shared read helper, or other tools' handlers as a bundle product does) writes the hosts in its own
   definition as a literal `upstreamHosts: [...]`; a sweep excuses its upstream's refusal only against
   the runner's direct read of a declared host (`scripts/lib/upstream-outage.js`).
+- A bundle product (`src/tools/bundle-kit.js`) holds one read per upstream host per unit at a time,
+  runs a leg the source rate-limited (its 429) once, and starts no further unit after it; a leg
+  helper that answers the source's 429 in its own words marks the error `throttled`. Its published
+  example stays inside what the keyless host allows, and the multi-unit path is covered offline
+  through the real legs (`scripts/test-bundle-products.js`). `NON_METERED_ONLY=<slug,...>` narrows a
+  local strict sweep to named tools and prints each one's attempts (refused under CI).
 - **Honest claims.** Most tools are deterministic code; model-backed ones (the `/v1` LLM tiers,
   report products, media/embedding/answer tools) are marked `modelBacked` and public copy must
   say so. Never write an unscoped "no model in the serving path" or "every tool is
