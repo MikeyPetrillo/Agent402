@@ -3593,7 +3593,10 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
   const hadMetered = !!meterReq && Object.prototype.hasOwnProperty.call(meterReq, "__meteredUsageUsd");
   const meteredBefore = meterReq?.__meteredUsageUsd;
   let timer = setTimeout(() => { if (!started) firstFrameTimedOut = true; else overallTimedOut = true; ctrl.abort(); }, timeoutMs);
-  res.on?.("close", () => ctrl.abort());
+  // A chain walk calls this once per attempt on the same response: the
+  // listener is this attempt's and is taken off when the attempt ends.
+  const abortOnClose = () => ctrl.abort();
+  res.on?.("close", abortOnClose);
   try {
     let upstream;
     try { upstream = await fetchUpstream(body, { signal: ctrl.signal, url }); } catch (e) {
@@ -3711,6 +3714,7 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
   } finally {
     clearTimeout(timer);
     clearTimeout(holdTimer);
+    res.off?.("close", abortOnClose);
     if (!committed && answer && meterReq) {
       if (hadMetered) meterReq.__meteredUsageUsd = meteredBefore;
       else delete meterReq.__meteredUsageUsd;
