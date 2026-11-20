@@ -4165,7 +4165,7 @@ jobs:
             [ -n "$cursor" ] || break
           done
           if node -e 'const [n, v] = process.argv.slice(1); const rows = require("fs").readFileSync("registry-pages.jsonl", "utf8").split("\n").filter(Boolean).flatMap((l) => { try { return JSON.parse(l).servers || []; } catch { return []; } }); process.exit(rows.some((r) => r?.server?.name === n && r?.server?.version === v) ? 0 : 1)' "$SERVER_NAME" "$VER"; then
-            echo "$SERVER_NAME@$VER already in the MCP Registry — nothing to do"; exit 0
+            echo "$SERVER_NAME@$VER already in the MCP Registry: nothing to do"; exit 0
           fi
           # Capture whichever version is isLatest RIGHT NOW - it's about to
           # become stale the moment the new publish below lands - and every
