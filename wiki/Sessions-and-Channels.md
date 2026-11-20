@@ -66,9 +66,10 @@ booked as a sale at the amount charged, with no transaction of its own; the
 batch claim and settle carry the chain transactions. A buyer who leaves after
 its call's charge was committed is treated as on every other rail: when the
 call holds a hang-up forgiveness ticket (the close landed during the settle
-itself), the charge is credited back to the channel, once; otherwise (the
-forgiveness budget is spent, or the call took no ticket) the charge stands
-and the undelivered answer is booked as owed. A credit the channel can no
+itself), the charge is credited back to the channel, once, and the call
+counts against the forgiveness budget like any other forgiven hang-up;
+otherwise (the forgiveness budget is spent, or the call took no ticket) the
+charge stands and the undelivered answer is booked as owed. A credit the channel can no
 longer take (already claimed on chain) is booked as owed and repaid by hand.
 
 **Where it is offered.** Beside `exact` on each network listed in

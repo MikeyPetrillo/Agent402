@@ -328,9 +328,10 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
     // A channel charge (x402 batch-settlement) moved nothing on chain. It is
     // given back to the channel (the buyer's next voucher is signed on the
     // lower total; the corrective 402 carries it) only on a GRANTED
-    // forgiveness ticket, a close before the first byte and a route whose
-    // effect does not outlive the answer: the close landed inside the settle
-    // call, where the forgiveness rule had already decided not to charge.
+    // forgiveness ticket whose run was recorded as abandoned (the dispatcher
+    // does so for a channel run whose buyer left inside the settle call, so
+    // the budget bounds the credit like any withheld charge), a close before
+    // the first byte and a route whose effect does not outlive the answer.
     // Without one (the budget is spent, a lasting effect, no ticket) the
     // charge stays on the buyer and is booked as owed below, as on every
     // other rail. A credit the channel cannot take (already claimed on
@@ -340,6 +341,7 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
     if (!receiptProvesCharge(channelReceipt)) return null;
     const hung = hungUpBatchCall(req, channelReceipt, {
       forgiven: hangupForgiven(req),
+      spent: hangupTicketAbandoned(req),
       lastingEffect: defHasLastingEffect(def),
       reason,
       row: {
@@ -387,10 +389,12 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
   noteChargedAfterServe(req, row);
   // Why it was not forgiven, when a ticket was refused ("lasting effect",
   // "payer budget", ...); nothing for the residual window, where it was.
-  // Stored on the row: the refund planner holds a budget denial (a repeat
-  // hang-up) for review instead of repaying it as an ordinary debt.
+  // Stored on the row, ahead of the booking's own reason (a connector that
+  // stopped waiting): the refund planner holds a budget denial (a repeat
+  // hang-up) for review instead of repaying it as an ordinary debt
+  // (src/hangup-forgiveness.js hangupDebtReason).
   const denied = hangupTicketDenial(req);
-  const hangupReason = reason || denied || (hangupForgiven(req) ? "settled in flight" : "no ticket");
+  const hangupReason = hangupDebtReason(req, reason);
   // The same push transfer was refused on input earlier and booked as owed
   // under its hash; INSERT OR IGNORE kept that 400 row. It is a disconnect
   // now: promote it, or the hang-up holds never see it.
@@ -418,7 +422,8 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
 //     The transfer may still land; a settle failure that names one is read
 //     from the chain and booked as owed (src/late-settlements.js), so this
 //     never says "not charged", and the run spends no forgiveness budget
-//     (the dispatcher's ticket is released, not abandoned).
+//     (the dispatcher's ticket is released, not abandoned), except on a
+//     payment channel, whose run is recorded as abandoned at the close.
 function recordHangupOutcome(req, res) {
   if (recordHangupDebt(req, res)) return;
   if (!ownTrue(req, "__a402Dispatched")) return; // nothing was accepted, or not a catalog route
@@ -427,7 +432,10 @@ function recordHangupOutcome(req, res) {
   const work = started > 0 ? `after ${Math.max(0, Date.now() - started)} ms of work` : "before the handler ran";
   const where = `client closed the connection before the answer was ready (${req.method} ${req.path} rail=${rail} ${work})`;
   if (settleSentWhileConnected(req)) {
-    console.warn(`[hangup] SETTLE UNCONFIRMED: ${where} - settlement was sent before the close and did not confirm; a late transfer is booked as owed and repaid; no forgiveness budget spent`);
+    // A channel run's ticket is recorded as abandoned at the close (see the
+    // dispatcher), so it is counted against the budget either way.
+    const budget = isBatchSettlementRequest(req) && hangupTicketAbandoned(req) ? "counted against the forgiveness budget (a channel call)" : "no forgiveness budget spent";
+    console.warn(`[hangup] SETTLE UNCONFIRMED: ${where} - settlement was sent before the close and did not confirm; a late transfer is booked as owed and repaid; ${budget}`);
     return;
   }
   const why = hangupForgiven(req) ? "within the hang-up forgiveness budget" : "the call never reached settlement";
@@ -1023,7 +1031,7 @@ const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP
 const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY} per day per client`;
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, grantedUnsettled, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed, allowanceRouteRefusal } from "./first-call-allowance.js";
-import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
+import { hangupForgiven, hangupTicketDenial, hangupTicketAbandoned, hangupDebtReason, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
 import { referralConfig, referralConfigProblem, referralTimingWarnings, referralRoutes, referralSlugOfPath, createReferralGate, referralRefundWriter } from "./referral-gate.js";
 import { createReferralSettler } from "./referral-settle.js";
 import { createReferralChainReader } from "./referral-chain.js";
@@ -13072,7 +13080,12 @@ if (!FREE_MODE) {
     // ... and only for a call that reached its handler: one that was refused
     // or left while still waiting to be admitted ran nothing, so its ticket
     // is released and nothing is booked.
-    const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) && !settleSentWhileConnected(req) });
+    // A payment channel (x402 batch-settlement) is the exception to the
+    // residual window: its charge there is given back to the channel
+    // (recordHangupDebt, hungUpBatchCall), outside the refund ledger and its
+    // caps, so the run is recorded as abandoned and the budget bounds the
+    // credit as it bounds every withheld charge.
+    const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) && (!settleSentWhileConnected(req) || isBatchSettlementRequest(req)) });
     res.once("close", () => { closed = true; if (reserved) settle(); });
     // Priced at what this chain charges (the signed amount, or the gated
     // price through the chain's premium and floor), so a ticket holds the

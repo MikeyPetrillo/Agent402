@@ -1334,7 +1334,7 @@ try {
   // settlement was sent; a residual-window close releases it.
   {
     const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-    ok(/const settle = \(\) => settleHangupTicket\(req, \{ abandoned: clientGoneBeforeFirstByte\(req\) && !settleSentWhileConnected\(req\) \}\);/.test(server), "the ticket is abandoned when gone before the first byte and no settlement was sent (pin; the behavior ran above)");
+    ok(/const settle = \(\) => settleHangupTicket\(req, \{ abandoned: clientGoneBeforeFirstByte\(req\) && \(!settleSentWhileConnected\(req\) \|\| isBatchSettlementRequest\(req\)\) \}\);/.test(server), "the ticket is abandoned when gone before the first byte and no settlement was sent, or on a payment channel, whose charge there is given back (pin; the behavior ran above and in scripts/test-batch-hangup.js)");
   }
 
   if (process.env.HANGUP_TEST_SHOW_LOG) console.log(serverLog.filter((l) => /\[hangup\]/.test(l)).join("\n"));

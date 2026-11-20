@@ -301,7 +301,9 @@ const hungUpDecided = new WeakMap();
  * goes back to the channel only where every other rail would not have taken
  * it: the request holds a GRANTED forgiveness ticket (src/hangup-forgiveness.js;
  * with one, the settle hook withholds the charge, so a committed charge means
- * the close landed inside the settle call), the buyer left before the first
+ * the close landed inside the settle call) whose run was recorded as
+ * abandoned (`spent`: the credit counts against the budget like any withheld
+ * charge, so the budget bounds it), the buyer left before the first
  * byte (`reason` null: not a connector that stopped waiting for an answer
  * written in full and stored), and the route's effect does not outlive the
  * answer. Anything else (a ticket denied on a budget or for a lasting
@@ -314,12 +316,12 @@ const hungUpDecided = new WeakMap();
  * the same evidence, and credits nothing. `row` is the owed row's fields;
  * its evidence is unique to the request.
  */
-export function hungUpBatchCall(req, receipt, { forgiven = false, lastingEffect = false, reason = null, row = {}, onCredited = () => {}, onCreditRefused = () => {} } = {}) {
+export function hungUpBatchCall(req, receipt, { forgiven = false, spent = false, lastingEffect = false, reason = null, row = {}, onCredited = () => {}, onCreditRefused = () => {} } = {}) {
   const keyed = req !== null && typeof req === "object";
   const prior = keyed ? hungUpDecided.get(req) : undefined;
   if (prior) return prior;
   const owed = { ...row, tx: `batch-hangup:${randomUUID()}`, wire: BATCH_WIRE };
-  const credit = forgiven === true && lastingEffect !== true && !reason;
+  const credit = forgiven === true && spent === true && lastingEffect !== true && !reason;
   let answer;
   if (credit) {
     const credited = creditHungUpBatchCall(req, receipt).catch(() => "store-failed").then((how) => {

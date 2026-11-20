@@ -40,6 +40,9 @@ const bs = await import("../src/batch-settlement.js");
 const { makeBatchStores, setBatchOffer, BATCH_WIRE } = bs;
 const hungUpBatchCall = bs.hungUpBatchCall;
 const { reserveHangupForgiveness, settleHangupTicket, hangupForgiven, hangupTicketDenial, defHasLastingEffect, _resetHangupForgiveness } = await import("../src/hangup-forgiveness.js");
+const hf = await import("../src/hangup-forgiveness.js");
+// Whether a request's granted ticket was recorded against the budget (its run abandoned).
+const spentOf = (req) => (typeof hf.hangupTicketAbandoned === "function" ? hf.hangupTicketAbandoned(req) : undefined);
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -67,8 +70,9 @@ const until = async (cond, ms = 20_000) => { const t0 = Date.now(); while (Date.
     const decide = (req, o = {}) => hungUpBatchCall(req, receipt, { row: ROW, onCreditRefused: (row, how) => refusedLog.push({ row, how }), ...o });
     const ticket = (req, { ip, priceUsd = 0.002, slug = "uuid", spendsOwnWallet = false } = {}) => reserveHangupForgiveness(req, { keys: [`ip:${ip}`], priceUsd, slug, spendsOwnWallet });
 
-    // A granted ticket on an ordinary route, the close before the first byte:
-    // credited back to the channel, exactly once.
+    // A granted ticket on an ordinary route, the close before the first byte,
+    // its run recorded against the budget: credited back to the channel,
+    // exactly once.
     _resetHangupForgiveness();
     process.env.HANGUP_FORGIVE_KEY_USD = "0.003"; process.env.HANGUP_FORGIVE_GLOBAL_USD = "1";
     {
@@ -76,7 +80,10 @@ const until = async (cond, ms = 20_000) => { const t0 = Date.now(); while (Date.
       const req = reqOn(cid);
       ticket(req, { ip: "10.1.0.1" });
       ok(hangupForgiven(req), "CONTROL: an ordinary route inside the IP's budget holds a granted ticket");
-      const a = decide(req, { forgiven: hangupForgiven(req), lastingEffect: false, reason: null });
+      ok(spentOf(req) === false, "a granted ticket still in flight is not yet counted as an abandoned run");
+      settleHangupTicket(req, { abandoned: true });
+      ok(spentOf(req) === true, "once its buyer left before the first byte the ticket reads as an abandoned run (hangupTicketAbandoned)");
+      const a = decide(req, { forgiven: hangupForgiven(req), spent: spentOf(req), lastingEffect: false, reason: null });
       ok(a.credited === true && !a.row, "a granted ticket, a close before the first byte, an ordinary route: the charge goes back to the channel");
       ok(await a.outcome === "credited" && await chargedOf(cid) === "4000", `by exactly the call's charge (6000 -> ${await chargedOf(cid)})`);
       const b = decide(req, { forgiven: true, lastingEffect: false, reason: null });
@@ -108,6 +115,20 @@ const until = async (cond, ms = 20_000) => { const t0 = Date.now(); while (Date.
       ok(!!other.row?.tx && other.row?.tx !== a.row?.tx, "another request on the same channel gets evidence of its own");
     }
 
+    // A granted ticket that was released, not recorded against the budget
+    // (the close landed inside a settle already sent): the credit would be a
+    // run the budget never counts, so the channel keeps the charge.
+    {
+      const cid = await channel();
+      const req = reqOn(cid);
+      ticket(req, { ip: "10.1.0.8" });
+      settleHangupTicket(req, { abandoned: false });
+      ok(hangupForgiven(req) && spentOf(req) === false, "CONTROL: a granted ticket released at the close is not an abandoned run");
+      const a = decide(req, { forgiven: hangupForgiven(req), spent: spentOf(req), lastingEffect: false, reason: null });
+      await sleep(20);
+      ok(!a.credited && a.row && await chargedOf(cid) === "6000", `a granted ticket that spent no budget keeps the charge on the channel (${await chargedOf(cid)})`);
+    }
+
     // A route whose effect outlives the answer: denied by slug, and kept even
     // where a ticket was granted (a def that pays an outside seller).
     {
@@ -122,7 +143,7 @@ const until = async (cond, ms = 20_000) => { const t0 = Date.now(); while (Date.
       const req2 = reqOn(cid2);
       ticket(req2, { ip: "10.1.0.4", slug: "some-seller-route" });
       ok(hangupForgiven(req2) && defHasLastingEffect({ slug: "some-seller-route", paysThirdPartySeller: true }), "CONTROL: a route paying an outside seller can hold a granted ticket");
-      const b = decide(req2, { forgiven: true, lastingEffect: defHasLastingEffect({ slug: "some-seller-route", paysThirdPartySeller: true }), reason: null });
+      const b = decide(req2, { forgiven: true, spent: true, lastingEffect: defHasLastingEffect({ slug: "some-seller-route", paysThirdPartySeller: true }), reason: null });
       await sleep(20);
       ok(!b.credited && b.row && await chargedOf(cid2) === "6000", "a granted ticket on a route whose effect outlives the answer still keeps the charge");
     }
@@ -140,7 +161,7 @@ const until = async (cond, ms = 20_000) => { const t0 = Date.now(); while (Date.
       const cid3 = await channel();
       const req3 = reqOn(cid3);
       ticket(req3, { ip: "10.1.0.6" });
-      const c = decide(req3, { forgiven: hangupForgiven(req3), lastingEffect: false, reason: "connector stopped waiting" });
+      const c = decide(req3, { forgiven: hangupForgiven(req3), spent: true, lastingEffect: false, reason: "connector stopped waiting" });
       await sleep(20);
       ok(!a.credited && a.row && await chargedOf(cid) === "6000", "a request that never took a ticket keeps the charge");
       ok(hangupTicketDenial(req2) === "disabled" && !b.credited && b.row && await chargedOf(cid2) === "6000", "forgiveness switched off keeps the charge");
@@ -153,7 +174,8 @@ const until = async (cond, ms = 20_000) => { const t0 = Date.now(); while (Date.
       const cid = await channel({ charged: "5000", claimed: "4000" });
       const req = reqOn(cid);
       ticket(req, { ip: "10.1.0.7" });
-      const a = decide(req, { forgiven: hangupForgiven(req), lastingEffect: false, reason: null });
+      settleHangupTicket(req, { abandoned: true });
+      const a = decide(req, { forgiven: hangupForgiven(req), spent: spentOf(req), lastingEffect: false, reason: null });
       ok(await a.outcome === "already-claimed" && refusedLog.length === 1 && refusedLog[0]?.how === "already-claimed" && /^batch-hangup:/.test(refusedLog[0]?.row?.tx) && refusedLog[0]?.row?.wire === BATCH_WIRE, `a credit below the claimed total is refused and handed back once to be booked as owed (${refusedLog.map((r) => r.how)})`);
       decide(req, { forgiven: true, lastingEffect: false, reason: null });
       await sleep(20);
@@ -169,6 +191,38 @@ const until = async (cond, ms = 20_000) => { const t0 = Date.now(); while (Date.
   }
 }
 
+// The reason an owed hang-up row stores, on every rail: the ticket's denial
+// first, so a spent budget is held for review by the refund planner whatever
+// booked the row (a connector that stopped waiting included).
+{
+  const { isRepeatHangup } = await import("./refund-run.js");
+  ok(typeof hf.hangupDebtReason === "function", "src/hangup-forgiveness.js names an owed hang-up row's reason in one place (hangupDebtReason)");
+  if (typeof hf.hangupDebtReason === "function") {
+    _resetHangupForgiveness();
+    process.env.HANGUP_FORGIVE_KEY_USD = "0.003"; process.env.HANGUP_FORGIVE_GLOBAL_USD = "1";
+    const bare = () => ({ header: () => null });
+    const first = bare();
+    reserveHangupForgiveness(first, { keys: ["ip:10.2.0.1"], priceUsd: 0.002, slug: "uuid" });
+    settleHangupTicket(first, { abandoned: true });
+    const repeat = bare();
+    reserveHangupForgiveness(repeat, { keys: ["ip:10.2.0.1"], priceUsd: 0.002, slug: "uuid" });
+    ok(hangupTicketDenial(repeat) === "ip budget", `CONTROL: a repeat hang-up from one IP is denied on its spent budget (${hangupTicketDenial(repeat)})`);
+    const cut = hf.hangupDebtReason(repeat, "connector stopped waiting");
+    ok(cut === "ip budget", `a connector cut-off on a ticket denied on a spent budget keeps the denial as the row's reason (${cut})`);
+    ok(isRepeatHangup({ httpStatus: 499, hangupReason: cut }), "so the refund planner holds that row for review as a repeat hang-up");
+    ok(hf.hangupDebtReason(repeat, null) === "ip budget", "and so does a close before the first byte on the same ticket");
+    const lasting = bare();
+    reserveHangupForgiveness(lasting, { keys: ["ip:10.2.0.2"], priceUsd: 0.002, slug: "attest" });
+    ok(hf.hangupDebtReason(lasting, "connector stopped waiting") === "lasting effect", "a lasting-effect denial outranks the cut-off too");
+    const granted = bare();
+    reserveHangupForgiveness(granted, { keys: ["ip:10.2.0.3"], priceUsd: 0.002, slug: "uuid" });
+    ok(hf.hangupDebtReason(granted, "connector stopped waiting") === "connector stopped waiting" && !isRepeatHangup({ httpStatus: 499, hangupReason: "connector stopped waiting" }), "a granted ticket's cut-off keeps the booking's own reason (an ordinary debt)");
+    ok(hf.hangupDebtReason(granted, null) === "settled in flight" && hf.hangupDebtReason(bare(), null) === "no ticket", "and with no reason: settled in flight on a granted ticket, no ticket without one");
+    _resetHangupForgiveness();
+    delete process.env.HANGUP_FORGIVE_KEY_USD; delete process.env.HANGUP_FORGIVE_GLOBAL_USD;
+  }
+}
+
 // The one caller: src/server.js books a channel hang-up only through
 // hungUpBatchCall, with the request's ticket, the route's lasting effect and
 // the booking's reason, and credits a channel nowhere else.
@@ -176,9 +230,12 @@ const until = async (cond, ms = 20_000) => { const t0 = Date.now(); while (Date.
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   const start = server.indexOf("function recordHangupDebt(");
   const branch = server.slice(server.indexOf("isBatchSettlementRequest(req)) {", start), server.indexOf("} else if (settleReceipt) {", start));
-  ok(/hungUpBatchCall\(req, channelReceipt, \{[\s\S]*forgiven: hangupForgiven\(req\),[\s\S]*lastingEffect: defHasLastingEffect\(def\),[\s\S]*reason,/.test(branch), "recordHangupDebt's channel branch decides with the request's ticket, the route's lasting effect and the booking's reason");
+  ok(/hungUpBatchCall\(req, channelReceipt, \{[\s\S]*forgiven: hangupForgiven\(req\),[\s\S]*spent: hangupTicketAbandoned\(req\),[\s\S]*lastingEffect: defHasLastingEffect\(def\),[\s\S]*reason,/.test(branch), "recordHangupDebt's channel branch decides with the request's ticket, whether its run was counted against the budget, the route's lasting effect and the booking's reason");
   ok(/if \(hung\.credited\) return hung;\s*row = hung\.row;/.test(branch), "and books every hang-up it does not credit through the common owed path");
   ok(!/creditHungUpBatchCall|creditBatchChannel/.test(server), "src/server.js credits a channel nowhere else");
+  const debt = server.slice(start, server.indexOf("\nfunction recordHangupOutcome(", start));
+  ok(/const hangupReason = hangupDebtReason\(req, reason\);/.test(debt) && !/reason \|\| denied/.test(debt), "recordHangupDebt stores the reason hangupDebtReason names (the ticket's denial first), on every rail");
+  ok(/const settle = \(\) => settleHangupTicket\(req, \{ abandoned: clientGoneBeforeFirstByte\(req\) && \(!settleSentWhileConnected\(req\) \|\| isBatchSettlementRequest\(req\)\) \}\);/.test(server), "the dispatcher records a channel run whose buyer left inside the settle call as abandoned (its charge is given back, not repaid)");
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +373,23 @@ try {
   const stale = await call(await late.voucher(ch), "10.77.0.9");
   ok(stale !== 200, `b. the credited channel refuses a voucher on the uncredited total (${stale})`);
   ok((on.log().match(/\[batch\] hang-up on uuid: the charge is given back to the channel/g) || []).length === creditLines0 + 1 && !/channel credit not taken/.test(on.log()), "b. credited exactly once");
+
+  // b2. That credit counted against the IP's forgiveness budget like any
+  //     forgiven hang-up: the same close from the same IP again is denied,
+  //     keeps its charge on the channel and is booked as owed, held for
+  //     review as a repeat hang-up.
+  const late2 = makeChannelBuyer();
+  let release2;
+  const arrived2 = new Promise((resolve) => { holdDepositSettle = { arrived: resolve, release: new Promise((r) => { release2 = r; }) }; });
+  await hangUp(`${on.url}/api/uuid`, { "payment-signature": encodePayment(await late2.deposit(ch, Number(PRICE) * 10)), "x-forwarded-for": IP_B }, arrived2.then(() => sleep(50)));
+  await sleep(100);
+  release2();
+  ok(await until(async () => (await channelRows()).length >= 2), "b2. a second close inside the settle call from the same IP is booked as owed");
+  const rows2 = (await channelRows()).filter((r) => !rows.some((o) => (o.evidence ?? o.tx) === (r.evidence ?? r.tx)));
+  ok(rows2.length === 1 && rows2[0].hangupReason === "ip budget", `b2. under the IP's spent budget, held for review as a repeat hang-up (${JSON.stringify(rows2.map((r) => r.hangupReason))})`);
+  ok((on.log().match(/\[batch\] hang-up on uuid: the charge is given back to the channel/g) || []).length === creditLines0 + 1, "b2. and it is not credited");
+  late2.charged = PRICE;
+  ok(await call(await late2.voucher(ch), "10.77.0.9") === 200, "b2. its channel kept the charge: the next voucher on the charged total is served");
 
   // c. Channels off: a channel payment is never accepted, so no hang-up can
   //    reach the channel branch; the 402 carries no channel accept.
