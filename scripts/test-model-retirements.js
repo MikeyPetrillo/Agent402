@@ -150,5 +150,28 @@ const NOTICE_2026_12_11 = {
     if (r && due(r.until)) { fail++; console.log(`FAIL ${slug}: renders on ${t.model}, retired ${r.until}`); } else pass++;
   }
 }
+// The wiki and docs: a sentence that says an id "is served as itself until"
+// a date names the date RETIRING_MODELS holds, and none is left once that
+// date has passed (the id is then served by its successor).
+{
+  const { RETIRING_MODELS } = await import("../src/tools/llm-gateway-kit.js");
+  const { execFileSync } = await import("node:child_process");
+  const { readFileSync } = await import("node:fs");
+  const root = new URL("..", import.meta.url);
+  const files = execFileSync("git", ["ls-files", "wiki/*.md", "docs/*.md", "*.md"], { cwd: root, encoding: "utf8" }).split("\n").filter((f) => f && f !== "CHANGELOG.md");
+  let seen = 0;
+  for (const f of [...new Set(files)]) {
+    const text = readFileSync(new URL(f, root), "utf8").replace(/\s+/g, " ");
+    for (const m of text.matchAll(/`([\w.\/:-]+)` is served as itself until (?:its upstream expiration on )?(\d{4}-\d{2}-\d{2})/g)) {
+      seen++;
+      const r = RETIRING_MODELS[m[1]];
+      if (!r) { fail++; console.log(`FAIL ${f}: ${m[1]} is "served as itself until ${m[2]}" but RETIRING_MODELS has no entry`); }
+      else if (r.until !== m[2]) { fail++; console.log(`FAIL ${f}: ${m[1]} until ${m[2]}, RETIRING_MODELS ${r.until}`); }
+      else if (now >= Date.parse(`${m[2]}T00:00:00Z`)) { fail++; console.log(`FAIL ${f}: ${m[1]} is still "served as itself until ${m[2]}", a date that has passed: name its successor mapping instead`); }
+      else pass++;
+    }
+  }
+  console.log(`markdown "served as itself until" sentences read: ${seen}`);
+}
 console.log(`${pass} retirement checks clean, ${fail} failing`);
 process.exit(fail ? 1 : 0);

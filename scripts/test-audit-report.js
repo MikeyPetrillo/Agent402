@@ -299,4 +299,13 @@ const full = await call(A, WIN);
   ok(/\/api\/audit-report/.test(src) && (src.match(/\$\{RECEIPT_STORE_DAYS\} days after it was issued/g) || []).length >= 2, "/privacy names the audit report and the kept receipts' retention, read from RECEIPT_STORE_DAYS");
 }
 
+// The wiki page names the refund block as served: listed beside the calls,
+// never netted from the totals, read up to the kit's cap.
+{
+  const { AUDIT_REFUNDS_MAX: cap } = await import("../src/tools/audit-report-kit.js");
+  const wiki = readFileSync(new URL("../wiki/Audit-Report.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  ok(/`report\.refunds`/.test(wiki) && /`netted: false`/.test(wiki) && wiki.includes(`newest ${cap} refund rows`), `wiki/Audit-Report.md names report.refunds, netted: false and the ${cap}-row read`);
+  ok(!/full paid history/.test(wiki) && !/hand to an auditor/.test(wiki), "wiki/Audit-Report.md describes a record of paid calls, not a full history for an auditor");
+}
+
 console.log(`\n${n} passed`);

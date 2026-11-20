@@ -130,5 +130,19 @@ try {
   ok(miss.length === 1 && miss[0] === "PLANTED_NEW_SETTING", `control: a new variable with no purpose line is reported (${miss.join(", ")})`);
 } finally { rmSync(dir, { recursive: true, force: true }); }
 
+// The subsystem rules name the settings their modules added, with the
+// default each module holds (the rules file is what a session reads first).
+{
+  const ops = readFileSync(new URL("../.claude/rules/ops.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+  for (const [name, dflt, file, inSrc] of [
+    ["SOLANA_ACTIVITY_STUCK_SCANS", "3", "src/revenue-live.js", /SOLANA_ACTIVITY_STUCK_SCANS\) \|\| 3\)/],
+    ["UPSTREAM_CALL_DAYS_FLUSH_MS", "60000", "src/upstream-call-days.js", /UPSTREAM_CALL_DAYS_FLUSH_MS\) \|\| 60_000\)/],
+    ["UPSTREAM_CALL_DAYS_FILE", "/data/upstream-call-days.json", "src/upstream-call-days.js", /UPSTREAM_CALL_DAYS_FILE \|\| join\(existsSync\("\/data"\) \? "\/data" : tmpdir\(\), "upstream-call-days\.json"\)/],
+  ]) {
+    ok(inSrc.test(read(file)) && new RegExp(`\`${name}\`[^.;]{0,60}default \`?${dflt.replace(/[./]/g, (c) => `\\${c}`)}`).test(ops), `.claude/rules/ops.md names ${name} with the default ${file} holds (${dflt})`);
+  }
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

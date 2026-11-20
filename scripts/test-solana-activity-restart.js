@@ -7,7 +7,7 @@
 // Two FREE_MODE boots (port 0, read back) share one store directory; stub Solana lanes
 // count every call (scripts/lib/solana-rpc-stub.mjs). No network.
 import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { bootServer } from "./lib/boot-server.js";
 import { makeWorld, startLane, addr } from "./lib/solana-rpc-stub.mjs";
@@ -83,6 +83,28 @@ try {
   ok(st2.solanaHistory?.activityStore?.hits === 1 && st2.solanaHistory.activity?.cold === 0, `the chart came from the stored row (${JSON.stringify(st2.solanaHistory?.activityStore)})`);
   ok(coldReads >= PAYMENTS && head.calls.getSignaturesForAddress + head.calls.getTokenAccountsByOwner === 0, `control: the first boot cost ${coldReads} transaction reads; the second made no account or signature read for the chart`);
   await b.stop();
+
+  // ---- a third boot past the cache TTL: the refresh resumes from the stored
+  // cursors and reads only the payments that are new ----------------------
+  {
+    const body = JSON.parse(readFileSync(stores.SOLANA_ACTIVITY_FILE, "utf8"));
+    body.wallets[WALLET].at = Date.now() - 11 * 60_000; // past the 10-minute cache TTL
+    writeFileSync(stores.SOLANA_ACTIVITY_FILE, JSON.stringify(body));
+    const NEW = 2;
+    world.addPayments(WALLET, NEW, { ageSec: 5, gapSec: 1 });
+    pub.mode = "ok"; keyed.mode = "ok";
+    for (const l of [pub, keyed, head]) l.reset();
+    const c = await boot();
+    ok(c.up, "the third server booted on the same store, its stored chart past the TTL");
+    let html3 = "";
+    for (let i = 0; i < 80; i++) { html3 = await panel(c.base); if (txCard(html3) === PAYMENTS + NEW) break; await sleep(250); }
+    const st3 = await op(c.base);
+    const callers3 = st3.solanaHistory?.callers || {};
+    const reads3 = pub.calls.getTransaction + keyed.calls.getTransaction;
+    ok(txCard(html3) === PAYMENTS + NEW, `the refresh past the TTL adds the ${NEW} new payments (${txCard(html3)})`);
+    ok(!callers3["activity-cold"] && reads3 === NEW, `the refresh resumed from the stored cursors: ${reads3} transaction reads for ${NEW} new payments, no cold read (${Object.keys(callers3).join(",") || "no caller"})`);
+    await c.stop();
+  }
 } finally {
   for (const srv of servers) { try { srv.child.kill("SIGKILL"); } catch { /* already gone */ } }
   for (const l of [pub, keyed, head]) await l.close();

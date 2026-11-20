@@ -73,7 +73,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   writes at most 20 wallets a tick under the lease `solana-activity-store-flush`, prunes hourly to
   `SOLANA_ACTIVITY_STORE_MAX_WALLETS` (default 500) and 35 days, and the drain writes up to 100.
   A cold scan's first `SOLANA_ACTIVITY_COLD_FAST_READS` (default 40) reads do not queue; one scan
-  runs at most `SOLANA_ACTIVITY_SCAN_BUDGET_MS` (default 120000) behind the page.
+  runs at most `SOLANA_ACTIVITY_SCAN_BUDGET_MS` (default 120000) behind the page. A transaction
+  whose read fails in `SOLANA_ACTIVITY_STUCK_SCANS` (default 3) scans in a row is skipped and
+  counted, so one unreadable transaction never holds a wallet's history open.
   `SOLANA_ACTIVITY_STORE=off` is the rollback (state in memory only); an older build ignores the
   rows. Operator view: `solanaHistory.activity`, `.activityStore`, `.backgroundShare` on
   `/api/gateway-status` (`scripts/test-solana-activity-resume.js`, `-restart.js`, `-store-pg.js`).
@@ -84,7 +86,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   which is all there is without a shared store (`shared: false` on the row). The public word stays
   one word. `src/upstream-call-days.js` keeps, for the on-chain data provider, each day's calls by
   caller (the label a module set with `egressCaller`, else the first file of ours on the stack)
-  in the `upstream-call-days` state document, eight days, folded on a timer and at the drain; the
+  in the `upstream-call-days` state document (without a state database the file
+  `UPSTREAM_CALL_DAYS_FILE`, default `/data/upstream-call-days.json`, or the temp directory without
+  a volume), eight days, folded every `UPSTREAM_CALL_DAYS_FLUSH_MS` (default 60000) and at the drain; the
   operator view carries `callersToday` and `history` on that budget's row
   (`scripts/test-upstream-budgets-shared-redis.js`, `scripts/test-upstream-call-days.js`).
 - **Store deadlines:** `src/loop-deadline.js` (`withLoopTimeout`, `withLoopDeadline`, `loopDeadline`)
@@ -271,7 +275,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   on a boot wired as production is). At one replica two sends may go back to back
   (`SQL_SEND_BURST`): a send waits for the send two before it plus two gaps; more replicas keep one
   gap per send; the pacer reads `performance.now()` (`scripts/test-onchain-sql-pacer.js`). The
-  answer is read up to `SQL_READ_MAX_BYTES` (16 MB), past it 502 uncharged (`answerTooLargeError`);
+  answer is read up to `SQL_READ_MAX_BYTES` (16 MB), past it a 502 (`answerTooLargeError`);
   a 408 is a 422 with hint `timed-out`; a fast 502/504 is a 502 to retry; narrow-query 422s carry
   `charged: false` and `upstreamMs`; a Solana-paid call runs under `SVM_SQL_BUDGET_MS` (40 s) on
   both SQL routes. A 2xx from the query service whose body is cut off, empty or
