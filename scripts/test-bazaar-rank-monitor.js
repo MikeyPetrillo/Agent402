@@ -4,6 +4,7 @@
 // and that it keeps and prints nothing about the search.
 //
 //   node scripts/test-bazaar-rank-monitor.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import {
   FLAGSHIPS, WORST_CASE_MS, queryFromName, buildQueries, ourRoutes, isOurs, readReply, parseAck,
@@ -28,14 +29,27 @@ const endpoints = [
 ];
 const top = ["hash", "v1-chat-metered", "base64", "gone", "dup", "uuid", "a", "b", "c", "d", "e", "f"].map((slug, i) => ({ slug, n: 100 - i }));
 const qs = buildQueries(top, endpoints);
-ok(qs.length === FLAGSHIPS.length + 8, `two flagships plus eight by demand (${qs.length})`);
-ok(qs[0].query === "web search" && qs[1].query === "chat completion" && qs[0].flagship && qs[1].flagship, "the fixed flagship queries lead");
-ok(qs.slice(2).every((q) => !q.flagship), "the rest come from demand");
-ok(!qs.slice(2).some((q) => q.slug === "v1-chat-metered"), "a flagship slug in the demand list is not counted twice");
+const F = FLAGSHIPS.length;
+ok(qs.length === F + 8, `the flagships plus eight by demand (${qs.length})`);
+ok(qs[0].query === "web search" && qs[1].query === "chat completion" && qs.slice(0, F).every((q) => q.flagship), "the fixed flagship queries lead");
+// The weather queries buyers type, each pinned to the route that should answer it.
+const pinned = Object.fromEntries(FLAGSHIPS.map((f) => [f.query, f.slug]));
+ok(pinned["weather forecast"] === "weather-daily" && pinned["historical weather"] === "weather-history" && pinned["weather probability"] === "weather-probability", `the weather queries are fixed flagships with their slugs (${JSON.stringify(pinned)})`);
+{
+  const { WEATHER_TOOLS } = await import("../src/tools/weather-kit.js");
+  const { WEATHER_PROBABILITY_TOOLS } = await import("../src/tools/weather-probability-kit.js");
+  const bySlug = new Map([...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS].map((t) => [t.slug, t]));
+  for (const f of FLAGSHIPS.filter((x) => /weather/.test(x.query))) {
+    const t = bySlug.get(f.slug);
+    ok(t && t.description.toLowerCase().startsWith(f.query), `${f.slug}: its description leads with the words of "${f.query}" (${t?.description.slice(0, 40)})`);
+  }
+}
+ok(qs.slice(F).every((q) => !q.flagship), "the rest come from demand");
+ok(!qs.slice(F).some((q) => q.slug === "v1-chat-metered"), "a flagship slug in the demand list is not counted twice");
 ok(!qs.some((q) => q.slug === "gone"), "a slug the catalog no longer lists is skipped");
 ok(!qs.some((q) => q.slug === "dup"), "a slug that phrases like an earlier one is kept once");
-ok(qs.slice(2).map((q) => q.slug).join(",") === "hash,base64,uuid,a,b,c,d,e", `demand order follows the ranking (${qs.slice(2).map((q) => q.slug).join(",")})`);
-ok(buildQueries([], endpoints).length === 2, "no demand data still checks the flagships");
+ok(qs.slice(F).map((q) => q.slug).join(",") === "hash,base64,uuid,a,b,c,d,e", `demand order follows the ranking (${qs.slice(F).map((q) => q.slug).join(",")})`);
+ok(buildQueries([], endpoints).length === F, "no demand data still checks the flagships");
 
 // ---- ours: exact host AND a listed route -----------------------------------
 const routes = ourRoutes(endpoints);

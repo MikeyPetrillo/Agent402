@@ -8,8 +8,9 @@
 // which separates "our metadata does not match" from "our routes match but do
 // not come back", two different fixes on our side.
 //
-// The query list: two fixed flagship queries (web search, chat completion),
-// then the next eight tools by our own demand, read from the public
+// The query list: the fixed flagship queries (web search, chat completion,
+// and the three weather queries: weather forecast, historical weather,
+// weather probability), then the next eight tools by our own demand, read from the public
 // `topTools` ranking on /api/stats and phrased as each tool's catalog name
 // from /api/pricing.
 //
@@ -41,6 +42,9 @@ export const OUR_HOST = "agent402.tools";
 export const FLAGSHIPS = Object.freeze([
   Object.freeze({ query: "web search", slug: "search" }),
   Object.freeze({ query: "chat completion", slug: "v1-chat-metered" }),
+  Object.freeze({ query: "weather forecast", slug: "weather-daily" }),
+  Object.freeze({ query: "historical weather", slug: "weather-history" }),
+  Object.freeze({ query: "weather probability", slug: "weather-probability" }),
 ]);
 export const DEMAND_QUERIES = 8;
 

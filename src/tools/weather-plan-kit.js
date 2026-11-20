@@ -5,7 +5,7 @@
 // Both take lat/lon or a place name (src/tools/weather-kit.js).
 import { markEndsAtCeiling } from "../run-ceiling.js";
 import { OPEN_METEO_ATTRIBUTION } from "../data-attribution.js";
-import { bad, openMeteoJson, resolveLocation, locationFields, tempUnitOf, LOCATION_PROPERTIES } from "./weather-kit.js";
+import { bad, openMeteoJson, resolveLocation, locationFields, tempUnitOf, LOCATION_PROPERTIES, cacheNote } from "./weather-kit.js";
 
 export const PLAN_SOURCE = "computed from Open-Meteo forecast data, api.open-meteo.com (CC BY 4.0)";
 export const MAX_RULES = 8;
@@ -193,7 +193,7 @@ export const WEATHER_PLAN_TOOLS = [
     category: "data",
     price: "$0.004",
     description:
-      `Find the hours in the next 1-16 days that meet your limits for an outdoor plan: rain chance, rain amount, wind, gusts, a temperature range, daylight only. Returns each stretch of consecutive qualifying hours from now on, longest first, with its temperature range, rain chance and wind, or names the limit that ruled out the most hours when none fits. Any place by coordinates or name. ?place=Austin, TX&days=10&minHours=4&maxPrecipProbability=20. ${OPEN_METEO_ATTRIBUTION}`,
+      `Find hours in the next 1-16 days that meet your limits for an outdoor plan: rain chance, rain amount, wind, gusts, a temperature range, daylight only. Returns each run of qualifying hours from now on, longest first, with its temperature range, rain chance and wind, or names the limit that ruled out the most hours when none fits. Any place by coordinates or name. ${cacheNote("forecast")} ?place=Austin, TX&days=10&minHours=4&maxPrecipProbability=20. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "forecast", "window", "planning", "outdoor", "schedule"],
     discovery: {
       input: { lat: 30.2672, lon: -97.7431, days: 10, minHours: 4, maxPrecipProbability: 30 },
@@ -261,7 +261,7 @@ export const WEATHER_PLAN_TOOLS = [
     category: "data",
     price: "$0.003",
     description:
-      `Check the hourly forecast against your own rules: for each rule (a variable, a comparison, a value) get whether it is met in the next 1-168 hours, the first and last hour it is met, how many hours, and the highest or lowest value. Up to ${MAX_RULES} rules over temperature, feels-like, humidity, precipitation and its probability, snowfall, wind, gusts, cloud cover and UV, for example frost (temperature < 0) or gusts > 60. Any place by coordinates or name. ${OPEN_METEO_ATTRIBUTION}`,
+      `Check the hourly forecast against your own rules: for each rule (variable, comparison, value) get whether it is met in the next 1-168 hours, the first and last hour it is met, how many hours, and the highest or lowest value. Up to ${MAX_RULES} rules over temperature, feels-like, humidity, precipitation and its probability, snowfall, wind, gusts, cloud cover and UV, such as frost (temperature < 0). Any place by coordinates or name. ${cacheNote("forecast")} ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "forecast", "threshold", "frost", "wind", "alert"],
     discovery: {
       bodyType: "json",

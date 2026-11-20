@@ -17,7 +17,7 @@
 // No field compares them and no text rates one against the other.
 import { markEndsAtCeiling } from "../run-ceiling.js";
 import { OPEN_METEO_ATTRIBUTION } from "../data-attribution.js";
-import { bad, openMeteoJson, resolveLocation, requireCoords, locationFields, tempUnitOf, LOCATION_PROPERTIES } from "./weather-kit.js";
+import { bad, openMeteoJson, resolveLocation, requireCoords, locationFields, tempUnitOf, LOCATION_PROPERTIES, cacheNote } from "./weather-kit.js";
 
 export const ENSEMBLE_SOURCE = "computed from Open-Meteo ensemble data, ensemble-api.open-meteo.com (CC BY 4.0)";
 export const ENSEMBLE_METHOD = "Each probability is the share of ensemble members whose value for the date meets the condition. Raw model output at the model grid point, not calibrated to a weather station.";
@@ -317,7 +317,7 @@ export const WEATHER_PROBABILITY_TOOLS = [
     category: "data",
     price: "$0.01",
     description:
-      `Probability that a day's weather meets a condition, from up to 82 ensemble members (ECMWF IFS and NOAA GEFS): a high, low, rain total or wind past a threshold or inside a range. Returns the member share, per-model counts and the spread. Any place by coordinates or name, up to ${FORECAST_DAYS_AHEAD} days ahead (all 82 to about 13 days, then NOAA's 31). Raw model output, not station-calibrated. ?place=Chicago&variable=temperature_max&units=fahrenheit&op=gte&value=40. ${OPEN_METEO_ATTRIBUTION}`,
+      `Weather probability: the chance a day's high, low, rain total or wind is past a threshold or in a range, from up to 82 ensemble members (ECMWF IFS and NOAA GEFS). Returns the member share, per-model counts, spread. Any place by coordinates or name, up to ${FORECAST_DAYS_AHEAD} days ahead (all 82 to about 13 days, then NOAA's 31). Raw model output, not station-calibrated. ${cacheNote("ensemble")} ?place=Chicago&variable=temperature_max&units=fahrenheit&op=gte&value=40. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "probability", "ensemble", "forecast", "temperature", "prediction-market"],
     discovery: {
       input: { lat: 41.8781, lon: -87.6298, variable: "temperature_max", units: "fahrenheit", op: ">=", value: 40 },
@@ -385,7 +385,7 @@ export const WEATHER_PROBABILITY_TOOLS = [
     category: "data",
     price: "$0.02",
     description:
-      `Forecast probability for every bracket of a weather market. Send the place, the date and your brackets (label, min, max and the market price you hold for each): each bracket comes back with the share of up to 82 members (ECMWF IFS and NOAA GEFS) that land in it, your price beside it as sent. You supply brackets and prices; this tool reads no market feed and gives facts only, no rating or recommendation. Raw model output, not station-calibrated. ${OPEN_METEO_ATTRIBUTION}`,
+      `Forecast probability for every bracket of a weather market. Send the place, the date and your brackets (label, min, max and the market price you hold for each): each comes back with the share of up to 82 members (ECMWF IFS and NOAA GEFS) in it, your price beside it. You supply brackets and prices; this tool reads no market feed and gives facts only, no rating or recommendation. Raw model output, not station-calibrated. ${cacheNote("ensemble")} ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "probability", "ensemble", "prediction-market", "brackets", "temperature"],
     discovery: {
       bodyType: "json",
@@ -473,7 +473,7 @@ export const WEATHER_PROBABILITY_TOOLS = [
     category: "data",
     price: "$0.10",
     description:
-      `One date, many cities: per city, the ensemble spread of a daily weather value (up to 82 members, ECMWF IFS and NOAA GEFS) and the forecast probability of each bracket on a ladder. Default: 13 large US cities, or send up to ${MAX_BOARD_CITIES} by name or lat/lon, with your own brackets and the market prices you hold, shown beside each probability. This tool reads no market feed and gives facts only, no rating or recommendation. Raw model output, not station-calibrated. ${OPEN_METEO_ATTRIBUTION}`,
+      `One date, many cities: per city, the ensemble spread of a daily weather value (up to 82 members, ECMWF IFS and NOAA GEFS) and the probability of each bracket on a ladder. Default: 13 large US cities, or send up to ${MAX_BOARD_CITIES} by name or lat/lon, with your own brackets and market prices, shown beside each probability. It reads no market feed and gives facts only, no rating or recommendation. Raw model output, not station-calibrated. ${cacheNote("ensemble")} ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "probability", "ensemble", "prediction-market", "cities", "temperature", "board"],
     discovery: {
       bodyType: "json",
