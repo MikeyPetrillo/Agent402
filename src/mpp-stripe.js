@@ -36,6 +36,7 @@ import { createHmac } from "node:crypto";
 import { mppProblem, markMppProblem, sendMppProblem } from "./mpp-problem.js";
 import { chargeCancelledForClientGone, markSettleSent, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { challengeLifeShortfall, challengeLifeReason, presentChallengeWindow } from "./challenge-life.js";
+import { mppChallengesSuppressed } from "./mpp-fallback.js";
 
 export const STRIPE_MIN_USD = 0.50; // SPT card minimum (docs.stripe.com/payments/machine)
 const CHALLENGE_TIMEOUT_SECONDS = 300;
@@ -260,7 +261,8 @@ export function createStripeChallengeAppender({ realm, secretKey, priceFor } = {
     const origWriteHead = res.writeHead;
     res.writeHead = function stripeWriteHead(...args) {
       try {
-        if (res.statusCode === 402) {
+        // The same question the evm and tempo appenders ask (src/mpp-fallback.js).
+        if (res.statusCode === 402 && !mppChallengesSuppressed(req)) {
           const item = typeof priceFor === "function" ? priceFor(req.method, req.path, req) : null;
           const priceUsd = Number(item?.priceUsd);
           if (item && !item.identityBound && !item.paysThirdParty && priceUsd >= STRIPE_MIN_USD) {

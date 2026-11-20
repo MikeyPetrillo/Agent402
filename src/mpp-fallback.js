@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { mppOffersWithheldFor, mppOfferGateStatus } from "./mpp-offer-gate.js";
 // "Stop offering this client an MPP challenge so it falls through to x402."
 //
 // Companion to src/mpp-evm-domain.js. Once a client has PROVEN (by a signature
@@ -110,12 +111,20 @@ export function noteWrongDomainSigner(req) {
   logLine("flagged", { client: clientTag(key), remembered: true, ttlMs: TTL_MS, budget: MAX_SUPPRESSED, live: flagged.size });
 }
 
-/** Should this request's 402 carry MPP challenges? Decided ONCE per request:
- *  the evm and tempo hooks both ask, and they must agree AND must not spend
- *  two of the response budget between them. */
+/** Should this request's 402 be sent WITHOUT MPP challenges? The one question
+ *  the evm, tempo and card appenders ask, answering both rules: the
+ *  wrong-domain steering below, then the User-Agent gate
+ *  (src/mpp-offer-gate.js). Each is decided once per request. */
 export function mppChallengesSuppressed(req) {
-  if (!evmDomainFallbackEnabled()) return false;
   if (!req) return false;
+  return wrongDomainSuppressed(req) || mppOffersWithheldFor(req);
+}
+
+/** The wrong-domain steering. Decided ONCE per request: the appenders all
+ *  ask, and they must agree AND must not spend more than one of the response
+ *  budget between them. */
+function wrongDomainSuppressed(req) {
+  if (!evmDomainFallbackEnabled()) return false;
   if (req.mppSuppressChallenges) return true;
   if (typeof req.__mppSuppressDecision === "boolean") return req.__mppSuppressDecision;
 
@@ -158,5 +167,5 @@ export function mppFallbackStatus() {
   const now = Date.now();
   let live = 0;
   for (const v of flagged.values()) if (v.expiresAt > now && v.remaining > 0) live++;
-  return { enabled: evmDomainFallbackEnabled(), suppressedClients: live, ttlMs: TTL_MS, maxResponses: MAX_SUPPRESSED };
+  return { enabled: evmDomainFallbackEnabled(), suppressedClients: live, ttlMs: TTL_MS, maxResponses: MAX_SUPPRESSED, offerGate: mppOfferGateStatus() };
 }
