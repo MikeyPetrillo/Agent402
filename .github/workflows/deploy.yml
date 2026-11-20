@@ -867,13 +867,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Full history: scripts/test-page-dates.js dates every page module
@@ -1081,13 +1074,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1220,7 +1206,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1416,7 +1401,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1564,13 +1548,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1722,13 +1699,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1824,7 +1794,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1949,7 +1918,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2057,7 +2025,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2219,13 +2186,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2425,7 +2385,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2699,7 +2658,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2775,7 +2733,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2857,20 +2814,47 @@ jobs:
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
         run: bash scripts/ci-apt-install.sh --playwright-chromium
-      - name: Start server in free mode
+      # The CI data keys reach THIS step alone: the server it boots is the only
+      # process that reads them (scripts/test-ci-secretless-install.js). The CI
+      # CoinGecko key (never the production key) goes in as COINGECKO_API_KEY on
+      # the pro tier, with the strict sweep's per-run read cap as the server's
+      # day ceiling (a fresh server's day is this run) and its minute pacing
+      # (CG_RUN_READ_CAP, CG_RUN_MAX_PER_MIN in scripts/test-non-metered-examples.js).
+      # A fork PR gets no secrets and boots keyless. The log and the later steps
+      # get the words keyed or keyless, never a value.
+      - name: Start server in free mode (the strict sweep's server; the CI data keys)
+        env:
+          OPEN_METEO_API_KEY: ${{ secrets.OPEN_METEO_API_KEY }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_CI_API_KEY }}
+          COINGECKO_API_TIER: pro
+          COINGECKO_DAILY_MAX: "40"
+          COINGECKO_MAX_PER_MIN: "30"
         run: |
+          cg=keyless; if [ -n "$COINGECKO_API_KEY" ]; then cg=keyed; fi
+          om=keyless; if [ -n "$OPEN_METEO_API_KEY" ]; then om=keyed; fi
+          echo "CoinGecko: $cg; Open-Meteo: $om"
+          echo "NON_METERED_CG_MODE=$cg" >> "$GITHUB_ENV"
+          echo "NON_METERED_OM_MODE=$om" >> "$GITHUB_ENV"
+          # The run's own operator token: the CoinGecko check after the sweeps
+          # reads the server's read count from the operator view with it.
+          token=$(openssl rand -hex 24)
+          echo "::add-mask::$token"
+          echo "SWEEP_OPERATOR_TOKEN=$token" >> "$GITHUB_ENV"
+          # One failure log for this run, read by the strict sweep and the check.
+          echo "UPSTREAM_FAILURE_LOG=$RUNNER_TEMP/upstream-failures.jsonl" >> "$GITHUB_ENV"
           # Raise the MCP rate limit so the full-catalog connector test can sweep
           # every tool (production keeps the default 20/min, 120/hr).
           # The examples that fetch this server's own /samples/ and /fixtures/ files are
           # answered by this server, never production (own-examples-preload.js).
           # Failed upstream requests are logged for the strict sweep's outage
           # check (upstream-failure-log-preload.js, scripts/lib/upstream-outage.js).
+          AGENT402_OPERATOR_TOKEN="$token" UPSTREAM_FAILURE_LOG="$RUNNER_TEMP/upstream-failures.jsonl" \
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
             X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node --import ./scripts/lib/own-examples-preload.js --import ./scripts/lib/upstream-failure-log-preload.js src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       - name: Crypto-kit tests (CoinGecko price/market/history/trending/global — keyless live API)
-        # Keyless on purpose: the job-scope key is for the sampled sweep only,
-        # and these live calls ran against the monthly Demo quota on every push.
+        # Keyless on purpose: the CI key reaches the sweep's server only, and
+        # these live calls would draw on its quota on every push.
         env:
           COINGECKO_API_KEY: ""
         run: node scripts/test-crypto-kit.js
@@ -2925,6 +2909,14 @@ jobs:
 
       - name: Every tool responds to its own example (all ~1070 endpoints)
         run: TEST_ALL_SKIP_STRICT_COVERED=1 TARGET_URL=http://127.0.0.1:3000 node scripts/test-all.js
+
+      # After both sweeps: the server's own count of CoinGecko reads against
+      # the per-run cap. A spent cap or a keyed read refused 429 fails the run
+      # here even where the lenient sweep tolerated the answer; the count it
+      # prints is the measurement the cap is tuned from.
+      - name: CoinGecko reads stay under the per-run cap (keyed runs)
+        if: ${{ !cancelled() }}
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-non-metered-examples.js --coingecko-run-check
 
       - name: CSS tokens resolve (every :root custom property must actually resolve in a real browser, not just exist as text)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-css-tokens-resolve.js
@@ -2983,7 +2975,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -3270,13 +3261,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -3357,13 +3341,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # Raises CoinGecko off the 30/min keyless budget shared per runner IP.
-      # It does NOT make the calls free: the Demo plan has a monthly quota and
-      # CI would burn it on every push, which is the trap the Brave notes in
-      # test-non-metered-examples.js already record. So the sweep still SAMPLES
-      # the family (COINGECKO_SLUGS there). Key plus sampling: the two live
-      # calls per run are reliable, and the quota lasts.
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -3499,7 +3476,6 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
