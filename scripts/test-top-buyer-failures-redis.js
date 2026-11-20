@@ -14,9 +14,13 @@
 //   D   watches another payer with no failures: reads ok
 //   E   a store that refuses the connection: its own failures still raise
 //       the word, from this process alone, inside a bounded wait
-//   F1  serves one busy refusal of onchain-sql for another top payer:
-//       onchainSqlBusy reads ok (one refusal is a buyer told to retry)
-//   F   serves three, their first and last ONCHAIN_SQL_BUSY_SPAN_MS apart:
+//   I   under the default busy rule (neither setting set) serves one busy
+//       refusal of onchain-sql for another top payer: onchainSqlBusy reads
+//       alert; J, a new process that served nothing, reads alert from the
+//       shared store on that one refusal
+//   F1  under a rule set to a sustained stretch (ONCHAIN_SQL_BUSY_MIN=3,
+//       ONCHAIN_SQL_BUSY_SPAN_MS=1000) serves one: onchainSqlBusy reads ok
+//   F   under that rule serves three, their first and last a span apart:
 //       onchainSqlBusy reads alert; G, a new process that served nothing,
 //       reads alert from the shared store with F's refusals (their kind is
 //       kept in the shared window); H, watching only the first payer, reads ok
@@ -44,8 +48,8 @@ if (process.env.TOP_BUYER_CHILD) {
   T.setTopBuyers(job.top);
   const t0 = Date.now();
   for (let i = 0; i < (job.fail || 0); i++) T.noteVerifiedPaidOutcome({ payer: PAYER, slug: "onchain-sql", status: 502, error: `we said ${i}`, at: t0 + i });
-  // Busy refusals spaced BUSY_GAP_MS apart, the last at t0: the sustained
-  // rule reads their first and last against ONCHAIN_SQL_BUSY_SPAN_MS.
+  // Busy refusals spaced BUSY_GAP_MS apart, the last at t0: a rule set to a
+  // sustained stretch reads their first and last against ONCHAIN_SQL_BUSY_SPAN_MS.
   const nb = job.busy || 0;
   for (let i = 0; i < nb; i++) T.noteVerifiedPaidOutcome({ payer: BUSY_PAYER, slug: "onchain-sql", status: 429, kind: T.SQL_BUSY_KIND, error: "busy", at: t0 - (nb - 1 - i) * BUSY_GAP_MS });
   await T._flushTopBuyerWrites();
@@ -69,12 +73,15 @@ if (!String(process.env.REDIS_URL || "").trim()) {
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const prefix = `top-buyer-${randomBytes(5).toString("hex")}`;
-function container(job, { redisUrl = process.env.REDIS_URL, timeoutMs = 30_000, prefixOverride = null } = {}) {
+// The busy rule a container runs under: a sustained stretch unless a case asks for the default one.
+const SUSTAINED = { ONCHAIN_SQL_BUSY_MIN: "3", ONCHAIN_SQL_BUSY_SPAN_MS: "1000" };
+const DEFAULT_RULE = { ONCHAIN_SQL_BUSY_MIN: "", ONCHAIN_SQL_BUSY_SPAN_MS: "" };
+function container(job, { redisUrl = process.env.REDIS_URL, timeoutMs = 30_000, prefixOverride = null, busyRule = SUSTAINED } = {}) {
   return new Promise((resolve) => {
     const env = { ...process.env, TOP_BUYER_CHILD: JSON.stringify(job), SHARED_LIMITS_PREFIX: prefixOverride || prefix, REDIS_URL: redisUrl, SHARED_LIMITS_OP_MS: "1000",
       // Short windows, so this run's keys expire within minutes.
       TOP_BUYER_FAIL_WINDOW_MS: "60000", TOP_BUYER_FAIL_HOLD_MS: "60000", TOP_BUYER_FAIL_MIN: "3",
-      ONCHAIN_SQL_BUSY_MIN: "3", ONCHAIN_SQL_BUSY_SPAN_MS: "1000" };
+      ...busyRule };
     delete env.SHARED_LIMITS; delete env.STATE_DATABASE_URL;
     const child = spawn(process.execPath, [SELF], { env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "";
@@ -106,10 +113,16 @@ ok(d.out?.pub?.status === "ok", `D: another top payer with no failures reads ok 
 const e = await container({ top: [PAYER], fail: 3 }, { redisUrl: "redis://127.0.0.1:1" });
 ok(e.out?.pub?.status === "alert" && e.out.full?.sharedStore === "unread" && e.out.ms < 5_000, `E: with the store refusing, its own failures still read alert inside a bounded wait (${show(e)}, ${e.out?.ms} ms)`);
 
-// onchainSqlBusy reads the same per-payer window, by the refusal's kind, and
-// only a sustained stretch of refusals raises it.
+// onchainSqlBusy reads the same per-payer window, by the refusal's kind.
+// Under the default rule one refusal raises it, on the process that served
+// it and on one that served nothing.
+const one = await container({ top: [BUSY_PAYER], busy: 1 }, { prefixOverride: `${prefix}-default`, busyRule: DEFAULT_RULE });
+ok(one.out?.mode === "redis" && one.out.busyPub?.status === "alert" && one.out.busyFull?.rule?.refusals === 1 && one.out.busyFull.rule.spanSeconds === 0, `I: under the default rule one busy refusal reads alert (${JSON.stringify(one.out?.busyFull)})`);
+const seen = await container({ top: [BUSY_PAYER], busy: 0 }, { prefixOverride: `${prefix}-default`, busyRule: DEFAULT_RULE });
+ok(seen.out?.busyPub?.status === "alert" && seen.out.busyFull?.sharedStore === "on" && seen.out.busyFull.alerting?.[0]?.refusals?.length === 1, `J: a process that served none reads alert from the shared store on that one refusal (${JSON.stringify(seen.out?.busyFull?.alerting)})`);
+// Under a rule set to a sustained stretch only such a stretch raises it.
 const f1 = await container({ top: [BUSY_PAYER], busy: 1 }, { prefixOverride: `${prefix}-single` });
-ok(f1.out?.busyPub?.status === "ok", `F1: one busy refusal reads ok (${JSON.stringify(f1.out?.busyFull)})`);
+ok(f1.out?.busyPub?.status === "ok", `F1: under a rule of three over a span, one busy refusal reads ok (${JSON.stringify(f1.out?.busyFull)})`);
 const f = await container({ top: [PAYER, BUSY_PAYER], busy: 3 });
 ok(f.out?.busyPub?.status === "alert" && f.out.busyFull?.alerting?.length === 1 && f.out.busyFull.alerting[0].rank === 2, `F: three busy refusals over the span read onchainSqlBusy alert, for that payer only; A's 502s for the other payer are not busy refusals (${JSON.stringify(f.out?.busyFull?.alerting)})`);
 const g = await container({ top: [PAYER, BUSY_PAYER], busy: 0 });

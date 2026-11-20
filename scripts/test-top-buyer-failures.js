@@ -31,14 +31,16 @@
 // Busy half (onchainSqlBusy): with two queries held in flight by the stubbed
 // query service, a non-top payer's third query gets the busy 429, is counted
 // as other on the operator's daily counts and leaves the word ok; the top
-// payer's gets the same 429 and is counted as topBuyer; under the boot's rule
-// (ONCHAIN_SQL_BUSY_MIN=2, no span) its first refusal leaves the word ok and
-// its second raises it, the public body carries the word only, the operator
-// view names the short payer and rank, and the word clears after its hold.
-// In the module half the default rule is sustained refusals: three inside
-// the window, the first and last a minute or more apart, raise the word; one
-// refusal, or a burst inside the minute, does not; any other failure or a
-// non-top payer's refusal does not.
+// payer's gets the same 429 and is counted as topBuyer, and under the default
+// rule (neither setting set) that first refusal raises the word, the public
+// body carries the word only, the operator view names the short payer and
+// rank, and the word clears after its hold.
+// In the module half the default rule is one refusal: a top payer's first
+// busy refusal raises the word, alone, in a burst or once every eleven
+// minutes; any other failure or a non-top payer's refusal does not. With
+// ONCHAIN_SQL_BUSY_MIN and ONCHAIN_SQL_BUSY_SPAN_MS set to a sustained
+// stretch (three refusals, a minute apart) one refusal or a burst inside the
+// minute leaves it ok and the stretch raises it.
 //
 //   node scripts/test-top-buyer-failures.js     (offline)
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -224,32 +226,58 @@ const SPEND_EVM = [...OUR_EVM_WALLETS].find((w) => w.startsWith("0x7706"));
   ok((await T.onchainSqlBusyStatus({ now: t0 + 30, env })).status === "ok", "a non-top payer's busy refusal leaves it ok");
   T.noteVerifiedPaidOutcome({ payer: TOP, slug: "onchain-sql", status: 429, kind: "something-else", at: t0 + 40 }, env);
   ok((await T.onchainSqlBusyStatus({ now: t0 + 50, env })).status === "ok", "an unknown kind is not a busy refusal");
-  // One refusal, then a burst inside the minute: a buyer told to retry, not held off.
   const busy = (at, payer = TOP) => T.noteVerifiedPaidOutcome({ payer, slug: "onchain-sql", status: 429, kind: T.SQL_BUSY_KIND, error: "busy", at }, env);
   const s0 = t0 + 60_000;
+  // The default rule: a top payer's first busy refusal raises the word.
+  ok(T.sqlBusyMin({}) === 1 && T.sqlBusySpanMs({}) === 0, `by default one refusal is enough and no span is asked for (${T.sqlBusyMin({})}, ${T.sqlBusySpanMs({})} ms)`);
   busy(s0);
-  ok((await T.onchainSqlBusyStatus({ now: s0 + 1, env })).status === "ok", "one busy refusal of a top payer leaves onchainSqlBusy ok");
+  const pub1 = await T.onchainSqlBusyStatus({ now: s0 + 1, env });
+  ok(pub1.status === "alert" && Object.keys(pub1).join() === "status", `one busy refusal of a top payer reads alert, the word alone in public (${JSON.stringify(pub1)})`);
+  const full1 = await T.onchainSqlBusyStatus({ now: s0 + 1, env, full: true });
+  const a1 = full1.alerting?.[0];
+  ok(full1.alerting?.length === 1 && a1.payer === shortPayer(TOP) && a1.rank === 2 && a1.refusals.length === 1 && a1.refusals[0].status === 429 && a1.refusals[0].at === new Date(s0).toISOString() && !JSON.stringify(full1).includes(TOP), `the operator view names the short payer, its rank and the refusal time, never the address (${JSON.stringify(a1)})`);
+  ok(full1.rule?.refusals === 1 && full1.rule?.spanSeconds === 0 && full1.rule?.windowMinutes === 10 && full1.rule?.holdMinutes === 20, `the operator view states the rule in force (${JSON.stringify(full1.rule)})`);
+  ok((await T.onchainSqlBusyStatus({ now: s0 + 20 * MIN, env })).status === "alert" && (await T.onchainSqlBusyStatus({ now: s0 + 20 * MIN + 1, env })).status === "ok", "it holds TOP_BUYER_FAIL_HOLD_MS after that refusal, then clears");
+  ok((await T.onchainSqlBusyStatus({ now: s0 + 1, env: { TOP_BUYER_FAIL_HOLD_MS: "0" } })).status === "ok", "the hold follows TOP_BUYER_FAIL_HOLD_MS");
+  // Refusals spread wide: one every eleven minutes for five hours raises it from the first and keeps it raised.
+  T._resetTopBuyerFailures();
+  T.setTopBuyers([evm(1), TOP], t0);
+  const spread = [];
+  for (let i = 0; i < 28; i++) { busy(t0 + i * 11 * MIN); spread.push((await T.onchainSqlBusyStatus({ now: t0 + i * 11 * MIN + 1, env })).status); }
+  ok(spread.every((w) => w === "alert"), `a refusal every eleven minutes for five hours reads alert from the first one on (${[...new Set(spread)].join(",")}, ${spread.length} refusals)`);
+  // Six in a row, ten seconds apart: alert at each.
+  T._resetTopBuyerFailures();
+  T.setTopBuyers([evm(1), TOP], t0);
+  const row6 = [];
+  for (let i = 0; i < 6; i++) { busy(t0 + i * 10_700); row6.push((await T.onchainSqlBusyStatus({ now: t0 + i * 10_700 + 1, env })).status); }
+  ok(row6.every((w) => w === "alert"), `six refusals in a row read alert at each (${row6.join(",")})`);
+
+  // ---- a rule set to a sustained stretch: three refusals, the first and last a minute apart ----
+  const sustained = { ONCHAIN_SQL_BUSY_MIN: "3", ONCHAIN_SQL_BUSY_SPAN_MS: "60000" };
+  const word = async (now, extra = {}) => (await T.onchainSqlBusyStatus({ now, env: { ...sustained, ...extra } })).status;
+  T._resetTopBuyerFailures();
+  T.setTopBuyers([evm(1), TOP], t0);
+  busy(s0);
+  ok(await word(s0 + 1) === "ok", "under that rule one busy refusal of a top payer leaves onchainSqlBusy ok");
   busy(s0 + 2_000); busy(s0 + 4_000); busy(s0 + 30_000);
-  ok((await T.onchainSqlBusyStatus({ now: s0 + 30_001, env })).status === "ok", "four refusals inside 30 seconds (one burst) leave it ok");
+  ok(await word(s0 + 30_001) === "ok", "four refusals inside 30 seconds (one burst) leave it ok");
   // Sustained: a third-or-later refusal a minute or more after the first inside the window.
   const at = s0 + 61_000;
   busy(at);
-  const pub = await T.onchainSqlBusyStatus({ now: at + 1, env });
-  ok(pub.status === "alert" && Object.keys(pub).join() === "status", `refusals a minute apart inside the window read alert, the word alone in public (${JSON.stringify(pub)})`);
-  const full = await T.onchainSqlBusyStatus({ now: at + 1, env, full: true });
+  ok(await word(at + 1) === "alert", "refusals a minute apart inside the window read alert");
+  const full = await T.onchainSqlBusyStatus({ now: at + 1, env: sustained, full: true });
   const a = full.alerting?.[0];
-  ok(full.alerting?.length === 1 && a.payer === shortPayer(TOP) && a.rank === 2 && a.refusals.length === 5 && a.refusals.every((r) => r.status === 429) && a.refusals[4].at === new Date(at).toISOString() && !JSON.stringify(full).includes(TOP), `the operator view names the short payer, its rank and the refusal times, never the address (${JSON.stringify(a)})`);
-  ok(full.rule?.refusals === 3 && full.rule?.spanSeconds === 60 && full.rule?.windowMinutes === 10 && full.rule?.holdMinutes === 20, `the operator view states the rule (${JSON.stringify(full.rule)})`);
-  ok((await T.onchainSqlBusyStatus({ now: at + 20 * MIN, env })).status === "alert" && (await T.onchainSqlBusyStatus({ now: at + 20 * MIN + 1, env })).status === "ok", "it holds TOP_BUYER_FAIL_HOLD_MS after the refusal that met the rule, then clears");
-  ok((await T.onchainSqlBusyStatus({ now: at + 1, env: { TOP_BUYER_FAIL_HOLD_MS: "0" } })).status === "ok", "the hold follows TOP_BUYER_FAIL_HOLD_MS");
-  ok((await T.onchainSqlBusyStatus({ now: at + 1, env: { ONCHAIN_SQL_BUSY_MIN: "6" } })).status === "ok" && (await T.onchainSqlBusyStatus({ now: s0 + 4_001, env: { ONCHAIN_SQL_BUSY_SPAN_MS: "0" } })).status === "alert",
+  ok(full.alerting?.length === 1 && a.payer === shortPayer(TOP) && a.rank === 2 && a.refusals.length === 5 && a.refusals.every((r) => r.status === 429) && a.refusals[4].at === new Date(at).toISOString() && !JSON.stringify(full).includes(TOP), `the operator view lists the refusals of the stretch (${JSON.stringify(a)})`);
+  ok(full.rule?.refusals === 3 && full.rule?.spanSeconds === 60 && full.rule?.windowMinutes === 10 && full.rule?.holdMinutes === 20, `and states the rule as set (${JSON.stringify(full.rule)})`);
+  ok(await word(at + 20 * MIN) === "alert" && await word(at + 20 * MIN + 1) === "ok", "it holds TOP_BUYER_FAIL_HOLD_MS after the refusal that met the rule, then clears");
+  ok(await word(at + 1, { ONCHAIN_SQL_BUSY_MIN: "6" }) === "ok" && await word(s0 + 4_001, { ONCHAIN_SQL_BUSY_SPAN_MS: "0" }) === "alert",
     "ONCHAIN_SQL_BUSY_MIN and ONCHAIN_SQL_BUSY_SPAN_MS set the rule");
-  ok((await T.onchainSqlBusyStatus({ now: at + 1, env: { TOP_BUYER_FAIL_WINDOW_MS: "20000" } })).status === "ok", "refusals further apart than TOP_BUYER_FAIL_WINDOW_MS never add up");
+  ok(await word(at + 1, { TOP_BUYER_FAIL_WINDOW_MS: "20000" }) === "ok", "refusals further apart than TOP_BUYER_FAIL_WINDOW_MS never add up");
   // Refusals spread past the window: three each more than the window apart never meet the rule.
   T._resetTopBuyerFailures();
   T.setTopBuyers([evm(1), TOP], t0);
   busy(t0); busy(t0 + 11 * MIN); busy(t0 + 22 * MIN);
-  ok((await T.onchainSqlBusyStatus({ now: t0 + 22 * MIN + 1, env })).status === "ok", "three refusals eleven minutes apart leave it ok (never three inside one window)");
+  ok(await word(t0 + 22 * MIN + 1) === "ok", "under that rule three refusals eleven minutes apart leave it ok (never three inside one window)");
   // Sustained refusals at a high rate with no shared store: five a second for
   // two minutes is far past the per-payer failure list's 50, and still reads
   // alert (the busy refusals are kept over time, not by count).
@@ -257,19 +285,19 @@ const SPEND_EVM = [...OUR_EVM_WALLETS].find((w) => w.startsWith("0x7706"));
   T.setTopBuyers([evm(1), TOP], t0);
   for (let i = 0; i < 600; i++) busy(t0 + i * 200);
   const endAt = t0 + 599 * 200;
-  ok((await T.onchainSqlBusyStatus({ now: endAt + 1, env })).status === "alert", "600 refusals over two minutes without a shared store read alert");
+  ok(await word(endAt + 1) === "alert", "600 refusals over two minutes without a shared store read alert");
   ok(T._localSizes().busyEvents <= 512, `the busy refusals kept per payer stay bounded (${T._localSizes().busyEvents})`);
   // The same rate for 30 seconds only (one burst) stays ok.
   T._resetTopBuyerFailures();
   T.setTopBuyers([evm(1), TOP], t0);
   for (let i = 0; i < 150; i++) busy(t0 + i * 200);
-  ok((await T.onchainSqlBusyStatus({ now: t0 + 150 * 200, env })).status === "ok", "150 refusals inside 30 seconds (one burst) stay ok");
+  ok(await word(t0 + 150 * 200) === "ok", "150 refusals inside 30 seconds (one burst) stay ok");
   // Sustained for 25 minutes (window plus hold past the first): still alert at the end, clears after the hold.
   T._resetTopBuyerFailures();
   T.setTopBuyers([evm(1), TOP], t0);
   for (let i = 0; i < 25 * 60; i++) busy(t0 + i * 1000);
   const lastAt = t0 + (25 * 60 - 1) * 1000;
-  ok((await T.onchainSqlBusyStatus({ now: lastAt + 1, env })).status === "alert" && (await T.onchainSqlBusyStatus({ now: lastAt + 20 * MIN + 1, env })).status === "ok",
+  ok(await word(lastAt + 1) === "alert" && await word(lastAt + 20 * MIN + 1) === "ok",
     "refusals every second for 25 minutes read alert at the end and clear after the hold");
   T._resetTopBuyerFailures();
 }
@@ -368,9 +396,9 @@ try {
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", FACILITATOR_GAS_CHECK: "off",
       TOP_BUYERS_REFRESH_MS: "1000", TOP_BUYER_FAIL_HOLD_MS: "8000",
       TOP_BUYER_FAIL_MIN: "", TOP_BUYER_FAIL_WINDOW_MS: "", TOP_BUYERS_COUNT: "", TOP_BUYERS_DAYS: "",
-      // Two in flight so a third is refused; two refusals raise the word (the
-      // sustained rule's span is the module half's).
-      ONCHAIN_SQL_INFLIGHT_MAX: "2", CDP_SQL_SEND_GAP_MS: "100", ONCHAIN_SQL_BUSY_MIN: "2", ONCHAIN_SQL_BUSY_SPAN_MS: "0",
+      // Two in flight so a third is refused. The busy rule is the default
+      // one (neither setting set): a top payer's first refusal raises the word.
+      ONCHAIN_SQL_INFLIGHT_MAX: "2", CDP_SQL_SEND_GAP_MS: "100", ONCHAIN_SQL_BUSY_MIN: "", ONCHAIN_SQL_BUSY_SPAN_MS: "",
     },
   });
   const B = srv.url;
@@ -479,15 +507,12 @@ try {
   ok(tb.held === 2 && tb.r.status === 429 && tb.r.body?.hint === "busy", `the top payer's third query gets the busy 429 (${JSON.stringify({ held: tb.held, status: tb.r.status })})`);
   const b2 = await waitFor(async () => { const c = await busyCounts(); return { done: c?.topBuyer === 1, c }; });
   ok(b2.c?.topBuyer === 1 && b2.c.other === 1, `it is counted on the day as topBuyer (${JSON.stringify(b2.c)})`);
-  ok((await word())?.status === "ok", "one busy refusal of the top payer leaves onchainSqlBusy ok under ONCHAIN_SQL_BUSY_MIN=2");
-  const tb2 = await busyRound(topSol, "t2");
-  ok(tb2.r.status === 429 && tb2.r.body?.hint === "busy", `the top payer's next third query gets the busy 429 too (${tb2.r.status})`);
   const up = await waitFor(async () => { const w = await word(); return { done: w?.status === "alert", w }; });
-  ok(up.w?.status === "alert", `its second busy refusal raises onchainSqlBusy (${JSON.stringify(up.w?.status)})`);
+  ok(up.w?.status === "alert", `that one busy refusal of the top payer raises onchainSqlBusy (${JSON.stringify(up.w?.status)})`);
   const pubB = await gs(false);
   ok(Object.keys(pubB.body.onchainSqlBusy || {}).join() === "status" && pubB.body.onchainSqlBusy.status === "alert" && !JSON.stringify(pubB.body).includes(topSol.address), `the public body carries the word only (${JSON.stringify(pubB.body.onchainSqlBusy)})`);
   const rowB = up.w?.alerting?.[0];
-  ok(rowB && rowB.payer === topSol.address.slice(0, 4) && rowB.rank === 1 && rowB.refusals?.length === 2 && rowB.refusals.every((x) => x.status === 429) && !JSON.stringify(up.w).includes(topSol.address), `the operator view names the short payer, rank 1 and the refusal (${JSON.stringify(rowB)})`);
+  ok(rowB && rowB.payer === topSol.address.slice(0, 4) && rowB.rank === 1 && rowB.refusals?.length === 1 && rowB.refusals.every((x) => x.status === 429) && up.w.rule?.refusals === 1 && !JSON.stringify(up.w).includes(topSol.address), `the operator view names the short payer, rank 1 and the refusal (${JSON.stringify(rowB)})`);
   const pubCounts = JSON.stringify(pubB.body);
   ok(!/onchainSqlQueries|"busy"/.test(pubCounts), "the daily counts are not on the public body");
   const down = await waitFor(async () => { const w = await word(); return { done: w?.status === "ok", w }; }, 20_000);

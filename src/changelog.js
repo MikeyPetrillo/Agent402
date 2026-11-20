@@ -10,6 +10,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-19",
+    title: "Onchain query answers that cannot be read",
+    items: [
+      "Tools: `onchain-sql` and `onchain-sql-schema` answer 502, uncharged, when the query service's answer arrives cut off, empty or not JSON; before, such an answer was served as a result with no rows or an empty schema. A query that matches no rows still answers 200 with no rows.",
+    ],
+  },
+  {
+    date: "2026-11-19",
     title: "Answer size of the audio and PDF tools",
     items: [
       "Tools: `audio-convert` and `audio-normalize` answer an MP3 of up to 60 MB (43 minutes at 192k). A recording that would encode larger is answered 413 before it is encoded, with the limit and the length that fits, and is not charged; a lower `bitrate` fits a longer one. The PDF tools (`pdf-merge`, `pdf-extract-pages`, `pdf-rotate`, `images-to-pdf`) answer a file of up to 40 MB, and 413 past it.",
@@ -95,7 +102,7 @@ const ENTRIES = [
     title: "Onchain query capacity",
     items: [
       "Tools: onchain-sql runs up to 8 queries at once on a server (was 2), and every query the server sends to the query service is spaced to stay under that service's rate limit. A query past either limit is refused 429 with Retry-After, before any payment is settled.",
-      "Status: onchainSqlBusy on /api/gateway-status reads alert when a top paying buyer keeps getting that refusal over a sustained stretch, not on a single refusal.",
+      "Status: onchainSqlBusy on /api/gateway-status reads alert when a top paying buyer gets that refusal, from either limit.",
     ],
   },
   {

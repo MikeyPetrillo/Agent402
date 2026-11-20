@@ -4692,11 +4692,11 @@ app.get("/api/gateway-status", async (req, res) => {
     // payer its short id, spend rank, tools, statuses, times and our error
     // text for the operator. An alarm only: nothing is refused for it.
     topBuyerFailures: await topBuyerFailuresStatus({ full, off: FREE_MODE }),
-    // onchainSqlBusy reads alert while one of the same watched top payers kept
-    // getting onchain-sql's busy refusal (the server-wide in-flight query cap
-    // or the send pacer, a 429 never charged) over a sustained stretch
-    // (ONCHAIN_SQL_BUSY_MIN inside the window, ONCHAIN_SQL_BUSY_SPAN_MS
-    // apart), held TOP_BUYER_FAIL_HOLD_MS. ok
+    // onchainSqlBusy reads alert while one of the same watched top payers got
+    // onchain-sql's busy refusal (the server-wide in-flight query cap or the
+    // send pacer, a 429 never charged) inside TOP_BUYER_FAIL_HOLD_MS: one
+    // refusal by default (ONCHAIN_SQL_BUSY_MIN inside the window,
+    // ONCHAIN_SQL_BUSY_SPAN_MS apart, set a sustained stretch instead). ok
     // otherwise, unknown before the first read of the top payers, off in
     // FREE_MODE (src/top-buyer-failures.js). The word publicly; per alerting
     // payer its short id, spend rank and refusal times for the operator. The

@@ -6,6 +6,13 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-19 (onchain query answers that cannot be read)
+Tools:
+- `onchain-sql` and `onchain-sql-schema` answer 502, uncharged, when the
+  query service's answer arrives cut off, empty or not JSON; before, such an
+  answer was served as a result with no rows or an empty schema. A query
+  that matches no rows still answers 200 with no rows.
+
 ### 2026-11-19 (answer size of the audio and PDF tools)
 Tools:
 - `audio-convert` and `audio-normalize` answer an MP3 of up to 60 MB (43
@@ -162,8 +169,7 @@ Tools:
 
 Status:
 - onchainSqlBusy on /api/gateway-status reads alert when a top paying buyer
-  keeps getting that refusal over a sustained stretch, not on a single
-  refusal.
+  gets that refusal, from either limit.
 
 ### 2026-11-18 (holiday, business-day and market calendars)
 Tools:

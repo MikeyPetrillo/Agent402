@@ -583,7 +583,7 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "topBuyerFailures is ok; closing." || true
           fi
 
-      # A top outside payer kept getting onchain-sql's busy refusal (onchainSqlBusy,
+      # A top outside payer got onchain-sql's busy refusal (onchainSqlBusy,
       # src/top-buyer-failures.js): alert pages once, ok closes; unknown, off
       # and a blind read do neither. The payer and times are on the operator
       # view only; this issue names none of them.
@@ -600,7 +600,7 @@ jobs:
           if [ "$STATUS" = "alert" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports onchainSqlBusy.status=alert: one of our top outside payers by paid spend over the last week kept getting the busy refusal of the onchain query tool (the server-wide limit on queries in flight, or the send rate the query service allows; refused before settlement, told to retry in a few seconds) over a sustained stretch: ONCHAIN_SQL_BUSY_MIN refusals inside TOP_BUYER_FAIL_WINDOW_MS, the first and last ONCHAIN_SQL_BUSY_SPAN_MS or more apart, within TOP_BUYER_FAIL_HOLD_MS. The payer's short id, its spend rank and the refusal times are on the operator view of /api/gateway-status (onchainSqlBusy, operator token); the daily busy counts by caller are on /__operator/tool-failures.json (onchainSqlQueries, operator token). Read them and decide whether the in-flight limit should rise. Nothing is refused for this alarm. Auto-closes when the word reads ok." || true
+                --body "/api/gateway-status reports onchainSqlBusy.status=alert: one of our top outside payers by paid spend over the last week got the busy refusal of the onchain query tool (the server-wide limit on queries in flight, or the send rate the query service allows; refused before settlement, told to retry in a few seconds) inside TOP_BUYER_FAIL_HOLD_MS. One refusal raises it unless ONCHAIN_SQL_BUSY_MIN and ONCHAIN_SQL_BUSY_SPAN_MS are set to ask for more of them over a stretch. The payer's short id, its spend rank and the refusal times are on the operator view of /api/gateway-status (onchainSqlBusy, operator token); the daily busy counts by caller are on /__operator/tool-failures.json (onchainSqlQueries, operator token). Read them and decide whether the in-flight limit should rise. Nothing is refused for this alarm. Auto-closes when the word reads ok." || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "onchainSqlBusy is ok; closing." || true

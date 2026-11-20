@@ -32,12 +32,14 @@
 // onchainSqlBusy (also on /api/gateway-status): alert while a watched payer
 // got onchain-sql's busy refusal (the server-wide in-flight query cap or the
 // query service's send pacer, src/tools/cdp-kit.js: a 429, never charged)
-// over a sustained stretch: ONCHAIN_SQL_BUSY_MIN refusals (default 3) inside
-// TOP_BUYER_FAIL_WINDOW_MS whose first and last are ONCHAIN_SQL_BUSY_SPAN_MS
-// (default a minute) or more apart, held TOP_BUYER_FAIL_HOLD_MS after the
-// refusal that met the rule. A single refusal, or one burst refused in the
-// same few seconds, is a buyer told to retry, not a cap that holds them off,
-// since the cap was raised from 2 to 8. The refusal is kept as one of the payer's failures with its kind ("sql-busy"),
+// inside TOP_BUYER_FAIL_HOLD_MS; one refusal is enough by default, since a
+// top payer told to wait is a paid call we did not serve. The rule is
+// ONCHAIN_SQL_BUSY_MIN refusals (default 1) inside TOP_BUYER_FAIL_WINDOW_MS
+// whose first and last are ONCHAIN_SQL_BUSY_SPAN_MS (default 0) or more
+// apart, held TOP_BUYER_FAIL_HOLD_MS after the refusal that met it: the two
+// settings let an operator ask for a sustained stretch instead (three
+// refusals a minute apart, say), and are unset by default. The refusal is
+// kept as one of the payer's failures with its kind ("sql-busy"),
 // so it is read from the same per-payer window. ok otherwise; unknown before
 // the first read of the top payers; off in FREE_MODE. Publicly the word only;
 // the operator view names each alerting payer by its first characters, its
@@ -59,10 +61,10 @@ export const failMin = (env = process.env) => intEnv(env.TOP_BUYER_FAIL_MIN, 3, 
 export const failWindowMs = (env = process.env) => intEnv(env.TOP_BUYER_FAIL_WINDOW_MS, 600_000, 1_000, 6 * 3_600_000);
 /** How long alert holds after the failure that met the rule (TOP_BUYER_FAIL_HOLD_MS, default 20 minutes). */
 export const failHoldMs = (env = process.env) => intEnv(env.TOP_BUYER_FAIL_HOLD_MS, 1_200_000, 0, 6 * 3_600_000);
-/** Busy refusals inside the window that raise onchainSqlBusy (ONCHAIN_SQL_BUSY_MIN, default 3). */
-export const sqlBusyMin = (env = process.env) => intEnv(env.ONCHAIN_SQL_BUSY_MIN, 3, 1, 1000);
-/** How far apart the first and last of those refusals are at least (ONCHAIN_SQL_BUSY_SPAN_MS, default 1 minute). */
-export const sqlBusySpanMs = (env = process.env) => intEnv(env.ONCHAIN_SQL_BUSY_SPAN_MS, 60_000, 0, 6 * 3_600_000);
+/** Busy refusals inside the window that raise onchainSqlBusy (ONCHAIN_SQL_BUSY_MIN, default 1: the first one). */
+export const sqlBusyMin = (env = process.env) => intEnv(env.ONCHAIN_SQL_BUSY_MIN, 1, 1, 1000);
+/** How far apart the first and last of those refusals are at least (ONCHAIN_SQL_BUSY_SPAN_MS, default 0: no span). */
+export const sqlBusySpanMs = (env = process.env) => intEnv(env.ONCHAIN_SQL_BUSY_SPAN_MS, 0, 0, 6 * 3_600_000);
 /** How many top payers are watched (TOP_BUYERS_COUNT, default 10). */
 export const topCount = (env = process.env) => intEnv(env.TOP_BUYERS_COUNT, 10, 1, 100);
 /** The spend window the top payers are ranked over, in days (TOP_BUYERS_DAYS, default 7). */
@@ -81,7 +83,8 @@ let seq = 0;
 const local = new Map(); // payer -> [{ id, at, slug, status, error }], oldest first
 // Busy refusals are also kept per payer over TIME, not by count: a payer
 // refused several times a second fills the 50-event list above in seconds,
-// and a sustained stretch would then read as one burst. This ring keeps the
+// and under a rule set to a sustained stretch (ONCHAIN_SQL_BUSY_MIN and
+// ONCHAIN_SQL_BUSY_SPAN_MS) that stretch would read as one burst. This ring keeps the
 // newest and oldest refusals of the window plus hold and, past its size,
 // drops the refusal closest to the one before it, so what it keeps stays
 // spread over the whole stretch (busyRingSize: enough for the rule to read
@@ -356,8 +359,8 @@ export async function topBuyerFailuresStatus({ full = false, now = Date.now(), o
 
 /**
  * onchainSqlBusy for /api/gateway-status. alert while a watched payer's busy
- * refusals of onchain-sql met the sustained rule (sqlBusyMin inside the
- * window, sqlBusySpanMs apart) within TOP_BUYER_FAIL_HOLD_MS;
+ * refusals of onchain-sql met the rule (sqlBusyMin inside the window,
+ * sqlBusySpanMs apart: one refusal by default) within TOP_BUYER_FAIL_HOLD_MS;
  * ok otherwise; unknown before the first read of the top payers; off in
  * FREE_MODE. Public: { status } only. Operator (`full`): the rule and, per
  * alerting payer, its short id, its spend rank and the refusal times. Never
