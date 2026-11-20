@@ -14,10 +14,10 @@
 // own computation. Licensed market data, search results and model output are
 // not offered here, and neither is a proof-of-work tool that serves a
 // committed outside dataset under its own license (COMMITTED_DATASET_SLUGS)
-// or carries a source's attribution: the compute family's basis is our own
+// or carries a source's attribution, or answers this server's read of other
+// sellers (SELLER_DATA_SLUGS): the compute family's basis is our own
 // computation, some of it over public facts (exchange calendars typed in
-// from each exchange's page, sellers' own published listings), with no
-// credit line to keep.
+// from each exchange's page), with no credit line to keep.
 //
 // Whether a failed call was charged depends on the rail (a Tempo push
 // transfer is final before the call runs), so the error codes carry no such
@@ -32,7 +32,7 @@
 // v1 field set only grows (scripts/test-wholesale.js pins it).
 import { ERROR_CODES, ERROR_CODE_SCOPE, ERROR_CODE_NOT_CARRIED } from "./stable-error-code.js";
 import { toolReliabilityEnabled, TOOL_RELIABILITY_PATH } from "./tool-reliability.js";
-import { ATTRIBUTIONS, US_TREASURY_ATTRIBUTION, attributionTailOf } from "./data-attribution.js";
+import { ATTRIBUTIONS, US_TREASURY_ATTRIBUTION, GEONAMES_ATTRIBUTION, attributionTailOf } from "./data-attribution.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
 import { REFUND_TERMS_PATH } from "./refund-terms-path.js";
 
@@ -46,6 +46,12 @@ export const STATUS_THIN = "not enough data";
  *  dataset's own license, so their answers are not our own computation:
  *  country-info serves world-countries (ODbL 1.0, src/data/LICENSE.md). */
 export const COMMITTED_DATASET_SLUGS = Object.freeze(["country-info"]);
+/** Proof-of-work tools whose answers are this server's read of other
+ *  sellers: its crawl of their listings with their on-chain revenue, buyer
+ *  and settlement counts (x402-market-pulse) and its trust verdict on a
+ *  named seller (seller-trust). Not our own computation over public facts,
+ *  so not offered for a reseller to pass on. */
+export const SELLER_DATA_SLUGS = Object.freeze(["x402-market-pulse", "seller-trust"]);
 /** The rails a failed wholesale call is not charged on (the Tempo push
  *  exception is added where that credential is offered). */
 export const WHOLESALE_NOT_CHARGED_RAILS = Object.freeze(["x402", "MPP", "a prepaid credits key"]);
@@ -55,9 +61,9 @@ export const WHOLESALE_NOT_CHARGED_RAILS = Object.freeze(["x402", "MPP", "a prep
  *  carries its own), and the slugs (a function of the server's facts). */
 export const WHOLESALE_FAMILIES = Object.freeze([
   {
-    id: "compute", title: "Computation tools", source: "our own code; some tools compute over public facts (published exchange calendars, sellers' own published listings)",
+    id: "compute", title: "Computation tools", source: "our own code; some tools compute over public facts (published exchange calendars)",
     redistribution: "own-computation", credit: null,
-    slugs: ({ powSlugs }) => [...powSlugs].filter((s) => !COMMITTED_DATASET_SLUGS.includes(s)),
+    slugs: ({ powSlugs }) => [...powSlugs].filter((s) => !COMMITTED_DATASET_SLUGS.includes(s) && !SELLER_DATA_SLUGS.includes(s)),
   },
   {
     id: "sec-filings", title: "SEC filings and company financials", source: "SEC EDGAR (data.sec.gov, efts.sec.gov)",
@@ -70,7 +76,7 @@ export const WHOLESALE_FAMILIES = Object.freeze([
     slugs: () => ["treasury-yield-curve", "treasury-yield-history", "yield-curve-spread", "treasury-debt", "treasury-avg-rates"],
   },
   {
-    id: "weather", title: "Weather forecasts, history, air quality and risk", source: "Open-Meteo (CC BY 4.0) and the National Weather Service",
+    id: "weather", title: "Weather forecasts, history, air quality and risk", source: "Open-Meteo (CC BY 4.0), Copernicus CAMS and C3S, GeoNames place data (CC BY 4.0) and the National Weather Service",
     redistribution: "cc-by-4.0", credit: null,
     slugs: () => ["weather-current", "weather-daily", "weather-hourly", "weather-history", "weather-air-quality", "weather-window", "weather-thresholds", "weather-probability", "place-lookup", "weather-forecast", "weather-alerts", "weather-risk-brief"],
   },
@@ -118,7 +124,12 @@ const priceUsd = (p) => { const n = Number(String(p ?? "").replace(/[^0-9.]/g, "
  *  the attribution run its description ends with, else its family's line,
  *  else null (a source that asks for none). */
 export function toolCredit(def, familyCredit = null) {
-  return ATTRIBUTIONS[def?.attribution] || attributionTailOf(String(def?.description || "")) || familyCredit || null;
+  const line = ATTRIBUTIONS[def?.attribution] || attributionTailOf(String(def?.description || "")) || familyCredit || null;
+  // A tool that takes a place name answers GeoNames place data with it (the
+  // resolved place and its credit, src/tools/weather-kit.js), so its row
+  // keeps GeoNames' credit beside its own source's.
+  if (def?.discovery?.inputSchema?.properties?.place && !String(line || "").includes(GEONAMES_ATTRIBUTION)) return line ? `${line} ${GEONAMES_ATTRIBUTION}` : GEONAMES_ATTRIBUTION;
+  return line;
 }
 
 /** One tool's wholesale row (pure). */

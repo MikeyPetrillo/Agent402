@@ -253,7 +253,7 @@ ok(WHOLESALE_FAMILIES.every((f) => ["public-domain", "cc-by-4.0", "own-computati
 // ---- a FREE_MODE boot. Outbound fetches are held to loopback: the sweep
 // below calls every catalog route, and none of it may reach an upstream.
 const PRELOAD = ["--import", "./scripts/lib/loopback-only-preload.js"];
-const QUIET = { X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", POSTHOG_API_KEY: "", STATS_ALLOW_EPHEMERAL: "true", SOLANA_LEADERBOARD: "off", LEADERBOARD_FIRST_REFRESH_DELAY_MS: "3600000", KALSHI_TOOLS: "", STOCK_DATA_PROVIDER: "", DATABENTO_API_KEY: "" };
+const QUIET = { X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", POSTHOG_API_KEY: "", STATS_ALLOW_EPHEMERAL: "true", SOLANA_LEADERBOARD: "off", LEADERBOARD_FIRST_REFRESH_DELAY_MS: "3600000", KALSHI_TOOLS: "", STOCK_DATA_PROVIDER: "", DATABENTO_API_KEY: "", RUGCHECK_TOOLS: "", TRANSCRIBE_LONG: "" };
 // A JSON answer's errorCode against its final status: a 402 carries none, any
 // other error answer carries the table's code for its status.
 const readAnswer = async (res) => { const text = await res.text(); let json = null; try { json = JSON.parse(text); } catch { /* not JSON */ } return { status: res.status, json }; };
@@ -355,6 +355,36 @@ try {
       if (a.status !== 503 || a.json?.error !== "not-offered" || a.json?.errorCode !== "unavailable") wrongOff.push(`${path} ${a.status} ${JSON.stringify(a.json?.errorCode)}`);
     }
     ok(off.length >= 6 && wrongOff.length === 0, `every switched-off tool answers its not-offered 503 with errorCode "unavailable" (${off.length} routes; wrong: ${wrongOff.join(", ") || "none"})`);
+    // A tool switched off by not mounting its route (RugCheck unset, the long
+    // transcription tier without TRANSCRIBE_LONG) answers the /api 404, and
+    // a body the parser refuses answers 400 or 413: each carries the code for
+    // its status, as the contract says.
+    const unmounted = [];
+    for (const path of ["/api/sol-token-safety", "/api/transcribe-long", "/api/no-such-tool-zz"]) {
+      const a = await readAnswer(await fetch(`${U}${path}`));
+      if (a.status !== 404 || a.json?.errorCode !== "not_found") unmounted.push(`${path} ${a.status} ${JSON.stringify(a.json?.errorCode)}`);
+    }
+    ok(unmounted.length === 0, `a tool whose route is not served, and any unknown /api path, answers 404 with errorCode "not_found" (wrong: ${unmounted.join(", ") || "none"})`);
+    const unreadable = await readAnswer(await fetch(`${U}/api/json-format`, { method: "POST", headers: { "content-type": "application/json" }, body: "{" }));
+    ok(unreadable.status === 400 && unreadable.json?.errorCode === "invalid_input", `a body the server cannot read answers 400 with errorCode "invalid_input" (${unreadable.status} ${JSON.stringify(unreadable.json?.errorCode)})`);
+    const tooBig = await readAnswer(await fetch(`${U}/api/json-format`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ json: "x".repeat(300_000) }) }));
+    ok(tooBig.status === 413 && tooBig.json?.errorCode === "input_too_large", `a body over the size limit answers 413 with errorCode "input_too_large" (${tooBig.status} ${JSON.stringify(tooBig.json?.errorCode)})`);
+  }
+  {
+    // The compute family is our own computation: no tool that serves this
+    // server's read of other sellers (their listings, revenue and settlement
+    // counts, a trust verdict on one), and its source line names none.
+    const compute = all.filter((t) => t.family === "compute").map((t) => t.slug);
+    ok(!compute.includes("x402-market-pulse") && !compute.includes("seller-trust") && bySlug.has("x402-market-pulse") && bySlug.has("seller-trust"), `the compute family leaves out the tools that serve data about other sellers; both are still served (${["x402-market-pulse", "seller-trust"].filter((s) => compute.includes(s)).join(", ") || "none listed"})`);
+    ok(!/sellers?'? own|listings/i.test(computeIdx.families.find((f) => f.id === "compute")?.source || ""), `the compute family's source names no seller data (${computeIdx.families.find((f) => f.id === "compute")?.source})`);
+    // Every weather row whose tool takes a place name answers GeoNames place
+    // data, so its credit names GeoNames; the family's source names each source.
+    const takesPlace = (t) => (openapi.paths[t.path]?.get?.parameters || []).some((p) => p.name === "place") || Object.values(openapi.paths[t.path]?.post?.requestBody?.content || {}).some((c) => c?.schema?.properties?.place);
+    const placeRows = all.filter((t) => t.family === "weather" && takesPlace(t));
+    const noGeo = placeRows.filter((t) => !/GeoNames/.test(t.credit || "")).map((t) => t.slug);
+    ok(placeRows.length >= 6 && noGeo.length === 0, `every weather row that takes a place name credits GeoNames (${placeRows.length} rows; missing: ${noGeo.join(", ") || "none"})`);
+    const wsrc = computeIdx.families.find((f) => f.id === "weather")?.source || "";
+    ok(/Copernicus/.test(wsrc) && /GeoNames/.test(wsrc) && /Open-Meteo/.test(wsrc) && /National Weather Service/.test(wsrc), `the weather family's source names Open-Meteo, Copernicus, GeoNames and the National Weather Service (${wsrc})`);
   }
   const nf = await fetch(`${U}/api/wholesale/v1/nope`);
   const nj = await nf.json();
