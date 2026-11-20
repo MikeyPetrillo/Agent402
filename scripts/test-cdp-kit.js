@@ -1144,5 +1144,141 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
   }
 }
 
+// --- onchain-sql answers: the bytes read, a fast 502, the 408, the 422's
+// machine fields, and a Solana-paid call's budget (stubbed fetch) -----------
+{
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  process.env.CDP_API_KEY_ID = "organizations/test/apiKeys/test";
+  process.env.CDP_API_KEY_SECRET = privateKey.export({ type: "pkcs8", format: "pem" });
+  const m = await import("../src/tools/cdp-kit.js");
+  const { currentBudget } = await import("../src/upstream-deadline.js");
+  m._resetSqlPacerForTest(0);
+  m._setQueryHealthForTest(true);
+  m._setSlowQueryGatewayMsForTest(40);
+  const realFetch = globalThis.fetch;
+  let calls = 0, reply = null, budgets = [];
+  globalThis.fetch = async (url, init = {}) => { calls++; const b = currentBudget(); budgets.push(b ? { total: b.totalMs, left: b.remaining() } : null); return reply(calls, String(url), init); };
+  const J = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const run = (sql = "SELECT block_number FROM base.blocks", req) => tool("onchain-sql").handler({ sql }, req);
+  try {
+    // d-17: the bytes read from the query service are bounded. A body past
+    // the bound is not read to its end: the read stops there and the call
+    // ends 502, uncharged (a valid answer that large would otherwise be read
+    // whole, parsed and served).
+    {
+      const MB = 1 << 20;
+      ok(m.SQL_READ_MAX_BYTES === 16 * MB, `the query service's answer is read up to 16 MB (${m.SQL_READ_MAX_BYTES})`);
+      let pulled = 0, cancelled = false;
+      const head = new TextEncoder().encode('{"result":[');
+      reply = () => { pulled = 0; cancelled = false; return new Response(new ReadableStream({
+        pull(c) { if (pulled >= 40 * MB) { c.close(); return; } const chunk = pulled === 0 ? head : new Uint8Array(MB).fill(32); pulled += chunk.length; c.enqueue(chunk); },
+        cancel() { cancelled = true; },
+      }), { status: 200, headers: { "content-type": "application/json" } }); };
+      calls = 0;
+      let e = await run().catch((x) => x);
+      ok(e?.statusCode === 502 && /larger than this server reads/.test(e?.message) && /Nothing was charged\.$/.test(e?.message) && pulled < 20 * MB && cancelled && calls === 1 && m._buyerQueriesInflightForTest() === 0,
+        `a 40 MB answer is read to the 16 MB bound only, cancelled, and answered 502 uncharged, not resent (${e?.statusCode ?? 200}, read ${Math.round(pulled / MB)} MB, cancelled ${cancelled}, sends ${calls})`);
+      // A complete, valid answer past the bound: on the old read it was parsed and served.
+      const row = JSON.stringify({ x: "y".repeat(17_000) });
+      const big = `{"result":[${Array.from({ length: 1_001 }, () => row).join(",")}]}`;
+      reply = () => new Response(big, { status: 200, headers: { "content-type": "application/json" } });
+      calls = 0;
+      e = await run().catch((x) => x);
+      ok(e?.statusCode === 502 && /larger than this server reads/.test(e?.message) && calls === 1, `a valid ${Math.round(big.length / MB)} MB answer is not served whole: 502, uncharged (${e?.statusCode ?? `200 with ${e?.rowCount} rows`})`);
+      // Control: an answer under the bound is served.
+      reply = () => new Response(`{"result":[${Array.from({ length: 50 }, () => row).join(",")}]}`, { status: 200, headers: { "content-type": "application/json" } });
+      const r = await run().catch((x) => x);
+      ok(r?.rowCount === 50, `control: an answer under the bound (about 0.8 MB) is served (${r?.rowCount ?? r?.statusCode})`);
+    }
+    // d-15 (U3): a 502 or 504 that comes back fast did not run into the
+    // service's time window: it is an upstream error to retry, never the
+    // "narrow it, resending fails the same way" answer.
+    {
+      reply = () => J(502, { errorMessage: "Bad Gateway" });
+      calls = 0;
+      const e = await run().catch((x) => x);
+      ok(e?.statusCode === 502 && e?.hint !== "narrow-query" && /retry shortly/.test(e?.message) && !/answer window|Narrow it|fails the same way/.test(e?.message) && /Nothing was charged\.$/.test(e?.message) && calls === 2,
+        `a fast 502 twice is a 502 to retry, without the slow-query advice (${e?.statusCode}, hint ${e?.hint}, sends ${calls}: "${String(e?.message).slice(0, 90)}")`);
+      reply = () => J(504, {});
+      calls = 0;
+      const e4 = await run().catch((x) => x);
+      ok(e4?.statusCode === 502 && e4?.hint !== "narrow-query" && /HTTP 504/.test(e4?.message) && /retry shortly/.test(e4?.message), `the same for a fast 504 (${e4?.statusCode}, "${String(e4?.message).slice(0, 60)}")`);
+      // Control: a fast 502 then an answer is served.
+      reply = (n) => (n === 1 ? J(502, {}) : J(200, { result: [{ x: 1 }] }));
+      calls = 0;
+      ok((await run()).rowCount === 1 && calls === 2, "control: a fast 502 then an answer is served");
+    }
+    // d-15 (U4): the service's documented time-limit answer, 408 timed_out,
+    // is the caller's query to narrow: 422, a machine hint, not resent.
+    {
+      reply = () => new Promise((r) => setTimeout(() => r(J(408, { errorType: "timed_out", errorMessage: "Query execution was cut off by the server. Please try again with a more efficient query." })), 30));
+      calls = 0;
+      const e = await run().catch((x) => x);
+      ok(e?.statusCode === 422 && e?.hint === "timed-out" && /cut this query off/.test(e?.message) && /select fewer columns/.test(e?.message) && /Nothing was charged\.$/.test(e?.message) && calls === 1,
+        `a 408 timed_out is one 422 with hint timed-out and how to narrow it (${e?.statusCode}, hint ${e?.hint}, sends ${calls})`);
+      ok(e?.charged === false && Number.isInteger(e?.upstreamMs) && e.upstreamMs >= 25, `the 408's 422 carries charged false and the time the query service took (${e?.charged}, ${e?.upstreamMs} ms)`);
+    }
+    // d-15 (U7): every uncharged narrow-query 422 carries the numbers, not
+    // only the sentence: charged false and the ms the call's queries spent.
+    {
+      reply = () => new Promise((r) => setTimeout(() => r(J(502, { errorMessage: "Bad Gateway" })), 60));
+      calls = 0;
+      const slow = await run().catch((x) => x);
+      ok(slow?.statusCode === 422 && slow?.hint === "narrow-query" && slow?.charged === false && Number.isInteger(slow?.upstreamMs) && slow.upstreamMs >= 50,
+        `the slow-cutoff 422 carries charged false and upstreamMs (${slow?.statusCode}, ${slow?.charged}, ${slow?.upstreamMs})`);
+      // Every send an instant 500 (the result too large): the budget of
+      // queries ends in the 422.
+      reply = () => J(500, { errorMessage: "internal" });
+      calls = 0;
+      const spent = await run().catch((x) => x);
+      ok(spent?.statusCode === 422 && spent?.hint === "narrow-query" && spent?.charged === false && Number.isInteger(spent?.upstreamMs) && spent.upstreamMs >= 0 && calls === m.SQL_QUERY_BUDGET,
+        `the query-budget 422 carries charged false and upstreamMs (${spent?.statusCode}, ${spent?.charged}, ${spent?.upstreamMs}, sends ${calls})`);
+      // Control: a served answer carries neither.
+      reply = () => J(200, { result: [{ x: 1 }] });
+      const r = await run();
+      ok(r.rowCount === 1 && !("charged" in r) && !("upstreamMs" in r), "control: a served answer's shape is unchanged");
+    }
+    // d-16 (U5): a call paid on Solana runs under a budget its payment can
+    // outlast (the signed transaction lands only while its recent blockhash
+    // is valid), not the EVM payment window the route is wrapped with; a
+    // call paid on an EVM network keeps that window.
+    {
+      const header = (network) => Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network }, payload: { transaction: "AQ==" } })).toString("base64");
+      const reqOf = (network) => { const h = header(network); return { headers: { "payment-signature": h }, header: (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined) }; };
+      const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+      ok(m.SVM_SQL_BUDGET_MS === 40_000, `a Solana-paid SQL call's budget is 40 s (${m.SVM_SQL_BUDGET_MS})`);
+      reply = (n, url) => (/\/schema$/.test(url) ? J(200, { "base.blocks": [] }) : J(200, { result: [{ x: 1 }] }));
+      budgets = [];
+      await run(undefined, reqOf(SOL));
+      await tool("onchain-sql-schema").handler({}, reqOf(SOL));
+      const [solSql, solSchema] = budgets;
+      ok(solSql?.left <= 40_000 && solSql?.left > 39_000 && solSchema?.left <= 40_000 && solSchema?.left > 39_000,
+        `on Solana both SQL routes run under 40 s (query ${solSql?.left} ms left, schema ${solSchema?.left} ms left)`);
+      budgets = [];
+      await run(undefined, reqOf("eip155:8453"));
+      await tool("onchain-sql-schema").handler({}, reqOf("eip155:8453"));
+      await run(undefined, {});
+      ok(budgets.every((b) => b?.left > 200_000), `control: paid on Base, or with no payment header, the route's own window holds (${budgets.map((b) => b?.left).join(", ")} ms left)`);
+      // A stalled query on Solana ends inside the 40 s, as the uncharged deadline answer.
+      m._setCdpReadMsForTest(60_000);
+      const realTimeout = AbortSignal.timeout;
+      let capSeen = null;
+      AbortSignal.timeout = (ms) => { capSeen = ms; return realTimeout.call(AbortSignal, 30); };
+      reply = (n, url, init) => new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "TimeoutError" })), { once: true }));
+      calls = 0;
+      const keep = setInterval(() => {}, 1000); // the abort timer alone does not hold the process open
+      const e = await run(undefined, reqOf(SOL)).catch((x) => x);
+      clearInterval(keep);
+      AbortSignal.timeout = realTimeout;
+      m._setCdpReadMsForTest(null);
+      ok(e?.statusCode === 503 && capSeen <= 40_000 && capSeen > 39_000, `a stalled Solana-paid query's read is capped by the 40 s budget, not the 60 s read limit (${e?.statusCode}, cap ${capSeen} ms)`);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    m._setSlowQueryGatewayMsForTest(8_000);
+    delete process.env.CDP_API_KEY_ID; delete process.env.CDP_API_KEY_SECRET;
+  }
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -26,7 +26,10 @@
 import { createPrivateKey, createSign, randomBytes, sign as edSign, createHash } from "node:crypto";
 import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
-import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, currentBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
+import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, currentBudget, withBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
+import { paymentHeaderOf } from "../payer.js";
+import { decodePaymentHeader } from "../payment-header.js";
+import { isSvmNetwork } from "../svm-payer.js";
 import { onFinalResponse, currentRequestScope } from "../request-timing.js";
 import { clientGoneError, clientGoneBeforeFirstByte } from "../hangup-settlement.js";
 import { noteSqlCall } from "../sql-query-stats.js";
@@ -236,7 +239,7 @@ async function queryServiceHealth(sql = "", now = Date.now()) {
           headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
           body: JSON.stringify({ sql: QUERY_HEALTH_SQL[table] }),
         }, ctx);
-        await r.text().catch(() => "");
+        await readBounded(r);
         verdict = r.ok ? "ok" : r.status >= 500 ? "failing" : "unknown";
         if (!r.ok) console.warn(`[cdp] query health: the known-good ${table} query answered HTTP ${r.status}: ${verdict === "failing" ? "the query service is failing" : "verdict unknown"}`);
       } catch (e) {
@@ -454,7 +457,16 @@ export const SQL_QUERY_BUDGET = 3;
 // The budget also carries how the call's sends are paced: `own` (this
 // server's own read) and `callerGone` (the buyer's connection closed before
 // any byte of the answer).
-function newQueryBudget({ own = false, callerGone = () => false } = {}) { return { sent: 0, max: SQL_QUERY_BUDGET, own, callerGone, left() { return this.max - this.sent; } }; }
+// `ms` is the time the call's sends spent at the query service, named on
+// its uncharged 422 (upstreamMs) so an agent reads the number, not only the
+// sentence.
+function newQueryBudget({ own = false, callerGone = () => false } = {}) { return { sent: 0, max: SQL_QUERY_BUDGET, own, callerGone, ms: 0, left() { return this.max - this.sent; } }; }
+/** The machine fields of an uncharged answer to narrow the query. */
+function unchargedFields(e, queries) {
+  e.charged = false;
+  if (queries && Number.isFinite(queries.ms)) e.upstreamMs = Math.max(0, Math.round(queries.ms));
+  return e;
+}
 // Wraps the onchain-sql handler so every run inside a request is counted once
 // its response has ENDED (src/sql-query-stats.js): the queries it sent (0 for
 // a refusal before any query), by the response's final status and what the
@@ -468,11 +480,31 @@ function newQueryBudget({ own = false, callerGone = () => false } = {}) { return
 // query; refused 429 otherwise, and its caller tries again later), and it
 // takes no place in the buyers' in-flight cap and is never refused by it.
 const OWN_READ = Symbol("own sql read");
+// A call paid on Solana runs under SVM_SQL_BUDGET_MS, not the EVM payment
+// window the routes are wrapped with: its signed transaction lands only while
+// its recent blockhash is valid (about 60 s from the blockhash, which the
+// stock client fetches some seconds before it signs), so an answer later
+// than that is work whose payment can no longer settle. Measured 2026-11-19:
+// the slowest served call took about 14 s end to end. Read from the payment
+// header the paywall verified; an EVM payment keeps its own window.
+export const SVM_SQL_BUDGET_MS = 40_000;
+function paidOnSolana(req) {
+  const header = paymentHeaderOf(req);
+  if (!header || header.length > 65_536) return false;
+  try { const p = decodePaymentHeader(header); return isSvmNetwork(String(p?.accepted?.network || p?.network || "")); } catch { return false; }
+}
+/** Runs `fn` under the Solana payment's budget when the request paid on Solana. */
+function underPaymentLife(req, fn) {
+  if (!paidOnSolana(req)) return fn();
+  const budget = currentBudget();
+  const left = budget ? budget.remaining() : SVM_SQL_BUDGET_MS;
+  return withBudget(fn, Math.max(1, Math.floor(Math.min(left, SVM_SQL_BUDGET_MS))));
+}
 function countedSqlCall(run) {
   return async (input, ctx, mark) => {
     const own = mark === OWN_READ;
     const call = { queries: newQueryBudget({ own, callerGone: own ? () => false : () => clientGoneBeforeFirstByte(ctx) }), budgetSpent: false, own };
-    try { return await run(input, call); }
+    try { return await (own ? run(input, call) : underPaymentLife(ctx, () => run(input, call))); }
     catch (e) { if (e?.queryBudgetSpent) call.budgetSpent = true; throw e; }
     finally {
       try {
@@ -484,10 +516,10 @@ function countedSqlCall(run) {
 }
 let maxQueriesPerCall = 0;
 export function _maxQueriesPerCallForTest() { return maxQueriesPerCall; }
-function queryBudgetSpentError() {
+function queryBudgetSpentError(queries = null) {
   const e = bad(`This query could not be answered inside the ${SQL_QUERY_BUDGET} queries a call may send to the query service (the query itself and its recovery runs): narrow it (fewer or narrower columns, a smaller range or LIMIT) and send it again. Nothing was charged.`, 422);
   e.hint = "narrow-query"; e.queryBudgetSpent = true;
-  return e;
+  return unchargedFields(e, queries);
 }
 // The query service refuses to send a result that holds a row over 64 KB
 // (measured 2026-11-03: a 65,520-byte row is sent, a 65,540-byte row answers
@@ -558,6 +590,53 @@ function unreadableAnswerError() {
   return bad("CDP upstream error: the query service's answer could not be read (cut off, empty or not JSON); retry shortly. Nothing was charged.", 502);
 }
 
+// Bytes read from the query service's answer at most. Its own sends fail
+// past a few megabytes (measured 2026-11-03: about 2 MB answered, 5,000 rows
+// failed), and the row cap keeps a wrapped query far under that, but a query
+// sent as written (WITH, SETTINGS, a UNION) carries no row cap, and up to
+// BUYER_QUERY_INFLIGHT_MAX answers are held at once. Past the bound the read
+// stops (the rest is never buffered) and the call ends 502, uncharged.
+export const SQL_READ_MAX_BYTES = 16 * 1024 * 1024;
+function answerTooLargeError() {
+  const e = bad(`CDP's query service sent an answer larger than this server reads (${Math.round(SQL_READ_MAX_BYTES / (1024 * 1024))} MB), so it was not read: lower the LIMIT or select fewer or narrower columns. Nothing was charged.`, 502);
+  e.hint = "narrow-query";
+  return e;
+}
+/** The body as text, read up to `maxBytes`: `{ text }`, or `{ over: true }`
+ *  once more arrives (the stream is cancelled there). A read that fails (cut
+ *  off, our deadline) is the empty text, read by the caller as unreadable. */
+async function readBounded(res, maxBytes = SQL_READ_MAX_BYTES) {
+  const declared = Number(res.headers?.get?.("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) { try { await res.body?.cancel?.(); } catch { /* already closed */ } return { over: true }; }
+  const body = res.body;
+  if (!body || typeof body.getReader !== "function") {
+    const text = await res.text().catch(() => "");
+    return Buffer.byteLength(text, "utf8") > maxBytes ? { over: true } : { text };
+  }
+  const reader = body.getReader();
+  const chunks = [];
+  let n = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      n += value.byteLength;
+      if (n > maxBytes) { reader.cancel().catch(() => {}); return { over: true }; }
+      chunks.push(value);
+    }
+  } catch { return { text: "" }; }
+  return { text: Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))).toString("utf8") };
+}
+
+/** The query service's 408 (its documented answer for a query cut off at its
+ *  time limit, `timed_out`): the caller's query to narrow, never resent. */
+function timedOutQueryError(tookMs, sql = "") {
+  const e = narrowQueryError(408, tookMs, sql, 422);
+  e.message = e.message.replace(/^CDP's query service could not return this result \(HTTP 408 after ([\d.]+) s\)\. It answers this way when[^.]*\./, "CDP's query service cut this query off at its time limit (HTTP 408 timed_out after $1 s).");
+  e.hint = "timed-out";
+  return e;
+}
+
 async function cdpFetch(method, path, body, { idempotent = method === "GET", buyerQuery = false, attempts = null, lineOffset = 0, rewritten = false, queries = null } = {}) {
   // A query the handler rewrote (the row-size measure and filter) is ours:
   // its failure is never logged as the buyer's query.
@@ -602,7 +681,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     // A buyer's call sends at most SQL_QUERY_BUDGET queries, retries
     // included: the budget is spent here, where the query goes out.
     if (queries) {
-      if (queries.left() <= 0) throw queryBudgetSpentError();
+      if (queries.left() <= 0) throw queryBudgetSpentError(queries);
       queries.sent++;
     }
     const jwt = await mintCdpJwt({ method, path });
@@ -619,12 +698,17 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
         ...(buyerQuery ? { [NO_OUTCOME]: true } : {}),
       }, { label: "Coinbase Developer Platform", step: cdpStep(path), timeoutMs: cdpReadMs, tag: "[cdp]" });
     } catch (e) {
+      if (queries) queries.ms += Date.now() - started;
       lastErr = e;
       // The request may have reached CDP and taken effect: never resend it.
       if (!idempotent) throw lastErr;
       continue; // network error / timeout: retry while the budget holds
     }
-    const text = await res.text().catch(() => "");
+    const isQuery = /\/data\/query\//.test(path);
+    const read = isQuery ? await readBounded(res) : { text: await res.text().catch(() => "") };
+    if (queries) queries.ms += Date.now() - started;
+    if (read.over) throw answerTooLargeError();
+    const text = read.text;
     let json = {}, parsed = false;
     try { if (text) { json = JSON.parse(text); parsed = true; } } catch { /* a gateway's HTML page */ }
     // A 2xx from the query service whose body was cut off, stalled past the
@@ -667,6 +751,12 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
       throw e;
     }
     const tookMs = Date.now() - started;
+    // The service's documented answer to a query cut off at its time limit
+    // (408 timed_out): the buyer's to narrow, answered once.
+    if (buyerQuery && res.status === 408) {
+      logFailed(res.status, tookMs);
+      throw unchargedFields(timedOutQueryError(tookMs, body?.sql), queries);
+    }
     if (buyerQuery && res.status >= 500) {
       if ((res.status === 502 || res.status === 504) && tookMs >= slowQueryGatewayMs) {
         logFailed(res.status, tookMs);
@@ -674,17 +764,21 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
         // service answers with a 5xx makes this an outage; answered, or not
         // known (our check timed out), a query at the gateway's time limit
         // is the common cause and is the buyer's to narrow.
-        if (await queryServiceHealth(body?.sql) !== "failing") throw narrowQueryError(res.status, tookMs, body?.sql, 422);
+        if (await queryServiceHealth(body?.sql) !== "failing") throw unchargedFields(narrowQueryError(res.status, tookMs, body?.sql, 422), queries);
         throw bad(`CDP's query service is failing (HTTP ${res.status} after ${(tookMs / 1000).toFixed(1)} s, and a known-good query failed too); retry later. Nothing was charged.`, 502);
       }
       // An instant 500 is the result too large to send: never resent as is
       // (the handler re-runs it with a small row cap instead).
       if (res.status === 500) { logFailed(res.status, tookMs); throw resultTooLargeError(res.status, tookMs); }
       // A 503 is the service being unavailable, not the query: retried, and
-      // answered as an upstream error to retry, never "narrow it".
+      // answered as an upstream error to retry, never "narrow it". So is a
+      // 502 or 504 that came back before the service's time window could
+      // have run out: the query did not run into it.
       lastErr = res.status === 503
         ? bad(`CDP upstream error (HTTP 503): the query service is unavailable; retry shortly. Nothing was charged.`, 502)
-        : narrowQueryError(res.status, tookMs, body?.sql);
+        : res.status === 502 || res.status === 504
+          ? bad(`CDP upstream error (HTTP ${res.status} after ${(tookMs / 1000).toFixed(1)} s, too soon to be a query that ran past the service's time limit): retry shortly. Nothing was charged.`, 502)
+          : narrowQueryError(res.status, tookMs, body?.sql);
       if (attempt + 1 >= ATTEMPTS) { logFailed(res.status, tookMs); throw lastErr; }
       continue;
     }
@@ -1247,7 +1341,7 @@ export const CDP_TOOLS = [
               const text = tries
                 ? `Even ${SQL_RECOVER_ROWS} rows of this query could not be sent by the query service${tries > 1 ? `, ${tries} times` : ""} (it answers its internal error, HTTP ${last.cdpStatus}; ${sendRuleText()}): select fewer or narrower columns (map and array columns are the usual cause). Nothing was charged.`
                 : queryBudgetSpentError().message;
-              if (await queryServiceHealth(sql) !== "failing") { const e3 = bad(text, 422); e3.hint = "narrow-query"; e3.queryBudgetSpent = true; throw e3; }
+              if (await queryServiceHealth(sql) !== "failing") { const e3 = bad(text, 422); e3.hint = "narrow-query"; e3.queryBudgetSpent = true; throw unchargedFields(e3, queries); }
               throw bad(`CDP's query service is failing (HTTP ${last?.cdpStatus ?? 500} on this query and on a known-good query); retry later. Nothing was charged.`, 502);
             }
             tries++;
@@ -1322,10 +1416,10 @@ export const CDP_TOOLS = [
       inputSchema: { properties: {}, required: [] },
       output: { example: { schema: { "base.events": [{ name: "block_number", type: "UInt64" }] } } },
     },
-    handler: async () => {
+    handler: async (input, req) => underPaymentLife(req, async () => {
       const res = await cdpFetch("GET", "/platform/v2/data/query/schema");
       return { schema: res };
-    },
+    }),
   },
 ];
 
