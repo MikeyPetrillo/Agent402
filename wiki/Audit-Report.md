@@ -1,6 +1,6 @@
 # Audit Report
 
-`POST /api/audit-report` returns one wallet's full paid history with Agent402 as a report a company can hand to an auditor: every tool called, every payment, and the signed receipt for each call, with a summary receipt over the report itself.
+`POST /api/audit-report` returns one wallet's paid history with Agent402, a record of every paid call: every tool called, every payment, and the signed receipt for each call, the repayments recorded for the wallet beside them, and a summary receipt over the report itself.
 
 ## Who can read a report
 
@@ -36,6 +36,8 @@ The price is listed on [`/api/pricing`](https://agent402.tools/api/pricing) and 
 | `receiptId`, `receipt` | The signed receipt issued for the call (the `Agent402-Receipt` value), where one was issued and is still kept; `null` otherwise. |
 
 Beside the rows: `totals`, `byTool` and `byDay` cover the whole window, whatever the page; `returned`, `matched`, `complete` and `truncated` say how much of the window this page holds; `page.nextCursor` is the next page (`null` on the last). `receipts.read` reads `unavailable` when the receipt store could not be read, and every row then carries `receipt: null`.
+
+`report.refunds` lists the wallet's own refund rows recorded in the window: a charged call that failed or was not delivered, `owed` until it is repaid and `paid` with the repayment transaction (`refundTx`) once it is. `owedUsd` and `repaidUsd` sum them. They are never subtracted from `totals` (`netted: false`): the totals are what the wallet paid, and a refund can stand for a payment no row holds (one that landed on chain after an error answer). The block reads the wallet's newest 500 refund rows; when that read fills inside the window, `complete` is `false`. `read: "unavailable"` means the refund ledger could not be read. One transaction's refund status is also free at `GET /api/refunds?tx=<settlement>`. The CSV holds the call rows only.
 
 `format: "csv"` answers the same rows as a `text/csv` file. The summary receipt rides in the `Agent402-Audit-Summary` header, the next page's cursor in `Agent402-Audit-Next-Cursor`.
 
