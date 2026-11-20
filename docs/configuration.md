@@ -10,7 +10,7 @@ Scope: the server that runs as node src/server.js (every file under src/). The f
 Every value is set on the host, never in the repository. "Default" is the plain literal the code falls back to at
 its first read site when there is one; a helper may still clamp it, and the read site is the reference.
 
-1038 variables in 109 groups.
+1039 variables in 109 groups.
 
 ## Contents
 
@@ -206,7 +206,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `CDP_API_KEY_ID` | Coinbase Developer Platform key id: settlement through its facilitator and Bazaar discovery. |  | `src/cdp-facilitator.js`, `src/guides.js`, `src/integration-pages.js` and 2 more |
 | `CDP_API_KEY_SECRET` | Coinbase Developer Platform key secret (a credential, set on the host). |  | `src/cdp-facilitator.js`, `src/guides.js`, `src/integration-pages.js` and 2 more |
 | `CDP_FACILITATOR_URL` | Cdp facilitator URL. |  | `src/payments.js` |
-| `CDP_SQL_SEND_GAP_MS` | Spacing between queries one replica sends to the onchain query service, in milliseconds (times RATE_LIMIT_REPLICAS). |  | `src/tools/cdp-kit.js` |
+| `CDP_SQL_SEND_GAP_MS` | Spacing between queries one replica sends to the onchain query service, in milliseconds (at least 100; multiplied by RATE_LIMIT_REPLICAS, and the result is held at 2500, under the 3 seconds a send may wait for its slot). |  | `src/tools/cdp-kit.js` |
 
 ## CELO
 
@@ -719,8 +719,8 @@ its first read site when there is one; a helper may still clamp it, and the read
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `ONCHAIN_SQL_BUSY_MIN` | Busy refusals of onchain-sql to one top paying buyer, inside the failure window, that raise the onchainSqlBusy status word. |  | `src/top-buyer-failures.js` |
-| `ONCHAIN_SQL_BUSY_SPAN_MS` | Least time between the first and last of those busy refusals for onchainSqlBusy to read alert, in milliseconds. |  | `src/top-buyer-failures.js` |
+| `ONCHAIN_SQL_BUSY_MIN` | Busy refusals of onchain-sql to one top paying buyer, inside the failure window, that raise the onchainSqlBusy status word (1 when unset: the first refusal raises it). |  | `src/top-buyer-failures.js` |
+| `ONCHAIN_SQL_BUSY_SPAN_MS` | Least time between the first and last of those busy refusals for onchainSqlBusy to read alert, in milliseconds (0 when unset: no span is asked for). |  | `src/top-buyer-failures.js` |
 | `ONCHAIN_SQL_INFLIGHT_MAX` | Onchain-sql queries one server runs at once (1 to 16); past it a query is refused with a 429 before any payment is settled. |  | `src/tools/cdp-kit.js` |
 
 ## OPENROUTER
@@ -1562,6 +1562,7 @@ its first read site when there is one; a helper may still clamp it, and the read
 | `READY_ROUTER_WAIT_MS` | Ready router wait, in milliseconds. | `30000` | `src/server.js` |
 | `RECONCILE_GRACE_MS` | Reconcile grace, in milliseconds. |  | `src/settlement-reconcile.js` |
 | `REMOVED_ORIGINS_FILE` | Removed origins file path. |  | `src/x402-index.js` |
+| `REPLAY_CLAIM_OP_MS` | Bound on each shared-store command of a replay claim the route requires, in milliseconds (5000 when unset, never under SHARED_LIMITS_OP_MS): a store that answers inside it is waited for; past it the call is refused 503 before any payment is taken. |  | `src/replay-guard.js` |
 | `REPORT_GROUNDING_NOTE` | Report grounding note. |  | `src/report-grounding.js` |
 | `REPRICE_MAX_PER_CALL` | Reprice maximum per call. | `120` | `src/x402-index.js` |
 | `REPUTATION_RECHECK_GLOBAL_HOUR` | Seller reputation re-check requests accepted per hour across all callers. | `300` | `src/server.js` |

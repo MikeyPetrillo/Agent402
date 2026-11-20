@@ -183,8 +183,17 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
 // every paid call at its claim for as long as the socket lived. Each command
 // is bounded (SHARED_LIMITS_OP_MS, default 1 s, measured in loop time): the
 // claim then reads as a failed store, so a route that requires the shared
-// store is refused and every other route claims on this process.
+// store is refused and every other route claims on this process. The claim a
+// route requires has a longer bound of its own (REPLAY_CLAIM_OP_MS, default
+// 5 s; 1.5 s here): it is refused after that, never held for the socket's life.
 {
+  const { REQUIRED_CLAIM_OP_MS } = await import("../src/replay-guard.js");
+  ok(REQUIRED_CLAIM_OP_MS() === 5_000, `a required claim's commands are bounded at 5 s by default (${REQUIRED_CLAIM_OP_MS()} ms)`);
+  process.env.SHARED_LIMITS_OP_MS = "8000";
+  ok(REQUIRED_CLAIM_OP_MS() === 8_000, "and never under the bound every other command has");
+  delete process.env.SHARED_LIMITS_OP_MS;
+  process.env.REPLAY_CLAIM_OP_MS = "1500";
+  ok(REQUIRED_CLAIM_OP_MS() === 1_500, "REPLAY_CLAIM_OP_MS sets it");
   const g = createReplayGuard({ consumedRetryDelaysMs: [], pendingRetryMs: 50 });
   const never = () => new Promise(() => {});
   const hung = { isReady: true, get: never, set: never, del: never, expire: never, mGet: never, eval: never };
@@ -192,7 +201,7 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
   const timed = async (fn) => { const t0 = performance.now(); const v = await Promise.race([fn(), new Promise((r) => setTimeout(() => r("still-waiting"), 4_000))]); return { v, ms: Math.round(performance.now() - t0) }; };
   try {
     const a = await timed(() => g.begin("n:hung-long", undefined, { requireShared: true }));
-    ok(a.v === "unavailable" && a.ms < 2_500, `a hung store: a route that requires it is refused within the command bound (${a.v} after ${a.ms} ms)`);
+    ok(a.v === "unavailable" && a.ms >= 1_400 && a.ms < 3_500 && g._state().inFlight === 0, `a hung store: a route that requires it is refused after the required claim's bound, claiming nothing here (${a.v} after ${a.ms} ms, ${g._state().inFlight} in flight)`);
     const b = await timed(() => g.begin("n:hung-fast"));
     ok(b.v === "ok" && b.ms < 2_500, `a hung store: another route claims on this process within the command bound (${b.v} after ${b.ms} ms)`);
     const c = await timed(() => g.held("n:hung-other"));
@@ -206,8 +215,132 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
     __setTestClient({ isReady: true, get: async (k) => kv.get(k) ?? null, set: async (k, v, o = {}) => { if (o.NX && kv.has(k)) return null; kv.set(k, v); return "OK"; }, del: async (k) => (kv.delete(k) ? 1 : 0), expire: async () => 1 });
     for (let i = 0; i < 200 && g._state().pendingConsumed > 0; i++) await new Promise((r) => setTimeout(r, 20));
     ok(g._state().pendingConsumed === 0 && [...kv.keys()].some((k) => k.includes("hung-fast")), "once the store answers, the queued mark is written");
+    // The payment the store never answered for was not consumed: with the store back it is claimed.
+    ok(await g.begin("n:hung-long", undefined, { requireShared: true }) === "ok", "the refused payment was not consumed: once the store answers, the same payment is claimed");
+    await g.release("n:hung-long");
   } finally {
     __setTestClient(null);
+    delete process.env.REPLAY_CLAIM_OP_MS;
+  }
+}
+
+// ---- A3p. A store that pauses and then answers --------------------------------
+// A store that holds every command for a while (a pause inside a deploy's
+// overlap window, where the shared claim is required) and then answers: the
+// required claim waits it out and the call proceeds, where the short bound
+// alone would refuse a paying caller. Each command here answers after 400 ms
+// against a 100 ms bound for every other command and 3 s for the required
+// claim.
+{
+  const kv = new Map();
+  const slowly = (fn) => (...args) => new Promise((r) => setTimeout(() => r(fn(...args)), 400));
+  const paused = {
+    isReady: true,
+    get: slowly((k) => kv.get(k) ?? null),
+    set: slowly((k, v, o = {}) => { if (o.NX && kv.has(k)) return null; kv.set(k, v); return "OK"; }),
+    del: slowly((k) => (kv.delete(k) ? 1 : 0)),
+    expire: slowly(() => 1),
+  };
+  process.env.SHARED_LIMITS_OP_MS = "100";
+  process.env.REPLAY_CLAIM_OP_MS = "3000";
+  __setTestClient(paused);
+  try {
+    const g = createReplayGuard();
+    const t0 = performance.now();
+    const v = await g.begin("n2:paused", undefined, { requireShared: true });
+    const ms = Math.round(performance.now() - t0);
+    ok(v === "ok" && ms >= 400 && [...kv.keys()].some((k) => k.includes(":f:")), `a store that answers each command late: the required claim waits and is taken in the store (${v} after ${ms} ms)`);
+    // The same payment sent again meanwhile is the replay it is, from this process and from another.
+    ok(await g.begin("n2:paused", undefined, { requireShared: true }) === "inflight", "the same payment sent again to this process is refused as in flight");
+    const other = createReplayGuard();
+    ok(await other.begin("n2:paused", undefined, { requireShared: true }) === "inflight", "and another process reads it in flight from the store (one claim, one run)");
+    // Two processes claiming one payment at once through the slow store: exactly one runs it.
+    const [x, y] = await Promise.all([createReplayGuard().begin("n2:race", undefined, { requireShared: true }), createReplayGuard().begin("n2:race", undefined, { requireShared: true })]);
+    ok([x, y].sort().join() === "inflight,ok", `two processes claiming one payment at once through the slow store: one claim (${x}, ${y})`);
+    // A claim the route does not require keeps the short bound: it is taken on this process at once.
+    const g2 = createReplayGuard();
+    const t1 = performance.now();
+    const v2 = await g2.begin("n2:paused-fast");
+    const ms2 = Math.round(performance.now() - t1);
+    ok(v2 === "ok" && ms2 < 400, `a claim that is not required falls back to this process inside the short bound (${v2} after ${ms2} ms)`);
+    await g2.release("n2:paused-fast");
+  } finally {
+    __setTestClient(null);
+    delete process.env.SHARED_LIMITS_OP_MS; delete process.env.REPLAY_CLAIM_OP_MS;
+  }
+}
+
+// ---- A3q. A claim that was sent, landed, and was never answered ----------------
+// The store takes the SET NX and its answer never comes (the command times
+// out). The call is refused (or, on a route that does not require the store,
+// claimed on this process), and the claim that landed is dropped by this
+// call's own token: left in the store it would refuse the buyer's retry of
+// the same unused payment as in flight for the claim's whole life. A name
+// another request holds is never dropped by a call that failed.
+{
+  const kv = new Map();
+  let swallow = 0; // SET NX calls whose answer never comes (the write is applied when the name is free)
+  const store = {
+    isReady: true,
+    get: async (k) => kv.get(k) ?? null,
+    set: (k, v, o = {}) => {
+      const took = !(o.NX && kv.has(k));
+      if (took) kv.set(k, v);
+      if (o.NX && swallow > 0) { swallow--; return new Promise(() => {}); }
+      return Promise.resolve(took ? "OK" : null);
+    },
+    del: async (k) => (kv.delete(k) ? 1 : 0),
+    expire: async () => 1,
+  };
+  // This section's own claims (an earlier section's guard may still write a claim of its own here).
+  const claimsIn = () => [...kv.keys()].filter((k) => k.includes(":f:") && /landed|held|:t2:|:c:b{64}/.test(k));
+  process.env.SHARED_LIMITS_OP_MS = "100";
+  process.env.REPLAY_CLAIM_OP_MS = "300";
+  __setTestClient(store);
+  const keepQ = setInterval(() => {}, 1000); // a command bound alone does not hold the loop
+  try {
+    const g = createReplayGuard();
+    swallow = 1;
+    const v = await g.begin("n2:landed", undefined, { requireShared: true });
+    ok(v === "unavailable" && g._state().inFlight === 0, `a claim whose answer never came refuses a route that requires the store, claiming nothing here (${v})`);
+    ok(claimsIn().length === 0, `the claim that landed is dropped by its own token (left: ${claimsIn().join(",") || "none"})`);
+    ok(await g.begin("n2:landed", undefined, { requireShared: true }) === "ok", "so the buyer's retry of the same payment is claimed, never refused as a replay of itself");
+    ok(await createReplayGuard().begin("n2:landed", undefined, { requireShared: true }) === "inflight", "and that claim then holds: the payment runs once");
+    await g.release("n2:landed");
+    // A token key (its legacy twin is claimed too): both names are dropped.
+    const tk = `t2:${"a".repeat(64)}:${"b".repeat(64)}`;
+    swallow = 1;
+    const vt = await g.begin(tk, undefined, { requireShared: true });
+    ok(vt === "unavailable" && claimsIn().length === 0, `the same for a key with a legacy name (${vt}, left: ${claimsIn().join(",") || "none"})`);
+    // The legacy twin's answer is the one that never comes: both names are dropped.
+    const sets = store.set;
+    let nx = 0;
+    store.set = (k, v2, o = {}) => { if (o.NX && ++nx === 2) swallow = 1; return sets(k, v2, o); };
+    const vl = await g.begin(tk, undefined, { requireShared: true });
+    store.set = sets;
+    ok(vl === "unavailable" && claimsIn().length === 0, `and when the legacy name's claim is the one never answered (${vl}, left: ${claimsIn().join(",") || "none"})`);
+    ok(await g.begin(tk, undefined, { requireShared: true }) === "ok", "the retry is claimed");
+    await g.release(tk);
+    // On a route that does not require the store the call is claimed here, and the landed claim is dropped too.
+    swallow = 1;
+    const vf = await g.begin("n2:landed-fast");
+    ok(vf === "ok" && claimsIn().length === 0 && g._state().inFlight === 1, `on a route that does not require the store the call is claimed on this process and the unanswered claim is dropped (${vf}, left: ${claimsIn().join(",") || "none"})`);
+    await g.release("n2:landed-fast");
+    ok(await g.begin("n2:landed-fast") === "ok", "its retry after a release is claimed");
+    await g.release("n2:landed-fast");
+    // Another request holds the name: a call whose own claim is never answered leaves that claim alone.
+    const holder = createReplayGuard();
+    ok(await holder.begin("n2:held", undefined, { requireShared: true }) === "ok", "control: a first request claims the payment");
+    const held = claimsIn().map((k) => `${k}=${kv.get(k)}`).join();
+    swallow = 1;
+    const vr = await createReplayGuard().begin("n2:held", undefined, { requireShared: true });
+    ok(vr === "unavailable" && claimsIn().map((k) => `${k}=${kv.get(k)}`).join() === held, `a second request whose claim is never answered is refused and the first request's claim is untouched (${vr})`);
+    ok(await createReplayGuard().begin("n2:held", undefined, { requireShared: true }) === "inflight", "so the payment still reads in flight: it runs once");
+    await holder.release("n2:held");
+  } finally {
+    clearInterval(keepQ);
+    __setTestClient(null);
+    delete process.env.SHARED_LIMITS_OP_MS; delete process.env.REPLAY_CLAIM_OP_MS;
   }
 }
 

@@ -14,6 +14,14 @@
 // configured (one process: the per-process claim is the guarantee), and,
 // when the caller provides a real REDIS_URL, two servers sharing that Redis
 // serve one signed payment sent to both at once exactly once.
+// With that real Redis, a store that PAUSES and then answers (CLIENT PAUSE)
+// while a paid call arrives inside a deploy overlap window: a pause shorter
+// than the bound on a required claim (REPLAY_CLAIM_OP_MS, default 5 s) is
+// waited out and the call is served and settled once; a pause longer than
+// that bound (set to 1 s on its own server) is refused 503 before any
+// verify, the replay guard holds nothing for the payment, and the same
+// payment sent again once the store answers is served and settled once,
+// then refused as consumed on a third send.
 // Part 2 drives the REAL Tempo and card gates (src/mpp-tempo.js,
 // src/mpp-stripe.js) in this process against a shared store that throws:
 // inside the deploy overlap window a Tempo pull credential, a Tempo push
@@ -38,7 +46,7 @@ import { getFreePorts } from "./lib/free-port.js";
 import { isLongRunningSlug } from "../src/composite-spend-guard.js";
 
 const LIVE_REDIS = String(process.env.REDIS_URL || "").trim();
-const [PORT_A, PORT_B, PORT_C, PORT_D, PORT_E, FAC_PORT, DEAD_REDIS, PORT_F, PORT_G] = await getFreePorts(9);
+const [PORT_A, PORT_B, PORT_C, PORT_D, PORT_E, FAC_PORT, DEAD_REDIS, PORT_F, PORT_G, PORT_H, PORT_I] = await getFreePorts(11);
 const PAYER = "0x" + "4".repeat(40);
 const TMP = mkdtempSync(join(tmpdir(), "replay-outage-"));
 let pass = 0, failed = 0;
@@ -109,10 +117,14 @@ const C = boot(PORT_C, "c", "");
 const prefix = `outage-${process.pid}-${randomBytes(4).toString("hex")}`;
 const D = LIVE_REDIS ? boot(PORT_D, "d", LIVE_REDIS, { SHARED_LIMITS_PREFIX: prefix }) : null;
 const E = LIVE_REDIS ? boot(PORT_E, "e", LIVE_REDIS, { SHARED_LIMITS_PREFIX: prefix }) : null;
+// Two single containers held inside their deploy overlap window on the live
+// Redis: H with the default bound on a required claim, I with a 1 s bound.
+const H = LIVE_REDIS ? boot(PORT_H, "h", LIVE_REDIS, { SHARED_LIMITS_PREFIX: `${prefix}-h`, RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "3600", REPLAY_CLAIM_OP_MS: "", SHARED_LIMITS_OP_MS: "" }) : null;
+const I = LIVE_REDIS ? boot(PORT_I, "i", LIVE_REDIS, { SHARED_LIMITS_PREFIX: `${prefix}-i`, RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "3600", REPLAY_CLAIM_OP_MS: "1000", SHARED_LIMITS_OP_MS: "" }) : null;
 
 try {
-  const ups = await Promise.all([A, Bsrv, C, D, E, F, G].filter(Boolean).map(waitUp));
-  ok(ups.every(Boolean), `every server booted (two with an unreachable shared store, one with none${LIVE_REDIS ? ", two on the live Redis" : ""})`);
+  const ups = await Promise.all([A, Bsrv, C, D, E, F, G, H, I].filter(Boolean).map(waitUp));
+  ok(ups.every(Boolean), `every server booted (two with an unreachable shared store, one with none${LIVE_REDIS ? ", four on the live Redis" : ""})`);
   if (!ups.every(Boolean)) { for (const [name, log] of logs) for (const l of log.slice(-12)) console.error(`  server ${name}:`, l); throw new Error("a server did not boot"); }
   const pricing = await (await fetch(`${A}/api/pricing`)).json();
   const list = Array.isArray(pricing?.endpoints) ? pricing.endpoints : [];
@@ -209,6 +221,59 @@ try {
       const [rd, re] = await Promise.all([send(D, { "payment-signature": credD }), send(E, { "payment-signature": credD })]);
       const served = [rd, re].filter((r) => r.status === 200 && r.headers.get("x-replayed-answer") !== "1").length;
       ok(served === 1 && settles === d0 + 1, `live Redis: one payment sent to two containers runs once and settles once (${rd.status}, ${re.status}; settle +${settles - d0})`);
+
+      // The store pauses and then answers, as a paid call arrives inside a
+      // deploy overlap window (the shared claim is required there).
+      const { createClient } = await import("redis");
+      const admin = createClient({ url: LIVE_REDIS });
+      admin.on("error", () => {});
+      await admin.connect();
+      try {
+        // Controls first: with the store answering, each server serves a payment.
+        const h0 = settles;
+        const warmH = await send(H, { "payment-signature": credential(accept || {}) });
+        const warmI = await send(I, { "payment-signature": credential(accept || {}) });
+        ok(warmH.status === 200 && warmI.status === 200 && settles === h0 + 2, `control: inside the overlap window, with the store answering, both servers serve and settle a payment (${warmH.status}, ${warmI.status}; settle +${settles - h0})`);
+
+        // A 4 s pause against the default 5 s bound: the claim itself waits
+        // longer than the 1 s every other command has, is taken when the
+        // store answers, and the call is served and settled once.
+        const credH = credential(accept || {});
+        const h1 = settles, vh = verifies;
+        await admin.sendCommand(["CLIENT", "PAUSE", "4000", "ALL"]);
+        const tH = Date.now();
+        const rh = await send(H, { "payment-signature": credH });
+        const tookH = Date.now() - tH;
+        const bh = await rh.json().catch(() => ({}));
+        ok(rh.status === 200 && settles === h1 + 1 && verifies === vh + 1, `a store paused 4 s under the 5 s bound on a required claim: the paid call is served and settled once (${rh.status} ${bh.reason || ""}; verify +${verifies - vh}, settle +${settles - h1})`);
+        ok(tookH >= 3_700, `and it was the store it waited for: the answer came once the pause ended (${tookH} ms)`);
+        const againH = await send(H, { "payment-signature": credH });
+        ok((againH.status !== 200 || againH.headers.get("x-replayed-answer") === "1") && settles === h1 + 1, `the same payment buys no second run there (${againH.status}; settle +${settles - h1})`);
+
+        // A 5 s pause against a 1 s bound: refused before any verify, while
+        // the store is still paused. The resends below each carry an
+        // Idempotency-Key of their own, so the replay guard alone decides
+        // them (a resend under the first send's own key is the idempotency
+        // store's to decide, src/idempotency-store.js).
+        const credI = credential(accept || {});
+        const i1 = settles, vi = verifies;
+        await admin.sendCommand(["CLIENT", "PAUSE", "5000", "ALL"]);
+        const tI = Date.now();
+        const ri = await send(I, { "payment-signature": credI });
+        const tookI = Date.now() - tI;
+        const bi = await ri.json().catch(() => ({}));
+        ok(ri.status === 503 && bi.reason === "replay-store-unavailable" && ri.headers.get("retry-after") === "30" && tookI < 4_500, `a store paused past the bound on a required claim: the paid call is refused 503 with Retry-After while the store is still paused (${ri.status} ${bi.reason || ""} after ${tookI} ms)`);
+        ok(verifies === vi && settles === i1, `nothing was verified or settled for it (verify +${verifies - vi}, settle +${settles - i1})`);
+        await admin.ping(); // answers once the pause has ended
+        const ri2 = await send(I, { "payment-signature": credI, "idempotency-key": `outage-${randomBytes(8).toString("hex")}` });
+        const bi2 = await ri2.json().catch(() => ({}));
+        ok(ri2.status === 200 && settles === i1 + 1, `the refused payment was not consumed: sent again once the store answers it is served and settled once, never refused as a replay of itself (${ri2.status} ${bi2.reason || ""} ${ri2.headers.get("x-payment-replay") || ""} ${String(bi2.error || "").slice(0, 120)}; settle +${settles - i1})`);
+        const ri3 = await send(I, { "payment-signature": credI, "idempotency-key": `outage-${randomBytes(8).toString("hex")}` });
+        ok(ri3.status === 409 && ri3.headers.get("x-payment-replay") === "consumed" && settles === i1 + 1, `and sent a third time it is the replay it is: refused as consumed, never settled twice (${ri3.status} ${ri3.headers.get("x-payment-replay") || ""}; settle +${settles - i1})`);
+      } finally {
+        try { await admin.sendCommand(["CLIENT", "UNPAUSE"]); } catch { /* not paused */ }
+        await admin.quit().catch(() => {});
+      }
     } else {
       console.log("note - no REDIS_URL given: the live two-container control is skipped (the outage cases above do not need one)");
     }

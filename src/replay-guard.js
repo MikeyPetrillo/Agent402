@@ -53,12 +53,22 @@ import algosdk from "algosdk";
 import { getTransactionDecoder } from "@solana/kit";
 import { paymentHeaderOf } from "./payer.js";
 import { getSharedRedisClient, sharedLimitEnabled } from "./shared-limit.js";
-import { boundedRedisClient } from "./bounded-redis.js";
+import { boundedRedisClient, OP_MS } from "./bounded-redis.js";
 // Every command this guard sends is bounded (SHARED_LIMITS_OP_MS, loop time):
 // a connected Redis that stops answering fails the command, which each path
 // below reads as a store that did not answer, instead of holding the paid
 // call at its claim for as long as the socket lives.
 const storeClient = async () => boundedRedisClient(await getSharedRedisClient());
+// The commands of a claim the route REQUIRES (begin with requireShared) get a
+// longer bound of their own (REPLAY_CLAIM_OP_MS, default 5 s, never under
+// SHARED_LIMITS_OP_MS). A required claim that times out is a 503 to a paying
+// caller, while a store that pauses for a few seconds and then answers can
+// simply be waited for: the claim is taken when it answers and the call is
+// served. A store that never answers is still refused, after this bound. A
+// claim that is not required keeps the short bound: it falls back to this
+// process's own claim, which serves the call either way.
+export const REQUIRED_CLAIM_OP_MS = () => Math.max(OP_MS(), Number(process.env.REPLAY_CLAIM_OP_MS) || 5_000);
+const claimClient = async (required) => (required ? boundedRedisClient(await getSharedRedisClient(), REQUIRED_CLAIM_OP_MS) : storeClient());
 import { decodePaymentHeader, isEvmNetworkName, canonicalNonce } from "./payment-header.js";
 import { stellarAuthorizationsOf } from "./stellar-confirm.js";
 import { base64BytesOf } from "./base64-bytes.js";
@@ -743,7 +753,7 @@ export function createReplayGuard({
       // when they were made.
       if (isConsumedLocal(lk, now)) return "consumed";
       if (inFlight.has(lk)) return "inflight";
-      const c = await storeClient();
+      const c = await claimClient(requireShared);
       if (!c && requireShared && sharedLimitEnabled()) return "unavailable";
       if (c) {
         const names = namesOf(key);
@@ -752,12 +762,19 @@ export function createReplayGuard({
         const legacyTag = LEGACY_TAG + primary + "|" + token;
         let claimedPrimary = false;
         let legacyHeld = false;
+        // A claim that was SENT may land although its answer never came (the
+        // command timed out, or the connection dropped after the store took
+        // it): the name then holds this call's token, which no other call
+        // has, and it is dropped by that token below.
+        let sentPrimary = false;
+        let sentLegacy = false;
         try {
           if (await c.get(REDIS_PREFIX + "c:" + primary)) return "consumed";
           if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "c:" + legacy), names)) return "consumed";
           // SET NX is the atomic claim: two replicas racing this same key
           // cannot both receive a non-null reply, which is exactly the
           // property inFlight.add() gave for free within one process.
+          sentPrimary = true;
           const claimed = await c.set(REDIS_PREFIX + "f:" + primary, token, { NX: true, EX: inflightTtlSeconds });
           if (!claimed) return "inflight";
           claimedPrimary = true;
@@ -765,6 +782,7 @@ export function createReplayGuard({
           if (legacy) {
             // An earlier build's claim on this credential is honored; another
             // payer's tagged claim there is not ours to wait on.
+            sentLegacy = true;
             legacyHeld = Boolean(await c.set(REDIS_PREFIX + "f:" + legacy, legacyTag, { NX: true, EX: inflightTtlSeconds }));
             if (!legacyHeld && isLegacyEntry(await c.get(REDIS_PREFIX + "f:" + legacy), names)) return back("inflight");
           }
@@ -786,10 +804,14 @@ export function createReplayGuard({
         } catch (e) {
           // A claim this call took before the store failed is dropped (best
           // effort), so the buyer's retry is not refused as in flight for the
-          // claim's whole life on a payment that was never used.
-          if (claimedPrimary) {
+          // claim's whole life on a payment that was never used. So is one
+          // that was sent and never answered: on one connection the drop is
+          // queued behind the claim, so a claim that lands late is dropped
+          // right after it. Only a name still holding this call's own token
+          // is dropped, never another request's claim.
+          if (claimedPrimary || sentPrimary) {
             try { await delIfValue(c, REDIS_PREFIX + "f:" + primary, token); } catch { /* expires with its TTL */ }
-            if (legacyHeld) { try { await delIfValue(c, REDIS_PREFIX + "f:" + legacy, legacyTag); } catch { /* expires with its TTL */ } }
+            if (legacyHeld || sentLegacy) { try { await delIfValue(c, REDIS_PREFIX + "f:" + legacy, legacyTag); } catch { /* expires with its TTL */ } }
           }
           if (requireShared) {
             console.error("[replay-guard] redis begin failed; refusing a route that requires the shared store:", e.message);
