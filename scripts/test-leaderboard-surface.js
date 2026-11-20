@@ -44,6 +44,9 @@ ok(llms.includes("/api/route") && llms.includes("/api/find"), "llms.txt still ad
 // llms.txt must mention all three so an LLM crawling the doc learns it can
 // reach the same data via the MCP tool or the SDK method, not just the JSON.
 ok(llms.includes("sellers.list"), "llms.txt names the MCP tool sellers.list");
+// The hosted connector lists sellers.list only with AGENT402_SHOW_ROUTER=1, so
+// every line that names it on the short index carries that scope.
+ok(llms.split("\n").filter((l) => l.includes("sellers.list")).every((l) => /listed on hosted \/mcp only with `AGENT402_SHOW_ROUTER=1`/.test(l)), "llms.txt scopes MCP sellers.list to the switch that lists it on hosted /mcp");
 ok(llms.includes("topSellers"), "llms.txt names the SDK method topSellers()");
 ok(/\?sort=usd\|calls/.test(llms), "llms.txt documents the ?sort=usd|calls param");
 

@@ -783,10 +783,13 @@ export function llmsTxt(baseUrl, catalog) {
     [`- [/api/answer](`, `- [/api/answer](${baseUrl}/api/answer): **front door**: cited answer grounded in live web search results`],
     [`- [/api/route](`, `- [/api/route](${baseUrl}/api/route): Smart Order Router: rank tools across every crawled x402 seller`],
     [`- [/api/index](`, `- [/api/index](${baseUrl}/api/index): the crawled x402 seller index, one page per call; one origin with \`?seller=<host>\``],
-    // Each depth's price stays here (from the decide configuration).
+    // Each depth's price stays here (from the decide configuration), and so
+    // does the execute route's payment sentence: it is paid from a wallet only
+    // (scripts/test-third-party-routes.js).
     [`- [/api/decide](`, (line) => {
       const depth = (line.match(/ Depth quick \$[\d.]+ \/ plan \$[\d.]+ \/ full \$[\d.]+\./) || [""])[0];
-      return `- [/api/decide](${baseUrl}/api/decide): a paid decision: describe a job, get a call-ready plan over this catalog and outside x402 sellers${depth ? `.${depth.replace(/\.$/, "")}` : ""}`;
+      const execute = (line.match(/ The fee returns as a [^.]*`POST \/api\/decide\/execute`, which runs the plan [^.]*\./) || [""])[0];
+      return `- [/api/decide](${baseUrl}/api/decide): a paid decision: describe a job, get a call-ready plan over this catalog and outside x402 sellers${depth ? `.${depth.replace(/\.$/, "")}` : ""}${execute ? `.${execute}` : ""}`;
     }],
     // The tier prices stay here (each tier's route and price, from the catalog).
     [`- [/api/route/execute](`, (line) => {
@@ -797,7 +800,7 @@ export function llmsTxt(baseUrl, catalog) {
     [`- [/mcp/server-card](`, `- [/mcp/server-card](${baseUrl}/mcp/server-card): MCP server card`],
     [`- [/api/refunds](`, `- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments`],
     // The counting method, the filters and the SDK and MCP readers are in /llms-full.txt.
-    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\`), the top 25 (\`?top=N\`, \`?sort=usd|calls\`); also the SDK's \`topSellers()\` and MCP \`sellers.list\``],
+    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\`), the top 25 (\`?top=N\`, \`?sort=usd|calls\`); also the SDK's \`topSellers()\` and MCP \`sellers.list\` (listed on hosted /mcp only with \`AGENT402_SHOW_ROUTER=1\`)`],
   ];
   const surfaceBrief = (line) => {
     const hit = brief.find(([prefix]) => line.startsWith(prefix));
