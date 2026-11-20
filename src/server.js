@@ -13034,6 +13034,7 @@ app.use((req, res, next) => {
 // A free proof-of-work or trial call is not a charge and takes no ticket.
 // The abandoned records are read back before the listener opens: a deploy is a
 // restart, and a budget every restart refilled would not bound anything.
+import { INFLIGHT_WINDOW_MS as HANGUP_INFLIGHT_WINDOW_MS } from "./hangup-forgiveness.js";
 if (!FREE_MODE) {
   try {
     const r = loadHangupForgiveness();
@@ -13086,13 +13087,32 @@ if (!FREE_MODE) {
     // caps, so the run is recorded as abandoned and the budget bounds the
     // credit as it bounds every withheld charge.
     const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) && (!settleSentWhileConnected(req) || isBatchSettlementRequest(req)) });
-    res.once("close", () => { closed = true; if (reserved) settle(); });
+    // The ticket is settled once the response's outcome is known (the gate
+    // ended it, or it finished), not at the close: a close that lands while
+    // the settle path still waits (the authorization claim's store wait,
+    // after the client-gone check and before the settlement mark) reads "no
+    // settlement sent" at that moment, and the charge that then goes out
+    // would be counted against the budget as withheld. A payment channel's
+    // ticket is still settled at the close: its charge is given back only on
+    // an abandoned ticket, which recordHangupDebt reads when the gate ends
+    // the response, before the outcome runs. A response that never ends is
+    // settled one in-flight window after the close, as it reads then.
+    let decided = false;
+    onResponseEnd(req, res, () => { decided = true; if (reserved) settle(); });
+    res.once("close", () => {
+      closed = true;
+      if (!reserved) return;
+      if (decided || isBatchSettlementRequest(req)) { settle(); return; }
+      const late = setTimeout(settle, HANGUP_INFLIGHT_WINDOW_MS());
+      late.unref?.();
+    });
     // Priced at what this chain charges (the signed amount, or the gated
     // price through the chain's premium and floor), so a ticket holds the
     // charge it may forgive.
     try { await reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: ticketPriceUsd({ basePriceUsd: quotedPriceUsd(def, req), paymentHeader: paymentHeaderOf(req) }), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true }); }
     catch (err) { console.warn(`[hangup] ticket reservation failed (${String(err?.message || err).slice(0, 80)}); the call runs without a ticket`); }
     reserved = true;
+    if (decided) settle();
     if (closed || res.destroyed) {
       settle();
       try { res.status(499).json({ error: "The connection closed before the call started; nothing ran and nothing was charged.", tool: def.slug, charged: false }); } catch { /* socket already gone */ }
