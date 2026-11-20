@@ -45,11 +45,13 @@ const EMPTY_LENGTH = [reasoning("Let me think"), reasoning(" about it"), finish(
 const WITH_CONTENT = [reasoning("Let me think"), reasoning(" about it"), content("The"), content(" answer"), finish("stop"), usage(), DONE];
 
 // An upstream that sends `frames`, each after `gapMs` (or [ms, frame] pairs),
-// and errors out instead of ending when `cut` is set.
-const upstreamOf = (frames, { gapMs = 0, cut = false } = {}) => async (_b, { signal } = {}) => ({ ok: true, status: 200, body: (async function* () {
+// and errors out instead of ending when `cut` is set. `cleanOnAbort`: an
+// abort ends the body as if the upstream had finished (no error).
+const upstreamOf = (frames, { gapMs = 0, cut = false, cleanOnAbort = false } = {}) => async (_b, { signal } = {}) => ({ ok: true, status: 200, body: (async function* () {
   for (const f of frames) {
     const [ms, text] = Array.isArray(f) ? f : [gapMs, f];
     if (ms) await sleep(ms);
+    if (signal?.aborted && cleanOnAbort) return;
     // Like a real connection, an abort errors the body mid-read.
     if (signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
     yield new TextEncoder().encode(text);
@@ -169,6 +171,10 @@ ok(!chatDeltaHasAnswer({ role: "assistant", content: "", reasoning: "x", reasoni
   // An empty answer that ends inside the window is still a 502.
   const inside = await relay([[0, reasoning("a")], [50, reasoning("b")], [0, finish("length")], [0, DONE]], {}, true, cdnReq());
   ok(inside.err?.statusCode === 502 && inside.err.emptyAnswer === true && !inside.res.headersSent, "CDN window: an empty answer that ends inside the window is still a 502 before any byte");
+  // ...and stays one: the window's commit timer is cleared with the attempt,
+  // so no 200 header is written after the 502, when the window reaches its tail.
+  await sleep(450);
+  ok(!inside.res.headersSent && inside.res.status === null && inside.res.writes.length === 0, `CDN window: no header or byte follows the 502 once the window's tail passes (status ${inside.res.status}, ${inside.res.writes.length} writes)`);
   // No CDN deadline: a long hold is not committed early.
   const direct = await relay(long, {}, true, { headers: {} });
   ok(!direct.err && firstAt(direct.res) >= 900, `no CDN deadline: the hold lasts to the first answer frame (first byte at ${firstAt(direct.res)} ms)`);
@@ -180,6 +186,57 @@ ok(!chatDeltaHasAnswer({ role: "assistant", content: "", reasoning: "x", reasoni
   ok(cut.err?.statusCode === 502 && cut.err.upstreamTimeout === true && cut.err.emptyAnswer !== true && K.timedOutAttempt(cut.err, Date.now() - 300, 300), `our own stream limit on a held stream is a timeout (upstreamTimeout ${cut.err?.upstreamTimeout}, emptyAnswer ${cut.err?.emptyAnswer})`);
   const dropped = await relay([reasoning("a"), reasoning("b")], { cut: true });
   ok(dropped.err?.statusCode === 502 && dropped.err.emptyAnswer !== true && dropped.err.upstreamTimeout !== true, "a drop after the first frame is neither an empty answer nor a timeout");
+  // The upstream ends its body cleanly once our limit aborted it (no error on
+  // the read): still our timeout, never an empty answer.
+  const clean = await relay(endless, { cleanOnAbort: true }, true, null, { timeoutMs: 200, streamTimeoutMs: 300 });
+  ok(clean.err?.statusCode === 502 && clean.err.upstreamTimeout === true && clean.err.emptyAnswer !== true && !clean.res.headersSent, `a body that ends cleanly after our own limit fired is that timeout, not an empty answer (upstreamTimeout ${clean.err?.upstreamTimeout}, emptyAnswer ${clean.err?.emptyAnswer})`);
+}
+{
+  // One close listener per attempt, taken off when the attempt ends: a chain
+  // walk calls the relay once per attempt on the same response, and each call
+  // used to leave its listener behind (the 11th drew a MaxListenersExceeded
+  // warning). Served, empty, cut and refused-before-the-body attempts alike.
+  const warnings = [];
+  const onWarning = (w) => { if (w?.name === "MaxListenersExceededWarning") warnings.push(String(w.message)); };
+  process.on("warning", onWarning);
+  const res = fakeRes();
+  const before = res.listenerCount("close");
+  const refused = async () => ({ ok: false, status: 503, headers: new Headers(), text: async () => "busy", json: async () => ({ error: { message: "busy" } }) });
+  const kinds = [];
+  for (let i = 0; i < 12; i++) {
+    const fetchUpstream = [upstreamOf(EMPTY_LENGTH), upstreamOf([reasoning("x")], { cut: true }), refused][i % 3];
+    const r = await settle(() => streamOpenRouterTo({ model: "fake/model", messages: [], stream: true }, res, { fetchUpstream, timeoutMs: 5000, holdUntilAnswer: true }));
+    kinds.push(r.err?.statusCode ?? "ok");
+  }
+  const served = await settle(() => streamOpenRouterTo({ model: "fake/model", messages: [], stream: true }, res, { fetchUpstream: upstreamOf(WITH_CONTENT), timeoutMs: 5000, holdUntilAnswer: true }));
+  await sleep(0);
+  process.off("warning", onWarning);
+  ok(!served.err && res.status === 200 && kinds.every((k) => k === 502 || k === 503), `a walk of 13 attempts on one response: 12 refused, the last served (${kinds.join(",")})`);
+  ok(res.listenerCount("close") === before, `every attempt takes its close listener off when it ends (${res.listenerCount("close") - before} left behind)`);
+  ok(warnings.length === 0, `no MaxListenersExceeded warning on a long walk${warnings.length ? ` (${warnings[0]})` : ""}`);
+  // CONTROL: while an attempt runs, the buyer's hang-up still aborts it.
+  let aborted = null;
+  const live = fakeRes();
+  const slow = async (b, o) => { const u = await upstreamOf([[0, reasoning("a")], ...[...Array(20)].map((_, i) => [20, reasoning("r" + i)])])(b, o); aborted = o.signal; return u; };
+  const run = settle(() => streamOpenRouterTo({ model: "fake/model", messages: [], stream: true }, live, { fetchUpstream: slow, timeoutMs: 5000, holdUntilAnswer: true }));
+  await sleep(60);
+  live.emit("close");
+  const gone = await run;
+  ok(aborted?.aborted === true && gone.err?.statusCode === 502, `CONTROL: a close while the attempt runs aborts the upstream (aborted ${aborted?.aborted}, ${gone.err?.statusCode})`);
+  ok(live.listenerCount("close") === 0, `...and that attempt's listener is gone once it ended (${live.listenerCount("close")} left)`);
+}
+{
+  // A tool call is an answer on every wire, also when the output cap ends the
+  // stream (the buffered paths serve the same body: isEmptyLength,
+  // isEmptyMaxTokens and isEmptyIncomplete read a tool call as an answer).
+  const chat = await relay([reasoning("x"), frame({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "c", type: "function", function: { name: "f", arguments: "{\"a\":" } }] } }] }), finish("length"), DONE]);
+  ok(!chat.err && chat.res.status === 200 && chat.res.out.includes('"tool_calls"'), `chat: a tool call cut by the cap (length) is relayed as a 200 (${chat.err?.statusCode ?? chat.res.status})`);
+  const toolAtCap = [ev("message_start", { message: { id: "m", type: "message", role: "assistant", model: "m", content: [] } }), ev("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } }), ev("content_block_delta", { index: 0, delta: { type: "thinking_delta", thinking: "Let me think" } }), ev("content_block_stop", { index: 0 }), ev("content_block_start", { index: 1, content_block: { type: "tool_use", id: "t", name: "f", input: {} } }), ev("message_delta", { delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 64 } }), ev("message_stop", {})];
+  const msg = await relay(toolAtCap, {}, createMessagesAnswerWatch);
+  ok(!msg.err && msg.res.status === 200 && msg.res.out.includes('"tool_use"'), `messages: a tool_use block that ends at max_tokens is relayed as a 200, not the empty-answer 502 (${msg.err?.message?.slice(0, 50) ?? msg.res.status})`);
+  const respAtCap = [ev("response.created", { response: { id: "r", model: "m", status: "in_progress" } }), ev("response.output_item.added", { output_index: 0, item: { type: "function_call", name: "f", call_id: "c", arguments: "" } }), ev("response.incomplete", { response: { id: "r", model: "m", status: "incomplete", incomplete_details: { reason: "max_output_tokens" } } })];
+  const resp = await relay(respAtCap, {}, createResponsesAnswerWatch);
+  ok(!resp.err && resp.res.status === 200 && resp.res.out.includes('"function_call"'), `responses: a function call that ends at max_output_tokens is relayed as a 200 (${resp.err?.message?.slice(0, 50) ?? resp.res.status})`);
 }
 {
   // The Messages and Responses streams.

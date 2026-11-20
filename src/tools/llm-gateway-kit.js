@@ -353,8 +353,7 @@ export const TIERS = {
       // gemini-2.5-flash-lite left 2026-09-29 (upstream expiration 2026-10-20): served by its successor via RETIRING_MODELS.
       "google/gemini-3.1-flash-lite", // inside this tier's max_price
       // inception/mercury-2.5 left 2026-11-08 (upstream expiration): served by gemini-3.1-flash-lite via RETIRING_MODELS.
-      // llama-3.2-1b-instruct and llama-3.2-3b-instruct: each served as itself until their upstream expiration on 2026-11-20, then by ministral-3b-2512 (RETIRING_MODELS, scheduled). In no ranking, fallback or default; both prefixes go on that day.
-      "meta-llama/llama-3.2-1b-instruct", "meta-llama/llama-3.2-3b-instruct",
+      // llama-3.2-1b-instruct and llama-3.2-3b-instruct left 2026-11-20 (upstream expiration): served by ministral-3b-2512 via RETIRING_MODELS.
       // ministral-3b/8b were renamed upstream to the -2512 ids (the bare ids
       // 404 at OpenRouter; live-verified 2026-08-19). Listed with the live id so
       // /v1/models never advertises a name the upstream no longer serves.
@@ -974,9 +973,10 @@ export const RETIRING_MODELS = Object.freeze({
   "qwen/qwen-2.5-7b-instruct": { until: "2026-11-11", use: "mistralai/ministral-8b-2512" },
   // Llama 3.2 1B and 3B (OpenRouter expiration_date 2026-11-20 on both, so
   // the 3B id is no successor for the 1B: canonicalModel follows one entry,
-  // not a chain). SCHEDULED: each is served as itself on nano, base and
-  // metered until that day, then by the nano model of matching size class, as
-  // for laguna-xs, which those same three tiers admit. The successor is
+  // not a chain). Each was served as itself on nano, base and metered until
+  // that day, and from it by the nano model of matching size class, as for
+  // laguna-xs, which those same three tiers admit; the nano list stopped
+  // naming both ids that day. The successor is
   // non-reasoning, carries no upstream expiration date, has the 3B id's
   // context window and takes tools (the Llama ids do not); its own row is at
   // or under the family row that prices the Llama ids, so it is no dearer,
@@ -1226,6 +1226,30 @@ export function tierAllows(tierSlug, model, requested) {
   if (prefixesAdmit(tier, id) || retiredKeepAdmits(tierSlug, id)) return true;
   const from = requested == null ? null : substitutedFrom(requested);
   return !!from && canonicalModel(requested).toLowerCase() === id && (prefixesAdmit(tier, from) || retiredKeepAdmits(tierSlug, from));
+}
+
+/** A tier's list as it is advertised (GET /v1/models and the live-catalog
+ *  guard, scripts/test-gateway-model-ids.js): each entry as listed, except an
+ *  exact id past its retirement date (RETIRING_MODELS; canonicalModel serves
+ *  its successor before any upstream call, so the id is never sent as
+ *  itself). That id is advertised as its successor where the tier admits it
+ *  and no other entry already advertises it (a bare family name counts as
+ *  its PREFIX_CANONICAL model), and left out where the tier does not admit
+ *  it. A family prefix ("deepseek/") and a scheduled id before its date are
+ *  returned as listed. */
+export function advertisedPrefixes(tierSlug) {
+  const list = TIERS[tierSlug]?.prefixes || [];
+  const retired = (p) => (p.endsWith("/") ? null : retiringModel(p));
+  const shown = (p) => (p.endsWith("/") ? p : PREFIX_CANONICAL[p.toLowerCase()] || p);
+  const kept = new Set(list.filter((p) => !retired(p)).map(shown));
+  const out = [];
+  for (const p of list) {
+    const r = retired(p);
+    const id = r ? r.use : p;
+    if (r && (!tierAllows(tierSlug, id) || kept.has(shown(id)))) continue;
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
 }
 
 /** Which gateway tier serves this model - for self-correcting 400s. */
@@ -1843,6 +1867,29 @@ function promptTokensOf(estimated, body, tier, st) {
  *  no row; the metered tier refuses before then). */
 export function meteredBoundFor(body, tier, imageCount = 0) {
   return costFor(body.model, promptTokensFor(body, tier, imageCount));
+}
+
+/** The live-catalog guard's rule for a row on the metered tier (rule 4 in
+ *  scripts/test-gateway-model-ids.js). That tier sends the row itself as
+ *  provider.max_price (meteredBoundFor), so an endpoint dearer than the row is
+ *  never routed to and bills nothing: the row cannot under-price a call there.
+ *  What a row set too low costs is service (qwen3.8-max-prime, 2026-09-24:
+ *  no endpoint under its row, every metered call refused upstream). A row is
+ *  serviceable while at least one of the model's routable endpoints, and at
+ *  least METERED_MIN_FIT_SHARE of them, fit under it on both units, and one
+ *  that fits takes tools wherever any of them does. `endpoints` are
+ *  `{ prompt, completion, tools }` in the row's units; unpriced ones are not
+ *  counted. Reasons: none_fit, few_fit, tools_unfit. */
+export const METERED_MIN_FIT_SHARE = 0.5;
+export function meteredRowFit(row, endpoints) {
+  const routable = (endpoints || []).filter((e) => Number.isFinite(e?.prompt) && Number.isFinite(e?.completion));
+  const under = (e) => e.prompt <= row.prompt + 1e-9 && e.completion <= row.completion + 1e-9;
+  const fit = routable.filter(under);
+  const reasons = [];
+  if (!fit.length) reasons.push("none_fit");
+  else if (fit.length < routable.length * METERED_MIN_FIT_SHARE) reasons.push("few_fit");
+  if (fit.length && routable.some((e) => e.tools) && !fit.some((e) => e.tools)) reasons.push("tools_unfit");
+  return { routable: routable.length, fit: fit.length, serviceable: reasons.length === 0, reasons };
 }
 
 /** Worst-case upstream bill (USD) for an outbound body at this tier:
@@ -3593,7 +3640,10 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
   const hadMetered = !!meterReq && Object.prototype.hasOwnProperty.call(meterReq, "__meteredUsageUsd");
   const meteredBefore = meterReq?.__meteredUsageUsd;
   let timer = setTimeout(() => { if (!started) firstFrameTimedOut = true; else overallTimedOut = true; ctrl.abort(); }, timeoutMs);
-  res.on?.("close", () => ctrl.abort());
+  // A chain walk calls this once per attempt on the same response: the
+  // listener is this attempt's and is taken off when the attempt ends.
+  const abortOnClose = () => ctrl.abort();
+  res.on?.("close", abortOnClose);
   try {
     let upstream;
     try { upstream = await fetchUpstream(body, { signal: ctrl.signal, url }); } catch (e) {
@@ -3711,6 +3761,7 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
   } finally {
     clearTimeout(timer);
     clearTimeout(holdTimer);
+    res.off?.("close", abortOnClose);
     if (!committed && answer && meterReq) {
       if (hadMetered) meterReq.__meteredUsageUsd = meteredBefore;
       else delete meterReq.__meteredUsageUsd;
@@ -5031,7 +5082,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.003",
     description:
-      "OpenAI-compatible chat completions, nano tier: gpt-6-luna (the default), gpt-5.6-luna, claude haiku 5.5, gemini flash-lite, small llama/ministral, deepseek v4.1 flash, deepseek-chat - $0.003 per call in USDC over x402, priced for high-frequency agent loops. Same wire format as /v1/chat/completions with loop-sized caps (12k chars in, 768 tokens out). Streaming supported (stream: true). No API key, no signup.",
+      "OpenAI-compatible chat completions, nano tier: gpt-6-luna (the default), gpt-5.6-luna, claude haiku 5.5, gemini flash-lite, small ministral, deepseek v4.1 flash, deepseek-chat - $0.003 per call in USDC over x402, priced for high-frequency agent loops. Same wire format as /v1/chat/completions with loop-sized caps (12k chars in, 768 tokens out). Streaming supported (stream: true). No API key, no signup.",
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-5.6-luna" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-5.6-luna" } } },
     handler: makeHandler("v1-chat-nano"),
@@ -5296,7 +5347,11 @@ export function modelsList() {
     // tierAllows admits a tier's own default ids by name at its price, so a
     // default no prefix covers (base's gpt-6-luna) is listed under it too.
     const ownDefaults = [tier.defaultModel, tier.defaultModelCompat].filter((d) => d && !prefixesAdmit(tier, d.toLowerCase()));
-    for (const p of [...tier.prefixes, ...ownDefaults]) {
+    // A retired id the list still names is advertised as its successor, or
+    // not at all (advertisedPrefixes): a caller never reads an id we serve as
+    // another model.
+    const listed = advertisedPrefixes(slug);
+    for (const p of [...listed, ...ownDefaults.filter((d) => !listed.includes(d))]) {
       // A family prefix that is not itself an upstream id is advertised as
       // the concrete model it resolves to (PREFIX_CANONICAL) - an agent
       // must be able to send any id on this list verbatim.
