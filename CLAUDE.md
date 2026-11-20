@@ -50,6 +50,9 @@ LLC: credit the entity, never a personal name.
 - `src/state-db.js`, `src/json-document.js`: the state database (Postgres) and the whole-file JSON
   store API; leases, store readiness and large rows in `.claude/rules/ops.md`.
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
+- `src/solana-history-rpc.js` (Solana transaction reads: public lane first, keyed lane behind it),
+  `src/solana-activity-store.js` (the activity scans' state across restarts),
+  `src/upstream-call-days.js` (per-caller daily call counts); detail in `.claude/rules/ops.md`.
 - `src/stats.js`, `src/sales-ledger.js`, `src/seo.js`, `src/pages.js`, `src/guides.js`,
   `src/privacy.js`, `src/terms.js`, `src/security-page.js`, `src/company.js`.
 - `facilitator/`: self-hosted Stellar facilitator (own lockfile; redeploys only on
