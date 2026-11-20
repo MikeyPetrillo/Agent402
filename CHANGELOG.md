@@ -48,11 +48,11 @@ Tools:
 
 ### 2026-11-19 (Robinhood Chain price)
 Payments:
-- Robinhood Chain (`eip155:4663`) quotes every call at its list price, like
-  every other chain: the chain no longer carries a price floor by default.
-  `ROBINHOOD_MIN_PRICE_USD` still sets one, and `/api/pricing`
-  `payment.minPriceUsdByNetwork`, llms.txt and the guides state it only when
-  it is set.
+- Robinhood Chain (`eip155:4663`) no longer carries a price floor by
+  default. A server that leaves `ROBINHOOD_MIN_PRICE_USD` unset quotes every
+  call there at its list price, like every other chain. A server that sets
+  it keeps that floor, and `/api/pricing` `payment.minPriceUsdByNetwork`,
+  llms.txt and the guides state the floor only when it is set.
 - The optional own settler on Robinhood Chain (`ROBINHOOD_RELAYER_KEY`)
   settles a sale only when its price is at least
   `ROBINHOOD_RELAYER_MIN_PRICE_USD` (default 0.004). Under it, a refusal from

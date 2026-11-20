@@ -170,5 +170,24 @@ await check("the premium map and clause derive from NETWORK_PRICE_PREMIUMS, by p
   assert.match(src("mcp-http.js"), /\$\{premiumClause\(\)\}/, "MCP payment.info");
 });
 
+// The /changelog page (and CHANGELOG.md, which test-changelog-parity holds to
+// the same words) is read on servers that set the floor as well as on ones
+// that do not, so an item that says Robinhood Chain quotes its list price
+// states it only for a server that leaves ROBINHOOD_MIN_PRICE_USD unset, and
+// says a server that sets it keeps that floor: both halves are what the code
+// does, checked here beside the words.
+await check("the changelog's Robinhood price item holds on a server that sets the floor and on one that does not", async () => {
+  const { CHANGELOG_ENTRIES } = await import("../src/changelog.js");
+  const items = CHANGELOG_ENTRIES.flatMap((e) => e.items || []).filter((i) => i.includes("eip155:4663") && /list price/.test(i) && i.includes("ROBINHOOD_MIN_PRICE_USD"));
+  assert.ok(items.length >= 1, "the item that states Robinhood Chain's list price is found");
+  for (const item of items) {
+    const listPrice = item.split(/(?<=\.)\s+/).find((s) => /list price/.test(s)) || "";
+    assert.match(listPrice, /leaves `?ROBINHOOD_MIN_PRICE_USD`? unset|without `?ROBINHOOD_MIN_PRICE_USD`?/, `the list-price sentence is scoped to a server without the floor: "${listPrice}"`);
+    assert.match(item, /sets it keeps that floor/, "the item says a server that sets ROBINHOOD_MIN_PRICE_USD keeps that floor");
+  }
+  assert.equal(applyNetworkFloor("$0.001", RH, networkPriceFloors({})), "$0.001", "unset: the list price");
+  assert.equal(applyNetworkFloor("$0.001", RH, networkPriceFloors(OLD)), FLOOR, "set: that floor");
+});
+
 console.log(failures ? `\nFAILED (${failures})` : "\nall passed");
 process.exit(failures ? 1 : 0);
