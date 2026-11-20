@@ -222,6 +222,16 @@ const PAID_LOOPBACK_TIMEOUT_MS = Math.max(1_000, MCP_REQ_DEADLINE_MS - 2_500);
 // the settle call itself is in flight, the charge goes through and is
 // recorded as owed and refunded. The connector cannot tell which happened at
 // the moment it gives up, so "not charged" would not be a promise it can keep.
+// The wallet an MPP evm credential's signed authorization names (`from`);
+// null for any other credential. Only a label for a task record's sales-ledger
+// read after a restart (src/mcp-tasks.js), never an identity.
+export function evmPayerOfCredential(header) {
+  try {
+    const m = /^payment\s+([A-Za-z0-9_-]+=*)$/i.exec(String(header || "").trim());
+    const c = m ? JSON.parse(Buffer.from(m[1], "base64url").toString("utf8")) : null;
+    return c?.challenge?.method === "evm" && typeof c?.payload?.from === "string" ? c.payload.from : null;
+  } catch { return null; }
+}
 export const PAID_CUTOFF_TEXT = "The call may still have completed and been charged. If it was, the charge is recorded as owed in our refund ledger and repaid after review. Check any payment by its settlement transaction, free, at GET /api/refunds/lookup?tx=<hash>: it answers whether a refund is recorded and, once sent, our refund transaction. Do not retry blindly: a retry is a new paid call.";
 export const UNPAID_CUTOFF_TEXT = "No payment was presented, so there was nothing to charge.";
 /** The clause every connector "not charged" line carries: a Tempo push
@@ -1391,7 +1401,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
 
       // With the state database on, create() resolves once the row is stored
       // (file mode returns the record at once; await is a no-op there).
-      const rec = await tasks.create({ slug: entry.def.slug, controller });
+      // The paying wallet rides on the record (never on the wire), so a run
+      // orphaned by a restart is worded from the sales ledger (src/mcp-tasks.js).
+      const rec = await tasks.create({ slug: entry.def.slug, controller, payer: evmPayerOfCredential(credentialHeader) });
       if (rec) {
         progressTaskId = rec.taskId;
         if (progressHeld) { const held = progressHeld; progressHeld = null; try { await tasks.update?.(rec.taskId, withMessage(held)); } catch { /* advisory */ } }

@@ -41,6 +41,7 @@ import { NOT_CHARGED } from "./not-charged.js";
 import { PUSH_FAILURE_NOTE, PUSH_UNCLAIMED_OWED_NOTE, PUSH_UNCLAIMED_NOTE } from "./push-refusal-body.js";
 import { JOB_PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { PROGRESS_HEADER, registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
+import { payerFromRequest } from "./payer.js";
 
 /** What a failed run's job says about the charge. The loopback answer is the
  *  source, read at the top level and under `details` (the Tempo gate's
@@ -185,7 +186,9 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
 
     const ctl = new AbortController();
     let rec = null;
-    try { rec = await store.create({ slug: def.slug, controller: ctl }); } catch { rec = null; }
+    // The paying wallet rides on the record (never on the wire), so a job
+    // orphaned by a restart is worded from the sales ledger (src/mcp-tasks.js).
+    try { rec = await store.create({ slug: def.slug, controller: ctl, payer: payerFromRequest(req) }); } catch { rec = null; }
     if (!rec) return res.status(503).json({ error: "async_unavailable", hint: "A job could not be recorded. Send the call with Prefer: wait=<seconds> (the route's maxSeconds) instead of Prefer: respond-async to wait on this connection. Nothing was charged." });
     perIp.set(ip, (perIp.get(ip) || 0) + 1);
 
