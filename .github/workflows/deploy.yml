@@ -5463,6 +5463,35 @@ jobs:
             *) echo "::error::No Bazaar validator run was clean against the new build: $INVALID of $i run(s) read a checked route INVALID, the rest could not be read.$HINT"; exit 1 ;;
           esac
 
+      # Every install line (README, guides, llms-install.md, the connector's
+      # own answers) pins agent402-mcp at mcp/package.json's version, and this
+      # job does not wait on the publish job: a bump that ships before its
+      # publish lands, or whose publish failed or was never marked, points
+      # every copy-paste install at an E404. The registry is read until the
+      # version resolves (scripts/mcp-pin-resolves.js waits up to 20 minutes);
+      # a version that never does fails the job, an unreadable registry is a
+      # warning.
+      - name: Pinned agent402-mcp version resolves on npm
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        timeout-minutes: 25
+        env:
+          DATABENTO_API_KEY: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          MPP_SECRET_KEY: ""
+          X_BEARER_TOKEN: ""
+          WALLET_ADDRESS: ""
+        run: |
+          set +e
+          node scripts/mcp-pin-resolves.js; CODE=$?
+          set -e
+          [ "$CODE" = "1" ] && exit 1
+          exit 0
+
       # A route whose fixed price this deploy changed is bought once, so the
       # Bazaar listing shows the new price instead of the old one until a buyer
       # settles it. Quoted and model-priced routes, and every route whose effect
