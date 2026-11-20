@@ -119,7 +119,7 @@ const RULES = [
   [/\bbelow (our|the) settlement (gate|floor)\b/i, "no_seller_eligible"],
   // Judgment-step refusals (src/tool-judge.js).
   [/\bno tool under this endpoint'?s .{0,24}cap does that task\b/i, "underlying_over_cap"],
-  [/\bdoes that task \(judged/i, "judged_no_match"],
+  [/\bdoes that task \((?:judged|matched too few)/i, "judged_no_match"],
   [/\bno external (x402|MPP|x402 or MPP) seller matched\b/i, "no_seller_matched"],
   // NOT \$[0-9.]+ : the real template is `above this endpoint's $${cap}
   // underlying cap`, so the amount is an interpolation and a digit class here
@@ -167,7 +167,13 @@ export function refusalReason(message, status, err = null) {
   if (cover) return cover;
   if (code === 429 && spendRuleOf(err)) return "routing_paused";
   if (code === 413) return "too_large";
-  if (code === 404) return "not_found";
+  // The router's no-match refusals answer 404 too; their own words name
+  // the class, so a 404 is read as not_found only when they do not.
+  if (code === 404) {
+    const text = typeof message === "string" ? message : "";
+    for (const [re, reason] of RULES) if ((reason === "judged_no_match" || reason === "no_seller_matched") && re.test(text)) return reason;
+    return "not_found";
+  }
   const text = typeof message === "string" ? message : "";
   if (!text) return "other";
   for (const [re, reason] of RULES) if (re.test(text)) return reason;

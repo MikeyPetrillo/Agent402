@@ -22,6 +22,7 @@ import { paymentHeaderOf, payerFromRequest } from "../payer.js";
 import { decodePaymentHeader } from "../payment-header.js";
 import { maySpend, noteSpend, adjustSpend, reserveSpend } from "../external-spend-guard.js";
 import { spendRefusalFields, spendRuleOf } from "../refusal-reason.js";
+import { FILLER_TERMS } from "../query-terms.js";
 import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../avm-network.js";
 import { findTools } from "../find.js";
@@ -228,7 +229,8 @@ export const JUDGED_OVERRIDE_MIN_SHARE = 0.5;
 // Task words that carry the task: three letters or more and not a function
 // word, so a slug made of "an" and "to" cannot meet the judged-pick floor.
 const SCORE_STOP_WORDS = new Set(["the", "and", "for", "with", "from", "into", "onto", "that", "this", "these", "those", "are", "was", "were", "has", "have", "had", "can", "use", "using", "get", "via", "per", "out", "all", "any", "its", "our", "your", "you", "not", "but", "how", "what", "which", "who", "when", "where", "why", "please", "then", "than", "also", "some", "each", "one", "two", "new"]);
-const scoreTerms = (task) => [...new Set(String(task || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 3 && !SCORE_STOP_WORDS.has(t)))].slice(0, 32);
+// Filler ("tool", "api": src/query-terms.js) carries no task either.
+const scoreTerms = (task) => [...new Set(String(task || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 3 && !SCORE_STOP_WORDS.has(t) && !FILLER_TERMS.has(t)))].slice(0, 32);
 export function lexicalScoreOf(task, row, { name = true } = {}) {
   if (name && Number.isFinite(row?.score)) return row.score;
   const terms = scoreTerms(task);
@@ -253,6 +255,32 @@ export function judgedOverrideAllowed(task, candidates, chosen) {
   const score = scoreOf(chosen);
   const floor = Math.max(JUDGED_OVERRIDE_MIN_SCORE, best * JUDGED_OVERRIDE_MIN_SHARE);
   return score >= floor ? { ok: true, score, floor } : { ok: false, score, floor, best };
+}
+
+// A PURCHASE NEEDS A MATCH, NOT ONLY VOLUME. The resolver ordered gated
+// candidates by settled count alone, so a high-volume seller whose listing
+// shares one word with the task was bought ahead of the seller that does the
+// task. Before anything is probed or paid, every candidate is held to the
+// match floor (the judged pick's own score, overrideScoreOf: slug,
+// description and tags, never the name):
+//   - below ROUTE_MATCH_MIN_SCORE, or below one point per task term when the
+//     task has fewer terms than that, it is not bought at all;
+//   - below JUDGED_OVERRIDE_MIN_SHARE of the best candidate's score it is
+//     kept only as a fallback, after every candidate that meets the share.
+// Within each band the incoming order stands (most settled first on EVM
+// chains), and `group` keeps bands inside groups (proven before unproven).
+// No candidate left is the judged_no_match refusal: nothing is spent.
+export const ROUTE_MATCH_MIN_SCORE = JUDGED_OVERRIDE_MIN_SCORE;
+export function routeMatchOrder(task, candidates, { group = () => 0 } = {}) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  const terms = scoreTerms(task).length;
+  const floor = Math.min(ROUTE_MATCH_MIN_SCORE, Math.max(1, terms));
+  const rows = list.map((r, i) => ({ r, i, s: overrideScoreOf(task, r), g: Number(group(r)) || 0 }));
+  const kept = rows.filter((x) => x.s >= floor);
+  const best = Math.max(0, ...kept.map((x) => x.s));
+  const share = best * JUDGED_OVERRIDE_MIN_SHARE;
+  kept.sort((a, b) => (a.g - b.g) || ((a.s >= share ? 0 : 1) - (b.s >= share ? 0 : 1)) || (a.i - b.i));
+  return { items: kept.map((x) => x.r), dropped: rows.length - kept.length, floor, best, share };
 }
 
 /** What the outside-seller judge reads of one candidate: the seller's host,
@@ -295,7 +323,12 @@ export function routeJudgeListing(r) {
  *  when its pick's own match score meets the floor (judgedOverrideAllowed);
  *  below it the lexical order is kept and the judge's answer rides on the
  *  selection. A pinned target was already chosen and is not judged here. */
-export async function judgeSellerOrder(task, candidates, opts = {}) {
+export async function judgeSellerOrder(task, input, opts = {}) {
+  // The match floor first (routeMatchOrder): a candidate below it is never
+  // judged or bought, and none left is a refusal before any judge call.
+  const floored = routeMatchOrder(task, input, { group: (r) => (r?.unproven ? 1 : 0) });
+  if (!floored.items.length) return { items: [], refused: true, selection: { method: "lexical", reason: "below_match_floor", floor: floored.floor, dropped: floored.dropped } };
+  const candidates = floored.items;
   let ordered = await orderByJudgment(task, candidates, sellerJudgeListing, opts);
   if (!ordered.refused && ordered.items?.[0] && ordered.items[0] !== candidates[0]
     && (ordered.selection?.method === "judged" || ordered.selection?.method === "judged-tie")) {
@@ -629,13 +662,14 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // publishes a model list without it is skipped before anything is
           // probed or paid (a seller can charge on the 400 it answers).
           const wantModel = typeof input.params?.model === "string" && input.params.model.trim() ? input.params.model.trim() : null;
-          let candidateList = []; let chain = chains[0]; let lastDrops = null;
+          let candidateList = []; let chain = chains[0]; let lastDrops = null; let lastNoMatch = null;
           for (const c of chains) {
             const found = await resolveExternal(input.task, { cap, baseUrl, chain: c, limit: MAX_CANDIDATES, wantModel, params, ...(target ? { onlyUrl: target } : {}) });
             const list = Array.isArray(found) ? found : (found ? [found] : []);
             // Keep the tally from the LAST chain tried even when it resolved
             // nothing, or an all-empty run would report no reason at all.
             if (found && found.__gateDrops) lastDrops = found.__gateDrops;
+            if (found && found.__judgedNoMatch) lastNoMatch = found.__judgedNoMatch;
             if (list.length) { candidateList = list; chain = c; break; }
           }
           if ((avmBudgetMs != null || svmBudgetMs != null) && remainingMs() < 4000) {
@@ -654,10 +688,18 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           const drops = candidateList.__gateDrops || lastDrops || { total: 0, byReason: {} };
           const gatedOut = Number(drops.byReason?.settlement_required || 0);
           if (!candidateList.length && Number(drops.byReason?.judged_no_match || 0) > 0) {
+            // Below the match floor (routeMatchOrder): no judge was asked.
+            if (lastNoMatch?.reason === "below_match_floor") throw bad(`${drops.byReason.judged_no_match} outside seller(s) matched those words on ${chain}, and none of them does that task (matched too few of the task's words to buy). Nothing was spent.${notChargedOn(req)} Try /api/route?q=<task>&include=external to see them.`, 404);
             throw bad(`${drops.byReason.judged_no_match} outside seller(s) matched those words on ${chain}, and none of them does that task (judged). Nothing was spent.${notChargedOn(req)} Try /api/route?q=<task>&include=external to see them.`, 404);
           }
           if (!candidateList.length && gatedOut > 0) {
             throw bad(`No external seller is eligible for this task on ${chain} right now: ${gatedOut} matched it and all of them are below our settlement gate. Nothing was spent.${notChargedOn(req)}`, 409);
+          }
+          // Every candidate fell under the match floor (routeMatchOrder in the
+          // resolver): the same refusal as a judged no-match, nothing spent.
+          const flooredOut = Number(drops.byReason?.below_match_floor || 0);
+          if (!candidateList.length && flooredOut > 0) {
+            throw bad(`${flooredOut} outside seller(s) matched those words on ${chain}, and none of them does that task (matched too few of the task's words to buy). Nothing was spent.${notChargedOn(req)} Try /api/route?q=<task>&include=external to see them.`, 404);
           }
           // Routes the router lists but never buys (src/route-category.js).
           const excludedOut = Number(drops.byReason?.category_excluded || 0);

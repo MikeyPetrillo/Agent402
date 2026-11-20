@@ -208,7 +208,7 @@ import { evmDomainsOfAccepts, domainTruthFor } from "./evm-usdc-domain.js";
 import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAmountToDollars, tokenDecimalsOf } from "./price-usd.js";
 // Re-exported: the dataset snapshot, the server and the tests import it from here.
 export { priceToMicroUsd };
-import { queryTerms, isCjkTerm, splitTokens, caseRuns } from "./query-terms.js";
+import { queryTerms, withoutFiller, isCjkTerm, splitTokens, caseRuns } from "./query-terms.js";
 import { canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
 import { routeExecuteHint } from "./tools/route-execute.js";
 import { recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration, ensureSellerRegistrations } from "./stats.js";
@@ -11805,8 +11805,11 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   const q = String(query || "").slice(0, 500);
   // Unicode-aware (src/query-terms.js): a CJK query used to tokenize to
   // nothing and answer zero rows (reported from outside 2026-09-10).
-  const terms = queryTerms(q, { max: 32 });
-  const termSet = new Set(terms);
+  // Scored without filler words (src/query-terms.js withoutFiller); the
+  // whole query's words still decide which compound slugs it covers.
+  const queryWords = queryTerms(q, { max: 32 });
+  const terms = withoutFiller(queryWords);
+  const termSet = new Set(queryWords);
   // The ceiling has to announce itself. ?top=100 returned 25 rows with
   // `count: 25` and nothing else, so a caller reads "25 matched" where the truth
   // is "25 is our maximum" - the same silence that let a seller read one page of

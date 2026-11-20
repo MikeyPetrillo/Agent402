@@ -2069,8 +2069,19 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         return eligible;
       })
       // Proven first, most settled first; unproven after every proven one.
-      .sort((a, b) => ((a.unproven ? 1 : 0) - (b.unproven ? 1 : 0)) || (b.settled - a.settled))
-      .slice(0, 5);
+      .sort((a, b) => ((a.unproven ? 1 : 0) - (b.unproven ? 1 : 0)) || (b.settled - a.settled));
+    // Then the match floor (routeMatchOrder, src/tools/route-execute.js),
+    // BEFORE the cut to five: a candidate far below the best match follows
+    // every one that meets it, inside each lane, and one under the floor is
+    // dropped, so volume alone never puts a weak match first.
+    // A pinned endpoint (a decision's own step) was chosen already.
+    if (!onlyUrl) {
+      const { routeMatchOrder } = await import("./tools/route-execute.js");
+      const matched = routeMatchOrder(task, candidates, { group: (r) => (r.unproven ? 1 : 0) });
+      if (matched.dropped > 0) { gateDrops.total += matched.dropped; gateDrops.byReason.below_match_floor = (gateDrops.byReason.below_match_floor || 0) + matched.dropped; }
+      candidates = matched.items;
+    }
+    candidates = candidates.slice(0, 5);
   } else {
     // A chain no buyer here pays on resolves nothing.
     candidates = [];

@@ -83,8 +83,10 @@ ok(inSlug > inText, `the slug outranks the description for the same words (${inS
 ok(inText >= 11 && inText <= 15, `the description placement scores what it measured (${inText}, expected 13 +/- 2)`);
 // 31 until 2026-11-09, when a name longer than NAME_SLUG_MAX_TOKENS words
 // stopped scoring as a slug alias: this row's 13-word name had added 4 slug
-// points on top of the stuffed slug itself. Re-measured at 27.
-ok(inSlug >= 24 && inSlug <= 30, `the slug placement scores what it measured (${inSlug}, expected 27 +/- 3)`);
+// points on top of the stuffed slug itself. Re-measured at 27. Then 17 when
+// filler words stopped scoring (src/query-terms.js FILLER_TERMS): the query's
+// "tools" no longer earns the stuffed slug's "tools" token 10 points.
+ok(inSlug >= 14 && inSlug <= 20, `the slug placement scores what it measured (${inSlug}, expected 17 +/- 3)`);
 
 // And pin the WEIGHTS themselves, which is what the emails quoted and what a
 // future tweak would move. Each row below carries the term in exactly ONE
