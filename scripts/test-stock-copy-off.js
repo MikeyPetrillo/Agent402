@@ -6,8 +6,11 @@
 // sends a reader to a route that answers 503.
 //
 // Scans the markdown trees (README.md, llms-install.md, wiki/, docs/,
-// examples/, every package README) and the sample report fixtures
-// (assets/samples/*.json, their string values) for the stock slugs, the
+// examples/, every package README, the coding-agent plugins under plugins/
+// with their skills) and the JSON whose string values reach a reader: the
+// sample report fixtures (assets/samples/*.json) and the plugin manifests
+// (.claude-plugin/, .codex-plugin/, .cursor-plugin/, plugins/*/.claude-plugin/,
+// *.plugin.json), for the stock slugs, the
 // hidden pack slugs, market.quote and "live quote" / "stock price" phrasing.
 // A line that names the switch itself (STOCK_DATA_PROVIDER, "stock provider",
 // "stock data provider") documents the switch and is not a promise. With the
@@ -62,11 +65,13 @@ ok(scan("stock-quotes-extra and my-stock-quote-x").length === 0, "control: a slu
 const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8" }).split("\0").filter(Boolean);
 const md = tracked.filter((f) => f.endsWith(".md") && (
   f === "README.md" || f === "llms-install.md"
-  || /^(wiki|docs|examples)\//.test(f)
+  || /^(wiki|docs|examples|plugins)\//.test(f)
   || /^[^/]+\/README\.md$/.test(f) || /^adapters\/[^/]+\/README\.md$/.test(f)
 ));
-const samples = tracked.filter((f) => /^assets\/samples\/[^/]+\.json$/.test(f));
-ok(md.includes("README.md") && md.some((f) => f.startsWith("wiki/")) && md.includes("mcp/README.md") && samples.length > 0, `the scan reads the markdown trees and the sample fixtures (${md.length} markdown files, ${samples.length} fixtures)`);
+const manifests = tracked.filter((f) => /(^|\/)\.(claude|codex|cursor)-plugin\/[^/]+\.json$/.test(f) || /\.plugin\.json$/.test(f));
+const samples = [...tracked.filter((f) => /^assets\/samples\/[^/]+\.json$/.test(f)), ...manifests];
+ok(md.includes("README.md") && md.some((f) => f.startsWith("wiki/")) && md.includes("mcp/README.md") && samples.length > manifests.length, `the scan reads the markdown trees and the sample fixtures (${md.length} markdown files, ${samples.length - manifests.length} fixtures)`);
+ok(md.includes("plugins/agent402/skills/agent402/SKILL.md") && md.includes("plugins/agent402/README.md") && [".claude-plugin/marketplace.json", "plugins/agent402/.claude-plugin/plugin.json", ".codex-plugin/plugin.json", ".cursor-plugin/plugin.json"].every((f) => manifests.includes(f)), `...and the coding-agent plugins: their skill, README and manifests (${manifests.length} manifests)`);
 
 const findings = [];
 for (const f of md) for (const x of scan(readFileSync(join(ROOT, f), "utf8"))) findings.push(`${f}:${x.line} ${x.what}: ${x.text}`);
