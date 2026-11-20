@@ -205,12 +205,22 @@ export const isRunKey = (v) => typeof v === "string" && RUN_KEY_RE.test(v);
 /** salesLedgerChargeOf's answer while the sales ledger has not loaded. */
 export const ORPHAN_LEDGER_UNLOADED = "ledger-unloaded";
 const LEDGER_WAIT_MS = 10_000;
+const LEDGER_FRESH_MS = 5_000;
+// One wait serves every orphan a sweep reads in a row (a sweep of many
+// orphans waits once, not once per orphan).
+let ledgerPull = null, ledgerPulledAt = 0;
 async function loadedSalesLedger() {
   const ledger = await import("./sales-ledger.js");
-  let timer = null;
-  const wait = new Promise((r) => { timer = setTimeout(r, LEDGER_WAIT_MS); timer.unref?.(); });
-  // The first load, then what other containers wrote since the last pull.
-  try { await Promise.race([Promise.resolve(ledger.salesLedgerRefresh?.()).catch(() => 0), wait]); } finally { clearTimeout(timer); }
+  if (!ledgerPull || (ledgerPulledAt && Date.now() - ledgerPulledAt > LEDGER_FRESH_MS)) {
+    ledgerPulledAt = 0;
+    ledgerPull = (async () => {
+      let timer = null;
+      const wait = new Promise((r) => { timer = setTimeout(r, LEDGER_WAIT_MS); timer.unref?.(); });
+      // The first load, then what other containers wrote since the last pull.
+      try { await Promise.race([Promise.resolve(ledger.salesLedgerRefresh?.()).catch(() => 0), wait]); } finally { clearTimeout(timer); ledgerPulledAt = Date.now(); }
+    })();
+  }
+  await ledgerPull;
   return ledger.salesLedgerLoaded?.() === false ? null : ledger;
 }
 /** The sale an interrupted run made, from the sales ledger: { tx, network,
