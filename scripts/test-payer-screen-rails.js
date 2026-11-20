@@ -145,6 +145,11 @@ const refused = (r) => !r.next && r.code === 403 && r.body?.charged === false;
   const fields = X.X402_SCREENED_FIELDS?.[key] || [];
   ok(fields.length >= 2 && fields.includes("channelConfig.payer") && fields.every((f) => P.PAYER_SCREEN_RAILS[key]?.identifier.includes(f.split(".").slice(-2).join("."))), `its identifier names every payload field the screen reads for it (${fields.join(", ")})`);
   // Each field the table lists is one the screen refuses on: the cell follows the behavior.
+  // Each row's fields ride under that row's own accept: a top-level
+  // authorization block is signed only under exact (or upto), and intake
+  // removes it from a channel payment (src/payment-header.js).
+  const acceptOf = (k) => (k === "x402-batch-settlement" ? accepted
+    : { scheme: "exact", network: "eip155:8453", payTo: TREASURY, ...(k === "x402-gateway-batched" ? { extra: { name: "GatewayWalletBatched", version: "1" } } : {}) });
   for (const k of Object.keys(X.X402_SCREENED_FIELDS || {})) {
     for (const f of X.X402_SCREENED_FIELDS[k]) {
       const payload = { signature: "0x" };
@@ -152,9 +157,10 @@ const refused = (r) => !r.next && r.code === 403 && r.body?.charged === false;
       let at = payload;
       for (const part of parts.slice(0, -1)) at = (at[part] ||= {});
       at[parts.at(-1)] = LISTED;
-      ok(P.PAYER_SCREEN_RAILS[k]?.identifier.includes(parts.at(-2) ? `${parts.at(-2)}.${parts.at(-1)}` : f) && refused(await runScreen({ "payment-signature": hdr(payload) })), `${k}: a listed address at payload.${f} is refused, and the row names it`);
+      ok(P.PAYER_SCREEN_RAILS[k]?.identifier.includes(parts.at(-2) ? `${parts.at(-2)}.${parts.at(-1)}` : f) && refused(await runScreen({ "payment-signature": b64({ x402Version: 2, accepted: acceptOf(k), payload }) })), `${k}: a listed address at payload.${f} is refused, and the row names it`);
     }
   }
+  ok((await runScreen({ "payment-signature": hdr({ type: "voucher", channelConfig: config(CLEAN), voucher: voucherFields, authorization: { from: LISTED, nonce: "0x01" } }) })).next, "a channel voucher whose unsigned authorization block names a listed address is screened on its channel payer alone (intake removes the block)");
   ok(Object.keys(X.X402_SCREENED_FIELDS || {}).sort().join() === Object.keys(P.PAYER_SCREEN_RAILS).filter((k) => P.PAYER_SCREEN_RAILS[k].source === "src/x402-payer-screen.js" && k !== "mpp-evm").sort().join(), "every row the x402 EVM screen is the source of lists its fields");
   // The conformance row for an offered channel accept.
   const { __x402RowForTest } = await import("../src/conformance.js");

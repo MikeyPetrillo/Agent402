@@ -134,6 +134,41 @@ ok(dropUnsignedAuthorization({ payload: "text" }).payload === "text" && dropUnsi
   ok(same === 3 && new Set(Object.values(before)).size === 3, `an EIP-3009 payment's replay key is unchanged for three bytes32 nonces, zero-padded ones included (${same} of 3)`);
 }
 
+// --- a payment channel signs no top-level block ------------------------------------
+// The batch-settlement scheme signs its voucher over the channel
+// (`channelConfig`, `voucher`; a deposit's own authorization sits inside
+// `deposit`), never a top-level `authorization` or `permit2Authorization`, and
+// its verifier ignores extra keys. So on an EVM network such a block is the
+// sender's text there too: a planted `from` must not become the payer every
+// receipt, sale row and audit report names, nor a nonce the replay key reads.
+// A block stays only under a scheme that verifies it (exact, upto).
+{
+  const C = "0x" + "c3".repeat(20), Z = "0x" + "00".repeat(20);
+  const cfg = { payer: A, payerAuthorizer: Z, receiver: C, receiverAuthorizer: "0x" + "d4".repeat(20), token: C, withdrawDelay: 86400, salt: "0x" + "00".repeat(32) };
+  const voucher = { channelId: "0x" + "e5".repeat(32), maxClaimableAmount: "1000", signature: "0x" + "11".repeat(65) };
+  const channel = (extra = {}, { scheme = "batch-settlement", v1 = false } = {}) => b64(v1
+    ? { x402Version: 1, scheme, network: "base", payload: { type: "voucher", channelConfig: cfg, voucher, ...extra } }
+    : { x402Version: 2, accepted: { scheme, network: BASE, amount: "1000", asset: C, payTo: C, maxTimeoutSeconds: 60 }, payload: { type: "voucher", channelConfig: cfg, voucher, ...extra } });
+  const planted = { authorization: { from: B, nonce: "0x" + "22".repeat(32) } };
+  const d = decodePaymentHeader(channel(planted)).payload;
+  ok(!("authorization" in d) && d.channelConfig.payer === A && d.voucher.channelId === voucher.channelId, "a channel voucher's planted authorization block is removed; its channel and voucher stay");
+  ok(!("permit2Authorization" in decodePaymentHeader(channel({ permit2Authorization: { from: B, nonce: "1" } })).payload), "...and a planted Permit2 block");
+  ok(!("authorization" in decodePaymentHeader(channel(planted, { v1: true })).payload) && !("authorization" in decodePaymentHeader(channel(planted, { scheme: "Batch-Settlement" })).payload), "...under the v1 top-level scheme and in any case");
+  ok(!("authorization" in decodePaymentHeader(channel(planted, { scheme: "not-a-scheme" })).payload), "...and under a scheme this server never verifies");
+  ok(payerFromRequest(req(channel(planted))) === null, `a planted from is never the channel call's payer (read ${payerFromRequest(req(channel(planted)))}; the settle response names the channel's payer)`);
+  const id = (k) => k.split(":").slice(0, 2).join(":");
+  const bare = paymentReplayKey(req(channel()));
+  ok(id(paymentReplayKey(req(channel({ authorization: { from: B, nonce: "0x01" } })))) === id(bare) && id(paymentReplayKey(req(channel({ authorization: { from: B, nonce: "0x02" } })))) === id(bare), `one voucher is one payment to the replay guard whatever block rides beside it (${id(bare).slice(0, 14)})`);
+  {
+    const r = req(channel(planted));
+    canonicalizePaymentHeaders(r);
+    ok(!("authorization" in JSON.parse(Buffer.from(r.headers["payment-signature"], "base64").toString("utf8")).payload), "intake sends a channel header on without the block");
+  }
+  const upto = b64({ x402Version: 2, accepted: { scheme: "upto", network: BASE }, payload: { signature: "0xsig", permit2Authorization: { from: A, nonce: "3" } } });
+  ok(decodePaymentHeader(upto).payload.permit2Authorization.from === A && payerFromRequest(req(upto)) === A, "control: an upto payment keeps its signed Permit2 block and its payer");
+  ok(payerFromRequest(req(evm({ from: A, nonce: "0x01" }))) === A && decodePaymentHeader(b64({ x402Version: 1, scheme: "exact", network: "base", payload: { authorization: { from: A } } })).payload.authorization.from === A, "control: an exact payment keeps its block, v2 and v1");
+}
+
 // --- attribution, the screen's address list, the signed amount ------------------
 ok(payerFromRequest(req(svm({ authorization: { from: A } }))) === null, "a Solana payment names no EVM payer");
 ok(x402ScreenedAddressesOf(req(svm({ authorization: { from: A } }))).length === 0, "the payer screen takes no EVM address from a Solana payment (it reads the transaction's signer)");

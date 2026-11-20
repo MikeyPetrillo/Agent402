@@ -16,6 +16,7 @@
 // gate refuses what it must.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -378,7 +379,10 @@ const OP_TOKEN = `op-${process.pid}-${Date.now()}`;
 const listedBuyer = makeChannelBuyer();
 const screenDir = mkdtempSync(join(tmpdir(), "bs-screen-"));
 writeFileSync(join(screenDir, "screen.json"), JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 1 }, addresses: [listedBuyer.address.toLowerCase()] }));
-const ON = { SANCTIONS_SCREEN_FILE: join(screenDir, "screen.json"), SANCTIONS_LIST_URL: "http://127.0.0.1:9/SDN.XML", AGENT402_OPERATOR_TOKEN: OP_TOKEN, X402_BATCH_SETTLEMENT_NETWORKS: BASE, X402_BATCH_SETTLEMENT_STORE: "memory", X402_BATCH_CLAIM_INTERVAL_SECONDS: "5", X402_BATCH_REFUND_INTERVAL_SECONDS: "5", X402_BATCH_IDLE_REFUND_SECONDS: "5" };
+// The switch-on server signs receipts (a throwaway key), so a voucher call's
+// receipt shows whom this server names as its payer.
+const receiptKey = Buffer.from(generateKeyPairSync("ed25519").privateKey.export({ format: "pem", type: "pkcs8" })).toString("base64");
+const ON = { RECEIPT_SIGNING_KEY: receiptKey, RECEIPT_SIGNING_KEY_ID: "bs-test", SANCTIONS_SCREEN_FILE: join(screenDir, "screen.json"), SANCTIONS_LIST_URL: "http://127.0.0.1:9/SDN.XML", AGENT402_OPERATOR_TOKEN: OP_TOKEN, X402_BATCH_SETTLEMENT_NETWORKS: BASE, X402_BATCH_SETTLEMENT_STORE: "memory", X402_BATCH_CLAIM_INTERVAL_SECONDS: "5", X402_BATCH_REFUND_INTERVAL_SECONDS: "5", X402_BATCH_IDLE_REFUND_SECONDS: "5" };
 const JUNK = "banana<b>, false";
 const [junk, mixed, off, on, noStore, floored] = await Promise.all([
   boot({ X402_BATCH_SETTLEMENT_NETWORKS: JUNK, X402_BATCH_SETTLEMENT_STORE: "memory" }, "bs-junk"),
@@ -442,7 +446,9 @@ try {
     let settle = null;
     try { settle = resp ? JSON.parse(Buffer.from(resp, "base64").toString("utf8")) : null; } catch { /* none */ }
     await r.arrayBuffer().catch(() => null);
-    return { status: r.status, settle };
+    let receiptPayer;
+    try { const jws = r.headers.get("agent402-receipt"); receiptPayer = jws ? JSON.parse(Buffer.from(jws.split(".")[1], "base64url").toString("utf8")).payer ?? null : undefined; } catch { receiptPayer = "unreadable"; }
+    return { status: r.status, settle, receiptPayer };
   };
   const first = await call(await buyer.deposit(ch, Number(ch.amount) * 10));
   ok(first.status === 200 && first.settle?.success === true, `deposit call served over the channel (${first.status})`);
@@ -453,6 +459,18 @@ try {
     if (last.status === 200) buyer.charged += BigInt(ch.amount);
   }
   ok(last.status === 200 && last.settle?.extra?.channelState?.chargedCumulativeAmount === String(buyer.charged), `three voucher calls served; the answer carries the running total (${last.settle?.extra?.channelState?.chargedCumulativeAmount})`);
+  {
+    // A top-level authorization block rides on a voucher call: no signature
+    // covers it on this scheme, so its from is never the payer this server
+    // signs into the receipt (or books the sale under).
+    const PLANTED = "0x" + "b2".repeat(20);
+    const pv = await buyer.voucher(ch);
+    pv.payload.authorization = { from: PLANTED, nonce: "0x" + "22".repeat(32) };
+    const planted = await call(pv);
+    if (planted.status === 200) buyer.charged += BigInt(ch.amount);
+    ok(planted.status === 200 && planted.receiptPayer !== undefined && String(planted.receiptPayer).toLowerCase() !== PLANTED && [null, buyer.address.toLowerCase()].includes(planted.receiptPayer === null ? null : String(planted.receiptPayer).toLowerCase()), `a voucher call carrying an unsigned authorization block is served, and its signed receipt names the channel's payer or none, never the planted address (${planted.status}, payer ${planted.receiptPayer})`);
+    ok(first.receiptPayer && String(first.receiptPayer).toLowerCase() === buyer.address.toLowerCase(), `control: the deposit call's receipt names the channel's payer (${first.receiptPayer})`);
+  }
   const replay = await call(await buyer.voucher(ch, { base: buyer.charged - BigInt(ch.amount) }));
   // A voucher is a deterministic signature, so the replay is the earlier
   // header byte for byte: the replay guard answers 409 before verify, or the
