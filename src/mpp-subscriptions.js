@@ -1759,7 +1759,12 @@ export function createMppSubscriptions({
           // The rebuild reopened any debt it voided; one is booked here when
           // none was (the first attempt died before answering).
           log(`[mpp-subs] rebuilding a settled first payment failed: ${diagnoseError(err, 300)}`);
-          throw firstPaymentNotRecordedError(await oweFirstPayment({ product: b.product, payer, priceUsd: b.productDef.price / 100, tx: already.reference || null, lookupKey, why: "its record was not written" }));
+          const booked = await oweFirstPayment({ product: b.product, payer, priceUsd: b.productDef.price / 100, tx: already.reference || null, lookupKey, why: "its record was not written" });
+          // Another retry of this payment that rebuilt it while this one
+          // failed served the buyer: the debt just booked is voided.
+          const served = booked ? await voidIfServed(already.subscriptionId, already.reference || null, lookupKey) : null;
+          if (served) return { ...publicView(served), replay: true };
+          throw firstPaymentNotRecordedError(booked);
         }
         if (r.refused) {
           const e = new Error("A refund of this first subscription payment is already under way. Request a fresh challenge to subscribe again.");
@@ -1821,13 +1826,8 @@ export function createMppSubscriptions({
       // A retry of this credential that rebuilt the record between the read
       // above and the booking was served: the debt just booked is voided.
       if (booked && mppxRec) {
-        let served = null;
-        try { served = await findBySubscriptionId(mppxRec.subscriptionId); } catch { served = null; }
-        if (served) {
-          try { const L = await ledger(); for (const ev of firstPaymentEvidences(tx, lookupKey)) await L.voidForServe(ev, `${REBUILD_HELD_NOTE}; ${REBUILD_SERVED_NOTE}`); }
-          catch (ve) { log(`[mpp-subs] served by a concurrent retry; voiding its debt failed: ${String(ve?.message || ve).slice(0, 160)}`); }
-          return { ...publicView(served), replay: true };
-        }
+        const served = await voidIfServed(mppxRec.subscriptionId, tx, lookupKey);
+        if (served) return { ...publicView(served), replay: true };
       }
       throw firstPaymentNotRecordedError(booked);
     }
@@ -1946,6 +1946,27 @@ export function createMppSubscriptions({
     log(`[mpp-subs] first-payment debt ${owed ? "reopened" : "NOT reopened"} (${why}) evidence=${evidence.slice(0, 80)}`);
     return owed;
   }
+  /** Void every owed debt for a first payment whose subscription is ours
+   *  (served), with the note a finished rebuild leaves. Never throws. */
+  async function voidServedDebts(tx, lookupKey, why) {
+    try {
+      const L = await ledger();
+      for (const ev of firstPaymentEvidences(tx, lookupKey)) {
+        if (await L.voidForServe(ev, `${REBUILD_HELD_NOTE}; ${REBUILD_SERVED_NOTE}`)) log(`[mpp-subs] first-payment debt voided (${why}) evidence=${ev.slice(0, 80)}`);
+      }
+    } catch (e) { log(`[mpp-subs] voiding a served first payment's debt failed (${why}): ${String(e?.message || e).slice(0, 160)}`); }
+  }
+  /** After booking a first payment owed: when our record for it exists (a
+   *  concurrent retry rebuilt and served it), the debt is voided and that
+   *  record is returned; else null. */
+  async function voidIfServed(subscriptionId, tx, lookupKey) {
+    if (!subscriptionId) return null;
+    let served = null;
+    try { served = await findBySubscriptionId(subscriptionId); } catch { served = null; }
+    if (!served) return null;
+    await voidServedDebts(tx, lookupKey, "served by a concurrent retry");
+    return served;
+  }
   async function reopenFirstPaymentDebts(voided, why) {
     for (const ev of voided) { try { await reopenRebuildHeld(ev, why); } catch (e) { log(`[mpp-subs] reopen failed for ${ev.slice(0, 80)}: ${String(e?.message || e).slice(0, 160)}`); } }
   }
@@ -1981,6 +2002,12 @@ export function createMppSubscriptions({
       try { const row = await L.byEvidence(ev); if (isRebuildHeld(row)) await L.renoteVoid(ev, row.note, `${row.note}; ${REBUILD_SERVED_NOTE}`); }
       catch { /* the record exists, so the offer sweep never reaches this row */ }
     }
+    // A debt booked after the voids above and before the write (an
+    // activation of this payment whose own record write failed, booking
+    // while this rebuild wrote) is voided now that the record is ours: the
+    // buyer is served, never served and refunded. A booking that lands after
+    // this read finds the record and voids itself (voidIfServed).
+    if (w.won) await voidServedDebts(mppxRec.reference, lookupKey, "booked while its subscription was rebuilt");
     try { await dropOfferMarkers(b.accessKeyAddress); } catch { /* the offer sweep drops it */ }
     if (w.won) {
       bookCharge(w.value, w.value.lastChargedPeriod, w.value.lastChargeTx);

@@ -143,6 +143,7 @@ async function attempt(fn) { try { return { value: await fn() }; } catch (error)
   const retry = await attempt(() => engine.activateFromCredential(signed.header));
   ok(retry.value?.status === "active" && retry.value.replay === true && calls.activate === 1 && calls.sales.length === 1, `the retry rebuilds the subscription without settling again (${retry.error?.message || retry.value?.status})`);
   ok((await rowFor(ev))?.status === "void", `the owed row is voided when the subscription is handed back (${(await rowFor(ev))?.status})`);
+  ok(/; its subscription was handed back$/.test((await rowFor(ev))?.note || ""), `a served rebuild renotes the voided row, so it no longer reads as a rebuild left unfinished (${(await rowFor(ev))?.note})`);
 }
 
 // 3. A refund already being sent: the rebuild is refused, nothing booked, the row untouched.
@@ -397,6 +398,59 @@ async function mintSigned(engine, target, email) {
   ok(raced?.value?.status === "active", `setup: the concurrent retry was served (${raced?.value?.status || raced?.error?.message})`);
   ok(first.value?.status === "active" && first.value.replay === true, `the first call answers with the served subscription (${first.value?.status || first.error?.message})`);
   ok((await rowFor(ev))?.status === "void" && calls.sales.length === 1, `the debt booked after it was served is voided: never served and refunded (${(await rowFor(ev))?.status})`);
+}
+
+// 13. A debt booked between a rebuild's voids and its record write (an
+//     activation still booking while the retry rebuilt) is voided once the
+//     record is written.
+{
+  let skipBooking = true;
+  const refunds = { ...realLedger, recordOwed: async (row) => { if (skipBooking) { skipBooking = false; return; } return realLedger.recordOwed(row); } };
+  const { engine, calls } = makeEngine("book-mid-rebuild", { refunds });
+  const s13 = await mintSigned(engine, "midrebuild.example.org", "m@example.com");
+  const restore = failSubWrites(engine);
+  const first = await attempt(() => engine.activateFromCredential(s13.header));
+  restore();
+  const ev = `0x${txSeq.toString(16).padStart(64, "a")}`;
+  ok(first.error?.statusCode === 500 && !(await rowFor(ev)), `setup: settled, record not written, no debt yet (${first.error?.statusCode})`);
+  // The retry's record write: the late booking lands just before it.
+  const cas = engine._store.compareAndSet.bind(engine._store);
+  let booked = false;
+  engine._store.compareAndSet = async (k, d) => {
+    if (!booked && String(k).startsWith("a402:sub:mpp_")) {
+      booked = true;
+      await realLedger.recordOwed({ slug: "domain-monitor", network: "tempo", payer: s13.payer, priceUsd: PRICE_USD, tx: ev, httpStatus: 500, synthetic: false, wire: "mpp-tempo-subscription", note: "first subscription payment settled; its record was not written" });
+    }
+    return cas(k, d);
+  };
+  const retry = await attempt(() => engine.activateFromCredential(s13.header));
+  engine._store.compareAndSet = cas;
+  ok(booked && retry.value?.status === "active" && calls.sales.length === 1, `setup: the late debt landed before the rebuild's write, and the retry was served (${retry.value?.status || retry.error?.message})`);
+  const row = await rowFor(ev);
+  ok(row?.status === "void", `the debt booked mid-rebuild is voided once the record is written: never served and refunded (${row?.status})`);
+  ok(typeof row?.note === "string" && row.note.endsWith("its subscription was handed back"), `and its note says the subscription was handed back, so no sweep owes it again (${row?.note})`);
+}
+
+// 14. A retry whose rebuild fails books the debt after another retry rebuilt
+//     and served the payment: that debt is voided and the failed retry
+//     answers with the served subscription.
+{
+  let racer = null, raced = null;
+  const refunds = { ...realLedger, recordOwed: async (row) => { if (racer) { const go = racer; racer = null; raced = await attempt(go); } return realLedger.recordOwed(row); } };
+  const { engine, calls } = makeEngine("rebuild-race", { refunds });
+  const s14 = await mintSigned(engine, "rebuildrace.example.org", "rr@example.com");
+  let restore = failSubWrites(engine);
+  await attempt(() => engine.activateFromCredential(s14.header));
+  restore();
+  const ev = `0x${txSeq.toString(16).padStart(64, "a")}`;
+  ok((await rowFor(ev))?.status === "owed", "setup: the first attempt booked the debt");
+  restore = failSubWrites(engine);
+  racer = () => engine.activateFromCredential(s14.header);
+  const failed = await attempt(() => engine.activateFromCredential(s14.header));
+  restore();
+  ok(raced?.value?.status === "active", `setup: the other retry rebuilt and was served while this one failed (${raced?.value?.status || raced?.error?.message})`);
+  ok(failed.value?.status === "active" && failed.value.replay === true, `the failed retry answers with the served subscription (${failed.value?.status || failed.error?.message})`);
+  ok((await rowFor(ev))?.status === "void" && calls.sales.length === 1, `the debt it booked after the serve is voided: never served and refunded (${(await rowFor(ev))?.status}, sales ${calls.sales.length})`);
 }
 
 rmSync(tmp, { recursive: true, force: true });
