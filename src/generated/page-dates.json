@@ -17,7 +17,7 @@
     "src/human-reports-page.js": "2026-11-18",
     "src/index-tools-page.js": "2026-11-11",
     "src/integration-pages.js": "2026-11-18",
-    "src/learn.js": "2026-11-18",
+    "src/learn.js": "2026-11-20",
     "src/ledger-catalog.js": "2026-11-16",
     "src/ledger-docs.js": "2026-11-17",
     "src/ledger-home.js": "2026-11-18",
@@ -39,7 +39,7 @@
     "src/security-page.js": "2026-11-11",
     "src/sell.js": "2026-11-12",
     "src/seo.js": "2026-11-20",
-    "src/skill-md.js": "2026-11-18",
+    "src/skill-md.js": "2026-11-20",
     "src/skills.js": "2026-11-19",
     "src/speech-page.js": "2026-11-16",
     "src/stable-error-code.js": "2026-11-20",
@@ -219,13 +219,13 @@
     "src/transparency.js": "2026-11-15",
     "src/trust-page.js": "2026-11-20",
     "src/webhooks.js": "2026-11-16",
-    "src/what-is-mpp.js": "2026-11-12",
+    "src/what-is-mpp.js": "2026-11-20",
     "src/what-is-x402.js": "2026-11-16",
     "src/wholesale-page.js": "2026-11-20",
     "src/wholesale.js": "2026-11-20",
     "src/workflows.js": "2026-11-18",
     "src/x402-101.js": "2026-11-18",
-    "src/x402-test-page.js": "2026-11-17"
+    "src/x402-test-page.js": "2026-11-20"
   },
   "toolSources": {
     "a2a-card-fetch": "src/tools/network-kit.js",
