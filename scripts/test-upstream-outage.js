@@ -170,10 +170,13 @@ try {
       ok(own.every((leg) => WALLET_ONLY_SLUGS.has(leg)), `${slug}'s legs are network tools`);
     }
     const hostsOf = (slug) => [...upstreamHostsForSlug(slug)];
+    // Membership in the declared host set, read with Set.has: each name is a whole
+    // declared host, never a substring of a URL.
+    const declares = (slug, host) => upstreamHostsForSlug(slug).has(host);
     ok(["api.open-meteo.com", "archive-api.open-meteo.com", "air-quality-api.open-meteo.com", "ensemble-api.open-meteo.com", "geocoding-api.open-meteo.com"].every((h) => hostsOf("weather-risk-brief").includes(h)), "weather-risk-brief declares every Open-Meteo host its legs read");
-    ok(hostsOf("filings-brief").includes("data.sec.gov") && hostsOf("filings-brief").includes("efts.sec.gov") && ["api.coingecko.com", "pro-api.coingecko.com"].every((h) => hostsOf("token-diligence").includes(h)), "filings-brief declares the SEC hosts and token-diligence the CoinGecko host");
+    ok(declares("filings-brief", "data.sec.gov") && declares("filings-brief", "efts.sec.gov") && ["api.coingecko.com", "pro-api.coingecko.com"].every((h) => hostsOf("token-diligence").includes(h)), "filings-brief declares the SEC hosts and token-diligence the CoinGecko host");
     for (const slug of ["bank-holidays", "school-holidays", "next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar"]) {
-      ok(WALLET_ONLY_SLUGS.has(slug) && declaresUpstreamHosts(slug) && hostsOf(slug).includes("nagerholidays.com") && !hostsOf(slug).includes("www.opm.gov"), `${slug} is a network tool and declares the holiday source's host, not the pages it cites`);
+      ok(WALLET_ONLY_SLUGS.has(slug) && declaresUpstreamHosts(slug) && declares(slug, "nagerholidays.com") && !declares(slug, "www.opm.gov"), `${slug} is a network tool and declares the holiday source's host, not the pages it cites`);
     }
     for (const slug of ["weather-thresholds", "weather-window", "weather-probability", "weather-market-brackets", "weather-market-board"]) {
       ok(hostsOf(slug).some((h) => h.endsWith(".open-meteo.com")), `${slug} (reads through the weather kit's helper) names an Open-Meteo host`);
