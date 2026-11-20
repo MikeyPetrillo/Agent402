@@ -2899,7 +2899,7 @@ jobs:
           # check (upstream-failure-log-preload.js, scripts/lib/upstream-outage.js).
           AGENT402_OPERATOR_TOKEN="$token" UPSTREAM_FAILURE_LOG="$RUNNER_TEMP/upstream-failures.jsonl" \
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
-            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node --import ./scripts/lib/own-examples-preload.js --import ./scripts/lib/upstream-failure-log-preload.js src/server.js &
+            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node --import ./scripts/lib/own-examples-preload.js --import ./scripts/lib/upstream-failure-log-preload.js src/server.js > "$RUNNER_TEMP/sweep-server.log" 2>&1 &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       - name: Crypto-kit tests (CoinGecko price/market/history/trending/global — keyless live API)
         # Keyless on purpose: the CI key reaches the sweep's server only, and
@@ -2988,6 +2988,19 @@ jobs:
       # (Chromium, 1440 + 390 px). Boots its own server like the wrap check.
       - name: Sticky chrome (nav and panels hold after a scroll, 1440 + 390 px)
         run: node scripts/test-sticky-chrome.js
+      # The sweep server's own log (the boot step wrote it to a file), its last
+      # 200 lines through the shared secret redaction: configured secret values
+      # and anything shaped like a credential are replaced.
+      - name: Sweep server log (on failure; redacted tail)
+        if: failure()
+        run: |
+          node --input-type=module -e '
+          import { readFileSync, existsSync } from "node:fs";
+          import { redactSecrets, looksLikeCredential } from "./src/tools/redact.js";
+          const f = process.argv[1];
+          if (!existsSync(f)) { console.log(`no server log at ${f}`); process.exit(0); }
+          for (const l of readFileSync(f, "utf8").split("\n").slice(-200)) console.log(redactSecrets(l).replace(/\S{20,}/g, (t) => (looksLikeCredential(t) ? "[redacted]" : t)));
+          ' "$RUNNER_TEMP/sweep-server.log"
       - name: Runner kills and memory (on failure)
         if: failure()
         run: |
@@ -3107,7 +3120,7 @@ jobs:
           # Failed upstream requests are logged for the live public-data check
           # (upstream-failure-log-preload.js, scripts/live-public-data-check.js).
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
-            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node --import ./scripts/lib/upstream-failure-log-preload.js src/server.js &
+            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node --import ./scripts/lib/upstream-failure-log-preload.js src/server.js > "$RUNNER_TEMP/sweep-server.log" 2>&1 &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       - name: Exercise tools against live sites
         run: |
@@ -3249,6 +3262,19 @@ jobs:
 
       - name: gov-data Catalog API v4 (retired CKAN v3 proxy 404s on catalog-old)
         run: node scripts/test-gov-data.js
+      # The sweep server's own log (the boot step wrote it to a file), its last
+      # 200 lines through the shared secret redaction: configured secret values
+      # and anything shaped like a credential are replaced.
+      - name: Sweep server log (on failure; redacted tail)
+        if: failure()
+        run: |
+          node --input-type=module -e '
+          import { readFileSync, existsSync } from "node:fs";
+          import { redactSecrets, looksLikeCredential } from "./src/tools/redact.js";
+          const f = process.argv[1];
+          if (!existsSync(f)) { console.log(`no server log at ${f}`); process.exit(0); }
+          for (const l of readFileSync(f, "utf8").split("\n").slice(-200)) console.log(redactSecrets(l).replace(/\S{20,}/g, (t) => (looksLikeCredential(t) ? "[redacted]" : t)));
+          ' "$RUNNER_TEMP/sweep-server.log"
       - name: Runner kills and memory (on failure)
         if: failure()
         run: |

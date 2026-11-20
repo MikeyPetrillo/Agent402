@@ -556,6 +556,21 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(/import aiohttp, httpx, requests/.test(run) && /version/.test(run), "the install step proves the three clients import under -I, and Go answers its version");
 }
 
+// THE SWEEP SERVERS' LOGS. Both sweep lanes boot a server in the background
+// and drive it from later steps; its output went to the boot step's log only
+// until that step ended, so a failure later in the job had no server log to
+// read. Each boot writes to a file under $RUNNER_TEMP, and an if: failure()
+// step prints that file's tail through the shared secret redaction.
+for (const lane of ["test-sweeps", "test-sweeps2"]) {
+  const steps = jobs[lane]?.steps || [];
+  const boot = steps.find((st) => /PORT=3000 node [^\n]*src\/server\.js[^\n]*&\s*$/m.test(String(st.run || "")));
+  const file = /src\/server\.js > "(\$RUNNER_TEMP\/[\w.-]+\.log)" 2>&1 &/.exec(String(boot?.run || ""))?.[1];
+  ok(Boolean(file), `${lane}: the sweep server's output goes to a file under $RUNNER_TEMP (${file || "not redirected"})`);
+  const tail = steps.find((st) => String(st.if || "").replace(/\s/g, "") === "failure()" && file && String(st.run || "").includes(file.replace(/^\$RUNNER_TEMP\//, "")));
+  ok(Boolean(tail) && /console\.log\(redactSecrets\(l\)\.replace\([^\n]*looksLikeCredential\(/.test(String(tail?.run || "")), `${lane}: a failure prints the server log's tail through the secret redaction`);
+  ok(Boolean(tail) && steps.indexOf(tail) > steps.indexOf(boot), `${lane}: the log tail step comes after the boot`);
+}
+
 // THE TREE GATE'S BOUND. Run 44012918430 (2026-11-17): the gate job's checkout
 // could not reach github.com for 133 s, waited 20 s, fetched in 71 s (3 min 46 s
 // in all), and the gate itself then had 73 s of the job's 5 minutes; it was
