@@ -66,7 +66,7 @@
     "src/tools/child-env.js": "2026-11-10",
     "src/tools/code-run-kit.js": "2026-11-18",
     "src/tools/coingecko-cache.js": "2026-11-10",
-    "src/tools/coingecko-endpoint.js": "2026-11-16",
+    "src/tools/coingecko-endpoint.js": "2026-11-19",
     "src/tools/coingecko-rate.js": "2026-11-18",
     "src/tools/compression-kit.js": "2026-09-10",
     "src/tools/contract-kit.js": "2026-11-19",
