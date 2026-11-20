@@ -315,7 +315,12 @@ function releaseBuyerPlace() {
 // (four), so a wider gap (more replicas) leaves a query the same number of
 // sends ahead of it, never fewer. A send whose slot is further off than that
 // (or than the handler budget less a read) takes no slot and is refused as
-// busy. This server's own reads (ownSqlQuery) take a slot only when no
+// busy. At one replica two sends may go back to back (SQL_SEND_BURST): a send
+// waits only for the send two before it plus two gaps, the same long-run
+// rate, at most two sends in any two gaps (under 2 a second at the default
+// gap), and never a later slot than one gap per send would give, so a pair
+// of calls never waits. At more replicas each keeps one gap per send: a pair
+// on every replica would add up past the project's rate. This server's own reads (ownSqlQuery) take a slot only when no
 // other query is waiting for one (a wait of at most one gap: the spacing
 // after the last send), so they never queue ahead of a buyer's query.
 export const SQL_QUERY_PATH = "/platform/v2/data/query/run";
@@ -332,6 +337,7 @@ export function sqlSlotWaitMs(gapMs) { return Math.max(SQL_SLOT_WAIT_MS, SQL_SLO
 // between them: its own 429 then answers (retried once, then the uncharged
 // 503), and the boot line names the setting.
 export const SQL_SEND_GAP_MAX_MS = 2_500;
+export const SQL_SEND_BURST = 2;
 /** The send gap in force, and what was not taken as set (logged at boot by
  *  name, never by value): CDP_SQL_SEND_GAP_MS when it is not a whole number
  *  of at least SQL_SEND_GAP_MIN_MS (`invalid`: the default is used), and the
@@ -347,7 +353,7 @@ export function sqlSendGapConfig(env = process.env) {
   const replicas = Math.max(1, Math.floor(Number(env.RATE_LIMIT_REPLICAS)) || 1);
   const product = (valid ? asked : SQL_SEND_GAP_DEFAULT_MS) * replicas;
   if (product > SQL_SEND_GAP_MAX_MS) rejected.push({ name: [valid ? "CDP_SQL_SEND_GAP_MS" : null, replicas > 1 ? "RATE_LIMIT_REPLICAS" : null].filter(Boolean).join(" times "), why: "over" });
-  return { gapMs: Math.min(product, SQL_SEND_GAP_MAX_MS), rejected };
+  return { gapMs: Math.min(product, SQL_SEND_GAP_MAX_MS), burst: replicas > 1 ? 1 : SQL_SEND_BURST, rejected };
 }
 export function sqlSendGapMs(env = process.env) { return sqlSendGapConfig(env).gapMs; }
 /** One line per setting not taken as set: its name and the gap in force. */
@@ -358,8 +364,10 @@ export function sqlSendGapWarnings(env = process.env) {
     : `[cdp] the send gap set by ${name} is past ${SQL_SEND_GAP_MAX_MS} ms (a send waits up to ${SQL_SLOT_WAIT_SLOTS} gaps for its slot) and is held there`)
     + `; queries to the query service are sent ${gapMs} ms apart`);
 }
-let nextSqlSlotAt = 0;
+// The slots given out last (at most sqlSendBurst of them, ascending).
+let lastSqlSlots = [];
 let sqlSendGap = sqlSendGapMs();
+let sqlSendBurst = sqlSendGapConfig().burst;
 for (const line of sqlSendGapWarnings()) console.warn(line);
 // The pacer's clock and its wait, replaceable in a test so a schedule is
 // read as the slot times it gave, not as timer firings on a loaded machine.
@@ -368,12 +376,21 @@ for (const line of sqlSendGapWarnings()) console.warn(line);
 const realPacerClock = { now: () => performance.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
 let pacerClock = realPacerClock;
 export function _setSqlPacerClockForTest(clock = null) { pacerClock = clock ? { ...realPacerClock, ...clock } : realPacerClock; }
-export function _resetSqlPacerForTest(gapMs = null) { nextSqlSlotAt = 0; sqlSendGap = gapMs ?? sqlSendGapMs(); }
+export function _resetSqlPacerForTest(gapMs = null, burst = null) { lastSqlSlots = []; sqlSendGap = gapMs ?? sqlSendGapMs(); sqlSendBurst = burst ?? sqlSendGapConfig().burst; }
+/** The next send slot at `now`: after the last slot given, and the burst-th
+ *  slot back plus that many gaps. */
+function nextSqlSlot(now) {
+  const n = lastSqlSlots.length;
+  let at = n ? Math.max(now, lastSqlSlots[n - 1]) : now;
+  if (n >= sqlSendBurst) at = Math.max(at, lastSqlSlots[n - sqlSendBurst] + sqlSendBurst * sqlSendGap);
+  return at;
+}
 /** Waits for the next send slot; resolves false (no slot taken) when it is further off than maxWaitMs. */
 export async function takeSqlSendSlot(maxWaitMs = sqlSlotWaitMs(sqlSendGap), now = pacerClock.now()) {
-  const at = Math.max(now, nextSqlSlotAt);
+  const at = nextSqlSlot(now);
   if (at - now > Math.max(0, maxWaitMs)) return false;
-  nextSqlSlotAt = at + sqlSendGap;
+  lastSqlSlots.push(at);
+  if (lastSqlSlots.length > sqlSendBurst) lastSqlSlots.splice(0, lastSqlSlots.length - sqlSendBurst);
   if (at > now) await pacerClock.sleep(at - now);
   return true;
 }

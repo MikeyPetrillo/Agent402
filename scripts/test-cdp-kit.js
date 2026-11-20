@@ -493,38 +493,52 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       const sentAt = [];
       globalThis.fetch = async () => { sentAt.push(clock.now()); return J(200, { result: [{ x: 1 }] }); };
       try {
+        // At one replica two sends go back to back (the burst of two, its own
+        // section in scripts/test-onchain-sql-pacer.js): four at once are two
+        // pairs, two gaps apart. With one gap per send (more replicas), a
+        // slot apart.
         _setSqlPacerClockForTest(clock);
-        _resetSqlPacerForTest(150);
+        _resetSqlPacerForTest(150, 2);
         const rs = await Promise.all([sqlRun(), sqlRun(), sqlRun(), sqlRun()]);
-        ok(rs.every((r) => r.rowCount === 1) && sentAt.length === 4 && clock.slots.join() === [150, 300, 450].map((d) => T0 + d).join(), `four queries at once are scheduled a slot apart (the first at once, then +${clock.slots.map((s) => s - T0).join(", +")} ms)`);
+        ok(rs.every((r) => r.rowCount === 1) && sentAt.length === 4 && clock.slots.join() === [300, 300].map((d) => T0 + d).join(), `four queries at once are scheduled as two pairs two gaps apart (the first pair at once, then +${clock.slots.map((s) => s - T0).join(", +")} ms)`);
+        clock = clockOf(false); _setSqlPacerClockForTest(clock);
+        _resetSqlPacerForTest(150, 1);
+        sentAt.length = 0;
+        await Promise.all([sqlRun(), sqlRun(), sqlRun(), sqlRun()]);
+        ok(sentAt.length === 4 && clock.slots.join() === [150, 300, 450].map((d) => T0 + d).join(), `with one gap per send, four at once are scheduled a slot apart (+${clock.slots.map((s) => s - T0).join(", +")} ms)`);
         // The same on the real clock, read as a span from before the calls
         // began (a floor that load cannot lower): the fourth is sent no sooner
-        // than three gaps later.
+        // than two gaps later.
         _setSqlPacerClockForTest(null);
-        _resetSqlPacerForTest(150);
+        _resetSqlPacerForTest(150, 2);
         const realSent = [];
         globalThis.fetch = async () => { realSent.push(Date.now()); return J(200, { result: [{ x: 1 }] }); };
         const began = Date.now();
         await Promise.all([sqlRun(), sqlRun(), sqlRun(), sqlRun()]);
-        ok(realSent.length === 4 && Math.max(...realSent) - began >= 3 * 150 - 5, `on the real clock the fourth of four is sent three gaps after the calls began or later (${Math.max(...realSent) - began} ms)`);
+        ok(realSent.length === 4 && Math.max(...realSent) - began >= 2 * 150 - 5, `on the real clock the fourth of four is sent two gaps after the calls began or later (${Math.max(...realSent) - began} ms)`);
         // A send waits for its slot as many slots out as 3 s holds at the
-        // default gap (four), at any gap in force: at one replica and at two,
-        // five queries at once are each sent, the fifth four gaps out (5 s at
-        // two replicas, past the flat 3 s), and a sixth, with no send slot in
-        // reach, is the busy refusal: nothing is sent.
+        // default gap (four), at any gap in force: at two replicas (one gap
+        // per send) five queries at once are each sent, the fifth four gaps
+        // out (5 s, past the flat 3 s), and a sixth, with no send slot in
+        // reach, is the busy refusal: nothing is sent. At one replica (pairs)
+        // six are sent, the last pair four gaps out, and the seventh is refused.
         globalThis.fetch = async () => { sentAt.push(clock.now()); return J(200, { result: [{ x: 1 }] }); };
         for (const replicas of ["1", "2"]) {
-          const gap = sqlSendGapMs({ RATE_LIMIT_REPLICAS: replicas });
+          const { gapMs: gap, burst } = sqlSendGapConfig({ RATE_LIMIT_REPLICAS: replicas });
+          const waits = burst === 2 ? [2, 2, 4, 4] : [1, 2, 3, 4];
+          const fit = waits.length + 1 + (burst === 2 ? 1 : 0);
           clock = clockOf(false); _setSqlPacerClockForTest(clock);
-          _resetSqlPacerForTest(gap);
+          _resetSqlPacerForTest(gap, burst);
           sentAt.length = 0;
-          const five = await Promise.all(Array.from({ length: 5 }, () => sqlRun().catch((x) => x)));
-          const sixth = await sqlRun().catch((x) => x);
-          ok(five.every((r) => r?.rowCount === 1) && clock.slots.join() === [1, 2, 3, 4].map((k) => T0 + k * gap).join() && sentAt.length === 5,
-            `at ${replicas} replica(s) (gap ${gap} ms) five queries at once are all sent, the last ${4 * gap} ms out (${five.map((r) => r?.statusCode ?? 200).join(", ")})`);
-          ok(sixth?.statusCode === 429 && sixth?.hint === "busy" && sixth?.shed === true && /rate limit allows/.test(sixth?.message) && /Nothing was charged\.$/.test(sixth?.message) && sentAt.length === 5 && clock.slots.length === 4 && _buyerQueriesInflightForTest() === 0,
-            `at ${replicas} replica(s) a sixth, with no send slot in reach, is refused 429 busy, unsent, and its in-flight place returned (${sixth?.statusCode}, sent ${sentAt.length})`);
+          const sent = await Promise.all(Array.from({ length: fit }, () => sqlRun().catch((x) => x)));
+          const next = await sqlRun().catch((x) => x);
+          ok(sent.every((r) => r?.rowCount === 1) && clock.slots.join() === waits.map((k) => T0 + k * gap).join() && sentAt.length === fit,
+            `at ${replicas} replica(s) (gap ${gap} ms, ${burst} back to back) ${fit} queries at once are all sent, the last ${4 * gap} ms out (${sent.map((r) => r?.statusCode ?? 200).join(", ")})`);
+          ok(next?.statusCode === 429 && next?.hint === "busy" && next?.shed === true && /rate limit allows/.test(next?.message) && /Nothing was charged\.$/.test(next?.message) && sentAt.length === fit && clock.slots.length === waits.length && _buyerQueriesInflightForTest() === 0,
+            `at ${replicas} replica(s) the next, with no send slot in reach, is refused 429 busy, unsent, and its in-flight place returned (${next?.statusCode}, sent ${sentAt.length})`);
         }
+        // The mechanics below are read with one gap per send (the rule at
+        // more than one replica); the burst of two has its own section.
         // This server's own read takes a send slot only when no other query
         // is waiting for one: right after a send it waits out the one gap
         // (its own reads run one after another), and behind a query that is
@@ -533,7 +547,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         {
           const { ownSqlQuery } = await import("../src/tools/cdp-kit.js");
           clock = clockOf(false); _setSqlPacerClockForTest(clock);
-          _resetSqlPacerForTest(625);
+          _resetSqlPacerForTest(625, 1);
           sentAt.length = 0;
           const ownRead = () => ownSqlQuery({ sql: "SELECT block_number FROM base.blocks" }).catch((x) => x);
           const own1 = await ownRead();
@@ -551,7 +565,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         // the 499 cancels settlement), and its in-flight place is returned.
         {
           clock = clockOf(false); _setSqlPacerClockForTest(clock);
-          _resetSqlPacerForTest(625);
+          _resetSqlPacerForTest(625, 1);
           sentAt.length = 0;
           await sqlRun(); // the next slot is one gap off
           const req = {};
@@ -566,7 +580,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         // A later send of the same call (the retry of a fast 5xx, a recovery run) waits for its slot,
         // also at the widest gap the settings can give; the clock here moves by each wait.
         clock = clockOf(true); _setSqlPacerClockForTest(clock);
-        _resetSqlPacerForTest(sqlSendGapMs({ CDP_SQL_SEND_GAP_MS: "60000", RATE_LIMIT_REPLICAS: "4" }));
+        _resetSqlPacerForTest(sqlSendGapMs({ CDP_SQL_SEND_GAP_MS: "60000", RATE_LIMIT_REPLICAS: "4" }), 1);
         sentAt.length = 0;
         globalThis.fetch = async () => { sentAt.push(clock.now()); return J(500, {}); };
         const r3 = await sqlRun().catch((x) => x);
@@ -577,7 +591,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         // what it has, uncharged.
         {
           clock = clockOf(false); _setSqlPacerClockForTest(clock);
-          _resetSqlPacerForTest(SQL_SEND_GAP_MAX_MS);
+          _resetSqlPacerForTest(SQL_SEND_GAP_MAX_MS, 1);
           sentAt.length = 0;
           let first = true;
           globalThis.fetch = async () => {
@@ -591,7 +605,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         }
         // takeSqlSendSlot itself: no slot taken when refused.
         _setSqlPacerClockForTest(null);
-        _resetSqlPacerForTest(1_000);
+        _resetSqlPacerForTest(1_000, 1);
         const t0 = 1_000_000;
         ok(await takeSqlSendSlot(0, t0) === true && await takeSqlSendSlot(500, t0) === false && await takeSqlSendSlot(1_000, t0 + 2_000) === true,
           "a refused slot is not taken: the next caller gets the same slot");
@@ -648,7 +662,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         _setCdpReadMsForTest(150);
         for (const [name, respond] of cases) {
           const clock = { t: T0, slots: [] }; clock.now = () => clock.t; clock.sleep = async (ms) => { clock.slots.push(clock.t + ms); };
-          _setSqlPacerClockForTest(clock); _resetSqlPacerForTest(150);
+          _setSqlPacerClockForTest(clock); _resetSqlPacerForTest(150, 1);
           let sentN = 0;
           globalThis.fetch = async (url, init = {}) => { sentN++; return respond(init); };
           const e = await sqlRun().catch((x) => x);

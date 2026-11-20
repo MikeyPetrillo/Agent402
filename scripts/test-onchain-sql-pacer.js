@@ -45,7 +45,7 @@ try {
   {
     const clock = clockOf();
     _setSqlPacerClockForTest(clock);
-    _resetSqlPacerForTest(400_000); // one send, then no slot in reach of anyone
+    _resetSqlPacerForTest(400_000, 1); // one send, then no slot in reach of anyone
     const first = await run();
     ok(first?.rowCount === 1, "a first query is sent");
     const seen = new Map();
@@ -154,6 +154,61 @@ try {
     try { rs = await Promise.all([run(), run(), run()].map((p) => p.catch((x) => x))); } finally { Date.now = realDateNow; }
     const ms = performance.now() - t;
     ok(rs.every((r) => r?.rowCount === 1) && ms < 1_500, `after the wall clock steps back 5 s, three queries are sent a slot apart, none refused or held for the step (${rs.map((r) => r?.statusCode ?? 200).join(", ")}, ${Math.round(ms)} ms)`);
+    _resetSqlPacerForTest(0);
+  }
+  // ---------------------------------------------------------------- d-14
+  // At one replica two sends may go back to back, at the same long-run rate:
+  // a send waits only for the send two before it plus two gaps, so a pair
+  // never waits, any two gaps of time hold at most two sends (under 2 a
+  // second at the default gap), and no send is ever later than it was under
+  // one gap per send. At more replicas a send keeps the one-gap rule (each
+  // replica's pair would add up past the project's rate).
+  {
+    const { sqlSendGapConfig } = m;
+    ok(sqlSendGapConfig({}).burst === 2 && sqlSendGapConfig({ RATE_LIMIT_REPLICAS: "1" }).burst === 2 && sqlSendGapConfig({ RATE_LIMIT_REPLICAS: "2" }).burst === 1 && sqlSendGapConfig({ RATE_LIMIT_REPLICAS: "4" }).burst === 1,
+      `two sends back to back at one replica, one at more (${[{}, { RATE_LIMIT_REPLICAS: "2" }].map((e) => sqlSendGapConfig(e).burst).join(", ")})`);
+    const sent = [];
+    let clock = clockOf();
+    fetchImpl = async () => { sent.push(clock.now()); return J(200, { result: [{ x: 1 }] }); };
+    _setSqlPacerClockForTest(clock);
+    _resetSqlPacerForTest(625, 2);
+    const five = await Promise.all(Array.from({ length: 5 }, () => run().catch((x) => x)));
+    ok(five.every((r) => r?.rowCount === 1) && clock.slots.map((s) => s - T0).join() === "1250,1250,2500", `five at once: a pair at once, then a pair two gaps out, then the fifth (waits +${clock.slots.map((s) => s - T0).join(", +")} ms)`);
+    const six = await run().catch((x) => x);
+    const seven = await run().catch((x) => x);
+    ok(six?.rowCount === 1 && seven?.statusCode === 429 && seven?.hint === "busy" && clock.slots.map((s) => s - T0).join() === "1250,1250,2500,2500",
+      `the sixth pairs with the fifth (+2500 ms, in reach); the seventh, four gaps out, is refused busy (${six?.statusCode ?? 200}, ${seven?.statusCode})`);
+    // The schedule holds at most two sends in any two gaps, so at most two in any second.
+    const times = [T0, T0, ...clock.slots];
+    let most = 0;
+    for (let i = 0; i < times.length; i++) most = Math.max(most, times.filter((t) => t >= times[i] && t < times[i] + 1000).length);
+    ok(most === 2, `no second holds more than two sends (${most})`);
+    // Two calls 200 ms apart: the second is sent at once (one gap per send held it 425 ms).
+    clock = clockOf(); _setSqlPacerClockForTest(clock); _resetSqlPacerForTest(625, 2);
+    await run();
+    clock.t += 200;
+    await run();
+    ok(clock.slots.length === 0, `two calls 200 ms apart: neither waits (waits ${clock.slots.map((s) => s - T0).join(", ") || "none"})`);
+    // The first query after an idle gap is sent at once.
+    clock.t += 30_000;
+    await run();
+    ok(clock.slots.length === 0, "the first query after an idle gap is sent at once");
+    // At two replicas the one-gap rule holds: a pair 200 ms apart waits a gap.
+    clock = clockOf(); _setSqlPacerClockForTest(clock); _resetSqlPacerForTest(1250, 1);
+    await run(); clock.t += 200; await run();
+    ok(clock.slots.map((s) => s - T0).join() === "1250", `at two replicas the second of a pair waits one gap (+${clock.slots.map((s) => s - T0).join(", +")} ms)`);
+    // This server's own read still never waits more than one gap and never
+    // goes ahead of a waiting buyer: after a pair a buyer and then an own
+    // read arrive; the buyer takes the next slot and the own read, past one
+    // gap, is refused unsent.
+    clock = clockOf(); _setSqlPacerClockForTest(clock); _resetSqlPacerForTest(625, 2);
+    sent.length = 0;
+    await run(); await run();
+    const buyer = run();
+    const own = await m.ownSqlQuery({ sql }).catch((x) => x);
+    await buyer;
+    ok(own?.statusCode === 429 && sent.length === 3 && clock.slots.map((s) => s - T0).join() === "1250", `an own read behind a waiting buyer is refused unsent (${own?.statusCode}, ${sent.length} sent)`);
+    _setSqlPacerClockForTest(null);
     _resetSqlPacerForTest(0);
   }
 } finally {
