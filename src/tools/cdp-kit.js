@@ -28,6 +28,7 @@ import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, currentBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
 import { onFinalResponse, currentRequestScope } from "../request-timing.js";
+import { clientGoneError, clientGoneBeforeFirstByte } from "../hangup-settlement.js";
 import { noteSqlCall } from "../sql-query-stats.js";
 
 const CDP_HOST = "api.cdp.coinbase.com";
@@ -285,22 +286,29 @@ export function _buyerQueriesInflightForTest() { return buyerQueriesInflight; }
 // buyer's query, its retry and recovery runs, the health check, the
 // revenue reads) takes the next send slot first, slots CDP_SQL_SEND_GAP_MS
 // apart on each replica (default 625 ms times RATE_LIMIT_REPLICAS: under 2
-// a second across the project in any one-second window). A send whose slot
-// is further off than its call can wait (SQL_SLOT_MAX_WAIT_MS, or the
-// handler budget less a read) takes no slot and is refused as busy.
+// a second across the project in any one-second window). A send waits for
+// its slot up to SQL_SLOT_WAIT_MS (3 s) or SQL_SLOT_WAIT_SLOTS gaps,
+// whichever is longer: as many slots out as 3 s holds at the default gap
+// (four), so a wider gap (more replicas) leaves a query the same number of
+// sends ahead of it, never fewer. A send whose slot is further off than that
+// (or than the handler budget less a read) takes no slot and is refused as
+// busy. This server's own reads (ownSqlQuery) take a slot only when no
+// other query is waiting for one (a wait of at most one gap: the spacing
+// after the last send), so they never queue ahead of a buyer's query.
 export const SQL_QUERY_PATH = "/platform/v2/data/query/run";
-export const SQL_SLOT_MAX_WAIT_MS = 3_000;
+export const SQL_SLOT_WAIT_MS = 3_000;
 export const SQL_SEND_GAP_DEFAULT_MS = 625;
+export const SQL_SLOT_WAIT_SLOTS = Math.floor(SQL_SLOT_WAIT_MS / SQL_SEND_GAP_DEFAULT_MS);
 export const SQL_SEND_GAP_MIN_MS = 100;
-// The widest gap a replica runs. A send waits at most SQL_SLOT_MAX_WAIT_MS
-// for its slot, and a call's retry or recovery run is one gap behind its own
-// first send: at a gap past that wait every such send, and every query that
-// arrives behind another, would be refused. So the gap in force (the knob
-// times the replicas) is held under the wait, whatever the two are set to.
-// Held there, more than four replicas at the default gap send past the
-// service's documented 2 a second between them: its own 429 then answers
-// (retried once, then the uncharged 503), and the boot line names the setting.
-export const SQL_SEND_GAP_MAX_MS = SQL_SLOT_MAX_WAIT_MS - 500;
+/** How far off a send's slot may be for it to wait, at a gap in force of `gapMs`. */
+export function sqlSlotWaitMs(gapMs) { return Math.max(SQL_SLOT_WAIT_MS, SQL_SLOT_WAIT_SLOTS * gapMs); }
+// The widest gap a replica runs, whatever the knob and the replica count
+// multiply to: at it a send waits at most SQL_SLOT_WAIT_SLOTS gaps (10 s) for
+// its slot, well inside the handler budget. Held there, more than four
+// replicas at the default gap reach the service's documented 2 a second
+// between them: its own 429 then answers (retried once, then the uncharged
+// 503), and the boot line names the setting.
+export const SQL_SEND_GAP_MAX_MS = 2_500;
 /** The send gap in force, and what was not taken as set (logged at boot by
  *  name, never by value): CDP_SQL_SEND_GAP_MS when it is not a whole number
  *  of at least SQL_SEND_GAP_MIN_MS (`invalid`: the default is used), and the
@@ -324,7 +332,7 @@ export function sqlSendGapWarnings(env = process.env) {
   const { gapMs, rejected } = sqlSendGapConfig(env);
   return rejected.map(({ name, why }) => (why === "invalid"
     ? `[cdp] ${name} is not a whole number of milliseconds of at least ${SQL_SEND_GAP_MIN_MS} and is not used`
-    : `[cdp] the send gap set by ${name} is past ${SQL_SEND_GAP_MAX_MS} ms (a send waits at most ${SQL_SLOT_MAX_WAIT_MS} ms for its slot) and is held there`)
+    : `[cdp] the send gap set by ${name} is past ${SQL_SEND_GAP_MAX_MS} ms (a send waits up to ${SQL_SLOT_WAIT_SLOTS} gaps for its slot) and is held there`)
     + `; queries to the query service are sent ${gapMs} ms apart`);
 }
 let nextSqlSlotAt = 0;
@@ -337,7 +345,7 @@ let pacerClock = realPacerClock;
 export function _setSqlPacerClockForTest(clock = null) { pacerClock = clock ? { ...realPacerClock, ...clock } : realPacerClock; }
 export function _resetSqlPacerForTest(gapMs = null) { nextSqlSlotAt = 0; sqlSendGap = gapMs ?? sqlSendGapMs(); }
 /** Waits for the next send slot; resolves false (no slot taken) when it is further off than maxWaitMs. */
-export async function takeSqlSendSlot(maxWaitMs = SQL_SLOT_MAX_WAIT_MS, now = pacerClock.now()) {
+export async function takeSqlSendSlot(maxWaitMs = sqlSlotWaitMs(sqlSendGap), now = pacerClock.now()) {
   const at = Math.max(now, nextSqlSlotAt);
   if (at - now > Math.max(0, maxWaitMs)) return false;
   nextSqlSlotAt = at + sqlSendGap;
@@ -346,7 +354,8 @@ export async function takeSqlSendSlot(maxWaitMs = SQL_SLOT_MAX_WAIT_MS, now = pa
 }
 function slotWaitMs() {
   const budget = currentBudget();
-  return budget ? Math.min(SQL_SLOT_MAX_WAIT_MS, budget.remaining() - OPTIONAL_READ_FLOOR_MS) : SQL_SLOT_MAX_WAIT_MS;
+  const reach = sqlSlotWaitMs(sqlSendGap);
+  return budget ? Math.min(reach, budget.remaining() - OPTIONAL_READ_FLOOR_MS) : reach;
 }
 // The busy refusal (429, shed, never charged): the in-flight cap, or a
 // buyer's first send with no slot in reach. The request is marked so
@@ -442,7 +451,10 @@ export const SQL_SEND_LIMIT_BYTES = 500_000;
 // every HEALTH_TTL_MS (HEALTH_UNKNOWN_TTL_MS for an unknown verdict) across
 // every call, under its own memo and timeout.
 export const SQL_QUERY_BUDGET = 3;
-function newQueryBudget() { return { sent: 0, max: SQL_QUERY_BUDGET, left() { return this.max - this.sent; } }; }
+// The budget also carries how the call's sends are paced: `own` (this
+// server's own read) and `callerGone` (the buyer's connection closed before
+// any byte of the answer).
+function newQueryBudget({ own = false, callerGone = () => false } = {}) { return { sent: 0, max: SQL_QUERY_BUDGET, own, callerGone, left() { return this.max - this.sent; } }; }
 // Wraps the onchain-sql handler so every run inside a request is counted once
 // its response has ENDED (src/sql-query-stats.js): the queries it sent (0 for
 // a refusal before any query), by the response's final status and what the
@@ -451,12 +463,15 @@ function newQueryBudget() { return { sent: 0, max: SQL_QUERY_BUDGET, left() { re
 // counted. Counting never changes or fails the call.
 // This server's own reads (the economy snapshot, src/x402-economy.js) run
 // the same handler through ownSqlQuery below. The mark is private to this
-// module, so no request can carry it: an own read is paced like any query but
+// module, so no request can carry it: an own read takes a send slot only
+// when no other query is waiting for one (never queueing ahead of a buyer's
+// query; refused 429 otherwise, and its caller tries again later), and it
 // takes no place in the buyers' in-flight cap and is never refused by it.
 const OWN_READ = Symbol("own sql read");
 function countedSqlCall(run) {
-  return async (input, _ctx, mark) => {
-    const call = { queries: newQueryBudget(), budgetSpent: false, own: mark === OWN_READ };
+  return async (input, ctx, mark) => {
+    const own = mark === OWN_READ;
+    const call = { queries: newQueryBudget({ own, callerGone: own ? () => false : () => clientGoneBeforeFirstByte(ctx) }), budgetSpent: false, own };
     try { return await run(input, call); }
     catch (e) { if (e?.queryBudgetSpent) call.budgetSpent = true; throw e; }
     finally {
@@ -569,10 +584,20 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     }
     // Every query sent takes a send slot (the pacer above). A buyer's first
     // send with no slot in reach is the busy refusal; a later one (a retry
-    // or a recovery run) ends on the service-busy answer, uncharged.
-    if (path === SQL_QUERY_PATH && !(await takeSqlSendSlot(slotWaitMs()))) {
+    // or a recovery run) ends on the service-busy answer, uncharged. This
+    // server's own read takes a slot only when no other query is waiting for
+    // one: its slot is at most one gap off.
+    const own = queries?.own === true;
+    if (path === SQL_QUERY_PATH && !(await takeSqlSendSlot(own ? sqlSendGap : slotWaitMs()))) {
+      if (own && queries.sent === 0) throw Object.assign(bad("Queries are waiting for the query service, so this server's own read is tried again later.", 429), { retryAfter: 5 });
       if (buyerQuery && queries && queries.sent === 0) throw sqlBusyRefusal("The query service is taking this server's queries as fast as its rate limit allows; retry in a few seconds.");
       throw lastErr ?? bad("Coinbase Developer Platform is busy right now - retry shortly. Nothing was charged.", 503);
+    }
+    // A buyer who left while its first query waited for its slot: nothing
+    // could be delivered, so the query is not sent and the call ends 499,
+    // which cancels settlement (as for a buyer gone before the call started).
+    if (path === SQL_QUERY_PATH && buyerQuery && queries && queries.sent === 0 && queries.callerGone?.()) {
+      throw clientGoneError("The connection closed while the query waited for its send slot; it was not sent and nothing was charged.");
     }
     // A buyer's call sends at most SQL_QUERY_BUDGET queries, retries
     // included: the budget is spent here, where the query goes out.
