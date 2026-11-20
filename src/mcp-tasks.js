@@ -200,8 +200,10 @@ export async function salesLedgerChargeOf({ slug, payer, sinceMs, untilMs, via =
   if (typeof payer !== "string" || !payer || typeof slug !== "string" || !slug) return undefined;
   try {
     const { payerSalesOfTool } = await import("./sales-ledger.js");
-    const rows = payerSalesOfTool(payer, slug, { fromMs: sinceMs, toMs: untilMs, limit: 5 });
-    if (!Array.isArray(rows)) return undefined;
+    const LIMIT = 5;
+    const rows = payerSalesOfTool(payer, slug, { fromMs: sinceMs, toMs: untilMs, limit: LIMIT });
+    // A full page may hold more rows past it: which one is the run's cannot be said.
+    if (!Array.isArray(rows) || rows.length >= LIMIT) return undefined;
     const mine = via ? rows.filter((x) => x?.via === via) : rows;
     if (mine.length > 1) return undefined;
     const row = mine[0];
