@@ -34,7 +34,8 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
   ok(!html.slice(0, html.indexOf("Agent402, for comparison")).includes(">Agent402.Tools<"), "Agent402's own row is excluded from the ranked table (wallet-matched)");
   ok(html.includes(">Seller-One.example<") && html.includes(">seller-two.example<"), "external sellers render in the ranked table");
   // Re-ranked after exclusion: Seller-One.example (was rank 2) must now read 01.
-  const sellerOneRow = html.split("lb-row").find((s) => s.includes("Seller-One.example"));
+  // A table row (class="lb-row" or "lb-row first"), not the chart above the table.
+  const sellerOneRow = html.split("lb-row").find((s) => /^( first)?"/.test(s) && s.includes("Seller-One.example"));
   ok(sellerOneRow && />01</.test(sellerOneRow), "ranks are consecutive after Agent402's row is filtered out, not left with a gap");
   ok(html.includes("$21,422.23"), "real USDC settled renders with real formatting");
   // avg ticket = totalUsd / callsSettled = 21422.22932 / 1127246 = 0.0190...

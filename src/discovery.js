@@ -36,6 +36,7 @@ import { publicIndexManifest } from "./facilitator-public-index.js";
 import { referralOffered } from "./referral-gate.js";
 import { GOOD_READ_MAX_MS, SETTLED_MARK_MS, COVER_WALLETS_MAX, sharedWindowMs } from "./inflight-cover.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
+import { toolReliabilityEnabled, TOOL_RELIABILITY_PATH } from "./tool-reliability.js";
 const REPO = REPO_URL;
 const MAINTAINER = { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: REPO };
 
@@ -473,6 +474,11 @@ export function reliabilityReport({ baseUrl, network, wallet, stats, observedSta
       statusPage: `${baseUrl}/status`,
       openapi: `${baseUrl}/openapi.json`,
       manifest: `${baseUrl}/.well-known/x402`,
+      // Per tool: success rate and p50/p95 latency over a stated window, with
+      // the sample each stands on (src/tool-reliability.js), while that table
+      // is published.
+      ...(toolReliabilityEnabled() ? { toolReliability: `${baseUrl}${TOOL_RELIABILITY_PATH}` } : {}),
+      refundTerms: `${baseUrl}/.well-known/agent402-refund-terms.json`,
     },
     incidents: `${REPO}/issues?q=label%3Aheartbeat`,
   };

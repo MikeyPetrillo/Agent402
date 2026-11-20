@@ -31,13 +31,19 @@ the settlement is not confirmed (`reason: "settlement-unconfirmed"`) and the tra
 do not sign a new authorization for that call before the expiry the body names (`authorizationValidBefore`,
 `lastValidRound` or `expirationLedger`), or, when it names none, before the paying wallet shows whether
 the transfer landed, and read `refundStatusUrl` (a free refund lookup) when it is there; the same payment
-sent again, in any encoding, gets the same answer without the call running; `fresh-authorization` means sign a new payment;
+sent again, in any encoding, gets the same answer without the call running; `fresh-authorization` means sign a new payment,
+and with `reason: "settled-refund-owed"` the earlier transfer of that payment landed and is booked as owed to the
+paying wallet, repaid after on-chain proof (`transactions` names it, `refundStatusUrl` shows where the repayment
+stands), so that call was charged and not served;
 `fund-wallet` means the paying wallet holds too little of the asset (`reason:
 "insufficient-funds"`) or has no account for it yet (`reason: "no-token-account"`: no USDC token account
 on Solana, no trustline on Stellar, not opted in on Algorand), so a new signature alone is refused the
 same way: fund the wallet or pay on another listed network, and wait the `Retry-After` before trying the
 same wallet again. That body also carries `needs`: the `network`, `asset` and `amount` (base units, with
-`usd`) the refused call asked for. Every route's challenge is
+`usd`) the refused call asked for. A Solana refusal body with `requote: true` means the facilitator
+that quote named refused the x402 payment before broadcasting it: nothing was charged, so request the route
+again without a payment header and sign against that fresh 402, which names another facilitator's fee
+payer when one is available. Every route's challenge is
 valid under `@x402/core`'s own schemas (CI runs all 500+ routes through the official parser),
 and it carries a typed output schema twice: inside the `bazaar` discovery extension (with the
 input schema and an example) and as `accepts[0].outputSchema` on the first accept, so a client

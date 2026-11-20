@@ -67,7 +67,7 @@ try {
   });
   let stdout = "";
   try {
-    stdout = execFileSync("node", [join(installed, pkg.main || "index.js")], {
+    stdout = execFileSync(process.execPath, [join(installed, pkg.main || "index.js")], {
       input: req + "\n", encoding: "utf8", timeout: 90_000,
       env: { ...process.env, AGENT402_URL: process.env.AGENT402_URL || "https://agent402.tools" },
       stdio: ["pipe", "pipe", "pipe"],

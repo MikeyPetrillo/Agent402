@@ -11,7 +11,8 @@
   function go(i) {
     if (i < 0 || i >= slides.length) return;
     current = i;
-    slides[i].scrollIntoView({ behavior: "smooth", block: "start" });
+    var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    slides[i].scrollIntoView({ behavior: still ? "auto" : "smooth", block: "start" });
     if (progress) progress.textContent = (i + 1) + " / " + slides.length;
   }
   var byId = function (id) { return document.getElementById(id); };

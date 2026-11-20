@@ -3,7 +3,9 @@
 // write lands in the records table (and in the key's file while the directory
 // exists), a session is claimed by exactly one of two concurrent claims, two
 // concurrent holds on a balance that covers one leave exactly one holder, a
-// hold becomes spend only on a final 200 and comes back on anything else.
+// hold becomes spend only on a final 200 and comes back on anything else;
+// while signed receipts are served, a final 200 is debited before its answer
+// ends and the history names the debit's id.
 // Requires STATE_DATABASE_URL (CI fails without it).
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
@@ -13,7 +15,8 @@ import { EventEmitter } from "node:events";
 import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-credits-pg" });
 const sdb = await import("../src/state-db.js");
-const { createCredits, hashKey, usdToMicro } = await import("../src/credits.js");
+const { createCredits, hashKey, usdToMicro, emailKeyOf, ensureCreditsIndexes, CREDITS_INDEXES, CREDITS_LOOKUP_SQL } = await import("../src/credits.js");
+const { reserveHangupForgiveness, hangupForgiven } = await import("../src/hangup-forgiveness.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -96,6 +99,80 @@ try {
   res = fakeRes(); nexted = false;
   await gate({ method: "GET", path: "/api/other", headers: { authorization: `Bearer ${KEY}` } }, res, () => { nexted = true; });
   ok(nexted && res.statusCode === 200 && !res.headers["X-Credits-Balance"], "gate: an unpriced route passes through untouched");
+  // While signed receipts are served (settleBeforeEnd), a final 200 is
+  // debited BEFORE its answer ends: the row holds the debit, the history
+  // names its id, and the finish that follows takes nothing more.
+  {
+    // A key of its own, so the balances the checks below read are untouched.
+    const RKEY = "a402_" + "r".repeat(40), RHASH = hashKey(RKEY);
+    await sdb.stateQuery(`INSERT INTO ${sdb.stateDbSchema()}.records (collection, id, body) VALUES ('credits', $1, $2::jsonb)`, [`k_${RHASH}`, JSON.stringify({ keyId: "rcptkey00001", balanceMicro: 1_000_000, loadedMicro: 1_000_000, spentMicro: 0, heldMicro: 0, calls: 0, createdAt: "2026-11-01T00:00:00.000Z", history: [] })]);
+    const gateR = A.gate(priceFor, { settleBeforeEnd: () => true });
+    const before = (await B.balance(RKEY)).balanceUsd;
+    const debitsBefore = debits.length;
+    const r = fakeRes(); const req = { method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${RKEY}` } };
+    let ended = null; r.end = (...args) => { ended = { args, balance: null }; return r; };
+    await gateR(req, r, () => {});
+    r.statusCode = 200;
+    r.end("body");
+    ok(await until(async () => ended !== null), "pg receipts: the answer ends once the debit settled");
+    const row = await rowRec(RHASH);
+    ok(typeof req.creditsDebitId === "string" && /^cd_/.test(req.creditsDebitId) && row.history.some((e) => e.k === "charge" && e.d === req.creditsDebitId) && ended.args[0] === "body", `pg receipts: the debit landed before the end and the history names its id (${req.creditsDebitId})`);
+    ok((await B.balance(RKEY)).balanceUsd === Math.round((before - 0.001) * 1e6) / 1e6 && (await B.balance(RKEY)).heldUsd === 0, "pg receipts: one price taken, nothing held");
+    r.emit("finish");
+    await wait(100);
+    ok(debits.length === debitsBefore + 1 && (await B.balance(RKEY)).balanceUsd === Math.round((before - 0.001) * 1e6) / 1e6, "pg receipts: the finish takes nothing more");
+    // A debit that cannot land in CREDITS_DEBIT_WAIT_MS ends the answer
+    // without a debit id, and the retry still takes the hold once.
+    process.env.CREDITS_DEBIT_WAIT_MS = "100";
+    const slow = A.gate(priceFor, { settleBeforeEnd: () => true });
+    const r2 = fakeRes(); const req2 = { method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${RKEY}` } };
+    let ended2 = false; r2.end = () => { ended2 = true; return r2; };
+    await slow(req2, r2, () => {});
+    // Hold the row so the settle waits behind it.
+    const lockDone = sdb.withStateTx(async (c) => { await c.query(`SELECT 1 FROM ${sdb.stateDbSchema()}.records WHERE collection = 'credits' AND id = $1 FOR UPDATE`, [`k_${RHASH}`]); await wait(400); });
+    await wait(30);
+    r2.statusCode = 200; r2.end();
+    ok(await until(async () => ended2, 2000) && !req2.creditsDebitId, "pg receipts: a debit held up past the wait ends the answer with no debit id (no receipt)");
+    await lockDone.catch(() => {});
+    ok(await until(async () => (await B.balance(RKEY)).balanceUsd === Math.round((before - 0.002) * 1e6) / 1e6 && (await B.balance(RKEY)).heldUsd === 0, 5000), "pg receipts: the retried debit takes the hold once");
+    delete process.env.CREDITS_DEBIT_WAIT_MS;
+    // A buyer who hangs up while the debit is in flight: the debit left while
+    // the buyer was connected, so it stands once and the hang-up hook is told
+    // what it took (creditsChargedOnClose), so the undelivered answer is
+    // booked as owed. Nothing is left held.
+    {
+      const b0 = (await B.balance(RKEY)).balanceUsd;
+      const g = A.gate(priceFor, { settleBeforeEnd: () => true });
+      const r3 = fakeRes(); const req3 = { method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${RKEY}` } };
+      let ended3 = false; r3.end = () => { ended3 = true; return r3; };
+      await g(req3, r3, () => {});
+      const lock3 = sdb.withStateTx(async (c) => { await c.query(`SELECT 1 FROM ${sdb.stateDbSchema()}.records WHERE collection = 'credits' AND id = $1 FOR UPDATE`, [`k_${RHASH}`]); await wait(500); });
+      await wait(30);
+      r3.statusCode = 200; r3.end("answer");
+      await wait(50); r3.emit("close");
+      await lock3.catch(() => {});
+      ok(await until(async () => ended3, 4000), "pg receipts hang-up: the answer still ends after the debit");
+      ok(req3.creditsChargedOnClose === 0.001, `pg receipts hang-up: a close during the debit wait is noted for the hang-up hook (${req3.creditsChargedOnClose})`);
+      ok(await until(async () => (await B.balance(RKEY)).balanceUsd === Math.round((b0 - 0.001) * 1e6) / 1e6 && (await B.balance(RKEY)).heldUsd === 0, 3000), "pg receipts hang-up: the debit is taken once and nothing stays held");
+      // A buyer already gone when the answer ends, holding a granted
+      // forgiveness ticket: the hold is released and nothing is debited.
+      const b1 = (await B.balance(RKEY)).balanceUsd;
+      const r4 = fakeRes(); const req4 = { method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${RKEY}` } };
+      let ended4 = false; r4.end = () => { ended4 = true; return r4; };
+      await g(req4, r4, () => {});
+      // Awaited as the server awaits it: on a shared store (REDIS_URL set) the
+      // reservation is a promise, and the ticket is on the request only once
+      // it settles. The key is this run's own, so no other run's figures on
+      // that store decide it.
+      await reserveHangupForgiveness(req4, { keys: [`credits-pg-test-${basename(DIR)}`], priceUsd: 0.001, slug: "whois" });
+      ok(hangupForgiven(req4), "pg receipts hang-up: the run holds a granted ticket");
+      req4.__a402ClientGoneAt = Date.now();
+      r4.statusCode = 200; r4.end("answer");
+      ok(ended4 && !req4.creditsDebitId && !req4.creditsChargedOnClose, "pg receipts hang-up: a forgiven buyer already gone is not debited");
+      ok(await until(async () => (await B.balance(RKEY)).balanceUsd === b1 && (await B.balance(RKEY)).heldUsd === 0, 3000), "pg receipts hang-up: the forgiven hold is released, the balance untouched");
+    }
+    await sdb.stateQuery(`DELETE FROM ${sdb.stateDbSchema()}.records WHERE collection = 'credits' AND id = $1`, [`k_${RHASH}`]);
+  }
 
   // ---- (5) operator reads and the clawback ---------------------------------
   const st = await B.status();
@@ -384,6 +461,46 @@ try {
     ok((await L.setLowNotice("aaaaaaaaaaa3", false)) === true && (await rowRec("lkc".padEnd(64, "c"))).lowNoticeOff && (await L.setLowNotice("zzzzzzzzzzzz", false)) === false, "pg: a key id finds its row (and an unknown one none)");
     const st = await L.status();
     ok(st.keys >= 43 && st.rows.every((r) => !("history" in r)), `pg: the operator status still walks every key (${st.keys})`);
+
+    // ONE NORMALIZED EMAIL FIELD. The email a key is found by is normalized
+    // once, in JS (emailKeyOf), stored on the row (`emailKey`) and compared
+    // as stored: Postgres lower() follows the database's locale and lowers
+    // "İ" differently from JS, so a non-ASCII email was not found.
+    ok(emailKeyOf(" İpek@X.COM ") === "i̇pek@x.com" && emailKeyOf("") === null && emailKeyOf(null) === null, `emailKeyOf trims and lowers once, in JS (${JSON.stringify(emailKeyOf(" İpek@X.COM "))})`);
+    sessions.cs_tr = { id: "cs_tr", mode: "payment", payment_status: "paid", payment_intent: "pi_tr", customer_details: { email: "İpek@X.com" }, metadata: { credits_pack: "credits-20" } };
+    const tr = await L.claim("cs_tr");
+    const trRow = await rowRec(hashKey(tr.key));
+    ok(tr.status === "minted" && trRow?.emailKey === "i̇pek@x.com" && trRow.email === "İpek@X.com", `pg: a minted key's row keeps the email as given and its normalized key (${JSON.stringify(trRow?.emailKey)})`);
+    const trFound = await L.balancesForEmail("İPEK@x.com");
+    ok(trFound.map((b) => b.keyId).join() === tr.keyId && (await L.historyFor(tr.keyId, "i̇pek@X.com"))?.keyId === tr.keyId, `pg: a non-ASCII email finds its balance whatever the database's locale (${trFound.map((b) => b.keyId).join() || "none"})`);
+    // A row written before the field (an older build) is given it at the next load, computed in JS.
+    await put("lkd".padEnd(64, "d"), rec("aaaaaaaaaaa4", "Ünïcode@Example.com"));
+    ok(!("emailKey" in (await rowRec("lkd".padEnd(64, "d")))), "a row an older build wrote has no normalized email");
+    const L2 = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: quiet });
+    await L2.ready();
+    ok((await rowRec("lkd".padEnd(64, "d")))?.emailKey === "ünïcode@example.com" && (await rowRec("lka".padEnd(64, "a")))?.emailKey === "mixed@example.com", "pg: the next load gives every older row its normalized email");
+    ok((await L2.balancesForEmail("ÜNÏCODE@example.com")).map((b) => b.keyId).join() === "aaaaaaaaaaa4", "pg: and it is found by it");
+
+    // EXPRESSION INDEXES, built CONCURRENTLY outside any transaction and
+    // outside the boot's schema lock, once; an index a failed build left
+    // INVALID is dropped and built again.
+    const schemaName = sdb.stateDbSchema();
+    const idx = async () => Object.fromEntries((await sdb.stateQuery(`SELECT c.relname AS name, i.indisvalid AS valid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = ANY($2)`, [schemaName, CREDITS_INDEXES.map((x) => x.name)])).rows.map((r) => [r.name, r.valid]));
+    ok(Object.keys(await idx()).length === 0, "no credits index exists before the build runs");
+    // A build that failed part way leaves an INVALID index under the name (a unique build over duplicate keys does).
+    await sdb.stateStatementOutsideTx(`CREATE UNIQUE INDEX CONCURRENTLY ${CREDITS_INDEXES[1].name} ON ${schemaName}.records ((body->>'balanceMicro')) WHERE collection = 'credits'`).catch(() => {});
+    ok((await idx())[CREDITS_INDEXES[1].name] === false, "a failed concurrent build leaves an invalid index (the case the build repairs)");
+    const built = await ensureCreditsIndexes({ log: quiet });
+    const after = await idx();
+    ok(built.ran === true && CREDITS_INDEXES.every((x) => after[x.name] === true), `the build leaves every credits index valid (${JSON.stringify(after)})`);
+    ok(built.result?.built?.length === 2 && built.result?.rebuilt?.join() === CREDITS_INDEXES[1].name, `the invalid one was dropped and built again (${JSON.stringify(built.result)})`);
+    const again = await ensureCreditsIndexes({ log: quiet });
+    ok(again.ran === true && again.result?.built?.length === 0, `a second run builds nothing (${JSON.stringify(again.result)})`);
+    const plan = async (sql, params) => (await sdb.withStateTx(async (c) => { await c.query("SET LOCAL enable_seqscan = off"); return (await c.query(`EXPLAIN ${sql}`, params)).rows.map((r) => r["QUERY PLAN"]).join("\n"); }));
+    const emailPlan = await plan(CREDITS_LOOKUP_SQL.email(`${schemaName}.records`), ["mixed@example.com"]);
+    const keyPlan = await plan(CREDITS_LOOKUP_SQL.keyId(`${schemaName}.records`), ["aaaaaaaaaaa1"]);
+    ok(emailPlan.includes(CREDITS_INDEXES[0].name) && keyPlan.includes(CREDITS_INDEXES[1].name), `the balance page's two lookups can use their indexes (${emailPlan.split("\n")[0]} | ${keyPlan.split("\n")[0]})`);
+    ok((await L2.balancesForEmail("mixed@example.com")).length === 2 && (await L2.historyFor("aaaaaaaaaaa1", "mixed@example.com"))?.keyId === "aaaaaaaaaaa1", "the lookups answer the same with the indexes in place");
   }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});

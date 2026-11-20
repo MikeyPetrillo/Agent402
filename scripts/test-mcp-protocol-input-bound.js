@@ -109,7 +109,7 @@ ok(stdio.toolInputBoundRefusal("t", { v: series(MAX) }) === hosted.toolInputBoun
 // --- hosted connector, booted --------------------------------------------------
 const PORT = await getFreePort();
 const B = `http://127.0.0.1:${PORT}`;
-const proc = spawn("node", ["src/server.js"], {
+const proc = spawn(process.execPath, ["src/server.js"], {
   cwd: ROOT,
   env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", STATE_DATABASE_URL: "", UPSTREAM_COSTS_JSON: "" },
   stdio: ["ignore", "ignore", "inherit"],

@@ -36,11 +36,31 @@ export function upstreamFailureLogPath() {
 }
 
 const KEYED_NAME = /key|token|secret|sig|auth|passw|credential|session|cookie/i;
+// Hosts whose credential rides in the URL PATH ("/v2/{key}"), which no
+// parameter or header name shows.
+const PATH_KEYED_HOSTS = ["g.alchemy.com"];
+const SECRET_MIN_CHARS = 12;
+/** The values of this process's credential-like environment variables
+ *  (names as KEYED_NAME, values of SECRET_MIN_CHARS or more). */
+function configuredSecrets(env) {
+  const out = [];
+  for (const [name, value] of Object.entries(env || {})) {
+    if (KEYED_NAME.test(name) && typeof value === "string" && value.length >= SECRET_MIN_CHARS) out.push(value);
+  }
+  return out;
+}
 /** True when a request carries a credential: a key-like query parameter or
- *  header name. Such a request is never logged by URL nor re-read. */
-export function isKeyedRequest(u, headers) {
+ *  header name, a host that takes its key in the path, or a configured
+ *  credential's value anywhere in the URL (a key in a path segment). Such a
+ *  request is never logged by URL nor re-read. */
+export function isKeyedRequest(u, headers, env = process.env) {
   for (const name of u.searchParams.keys()) if (KEYED_NAME.test(name)) return true;
   if (u.username || u.password) return true;
+  const host = u.hostname.toLowerCase();
+  if (PATH_KEYED_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))) return true;
+  let href = u.href;
+  try { href = `${href}\n${decodeURIComponent(u.href)}`; } catch { /* the raw form is still read */ }
+  if (configuredSecrets(env).some((v) => href.includes(v) || href.includes(encodeURIComponent(v)))) return true;
   let names = [];
   if (headers && typeof headers.keys === "function") names = [...headers.keys()];
   else if (Array.isArray(headers)) names = headers.map((h) => h?.[0]);
@@ -87,25 +107,147 @@ function kits(root) {
 // `host: "api.open-meteo.com"`); a bare name must end in a letter TLD, so a
 // version string never reads as a host.
 const HOST_LITERAL = /https?:\/\/([a-z0-9-]+(?:\.[a-z0-9-]+)+)|["'`]((?:[a-z0-9-]+\.)+[a-z]{2,})["'`]/gi;
-/** The upstream hosts a tool's definition names, read from src/tools/: the
- *  hosts in the tool's own definition (from its `route: "` to the next
- *  one), or, when that names none (a kit-wide base URL), every host in
- *  its kit file. Empty when the slug is not defined there. */
-export function upstreamHostsForSlug(slug, root = ROOT) {
+const hostsIn = (s) => new Set([...s.matchAll(HOST_LITERAL)].map((m) => (m[1] || m[2]).toLowerCase()));
+/** A tool's definition text in src/tools/ (from its `route: "` to the next
+ *  one) and its kit file's, or null when the slug is not defined there. */
+function definitionOf(slug, root) {
   const marker = `slug: "${slug}"`;
-  const hostsIn = (s) => new Set([...s.matchAll(HOST_LITERAL)].map((m) => (m[1] || m[2]).toLowerCase()));
   for (const text of kits(root)) {
     // The definition, not a reference (a skill step also says `slug: "x"`):
     // the marker sits in the same object as a `route: "` just before it.
     for (let at = text.indexOf(marker); at >= 0; at = text.indexOf(marker, at + 1)) {
       const start = text.lastIndexOf('route: "', at);
       if (start < 0 || at - start > 400) continue;
+      // The route is this slug's own, not the previous definition's.
+      if (text.slice(start, at).includes('slug: "')) continue;
       const next = text.indexOf('route: "', at);
-      const own = hostsIn(text.slice(start, next < 0 ? text.length : next));
-      return own.size ? own : hostsIn(text);
+      return { own: text.slice(start, next < 0 ? text.length : next), kit: text };
     }
   }
-  return new Set();
+  // A definition built by a factory writes no route literal beside its slug
+  // (`route: \`GET /api/${slug}\``): the call that names the slug, up to the
+  // next one, is the definition.
+  for (const text of kits(root)) {
+    const at = text.indexOf(marker);
+    if (at < 0) continue;
+    const next = text.indexOf('slug: "', at + marker.length);
+    return { own: text.slice(at, next < 0 ? text.length : next), kit: text };
+  }
+  return null;
+}
+/** The upstream hosts a tool's definition names, read from src/tools/: the
+ *  hosts in the tool's own definition, or, when that names none (a kit-wide
+ *  base URL), every host in its kit file. Empty when the slug is not defined
+ *  there. */
+export function upstreamHostsForSlug(slug, root = ROOT) {
+  const def = definitionOf(slug, root);
+  if (!def) return new Set();
+  const declared = DECLARED_HOSTS.exec(def.own);
+  if (declared) return hostsIn(declared[1] ?? namedHostList(declared[2], root));
+  const own = hostsIn(def.own);
+  return own.size ? own : hostsIn(def.kit);
+}
+// A definition that reads its upstream through another module (a shared read
+// helper, or other tools' handlers) writes the hosts it reads as a literal
+// list: `upstreamHosts: ["api.example.org"]`. Where it is written, it is the
+// whole answer: a host the definition only cites or shows in an example is
+// not one it reads.
+// A source whose hosts one module alone may name is declared by that module's
+// exported list instead (`upstreamHosts: CG_API_HOSTS`): the list's literal,
+// `const CG_API_HOSTS = Object.freeze([...])` in src/tools/, is read the same way.
+const DECLARED_HOSTS = /\bupstreamHosts:\s*(?:\[([^\]]*)\]|([A-Z][A-Z0-9_]*)\b)/;
+function namedHostList(name, root) {
+  const re = new RegExp(`\\bconst ${name}\\s*=\\s*(?:Object\\.freeze\\()?\\[([^\\]]*)\\]`);
+  for (const text of kits(root)) { const m = re.exec(text); if (m) return m[1]; }
+  return "";
+}
+/** True when the tool's own definition declares the hosts it reads. */
+export function declaresUpstreamHosts(slug, root = ROOT) {
+  const def = definitionOf(slug, root);
+  return Boolean(def && DECLARED_HOSTS.test(def.own) && upstreamHostsForSlug(slug, root).size);
+}
+
+// A BUNDLE PRODUCT'S FAILURE IS ITS LEG'S. A bundle runs other catalog tools
+// (its legs) in process and answers a leg's source-side failure in its own
+// words, naming the first unit, the leg and the leg's message:
+//   "N of M unit(s) could not be completed on the source's side (first:
+//    <unit>, <leg>: <the leg's message>). Nothing was charged; retry later"
+// as a 502, 503 or 504. That answer is read as the leg's own answer, by the
+// same rule: excused only when the leg's message is one of the shared fetch
+// helper's upstream answers, a failed request to a host the bundle declares
+// was recorded during the call, and the runner's direct read of that request
+// fails the same way. Any other answer of a bundle is not read here.
+const BUNDLE_FAILURE = /^\d+ of \d+ unit\(s\) could not be completed on the source's side \(first: ([^]*)\)\. Nothing was charged; retry later$/;
+/** The leg answer inside a bundle's source-side failure: { leg, status, body }
+ *  for a leg in `legs`, else null. */
+export function bundleLegAnswer(status, body, legs) {
+  if (![502, 503, 504].includes(status) || !Array.isArray(legs) || !legs.length) return null;
+  const m = BUNDLE_FAILURE.exec(String(body?.error || ""));
+  if (!m) return null;
+  let best = null;
+  for (const leg of legs) {
+    const at = m[1].indexOf(`, ${leg}: `);
+    if (at >= 0 && (!best || at < best.at)) best = { at, leg };
+  }
+  if (!best) return null;
+  return { leg: best.leg, status, body: { error: m[1].slice(best.at + best.leg.length + 4) } };
+}
+/** The verdict on a bundle's failed answer: null when it is not a leg's
+ *  upstream answer (the caller grades it by its other rules), else the outage
+ *  verdict, final either way, with the leg named. The failed request must be
+ *  to a host the BUNDLE declares, in the shape the leg's definition builds. */
+export async function bundleOutageVerdict({ slug, legs, status, body, ...rest }) {
+  const inner = bundleLegAnswer(status, body, legs);
+  if (!inner) return null;
+  const refused = legRefusalStatus(inner.status, inner.body);
+  if (!refused && !isUpstreamErrorShape(inner.status, inner.body)) return null;
+  const v = await upstreamOutageVerdict({ ...rest, slug, shapeSlug: inner.leg, status: inner.status, body: inner.body, refused });
+  return { ...v, leg: inner.leg };
+}
+// A leg that reads through its own helper says its source's rate limit in
+// that helper's words (src/tools/crypto-markets-kit.js), a 503 like the
+// shared fetch helper's: read as the same refusal, the source's 429.
+const LEG_RATE_LIMIT_SHAPES = [
+  [503, /^Market data upstream rate-limited this request\b/],
+];
+/** The upstream status a leg's refusal names: the shared fetch helper's
+ *  (401, 403, 429), or 429 for a leg helper's own rate-limit answer; else null. */
+export function legRefusalStatus(status, body) {
+  const named = accessRefusalStatus(status, body);
+  if (named) return named;
+  const msg = String(body?.error || "");
+  return LEG_RATE_LIMIT_SHAPES.some(([st, re]) => st === status && re.test(msg)) ? 429 : null;
+}
+
+// The static path a definition writes before its first interpolation: after
+// a URL literal's host ("https://api.weather.gov/alerts/active?area=${...}"
+// gives /alerts/active), or after a base constant ("${DEXSCREENER}/token-pairs/v1/solana/${mint}").
+const URL_PATH_LITERAL = /https?:\/\/([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?::\d+)?(\/[^\s"'`$?#]*)?/gi;
+const BASE_PATH_LITERAL = /\$\{[A-Za-z_][\w.]*\}(\/[^\s"'`$?#]*)/g;
+// What an interpolation of a missing or unshaped value leaves in a URL.
+const URL_RESIDUE = /(?:^|[/=,&:;])(?:undefined|null|NaN)(?=$|[/,&;?#])|\[object(?:%20| )Object\]|%5Bobject%20Object%5D/i;
+/** Does the failed request have the shape the tool's definition builds? A
+ *  URL with an interpolation's residue in it (undefined, null, NaN, an
+ *  object's string form) or an empty path segment is a URL we built wrong,
+ *  and so is one whose path starts with none of the static paths the
+ *  definition writes for it (when it writes any). A wrong URL's 5xx is ours,
+ *  whatever the upstream answers the runner. */
+export function requestMatchesDefinition(slug, url, root = ROOT) {
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  if (/\/\//.test(u.pathname) || URL_RESIDUE.test(u.pathname) || URL_RESIDUE.test(u.search)) return false;
+  const def = definitionOf(slug, root);
+  if (!def) return false;
+  const host = u.hostname.toLowerCase();
+  const prefixes = new Set();
+  const read = (text) => {
+    for (const m of text.matchAll(URL_PATH_LITERAL)) if (m[1].toLowerCase() === host && m[2] && m[2].length > 1) prefixes.add(m[2]);
+    for (const m of text.matchAll(BASE_PATH_LITERAL)) if (m[1].length > 1) prefixes.add(m[1]);
+  };
+  read(def.own);
+  if (!prefixes.size) read(def.kit);
+  if (!prefixes.size) return true;
+  return [...prefixes].some((p) => u.pathname.startsWith(p));
 }
 
 /** The log rows recorded in [t0, t1]. */
@@ -144,8 +286,7 @@ export async function directReadFails(url, opts) {
 /** The verdict on a failed answer: { verdict: "upstream", evidence } when the
  *  conditions above hold (an outage, or an access refusal the runner is given
  *  too), else { verdict: "fail", reason }. */
-export async function upstreamOutageVerdict({ slug, status, body, t0, t1, logPath = upstreamFailureLogPath(), readFails = directReadFails, readStatus = directReadStatus, root = ROOT }) {
-  const refused = accessRefusalStatus(status, body);
+export async function upstreamOutageVerdict({ slug, shapeSlug = slug, status, body, refused = accessRefusalStatus(status, body), t0, t1, logPath = upstreamFailureLogPath(), readFails = directReadFails, readStatus = directReadStatus, root = ROOT }) {
   if (!refused && !isUpstreamErrorShape(status, body)) return { verdict: "fail", reason: "not an upstream-error answer" };
   const hosts = upstreamHostsForSlug(slug, root);
   if (!hosts.size) return { verdict: "fail", reason: "no upstream host in the tool's definition" };
@@ -154,6 +295,7 @@ export async function upstreamOutageVerdict({ slug, status, body, t0, t1, logPat
   if (!rows.length) return { verdict: "fail", reason: refused ? `no request refused with HTTP ${refused} recorded during the call` : "no failed upstream request recorded during the call" };
   const row = rows[rows.length - 1];
   if (row.keyed || !row.url || row.method !== "GET") return { verdict: "fail", reason: `the failed request to ${row.host} is keyed or not a GET` };
+  if (!requestMatchesDefinition(shapeSlug, row.url, root)) return { verdict: "fail", reason: `the failed request to ${row.host} is not the shape the tool's definition builds (a URL we built wrong is ours)` };
   const opts = row.accept ? { accept: row.accept } : undefined;
   if (refused) {
     const got = await readStatus(row.url, opts);

@@ -152,6 +152,7 @@ function makeEngine(opts = {}) {
     log: opts.log || (() => {}),
     onCharge: (s) => calls.sales.push(s),
     validateTarget: opts.validateTarget,
+    signPeriod: opts.signPeriod || null,
     activate: async (header, ctx) => {
       calls.activate++;
       if (opts.activateThrows) throw new Error("simulated settlement failure: node said no");
@@ -1413,6 +1414,47 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   const cut = diagnoseError(Object.assign(new Error("x"), { metaMessages: ["y".repeat(290) + pathKey] }));
   ok(!cut.includes(pathKey.slice(0, 8)), "a field is redacted before it is cut, so no key head survives the cut");
   if (saved === undefined) delete process.env.TEMPO_RPC_URL; else process.env.TEMPO_RPC_URL = saved;
+}
+
+// Signed receipts per confirmed period: the first payment and each renewal,
+// signed once the transfer is confirmed, kept on the record and shown on the
+// public view; a failed renewal signs nothing; with signing off, none.
+{
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { loadReceiptKeys, createSubscriptionReceipt, verifyReceipt, SUBSCRIPTION_RECEIPT_PATHS, requestDigest } = await import("../src/receipt-signing.js");
+  const { privateKey } = generateKeyPairSync("ed25519");
+  const keys = loadReceiptKeys({ RECEIPT_SIGNING_KEY: Buffer.from(privateKey.export({ type: "pkcs8", format: "pem" })).toString("base64"), RECEIPT_SIGNING_KEY_ID: "t-sub" });
+  const signed = [];
+  const h = makeEngine({ name: "receipts", signPeriod: (d) => { signed.push(d); return createSubscriptionReceipt({ iss: "https://agent402.tools", ...d }, keys.signer); } });
+  const offer = await h.engine.mintOffer({ product: "domain-monitor", target: "rcpt.example.com", email: "r@example.com" });
+  const cred = await signCredential(Challenge.deserialize(offer.header));
+  const act = await h.engine.activateFromCredential(cred.header);
+  const first = act.signedReceipts?.[0];
+  ok(act.signedReceipts?.length === 1 && typeof first.receipt === "string" && typeof first.statement === "string", "activation: the first period's signed receipt is on the subscribe answer with its period statement");
+  const v = verifyReceipt(first.receipt, { keys: keys.keys, responseBody: first.statement, request: { method: "POST", path: SUBSCRIPTION_RECEIPT_PATHS["mpp-subscription"], body: { product: "domain-monitor", target: "rcpt.example.com", subscription: act.subId } } });
+  ok(v.valid === true && v.record.rail === "mpp-subscription" && v.record.settlement === "0xactivation" && v.record.network === "eip155:4217" && v.record.priceUsd === "5" && v.record.payer === cred.account.address.toLowerCase(), `activation receipt verifies over the statement and the subscribe call, naming rail, transfer, network, amount and payer (${v.reason})`);
+  ok(JSON.parse(first.statement).period === "0" && JSON.parse(first.statement).subscription === act.subId, "the statement names the subscription and period 0");
+  ok(h.engine.publicView(h.engine.get(act.subId)).signedReceipts.length === 1, "the status view shows the kept receipt");
+  // A renewal that fails signs nothing.
+  advance(PERIOD + 60_000);
+  h.setCharge(() => new Error("execution reverted: insufficient balance"));
+  await h.engine.refreshStatus(act.subId);
+  ok(h.engine.get(act.subId).signedReceipts.length === 1, "a failed renewal attempt signs no receipt");
+  // The renewal that lands is signed, over its own transfer.
+  advance(24 * 3600_000);
+  h.setCharge(() => ({ reference: "0xrenewal1" }));
+  const n = signed.length;
+  for (let i = 0; i < 10 && h.engine.get(act.subId).lastChargedPeriod < 1; i++) { await h.engine.refreshStatus(act.subId); advance(24 * 3600_000); }
+  const kept = h.engine.get(act.subId).signedReceipts;
+  ok(h.engine.get(act.subId).lastChargedPeriod === 1 && kept.length === 2 && signed.length === n + 1, `the confirmed renewal is signed once (${kept.length} kept, ${signed.length - n} signed)`);
+  const v2 = verifyReceipt(kept[1].receipt, { keys: keys.keys, responseBody: kept[1].statement });
+  ok(v2.valid === true && v2.record.settlement === "0xrenewal1" && JSON.parse(kept[1].statement).period === "1", "the renewal's receipt names its own transfer and period 1");
+  ok(requestDigest("POST", SUBSCRIPTION_RECEIPT_PATHS["mpp-subscription"], { product: "domain-monitor", target: "rcpt.example.com", subscription: act.subId }) === v2.record.requestSha256, "the request digest is recomputable from the subscription's own facts");
+  // Signing off: no receipt.
+  const off = makeEngine({ name: "receipts-off", signPeriod: (d) => createSubscriptionReceipt(d, null) });
+  const o2 = await off.engine.mintOffer({ product: "domain-monitor", target: "off.example.com", email: "o@example.com" });
+  const a2 = await off.engine.activateFromCredential((await signCredential(Challenge.deserialize(o2.header))).header);
+  ok(a2.status === "active" && Array.isArray(a2.signedReceipts) && a2.signedReceipts.length === 0, "signing off: the subscription activates with no receipt");
 }
 
 rmSync(tmp, { recursive: true, force: true });

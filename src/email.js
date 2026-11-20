@@ -200,7 +200,7 @@ function modelNoteParts(kind) {
   return { html: `<p style="color:#626970;font-size:12px;margin:0 0 16px">${escapeHtml(REPORT_MODEL_NOTE)}</p>`, text: `${REPORT_MODEL_NOTE}\n` };
 }
 
-export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind = null, baseUrl = "" }) {
+export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind = null, baseUrl = "", receipt = null }) {
   const subj = `Your ${hdr(productLabel || "report", 60)} is ready`;
   const on = subjectOf ? ` on “${hdr(subjectOf)}”` : "";
   // Retention loop: if a monitor watches this kind of thing, offer it with the
@@ -209,6 +209,7 @@ export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind
   // and price come from the monitor product table, never from copy here.
   const up = upgradeOffer(kind, subjectOf, baseUrl || originOf(reportUrl));
   const note = modelNoteParts(kind);
+  const rcpt = receiptParts(receipt, baseUrl || originOf(reportUrl));
   const upHtml = up
     ? `<p style="color:#3A3F45;border-top:1px solid #D9DDE1;padding-top:16px;margin-top:26px">Want this kept current? Our ${escapeHtml(up.label)} re-checks ${escapeHtml(hdr(up.target || "it"))} on a schedule and emails you up to ${MAX_FULL_PER_SUB_30D} fresh reports in any 30 days, ${escapeHtml(up.priceUsd)} a month, cancel any time. <a href="${escapeAttr(up.url)}" style="color:#0F5E43;font-weight:600">Start monitoring →</a></p>`
     : "";
@@ -222,10 +223,37 @@ export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind
     <p style="color:#626970;font-size:13px">Or paste this link into your browser:<br>${escapeHtml(reportUrl)}</p>
     ${note.html}
     ${upHtml}
+    ${rcpt.html}
     <p style="color:#626970;font-size:12px;margin-top:28px">Agent402 · cited reports · pay per report</p>
   </div>`;
-  const text = `Your ${productLabel || "report"}${on} is ready.\n\nOpen it here (yours to keep): ${reportUrl}\n${note.text ? `\n${note.text}` : ""}${upText}\nAgent402`;
+  const text = `Your ${productLabel || "report"}${on} is ready.\n\nOpen it here (yours to keep): ${reportUrl}\n${note.text ? `\n${note.text}` : ""}${upText}${rcpt.text}\nAgent402`;
   return { subject: subj, html, text };
+}
+
+/** The signed purchase receipt's lines in the report-ready email: the
+ *  compact JWS and where to check it. Empty when none was signed. */
+function receiptParts(receipt, origin) {
+  if (typeof receipt !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(receipt)) return { html: "", text: "" };
+  const verify = `${origin || ""}/api/receipts/verify`;
+  return {
+    html: `<p style="color:#626970;font-size:12px;border-top:1px solid #D9DDE1;padding-top:16px;margin-top:26px">Signed receipt for this purchase (check it with a POST to ${escapeHtml(verify)}, sending { "receipt", "body": the report text }):<br><code style="word-break:break-all;font-size:11px">${escapeHtml(receipt)}</code></p>`,
+    text: `\nSigned receipt for this purchase (check it with a POST to ${verify}, sending { "receipt", "body": the report text }):\n${receipt}\n`,
+  };
+}
+
+/** The latest paid period's signed receipt in a monitor email: the compact
+ *  JWS, the period statement its answer digest covers, and where to check
+ *  both. Empty when none was signed (signing off, or a period that paid
+ *  nothing). */
+export function periodReceiptParts(signedReceipt, origin) {
+  const r = signedReceipt && typeof signedReceipt === "object" ? signedReceipt : null;
+  if (!r || typeof r.receipt !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(r.receipt) || typeof r.statement !== "string") return { html: "", text: "" };
+  const verify = `${origin || ""}/api/receipts/verify`;
+  const lead = `Signed receipt for your latest subscription payment (check it with a POST to ${verify}, sending { "receipt", "body": the period statement below })`;
+  return {
+    html: `<p style="color:#626970;font-size:12px;border-top:1px solid #D9DDE1;padding-top:16px;margin-top:22px">${escapeHtml(lead)}:<br><code style="word-break:break-all;font-size:11px">${escapeHtml(r.receipt)}</code><br>Period statement:<br><code style="word-break:break-all;font-size:11px">${escapeHtml(r.statement)}</code></p>`,
+    text: `\n${lead}:\n${r.receipt}\nPeriod statement:\n${r.statement}\n`,
+  };
 }
 
 export async function sendReportReadyEmail({ to, ...rest }) {
@@ -253,7 +281,7 @@ export function subscriptionPriceText({ priceCents = null, firstPeriodCents = nu
 /** Monitor delivery / alert email. reason: welcome | scheduled | change | tls-expiring | filing | recall | digest | safety-change. Best-effort.
  *  `kind` is the monitored report's kind; without it a "digest" (the IPO
  *  watch's only reason) reads as the code-written IPO digest. */
-export function buildMonitorEmail({ reason, label, target, changes = [], reportUrl, manageUrl, kind = null, priceCents = null, firstPeriodCents = null, renewalCents = null, rail = "card", cancelUrl = null, withTerms = false }) {
+export function buildMonitorEmail({ reason, label, target, changes = [], reportUrl, manageUrl, kind = null, priceCents = null, firstPeriodCents = null, renewalCents = null, rail = "card", cancelUrl = null, withTerms = false, signedReceipt = null }) {
   // A wallet (MPP) subscriber has no Stripe portal: its link is a status
   // endpoint, and it cancels with a POST to its cancel endpoint or by revoking
   // the authorization it signed. A card subscriber cancels in the portal the
@@ -319,6 +347,7 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
     : "";
   const renewalHtml = renewal ? `<p style="color:#3A3F45;font-size:13px;border-top:1px solid #D9DDE1;padding-top:14px;margin-top:22px">${escapeHtml(renewal)} <a href="${escapeAttr(termsUrl)}" style="color:#3A3F45">Terms</a></p>` : "";
   const renewalText = renewal ? `${renewal}\nTerms: ${termsUrl}\n\n` : "";
+  const rcpt = periodReceiptParts(signedReceipt, originOf(reportUrl));
   const list = (changes || []).slice(0, 12);
   const changesHtml = list.length ? `<ul style="color:#3A3F45;padding-left:18px">${list.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ul>` : "";
   const changesText = list.length ? `\n${list.map((c) => `- ${c}`).join("\n")}\n` : "";
@@ -329,6 +358,7 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
     <p style="color:#626970;font-size:13px">Or paste this link into your browser:<br>${escapeHtml(reportUrl)}</p>
     ${note.html}
     ${renewalHtml}
+    ${rcpt.html}
     ${whyHtml}
     <p style="color:#626970;font-size:12px;margin-top:12px">Agent402 · ${escapeHtml(lbl)} · ${mpp
       ? `<a href="${escapeAttr(manageUrl || reportUrl)}" style="color:#626970">subscription status</a>${cancelUrl ? ` · cancel: send a POST request to ${escapeHtml(cancelUrl)}` : " · cancel by revoking your authorization"}`
@@ -337,7 +367,7 @@ export function buildMonitorEmail({ reason, label, target, changes = [], reportU
   const stopText = mpp
     ? `Subscription status: ${manageUrl || reportUrl}\n${cancelUrl ? `Cancel (send a POST request): ${cancelUrl}` : "Cancel: revoke the authorization you signed for this subscription."}`
     : `Manage or cancel (change your card, or stop the emails): ${manageUrl || reportUrl}`;
-  const text = `${subj}\n\n${lead}\n${changesText}\nOpen the report: ${reportUrl}\n\n${note.text ? `${note.text}\n` : ""}${renewalText}${whyText}\n${stopText}\n\nAgent402`;
+  const text = `${subj}\n\n${lead}\n${changesText}\nOpen the report: ${reportUrl}\n\n${note.text ? `${note.text}\n` : ""}${renewalText}${rcpt.text}${whyText}\n${stopText}\n\nAgent402`;
   return { subject: subj, html, text };
 }
 

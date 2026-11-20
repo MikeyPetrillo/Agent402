@@ -8,6 +8,7 @@
 // the global fetch) — no network, deterministic.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { NETWORK_TOOLS2 } from "../src/tools/network-kit2.js";
+import { isHost } from "./lib/url-host.js";
 
 const tool = NETWORK_TOOLS2.find((t) => t.slug === "cert-transparency");
 const realFetch = globalThis.fetch;
@@ -34,7 +35,7 @@ try {
   // 1. crt.sh answers fast → served from crt.sh, certspotter never fired.
   let csHit = false;
   stub((url) => {
-    if (url.includes("crt.sh")) return Promise.resolve(jsonRes(CRT_ROWS));
+    if (isHost(url, "crt.sh")) return Promise.resolve(jsonRes(CRT_ROWS));
     if (url.includes("certspotter")) { csHit = true; return Promise.resolve(jsonRes(CS_ROWS)); }
     return Promise.reject(new Error("unexpected host"));
   });
@@ -48,7 +49,7 @@ try {
   // 2. crt.sh HANGS → hedge fires certspotter after ~1.5s and returns fast via it.
   //    This is the core fix: a slow crt.sh no longer stalls the endpoint.
   stub((url) => {
-    if (url.includes("crt.sh")) return never();
+    if (isHost(url, "crt.sh")) return never();
     if (url.includes("certspotter")) return Promise.resolve(jsonRes(CS_ROWS));
     return Promise.reject(new Error("unexpected host"));
   });
@@ -64,7 +65,7 @@ try {
   ok(r.subdomains.includes("c.example.com"), "certspotter dns_names → subdomains");
 
   // 3. crt.sh fails FAST (502) → certspotter serves immediately (no hedge wait).
-  stub((url) => url.includes("crt.sh") ? Promise.resolve(errRes(502)) : Promise.resolve(jsonRes(CS_ROWS)));
+  stub((url) => isHost(url, "crt.sh") ? Promise.resolve(errRes(502)) : Promise.resolve(jsonRes(CS_ROWS)));
   t0 = Date.now();
   r = await tool.handler({ domain: "example.com" });
   ok(r.source === "certspotter", "crt.sh fast-fail → source=certspotter");
@@ -76,8 +77,15 @@ try {
   try { await tool.handler({ domain: "example.com" }); } catch (e) { threw = e; }
   ok(threw && threw.statusCode === 502, "both sources down → 502 (was: " + (threw && threw.statusCode) + ")");
 
+  // 4b. Both logs rate-limit this server (429) → 502, an upstream failure,
+  //     not a 422 that blames the caller's domain.
+  stub(() => Promise.resolve(errRes(429)));
+  threw = null;
+  try { await tool.handler({ domain: "example.com" }); } catch (e) { threw = e; }
+  ok(threw && threw.statusCode === 502, "both sources rate-limited (429) → 502 (was: " + (threw && threw.statusCode) + ")");
+
   // 5. certspotter honors includeExpired=false (drops an expired cert).
-  stub((url) => url.includes("crt.sh") ? Promise.resolve(errRes(502))
+  stub((url) => isHost(url, "crt.sh") ? Promise.resolve(errRes(502))
     : Promise.resolve(jsonRes([{ id: "x", cert_sha256: "old", dns_names: ["old.example.com"], not_after: "2000-01-01" }])));
   r = await tool.handler({ domain: "example.com" });
   ok(r.count === 0, "certspotter drops expired cert when includeExpired=false");

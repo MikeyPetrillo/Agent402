@@ -43,6 +43,13 @@ export const EMPTY_ARRAY_OK = new Map([
   ["/api/weather-alerts", "alerts"],          // a state with no active NWS alert at that minute (CA read 0 on 2026-09-17 13:48Z); count 0 is the honest answer
   ["/api/nft-metadata", "attributes"],        // a token whose collection publishes no traits
   ["/api/coin-profile", "platforms"],         // a native coin has no contract addresses
+  // A screen's flags name a market condition past a fixed threshold, so a calm
+  // market at that minute honestly has none: ETH funding read 0.0416% spread
+  // (flag at 0.05%) with 81% of venues positive (flag at 25-75%) on 2026-11-19
+  // 04:30Z, an hour after the same input raised wide-dispersion. The same rule
+  // holds for the DEX board's concentration flag.
+  ["/api/funding-screener", "flags"],
+  ["/api/dex-volume-board", "flags"],
   // The example origin is agent402.tools. In production that is the local host,
   // which always names a blocker; a CI boot runs on 127.0.0.1, so the origin is
   // an outside seller there, and once the crawled index rates it proven the

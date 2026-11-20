@@ -13,6 +13,7 @@
 // carries its reason and a check that the reason still holds.
 //
 // When a guard moves, update its entry here in the same change.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,7 +47,8 @@ const CHECKLIST = [
   ] },
   // Secrets
   { area: "secrets", item: "no keys in code: gitleaks over the full history (merge commits included) and the working tree on every push", guards: [
-    [".github/workflows/secret-scan.yml", '--log-opts="--all -m"', "--no-git", "--redact"],
+    // Every download in the scan retries a dropped connection (a reset is not a finding).
+    [".github/workflows/secret-scan.yml", '--log-opts="--all -m"', "--no-git", "--redact", /(?<![\s\S])(?![\s\S]*^[ \t]*curl\b(?![^\n]*--retry 3 --retry-all-errors))/m],
     [".gitleaks.toml", "[allowlist]"],
   ], ci: false },
   { area: "secrets", item: "no configured secret in a buyer answer, a tool error or a log line", guards: [
@@ -102,11 +104,16 @@ const CHECKLIST = [
     ["scripts/test-security-header-surfaces.js", "x-content-type-options"],
     ["scripts/test-security-headers.js", "X-Powered-By"],
   ] },
-  { area: "web", item: "rate limits on unpaid surfaces (checkout, MCP free tier, operator login, proof-of-work); paid calls are never limited", guards: [
+  // Paid calls carry no per-caller rate limit, but capacity limits do refuse
+  // them: the onchain-sql in-flight cap answers 429, a daily upstream ceiling
+  // answers 503. The item names both, with the guards that hold them.
+  { area: "web", item: "rate limits on unpaid surfaces (checkout, MCP free tier, operator login, proof-of-work); no per-caller rate limit on paid calls, and the capacity limits that can refuse one (the onchain-sql in-flight cap 429, a daily upstream ceiling 503)", guards: [
     ["scripts/test-checkout-limiter.js", "this is a ceiling, not a wall"],
     ["scripts/test-mcp-limits.js"],
     ["scripts/test-operator-auth.js", "login is rate-limited"],
     ["scripts/test-pow-challenge-envelope.js"],
+    ["scripts/test-cdp-kit.js", "is refused 429 busy"],
+    ["scripts/test-upstream-hard-caps.js", "calls past the ceiling are refused with 503"],
   ] },
   // Before launch
   { area: "launch", item: "no stack, module path or framework fingerprint in an error answer; no source map served", guards: [
@@ -120,6 +127,23 @@ const CHECKLIST = [
     [".github/workflows/codeql.yml"],
     ["scripts/test-advisory-triage.js"],
   ], ci: false },
+  { area: "launch", item: "debug and test switches are off on a production boot (no debug field in an answer, no crash or hang hook)", guards: [
+    ["scripts/test-debug-off-in-production.js", "a production process with every seam set reads none of them", "control: a planted ungated debug read is caught"],
+    ["src/test-seams.js", "isProductionEnv(env)"],
+  ] },
+  { area: "launch", item: "environment review: every variable the server reads is documented, none documented that no code reads", guards: [
+    ["scripts/test-config-reference.js", "every environment variable src/ reads has a purpose line", "control: a new variable with no purpose line is reported"],
+    ["docs/configuration.md", "# Configuration reference"],
+  ] },
+  { area: "launch", item: "unused packages: every declared dependency is imported", guards: [
+    ["scripts/test-unused-deps.js", "every runtime dependency is imported by src/ or services/"],
+  ] },
+  { area: "data", item: "database connections verify TLS off the private network; every pool takes the shared TLS policy", guards: [
+    ["scripts/test-db-ssl.js", "every Postgres pool in src/ sets ssl: dbSsl(...)", "an unparseable URL defaults to verify"],
+  ] },
+  { area: "secrets", item: "key rotation is a written procedure (new credential, host and Actions secret, verify, revoke)", guards: [
+    ["docs/runbook.md", "## Rotate a key", "Revoke the old credential"],
+  ] },
   { area: "launch", item: "suspicious activity pages: wrong operator credentials counted shared, published as a word, paged by the heartbeat", guards: [
     ["scripts/test-operator-auth.js", "wrong operator credentials are counted"],
     [".github/workflows/heartbeat.yml", ".operatorAuth.status", "Operator token guessing ELEVATED"],
@@ -129,10 +153,8 @@ const CHECKLIST = [
 const NOT_APPLICABLE = [
   { area: "access", item: "password hashing", why: "no password is stored: the operator credential is a token compared in constant time and exchanged for an opaque session id; buyers authenticate by signed payment",
     holds: () => !/\b(?:import|require)\b[^\n]*\b(?:bcrypt|argon2|scrypt-js)\b/.test(srcText()) && !/CREATE TABLE[^;]*\bpassword\b/i.test(srcText()) },
-  { area: "secrets", item: "exposed-key response", why: "rotation is an owner action outside the repository; the history scan above is the detector",
-    holds: () => true },
-  { area: "launch", item: "unused packages", why: "a one-time import-graph read found every runtime dependency imported; removal is never automatic",
-    holds: () => true },
+  { area: "secrets", item: "exposed-key response", why: "issuing and revoking a credential is an owner action at its issuer; the history scan above is the detector and docs/runbook.md the procedure",
+    holds: () => existsSync(join(ROOT, "docs/runbook.md")) },
 ];
 
 let _src = null;
@@ -165,6 +187,23 @@ for (const entry of CHECKLIST) {
   }
 }
 for (const n of NOT_APPLICABLE) ok(n.holds(), `[${n.area}] ${n.item} is n/a: ${n.why}`);
+
+// The written mapping (docs/security-checklist.md) names only files that exist,
+// and names every guard file this checklist lists.
+{
+  const doc = read("docs/security-checklist.md");
+  const named = [...doc.matchAll(/`((?:scripts|src|\.github)\/[^`\s]+|\.gitleaks\.toml|SECURITY\.md)`/g)].map((m) => m[1]);
+  const missing = [...new Set(named)].filter((f) => !existsSync(join(ROOT, f)));
+  ok(named.length >= 30 && missing.length === 0, `docs/security-checklist.md names ${named.length} files, all present${missing.length ? `; missing: ${missing.join(", ")}` : ""}`);
+  const unlisted = [...new Set(CHECKLIST.flatMap((e) => e.guards.map(([f]) => f)))].filter((f) => f !== "docs/security-checklist.md" && f !== "docs/runbook.md" && f !== "docs/configuration.md" && !doc.includes(f));
+  ok(unlisted.length === 0, `every guard in this checklist is named in docs/security-checklist.md${unlisted.length ? `: ${unlisted.join(", ")}` : ""}`);
+  // A capacity limit refuses a paid call (429 busy, 503 at a daily ceiling),
+  // so the mapping never says a paid call is never limited.
+  const ABSOLUTE = /\bpaid calls?\b[^|]{0,40}\b(?:are|is)\s+never\s+(?:rate[- ])?limited/i;
+  ok(ABSOLUTE.test("| Rate limits | Unpaid surfaces are limited; paid calls are never limited. |") && !ABSOLUTE.test("| Rate limits | paid calls carry no per-caller rate limit; a capacity limit can refuse one |"), "control: the absolute is read, the scoped wording is not");
+  const absolute = doc.split("\n").find((l) => ABSOLUTE.test(l));
+  ok(!absolute, `docs/security-checklist.md states no "paid calls are never limited" absolute${absolute ? `: "${absolute.slice(0, 160)}"` : ""}`);
+}
 
 // This guard runs in exactly one lane.
 const lanes = readdirSync(join(ROOT, "scripts/ci/lanes")).filter((f) => f.endsWith(".sh") && read(`scripts/ci/lanes/${f}`).includes("scripts/test-security-checklist.js"));

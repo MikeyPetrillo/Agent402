@@ -292,8 +292,9 @@ export function facilitatorRetryOf(paymentPayload) {
 
 /**
  * Wrap the listed facilitator client's settle: on `network`, while
- * `order.ownFirst()`, the payment goes to `relayer.settle` and the facilitator
- * is not asked. Everything else (other networks, the facilitator funded or
+ * `order.ownFirst()`, a payment our relayer covers (its price at least the
+ * relayer's minimum) goes to `relayer.settle` and the facilitator is not
+ * asked. Everything else (other networks, the facilitator funded or
  * unread) calls the facilitator as before.
  */
 export function withRobinhoodGasOrder(client, { order, relayer, network = ROBINHOOD_ORDER_NETWORK } = {}) {
@@ -301,7 +302,9 @@ export function withRobinhoodGasOrder(client, { order, relayer, network = ROBINH
   if (!order || !relayer || typeof relayer.settle !== "function") return client;
   const orig = client.settle;
   const settle = async function gasOrderedSettle(payload, requirements, ...rest) {
-    if (requirements?.network !== network || !order.ownFirst()) return orig.call(client, payload, requirements, ...rest);
+    // A sale under our relayer's minimum (covers() false) is never handed to
+    // it: the facilitator is asked as if it were funded.
+    if (requirements?.network !== network || !order.ownFirst() || (typeof relayer.covers === "function" && !relayer.covers(requirements))) return orig.call(client, payload, requirements, ...rest);
     if (payload && typeof payload === "object") {
       ownFirstAttempts.set(payload, network);
       facilitatorRetries.set(payload, { name: order.host || "facilitator", settle: (p, rq) => orig.call(client, p, rq, ...rest) });

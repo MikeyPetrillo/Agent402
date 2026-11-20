@@ -130,7 +130,7 @@ const second = await stubFacilitator(3972, FEE_B);
 const PORT = 3973;
 const B = `http://127.0.0.1:${PORT}`;
 const log = { text: "" };
-proc = spawn("node", ["src/server.js"], {
+proc = spawn(process.execPath, ["src/server.js"], {
   env: {
     ...process.env, PORT: String(PORT), FREE_MODE: "",
     WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,solana",

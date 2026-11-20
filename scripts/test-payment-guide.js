@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { paymentGuide, quoteInputs, usdText, HOW_TO_PAY_PATH, HOW_SENTENCE, PAY_HEADING } from "../src/payment-guide.js";
+import { REFUND_TERMS_PATH } from "../src/refund-terms-path.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE_TREE = process.env.PAYMENT_GUIDE_BASE_TREE ? resolve(process.env.PAYMENT_GUIDE_BASE_TREE) : "";
@@ -30,7 +31,7 @@ const ORIGIN = "https://tools.example";
 const OP = "eip155:10", BASE_NET = "eip155:8453";
 const PREMIUM_USD = 0.001;
 // The whole block, and the most it may add to a 402 body.
-const BLOCK_KEYS = ["price", "network", "how", "quote", "noWallet", "docs", "howToPay", "mcp"];
+const BLOCK_KEYS = ["price", "network", "how", "quote", "noWallet", "docs", "howToPay", "mcp", "refundTerms"];
 const MAX_ADDED_BYTES = 600;
 
 let pass = 0, failed = 0;
@@ -40,9 +41,10 @@ const microOf = (usd) => Math.round(Number(String(usd ?? "").replace(/[^0-9.]/g,
 // ---- Part 1: pure ---------------------------------------------------------------
 {
   const g = paymentGuide({ price: "$0.010", network: "base", baseUrl: `${ORIGIN}/` });
-  ok(JSON.stringify(Object.keys(g)) === JSON.stringify(["price", "network", "how", "docs", "howToPay", "mcp"]), `a flat tool's block: ${Object.keys(g).join(",")}`);
+  ok(JSON.stringify(Object.keys(g)) === JSON.stringify(["price", "network", "how", "docs", "howToPay", "mcp", "refundTerms"]), `a flat tool's block: ${Object.keys(g).join(",")}`);
   ok(g.price === "$0.010" && g.network === "base" && g.how === HOW_SENTENCE, "it states the price as given, the network it is for, and one sentence on paying");
   ok(g.docs === `${ORIGIN}/llms.txt` && g.howToPay === `${ORIGIN}${HOW_TO_PAY_PATH}` && g.mcp === `${ORIGIN}/mcp`, "the three links are on the server's origin (a trailing slash folded)");
+  ok(g.refundTerms === `${ORIGIN}${REFUND_TERMS_PATH}`, "the refund terms document is linked on the server's origin");
   const pow = paymentGuide({ price: "$0.001", network: "base", baseUrl: ORIGIN, powEligible: true });
   ok(pow.noWallet?.method === "proof-of-work" && pow.noWallet.price === "free" && pow.noWallet.how === `${ORIGIN}/api/pow`, "a proof-of-work tool names the free path and its documented flow");
   ok(!("noWallet" in g), "control: a tool without a free tier names no wallet-free path");
@@ -262,7 +264,10 @@ try {
     const agentsText = await agents.text();
     const pow = await fetch(`${A}/api/pow`);
     const mcp = await fetch(`${A}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t", version: "0" } } }) });
+    const terms = await fetch(`${A}${REFUND_TERMS_PATH}`);
+    const termsDoc = await terms.json().catch(() => null);
     ok(llms.status === 200 && agents.status === 200 && pow.status === 200 && mcp.status === 200, `the linked pages answer (${llms.status}, ${agents.status}, ${pow.status}, mcp ${mcp.status})`);
+    ok(terms.status === 200 && termsDoc?.document === "agent402-refund-terms", `the refund terms link answers its document (${terms.status})`);
     ok(new RegExp(`^## ${PAY_HEADING}$`, "m").test(agentsText) && HOW_TO_PAY_PATH === `/agents.md#${PAY_HEADING.toLowerCase()}`, "and /agents.md has the Pay heading the howToPay link names");
   }
 } catch (e) {

@@ -200,21 +200,50 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   (default off: a buyer's transaction names its payer on chain); the operator view
   (`X-Operator-Token`, private, no-store) always lists them (`scripts/test-scorecard.js`).
 - **onchain-sql busy refusals:** onchain-sql refuses a query past `BUYER_QUERY_INFLIGHT_MAX`
-  buyer queries in flight on this server (`src/tools/cdp-kit.js`; a 429 with `Retry-After`,
-  `hint: "busy"`, shed, never charged) and marks the request scope (`onchainSqlBusy`). When its
-  response has ended, server.js counts it per UTC day by caller (`noteSqlBusy`,
+  buyer queries in flight on this server (8; `ONCHAIN_SQL_INFLIGHT_MAX`, 1 to 16), or when its
+  first send has no slot in reach of the send pacer (`src/tools/cdp-kit.js`; a 429 with
+  `Retry-After`, `hint: "busy"`, shed, never charged) and marks the request scope (`onchainSqlBusy`).
+  The pacer spaces every query the server sends to the query service (buyer queries, retries,
+  recovery runs, the health check, the revenue reads) `CDP_SQL_SEND_GAP_MS` apart (625 ms default,
+  times `RATE_LIMIT_REPLICAS`), under the project's documented 2 queries a second at up to four
+  replicas; a send waits for its slot up to 3 s or four gaps, whichever is longer
+  (`sqlSlotWaitMs`: the same four slots out at any replica count), and one whose slot is further
+  off (or past the handler budget) is not sent. A buyer whose connection closes while its first
+  query waits for its slot is answered 499 and the query is not sent (the 499 cancels settlement,
+  as `clientGoneError` does for a buyer gone before the call started); its slot stays taken. The
+  gap in force is held at 2,500 ms (`SQL_SEND_GAP_MAX_MS`, so a send waits at most 10 s) whatever
+  the two settings multiply to, and a value not taken as set is logged at boot by its setting's
+  name (`sqlSendGapWarnings`). The pacer is all a send waits on: a facilitator verify or settle
+  holds no query back
+  (`scripts/test-onchain-sql-paid-path.js` holds a paid query to 300 ms from its own verify answer
+  on a boot wired as production is). A 2xx from the query service whose body is cut off, empty or
+  not JSON is an uncharged 502 (`unreadableAnswerError`), never a result with no rows. When a busy
+  refusal's response has ended, server.js counts it per UTC day by caller (`noteSqlBusy`,
   `src/sql-query-stats.js`: `busy.topBuyer` when the proven payer is one of the watched top
   payers then, `busy.other` otherwise, including a call with no proven payer; by lane, outside or
   synthetic; on `/__operator/onchain-sql-queries.json` and `onchainSqlQueries` on
   `/__operator/tool-failures.json`, counts only) and keeps a top payer's refusal among its
-  failures with kind `sql-busy`. `onchainSqlBusy` on `/api/gateway-status` reads `alert` while a
-  watched payer has one such refusal inside `TOP_BUYER_FAIL_HOLD_MS`, `ok` otherwise, `unknown`
+  failures with kind `sql-busy`. `onchainSqlBusy` on `/api/gateway-status` reads `alert` on a
+  watched payer's first refusal (the rule is `ONCHAIN_SQL_BUSY_MIN` refusals, default 1, inside
+  `TOP_BUYER_FAIL_WINDOW_MS`, the first and last `ONCHAIN_SQL_BUSY_SPAN_MS`, default 0, or more
+  apart; setting the two asks for a sustained stretch instead), held `TOP_BUYER_FAIL_HOLD_MS`
+  after the refusal that met it, `ok` otherwise, `unknown`
   before the first read of the top payers, `off` in FREE_MODE; publicly the word only, the
   operator view names the short payer, rank and refusal times. The status Worker and
   `heartbeat.yml` page once on `alert` ("onchainSqlBusy: a top paying buyer was told the query
-  service is busy", fixed text) and close on `ok`. An alarm only: the cap is unchanged. The test
+  service is busy", fixed text) and close on `ok`. An alarm only: nothing is refused for it. The
+  server's own reads through the handler (the economy snapshot, `ownSqlQuery` in
+  `src/tools/cdp-kit.js`) take a send slot only when no other query is waiting for one (at most
+  one gap off; refused 429 otherwise, and `runSql` in `src/x402-economy.js` tries again after 4, 8
+  and 12 s), so they never queue ahead of a buyer's query and a buyer's query waits at most one
+  gap behind one; they take no place in the in-flight cap and are never refused by it. A new own caller uses `ownSqlQuery`,
+  never the tool's handler. The test
   preload `scripts/lib/cdp-sql-stub-preload.js` holds a `hold_<id>` query open until the file
-  `<id>` exists in `CDP_SQL_STUB_HOLD_DIR` (test only).
+  `<id>` exists in `CDP_SQL_STUB_HOLD_DIR`, and a query whose text holds `CDP_SQL_STUB_HOLD_TEXT`
+  until the file `own` does (test only). The test preload `scripts/lib/cdp-origin-preload.js` leaves
+  the server on the keyed CDP facilitator client at its production URL and sends every fetch to
+  that origin (verify, settle, supported, the query service) to a stand-in in the test's process;
+  any other host that is not loopback is refused in process (test only).
 - **Per-call count documents:** `src/sql-query-stats.js` (onchain-sql queries per call) and
   `src/x-search-stats.js` (x-search-recent authors and posts per call) keep per-UTC-day
   histograms as state documents (`src/json-document.js`), folded into the document on a timer
@@ -331,18 +360,16 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   sections) and one `records` row per open entry, booked-payment mark and dropped record
   (collection `referral-settlements.rows`, `src/json-rows-document.js`): every write locks the head
   row (`SELECT ... FOR UPDATE`, 5 s lock wait), reads only the rows written since this process's
-  copy, and writes only the rows it changes (about 600 bytes a paid call's write at 2,000 entries
-  once the mirror is off); a failed write that carried several changes writes each again on its
-  own, once. OVERLAP AND ROLLBACK (this release): every write also puts the whole body in the head
-  (the mirror, marked `__rowsAt` with the head version it wrote), so a build before rows, which
-  reads and writes the book as one document, sees every entry during a deploy's overlap or after a
-  rollback; a head without this build's mark was written last by such a build, and its sections are
-  taken as written (a key it added or changed is written to its row, a row it no longer holds is
-  deleted). The first write folds the old whole-book document into rows the same way. The next
-  release turns the mirror off (`mirror: false`): a write made with it off rewrites a head that
-  still carries a mirror's mark without the mirror, whatever it changed (a mirror left beside a
-  newer version would be read as an older build's book and taken over the rows), so a process with
-  the mirror off runs beside one that still writes it; from then on a rollback past this build reads no
+  copy, and writes only the rows it changes (about 600 bytes a paid call's write at 2,000 entries,
+  pinned with the shipped setting in `scripts/test-referral-book-pg.js`); a failed write that
+  carried several changes writes each again on its own, once. The MIRROR (`mirror: true`, the
+  release that brought rows) put the whole body in the head on every write (marked `__rowsAt`
+  with the head version it wrote) so a build before rows saw every entry during that deploy's
+  overlap; it is OFF by default now (about 1.8 MB a write while on). A head without this build's
+  mark was written last by such a build, and its sections are taken as written (a key it added or
+  changed is written to its row, a row it no longer holds is deleted); the first write folds an old
+  whole-book document into rows the same way, and a write made with the mirror off rewrites a head
+  that still carries a mirror's mark without it. A rollback past the release that brought rows reads no
   open entries: fix forward (`scripts/state-export.js` writes the book back as one document, by the
   same rule, for a file-mode restore). Without a database it is the file
   `REFERRAL_BOOK_FILE`, else `/data/agent402-referral-settlements.json`, else the same name under

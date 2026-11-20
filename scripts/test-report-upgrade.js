@@ -90,7 +90,7 @@ const hostileDom = new JSDOM(hostilePage);
 const hostileEl = hostileDom.window.document.getElementById("in-domain-monitor");
 // The input carries only the attributes cardField() writes (human-reports-page.js);
 // any other attribute could only have come from the target.
-const FIELD_ATTRS = new Set(["id", "name", "type", "autocomplete", "aria-describedby", "placeholder", "style", "value", "autofocus"]);
+const FIELD_ATTRS = new Set(["id", "name", "type", "required", "autocomplete", "aria-describedby", "placeholder", "style", "value", "autofocus"]);
 ok(!hostileEl.hasAttribute("onerror") && [...hostileEl.attributes].every((a) => FIELD_ATTRS.has(a.name)), "a hostile target cannot inject an attribute into the input");
 ok(hostileEl.getAttribute("value") === HOSTILE, "the hostile target arrives as the field's value, escaped, not as markup");
 ok(hostileInput.includes("&quot;"), "the hostile target is HTML-escaped inside the value attribute");

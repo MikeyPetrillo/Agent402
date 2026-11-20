@@ -13,6 +13,8 @@ t node scripts/test-dataset-snapshot.js
 t node scripts/test-dataset-health.js
 t node scripts/test-price-parse.js
 t node scripts/test-receipts.js
+# The audit report: the paying wallet's rows on every rail and nobody else's, kept receipts that verify, a summary receipt over the report and the CSV that fails on tamper, caps and cursors, receipts kept on a final 200 only and swept (offline)
+t node scripts/test-audit-report.js
 t node scripts/test-feedback-kit.js
 t node scripts/test-chain-namespace.js
 t node scripts/test-standing-band.js
@@ -66,6 +68,8 @@ t node scripts/test-listing-inputs.js
 t node scripts/test-multipart-openapi.js
 # Per-request facilitator preference: honored only with the operator token, the 402 byte-identical otherwise, verify and settle at the named facilitator (booted, two stub
 t node scripts/test-settle-preference.js
+# Second Solana facilitator: quote share, stable quotes, settle routed by the transaction fee payer, no cross-facilitator fallback, boot check, unset byte-identical (booted, three stubs)
+t node scripts/test-svm-facilitator-split.js
 # Tool resolver (/api/find ranking, guards)
 t node scripts/test-find.js
 # Reader searches find the article extractor through its aliases, on the real catalog (booted free-mode server)
@@ -149,6 +153,8 @@ t node scripts/test-arc-rail.js
 t node scripts/test-circle-evm-fallback.js
 # Render actual-byte budget (F03 — chunked/streamed/headerless/WebSocket bytes counted via CDP, cap not bypassable — offline)
 t node scripts/test-render-bytebudget.js
+# render's no-browser read: the served-HTML verdict and the browser fallback (offline stubs)
+t node scripts/test-render-static.js
 # Tempo chain-truth confirm (relay says failed but the credential's tx settled -> serve the buyer; pinned on the real incident tx — offline)
 t node scripts/test-tempo-confirm.js
 # Durable Tempo late-landing watches: failed reads kept, a day of failures dropped with an error, bounded list, in-process removal only once answered (offline)
@@ -293,6 +299,8 @@ t node scripts/test-legal-dates.js
 t node scripts/test-legal-claims.js
 # /trust and the /company contact block state only what the code runs (offline)
 t node scripts/test-trust-page.js
+# The refund terms document follows each switch it reads and the refund run's own families (offline)
+t node scripts/test-refund-terms-doc.js
 # Sentences a review found contradicting the code, pinned to its constants
 t node scripts/test-copy-truth.js
 # FACILITATOR_PUBLIC_INDEX_CHAINS: the privacy paragraph and terms pointer appear only for the listed chains, with their exact wording (offline)

@@ -50,6 +50,10 @@ t node scripts/test-price-by-model.js
 t node scripts/test-tts-quote-paid.js
 # Every quoted route states one floor: /api/pricing, /openapi.json, /llms-full.txt and the 402's smallest quote agree (paid boot, stub facilitator).
 t node scripts/test-quoted-from-price.js
+# Bundle products: price derived per unit from the leg tools by the pack rule, quote capped, inputs refused before any read, computed rows, no partial 200 (offline, legs stubbed)
+t node scripts/test-bundle-products.js
+# Wholesale surface: v1 fields and error codes pinned, reliability bounded and honest, prices are the public ones, no licensed data listed, errorCode on tool errors (boots FREE_MODE, offline)
+t node scripts/test-wholesale.js
 # Real sample reports: fixtures are finished reports, pages indexable with own title/JSON-LD, /reports links them, sitemap carries them (boots FREE_MODE, offline)
 t node scripts/test-sample-reports.js
 # openFDA 404 = no matches, an empty result: recall-report must not 502 on it (offline)
@@ -101,6 +105,8 @@ t node scripts/test-verify-refusal-reason.js
 t node scripts/test-paid-settle-breaker.js
 # onchain-sql queries per call on a booted server
 t node scripts/test-onchain-sql-queries-route.js
+# onchain-sql paid on Solana with the keyed CDP facilitator client at its production URL: a query leaves within 300 ms of its own verify answer and is served beside other facilitator traffic; an unreadable 200 is an unsettled 502 (paid boot, CDP origin answered by the test, offline)
+t node scripts/test-onchain-sql-paid-path.js
 # Refund debts for sales named by settle tx: dry by default, ledger row decides payer and price, skips named, idempotent, operator only (FREE_MODE boot, seeded ledger)
 t node scripts/test-refund-backfill-sales.js
 # Algorand leaves sub-cent 402s while the facilitator's sponsored sub-cent allowance is spent; a quota refusal is never the buyer's (paid boot, stub facilitators + stub sponsorship status)

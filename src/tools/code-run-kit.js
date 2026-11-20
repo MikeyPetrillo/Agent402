@@ -54,7 +54,8 @@ const payerInFlight = new Map();
 // a request-less step runs for (route-execute, decide and skill packs call
 // `def.handler(params)` inside runAsCallerOf), so a routed run is capped as a
 // direct one is. src/dispatch-caller.js: the identity payer, a credits key, a
-// Tempo sender, else the client address (an IPv6 one folded to its /64).
+// Tempo sender, else a call paid another way on its own payment, else the
+// client address (an IPv6 one folded to its /64).
 function payerKeyOf(req) {
   return callerKeyOf(req) || currentDispatchCaller();
 }

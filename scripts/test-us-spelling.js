@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Public copy is written in US English. This reads the prose a visitor, a
 // package user or an agent sees: the README, the wiki and docs trees, the
-// package READMEs, every served page module (legal, guides, FAQ, home, the
+// package READMEs, the coding-agent plugins (their skills, READMEs and
+// manifests), every served page module (legal, guides, FAQ, home, the
 // explainer and product pages, llms.txt and the connector's instructions),
 // every changelog title and item, and every tool description, and fails on a British spelling. Code comments and
 // identifiers are not read, and neither is a quoted token or an object key: a
@@ -9,7 +10,7 @@
 //
 //   node scripts/test-us-spelling.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { walk } from "./lib/shipped-files.js";
@@ -63,9 +64,16 @@ const md = (dir) => walk(join(ROOT, dir)).filter((f) => f.endsWith(".md"));
 
 // Markdown trees: every line is prose.
 const markdown = [
-  join(ROOT, "README.md"), ...md("wiki"), ...md("docs"),
+  join(ROOT, "README.md"), ...md("wiki"), ...md("docs"), ...md("plugins"),
   ...["mcp", "client", "tollbooth", "openclaw"].map((d) => join(ROOT, d, "README.md")),
   ...walk(join(ROOT, "adapters")).filter((f) => f.endsWith("README.md")),
+];
+// Plugin manifests: the descriptions a coding-agent host shows. Read whole;
+// a quoted single word (a key, a category) is a token and is not read.
+const manifests = [
+  ...[".claude-plugin", ".codex-plugin", ".cursor-plugin"].flatMap((d) => (existsSync(join(ROOT, d)) ? readdirSync(join(ROOT, d)).filter((f) => f.endsWith(".json")).map((f) => join(ROOT, d, f)) : [])),
+  ...readdirSync(join(ROOT, "plugins")).map((d) => join(ROOT, "plugins", d, ".claude-plugin", "plugin.json")).filter((f) => existsSync(f)),
+  join(ROOT, "openclaw", "openclaw.plugin.json"),
 ];
 // Page modules whose template text is served as a page, in llms.txt or in the
 // connector's instructions: comment lines are skipped, every other line is read.
@@ -118,6 +126,8 @@ const scanDescriptions = (file, src) => {
   }
 };
 ok(markdown.length >= 40 && pageModules.length >= 20 && kits.length >= 40, `read ${markdown.length} markdown files, ${pageModules.length} page modules and ${kits.length} tool kits`);
+const rel = (f) => relative(ROOT, f);
+ok(markdown.map(rel).includes("plugins/agent402/skills/agent402/SKILL.md") && markdown.map(rel).includes("plugins/agent402/README.md") && [".claude-plugin/marketplace.json", "plugins/agent402/.claude-plugin/plugin.json", ".codex-plugin/plugin.json", ".cursor-plugin/plugin.json", "openclaw/openclaw.plugin.json"].every((f) => manifests.map(rel).includes(f)), `...and the coding-agent plugins: the skill, the README and ${manifests.length} manifests`);
 // Controls: the scanner sees a British word in prose, in a description that
 // starts on the next line or is joined with +, and in a wiki sentence; it
 // ignores a comment, a quoted token and an object key.
@@ -138,6 +148,7 @@ ok(markdown.length >= 40 && pageModules.length >= 20 && kits.length >= 40, `read
 }
 // The real surfaces, after the controls emptied the list.
 for (const f of markdown) scanProse(f, readFileSync(f, "utf8"), () => true);
+for (const f of manifests) scanProse(f, readFileSync(f, "utf8"), () => true);
 for (const f of pageModules) scanProse(f, readFileSync(f, "utf8"), (line) => !isComment(line));
 for (const f of kits) scanDescriptions(f, readFileSync(f, "utf8"));
 // The changelog (/changelog and its RSS feed): every entry's title and item

@@ -57,10 +57,16 @@ t node scripts/test-farcaster-social-kit.js
 t node scripts/test-algorand-page.js
 # Homepage tests (offline, fixture snapshot)
 t node scripts/test-home-page.js
+# Paid-call figure on home, /101 and tool pages: steps, receipt switch, no cost or revenue figure, still under reduced motion (offline)
+t node scripts/test-paid-call-figure.js
+# Charts on /scorecard, /proof and /leaderboard: drawn only from published data, no dollar figure on the scorecard or proof charts, top ten without our own wallet (offline)
+t node scripts/test-svg-charts.js
 # Header: Pricing, Company, Status as plain links, one primary action, every earlier destination still linked (offline)
 t node scripts/test-nav-primary.js
 t node scripts/test-badge-contrast.js
 t node scripts/test-ga-snippet.js
+# GA key events: buy clicks and checkout starts reach GA with the product only (stub DOM, offline)
+t node scripts/test-ga-key-events.js
 # Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
 t node scripts/test-analytics-privacy.js
 # Age, self-hosted fonts, analytics off-switches, recurring-mail stop links, renewal terms after purchase, the copyright agent
@@ -292,6 +298,14 @@ t node scripts/test-mpp-agents-weekly.js
 t node scripts/test-sale-path.js
 # Paid-call funnel per day and arrival path (probes, 402s served, attempts, settlements, refusal classes, callers that never came back), the ledger half and weekly figures, a 400k-row cost bound, operator-only /__operator/funnel.json (paid boot, stub facilitator)
 t node scripts/test-funnel.js
+# Funnel sources: User-Agent family, Referer class, the discovery document a caller read last (keyed hash, window, cap), no-payment reasons, next-step and timeout counts on a real traffic store
+t node scripts/test-funnel-sources.js
+# Paying wallets to operators on public evidence only: forward-checked ENS and Base names, a single-origin payTo, failed lookups never cached, deadline, concurrency, cache cap (stub clients)
+t node scripts/test-payer-operators.js
+# nextStep on a refused payment whose wallet cannot cover the call (state, who acts, command, wait) and emptyWallet on payment.info (FREE_MODE boot)
+t node scripts/test-next-step.js
+# Weekly operator scoreboard: ledger half (our rows out, 30-day shares, new payers with Arc out), operator-only /__operator/scoreboard.json, the local script's pure parts and private report directory
+t node scripts/test-scoreboard.js
 # The connector's internal x402 twins of six flagships: 404 without the loopback secret, resource /mcp with a valid MCP Bazaar extension, the route's accepts on every chain, settle on the final 200 only, no payment spent on both, sales booked x402-mcp (paid boot, stub facilitator)
 t node scripts/test-mcp-x402-routes.js
 # First-call allowance returning payers (operator view): granted wallets with a later outside paid sale, and within 7 days; one batched ledger read, cached (offline, temp SQLite ledger)
@@ -319,6 +333,8 @@ t node scripts/test-mppx-production-store.js
 t node scripts/test-sanctions-screen.js
 # An x402 payer on the same EVM set is refused after verify and before the handler, nothing settles; no list serves (paid-mode boot vs stub facilitator - offline)
 t node scripts/test-x402-payer-screen.js
+# Every rail that carries a payer address screens it (x402 EVM, Gateway, MPP evm, Solana, Stellar, Algorand, Tempo relay); a payer not listed is served; card and credits name no address (offline)
+t node scripts/test-payer-screen-rails.js
 # workflow_run references name a workflow that exists (GitHub matches on name:, a mismatch never fires - offline)
 t node scripts/test-workflow-run-refs.js
 # Every workflow job names a versioned runner image, never a moving -latest label (offline)
@@ -371,6 +387,7 @@ t node scripts/test-pdf.js
 t node scripts/test-demand.js
 # Media-kit tests (ffprobe, mp4-to-mp3, loudnorm — real ffmpeg)
 t node scripts/test-media.js
+t node scripts/test-answer-cap.js
 # Finance-math-kit tests (TVM, Black-Scholes, bonds, CAGR, Sharpe — vs textbook values)
 t node scripts/test-finance-math-kit.js
 # Barcode-kit tests (QR/barcode decode round-trip, PNG + JPEG)

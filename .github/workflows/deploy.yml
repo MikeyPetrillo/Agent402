@@ -1162,7 +1162,7 @@ jobs:
           E2B_LIVE_TEST: ${{ secrets.E2B_API_KEY && '1' || '' }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
 
-      - name: Offline suites (17 scripts, one process each)
+      - name: Offline suites (20 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a3 2
 
   test-unit-a2:
@@ -2015,7 +2015,7 @@ jobs:
           STATE_DATABASE_URL: postgres://decide@127.0.0.1:5432/decide_test?sslmode=disable
         run: node scripts/test-databento-shared-cache.js
 
-      - name: Offline suites (11 scripts, one process each)
+      - name: Offline suites (12 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-b4 2
 
       - name: Crawl honours robots.txt (explicit Disallow enforced, unreadable file fails OPEN, cached per origin - offline)
@@ -2515,7 +2515,12 @@ jobs:
           # The committed contract artifact must be REPRODUCIBLE from the committed
           # source: a bytecode edit that leaves the .sol alone would pass the
           # source-hash pin, so recompile with the pinned solc and diff the blob.
-          ( cd examples/agentkit-data-to-deploy && npm i --no-save --ignore-scripts --no-audit --no-fund --silent solc@0.8.28 && node contracts/compile.js && rm -rf node_modules )
+          # The install prints its own output and is retried once, so a registry
+          # hiccup names itself in the log instead of a silent exit 1.
+          ( cd examples/agentkit-data-to-deploy
+            install_solc() { npm i --no-save --ignore-scripts --no-audit --no-fund solc@0.8.28; }
+            install_solc || { rc=$?; echo "::warning::solc@0.8.28 install failed (exit $rc); retrying once"; sleep 5; install_solc; }
+            node contracts/compile.js && rm -rf node_modules )
           git diff --exit-code -- examples/agentkit-data-to-deploy/contracts/artifact.json
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/eliza/test.js
           # Paid calls in the zero-dependency adapters and the OpenClaw proxy refuse redirects (offline, loopback)
@@ -3464,7 +3469,7 @@ jobs:
           # a main push with no before): empty, so the gate runs (fail-open).
           DIFF_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && (github.ref == 'refs/heads/main' && github.event.before || github.ref != 'refs/heads/main' && 'main')) || '' }}
 
-      - name: Offline suites (3 scripts, one process each)
+      - name: Offline suites (4 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-c 1
       - name: Runner kills and memory (on failure)
         if: failure()
@@ -5395,7 +5400,8 @@ jobs:
       # seller: src/lasting-effect-slugs.js), are exempt
       # (scripts/lib/keepalive-plan.js). Same buyer as the keep-alive
       # (scripts/refresh-bazaar.js, the burner, Base), the whole set capped by
-      # BAZAAR_PRICE_CHANGE_MAX_USD and by MAX_ROUTES routes: over either,
+      # BAZAAR_PRICE_CHANGE_MAX_USD and by BAZAAR_PRICE_CHANGE_MAX_ROUTES routes
+      # (default 25; a repricing raises it for one deploy): over either,
       # nothing is bought and the warning names the hand pass. Never fails the
       # deploy, which has already shipped (continue-on-error, its own timeout);
       # a refusal or a failed buy is a warning on the run. The logs carry route
@@ -5417,7 +5423,7 @@ jobs:
           WALLET_ADDRESS: ""
           TARGET_URL: https://agent402.tools
           MAX_SPEND_USD: ${{ vars.BAZAAR_PRICE_CHANGE_MAX_USD || '5' }}
-          MAX_ROUTES: "25"
+          MAX_ROUTES: ${{ vars.BAZAAR_PRICE_CHANGE_MAX_ROUTES || '25' }}
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
           POW_SECRET: ${{ secrets.POW_SECRET }}
         run: |

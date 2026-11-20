@@ -41,9 +41,10 @@ import { createHash, randomBytes } from "node:crypto";
 import { sendEmail } from "./email.js";
 import { creditsTopupFields, creditsDailyMaxCents, creditsBalanceMaxCents, creditsTermsVersion, creditsSalesEnabled } from "./credits-sales.js";
 import { limiterKey } from "./rate-limit.js";
-import { chargeCancelledForClientGone, markSettleSent } from "./hangup-settlement.js";
+import { chargeCancelledForClientGone, clientGoneBeforeFirstByte, markSettleSent } from "./hangup-settlement.js";
 import { meteredUsdOf } from "./gateway-meter.js";
-import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady } from "./state-db.js";
+import { envPositive } from "./env-num.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady, stateStatementOutsideTx, withLease } from "./state-db.js";
 import { getSharedRedisClient } from "./shared-limit.js";
 import { sharedLimitsEnabled } from "./shared-limits.js";
 import { retryingLoad } from "./store-retry.js";
@@ -149,6 +150,63 @@ export function noteEvent(rec, ev, at = Date.now()) {
 import { LOW_BALANCE_MICRO } from "./credits-figures.js";
 export { LOW_BALANCE_MICRO };
 export const usdToMicro = (usd) => Math.round(Number(usd) * MICRO);
+
+// ONE NORMALIZED EMAIL. The email a balance is found by is normalized once,
+// here (trimmed, NFC, lowercased by JS), stored on the key's record as
+// `emailKey` beside the email as given, and compared as stored: the balance
+// page never lowercases in SQL, whose lower() follows the database's locale
+// and does not agree with JS for every letter ("İ"). A row an older build
+// wrote without the field is given it at the next load (computed here); until
+// then the lookup falls back to lower() of its email.
+export function emailKeyOf(email) {
+  const e = String(email ?? "").trim().normalize("NFC").toLowerCase();
+  return e || null;
+}
+const sameEmail = (a, b) => { const k = emailKeyOf(a); return k !== null && k === emailKeyOf(b); };
+const recEmailKey = (rec) => (typeof rec?.emailKey === "string" && rec.emailKey ? rec.emailKey : emailKeyOf(rec?.email));
+
+// THE BALANCE PAGE'S TWO LOOKUPS and the expression indexes they use (partial,
+// on the credits rows of the shared records table). The collection is written
+// into the statement so the planner can match the indexes' predicate.
+export const CREDITS_LOOKUP_SQL = Object.freeze({
+  keyId: (t) => `SELECT id, body FROM ${t} WHERE collection = 'credits' AND id LIKE 'k\\_%' ESCAPE '\\' AND (body->>'keyId') = $1`,
+  email: (t) => `SELECT id, body FROM ${t} WHERE collection = 'credits' AND id LIKE 'k\\_%' ESCAPE '\\' AND COALESCE(body->>'emailKey', lower(body->>'email')) = $1`,
+});
+export const CREDITS_INDEXES = Object.freeze([
+  { name: "credits_email_key_idx", expr: "(COALESCE(body->>'emailKey', lower(body->>'email')))" },
+  { name: "credits_key_id_idx", expr: "((body->>'keyId'))" },
+]);
+// Built CONCURRENTLY (writes go on during the build), each statement on a
+// connection of its own outside any transaction (Postgres refuses one inside
+// a transaction block), never in the boot's schema setup, which runs in one
+// transaction under the schema lock. One container builds at a time (the
+// lease); an index a failed build left INVALID is dropped and built again.
+// The store starts it in the background CREDITS_INDEX_DELAY_MS (default 60 s)
+// after its first load; CREDITS_INDEXES=off leaves it to an operator.
+export async function ensureCreditsIndexes({ log = console.log } = {}) {
+  if (!stateDbEnabled()) return { ran: false, reason: "no-db" };
+  const schema = stateDbSchema();
+  return withLease("credits-indexes", { ttlMs: 120_000, log }, async () => {
+    const have = async () => new Map((await stateQuery(
+      `SELECT c.relname AS name, i.indisvalid AS valid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = ANY($2)`,
+      [schema, CREDITS_INDEXES.map((x) => x.name)],
+    )).rows.map((r) => [r.name, r.valid === true]));
+    const found = await have();
+    const built = [], rebuilt = [];
+    for (const ix of CREDITS_INDEXES) {
+      if (found.get(ix.name) === true) continue;
+      if (found.has(ix.name)) {
+        await stateStatementOutsideTx(`DROP INDEX CONCURRENTLY IF EXISTS ${schema}.${ix.name}`);
+        rebuilt.push(ix.name);
+      }
+      const t0 = Date.now();
+      await stateStatementOutsideTx(`CREATE INDEX CONCURRENTLY IF NOT EXISTS ${ix.name} ON ${schema}.records ${ix.expr} WHERE collection = 'credits'`);
+      built.push(ix.name);
+      log(`[credits] index ${ix.name} built concurrently in ${Date.now() - t0} ms${rebuilt.includes(ix.name) ? " (an invalid one was dropped first)" : ""}`);
+    }
+    return { built, rebuilt };
+  });
+}
 export const microToUsd = (m) => Math.round(Number(m) / 100) / 10000; // 4 dp
 
 /**
@@ -197,7 +255,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     if (!fileIdx) return;
     idxForget(hash);
     if (!rec) return;
-    const k = typeof rec.keyId === "string" ? rec.keyId : "", e = String(rec.email || "").toLowerCase();
+    const k = typeof rec.keyId === "string" ? rec.keyId : "", e = recEmailKey(rec) || "";
     fileIdx.of.set(hash, { k, e });
     if (k) fileIdx.byKeyId.set(k, hash);
     if (e) { let set = fileIdx.byEmail.get(e); if (!set) fileIdx.byEmail.set(e, (set = new Set())); set.add(hash); }
@@ -227,8 +285,22 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   const pgKeysLite = async () => (await stateQuery(`SELECT id, body - 'history' AS body FROM ${RT()} WHERE collection = $1 AND id LIKE 'k\\_%' ESCAPE '\\' ORDER BY id`, [COLL])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
   // The key rows one balance-page lookup needs, found by the database: by key
   // id, or every row bought with an email.
-  const pgKeysByKeyId = async (keyId) => (await stateQuery(`SELECT id, body FROM ${RT()} WHERE collection = $1 AND id LIKE 'k\\_%' ESCAPE '\\' AND body->>'keyId' = $2`, [COLL, keyId])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
-  const pgKeysByEmail = async (email) => (await stateQuery(`SELECT id, body FROM ${RT()} WHERE collection = $1 AND id LIKE 'k\\_%' ESCAPE '\\' AND lower(body->>'email') = $2`, [COLL, email])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
+  // (CREDITS_LOOKUP_SQL, on their expression indexes once built.)
+  const pgKeysByKeyId = async (keyId) => (await stateQuery(CREDITS_LOOKUP_SQL.keyId(RT()), [keyId])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
+  const pgKeysByEmail = async (email) => (await stateQuery(CREDITS_LOOKUP_SQL.email(RT()), [email])).rows.map((r) => ({ hash: r.id.slice(2), rec: r.body }));
+  // Every key row an older build wrote without `emailKey` is given it,
+  // computed in JS, in one merge per row that leaves every other field as it is.
+  async function backfillEmailKeys() {
+    const rows = (await stateQuery(`SELECT id, body->>'email' AS email FROM ${RT()} WHERE collection = $1 AND id LIKE 'k\\_%' ESCAPE '\\' AND NOT (body ? 'emailKey') AND COALESCE(body->>'email', '') <> ''`, [COLL])).rows;
+    let n = 0;
+    for (const r of rows) {
+      const k = emailKeyOf(r.email);
+      if (!k) continue;
+      n += (await stateQuery(`UPDATE ${RT()} SET body = body || jsonb_build_object('emailKey', $3::text) WHERE collection = $1 AND id = $2 AND NOT (body ? 'emailKey')`, [COLL, r.id, k])).rowCount;
+    }
+    if (n) log(`[credits] gave ${n} key record(s) their normalized email`);
+    return n;
+  }
   // Write-through to the directory while it is there, so a rollback reads
   // current balances. Best effort: a failure is logged once, never the verdict.
   let throughWarned = false;
@@ -282,10 +354,19 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   const loader = usePg ? retryingLoad("[credits]", async () => {
     await importOnce(basename(dir), { source: dir, run: importDir });
     await rollForwardIfFilesNewer();
+    await backfillEmailKeys();
     await sweepAbandonedHolds().catch((e) => log(`[credits] hold sweep failed: ${String(e?.message || e).slice(0, 120)}`));
   }, { log }) : null;
   const readyP = () => (loader ? loader.ready() : Promise.resolve());
   if (loader) { trackStoreReady(loader.eventually); readyP().catch(() => {}); }
+  // The lookup indexes, in the background once the store has loaded (ensureCreditsIndexes).
+  if (loader && String(process.env.CREDITS_INDEXES || "").toLowerCase() !== "off") {
+    const delay = Math.max(0, Number(process.env.CREDITS_INDEX_DELAY_MS ?? 60_000) || 0);
+    Promise.resolve(loader.eventually).then(() => {
+      const t = setTimeout(() => { ensureCreditsIndexes({ log }).catch((e) => log(`[credits] index build failed (the lookups run without it): ${String(e?.message || e).slice(0, 160)}`)); }, delay);
+      t.unref?.();
+    }, () => {});
+  }
 
   // ---- abandoned holds (database only) --------------------------------------
   // Each hold on the database is also an entry `holds[id] = { m, at }` on the
@@ -418,8 +499,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   }
   async function keysByEmail(email) {
     if (!email) return [];
-    if (usePg) { await readyP(); return (await pgKeysByEmail(email)).filter((x) => String(x.rec?.email || "").toLowerCase() === email); }
-    return [...(fileIndex().byEmail.get(email) || [])].map((hash) => ({ hash, rec: load(hash) })).filter((x) => x.rec && String(x.rec.email || "").toLowerCase() === email);
+    const k = emailKeyOf(email);
+    if (!k) return [];
+    if (usePg) { await readyP(); return (await pgKeysByEmail(k)).filter((x) => recEmailKey(x.rec) === k); }
+    return [...(fileIndex().byEmail.get(k) || [])].map((hash) => ({ hash, rec: load(hash) })).filter((x) => x.rec && recEmailKey(x.rec) === k);
   }
   const answer = (v) => (usePg ? Promise.resolve(v) : v);
   const note = (rec, ev) => noteEvent(rec, ev, now());
@@ -494,7 +577,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // session carries, and how much of the payment Stripe has refunded already
   // (cents). A read that fails leaves a field null; the other still matches.
   async function buyerOf(session, paymentIntent) {
-    const email = String(session.customer_details?.email || session.customer_email || "").trim().toLowerCase() || null;
+    const email = emailKeyOf(session.customer_details?.email || session.customer_email);
     let cardFingerprint = null, refundedCents = 0;
     if (paymentIntent && stripe.paymentIntents?.retrieve) {
       try {
@@ -511,7 +594,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     let micro = 0;
     for (const { rec } of await allKeys()) {
       if (!rec) continue;
-      const same = (buyer.email && rec.email && String(rec.email).toLowerCase() === buyer.email)
+      const same = (buyer.email && recEmailKey(rec) === buyer.email)
         || (buyer.cardFingerprint && rec.cardFingerprint === buyer.cardFingerprint);
       if (!same) continue;
       // A key topped up counts each payment on its own day.
@@ -657,7 +740,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const buyer = await buyerOf(session, paymentIntent);
     // A top-up (started from the balance page) adds to the balance it names.
     const topupOf = session.metadata?.credits_topup;
-    if (typeof topupOf === "string" && topupOf) return withBuyerLock(buyer, () => topUp({ session, sessionId, packKey, p, paymentIntent, buyer, keyId: topupOf, account: String(session.metadata?.credits_account || "").toLowerCase() }));
+    if (typeof topupOf === "string" && topupOf) return withBuyerLock(buyer, () => topUp({ session, sessionId, packKey, p, paymentIntent, buyer, keyId: topupOf, account: emailKeyOf(session.metadata?.credits_account) }));
     return withBuyerLock(buyer, () => issue({ session, sessionId, packKey, p, email, loadedMicro, paymentIntent, buyer }));
   }
 
@@ -699,7 +782,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     // The buyer's answers to the required checkout fields (business use, terms).
     const fields = Object.fromEntries((Array.isArray(session.custom_fields) ? session.custom_fields : []).map((f) => [String(f?.key || ""), String(f?.dropdown?.value || "")]));
     const consent = { use: fields.use || null, terms: fields.terms === "agreed" ? session.metadata?.terms || null : null };
-    const rec = { keyId, balanceMicro: loadedMicro - refundedMicro, loadedMicro, ...(refundedMicro ? { refundedMicro } : {}), spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, cardFingerprint: buyer.cardFingerprint, billing, consent, taxIds, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
+    const rec = { keyId, balanceMicro: loadedMicro - refundedMicro, loadedMicro, ...(refundedMicro ? { refundedMicro } : {}), spentMicro: 0, calls: 0, createdAt: new Date(now()).toISOString(), email, emailKey: emailKeyOf(email), cardFingerprint: buyer.cardFingerprint, billing, consent, taxIds, sessions: [sessionId], paymentIntents: paymentIntent ? [paymentIntent] : [], pack: packKey, lastUsedAt: null };
     note(rec, { k: "purchase", m: loadedMicro - refundedMicro });
     if (usePg) {
       // The record first (nobody holds its key yet), then the claim; a claim
@@ -765,7 +848,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const out = hash ? await mutate(hash, (rec) => {
       if (!rec || rec.keyId !== keyId) return { result: { why: "topup_target" } };
       if (Array.isArray(rec.sessions) && rec.sessions.includes(sessionId)) return { result: { dup: true } };
-      if (!account || String(rec.email || "").toLowerCase() !== account || rec.disabled || rec.refundRequest) return { result: { why: "topup_target" } };
+      if (!account || !sameEmail(recEmailKey(rec), account) || rec.disabled || rec.refundRequest) return { result: { why: "topup_target" } };
       if ((Number(rec.balanceMicro) || 0) + (Number(rec.heldMicro) || 0) + p.cents * 10_000 > creditsBalanceMaxCents() * 10_000) return { result: { why: "balance_cap" } };
       const pays = Array.isArray(rec.payments) && rec.payments.length ? rec.payments : (() => {
         const first = Array.isArray(rec.paymentIntents) ? rec.paymentIntents[0] || null : null;
@@ -806,7 +889,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     if (!p) throw bad(`Unknown credit pack. Valid packs: ${Object.keys(sellablePacks()).join(", ")}`, { validPacks: Object.keys(sellablePacks()) });
     const hash = await keyHashById(String(keyId || ""));
     const rec = hash ? await readRec(hash) : null;
-    if (!rec || !account || String(rec.email || "").toLowerCase() !== account) throw Object.assign(new Error("No balance with that id is on this account."), { statusCode: 404, buyerSafe: true });
+    if (!rec || !account || !sameEmail(recEmailKey(rec), account)) throw Object.assign(new Error("No balance with that id is on this account."), { statusCode: 404, buyerSafe: true });
     if (rec.disabled || rec.refundRequest) throw bad("This balance is closed (refunded or switched off), so it cannot be topped up.");
     const capCents = creditsBalanceMaxCents();
     const usedCents = Math.ceil(((Number(rec.balanceMicro) || 0) + (Number(rec.heldMicro) || 0)) / 10_000);
@@ -858,7 +941,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     delete rec.holds[holdId];
     return heldMicro;
   }
-  function settleOn(rec, heldMicro, slug, chargeUsd, holdId = null, via = null) {
+  function settleOn(rec, heldMicro, slug, chargeUsd, holdId = null, via = null, debitId = null) {
     if (!rec) return { result: null };
     // A retried settle whose first attempt landed (its reply was lost): the
     // row already says what that settle took. Nothing moves again, and the
@@ -876,7 +959,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const returned = held - taken;
     rec.heldMicro = (rec.heldMicro || 0) - held; rec.balanceMicro += returned; rec.spentMicro += taken; rec.calls += 1; rec.lastUsedAt = new Date(now()).toISOString();
     if (holdId) rec.settledHolds = recentSettled({ ...(rec.settledHolds || {}), [holdId]: { m: taken, h: held, at: now() } });
-    note(rec, { k: "charge", slug: slug ?? null, m: taken });
+    // `d`: the debit id a signed receipt names as its settlement.
+    note(rec, { k: "charge", slug: slug ?? null, m: taken, ...(typeof debitId === "string" && debitId ? { d: debitId } : {}) });
     const low = lowCrossed(rec, taken) ? lowNotice(rec) : null;
     return { rec, result: { balanceUsd: microToUsd(rec.balanceMicro), chargedUsd: microToUsd(taken), heldUsd: microToUsd(held), returnedUsd: microToUsd(returned) }, after: () => { onDebit?.({ slug, priceUsd: microToUsd(taken), keyId: rec.keyId, via }); low?.(); } };
   }
@@ -922,8 +1006,8 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // markup on a metered route) takes LESS than the hold and returns the rest
   // to the balance; it can never take more than was held.
   // `via`: the path the call arrived on (src/sale-path.js), passed to onDebit.
-  function settle(hash, heldMicro, slug, chargeUsd = null, holdId = null, via = null) {
-    return mutate(hash, (rec) => settleOn(rec, heldMicro, slug, chargeUsd, holdId, via));
+  function settle(hash, heldMicro, slug, chargeUsd = null, holdId = null, via = null, debitId = null) {
+    return mutate(hash, (rec) => settleOn(rec, heldMicro, slug, chargeUsd, holdId, via, debitId));
   }
   // A final 200 is about to end: mark the hold settling with what the debit
   // takes, so a sweep that finds it after its settle could not land turns it
@@ -1362,7 +1446,13 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // or answers 402 with the balance and a top-up link; non-credit requests
   // pass through untouched. On the database the middleware is async (the
   // hold is a row lock away); on the files it is synchronous, as before.
-  function gate(priceFor) {
+  // `settleBeforeEnd()`: when it answers true (src/server.js: signed receipts
+  // are served), a final 200 is debited as its answer ENDS, before the last
+  // bytes leave, so the receipt signer (mounted before this gate) signs a
+  // landed debit: req.creditsDebitId names it. A debit that does not land
+  // in CREDITS_DEBIT_WAIT_MS (default 3000) ends the answer without a
+  // receipt and is retried as before; the hold is never released for it.
+  function gate(priceFor, { settleBeforeEnd = null } = {}) {
     // What every request does before the hold: null = not ours, pass through;
     // `{ done: true }` = answered here; else the key and the priced item.
     const begin = (req, res) => {
@@ -1406,12 +1496,15 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
       res.setHeader("X-Credits-Balance", String(a.balanceUsd));
       const slug = item.slug || req.path;
       const via = salePathOf(req);
+      // The id of this call's debit: recorded on the key's history and named
+      // as the settlement of its signed receipt (never the key or its hash).
+      const debitId = `cd_${randomBytes(12).toString("base64url")}`;
       // The two outcomes of the hold. On the files they answer at once; on the
       // database they are scheduled (and retried), and the charged amount is
       // recorded when the debit lands.
       const settleHold = (chargeUsd = null) => {
-        if (!usePg) { const c = settle(a.hash, a.heldMicro, slug, chargeUsd, null, via); if (c) req.creditsCharged = c.chargedUsd; return; }
-        later(`debit of key ${a.keyId}`, () => settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId, via), (c) => { if (c) req.creditsCharged = c.chargedUsd; }, a.holdId, { persist: true });
+        if (!usePg) { const c = settle(a.hash, a.heldMicro, slug, chargeUsd, null, via, debitId); if (c) req.creditsCharged = c.chargedUsd; return; }
+        later(`debit of key ${a.keyId}`, () => settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId, via, debitId), (c) => { if (c) req.creditsCharged = c.chargedUsd; }, a.holdId, { persist: true });
       };
       const releaseHold = () => {
         if (!usePg) { release(a.hash, a.heldMicro); return; }
@@ -1484,12 +1577,67 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
           settleHold();
           return;
         }
-        const c = settle(a.hash, a.heldMicro, slug, null, null, via);
+        const c = settle(a.hash, a.heldMicro, slug, null, null, via, debitId);
         if (c) { req.creditsCharged = c.chargedUsd; req.creditsChargedOnClose = c.chargedUsd; }
       };
       const priorEnd = res.end;
       let goneAfterHeaders = false;
+      // The settle-before-end debit's wait, and a close that landed in it.
+      let debitInFlight = false, goneDuringDebit = false;
       res.end = function creditsAwareEnd(...args) {
+        // Debit first, then end: a settled 200 whose answer is still being
+        // written, while signed receipts are served.
+        if (!goneEarly && !goneAfterHeaders && !done && res.statusCode === 200 && !servedWithoutRun(req, res) && settleBeforeEnd?.() === true) {
+          done = true;
+          const metered = meteredUsdOf(req, res);
+          const chargeUsd = Number.isFinite(metered) && metered > 0 ? metered : null;
+          const landed = (c) => { if (c) { req.creditsCharged = c.chargedUsd; req.creditsDebitId = debitId; } };
+          if (!usePg) {
+            try { landed(settle(a.hash, a.heldMicro, slug, chargeUsd, null, via, debitId)); } catch (e) { log(`[credits] debit of key ${a.keyId} failed: ${String(e?.message || e).slice(0, 120)}`); }
+            return priorEnd.apply(this, args);
+          }
+          const self = this;
+          // A buyer already gone with a granted forgiveness ticket is not
+          // debited: the hold is released and nothing is sent. Otherwise the
+          // debit leaves from here while the buyer is connected.
+          if (chargeCancelledForClientGone(req)) {
+            releaseHold();
+            return priorEnd.apply(this, args);
+          }
+          markSettleSent(req);
+          // A close during the wait below lands after the debit left: the
+          // hang-up hook books it as owed (creditsChargedOnClose), as on every
+          // rail whose settle call was in flight when the buyer left.
+          debitInFlight = true;
+          let timer = null;
+          const waitMs = Math.max(100, envPositive("CREDITS_DEBIT_WAIT_MS", 3000));
+          markSettling(a.hash, a.holdId, chargeUsd, slug, via).catch(() => { /* the settle below retries */ });
+          const first = settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId, via, debitId);
+          Promise.race([first.then((c) => ({ c })), new Promise((r) => { timer = setTimeout(() => r({ late: true }), waitMs); timer.unref?.(); })])
+            .then((out) => {
+              if (out.late) {
+                // Still in flight: a retry of the same hold takes what the
+                // first landed and never moves the balance twice.
+                later(`debit of key ${a.keyId}`, () => settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId, via, debitId), (c) => { if (c) req.creditsCharged = c.chargedUsd; }, a.holdId, { persist: true });
+                return;
+              }
+              landed(out.c);
+              liveHolds.delete(a.holdId); stopHoldFresh(a.holdId);
+            }, () => {
+              later(`debit of key ${a.keyId}`, () => settle(a.hash, a.heldMicro, slug, chargeUsd, a.holdId, via, debitId), (c) => { if (c) req.creditsCharged = c.chargedUsd; }, a.holdId, { persist: true });
+            })
+            .finally(() => {
+              clearTimeout(timer);
+              debitInFlight = false;
+              // The buyer left during the debit: the answer is not delivered
+              // and the debit stands, so the hang-up hook books what it took.
+              if (goneDuringDebit || clientGoneBeforeFirstByte(req)) {
+                req.creditsChargedOnClose = Number(req.creditsCharged) > 0 ? req.creditsCharged : (chargeUsd ?? microToUsd(a.heldMicro));
+              }
+              try { priorEnd.apply(self, args); } catch (e) { log(`[credits] answer end failed: ${String(e?.message || e).slice(0, 120)}`); }
+            });
+          return this;
+        }
         if (goneEarly) decideGone();
         else if (usePg && a.holdId && !done && res.statusCode === 200 && !servedWithoutRun(req, res)) {
           const metered = meteredUsdOf(req, res);
@@ -1499,6 +1647,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
         try { return priorEnd.apply(this, args); } finally { decideFinal(); }
       };
       res.on("close", () => {
+        if (debitInFlight && !res.headersSent) { goneDuringDebit = true; return; }
         if (done) return;
         if (res.headersSent) {
           if (res.writableEnded) { decideFinal(); return; }
@@ -1556,15 +1705,15 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
   // or its hash; the key id is the handle the page acts on.
   const capRoomUsd = (rec) => Math.max(0, creditsBalanceMaxCents() - Math.ceil(((Number(rec.balanceMicro) || 0) + (Number(rec.heldMicro) || 0)) / 10_000)) / 100;
   async function balancesForEmail(email) {
-    const e = String(email || "").trim().toLowerCase();
+    const e = emailKeyOf(email);
     if (!e) return [];
     return (await keysByEmail(e))
       .map(({ rec }) => ({ ...balanceOf(rec), roomUsd: rec.disabled || rec.refundRequest ? 0 : capRoomUsd(rec), lowNotice: !rec.lowNoticeOff, disabledReason: rec.disabled ? rec.disabledReason || "operator" : null }))
       .sort((a, b) => String(b.lastUsedAt || b.createdAt).localeCompare(String(a.lastUsedAt || a.createdAt)));
   }
   async function ownedRec(keyId, email) {
-    const e = String(email || "").trim().toLowerCase();
-    const hit = e ? (await keysByKeyId(keyId)).find((x) => String(x.rec.email || "").toLowerCase() === e) : null;
+    const e = emailKeyOf(email);
+    const hit = e ? (await keysByKeyId(keyId)).find((x) => recEmailKey(x.rec) === e) : null;
     return hit || null;
   }
   /** One balance's history (newest first), its totals by tool and what is held now; null when the email does not hold it. */
@@ -1607,7 +1756,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, onLo
     const key = `a402_${randomBytes(24).toString("base64url")}`;
     const next = hashKey(key);
     const move = (rec) => {
-      if (!rec || rec.keyId !== keyId || String(rec.email || "").toLowerCase() !== String(email).trim().toLowerCase()) return { status: "unknown" };
+      if (!rec || rec.keyId !== keyId || !sameEmail(recEmailKey(rec), email)) return { status: "unknown" };
       if ((Number(rec.heldMicro) || 0) > 0) return { status: "in_flight" };
       const out = { ...rec, rotatedAt: new Date(now()).toISOString() };
       delete out.holds; delete out.settledHolds;

@@ -5,6 +5,7 @@ paths:
   - "src/tools/ocr-kit.js"
   - "src/tools/media-kit.js"
   - "src/tools/render.js"
+  - "src/tools/render-static.js"
   - "src/tools/frame-diff.js"
   - "src/tools/child-env.js"
   - "src/tools/image-*.js"
@@ -42,6 +43,23 @@ Loaded when a media, document or worker-pool tool file is read.
   then a 429 with Retry-After. ffmpeg, ffprobe and Chromium start with `childEnv()`
   (`src/tools/child-env.js`), an allowlist of environment variables, so no key reaches a child
   process (defense in depth: a same-user child can still read its parent's environment).
+- **Answer size:** a tool that answers with bytes a converter wrote holds them to its cap in
+  `src/tools/answer-cap.js` (`ANSWER_CAPS`: the audio tools 60 MB, the PDF tools 40 MB, images the
+  bound their pixel cap sets; a tool with a cap of its own is in `ANSWER_CAPS_ELSEWHERE`), checked
+  before the bytes are read or turned into base64; past it the answer is a 413 naming the limit.
+  `audio-convert` and `audio-normalize` read the declared length first (ffprobe) and refuse before
+  the encode a file whose MP3 would pass the cap, projected at the bitrate the encoder writes for
+  the file's sample rate; ffmpeg gets `-fs` one byte past the cap and the output is sized
+  (`readFileWithin`) before it is read, which holds a file whose headers understate its length. A
+  new converter tool gets a row in one of the two tables. Suite: `scripts/test-answer-cap.js`.
+- **Render without a browser:** `src/tools/render-static.js` fetches the page through `safeFetch`
+  (8 s) and answers from its served HTML (`rendered: false`) when the verdict allows it: at least
+  `STATIC_MIN_WORDS` (50) words, no empty single-page-app mount, no hydrated components, no
+  noscript JavaScript notice beside under 300 words. Every other outcome, a refused or failed
+  fetch included, runs the browser path unchanged. The markers are read from the first
+  `STATIC_SCAN_MAX_CHARS` (256 KB) with bounded attribute reads, so a crafted page cannot hold the
+  serving thread (`scripts/test-render-static.js` times it). `RENDER_STATIC_READ=off` (unset = on)
+  sends every page to the browser.
 - **Markdown:** one renderer configuration (`src/tools/markdown-render.js`: heading ids) serves
   `markdown-to-html`, the guide pages and the docs pages, so a document renders to the same bytes
   everywhere. The tool renders a document of up to `MARKDOWN_INLINE_MAX_CHARS` (2,500) characters
@@ -108,6 +126,16 @@ Loaded when a media, document or worker-pool tool file is read.
   `durationUnconfirmed: true`. A file ffmpeg cannot decode is a 400 (format unreadable, no upstream call); a decoder that
   cannot run (no slot in the time the budget leaves, deadline, no ffmpeg) is a retryable 503 with no upstream call. The unmeasured count since boot
   is `transcriptionUnmeasured.sinceBoot` on `/__operator/tool-failures.json`. Suite: `scripts/test-stt-cap.js`.
+- **Thirty-minute tier (`transcribe-long`, `POST /api/transcribe-long`):** listed and served only with
+  `TRANSCRIBE_LONG=on` (off by default; `src/tools/stt-kit.js` `sttLongEnabled`, env-gated in
+  `scripts/published-slugs.js`). An audio URL only (a job replays a JSON body). Its price is the margin rule's
+  (the cent at or above 30 minutes at the dearer model's rate over `STT_MARGIN`, pinned by test-stt-cap). A
+  converted file goes as 16 kHz mono Opus in Ogg (`SPEECH_CODECS`, `src/tools/media-kit.js`): thirty minutes of
+  FLAC can pass the 25 MB upload limit. Its upstream cap is 140 s per path (`sttUpstreamCapMs`), its run budget
+  230 s (`EVM_RUN_SECONDS`, the fetch, the decode and that cap), and it is long-running (EVM exact only,
+  `LONG_RUNNING_SLUGS`); past the CDN answer window it runs as a job. The other tiers' over-cap refusal and the
+  pro description name it only while the switch is on. The upstream's time on a thirty-minute file is measured
+  by one supervised paid run before the switch goes on.
 - **Image generation moderation:** the three GPT Image tiers (`src/tools/image-gen-kit.js`) send
   `moderation: "low"` unless the caller sends `"auto"` (any other value is a 400 naming the field).
   A 400 whose OpenAI error names the `moderation` parameter (`error.param`, or an

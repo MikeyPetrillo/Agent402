@@ -1,6 +1,8 @@
 # agent402-mcp
 
-MCP server for [Agent402](https://agent402.tools), the applied layer of Agentic Finance. Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify paid calls across x402 and MPP, backed by signed receipts. 500+ ready tools on the same rails. Paid calls settle in USDC over x402 or MPP (Machine Payments Protocol). Pure-CPU tools are free: each call solves a small proof-of-work puzzle on your own machine. Other tools are paid per call in USDC over the [x402 protocol](https://www.x402.org) from a wallet you control. Built by [Havok Holdings LLC](https://github.com/MikeyPetrillo/Agent402).
+MCP server for [Agent402](https://agent402.tools), the applied layer of Agentic Finance. Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails. Paid calls settle in USDC over x402 or MPP (Machine Payments Protocol). Pure-CPU tools are free: each call solves a small proof-of-work puzzle on your own machine. Other tools are paid per call in USDC over the [x402 protocol](https://www.x402.org) from a wallet you control. Built by [Havok Holdings LLC](https://github.com/MikeyPetrillo/Agent402).
+
+![A paid call on Agent402: the request, the 402 with its price, the signature, the settlement, the answer and the signed receipt](https://raw.githubusercontent.com/MikeyPetrillo/Agent402/main/docs/media/agent402-call.gif)
 
 ## Quick start
 
@@ -68,7 +70,7 @@ server names the variable on stderr. Set `AGENT402_BUDGET` to cap the session to
 the server runs in proof-of-work mode (pure-CPU tools stay free). Use dedicated
 low-value wallets for `AGENT_KEY` / `SOLANA_AGENT_KEY`, funded only with what
 you intend to spend. Most tools cost $0.001 to $0.02. The routing tiers top out
-at $3.30 (`route-execute-pro`); multi-tool skill packs run $0.003 to $0.101; and the
+at $3.30 (`route-execute-pro`); multi-tool skill packs run $0.001 to $0.093; and the
 report products run $0.60 to $2.00 per report (domain-audit $0.60 up to the ticker pack at $2.00),
 so the default per-call cap of $5 covers every tool; set `AGENT402_MAX_PER_CALL` lower for a
 tighter ceiling, or `off` for none.

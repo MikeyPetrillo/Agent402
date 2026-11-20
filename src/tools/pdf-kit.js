@@ -50,7 +50,7 @@ export const PDF_TOOLS = [
     handler: async (i) => pdfInfo(await fetchBuf(need(i, "url"))),
   },
   {
-    route: "POST /api/pdf-merge", name: "Merge PDFs", slug: "pdf-merge", category: "web", price: "$0.004",
+    route: "POST /api/pdf-merge", name: "Merge PDFs", slug: "pdf-merge", category: "web", price: "$0.003",
     description:
       "Combine several PDFs into one, in order. Body: {\"urls\":[\"https://…/a.pdf\",\"https://…/b.pdf\"]}. Returns the merged PDF as base64 plus page count and size.",
     tags: ["pdf", "merge", "combine", "convert-pdf", "documents"],

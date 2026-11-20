@@ -12,6 +12,7 @@ import {
   parseRobinhoodTransfer, robinhoodActivity,
 } from "../src/revenue-live.js";
 import { marketPage } from "../src/market-page.js";
+import { urlMatches } from "./lib/url-host.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -92,7 +93,7 @@ ok(a.error === "WALLET_ADDRESS unset" && a.buckets.length === 0 && a.totals.tx =
   globalThis.fetch = async (url) => { seen.push(String(url)); return { ok: false, status: 403, headers: { get: () => "text/html" }, json: async () => { throw new Error("html"); }, text: async () => "<html>Just a moment...</html>" }; };
   a = await robinhoodActivity("0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0");
   ok(a.error === "Blockscout HTTP 403" && a.buckets.length === 0 && a.totals.tx === 0, `robinhoodActivity: an edge 403 page -> error named, empty buckets, no throw (got ${a.error})`);
-  ok(seen.length === 2 && seen.every((u) => u.startsWith("https://robinhoodchain.blockscout.com/api?module=account&action=tokentx")), `robinhoodActivity: legacy per-instance host, one retry (${seen.length} calls)`);
+  ok(seen.length === 2 && seen.every((u) => urlMatches(u, "robinhoodchain.blockscout.com", "/api") && new URL(u).searchParams.get("module") === "account" && new URL(u).searchParams.get("action") === "tokentx"), `robinhoodActivity: legacy per-instance host, one retry (${seen.length} calls)`);
   ok(!seen.some((u) => new URL(u).hostname === "api.blockscout.com"), "robinhoodActivity: the keyless read never asks api.blockscout.com (402 without a key)");
   globalThis.fetch = realFetch;
 }

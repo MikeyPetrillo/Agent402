@@ -21,7 +21,8 @@ import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
-import { RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly } from "./rails.js";
+import { RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly, x402RailsFor } from "./rails.js";
+import { paidCallFigure, paidCallScript, PAID_CALL_CSS } from "./paid-call-figure.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
 import { JOB_PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumUsdByNetwork as premiumUsdByNetworkName } from "./public-networks.js";
@@ -40,6 +41,7 @@ import { mppFlagshipRows } from "./mpp-flagship.js";
 import { PRICED_BY_MODEL_NOTE } from "./tools/llm-gateway-kit.js";
 import { meteredTwinPath, meteredQuoteSentence, meteredRoutesInline, flatTiersLine, isMeteredChatSlug, meteredTimeoutSentence } from "./metered-lead.js";
 import { PARAM_ALIASES } from "./input-aliases.js";
+import { kalshiToolsEnabled } from "./kalshi-switch.js";
 import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
 import { toolJudgeEnabled } from "./tool-judge.js";
 import { fromPriceLabel } from "./quoted-from.js";
@@ -540,6 +542,9 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   ${codeBlock(curlExample(baseUrl, tool), { name: "the request" })}
   <p class="tp-sub">Without payment this returns <code>HTTP 402 Payment Required</code> with the exact price for ${e(tool.slug)}; any x402 v2${orMpp} client pays it and retries.</p>
 
+  <h2 class="tp-h2">Watch a call get paid</h2>
+  ${paidCallFigure({ method: tool.method, path: tool.path, price: pw.short, chains: x402RailsFor(tool).length === 1 ? railsOrFor(tool) : x402RailsFor(tool).length })}
+
   <h2 class="tp-h2">Example response</h2>
   ${binaryTypes
     ? `<p class="tp-sub">A 200 carries ${binaryPhrase}: the file itself.</p>`
@@ -584,7 +589,8 @@ await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}
   ${relatedCards ? `<h2 class="tp-h2">Related tools</h2>
   <div class="tp-grid">${relatedCards}</div>` : ""}
 </div>
-${ledgerFooterCompact()}`;
+${ledgerFooterCompact()}
+${paidCallScript()}`;
 
   return ledgerShell({
     title,
@@ -594,7 +600,7 @@ ${ledgerFooterCompact()}`;
     activePath: "/tools",
     ogImage: `${baseUrl}/tools/${tool.slug}/card.png`,
     jsonLd,
-    extraCss: TOOL_PAGE_CSS,
+    extraCss: TOOL_PAGE_CSS + PAID_CALL_CSS,
     body,
     mpp,
   });
@@ -705,7 +711,7 @@ export function faqItems() {
   { g: "sellers", q: "How do I list my own API?", a: 'For free: your origin is auto-discovered from public x402 discovery registries once it is live, or paste it on <a href="/sell">/sell</a> (or call <code>POST /api/index/register</code>) for an immediate probe. Settlement lands straight in your wallet, with 0% take.' },
   { g: "sellers", q: "How do I see which x402 sellers are most used?", a: `<code>GET <a href="/api/leaderboard">/api/leaderboard</a></code> returns the head of the on-chain ranking of x402 sellers by Base USDC settled volume: 25 rows by default, up to 50 with <code>?top=N</code>, and <code>totalSellers</code> for the full count. It refreshes ${leaderboardCadence()}, leaves Agent402 out unless you add <code>?include=all</code>, and <a href="/leaderboard">/leaderboard</a> shows how it is built.` },
   { g: "sellers", q: "How does the Smart Order Router decide which seller to route to?", a: `${routerRankingSentence()} If the model declines every candidate, route-and-execute refuses before anything is paid. ${routingProofSentence()} More: <a href="/guides/smart-order-router">the router guide</a>.` },
-  { g: "service", q: "How do I know the service is honest?", a: 'The server is open source; CI re-tests every tool that runs without a third-party key against its own documented example before each deploy. The wallet-identity tools (memory and usage), which need a paying wallet, and one prediction-market family whose upstream throttles CI runners get a looser check, and one rate-limited data family runs on a rotation, covered across runs. Revenue settles on chain to the receiving wallets listed in <a href="/.well-known/x402">/.well-known/x402</a> (agent402.base.eth on Base and the other EVM chains).' },
+  { g: "service", q: "How do I know the service is honest?", a: 'The server is open source; CI re-tests every tool that runs without a third-party key against its own documented example before each deploy. The wallet-identity tools (memory and usage), which need a paying wallet, ' + (kalshiToolsEnabled() ? 'and one prediction-market family whose upstream throttles CI runners ' : '') + 'get a looser check, and one rate-limited data family runs on a rotation, covered across runs. Revenue settles on chain to the receiving wallets listed in <a href="/.well-known/x402">/.well-known/x402</a> (agent402.base.eth on Base and the other EVM chains).' },
   { g: "service", q: "Is Agent402 self-hostable and open source?", a: 'Yes - the server is open source under the AGPL-3.0 license (the client SDK, MCP connector, and tollbooth are MIT). Clone the repo and run it yourself for free, with or without payments enabled. It also ships agent402-tollbooth, an open-source pay-per-crawl gate for charging AI crawlers on your own site.' },
   { g: "service", q: "Who runs Agent402?", a: `Havok Holdings LLC - a public, contactable maintainer reachable at <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>, on <a href="${REPO_URL}">GitHub</a>, and on <a href="https://x.com/Agent402Tools">X</a>.` },
   ];
@@ -734,7 +740,7 @@ export function faqPage(baseUrl) {
   .fq-group h2 { padding-bottom:6px; border-bottom:1px solid var(--hairline); }
   .fq-item > summary { list-style:none; cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:20px 0; font-family:var(--font-body); font-weight:800; font-size:var(--fs-lg); line-height:1.3; color:var(--ink); }
   .fq-item > summary::-webkit-details-marker { display:none; }
-  .fq-mark { font-family:var(--font-mono); font-weight:400; font-size:var(--fs-xl); line-height:1; color:var(--accent); flex:none; transition:transform .15s ease; display:inline-block; }
+  .fq-mark { font-family:var(--font-mono); font-weight:400; font-size:var(--fs-xl); line-height:1; color:var(--accent); flex:none; transition:transform var(--dur-fast) ease; display:inline-block; }
   .fq-item[open] .fq-mark { transform:rotate(45deg); }
   @media (prefers-reduced-motion:reduce){ .fq-mark { transition:none; } }
   .fq-item p { color:var(--muted); font-size:var(--fs-base); line-height:1.7; margin:0; padding:0 0 22px; max-width:760px; }
@@ -842,6 +848,50 @@ const REFUND_LOOKUP_SCHEMA = {
     },
   },
 };
+
+// The answers of GET /api/skill-packs.json and /api/skill-packs/{slug}/prompt
+// (server.js), as their handlers build them.
+const SKILL_PACK_LIST_SCHEMA = Object.freeze({
+  type: "object",
+  required: ["packs"],
+  properties: {
+    packs: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["slug", "title", "toolSlugs"],
+        properties: {
+          slug: { type: "string" },
+          title: { type: "string" },
+          tagline: { type: "string" },
+          useCase: { type: "string" },
+          toolSlugs: { type: "array", items: { type: "string" } },
+          workflow: { type: "array", items: { type: "string" } },
+          claudePrompt: { type: "string" },
+          promptArgs: { type: "array", items: { type: "object", required: ["name"], properties: { name: { type: "string" }, description: { type: "string" }, required: { type: "boolean" } } } },
+        },
+      },
+    },
+  },
+});
+const SKILL_PACK_PROMPT_SCHEMA = Object.freeze({
+  type: "object",
+  required: ["messages"],
+  properties: {
+    description: { type: "string" },
+    messages: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["role", "content"],
+        properties: {
+          role: { type: "string", enum: ["user", "assistant"] },
+          content: { type: "object", required: ["type", "text"], properties: { type: { type: "string", const: "text" }, text: { type: "string" } } },
+        },
+      },
+    },
+  },
+});
 
 export function openapiSpec(baseUrl, catalog) {
   const paths = {};
@@ -1063,7 +1113,7 @@ export function openapiSpec(baseUrl, catalog) {
       responses: {
         200: {
           description: "All skill packs.",
-          content: { "application/json": { schema: { type: "object" } } },
+          content: { "application/json": { schema: SKILL_PACK_LIST_SCHEMA } },
         },
       },
     },
@@ -1089,7 +1139,7 @@ export function openapiSpec(baseUrl, catalog) {
       responses: {
         200: {
           description: "Rendered prompt messages.",
-          content: { "application/json": { schema: { type: "object" } } },
+          content: { "application/json": { schema: SKILL_PACK_PROMPT_SCHEMA } },
         },
         404: { description: "Unknown slug. Use /api/skill-packs.json to list." },
       },
@@ -1105,6 +1155,40 @@ export function openapiSpec(baseUrl, catalog) {
       responses: {
         200: { description: "The scorecard.", content: { "application/json": { schema: { type: "object", required: ["asOf", "months", "method"], properties: { asOf: { type: "string", format: "date-time" }, months: { type: "array", items: { type: "object" } }, method: { type: "object" } } } } } },
         503: { description: "Not computed yet; retry after Retry-After seconds." },
+      },
+    },
+  };
+  paths["/api/reputation"] = {
+    get: {
+      operationId: "getSellerReputation",
+      security: [],
+      summary: "One outside seller's reputation, measured by this server",
+      description: "Free. What this server's own crawl and its router's own paid calls measured about one outside x402 seller over a rolling 30-day window: manifest uptime, paywall (402) uptime, responsiveness of the 402, price matches listing (the live 402 price against the price the seller's own documents list) and delivery (measured from purchases Agent402's router made for buyers), with age. Each metric names its method, window, sample size, minimum sample and last measurement, and is scored (0 to 1) only past its minimum sample; below it reads not-enough-data. No metric counts payments or buyers: router purchases, our own wallets and test traffic are never buyer evidence, and settlement counts are not part of the record. Per-route rows are capped (returned, matched, complete and truncated say so). Computed off the request path by a scheduled pass.",
+      tags: ["transparency"],
+      parameters: [{ name: "seller", in: "query", required: true, description: "The seller's host or origin, as on /api/index?seller=.", schema: { type: "string", maxLength: 512 } }],
+      responses: {
+        200: { description: "The seller's reputation record.", content: { "application/json": { schema: { type: "object", required: ["seller", "reputation", "tools"], properties: { seller: { type: "string" }, reputation: { type: "object" }, tools: { type: "array", items: { type: "object" } }, returned: { type: "integer" }, matched: { type: "integer" }, complete: { type: "boolean" }, truncated: { type: "boolean" } } } } } },
+        400: { description: "No seller named, or one longer than 512 characters." },
+        404: { description: "The seller is not in this server's index (or names this server's own host)." },
+        503: { description: "The index is still loading; retry after Retry-After seconds." },
+      },
+    },
+  };
+  paths["/api/reputation/recheck"] = {
+    post: {
+      operationId: "recheckSellerReputation",
+      security: [],
+      summary: "Ask for a fresh measurement of one indexed seller",
+      description: "Free. Schedules the crawl to read the seller on its next cycle, inside the seller's own per-operator crawl budget (one of its places that cycle, never an extra read; a Retry-After or daily budget it set still applies); the next reputation pass folds that read in. One accepted request per seller every 6 hours: a repeat inside that span answers the request already scheduled and changes nothing. Limited per caller.",
+      tags: ["transparency"],
+      parameters: [{ name: "seller", in: "query", required: false, description: "The seller's host or origin, as on /api/reputation?seller= (or send it in the body).", schema: { type: "string", maxLength: 512 } }],
+      requestBody: { required: false, content: { "application/json": { schema: { type: "object", properties: { seller: { type: "string", maxLength: 512, description: "The seller's host or origin, when not sent as ?seller=." } } }, example: { seller: "seller.example" } } } },
+      responses: {
+        202: { description: "Scheduled: when the crawl reads the seller (crawlBy) and when the record shows it (recordBy).", content: { "application/json": { schema: { type: "object", required: ["seller", "status", "accepted", "requestedAt", "crawlBy", "recordBy"], properties: { seller: { type: "string" }, status: { type: "string", enum: ["scheduled"] }, accepted: { type: "boolean" }, requestedAt: { type: "string", format: "date-time" }, crawlBy: { type: "string", format: "date-time" }, recordBy: { type: "string", format: "date-time" }, nextAcceptedAt: { type: "string", format: "date-time" }, lastRecheckedAt: { type: ["string", "null"], format: "date-time" } } } } } },
+        400: { description: "No seller named, or one longer than 512 characters." },
+        404: { description: "The seller is not in this server's index (or names this server's own host)." },
+        429: { description: "The caller's hourly limit; retry after Retry-After seconds." },
+        503: { description: "The index is still loading, reputation is not measured on this server, or the store could not record the request; retry after Retry-After seconds." },
       },
     },
   };

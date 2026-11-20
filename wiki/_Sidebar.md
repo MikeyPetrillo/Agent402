@@ -11,6 +11,7 @@
 - [[Arc (USDC)|Arc]]
 - [[Ink (USDC)|Ink]]
 - [[Circle Gateway (batched USDC)|Circle-Gateway]]
+- [[Sessions and Channels|Sessions-and-Channels]]
 - [[Paying with Compute]]
 - [[Buying at Volume|Buying-at-Volume]]
 - [[Content Pipeline|Content-Pipeline]]
@@ -21,6 +22,7 @@
 - [[Tool Catalog]]
 - [[Skill Packs|Skill-Packs]]
 - [[x402 Index and Router|x402-Index-and-Router]]
+- [[Seller Reputation|Seller-Reputation]]
 - [[x402 Leaderboard|x402-Leaderboard]]
 - [[LLM Gateway (OpenAI /v1)|LLM-Gateway]]
 - [[LLM Proxy Gateway|LLM-Proxy]]
@@ -30,6 +32,7 @@
 - [[Speech-to-Text|STT]]
 - [[Text Embeddings|Embeddings]]
 - [[Payments and x402]]
+- [[Audit Report|Audit-Report]] - a wallet's signed history
 - [[Memory and Coordination]]
 
 **Tollbooth (for site owners)**

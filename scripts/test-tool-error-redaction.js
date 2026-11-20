@@ -358,6 +358,26 @@ try {
   delete process.env.CACHE_PROBE_API_KEY;
 }
 
+// A configured secret that is also a URL scheme word (a database whose
+// password is "postgres") is replaced in the scheme of ANOTHER URL in the same
+// text. The password in that other URL is still redacted.
+{
+  const { redactSecrets } = await import("../src/tools/redact.js");
+  const OTHER = "hunter2pgSecretPass";
+  for (const [name, value, text] of [
+    ["SCHEME_PROBE_PGURL", "postgres://postgres:postgres@127.0.0.1:5432/postgres", `reading postgres://agent:${OTHER}@db.internal.example:5432/state failed`],
+    ["SCHEME_PROBE_DATABASE_URL", "postgresql://app:postgres@127.0.0.1:5432/app", `reading postgresql://agent:${OTHER}@db.internal.example:5432/state failed`],
+    ["SCHEME_PROBE_API_KEY", "mongodb+", `reading mongodb+srv://agent:${OTHER}@cluster.example/state failed`],
+  ]) {
+    process.env[name] = value;
+    const out = redactSecrets(text);
+    ok(!out.includes(OTHER) && out.includes("[redacted]@") && out.includes("db.internal.example") === text.includes("db.internal.example"),
+      `a password in a URL whose scheme holds a configured secret's text is still redacted (${name}: ${out})`);
+    delete process.env[name];
+  }
+  ok(redactSecrets("see [redacted] and a@b") === "see [redacted] and a@b", "control: text with no URL credential is left as it is");
+}
+
 // The [tool-error] console line strips control characters from the message as
 // well as the key names, so a caller-chosen message is always one log line.
 {

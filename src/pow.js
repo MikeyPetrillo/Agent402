@@ -250,6 +250,15 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Locale/time reference (data-kit): Nager.Date egress → wallet-only.
   // (country-info is a committed in-repo dataset now — pure CPU, PoW-eligible.)
   "public-holidays",
+  // holidays-kit.js: the same holiday-source egress (market-calendar reads a
+  // committed table and is in src/free-tier.js).
+  "bank-holidays", "school-holidays", "next-holidays", "long-weekends",
+  "country-business-days", "business-day-planner", "settlement-calendar",
+  // bundle-kit.js: each runs other network tools (its legs) in process, so it
+  // reads every upstream they read.
+  "weather-risk-brief", "filings-brief", "token-diligence",
+  "fetch-json",          // kit.js: fetches a caller-supplied URL
+  "mcp-package-check",   // mcp-package-kit.js: reads the npm registry
   // Image tools that can fetch a caller-supplied URL (safeFetch egress).
   "image-exif", "image-dominant-color", "image-crop",
   "treasury-yield-curve", "treasury-yield-history", "yield-curve-spread",
@@ -482,6 +491,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // no wallet, so there is nothing it could ever report on.
   "my-usage",
   "receipts",
+  "audit-report",
   // Feedback: the verdict is bound to the wallet that paid for the call being
   // rated, so a PoW call has no standing to write one. (The TALLY,
   // feedback-summary, is counts only and stays free.)

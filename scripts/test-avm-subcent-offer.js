@@ -415,7 +415,7 @@ const base = (amount) => ({ scheme: "exact", network: "eip155:8453", asset: "0x8
   const serverLog = [];
   const procs = [];
   const boot = async (port, extraEnv = {}) => {
-    const proc = spawn("node", ["src/server.js"], {
+    const proc = spawn(process.execPath, ["src/server.js"], {
       env: {
         ...process.env, PORT: String(port), FREE_MODE: "",
         WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",

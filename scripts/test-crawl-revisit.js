@@ -108,15 +108,21 @@ const turn = async (o) => idx.__crawlScheduledForTest(o);
   await idx.__crawlSellerForTest(O);
   clock += CYCLE;
   ok((await turn(O)) === null, "an unscheduled read (registration) does not lengthen the wait");
-  // A re-registration inside the re-read cooldown reads nothing, and still
-  // puts the origin back on the cycle.
+  // A re-registration inside the re-read cooldown reads nothing and leaves
+  // the back-off standing (anyone may register any origin).
   for (let i = 0; i < 4; i++) await sellerLoad.noteDiscoveryRead(O, { manifestHash: undefined, openapiHash: undefined });
   clock += CYCLE;
   ok((await turn(O)) === "unchanged", "backed off for hours");
   const n = fetchedFrom(O);
   await idx.registerOrigin(O).catch(() => null);
   ok(fetchedFrom(O) === n, "a second registration inside the cooldown re-reads nothing");
-  ok((await turn(O)) === null, "and the origin is read on the next cycle all the same");
+  ok((await turn(O)) === "unchanged", "and the back-off stands: the origin is not read on the next cycle");
+  // Past the cooldown a registration re-reads and puts it back on the cycle.
+  idx.__resetForcedCrawlForTest();
+  await idx.registerOrigin(O).catch(() => null);
+  ok(fetchedFrom(O) > n, "a registration past the cooldown re-reads the documents");
+  clock += CYCLE;
+  ok((await turn(O)) === null, "and puts the origin back on the cycle");
 }
 
 // ---- a failed crawl resets -------------------------------------------------------

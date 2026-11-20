@@ -146,14 +146,15 @@ const FORBIDDEN = [
     // "a run where no step succeeds is not charged", "a 4xx or 5xx is never
     // charged", "answers 422 and is not charged", "so nothing is charged",
     // and the bare sentences "Nothing was charged" / "You were not charged" /
-    // "Not charged" with no rail named beside them. A Tempo push transfer is
+    // "Not charged" with no rail named beside them, and the status form "an
+    // answer of 400 or above is never charged". A Tempo push transfer is
     // final before the call and a failure on it is booked as owed, so the
     // claim holds only with its rail (x402, MPP evm, card, credits) or the
     // push exception in the same line or the next. A handler's refusal line
     // (bad(...), throw, res.status(n).json) is not copy: the Tempo push gate
     // restates it for that payer at send (src/push-refusal-body.js), which
     // the block below proves against every such phrasing in the tree.
-    re: /\b(?:failures?|errors?|refusals?|timeouts?|(?:a |an |any |every |each |the )?(?:failed|failing|errored|timed-out|refused|cancell?ed|rejected|unsuccessful)(?:\s+or\s+[\w-]+)?\s+(?:[\w-]+\s+)?(?:call|request|generation|run|job|step|attempt|buy|purchase)s?|(?:a |any |every |the )?(?:call|run|request|job|step|attempt|generation)s? (?:that|which|where) (?:fails?|errors?|times? out|no step succeeds)|a 4xx or 5xx|4xx\S*\s*(?:or|\/)\s*5xx\S*|[45]xx(?:es)?)\b[^.;]{0,40}?\b(?:is|are|was|were|get|gets) (?:not|never) charged\b|\b(?:fails?|failing|errors?|times? out|is refused|refused|cancels? settlement|answers? (?:a |an )?\S*[45]\d\d\S*)[^.;]{0,30}?\b(?:so |and |[-:,] )?(?:nothing|no charge|not|never)\s*(?:is|was|has been)?\s*charged\b|\bnothing is charged\b[^.]{0,30}\b(?:fail|error|[45]xx)|\bno charge is applied\b/i,
+    re: /\b(?:failures?|errors?|refusals?|timeouts?|(?:a |an |any |every |each |the )?(?:failed|failing|errored|timed-out|refused|cancell?ed|rejected|unsuccessful)(?:\s+or\s+[\w-]+)?\s+(?:[\w-]+\s+)?(?:call|request|generation|run|job|step|attempt|buy|purchase)s?|(?:a |any |every |the )?(?:call|run|request|job|step|attempt|generation)s? (?:that|which|where) (?:fails?|errors?|times? out|no step succeeds)|a 4xx or 5xx|4xx\S*\s*(?:or|\/)\s*5xx\S*|[45]xx(?:es)?|(?:an? |any |every |the )?(?:answer|response)s? of [45]\d\d or (?:above|over|higher|more))\b[^.;]{0,40}?\b(?:is|are|was|were|get|gets) (?:not|never) charged\b|\b(?:fails?|failing|errors?|times? out|is refused|refused|cancels? settlement|answers? (?:a |an )?\S*[45]\d\d\S*)[^.;]{0,30}?\b(?:so |and |[-:,] )?(?:nothing|no charge|not|never)\s*(?:is|was|has been)?\s*charged\b|\bnothing is charged\b[^.]{0,30}\b(?:fail|error|[45]xx)|\bno charge is applied\b/i,
     why: "unscoped: a Tempo push transfer is final before the call and a failure on it is recorded as owed; name the rail (x402, MPP evm, card, credits) or the push exception in the same sentence",
     scopedBy: NOT_CHARGED_SCOPE,
     scopeWindow: 0,
@@ -508,6 +509,7 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "A 4xx is never charged, nothing owed."],
                        ["<control>", "Any failed call is not charged (we accept proof-of-work)."],
                        ["<control>", "If the seller does not answer, nothing is charged."],
+                       ["<control>", "Branch on the code; the message text may change. An answer of 400 or above is never charged."],
                        ["<control>", "Flat pricing for ${n} deterministic web tools."],
                        ["<control>", "Every tool is deterministic."],
                        ["<control>", "If it was, the charge is recorded as owed and refunded automatically."],
@@ -527,8 +529,8 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["src/<control>.js", "<p><strong>Twelve chains.</strong> A buyer pays on whichever chain"],
                        ["src/<control>.js", "settling USDC on Base (plus eleven more rails), across all twelve chains"],
                        ["src/<control>.js", "// a comment that says twelve chains is not served copy"]]);
-const CONTROL_EXPECTED = 38;
-ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 29 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
+const CONTROL_EXPECTED = 39;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 30 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);
@@ -1056,7 +1058,8 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
 
 // A success:false receipt is not always "not charged, safe to retry": a
 // settle chain that ended unconfirmed (settlement_unconfirmed) may still
-// move money. Every copy surface that says such a receipt was not
+// move money, and a settle whose transfer was already booked owed
+// (settled_refund_owed) was charged. Every copy surface that says such a receipt was not
 // charged, moved nothing or is safe to retry carries the shared clause
 // (src/front-door.js UNCONFIRMED_RECEIPT_EXCEPTION) right after the claim: by
 // interpolation in a module, word for word in markdown.
@@ -1073,7 +1076,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
       const line = text.slice(text.lastIndexOf("\n", m.index) + 1, m.index);
       if (/^\s*(?:\/\/|\/?\*)/.test(line)) continue;
       claims++;
-      const after = text.slice(m.index, m.index + m[0].length + 900).replace(/\\?\n\s*/g, " ");
+      const after = text.slice(m.index, m.index + m[0].length + 1300).replace(/\\?\n\s*/g, " ");
       if (!carries(after)) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
     }
   }
@@ -1081,8 +1084,9 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   // (src/settlement-claims.js), and a re-sent unconfirmed payment is answered
   // from its stored answer before it could reach that refusal.
   ok(/settlement_unconfirmed/.test(UNC) && !/duplicate_authorization/.test(UNC) && /do not sign a new authorization/.test(UNC) && /check-wallet/.test(UNC) && /watch-transaction/.test(UNC)
-    && /authorizationValidBefore/.test(UNC) && /lastValidRound/.test(UNC) && /expirationLedger/.test(UNC) && /names none, before the paying wallet shows/.test(UNC),
-    "the shared clause names the unconfirmed receipt only, the instruction scoped to the answer's expiry or the wallet, and both retry verbs");
+    && /authorizationValidBefore/.test(UNC) && /lastValidRound/.test(UNC) && /expirationLedger/.test(UNC) && /names none, before the paying wallet shows/.test(UNC)
+    && /settled_refund_owed was charged/.test(UNC) && /booked as owed/.test(UNC) && /refundStatusUrl/.test(UNC),
+    "the shared clause names the unconfirmed and the owed receipts, the instruction scoped to the answer's expiry or the wallet, and both retry verbs");
   ok(claims >= 8, `the success:false not-charged claim is found where it is made (${claims} places)`);
   ok(bare.length === 0, `every success:false not-charged claim carries the unconfirmed-receipt clause${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
   ok("a PAYMENT-RESPONSE with success: false means settlement was refused, you were not charged on x402.".match(CLAIM) && !carries("receipt success:false, safe to retry."),
@@ -1120,6 +1124,13 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   ok(/`same-payment` means send the same payment again after `Retry-After`, with no new signature; `watch-transaction` \(the body lists `transactions`\) and `check-wallet` \(it lists none\) mean the settlement is not confirmed/.test(wiki)
     && /`fresh-authorization` means sign a new payment/.test(wiki),
     "the wiki's Paying-with-x402 page names the retry verbs and the unconfirmed settlement");
+  // The owed answer (settled-refund-owed) is named wherever the verbs are:
+  // that payment was charged, its transfer is owed back, and a new one makes the call.
+  ok(/reason settled-refund-owed the earlier transfer of that payment landed and is booked as owed to the paying wallet, repaid after on-chain proof \(transactions names it, refundStatusUrl shows where the repayment stands\), so that call was charged and not served/.test(NOTE),
+    "the retry-verbs note names settled-refund-owed: charged, owed back, the transfer and its refund lookup");
+  ok(/`reason: "settled-refund-owed"` the earlier transfer of that payment landed and is booked as owed to the paying wallet, repaid after on-chain proof/.test(readme)
+    && /`reason: "settled-refund-owed"` the earlier transfer of that payment landed and is booked as owed to the paying wallet, repaid after on-chain proof/.test(wiki),
+    "the client README and the wiki name settled-refund-owed");
 }
 
 console.log(`test-copy-absolutes: ${pass} passed, ${fail} failed`);

@@ -26,77 +26,77 @@ export const PACK_PRICE_TABLE = {
   // advertised tools' prices minus the 10% bundle discount, rounded up to $0.001,
   // never below $0.001. CI recomputes it (pack-prices.js in check mode) and fails
   // on drift, so do not hand-edit a number here - reprice the tool, then --write.
-  "earnings-deep-dive": 0.033, // 4 tools, parts $0.036
+  "earnings-deep-dive": 0.027, // 4 tools, parts $0.029
   "options-analytics": 0.017, // 4 tools, parts $0.018
-  "fixed-income-desk": 0.017, // 5 tools, parts $0.018
-  "defi-protocol-scanner": 0.031, // 4 tools, parts $0.034
-  "security-audit": 0.017, // 7 tools, parts $0.018
-  "email-deliverability": 0.009, // 6 tools, parts $0.009
-  "market-brief": 0.009, // 3 tools, parts $0.01
-  "financial-analysis": 0.024, // 3 tools, parts $0.026
-  "financial-research": 0.024, // 6 tools, parts $0.026
-  "macro-economics": 0.032, // 7 tools, parts $0.035
-  "macro-dashboard": 0.065, // 14 tools, parts $0.072
-  "dns-network-ops": 0.011, // 6 tools, parts $0.012
-  "crypto-research": 0.054, // 7 tools, parts $0.06
-  "content-extraction": 0.035, // 6 tools, parts $0.038
-  "sec-filings-deep-dive": 0.028, // 7 tools, parts $0.031
-  "structured-scrape": 0.023, // 7 tools, parts $0.025
+  "fixed-income-desk": 0.013, // 5 tools, parts $0.014
+  "defi-protocol-scanner": 0.02, // 4 tools, parts $0.022
+  "security-audit": 0.012, // 7 tools, parts $0.013
+  "email-deliverability": 0.008, // 6 tools, parts $0.008
+  "market-brief": 0.005, // 3 tools, parts $0.005
+  "financial-analysis": 0.019, // 3 tools, parts $0.021
+  "financial-research": 0.018, // 6 tools, parts $0.02
+  "macro-economics": 0.028, // 7 tools, parts $0.031
+  "macro-dashboard": 0.046, // 14 tools, parts $0.051
+  "dns-network-ops": 0.006, // 6 tools, parts $0.006
+  "crypto-research": 0.031, // 7 tools, parts $0.034
+  "content-extraction": 0.017, // 6 tools, parts $0.018
+  "sec-filings-deep-dive": 0.027, // 7 tools, parts $0.029
+  "structured-scrape": 0.009, // 7 tools, parts $0.009
   "decode-blob": 0.007, // 7 tools, parts $0.007
-  "trend-analysis": 0.018, // 11 tools, parts $0.019
-  "forecasting-bake-off": 0.014, // 7 tools, parts $0.015
-  "document-intel": 0.024, // 7 tools, parts $0.026
+  "trend-analysis": 0.014, // 11 tools, parts $0.015
+  "forecasting-bake-off": 0.01, // 7 tools, parts $0.011
+  "document-intel": 0.019, // 7 tools, parts $0.021
   "document-brief": 0.031, // 3 tools, parts $0.034
-  "fraud-signals": 0.027, // 7 tools, parts $0.029
-  "api-investigation": 0.017, // 7 tools, parts $0.018
-  "location-intel": 0.009, // 5 tools, parts $0.01
+  "fraud-signals": 0.01, // 7 tools, parts $0.011
+  "api-investigation": 0.009, // 7 tools, parts $0.009
+  "location-intel": 0.009, // 5 tools, parts $0.009
   "user-onboarding": 0.008, // 7 tools, parts $0.008
   "trip-planner": 0.007, // 6 tools, parts $0.007
-  "macro-context": 0.036, // 8 tools, parts $0.04
-  "regulatory-watch": 0.023, // 5 tools, parts $0.025
-  "search-and-cite": 0.101, // 5 tools, parts $0.112
-  "media-pipeline": 0.03, // 6 tools, parts $0.033
+  "macro-context": 0.033, // 8 tools, parts $0.036
+  "regulatory-watch": 0.021, // 5 tools, parts $0.023
+  "search-and-cite": 0.093, // 5 tools, parts $0.103
+  "media-pipeline": 0.028, // 6 tools, parts $0.031
   "schema-evolution": 0.008, // 6 tools, parts $0.008
-  "link-preview": 0.015, // 5 tools, parts $0.016
-  "any-to-markdown": 0.026, // 6 tools, parts $0.028
-  "status-snapshot": 0.008, // 5 tools, parts $0.008
+  "link-preview": 0.007, // 5 tools, parts $0.007
+  "any-to-markdown": 0.014, // 6 tools, parts $0.015
+  "status-snapshot": 0.007, // 5 tools, parts $0.007
   "weather-brief": 0.006, // 3 tools, parts $0.006
   "price-monitor": 0.021, // 5 tools, parts $0.023
-  "wallet-readiness": 0.008, // 3 tools, parts $0.008
+  "wallet-readiness": 0.003, // 3 tools, parts $0.003
   "onchain-analyst": 0.03, // 3 tools, parts $0.033
-  "seo-audit": 0.009, // 6 tools, parts $0.01
-  "cheapest-rail": 0.009, // 4 tools, parts $0.009
-  "company-dossier": 0.037, // 5 tools, parts $0.041
-  "domain-intel": 0.016, // 6 tools, parts $0.017
-  "crypto-dossier": 0.041, // 6 tools, parts $0.045
-  "earnings-watch": 0.015, // 3 tools, parts $0.016
-  "insider-alert": 0.01, // 3 tools, parts $0.011
+  "seo-audit": 0.009, // 6 tools, parts $0.009
+  "cheapest-rail": 0.005, // 4 tools, parts $0.005
+  "company-dossier": 0.031, // 5 tools, parts $0.034
+  "domain-intel": 0.008, // 6 tools, parts $0.008
+  "crypto-dossier": 0.028, // 6 tools, parts $0.031
+  "earnings-watch": 0.013, // 3 tools, parts $0.014
+  "insider-alert": 0.009, // 3 tools, parts $0.009
   "ipo-watch": 0.023, // 3 tools, parts $0.025
-  "yield-dashboard": 0.014, // 3 tools, parts $0.015
+  "yield-dashboard": 0.01, // 3 tools, parts $0.011
   "inflation-check": 0.018, // 4 tools, parts $0.02
-  "fx-monitor": 0.009, // 3 tools, parts $0.009
-  "defi-dashboard": 0.018, // 4 tools, parts $0.019
+  "fx-monitor": 0.008, // 3 tools, parts $0.008
+  "defi-dashboard": 0.009, // 4 tools, parts $0.01
   "nft-portfolio": 0.005, // 3 tools, parts $0.005
-  "wallet-audit": 0.005, // 3 tools, parts $0.005
-  "gas-optimizer": 0.007, // 3 tools, parts $0.007
-  "ssl-audit": 0.006, // 3 tools, parts $0.006
+  "wallet-audit": 0.004, // 3 tools, parts $0.004
+  "gas-optimizer": 0.003, // 3 tools, parts $0.003
+  "ssl-audit": 0.005, // 3 tools, parts $0.005
   "email-security": 0.006, // 4 tools, parts $0.006
-  "brand-protection": 0.018, // 4 tools, parts $0.02
-  "competitor-scan": 0.014, // 4 tools, parts $0.015
-  "page-audit": 0.017, // 5 tools, parts $0.018
+  "brand-protection": 0.014, // 4 tools, parts $0.015
+  "competitor-scan": 0.007, // 4 tools, parts $0.007
+  "page-audit": 0.008, // 5 tools, parts $0.008
   "article-digest": 0.09, // 3 tools, parts $0.1
   "pdf-pipeline": 0.007, // 3 tools, parts $0.007
   "url-inspector": 0.004, // 3 tools, parts $0.004
-  "content-grade": 0.012, // 3 tools, parts $0.013
+  "content-grade": 0.004, // 3 tools, parts $0.004
   "api-health": 0.005, // 3 tools, parts $0.005
   "world-data": 0.005, // 1 tools, parts $0.005
-  "fred-snapshot": 0.005, // 1 tools, parts $0.005
-  "contact-verify": 0.004, // 3 tools, parts $0.004
-  "domain-age": 0.008, // 3 tools, parts $0.008
-  "contract-audit": 0.022, // 5 tools, parts $0.024
-  "tx-forensics": 0.011, // 5 tools, parts $0.012
-  "entity-enrich": 0.022, // 6 tools, parts $0.024
-  "feed-watch": 0.016, // 4 tools, parts $0.017
+  "fred-snapshot": 0.001, // 1 tools, parts $0.001
+  "contact-verify": 0.003, // 3 tools, parts $0.003
+  "domain-age": 0.003, // 3 tools, parts $0.003
+  "contract-audit": 0.021, // 5 tools, parts $0.023
+  "tx-forensics": 0.009, // 5 tools, parts $0.01
+  "entity-enrich": 0.01, // 6 tools, parts $0.011
+  "feed-watch": 0.005, // 4 tools, parts $0.005
   "subtitle-pipeline": 0.03, // 3 tools, parts $0.033
   "locale-brief": 0.004, // 4 tools, parts $0.004
   "jwt-toolkit": 0.003, // 3 tools, parts $0.003
@@ -105,22 +105,22 @@ export const PACK_PRICE_TABLE = {
   "number-crunch": 0.003, // 3 tools, parts $0.003
   "json-pipeline": 0.004, // 3 tools, parts $0.004
   "openapi-audit": 0.004, // 3 tools, parts $0.004
-  "text-hygiene": 0.009, // 7 tools, parts $0.01
+  "text-hygiene": 0.009, // 7 tools, parts $0.009
   "loan-comparison": 0.006, // 5 tools, parts $0.006
   "timezone-planner": 0.003, // 3 tools, parts $0.003
-  "webhook-intake": 0.006, // 5 tools, parts $0.006
+  "webhook-intake": 0.005, // 5 tools, parts $0.005
   "markdown-convert": 0.003, // 3 tools, parts $0.003
 };
 export const PACK_PRICES_WITHOUT_STOCK = {
   // GENERATED by scripts/pack-prices.js --write: the same rule over the tools a
   // pack keeps when no stock provider is active (its stock step removed).
-  "earnings-deep-dive": 0.032, // without the stock step: 3 tools, parts $0.035
-  "financial-research": 0.018, // without the stock step: 4 tools, parts $0.02
-  "trend-analysis": 0.013, // without the stock step: 10 tools, parts $0.014
-  "forecasting-bake-off": 0.009, // without the stock step: 6 tools, parts $0.01
-  "company-dossier": 0.036, // without the stock step: 4 tools, parts $0.04
-  "earnings-watch": 0.014, // without the stock step: 2 tools, parts $0.015
-  "insider-alert": 0.009, // without the stock step: 2 tools, parts $0.01
+  "earnings-deep-dive": 0.026, // without the stock step: 3 tools, parts $0.028
+  "financial-research": 0.013, // without the stock step: 4 tools, parts $0.014
+  "trend-analysis": 0.009, // without the stock step: 10 tools, parts $0.01
+  "forecasting-bake-off": 0.006, // without the stock step: 6 tools, parts $0.006
+  "company-dossier": 0.03, // without the stock step: 4 tools, parts $0.033
+  "earnings-watch": 0.012, // without the stock step: 2 tools, parts $0.013
+  "insider-alert": 0.008, // without the stock step: 2 tools, parts $0.008
 };
 // The price each listed pack sells at: the table above, and, with no stock
 // provider active, the packs listed without their stock step at the rule's
@@ -2766,7 +2766,7 @@ const SKILLS_CSS = `
 @media (max-width:640px){ .sk-cardgrid { grid-template-columns:1fr; } }
 .sk-flagship { display:flex; flex-direction:column; gap:11px; padding:24px; background:var(--card); color:inherit; text-decoration:none; }
 .sk-flagship:hover .sk-flagship-slug { color:var(--accent); }
-.sk-flagship-slug { font-family:var(--font-mono); font-weight:700; font-size:var(--fs-lg); color:var(--ink); transition:color .15s; }
+.sk-flagship-slug { font-family:var(--font-mono); font-weight:700; font-size:var(--fs-lg); color:var(--ink); transition:color var(--dur-fast); }
 .sk-flagship-body { font-size:var(--fs-md); line-height:1.55; color:var(--muted); flex:1; }
 .sk-flagship-tools { display:flex; flex-wrap:wrap; font-family:var(--font-mono); font-size:var(--fs-2xs); line-height:1.6; color:var(--faint); }
 .sk-flagship-tools > span { white-space:nowrap; }

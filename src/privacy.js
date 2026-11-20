@@ -10,6 +10,7 @@ import { backupKeepDays } from "./backup.js";
 import { KEEP_DAYS as DISCOVERY_REFUSALS_KEEP_DAYS } from "./discovery-refusals.js";
 import { WISH_STALE_DAYS, wishRetentionDays } from "./wish.js";
 import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
+import { RECEIPT_STORE_DAYS } from "./receipt-store.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
 import { creditsSalesEnabled, withCreditsSalesDate } from "./credits-sales.js";
 import { signInLifeWords, sessionIdleWords, sessionMaxWords, lowBalanceWords } from "./credits-figures.js";
@@ -26,6 +27,9 @@ import { oneHopPublicBounds } from "./sanctions-screen.js";
 import { endedRecordRetentionPublic, offerRetentionPublic } from "./mpp-subscription-retention.js";
 import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 import { referralOffered } from "./referral-gate.js";
+import { walletSignInEnabled } from "./wallet-sign-in.js";
+import { webBotAuthEnabled } from "./web-bot-auth.js";
+import { aiEventsEnabled, exceptionEventsEnabled } from "./posthog-observability.js";
 import { GOOD_READ_MAX_MS, SETTLED_MARK_MS, COVER_WALLETS_MAX, sharedWindowMs } from "./inflight-cover.js";
 
 // How long a kept balance read is used, and how long a wallet's settled mark
@@ -50,6 +54,12 @@ export function privacyPage(baseUrl) {
   // Sales through a referral network's links (src/referral-gate.js): the
   // sentences about that channel appear only while this server has it.
   const referralOn = referralOffered();
+  const walletSignInOn = walletSignInEnabled();
+  // PostHog model-call and error events (src/posthog-observability.js): each
+  // sentence renders only while its switch is on.
+  const aiEventsOn = aiEventsEnabled();
+  const exceptionEventsOn = exceptionEventsEnabled();
+  const webBotAuthOn = webBotAuthEnabled();
   // Job and task results, and the funding screen's bounds, as the server runs
   // them (src/mcp-tasks.js, src/sanctions-screen.js).
   const jobs = taskRetentionPublic();
@@ -103,7 +113,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-18.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-19.</p>
 </section>
 
 <section>
@@ -117,7 +127,7 @@ cut the same way. It keeps a random per-visit id in session storage, never a coo
 events and forwards only their body and content type, so your IP address is not passed on to the
 analytics provider. It keeps no session
 replay: nothing you click, type or see on a page is recorded. Pages also run
-<b>Google Analytics</b> (advertising features off) to count visits and see how people find the site. It sets a measurement cookie
+<b>Google Analytics</b> (advertising features off) to count visits, see how people find the site and count clicks that start a report or monitor checkout (the product name only, never what you type). It sets a measurement cookie
 (<code>_ga</code>) and Google receives your IP address and browser details under
 <a href="https://policies.google.com/privacy" rel="noopener">Google's privacy policy</a>. Advertising
 features, ad personalization and Google signals are off. If your browser's time zone is in Europe, the
@@ -166,8 +176,21 @@ so every claim below is verifiable in code.</p>
     and version, the first word of the User-Agent it sends), from a client whose User-Agent names the
     Bazaar discovery service, or as any other HTTP request. Beside it we count, per day and per those
     same arrival paths, the requests to paid tools that carried no payment, the payment requests we
-    answered, the payments tried and settled and the refusal reason of each one refused; these are
-    counts only, kept with the daily traffic statistics;</li>
+    answered, the payments tried and settled and the refusal reason of each one refused, together
+    with the kind of client the User-Agent names (for example curl or a browser), the kind of page
+    the Referer names (for example a search engine; never the page or its host) and which of our
+    discovery documents (llms.txt, openapi.json and the like) the same caller read before. That last
+    link is held in memory for six hours under a keyed hash of the caller's address, never the address,
+    and is never written anywhere; the rest are counts only, kept with the daily traffic statistics;</li>
+    <li>when a paid call paid from an EVM wallet or over Tempo carries a signed receipt, we keep that
+    receipt (the tool, its route, the price, the rail, chain and transaction, the paying wallet, and
+    SHA-256 hashes of the request and the response, never their content) so the paying wallet can
+    export it in its <code>/api/audit-report</code>; only a payment from that wallet opens the report.
+    Each kept receipt is deleted ${RECEIPT_STORE_DAYS} days after it was issued;</li>
+    <li>to count how many separate operators pay us, we look up public records about a paying wallet:
+    its primary name on Ethereum or Base when the name's own address record is that wallet, or the
+    seller whose own payment offer names it as the receiving address. The result is held in memory for
+    up to seven days and only counts of operators leave it;</li>
     <li>a verdict you leave on a paid call through <code>/api/feedback</code>, including the reason
     you write, is kept with that call's transaction id and is never published;</li>${allowanceOn ? `
     <li>the first-call allowance (a wallet's first paid call on an eligible tool served without
@@ -253,7 +276,7 @@ so every claim below is verifiable in code.</p>
   billing country, state and postal code, any business tax ID you enter, your answers to the checkout's business-use and
   terms questions, and Stripe's fingerprint of the card (a token, never the card number). We use the billing address to
   apply sales tax, the tax ID to sell to a business in the EU or the UK, and the email and card fingerprint to enforce the
-  daily purchase limit.${creditsSalesEnabled() ? ` When you ask for a key's unspent balance back, the key's record also keeps the amount refunded, when you asked, and Stripe's id for the refund, so the refund is sent once and can be traced. <span id="credits-sign-in">The purchase email is also how you manage a balance: at <a href="/credits/account">/credits/account</a> you ask for a sign-in link, and we look up the balances bought with that email and send the link only to it (the answer is the same whether or not the address holds one). The link carries a signed token that works once, for ${signInLifeWords()}; we keep a record that it was used until it would have expired. Signing in sets one cookie, <code>a402_acct</code>, limited to /credits/account: it holds a random session id and scripts cannot read it. On our server we keep a hash of that id with your email, and the session ends after ${sessionIdleWords()} without use, after ${sessionMaxWords()} at most, or when you sign out. A key's record also keeps its history (each charge with the tool and the amount, top-ups with the payment that made them, refunds, and when a new key was issued), shown only to you on that page and as a CSV you download, and whether you turned off the low-balance email. We email a receipt for each purchase and top-up, and a notice once each time a balance drops under ${lowBalanceWords()}, which you can turn off with the link in it or on the page.</span>` : ""} For a monitor
+  daily purchase limit.${creditsSalesEnabled() ? ` When you ask for a key's unspent balance back, the key's record also keeps the amount refunded, when you asked, and Stripe's id for the refund, so the refund is sent once and can be traced. <span id="credits-sign-in">The purchase email is also how you manage a balance: at <a href="/credits/account">/credits/account</a> you ask for a sign-in link, and we look up the balances bought with that email and send the link only to it (the answer is the same whether or not the address holds one). The link carries a signed token that works once, for ${signInLifeWords()}; we keep a record that it was used until it would have expired. Signing in sets one cookie, <code>a402_acct</code>, limited to /credits/account: it holds a random session id and scripts cannot read it. On our server we keep a hash of that id with your email and the time you signed in (a new key is issued only within ten minutes of it), and the session ends after ${sessionIdleWords()} without use, after ${sessionMaxWords()} at most, or when you sign out. A key's record also keeps its history (each charge with the tool and the amount, top-ups with the payment that made them, refunds, and when a new key was issued), shown only to you on that page and as a CSV you download, and whether you turned off the low-balance email. We email a receipt for each purchase and top-up, and a notice once each time a balance drops under ${lowBalanceWords()}, which you can turn off with the link in it or on the page.</span>` : ""} For a monitor
   we also keep the subject you asked us to watch (a domain, ticker, fund, token or query), your email
   and the most recent 12 reports we generated, for the life of the subscription. The input you give a report (a ticker, a
   domain, a research question) is stored with the paid session so the report can be generated once and
@@ -269,8 +292,22 @@ so every claim below is verifiable in code.</p>
   hash of one declared input field (for example the ticker), so repeat use is countable without the value;
   a refused payment carries the resource URL the payment names and a coarse balance bucket for the paying
   wallet; and an error event carries our error message (at most 200 characters), which can name the input
-  value that was refused.</li>
-${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can also be bought through a referral link issued by a
+  value that was refused.${aiEventsOn ? ` A call to a model-backed tier also records the model, the tier, the token counts,
+  the status and how long it took, never the prompt or the answer.` : ""}${exceptionEventsOn ? ` An unexpected server error records its
+  type, its message with any quoted text, address, link, email, long token or long number removed, and the
+  places in our code it passed through; it carries no request body, header value or wallet address.` : ""}</li>
+${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sign a one-time message with an Ethereum wallet so that
+  routes that read what is keyed to a wallet (your usage, your receipts, your memory) answer for that wallet on a call
+  paid another way. The session only reads: a write still takes a payment signed by that wallet.
+  We keep each one-time code for at most five minutes and until it is used, and we give you a signed session token that
+  names the wallet address and chain and lasts at most an hour; we do not store the token. When you sign out we keep
+  a random id of the token until it would have expired, so it is refused. The signed message is checked and not kept.</li>
+` : ""}${webBotAuthOn ? `  <li id="signed-agents"><b>Signed agents.</b> When a request carries an HTTP message signature for automated
+  agents, we read the address of the agent's published key list from the request, fetch that list from the agent's
+  own site and check the signature. We count requests by the agent address when the signature checks out, and as
+  unverified otherwise, without the address; we keep a signature's one-time value until the signature expires so it
+  is accepted once, and the agent's public keys for up to an hour. A signature is never needed to use the service.</li>
+` : ""}${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can also be bought through a referral link issued by a
   referral network. On those routes the payment is made to the network's payment contract on Base, which pays
   our share to our wallet and pays the reviewer whose link was used; the split is public on chain. When a
   request arrives through a referral link we read two more fields: the referral token the link carries, which
@@ -304,7 +341,7 @@ ${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can 
   never before its validBefore has passed; one still open after ${Math.round(LATE_SETTLE_MAX_AGE_MS / 3600000)} hours, because the chain cannot be read
   or the authorization is still valid, is kept until it closes or we resolve it by hand; past a per-wallet bound on open
   records it waits in our journal until it fits; a transfer that lands is booked as owed), the 402 answer
-  and settle receipt of any x402 payment whose settlement was answered unconfirmed${gatewayBatched ? " (other than a batched payment)" : ""},
+  and settle receipt of any x402 payment whose settlement was answered unconfirmed${gatewayBatched ? " (other than a batched payment)" : ""}, or answered as already booked owed (its transfer landed after an earlier unconfirmed answer),
   kept under a digest of the payment's identity (network, signed payer and nonce on an EVM chain,
   the transaction its chain consumes on any other) with a digest of the payer's signature (on Solana,
   Stellar and Algorand, of the signed transaction), until the authorization's validBefore plus one minute (at
@@ -406,7 +443,7 @@ as soon as the last follow-up is sent, when you stop them or buy again, or after
 in a row, and in any case ${DAYS(ADDRESS_MAX_AGE_MS)} days after the purchase; the rest of the record (the
 product and the subject you asked about) is deleted ${DAYS(RECORD_KEEP_MS)} days after the purchase. Memory audit-log
 entries are deleted ${auditRetentionDays()} days after they are written, and demand-board request text
-${wishRetentionDays()} days after it was sent. Decisions bought on <code>/api/decide</code> are deleted after 30 days. An async job's or MCP task's result
+${wishRetentionDays()} days after it was sent. A kept signed receipt is deleted ${RECEIPT_STORE_DAYS} days after it was issued. Decisions bought on <code>/api/decide</code> are deleted after 30 days. An async job's or MCP task's result
 is deleted ${jobs.keptFor} after the job was created, and a wallet's funding-screen result after ${oneHop.ttlDays} days. An MPP
 monitor subscription's signing key is deleted when the subscription is canceled or ends, and its reduced
 record ${mppSub.keepDays} days after it ends. You can ask

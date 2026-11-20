@@ -8,6 +8,7 @@ import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitC
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/tools/solana-intel-kit.js";
 import { JUDGE_TOOLS, judgeEnabled } from "../src/tools/judge-kit.js";
 import { STOCK_SLUGS, stockDataEnabled } from "../src/tools/stock-provider.js";
+import { KALSHI_SLUGS, kalshiToolsEnabled } from "../src/kalshi-switch.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -17,7 +18,7 @@ const slugs = new Set((res?.endpoints || []).map((e) => e.slug));
 ok(slugs.size > 400, `live catalog readable (${slugs.size} slugs) - boot the server or set TARGET_URL`);
 for (const [slug, text] of Object.entries(BAZAAR_DESCRIPTIONS)) {
   // A tool switched off on this boot keeps its copy for when it is listed again.
-  const gatedOff = (!rugcheckEnabled() && RUGCHECK_SLUGS.has(slug)) || (!judgeEnabled() && JUDGE_TOOLS.some((t) => t.slug === slug)) || (!stockDataEnabled() && STOCK_SLUGS.has(slug));
+  const gatedOff = (!rugcheckEnabled() && RUGCHECK_SLUGS.has(slug)) || (!judgeEnabled() && JUDGE_TOOLS.some((t) => t.slug === slug)) || (!stockDataEnabled() && STOCK_SLUGS.has(slug)) || (!kalshiToolsEnabled() && KALSHI_SLUGS.has(slug));
   ok(slugs.has(slug) || gatedOff, `curated description key "${slug}" is a real catalog slug`);
   ok(text.length <= BAZAAR_DESCRIPTION_MAX && text.length >= 120, `${slug}: ${text.length} chars (120..${BAZAAR_DESCRIPTION_MAX})`);
   ok(/Use it|use it|Use this/.test(text), `${slug}: says WHEN to use it`);

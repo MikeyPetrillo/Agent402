@@ -56,11 +56,12 @@ That's it. The agent now has those tools available; when it calls one, the
 adapter signs an x402 payment (paid tier) or solves a proof-of-work (free
 tier) under the hood and returns the result as a structured object.
 
-## Spending caps (opt-in)
+## Spending caps
 
-No cap is set by default: a call is never refused for its price unless you
-ask for a ceiling. To set one, pass agent402-client's caps through (since
-0.2.0); a paid call over one is refused before anything is signed, with a
+agent402-client 0.10.0 and later hold one ceiling by default: `maxPerCallUsd`
+of $5, above every catalog price (`0` or `"off"` turns it off). The rolling
+caps are opt-in. Pass agent402-client's caps through (since 0.2.0); a paid
+call over one is refused before anything is signed, with a
 `SpendingLimitError`:
 
 ```js
@@ -95,7 +96,7 @@ agent402Tools(opts?: {
   slugs?: string[];       // restrict to these tool slugs (recommended)
   freeOnly?: boolean;     // default true - only compute-payable tools (no wallet)
   fetch?: typeof fetch;   // an @x402/fetch-wrapped fetch (only for wallet-only tools)
-  maxPerCallUsd?: number; // opt-in spending caps (none by default)
+  maxPerCallUsd?: number | string; // per-call ceiling ($5 by default from agent402-client 0.10.0; 0 or "off" turns it off)
   dailyLimitUsd?: number;
   maxPerHostUsd?: number;
   x402Client?: object;    // the @x402/core client fetch wraps, so caps hold at signing

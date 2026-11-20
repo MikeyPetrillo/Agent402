@@ -24,7 +24,8 @@
 // Bounds: the wait in (1) ends inside the authorization's settle deadline and
 // the CDN answer window. Our relayer in (3) is skipped (the authorization is
 // booked instead) when the buyer left holding a forgiveness ticket, when the
-// authorization's deadline leaves it no time, or when a CDN request's window
+// sale's price is under the relayer's minimum (ROBINHOOD_RELAYER_MIN_PRICE_USD),
+// when the authorization's deadline leaves it no time, or when a CDN request's window
 // is shorter than the relayer's worst case (its lock wait plus its receipt
 // wait); the relayer's own steps are bounded by those two settings.
 //
@@ -223,6 +224,10 @@ export function createRobinhoodOutage({ network, token, treasury, rpcUrl, relaye
       // them. The authorization stays booked, so a facilitator transfer that
       // still lands is recorded as owed.
       if (req && clientGone(req)) return { refused: true, lateAuth, reason: "the buyer left (forgiven); our relayer is not used" };
+      // A sale under our relayer's minimum is not submitted by it: the
+      // authorization stays booked, so a facilitator transfer that still
+      // lands is booked owed, and the refusal stands (402).
+      if (typeof relayer?.covers === "function" && !relayer.covers(rq)) return { refused: true, lateAuth, reason: "the price is under our relayer's minimum; our relayer is not used" };
       const cdnLeft = cdnSyncLeftMs(req, now());
       if (cdnLeft != null && cdnLeft - CDN_MARGIN_MS < relayerWorstMs) return { refused: true, lateAuth, reason: "the CDN answer window is shorter than our relayer's worst case" };
       let r;

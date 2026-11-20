@@ -32,12 +32,14 @@ import { classifySvmFundingRefusal } from "./svm-funding-refusal.js";
 export const RAW_SETTLE_RECEIPT = "__settleReceiptRaw";
 
 const TEXT_MAX = 2000;
-const NOT_BUYER_CODE = /^(?:timeout|network_error|non_json_response|redirect_refused|client_disconnected|own_relayer_refused|relayer_error|settlement_unconfirmed)$|_check_failed$|_hook_error$|_mark_failed$|_unverifiable$|^invalid_(?:network|scheme|payment_requirements|x402_version)$|_requirements$|_not_configured$|_auth_store$|_unauthenticated$|_verifier_error$|^unsupported_|^(?:circle|gateway)_http_(?:5\d\d|401|403|408|429)$/i;
+const NOT_BUYER_CODE = /^(?:timeout|network_error|non_json_response|redirect_refused|client_disconnected|own_relayer_refused|relayer_error|settlement_unconfirmed|settled_refund_owed)$|_check_failed$|_hook_error$|_mark_failed$|_unverifiable$|^invalid_(?:network|scheme|payment_requirements|x402_version)$|_requirements$|_not_configured$|_auth_store$|_unauthenticated$|_verifier_error$|^unsupported_|^(?:circle|gateway)_http_(?:5\d\d|401|403|408|429)$/i;
 // settlement_unconfirmed is this server's own receipt for a settle chain that
 // ended on an answer showing nothing either way (src/payments.js
 // markUnconfirmedStop: a fallback's HTTP error, time limit, reset, unreadable
 // answer, or a failure naming a transaction); a transfer that lands is owed
-// back. Read first, whatever the kept words say.
+// back. settled_refund_owed is the receipt for a settle whose transfer the
+// late-settlement book had already booked owed (src/settlement-claims.js):
+// charged, owed back, not served. Read first, whatever the kept words say.
 // circle_http_NNN / gateway_http_NNN are the codes those settle clients give a
 // 4xx/5xx whose body names no reason (src/circle-facilitator.js,
 // src/gateway-nanopayments.js). Only a 5xx, our credentials refused (401,

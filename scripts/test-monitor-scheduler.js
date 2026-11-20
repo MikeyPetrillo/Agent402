@@ -285,7 +285,7 @@ active.delete("sub_c");
   try { rmSync(P); } catch { /* first run */ }
   const bsch = mk({ storePath: P, billingFor: (subId) => (subId === "sub_mw" ? { rail: "mpp", manageUrl: "https://agent402.tools/api/mpp/monitors/sub_mw?token=T", cancelUrl: "https://agent402.tools/api/mpp/monitors/sub_mw/cancel?token=T" } : { rail: "card" }) });
   active.set("sub_mw", { subId: "sub_mw", status: "active", product: "domain-monitor", target: "mw.example.com", email: "mw@x.com" });
-  active.set("sub_pc", { subId: "sub_pc", status: "active", product: "domain-monitor", target: "pc.example.com", email: "pc@x.com", firstPeriodCents: 250, renewalCents: 500 });
+  active.set("sub_pc", { subId: "sub_pc", status: "active", product: "domain-monitor", target: "pc.example.com", email: "pc@x.com", firstPeriodCents: 250, renewalCents: 500, signedReceipts: [{ receipt: "aa.bb.c1", statement: "{\"period\":\"in_1\"}", settlement: "in_1" }, { receipt: "aa.bb.c2", statement: "{\"period\":\"in_2\"}", settlement: "in_2" }] });
   const m0 = calls.mail.length;
   await bsch.tick({ force: true, subId: "sub_mw" });
   await bsch.tick({ force: true, subId: "sub_pc" });
@@ -293,6 +293,7 @@ active.delete("sub_c");
   const pc = calls.mail.slice(m0).find((x) => x.to === "pc@x.com");
   ok(mw && mw.rail === "mpp" && mw.cancelUrl.endsWith("/cancel?token=T") && mw.manageUrl === "https://agent402.tools/api/mpp/monitors/sub_mw?token=T", "a wallet subscriber's welcome email is handed its rail, its status link and its cancel endpoint");
   ok(pc && pc.rail === "card" && pc.firstPeriodCents === 250 && pc.renewalCents === 500 && /\/monitors\/manage\?report=/.test(pc.manageUrl), "a card subscriber's welcome email is handed the first-period and renewal prices read at checkout, and the keyed manage link");
+  ok(pc.signedReceipt?.receipt === "aa.bb.c2" && pc.signedReceipt.statement === "{\"period\":\"in_2\"}" && !("signedReceipt" in mw), "the latest paid period's signed receipt rides to the email with its statement; a subscription with none gets none");
   active.delete("sub_mw"); active.delete("sub_pc");
   try { rmSync(P); } catch { /* ignore */ }
 }

@@ -16,10 +16,13 @@
 //   noWallet  on a proof-of-work tool: the free path and where its flow is
 //   docs, howToPay, mcp   the index, the pay section of /agents.md, and the
 //             hosted connector
+//   refundTerms  what happens to a payment that does not deliver, per rail
+//             (src/refund-terms-doc.js)
 //
 // Pure: every figure and switch is passed in by server.js, which reads them
 // from the catalog, the request and the live offer.
 import { AGENTS_MD_PATH, POW_LIST_PATH } from "./front-door.js";
+import { REFUND_TERMS_PATH } from "./refund-terms-path.js";
 
 /** The /agents.md heading the pay instructions live under, and its anchor. */
 export const PAY_HEADING = "Pay";
@@ -69,5 +72,6 @@ export function paymentGuide({ price, network, baseUrl, quote = null, powEligibl
     docs: `${origin}/llms.txt`,
     howToPay: `${origin}${HOW_TO_PAY_PATH}`,
     mcp: `${origin}/mcp`,
+    refundTerms: `${origin}${REFUND_TERMS_PATH}`,
   };
 }

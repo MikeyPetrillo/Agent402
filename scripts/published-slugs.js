@@ -61,10 +61,14 @@ export async function envGatedSegments() {
     // Listed only with RUGCHECK_TOOLS=on.
     import("../src/tools/solana-intel-kit.js").then((m) => m.SOLANA_INTEL_TOOLS.filter((t) => m.RUGCHECK_SLUGS.has(t.slug))),
     import("../src/tools/token-brief-kit.js").then((m) => m.TOKEN_BRIEF_TOOLS),
+    // Listed only with TRANSCRIBE_LONG=on.
+    import("../src/tools/stt-kit.js").then((m) => [m.STT_LONG_TOOL]),
     // Listed only with MARKET_TICK=on.
     import("../src/tools/market-tick-kit.js").then((m) => m.MARKET_TICK_TOOLS),
     // Listed only with an active stock provider (STOCK_DATA_PROVIDER and its key).
     import("../src/tools/finance-kit.js").then((m) => m.FINANCE_TOOLS),
+    // Listed only with KALSHI_TOOLS=on (src/kalshi-switch.js).
+    import("../src/tools/prediction-market-kit.js").then((m) => m.PREDICTION_MARKET_TOOLS),
     // Listed only when FLIGHT_SELLERS_JSON names sellers; built here with a
     // placeholder seller per kind just to read the route names.
     import("../src/tools/flights-kit.js").then((m) => m.buildFlightTools({

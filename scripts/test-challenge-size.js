@@ -62,7 +62,7 @@ if (LOCAL_BOOT) {
     res.end(JSON.stringify(req.url === "/supported" ? { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} } : {}));
   });
   await new Promise((r) => localFac.listen(FAC_PORT, "127.0.0.1", r));
-  localProc = spawn("node", ["src/server.js"], { env: {
+  localProc = spawn(process.execPath, ["src/server.js"], { env: {
     ...process.env, PORT: String(PORT), FREE_MODE: "", TARGET_URL: "",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base",

@@ -17,6 +17,7 @@ import { onGatedRailOffered } from "./gated-rails.js";
 import { CATEGORIES } from "./pages.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { discoveryNote } from "./discovery-note.js";
+import { sellerReputation, METRIC_LABELS, WINDOW_DAYS as REPUTATION_WINDOW_DAYS } from "./seller-reputation.js";
 import { hostCardHtml, hostCardNotes } from "./host-entry.js";
 import { standingCountsExcludingHost } from "./standing.js";
 import { ALGORAND_MAINNET_CAIP2 } from "./avm-network.js";
@@ -723,8 +724,27 @@ export function sellerCardHtml(chainKey, seller, sel, activity, stat, payTo, win
     </div>
     ${note ? `<div style="padding:10px 16px;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);line-height:1.7;border-bottom:1px solid var(--panel-rule-2);overflow-wrap:anywhere;">discovery &middot; ${esc(note)}</div>` : ""}
     <div style="padding:10px 16px;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);line-height:1.7;overflow-wrap:anywhere;">rolling ${esc(winLabel)} totals${capped ? " (scan capped - a floor)" : ""} &middot; payTo ${payTo ? esc(payTo) : `not advertised on ${esc(C.chainName)}`}${firstSeen ? ` &middot; first settlement in the ${esc(String(activity?.days || 30))}-day scan ${esc(firstSeen)}` : ""}${payTo ? ` &middot; <a href="${esc(C.explorerWalletUrl(payTo))}" rel="noopener" style="color:var(--accent-lit);text-decoration:none;">verify on ${esc(C.explorerUrl)} &rarr;</a>` : ""}</div>
+    ${sellerReputationLineHtml(seller, host)}
     ${seller.bazaar && (seller.bazaar.calls30d > 0 || seller.bazaar.payers30d > 0) ? `<div style="padding:10px 16px;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);line-height:1.7;border-top:1px solid var(--panel-rule-2);overflow-wrap:anywhere;">x402 Bazaar discovery listing, last 30 days (its measurement, not ours) &middot; ${Number(seller.bazaar.calls30d || 0).toLocaleString("en-US")} calls &middot; ${Number(seller.bazaar.payers30d || 0).toLocaleString("en-US")} distinct payers${seller.bazaar.lastCalledAt ? ` &middot; last call ${esc(String(seller.bazaar.lastCalledAt).slice(0, 10))}` : ""}</div>` : ""}
   </div>`;
+}
+
+// The seller's reputation, one line: what this server's own crawl and the
+// router's own paid calls measured (src/seller-reputation.js). Scores as
+// percentages with their sample size; a metric under its minimum sample reads
+// "not enough data". Nothing on it counts payments or buyers.
+export function sellerReputationLineHtml(seller, host) {
+  if (!seller?.origin) return "";
+  const rep = sellerReputation(seller.origin);
+  const pct = (m) => `${Math.round(m.score * 100)}%`;
+  const parts = Object.entries(METRIC_LABELS).map(([k, label]) => {
+    const m = rep.metrics[k];
+    return m.status === "scored" ? `${esc(label)} ${pct(m)} (n=${m.sampleSize})` : `${esc(label)}: not enough data (n=${m.sampleSize})`;
+  });
+  const overall = rep.overall.status === "scored" ? `overall ${pct(rep.overall)}` : "overall: not enough data";
+  const issue = rep.measurementIssue ? ` &middot; ${rep.measurementIssue.days.length} day(s) left out: ${esc(rep.measurementIssue.status)}` : "";
+  const rechecked = ` &middot; last re-checked ${rep.lastRecheckedAt ? esc(rep.lastRecheckedAt.slice(0, 10)) : "never"}`;
+  return `<div id="seller-reputation" style="padding:10px 16px;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);line-height:1.7;border-top:1px solid var(--panel-rule-2);overflow-wrap:anywhere;">reputation, our own measurements over ${REPUTATION_WINDOW_DAYS} days &middot; ${overall} &middot; ${parts.join(" &middot; ")}${issue}${rechecked} &middot; <a href="/api/reputation?seller=${encodeURIComponent(host)}" rel="nofollow" style="color:var(--accent-lit);text-decoration:none;">method and data &rarr;</a></div>`;
 }
 
 // The swappable panel = seller card (if a seller is picked) + Activity charts.

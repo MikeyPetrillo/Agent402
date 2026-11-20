@@ -53,6 +53,24 @@ import algosdk from "algosdk";
 import { getTransactionDecoder } from "@solana/kit";
 import { paymentHeaderOf } from "./payer.js";
 import { getSharedRedisClient, sharedLimitEnabled } from "./shared-limit.js";
+import { boundedRedisClient, OP_MS, delIfValue } from "./bounded-redis.js";
+// Every command this guard sends is bounded (SHARED_LIMITS_OP_MS, loop time):
+// a connected Redis that stops answering fails the command, which each path
+// below reads as a store that did not answer, instead of holding the paid
+// call at its claim for as long as the socket lives.
+const storeClient = async () => boundedRedisClient(await getSharedRedisClient());
+// The commands of a claim the route REQUIRES (begin with requireShared) get a
+// longer bound of their own (REPLAY_CLAIM_OP_MS, default 5 s, never under
+// SHARED_LIMITS_OP_MS). A required claim that times out is a 503 to a paying
+// caller, while a store that pauses for a few seconds and then answers can
+// simply be waited for: the claim is taken when it answers and the call is
+// served. A store that stops answering is still refused, once the claim's
+// command it did not answer passes this bound (the drop by token that
+// follows is sent, not waited for). A claim that is not required keeps the
+// short bound: it falls back to this process's own claim, which serves the
+// call either way.
+export const REQUIRED_CLAIM_OP_MS = () => Math.max(OP_MS(), Number(process.env.REPLAY_CLAIM_OP_MS) || 5_000);
+const claimClient = async (required) => (required ? boundedRedisClient(await getSharedRedisClient(), REQUIRED_CLAIM_OP_MS) : storeClient());
 import { decodePaymentHeader, isEvmNetworkName, canonicalNonce } from "./payment-header.js";
 import { stellarAuthorizationsOf } from "./stellar-confirm.js";
 import { base64BytesOf } from "./base64-bytes.js";
@@ -442,13 +460,8 @@ export function consumedHoldFor(req, { settled = true } = {}) {
  */
 // Act on one name only while it still holds `value`: one script on a real
 // Redis; a read then the command on a client without EVAL (test doubles).
-const DEL_IF = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+// The drop is delIfValue (src/bounded-redis.js).
 const EXPIRE_IF = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end";
-async function delIfValue(c, name, value) {
-  if (typeof c.eval === "function") return c.eval(DEL_IF, { keys: [name], arguments: [String(value)] });
-  if ((await c.get(name)) === value) return c.del(name);
-  return 0;
-}
 async function expireIfValue(c, name, value, seconds) {
   if (typeof c.eval === "function") return c.eval(EXPIRE_IF, { keys: [name], arguments: [String(value), String(seconds)] });
   if ((await c.get(name)) === value) return c.expire(name, seconds);
@@ -517,7 +530,7 @@ export function createReplayGuard({
       const claim = claims.get(key);
       if (!claim || Date.now() >= until) { stopRenew(key); return; }
       try {
-        const c = await getSharedRedisClient();
+        const c = await storeClient();
         if (!c) return;
         if (!claim.shared) {
           // Taken here while the store did not answer: written there now,
@@ -560,7 +573,7 @@ export function createReplayGuard({
       if (claims.get(key) !== claim || claim.shared || Date.now() >= until) { stopDeferredWrite(key); return; }
       busy = true;
       try {
-        const c = await getSharedRedisClient();
+        const c = await storeClient();
         if (!c) return;
         const took = await c.set(REDIS_PREFIX + "f:" + primary, claim.token, { NX: true, EX: inflightTtlSeconds });
         if (deferredWriters.get(key) === t) stopDeferredWrite(key);
@@ -647,7 +660,7 @@ export function createReplayGuard({
         lastError = e;
         if (i >= delays.length) break;
         await sleep(delays[i]);
-        try { c = await getSharedRedisClient(); } catch { c = null; }
+        try { c = await storeClient(); } catch { c = null; }
       }
     }
     if (lastError) return { written: false, error: lastError };
@@ -687,7 +700,7 @@ export function createReplayGuard({
       }
       if (pending.size === 0) return;
       let c = null;
-      try { c = await getSharedRedisClient(); } catch { c = null; }
+      try { c = await storeClient(); } catch { c = null; }
       if (!c) return;
       for (const [key, entry] of [...pending]) {
         if (pending.get(key) !== entry) continue;
@@ -737,7 +750,7 @@ export function createReplayGuard({
       // when they were made.
       if (isConsumedLocal(lk, now)) return "consumed";
       if (inFlight.has(lk)) return "inflight";
-      const c = await getSharedRedisClient();
+      const c = await claimClient(requireShared);
       if (!c && requireShared && sharedLimitEnabled()) return "unavailable";
       if (c) {
         const names = namesOf(key);
@@ -746,12 +759,19 @@ export function createReplayGuard({
         const legacyTag = LEGACY_TAG + primary + "|" + token;
         let claimedPrimary = false;
         let legacyHeld = false;
+        // A claim that was SENT may land although its answer never came (the
+        // command timed out, or the connection dropped after the store took
+        // it): the name then holds this call's token, which no other call
+        // has, and it is dropped by that token below.
+        let sentPrimary = false;
+        let sentLegacy = false;
         try {
           if (await c.get(REDIS_PREFIX + "c:" + primary)) return "consumed";
           if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "c:" + legacy), names)) return "consumed";
           // SET NX is the atomic claim: two replicas racing this same key
           // cannot both receive a non-null reply, which is exactly the
           // property inFlight.add() gave for free within one process.
+          sentPrimary = true;
           const claimed = await c.set(REDIS_PREFIX + "f:" + primary, token, { NX: true, EX: inflightTtlSeconds });
           if (!claimed) return "inflight";
           claimedPrimary = true;
@@ -759,6 +779,7 @@ export function createReplayGuard({
           if (legacy) {
             // An earlier build's claim on this credential is honored; another
             // payer's tagged claim there is not ours to wait on.
+            sentLegacy = true;
             legacyHeld = Boolean(await c.set(REDIS_PREFIX + "f:" + legacy, legacyTag, { NX: true, EX: inflightTtlSeconds }));
             if (!legacyHeld && isLegacyEntry(await c.get(REDIS_PREFIX + "f:" + legacy), names)) return back("inflight");
           }
@@ -780,10 +801,18 @@ export function createReplayGuard({
         } catch (e) {
           // A claim this call took before the store failed is dropped (best
           // effort), so the buyer's retry is not refused as in flight for the
-          // claim's whole life on a payment that was never used.
-          if (claimedPrimary) {
-            try { await delIfValue(c, REDIS_PREFIX + "f:" + primary, token); } catch { /* expires with its TTL */ }
-            if (legacyHeld) { try { await delIfValue(c, REDIS_PREFIX + "f:" + legacy, legacyTag); } catch { /* expires with its TTL */ } }
+          // claim's whole life on a payment that was never used. So is one
+          // that was sent and never answered: on one connection the drop is
+          // queued behind the claim, so a claim that lands late is dropped
+          // right after it. Only a name still holding this call's own token
+          // is dropped, never another request's claim. The drops are sent and
+          // not waited for: a store that stopped answering would hold the
+          // refusal one more bound for each, and the retry of this payment is
+          // queued behind them on the same connection.
+          const drop = (name, value) => { try { Promise.resolve(delIfValue(c, name, value)).catch(() => {}); } catch { /* expires with its TTL */ } };
+          if (claimedPrimary || sentPrimary) {
+            drop(REDIS_PREFIX + "f:" + primary, token);
+            if (legacyHeld || sentLegacy) drop(REDIS_PREFIX + "f:" + legacy, legacyTag);
           }
           if (requireShared) {
             console.error("[replay-guard] redis begin failed; refusing a route that requires the shared store:", e.message);
@@ -819,7 +848,7 @@ export function createReplayGuard({
       // does not answer): they hold whatever backend answered when made.
       const local = () => (isConsumedLocal(lk, now) ? "consumed" : inFlight.has(lk) ? "inflight" : null);
       let c = null;
-      try { c = await getSharedRedisClient(); } catch { return local() || (sharedLimitEnabled() ? "unavailable" : null); }
+      try { c = await storeClient(); } catch { return local() || (sharedLimitEnabled() ? "unavailable" : null); }
       if (!c) return local() || (sharedLimitEnabled() ? "unavailable" : null);
       try {
         // Every name in one round trip (MGET): this read runs before the
@@ -859,7 +888,7 @@ export function createReplayGuard({
       // payment again while the mark is held.
       markConsumedLocal(lk, until, holdMs > ttlMs);
       let c = null;
-      try { c = await getSharedRedisClient(); } catch { c = null; }
+      try { c = await storeClient(); } catch { c = null; }
       // No store configured: the local mark is the guarantee.
       if (!c && !sharedLimitEnabled()) return;
       const r = await writeConsumed(c, key, now, until, claim, consumedRetryDelaysMs);
@@ -881,7 +910,7 @@ export function createReplayGuard({
       inFlight.delete(localKeyOf(key));
       if (!claim?.shared) return;
       try {
-        const c = await getSharedRedisClient();
+        const c = await storeClient();
         if (!c) return;
         const { primary, legacy } = namesOf(key);
         await delIfValue(c, REDIS_PREFIX + "f:" + primary, claim.token);

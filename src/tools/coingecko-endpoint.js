@@ -15,6 +15,10 @@
 
 export const CG_DEMO_BASE = "https://api.coingecko.com/api/v3";
 export const CG_PRO_BASE = "https://pro-api.coingecko.com/api/v3";
+// The two API hosts by name, for a definition that reads this source through
+// other tools' handlers and declares the hosts it reads (`upstreamHosts`,
+// read by scripts/lib/upstream-outage.js).
+export const CG_API_HOSTS = Object.freeze(["api.coingecko.com", "pro-api.coingecko.com"]);
 
 function cgKey() {
   return String(process.env.COINGECKO_API_KEY || "").trim();

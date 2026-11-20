@@ -1,6 +1,8 @@
 # agent402-client
 
-Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify paid calls across x402 and MPP, backed by signed receipts. 500+ ready tools on the same rails.
+Agent402 is the payment and trust layer for agent commerce: agents find, pay for and verify every paid call to Agent402, across x402 and MPP, with a signed receipt for each one. 500+ ready tools on the same rails.
+
+![A paid call on Agent402: the request, the 402 with its price, the signature, the settlement, the answer and the signed receipt](https://raw.githubusercontent.com/MikeyPetrillo/Agent402/main/docs/media/agent402-call.gif)
 
 A tiny buyer-side client for [Agent402](https://agent402.tools) (and any Agent402
 instance) - the buy side of [Agentic Finance](https://agent402.tools/agentic-finance),
@@ -315,7 +317,7 @@ whole API: `Agent402Options`, `CallOptions`, the error classes and the helpers.
 
 | Method | What |
 |---|---|
-| `new Agent402({ baseUrl?, fetch?, x402Client?, creditsKey?, gateway?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, payNetworks?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, userAgent?, timeoutMs? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `x402Client` is the `@x402/core` client that `fetch` wraps, so the caps are enforced on the payment that is signed (see below); `payNetworks` (for example `["base"]`, the names `withNetworkPreference` takes) tells the caps which chains a pre-wrapped `fetch` without an `x402Client` pays on, so a call is counted at the dearest option on those chains (when none of a 402's options is on them, the dearest of all counts); `creditsKey` is a prepaid credits key (`a402_...`) used for paid tools when no `fetch` is given; `gateway` (`{ signer, networks?, verifyingContracts? }`) pays the Circle Gateway batched accept where a 402 offers one, from the signer's Gateway deposit (see above); `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits, none set by default (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above); `userAgent` (`"name/version"`) is a calling package's own product token, sent before `agent402-client/<version>` in the User-Agent; `timeoutMs` (default 120000, `null` to wait without one) abandons a request that has not answered with `RequestTimeoutError` |
+| `new Agent402({ baseUrl?, fetch?, x402Client?, creditsKey?, gateway?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, payNetworks?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, userAgent?, timeoutMs? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `x402Client` is the `@x402/core` client that `fetch` wraps, so the caps are enforced on the payment that is signed (see below); `payNetworks` (for example `["base"]`, the names `withNetworkPreference` takes) tells the caps which chains a pre-wrapped `fetch` without an `x402Client` pays on, so a call is counted at the dearest option on those chains (when none of a 402's options is on them, the dearest of all counts); `creditsKey` is a prepaid credits key (`a402_...`) used for paid tools when no `fetch` is given; `gateway` (`{ signer, networks?, verifyingContracts? }`) pays the Circle Gateway batched accept where a 402 offers one, from the signer's Gateway deposit (see above); `cache` (default `true`) memoizes deterministic results; `maxPerCallUsd` defaults to $5 (`0`, `"off"` or `null` turns it off) and the other two USD caps are optional, none set by default (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above); `userAgent` (`"name/version"`) is a calling package's own product token, sent before `agent402-client/<version>` in the User-Agent; `timeoutMs` (default 120000, `null` to wait without one) abandons a request that has not answered with `RequestTimeoutError` |
 | `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools on this host (route, price, schema, example) |
 | `await a.route(task, { k?, include?, network? })` | Cross-seller router: ranks eligible, routable seller rows from the host's current index; free and read-only; rows come back as the server wrote them and may carry server-reported `executeVia` |
 | `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |
@@ -399,8 +401,10 @@ Keep it cheap, or accept that cost knowingly.
 
 ## Spending caps (never overpay)
 
-Spending caps are opt-in: by default the client pays whatever a tool costs and
-never refuses a purchase. Set a ceiling and a call that would exceed it is
+By default the client holds one ceiling: `maxPerCallUsd` of $5, above every
+catalog price, so a 402 that asks for far more is never signed (`0`, `"off"` or
+`null` turns it off; a malformed value keeps $5 and prints a warning). The
+rolling caps are opt-in. A call that would exceed a ceiling is
 **refused before any payment is signed** (it throws `SpendingLimitError` - no
 funds move). `a.call(slug, params, { maxUsd })` allows one call up to that
 amount: it replaces the per-call cap for that call (a `dailyLimitUsd` or
@@ -449,10 +453,12 @@ or `check-wallet` (`reason: "settlement-unconfirmed"`) means the settlement is n
 transfer may still land, so do not pay for that call again before the `authorizationValidBefore` time
 when the body names one (the hold covers that payment until then); `transactions` lists any transaction
 to watch and `refundStatusUrl` is a free refund lookup when the body has one. `same-payment` means send
-the same payment again, and `fresh-authorization` means sign a new one. A paid HTTP-success response that later fails byte,
+the same payment again, and `fresh-authorization` means sign a new one; with `reason: "settled-refund-owed"`
+the earlier transfer of that payment landed and is booked as owed to the paying wallet, repaid after on-chain
+proof (`transactions` names it, `refundStatusUrl` shows where the repayment stands). A paid HTTP-success response that later fails byte,
 JSON, or output validation remains settled spend. Free proof-of-work calls are
-never counted. Omit a cap (or leave it `null`) for no limit; with none set,
-behavior is unchanged.
+never counted. Omit `dailyLimitUsd` or `maxPerHostUsd` (or leave it `null`) for no
+limit; set `maxPerCallUsd` to `0` or `"off"` to pay any single price.
 
 **Held payments.** `heldUsd` is money this client sent a signed payment for
 without getting a delivered answer. It is held, not spent: a seller that kept
@@ -578,13 +584,12 @@ dispatcher installed, requests go out through yours unchanged. Pass
 
 ## Checking a signed receipt (`verifyReceipt`)
 
-When the server signs receipts, a settled paid answer that is not streamed
-carries an
-`Agent402-Receipt` header: a compact JWS (EdDSA, Ed25519) over the route, a
-digest of the request, the sha256 of the answer bytes, the price, the rail,
-the network, the payer and the settlement. The client never checks it on
-its own; call `verifyReceipt` when you want proof of what you paid for and
-received:
+When the server signs receipts, every settled paid answer carries a
+receipt: a compact JWS (EdDSA, Ed25519) over the route, a digest of the
+request, the sha256 of the answer bytes, the price, the rail, the network,
+the payer and the settlement. A one-piece answer carries it as the
+`Agent402-Receipt` header. The client never checks it on its own; call
+`verifyReceipt` when you want proof of what you paid for and received:
 
 ```js
 import { verifyReceipt } from "agent402-client";
@@ -596,6 +601,22 @@ const v = await verifyReceipt(receipt, {
   request: { method: "POST", path: "/api/hash", body: input }, // what you sent
 });
 // v.valid, v.reason, v.record.settlement, v.record.priceUsd
+```
+
+A streamed answer (`stream: true` on the model routes) ends with one more
+line, the server-sent comment `: agent402-receipt <receipt>`, carrying the
+receipt over every byte streamed before it. Event-stream parsers skip a
+comment, so your stream handling sees the same events as without it. Keep the
+bytes as they arrive and check them with `verifyStreamedReceipt`
+(`splitStreamedReceipt` separates the two):
+
+```js
+import { verifyStreamedReceipt } from "agent402-client";
+
+const bytes = new Uint8Array(await res.arrayBuffer()); // or the chunks, joined
+const v = await verifyStreamedReceipt(bytes, {
+  request: { method: "POST", path: "/v1/chat/completions", body: input },
+});
 ```
 
 The keys come from `/.well-known/agent402-receipt-key.json` (pass `keys` to

@@ -102,7 +102,7 @@ ok(samplePaths().every((p) => p.startsWith("/reports/sample/")), "sample paths l
 let drawnPage = null;
 const PORT = await getFreePort();
 const B = `http://127.0.0.1:${PORT}`;
-proc = spawn("node", ["src/server.js"], { env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", STRIPE_SECRET_KEY: "" }, stdio: "ignore" });
+proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", STRIPE_SECRET_KEY: "" }, stdio: "ignore" });
 try {
   for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
   ok((await fetch(`${B}/health`)).ok, "server booted (FREE_MODE, no Stripe)");

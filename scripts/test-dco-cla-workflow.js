@@ -58,10 +58,19 @@ const jobs = Object.entries(wf.jobs || {});
 ok(jobs.length === 1 && jobs[0][0] === "dco", "one job, still named dco (the check name is unchanged)");
 for (const [name, job] of jobs) {
   ok(!job.permissions || Object.values(job.permissions).every((v) => v === "read"), `${name}: no job-level write permission`);
-  const cond = String(job.if || "");
+  // The job itself runs for every pull request (a skipped job reports no
+  // result, and a required-check rule waits on one forever); the exemption is
+  // in SUBJECT_TO_CHECK, which gates every checking step.
+  const jobIf = String(job.if || "");
+  ok(/github\.event_name == 'pull_request'/.test(jobIf) && !/user\.login/.test(jobIf), `${name}: the job runs for the owner's PRs too, so the check reports a result`);
+  ok(/github\.event_name == 'issue_comment' && github\.event\.issue\.pull_request/.test(jobIf), `${name}: a comment runs the check only on a pull request`);
+  const cond = String(job.env?.SUBJECT_TO_CHECK || "");
   ok(/github\.event\.pull_request\.user\.login != 'MikeyPetrillo'/.test(cond) && /github\.event\.issue\.user\.login != 'MikeyPetrillo'/.test(cond), `${name}: the owner's PRs are exempt on both events`);
   ok(/github\.event\.pull_request\.user\.type != 'Bot'/.test(cond) && /github\.event\.issue\.user\.type != 'Bot'/.test(cond), `${name}: bot PRs are exempt on both events`);
-  ok(/github\.event_name == 'issue_comment' && github\.event\.issue\.pull_request/.test(cond), `${name}: a comment runs the check only on a pull request`);
+  const checking = (job.steps || []).filter((st) => st.uses || /scripts\/ci\//.test(String(st.run || "")));
+  ok(checking.length === 3 && checking.every((st) => String(st.if || "") === "env.SUBJECT_TO_CHECK == 'true'"), `${name}: the checkout and both checks run only for a PR subject to the check`);
+  const exempt = (job.steps || []).filter((st) => String(st.if || "") === "env.SUBJECT_TO_CHECK != 'true'");
+  ok(exempt.length === 1 && !exempt[0].uses && !/\$\{\{/.test(String(exempt[0].run || "")), `${name}: an exempt PR runs one step that only prints, so the job passes`);
   const checkouts = (job.steps || []).filter((s) => /^actions\/checkout@/.test(String(s.uses || "")));
   ok(checkouts.length === 1, `${name}: one checkout`);
   const ref = String(checkouts[0]?.with?.ref || "");

@@ -6,11 +6,12 @@
 // gpt-4o-mini-transcribe, which OpenAI retires 2027-02-26, onto gpt-transcribe,
 // and its cap dropped 5 -> 4 minutes to stay inside the margin rule). Offline: synthetic WAV buffers, no network.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { probeDurationSeconds, assertWithinDurationCap, prepareAudioWithinCap, makeMultipartHandler, STT_TIERS, upstreamUsdPerMinute, STT_MARGIN, STT_TOOLS, byteFloorSeconds, __setMeasureForTest, __setTranscodeForTest, sttUnmeasuredSinceBoot } from "../src/tools/stt-kit.js";
+import { probeDurationSeconds, assertWithinDurationCap, prepareAudioWithinCap, makeMultipartHandler, STT_TIERS, upstreamUsdPerMinute, STT_MARGIN, STT_TOOLS, STT_LONG_TOOL, sttLongEnabled, sttUpstreamCapMs, STT_UPSTREAM_CAP_MS, TRANSCRIBE_LONG_RUN_SECONDS, byteFloorSeconds, __setMeasureForTest, __setTranscodeForTest, sttUnmeasuredSinceBoot } from "../src/tools/stt-kit.js";
 import { measureAudioSeconds, __setExecFileForTest } from "../src/tools/media-kit.js";
 import { execFile as realExecFile } from "node:child_process";
 import * as sttKit from "../src/tools/stt-kit.js";
 import { execFileSync } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,7 +29,7 @@ for (const [slug, tier] of Object.entries(STT_TIERS)) {
   ok(Number.isFinite(rate) && rate > 0, `${slug}: the model it sends (${tier.model}) has a known per-minute rate`);
   const worst = tier.maxMinutes * rate;
   ok(worst <= STT_MARGIN * tier.priceUsd + 1e-12, `${slug}: worst case at the ${tier.maxMinutes}-min cap is under ${STT_MARGIN * 100}% of $${tier.priceUsd}`);
-  const tool = STT_TOOLS.find((t) => t.slug === slug);
+  const tool = [...STT_TOOLS, STT_LONG_TOOL].find((t) => t.slug === slug);
   ok(Math.abs(Number(tool.price.replace("$", "")) - tier.priceUsd) < 1e-9, `${slug}: the catalog price string matches the tier price the margin is computed on`);
   ok(new RegExp(`Max ${tier.maxMinutes} minutes`).test(tool.description) && tool.description.includes(tier.model) && tool.discovery.output.example.model === tier.model, `${slug}: description states the ${tier.maxMinutes}-minute cap and the model; the example names the model actually sent`);
 }
@@ -616,6 +617,56 @@ const reject = (p) => p.then(() => null, (e) => e);
       rmSync(dir, { recursive: true, force: true });
     }
   }
+}
+
+// ---- the thirty-minute tier (transcribe-long), behind TRANSCRIBE_LONG ----
+{
+  const { EVM_RUN_SECONDS, requiredEvmSecondsFor, CLIENT_SLACK_SECONDS } = await import("../src/evm-validity.js");
+  const { isLongRunningSlug } = await import("../src/composite-spend-guard.js");
+  const { transcodeSpeech } = await import("../src/tools/media-kit.js");
+  const L = STT_TIERS["transcribe-long"];
+  // Its price is the margin rule's: the cent at or above 30 minutes at the dearer model's rate over STT_MARGIN.
+  const dearest = Math.max(upstreamUsdPerMinute(L.model), upstreamUsdPerMinute(L.diarizeModel));
+  const rulePrice = Math.ceil((L.maxMinutes * dearest / STT_MARGIN) * 100 - 1e-9) / 100;
+  ok(L.maxMinutes === 30 && Math.abs(L.priceUsd - rulePrice) < 1e-9, `transcribe-long: 30 minutes at the price the margin rule derives ($${L.priceUsd})`);
+  ok(STT_LONG_TOOL.price === `$${L.priceUsd.toFixed(3)}` && STT_LONG_TOOL.route === "POST /api/transcribe-long" && STT_LONG_TOOL.discovery.bodyType === "json", "transcribe-long: a JSON URL route at the tier's price");
+  // Off by default: not listed, and no other route names it.
+  const saved = process.env.TRANSCRIBE_LONG;
+  delete process.env.TRANSCRIBE_LONG;
+  ok(!sttLongEnabled() && !sttLongEnabled({ TRANSCRIBE_LONG: "1" }) && sttLongEnabled({ TRANSCRIBE_LONG: "on" }) && !STT_TOOLS.some((t) => t.slug === "transcribe-long"), "transcribe-long is off unless TRANSCRIBE_LONG=on, and the list loaded here does not carry it");
+  ok(!STT_TOOLS.some((t) => /transcribe-long/.test(t.description)), "with the switch off no route's description names it");
+  const { execFileSync } = await import("node:child_process");
+  const listedWith = (v) => childJson(execFileSync(process.execPath, ["--input-type=module", "-e", `import("${new URL("../src/tools/stt-kit.js", import.meta.url).href}").then((m) => console.log(JSON.stringify({ slugs: m.STT_TOOLS.map((t) => t.slug), pro: m.STT_TOOLS.find((t) => t.slug === "transcribe-pro").description })))`], { env: { ...process.env, TRANSCRIBE_LONG: v }, encoding: "utf8" }));
+  const on = listedWith("on"), off = listedWith("");
+  ok(on.slugs.includes("transcribe-long") && !off.slugs.includes("transcribe-long"), "TRANSCRIBE_LONG=on lists the route; unset does not");
+  ok(/transcribe-long takes a URL to 30 minutes/.test(on.pro) && !/transcribe-long/.test(off.pro) && /the longer cap of the transcribe routes/.test(off.pro), "the pro description names the longer tier only while it is on");
+  // The refusal text points to the longer tier only while it is on, and only for a recording it takes.
+  const twelve = makeWav(12 * 60), forty = makeWav(40 * 60);
+  const msg = async (buf, slug) => { try { await prepareAudioWithinCap(buf, "a.wav", slug); return "served"; } catch (e) { return `${e.statusCode} ${e.message}`; } };
+  ok(!/transcribe-long/.test(await msg(twelve, "transcribe-pro")) && /^422 /.test(await msg(twelve, "transcribe-pro")), "off: a 12-minute file on the pro tier is refused without naming the longer tier");
+  ok(/use \/api\/transcribe-pro/.test(await msg(twelve, "transcribe")), "off: the standard tier still points to pro");
+  process.env.TRANSCRIBE_LONG = "on";
+  ok(/For up to 30 minutes, use \/api\/transcribe-long/.test(await msg(twelve, "transcribe-pro")), "on: a 12-minute file on the pro tier is pointed to the longer tier");
+  ok(/use \/api\/transcribe-long/.test(await msg(twelve, "transcribe")) && /use \/api\/transcribe-pro/.test(await msg(makeWav(6 * 60), "transcribe")), "on: the standard tier points to pro for what pro takes and to the longer tier past it");
+  ok(!/transcribe-long/.test(await msg(forty, "transcribe-pro")), "on: a 40-minute file is not pointed at a tier that refuses it");
+  ok(await msg(makeWav(29 * 60), "transcribe-long") === "served" && /^422 Audio is 31\.0 minutes - this tier accepts up to 30 minutes\. Split/.test(await msg(makeWav(31 * 60), "transcribe-long")), "the longer tier takes 29 minutes and refuses 31, naming no further tier");
+  if (saved === undefined) delete process.env.TRANSCRIBE_LONG; else process.env.TRANSCRIBE_LONG = saved;
+  // A converted file goes as Opus in Ogg on the longer tier (FLAC on the others).
+  const seen = [];
+  __setMeasureForTest(async (_b, opts) => { seen.push(opts?.codec); return { seconds: 100, audio: Buffer.from("cut"), format: "mp3" }; });
+  try {
+    const headerless = Buffer.alloc(4096, 7);
+    const pl = await prepareAudioWithinCap(headerless, "a.bin", "transcribe-long");
+    const pp = await prepareAudioWithinCap(headerless, "a.bin", "transcribe-pro");
+    ok(pl.filename === "audio.ogg" && pp.filename === "audio.flac" && seen[0] === "opus" && seen[1] === "flac", `the longer tier's cut is Opus (audio.ogg), the pro tier's FLAC (${pl.filename}, ${pp.filename}, ${seen.join("/")})`);
+  } finally { __setMeasureForTest(null); }
+  // The real encoder writes Ogg.
+  const o = await transcodeSpeech(makeWav(3), { maxSeconds: 10, codec: "opus" });
+  ok(Buffer.isBuffer(o.audio) && o.audio.subarray(0, 4).toString("latin1") === "OggS" && o.seconds > 2.5, `the opus cut is an Ogg stream (${o.audio ? o.audio.subarray(0, 4).toString("latin1") : JSON.stringify(o)})`);
+  // Windows: its own upstream cap, and a run budget that holds the fetch, the decode and that cap.
+  ok(sttUpstreamCapMs("transcribe-long", false) === 140_000 && sttUpstreamCapMs("transcribe-long", true) === 140_000 && sttUpstreamCapMs("transcribe-pro", false) === STT_UPSTREAM_CAP_MS.default && sttUpstreamCapMs("transcribe", true) === STT_UPSTREAM_CAP_MS.diarize, "the longer tier has its own 140 s upstream cap; the others keep theirs");
+  ok(EVM_RUN_SECONDS["transcribe-long"] === TRANSCRIBE_LONG_RUN_SECONDS && TRANSCRIBE_LONG_RUN_SECONDS >= 25 + 60 + 140 && requiredEvmSecondsFor("transcribe-long") <= 300 - CLIENT_SLACK_SECONDS, "its run budget holds the fetch (25 s), the decode (60 s) and the upstream cap, inside a stock client's authorization");
+  ok(isLongRunningSlug("transcribe-long"), "it is long-running: EVM exact only, as the other runs past a short-lived credential");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

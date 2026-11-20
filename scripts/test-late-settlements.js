@@ -516,9 +516,18 @@ await check("a fallback that answers a transaction already held (served, or book
   registerFacilitatorFailureHooks(server, null, null, { [RH]: () => [{ name: "listed", client: good(txh(32)), revertRetry: true }] });
   claims.registerSettlementClaimRelease(server);
   // The late-settlement book took this transaction when it booked it owed.
-  assert.equal((await claims.claimSettlementKey(claims.txClaimKey(RH, txh(32)), "late-settle:x")).claimed, true);
+  assert.equal((await claims.claimSettlementKey(claims.txClaimKey(RH, txh(32)), claims.lateSettleHolder("x"))).claimed, true);
   const held = await request(reqCtx(32, txh(9302)), revertedPrimary());
-  assert.ok(held.refused, "a transaction the book holds is never served as this request's payment");
+  const r = held.recovered?.result;
+  assert.ok(r && r.success === false && r.errorReason === claims.SETTLED_REFUND_OWED && r.transaction === txh(32),
+    "a transaction the book holds is never served as this request's payment: the settle ends failed, as settled_refund_owed naming it");
+  // Another request's holder: the earlier refusal stands.
+  assert.equal((await claims.claimSettlementKey(claims.txClaimKey(RH, txh(34)), "another-request")).claimed, true);
+  const { server: s3, request: r3 } = fullHost();
+  claims.registerSettlementClaimHooks(s3);
+  registerFacilitatorFailureHooks(s3, null, null, { [RH]: () => [{ name: "listed", client: good(txh(34)), revertRetry: true }] });
+  claims.registerSettlementClaimRelease(s3);
+  assert.ok((await r3(reqCtx(34, txh(9304)), revertedPrimary())).refused, "a transaction another request served is not served again; the earlier refusal stands");
   // Control: a fresh transaction is recovered, and is then held for this request.
   const { server: s2, request: r2 } = fullHost();
   claims.registerSettlementClaimHooks(s2);
@@ -1018,6 +1027,41 @@ await check("a Solana or Algorand transaction a facilitator answers twice serves
   assert.equal(claims.txClaimKey(RH, txh(82).toUpperCase().replace("0X", "0x")), claims.txClaimKey(RH, txh(82)));
   assert.deepEqual(await settled(RH, txh(82)), { served: true });
   assert.deepEqual(await settled(RH, txh(82)), { served: true }, "EVM keeps its nonce claim before settle as the guard");
+});
+
+await check("a transaction the late-settlement book booked owed is never also served, on any rail", async () => {
+  claims.__resetSettlementClaims();
+  const { server, settled } = afterSettleHost();
+  claims.registerSettlementClaimHooks(server);
+  for (const [net, tx] of [[RH, txh(90)], [SOL, solSig(90)], [ALGO, algoId(90)]]) {
+    // The late book's wasServed claims the transaction before it books it owed.
+    assert.equal(await claims.txServedElsewhere(net, tx, claims.lateSettleHolder(`${net}|tx|${tx}`)), false);
+    assert.deepEqual(await settled(net, tx), { refused: claims.SETTLED_REFUND_OWED }, `${net}: the settle naming that transaction is not served`);
+  }
+  // A recovery (no afterSettle hook) reads the same holder as owed; another
+  // request's holder stays "held elsewhere"; a free one is taken.
+  const ctxOf = () => ({ requirements: { network: RH }, paymentPayload: { payload: { authorization: { from: "0x" + "ab".repeat(20) } } }, transportContext: { request: { adapter: { req: {} } } } });
+  await claims.txServedElsewhere(RH, txh(91), claims.lateSettleHolder("k91"));
+  assert.equal(await claims.recoveredTxHeldElsewhere(ctxOf(), { network: RH, transaction: txh(91) }), claims.OWED_ELSEWHERE);
+  await claims.txServedElsewhere(RH, txh(92), "another-request");
+  assert.equal(await claims.recoveredTxHeldElsewhere(ctxOf(), { network: RH, transaction: txh(92) }), true);
+  assert.equal(await claims.recoveredTxHeldElsewhere(ctxOf(), { network: RH, transaction: txh(93) }), false);
+  const r = claims.settledRefundOwedResult(ctxOf(), { network: RH, transaction: txh(91) });
+  assert.deepEqual([r.success, r.errorReason, r.transaction, r.network, r.payer], [false, claims.SETTLED_REFUND_OWED, txh(91), RH, "0x" + "ab".repeat(20)]);
+});
+
+await check("a payer or transaction is a key without case only on an EVM chain; base58 and base32 keep theirs", async () => {
+  const { latePayerKey, lateSettleCandidates } = await import("../src/late-settlements.js");
+  const evmA = "0x" + "Ab".repeat(20);
+  assert.equal(latePayerKey(RH, evmA), evmA.toLowerCase(), "an EVM address compares without case");
+  const solA = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", solB = "7xkxtg2cw87d97txjsdpbd5jbkhetqa83tzrujosgasu";
+  assert.notEqual(latePayerKey(SOL, solA), latePayerKey(SOL, solB), "two Solana addresses differing only in case stay two wallets");
+  assert.equal(latePayerKey(SOL, solA), solA);
+  assert.equal(latePayerKey(ALGO, "ABCDEF"), "ABCDEF", "an Algorand address is kept exactly");
+  // A Solana failure naming its signature books it as written, once.
+  const sig = solSig(77);
+  const c = lateSettleCandidates({ requirements: { network: SOL, scheme: "exact", payTo: solA, asset: solA, amount: "1000" }, paymentPayload: { payload: {} }, error: { transaction: sig, payer: solA } });
+  assert.ok(c.length <= 1 && (c.length === 0 || (c[0].tx === sig && c[0].payer === solA)), `the candidate keeps the signature and payer as written (${JSON.stringify(c)})`);
 });
 
 console.log(`test-late-settlements: ${failures ? `FAILED (${failures})` : "all passed"}`);

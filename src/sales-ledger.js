@@ -42,7 +42,7 @@
 // file written after that build ran alone is rolled forward into the tables
 // at the next boot (rollForwardIfFileNewer, the file winning per row).
 import Database from "better-sqlite3";
-import { GATEWAY_WIRE, isGatewayWire, settlementKindOf } from "./gateway-wire.js";
+import { GATEWAY_WIRE, settlementKindOf } from "./gateway-wire.js";
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -736,7 +736,7 @@ export function saleByTx(tx) {
     id: r.id, ts: r.ts, slug: r.slug, priceUsd: Number(r.price_usd) || 0, rail: r.rail, network: r.network || null,
     payer: r.payer || null, tx: r.tx, internal: !!r.internal, wire: r.wire || null,
     // A Circle Gateway batched sale settled off chain (its tx is Gateway's id).
-    settlement: settlementKindOf(r.wire), settledOffChain: isGatewayWire(r.wire),
+    settlement: settlementKindOf(r.wire), settledOffChain: settlementKindOf(r.wire) === "offchain",
     responseSha256: r.response_sha256 || null, attestUid: r.attest_uid || null, attestTx: r.attest_tx || null,
   };
 }
@@ -1394,6 +1394,76 @@ export function payerUsage(payer, { days = 30, limit = 50 } = {}) {
       at: new Date(r.ts).toISOString(), slug: r.slug, priceUsd: r.price_usd, network: r.network, tx: r.tx,
     })),
     note: "Rows are recorded at settle time and every USDC row keeps its settle tx, so this report is independently verifiable on-chain. The call that paid for this report will appear in the next one.",
+  };
+}
+
+// The audit report (src/tools/audit-report-kit.js): one wallet's own paid
+// calls over a window, oldest first, a page at a time by (ts, id), plus the
+// window's totals by tool and by UTC day. Like payerUsage, every row the
+// wallet paid for (its own history, whichever way the call was classified),
+// on the buyer's rails at what the buyer paid (BUYER_AMOUNT_SQL).
+const qAuditPage = db.prepare(`
+  SELECT id, ts, slug, ${BUYER_AMOUNT_SQL} AS price_usd, quote_usd, rail, network, wire, tx, response_sha256
+    FROM sales /* buyer-view */
+   WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ? AND ts <= ? AND (ts > ? OR (ts = ? AND id > ?))
+   ORDER BY ts, id
+   LIMIT ?`);
+const qAuditTotals = db.prepare(`
+  SELECT COUNT(*) AS n, SUM(CAST(ROUND(${BUYER_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+    FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ? AND ts <= ?`);
+const qAuditBySlug = db.prepare(`
+  SELECT slug, COUNT(*) AS n, SUM(CAST(ROUND(${BUYER_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano
+    FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ? AND ts <= ?
+   GROUP BY slug ORDER BY slug`);
+const qAuditByDay = db.prepare(`
+  SELECT CAST(ts / 86400000 AS INTEGER) AS day, COUNT(*) AS n, SUM(CAST(ROUND(${BUYER_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano
+    FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ? AND ts <= ?
+   GROUP BY day ORDER BY day`);
+const usdOfNano = (n) => Number(((Number(n) || 0) / NANO_PER_USD).toFixed(6));
+
+/**
+ * One wallet's audit rows over [fromMs, toMs], oldest first, after the
+ * position `after` ({ ts, id }, exclusive; none for the first page), at most
+ * `limit`. ONLY ever called with a payer the payment middleware verified.
+ * Answers { rows, matched, totals, byTool, byDay }: `matched` and the totals
+ * cover the whole window, `rows` the page. Database mode: the mirror, at most
+ * REFRESH_MS behind another container's writes.
+ */
+export function payerAuditRows(payer, { fromMs, toMs, after = null, limit = 200 } = {}) {
+  const p = normalizePayerAddress(payer);
+  const empty = { rows: [], matched: 0, totals: { calls: 0, paidUsd: 0, firstAt: null, lastAt: null }, byTool: [], byDay: [] };
+  if (!p || !Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs < fromMs) return empty;
+  const aTs = Number.isFinite(after?.ts) ? after.ts : -1;
+  const aId = Number.isFinite(after?.id) ? after.id : -1;
+  const cap = Math.max(1, Math.min(5000, Math.floor(Number(limit) || 200)));
+  const rows = qAuditPage.all(p, fromMs, toMs, aTs, aTs, aId, cap).map((r) => {
+    const priv = PRIVATE_RAILS.includes(String(r.rail));
+    return {
+      id: r.id,
+      ts: Number(r.ts),
+      slug: r.slug,
+      priceUsd: Number(Number(r.price_usd || 0).toFixed(6)),
+      // A private rail's quote column holds the gross, already the amount.
+      quotedUsd: priv || r.quote_usd == null ? null : Number(Number(r.quote_usd).toFixed(6)),
+      rail: r.rail,
+      network: r.network || null,
+      wire: r.wire || null,
+      tx: r.tx || null,
+      responseSha256: r.response_sha256 || null,
+    };
+  });
+  const t = qAuditTotals.get(p, fromMs, toMs) || {};
+  return {
+    rows,
+    matched: Number(t.n) || 0,
+    totals: {
+      calls: Number(t.n) || 0,
+      paidUsd: usdOfNano(t.nano),
+      firstAt: t.first_ts ? new Date(Number(t.first_ts)).toISOString() : null,
+      lastAt: t.last_ts ? new Date(Number(t.last_ts)).toISOString() : null,
+    },
+    byTool: qAuditBySlug.all(p, fromMs, toMs).map((r) => ({ slug: r.slug, calls: Number(r.n) || 0, usd: usdOfNano(r.nano) })),
+    byDay: qAuditByDay.all(p, fromMs, toMs).map((r) => ({ day: new Date(Number(r.day) * 86_400_000).toISOString().slice(0, 10), calls: Number(r.n) || 0, usd: usdOfNano(r.nano) })),
   };
 }
 
@@ -2170,7 +2240,7 @@ export function proofFeed({ slug = "v1-chat-metered" } = {}) {
       network: l.network, wire: l.wire, rail: l.rail,
       // A Circle Gateway batched row settled off chain: its tx is Gateway's
       // transaction id, and no block explorer resolves it.
-      settlement: settlementKindOf(l.wire), settledOffChain: isGatewayWire(l.wire),
+      settlement: settlementKindOf(l.wire), settledOffChain: settlementKindOf(l.wire) === "offchain",
       // An outside buyer's tx hash resolves to that buyer's wallet on chain,
       // so only our own canary row carries one; the external row is the
       // amount, the quote and the hour.
@@ -2411,3 +2481,86 @@ export function buyerScorecard(opts = {}) { return runSteps(buyerScorecardSteps(
 registerSqliteStore("sales-ledger.db", () => db, { note: "sales ledger (in memory with a state database)" });
 registerSqliteStore("sales-ledger.fileDb", () => fileDb, { note: "sales ledger write-through file" });
 registerMemoryStore("sales-ledger.answerDigests", () => qAnswerDigests, { note: "answer digests" });
+
+// ---------------------------------------------------------------------------
+// The operator scoreboard's ledger half (src/scoreboard.js; operator only,
+// computed on read, nothing stored). Outside sales on the counted rails, as
+// the funnel reads them (internal = 0: our wallets, the router's spending
+// wallets, burners and signed probes are already out).
+//   weekPayers      the week's paying wallets with their dollars and paying
+//                   days, handed to the operator resolver and never answered
+//   concentration   over the `days` window: outside dollars, paying wallets,
+//                   tools sold, the largest wallet's and the largest tool's
+//                   share of the dollars, and that tool's slug (ours)
+//   newPayersPerDay wallets whose first counted sale ever falls on that day,
+//                   a sale on `excludeNetworks` (Arc by default) not counted
+// One paged pass (windowPages) plus one index read per wallet of the window.
+const SCOREBOARD_STEP = 200;
+const qScoreboardPage = db.prepare(`
+  SELECT (ts / 86400000) AS d, slug, network, payer, COUNT(*) AS n,
+         SUM(CAST(ROUND(${SALE_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano
+  ${WINDOW_PAGE} AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL}
+  GROUP BY d, slug, network, payer`);
+function* scoreboardLedgerSteps({ days = 30, weekDays = 7, now = Date.now(), excludeNetworks = ["eip155:5042"] } = {}) {
+  const n = Math.max(1, Math.min(FUNNEL_MAX_DAYS, Math.floor(Number(days)) || 30));
+  const w = Math.max(1, Math.min(n, Math.floor(Number(weekDays)) || 7));
+  const today = Math.floor(now / 86_400_000);
+  const from = today - n; // whole days [from, today)
+  const weekFrom = today - w;
+  const since = from * 86_400_000;
+  const excluded = new Set((excludeNetworks || []).map((x) => String(x).toLowerCase()));
+  const byPayer = new Map(); // payer -> nano (window)
+  const bySlug = new Map(); // slug -> nano (window)
+  const firstDay = new Map(); // payer -> first day in the window on a counted network
+  const week = new Map(); // payer -> { nano, days:Set }
+  let totalNano = 0;
+  yield* windowPages(since, (a, b) => {
+    for (const r of qScoreboardPage.all(a, b, since)) {
+      const d = Number(r.d);
+      if (d < from || d >= today) continue;
+      const nano = Number(r.nano) || 0;
+      totalNano += nano;
+      bySlug.set(r.slug, (bySlug.get(r.slug) || 0) + nano);
+      if (!r.payer) continue;
+      byPayer.set(r.payer, (byPayer.get(r.payer) || 0) + nano);
+      if (!excluded.has(String(r.network || "").toLowerCase())) {
+        const f = firstDay.get(r.payer);
+        if (f === undefined || d < f) firstDay.set(r.payer, d);
+      }
+      if (d >= weekFrom) {
+        const e = week.get(r.payer) || { nano: 0, days: new Set() };
+        e.nano += nano; e.days.add(d);
+        week.set(r.payer, e);
+      }
+    }
+  });
+  const newByDay = new Map();
+  let i = 0;
+  for (const [payer, d] of firstDay) {
+    if (!qPaidBefore.get(payer, since)) newByDay.set(d, (newByDay.get(d) || 0) + 1);
+    if (++i % SCOREBOARD_STEP === 0) yield;
+  }
+  const top = (m) => { let k = null, v = 0; for (const [kk, vv] of m) if (vv > v) { k = kk; v = vv; } return { k, v }; };
+  const tp = top(byPayer), ts = top(bySlug);
+  const newPayersPerDay = [];
+  for (let d = from; d < today; d++) newPayersPerDay.push({ day: dayKey(d), newPayers: newByDay.get(d) || 0 });
+  return {
+    window: { days: n, from: dayKey(from), to: dayKey(today - 1) },
+    week: { days: w, from: dayKey(weekFrom), to: dayKey(today - 1) },
+    weekPayers: [...week].map(([payer, e]) => ({ payer, usd: nanoToUsd4(e.nano), days: e.days.size })),
+    concentration: {
+      outsideUsd: nanoToUsd4(totalNano),
+      payingWallets: byPayer.size,
+      toolsSold: bySlug.size,
+      topWalletShare: totalNano ? +(tp.v / totalNano).toFixed(4) : null,
+      topToolShare: totalNano ? +(ts.v / totalNano).toFixed(4) : null,
+      topTool: ts.k,
+    },
+    newPayersPerDay,
+    newPayersExcludedNetworks: [...excluded],
+  };
+}
+/** The scoreboard's ledger half (see above), synchronously. */
+export function scoreboardLedger(opts = {}) { return runSteps(scoreboardLedgerSteps(opts)); }
+/** scoreboardLedger across event-loop turns (same answer). */
+export function scoreboardLedgerAsync(opts = {}) { return runStepsAsync(scoreboardLedgerSteps(opts)); }

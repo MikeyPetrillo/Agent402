@@ -67,11 +67,12 @@ const { tools, execute } = await agent402Tools({
 });
 ```
 
-## Spending caps (opt-in)
+## Spending caps
 
-No cap is set by default: a call is never refused for its price unless you
-ask for a ceiling. To set one, pass agent402-client's caps through (since
-0.2.0); a paid call over one is refused before anything is signed, with a
+agent402-client 0.10.0 and later hold one ceiling by default: `maxPerCallUsd`
+of $5, above every catalog price (`0` or `"off"` turns it off). The rolling
+caps are opt-in. Pass agent402-client's caps through (since 0.2.0); a paid
+call over one is refused before anything is signed, with a
 `SpendingLimitError`:
 
 ```js

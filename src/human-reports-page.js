@@ -20,11 +20,16 @@ import { reportDoneHtml } from "./report-prerender.js";
 
 // One field of a product card (DESIGN.md "Forms"): a visible label tied to its
 // input, the input tied to its error line by aria-describedby, and the error
-// line announced when it changes. The ids are the ones the storefront scripts read.
+// line announced when it changes. The field is marked required (the form keeps
+// novalidate, so the script's own error line speaks, not the browser bubble).
+// The ids are the ones the storefront scripts read.
 export function cardField(id, label, placeholder = "", { upper = false, value = "", autofocus = false } = {}) {
-  return `<label class="flabel" for="in-${esc(id)}">${esc(label)}</label><div class="field"><input id="in-${esc(id)}" name="input" type="text" autocomplete="off" aria-describedby="err-${esc(id)}"${placeholder ? ` placeholder="${esc(placeholder)}"` : ""}${upper ? ' style="text-transform:uppercase"' : ""}${value ? ` value="${esc(value)}"` : ""}${autofocus ? " autofocus" : ""}></div>`;
+  return `<label class="flabel" for="in-${esc(id)}">${esc(label)}</label><div class="field"><input id="in-${esc(id)}" name="input" type="text" required autocomplete="off" aria-describedby="err-${esc(id)}"${placeholder ? ` placeholder="${esc(placeholder)}"` : ""}${upper ? ' style="text-transform:uppercase"' : ""}${value ? ` value="${esc(value)}"` : ""}${autofocus ? " autofocus" : ""}></div>`;
 }
 export const cardError = (id) => `<div class="err" id="err-${esc(id)}" aria-live="polite"></div>`;
+// Card checkout starts from the page script; with scripts off the forms cannot
+// start one, so the storefronts say so in place of a button that does nothing.
+export const NO_SCRIPT_CHECKOUT = `<noscript><p class="note">Checkout opens with JavaScript on.</p></noscript>`;
 
 // How long a report takes, said once: the storefront said "about two minutes"
 // while the page a buyer waits on said one to three, the deepest up to five.
@@ -79,7 +84,7 @@ export const REPORTS_CSS = `
   .report ol,.report ul{color:var(--muted);line-height:1.6}
   .cite{font-family:var(--font-mono);font-size:var(--fs-code-inline);font-weight:500;color:var(--accent);vertical-align:super}
   @keyframes sp{to{transform:rotate(360deg)}}
-  .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--dash);border-top-color:var(--ink);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-3px;margin-right:8px}
+  .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--dash);border-top-color:var(--ink);border-radius:50%;animation:sp var(--dur-spin) linear infinite;vertical-align:-3px;margin-right:8px}
   .status{background:var(--card);border:1px solid var(--hairline);border-radius:var(--radius);padding:44px 34px;text-align:center;margin-top:24px}
   .status h2{font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink)}.status p{color:var(--muted);max-width:460px;margin:0 auto 8px;line-height:1.55}
   .report-actions{display:flex;gap:10px;align-items:center;margin:22px 0 4px;flex-wrap:wrap}
@@ -162,6 +167,7 @@ export function humanReportsPage(baseUrl) {
   <section>
     <h2 class="sr-section">Every report you can buy</h2>
     <p class="note" style="margin:0 0 16px;">Card prices include payment processing. An agent paying per call over x402 or MPP pays the tool's own price instead. Both buy the same report.</p>
+    ${NO_SCRIPT_CHECKOUT}
     <div class="products">
       <div class="pcard receipt" data-kind="research">
         <div class="k">Deep research</div>

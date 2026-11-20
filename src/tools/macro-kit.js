@@ -188,7 +188,10 @@ export function parseTreasuryYieldCsv(csv) {
 //   - An earlier year's file is kept a day; the timer reads last year's too.
 //   - When the latest refresh failed, or the held copy is past two refresh
 //     periods, the answer is served marked stale (stale, staleAsOf), the
-//     fx-dashboard convention, never a 502 or 504.
+//     fx-dashboard convention, never a 502 or 504, for up to
+//     TREASURY_YIELD_MAX_AGE_MS (3 days) after the held copy's last good
+//     read; past that the held rows are not served: the call answers 503
+//     with Retry-After (nothing is charged) and starts a read as above.
 //   - A request that finds a year it needs not held at all (a cold process)
 //     reads every needed year at once and waits at most its budget
 //     (TREASURY_YIELD_BUDGET_MS, inside the hosted connector's wait and the
@@ -204,6 +207,8 @@ const TREASURY_YIELD_PAST_TTL_MS = 24 * 3600 * 1000;
 const TREASURY_YIELD_STALE_MS = 2 * TREASURY_YIELD_REFRESH_MS + 5 * 60 * 1000;
 const TREASURY_YIELD_RETRY_AFTER_S = 30;
 const TREASURY_YIELD_FAIL_BACKOFF_MS = 60_000;
+/** The oldest last good read whose rows are still served (marked stale). */
+export const TREASURY_YIELD_MAX_AGE_MS = 3 * 24 * 3600 * 1000;
 const treasuryYieldYears = new Map(); // year -> { at, rows, failedAt }
 const treasuryYieldReads = new Map(); // year -> in-flight read (single flight)
 const treasuryYieldTimer = { interval: null, boot: null };
@@ -269,6 +274,8 @@ export function startTreasuryYieldRefresh({ firstDelayMs = 5_000 } = {}) {
   treasuryYieldTimer.interval.unref?.();
   return true;
 }
+/** True while the background refresh timer is armed. */
+export function treasuryYieldRefreshRunning() { return Boolean(treasuryYieldTimer.interval); }
 export function stopTreasuryYieldRefresh() {
   if (treasuryYieldTimer.boot) clearTimeout(treasuryYieldTimer.boot);
   if (treasuryYieldTimer.interval) clearInterval(treasuryYieldTimer.interval);
@@ -347,6 +354,9 @@ async function fetchTreasuryYields(count = 1) {
     const e = treasuryYieldYears.get(y);
     if (!e) break;
     if (!e.rows.length) continue;
+    // Past the age limit the held rows are not an answer (the read the call
+    // started above, or the timer's, brings them back).
+    if (now - e.at >= TREASURY_YIELD_MAX_AGE_MS) throw treasuryYieldUnavailable(new Error(`held ${y} yields are ${Math.round((now - e.at) / 3_600_000)} h old, past the ${TREASURY_YIELD_MAX_AGE_MS / 3_600_000} h limit`));
     rows = e.rows.concat(rows);
     const stale = e.failedAt > e.at || now - e.at >= (y === year ? TREASURY_YIELD_STALE_MS : TREASURY_YIELD_PAST_TTL_MS + TREASURY_YIELD_STALE_MS);
     if (stale) staleAt = staleAt ? Math.min(staleAt, e.at) : e.at;
@@ -382,7 +392,7 @@ let fxDashCache = null;
 
 export const MACRO_TOOLS = [
   {
-    route: "GET /api/treasury-yield-curve", name: "US Treasury daily yield curve", slug: "treasury-yield-curve", category: "data", attribution: "us-treasury", price: "$0.005",
+    route: "GET /api/treasury-yield-curve", name: "US Treasury daily yield curve", slug: "treasury-yield-curve", category: "data", attribution: "us-treasury", price: "$0.001",
     description:
       "Latest US Treasury daily par yield curve in one object: recordDate plus mo1, mo3, mo6, yr1, yr2, yr3, yr5, yr7, yr10, yr20 and yr30, each a yield in percent, from the Treasury's Daily Treasury Par Yield Curve Rates (public domain). No params - always returns the most recent published curve, which trails today by a business day or two; for a date range use treasury-yield-history. Source: U.S. Treasury.",
     tags: ["treasury", "yield-curve", "interest-rates", "rates", "macro", "bonds", "fed", "10-year", "yields"],
@@ -877,7 +887,7 @@ async function fredObservations({ seriesId, startDate, endDate, limit, units, fr
 
 MACRO_TOOLS.push(
   {
-    route: "GET /api/fred-series", name: "FRED time series", slug: "fred-series", category: "data", attribution: "fred", price: "$0.005",
+    route: "GET /api/fred-series", name: "FRED time series", slug: "fred-series", category: "data", attribution: "fred", price: "$0.001",
     description:
       "Fetch any of FRED's ~800,000 economic time series by series ID - GDP (GDPC1), CPI (CPIAUCSL), unemployment (UNRATE), fed funds (DFF), and so on. Supports date windowing and the standard FRED units transformations (lin, chg, ch1, pch, pc1, pca, cca, log). ?seriesId=GDPC1&startDate=2018-01-01&endDate=2023-12-31&units=pc1. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fred", "series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed", "macro", "economic-data", "st-louis-fed"],

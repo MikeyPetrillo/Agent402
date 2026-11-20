@@ -72,11 +72,13 @@ export const RECOVERY_ANCHOR = `#${RECOVERY_HEADING.toLowerCase().replace(/\s+/g
  *  payment sent again is answered from that stored answer before anything
  *  runs (src/idempotency.js), so it never reaches the settlement claim's
  *  duplicate_authorization refusal, whose receipt rightly asks for a new
- *  payment. Every surface that says a success:false receipt was not charged
+ *  payment. A settle whose transfer the late-settlement book had already
+ *  booked owed reads settled_refund_owed (src/settlement-claims.js): charged,
+ *  owed back, not served. Every surface that says a success:false receipt was not charged
  *  carries it (scripts/test-copy-absolutes.js scans for the claim; the
  *  front door's recovery line is pinned by scripts/test-front-door.js); a
  *  markdown file carries its text word for word. */
-export const UNCONFIRMED_RECEIPT_EXCEPTION = "Not so for a receipt whose errorReason is settlement_unconfirmed (a settle that ended without showing whether the transfer was sent): the transfer may still land, so do not sign a new authorization for that call before the expiry the answer names (authorizationValidBefore, lastValidRound or expirationLedger), or, when it names none, before the paying wallet shows whether the transfer landed, and follow the answer's retry (watch-transaction: watch the named transaction; check-wallet: check the paying wallet).";
+export const UNCONFIRMED_RECEIPT_EXCEPTION = "Not so for a receipt whose errorReason is settlement_unconfirmed (a settle that ended without showing whether the transfer was sent): the transfer may still land, so do not sign a new authorization for that call before the expiry the answer names (authorizationValidBefore, lastValidRound or expirationLedger), or, when it names none, before the paying wallet shows whether the transfer landed, and follow the answer's retry (watch-transaction: watch the named transaction; check-wallet: check the paying wallet). A receipt whose errorReason is settled_refund_owed was charged: its transfer landed after an earlier attempt with the same payment and is booked as owed to the paying wallet, repaid after on-chain proof (refundStatusUrl shows where it stands), and a new authorization makes the call.";
 
 export const LATE_SETTLE_EXCEPTION = "One exception, on the EVM chains: a transfer that lands after a timed-out settle, a disconnect during settle, or a settle the facilitator answered as pending whose receipt was not read in time, is booked as a refund owed and repaid after on-chain proof.";
 
@@ -270,7 +272,7 @@ Maintained by Havok Holdings LLC.
  *  x402 discovery document): what the first call gets for its price. */
 export function frontDoorOneLine(catalog) {
   const first = routeOf(catalog, FRONT_DOOR_SLUG) || { method: "GET", path: `/api/${FRONT_DOOR_SLUG}`, price: null };
-  return `Start here: ${first.method} ${first.path}?q=<query> returns ranked live web results as JSON (title, URL, snippet, age) for ${priceText(first)} a call, with no account and no API key; the first request answers HTTP 402 with the price, and ${AGENTS_MD_PATH} has the recovery contract.`;
+  return `First call: ${first.method} ${first.path}?q=<query> returns ranked live web results as JSON (title, URL, snippet, age) for ${priceText(first)} a call, with no account and no API key; the first request answers HTTP 402 with the price, and ${AGENTS_MD_PATH} has the recovery contract.`;
 }
 
 /** The unpaid 402 body's part of the block: the access line, the one that

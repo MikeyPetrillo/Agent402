@@ -6,12 +6,32 @@
 // upstream vendor 5xx was booked as a broken tool on first sight.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
-import { outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
+import { outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent, isBuyerNetworkError, errorText, failedClasses } from "./avm-canary-classify.js";
+import { classesText } from "./algorand-canary-classes.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };
 const eq = (a, b, m) => ok(JSON.stringify(a) === JSON.stringify(b), `${m}${JSON.stringify(a) === JSON.stringify(b) ? "" : ` (got ${JSON.stringify(a)})`}`);
 const R = (status, body = "", elapsedMs = 6000) => ({ status, body, elapsedMs });
+
+// ---- a throw before any paid request (the runner's network) ----
+{
+  const fetchFailed = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
+  ok(isBuyerNetworkError(fetchFailed) && isBuyerNetworkError(Object.assign(new Error("x"), { cause: { code: "EAI_AGAIN" } })) && isBuyerNetworkError(Object.assign(new Error("t"), { name: "TimeoutError" })) && isBuyerNetworkError(new TypeError("fetch failed")), "a transport failure preparing a payment (fetch failed, a reset, DNS, a timeout) is the runner's network");
+  ok(!isBuyerNetworkError(new Error("unsupported scheme for network algorand:x")) && !isBuyerNetworkError(new TypeError("Cannot read properties of undefined")) && !isBuyerNetworkError(null), "an offer the client cannot sign, or a bug, is not the runner's network");
+  ok(errorText(fetchFailed) === "fetch failed <- ECONNRESET read ECONNRESET", `the log line names the cause (${errorText(fetchFailed)})`);
+  const r = { railFail: [], toolFail: [], chargedNoAnswer: [], chargeUnverified: [], noAnswer: [], chargedEmpty: [], buyerNetwork: [{ key: "x" }], aborted: null };
+  eq(failedClasses(r, []), [], "a run with only a runner-network row names no failed class");
+  eq(failedClasses({ ...r, toolFail: [{}] }, []), ["tool-failure"], "a tool failure alone names only that class");
+  eq(failedClasses({ ...r, railFail: [{}], chargedEmpty: [{}] }, [{ key: "y" }]), ["rail-failure", "unexpected-missing-accept", "charged-empty"], "each failed class is named, in order");
+  const one = classesText({ failedClasses: ["tool-failure"] });
+  ok(/tool failure/.test(one) && !/rail failure/.test(one) && !/missing accept/.test(one), "the alert lists only the class that failed");
+  ok(/rail failure/.test(classesText(null)) && /tool failure/.test(classesText(null)), "an unreadable report lists every class");
+  const yml = readFileSync(new URL("../.github/workflows/algorand-rail-canary.yml", import.meta.url), "utf8");
+  ok(yml.includes("node scripts/algorand-canary-classes.js rail-report.json") && !yml.includes("Three failure classes"), "the workflow's alert text comes from the report's failed classes");
+  const canary = readFileSync(new URL("./algorand-rail-canary.js", import.meta.url), "utf8");
+  ok(/report\.failedClasses = failedClasses\(report, unexpectedNoAvm\)/.test(canary) && /attemptOnce\(\)/.test(canary) && /e\?\.buyerSide/.test(canary), "the sweep retries a throw before any paid request once and writes its failed classes");
+}
 
 // ---- outcomeOf ----
 ok(outcomeOf(R(200, '{"x":1}')) === "ok", "200 with a body is ok");
@@ -199,20 +219,27 @@ ok(outcomeOf({ status: 429, body: BREAKER_BODY, elapsedMs: 50 }) === "breaker", 
   const src = readFileSync(new URL("./algorand-rail-canary.js", import.meta.url), "utf8");
   ok(/try \{ paid = await signed\.send\(\); \} catch \(e\) \{ return transportAttempt\(e, Date\.now\(\) - startedMs, signed\.txid\); \}/.test(src),
      "the sweep shapes a thrown request as an attempt that carries its signed payment's id");
-  ok(/const signed = await signOnce\(\);\s*let paid;/.test(src), "...while a throw from signing stays outside that catch and fails on first sight");
+  ok(/let signed;\s*try \{ signed = await signOnce\(\); \} catch \(e\) \{ if \(isBuyerNetworkError\(e\)\) e\.buyerSide = true; throw e; \}\s*let paid;/.test(src), "...while a throw from signing stays outside that catch: marked as the runner's network only when it is a transport failure, and thrown either way");
+  // A throw before the paid request left is signed again once, and only then:
+  // the retry inside attemptOnce runs on e.buyerSide alone (nothing was sent).
+  {
+    const once = /const attemptOnce = async \(\) => \{[\s\S]*?\n  \};\n/.exec(src)?.[0] || "";
+    ok(/try \{ return await attempt\(\); \} catch \(e\) \{\s*if \(!e\?\.buyerSide\) throw e;[\s\S]*await sleep\(THROTTLE_BACKOFF_MS\);\s*return await attempt\(\);\s*\}/.test(once) && (once.match(/await attempt\(\)/g) || []).length === 2,
+       "attemptOnce signs again only after a throw before any paid request (buyerSide), once, after a pause");
+  }
   ok(/return \{ send, txid: avmPaymentTxid\(payload\) \};/.test(src), "the id is read from the payload that was signed");
   ok(/const send = \(\) => fetch\(url, \{\s*\.\.\.reqInit,\s*signal: AbortSignal\.timeout\(/.test(src) && !/const reqInit = \{[^}]*signal:/.test(src),
      "each attempt gets its own deadline: a signal built once left the retry already aborted");
-  ok(/const first = out === "no-answer" \? await settleNoAnswer\(a, false\) : "retry";\s*if \(first === "retry"\) \{\s*a = await attempt\(\);/.test(src),
+  ok(/const first = out === "no-answer" \? await settleNoAnswer\(a, false\) : "retry";\s*if \(first === "retry"\) \{\s*a = await attemptOnce\(\);/.test(src),
      "a no-answer is settled on chain BEFORE the retry signs, and only `retry` signs again");
   // An empty 200 is a charge: the retry block is entered on the classifier's
   // word alone, and there is no other attempt anywhere in the sweep.
   ok(/const step = nextStep\(out\);\s*if \(step === "retry" \|\| step === "read-chain"\) \{/.test(src), "the retry block is entered only on nextStep's retry or read-chain");
-  ok((src.match(/await attempt\(\)/g) || []).length === 2 && !/if \(out !== "ok"\) \{/.test(src) && !/nextStep\([^)]*\) (!==|===) "(done|charged-empty)"/.test(src),
+  ok((src.match(/await attemptOnce\(\)/g) || []).length === 2 && (src.match(/await attempt\(\)/g) || []).length === 2 && !/if \(out !== "ok"\) \{/.test(src) && !/nextStep\([^)]*\) (!==|===) "(done|charged-empty)"/.test(src),
      "...and the sweep holds exactly two attempts: the first, and the one inside that block");
   {
     const block = /const step = nextStep\(out\);[\s\S]*?\n    \}\n/.exec(src)?.[0] || "";
-    ok(block.includes("a = await attempt();") && src.replace(block, "").match(/await attempt\(\)/g)?.length === 1, "the second attempt sits inside the gated block");
+    ok(block.includes("a = await attemptOnce();") && src.replace(block, "").match(/await attemptOnce\(\)/g)?.length === 1, "the second attempt sits inside the gated block");
   }
   ok(/\} else if \(out === "empty"\) \{[^}]*\s*report\.chargedEmpty\.push\(\{ key, slug: t\.slug, usd, tx: a\.tx \|\| null,[^\n]*\n\s*report\.spentUsd \+= usd;/.test(src),
      "an empty 200 is recorded as charged with an empty answer (tool, receipt transaction id) and counted in the spend");

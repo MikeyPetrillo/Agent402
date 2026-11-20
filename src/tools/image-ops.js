@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadJimp } from "./lazy-deps.js";
 import { childEnv } from "./child-env.js";
+import { IMAGE_ANSWER_MAX_BYTES, assertAnswerBytes } from "./answer-cap.js";
 import {
   assertGifHeader, gifFirstFrame, assertPngHeader, assertInflateWithinDeclared,
   assertJpegHeader, jpegFrameHeaders, assertTiffHeader, tiffSettledView, assertTiffStreams,
@@ -214,6 +215,9 @@ export async function toBuffer(img, format, quality) {
   if (!mime) throw bad('format must be "png", "jpeg", or "bmp"');
   const opts = mime === MIME.jpeg ? { quality: Math.min(Math.max(posInt(quality) || 80, 1), 100) } : undefined;
   const buffer = await img.getBuffer(mime, opts);
+  // The encoders here write about four bytes a pixel at most; a file past
+  // that bound is never handed to the serving thread.
+  assertAnswerBytes(buffer.length, IMAGE_ANSWER_MAX_BYTES, "The image", { hint: "request a smaller width and height" });
   return { __binary: buffer, contentType: mime };
 }
 

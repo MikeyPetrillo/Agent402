@@ -11,6 +11,10 @@
   } catch (e) { /* no-op */ }
   var sel = { "research": "research", "dossier": "dossier", "fund": "fund-report", "domain": "domain-audit", "recall": "recall-report", "insider": "insider-report", "market": "market-brief", "filing": "filing-report", "token": "token-brief", "ticker": "ticker-pack", "linkedin": "linkedin-article" };
   var need = { "dossier": "a ticker.", "research": "a question.", "fund": "a fund name, ticker, or CIK.", "domain": "a domain, e.g. example.com", "recall": "a drug, food, brand or device.", "insider": "a US ticker.", "market": "a market, category or company.", "filing": "a US ticker.", "token": "a Solana token mint address.", "ticker": "a US ticker.", "linkedin": "a topic." };
+  // Google Analytics key events (assets/js/ga-loader.js defines gtag only
+  // where GA is configured and allowed): the product and the kind only, never
+  // what the buyer typed. Sent as a beacon so it survives the redirect.
+  function ga(ev, props) { try { if (typeof window.gtag === "function") window.gtag("event", ev, Object.assign({ transport_type: "beacon" }, props)); } catch (e) { /* telemetry never blocks a buy */ } }
   function ph(ev, props) { try { if (window.posthog && window.posthog.capture) window.posthog.capture(ev, props); } catch (e) { /* telemetry never blocks a buy */ } }
   document.querySelectorAll(".pcard").forEach(function (card) {
     card.querySelectorAll(".tierbtn").forEach(function (b) {
@@ -45,17 +49,18 @@
       if (!input) { errEl.textContent = "Please enter " + (need[kind] || "a value."); field.setAttribute("aria-invalid", "true"); field.focus(); return; }
       field.removeAttribute("aria-invalid");
       btn.disabled = true;
-      var label = btn.textContent;
+      var label = btn.innerHTML; // the price slot inside it stays, so a later tier choice still updates it
       ph("report_buy_click", { product: sel[kind], kind: kind });
+      ga("report_buy_click", { product: sel[kind], kind: kind });
       btn.innerHTML = '<span class="spin"></span>Redirecting to checkout…';
       try {
         var r = await fetch("/api/buy", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ product: sel[kind], input: input }) });
         var j = await r.json();
-        if (j && j.url) { window.location = j.url; }
-        else { errEl.textContent = (j && j.error) || "Could not start checkout."; btn.disabled = false; btn.textContent = label; }
+        if (j && j.url) { ga("checkout_started", { product: sel[kind], kind: kind }); window.location = j.url; }
+        else { errEl.textContent = (j && j.error) || "Could not start checkout."; btn.disabled = false; btn.innerHTML = label; }
       } catch (e) {
         errEl.textContent = "Network error, please try again.";
-        btn.disabled = false; btn.textContent = label;
+        btn.disabled = false; btn.innerHTML = label;
       }
     });
   });

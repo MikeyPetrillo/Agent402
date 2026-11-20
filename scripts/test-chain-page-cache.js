@@ -5,8 +5,7 @@
 // (scripts/test-chain-seller-view-memo.js) and their builds are capped.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -23,13 +22,10 @@ ok(!loop.includes("buildChainPage(chainKey, req.query.seller"), "the raw query n
 // a view whose build never settled stops refusing anyone once it is that old.
 ok(/chainSellerViewsInFlight\.live\(\) < CHAIN_SELLER_VIEW_MAX_INFLIGHT/.test(loop) && /shedResponse\(res, 5, \{ reason: "chain-seller-view" \}\)/.test(loop), "?seller= view builds are capped and a miss past the cap is shed");
 
-const port = await getFreePort();
-const proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "" }, stdio: ["ignore", "ignore", "inherit"] });
-const base = `http://127.0.0.1:${port}`;
+const srv = await bootServer({ stores: "chain-page-cache", env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "" } });
+const base = srv.url;
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
-  ok(up, "server booted");
+  ok(true, "server booted");
   const burst = await Promise.all(Array.from({ length: 40 }, () => fetch(`${base}/base`).then((r) => r.status)));
   ok(burst.every((s) => s === 200), `a burst of 40 concurrent /base requests all answer 200 (${[...new Set(burst)].join(",")})`);
   const t0 = Date.now();
@@ -39,6 +35,6 @@ try {
   ok(cachedMs < 500, `a repeat request is served from the cache (${cachedMs} ms; first ${cached - t0} ms)`);
   const seller = await fetch(`${base}/base?seller=example.com`);
   ok(seller.status === 200, "a ?seller= view still renders");
-} finally { proc.kill("SIGKILL"); }
+} finally { await srv.stop(); }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

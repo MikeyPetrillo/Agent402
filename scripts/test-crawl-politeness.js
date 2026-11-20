@@ -100,7 +100,7 @@ const index = readFileSync(new URL("../src/x402-index.js", import.meta.url), "ut
 // does not.
 ok(/const crawled = skipped\.size \? due\.filter\(\(o\) => !skipped\.has\(o\)\) : due;/.test(index) && /const backedOff = skipped\.size \? due\.filter\(\(o\) => skipped\.get\(o\) === "unchanged"\) : \[\];/.test(index) && /const okCounts = cycleOkCounts\(crawled\);/.test(index) && /const rates = measureBackedOffVote\(crawled\.filter\(\(o\) => prevGood\.has\(o\)\), oursByOrigin\);/.test(index) && /releaseDeadSubmissions\(fraction\)/.test(index) && !/cycleOkFraction\((ordered|due)\)/.test(index),
    "the outage guard scores the crawled set and the origins backed off unchanged, not the full seed list nor the origins held back");
-ok(/const due = originsDueThisCycle\(ordered, crawlCycle\)/.test(index),
+ok(/const due = originsDueThisCycle\(ordered, crawlCycle, CRAWL_ORIGINS_PER_OPERATOR, \{ prefer \}\)/.test(index),
    "runCrawl actually applies the per-operator filter");
 // The pool runs the turns made from the filtered list (landingTurns groups the
 // origins behind one landing host; it adds and drops none), and each turn is

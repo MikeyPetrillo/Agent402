@@ -410,6 +410,13 @@ export const TIERS = {
       // 2026-08-19, scripts/test-gateway-model-ids.js); gemini-2.5-flash left
       // 2026-09-29 ahead of its 2026-10-20 upstream expiration (RETIRING_MODELS).
       "google/gemini-3.1-flash-lite", "google/gemini-3.5-flash-lite",
+      // Gemini 4 Hydrogen (live 2026-11-18, 1M context, tools): its dearest
+      // routable endpoint sits inside this tier's bound, so it is served here
+      // and on metered. qwen4-max (live 2026-11-18, 1M context, tools) is
+      // admitted by the qwen/ family below too; named here so /v1/models lists
+      // it by id, with its metered endpoint, and priced by its own row
+      // (REQUIRED_MODEL_ROWS), never the family's.
+      "google/gemini-4-hydrogen", "qwen/qwen4-max",
       "deepseek/", "meta-llama/", "mistralai/", "qwen/",
       // Meta's Muse models. Glimmer 30B (live 2026-09-23): reasoning mandatory (see REASONING_MODELS). The "-contributor" listings
       // are refused by name in refuseCostVariants: a buyer's prompt is never
@@ -471,6 +478,14 @@ export const TIERS = {
       // entry: prefix matching is boundary-aware, so gpt-6-sol does not admit it.
       // The prefix also admits gpt-6.1-sol-pro (same price).
       "openai/gpt-6.1-sol",
+      // gpt-6.2-sol (live 2026-11-18, same list price as gpt-6.1-sol, 1.05M
+      // context, tools, reasoning mandatory). The prefix also admits
+      // gpt-6.2-sol-pro (same price and efforts).
+      "openai/gpt-6.2-sol",
+      // Gemini 4 Carbon and Neon (live 2026-11-18, 1M context, tools,
+      // reasoning mandatory): each one's dearest routable endpoint fits this
+      // tier's bound and not base's.
+      "google/gemini-4-carbon", "google/gemini-4-neon",
       // gpt-6.1-terra (live 2026-10-26, 1M context, tools, flex endpoint):
       // the 6.1 generation's mid model, listed below gpt-6.1-sol, so the pro
       // caps leave it more output room under the clamp. The prefix also admits
@@ -546,11 +561,12 @@ export const TIERS = {
       "openai/gpt-5.6-sol", "openai/gpt-5.6-terra",
       "anthropic/claude-opus",
       // Admitted 2026-09-18, both 1M context, both reasoning-mandatory
-      // (REASONING_MODELS). gpt-6-astra also admits gpt-6-astra-pro under the
-      // "-suffix" rule; the exact id for Fable keeps fable-5 (a different,
+      // (REASONING_MODELS); the exact id for Fable keeps fable-5 (a different,
       // older model) out. With a 4k-char prompt the clamp still leaves a usable
-      // output budget on either (pinned in test-llm-gateway).
-      "openai/gpt-6-astra", "anthropic/claude-fable-5.1",
+      // output budget on either (pinned in test-llm-gateway). gpt-6.2-astra
+      // (live 2026-11-18) replaced gpt-6-astra here, which RETIRING_MODELS now
+      // serves by it; the prefix also admits gpt-6.2-astra-pro.
+      "openai/gpt-6.2-astra", "anthropic/claude-fable-5.1",
       // Claude Fable 5.2 (live 2026-11-09, listed below 5.1): exact id too.
       "anthropic/claude-fable-5.2",
       // Gemini's pro model, also on pro: the premium Gemini wire's default
@@ -965,6 +981,13 @@ export const RETIRING_MODELS = Object.freeze({
   // context window and takes tools (the Llama ids do not); its own row is at
   // or under the family row that prices the Llama ids, so it is no dearer,
   // and sits inside the nano tier's max_price.
+  // GPT-6 Astra and its -pro twin, replaced on the premium list by
+  // gpt-6.2-astra (live 2026-11-18, 1.05M context, the same reasoning
+  // efforts and no sampling knobs). Still listed upstream with no expiration
+  // date; a call naming either is served by its 6.2 twin, disclosed in
+  // agent402_model_substituted, on the tiers that admitted it.
+  "openai/gpt-6-astra": { until: "2026-11-19", use: "openai/gpt-6.2-astra", keepOn: ["v1-chat-premium", "v1-chat-metered"] },
+  "openai/gpt-6-astra-pro": { until: "2026-11-19", use: "openai/gpt-6.2-astra-pro", keepOn: ["v1-chat-premium", "v1-chat-metered"] },
   "meta-llama/llama-3.2-1b-instruct": { until: "2026-11-20", use: "mistralai/ministral-3b-2512", asItselfUntil: true },
   "meta-llama/llama-3.2-3b-instruct": { until: "2026-11-20", use: "mistralai/ministral-3b-2512", asItselfUntil: true },
 });
@@ -1382,11 +1405,12 @@ export function tokenizerFactor(model) {
 }
 
 /** Models that take NO sampling knobs (no temperature / top_p in their live
- *  supported_parameters; the upstream drops them silently). GPT-6 Astra today;
+ *  supported_parameters; the upstream drops them silently). GPT-6 Astra and
+ *  GPT-6.2 Astra today;
  *  the Claude post-4.6 rule (temperature must be 1) lives on the Messages
  *  wire, where the Anthropic-native fields are. Exported for the tests. */
 export function noSamplingKnobs(model) {
-  return /^openai\/gpt-6-astra/.test(canonicalModel(model).toLowerCase());
+  return /^openai\/gpt-6(\.2)?-astra/.test(canonicalModel(model).toLowerCase());
 }
 
 /** Claude Haiku 5 and later. Live 2026-10-14 on haiku-5.5: the parameter list
@@ -2458,6 +2482,9 @@ export const FLEX_MODELS = [
   // google-ai-studio/flex (and google-vertex/global/flex on 3.8-flash) endpoint
   // tags on gemini-3.8-flash and gemini-4-argon (live endpoints 2026-11-12).
   "google/gemini-3.8-flash", "google/gemini-4-argon",
+  // google-ai-studio/flex endpoint tag on gemini-4-carbon, -hydrogen and -neon
+  // (live endpoints 2026-11-18).
+  "google/gemini-4-carbon", "google/gemini-4-hydrogen", "google/gemini-4-neon",
 ];
 const FLEX_ENABLED = () => String(process.env.OPENROUTER_FLEX || "on").toLowerCase() !== "off";
 export const PROVIDER_SORT_ENABLED = () => String(process.env.OPENROUTER_PROVIDER_SORT || "on").toLowerCase() !== "off";
@@ -2608,6 +2635,11 @@ export const REASONING_MODELS = [
   // medium, no "minimal" (live catalog 2026-11-12).
   { id: "google/gemini-3.8-flash", efforts: ["low", "medium", "high"] },
   { id: "google/gemini-4-argon", efforts: ["low", "medium", "high"] },
+  // Gemini 4 Carbon (low..high) and Hydrogen and Neon (low..xhigh): reasoning
+  // MANDATORY, default effort medium (live catalog 2026-11-18).
+  { id: "google/gemini-4-carbon", efforts: ["low", "medium", "high"] },
+  { id: "google/gemini-4-hydrogen", efforts: ["low", "medium", "high", "xhigh"] },
+  { id: "google/gemini-4-neon", efforts: ["low", "medium", "high", "xhigh"] },
   // Gemini 3.1 Pro: reasoning MANDATORY, default effort medium, no "minimal"
   // (live catalog 2026-10-21). Pro injects "low"; premium leaves the model
   // default unless the call's budget is small (smallBudgetEffort).
@@ -2633,6 +2665,8 @@ export const REASONING_MODELS = [
   { prefix: "openai/gpt-6-sol", efforts: ["none", "low", "medium", "high", "xhigh", "max"] },
   // gpt-6.1-sol and -pro: reasoning mandatory, no "none" (live catalog 2026-10-06).
   { prefix: "openai/gpt-6.1-sol", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  // gpt-6.2-sol and -pro: reasoning mandatory, no "none" (live catalog 2026-11-18).
+  { prefix: "openai/gpt-6.2-sol", efforts: ["low", "medium", "high", "xhigh", "max"] },
   // gpt-6.1-terra: reasoning default-on at medium, "none" supported; its -pro
   // twin is mandatory with no "none" (live catalog 2026-11-01), so exact rows.
   { id: "openai/gpt-6.1-terra", efforts: ["none", "low", "medium", "high", "xhigh", "max"] },
@@ -2653,17 +2687,21 @@ export const REASONING_MODELS = [
   { id: "x-ai/grok-4.7", efforts: ["low", "medium", "high", "xhigh"], reasoningOutsideMaxTokens: true },
   // qwen3.8-max-prime: reasoning MANDATORY, default effort xhigh (live 2026-09-24).
   { id: "qwen/qwen3.8-max-prime", efforts: ["minimal", "low", "medium", "high", "xhigh"] },
+  // qwen4-max: reasoning default-on at "high", efforts none/low/high/xhigh
+  // (live catalog 2026-11-18); base and metered inject "low".
+  { id: "qwen/qwen4-max", efforts: ["none", "low", "high", "xhigh"] },
   // qwen3.8-27b: reasoning default-on at "xhigh", efforts none/low/medium/xhigh
   // (live catalog 2026-11-15). Without this row it reasoned unbounded and spent
   // a 4096 cap with nothing said; base and metered inject "low", and an empty
   // answer gets the one same-model retry at "none".
   { id: "qwen/qwen3.8-27b", efforts: ["none", "low", "medium", "xhigh"] },
-  // GPT-6 Astra: reasoning MANDATORY (no "none"), default effort medium; the
-  // prefix covers gpt-6-astra-pro, which the live catalog lists with the same
-  // set. Claude Fable 5.1: adaptive thinking mandatory, default effort high.
-  // Both live-read 2026-09-18. On the premium tier the policy is "model", so
-  // nothing is injected; on metered ("lowest") they get "low".
-  { prefix: "openai/gpt-6-astra", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  // GPT-6.2 Astra: reasoning MANDATORY (no "none"), default effort medium; the
+  // prefix covers gpt-6.2-astra-pro, which the live catalog lists with the
+  // same set (2026-11-18; gpt-6-astra, which it replaced, left this table with
+  // its RETIRING_MODELS entry). Claude Fable 5.1: adaptive thinking mandatory,
+  // default effort high (live-read 2026-09-18). On the premium tier the policy
+  // is "model", so nothing is injected; on metered ("lowest") they get "low".
+  { prefix: "openai/gpt-6.2-astra", efforts: ["low", "medium", "high", "xhigh", "max"] },
   { id: "anthropic/claude-fable-5.1", efforts: ["low", "medium", "high", "xhigh", "max"] },
   // Claude Fable 5.2: the same mandatory reasoning and efforts (live catalog 2026-11-12).
   { id: "anthropic/claude-fable-5.2", efforts: ["low", "medium", "high", "xhigh", "max"] },
@@ -5091,7 +5129,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.10",
     description:
-      "OpenAI-compatible chat completions, pro tier: gpt-6.1 terra (the default when model is omitted), gpt-6 sol, claude sonnet, gemini pro and flash, gemini 4 argon, grok - paid per call in USDC over x402. Same wire format as /v1/chat/completions with higher input/output caps (48k chars in, 4096 tokens out). " + defaultModelCompatNote(TIERS["v1-chat-pro"]),
+      "OpenAI-compatible chat completions, pro tier: gpt-6.1 terra (the default when model is omitted), gpt-6 sol, gpt-6.2 sol, claude sonnet, gemini pro and flash, gemini 4 argon, carbon and neon, grok - paid per call in USDC over x402. Same wire format as /v1/chat/completions with higher input/output caps (48k chars in, 4096 tokens out). " + defaultModelCompatNote(TIERS["v1-chat-pro"]),
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-6.1-terra" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-6.1-terra" } } },
     handler: makeHandler("v1-chat-pro"),
@@ -5103,7 +5141,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.50",
     description:
-      "OpenAI-compatible chat completions, premium tier: claude opus 5.5 (the default), gpt-5.6 sol and terra, gpt-6 astra, claude fable 5.1 and 5.2, gemini 4 argon - paid per call in USDC over x402. Same wire format as /v1/chat/completions with the largest caps (85k chars in, 8192 tokens out).",
+      "OpenAI-compatible chat completions, premium tier: claude opus 5.5 (the default), gpt-5.6 sol and terra, gpt-6.2 astra, claude fable 5.1 and 5.2, gemini 4 argon - paid per call in USDC over x402. Same wire format as /v1/chat/completions with the largest caps (85k chars in, 8192 tokens out).",
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: { ...EXAMPLE, model: "anthropic/claude-opus-5.5" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "anthropic/claude-opus-5.5" } } },
     handler: makeHandler("v1-chat-premium"),

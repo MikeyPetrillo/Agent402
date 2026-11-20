@@ -8,14 +8,15 @@
 
 import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, decideLive, sectionMeta, fmtNum } from "./ledger-chrome.js";
-import { whyHomeClaims } from "./why.js";
+import { whyHomeClaims, WHY_POINTS } from "./why.js";
 import { decideConfig } from "./decide/config.js";
-import { toolList } from "./pages.js";
+import { toolList, priceWords } from "./pages.js";
+import { paidCallFigure, paidCallScript, PAID_CALL_CSS } from "./paid-call-figure.js";
 import { RAILS, RAILS_SHORT } from "./rails.js";
 import { CAIP2_NAMES } from "./stats.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { routerPayChains } from "./tools/route-execute.js";
-import { railKey, chainDisplayName } from "./rails.js";
+import { railKey, chainDisplayName, countWord } from "./rails.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 import { HUMAN_PRODUCTS, humanCheckoutEnabled } from "./human-checkout.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -127,7 +128,7 @@ export function homeDescription(opts) {
   const card = cardPayClause(opts);
   const pay = card === "or by card" ? "; any tool also by card" : card ? `; ${card}` : "";
   const receipts = opts && "receipts" in opts ? Boolean(opts.receipts) : receiptsServed();
-  return `Find, pay for and verify paid calls over x402 and MPP${receipts ? ", backed by signed receipts" : ""}. 500+ tools on the same rails${pay}.`;
+  return `${receipts ? "Find, pay for and verify every paid call over x402 and MPP, each with a signed receipt" : "Find, pay for and verify paid calls over x402 and MPP"}. 500+ tools on the same rails${pay}.`;
 }
 
 export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null, proof = [], chainsOffered, mpp = true, receipts = receiptsServed() } = {}) {
@@ -160,7 +161,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   // while receipts are signed; each wire name and "verify" linked.
   const wireLink = (href, t) => `<a href="${href}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">${t}</a>`;
   const leadHtml = esc(leadSentence({ mpp, receipts }))
-    .replace("verify paid calls", `${wireLink("/trust#verify", "verify")} paid calls`)
+    .replace(/verify (every paid call|paid calls)/, (_m, rest) => `${wireLink("/trust#verify", "verify")} ${rest}`)
     .replace(mpp ? "across x402 and MPP" : "across x402", `across ${wireLink("/what-is-x402", "x402")}${mpp ? ` and ${wireLink("/what-is-mpp", "MPP")}` : ""}`);
   const viaPow = Number(served.viaProofOfWork) || 0;
   const rails = railsByVolume(stats);
@@ -202,7 +203,18 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   ];
   const faqLd = { "@type": "FAQPage", "@id": `${baseUrl}/#faq`, mainEntity: faqs.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
 
-  const extraCss = `
+  // The paid-call figure follows one real tool (the cited answer) with the
+  // hero's own live readings; a reading the server lacks is left to the poll.
+  const pcTool = tools.find((t) => t.slug === "answer") || tools.find((t) => t.slug === "uuid");
+  const pcLatency = figures.find((f) => f.key === "latency");
+  const paidCallHtml = pcTool ? paidCallFigure({
+    method: pcTool.method, path: pcTool.path, price: priceWords(pcTool).short,
+    chains: Number(chainsOffered) > 0 ? Number(chainsOffered) : undefined,
+    receipts,
+    latencyMs: pcLatency ? Number(String(pcLatency.value).replace(/[^0-9]/g, "")) : null,
+    settled: hasExternal ? Number(external.count) : null,
+  }) : "";
+  const extraCss = `${PAID_CALL_CSS}
 .hm-hero { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; }
 .hm-live-stats { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px 10px; padding: 16px 22px 14px; border-top: 1px solid rgba(255,255,255,.07); }
 .hm-live-stats[hidden] { display: none; }
@@ -285,7 +297,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 
       <div class="hm-obsidian receipt" style="overflow:hidden;padding-bottom:22px;">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 12px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.07);">
-          <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-dim);display:inline-flex;align-items:center;gap:8px;min-width:0;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent-lit);animation:ml-pulse 1.8s ease-in-out infinite;flex:none;"></span><span class="hm-live-h" style="white-space:nowrap;">live · every x402 and MPP payment<span class="hm-live-tail"> we see on chain</span></span></span>
+          <span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-dim);display:inline-flex;align-items:center;gap:8px;min-width:0;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent-lit);animation:ml-pulse var(--dur-pulse) ease-in-out infinite;flex:none;"></span><span class="hm-live-h" style="white-space:nowrap;">live · every x402 and MPP payment<span class="hm-live-tail"> we see on chain</span></span></span>
           <a href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent-lit);text-decoration:none;white-space:nowrap;">full screen ↗</a>
         </div>
         ${liveEmbed
@@ -341,11 +353,16 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   </div>
 </section>
 
-<section id="why" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;scroll-margin-top:90px;">
+${paidCallHtml ? `<section id="paid-call" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
+  <h2 class="hm-h2" style="margin:0 0 22px;">Watch a call get paid.</h2>
+  ${paidCallHtml}
+</section>
+
+` : ""}<section id="why" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;scroll-margin-top:90px;">
   <h2 class="hm-h2" style="margin:0 0 22px;">Why pay here.</h2>
   <div class="hm-claims">${claimsHtml}</div>
   <div class="hm-marks"><span class="hm-marks-k">settles on</span>${railMarksHtml}${tempoMarkHtml}</div>
-  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);margin-top:18px;"><a href="/docs#why" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;white-space:nowrap;">all seven claims, with proof →</a></div>
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);margin-top:18px;"><a href="/docs#why" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;white-space:nowrap;">all ${countWord(WHY_POINTS.length)} claims, with proof →</a></div>
 </section>
 
 <section id="sell" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
@@ -359,13 +376,14 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   <h2 class="hm-h2" style="margin:0 0 22px;">Questions.</h2>
   <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);max-width:900px;">${faqHtml}</div>
   <p style="font-size:var(--fs-base);color:var(--muted);margin:20px 0 0;">More on <a href="/faq" style="color:var(--accent);font-weight:500;font-family:var(--font-mono);">/faq</a>, and what agentic finance means on <a href="/agentic-finance" style="color:var(--accent);font-weight:500;font-family:var(--font-mono);">/agentic-finance</a>.</p>
-  <style>section details > summary::-webkit-details-marker{display:none;} section details[open] .ml-faq-mark{transform:rotate(45deg);} .ml-faq-mark{transition:transform .15s ease;display:inline-block;}</style>
+  <style>section details > summary::-webkit-details-marker{display:none;} section details[open] .ml-faq-mark{transform:rotate(45deg);} .ml-faq-mark{transition:transform var(--dur-fast) ease;display:inline-block;}</style>
 </section>
 
 ${ledgerFooterCompact()}
 
 <script src="/js/hero-aura.js" defer></script>
-<script src="/js/home-hero.js"></script>`;
+<script src="/js/home-hero.js"></script>
+${paidCallHtml ? paidCallScript() : ""}`;
 
   return ledgerShell({ title, description, canonical, baseUrl, activePath: "", jsonLd: [orgLd, websiteLd, appLd, surfacesLd, faqLd], extraCss, body });
 }

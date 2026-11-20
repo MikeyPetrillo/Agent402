@@ -30,6 +30,13 @@ import { Credential } from "mppx";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, MCP_PAYMENT_REQUIRED_CODE, MCP_CREDENTIAL_META } from "../src/mcp-mpp.js";
 import { getFreePorts } from "./lib/free-port.js";
+import { generateKeyPairSync } from "node:crypto";
+import { verifyReceipt as verifySignedReceipt } from "../client/receipt.js";
+import { MCP_SIGNED_RECEIPT_META } from "../src/mcp-http.js";
+
+// A receipt signing key for this boot: a paid result relays the route's
+// signed receipt in _meta (src/mcp-http.js withSignedReceipt).
+const RECEIPT_KEY = Buffer.from(generateKeyPairSync("ed25519").privateKey.export({ format: "pem", type: "pkcs8" })).toString("base64");
 
 const [PORT, FAC_PORT] = await getFreePorts(2);
 const B = `http://127.0.0.1:${PORT}`;
@@ -139,7 +146,7 @@ facilitator = createServer((req, res) => {
 });
 await new Promise((r) => facilitator.listen(FAC_PORT, r));
 
-proc = spawn("node", ["src/server.js"], {
+proc = spawn(process.execPath, ["src/server.js"], {
   env: {
     ...process.env, TRUST_PROXY_HOPS: "1", ...ownStoreEnv("mcp-mpp"), PORT: String(PORT), FREE_MODE: "",
     WALLET_ADDRESS: TREASURY, NETWORK: "base",
@@ -154,6 +161,7 @@ proc = spawn("node", ["src/server.js"], {
     // The connector's free-answer ceiling at its floor: a paid answer past it
     // must still come back whole (case 3), a free one is cut (case 4).
     AGENT402_MCP_MAX_ANSWER_BYTES: "1024",
+    RECEIPT_SIGNING_KEY: RECEIPT_KEY, RECEIPT_SIGNING_KEY_ID: "r1-mcp-mpp", RECEIPT_RETIRED_KEYS: "",
   },
   stdio: "ignore",
 });
@@ -217,6 +225,15 @@ try {
   ok(!paid.isError, `mppx MCP client pays the challenge and the tool answers (isError=${paid.isError})`);
   ok(paid.structuredContent?.slug === "memory-write" && paid.structuredContent?.result, "result is the catalog.call envelope {slug, result}");
   ok(paid.receipt && paid._meta?.["org.paymentauth/receipt"], `receipt rides in _meta["org.paymentauth/receipt"] (and McpClient surfaces it as result.receipt: ${JSON.stringify(paid.receipt).slice(0, 80)})`);
+  {
+    // The route's signed receipt rides beside it, over the route's answer
+    // (the result parsed, so JSON.stringify(result) is those bytes).
+    const jws = paid._meta?.[MCP_SIGNED_RECEIPT_META];
+    const keys = (await (await fetch(`${B}/.well-known/agent402-receipt-key.json`)).json()).keys;
+    const v = await verifySignedReceipt(jws || "", { keys, body: JSON.stringify(paid.structuredContent?.result) });
+    ok(typeof jws === "string" && v.valid && v.record.slug === "memory-write" && v.record.rail === "mpp-evm" && v.record.settlement, `the route's signed receipt rides in _meta["${MCP_SIGNED_RECEIPT_META}"] and verifies against the result (${v.reason}, rail ${v.record?.rail})`);
+    ok(!free._meta?.[MCP_SIGNED_RECEIPT_META], "a free result (the proof-of-work call above) carries no signed receipt");
+  }
   ok(facCalls.verify - before.verify === 1 && facCalls.settle - before.settle === 1, `the REAL gates settled it: facilitator verify +${facCalls.verify - before.verify}, settle +${facCalls.settle - before.settle} (loopback, settlement authority unchanged)`);
   {
     // One paid call is ONE served call on /api/stats, booked by the paid route
@@ -310,7 +327,7 @@ try {
   proc.kill("SIGKILL");
   const { getFreePort } = await import("./lib/free-port.js");
   const port2 = await getFreePort();
-  proc = spawn("node", ["src/server.js"], {
+  proc = spawn(process.execPath, ["src/server.js"], {
     env: {
       ...process.env, TRUST_PROXY_HOPS: "1", ...ownStoreEnv("mcp-mpp-deadline"), PORT: String(port2), FREE_MODE: "",
       WALLET_ADDRESS: TREASURY, NETWORK: "base",

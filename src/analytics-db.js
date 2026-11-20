@@ -19,6 +19,7 @@ import pg from "pg";
 import { dbSsl } from "./db-ssl.js";
 import { probeDbHost } from "./db-probe.js";
 import { leased, leaseStillHeld } from "./state-db.js";
+import { testSeamOn } from "./test-seams.js";
 
 const { Pool } = pg;
 
@@ -27,7 +28,7 @@ const ANALYTICS_URL = process.env.ANALYTICS_DATABASE_URL || process.env.DATABASE
 // single `[tool-call-test] {json}` line instead of touching a database, so a
 // suite reads the exact rows a boot would have written (the same pattern as
 // POSTHOG_TEST_CAPTURE in src/posthog.js). Never set in production.
-const TEST_CAPTURE = process.env.ANALYTICS_TEST_CAPTURE === "1";
+const TEST_CAPTURE = testSeamOn("ANALYTICS_TEST_CAPTURE"); // never on a production boot (src/test-seams.js)
 let pool = null;
 let schemaReady = false;
 // After a failed init the database is not retried for RETRY_AFTER_MS. This
@@ -437,6 +438,45 @@ export async function getAnalytics({ windowHours = 24, top = 25, includeSyntheti
   } catch (e) {
     console.error("[analytics-db] query failed:", e.message);
     return { ok: false, enabled: true, error: "query-failed" };
+  }
+}
+
+/**
+ * Per-tool outcomes for the public per-tool reliability table
+ * (src/tool-reliability.js): over the window, the calls that were answered
+ * (2xx/3xx, or a legacy unclassified row that did not error) or failed on our
+ * side (5xx), with the median and 95th percentile latency of those calls.
+ * A 4xx (the caller's own input, a payment refusal) is neither, and the
+ * synthetic, probe and pre-payment rows are left out as the dashboard leaves
+ * them out. Exact counts stay in this process: the public table bands them.
+ * Returns { ok, enabled, rows: [{ slug, n, ok, serverErrored, p50, p95 }] }.
+ */
+export async function getToolOutcomes({ windowHours = 168 } = {}) {
+  if (!ANALYTICS_URL) return { ok: false, enabled: false, reason: "not-configured" };
+  if (unavailable()) return { ok: false, enabled: false, reason: "init-failed" };
+  try {
+    await ensureSchema();
+    const p = getPool();
+    if (!p) return { ok: false, enabled: false, reason: "no-pool" };
+    const hours = Math.max(1, Math.min(MAX_WINDOW_HOURS, windowHours | 0));
+    const r = await p.query(
+      `SELECT slug,
+         count(*)::int AS n,
+         count(*) FILTER (WHERE status < 500)::int AS ok,
+         count(*) FILTER (WHERE status >= 500)::int AS server_errored,
+         percentile_disc(0.50) WITHIN GROUP (ORDER BY latency_ms)::int AS p50,
+         percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms)::int AS p95
+       FROM tool_calls
+       WHERE ts >= now() - make_interval(hours => $1::int)
+         AND NOT synthetic AND NOT probe AND NOT pre_payment
+         AND ((status BETWEEN 1 AND 399) OR (status = 0 AND NOT errored) OR status >= 500)
+       GROUP BY slug`,
+      [hours]
+    );
+    return { ok: true, enabled: true, windowHours: hours, rows: r.rows.map((x) => ({ slug: x.slug, n: x.n, ok: x.ok, serverErrored: x.server_errored, p50: x.p50, p95: x.p95 })) };
+  } catch (e) {
+    console.error("[analytics-db] tool outcomes query failed:", e.message);
+    return { ok: false, enabled: true, reason: "query-failed" };
   }
 }
 

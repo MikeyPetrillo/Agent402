@@ -20,6 +20,8 @@ import { fileURLToPath } from "node:url";
 import { pageText } from "./lib/html-text.js";
 import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 import { CONFORMANCE_PATH } from "../src/conformance-path.js";
+import { REFUND_TERMS_PATH } from "../src/refund-terms-path.js";
+import { TOOL_RELIABILITY_PATH, TOOL_RELIABILITY_MIN_SAMPLE } from "../src/tool-reliability.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -195,6 +197,19 @@ ok(/workflow_dispatch:/.test(src(".github/workflows/refund.yml")), "the refund r
 ok(/acknowledgement within two business days/.test(src("SECURITY.md")) && trust.includes("acknowledge within two business days"), "the acknowledgement window matches SECURITY.md");
 ok(/node scripts\/advisory-triage-check\.js/.test(src(".github/workflows/heartbeat.yml")), "the heartbeat checks reports waiting in triage");
 
+// ---- refund terms, payer screening, per-tool reliability ------------------------------
+{
+  ok(trust.includes(REFUND_TERMS_PATH) && /Every first-contact 402 links it/.test(trust) && /refundTerms: `\$\{origin\}\$\{REFUND_TERMS_PATH\}`/.test(src("src/payment-guide.js")), "/trust names the refund terms document and the 402 block links it (src/payment-guide.js)");
+  const { PAYER_SCREEN_RAILS } = await import("../src/payer-screen-rails.js");
+  ok(PAYER_SCREEN_RAILS.credits.identifier === null && PAYER_SCREEN_RAILS["mpp-stripe"].identifier === null && /carry no payer address/.test(trust), "/trust says the card and credits rails carry no payer address, as the screen table does");
+  ok(["x402-evm", "x402-svm", "x402-stellar", "x402-avm", "mpp-tempo-relay"].every((k) => typeof PAYER_SCREEN_RAILS[k].identifier === "string") && /the paying wallet on Tempo/.test(trust), "every rail /trust says is screened has an identifier in the screen table");
+  ok(trust.includes(TOOL_RELIABILITY_PATH) && trust.includes(`fewer than ${TOOL_RELIABILITY_MIN_SAMPLE} calls`) && /last seven days/.test(trust) && /measured or not enough data/.test(trust) && !/sample/i.test(trust.slice(trust.indexOf(TOOL_RELIABILITY_PATH), trust.indexOf(TOOL_RELIABILITY_PATH) + 400)), "/trust states the per-tool window and the sample floor the module runs");
+  process.env.TOOL_RELIABILITY_PUBLIC = "off";
+  const offText = pageText(trustPage(BASE));
+  delete process.env.TOOL_RELIABILITY_PUBLIC;
+  ok(!offText.includes(TOOL_RELIABILITY_PATH), "TOOL_RELIABILITY_PUBLIC=off: /trust no longer offers the per-tool table");
+}
+
 // ---- every internal link on /trust is a served route --------------------------------
 {
   const server = src("src/server.js");
@@ -202,7 +217,7 @@ ok(/node scripts\/advisory-triage-check\.js/.test(src(".github/workflows/heartbe
   const content = trustHtml.slice(trustHtml.indexOf("Trust at Agent402."), trustHtml.indexOf("<footer"));
   const hrefs = [...content.matchAll(/href="(\/[^"#?]*)/g)].map((m) => m[1]).filter((h) => !h.startsWith("//"));
   // A route registered under a path constant (app.get(CONFORMANCE_PATH, ...)) counts with its value.
-  const viaConstant = new Set(server.includes("app.get(CONFORMANCE_PATH,") ? [CONFORMANCE_PATH] : []);
+  const viaConstant = new Set([[CONFORMANCE_PATH, "CONFORMANCE_PATH"], [REFUND_TERMS_PATH, "REFUND_TERMS_PATH"], [TOOL_RELIABILITY_PATH, "TOOL_RELIABILITY_PATH"]].filter(([, name]) => server.includes(`app.get(${name},`)).map(([path]) => path));
   const missing = [...new Set(hrefs)].filter((h) => h !== "/" && !viaConstant.has(h) && !server.includes(`app.get("${h}"`) && !server.includes(`"${h}"`));
   ok(hrefs.length > 5 && missing.length === 0, `every internal link on /trust is a route (${missing.join(", ") || "all served"})`);
 }

@@ -68,6 +68,23 @@ const loopHold = async (fn) => {
   }
   return best;
 };
+// A walk that spends a step budget (resolve-refs on a cycle) costs what the
+// runner makes of those steps: read on the ours clock (least of three)
+// against the larger of the free tier's bound and 60x a same-process baseline
+// job, so a runner twice as slow gets twice the room while a step made
+// several times dearer still fails.
+const STEP_BOUND = bound(BOUND_MS, 60);
+const leastOursAsync = async (fn) => {
+  let ms = Infinity, err;
+  for (let k = 0; k < 3; k++) {
+    const t0 = oursMs();
+    try { await fn(); err = undefined; } catch (e) { err = e; }
+    const took = oursMs() - t0;
+    ms = Math.min(ms, took);
+    if (ms < STEP_BOUND.ms / 2 || took > STEP_BOUND.ms * 4) break;
+  }
+  return { ms, err };
+};
 // Deterministic random numbers, so a failure reproduces.
 function rng(seed) {
   let s = seed >>> 0;
@@ -178,7 +195,7 @@ function rng(seed) {
   ok(rc.turns >= 10 && rc.hold < BOUND_MS, "resolve-refs: the doubling cycle gave the event loop back " + rc.turns + " times (longest gap " + rc.hold.toFixed(0) + "ms)");
   // A long pointer inside that cycle: met on every pass round it, walked once.
   // 800 and 1,600 segments (a 47 KB and a 90 KB spec) cost what the bare
-  // cycle costs, inside the free tier's CPU bound, and the pointer's length
+  // cycle costs, inside the step bound (STEP_BOUND), and the pointer's length
   // is charged to the step budget.
   for (const segs of [800, 1600]) {
     const withPtr = doubling(24);
@@ -188,8 +205,8 @@ function rng(seed) {
     let node = { type: "string" }; for (let i = 0; i < segs; i++) node = { a: node };
     withPtr.deep = node;
     const parsed = JSON.parse(JSON.stringify(withPtr));
-    const rp = await bestOf(() => tool.handler({ spec: parsed }));
-    ok(rp.err?.statusCode === 413 && rp.ms < BOUND_MS, `resolve-refs: a ${JSON.stringify(parsed).length}-byte doubling cycle holding a ${segs}-segment pointer is refused in ${rp.ms.toFixed(0)}ms of CPU (${rp.err?.statusCode})`);
+    const rp = await leastOursAsync(() => tool.handler({ spec: parsed }));
+    ok(rp.err?.statusCode === 413 && rp.ms < STEP_BOUND.ms, `resolve-refs: a ${JSON.stringify(parsed).length}-byte doubling cycle holding a ${segs}-segment pointer is refused in ${rp.ms.toFixed(0)}ms (${OURS_READING}), ${STEP_BOUND.note} (${rp.err?.statusCode})`);
   }
   {
     const { __resolveRefsBudgetForTest } = await import("../src/tools/api-kit.js");
@@ -264,18 +281,7 @@ function rng(seed) {
   // while a step made several times dearer still fails.
   {
     const { RESOLVE_REFS_MAX_STEPS } = await import("../src/tools/api-kit.js");
-    const stepBound = bound(BOUND_MS, 60);
-    const leastOursAsync = async (fn) => {
-      let ms = Infinity, err;
-      for (let k = 0; k < 3; k++) {
-        const t0 = oursMs();
-        try { await fn(); err = undefined; } catch (e) { err = e; }
-        const took = oursMs() - t0;
-        ms = Math.min(ms, took);
-        if (ms < stepBound.ms / 2 || took > stepBound.ms * 4) break;
-      }
-      return { ms, err };
-    };
+    const stepBound = STEP_BOUND;
     const cycleKeys = (L, N, wrap) => { const s = { c: {}, w: {} }; for (let i = 0; i < L; i++) s.c["s" + i] = { $ref: "#/c/s" + ((i + 1) % L) }; for (let i = 0; i < N; i++) { if (wrap) { s.w["w" + i] = { $ref: "#/c/s0" }; s["k" + i] = { $ref: "#/w/w" + i }; } else s["k" + i] = { $ref: "#/c/s0" }; } return s; };
     for (const [label, spec] of [["1,500 keys", cycleKeys(2000, 1500, false)], ["1,000 wrapped keys", cycleKeys(2000, 1000, true)]]) {
       const r = await leastOursAsync(() => tool.handler({ spec }));

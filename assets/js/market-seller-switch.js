@@ -8,7 +8,7 @@
   var panel=document.getElementById('market-panel');
   var CHAIN=panel?(panel.getAttribute('data-chain')||''):'';
   if(!panel||!window.fetch||!window.history||!history.pushState||!document.createRange().createContextualFragment)return;
-  function loading(on){panel.style.transition='opacity .15s';panel.style.opacity=on?'.5':'';}
+  function loading(on){panel.style.transition='opacity var(--dur-fast)';panel.style.opacity=on?'.5':'';}
   function mark(host){document.querySelectorAll('[data-seller-link]').forEach(function(a){var h=a.getAttribute('data-seller-host')||'';a.classList.toggle('sel',host?(h===host):(a.getAttribute('data-seller-local')==='1'));});}
   function swap(html){panel.replaceChildren(document.createRange().createContextualFragment(html));}
   function load(host,push){
@@ -16,7 +16,7 @@
     return fetch('/api/market/'+CHAIN+'/panel'+(host?('?seller='+encodeURIComponent(host)):''),{headers:{accept:'application/json'}})
       .then(function(r){if(!r.ok)throw 0;return r.json();})
       .then(function(j){swap(j.html);mark(host);loading(false);
-        if(push){var u=host?(location.pathname.split('?')[0]+'?seller='+encodeURIComponent(host)):location.pathname.split('?')[0];history.pushState({s:host},'',u+'#activity');var el=document.getElementById('activity');if(el)el.scrollIntoView({behavior:'smooth',block:'start'});}
+        if(push){var u=host?(location.pathname.split('?')[0]+'?seller='+encodeURIComponent(host)):location.pathname.split('?')[0];history.pushState({s:host},'',u+'#activity');var el=document.getElementById('activity');if(el)el.scrollIntoView({behavior:window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});}
         return true;});
   }
   document.addEventListener('click',function(e){

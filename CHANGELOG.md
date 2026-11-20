@@ -6,6 +6,292 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-19 (onchain query answers that cannot be read)
+Tools:
+- `onchain-sql` and `onchain-sql-schema` answer 502, uncharged, when the
+  query service's answer arrives cut off, empty or not JSON; before, such an
+  answer was served as a result with no rows or an empty schema. A query
+  that matches no rows still answers 200 with no rows.
+
+### 2026-11-19 (answer size of the audio and PDF tools)
+Tools:
+- `audio-convert` and `audio-normalize` answer an MP3 of up to 60 MB (43
+  minutes at 192k). A recording that would encode larger is answered 413
+  before it is encoded, with the limit and the length that fits, and is not
+  charged; a lower `bitrate` fits a longer one. The PDF tools (`pdf-merge`,
+  `pdf-extract-pages`, `pdf-rotate`, `images-to-pdf`) answer a file of up to
+  40 MB, and 413 past it.
+
+### 2026-11-19 (agent402-client 0.10.0: a default per-call ceiling)
+Packages:
+- agent402-client 0.10.0 holds a $5 per-call ceiling by default
+  (`maxPerCallUsd`), above every catalog price, so a 402 that asks for far
+  more is refused before anything is signed. `0`, `"off"` or `null` turns it
+  off; a malformed value keeps the default and prints a warning; a refusal
+  names `maxPerCallUsd` and the per-call `maxUsd` option. The rolling caps
+  stay opt-in.
+
+### 2026-11-19 (Solana fresh quote after a refusal, render without a browser)
+Payments:
+- A Solana payment its facilitator refused before broadcasting it (a verify
+  refusal, or a settle refusal that names no transaction) is answered 402
+  with `requote: true` and words that say to request the route again without
+  a payment header: that fresh 402 names another facilitator's fee payer
+  when one is available, and otherwise the same quote as before. Nothing was
+  charged.
+Tools:
+- render reads a page's served HTML without starting the browser when that
+  HTML already carries the page's content, and answers `rendered: false`; a
+  page that needs JavaScript (an app shell, little text, hydrated
+  components, a refused fetch) is rendered in headless Chromium as before
+  and answers `rendered: true`.
+
+### 2026-11-19 (Robinhood Chain price)
+Payments:
+- Robinhood Chain (`eip155:4663`) no longer carries a price floor by
+  default. A server that leaves `ROBINHOOD_MIN_PRICE_USD` unset quotes every
+  call there at its list price, like every other chain. A server that sets
+  it keeps that floor, and `/api/pricing` `payment.minPriceUsdByNetwork`,
+  llms.txt and the guides state the floor only when it is set.
+- The optional own settler on Robinhood Chain (`ROBINHOOD_RELAYER_KEY`)
+  settles a sale only when its price is at least
+  `ROBINHOOD_RELAYER_MIN_PRICE_USD` (default 0.004). Under it, a refusal from
+  the listed facilitators is answered as a 402 and the x402 payment is not
+  settled.
+
+### 2026-11-19 (lower prices on 40 tools)
+Pricing:
+- Lower prices on 40 tools, among them extract, render, screenshot, pdf, image OCR, whois, DNS lookup, FX rates, FRED series, the Treasury yield curve, EDGAR filings, company financials and the crypto market tools. Every skill pack that runs one of them is repriced by the pack rule, and each listing, 402 answer and the OpenAPI document quote the new prices.
+
+### 2026-11-19 (reputation corrections, transcript language, gateway models)
+Seller index:
+- A seller's reputation record reads the price metric as
+  `priceMatchesListing` ("price matches listing"): the share of routes whose
+  live 402 price matches the price the seller's own documents list. `POST
+  /api/reputation/recheck?seller=<host>` asks for a fresh measurement: free,
+  one accepted request per seller every 6 hours (a repeat answers the one
+  already scheduled), limited per caller; the crawl reads the seller on its
+  next cycle inside its operator's crawl budget, and the answer is 202 with
+  `crawlBy` and `recordBy`. The record shows `lastRecheckedAt`, and a day on
+  which our own crawl cycle failed broadly on our side is left out of the
+  crawl and paywall metrics and named under `measurementIssue` ("measurement
+  issue on our side"). The method page names the correction contact.
+Tools:
+- Transcription answers carry `language` on every tier: the language the
+  model reports, else the caller's `language` hint, else the transcript's
+  language read from its words, else null.
+Gateway:
+- The pro tier serves openai/gpt-6.2-sol and gpt-6.2-sol-pro,
+  google/gemini-4-carbon and gemini-4-neon; the premium tier serves
+  openai/gpt-6.2-astra and gpt-6.2-astra-pro in place of gpt-6-astra, and a
+  call naming gpt-6-astra or gpt-6-astra-pro is served by its 6.2 twin; the
+  base tier serves google/gemini-4-hydrogen and lists qwen/qwen4-max by
+  name. Each is on the metered tier too.
+Site:
+- The "Watch a call get paid" figure lays every step out in one row from
+  1024 px wide, and stacks them on phones.
+
+### 2026-11-18 (bundle products and wholesale tool data)
+Tools:
+- Three bundle tools each run many catalog tools in one call and return one
+  computed report: weather-risk-brief, a 7-day weather risk read for up to
+  50 sites (forecast, threshold hits, air quality, the same dates a year
+  earlier and the chance of heavy rain), scored and ranked; filings-brief,
+  the SEC picture of up to 40 US public companies (latest annual and
+  quarterly financials with ratios, filing activity and Form 4 activity),
+  flagged and ranked; and token-diligence, market diligence for up to 20
+  coins (profile and supply, one-year return, drawdown and volatility,
+  turnover and dilution), flagged and ranked. Each is priced per site,
+  company or coin by the skill-pack rule over the tools it runs, and the 402
+  quotes the amount for the units in the body. A ticker or coin the source
+  does not know answers 422 naming it. No model writes any part of a
+  report.
+Wholesale:
+- `/wholesale` and `GET /api/wholesale/v1` give a reseller one versioned
+  JSON read per tool family (computation tools; SEC filings and company
+  financials; US Treasury rates and debt; weather forecasts, history, air
+  quality and risk), and `GET /api/wholesale/v1/<family>` lists a family's
+  tools: each tool's price, which is the public route's own price with no
+  wholesale discount, the credit to keep with its answers, and its success
+  rate and p50 and p95 latency over the last seven days, marked measured or
+  not enough data. Only sources whose answers may be passed on are listed;
+  market data, search results and model output are not offered. Within v1,
+  fields are only added.
+- Every tool error answer carries `errorCode` beside the message: one
+  stable code per status (such as `invalid_input`, `upstream_error` and
+  `unavailable`), listed with its meaning in the wholesale contract. A code
+  is only ever added, never renamed or removed.
+
+### 2026-11-18 (yield age limit, MCP cut-offs, unknown coin ids)
+Tools:
+- The Treasury yield tools (`treasury-yield-curve`,
+  `treasury-yield-history`, `yield-curve-spread`) answer 503 with
+  Retry-After, uncharged, when the last good read of the yield file is more
+  than three days old, instead of serving older yields marked stale.
+MCP:
+- A paid call on the hosted MCP connector whose settled answer the connector
+  stopped waiting for is booked as owed in the refund ledger, as its cut-off
+  text says, also when the answer was written just as the connector's wait
+  ended. A resend of the same payment with the same idempotency key is
+  served the stored answer and that booking is voided first, so the call is
+  never both served and owed.
+Tools:
+- A CoinGecko id the upstream called unknown is answered 422 with no
+  upstream read for the rest of the UTC day unless its list names it, and
+  one address's calls naming unknown ids take at most 8 of the day's reads
+  an hour before their ids are checked against their lists; a real id is
+  always read.
+
+### 2026-11-18 (refund terms, per-tool reliability and payer screening per rail)
+Payments:
+- `/.well-known/agent402-refund-terms.json` states per payment rail whether
+  an error answer is charged, whether a hang-up is forgiven and how a
+  charged failure is repaid, with the rules of the refund ledger, prepaid
+  credits and card reports, computed from the serving code and its switches.
+  Every 402 body's `payment` block and `/api/pricing` link it.
+- An MPP Tempo payment settled through Tempo's relay now has its paying
+  wallet screened against the OFAC SDN list before the relay is asked; a
+  payer that is not listed is served as before. Each rail's
+  `sanctionsScreening` cell in the conformance document names the
+  `identifier` its screen reads, and says so where a rail carries no payer
+  address.
+Reliability:
+- `/api/reliability/tools` lists every tool with its success rate and median
+  and 95th percentile latency over the last seven days, each marked measured
+  or not enough data; a tool with too few calls in the window has no figure,
+  and an input the caller got wrong is not counted against the tool.
+  `?slug=` returns one tool.
+Docs:
+- A proposal for the receipt format and the refund terms document, with this
+  server as the working implementation, is in the repository's docs folder.
+
+### 2026-11-18 (seller reputation)
+Seller index:
+- `GET /api/reputation?seller=<host>` publishes one outside seller's
+  reputation as this server measured it over a rolling 30-day window:
+  manifest uptime, 402 uptime, responsiveness, price matches listing (the live 402
+  price against the listed price) and delivery (measured from purchases
+  Agent402's router made for buyers), with age. Each metric names its method, sample size and last measurement and is
+  scored only past its minimum sample. No metric counts payments or buyers.
+- `/api/index?seller=` carries the same record as `reputation` and a compact
+  `reputation` on each route row; a seller's card on a chain page shows it in
+  one line.
+
+### 2026-11-18 (audit report)
+Tools:
+- `POST /api/audit-report` returns the paying wallet's paid history over a
+  window of up to a year: each call's time, tool and route, amount, rail,
+  network, settlement, request and response digests and its signed receipt,
+  with totals by tool and by day, as JSON or a CSV file, a page at a time.
+  The report carries a summary receipt over itself that `POST
+  /api/receipts/verify` checks. Keyed to the wallet that pays for the call;
+  EVM x402 only.
+Privacy:
+- A signed receipt issued for a call paid from an EVM wallet or over Tempo
+  is kept for the paying wallet's audit report and deleted 400 days after it
+  was issued.
+
+### 2026-11-18 (onchain query capacity)
+Tools:
+- onchain-sql runs up to 8 queries at once on a server (was 2), and every
+  query the server sends to the query service is spaced to stay under that
+  service's rate limit (for up to four replicas at the default spacing). A
+  query past either limit is refused 429 with Retry-After, before any
+  payment is settled.
+
+Status:
+- onchainSqlBusy on /api/gateway-status reads alert when a top paying buyer
+  gets that refusal, from either limit.
+
+### 2026-11-18 (holiday, business-day and market calendars)
+Tools:
+- public-holidays reads the v4 holiday dataset: each holiday adds
+  `calendarDate`, `nationalHoliday`, `subdivisionCodes` and `holidayTypes`
+  (Public, Bank, School, Authorities, Optional, Observance), and the call
+  takes optional `subdivision` and `types` filters. Every existing field
+  keeps its meaning: `date` is still the observed date. Until 2027-01-31
+  `date` and `localName` come from the earlier source and years outside the
+  v4 window are answered from it; from 2027-02-01 `date` follows the
+  published observance rule where a country has one (US federal, UK
+  substitute days, Japan substitute holidays), `localName` is null, and
+  those years answer 400.
+- New holiday tools: bank-holidays, school-holidays, next-holidays (upcoming
+  holidays with days until each), long-weekends (runs of three or more days
+  off with bridge days), country-business-days (check a date, add or
+  subtract business days, count between dates, by country or region, with
+  the US federal, UK substitute-day and Japan substitute-holiday rules
+  applied) and business-day-planner (the first dates that are business days
+  in every listed country or region).
+- settlement-calendar: the settlement date for a payment sent on a given
+  date over ACH, Fedwire, SEPA Credit Transfer, SEPA Instant or CHAPS, from
+  each rail's published operating days and bank holidays, with the rule and
+  its official sources in the answer.
+- market-calendar: whether NYSE, the London Stock Exchange, Xetra, JPX or
+  HKEX is open at a given moment, the day's sessions, the next open and
+  close, and closures in the coming month, from each exchange's own
+  published calendar. It is pure computation and free through proof of work.
+- gtin-validate: checks the GS1 check digit of a GTIN-8, UPC-A, EAN-13 or
+  GTIN-14 barcode number and returns the expected digit and the 14-digit
+  form. It is pure computation and free through proof of work.
+Credits:
+- Holiday data by Nager.Date, which Agent402 sponsors; every tool that
+  serves it carries the credit.
+
+### 2026-11-18 (site motion and charts)
+Site:
+- Home, /101 and every tool page show one paid call step by step: the request,
+  the 402 with the tool's price, the signature, the settlement, the answer
+  and, while the server signs them, the signed receipt, with the 24-hour
+  median latency and the count of settled outside payments read from
+  /api/stats. It holds still under reduced motion.
+- /scorecard charts outside paying wallets per month, returning and new;
+  /proof charts each settlement as a share of its quoted ceiling; /leaderboard
+  charts the top ten sellers by USDC settled.
+- Motion follows the DESIGN.md tokens: interface moves take 200 to 400 ms, an
+  exit takes 70% of its entrance, and every page goes still under reduced
+  motion.
+Live view:
+- A walker near the pointer lifts toward it, the gate under the pointer
+  brightens, and each settlement sends a ring out of its gate.
+Docs:
+- The READMEs and the wiki show a paid call as an animated image and the
+  architecture as a diagram.
+
+### 2026-11-18 (prediction-market tools not offered)
+Tools:
+- The prediction-market tools are not offered for now: kalshi-markets,
+  kalshi-event, kalshi-live-data and kalshi-weather-index. Their routes
+  answer 503 with no payment asked, and the catalog, /api/pricing,
+  /openapi.json, llms.txt, the MCP tool lists and the sitemap do not list
+  them. The retired Polymarket routes answer 410 with no replacement named.
+
+### 2026-11-18 (signed receipts on every paid call)
+Payments:
+- A streamed paid answer ends with a `: agent402-receipt <receipt>`
+  server-sent comment line, which event-stream parsers skip, carrying the
+  signed receipt over every byte streamed before it, and also carries it as
+  an `Agent402-Receipt` trailer when the client sends `TE: trailers`.
+- A call paid with a prepaid credits key is debited before its answer ends
+  and carries a signed receipt naming the key's id (never the key) and the
+  debit's id, which the key's history records.
+- A report bought at card checkout carries a signed receipt over the
+  checkout, the amount collected, the payment intent and the report's text,
+  shown on the report page and in the delivery email and checked at `POST
+  /api/receipts/verify`.
+MCP:
+- A paid tool result on the hosted MCP connector carries the route's signed
+  receipt in `_meta["tools.agent402/receipt"]`, and a finished async job
+  keeps it in its result's headers.
+Site:
+- The lead line reads: Agent402 is the payment and trust layer for agent
+  commerce: agents find, pay for and verify every paid call, across x402 and
+  MPP, with a signed receipt for each one. A server with no signing key
+  keeps the line without the receipt clause.
+Packages:
+- agent402-client exports `verifyStreamedReceipt` and
+  `splitStreamedReceipt`, which check the receipt line that ends a streamed
+  answer against the bytes streamed before it.
+
 ### 2026-11-18 (stock data tools not offered)
 Tools:
 - stock-quote and stock-history are not offered for now, and neither are the

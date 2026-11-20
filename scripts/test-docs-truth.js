@@ -145,6 +145,10 @@ const KNOWN_NON_CATALOG = new Set([
   "/api/pricing", "/api/find", "/api/index", "/api/route", "/api/stats", "/api/wishes",
   "/api/sales", "/api/revenue", "/api/revenue/daily", "/api/revenue/mpp", "/api/calls/daily",
   "/api/reliability", "/api/rails", "/api/status", "/api/status/probe", "/api/leaderboard", "/api/analytics",
+  // Free seller reputation (src/seller-reputation.js), outside CATALOG.
+  "/api/reputation", "/api/reputation/recheck",
+  // Free signed-receipt check (src/receipt-signing.js RECEIPT_VERIFY_PATH), outside CATALOG.
+  "/api/receipts/verify",
   "/api/cacheable", "/api/cache-stats", "/api/pow", "/api/pow/challenge", "/api/skill-packs.json",
   "/api/index/register", "/api/x402-economy", "/api/gateway-status", "/api/selfcheck",
   "/api/wish", "/api/route/execute", "/api/skill-packs",
@@ -156,10 +160,23 @@ const KNOWN_NON_CATALOG = new Set([
   "/api/buy", "/api/subscribe", "/api/credits/checkout", "/api/credits/claim", "/api/credits/balance",
 ]);
 
-let deadRoutes = 0, priceMismatches = 0, badSlugLinks = 0, exactCounts = 0, wrongFirstAsk = 0;
+// A walkthrough's approval step ("4. User approves the ~$0.010 USDC payment")
+// states the price of the call its block makes, with no route on its own line,
+// so no check above reads it: one was left at ten times the price when the
+// route's own line two rows up was repriced. The price it states, or null.
+function approvalPrice(line) {
+  const m = /\bapprov\w*\s+(?:the\s+)?~?\$(\d+\.\d+)/i.exec(line);
+  return m ? m[1] : null;
+}
+ok(approvalPrice("4. User approves the ~$0.010 USDC payment") === "0.010" && approvalPrice("Approve $0.02 to continue") === "0.02" && approvalPrice("costs $0.010") === null, "control: an approval step's price is read, other prices are not");
+
+let deadRoutes = 0, priceMismatches = 0, badSlugLinks = 0, exactCounts = 0, wrongFirstAsk = 0, approvalsJudged = 0;
 for (const file of files) {
   const rel = relative(ROOT, file);
   const text = readFileSync(file, "utf8");
+  // The catalog routes named so far in the current block (lines between two
+  // blank lines): an approval step is judged against the block's one route.
+  let blockRoutes = new Set();
 
   // 1 + 2. Routes, and a price only where the line is unambiguous.
   //
@@ -198,6 +215,19 @@ for (const file of files) {
       }
     }
     const pricesOnLine = [...line.matchAll(/\$(\d+\.\d+)/g)].map((m) => m[1]);
+
+    if (!line.trim()) blockRoutes = new Set();
+    for (const r of routesOnLine) if (routeByPath.has(r)) blockRoutes.add(r);
+    const approved = routesOnLine.length === 0 ? approvalPrice(line) : null;
+    if (approved !== null && blockRoutes.size === 1) {
+      approvalsJudged++;
+      const [route] = blockRoutes;
+      const real = String(routeByPath.get(route).price).replace("$", "");
+      if (Number(approved) !== Number(real)) {
+        priceMismatches++;
+        if (priceMismatches <= 12) console.error(`  price: ${rel} -> the approval step for ${route} says $${approved}, catalog says $${real}`);
+      }
+    }
 
     // Pack price tables key on a /skills/<slug> LINK, not a route and not a
     // backticked slug, so neither check above looked at them - found when a
@@ -299,7 +329,8 @@ for (const file of files) {
 
 ok(dualSeen > 0, `the docs' two-state pack prices are read against this server's state (${dualSeen} lines, stock data provider ${stockOn ? "on" : "off"})`);
 ok(deadRoutes === 0, `no documentation references a route the server does not serve (${deadRoutes} found)`);
-ok(priceMismatches === 0, `every price stated beside a route matches the catalog (${priceMismatches} mismatched)`);
+ok(approvalsJudged >= 3, `walkthrough approval steps are read against their block's route (${approvalsJudged} judged)`);
+ok(priceMismatches === 0, `every price stated beside a route, or in a walkthrough's approval step, matches the catalog (${priceMismatches} mismatched)`);
 ok(badSlugLinks === 0, `every /tools and /skills link resolves to a real entry (${badSlugLinks} dead)`);
 ok(exactCounts === 0, `no doc hard-codes an exact catalog count (${exactCounts} found)`);
 ok(wrongFirstAsk === 0, `no doc says the connector's first payment ask is JSON-RPC -32042 (${wrongFirstAsk} found; it is a tool result, -32042 is the tasks path)`);

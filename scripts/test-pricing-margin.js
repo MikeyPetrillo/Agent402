@@ -533,7 +533,7 @@ console.log("\n# tool_gone — retired-route telemetry");
 
   // Integration: a real retired-route hit on a booted server fires the event.
   const PORT = 3179, B = `http://127.0.0.1:${PORT}`;
-  const proc = spawn("node", ["src/server.js"], {
+  const proc = spawn(process.execPath, ["src/server.js"], {
     env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), POSTHOG_TEST_CAPTURE: "1", POSTHOG_PAYWALL_FLUSH_MS: "1000" },
     stdio: ["ignore", "pipe", "pipe"],
   });

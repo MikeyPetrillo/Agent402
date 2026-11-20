@@ -89,7 +89,7 @@ const sanitizeName = (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 6
  * @param {string[]} [opts.slugs]    Restrict to these slugs (recommended; smaller tool list = better tool-selection)
  * @param {boolean}  [opts.freeOnly=true]  Default: only include compute-payable tools (no wallet needed)
  * @param {typeof fetch} [opts.fetch]      An x402-wrapped fetch (only needed for wallet-only tools)
- * @param {number} [opts.maxPerCallUsd]   Opt-in spending caps passed to agent402-client (none by default):
+ * @param {number} [opts.maxPerCallUsd]   Spending caps passed to agent402-client ($5 per call by default from 0.10.0):
  * @param {number} [opts.dailyLimitUsd]   a paid call over one is refused before anything is signed
  * @param {number} [opts.maxPerHostUsd]
  * @param {object} [opts.x402Client]      The @x402/core client your fetch wraps, so the caps hold at signing

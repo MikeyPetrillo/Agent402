@@ -228,6 +228,7 @@ export const META_OUTPUT_SCHEMAS = {
       pay: { type: "object", additionalProperties: true },
       spendControls: { additionalProperties: true },
       balanceAndHistory: { type: "object", additionalProperties: true },
+      emptyWallet: { type: "object", description: "What to do with an empty wallet: state, whoActs, command, wait", additionalProperties: true },
       mppStartHere: { type: "object", description: "MPP start-here routes (slug, method, path, url, price, why)", additionalProperties: true },
       service: { type: "string" },
       mode: { type: "string" },

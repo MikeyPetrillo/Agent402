@@ -1176,6 +1176,34 @@ export async function withStateTx(fn, { timeoutMs = 0 } = {}) {
   }
 }
 
+/**
+ * One statement outside any transaction, on a pooled connection that is
+ * closed afterwards, with its own statement limit (`statementMs`, 0 for none):
+ * for CREATE or DROP INDEX CONCURRENTLY, which Postgres refuses inside a
+ * transaction block and which can run longer than the pool's statement limit.
+ * The session setting dies with the connection, so it never reaches another
+ * caller. Takes no lock of this module's (the caller decides who runs it).
+ */
+export async function stateStatementOutsideTx(text, { statementMs = 0 } = {}) {
+  const p = await stateDb();
+  if (!p) throw new Error("state database not configured");
+  let client;
+  try { client = await p.connect(); }
+  catch (e) { noteFailure(e); throw e; }
+  let broken = null;
+  const onError = (err) => { broken = broken || err || new Error("connection error"); };
+  client.on("error", onError);
+  try {
+    await client.query(`SET statement_timeout = ${Math.max(0, Math.floor(Number(statementMs) || 0))}`);
+    return await client.query(text);
+  } catch (e) {
+    broken = broken || e;
+    throw e;
+  } finally {
+    client.release(broken instanceof Error ? broken : true);
+  }
+}
+
 // ---- one-time imports share a few slots ----------------------------------------
 // A first boot with the database on imports every store's file at once, and a
 // large import holds its pooled connection for as long as it takes to send.

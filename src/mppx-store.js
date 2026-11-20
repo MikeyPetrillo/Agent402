@@ -24,6 +24,7 @@
 import { Json } from "ox";
 import { Store } from "mppx";
 import { getSharedRedisClient } from "./shared-limit.js";
+import { boundedRedisClient } from "./bounded-redis.js";
 
 export const MPPX_STORE_PREFIX = "mppx-store:";
 // A value that is not a replay marker carries no expiry of its own (mppx's
@@ -73,8 +74,12 @@ export function createMppxStore({ getClient = getSharedRedisClient, prefix = MPP
     lastDegradedLog = now;
     try { log(`[mppx-store] redis ${op} failed, using this process's store (claims are not shared until redis answers): ${String(e?.message || e).slice(0, 200)}`); } catch { /* logging never throws */ }
   };
+  // Every command is bounded (SHARED_LIMITS_OP_MS, loop time): a connected
+  // Redis that stops answering fails the command and the claim falls back to
+  // this process's memory, instead of holding the payment for as long as the
+  // socket lives.
   async function redis() {
-    try { return await getClient(); } catch { return null; }
+    try { return boundedRedisClient(await getClient()); } catch { return null; }
   }
   const k = (key) => `${prefix}${key}`;
 

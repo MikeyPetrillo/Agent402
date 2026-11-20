@@ -63,8 +63,10 @@ export function sharedLimitsMode() { return MODE; }
 /** True when a control should write its state through to the shared store. */
 export function sharedLimitsEnabled() { return MODE === "redis"; }
 
-/** A Redis command that neither answers nor fails within this is a failure (SHARED_LIMITS_OP_MS). */
-export const OP_MS = () => Math.max(50, Number(process.env.SHARED_LIMITS_OP_MS) || 1_000);
+// A Redis command that neither answers nor fails within OP_MS is a failure
+// (SHARED_LIMITS_OP_MS); defined beside boundedRedisClient, which holds no state.
+import { OP_MS, boundedRedisClient } from "./bounded-redis.js";
+export { OP_MS, boundedRedisClient };
 /** How long after a failed command the word reads degraded (SHARED_LIMITS_DEGRADED_HOLD_MS). */
 export const DEGRADED_HOLD_MS = () => Math.max(1_000, Number(process.env.SHARED_LIMITS_DEGRADED_HOLD_MS) || 60_000);
 /** A window read hands back its entries only up to this many (count and sum always). */

@@ -122,7 +122,7 @@ export function workflowsPage(baseUrl, catalog = {}) {
 .wf-card h3{margin:0 0 8px;font-family:var(--font-body);font-weight:600;font-size:var(--fs-xl);color:var(--ink)}
 .wf-desc{color:var(--muted);font-size:var(--fs-md);line-height:1.55;margin:0 0 20px}
 .wf-flow{display:flex;align-items:stretch;gap:0;flex-wrap:nowrap;overflow-x:auto;padding:4px 0}
-.wf-step{display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--card);border:1px solid var(--hairline);padding:12px 16px;min-width:120px;max-width:200px;text-decoration:none;transition:border-color .15s;flex-shrink:0}
+.wf-step{display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--card);border:1px solid var(--hairline);padding:12px 16px;min-width:120px;max-width:200px;text-decoration:none;transition:border-color var(--dur-fast);flex-shrink:0}
 .wf-step:hover{border-color:var(--accent)}
 .wf-step-name{color:var(--accent);font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;margin-bottom:4px;white-space:nowrap}
 .wf-step-desc{color:var(--muted);font-size:var(--fs-xs);line-height:1.35;text-align:center}

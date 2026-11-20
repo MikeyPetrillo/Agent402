@@ -1,5 +1,7 @@
-import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
+import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_SSE_COMMENT } from "./receipt-signing.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
+import { REFUND_TERMS_PATH } from "./refund-terms-path.js";
+import { TOOL_RELIABILITY_PATH, TOOL_RELIABILITY_WINDOW_HOURS, TOOL_RELIABILITY_MIN_SAMPLE, toolReliabilityEnabled } from "./tool-reliability.js";
 import { smallHeaderLimitText } from "./payment-required-compact.js";
 import { whyPointsPlain } from "./why.js";
 import { networkPriceFloors } from "./network-floors.js";
@@ -16,6 +18,7 @@ import { LEARN, learnSlugs } from "./learn.js";
 import { RAILS, RAILS_OR, countWord } from "./rails.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
+import { batchOfferPublic } from "./batch-settlement.js";
 import { CHAIN_PAGES } from "./market-page.js";
 import { EXEC_TIERS } from "./tools/route-execute.js";
 import { stripeEnabled } from "./mpp-stripe.js";
@@ -285,6 +288,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
     { loc: `${baseUrl}/security`, priority: "0.7" },
+    { loc: `${baseUrl}/wholesale`, priority: "0.6" },
     { loc: `${baseUrl}/trust`, priority: "0.6" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
@@ -372,6 +376,7 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
     { loc: `${baseUrl}/security`, priority: "0.7" },
+    { loc: `${baseUrl}/wholesale`, priority: "0.6" },
     { loc: `${baseUrl}/trust`, priority: "0.6" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
@@ -465,6 +470,17 @@ function gatewayNanopaymentsLine() {
   const windows = [...new Set(Object.values(gw.networks).map((n) => Number(n.maxTimeoutSeconds)).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
   const windowWords = windows.length ? ` and a \`maxTimeoutSeconds\` of ${windows.join(" or ")} seconds` : "";
   return ` **Batched option, no gas per call (Circle Gateway nanopayments).** On ${chains.join(" and ")} the same 402 also carries a second \`exact\` accept whose \`extra.name\` is \`${gw.kind}\` (with \`extra.verifyingContract\`${windowWords}): after a USDC deposit into Circle Gateway (an on-chain transfer the buyer makes and pays gas for), the buyer for each call signs the same EIP-3009 authorization under that domain against that balance and pays no gas for the call; Gateway verifies it and settles it off chain in batches. Same price, same payTo; a client that ignores \`extra.name\` keeps paying the plain accept, which stays first in \`accepts\`; agent402-client 0.8.20+ pays the batched one when constructed with \`{ gateway: { signer } }\`. Identity-bound routes and routes with a lasting effect (such as memory writes, attest and the route-execute tiers) offer the plain accept only. Machine-readable: \`/api/pricing\` (\`payment.acceptKinds\`, \`payment.gatewayNanopayments\`) and \`/.well-known/x402\`.`;
+}
+
+/** The x402 payment-channel option (batch-settlement), as one sentence for
+ *  llms.txt, from the live offer (src/batch-settlement.js); empty while off. */
+function paymentChannelsLine() {
+  const ch = batchOfferPublic();
+  if (!ch) return "";
+  const chains = Object.entries(CHAIN_PAGES).filter(([, c]) => ch.networks.includes(c.caip2)).map(([, c]) => c.chainName);
+  const hours = Math.round(ch.idleRefundSeconds / 3600);
+  const idle = hours >= 1 ? `${hours} hour${hours === 1 ? "" : "s"}` : `${ch.idleRefundSeconds} seconds`;
+  return ` **Payment channels, one deposit for many calls (x402 \`batch-settlement\`).** On ${chains.join(" and ") || ch.networks.join(", ")} the 402 also carries a \`batch-settlement\` accept, last in \`accepts\`: the first call deposits USDC into the channel escrow, and each later call carries one signed cumulative voucher, with no transaction per call. Vouchers are claimed on chain in batches; an x402 channel call is charged to the channel only on its final 200, and a channel idle for ${idle} gets its unused deposit refunded. Identity-bound routes, routes with a lasting effect and the long-running reports offer the other accepts only. Machine-readable: \`/api/pricing\` (\`payment.acceptKinds\`, \`payment.paymentChannels\`) and \`/api/rails\`.`;
 }
 
 /** The full llms text: every section, the skill packs and every tool category.
@@ -595,7 +611,7 @@ Base URL: ${baseUrl}
 
 **No wallet? Pay with compute (proof-of-work).** ${powCount} of the ${tools.length} tools accept a sha256 proof-of-work puzzle (a fraction of a second of CPU) instead of USDC - no money and no AI tokens (no model in the serving path of these tools). Get a challenge at \`${baseUrl}/api/pow/challenge?slug=hash\`, find an integer nonce so that \`sha256(challenge + ":" + nonce)\` has at least ${POW_DIFFICULTY} leading zero bits, then resend the request with header \`X-Pow-Solution: <token>:<nonce>\`. **The response has two different fields and you use both: hash the \`challenge\` (32 hex chars), submit the \`token\` (the longer signed string).** Submitting the challenge you just hashed returns a 402 that looks exactly like an unpaid request, so this is the one step worth reading twice. The network / browser / storage tools that need wallet-bound identity or live egress stay wallet-only.
 
-**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin${floorClause() ? ` (${floorClause()})` : ""}.${premiumClause() ? ` A chain's settlement premium is in the 402 and in \`/api/pricing\` (\`payment.premiumUsdByNetwork\`): ${premiumClause()}.` : ""} Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result (answers up to ${IDEM_MAX_BODY_LABEL}) without paying again.${gatewayNanopaymentsLine()}
+**Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin${floorClause() ? ` (${floorClause()})` : ""}.${premiumClause() ? ` A chain's settlement premium is in the 402 and in \`/api/pricing\` (\`payment.premiumUsdByNetwork\`): ${premiumClause()}.` : ""} Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result (answers up to ${IDEM_MAX_BODY_LABEL}) without paying again.${gatewayNanopaymentsLine()}${paymentChannelsLine()}
 
 **${creditsSalesEnabled() ? "Pay with a prepaid credits key." : "Already hold a prepaid credits key?"}** ${creditsSalesEnabled() ? `Packs are sold by card at ${baseUrl}/credits.` : "New credits are not on sale; a key already issued keeps working."} Send it as \`Authorization: Bearer a402_...\` on any paid tool except the ones that buy from an outside seller (the router's execute tiers, seller-payability, decide-execute and the flight routes), which take a wallet payment - the list price is held before the call and debited only on a successful (200) response; \`X-Credits-Balance\` rides on every answer and \`GET ${baseUrl}/api/credits/balance\` reports the key. agent402-mcp (AGENT402_CREDITS_KEY) and agent402-client ({ creditsKey }) support it. Identity-bound tools (${identityBoundList}) still need an EVM x402 wallet - the payment is the identity there, so credits keys and Tempo are refused on them.
 
@@ -653,6 +669,7 @@ ${flatTiersLine()}
 - [/mcp/server-card](${baseUrl}/mcp/server-card): our MCP server card (also at /.well-known/mcp/server-card.json) - name, version and the streamable HTTP endpoint at /mcp, as the connector reports them at initialize
 - [/.well-known/agent-registration.json](${baseUrl}/.well-known/agent-registration.json): our ERC-8004 registration file. ${erc8004AgentId(baseUrl) ? `The identity is agent ${erc8004AgentId(baseUrl)} in the registry at ${ERC8004_IDENTITY_REGISTRY.chain}:${ERC8004_IDENTITY_REGISTRY.address}, owned by the wallet our 402s name as payTo, and the` : "The"} file lists every way to reach us with x402Support declared
 - [/api/reliability](${baseUrl}/api/reliability): structured reliability / SLA report with a verification URL per claim
+- [/api/reputation](${baseUrl}/api/reputation?seller=): one outside seller's 30-day reputation as this server measured it (\`?seller=<host>\`); each metric and its method in /llms-full.txt
 - [/api/scorecard](${baseUrl}/api/scorecard): buyer scorecard per UTC month from our sales ledger: outside paying wallets, returning and multi-day wallets, settled paid calls and USD by network; our own wallets and test traffic left out, counts of 1 or 2 read "<3" (page: [/scorecard](${baseUrl}/scorecard))
 - [/api/pricing](${baseUrl}/api/pricing): machine-readable catalog (every endpoint, price, category, docs URL)
 - [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments, keyed by its own on-chain payment transaction (\`?tx=\`, 0x plus 64 hex on EVM chains, a signature on Solana, a transaction id on Stellar or Algorand): \`found\`, \`status\` (owed, sending, paid, void or none), \`priceUsd\`, \`network\`, explorer links, our \`refundTx\` once sent, and \`refunds\` (every refund recorded for that transaction, where more than one payment settled in it). It answers that one transaction only, never a wallet's list, and an unknown transaction answers \`none\` in the same shape (also at /api/refunds/lookup)
@@ -695,7 +712,9 @@ ${toolSections}
 - [Security](${baseUrl}/security): disclosure policy with safe harbor, what data is held, key handling, controls in the serving path and on the code
 - [Trust](${baseUrl}/trust): subprocessors, what is stored and where, encryption, nightly backups and restore tests, incident response
 - [Conformance](${baseUrl}${CONFORMANCE_PATH}): per payment rail, the protocol features this server implements (settle after the answer, idempotency key, payment-identifier, replay guard, refund on a charged failure, hang-up forgiveness, payer sanctions screening, receipts) and the refund terms as data, computed from the serving code at each request
-- [Company](${baseUrl}/company): Havok Holdings LLC, what it sells, where the proof is, role mailboxes
+- [Refund terms](${baseUrl}${REFUND_TERMS_PATH}): per payment rail, whether an error answer is charged, whether a hang-up is forgiven and how a charged failure is repaid, with the refund ledger, credits and card report rules, computed from the serving code
+${toolReliabilityEnabled() ? `- [Per-tool reliability](${baseUrl}${TOOL_RELIABILITY_PATH}): every tool's success rate and p50/p95 latency over the last ${TOOL_RELIABILITY_WINDOW_HOURS / 24} days, each marked measured or not enough data (below ${TOOL_RELIABILITY_MIN_SAMPLE} calls)
+` : ""}- [Company](${baseUrl}/company): Havok Holdings LLC, what it sells, where the proof is, role mailboxes
 - [Press](${baseUrl}/press): press kit: how to write the name, logo and social card files, the press contact
 - [Markets](${baseUrl}/markets): the keyless crypto market-data calls (market pulse, perps, options, DeFi, stablecoins, news, indicators) with one curl to copy
 - [Agentic Finance](${baseUrl}/agentic-finance): what the category is and where Agent402 sits in it
@@ -743,7 +762,8 @@ export function llmsTxt(baseUrl, catalog) {
     [`- [/api/scorecard](`, `- [/api/scorecard](${baseUrl}/api/scorecard): monthly buyer scorecard`],
     [`- [/mcp/server-card](`, `- [/mcp/server-card](${baseUrl}/mcp/server-card): MCP server card`],
     [`- [/api/refunds](`, `- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status of one transaction's payments`],
-    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled inside \`windowServed\` (\`eth_getLogs\` on Base USDC, a transfer matching no published price counted only up to the per-call ceiling \`maxCallUsd\`, by payTo). The TOP N only: 25 rows by default, 50 the ceiling, \`totalSellers\` for how many rank in all. \`?sort=usd|calls\`, \`?top=N\`, \`?include=external|all\`; the same data as the SDK's \`topSellers()\` and MCP \`sellers.list\` (listed on hosted /mcp with \`AGENT402_SHOW_ROUTER=1\`, in the npm package with a wallet or that switch)`],
+    // The counting method, the filters and the SDK and MCP readers are in /llms-full.txt.
+    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled (\`eth_getLogs\` on Base USDC, by payTo), the top 25 by default (50 the ceiling, \`totalSellers\` for how many rank in all); \`?sort=usd|calls\`, \`?top=N\`; also the SDK's \`topSellers()\` and MCP \`sellers.list\` (listed on hosted /mcp only with \`AGENT402_SHOW_ROUTER=1\`); the counting window and filters are in /llms-full.txt`],
   ];
   const briefOf = (line) => (brief.find(([prefix]) => line.startsWith(prefix)) || [])[1] || line;
   const sections = keep.map((name) => {
@@ -776,6 +796,7 @@ ${[
     mppMethodsProse(),
     mppFlagshipLlmsBlock(catalog, { compact: true }),
     gatewayNanopaymentsLine(),
+    paymentChannelsLine(),
     ...sections,
     identity,
   ].map((b) => String(b || "").replace(/^\n+|\n+$/g, "")).filter(Boolean).join("\n\n")}
@@ -803,8 +824,10 @@ export function llmsFullTxt(baseUrl, catalog) {
 - Receipt: a settled x402 answer carries \`PAYMENT-RESPONSE\`, base64 JSON with \`success\`, \`transaction\`, \`network\` and \`payer\`; an MPP answer carries \`Payment-Receipt\`, whose \`reference\` names the payment.
 - Settlement: look \`transaction\` up on \`network\`: a stablecoin transfer from \`payer\` to the \`payTo\` the 402 named (also listed in ${baseUrl}/.well-known/x402). A batched payment names its batch transfer instead.
 - Delivery: sha256 the exact bytes received. \`POST /api/attest\` with the transaction, paid from the same EVM wallet, records that digest beside the payment in an attestation on Base; \`POST /api/receipts\` returns the paying wallet's settled calls with each transaction and response digest.
-- Rail rules: ${baseUrl}${CONFORMANCE_PATH}, the row whose \`id\` names the rail and network paid on: \`receipt\`, \`settleAfterAnswer\`, \`idempotencyKey\`, \`replayGuard\` and \`refundOnChargedFailure\`. ${receiptsServed() ? `Where \`signedReceipt\` reads true, the answer also carries \`${RECEIPT_HEADER}\`, a compact JWS (EdDSA) this server signs over the route, the request digest, the answer's sha256, the price, the rail, the payer and the settlement, on a non-streamed answer after settlement; keys at ${baseUrl}${RECEIPT_KEYS_PATH}, free check at \`POST ${RECEIPT_VERIFY_PATH}\`.` : "\`signedReceipt\` reads false on every paid rail: the receipt is the settlement's own record."}
+- Rail rules: ${baseUrl}${CONFORMANCE_PATH}, the row whose \`id\` names the rail and network paid on: \`receipt\`, \`settleAfterAnswer\`, \`idempotencyKey\`, \`replayGuard\` and \`refundOnChargedFailure\`. ${receiptsServed() ? `Where \`signedReceipt\` reads true, the answer also carries \`${RECEIPT_HEADER}\`, a compact JWS (EdDSA) this server signs over the route, the request digest, the answer's sha256, the price, the rail, the payer and the settlement, after settlement; a streamed answer ends with a \`: ${RECEIPT_SSE_COMMENT} <receipt>\` server-sent comment line (event-stream parsers skip it) over every byte streamed before it (an \`${RECEIPT_HEADER}\` trailer too with \`TE: trailers\`), a credits call's receipt names the key's id and its debit, a card-bought report's receipt is on its page and in its email, a monitor subscription gets one per paid period (the first and every renewal) with its period statement on its confirmation page or status link and in its monitor emails, and a paid MCP result carries it in \`_meta["tools.agent402/receipt"]\`; keys at ${baseUrl}${RECEIPT_KEYS_PATH}, free check at \`POST ${RECEIPT_VERIFY_PATH}\`.` : "\`signedReceipt\` reads false on every paid rail: the receipt is the settlement's own record."}
+- Audit report: \`POST /api/audit-report\`, paid from the wallet it covers, returns that wallet's paid calls over a window of up to a year (time, tool, route, amount, rail, network, settlement, request and response digests${receiptsServed() ? ", and each call's signed receipt" : ""}) with totals by tool and by day, as JSON or CSV${receiptsServed() ? `, plus a summary receipt over the report that \`POST ${RECEIPT_VERIFY_PATH}\` checks` : ""}.
 - Outside sellers: ${baseUrl}/api/index?seller=<host> gives a seller's crawl history, the live probe of its paywall and the router's verdict on paying it.
+- Seller reputation: ${baseUrl}/api/reputation?seller=<host> gives one outside seller's reputation as this server measured it over 30 days: manifest and 402 uptime, responsiveness, the live 402 price against the listed price, delivery (measured from purchases Agent402's router made for buyers), and age; each metric with its method, sample size and last measurement, scored only past its minimum sample (else \`not-enough-data\`). It counts no payments or buyers. A day on which our own crawl cycle failed broadly on our side is left out of the crawl and paywall metrics and named under \`measurementIssue\` ("measurement issue on our side"). A seller asks for a fresh measurement with \`POST /api/reputation/recheck?seller=<host>\` (free; one accepted request per seller every 6 hours, a repeat answers the one scheduled; 202 with \`crawlBy\` and \`recordBy\`); the record shows \`lastRecheckedAt\`. Corrections: mike@agent402.tools.
 - Walkthrough: ${baseUrl}/trust#verify
 
 ## Learn (summaries)

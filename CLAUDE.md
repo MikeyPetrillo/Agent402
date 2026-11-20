@@ -28,6 +28,8 @@ LLC: credit the entity, never a personal name.
 - `src/credits.js`: prepaid card credits (hold at authorize, debit on a final 200).
 - `src/human-checkout.js`, `src/stripe-subscriptions.js`, `src/monitor-scheduler.js`: card
   report products and recurring monitors.
+- `src/seller-reputation.js` (`/api/reputation`): outside sellers' reputation from our own crawl
+  and the router's own paid calls; never a payment, buyer or settlement count.
 - `src/find.js` (`/api/find`), `src/discovery.js` (`/.well-known/x402`, `/api/reliability`),
   `src/x402-index.js` (crawled seller index), `src/dispatch-eligibility.js` (router labels).
   Submissions, parts, tool cap and the paywall probe: `.claude/rules/index-router.md`.
@@ -82,6 +84,18 @@ LLC: credit the entity, never a personal name.
   `.statusCode`.
 - A tool whose answer is bytes (the `{ __binary, contentType }` sentinel) declares `mimeType`, the type its published example
   returns; listings, `/openapi.json` and `/api/pricing` read it (`src/tool-media-type.js`, `scripts/test-bazaar-contracts.js`).
+- A tool that reaches the network on its own example is in `WALLET_ONLY_SLUGS` (`src/pow.js`), the
+  egress set the strict example sweep grades by (`scripts/test-free-tier-egress.js` drives every tool on
+  neither list and fails one that egresses). A tool that reads its upstream through another module (a
+  shared read helper, or other tools' handlers as a bundle product does) writes the hosts in its own
+  definition as a literal `upstreamHosts: [...]`; a sweep excuses its upstream's refusal only against
+  the runner's direct read of a declared host (`scripts/lib/upstream-outage.js`).
+- A bundle product (`src/tools/bundle-kit.js`) holds one read per upstream host per unit at a time,
+  runs a leg the source rate-limited (its 429) once, and starts no further unit after it; a leg
+  helper that answers the source's 429 in its own words marks the error `throttled`. Its published
+  example stays inside what the keyless host allows, and the multi-unit path is covered offline
+  through the real legs (`scripts/test-bundle-products.js`). `NON_METERED_ONLY=<slug,...>` narrows a
+  local strict sweep to named tools and prints each one's attempts (refused under CI).
 - **Honest claims.** Most tools are deterministic code; model-backed ones (the `/v1` LLM tiers,
   report products, media/embedding/answer tools) are marked `modelBacked` and public copy must
   say so. Never write an unscoped "no model in the serving path" or "every tool is
@@ -108,7 +122,7 @@ LLC: credit the entity, never a personal name.
   stays a 500 and is counted as a tool failure; a tool checks its own inputs for everything else.
 - **Identity-bound routes** (memory, my-usage, attest, feedback) are keyed on the signed
   EIP-3009 `authorization.from` (`src/payer.js` `identityPayerOf`: null in FREE_MODE, where no
-  header is verified); they are EVM-exact only and refused on Tempo/credits gates. Never weaken payer attribution. Never case-fold base58/Stellar addresses.
+  header is verified); they are EVM-exact only and refused on Tempo/credits gates. A wallet session (`src/wallet-sign-in.js`, off by default) names the wallet only where no signed payer does, and never for attribution. Never weaken payer attribution. Never case-fold base58/Stellar addresses.
 - Catalog floor: 400 entries, CI-checked by `node scripts/sync-count.js --check`. Marketing leads
   with the payment and trust layer; catalog size appears only as a supporting line, as "500+ tools",
   never an exact number. The lead sentence lives in `src/positioning.js` (its signed-receipt clause
@@ -158,7 +172,7 @@ LLC: credit the entity, never a personal name.
 
 ## Key machine-readable surfaces (free)
 `/health`, `/api/pricing`, `/openapi.json`, `/llms.txt`, `/.well-known/x402`,
-`/api/reliability`, `/api/find?q=<task>`, `/api/route`, `/api/index`, `/api/stats`,
+`/api/reliability`, `/api/find?q=<task>`, `/api/route`, `/api/index`, `/api/reputation?seller=<host>`, `/api/stats`,
 `/api/status`, `/api/gateway-status` (bucketed status words only, never numbers), `/robots.txt`,
 `/sitemap.xml`, `/.well-known/glama.json`, `/x402-test` (payment-refusal diagnostics).
 Operator-only surfaces live under `/__operator/*` (token-authed); the operator view of a public
@@ -207,8 +221,9 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
 - `heartbeat.yml` probes prod on a schedule and opens issues for outages and low balances; a
   daily paid canary (`scripts/paid-canary.js`) buys across every rail. No open issues = healthy.
 - Keep-alive knobs (repo variables): `BAZAAR_PRICE_CHANGE_MAX_USD` caps the deploy job's one buy
-  of each route whose fixed price changed (default 5; that step also refuses more than 25
-  routes). `CANARY_BURNER_LOW_USD` (default 1) is now a floor: the heartbeat's burner low-water
+  of each route whose fixed price changed (default 5), and
+  `BAZAAR_PRICE_CHANGE_MAX_ROUTES` its route count (default 25; raised for one repricing
+  deploy, then unset). `CANARY_BURNER_LOW_USD` (default 1) is now a floor: the heartbeat's burner low-water
   mark is one above-ceiling keep-alive pass plus a margin, read from the live catalog
   (`scripts/keepalive-plan.js low-water`), never under it, and the variable alone when the
   catalog cannot be read.
@@ -330,7 +345,7 @@ Subsystem detail lives in `.claude/rules/`, and each file loads only when a file
 replay and idempotency, 402 bodies), `index-router.md` (seller index, submissions, parts and tool
 cap, paywall probe, router, route-execute and its buyers), `gateway.md` (LLM gateway, metering,
 model catalog, report products), `ops.md` (state database, scheduled loops, drain and containment,
-monitors, backups, status, live view, workflows and workers), `cdn.md` (CDN and client address,
+monitors, backups, status, live view, workflows and workers), `identity-telemetry.md` (wallet sessions, Web Bot Auth, PostHog LLM and error events), `cdn.md` (CDN and client address,
 async jobs and sync windows, large bodies, outbound fetches), `media.md` (OCR, PDF, Office and
 media workers), `mcp.md` (connector modules, front door, shareable answers). Read the matching
 file before changing a subsystem it names. The batch procedure is the `/batch` skill
@@ -341,7 +356,8 @@ Configuration and secrets are set on Railway (and, where a workflow needs them, 
 Actions secrets), never in the repo. Rollout switches are generally "key present = feature on"
 (for example `MPP_SECRET_KEY`, `TEMPO_API_KEY`, `STRIPE_SECRET_KEY`, `OPENROUTER_API_KEY`,
 `X_BEARER_TOKEN`). `STOCK_DATA_PROVIDER` (`off` default, `databento`) selects the stock data adapter
-(`src/tools/stock-provider.js`); it is active only with its own key, else the stock tools and packs are unlisted. `COINGECKO_API_TIER` (`demo`, the default, or `pro`) picks the CoinGecko
+(`src/tools/stock-provider.js`); it is active only with its own key, else the stock tools and packs are unlisted. `KALSHI_TOOLS=on`
+(`src/kalshi-switch.js`) lists the Kalshi tools; unset, they are unlisted and answer 503. `COINGECKO_API_TIER` (`demo`, the default, or `pro`) picks the CoinGecko
 host and key header for `COINGECKO_API_KEY` (`src/tools/coingecko-endpoint.js`, the only file
 that names them): a paid key needs `pro`, and a keyless call uses the public host whatever the
 tier. `OPEN_METEO_API_KEY` present = the weather tools read Open-Meteo's keyed

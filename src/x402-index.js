@@ -195,6 +195,7 @@ import { parseRobots, robotsAllows } from "./tools/kit.js";
 import { partialFields, clampFields } from "./partial-answer.js";
 import { responseContractOf, packResponseContract, responseContractProjection } from "./response-contract.js";
 import { deliveryProjection } from "./response-observation.js";
+import { sellerReputation, sellerDeliveryRoutes, toolReputationOf, TOOL_REPUTATION_LEGEND } from "./seller-reputation.js";
 import { requestContractOf, requestContractFromInputSchema, packRequestContract, requestContractProjection, requestContractStrength } from "./request-contract.js";
 import { toolList } from "./pages.js";
 import { walkBazaarPages, isBazaarDiscoveryUrl } from "./bazaar-pager.js";
@@ -492,6 +493,11 @@ export class ProbeSkipped extends Error {
 // to a probe sent for another operator's origin holds only that operator's
 // probes there, and one to a registration's probe only that registrant's
 // (src/seller-load.js noteThrottle).
+// How long each probe's response took to arrive (headers), keyed on the
+// response object, so the paywall verdict can carry it (seller reputation's
+// responsiveness reads it). Only the request itself is timed, never a wait
+// our own load controls added before it.
+const probeAnswerMs = new WeakMap();
 async function probeOnce(target, opts, load) {
   const unscheduled = readIsUnscheduled();
   const chargeTo = load?.chargeTo || null;
@@ -504,7 +510,9 @@ async function probeOnce(target, opts, load) {
       if (b?.ok === false) throw new ProbeSkipped("budget");
     }
   }
+  const sentAt = performance.now();
   const res = await probeFetch(target, opts);
+  if (res && typeof res === "object") probeAnswerMs.set(res, Math.round(performance.now() - sentAt));
   if (load?.kind && (res?.status === 429 || res?.status === 503)) await sellerLoad.noteThrottle(target, res.status, res.headers?.get?.("retry-after"), { chargeTo, unscheduled });
   return res;
 }
@@ -1876,13 +1884,15 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
       // A re-registration is the seller asking us to look again: every route
       // this origin had dropped or was about to drop is re-checked from scratch.
       clearGoneMarks(origin);
-      // Back on the normal crawl cycle (src/seller-load.js), whether or not
-      // the documents are re-read now.
-      await sellerLoad.resetRevisit(origin, "re-registration");
       // The windows another container opened for this origin count here too.
       await refreshOriginCooldowns(origin);
       if (forcedCrawlDue(origin)) {
         noteForcedCrawl(origin);
+        // Back on the normal crawl cycle (src/seller-load.js), with the same
+        // per-origin bound as the re-read: a registration needs no proof of
+        // control, so one inside the cooldown leaves another origin's
+        // back-off standing.
+        await sellerLoad.resetRevisit(origin, "re-registration");
         clearOriginProbeState(origin);
         reread = true;
         // The seller asked us to look again: its paywall is re-probed on this
@@ -5965,7 +5975,8 @@ async function probePaywall(tools, { redirectedTo = null, gated = false } = {}) 
       return paywallUnknown(url, `our unpaid probe was not a well-formed request for this route (HTTP ${res.status} to ${method === "GET" ? "a request without parameters" : "an empty JSON body"}); no paywall verdict`, res.status);
     }
     // `url` is the URL that answered, which is the upgraded one after a 301/308.
-    return { ok: res.status === 402, status: res.status, url, at: Date.now(), mpp };
+    const ms = probeAnswerMs.get(res);
+    return { ok: res.status === 402, status: res.status, url, at: Date.now(), mpp, ...(Number.isFinite(ms) ? { ms } : {}) };
   } catch (e) {
     // Not sent (the host's load controls held it back): the stored verdict stands.
     if (e?.sellerLoadSkip) return PAYWALL_NOT_SENT;
@@ -6431,16 +6442,104 @@ export function crawlReadFailureIsOurs(e) {
 const CRAWL_HOLD_MS = (() => { const n = Number(process.env.INDEX_CRAWL_HOLD_HOURS); return (Number.isFinite(n) && n >= 0 ? n : 6) * 3600_000; })();
 const CRAWL_OURS_SIDE_SHARE = 0.5;
 const CRAWL_OURS_MIN_SAMPLE = 20;
-let crawlCycleTally = { done: 0, ours: 0 };
+// `read` counts the crawls that ran; `done` and `ours` also hold the votes of
+// backed-off origins (runCrawl). The sample floor is met by reads alone: a
+// vote repeats a rate, it is not another observation.
+let crawlCycleTally = { done: 0, ours: 0, read: 0 };
 let lastCycleOursShare = 0;
 /** Close a cycle's tally: the share of crawls that ended on our side. */
 function closeCrawlCycleTally() {
-  const { done, ours } = crawlCycleTally;
-  lastCycleOursShare = done >= CRAWL_OURS_MIN_SAMPLE ? ours / done : 0;
-  crawlCycleTally = { done: 0, ours: 0 };
+  const { done, ours, read } = crawlCycleTally;
+  lastCycleOursShare = read >= CRAWL_OURS_MIN_SAMPLE && done > 0 ? ours / done : 0;
+  crawlCycleTally = { done: 0, ours: 0, read: 0 };
   return lastCycleOursShare;
 }
-export function __setLastCycleOursShareForTest(x) { lastCycleOursShare = Number(x) || 0; crawlCycleTally = { done: 0, ours: 0 }; }
+
+// WHOSE SIDE A BROAD FAILURE IS ON. The share above is counted over reads of
+// sellers' origins, and a read that times out counts as ours, so the share
+// alone is evidence a seller can supply: its own origins not answering. It
+// still decides the hold of a last good listing (crawlHoldsLastGood), which
+// only keeps entries as they were. The verdict that leaves a UTC day out of
+// every seller's reputation record (ourSideVerdict) asks for more, all of it:
+//   - the cycle's share is at least CRAWL_OURS_SIDE_SHARE;
+//   - one vote per OPERATOR (operatorKey, the registrable domain), however
+//     many origins it runs: an operator votes "ours" when at least half of
+//     its reads this cycle ended on our side;
+//   - at least CRAWL_OURS_MIN_OPERATORS distinct operators voted "ours", and
+//     they are at least half of the operators read;
+//   - a control read of our own failed too (setOurSideControl: hosts no
+//     seller runs, read through the same egress). Every control read must
+//     have failed; a control that was not wired, read nothing, or got an
+//     answer from any host confirms nothing, and the day stands.
+// The control is read when the operator floor is first met inside the cycle
+// (near the failures) and once more at its close when the first one answered.
+export const CRAWL_OURS_MIN_OPERATORS = 10;
+const OUR_SIDE_CONTROL_WAIT_MS = 15_000;
+let cycleOperators = new Map();   // operatorKey -> { read, ours }, this cycle
+let cycleOursOperators = 0;       // operators with at least one read on our side
+let cycleControl = null;          // the in-cycle control read's promise
+let ourSideControl = null;
+/** `fn()` resolves to { checked, failed }: how many control reads of hosts no
+ *  seller runs were made, and how many got no answer. Null unwires it. */
+export function setOurSideControl(fn) { ourSideControl = typeof fn === "function" ? fn : null; }
+async function readOurSideControl() {
+  if (!ourSideControl) return null;
+  try {
+    const r = await Promise.race([ourSideControl(), new Promise((res) => setTimeout(() => res(null), OUR_SIDE_CONTROL_WAIT_MS).unref?.())]);
+    const checked = Math.trunc(Number(r?.checked)), failed = Math.trunc(Number(r?.failed));
+    return Number.isFinite(checked) && Number.isFinite(failed) && checked >= 0 && failed >= 0 && failed <= checked ? { checked, failed } : null;
+  } catch { return null; }
+}
+const controlFailed = (c) => !!c && c.checked >= 1 && c.failed === c.checked;
+function noteOperatorRead(originUrl, ours) {
+  if (!crawlInFlight) return;      // a read outside a cycle casts no vote
+  let k;
+  try { k = operatorKey(originUrl); } catch { return; }
+  let row = cycleOperators.get(k);
+  if (!row) { row = { read: 0, ours: 0 }; cycleOperators.set(k, row); }
+  row.read++;
+  if (!ours) return;
+  if (row.ours++ === 0) cycleOursOperators++;
+  if (cycleOursOperators >= CRAWL_OURS_MIN_OPERATORS && !cycleControl) cycleControl = readOurSideControl();
+}
+/** How the operators read this cycle voted (one vote each). */
+export function operatorVotes(operators) {
+  let read = 0, ours = 0;
+  for (const row of operators instanceof Map ? operators.values() : []) {
+    if (!(row?.read > 0)) continue;
+    read++;
+    if (row.ours / row.read >= CRAWL_OURS_SIDE_SHARE) ours++;
+  }
+  return { operatorsRead: read, operatorsOurs: ours, operatorShare: read ? ours / read : 0 };
+}
+/** The verdict and its evidence (see above). `control` is { checked, failed }
+ *  or null. Pure. */
+export function ourSideVerdict({ operators, share = 0, control = null } = {}) {
+  const v = operatorVotes(operators);
+  const votes = Number(share) >= CRAWL_OURS_SIDE_SHARE && v.operatorsOurs >= CRAWL_OURS_MIN_OPERATORS && v.operatorShare >= CRAWL_OURS_SIDE_SHARE;
+  const c = control && Number.isFinite(control.checked) && Number.isFinite(control.failed) ? { checked: control.checked, failed: control.failed } : null;
+  return {
+    broad: votes && controlFailed(c),
+    share: Number((Number(share) || 0).toFixed(3)),
+    operatorsRead: v.operatorsRead, operatorsOurs: v.operatorsOurs, operatorShare: Number(v.operatorShare.toFixed(3)),
+    minOperators: CRAWL_OURS_MIN_OPERATORS, control: c,
+    reason: !votes ? (Number(share) < CRAWL_OURS_SIDE_SHARE ? "share" : v.operatorsOurs < CRAWL_OURS_MIN_OPERATORS ? "operators-under-floor" : "operators-under-half") : !c ? "no-control" : controlFailed(c) ? "confirmed" : "control-answered",
+  };
+}
+/** Close the cycle's operator tally into the verdict; the control is read
+ *  again only when the votes passed and the in-cycle read did not fail. */
+async function closeOurSideVerdict(share) {
+  const operators = cycleOperators;
+  const pending = cycleControl;
+  cycleOperators = new Map(); cycleOursOperators = 0; cycleControl = null;
+  let verdict = ourSideVerdict({ operators, share, control: null });
+  if (verdict.reason !== "no-control") return verdict;
+  let control = pending ? await pending : null;
+  if (!controlFailed(control)) control = (await readOurSideControl()) || control;
+  return ourSideVerdict({ operators, share, control });
+}
+export function __closeCrawlCycleTallyForTest(tally) { crawlCycleTally = { done: 0, ours: 0, read: 0, ...tally }; return closeCrawlCycleTally(); }
+export function __setLastCycleOursShareForTest(x) { lastCycleOursShare = Number(x) || 0; crawlCycleTally = { done: 0, ours: 0, read: 0 }; }
 /** May this failed crawl keep `prev` as it was? Only an entry whose last
  *  completed crawl succeeded with a catalog the origin itself served. */
 /** `holdFromAt`: when the window starts, if later than the last completed
@@ -6701,7 +6800,7 @@ async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
     noteLandingHeld(originUrl, e.landingHost);
     return { landingHeld: e.landingHost || true, error: String(e.message || e), ...(e.heldBy ? { heldBy: e.heldBy, retryAfterSeconds: e.retryAfterSeconds || 0 } : {}) };
   }
-  finally { if (read) { crawlCycleTally.done++; if (outcome.ours) crawlCycleTally.ours++; } }
+  finally { if (read) { crawlCycleTally.done++; crawlCycleTally.read++; if (outcome.ours) crawlCycleTally.ours++; noteOperatorRead(originUrl, !!outcome.ours); } }
 }
 async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false, scheduled = false, revisitIntervalMs = 0 } = {}, outcome = { ours: false }) {
   const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
@@ -7689,8 +7788,11 @@ const CRAWL_ORIGINS_PER_OPERATOR = Math.max(1, Number(process.env.CRAWL_ORIGINS_
 
 /** At most `cap` origins per operator this cycle, rotating by cycle so every
  *  origin comes up in turn instead of the same few always winning. Input order
- *  is preserved, and anyone at or under the cap is unaffected. */
-export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_OPERATOR, { slowWaiting = (o) => sellerLoad.slowWaiting(o, "x402") } = {}) {
+ *  is preserved, and anyone at or under the cap is unaffected. `prefer(origin)`
+ *  (a seller's re-check request, src/seller-reputation.js) puts an origin
+ *  among its operator's places this cycle ahead of the rotation: it takes one
+ *  of the `cap` places, never an extra one. */
+export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_OPERATOR, { slowWaiting = (o) => sellerLoad.slowWaiting(o, "x402"), prefer = null } = {}) {
   const byOperator = new Map();
   for (const o of origins) {
     const k = operatorKey(o);
@@ -7700,8 +7802,10 @@ export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_
   const due = new Set();
   for (const [, list] of byOperator) {
     if (list.length <= cap) { for (const o of list) due.add(o); continue; }
+    const picked = new Set(typeof prefer === "function" ? list.filter((o) => prefer(o)).slice(0, cap) : []);
     const offset = (cycle * cap) % list.length;
-    for (let i = 0; i < cap; i++) due.add(list[(offset + i) % list.length]);
+    for (let i = 0; i < list.length && picked.size < cap; i++) picked.add(list[(offset + i) % list.length]);
+    for (const o of picked) due.add(o);
   }
   // A slow origin (its operator asked) waits SLOW_READ_INTERVAL_MS by the
   // clock from its last scheduled read, whichever container made it and
@@ -7758,6 +7862,29 @@ export function groupTurnGoesOn(read, size, othersOpen, slots = CRAWL_CONCURRENC
   return read < Math.ceil(size / Math.max(1, slots)) || othersOpen > 0;
 }
 
+// Hooks the server wires to the seller reputation record (kept out of this
+// module's imports): which origins a re-check asked for, and a cycle that
+// failed broadly on our side.
+let recheckSource = async () => new Map();
+let ourSideIssueHook = async () => {};
+/** `fn()` resolves to a Map origin -> requestedAt (ms). */
+export function setCrawlRecheckSource(fn) { recheckSource = typeof fn === "function" ? fn : async () => new Map(); }
+/** `fn(at, evidence)` is called once per crawl cycle that failed broadly on
+ *  our side (ourSideVerdict), with the verdict it rests on. */
+export function setOurSideIssueHook(fn) { ourSideIssueHook = typeof fn === "function" ? fn : async () => {}; }
+async function recheckWantedFor() {
+  try {
+    const m = await Promise.race([recheckSource(), new Promise((r) => setTimeout(() => r(null), 5000).unref?.())]);
+    return m instanceof Map ? m : new Map();
+  } catch { return new Map(); }
+}
+/** The crawl's own cycle health: the last cycle's share of reads that ended on
+ *  our side, and whether that is a broad failure of ours. */
+export function crawlCycleHealth() {
+  const s = lastCycleSummary;
+  return { at: s?.at || null, oursShare: s ? s.oursShare : null, broadOurSide: !!s?.ourSide?.broad, threshold: CRAWL_OURS_SIDE_SHARE, verdict: s?.ourSide || null };
+}
+
 /** True while a crawl cycle is running (every entry is being replaced). */
 export function crawlInProgress() { return !!crawlInFlight; }
 const runCrawlLeased = leased("x402-index-crawl", { ttlMs: 60 * 60_000, failOpen: true }, () => runCrawl());
@@ -7792,11 +7919,16 @@ async function runCrawl() {
     // less often when it shares an operator: 20 hosts at a cap of 4 means each is
     // seen every 5th cycle (~2.5h) instead of every 30 minutes. Single-host
     // sellers - almost all of them - are untouched.
-    const due = originsDueThisCycle(ordered, crawlCycle);
+    // A seller's re-check request (src/seller-reputation.js) takes one of its
+    // operator's places this cycle; a read made since the request ends it.
+    const rechecks = await recheckWantedFor();
+    const prefer = rechecks.size ? (o) => rechecks.has(o) && !((Number(cache.get(o)?.fetchedAt) || 0) >= rechecks.get(o)) : null;
+    const due = originsDueThisCycle(ordered, crawlCycle, CRAWL_ORIGINS_PER_OPERATOR, { prefer });
     // A slow origin left out while it waits its slow cycle is a turn we put
     // off: the hold of its last good listing counts from here (turnNotReadAt).
     if (SLOW_ORIGINS.size) { const dueSet = new Set(due); for (const o of ordered) if (!dueSet.has(o) && sellerLoad.slowWaiting(o, "x402")) noteTurnNotRead(o); }
-    crawlCycleTally = { done: 0, ours: 0 };
+    crawlCycleTally = { done: 0, ours: 0, read: 0 };
+    cycleOperators = new Map(); cycleOursOperators = 0; cycleControl = null;
     // Each origin's load controls (src/seller-load.js) decide whether it is
     // read this cycle: held by its own Retry-After, past its host's daily
     // budget, or backed off because its documents have not changed. A skipped
@@ -7846,6 +7978,12 @@ async function runCrawl() {
       crawlCycleTally.ours += backedOff.length * rates.ours;
     }
     const oursShare = closeCrawlCycleTally();
+    // A cycle that failed broadly on our side: its day's readings say nothing
+    // about the sellers, so the reputation record leaves them out. The share
+    // alone never decides that (ourSideVerdict): it is counted over sellers'
+    // own origins.
+    const ourSide = await closeOurSideVerdict(oursShare);
+    if (ourSide.broad) { try { await ourSideIssueHook(Date.now(), ourSide); } catch { /* the cycle goes on */ } }
     // Each step is guarded on its own: a throw in one used to skip the release
     // silently for every later cycle, and the slots it should have freed stayed
     // held with nothing in the log to say why.
@@ -7867,7 +8005,7 @@ async function runCrawl() {
     try { release = releaseDeadSubmissions(fraction); } catch (e) { release = { released: 0, reason: `error: ${String(e?.message || e).slice(0, 120)}` }; }
     const skippedBy = {};
     for (const why of skipped.values()) skippedBy[why] = (skippedBy[why] || 0) + 1;
-    lastCycleSummary = { at: new Date().toISOString(), cycle: crawlCycle, due: due.length, crawled: crawled.length, skipped: skippedBy, okFraction: fraction === null ? null : Number(fraction.toFixed(3)), oursShare: Number(oursShare.toFixed(3)), rowsAdded, ...release };
+    lastCycleSummary = { at: new Date().toISOString(), cycle: crawlCycle, due: due.length, crawled: crawled.length, skipped: skippedBy, okFraction: fraction === null ? null : Number(fraction.toFixed(3)), oursShare: Number(oursShare.toFixed(3)), ourSide, rowsAdded, ...release };
     // One line per cycle (every ~30 min): the only way to tell from the log
     // whether the release ran, freed slots, or why it did not.
     console.log(`[x402-index] cycle ${crawlCycle}: probed ${crawled.length}${skipped.size ? ` (${skipped.size} waiting: ${Object.entries(skippedBy).map(([k, n]) => `${n} ${k}`).join(", ")})` : ""}, ok ${fraction === null ? "n/a" : (fraction * 100).toFixed(1) + "%"}, release ${release.released ? `freed ${release.released}` : `none (${release.reason})`}${rowsAdded ? `, ${rowsAdded} registration row(s) added` : ""}`);
@@ -8021,10 +8159,15 @@ function entryReadGood(entry) {
 }
 // The rates a backed-off origin votes at (see runCrawl): of this cycle's reads
 // of origins whose last read was good, the share that read good again and the
-// share that ended on our side. Kept for a cycle that reads none of them.
+// share that ended on our side. Measured only over at least
+// BACKED_OFF_VOTE_MIN_SAMPLE such reads, so a few origins a seller controls
+// (good once, then failing in a way that reads as ours) cannot set the rate
+// hundreds of backed-off origins vote at; a cycle with fewer keeps the last
+// rate that was measured on enough reads.
+const BACKED_OFF_VOTE_MIN_SAMPLE = CRAWL_OURS_MIN_SAMPLE;
 let lastBackedOffVote = null;
 function measureBackedOffVote(readAfterGood, oursByOrigin) {
-  if (!readAfterGood.length) return lastBackedOffVote;
+  if (readAfterGood.length < BACKED_OFF_VOTE_MIN_SAMPLE) return lastBackedOffVote;
   let ok = 0, ours = 0;
   for (const o of readAfterGood) {
     if (entryReadGood(cache.get(o))) ok++;
@@ -8032,6 +8175,10 @@ function measureBackedOffVote(readAfterGood, oursByOrigin) {
   }
   lastBackedOffVote = { ok: ok / readAfterGood.length, ours: ours / readAfterGood.length };
   return lastBackedOffVote;
+}
+export function __backedOffVoteForTest(readAfterGood, oursByOrigin, { reset = false } = {}) {
+  if (reset) lastBackedOffVote = null;
+  return measureBackedOffVote(readAfterGood, oursByOrigin);
 }
 
 // The release pass's health floor (see selectReleasableOrigins' outage guard).
@@ -10130,6 +10277,8 @@ export function sellerDetail(originOrHost) {
   if (!key) return null;
   for (const [origin, v] of cache.entries()) {
     if (origin !== key) continue;
+    // The router's delivery outcomes per route, read once for the rows below.
+    const deliveryRoutes = sellerDeliveryRoutes(origin);
     const detail = {
       origin,
       // Present only for a path seller, so a bare origin's detail is unchanged.
@@ -10172,6 +10321,12 @@ export function sellerDetail(originOrHost) {
       // says the manifest parsed; a seller whose every paid route 500s scores a
       // perfect 1.0 on it. null = not probed yet (never assume healthy).
       paywall: v.paywall || null,
+      // What our own crawl and paid calls say about this seller over a rolling
+      // window (src/seller-reputation.js): each metric with its method,
+      // sample size and last measurement, scored only past its minimum
+      // sample. It never carries a payment, buyer or settlement count.
+      reputation: sellerReputation(origin),
+      toolReputationLegend: TOOL_REPUTATION_LEGEND,
       // The origin this seller's manifest is served from by permanent redirect,
       // when the crawl recorded one: live probes (and paywall.url) go there.
       ...(v.redirectedTo ? { redirectedTo: v.redirectedTo } : {}),
@@ -10279,6 +10434,9 @@ export function sellerDetail(originOrHost) {
         // came from, and when it last answered us live. An undeclared row
         // that stops answering leaves the listing (see stampDeclared).
         ...listingBasisProjection(t),
+        // This route's price reading and the router's delivery on it (the
+        // method is stated once, in toolReputationLegend).
+        reputation: toolReputationOf(t, { routes: deliveryRoutes, url: sellerRouteUrl(origin, t.route) }),
         // The seller's documentation link, checked once per stored row and
         // origin (src/seller-docs-url.js). This record is the only surface
         // that carries it.
@@ -12198,6 +12356,15 @@ export function indexMemoryFigures({ sampleBytes = false } = {}) {
   out.routeIndex = { tokens: routeIdx.postings.size, postingRefs, pending: routeIdx.pending.size, termCache: routeIdx.termCache.size, staleTools: routeIdx.staleTools, shadowBuilding: !!routeIdx.shadow };
   return out;
 }
+/** Every indexed seller as [key, raw entry], for the seller reputation pass
+ *  (src/seller-reputation.js), which folds each entry's newest crawl,
+ *  paywall and price reading. Our own hosts are never in the cache. */
+export function* sellerEntriesForReputation() {
+  for (const [origin, v] of cache) yield [origin, v];
+}
+/** The raw entry stored under an exact seller key (no matching), or null. */
+export function sellerEntryByKey(key) { return (typeof key === "string" && cache.get(key)) || null; }
+
 export function _cacheForTests() {
   return cache;
 }

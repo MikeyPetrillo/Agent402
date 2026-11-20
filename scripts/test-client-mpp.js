@@ -36,7 +36,7 @@ facilitator = createServer((req, res) => {
 });
 await new Promise((r) => facilitator.listen(FAC_PORT, r));
 
-proc = spawn("node", ["src/server.js"], {
+proc = spawn(process.execPath, ["src/server.js"], {
   env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, MPP_SECRET_KEY: "client-mpp-test", CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
     PAYMENT_NETWORKS: "base", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" },

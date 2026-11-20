@@ -35,7 +35,7 @@ let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const proc = spawn("node", ["src/server.js"], {
+const proc = spawn(process.execPath, ["src/server.js"], {
   env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false" },
   stdio: "ignore",
 });

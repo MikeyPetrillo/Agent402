@@ -334,6 +334,27 @@ export function hangupTicketDenial(req) {
   return t && t.granted !== true && typeof t.reason === "string" ? t.reason : null;
 }
 
+/** True when this request's ticket was granted and its run recorded as
+ *  ABANDONED: the run counts against every budget the ticket was reserved
+ *  under. A charge given back outside the refund ledger (a payment channel's
+ *  credit) is taken only then, so the budget bounds it as it bounds every
+ *  withheld charge. */
+export function hangupTicketAbandoned(req) {
+  const t = ticketOf(req);
+  return t?.granted === true && t.state === "abandoned";
+}
+
+/** The reason an undelivered charge's owed row stores, in the words the
+ *  refund planner reads (scripts/refund-run.js isRepeatHangup): the ticket's
+ *  denial FIRST ("payer budget", "ip budget", "global budget", "lasting
+ *  effect", ...), so a hang-up past a spent budget is held for review
+ *  whatever path booked it; else the booking's own reason (a connector that
+ *  stopped waiting); else "settled in flight" for a granted ticket that lost
+ *  the race to a settle already sent, or "no ticket". */
+export function hangupDebtReason(req, reason = null) {
+  return hangupTicketDenial(req) || reason || (hangupForgiven(req) ? "settled in flight" : "no ticket");
+}
+
 /**
  * Reserve a forgiveness ticket for a paid request whose handler is starting.
  * Returns the ticket (synchronously without a shared store; a promise of it

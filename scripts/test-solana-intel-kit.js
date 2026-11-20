@@ -339,6 +339,20 @@ try {
   ok(p0.ageHours > 35 && p0.ageHours < 37 && typeof p0.pairCreatedAt === "string", "pairs: age in hours from pairCreatedAt");
   ok(p0.hasProfile === true && p0.labels[0] === "DLMM" && p0.quote.symbol === "MET", "pairs: profile flag, labels, quote");
   ok(r.totals.liquidityUsd === 71508314.54 && r.totals.txns24h === 4858, "pairs: totals summed across solana pairs");
+  // Computed signals: bands, buy share, turnover and flags per pair; where the
+  // token's liquidity sits across pairs.
+  ok(p0.signals.liquidityBand === "deep" && p0.signals.age === "young" && p0.signals.buyShare24h === 0.49 && p0.signals.turnover24h === 2.09 && p0.signals.flags.length === 0, `pairs: the deep pair reads deep, young, balanced, no flags (${JSON.stringify(p0.signals)})`);
+  ok(r.pairs[1].signals.liquidityBand === "dust" && r.pairs[1].signals.flags.includes("dust-liquidity") && r.pairs[1].signals.flags.includes("high-turnover"), `pairs: a $100 pool with that volume reads dust and high turnover (${JSON.stringify(r.pairs[1].signals)})`);
+  ok(r.analysis.dexCount === 1 && r.analysis.topPairSharePct === 100 && r.analysis.concentration === 1 && r.analysis.deepPairs === 1 && r.analysis.flaggedPairs["dust-liquidity"] === 1, `pairs: analysis names where the liquidity sits (${JSON.stringify(r.analysis)})`);
+  {
+    const { pairSignals, PAIR_SIGNAL_FLAGS } = __test;
+    const sig = (over) => pairSignals({ liquidityUsd: 50_000, volume: { h24: 1000 }, txns24h: { buys: 95, sells: 5 }, ageHours: 2, hasProfile: false, ...over });
+    const a = sig({});
+    ok(a.liquidityBand === "thin" && a.age === "new" && a.buyShare24h === 0.95 && ["thin-liquidity", "new-pair", "no-profile", "one-sided-flow"].every((f) => a.flags.includes(f)), `signals: a thin new pool with one-sided flow and no profile carries each flag (${a.flags.join(",")})`);
+    ok(sig({ txns24h: { buys: 9, sells: 1 } }).flags.includes("one-sided-flow") === false, "signals: one-sided flow needs at least 50 trades");
+    ok(sig({ liquidityUsd: null, volume: { h24: null }, txns24h: { buys: null, sells: null }, ageHours: null }).liquidityBand === null, "signals: unknown figures read null, never a band");
+    ok(a.flags.every((f) => PAIR_SIGNAL_FLAGS.includes(f)), "signals: every flag is a listed one");
+  }
 
   // --------------------------------------------------------------------------
   // sol-token-search
@@ -349,7 +363,14 @@ try {
   r = await h("sol-token-search")({ query: "JUP token", limit: 10 });
   ok(r.totalSolanaPairs === 2 && r.pairs[0].pairAddress === "first" && r.pairs[1].pairAddress === "second", "search: solana-only, upstream relevance order kept (not re-sorted by liquidity)");
   ok(r.pairs[0].hasProfile === false && r.pairs[1].hasProfile === true, "search: hasProfile distinguishes bare pairs");
+  ok(r.pairs.every((x) => x.signals && Array.isArray(x.signals.flags)) && r.analysis && r.analysis.tickerMints === 0, `search: rows carry signals; a query that is not a ticker names no ticker mint (${JSON.stringify(r.analysis)})`);
   ok(r.query === "JUP token" && r.source === "dexscreener", "search: echoes query + source");
+  // Two mints answer to one ticker: the thinner one's rows are marked.
+  stub((url) => ((u) => u.host === "api.dexscreener.com" && u.pathname === "/latest/dex/search" && u.searchParams.get("q") === "JUP")(new URL(url))
+    ? Promise.resolve(jsonRes({ schemaVersion: "1.0.0", pairs: [DS_PAIR({ pairAddress: "fake", baseToken: { address: "FakeJup111", name: "Jupiter", symbol: "JUP" }, liquidity: { usd: 5000 } }), DS_PAIR({ pairAddress: "real" })] }))
+    : Promise.reject(new Error("bad url " + url)));
+  r = await h("sol-token-search")({ query: "JUP" });
+  ok(r.analysis.tickerMints === 2 && r.analysis.deepestTickerMint === JUP && r.pairs[0].signals.tickerShadow === true && r.pairs[1].signals.tickerShadow === false, `search: a copied ticker on a thinner pool is a tickerShadow (${JSON.stringify(r.analysis)})`);
   stub(() => Promise.resolve(jsonRes({ schemaVersion: "1.0.0", pairs: [] })));
   r = await h("sol-token-search")({ query: "zzzz" });
   ok(r.totalSolanaPairs === 0 && r.pairs.length === 0, "search: no match -> empty list, not an error");
@@ -475,6 +496,9 @@ try {
   ok(r.boosts.length === 2 && r.boosts[0].mint === PUMP && r.boosts[0].boostAmount === 500 && r.boosts[0].links.length === 2, "trending: boosts solana-only, amount + links");
   ok(r.profiles.length === 1 && r.profiles[0].mint === "AiRG" && r.profiles[0].communityTakeover === true, "trending: profiles solana-only, cto flag");
   ok(r.counts.boostsSolana === 2 && r.counts.boostsAll === 3 && r.counts.profilesSolana === 1 && r.counts.profilesAll === 2, "trending: counts");
+  ok(r.boosts[0].boostSharePct === 83.3 && r.boosts[1].boostSharePct === 16.7 && r.analysis.boostTotal === 600 && r.analysis.top5BoostSharePct === 100, `trending: boost shares over the Solana spend (${r.boosts.map((b) => b.boostSharePct)}, ${JSON.stringify(r.analysis)})`);
+  ok(r.boosts[0].linkCount === 2 && r.boosts[0].hasWebsite === true && r.boosts[0].hasSocials === true && r.profiles[0].hasWebsite === false && r.profiles[0].hasSocials === true, "trending: link completeness per row");
+  ok(r.analysis.communityTakeovers === 1 && Array.isArray(r.analysis.boostedAndNewlyProfiled) && r.analysis.boostedAndNewlyProfiled.length === 0 && r.profiles[0].alsoBoosted === false, "trending: takeovers and the boosted-and-profiled overlap");
   stub((url) => url.endsWith("/token-boosts/top/v1") ? Promise.resolve(jsonRes(DS_BOOSTS)) : Promise.reject(new Error("profiles must not be fetched: " + url)));
   r = await h("sol-trending")({ list: "boosts", limit: 1 });
   ok(calls.length === 1 && r.boosts.length === 1 && r.profiles === null, "trending: list=boosts fetches one endpoint, profiles null");

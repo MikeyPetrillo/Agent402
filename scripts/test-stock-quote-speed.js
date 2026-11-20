@@ -28,6 +28,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import dnsPromises from "node:dns/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { stubGuardResolver, oneV4 } from "./lib/guard-resolver-stub.js";
+import { isHost } from "./lib/url-host.js";
 
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
 process.env.STOCK_DATA_PROVIDER = "databento";
@@ -56,7 +57,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const bar = (day, close) => JSON.stringify({ hd: { ts_event: String(Date.parse(day) * 1e6) }, open: "1e11", high: "2e11", low: "5e10", close, volume: "100" });
 globalThis.fetch = async (url) => {
   const u = String(url);
-  if (!u.startsWith("https://hist.databento.com/")) throw new Error(`unexpected egress: ${u}`);
+  if (!isHost(u, "hist.databento.com")) throw new Error(`unexpected egress: ${u}`);
   up.inflight++; up.maxInflight = Math.max(up.maxInflight, up.inflight);
   try {
     await sleep(LATENCY);

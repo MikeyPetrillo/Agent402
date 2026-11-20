@@ -33,7 +33,7 @@ const get = async (p) => {
   catch { return 0; }
 };
 
-const srv = spawn("node", ["src/server.js"], {
+const srv = spawn(process.execPath, ["src/server.js"], {
   env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" },
   stdio: ["ignore", "pipe", "pipe"],
 });

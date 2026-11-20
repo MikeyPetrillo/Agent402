@@ -313,7 +313,7 @@ const seedFirst = addDays(today, -59);
 }
 const PORT = await getFreePort();
 const B = `http://127.0.0.1:${PORT}`;
-const proc = spawn("node", ["src/server.js"], {
+const proc = spawn(process.execPath, ["src/server.js"], {
   env: {
     ...process.env, PORT: String(PORT), FREE_MODE: "true", WALLET_ADDRESS: WALLET,
     REVENUE_LEDGER_DB: join(dir, "revenue.db"), SALES_LEDGER_DB: join(dir, "sales.db"), STATS_DB_DIR: dir,

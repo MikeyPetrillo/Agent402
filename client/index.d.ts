@@ -57,8 +57,8 @@ export interface Agent402Options {
   tlsDistrust?: boolean;
   /** Resend the SDK's own request once on a connection reset (default true). */
   retryResets?: boolean;
-  /** Opt-in per-call ceiling in USD (no cap unless set). */
-  maxPerCallUsd?: number | null;
+  /** Per-call ceiling in USD (default 5; 0, "off" or null turns it off; a malformed value keeps the default and warns). */
+  maxPerCallUsd?: number | string | null;
   /** Opt-in rolling-24h ceiling in USD (no cap unless set). */
   dailyLimitUsd?: number | null;
   /** Opt-in rolling-24h ceiling per seller host in USD (no cap unless set). */
@@ -229,6 +229,10 @@ export class AsyncJobPendingError extends Error {
 }
 
 export const DEFAULT_BASE_URL: string;
+/** The per-call ceiling a client gets when maxPerCallUsd is not set (USD). */
+export const DEFAULT_MAX_PER_CALL_USD: number;
+/** The per-call ceiling a maxPerCallUsd value gives: the default when unset or malformed (warns), null when 0, "off" or null. */
+export function perCallCeilingOf(value: unknown, warn?: (message: string) => void): number | null;
 export const DEFAULT_REQUEST_TIMEOUT_MS: number;
 export const DEFAULT_HOST_BLIND_HOLD_MS: number;
 export const HOLD_SLACK_MS: number;
@@ -284,3 +288,9 @@ export const RECEIPT_KEYS_PATH: string;
 export function receiptRequestDigest(method: string, pathWithQuery: string, body?: unknown): string;
 /** Check an Agent402-Receipt against the published keys (fetched from baseUrl when `keys` is absent). */
 export function verifyReceipt(receipt: string, opts?: { keys?: ReceiptKey[]; baseUrl?: string; fetchImpl?: FetchLike; body?: string | Uint8Array; request?: { method: string; path: string; body?: unknown } }): Promise<{ valid: boolean; reason: string | null; kid?: string; record?: ReceiptRecord }>;
+/** The tag of the server-sent comment line (`: agent402-receipt <receipt>`) that ends a settled streamed answer with its receipt. */
+export const RECEIPT_SSE_COMMENT: "agent402-receipt";
+/** Split a streamed answer into the bytes its receipt covers and the receipt (null when it ends with none). */
+export function splitStreamedReceipt(streamed: string | Uint8Array): { body: Uint8Array; receipt: string | null };
+/** Check the receipt line that ends a streamed answer against the bytes streamed before it (reason "no_stream_receipt" when it carries none). */
+export function verifyStreamedReceipt(streamed: string | Uint8Array, opts?: { keys?: ReceiptKey[]; baseUrl?: string; fetchImpl?: FetchLike; request?: { method: string; path: string; body?: unknown } }): Promise<{ valid: boolean; reason: string | null; kid?: string; record?: ReceiptRecord }>;

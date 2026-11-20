@@ -73,7 +73,7 @@ function headers() {
 // charged; a cache hit never takes a token.
 // The bucket is SHARED with crypto-kit since 2026-09-03 (src/tools/coingecko-rate.js):
 // one key, one minute budget, whichever kit spends it.
-import { cgTake, cgRefusal, resetCgRateLimit, cgReserveUnconfirmed, cgScopeAll } from "./coingecko-rate.js";
+import { cgTake, cgRefusal, resetCgRateLimit, cgReserveUnconfirmed, cgScopeAll, cgNoteUnknownId, cgUnknownToday, cgForgetUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
 export { resetCgRateLimit };
@@ -120,15 +120,32 @@ const unknownIdError = (kind) => Object.assign(bad(kind === "currency" ? "Unknow
 /** Split `ids` into the ones that may be read and the ones the list does not
  *  name. Every id may be read while the call holds a place in the unsettled
  *  share (or when the list cannot be read). */
-export async function knownIdsGate(kind, ids) {
-  const list = ID_LISTS[kind];
-  if (!list || !ids.length || (await cgReserveUnconfirmed())) return { known: ids, unknown: [] };
+async function listSetOf(list) {
   let read;
-  try { read = await cgGet(list.path, {}, ID_LIST_TTL_MS, list.reduce); } catch { return { known: ids, unknown: [] }; }
+  try { read = await cgGet(list.path, {}, ID_LIST_TTL_MS, list.reduce); } catch { return null; }
   let set = idSets.get(read.data);
   if (!set) { set = new Set(read.data); idSets.set(read.data, set); }
-  if (set.size === 0) return { known: ids, unknown: [] };
-  return { known: ids.filter((id) => set.has(id)), unknown: ids.filter((id) => !set.has(id)) };
+  return set.size ? set : null;
+}
+export async function knownIdsGate(kind, ids) {
+  const list = ID_LISTS[kind];
+  if (!list || !ids.length) return { known: ids, unknown: [] };
+  // An id called unknown earlier today is answered with no read of its own,
+  // unless its list (read at most once an hour) names it now.
+  let remembered = ids.filter((id) => cgUnknownToday(kind, id));
+  if (remembered.length) {
+    const named = await listSetOf(list);
+    if (named) for (const id of remembered) if (named.has(id)) cgForgetUnknownId(kind, id);
+    remembered = remembered.filter((id) => cgUnknownToday(kind, id));
+  }
+  const rest = remembered.length ? ids.filter((id) => !remembered.includes(id)) : ids;
+  if (!rest.length) return { known: [], unknown: remembered };
+  if (await cgReserveUnconfirmed()) return { known: rest, unknown: remembered };
+  const set = await listSetOf(list);
+  if (!set) return { known: rest, unknown: remembered };
+  const unknown = rest.filter((id) => !set.has(id));
+  for (const id of unknown) cgNoteUnknownId(kind, id);
+  return { known: rest.filter((id) => set.has(id)), unknown: [...remembered, ...unknown] };
 }
 /** One id: answered 422 (`unknownId`) with no read when the list does not name it. */
 export async function knownIdGate(kind, id) {
@@ -185,8 +202,15 @@ async function cgLoad(key, path, reduce = null) {
   if (!res.ok) {
     const s = res.status;
     // `unknownId` marks the one 422 that is the upstream's verdict on the id itself.
-    if (s === 404) throw Object.assign(bad("Unknown id: the coin, exchange or platform is not tracked upstream", 422), { unknownId: true });
-    if (s === 429) throw bad("Market data upstream rate-limited this request - retry in about 60 seconds", 503);
+    if (s === 404) {
+      // The upstream's verdict on the id this path reads, kept for the day (knownIdsGate).
+      const named = cgUnknownIdOfPath(path);
+      if (named) cgNoteUnknownId(named.kind, named.id);
+      throw Object.assign(bad("Unknown id: the coin, exchange or platform is not tracked upstream", 422), { unknownId: true });
+    }
+    // `throttled` marks the source's own rate limit for an in-process caller
+    // (src/tools/bundle-kit.js runs this read once and starts no further unit).
+    if (s === 429) throw Object.assign(bad("Market data upstream rate-limited this request - retry in about 60 seconds", 503), { throttled: true });
     if (s === 401 || s === 403) {
       // Plan/range codes are about the request; any other 401/403 is this
       // server's key, which no buyer input can fix.
@@ -580,7 +604,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     name: "Coin OHLC candles",
     slug: "coin-ohlc",
     category: "crypto",
-    price: "$0.008",
+    price: "$0.003",
     description:
       "OHLC candles for a coin: days 1 (30-min candles), 7 or 14 (4-hour), 30 / 90 / 180 / 365 (daily), in any vs currency. Returns aligned {time, open, high, low, close} bars plus the window's high/low/first/last and % change. The candle sibling of crypto-history, which returns close-only points: use OHLC for technical indicators, range/volatility work and charting. Cached in-process for 60 seconds.",
     tags: ["crypto", "ohlc", "candles", "chart", "technical-analysis", "volatility", "timeseries"],
@@ -801,7 +825,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     name: "Crypto exchanges",
     slug: "exchanges",
     category: "crypto",
-    price: "$0.005",
+    price: "$0.003",
     description:
       "Crypto exchanges ranked by trust score: id, name, country, year established, trust score (1-10) and rank, 24h volume in BTC (and normalized), centralized flag and URL; limit 1-100 (default 25). Pass `exchange` (an id such as binance, gdax, kraken) for ONE exchange's profile instead: the same fields plus description, trade volume incl. and excl. wash-trade normalization, ticker count and social links. Cached in-process for 5 minutes. Use exchange-tickers for an exchange's markets.",
     tags: ["crypto", "exchanges", "cex", "trust-score", "volume", "venue"],

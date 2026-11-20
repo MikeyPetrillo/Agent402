@@ -17,7 +17,7 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
 const dir = mkdtempSync(join(tmpdir(), "restore-test-"));
 const keyHex = randomBytes(32).toString("hex");
 const key = parseEncKey(keyHex);
-const restore = (file, extra = []) => execFileSync("node", ["scripts/backup-restore.js", file, ...extra], { env: { ...process.env, BACKUP_ENCRYPTION_KEY: keyHex }, encoding: "utf8" });
+const restore = (file, extra = []) => execFileSync(process.execPath, ["scripts/backup-restore.js", file, ...extra], { env: { ...process.env, BACKUP_ENCRYPTION_KEY: keyHex }, encoding: "utf8" });
 
 try {
   // 1. A plain .ndjson FILE store (not a bundle), encrypted like production.
@@ -28,7 +28,7 @@ try {
   restore(encFile, ["--out", out1]);
   ok(readFileSync(out1, "utf8") === ledger, "an .ndjson file store restores byte-for-byte with --out");
   rmSync(out1, { recursive: true, force: true });
-  const msg = execFileSync("node", [join(process.cwd(), "scripts/backup-restore.js"), encFile], { cwd: dir, env: { ...process.env, BACKUP_ENCRYPTION_KEY: keyHex }, encoding: "utf8" });
+  const msg = execFileSync(process.execPath, [join(process.cwd(), "scripts/backup-restore.js"), encFile], { cwd: dir, env: { ...process.env, BACKUP_ENCRYPTION_KEY: keyHex }, encoding: "utf8" });
   ok(readFileSync(join(dir, "outbound-spend.ndjson"), "utf8") === ledger && /bytes/.test(msg), "...and without --out it is recognised as a file by its content, not unbundled");
 
   // 2. A real directory bundle still unbundles.

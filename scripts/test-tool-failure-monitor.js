@@ -953,15 +953,20 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       const none = createFloorGasCheck({ network: NET, floorUsd: () => 0, readEthUsd: async () => 3500, settings: floorSettings, now: c.now, log: () => {} });
       assert.equal(await none.check(20_000_000n), null, "no floor, no row");
     });
-    await check("floor gas: the payments loop prices the floor through the gas check (caller path)", async () => {
+    await check("floor gas: the payments loop prices our relayer's minimum sale price through the gas check (caller path); no relayer and no floor, no row", async () => {
       process.env.EVM_RPC_4663 = RPC;
       const { startFacilitatorGasCheck } = await import("../src/payments.js");
       const { toolFailureMonitor } = await import("../src/tool-failure-monitor.js");
       chain.balance = PER * 100_000n; chain.down = false;
-      const tick = await startFacilitatorGasCheck({ network: NET, urls: () => [FAC], schedule: false, readEthUsd: async () => 5000 });
+      // No price floor on Robinhood by default: without our relayer nothing
+      // of ours pays gas, so there is no row.
+      const bare = await (await startFacilitatorGasCheck({ network: NET, urls: () => [FAC], schedule: false, readEthUsd: async () => 5000 }))();
+      assert.equal(bare.find((x) => x.facilitator === "price floor"), undefined, JSON.stringify(bare));
+      toolFailureMonitor()._reset();
+      const tick = await startFacilitatorGasCheck({ network: NET, urls: () => [FAC], ownSigners: [{ label: "own relayer", signer: "0x" + "cd".repeat(20) }], schedule: false, readEthUsd: async () => 5000 });
       const r = await tick();
       const floorRow = r.find((x) => x.facilitator === "price floor");
-      assert.ok(floorRow && floorRow.status === "low" && floorRow.reason === "gasNearFloor", JSON.stringify(r));
+      assert.ok(floorRow && floorRow.status === "low" && floorRow.reason === "gasNearFloor" && floorRow.floorUsd === 0.004, JSON.stringify(r));
       assert.equal((await toolFailureMonitor().status({ fresh: true })).facilitatorFunds.status, "low");
       toolFailureMonitor()._reset();
       delete process.env.EVM_RPC_4663;

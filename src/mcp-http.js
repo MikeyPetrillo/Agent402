@@ -1,4 +1,5 @@
 import { frontDoorJson } from "./front-door.js";
+import { emptyWalletGuide } from "./next-step.js";
 import { stripHiddenCharacters, quotedCallerText } from "./hidden-chars.js";
 import { RAILS_PAREN, RAILS_OR, RAILS } from "./rails.js";
 import { gatewayOfferPublic, gatewayOfferNetworkNames } from "./gateway-nanopayments.js";
@@ -71,7 +72,21 @@ import { withoutAttributions } from "./data-attribution.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredFromPrice, meteredQuoteSentence, flatTiersLine } from "./metered-lead.js";
 import { leadSentence, SUPPORT_LINE } from "./positioning.js";
-import { receiptsServed } from "./receipt-signing.js";
+import { receiptsServed, RECEIPT_HEADER } from "./receipt-signing.js";
+
+/** The `_meta` key a paid tools/call result carries the route's signed
+ *  receipt under (src/receipt-signing.js): the compact JWS the paid HTTP
+ *  answer carried, over that answer's bytes (a JSON result is those bytes
+ *  parsed, so JSON.stringify(result) recomputes the digest). */
+export const MCP_SIGNED_RECEIPT_META = "tools.agent402/receipt";
+/** A settled paid result with the loopback answer's signed receipt in _meta.
+ *  Never throws: a header that cannot be read leaves the result as it was. */
+export function withSignedReceipt(out, r) {
+  let jws = null;
+  try { jws = r && r.status === 200 && typeof r.headers?.get === "function" ? r.headers.get(RECEIPT_HEADER) : null; } catch { return out; }
+  if (typeof jws !== "string" || !jws || !out || typeof out !== "object" || Array.isArray(out) || out.isError) return out;
+  return { ...out, _meta: { ...(out._meta && typeof out._meta === "object" ? out._meta : {}), [MCP_SIGNED_RECEIPT_META]: jws } };
+}
 import { mppMethodsSummary } from "./mpp-offers.js";
 import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
@@ -83,6 +98,7 @@ import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
 import { attributionOf, notCallersInput, faultAdvice } from "./tool-error-fields.js";
 import { redactSecrets } from "./tools/redact.js";
 import { STOCK_SLUGS, stockNotOffered } from "./tools/stock-provider.js";
+import { KALSHI_SLUGS, kalshiNotOffered } from "./kalshi-switch.js";
 import {
   FLAGSHIP_SLUGS,
   FLAGSHIP_MCP_NAMES,
@@ -119,6 +135,7 @@ import {
 import { maxHeaderSize } from "node:http";
 import { mcpX402Entries, mcpX402PathOf, MCP_X402_PREFIX, isFixedPriceDef } from "./mcp-x402-routes.js";
 import { decodesAsMppCredential, decodesAsX402Payment } from "./payment-attempt.js";
+import { openLoopbackCall, closeLoopbackCall, cutLoopbackCall } from "./mcp-loopback.js";
 
 // serverInfo reports the agent402-mcp package version in the deployed build
 // (mcp/package.json, which the image copies) with the server's build as
@@ -1015,14 +1032,20 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const x402Target = !credentialHeader && x402Loopback && !isLongCall(entry.def) ? x402TargetOf(entry.def, isNamed) : null;
       const twinAsk = x402Target && x402Target !== entry.def ? x402Offer(x402Target, params, ip, signal) : null;
       let r;
+      // A credential rides this replay: it is named (src/mcp-loopback.js), so a
+      // settled answer this connector stops waiting for is booked as owed.
+      const callId = credentialHeader ? openLoopbackCall() : null;
       try {
-        r = await mppLoopback({ def: entry.def, params, credentialHeader, ip, signal, idempotencyKey, timeoutMs: PAID_LOOPBACK_TIMEOUT_MS, heartbeatToken });
+        r = await mppLoopback({ def: entry.def, params, credentialHeader, ip, signal, idempotencyKey, timeoutMs: PAID_LOOPBACK_TIMEOUT_MS, heartbeatToken, callId });
+        if (callId) closeLoopbackCall(callId);
       } catch (err) {
         const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
         console.warn(`[mcp] tools/call failed class=${timedOut ? "paid-timeout" : "paid-loopback-error"} tool=${entry.def.slug} after=${Date.now() - startedAt}ms`);
-        // The loopback returned no answer, so no route booked this outcome:
-        // the connector books it (the one failure class that is its own).
-        onPaidCutoff(entry.def.slug, { statusCode: timedOut ? 504 : 502, errorMessage: timedOut ? "paid loopback timed out" : "paid loopback failed", latencyMs: Date.now() - startedAt, heartbeatToken });
+        // The loopback returned no answer to this connector: the connector
+        // books the outcome, once (a route that already counted its own
+        // outcome is not counted again; one that ends later leaves it here).
+        const { routeCounted } = callId ? cutLoopbackCall(callId) : { routeCounted: false };
+        onPaidCutoff(entry.def.slug, { statusCode: timedOut ? 504 : 502, errorMessage: timedOut ? "paid loopback timed out" : "paid loopback failed", latencyMs: Date.now() - startedAt, heartbeatToken, routeCounted });
         // "Not charged" is only true when no payment credential rode along:
         // with one, the server-side request may have settled after this
         // connector stopped waiting.
@@ -1038,7 +1061,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const x402Required = x402Target && r.status === 402
         ? (twinAsk ? await twinAsk : paymentRequiredFromHeader(r.headers.get("payment-required")))
         : null;
-      return translateMppResponse(entry, meta, params, startedAt, isNamed, r, { x402Required });
+      return withSignedReceipt(translateMppResponse(entry, meta, params, startedAt, isNamed, r, { x402Required }), r);
     }
 
     /** The params a paid call replays (flagship: args IS params; catalog.call:
@@ -1101,12 +1124,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const paymentSignature = paymentSignatureHeader(read.payment);
       const idempotencyKey = reqParams?._meta?.["org.agent402/idempotency-key"];
       let r;
+      const callId = openLoopbackCall();
       try {
-        r = await x402Loopback({ def: target, params, paymentSignature, ip, signal, idempotencyKey, timeoutMs: PAID_LOOPBACK_TIMEOUT_MS, heartbeatToken });
+        r = await x402Loopback({ def: target, params, paymentSignature, ip, signal, idempotencyKey, timeoutMs: PAID_LOOPBACK_TIMEOUT_MS, heartbeatToken, callId });
+        closeLoopbackCall(callId);
       } catch (err) {
         const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
         console.warn(`[mcp] tools/call failed class=${timedOut ? "paid-timeout" : "paid-loopback-error"} wire=x402 tool=${def.slug} after=${Date.now() - startedAt}ms`);
-        onPaidCutoff(def.slug, { statusCode: timedOut ? 504 : 502, errorMessage: timedOut ? "paid loopback timed out" : "paid loopback failed", latencyMs: Date.now() - startedAt, heartbeatToken });
+        const { routeCounted } = cutLoopbackCall(callId);
+        onPaidCutoff(def.slug, { statusCode: timedOut ? 504 : 502, errorMessage: timedOut ? "paid loopback timed out" : "paid loopback failed", latencyMs: Date.now() - startedAt, heartbeatToken, routeCounted });
         return {
           content: [{ type: "text", text: connectorCutoffText({
             label: `Agent402 (${def.slug})`, seconds: Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000), paid: true,
@@ -1115,7 +1141,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           isError: true,
         };
       }
-      return translateX402Response(entry, target, params, isNamed, r, ip, signal);
+      return withSignedReceipt(await translateX402Response(entry, target, params, isNamed, r, ip, signal), r);
     }
 
     /** The no-offer result for a paid loopback's 402 that records a failed
@@ -1360,7 +1386,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // rather than making the client poll for something already done.
         endProgress();
         if (gate.e) throw gate.e;
-        return translateMppResponse(entry, meta, params, startedAt, isNamed, gate.r, { softAsk: false });
+        return withSignedReceipt(translateMppResponse(entry, meta, params, startedAt, isNamed, gate.r, { softAsk: false }), gate.r);
       }
 
       // With the state database on, create() resolves once the row is stored
@@ -1407,6 +1433,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           await tasks.fail(rec.taskId, { code, message: mcpErrorText(err) || "Payment required.", ...(err?.data ? { data: err.data } : {}) }, "Payment was required for this call; no payment was claimed.");
           return;
         }
+        // The route's signed receipt rides with the stored result (never throws).
+        out = withSignedReceipt(out, r);
         // Spec: `failed` is for JSON-RPC errors only. A tool result that
         // completed carrying isError:true is a COMPLETED task whose result says
         // it went wrong (and our text already says "not charged"), so a caller
@@ -1797,6 +1825,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               ...(gatewayOfferPublic() ? { batched: `on ${gatewayOfferNetworkNames().join(" and ")} the 402 also carries a Circle Gateway batched accept (extra.name ${gatewayOfferPublic().kind}) at the same price: after a USDC deposit into Circle Gateway, each payment is a signature against that balance with no gas per call, settled off chain in batches. agent402-mcp and agent402-client pay the plain accept; a client that signs under the Gateway domain can choose the batched one` } : {}),
             },
             ...(mppStartHere.length ? { mppStartHere: { what: `fast, low-priced routes that ${mppFlagshipOffersPhrase()}: a good first call for a new MPP client (call by slug with catalog.call, or pay the HTTP route with mppx)`, routes: mppStartHere, more: `${baseUrl}/what-is-mpp#start-here` } } : {}),
+            // An empty wallet's way forward, as fields (src/next-step.js); a
+            // refused payment's 402 carries the same block with the call's amount.
+            emptyWallet: emptyWalletGuide(baseUrl),
             spendControls: { perCall: "AGENT402_MAX_PER_CALL caps any single call ($5 by default; 0 or off disables)", totalBudget: "AGENT402_BUDGET caps cumulative spend for the session (opt-in; unset means no session cap)", enforced: "on the payment that is signed" },
             balanceAndHistory: {
               balance: "check a wallet's USDC balance via catalog.call with slug wallet-balances (multi-chain) or wallet-balance (single)",
@@ -1820,6 +1851,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           : (!entry && STOCK_SLUGS.has(resolvedSlug) ? resolvedSlug : null);
         if (unlistedStock) {
           return { content: [{ type: "text", text: `${stockNotOffered().message} (${unlistedStock})` }], isError: true };
+        }
+        // Same for a Kalshi tool while KALSHI_TOOLS is off (src/kalshi-switch.js).
+        const unlistedKalshi = name === "catalog.call" && !entry && KALSHI_SLUGS.has(resolvedSlug) ? resolvedSlug : null;
+        if (unlistedKalshi) {
+          return { content: [{ type: "text", text: `${kalshiNotOffered().message} (${unlistedKalshi})` }], isError: true };
         }
         if (name !== "catalog.call" && !isNamed) {
           return { content: [{ type: "text", text: `Unknown tool ${quotedEcho(rawName)}.` }], isError: true };

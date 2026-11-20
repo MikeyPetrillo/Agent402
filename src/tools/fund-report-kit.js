@@ -18,6 +18,7 @@ import { checkReportGrounding, sanitizeReportProse, quotedMaterial, QUOTED_MATER
 import { bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { get13fHoldings, resolveManager } from "./edgar-kit.js";
+import { testSeamOn } from "../test-seams.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -242,7 +243,7 @@ Write a thorough, well-structured report of up to ${t.words} words with these se
       web_angles: webGood.length, sources_cited: numbered.length, synthesis_model: SYNTH,
     };
     const out = { report, manager: managerName, cik: resolved.cik, sources: numbered, tables, meta, grounding };
-    if (process.env.RESEARCH_DEBUG === "1") out._debug = { changeBlock, topHoldings, webAnswers: webGood.map((r) => ({ q: r.q, answer: r.answer })) };
+    if (testSeamOn("RESEARCH_DEBUG")) out._debug = { changeBlock, topHoldings, webAnswers: webGood.map((r) => ({ q: r.q, answer: r.answer })) };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(FUND_TIERS[tierSlug]) });
     return out;
   };

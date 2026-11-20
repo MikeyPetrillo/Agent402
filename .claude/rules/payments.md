@@ -304,11 +304,34 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `RECEIPT_SIGNING_KEY_VALID_FROM` (ISO) and `RECEIPT_RETIRED_KEYS` (JSON `[{kid,x,validFrom,validUntil}]`,
   `x` the raw public key in base64url) for rotation. Anything else is refused at boot with the reason
   (`[receipts] signing refused: ...`, never the value) and signing stays off. The signer wraps
-  `res.write`/`res.end` and is mounted before every payment gate (beside the answer-headers guard), so
-  each gate replays its buffered answer through it after it settled; it signs only a final 200 written in
-  one `end()`, with settlement evidence (`receiptFieldsOf` in server.js: a decoded PAYMENT-RESPONSE with
-  `success: true`, or the Tempo or card gate's settled mark). No receipt on a 4xx/5xx, a refused settle,
-  a free, trial or allowance answer, a credits call, a streamed answer, `/ref` or FREE_MODE, nor on a keyed
+  `res.writeHead`/`res.write`/`res.end` and is mounted before every payment gate (beside the answer-headers
+  guard), so each gate replays its buffered answer through it after it settled; it signs a final 200 with
+  settlement evidence (`receiptFieldsOf` in server.js: a decoded PAYMENT-RESPONSE with `success: true`, the
+  Tempo or card gate's settled mark, or `req.creditsDebitId`, the credits debit the gate landed before the
+  answer ended: `settleBeforeEnd` in `src/credits.js`, on while the signer is mounted, waiting at most
+  `CREDITS_DEBIT_WAIT_MS`, default 3000, then retried as before with no receipt). A one-piece answer gets
+  the header; an answer written in parts gets the digest of every byte written, then a final
+  `: agent402-receipt <jws>` SSE comment line when it is `text/event-stream` (a comment, never an event: a
+  client that JSON-parses every event's data never meets it) and an `Agent402-Receipt` trailer when
+  the request sent `TE: trailers` on HTTP/1.1 (declared only on a 200 with no length; a declaration Node
+  refuses is dropped, never the answer). A card-bought report is signed at delivery
+  (`createCheckoutReceipt`, rail `card-checkout`, stored on the record, shown on `/r/<session>` and in the
+  ready email; none on a 100%-off session). A monitor subscription's paid period, the first and every
+  renewal, is signed once its payment is final (`createSubscriptionReceipt`: rail `card-subscription` on
+  `invoice.paid` with an amount paid, rail `mpp-subscription` on a confirmed Tempo transfer, never on an
+  attempt); the answer digest covers a canonical period statement shown beside it. The last
+  `SUBSCRIPTION_RECEIPTS_KEPT` (3) are kept on the subscription record as `signedReceipts` (not in the
+  issued-receipt store: no audit report reads them), shown on `/monitors/thanks`, the MPP status link and
+  in each monitor email (the newest). The receipts a payer's audit report reads are kept in
+  the issued-receipt store (`src/receipt-store.js`): table `issued_receipts` in the state database when
+  `STATE_DATABASE_URL` is set, else the SQLite file `RECEIPT_STORE_DB` (default
+  `/data/agent402-receipts.db` with a volume, `/tmp/agent402-receipts.db` without); a row holds the receipt
+  and its lookup fields, never the request or the answer, and goes after `RECEIPT_STORE_DAYS` (400) or past
+  `RECEIPT_STORE_MAX_ROWS` (2,000,000, oldest first); a write the store refuses waits in a queue of
+  `RECEIPT_STORE_PENDING_MAX` (5000) and is retried, never on the serving path. The operator perf view
+  (`/__operator/perf.json`) carries its counts as `receiptStore`. The hosted MCP connector relays a paid result's receipt in
+  `_meta["tools.agent402/receipt"]`; an async job keeps it in `result.headers`. No receipt on a 4xx/5xx, a
+  refused settle, a free, trial or allowance answer, `/ref` or FREE_MODE, nor on a keyed
   idempotent replay (it carries no settlement header; the first receipt covers the same bytes). The
   implicit replay of a pending answer, which carries its PAYMENT-RESPONSE, is signed with `replay: true`. Header
   `Agent402-Receipt`: a compact JWS (`alg` EdDSA, `typ` `agent402-receipt+jws`, `kid`) over the record
@@ -321,9 +344,45 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `POST /api/receipts/verify`; `verifyReceipt()` in the client package. The conformance `signedReceipt`
   cell reads `receiptsServed()` (key loaded AND signer mounted) and the rail being in `SIGNED_RAILS`;
   /trust and llms-full.txt offer receipts only under the same switch (`scripts/test-receipt-signing.js`).
+- **Refund terms document:** `/.well-known/agent402-refund-terms.json` (`src/refund-terms-doc.js`,
+  path in `src/refund-terms-path.js`): per rail the conformance rows' `settleAfterAnswer`,
+  `hangupForgiveness` and `refundOnChargedFailure` cells with `chargedOnErrorAnswer` derived from the
+  first, plus rules read from the running switches (`HANGUP_FORGIVE`, the lasting-effect list,
+  `CREDITS_SALES` for the refund route, card checkout) and the refund families held to
+  `scripts/refund-run.js`'s own constants (`scripts/test-refund-terms-doc.js`). No budget, cap or dollar
+  figure is published. Linked from the 402 `payment` block, `/api/pricing` and the conformance document.
+- **Payer screening per rail:** `src/payer-screen-rails.js` `PAYER_SCREEN_RAILS` names the identifier
+  each rail screens; every conformance `sanctionsScreening` cell carries it as `identifier` (null on
+  MPP card, credits and card checkout, which carry no payer address). Tempo through the relay (the
+  default) screens the payer addresses the credential names before the relay is asked and the
+  relay's settled sender after (`relayPayerScreen`, hooked in `validateTempoCredential`); no list
+  loaded serves unscreened and counts it (operator view `tempoRelay`). Only Tempo direct mode fails
+  closed. A payer not on the list is never refused (`scripts/test-payer-screen-rails.js`).
+  The x402 EVM screen reads the payload fields `X402_SCREENED_FIELDS` lists
+  (`src/x402-payer-screen.js`), one list per table row: a scheme whose payer sits in another field
+  (channels: `channelConfig.payer`, its `payerAuthorizer`, a Permit2 deposit's funder, on the
+  deposit, every voucher call and a refund request) is added there, to its own row of
+  `PAYER_SCREEN_RAILS` and to `x402ScreenKey`, in the change that offers it; the suite refuses a
+  listed address at every listed field with an unlisted control. An EVM payment none of whose
+  fields reads is served and counted (`servedUnscreened`, `unreadablePayer` on the operator view).
 - **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
   in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
-  route that outlives the claim's expiry cannot run twice on one payment. With Redis configured
+  route that outlives the claim's expiry cannot run twice on one payment. Every command the guard
+  and the mppx replay store (`src/mppx-store.js`) send is bounded (`boundedRedisClient` in
+  `src/bounded-redis.js`, `SHARED_LIMITS_OP_MS`, loop time), so a connected Redis that stops
+  answering reads as unreachable instead of holding the call (a paid x402 call answered in about
+  6 s with Redis stopped, where it waited past 30 s before). The commands of a claim the route
+  requires (`begin` with `requireShared`) have a longer bound of their own (`REPLAY_CLAIM_OP_MS`,
+  default 5 s, never under `SHARED_LIMITS_OP_MS`; `REQUIRED_CLAIM_OP_MS`): a store that pauses for
+  less than that and then answers is waited for and the call is served, and one that stops
+  answering is the 503 below once the claim's command it did not answer passes that bound (the
+  call's store steps before the claim, such as the idempotency claim, keep the short bound each). A
+  claim that was sent and never answered is dropped by its own token (it may land late); the drop
+  is sent and not waited for, and on one connection it runs right after the claim, so the retry of
+  that payment is not read as in flight. The idempotency store's in-flight claim
+  (`src/idempotency-store.js`) is written under a token of its own and dropped the same way, so a
+  call refused this way and sent again as is runs once the store answers, never a 409 for the
+  claim's life. With Redis configured
   but unreachable, a paid call is refused 503 with `Retry-After` before any payment is taken (x402
   dispatcher, Tempo gate and card gate, each through `sharedClaimRequired`) on a long-running or
   composite route (`isLongRunningSlug`), and on any route while another container may be serving
@@ -345,9 +404,17 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   (`scripts/test-replay-consumed-hold.js`, on Redis).
 - **Per-chain price floors:** `src/network-floors.js`. Every accept is priced through
   `priceForNetwork` (`src/payments.js`: list or per-request quote, plus the chain's
-  `NETWORK_PRICE_PREMIUMS` premium, raised to its floor). eip155:4663 has a static floor
-  (`ROBINHOOD_MIN_PRICE_USD`, "0" off; `NETWORK_PRICE_FLOORS` for others) because its settlement
-  can run through our own relayer; it is static so the paid retry re-derives the same amount.
+  `NETWORK_PRICE_PREMIUMS` premium, raised to its floor). No chain has a floor by default,
+  eip155:4663 included (it quotes the list price like every chain); `ROBINHOOD_MIN_PRICE_USD`
+  sets one there (unset or "0": none) and `NETWORK_PRICE_FLOORS` on any chain. A floor is static
+  so the paid retry re-derives the same amount. Our own relayer pays the gas of what it settles,
+  so it takes a sale only when its amount is at least `ROBINHOOD_RELAYER_MIN_PRICE_USD` (default
+  0.004; "0" any price; `covers()` in `src/robinhood-relayer.js`): under it the relayer refuses
+  with nothing sent (`own_relayer_below_minimum`), the gas order asks the facilitator instead of
+  it, and the outage read books the authorization without submitting, so a refusal from the
+  listed facilitators stands as the buyer's 402 and the x402 payment is not settled
+  (`scripts/test-own-relayer.js`, `scripts/test-rh-outage.js`). The settlement-gas row
+  ("price floor") on 4663 compares gas to that minimum when the relayer is on and no floor is set.
   Ink (eip155:57073) has none by default: only its listed facilitators pay its gas, so the
   floor rule (a settler of ours may pay) does not apply; a per-settlement fee is a premium.
   A floored network, or one with a premium above zero, is never offered `upto` (the boot gate refuses it). /api/pricing (`minPriceUsdByNetwork`), llms-full.txt,
@@ -378,6 +445,28 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   The preflights read only string payload fields (`txt` in `src/circle-shapes.js`) and refuse an
   EIP-2612 permit with any permit field but no matching `from`
   (`scripts/test-evm-preflight-inputs.js`).
+- **x402 payment channels (`batch-settlement`, off by default):** `src/batch-settlement.js`.
+  `X402_BATCH_SETTLEMENT_NETWORKS` (CSV of CAIP-2) offers a `batch-settlement` accept LAST, at the
+  exact accept's price, payTo the treasury, on each listed network in the plain EVM offer that a
+  routing facilitator's `/supported` lists the kind for AND the scheme's own
+  `validateFacilitatorSupport` accepts (a receiver authorizer the facilitator holds; we hold no
+  authorizer key). Checked at boot only, before registration: a kind @x402/core rejects at
+  `initialize()` would refuse every rail. Refused (logged `x402 batch-settlement: REFUSING`): a floor,
+  a premium, no durable store (Redis via `REDIS_URL`; `X402_BATCH_SETTLEMENT_STORE=memory` names the
+  single-process store), an unpriceable asset. Never on identity-bound, lasting-effect or
+  `x402EvmOnly` routes, nor where the route's 402 budget has no room beside the listing
+  (`BATCH_ACCEPT_JSON_BYTES`, `batchWithheld`; a listing never shrinks for it). Money path: the
+  scheme commits a voucher's charge in its beforeSettle hook, which @x402/core runs after every manual
+  hook (hang-up, blocklist, settle-sent), and only for a handler answer below 400; one admission per
+  channel (lock); a replayed voucher fails the running-total check. A metered override charges less
+  than the signed cap (`isMeterable`). Books: a sale per committed call, wire `x402-batch`
+  (`settlementKindOf` offchain), tx null. A hang-up after the commit credits the channel back
+  (`creditHungUpBatchCall`); a credit the channel cannot take is booked owed under
+  `batch-hangup:<uuid>`. Claim, settle and idle refund run per network under a lease
+  (`X402_BATCH_CLAIM_INTERVAL_SECONDS` 300, `X402_BATCH_REFUND_INTERVAL_SECONDS` 900,
+  `X402_BATCH_IDLE_REFUND_SECONDS` 86400); a claimed batch is settled to payTo in the same pass or
+  the next. `/api/rails` `batchSettlement`, `/api/pricing` `payment.paymentChannels` and
+  `acceptKinds`, and the llms.txt line appear only while offered. Suite: `scripts/test-batch-settlement.js`.
 - **Solana funding refusals:** `src/svm-funding-refusal.js` words a Solana verify refused for no USDC
   account or too little USDC (`retry: fund-wallet`, Retry-After `SVM_FUNDING_RETRY_AFTER_S`, default 300)
   and, after `SVM_FUNDING_HOLD_AFTER` (3) such refusals per wallet and source account in
@@ -476,6 +565,23 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   rail whose readings replace only that network's rows (`scripts/test-settle-fallback.js`,
   `scripts/test-tool-failure-monitor.js`). There is no extra Solana settle fallback by design: a
   Solana payment names the quoted facilitator's fee payer, and any other facilitator refuses it.
+  `SOLANA_FACILITATOR_URL` (ordered list; unset = unchanged) adds a second Solana mainnet
+  facilitator that is never a routing client (`src/svm-facilitator-split.js`): it names
+  `SOLANA_FACILITATOR_SHARE` percent (default 50) of Solana quotes, chosen by a hash of client
+  address, method and URL (a re-read is the same quote), while its /supported lists exact with a
+  valid base58 fee payer that the boot-order facilitator does not also name (read at boot and
+  every `SOLANA_FACILITATOR_RECHECK_MS`, default 10 min). A paid request is routed by the fee
+  payer its transaction's first account names, never by the share: a listed signer to the listed
+  facilitator, the boot-order one's to it, any other refused before verify
+  (`fee_payer_not_offered`). With it set, Solana has no settle fallback (`[]` override)
+  (`scripts/test-svm-facilitator-split.js`). A refusal before broadcast (a verify refusal that is
+  not about funding, or a settle refusal `isPreBroadcastSettleRejection` admits) notes the request
+  identity for `REQUOTE_TTL_MS` (10 min): the 402 carries `requote: true` and
+  `SVM_REQUOTE_SENTENCE` (`extendHint`, `src/verify-hint.js`), and that identity's next quotes
+  name the other facilitator while it is usable, else the stable pick. A 5xx or timeout (it may
+  have broadcast) notes nothing. Settle failures are labeled with the facilitator that handled
+  them and the call's chain: CDP's label is `cdpLabelOf(network)` ("CDP (Solana)" on Solana),
+  and `settle_failed` carries `facilitator` (`settleFacilitatorOf`).
   `FACILITATOR_PUBLIC_INDEX_CHAINS` (`robinhood` and `ink` are the known values; unset = none;
   any other value renders nothing and warns at boot; a listed chain renders only while the
   final offer carries it, and one it leaves out is named in a boot warning,
@@ -492,7 +598,7 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   invalid URL or date (`publicIndexBootWarnings`); there is no status word for it
   (`src/facilitator-public-index.js`, `scripts/test-public-index-copy.js`). `ROBINHOOD_RELAYER_KEY` (key present = on) adds our own
   settler after the listed ones (`src/robinhood-relayer.js`): our 4663 sales only (token, call and
-  treasury fixed), the package's exact EVM facilitator verify and settle, one submission per
+  treasury fixed, amount at least `ROBINHOOD_RELAYER_MIN_PRICE_USD`), the package's exact EVM facilitator verify and settle, one submission per
   relayer key across replicas under a lease with the nonce read under it, fee and gas caps, a
   balance check before signing, and a hash for any send that may have reached the node so a
   missing receipt stops the chain; its signer joins the gas check (`scripts/test-own-relayer.js`).
@@ -565,7 +671,18 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   lone container restarted on its own memory) sends the same payment down the normal path, where it
   is verified, run and settled at most once; its late-settlement booking stays open and the sales
   ledger (`wasServed`) closes it once the chain shows the authorization used by that settlement, so
-  it is charged once and never also owed (section 7 of the same suite).
+  it is charged once and never also owed (section 7 of the same suite). **A transfer booked owed is
+  never also served:** the late book's served check claims the transaction (`lateSettleHolder`,
+  src/settlement-claims.js) before it books it owed; a settle that then answers success naming that
+  transaction (the normal settle: afterSettle aborts, on any rail; a recovery: `recoveredTxHeldElsewhere`
+  answers `OWED_ELSEWHERE`) ends failed with errorReason `settled_refund_owed` (not the buyer's fault,
+  src/settle-fault.js), and the 402 is `settled-refund-owed` (`settledRefundOwedRefusal`: the transfer,
+  `refundStatusUrl`, retry fresh-authorization, and no wording that says the x402 call cost nothing; it says the transfer is owed back, since that x402 payment
+  was charged), kept for the same payment sent again like an unconfirmed answer (section 8). /terms
+  states it (`owed-not-served`, src/refund-terms.js), /privacy keeps that answer with the unconfirmed
+  ones, and the retry-verbs note (src/tool-error-fields.js, on the 402 description, /llms-full.txt and
+  /agents.md), the client README and the wiki name the reason. Late-book keys fold case only on an
+  EVM chain (`latePayerKey`, `txKeyOf`): a base58 or base32 address or id is kept exactly.
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read. The key is the client
@@ -593,7 +710,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   (this request's dollar price on the primary network through `priceForNetwork`, or on the first
   network offered when the route does not offer the primary; one sentence on paying; `noWallet`
   on a proof-of-work tool; `quote` with the caller's own model, request bytes and output cap on a
-  body-quoted route, never a rate or cost; links to `/llms.txt`, `/agents.md#pay` and `/mcp`).
+  body-quoted route, never a rate or cost; links to `/llms.txt`, `/agents.md#pay`, `/mcp` and the
+  refund terms document `/.well-known/agent402-refund-terms.json`).
   Body only, keyed on the PAYMENT-REQUIRED header. A refused payment carries none: an x402
   header that decodes and is refused, or an `Authorization` credential, keeps its own
   explanation. An x402 header that does not decode is removed at intake
@@ -601,6 +719,11 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `reason: malformed-header`. Every other field and the header are unchanged
   (`scripts/test-payment-guide.js`). Rollback lever:
   `PAYMENT_GUIDE_402=off`.
+- **Funding next step:** `src/next-step.js`: a refusal the verify hint answers with `fund-wallet`,
+  `lower-price-route` or `fund-gateway-deposit` also carries `nextStep` (`state`, `whoActs`,
+  `command`, `fund` from `needs`, `wait` with the Retry-After); the request is marked
+  `__paymentNextStepState` for the funnel. payment.info carries the general `emptyWallet` block
+  (`scripts/test-next-step.js`).
 - **Tempo push refusals:** `src/push-refusal-body.js`: for a push credential the Tempo gate
   restates a 4xx JSON body's not-charged sentence and sets `charged`, `transferClaimed`, `refundOwed`.
 - **Algorand network id:** `src/avm-network.js`: the CAIP-2 (32-character) id is what every 402

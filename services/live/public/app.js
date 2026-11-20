@@ -14,7 +14,11 @@
   let win = params.get("window") === "24h" ? "h24" : "h1";
   let W = 0, H = 0, DPR = 1;
   const payments = [];            // last hour, oldest first
-  const walkers = [], puffs = [], floaters = [];
+  const walkers = [], puffs = [], floaters = [], bursts = [];
+  // The pointer over the scene (null when it is not hovering): walkers near it
+  // lift toward it, and the gate under it brightens. Touch has no hover.
+  let pointer = null;
+  const LIFT_RADIUS = 90, BURST_MS = 400;   // the site's --dur-slow
   const latest = [];              // newest first, <= 8
   let lastLive = 0, lastStats = null, replay = null;
   // The connection's own state, apart from whether payments are arriving: a
@@ -117,7 +121,8 @@
   function fit(t, max) { if (ctx.measureText(t).width <= max) return t; while (t.length > 1 && ctx.measureText(t + "…").width > max) t = t.slice(0, -1); return t + "…"; }
   const money = (n) => n >= 100 ? `$${n.toFixed(0)}` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`;
   function drawGate(g) {
-    const r = RAIL[g.hitRail], lit = g.hit > 0, a = g.hit / 14;
+    const r = RAIL[g.hitRail], hover = !!pointer && pointer.x >= g.x && pointer.x <= g.x + g.w && pointer.y >= g.y && pointer.y <= g.y + g.h;
+    const lit = g.hit > 0 || hover, a = Math.max(g.hit / 14, hover ? 0.45 : 0);
     ctx.save();
     ctx.fillStyle = lit ? `rgba(${r.rgb},${0.08 + 0.1 * a})` : "rgba(20,27,36,.85)";
     rr(g.x, g.y, g.w, g.h, 12); ctx.fill();
@@ -151,11 +156,29 @@
     else if (kind === "crown") { ctx.fillStyle = "#FACC15"; ctx.beginPath(); ctx.moveTo(x - r * 0.8, y - r * 0.85); ctx.lineTo(x - r * 0.8, y - r * 1.6); ctx.lineTo(x - r * 0.4, y - r * 1.2); ctx.lineTo(x, y - r * 1.75); ctx.lineTo(x + r * 0.4, y - r * 1.2); ctx.lineTo(x + r * 0.8, y - r * 1.6); ctx.lineTo(x + r * 0.8, y - r * 0.85); ctx.closePath(); ctx.fill(); }
     ctx.restore();
   }
+  // How close the pointer is to a walker's head, eased in and out over a few
+  // frames: 0 far away, 1 on top of it. Reduced motion keeps the highlight ring
+  // and drops the lift itself.
+  function liftOf(w, x, y) {
+    let target = 0;
+    if (pointer) { const d = Math.hypot(pointer.x - x, pointer.y - (y - 30)); if (d < LIFT_RADIUS) target = Math.pow(1 - d / LIFT_RADIUS, 2); }
+    w.lift = (w.lift || 0) + (target - (w.lift || 0)) * (REDUCED ? 1 : 0.2);
+    return w.lift;
+  }
   function drawWalker(w, now) {
-    const { k, x, y } = pos(w, now);
+    const at = pos(w, now), k = at.k, x = at.x, lift = liftOf(w, at.x, at.y);
+    const y = at.y - (REDUCED ? 0 : lift * 10);
     const t = (now - w.t0) / (w.gait === "run" ? 55 : 95), swing = Math.sin(t) * (REDUCED ? 0 : 1);
     ctx.save();
     ctx.globalAlpha = k > 0.96 ? (1 - k) / 0.04 : 1;
+    if (lift > 0.02) {
+      const rc0 = RAIL[w.p.chain] || RAIL.x402;
+      ctx.save(); ctx.globalAlpha *= Math.min(1, lift * 1.6);
+      ctx.fillStyle = `rgba(${rc0.rgb},.18)`; ctx.beginPath(); ctx.ellipse(x, at.y + 1, 12 + lift * 6, 3.5, 0, 0, 7); ctx.fill();
+      ctx.strokeStyle = rc0.lit; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y - 30 * w.scale, 13 * w.scale + 6 + lift * 3, 0, 7); ctx.stroke();
+      ctx.restore();
+    }
+    if (!REDUCED && lift > 0.02) { const s = 1 + lift * 0.14; ctx.translate(x, y); ctx.scale(s, s); ctx.translate(-x, -y); }
     if (w.big) {
       const s = 0.6;
       ctx.shadowColor = "rgba(158,240,176,.85)"; ctx.shadowBlur = 16;
@@ -200,6 +223,9 @@
     g.hit = 14; g.hitRail = w.p.chain;
     if (REDUCED) return;
     const rc = RAIL[w.p.chain] || RAIL.x402, n = w.p.amountUsd >= 1 ? 26 : 6;
+    // The settle burst: a ring out of the gate's notch in the rail's color,
+    // wider for a larger payment.
+    if (bursts.length < 40) bursts.push({ x: g.x, y: g.y + g.h / 2, t0: performance.now(), c: rc.rgb, reach: w.p.amountUsd >= 1 ? 74 : w.p.amountUsd >= 0.05 ? 50 : 34 });
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, v = 0.6 + Math.random() * (n > 6 ? 2.6 : 1.2);
       puffs.push({ x: g.x - 6, y: w.ty - 14, vx: Math.cos(a) * v - (n > 6 ? 0 : 0.6), vy: Math.sin(a) * v - (n > 6 ? 1.6 : 0), life: 1, c: n > 6 ? ["#FACC15", "#F472B6", "#38BDF8", "#6EE7A8"][i % 4] : rc.c, sq: n > 6 });
@@ -216,6 +242,13 @@
     for (let i = walkers.length - 1; i >= 0; i--) { const w = walkers[i]; if (now - w.t0 >= w.dur) { arrive(w); walkers.splice(i, 1); } }
     for (const w of walkers) if (!w.big) drawWalker(w, now);
     for (const w of walkers) if (w.big) drawWalker(w, now);
+    for (let i = bursts.length - 1; i >= 0; i--) {
+      const b = bursts[i], k = (now - b.t0) / BURST_MS;
+      if (k >= 1) { bursts.splice(i, 1); continue; }
+      const e = 1 - Math.pow(1 - k, 3);
+      ctx.save(); ctx.strokeStyle = `rgba(${b.c},${(1 - k) * (1 - k) * 0.9})`; ctx.lineWidth = 2.5 - 1.5 * k;
+      ctx.beginPath(); ctx.arc(b.x, b.y, 6 + e * b.reach, 0, 7); ctx.stroke(); ctx.restore();
+    }
     for (let i = puffs.length - 1; i >= 0; i--) {
       const p = puffs[i]; p.x += p.vx; p.y += p.vy; p.vy += p.sq ? 0.08 : 0; p.vx *= 0.94; p.vy *= p.sq ? 1 : 0.94; p.life -= p.sq ? 0.014 : 0.06;
       if (p.life <= 0) { puffs.splice(i, 1); continue; }
@@ -367,6 +400,11 @@
     return null;
   }
   field.addEventListener("mousemove", (e) => { canvas.style.cursor = hitAt(e.clientX, e.clientY) ? "pointer" : "default"; });
+  field.addEventListener("pointermove", (e) => {
+    if (e.pointerType === "touch") { pointer = null; return; }
+    const r = canvas.getBoundingClientRect(); pointer = { x: e.clientX - r.left, y: e.clientY - r.top };
+  });
+  field.addEventListener("pointerleave", () => { pointer = null; });
   field.addEventListener("click", (e) => { if (e.target.closest("#tip")) return; const w = hitAt(e.clientX, e.clientY); if (w) showTip(w, e.clientX, e.clientY); else tip.style.display = "none"; });
   // Full screen: the whole stage (toolbar, scene, LATEST bar). Native
   // fullscreen when the browser offers it; otherwise a fixed overlay, closed

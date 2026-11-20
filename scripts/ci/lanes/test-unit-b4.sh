@@ -4,11 +4,13 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (43 scripts, one process each)
+# @step 1: Offline suites (46 scripts, one process each)
 # "Router Sybil resistance (M6 — Attack IV: per-seller diversity cap, metadata-injection listings dropped)"
 t node scripts/test-router-sybil.js
 # Data-kit tests (barcode-lookup, fx-rate, weather-forecast — live keyless APIs)
 t node scripts/test-data-kit.js
+# Holidays kit: public-holidays v4 contract, cache bounds, business-day math on published calendars, rails, exchanges (offline)
+t node scripts/test-holidays-kit.js
 # The sweeps' server answers examples naming its own /samples/ and /fixtures/ files from itself, never production (offline)
 t node scripts/test-own-examples-preload.js
 # A keyless upstream's 5xx is excused only when the runner's direct read of the same request fails too (offline, loopback)
@@ -80,6 +82,8 @@ t node scripts/test-replayable-example.js
 # Our own listing text (every 402, /api/pricing, /openapi.json, /.well-known/x402) passes
 # the listing screen and the hidden-character scan we hold sellers to (stub facilitator)
 t node scripts/test-own-listing-screen.js
+# The AgentCore payments recipe runs as written against our own 402 (stub AWS modules, stand-in seller, python3)
+t node scripts/test-agentcore-recipe.js
 # Standing red team (scripts/redteam-corpus.json): injection and tool-abuse payloads against
 # the MCP connector, the seller judge, decide's planner, the fetch guard, the router's payer
 # and report prose; fails on any attack that lands (stub judge, model and facilitator, port 0)
@@ -95,7 +99,7 @@ t node scripts/test-base-unit-parity.js
 # a payment header decoding to non-object JSON answers 4xx (real resource server + two paid boots)
 t node scripts/test-x402-hook-throws.js
 
-# @step 2: Offline suites (11 scripts, one process each)
+# @step 2: Offline suites (12 scripts, one process each)
 # "x402-audit grader (deterministic scoring: TLS, cache hygiene, terms, info-leak → letter grade)"
 t node scripts/test-x402-audit.js
 # Finance-kit tests (Yahoo chart quote+history, Nasdaq earnings calendar — keyless live APIs)
@@ -104,6 +108,8 @@ t node scripts/test-finance-kit.js
 t node scripts/test-stock-provider.js
 # Static copy (markdown trees, package READMEs, sample reports) names no stock tool, hidden pack or market.quote and promises no live quote while no stock provider is active
 t node scripts/test-stock-copy-off.js
+# Static copy (markdown trees, package READMEs, sample reports) names no Kalshi tool while KALSHI_TOOLS is off; the weather-market tools never name Kalshi
+t node scripts/test-kalshi-copy-off.js
 t node scripts/test-databento-timeouts.js
 t node scripts/test-databento-fallback.js
 t node scripts/test-databento-bar-range.js
@@ -190,6 +196,8 @@ t node scripts/test-crawl-redirect-budget.js
 t node scripts/test-crawl-landing-turns.js
 # A cycle with healthy origins backed off still measures its health on them: 1000 origins, 200 dark (offline)
 t node scripts/test-crawl-cycle-health.js
+# A cycle is read as failing on our side per operator, at ten or more, and only when our own control read fails too (offline)
+t node scripts/test-crawl-our-side-verdict.js
 # The MPP index obeys the seller load controls: day budget, Retry-After holds, CRAWL_SLOW_ORIGINS (offline)
 t node scripts/test-mpp-seller-load.js
 # The router's probe is sent with the day spent, counted apart and never waits on the store; 429 holds and failed-buy resets (offline)
@@ -221,6 +229,8 @@ t node scripts/test-ci-gating.js
 # A sharded lane runs every script it names in exactly one shard (dry run of every shard, mutated copies must fail)
 t node scripts/test-ci-shards.js
 t node scripts/test-port-hygiene.js
+# A suite starts this Node (process.execPath), never the first node on PATH (offline)
+t node scripts/test-spawn-exec-path.js
 # Every suite that reaches src/ takes a stats store of its own with its first import
 t node scripts/test-stats-store-hygiene.js
 # scripts/lib/boot-server.js: PORT=0 boots read the bound port back, two at once get two ports, a crash rejects with its log (boots the server; offline)
@@ -292,6 +302,8 @@ t node scripts/test-robots-redos.js
 t node scripts/test-stt-billing-limit.js
 # transcribe makes one more upstream attempt on a transient failure, inside its cap and its counters (offline)
 t node scripts/test-stt-retry.js
+# transcription answers carry a language: upstream, hint, or the transcript's words
+t node scripts/test-stt-language.js
 # rwa-asset joins only the requested asset's market row (offline)
 t node scripts/test-rwa-asset-own-row.js
 # filing-watch form filter reads the full recent list and older filing files, bounded reads (offline)

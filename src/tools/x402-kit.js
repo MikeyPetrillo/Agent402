@@ -362,7 +362,7 @@ export const X402_TOOLS = [
     },
   },
   {
-    route: "GET /api/usdc-balance", name: "USDC balance", slug: "usdc-balance", category: "payments", price: "$0.003",
+    route: "GET /api/usdc-balance", name: "USDC balance", slug: "usdc-balance", category: "payments", price: "$0.001",
     description:
       "Read the USDC balance of any address on Base, Polygon, Arbitrum, Optimism, Ethereum, Monad, Celo, Avalanche, Sei, or Arc. Read-only on-chain call. The minimal single-token read for payment flows - for EVERY token a wallet holds in one call use wallet-balance. ?address=0x…&network=base",
     tags: ["usdc", "balance", "wallet", "erc20", "multichain"],

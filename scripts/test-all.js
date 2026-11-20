@@ -139,6 +139,9 @@ const NETWORK = new Set([
   "/api/image-exif", "/api/image-dominant-color", "/api/image-crop",
   "/api/barcode-lookup", "/api/fx-rate", "/api/weather-forecast",
   "/api/public-holidays",
+  // Holidays kit: the same holiday-source egress as public-holidays.
+  "/api/bank-holidays", "/api/school-holidays", "/api/next-holidays", "/api/long-weekends",
+  "/api/country-business-days", "/api/business-day-planner", "/api/settlement-calendar",
   // Weather-kit: live open-meteo forecasts — same upstream class as
   // weather-forecast above (was misfiled as pure-CPU; an open-meteo outage
   // must not hard-block the deploy gate).
@@ -146,6 +149,8 @@ const NETWORK = new Set([
   "/api/weather-history", "/api/weather-air-quality",
   "/api/place-lookup", "/api/weather-probability", "/api/weather-market-brackets", "/api/weather-market-board",
   "/api/weather-window", "/api/weather-thresholds",
+  // bundle-kit: the weather risk brief runs five Open-Meteo tools per site.
+  "/api/weather-risk-brief",
   // B20 log scans: chunked eth_getLogs against public Base RPCs — flappy in CI.
   "/api/b20-new-tokens", "/api/b20-memos",
   // B20 eth_call tools: the SAME public-RPC egress (15s abort x 3 RPCs x 2
@@ -174,6 +179,8 @@ const NETWORK = new Set([
   "/api/edgar-company-lookup", "/api/edgar-filings", "/api/edgar-company-concept",
   "/api/edgar-company-facts", "/api/edgar-xbrl-frame",
   "/api/edgar-insider-trades", "/api/edgar-13f-holdings", "/api/edgar-recent-ipos", "/api/edgar-search",
+  // bundle-kit: the filings brief runs three EDGAR tools per company.
+  "/api/filings-brief",
   "/api/edgar-13f-datasets", "/api/edgar-13f-dataset-head",
   "/api/company-financials",
   // Finance-kit: Databento equities (quote + history)
@@ -184,6 +191,8 @@ const NETWORK = new Set([
   // Tolerate transient 429/502/503/504 (rate limit + Cloudflare hiccups).
   "/api/crypto-price", "/api/crypto-market", "/api/crypto-history", "/api/crypto-trending", "/api/crypto-global",
   "/api/stablecoin-peg",
+  // bundle-kit: token-diligence runs two CoinGecko tools per coin.
+  "/api/token-diligence",
   // market-tick reads crypto-price and stock-quote in-process (listed only with MARKET_TICK=on).
   "/api/market/tick",
   // Network-kit: live DNS resolution against 1.1.1.1/8.8.8.8/9.9.9.9. Public
@@ -203,10 +212,10 @@ const NETWORK = new Set([
   // post-deploy verification once the key is set in Railway.
   "/api/wallet-balance", "/api/token-metadata", "/api/token-price",
   "/api/wallet-transactions", "/api/nft-holdings", "/api/nft-metadata",
-  "/api/gas-snapshot", "/api/eth-call",
-  // evm-rpc rides keyless public RPC endpoints (no Alchemy key needed) but
-  // shares per-IP rate limits — tolerate transient upstream failures.
-  "/api/evm-rpc",
+  "/api/gas-snapshot",
+  // evm-rpc and eth-call ride keyless public RPC endpoints first (no Alchemy
+  // key needed) but share per-IP rate limits: tolerate transient upstream failures.
+  "/api/evm-rpc", "/api/eth-call",
   // Contract-kit egress: Sourcify (contract-source / contract-abi), the
   // openchain.xyz + 4byte.directory signature DBs (selector-lookup, and
   // calldata-decode's no-ABI fallback), and the shared public RPC pool
@@ -354,7 +363,7 @@ const NETWORK = new Set([
   // Dub composes the chat gateway and the speech tiers: keyless, the first step answers 503.
   "/api/dub",
   // STT kit: fetches external audio + hits OpenAI transcription API.
-  "/api/transcribe", "/api/transcribe-pro",
+  "/api/transcribe", "/api/transcribe-pro", "/api/transcribe-long",
   // Embeddings kit: every call hits OpenAI embeddings API upstream.
   "/api/embed", "/api/embed-large",
   // Moderation kit: every call hits OpenAI moderation API upstream.
@@ -365,7 +374,7 @@ const MEMORY_NS = `smoke-all-${process.pid}-${Date.now().toString(36)}`;
 // Wallet-keyed tools (payment = identity): in free mode there is no payment,
 // so their documented "pay to unlock" 4xx is the CORRECT answer, not a bug —
 // same leniency class as the memory tools.
-const isWalletIdentity = (p) => isMemory(p) || p === "/api/my-usage" || p === "/api/receipts" || p === "/api/feedback";
+const isWalletIdentity = (p) => isMemory(p) || p === "/api/my-usage" || p === "/api/receipts" || p === "/api/audit-report" || p === "/api/feedback";
 
 // The seller index must have loaded before the strict sweep: seller-dossier
 // (and every tool that answers about a third-party seller) refuses with a 503
@@ -493,6 +502,11 @@ for (const [path, methods] of paths) {
     // bearer link this sweep cannot have, so the only honest answer here is
     // 404. scripts/test-async-jobs.js drives it end to end against a real job.
     if (cat === "jobs") continue;
+    // GET /api/reputation answers for a seller in this server's index, and a
+    // FREE_MODE boot holds none (its crawler is off), so the honest answer
+    // here is 404. scripts/test-seller-reputation.js drives it on a seeded index,
+    // with its re-check route (a POST that needs an indexed seller too).
+    if (path === "/api/reputation" || path === "/api/reputation/recheck") continue;
     if (strictCovered.has(`${method} ${path}`)) { strictSkipped++; continue; }
     if (coingeckoHanded.has(`${method} ${path}`)) { coingeckoSkipped++; continue; }
     cats[cat] = cats[cat] || { pass: 0, total: 0 };

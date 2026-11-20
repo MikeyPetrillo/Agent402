@@ -60,6 +60,9 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   const withBom = (o) => Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify(o))]).toString("base64");
   ok(x402ScreenedAddressesOf(req({ "payment-signature": withBom({ x402Version: 2, payload: { authorization: { from: LISTED } } }) })).join() === LISTED, "a payer behind a byte order mark is screened");
   ok(x402ScreenedAddressesOf(req({ "x-payment": eip3009(LISTED).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") })).join() === LISTED, "a base64url header is screened");
+  const channel = (payer, payerAuthorizer = "0x" + "00".repeat(20), funder = null) => b64({ x402Version: 2, accepted: { scheme: "batch-settlement", network: "eip155:8453" }, payload: { type: funder ? "deposit" : "voucher", channelConfig: { payer, payerAuthorizer }, voucher: { channelId: "0x" + "cd".repeat(32) }, ...(funder ? { deposit: { amount: "1", authorization: { permit2Authorization: { from: funder } } } } : {}) } });
+  ok(x402ScreenedAddressesOf(req({ "payment-signature": channel(LISTED_MIXED) })).join() === LISTED, "a payment channel: channelConfig.payer, lowercased; the zero authorizer is not a party");
+  ok(x402ScreenedAddressesOf(req({ "payment-signature": channel(CLEAN, LISTED, LISTED_MIXED) })).sort().join() === [CLEAN, LISTED].sort().join(), "a payment channel: the voucher signer and a Permit2 deposit's funder are read too, de-duplicated");
   ok(x402ScreenedAddressesOf(req({})).length === 0 && x402ScreenedAddressesOf(req({ "payment-signature": "not-json!" })).length === 0, "no header, or an unreadable one: nothing to screen");
   ok(x402ScreenedAddressesOf(req({ "payment-signature": b64({ payload: { authorization: { from: "0xNOTHEX" } }, from: LISTED }) })).length === 0, "a malformed from, or an address outside the payload, is not read");
 }

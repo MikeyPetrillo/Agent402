@@ -29,6 +29,7 @@
 //   - docToText / fetchDocText / selectDocuments primitives
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { urlMatches } from "./lib/url-host.js";
 process.env.OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "test-key-not-real";
 
 const mod = await import("../src/tools/filing-watch-kit.js");
@@ -342,7 +343,7 @@ let happy = null;
   ok(happy.untrustedContent === true, "result is marked untrusted (filing text is third-party content)");
   ok(happy.sources.length === 5 && happy.sources[0].n === 1, `4 filings + the submissions index are cited (${happy.sources.length})`);
   ok(happy.sources.every((s) => /^https:\/\/(www\.sec\.gov|data\.sec\.gov)\//.test(s.url)), "every source URL is on SEC EDGAR");
-  ok(happy.sources.at(-1).url.includes("data.sec.gov/submissions"), "the submissions index is the last source");
+  ok(urlMatches(happy.sources.at(-1).url, "data.sec.gov", "/submissions"), "the submissions index is the last source");
   const names = happy.tables.map((t) => t.name);
   ok(names.includes("filings") && names.includes("documents"), `appendix has filings + documents (${names.join(",")})`);
   const ft = happy.tables.find((t) => t.name === "filings");

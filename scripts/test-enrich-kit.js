@@ -19,11 +19,11 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 // ----------------------------------------------------------------------------
 ok(ENRICH_TOOLS.length === 5, `5 tools exported (got ${ENRICH_TOOLS.length})`);
 const SPEC = {
-  "lei-lookup": { price: "$0.005", category: "data" },
+  "lei-lookup": { price: "$0.002", category: "data" },
   "wikidata-entity": { price: "$0.005", category: "data" },
-  "gravatar-check": { price: "$0.002", category: "network" },
+  "gravatar-check": { price: "$0.001", category: "network" },
   "github-repo": { price: "$0.005", category: "data" },
-  "favicon-grab": { price: "$0.003", category: "web" },
+  "favicon-grab": { price: "$0.001", category: "web" },
 };
 for (const t of ENRICH_TOOLS) {
   const spec = SPEC[t.slug];

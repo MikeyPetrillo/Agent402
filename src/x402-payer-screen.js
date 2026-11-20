@@ -15,13 +15,31 @@
 // through the same middleware, so it is screened again.
 //
 // WHICH ADDRESSES. Read from the header the middleware settles from
-// (paymentHeaderOf): the EIP-3009 `authorization.from` (exact scheme) and the
+// (paymentHeaderOf), by the fields X402_SCREENED_FIELDS lists: the EIP-3009 `authorization.from` (exact scheme) and the
 // Permit2 `permit2Authorization.from` (exact over Permit2, and upto), on any
 // EVM network. Both are screened when both are present: a Permit2 payment is
 // settled from the Permit2 signer while the `authorization` block beside it is
 // not signed, and screening each address the buyer put in its own header
 // means neither block can stand in for the other. An unsigned address only
 // ever refuses the request that carries it.
+//
+// PAYMENT CHANNELS (the `batch-settlement` scheme, src/batch-settlement.js)
+// carry no authorization block: the payer is `payload.channelConfig.payer`,
+// on the deposit that opens or tops up the channel, on every voucher call and
+// on a refund request, and the scheme binds the channel id to that config
+// before `next` is called. The screen reads it on each of those requests,
+// with `channelConfig.payerAuthorizer` (the key a voucher may be signed by in
+// the payer's place) and, for a deposit made over Permit2, the funder
+// (`deposit.authorization.permit2Authorization.from`). X402_SCREENED_FIELDS
+// is the one list of payload fields read, per rail; the conformance cells
+// (src/payer-screen-rails.js) name the same fields, and
+// scripts/test-payer-screen-rails.js refuses a listed address at each.
+//
+// AN EVM PAYMENT WITH NO READABLE PAYER (an eip155 network, or the channel
+// scheme, and none of the fields above holds an address) is served, since a
+// payer that is not listed is never refused, and counted as served
+// unscreened, so a payload shape this screen does not read shows up in the
+// operator view instead of passing uncounted.
 //
 // SOLANA, STELLAR AND ALGORAND payments carry a signed transaction, not an
 // authorization naming the payer: the signers are read from the transaction
@@ -51,6 +69,50 @@ import { decodePaymentHeader } from "./payment-header.js";
 
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 
+/** The payload fields the EVM screen reads, per screen-table row
+ *  (src/payer-screen-rails.js PAYER_SCREEN_RAILS). Every field of every row
+ *  is read on every x402 payment, whatever scheme it names. */
+export const X402_SCREENED_FIELDS = Object.freeze({
+  "x402-evm": Object.freeze(["authorization.from", "permit2Authorization.from"]),
+  "x402-gateway-batched": Object.freeze(["authorization.from"]),
+  "x402-batch-settlement": Object.freeze(["channelConfig.payer", "channelConfig.payerAuthorizer", "deposit.authorization.permit2Authorization.from"]),
+});
+const SCREENED_PATHS = [...new Set(Object.values(X402_SCREENED_FIELDS).flat())].map((f) => f.split("."));
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const fieldAt = (obj, path) => {
+  let at = obj;
+  for (const k of path) {
+    if (!at || typeof at !== "object" || !Object.hasOwn(at, k)) return undefined;
+    at = at[k];
+  }
+  return at;
+};
+
+/** What the screen reads of this request's x402 payment: `addresses` (every
+ *  EVM-format paying address, lowercased, de-duplicated) and `evm` (true when
+ *  the payment is on an EVM network or names the channel scheme, so a payer
+ *  is expected). Null with no header or one that does not decode. Pure. */
+export function x402ScreenedPaymentOf(req) {
+  const header = paymentHeaderOf(req);
+  if (!header) return null;
+  let payload;
+  try { payload = decodePaymentHeader(header); } catch { return null; }
+  if (!payload || typeof payload !== "object") return null;
+  const inner = payload.payload;
+  const out = new Set();
+  if (inner && typeof inner === "object") {
+    for (const path of SCREENED_PATHS) {
+      const from = fieldAt(inner, path);
+      // The zero address is the scheme's "no separate authorizer", not a party.
+      if (typeof from === "string" && EVM_RE.test(from) && from.toLowerCase() !== ZERO_ADDRESS) out.add(from.toLowerCase());
+    }
+  }
+  const str = (v) => (typeof v === "string" ? v.toLowerCase() : "");
+  const network = str(payload.accepted?.network) || str(payload.network);
+  const scheme = str(payload.accepted?.scheme) || str(payload.scheme);
+  return { addresses: [...out], evm: network.startsWith("eip155:") || scheme === "batch-settlement" };
+}
+
 /** The buyer-facing refusal. Neutral: no list contents, no internals. */
 export const X402_PAYER_REFUSED_TEXT = "This server cannot accept a payment from this address (sanctions screening). Nothing was charged for this request.";
 
@@ -59,21 +121,12 @@ export const X402_PAYER_REFUSED_TEXT = "This server cannot accept a payment from
  *  header, it will not decode, or it names no EVM authorization (Solana,
  *  Stellar and Algorand payloads). Pure; never throws. */
 export function x402ScreenedAddressesOf(req) {
-  const header = paymentHeaderOf(req);
-  if (!header) return [];
-  let payload;
-  try { payload = decodePaymentHeader(header); } catch { return []; }
-  const inner = payload?.payload;
-  if (!inner || typeof inner !== "object") return [];
-  const out = new Set();
-  for (const from of [inner.authorization?.from, inner.permit2Authorization?.from]) {
-    if (typeof from === "string" && EVM_RE.test(from)) out.add(from.toLowerCase());
-  }
-  return [...out];
+  return x402ScreenedPaymentOf(req)?.addresses || [];
 }
 
-const counts = { screened: 0, refused: 0, servedUnscreened: 0, lastRefusedAt: 0, lastUnscreenedAt: 0 };
+const counts = { screened: 0, refused: 0, servedUnscreened: 0, unreadablePayer: 0, lastRefusedAt: 0, lastUnscreenedAt: 0 };
 let unscreenedLoggedAt = 0;
+let unreadableLoggedAt = 0;
 
 /** Counts for the operator view of /api/gateway-status; never an address. */
 export function x402PayerScreenView() {
@@ -81,6 +134,8 @@ export function x402PayerScreenView() {
     screened: counts.screened,
     refused: counts.refused,
     servedUnscreened: counts.servedUnscreened,
+    // Of those, EVM payments none of whose payer fields could be read.
+    unreadablePayer: counts.unreadablePayer,
     lastRefusedAt: counts.lastRefusedAt ? new Date(counts.lastRefusedAt).toISOString() : null,
     lastUnscreenedAt: counts.lastUnscreenedAt ? new Date(counts.lastUnscreenedAt).toISOString() : null,
   };
@@ -132,9 +187,21 @@ export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = 
     return res.json({ error: X402_PAYER_REFUSED_TEXT, reason: "payer-not-accepted", charged: false });
   };
   return function x402PayerScreen(req, res, next) {
-    const addresses = x402ScreenedAddressesOf(req);
+    const payment = x402ScreenedPaymentOf(req);
+    const addresses = payment?.addresses || [];
     if (addresses.length) return decide(req, res, next, screenAddresses(addresses));
     if (!paymentHeaderOf(req)) return next();
+    // An EVM payment none of whose payer fields reads: served, and counted.
+    if (payment?.evm) {
+      counts.servedUnscreened++;
+      counts.unreadablePayer++;
+      counts.lastUnscreenedAt = Date.now();
+      if (Date.now() - unreadableLoggedAt >= 60_000) {
+        unreadableLoggedAt = Date.now();
+        log(`[sanctions-screen] x402 payer screen: an EVM payment named no payer this screen reads (${req.method} ${req.path}); served unscreened`);
+      }
+      return next();
+    }
     // A non-EVM payment: the transaction's signers, read asynchronously.
     screenNonEvmPayer(req, nonEvmAddressesOf)
       .then((v) => (v ? decide(req, res, next, v) : next()))
@@ -144,6 +211,6 @@ export function createX402PayerScreen({ log = console.warn, nonEvmAddressesOf = 
 
 /** Test seam. */
 export function __resetX402PayerScreenForTests() {
-  counts.screened = 0; counts.refused = 0; counts.servedUnscreened = 0; counts.lastRefusedAt = 0; counts.lastUnscreenedAt = 0;
-  unscreenedLoggedAt = 0;
+  counts.screened = 0; counts.refused = 0; counts.servedUnscreened = 0; counts.unreadablePayer = 0; counts.lastRefusedAt = 0; counts.lastUnscreenedAt = 0;
+  unscreenedLoggedAt = 0; unreadableLoggedAt = 0;
 }

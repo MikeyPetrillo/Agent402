@@ -127,6 +127,23 @@ function signatureDigestOf(req, cred) {
  *  gate's replay guard instead. Read by the conformance document. */
 export const IDEMPOTENCY_CREDENTIALS = Object.freeze(["x402", "credits", "pow"]);
 
+// A charge booked as owed AFTER its answer was stored (src/server.js
+// recordHangupDebt; the hosted MCP connector's cut-off: the route wrote its
+// settled 200 in full, so the answer was committed as delivered, and then the
+// connector said it had stopped waiting). The request's middleware run
+// registers how to restate its stored answer as charged-but-undelivered, so a
+// resend of the same payment voids that debt before it is served, exactly as
+// for a hang-up before the first byte: served once, never served and refunded.
+const chargedLaterOf = new WeakMap(); // request -> (charged) => void
+/** Restate this request's stored answer (if any) as charged under `charged`
+ *  ({ tx, network, wire }); before the answer is stored, the charge rides the
+ *  commit instead. No-op off a keyed request. */
+export function noteChargedAfterServe(req, charged) {
+  const fn = req && typeof req === "object" ? chargedLaterOf.get(req) : null;
+  if (!fn || !charged || typeof charged !== "object" || typeof charged.tx !== "string" || !charged.tx) return false;
+  try { return fn({ tx: charged.tx, network: charged.network ?? null, wire: charged.wire ?? null }) === true; } catch { return false; }
+}
+
 export function implicitReplayAllowed(def, req, { hasLastingEffect, isIdentityBound }) {
   return Boolean(def) && !hasLastingEffect(def.slug) && !isIdentityBound(def) && req?.body?.stream !== true;
 }
@@ -420,9 +437,13 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     const origJson = res.json.bind(res);
     res.json = (body) => { captured = body; return origJson(body); };
     let committed = false;
-    const commit = (charged = null) => {
+    let stored0 = false; // the answer went to the store
+    let storedCharged = false; // ... wrapped as charged
+    let lateCharged = null; // a charge booked before the commit (noteChargedAfterServe)
+    const commit = (charged0 = null) => {
       if (committed || res.statusCode !== 200 || captured === undefined) return;
       committed = true;
+      const charged = charged0 || lateCharged;
       // Only a credential the server actually VERIFIED may seed the cache.
       //
       // idemHashKey binds the entry to `x-pow-solution` as presented, and this
@@ -455,8 +476,22 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       let bytes = 0;
       try { bytes = Buffer.byteLength(JSON.stringify(stored), "utf8"); } catch { bytes = 0; }
       if (!bytes || bytes > IDEM_MAX_BODY_BYTES) return;
+      stored0 = true;
+      storedCharged = Boolean(charged);
       pendingSet = store.set(key, stored, bytes).catch(() => {});
     };
+    chargedLaterOf.set(req, (charged) => {
+      if (!committed) { lateCharged = charged; return true; }
+      if (!stored0 || storedCharged) return false;
+      const wrapped = wrapStored(captured, charged);
+      let bytes = 0;
+      try { bytes = Buffer.byteLength(JSON.stringify(wrapped), "utf8"); } catch { bytes = 0; }
+      if (!bytes || bytes > IDEM_MAX_BODY_BYTES) return false;
+      storedCharged = true;
+      // After the first write, never before it, so the charged form is the one kept.
+      pendingSet = Promise.resolve(pendingSet).catch(() => {}).then(() => store.set(key, wrapped, bytes)).catch(() => {});
+      return true;
+    });
     res.on("finish", () => { commit(); releaseClaim(); });
     // CHARGED BUT NEVER DELIVERED. A buyer that leaves before the first byte
     // while its payment settles is charged (no ticket, or the close landed

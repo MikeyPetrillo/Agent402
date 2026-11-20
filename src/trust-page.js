@@ -18,7 +18,9 @@ import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { directUpstreamConfigured, directUpstreamName } from "./gateway-direct-upstream.js";
 import { COMPANY_MAILBOXES } from "./company.js";
 import { CONFORMANCE_PATH } from "./conformance-path.js";
-import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
+import { REFUND_TERMS_PATH } from "./refund-terms-path.js";
+import { TOOL_RELIABILITY_PATH, TOOL_RELIABILITY_WINDOW_HOURS, TOOL_RELIABILITY_MIN_SAMPLE, toolReliabilityEnabled } from "./tool-reliability.js";
+import { receiptsServed, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_SSE_COMMENT } from "./receipt-signing.js";
 
 /** The processors the server sends buyer data to, as the privacy policy names
  *  them. `gets` is what each receives; the guard checks every entry of
@@ -57,7 +59,7 @@ export function hstsYears() {
   const m = /max-age=(\d+)/.exec(HSTS);
   return m ? Math.floor(Number(m[1]) / (365 * 86400)) : 0;
 }
-const NUM = ["zero", "one", "two", "three", "four", "five"];
+const NUM = ["zero", "one", "two", "three", "four", "five", "six", "seven"];
 const words = (n) => NUM[n] || String(n);
 const hh = (h) => `${String(h).padStart(2, "0")}:00 UTC`;
 
@@ -86,7 +88,7 @@ export function trustPage(baseUrl) {
           step(`A settled x402 answer carries ${code("PAYMENT-RESPONSE")}: base64 JSON whose ${code("success")}, ${code("transaction")}, ${code("network")} and ${code("payer")} fields name the settlement. An MPP answer carries ${code("Payment-Receipt")}, whose ${code("reference")} names the payment.`),
           step(`Look up ${code("transaction")} on that network's block explorer: a stablecoin transfer from ${code("payer")} to the ${code("payTo")} the 402 named. A batched payment names its batch transfer instead.`),
           step(`Hash the exact bytes you received with sha256. To keep that digest beside the payment on chain, send the transaction to ${code("POST /api/attest")} from the paying EVM wallet; ${code("POST /api/receipts")} returns that wallet's settled calls with each transaction and response digest.`),
-          step(`Open ${link(CONFORMANCE_PATH, code(CONFORMANCE_PATH))}, find the row whose ${code("id")} names the rail and network you paid on, and read its ${code("receipt")}, ${code("settleAfterAnswer")} and ${code("refundOnChargedFailure")} cells. ${receiptsServed() ? `Where its ${code("signedReceipt")} cell reads true, the answer also carries ${code(RECEIPT_HEADER)}: a compact JWS this server signs over the route, the request, the sha256 of the answer, the price, the rail, the payer and the settlement, sent on a non-streamed answer only after the payment settled (a streamed answer carries the settlement's own receipt only). Check it against the keys at ${link(RECEIPT_KEYS_PATH, code(RECEIPT_KEYS_PATH))}, or send it to ${code(`POST ${RECEIPT_VERIFY_PATH}`)} (free).` : `${code("signedReceipt")} reads false on every paid rail: the receipt is the settlement's own record, with no signature added by this server.`}`),
+          step(`Open ${link(CONFORMANCE_PATH, code(CONFORMANCE_PATH))}, find the row whose ${code("id")} names the rail and network you paid on, and read its ${code("receipt")}, ${code("settleAfterAnswer")} and ${code("refundOnChargedFailure")} cells. ${receiptsServed() ? `Where its ${code("signedReceipt")} cell reads true, the answer also carries ${code(RECEIPT_HEADER)}: a compact JWS this server signs over the route, the request, the sha256 of the answer, the price, the rail, the payer and the settlement, sent only after the payment settled. A streamed answer ends with a ${code(`: ${RECEIPT_SSE_COMMENT} <receipt>`)} server-sent comment line, which event-stream parsers skip, over every byte streamed before it (and an ${code(RECEIPT_HEADER)} trailer when you send ${code("TE: trailers")}); a prepaid credits call's receipt names the key's id and its debit; a card-bought report's receipt is on its page and in its email; a monitor subscription gets one for each paid period, the first and every renewal, by card or over MPP, signed once the payment is final and shown with its period statement on the subscription's confirmation page or status link and in its monitor emails. Check it against the keys at ${link(RECEIPT_KEYS_PATH, code(RECEIPT_KEYS_PATH))}, or send it to ${code(`POST ${RECEIPT_VERIFY_PATH}`)} (free).` : `${code("signedReceipt")} reads false on every paid rail: the receipt is the settlement's own record, with no signature added by this server.`}`),
         ].join("")}</ol></div>`,
         `A re-send with the same ${code("Idempotency-Key")}, credential, route and body within ${cacheMin} minutes replays the served JSON answer without a second charge. For an outside x402 seller the router buys from, ${code("/api/index?seller=<host>")} shows its crawl history, the live probe of its paywall and the router's verdict on paying it.`,
       ],
@@ -135,15 +137,18 @@ export function trustPage(baseUrl) {
       p: [
         `${link("/status", "/status")} shows only what two observers outside production saw: a scheduled heartbeat and an outside probe that runs every five minutes. A day with no observation shows as no data. Service alarms are public words on ${link("/api/gateway-status", "/api/gateway-status")}, and the observers page the operator on the ones that need a person, one issue per alarm.`,
         `A paid call that was charged but failed is recorded as a debt in the refund ledger and repaid only after the charge is proven on chain. Once a debt has waited past a short grace period, the ${code("refundsOwed")} word reads ${code("owed")} and pages until it is repaid. A card report that fails to generate is refunded to the card.`,
+        ...(toolReliabilityEnabled() ? [`${link(TOOL_RELIABILITY_PATH, code(TOOL_RELIABILITY_PATH))} lists every tool with its success rate and median and 95th percentile latency over the last ${words(Math.round(TOOL_RELIABILITY_WINDOW_HOURS / 24))} days, each marked measured or not enough data. A tool with fewer than ${TOOL_RELIABILITY_MIN_SAMPLE} calls in the window reads not enough data, with no figure; an input the caller got wrong is not counted against the tool.`] : []),
       ],
-      links: [["/status", "Status"], ["/api/gateway-status", "Alarm words"]],
+      links: [["/status", "Status"], ["/api/gateway-status", "Alarm words"], ...(toolReliabilityEnabled() ? [[TOOL_RELIABILITY_PATH, "Per-tool reliability"]] : [])],
     },
     {
       h: "Payment conformance",
       p: [
         `${link(CONFORMANCE_PATH, code(CONFORMANCE_PATH))} lists each payment rail this server accepts and, for each, whether it settles after a successful answer, honors an idempotency key and the x402 payment-identifier, guards against a replayed credential, repays a charged failure and how, forgives a hang-up, screens the payer and returns a receipt. Each cell is computed at request time from the serving code and its switches, and the document carries the refund terms as data, in the words of the ${link("/terms", "terms")}.`,
+        `${link(REFUND_TERMS_PATH, code(REFUND_TERMS_PATH))} states, per rail, whether an error answer is charged, whether a hang-up is forgiven and how a charged failure is repaid, with the rules of the refund ledger, prepaid credits and card reports, read from the same switches. Every first-contact 402 links it.`,
+        `Every rail that carries a payer address screens it against the OFAC SDN list before the paid route runs: the signed payer on an EVM chain, the signers on Solana, Stellar and Algorand, the paying wallet on Tempo. Each row's ${code("sanctionsScreening")} cell names the ${code("identifier")} it reads. A payer that is not listed is never refused by the screen. A card payment and a prepaid credits key carry no payer address, so their cells say there is none.`,
       ],
-      links: [[CONFORMANCE_PATH, "Conformance JSON"], [repoUrl("blob/main/src/conformance.js"), "Conformance code"]],
+      links: [[CONFORMANCE_PATH, "Conformance JSON"], [REFUND_TERMS_PATH, "Refund terms JSON"], [repoUrl("blob/main/src/conformance.js"), "Conformance code"]],
     },
     {
       h: "Security reports",

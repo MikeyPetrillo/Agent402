@@ -544,6 +544,22 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
     const t = [...terms];
     ok(applyCurrencyTerms(t) === false && !t.includes("forex"), `[${terms.join(" ")}] asks for no conversion (terms ${t.join(" ")})`);
   }
+  // Two different currencies joined ("to", "vs", "/") or beside a rate word
+  // ask for a conversion without the verb, and a currency the fx tools do not
+  // spell out still reaches the converter, never another *-convert tool.
+  for (const q of ["rupee to peso", "rupees to pesos", "convert rupees to pesos", "euro to yen", "eur/jpy", "inr vs mxn", "euro yen rate"]) {
+    const r = findTools(C, q, {});
+    ok(r.results[0]?.slug === "fx-rate" && r.rarestTermCovered === true, `"${q}" -> fx-rate as a strong match (got ${r.results.slice(0, 3).map((x) => x.slug).join(", ")}, covered ${r.rarestTermCovered})`);
+  }
+  // Listed side by side, joined by "and", or one currency twice: no conversion.
+  for (const [terms, q] of [[["currency", "usd", "eur", "dashboard"], "currency usd eur dashboard"], [["translate", "dollars", "euros"], "translate it in dollars and euros"], [["dollar", "dollars"], "dollar to dollars"], [["usd", "dollar", "rate"], "usd dollar rate"]]) {
+    const t = [...terms];
+    ok(applyCurrencyTerms(t, q) === false && !t.includes("forex"), `"${q}" asks for no conversion (terms ${t.join(" ")})`);
+  }
+  for (const q of ["translate it in dollars and euros", "translate in dollars and euros"]) {
+    const r = findTools(C, q, {});
+    ok(!/^fx-/.test(r.results[0]?.slug || "") && !(r.results.length && r.rarestTermCovered === true && /^fx-/.test(r.results[0]?.slug || "")), `"${q}" is not a confident fx match (top ${r.results[0]?.slug}, covered ${r.rarestTermCovered})`);
+  }
   const named = ["convert", "dollars", "euros"];
   ok(applyCurrencyTerms(named) === true && named.includes("usd") && named.includes("eur") && named.includes("forex"), `currency names read as their codes in a conversion (terms ${named.join(" ")})`);
 }

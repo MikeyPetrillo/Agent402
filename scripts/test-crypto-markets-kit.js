@@ -63,8 +63,8 @@ const reset = () => { calls.length = 0; clearCryptoMarketsCache(); };
 // Catalog envelope
 // ----------------------------------------------------------------------------
 const EXPECTED = {
-  "coin-price-by-contract": "$0.005", "coin-profile": "$0.008", "coin-history": "$0.005", "coin-ohlc": "$0.008",
-  "coin-market-chart-range": "$0.008", "coin-categories": "$0.005", "global-defi": "$0.005", "exchanges": "$0.005",
+  "coin-price-by-contract": "$0.005", "coin-profile": "$0.008", "coin-history": "$0.005", "coin-ohlc": "$0.003",
+  "coin-market-chart-range": "$0.008", "coin-categories": "$0.005", "global-defi": "$0.005", "exchanges": "$0.003",
   "exchange-tickers": "$0.008", "exchange-rates": "$0.005", "coin-search": "$0.005", "coins-list": "$0.005",
   "rwa-list": "$0.003", "rwa-markets": "$0.006", "rwa-asset": "$0.006", "rwa-issuers": "$0.003", "rwa-issuer": "$0.006",
 };
@@ -345,29 +345,34 @@ const histByDate = await h("coin-history")({ coin: "bitcoin", date: expectDate }
 ok(histByDate.cached === true && histByDate.date === expectDate, "coin-history: explicit date hits the same cache entry as daysAgo");
 reset();
 routes = { "/api/v3/coins/bitcoin/history": jsonRes(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin" }) };
-await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 5 }), 422, "coin-history: no market_data on that date -> 422 (free, never a charged empty answer)");
+// An explicit date, so the block reads the same key at any time of day (a
+// relative daysAgo moved to the next date when the clock was pushed across
+// UTC midnight, and the 10-minute case below read upstream again).
+const MISS_DATE = new Date(Date.now() - 5 * 86_400_000).toISOString().slice(0, 10);
+const OTHER_DATE = new Date(Date.now() - 6 * 86_400_000).toISOString().slice(0, 10);
+await throws(h("coin-history")({ coin: "bitcoin", date: MISS_DATE }), 422, "coin-history: no market_data on that date -> 422 (free, never a charged empty answer)");
 {
   // The miss is kept per coin and date: a repeat answers the same 422 with no
   // upstream read, even once the 5-minute read cache has dropped the document.
   const reads = calls.length;
   ok(reads === 1 && __test.historyMissSize() === 1, `coin-history: the miss read upstream once and was kept (${reads} reads)`);
-  await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 5 }), 422, "coin-history: a repeated miss is still 422");
+  await throws(h("coin-history")({ coin: "bitcoin", date: MISS_DATE }), 422, "coin-history: a repeated miss is still 422");
   ok(calls.length === reads, "coin-history: a repeated miss reads nothing upstream");
   const realNow = Date.now;
   try {
     Date.now = () => realNow() + 10 * 60_000; // past the read cache, inside the day
-    await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 5 }), 422, "coin-history: a miss past the read cache is still 422");
+    await throws(h("coin-history")({ coin: "bitcoin", date: MISS_DATE }), 422, "coin-history: a miss past the read cache is still 422");
   } finally { Date.now = realNow; }
   ok(calls.length === reads, "coin-history: the miss memo outlives the read cache (no read after 10 minutes)");
   // Another date for the same coin is its own key and is read.
   routes["/api/v3/coins/bitcoin/history"] = jsonRes(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin", market_data: { current_price: { usd: 1 }, market_cap: {}, total_volume: {} } });
-  const other = await h("coin-history")({ coin: "bitcoin", daysAgo: 6 });
+  const other = await h("coin-history")({ coin: "bitcoin", date: OTHER_DATE });
   ok(other.price === 1 && !("recorded" in other) && calls.length === reads + 1, "coin-history: another date is read and answered");
   // The memo lasts a day: once it lapses the pair is read again.
   try {
     Date.now = () => realNow() + 86_400_000 + 60_000;
     calls.length = 0;
-    const again = await h("coin-history")({ coin: "bitcoin", date: new Date(realNow() - 5 * 86_400_000).toISOString().slice(0, 10) });
+    const again = await h("coin-history")({ coin: "bitcoin", date: MISS_DATE });
     ok(again.price === 1 && calls.length === 1, "coin-history: a miss older than a day is read again");
   } finally { Date.now = realNow; }
   // Bounded: a flood of distinct misses never holds more than HISTORY_MISS_MAX.

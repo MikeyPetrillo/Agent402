@@ -381,7 +381,7 @@ const text = [
     },
   },
   {
-    route: "POST /api/redact", name: "Redact PII", slug: "redact", category: "text", price: "$0.002",
+    route: "POST /api/redact", name: "Redact PII", slug: "redact", category: "text", price: "$0.001",
     description: "Mask emails, phone numbers, credit-card-like numbers, IPs, and SSNs in text. Returns the redacted text and counts by type.",
     tags: ["redact", "pii", "mask", "privacy"],
     discovery: { bodyType: "json", input: { text: "reach me at ada@x.com or 555-123-4567" }, inputSchema: { properties: { text: { type: "string" } }, required: ["text"] }, output: { example: { result: "reach me at [EMAIL] or [PHONE]", counts: { email: 1, phone: 1 } } } },
@@ -1389,6 +1389,25 @@ const validation = [
         return { valid: sum % 10 === 0, format: "ISBN-13" };
       }
       return { valid: false, reason: "Not 10 or 13 digits" };
+    },
+  },
+  {
+    // GS1 check digit (GS1 General Specifications, "How to calculate a check
+    // digit manually": https://www.gs1.org/services/how-calculate-check-digit-manually):
+    // weights 3 and 1 alternate from the digit left of the check digit.
+    route: "POST /api/gtin-validate", name: "GTIN / EAN / UPC validate", slug: "gtin-validate", category: "validation", price: "$0.001",
+    description: "Validate a product barcode number's GS1 check digit: GTIN-8 (EAN-8), GTIN-12 (UPC-A), GTIN-13 (EAN-13, including ISBN-13 and ISSN prefixes) or GTIN-14, with the expected check digit and the 14-digit form. Spaces and hyphens ignored. Pairs with /api/barcode-lookup.",
+    tags: ["gtin", "ean", "upc", "barcode", "validate", "checksum"],
+    discovery: { bodyType: "json", input: { code: "4006381333931" }, inputSchema: { properties: { code: { type: "string", description: "8, 12, 13 or 14 digits" } }, required: ["code"] }, output: { example: { valid: true, format: "GTIN-13", alias: "EAN-13", checkDigit: 1, expectedCheckDigit: 1, gtin14: "04006381333931", prefix: null } } },
+    handler: (i) => {
+      const raw = cap(need(i, "code"), 64, "code").replace(/[\s-]/g, "");
+      const formats = { 8: ["GTIN-8", "EAN-8"], 12: ["GTIN-12", "UPC-A"], 13: ["GTIN-13", "EAN-13"], 14: ["GTIN-14", "ITF-14"] };
+      if (!/^\d+$/.test(raw) || !formats[raw.length]) return { valid: false, reason: "a GTIN is 8, 12, 13 or 14 digits" };
+      let sum = 0;
+      for (let k = raw.length - 2, w = 3; k >= 0; k--, w = 4 - w) sum += +raw[k] * w;
+      const expected = (10 - (sum % 10)) % 10, check = +raw[raw.length - 1];
+      const prefix = raw.length === 13 && /^97[89]/.test(raw) ? "ISBN-13 (Bookland)" : raw.length === 13 && raw.startsWith("977") ? "ISSN" : null;
+      return { valid: check === expected, format: formats[raw.length][0], alias: formats[raw.length][1], checkDigit: check, expectedCheckDigit: expected, gtin14: raw.padStart(14, "0"), prefix };
     },
   },
   {

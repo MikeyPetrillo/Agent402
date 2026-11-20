@@ -14,6 +14,7 @@
 // this thread's own (empty) state read the shipped values instead.
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { parentPort } from "node:worker_threads";
+import { testSeam, testSeamOn } from "./test-seams.js";
 
 const xi = await import("./x402-index.js");
 const obs = await import("./response-observation.js");
@@ -29,7 +30,7 @@ const CATALOG_MAX = 8;
 // scores once for its page and its shortlist).
 const memos = new Map(); // id -> memo object
 const MEMO_MAX = 32;
-const testHooks = process.env.ROUTER_WORKER_TEST_HOOKS === "1";
+const testHooks = testSeamOn("ROUTER_WORKER_TEST_HOOKS"); // never on a production boot (src/test-seams.js)
 
 function post(m) { parentPort.postMessage(m); }
 
@@ -77,8 +78,8 @@ parentPort.on("message", (m) => {
     case "warm": {
       // Build the candidate index now, off any query's clock.
       const t0 = performance.now();
-      if (testHooks && Number(process.env.ROUTER_WORKER_TEST_WARM_DELAY_MS) > 0) {
-        const until = performance.now() + Number(process.env.ROUTER_WORKER_TEST_WARM_DELAY_MS);
+      if (testHooks && Number(testSeam("ROUTER_WORKER_TEST_WARM_DELAY_MS")) > 0) {
+        const until = performance.now() + Number(testSeam("ROUTER_WORKER_TEST_WARM_DELAY_MS"));
         while (performance.now() < until) { /* a slow load, on purpose */ }
       }
       let n = 0;

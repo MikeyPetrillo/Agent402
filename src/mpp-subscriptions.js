@@ -106,7 +106,8 @@ import { Challenge, Credential, Method, Receipt } from "mppx";
 import * as Tempo from "mppx/tempo";
 import { tempo as tempoServer } from "mppx/server";
 import { privateKeyToAccount } from "viem/accounts";
-import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
+import { MONITOR_PRODUCTS, publicReceipts } from "./stripe-subscriptions.js";
+import { appendPeriodReceipt } from "./receipt-signing.js";
 import { usdToBaseUnits, usdToTokenDecimalString } from "./base-units.js";
 import { redactSecrets } from "./tools/redact.js";
 import { withSponsorCeiling, sponsorCeilingWord } from "./tempo-sponsor-ceiling.js";
@@ -1008,6 +1009,10 @@ export function createMppSubscriptions({
   findRenewalOnChain: injectedFindRenewal = null,
   screen = { addresses: screenAddresses, funding: screenFunding },
   refunds = null,
+  // A signed receipt per confirmed period (src/receipt-signing.js
+  // createSubscriptionReceipt), or null while signing is off; kept on the
+  // record as `signedReceipts` (the newest last).
+  signPeriod = null,
   now = () => Date.now(), log = console.log,
 } = {}) {
   // Fail closed on the inputs the binding rests on. A subscription engine that
@@ -1792,6 +1797,7 @@ export function createMppSubscriptions({
       mppxRec = await subStore.getByKey(lookupKey);
       if (!mppxRec) throw new Error("subscription did not persist after settlement");
       rec = houseRecordFrom(mppxRec, { b, payer, lookupKey, receipt });
+      rec = withPeriodReceipt(rec, rec.lastChargedPeriod, rec.lastChargeTx);
       // Created only when absent: a retry of this credential that rebuilt the
       // record while this activation was settling already booked the period.
       w = await writeRecIfAbsent(rec);
@@ -1855,6 +1861,20 @@ export function createMppSubscriptions({
     };
   }
 
+  // The record with one confirmed period's signed receipt kept on it: only a
+  // period whose transfer is confirmed (named by its transaction hash), signed
+  // once per period. Never throws: the record is returned as it was.
+  function withPeriodReceipt(rec, periodIndex, tx, at = now()) {
+    if (typeof signPeriod !== "function" || typeof tx !== "string" || !tx) return rec;
+    try {
+      const r = signPeriod({
+        rail: "mpp-subscription", network: `eip155:${rec.chainId || TEMPO_MAINNET_CHAIN_ID}`, payer: rec.payer || null,
+        subscription: rec.subId, product: rec.product, target: rec.target,
+        period: periodIndex == null ? null : String(periodIndex), settlement: tx, priceUsd: rec.priceUsd, paidAt: at,
+      });
+      return r && typeof r.receipt === "string" ? { ...rec, signedReceipts: appendPeriodReceipt(rec.signedReceipts, r) } : rec;
+    } catch { return rec; }
+  }
   function receiptHeader(receipt) {
     if (!receipt) return null;
     try { return Receipt.serialize(receipt); } catch { return null; }
@@ -1941,7 +1961,8 @@ export function createMppSubscriptions({
         return { refused: true };
       }
     }
-    const rebuilt = houseRecordFrom(mppxRec, { b, payer, lookupKey, receipt: null });
+    let rebuilt = houseRecordFrom(mppxRec, { b, payer, lookupKey, receipt: null });
+    rebuilt = withPeriodReceipt(rebuilt, rebuilt.lastChargedPeriod, rebuilt.lastChargeTx);
     if (mppxRec.canceledAt) { rebuilt.status = "canceled"; rebuilt.canceledAt = String(mppxRec.canceledAt); }
     let w;
     try { w = await writeRecIfAbsent(rebuilt); }
@@ -2172,10 +2193,10 @@ export function createMppSubscriptions({
           if (mppxRec && (mppxRec.lastChargedPeriod ?? 0) < due) {
             await subStore.put({ ...mppxRec, lastChargedPeriod: due, reference: verdict.tx, timestamp: new Date(at).toISOString(), inFlightPeriod: undefined, inFlightAttempt: undefined, inFlightReference: undefined, inFlightStartedAt: undefined });
           }
-          const next = {
+          const next = withPeriodReceipt({
             ...rec, status: "active", lastChargedPeriod: due, lastChargeTx: verdict.tx, lastChargeAt: new Date(at).toISOString(),
             chargeFailures: 0, firstFailedAt: null, nextChargeAttemptAt: null, lastChargeError: null, unconfirmedCharge: null,
-          };
+          }, due, verdict.tx, at);
           await writeRecKeepingCancel(next, { ownPull: true });
           bookCharge(next, due, verdict.tx);
           log(`[mpp-subs] reconciled ${subId} period ${due} from the chain: the send that timed out had landed, tx=${verdict.tx} - not charged twice`);
@@ -2217,13 +2238,14 @@ export function createMppSubscriptions({
       const mppxRec = await subStore.get(rec.mppxSubscriptionId);
       const charged = mppxRec?.lastChargedPeriod ?? (result ? due : (rec.lastChargedPeriod ?? 0));
       if (charged <= (rec.lastChargedPeriod ?? 0)) throw new Error(result === null ? "renewal reported nothing due while a period is outstanding" : "renewal did not advance the paid period");
-      const next = {
+      const paid = {
         ...rec, status: "active", lastChargedPeriod: charged,
         billingAnchor: mppxRec?.billingAnchor || rec.billingAnchor,
         lastChargeTx: result?.reference || mppxRec?.reference || null,
         lastChargeAt: new Date(at).toISOString(),
         chargeFailures: 0, firstFailedAt: null, nextChargeAttemptAt: null, lastChargeError: null, unconfirmedCharge: null,
       };
+      const next = withPeriodReceipt(paid, charged, paid.lastChargeTx, at);
       await writeRecKeepingCancel(next, { ownPull: true });
       bookCharge(next, charged, next.lastChargeTx);
       log(`[mpp-subs] charged ${subId} period ${charged} tx=${next.lastChargeTx || "?"}`);
@@ -2353,6 +2375,9 @@ export function createMppSubscriptions({
       canceledReason: rec.canceledReason || null,
       ...(rec.canceledReason === SCREEN_ENDED_REASON ? { notice: TEMPO_SCREEN_REFUSED_DETAIL } : {}),
       lastChargeAt: rec.lastChargeAt || null, lastChargeTx: rec.lastChargeTx || null,
+      // Each confirmed period's signed receipt (the newest last), with the
+      // period statement its answer digest covers.
+      signedReceipts: publicReceipts(rec),
       // Deliberately NOT exposed: chargeFailures/lastChargeError text on the
       // public view (operator surface only) - it can quote a node's words.
     };

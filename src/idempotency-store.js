@@ -11,8 +11,10 @@
 // Keys are the middleware's sha256 binding (credential + route + body), never
 // the credential itself. Bodies are capped as before (IDEM_MAX_BODY_BYTES per
 // entry; the local store also caps total bytes and entries).
+import { randomUUID } from "node:crypto";
 import { getSharedRedisClient } from "./shared-limit.js";
 import { withLoopTimeout } from "./loop-deadline.js";
+import { delIfValue } from "./bounded-redis.js";
 
 // Ten minutes; IDEM_TTL_MS overrides it (a paid-mode test shortens it to prove
 // a replay past the window is not served from the store).
@@ -78,6 +80,11 @@ export function createLocalIdempotencyStore({ ttlMs = IDEM_TTL_MS, maxEntries = 
  * then the local store. A release clears both; a Redis delete that fails is
  * retried, and a later claim of a key this process released while Redis was
  * down clears its own stale Redis claim instead of refusing for 120 s.
+ * Each claim is written under a token of its own, and a claim whose command
+ * was sent and never answered (Redis paused past the bound: it may land
+ * later) is remembered by that token too, so its release drops it once it
+ * lands. Every drop is by token: a claim another container holds is never
+ * dropped by one that only sent its own.
  */
 const REDIS_OP_MS = 1_000;
 const RELEASE_RETRY_MS = 5_000;
@@ -87,24 +94,25 @@ export function createIdempotencyStore({ ttlMs = IDEM_TTL_MS, redis = getSharedR
   // Loop time (src/loop-deadline.js): an answer that landed while the loop was
   // held is read, not taken for a store that did not answer.
   const op = (p) => withLoopTimeout(p, opTimeoutMs, () => new Error("redis op timeout"));
-  // Keys this process released locally whose Redis claim could not be deleted.
-  const pendingRelease = new Map(); // key -> deadline (ms)
-  // Keys whose claim this process holds in Redis (only those need a Redis delete).
-  const heldInRedis = new Set();
+  // Keys this process released locally whose Redis claim could not be dropped.
+  const pendingRelease = new Map(); // key -> { until (ms), token }
+  // Keys whose claim this process holds in Redis, or sent there with no
+  // answer (it may land later), by the claim's token: only those need a drop.
+  const heldInRedis = new Map(); // key -> token
   let retryTimer = null;
-  const tryRedisDel = async (key) => {
+  const tryRedisDel = async (key, token) => {
     const c = await client();
     if (!c) return false;
-    try { await op(c.del(PREFIX + "f:" + key)); return true; } catch { return false; }
+    try { await op(delIfValue(c, PREFIX + "f:" + key, token)); return true; } catch { return false; }
   };
   const scheduleRetry = () => {
     if (retryTimer || pendingRelease.size === 0) return;
     retryTimer = setTimeout(async () => {
       retryTimer = null;
       const now = Date.now();
-      for (const [key, until] of [...pendingRelease]) {
+      for (const [key, { until, token }] of [...pendingRelease]) {
         if (now >= until) { pendingRelease.delete(key); continue; } // the Redis ttl has lapsed it
-        if (await tryRedisDel(key)) pendingRelease.delete(key);
+        if (await tryRedisDel(key, token)) pendingRelease.delete(key);
       }
       scheduleRetry();
     }, releaseRetryMs);
@@ -141,19 +149,24 @@ export function createIdempotencyStore({ ttlMs = IDEM_TTL_MS, redis = getSharedR
       if (!(await local.claim(key))) return false;
       const c = await client();
       if (!c) return true;
+      const token = randomUUID();
       try {
-        let r = await op(c.set(PREFIX + "f:" + key, "1", { NX: true, EX: INFLIGHT_TTL_SECONDS }));
+        let r = await op(c.set(PREFIX + "f:" + key, token, { NX: true, EX: INFLIGHT_TTL_SECONDS }));
         if (r !== "OK" && pendingRelease.has(key)) {
-          // Our own claim, released while Redis was down: clear it and retry.
-          await op(c.del(PREFIX + "f:" + key));
+          // Our own claim, released while Redis was down: drop it (by its
+          // token, never another container's) and retry.
+          await op(delIfValue(c, PREFIX + "f:" + key, pendingRelease.get(key).token));
           pendingRelease.delete(key);
-          r = await op(c.set(PREFIX + "f:" + key, "1", { NX: true, EX: INFLIGHT_TTL_SECONDS }));
+          r = await op(c.set(PREFIX + "f:" + key, token, { NX: true, EX: INFLIGHT_TTL_SECONDS }));
         }
-        if (r === "OK") { pendingRelease.delete(key); heldInRedis.add(key); return true; }
+        if (r === "OK") { pendingRelease.delete(key); heldInRedis.set(key, token); return true; }
         await local.release(key);
         return false;
       } catch {
-        return true; // Redis unreachable: the local claim guards this process
+        // Redis did not answer: the local claim guards this process. A claim
+        // that was sent may still land; the release drops it by its token.
+        heldInRedis.set(key, token);
+        return true;
       }
     },
     /** Keep a claim alive while its handler runs: the longest routes outlive INFLIGHT_TTL_SECONDS. */
@@ -164,9 +177,12 @@ export function createIdempotencyStore({ ttlMs = IDEM_TTL_MS, redis = getSharedR
     },
     async release(key) {
       await local.release(key);
-      if (!heldInRedis.delete(key)) return; // never claimed in Redis: nothing to clear there
-      if (!(await tryRedisDel(key))) {
-        pendingRelease.set(key, Date.now() + INFLIGHT_TTL_SECONDS * 1000);
+      const token = heldInRedis.get(key);
+      if (token === undefined) return; // never sent to Redis: nothing to clear there
+      heldInRedis.delete(key);
+      // On one connection the drop runs after a claim that lands late.
+      if (!(await tryRedisDel(key, token))) {
+        pendingRelease.set(key, { until: Date.now() + INFLIGHT_TTL_SECONDS * 1000, token });
         scheduleRetry();
       }
     },

@@ -50,7 +50,7 @@ facilitator = createServer((req, res) => {
 });
 await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
 
-proc = spawn("node", ["src/server.js"], {
+proc = spawn(process.execPath, ["src/server.js"], {
   env: {
     ...process.env, PORT: String(PORT), FREE_MODE: "",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",

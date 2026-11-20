@@ -24,7 +24,7 @@ export const METERED_SLUGS = new Set([
   // OpenAI
   "llm", "llm-pro", "llm-premium",
   "image-gen", "image-gen-hd", "image-gen-premium",
-  "tts", "tts-hd", "tts-lite", "transcribe", "transcribe-pro",
+  "tts", "tts-hd", "tts-lite", "transcribe", "transcribe-pro", "transcribe-long",
   "dub", // dub-kit.js: the v1-chat gateway tier, then a tts tier, both in-process
   "embed", "embed-large", "moderate",
   // OpenRouter gateway
@@ -62,6 +62,7 @@ export const METERED_SLUGS = new Set([
   "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",
   "my-usage",
   "receipts",
+  "audit-report",
   "feedback",        // feedback-kit.js: the verdict is bound to the wallet that paid for the rated call
   "judge",           // paid third-party judgment model; CI holds no key
   "decisions",       // the same judgment on the OpenAI Decisions wire
@@ -86,7 +87,7 @@ export const METERED_SLUGS = new Set([
   "wallet-balance", "token-metadata", "token-price", "wallet-transactions",
   "asset-transfers", "token-balances", "token-allowance", "tx-receipt",
   "block-receipts", "token-price-history",
-  "nft-holdings", "nft-metadata", "gas-snapshot", "eth-call",
+  "nft-holdings", "nft-metadata", "gas-snapshot",
   "dex-pair", "dex-pool", "dex-quote",
   "nft-collection", "nft-floor",
   "l2-gas-comparison",

@@ -8,6 +8,9 @@
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
+import { mediaMeterEnabled, setMeterSentinel } from "../gateway-meter.js";
+
+const withMediaMeter = (upstreamUsd, result) => (mediaMeterEnabled() ? setMeterSentinel(result, upstreamUsd) : result);
 import { ourKeyRefusedError } from "../upstream-deadline.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
@@ -78,9 +81,11 @@ async function callOpenAI(text, tierSlug) {
   try { data = JSON.parse(body); } catch { throw bad("OpenAI returned non-JSON", 502); }
   const embedding = data.data?.[0]?.embedding;
   if (!Array.isArray(embedding) || embedding.length === 0) throw bad("OpenAI returned no embedding - retry", 502);
-  recordEmbedSpend(tierSlug, data.usage);
+  const upstreamUsd = recordEmbedSpend(tierSlug, data.usage);
 
-  return {
+  // The work meter (METERED_MEDIA): an upto, channel or credits buyer settles
+  // the tokens embedded, under the price (src/gateway-meter.js).
+  return withMediaMeter(upstreamUsd, {
     model: tier.model,
     provider: "openai",
     embedding,
@@ -88,7 +93,7 @@ async function callOpenAI(text, tierSlug) {
     usage: {
       total_tokens: data.usage?.total_tokens ?? 0,
     },
-  };
+  });
 }
 
 // The list price of a tier, read from its own tool def so it is never typed twice.
@@ -104,7 +109,8 @@ function recordEmbedSpend(tierSlug, usage) {
     const tokens = Number(usage?.prompt_tokens ?? usage?.total_tokens) || 0;
     const upstreamUsd = rate != null && tokens > 0 ? Math.round((tokens / 1e6) * rate * 1e6) / 1e6 : null;
     capturePostHogGatewayUsage({ tier: tierSlug, model, priceUsd: tierPriceUsd(tierSlug), upstreamUsd, promptTokens: tokens, source: "embeddings" });
-  } catch { /* telemetry must never fail a served response */ }
+    return upstreamUsd;
+  } catch { return null; /* telemetry must never fail a served response */ }
 }
 
 function makeHandler(tierSlug) {

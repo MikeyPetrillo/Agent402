@@ -43,7 +43,7 @@ const catalog = {
   const html = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, Array.from({ length: 42 }));
   for (const receipts of [true, false]) {
     const h = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, [], { receipts });
-    ok(/<a href="\/trust#verify"[^>]*>verify<\/a> paid calls/.test(h), `the lead links "verify" to /trust#verify (receipts ${receipts ? "on" : "off"})`);
+    ok(new RegExp(`<a href="/trust#verify"[^>]*>verify</a> ${receipts ? "every paid call" : "paid calls"}`).test(h), `the lead links "verify" to /trust#verify (receipts ${receipts ? "on" : "off"})`);
   }
 
   // The hero's paid figure is external payments only (src/home-proof.js); the
@@ -293,6 +293,10 @@ const catalog = {
   const fail02 = WHY_POINTS.find((w) => w.id === "never-charged");
   ok(/x402/.test(fail02.t) && !fail02.links.some(([h]) => h === "/status"), "the failure claim is scoped to x402 and links a payment check, not uptime");
   ok(!/^No wallet required/.test(WHY_POINTS.find((w) => w.id === "no-wallet").t), "the no-wallet row is not an absolute");
+  // The link to the claims counts them from WHY_POINTS, never a typed number.
+  const { countWord } = await import("../src/rails.js");
+  const claimsLink = (html.match(/href="\/docs#why"[^>]*>([^<]*)</) || [])[1] || "";
+  ok(claimsLink.includes(`all ${countWord(WHY_POINTS.length)} claims`), `the /docs#why link counts WHY_POINTS (${claimsLink})`);
 }
 
 // --- the meta description's card clause reads the switches that sell card ---
@@ -306,7 +310,7 @@ const catalog = {
     const d = homeDescription({ credits: false, storefront: true, receipts });
     ok(/signed receipt/.test(d) === receipts && d.length <= 155, `the description names the signed receipt only while receipts are signed, and fits the snippet (${receipts ? "on" : "off"}, ${d.length} chars)`);
   }
-  ok(homeDescription({ credits: false, storefront: true, receipts: true }) === "Find, pay for and verify paid calls over x402 and MPP, backed by signed receipts. 500+ tools on the same rails; reports and monitors also by card.", "the approved meta description, word for word (receipts signed, storefront on)");
+  ok(homeDescription({ credits: false, storefront: true, receipts: true }) === "Find, pay for and verify every paid call over x402 and MPP, each with a signed receipt. 500+ tools on the same rails; reports and monitors also by card.", "the approved meta description, word for word (receipts signed, storefront on)");
   const saved = { c: process.env.CREDITS_SALES, s: process.env.STRIPE_SECRET_KEY };
   delete process.env.CREDITS_SALES; process.env.STRIPE_SECRET_KEY = "sk_test_x";
   const meta = (ledgerHomePage(BASE_URL, catalog, {}, {}, []).match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";

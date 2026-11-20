@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" width="960" height="440" role="img" aria-labelledby="t d">
+  <title id="t">How a paid call flows through Agent402</title>
+  <desc id="d">Agents, SDKs and people send requests to the Agent402 server. The server answers 402 with a price, takes the paid retry through its x402, MPP, proof-of-work or card gate, runs the tool, settles the payment on chain after a successful answer and returns the answer with a signed receipt. Its router can buy from proven outside x402 sellers, and sites charge agents with agent402-tollbooth.</desc>
+  <style>
+    .bg { fill: #F3F4F5; }
+    .box { fill: #FFFFFF; stroke: #D9DDE1; }
+    .core { fill: #0C0D0F; stroke: #24282C; }
+    .inner { fill: #16191D; stroke: #353B41; }
+    .h { font: 600 15px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #111315; }
+    .t { font: 400 13px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #3A3F45; }
+    .m { font: 400 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #626970; letter-spacing: .08em; }
+    .ch { font: 600 15px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #E9EAEC; }
+    .ct { font: 400 13px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #C9CED3; }
+    .cm { font: 400 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #9EF0B0; letter-spacing: .08em; }
+    .ln { stroke: #0F5E43; stroke-width: 1.5; fill: none; }
+    .lt { font: 400 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #0F5E43; }
+    .ah { fill: #0F5E43; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0B0C0E; }
+      .box { fill: #141619; stroke: #24282C; }
+      .core { fill: #16191D; stroke: #2C3136; }
+      .inner { fill: #0B0C0E; stroke: #3A4148; }
+      .h { fill: #E9EAEC; }
+      .t { fill: #B3B9C0; }
+      .m { fill: #8B929A; }
+      .ln { stroke: #34A877; }
+      .lt { fill: #34A877; }
+      .ah { fill: #34A877; }
+    }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0 0 L10 5 L0 10 z"/></marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="960" height="440" rx="4"/>
+
+  <text class="m" x="24" y="36">BUYERS</text>
+  <rect class="box" x="24" y="52" width="200" height="74" rx="4"/>
+  <text class="h" x="40" y="80">AI agents</text>
+  <text class="t" x="40" y="102">MCP at /mcp or agent402-mcp</text>
+  <rect class="box" x="24" y="140" width="200" height="74" rx="4"/>
+  <text class="h" x="40" y="168">SDKs and HTTP</text>
+  <text class="t" x="40" y="190">agent402-client, any x402</text>
+  <text class="t" x="40" y="206">or MPP client</text>
+  <rect class="box" x="24" y="228" width="200" height="74" rx="4"/>
+  <text class="h" x="40" y="256">People</text>
+  <text class="t" x="40" y="278">reports and monitors by card</text>
+
+  <rect class="core" x="300" y="40" width="360" height="360" rx="4"/>
+  <text class="cm" x="320" y="70">AGENT402 SERVER</text>
+  <rect class="inner" x="320" y="86" width="320" height="64" rx="4"/>
+  <text class="ch" x="336" y="112">Payment gates</text>
+  <text class="ct" x="336" y="134">x402 · MPP · proof of work · card</text>
+  <rect class="inner" x="320" y="162" width="320" height="64" rx="4"/>
+  <text class="ch" x="336" y="188">500+ tools and metered models</text>
+  <text class="ct" x="336" y="210">each priced per call in its 402</text>
+  <rect class="inner" x="320" y="238" width="320" height="64" rx="4"/>
+  <text class="ch" x="336" y="264">Signed receipts and refund ledger</text>
+  <text class="ct" x="336" y="286">every paid answer, checked against the chain</text>
+  <rect class="inner" x="320" y="314" width="320" height="64" rx="4"/>
+  <text class="ch" x="336" y="340">x402 Index and router</text>
+  <text class="ct" x="336" y="362">crawled sellers, buys from proven ones</text>
+
+  <text class="m" x="736" y="36">SETTLEMENT AND SELLERS</text>
+  <rect class="box" x="736" y="52" width="200" height="90" rx="4"/>
+  <text class="h" x="752" y="80">Facilitators</text>
+  <text class="t" x="752" y="102">settle USDC on chain after</text>
+  <text class="t" x="752" y="118">a successful answer</text>
+  <rect class="box" x="736" y="196" width="200" height="74" rx="4"/>
+  <text class="h" x="752" y="224">Outside x402 sellers</text>
+  <text class="t" x="752" y="246">bought by the router</text>
+  <rect class="box" x="736" y="314" width="200" height="74" rx="4"/>
+  <text class="h" x="752" y="342">Your site or API</text>
+  <text class="t" x="752" y="364">agent402-tollbooth</text>
+
+  <path class="ln" d="M224 89 H296" marker-end="url(#a)"/>
+  <path class="ln" d="M224 177 H296" marker-end="url(#a)"/>
+  <path class="ln" d="M224 265 H296" marker-end="url(#a)"/>
+  <text class="lt" x="24" y="336">→ request, 402, paid retry</text>
+  <text class="lt" x="24" y="358">← answer and signed receipt</text>
+  <path class="ln" d="M660 118 H732" marker-end="url(#a)"/>
+  <path class="ln" d="M660 346 C700 346 700 233 732 233" marker-end="url(#a)"/>
+  <text class="lt" x="666" y="108">settle</text>
+  <text class="lt" x="666" y="300">buy</text>
+</svg>

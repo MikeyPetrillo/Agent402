@@ -63,6 +63,14 @@ const GATES = [
     defect: "a stale pack price on a /skills link (the shape that slipped past the first version)",
   },
   {
+    gate: "test-docs-truth.js",
+    needsServer: true,
+    file: "docs/base-mcp-plugin.md",
+    from: "4. User approves the ~$0.01 USDC payment",
+    to: "4. User approves the ~$0.10 USDC payment",
+    defect: "a walkthrough's approval step quoting another price than the route its block calls (no route on its own line)",
+  },
+  {
     gate: "test-sales-ledger.js",
     file: "src/sales-ledger.js",
     from: "rail: r.rail, network: r.network, tx: r.tx, internal: !!r.internal,",
@@ -146,7 +154,7 @@ for (const g of GATES) {
     if (g.bootMutatedServer) {
       const port = 3300 + Math.floor(Math.random() * 200);
       mutantTarget = `http://127.0.0.1:${port}`;
-      mutant = spawn("node", ["src/server.js"], {
+      mutant = spawn(process.execPath, ["src/server.js"], {
         cwd: ROOT, stdio: "ignore",
         env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off",
                AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999" },
@@ -160,7 +168,7 @@ for (const g of GATES) {
     }
 
     try {
-      execFileSync("node", [join("scripts", g.gate)], {
+      execFileSync(process.execPath, [join("scripts", g.gate)], {
         cwd: ROOT, stdio: "pipe", timeout: 900_000,
         env: { ...process.env, TARGET_URL: mutantTarget },
       });

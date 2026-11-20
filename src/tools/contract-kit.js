@@ -768,7 +768,7 @@ export const CONTRACT_TOOLS = [
     name: "Calldata decoder (ABI or selector DB)",
     slug: "calldata-decode",
     category: "crypto",
-    price: "$0.003",
+    price: "$0.002",
     description:
       "Decode EVM smart-contract transaction calldata into the function name and typed parameters. Supply an ABI (from /api/contract-abi) or a signature like transfer(address,uint256) for a fully offline decode; with neither, the 4-byte selector is resolved via the openchain.xyz signature database (4byte.directory fallback) and each candidate signature is tried. Unknown selectors return a documented partial decode (selector + raw 32-byte words) instead of an error.",
     tags: ["crypto", "calldata", "decode", "abi", "selector", "evm", "transaction", "smart-contract"],
@@ -1021,7 +1021,7 @@ export const CONTRACT_TOOLS = [
     name: "Known-address label lookup",
     slug: "address-label",
     category: "crypto",
-    price: "$0.002",
+    price: "$0.001",
     description:
       "Label a known EVM address from a curated, committed dataset: major stablecoin + token contracts (the USDC and USDG contracts of every EVM chain we settle on, USDC on Ethereum, USDT, DAI, WETH, WBTC), DEX routers (Uniswap, 1inch, 0x), canonical L1↔L2 bridges, large exchange hot/cold wallets, and burn/system addresses. Deterministic and offline - the provenance field states the dataset revision. Unknown addresses return {found:false}, not an error.",
     tags: ["crypto", "address", "label", "exchange", "bridge", "router", "token", "evm"],

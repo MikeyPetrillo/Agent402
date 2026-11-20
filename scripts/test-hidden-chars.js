@@ -33,17 +33,24 @@ const ALLOW = new Map([]);
 // there, and only files git tracks (an untracked draft is not an instruction).
 // The source files are scanned whole: a hidden character in a code line of
 // one of them needs its own ALLOW entry, the same as in prose.
+// The coding-agent plugins (plugins/, their skills) are read like the other
+// markdown trees, and every plugin manifest is scanned whole like a source file.
 const SOURCE_FILES = ["src/mcp-flagship.js", "src/mcp-http.js", "src/server.js", "mcp/index.js"];
-const PATHS = ["CLAUDE.md", "README.md", ".claude", "wiki", "docs", "mcp/README.md", "client/README.md", "openclaw/README.md", "tollbooth/README.md", "adapters", ...SOURCE_FILES];
+const PLUGIN_MANIFEST = /(^|\/)\.(claude|codex|cursor)-plugin\/[^/]+\.json$|\.plugin\.json$/;
+const PATHS = ["CLAUDE.md", "README.md", ".claude", "wiki", "docs", "mcp/README.md", "client/README.md", "openclaw/README.md", "tollbooth/README.md", "adapters", "plugins", ".claude-plugin", ".codex-plugin", ".cursor-plugin", "openclaw/openclaw.plugin.json", ...SOURCE_FILES];
 const tracked = execFileSync("git", ["ls-files", "-z", "--", ...PATHS], { cwd: ROOT, encoding: "utf8" })
   .split("\0").filter(Boolean)
-  .filter((f) => /\.md$/i.test(f) || SOURCE_FILES.includes(f))
+  .filter((f) => /\.md$/i.test(f) || SOURCE_FILES.includes(f) || PLUGIN_MANIFEST.test(f))
   .sort();
 ok(tracked.length >= 10, `found the instruction files (${tracked.length})`);
 ok(tracked.includes("CLAUDE.md") && SOURCE_FILES.every((f) => tracked.includes(f)) && tracked.some((f) => f.startsWith("wiki/")),
   "the project map, the MCP instruction modules, the npm server and the wiki source are in the set");
 ok(["mcp/README.md", "client/README.md", "openclaw/README.md", "tollbooth/README.md"].every((f) => tracked.includes(f)) && tracked.filter((f) => /^adapters\/[^/]+\/README\.md$/.test(f)).length >= 5,
   "every published package README and the adapter READMEs are in the set");
+// A coding-agent plugin's skill is a brief its host runs, and its manifests'
+// descriptions are what the host shows: both are instructions.
+ok(tracked.includes("plugins/agent402/skills/agent402/SKILL.md") && tracked.includes("plugins/agent402/README.md") && [".claude-plugin/marketplace.json", "plugins/agent402/.claude-plugin/plugin.json", ".codex-plugin/plugin.json", ".cursor-plugin/plugin.json", "openclaw/openclaw.plugin.json"].every((f) => tracked.includes(f)),
+  "the coding-agent plugins are in the set: the skill, the README and every plugin manifest");
 
 // The path-scoped rules, the project skills and the committed agents are
 // instructions too: a session loads a rules file whenever it reads a matching

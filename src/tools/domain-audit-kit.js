@@ -20,6 +20,7 @@ import { NETWORK_TOOLS } from "./network-kit.js";
 import { NETWORK_TOOLS2 } from "./network-kit2.js";
 import { promises as dnsPromises } from "node:dns";
 import { assertQueryableName } from "./dns-name-filter.js";
+import { testSeamOn } from "../test-seams.js";
 
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
@@ -430,7 +431,7 @@ NOTE: a gap in this material is never a finding about the domain - a probe marke
       synthesis_model: SYNTH,
     };
     const out = { report, domain, grade, composite, sources: [], tables, meta, grounding };
-    if (process.env.RESEARCH_DEBUG === "1") out._debug = { emailBlock, hdrBlock, tlsBlock, proBlock, hostBlock, wwwBlock, mailboxBlock };
+    if (testSeamOn("RESEARCH_DEBUG")) out._debug = { emailBlock, hdrBlock, tlsBlock, proBlock, hostBlock, wwwBlock, mailboxBlock };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(DOMAIN_AUDIT_TIERS[tierSlug]) });
     return out;
   };

@@ -3,6 +3,9 @@
 // Deterministic, no AI; ffmpeg is invoked
 // directly (execFile, no shell) on temp files with hard limits:
 //   • input capped at 30MB (SSRF-guarded fetch)
+//   • the encoded file capped at AUDIO_ANSWER_MAX_BYTES (src/tools/answer-cap.js):
+//     a length the headers declare is refused before the encode, the encoder
+//     stops writing at the cap, and the file is sized before it is read
 //   • 90s processing timeout, process killed on breach
 //   • at most 2 concurrent jobs (busy callers get 429 + Retry-After)
 // Transforms are pure functions over Buffers (unit-testable); the catalog
@@ -10,6 +13,7 @@
 import { execFile } from "node:child_process";
 import { childEnv } from "./child-env.js";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
+import { AUDIO_ANSWER_MAX_BYTES, answerTooLarge, capText, readFileWithin, projectedAudioBytes, audioSecondsWithin, lengthText } from "./answer-cap.js";
 import { tmpdir, availableParallelism } from "node:os";
 import { join } from "node:path";
 import { safeFetch } from "./fetch-guard.js";
@@ -177,34 +181,72 @@ export async function probeMedia(buffer) {
     const inPath = join(dir, "in");
     const input = mediaInputArgs(buffer, inPath);
     await writeFile(inPath, buffer);
-    const res = await run("ffprobe", [
-      "-hide_banner", "-v", "info", "-print_format", "json", "-show_format", "-show_streams", ...input,
-    ], { keepFailure: true });
-    if (res.failed) {
-      // ffprobe stops when a stream's decoder is outside AUDIO_DECODERS (a
-      // video track, cover art, subtitles). Its input summary, printed before
-      // that stop, still names every stream from the container headers.
-      const summary = /not on whitelist/.test(res.stderr) ? probeSummaryOf(res.stderr, buffer.length) : null;
-      if (summary) return summary;
-      throw bad("media could not be processed (is the input a valid audio/video file?)", 422);
-    }
-    let data;
-    try { data = JSON.parse(res.stdout); } catch { throw bad("ffprobe returned no metadata", 422); }
-    const f = data.format ?? {};
-    return {
-      formatName: f.format_name ?? null,
-      durationSec: f.duration ? Number(f.duration) : null,
-      bitrate: f.bit_rate ? Number(f.bit_rate) : null,
-      bytes: buffer.length,
-      streams: (data.streams ?? []).map((s) => ({
-        type: s.codec_type,
-        codec: s.codec_name,
-        ...(s.codec_type === "audio" ? { sampleRate: Number(s.sample_rate) || null, channels: s.channels ?? null } : {}),
-        ...(s.codec_type === "video" ? { width: s.width ?? null, height: s.height ?? null, fps: s.avg_frame_rate ?? null } : {}),
-      })),
-    };
+    return probeStaged(input, buffer.length);
   });
 }
+/** ffprobe's answer for a file already staged at the path `input` names. */
+async function probeStaged(input, bytes) {
+  const res = await run("ffprobe", [
+    "-hide_banner", "-v", "info", "-print_format", "json", "-show_format", "-show_streams", ...input,
+  ], { keepFailure: true });
+  if (res.failed) {
+    // ffprobe stops when a stream's decoder is outside AUDIO_DECODERS (a
+    // video track, cover art, subtitles). Its input summary, printed before
+    // that stop, still names every stream from the container headers.
+    const summary = /not on whitelist/.test(res.stderr) ? probeSummaryOf(res.stderr, bytes) : null;
+    if (summary) return summary;
+    throw bad("media could not be processed (is the input a valid audio/video file?)", 422);
+  }
+  let data;
+  try { data = JSON.parse(res.stdout); } catch { throw bad("ffprobe returned no metadata", 422); }
+  const f = data.format ?? {};
+  return {
+    formatName: f.format_name ?? null,
+    durationSec: f.duration ? Number(f.duration) : null,
+    bitrate: f.bit_rate ? Number(f.bit_rate) : null,
+    bytes,
+    streams: (data.streams ?? []).map((s) => ({
+      type: s.codec_type,
+      codec: s.codec_name,
+      ...(s.codec_type === "audio" ? { sampleRate: Number(s.sample_rate) || null, channels: s.channels ?? null } : {}),
+      ...(s.codec_type === "video" ? { width: s.width ?? null, height: s.height ?? null, fps: s.avg_frame_rate ?? null } : {}),
+    })),
+  };
+}
+
+/** The most an MP3 encode writes per second at a sample rate, in kbps: the
+ *  format's own ceiling (MPEG-1 at 32 kHz and up, MPEG-2 from 16 kHz,
+ *  MPEG-2.5 below), which the encoder holds a higher request to. */
+const mp3CeilingKbps = (sampleRate) => (sampleRate >= 32000 ? 320 : sampleRate >= 16000 ? 160 : 64);
+/** The bitrate an encode asked for `bitrate` writes at, in kbps. */
+const mp3Kbps = (bitrate, ceiling = 320) => Math.min(ceiling, Math.max(8, parseInt(bitrate, 10) || 192));
+/** Refuses (413), before the encode, a staged file whose declared length
+ *  would encode past the answer cap at `bitrate`. The projection uses the
+ *  lowest ceiling among the file's audio streams (`resampled`: the filter
+ *  chain writes 48 kHz whatever came in), so a file whose encode would fit is
+ *  never refused here. A file whose headers give no length or no audio
+ *  stream (or cannot be probed) goes on: the encoder's own size limit and the
+ *  size check on its output hold the same cap. */
+async function assertEncodeFits(input, bytes, bitrate, { fixedBitrate = false, resampled = false } = {}) {
+  let probed = null;
+  try { probed = await probeStaged(input, bytes); } catch { /* unprobed: the encoder's limit and the output check hold the cap */ }
+  const seconds = probed?.durationSec;
+  if (!(Number.isFinite(seconds) && seconds > 0)) return;
+  const rates = (probed.streams || []).filter((s) => s.type === "audio").map((s) => s.sampleRate).filter((r) => Number.isFinite(r) && r > 0);
+  if (!rates.length) return;
+  const kbps = mp3Kbps(bitrate, resampled ? 320 : mp3CeilingKbps(Math.min(...rates)));
+  if (projectedAudioBytes(seconds, kbps) > AUDIO_ANSWER_MAX_BYTES) throw mp3TooLarge(kbps, { fixedBitrate, seconds });
+}
+function mp3TooLarge(kbps, { fixedBitrate = false, seconds = null } = {}) {
+  const longest = lengthText(audioSecondsWithin(AUDIO_ANSWER_MAX_BYTES, kbps));
+  const was = Number.isFinite(seconds) ? `this audio is ${lengthText(seconds)} long and ` : "";
+  return answerTooLarge("The MP3", AUDIO_ANSWER_MAX_BYTES, {
+    hint: `${was}at ${kbps}k the limit holds ${longest}; send a shorter file${fixedBitrate ? "" : ' or a lower "bitrate"'}`,
+  });
+}
+/** The encoder's own stop, one byte past the cap: a file that reaches it is
+ *  larger than the cap, and the size check on the output refuses it. */
+const MP3_SIZE_LIMIT_ARGS = Object.freeze(["-fs", String(AUDIO_ANSWER_MAX_BYTES + 1)]);
 
 const CHANNEL_LAYOUTS = { mono: 1, stereo: 2, "2.1": 3, "3.0": 3, quad: 4, "4.0": 4, "5.0": 5, "5.0(side)": 5, "5.1": 6, "5.1(side)": 6, "6.1": 7, "7.1": 8 };
 /** "25 fps" / "29.97 fps" as the rational string ffprobe reports. */
@@ -254,6 +296,16 @@ export function probeSummaryOf(stderr, bytes) {
   };
 }
 
+/** The encoded MP3, sized before it is read: past the cap it is the 413. */
+async function readMp3(outPath, bitrate, opts = {}) {
+  try {
+    return await readFileWithin(outPath, AUDIO_ANSWER_MAX_BYTES, "The MP3");
+  } catch (e) {
+    if (e?.statusCode === 413) throw mp3TooLarge(mp3Kbps(bitrate), opts);
+    throw e;
+  }
+}
+
 export async function toMp3(buffer, { bitrate = "192k" } = {}) {
   if (!/^\d{2,3}k$/.test(bitrate)) throw bad('"bitrate" must look like "128k"/"192k"/"320k"');
   return withTmp(async (dir) => {
@@ -261,8 +313,9 @@ export async function toMp3(buffer, { bitrate = "192k" } = {}) {
     const outPath = join(dir, "out.mp3");
     const input = mediaInputArgs(buffer, inPath);
     await writeFile(inPath, buffer);
-    await run("ffmpeg", ["-y", ...input, "-vn", "-map_metadata", "-1", "-b:a", bitrate, outPath]);
-    const out = await readFile(outPath);
+    await assertEncodeFits(input, buffer.length, bitrate);
+    await run("ffmpeg", ["-y", ...input, "-vn", "-map_metadata", "-1", "-b:a", bitrate, ...MP3_SIZE_LIMIT_ARGS, outPath]);
+    const out = await readMp3(outPath, bitrate);
     return { format: "mp3", bitrate, bytes: out.length, mp3Base64: out.toString("base64") };
   });
 }
@@ -282,6 +335,7 @@ const PCM_FORMATS = {
 // runs, so a "busy" refusal would discard paid-for audio. A slot is handed straight to
 // the next waiter on release.
 const PCM_MAX_CONCURRENT = 4;
+const PCM_OUTPUT_HEADROOM_BYTES = 1024 * 1024;
 let pcmActive = 0;
 const pcmWaiters = [];
 const pcmAcquire = () => (pcmActive < PCM_MAX_CONCURRENT ? (pcmActive++, Promise.resolve()) : new Promise((resolve) => pcmWaiters.push(resolve)));
@@ -296,8 +350,12 @@ export async function transcodePcm(buffer, format, { sampleRate = 24000 } = {}) 
     const inPath = join(dir, "in.pcm");
     const outPath = join(dir, `out.${format}`);
     await writeFile(inPath, buffer);
-    await run("ffmpeg", ["-y", "-codec_whitelist", "pcm_s16le", "-protocol_whitelist", "file", "-f", "s16le", "-ar", String(sampleRate), "-ac", "1", "-i", inPath, "-vn", "-map_metadata", "-1", ...out, outPath]);
-    return await readFile(outPath);
+    // PCM in, so no codec here writes more than the samples it was given
+    // (WAV adds a header; FLAC, Opus and AAC write less). The limit is that
+    // bound with room, held by the encoder and by the size check on its file.
+    const cap = buffer.length * 2 + PCM_OUTPUT_HEADROOM_BYTES;
+    await run("ffmpeg", ["-y", "-codec_whitelist", "pcm_s16le", "-protocol_whitelist", "file", "-f", "s16le", "-ar", String(sampleRate), "-ac", "1", "-i", inPath, "-vn", "-map_metadata", "-1", ...out, "-fs", String(cap + 1), outPath]);
+    return await readFileWithin(outPath, cap, "The encoded speech");
   } finally {
     pcmRelease();
     rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -313,12 +371,13 @@ export async function normalizeAudio(buffer, { targetLufs = -16 } = {}) {
     const input = mediaInputArgs(buffer, inPath);
     await writeFile(inPath, buffer);
     // EBU R128 two-in-one: loudnorm in dynamic mode, then encode to mp3.
+    await assertEncodeFits(input, buffer.length, "192k", { fixedBitrate: true, resampled: true });
     await run("ffmpeg", [
       "-y", ...input, "-vn", "-map_metadata", "-1",
       "-af", `loudnorm=I=${lufs}:TP=-1.5:LRA=11`,
-      "-b:a", "192k", outPath,
+      "-b:a", "192k", ...MP3_SIZE_LIMIT_ARGS, outPath,
     ]);
-    const out = await readFile(outPath);
+    const out = await readMp3(outPath, "192k", { fixedBitrate: true });
     return { format: "mp3", targetLufs: lufs, truePeakDb: -1.5, bytes: out.length, mp3Base64: out.toString("base64") };
   });
 }
@@ -435,20 +494,32 @@ export async function measureAudioSeconds(buffer) {
   const m = await measureAudio(buffer);
   return Number.isFinite(m.seconds) ? m.seconds : null;
 }
+/** The speech encodings a cut is written in. flac: 16 kHz mono FLAC, at most
+ *  32 KB a second, so ten minutes stay under the 25 MB upload limit. opus:
+ *  16 kHz mono Opus at 32 kbps in Ogg (both on the speech upstream's input
+ *  list), about 4 KB a second, so the thirty-minute tier's cut is about 7 MB
+ *  where FLAC could pass the limit. */
+export const SPEECH_CODECS = Object.freeze({
+  flac: Object.freeze({ file: "out.flac", ext: "flac", args: Object.freeze(["-c:a", "flac", "-f", "flac"]) }),
+  opus: Object.freeze({ file: "out.ogg", ext: "ogg", args: Object.freeze(["-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg"]) }),
+});
+const speechCodec = (codec) => SPEECH_CODECS[codec] || SPEECH_CODECS.flac;
 /** { seconds, format, audioTracks? } (format: the demuxer that read it). With
  *  `cutSeconds`, the same run also writes the first audio stream as 16 kHz
- *  mono FLAC cut at that length (transcodeSpeech's output), answered as
- *  `audio`: one decode measures the whole file and converts it, instead of a
- *  measurement followed by a second decode for the conversion. */
-export async function measureAudio(buffer, { cutSeconds = null, format = null, deadlineAt = null, who = null } = {}) {
+ *  mono speech audio (`codec`, SPEECH_CODECS: FLAC unless named) cut at that
+ *  length (transcodeSpeech's output), answered as `audio`: one decode
+ *  measures the whole file and converts it, instead of a measurement
+ *  followed by a second decode for the conversion. */
+export async function measureAudio(buffer, { cutSeconds = null, format = null, deadlineAt = null, who = null, codec = "flac" } = {}) {
   if (Number.isFinite(cutSeconds) && cutSeconds > 0) {
     let outPath = null;
+    const c = speechCodec(codec);
     return decodeInMeasurePool(buffer, "a402-measure-", (dir) => {
-      outPath = join(dir, "out.flac");
+      outPath = join(dir, c.file);
       // Output 0: the cut. Output 1: the whole stream at 100 one-byte samples
       // a second on stdout, so its byte count is the length (the progress
       // clock of a run with two outputs follows the shorter one).
-      return [...SAMPLE_CLOCK, "-t", String(cutSeconds), "-ac", "1", "-ar", "16000", "-c:a", "flac", "-f", "flac", "-y", outPath,
+      return [...SAMPLE_CLOCK, "-t", String(cutSeconds), "-ac", "1", "-ar", "16000", ...c.args, "-y", outPath,
         "-map", "0:a:0", "-vn", "-sn", "-dn", ...SAMPLE_CLOCK, "-ac", "1", "-ar", String(COUNTER_RATE), "-c:a", "pcm_u8", "-f", "u8", "pipe:1"];
     }, async (seconds) => {
       const audio = await readFile(outPath);
@@ -464,21 +535,22 @@ const COUNTER_RATE = 100;
  *  timestamps the container wrote (a file can stamp an hour of audio as minutes). */
 const SAMPLE_CLOCK = Object.freeze(["-af", "asetpts=N/SR/TB"]);
 
-/** The first audio stream as 16 kHz mono FLAC, cut at `maxSeconds` (ffmpeg
- *  `-t`), for a speech upstream: FLAC is on its documented input list, and
- *  16 kHz mono FLAC holds at most 32 KB a second, so a ten-minute cut stays
- *  under the 25 MB upload limit. It runs in the measurement's pool, under the
+/** The first audio stream as 16 kHz mono FLAC (or the `codec` named,
+ *  SPEECH_CODECS), cut at `maxSeconds` (ffmpeg `-t`), for a speech upstream:
+ *  FLAC is on its documented input list, and 16 kHz mono FLAC holds at most
+ *  32 KB a second, so a ten-minute cut stays under the 25 MB upload limit. It runs in the measurement's pool, under the
  *  same wait and deadline rules (`deadlineAt`); a cut reads only up to `maxSeconds` of audio, so it can
  *  finish where a full measurement outlasted the deadline. Answers
  *  { audio, seconds } (seconds: the length written, which is the file's whole
  *  length when it is shorter than the cut), or measureAudio's { undecodable }
  *  or { unavailable }. Never throws. */
-export async function transcodeSpeech(buffer, { maxSeconds, format = null, deadlineAt = null, who = null }) {
+export async function transcodeSpeech(buffer, { maxSeconds, format = null, deadlineAt = null, who = null, codec = "flac" }) {
   if (!(Number.isFinite(maxSeconds) && maxSeconds > 0)) return { unavailable: "no length to cut at was given" };
   let outPath = null;
+  const c = speechCodec(codec);
   return decodeInMeasurePool(buffer, "a402-speech-", (dir) => {
-    outPath = join(dir, "out.flac");
-    return [...SAMPLE_CLOCK, "-t", String(maxSeconds), "-ac", "1", "-ar", "16000", "-c:a", "flac", "-f", "flac", "-y", outPath];
+    outPath = join(dir, c.file);
+    return [...SAMPLE_CLOCK, "-t", String(maxSeconds), "-ac", "1", "-ar", "16000", ...c.args, "-y", outPath];
   }, async (seconds) => {
     const audio = await readFile(outPath);
     return audio.length > 0 ? { audio, seconds } : { undecodable: "the decoder wrote no audio" };
@@ -613,6 +685,8 @@ const fetchMedia = async (url) => {
 };
 
 // ---- catalog tools ---------------------------------------------------------
+/** Whole minutes of 192k MP3 the answer cap holds, for the descriptions. */
+const AUDIO_MINUTES_AT_192K = Math.floor(audioSecondsWithin(AUDIO_ANSWER_MAX_BYTES, 192) / 60);
 export const MEDIA_TOOLS = [
   {
     route: "POST /api/media-info", name: "Media info (ffprobe)", slug: "media-info", category: "web", price: "$0.005",
@@ -628,9 +702,9 @@ export const MEDIA_TOOLS = [
     handler: async (i) => probeMedia(await fetchMedia(need(i, "url"))),
   },
   {
-    route: "POST /api/audio-convert", name: "Audio convert (to MP3)", slug: "audio-convert", category: "web", price: "$0.02",
+    route: "POST /api/audio-convert", name: "Audio convert (to MP3)", slug: "audio-convert", category: "web", price: "$0.002",
     description:
-      "Extract/convert the audio track of any media URL (mp4, mov, wav, m4a, ogg…) to MP3 - the \"mp4 to mp3\" conversion, deterministic ffmpeg, no AI. Body: {\"url\":\"https://…/video.mp4\",\"bitrate\":\"192k\"?}. Returns the MP3 as base64.",
+      `Extract/convert the audio track of any media URL (mp4, mov, wav, m4a, ogg…) to MP3 - the \"mp4 to mp3\" conversion, deterministic ffmpeg, no AI. Body: {\"url\":\"https://…/video.mp4\",\"bitrate\":\"192k\"?}. Returns the MP3 as base64, up to ${capText(AUDIO_ANSWER_MAX_BYTES)} (${AUDIO_MINUTES_AT_192K} minutes at 192k; a longer recording answers 413 before it is encoded, so send a lower bitrate or a shorter file).`,
     tags: ["ffmpeg", "mp4-to-mp3", "audio", "convert", "mp3"],
     discovery: {
       bodyType: "json",
@@ -649,7 +723,7 @@ export const MEDIA_TOOLS = [
   {
     route: "POST /api/audio-normalize", name: "Audio normalize (EBU R128)", slug: "audio-normalize", category: "web", price: "$0.02",
     description:
-      "Loudness-normalize any audio/video URL to a target LUFS with ffmpeg's loudnorm (EBU R128) and return MP3 - consistent levels for podcasts, clips, and TTS output. Body: {\"url\":\"https://…/audio.wav\",\"targetLufs\":-16?}.",
+      `Loudness-normalize any audio/video URL to a target LUFS with ffmpeg's loudnorm (EBU R128) and return MP3 - consistent levels for podcasts, clips, and TTS output. Body: {\"url\":\"https://…/audio.wav\",\"targetLufs\":-16?}. The MP3 is 192k and up to ${capText(AUDIO_ANSWER_MAX_BYTES)} (${AUDIO_MINUTES_AT_192K} minutes; a longer recording answers 413 before it is encoded).`,
     tags: ["ffmpeg", "normalize", "loudnorm", "audio", "lufs"],
     discovery: {
       bodyType: "json",

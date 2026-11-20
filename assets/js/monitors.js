@@ -1,5 +1,9 @@
 // /monitors storefront behavior. External file (site CSP drops inline script).
 (function () {
+  // Google Analytics key events (assets/js/ga-loader.js defines gtag only
+  // where GA is configured and allowed): the product and the kind only, never
+  // what the buyer typed. Sent as a beacon so it survives the redirect.
+  function ga(ev, props) { try { if (typeof window.gtag === "function") window.gtag("event", ev, Object.assign({ transport_type: "beacon" }, props)); } catch (e) { /* telemetry never blocks a subscribe */ } }
   // Each card's field sits in a <form>: Subscribe submits it, and so does Enter
   // in the field. An empty field shows its error in the line it names by
   // aria-describedby, is marked invalid and keeps focus.
@@ -14,6 +18,7 @@
       ev.preventDefault();
       if (btn.disabled) return;
       try { if (window.posthog && window.posthog.capture) window.posthog.capture("monitor_subscribe_click", { product: product }); } catch (e) { /* telemetry never blocks a subscribe */ }
+      ga("monitor_subscribe_click", { product: product });
       var input = (el.value || "").trim();
       if (errEl) errEl.textContent = "";
       if (!input) { if (errEl) errEl.textContent = "Please enter a value."; el.setAttribute("aria-invalid", "true"); el.focus(); return; }
@@ -24,7 +29,7 @@
       try {
         var r = await fetch("/api/subscribe", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ product: product, target: input }) });
         var j = await r.json();
-        if (j && j.url) { window.location = j.url; }
+        if (j && j.url) { ga("monitor_checkout_started", { product: product }); window.location = j.url; }
         else { if (errEl) errEl.textContent = (j && j.error) || "Could not start checkout."; btn.disabled = false; btn.textContent = label; }
       } catch (e) {
         if (errEl) errEl.textContent = "Network error, please try again.";

@@ -292,11 +292,21 @@ try {
   const perfBody = await perf.json().catch(() => null);
   ok(perf.status === 200 && perfBody?.brokenListings?.byOrigin?.[POISON]?.count >= 1 && perfBody.brokenListings.byOrigin[POISON2]?.count >= 1, `/__operator/perf.json brokenListings counts both poison origins (${JSON.stringify(perfBody?.brokenListings)?.slice(0, 160)})`);
   ok(typeof perfBody?.containedTurns?.total === "number" && perfBody.containedTurns.byName && typeof perfBody.containedTurns.names === "number", `/__operator/perf.json carries containedTurns by name (${JSON.stringify(perfBody?.containedTurns)?.slice(0, 120)})`);
+  const rs = perfBody?.receiptStore, rep = perfBody?.reputation;
+  ok(rs && typeof rs.backend === "string" && ["stored", "skipped", "failed", "dropped", "pending"].every((k) => Number.isInteger(rs[k])),
+    `/__operator/perf.json carries the receipt store's counts (${JSON.stringify(rs)})`);
+  ok(rep && typeof rep.enabled === "boolean" && typeof rep.loaded === "boolean" && Number.isInteger(rep.sellers) && rep.lastPass && typeof rep.lastPass === "object",
+    `/__operator/perf.json carries the reputation pass's state (${JSON.stringify(rep)?.slice(0, 160)})`);
+  ok(perfBody && Object.hasOwn(perfBody, "solanaFacilitatorSplit") && (perfBody.solanaFacilitatorSplit === null || Array.isArray(perfBody.solanaFacilitatorSplit.entries)),
+    `/__operator/perf.json carries the Solana facilitator split's health (${JSON.stringify(perfBody?.solanaFacilitatorSplit)})`);
   const anon = await fetch(`${base}/__operator/perf.json`);
+  const anonText = await anon.clone().text();
+  ok(!/receiptStore|solanaFacilitatorSplit|lastPass/.test(anonText), "none of them is answered without the token");
   ok(anon.status === 404, `the operator surface stays operator-only (${anon.status} without the token)`);
   const status = await fetch(`${base}/api/gateway-status`);
   const statusText = await status.text();
   ok(status.status === 200 && !/\d{3,}/.test(statusText.replace(/"[a-zA-Z]+":\s*"[^"]*"/g, "")), "/api/gateway-status still carries words only");
+  ok(!/receiptStore|solanaFacilitatorSplit|lastPass/.test(statusText), "the public status body carries none of the operator figures");
 
   // A code bug that breaks every listing: statics forced to throw for every
   // row, then fresh sellers planted. External routing empties and the public

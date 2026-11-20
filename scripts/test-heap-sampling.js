@@ -1,26 +1,16 @@
 // The operator heap-sampling read: off unless HEAP_SAMPLING=on, token-gated,
 // and on reports live sampled allocations by function and file (names, lines
-// and megabytes only). Boots FREE_MODE servers on free ports, offline.
+// and megabytes only). Boots FREE_MODE servers on port 0 (bootServer), offline.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const TOKEN = "heap-sampling-test-token-0123456789";
 
 async function boot(extra) {
-  const port = await getFreePort();
-  const child = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), AGENT402_OPERATOR_TOKEN: TOKEN, X402_INDEX_CRAWL: "off", STATE_DATABASE_URL: "", REDIS_URL: "", ...extra },
-    stdio: ["ignore", "ignore", "ignore"],
-  });
-  const base = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 120; i++) {
-    try { if ((await fetch(`${base}/health`)).ok) return { base, child }; } catch { /* not up yet */ }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  child.kill(); throw new Error("server did not start");
+  const srv = await bootServer({ stores: "heap-sampling", env: { FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: TOKEN, X402_INDEX_CRAWL: "off", STATE_DATABASE_URL: "", REDIS_URL: "", ...extra } });
+  return { base: srv.url, child: { kill: () => srv.stop() } };
 }
 const read = (base, token) => fetch(`${base}/__operator/heap-sampling.json`, { headers: token ? { "X-Operator-Token": token } : {} });
 
@@ -38,14 +28,14 @@ const read = (base, token) => fetch(`${base}/__operator/heap-sampling.json`, { h
     ok(many.every((x) => x.status === 200), "concurrent reads all answer");
     const neg = await (await fetch(`${base}/__operator/heap-sampling.json?top=-5`, { headers: { "X-Operator-Token": TOKEN } })).json();
     ok(neg.byFunction.length >= 1, `a negative top still returns entries (${neg.byFunction.length})`);
-  } finally { child.kill(); }
+  } finally { await child.kill(); }
 }
 {
   const { base, child } = await boot({});
   try {
     const j = await (await read(base, TOKEN)).json();
     ok(j.enabled === false, "off by default: the read says how to turn it on and samples nothing");
-  } finally { child.kill(); }
+  } finally { await child.kill(); }
 }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -137,7 +137,7 @@ facilitator = createServer((req, res) => {
   });
 });
 await new Promise((r) => facilitator.listen(FAC_PORT, r));
-proc = spawn("node", ["src/server.js"], {
+proc = spawn(process.execPath, ["src/server.js"], {
   env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
     PAYMENT_NETWORKS: "base,algorand", ALGORAND_WALLET_ADDRESS: ALGO_TREASURY,
     FACILITATOR_URL: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "",

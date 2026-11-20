@@ -50,6 +50,8 @@ export function meterUpstreamSpend(source, usd) {
 export function setMeterSpendSinkForTest(fn) { __meterSink = typeof fn === "function" ? fn : null; }
 import { isCountedRail } from "./paid-rails.js";
 import { OWN_UA, indexerFor, isBrowserUa } from "./traffic-classifier.js";
+import { registerObservabilitySink, captureAiGeneration, flushObservability, flushWebBotAuthRollup } from "./posthog-observability.js";
+import { testSeamOn } from "./test-seams.js";
 
 const API_KEY = process.env.POSTHOG_API_KEY || "";
 const HOST = process.env.POSTHOG_HOST || "https://us.i.posthog.com";
@@ -77,7 +79,7 @@ let enabled = false;
 // touching the network. This is how the funnel CI test asserts the exact
 // events + properties the server would have sent, fully offline — same
 // pattern as the wallet E2E's leak audit reading the server log.
-const TEST_MODE = process.env.POSTHOG_TEST_CAPTURE === "1";
+const TEST_MODE = testSeamOn("POSTHOG_TEST_CAPTURE"); // never on a production boot (src/test-seams.js)
 const testEvents = [];
 export function _testEventsForTest() {
   return testEvents;
@@ -107,6 +109,9 @@ function capture(event, properties, distinctId = DISTINCT_ID) {
 
 // True when captures should be built at all — real client or the test sink.
 const active = () => TEST_MODE || (enabled && client);
+// LLM analytics, error tracking and the verified-agent rollup
+// (src/posthog-observability.js) send through this same capture.
+registerObservabilitySink((event, props) => capture(event, props), () => !!active());
 
 export function initPostHog() {
   if (initialized) return { ok: enabled, reason: enabled ? undefined : "no-key" };
@@ -596,9 +601,15 @@ export function capturePostHogWrongMethod({ path, method, allow, ua }) {
   });
 }
 
-export function capturePostHogSettleFailed({ slug, status, network, priceUsd, synthetic, payer, errorReason }) {
+export function capturePostHogSettleFailed({ slug, status, network, priceUsd, synthetic, payer, errorReason, facilitator }) {
   if (!active()) return;
-  capture("settle_failed", {
+  capture("settle_failed", settleFailedProps({ slug, status, network, priceUsd, synthetic, payer, errorReason, facilitator }));
+}
+/** The settle_failed event's properties. `facilitator` is the one that
+ *  handled the settle, named with the call's chain (never another chain's
+ *  label). Pure; exported for tests. */
+export function settleFailedProps({ slug, status, network, priceUsd, synthetic, payer, errorReason, facilitator }) {
+  return {
     slug: String(slug || "unknown"),
     status: Number(status) || 0,
     network: network ? String(network) : null,
@@ -606,7 +617,8 @@ export function capturePostHogSettleFailed({ slug, status, network, priceUsd, sy
     synthetic: !!synthetic,
     ...(payer ? { payer } : {}),
     ...(errorReason ? { errorReason: String(errorReason).slice(0, 200) } : {}),
-  });
+    ...(facilitator ? { facilitator: String(facilitator).slice(0, 120) } : {}),
+  };
 }
 
 // Retired routes — the teaching 410s (the pruned convert-* pairs). Residual
@@ -797,6 +809,7 @@ export function capturePostHogGatewayUsage({ tier, routeTier, model, priceUsd, u
   const src = source ? String(source) : "gateway";
   if (upstreamUsd != null) meterSpend(src, upstreamUsd);
   if (!active()) return;
+  captureAiGeneration({ tier, routeTier, model, promptTokens, completionTokens, servedBy, source: src, serviceTier, defaulted });
   const price = Number(priceUsd) || 0;
   const upstream = Number(upstreamUsd) || 0;
   capture("gateway_usage", {
@@ -835,6 +848,7 @@ export function capturePostHogGatewayUsage({ tier, routeTier, model, priceUsd, u
 // paywall_402 rollup so a redeploy doesn't drop up to a window of counts.
 export async function shutdownPostHog() {
   flushPaywallRollup();
+  try { flushWebBotAuthRollup(); flushObservability(); } catch { /* telemetry never throws */ }
   if (!client) return;
   try {
     await client.shutdown();

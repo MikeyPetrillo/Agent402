@@ -22,9 +22,11 @@ export function isGatewayWire(wire) {
   return String(wire || "") === GATEWAY_WIRE;
 }
 
-/** The settlement kind a row carries: "offchain" for the batched wire, else "onchain". */
+/** The settlement kind a row carries: "offchain" for the batched wire and
+ *  for an x402 channel voucher ("x402-batch": charged to the channel, claimed
+ *  on chain later in a batch), else "onchain". */
 export function settlementKindOf(wire) {
-  return isGatewayWire(wire) ? "offchain" : "onchain";
+  return isGatewayWire(wire) || String(wire || "") === "x402-batch" ? "offchain" : "onchain";
 }
 
 /** True when a decoded payment payload, or one accept, is the batched kind:

@@ -115,7 +115,7 @@
       var keyBox = h("div");
       card.appendChild(h("div", { class: "acct-section" }, [
         h("h3", { text: "Your key" }),
-        h("p", { text: "Keys are stored only as a hash, so the key itself cannot be shown again. Lost it? Issue a new key: it is shown once, here, and the old key stops working at once. The balance and its history stay." }),
+        h("p", { text: "Keys are stored only as a hash, so the key itself cannot be shown again. Lost it? Issue a new key within ten minutes of signing in: it is shown once, here, and the old key stops working at once. The balance and its history stay." }),
         h("div", { class: "acct-row" }, [h("button", { class: "btn btn-secondary", type: "button", onclick: function (e) {
           if (!window.confirm("Issue a new key? The current key stops working at once.")) return;
           var btn = e.currentTarget; btn.disabled = true;

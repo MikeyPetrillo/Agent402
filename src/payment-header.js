@@ -34,14 +34,22 @@ export function isEvmNetworkName(network) {
  *  `network`, `payload.network`) must be an EVM one for a block to stay:
  *  whichever of them the paywall reads, it then verified that block. A header
  *  naming no network matches no offer and is never verified, so nothing
- *  downstream of a verify reads it. Mutates and returns `decoded`. */
+ *  downstream of a verify reads it. The same holds for the scheme: only
+ *  `exact` (EIP-3009 or Permit2) and `upto` (Permit2) verify a top-level
+ *  block. A payment channel (`batch-settlement`) signs its voucher over the
+ *  channel and reads neither block, and its verifier ignores extra keys, so
+ *  under it, or under any scheme this server never verifies, both blocks are
+ *  removed too (every scheme the header names, v2 `accepted.scheme` and v1
+ *  `scheme`, must be one that verifies them). Mutates and returns `decoded`. */
+const BLOCK_SIGNING_SCHEMES = new Set(["exact", "upto"]);
 export function dropUnsignedAuthorization(decoded) {
   const inner = decoded?.payload;
   if (!inner || typeof inner !== "object" || Array.isArray(inner)) return decoded;
   const has = (k) => Object.hasOwn(inner, k);
   if (!has("authorization") && !has("permit2Authorization")) return decoded;
   const named = [decoded?.accepted?.network, decoded?.network, inner.network].filter((n) => n !== undefined && n !== null);
-  if (!named.every(isEvmNetworkName)) { delete inner.authorization; delete inner.permit2Authorization; return decoded; }
+  const schemes = [decoded?.accepted?.scheme, decoded?.scheme].filter((s) => s !== undefined && s !== null);
+  if (!named.every(isEvmNetworkName) || !schemes.every((s) => typeof s === "string" && BLOCK_SIGNING_SCHEMES.has(s))) { delete inner.authorization; delete inner.permit2Authorization; return decoded; }
   if (inner.permit2Authorization !== undefined && inner.permit2Authorization !== null) delete inner.authorization;
   return decoded;
 }

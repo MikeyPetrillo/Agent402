@@ -62,6 +62,7 @@ const CALLS = {
   "src/leaderboard.js": [F("discovery directory, fixed base"), F("RPC list from configuration")],
   "src/mpp-subscriptions.js": [F("Tempo RPC from configuration")],
   "src/mpp-tempo.js": [F("MPP relay, fixed base"), F("MPP relay retry, same init", { t: "init" })],
+  "src/our-side-control.js": [F("the crawl's control read: this server's own public /health and the operator's listed https hosts (configuration); redirect manual; the AbortSignal timeout rides in the init built beside the call", { t: "init" })],
   "src/pages.js": [S, S],
   "src/payments.js": [F("Solana public RPC, boot-time check")],
   "src/pow.js": [S, S],

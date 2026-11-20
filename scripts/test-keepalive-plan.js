@@ -268,7 +268,7 @@ async function signedPass({ routes, cap, maxPrice = "2" }) {
   ok(/BURNER_KEY="" POW_SECRET="" node scripts\/keepalive-plan\.js changed/.test(b.run) && /steps\.verify\.outcome == 'success'/.test(String(b.if)), "the plan runs without the key, and only on a verified deploy");
   ok(b["continue-on-error"] === true, "the price-change buy can never fail the deploy job (continue-on-error)");
   ok(Number.isInteger(b["timeout-minutes"]) && b["timeout-minutes"] >= 15 && b["timeout-minutes"] <= 20, `the price-change buy has its own 15 to 20 minute bound (${b["timeout-minutes"]})`);
-  ok(String(b.env?.MAX_ROUTES) === "25", `the price-change buy refuses more than 25 routes (MAX_ROUTES ${b.env?.MAX_ROUTES})`);
+  ok(String(b.env?.MAX_ROUTES) === "${{ vars.BAZAAR_PRICE_CHANGE_MAX_ROUTES || '25' }}", `the price-change buy refuses more routes than the repo variable BAZAAR_PRICE_CHANGE_MAX_ROUTES names, 25 when it is unset (MAX_ROUTES ${b.env?.MAX_ROUTES})`);
   const warnings = String(b.run).split("\n").filter((l) => /::warning::/.test(l));
   ok(warnings.length >= 3 && !warnings.some((l) => DOLLAR_FIGURE.test(l) || /\$OUT\b/.test(l) || /\$MAXP\b|\$MAX_SPEND_USD\b/.test(l)), "no warning in the price-change step echoes a figure, the cap or the plan's output");
   const tailWf = read(".github/workflows/bazaar-keepalive-tail.yml");
@@ -282,7 +282,7 @@ async function signedPass({ routes, cap, maxPrice = "2" }) {
   ok(/\$WARN_USD/.test(burnerRun) && !burnerRun.split("\n").some((l) => /(?:echo|--body)\s+["']?[^"'\n]*\$\{?WARN_USD\b/.test(l)), "the burner balance step never echoes its derived mark");
   ok(/keepalive-plan\.js low-water/.test(hb) && /FLOOR_USD: \$\{\{ vars\.CANARY_BURNER_LOW_USD/.test(hb) && /WARN_USD="\$FLOOR_USD"/.test(hb), "the burner alarm reads the derived mark, floored by the repo variable, which also stands in when the catalog is unreadable");
   const claude = read("CLAUDE.md");
-  ok(/`BAZAAR_PRICE_CHANGE_MAX_USD`/.test(claude) && /`CANARY_BURNER_LOW_USD`[^\n]*floor/.test(claude), "CLAUDE.md documents both repo variables");
+  ok(/`BAZAAR_PRICE_CHANGE_MAX_USD`/.test(claude) && /`BAZAAR_PRICE_CHANGE_MAX_ROUTES`[^\n]*default 25/.test(claude) && /`CANARY_BURNER_LOW_USD`[^\n]*floor/.test(claude), "CLAUDE.md documents both repo variables");
 }
 
 // --- the burner alarm, run as written with stubbed node, curl and gh ---------

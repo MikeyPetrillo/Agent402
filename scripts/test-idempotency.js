@@ -61,7 +61,7 @@ facilitator = createServer((req, res) => {
 });
 await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
 
-const proc = spawn("node", ["src/server.js"], {
+const proc = spawn(process.execPath, ["src/server.js"], {
   env: { ...process.env, WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",

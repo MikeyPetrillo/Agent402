@@ -19,6 +19,7 @@ import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, stateDbSchema, stateQuery } from "./state-db.js";
 import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 import { rugcheckEnabled } from "./rugcheck-switch.js";
+import { appendPeriodReceipt } from "./receipt-signing.js";
 
 // The monitoring products. Each subscribes to a `target` (a domain, a fund,
 // etc.) and re-runs a report kind on a cadence (src/monitor-scheduler.js).
@@ -102,6 +103,14 @@ const invoicePaymentIntentOf = (inv) => {
   return p ? (typeof p === "string" ? p : p.id || null) : null;
 };
 const normEmail = (e) => String(e ?? "").trim().toLowerCase();
+// The paid periods' signed receipts a buyer is shown (the thanks page, the
+// monitor emails): each receipt with the period statement its answer digest
+// covers, newest last.
+export function publicReceipts(rec) {
+  const list = Array.isArray(rec?.signedReceipts) ? rec.signedReceipts : [];
+  return list.filter((r) => r && typeof r.receipt === "string" && typeof r.statement === "string")
+    .map((r) => ({ receipt: r.receipt, statement: r.statement, period: r.period ?? null, settlement: r.settlement ?? null, at: r.at ?? null }));
+}
 
 export function subscriptionsEnabled() {
   return Boolean((process.env.STRIPE_SECRET_KEY || "").trim());
@@ -157,8 +166,12 @@ const shapeTally = (t) => (t && typeof t === "object" ? { ...emptyTally(), ...t,
  * @param {import("stripe")} deps.stripe
  * @param {string} deps.baseUrl
  * @param {string} [deps.storePath]  override for tests
+ * @param {(p:object)=>object|null} [deps.signPeriod]  a signed receipt for a
+ *   paid period (src/receipt-signing.js createSubscriptionReceipt), or null
+ *   while signing is off; called on invoice.paid with an amount paid, and the
+ *   answer is kept on the record (`signedReceipts`, the newest last)
  */
-export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed, onDisputeClosed, onRefundUpdated }) {
+export function createStripeSubscriptions({ stripe, baseUrl, storePath, validateTarget = {}, onInvoicePaid, onPaymentSession, onChargeReversed, onDisputeClosed, onRefundUpdated, signPeriod = null }) {
   const path = storePath || STORE_PATH();
   const doc = createJsonDocument({ file: path, log: () => {} });
   const tallyDoc = createJsonDocument({ file: path + TALLY_SUFFIX, log: () => {} });
@@ -471,7 +484,27 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
       priceCents: p?.price ?? null,
       ...(Number.isFinite(rec.firstPeriodCents) ? { firstPeriodCents: rec.firstPeriodCents } : {}),
       ...(Number.isFinite(rec.renewalCents) ? { renewalCents: rec.renewalCents } : {}),
+      signedReceipts: publicReceipts(rec),
     };
+  }
+
+  // A paid invoice's signed receipt (the first period and every renewal):
+  // only for an invoice that collected money (a 100% promotion paid nothing),
+  // signed once per invoice (a redelivery keeps the receipt already kept).
+  // Never throws: a receipt that cannot be signed leaves the record as it was.
+  function periodReceiptPatch(cur, inv, subId, paidAt) {
+    if (typeof signPeriod !== "function" || !inv?.id || !(Number(inv.amount_paid) > 0)) return {};
+    const kept = Array.isArray(cur?.signedReceipts) ? cur.signedReceipts : [];
+    if (kept.some((r) => r?.settlement === inv.id)) return {};
+    const meta = inv.parent?.subscription_details?.metadata || inv.subscription_details?.metadata || {};
+    try {
+      const r = signPeriod({
+        rail: "card-subscription", network: null, payer: null, subscription: subId,
+        product: cur?.product || meta.product || null, target: cur?.target || meta.target || null,
+        period: inv.id, settlement: inv.id, priceUsd: Number(inv.amount_paid) / 100, paidAt,
+      });
+      return r && typeof r.receipt === "string" ? { signedReceipts: appendPeriodReceipt(kept, r) } : {};
+    } catch { return {}; }
   }
 
   // Signature-verified webhook. Never trusts an unverified body: without the
@@ -565,12 +598,14 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
         // it, never once per delivery. Every payment's ids are kept, so a
         // dispute on any of them finds this subscription.
         if (subId) {
+          const paidAt = new Date().toISOString();
           stored = stored && await upsert(subId, (cur) => {
             seenOnRecord = !!inv.id && cur?.lastInvoiceId === inv.id;
             return {
-              lastInvoiceId: inv.id, lastPaymentIntent: pi || cur?.lastPaymentIntent || null, lastPaidAt: new Date().toISOString(),
+              lastInvoiceId: inv.id, lastPaymentIntent: pi || cur?.lastPaymentIntent || null, lastPaidAt: paidAt,
               paidInvoiceIds: pushId(cur?.paidInvoiceIds, inv.id), paidPaymentIntents: pushId(cur?.paidPaymentIntents, pi),
               ...(charge ? { lastCharge: charge, paidCharges: pushId(cur?.paidCharges, charge) } : {}),
+              ...periodReceiptPatch(cur, inv, subId, paidAt),
             };
           });
         }

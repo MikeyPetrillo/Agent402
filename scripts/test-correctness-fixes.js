@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 
 const PORT = 3099;
 const B = `http://127.0.0.1:${PORT}`;
-const proc = spawn("node", ["src/server.js"], {
+const proc = spawn(process.execPath, ["src/server.js"], {
   env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), TZ: "UTC" },
   stdio: "ignore",
 });

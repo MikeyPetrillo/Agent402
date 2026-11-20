@@ -72,7 +72,9 @@ async function certTransparencyHandler(body) {
       // comes back as HTTP 404 whose BODY is a "502 Bad Gateway" page. A real
       // no-results query returns 200 with [], so 404 here is never a genuine
       // answer — treat it as a retryable upstream failure, not a client error.
-      if (!res.ok) throw bad(`${label} returned HTTP ${res.status}`, res.status >= 500 || res.status === 404 ? 502 : 422);
+      // A 429 is the log rate-limiting this server, never a fault in the
+      // caller's domain: an upstream failure too.
+      if (!res.ok) throw bad(`${label} returned HTTP ${res.status}`, res.status >= 500 || res.status === 404 || res.status === 429 ? 502 : 422);
       const text = await res.text();
       try { return JSON.parse(text); } catch { throw bad(`${label} returned non-JSON - try again later`, 502); }
     } finally {
@@ -592,7 +594,7 @@ export const NETWORK_TOOLS2 = [
     name: "Tech stack detection",
     slug: "tech-stack",
     category: "network",
-    price: "$0.005",
+    price: "$0.001",
     description:
       "Detect the technology stack of a public website: CDN, web server, language/runtime, frontend framework (Next.js, Nuxt, SvelteKit, Remix, Astro, React, Vue, Angular), CMS (WordPress, Drupal, Ghost, Shopify, Wix, Squarespace, Webflow), analytics (GA, GTM, PostHog, Mixpanel, Segment, Hotjar, Plausible, Fathom), and payments (Stripe, PayPal). Signature-based; no third-party API.",
     tags: ["security", "audit", "research", "fingerprint"],

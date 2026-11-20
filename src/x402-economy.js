@@ -22,7 +22,7 @@
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
-import { CDP_TOOLS } from "./tools/cdp-kit.js";
+import { ownSqlQuery } from "./tools/cdp-kit.js";
 import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady, withSchemaLock } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
 import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
@@ -219,10 +219,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Sequential + 429-retry: CDP rate-limits concurrent SQL calls, and under the
 // 30-minute snapshot cache a few extra seconds per refresh cost nothing.
 async function runSql(sql) {
-  const tool = CDP_TOOLS.find((t) => t.slug === "onchain-sql");
   for (let attempt = 1; ; attempt++) {
     try {
-      return await tool.handler({ sql, cacheSeconds: 900 });
+      // An own read: it takes no place in the buyers' in-flight cap.
+      return await ownSqlQuery({ sql, cacheSeconds: 900 });
     } catch (e) {
       if (e?.statusCode === 429 && attempt < 4) { await sleep(4000 * attempt); continue; }
       throw e;

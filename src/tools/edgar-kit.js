@@ -221,7 +221,7 @@ export const EDGAR_TOOLS = [
     name: "EDGAR recent filings",
     slug: "edgar-filings",
     category: "data",
-    price: "$0.005",
+    price: "$0.003",
     description:
       "Recent SEC filings for a company by ticker or CIK, newest first. Optionally filter by form type (10-K, 10-Q, 8-K, 4, S-1, etc.). Each row links to the primary document on SEC.gov. Source: data.sec.gov/submissions (public domain). ?ticker=AAPL&form=10-K&limit=10",
     tags: ["edgar", "sec", "filings", "10-K", "10-Q", "8-K", "form-4", "insider", "annual-report", "quarterly"],
@@ -891,7 +891,7 @@ EDGAR_TOOLS.push(
     name: "Company financials summary",
     slug: "company-financials",
     category: "data",
-    price: "$0.02",
+    price: "$0.015",
     description:
       "Key financial metrics (Revenue, Net Income, Operating Income, Total Assets, Liabilities, Equity, EPS, Operating Cash Flow) for a US public company in one call. Returns the latest annual and quarterly values from SEC XBRL filings. No XBRL knowledge needed - just pass a ticker. ?ticker=AAPL",
     tags: ["edgar", "sec", "financials", "fundamentals", "income-statement", "balance-sheet", "cash-flow"],

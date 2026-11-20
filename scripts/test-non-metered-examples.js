@@ -103,6 +103,8 @@ const COINGECKO_SLUGS = new Set([
   // crypto-screens-kit.js: the computed answers whose endpoints answer keyless
   // (its two pool tools need a key and are in METERED_SLUGS).
   "funding-screener", "stablecoin-depeg-watch", "exchange-spread", "defi-screener", "chain-board",
+  // bundle-kit.js: token-diligence runs coin-profile and coin-ohlc per coin.
+  "token-diligence",
 ]);
 const CG_SAMPLE_SIZE = Number(process.env.NON_METERED_CG_SAMPLE) || 2;
 
@@ -156,7 +158,32 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // (/api/reliability); re-exported here for the scripts that import it.
 import { METERED_SLUGS, meteredPackSlugs } from "../src/metered-slugs.js";
 import { isFredMaintenancePage, fredMaintenanceError } from "../src/tools/macro-kit.js";
-import { upstreamOutageVerdict } from "./lib/upstream-outage.js";
+import { upstreamOutageVerdict, bundleOutageVerdict } from "./lib/upstream-outage.js";
+import { BUNDLE_LEGS } from "../src/tools/bundle-kit.js";
+
+// WHICH TOOLS HAVE AN UPSTREAM. WALLET_ONLY_SLUGS (src/pow.js) is the egress
+// set: a tool outside it is graded below as pure computation, where a 429 or
+// a 5xx is ours and fails. test-free-tier-egress.js holds the set to that
+// meaning: it drives every tool outside it and fails one that reaches the
+// network on its own example.
+export function isPureCpuSlug(slug) { return !WALLET_ONLY_SLUGS.has(slug); }
+
+// A BUNDLE PRODUCT (src/tools/bundle-kit.js) runs other network tools in
+// process and answers a leg's source-side failure in its own words, naming
+// the leg. That answer is graded as the leg's, ahead of every softer rule
+// below: when the leg's message is the shared fetch helper's rate limit (429)
+// or upstream failure, it is excused only when a failed request to a host the
+// bundle declares was recorded during the call AND the runner's own direct
+// read of that request fails the same way; otherwise it fails. Resolves null
+// for any other answer, { skip } when excused, { fail } when not.
+export async function bundleFailureGrade(t, r, opts = {}) {
+  const legs = BUNDLE_LEGS[t.slug];
+  if (!legs) return null;
+  const v = await bundleOutageVerdict({ slug: t.slug, legs, status: r.status, body: r.body, t0: r.t0, t1: r.t1, ...opts });
+  if (!v) return null;
+  if (v.verdict === "upstream") return { skip: `${t.slug}: its leg ${v.leg} failed on the source's side and ${v.evidence} (upstream, not our defect)` };
+  return { fail: `${String(t.method).toUpperCase()} ${t.path} (${t.slug}, leg ${v.leg}) → ${r.status} ${errText(r.body, r.threw).slice(0, 200)} [not excused: ${v.reason}]` };
+}
 export { METERED_SLUGS };
 
 const BROWSER_SLUGS = new Set(["render", "screenshot", "page-speed", "html-frames"]);
@@ -175,15 +202,11 @@ const RUNNER_BLOCKED_SLUGS = new Set(["kalshi-markets", "kalshi-event", "kalshi-
 
 // A source that is down for everyone (not only for runners) is left out until a
 // date, then is in scope again with no edit: an entry cannot outlive its outage
-// unnoticed. 2026-11-14: api.fiscaldata.treasury.gov stopped resolving, then
-// answered 403 and 503, from every network tried. Remove the entry when the
-// source answers again.
-const SOURCE_OUTAGE_UNTIL = new Map([
-  ["treasury-debt", "2026-11-21"],
-  ["treasury-avg-rates", "2026-11-21"],
-]);
-export function sourceOutageExcluded(slug, now = new Date()) {
-  const until = SOURCE_OUTAGE_UNTIL.get(slug);
+// unnoticed. An entry is [slug, "YYYY-MM-DD"]; remove it when the source
+// answers again. None is open.
+const SOURCE_OUTAGE_UNTIL = new Map([]);
+export function sourceOutageExcluded(slug, now = new Date(), table = SOURCE_OUTAGE_UNTIL) {
+  const until = table.get(slug);
   return Boolean(until) && now.toISOString().slice(0, 10) < until;
 }
 
@@ -534,7 +557,7 @@ async function boot() {
 
   // Examples that fetch this server's own /samples/ and /fixtures/ files are
   // answered by this server, never production (the CI boot loads the same).
-  srv = spawn("node", ["--import", "./scripts/lib/own-examples-preload.js", "--import", "./scripts/lib/upstream-failure-log-preload.js", "src/server.js"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
+  srv = spawn(process.execPath, ["--import", "./scripts/lib/own-examples-preload.js", "--import", "./scripts/lib/upstream-failure-log-preload.js", "src/server.js"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
   srv.stdout.on("data", (d) => { srvLog += d; if (srvLog.length > 200_000) srvLog = srvLog.slice(-100_000); });
   srv.stderr.on("data", (d) => { srvLog += d; if (srvLog.length > 200_000) srvLog = srvLog.slice(-100_000); });
   for (let i = 0; i < 120; i++) {
@@ -556,10 +579,16 @@ function stop() {
 // lenient sweep can import this file's scope without running a sweep.
 function runControls() {
   // ── Offline controls (run before any live call) ─────────────────────────────
-  ok(sourceOutageExcluded("treasury-debt", new Date("2026-11-20T23:59:59Z")) === true
-    && sourceOutageExcluded("treasury-debt", new Date("2026-11-21T00:00:00Z")) === false
-    && sourceOutageExcluded("hash", new Date("2026-11-14T00:00:00Z")) === false,
-    "control: a source-outage exclusion ends on its date and covers only the named slugs");
+  {
+    // A fixed past entry, never a live one: excused the day before its date,
+    // not on it, not today, and never for another slug.
+    const past = new Map([["control-outage-slug", "2026-01-15"]]);
+    ok(sourceOutageExcluded("control-outage-slug", new Date("2026-01-14T23:59:59Z"), past) === true
+      && sourceOutageExcluded("control-outage-slug", new Date("2026-01-15T00:00:00Z"), past) === false
+      && sourceOutageExcluded("control-outage-slug", new Date(), past) === false
+      && sourceOutageExcluded("hash", new Date("2026-01-01T00:00:00Z"), past) === false,
+      "control: a source-outage exclusion ends on its date, an expired one stops excusing a failure, and it covers only the named slugs");
+  }
   // Pin the NETWORK hole: a handler 502 MUST fail this suite.
   ok(isStrictFailure(502, { error: "data.gov is not returning results" }, null) === true,
     "control: HTTP 502 is a hard fail (the NETWORK-lenient hole that hid gov-data)");
@@ -610,8 +639,8 @@ function runControls() {
       "control: only CoinGecko-backed slugs are ever sampled");
     ok(!COINGECKO_SLUGS.has("lending-rates") && !COINGECKO_SLUGS.has("perp-funding"),
       "control: tools on other upstreams (contract reads, a perp venue) are NOT in the CoinGecko family - they stay swept");
-    ok(COINGECKO_SLUGS.has("crypto-price") && COINGECKO_SLUGS.has("coins-list") && COINGECKO_SLUGS.size === 29,
-      `control: the family is the full 29 keyless CoinGecko-backed slugs (got ${COINGECKO_SLUGS.size})`);
+    ok(COINGECKO_SLUGS.has("crypto-price") && COINGECKO_SLUGS.has("coins-list") && COINGECKO_SLUGS.size === 30,
+      `control: the family is the full 30 keyless CoinGecko-backed slugs (got ${COINGECKO_SLUGS.size})`);
     ok(coingeckoSample("x", 99).size === COINGECKO_SLUGS.size,
       "control: raising the sample past the family size sweeps all of them, so the cap is a budget and not a lock");
   }
@@ -701,6 +730,13 @@ function runControls() {
     "control: E2B code-run is excluded");
   ok(WALLET_ONLY_SLUGS.has("gov-data"),
     "control: gov-data is WALLET_ONLY (wallet-gated live) yet still in THIS suite's scope");
+  // A bundle product reads every upstream its legs read: it is never graded
+  // as pure computation, and neither is a leg.
+  for (const [slug, legs] of Object.entries(BUNDLE_LEGS)) {
+    ok(!isPureCpuSlug(slug) && legs.every((leg) => !isPureCpuSlug(leg)),
+      `control: ${slug} and its legs (${legs.join(", ")}) are network tools, never graded as pure-CPU`);
+  }
+  ok(isPureCpuSlug("hash") && isPureCpuSlug("xlsx-create"), "control: a tool with no upstream is still graded as pure-CPU");
 }
 
 
@@ -786,6 +822,56 @@ export async function runVerdictStubControls() {
       }
     }
   } finally { for (const s of [upstreamUp, upstreamDown, tool]) s.close(); }
+  await runBundleStubControls();
+}
+
+/** Stub controls for bundleFailureGrade: the exact answer a rate-limited
+ *  forecast host produced (2026-11-19, six of six sites), a recorded 429 to
+ *  that host, and a stub runner read that is refused too, or is answered. */
+export async function runBundleStubControls() {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "a402-bundle-grade-"));
+  const logPath = join(dir, "failures.jsonl");
+  const limitedWords = "The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at api.open-meteo.com; retry later";
+  const answer = (leg, words) => ({ status: 503, t0: 900, t1: 1100, threw: null, body: { error: `6 of 6 unit(s) could not be completed on the source's side (first: Chicago DC, ${leg}: ${words}). Nothing was charged; retry later` } });
+  const t = { slug: "weather-risk-brief", method: "post", path: "/api/weather-risk-brief" };
+  const record = (o) => writeFileSync(logPath, `${JSON.stringify({ t: 1000, host: "api.open-meteo.com", method: "GET", keyed: false, status: 429, url: "https://api.open-meteo.com/v1/forecast?latitude=41.88&longitude=-87.63&hourly=temperature_2m&forecast_hours=168", ...o })}\n`);
+  const runnerGets = (status) => ({ logPath, readStatus: async () => status, readFails: async () => status === 0 || status >= 500 || status === 429 });
+  try {
+    record({});
+    const refusedToo = await bundleFailureGrade(t, answer("weather-thresholds", limitedWords), runnerGets(429));
+    ok(Boolean(refusedToo?.skip) && /weather-thresholds/.test(refusedToo.skip), "control (stub): weather-risk-brief's leg was rate-limited (429) and the runner's direct read is refused 429 too: excused, leg named");
+    const answered = await bundleFailureGrade(t, answer("weather-thresholds", limitedWords), runnerGets(200));
+    ok(Boolean(answered?.fail) && /leg weather-thresholds/.test(answered.fail), "control (stub): weather-risk-brief's leg was rate-limited while the host answers the runner's direct read: it FAILS");
+    ok(Boolean((await bundleFailureGrade(t, answer("weather-thresholds", limitedWords), runnerGets(503)))?.fail), "control (stub): a 429 the runner is answered 503 for is not the same refusal: it FAILS");
+    record({ host: "elsewhere.example" });
+    ok(Boolean((await bundleFailureGrade(t, answer("weather-thresholds", limitedWords), runnerGets(429)))?.fail), "control (stub): a 429 from a host the bundle does not declare excuses nothing");
+    record({ keyed: true, url: undefined });
+    ok(Boolean((await bundleFailureGrade(t, answer("weather-thresholds", limitedWords), runnerGets(429)))?.fail), "control (stub): a keyed request is never re-read and excuses nothing");
+    rmSync(logPath, { force: true });
+    ok(Boolean((await bundleFailureGrade(t, answer("weather-thresholds", limitedWords), runnerGets(429)))?.fail), "control (stub): no refused request recorded during the call excuses nothing");
+    record({});
+    ok(await bundleFailureGrade(t, answer("weather-thresholds", "Open-Meteo returned no hourly data"), runnerGets(429)) === null
+      && await bundleFailureGrade(t, { status: 500, body: { error: "Internal error" }, t0: 900, t1: 1100 }, runnerGets(429)) === null,
+      "control (stub): a leg's own failure and the bundle's own 500 are not read as an outage (they fail by the rules below)");
+    ok(await bundleFailureGrade({ slug: "weather-daily", method: "get", path: "/api/weather-daily" }, answer("weather-thresholds", limitedWords), runnerGets(429)) === null,
+      "control (stub): a tool that is not a bundle product is never graded by the bundle rule");
+    record({ status: 503, url: "https://archive-api.open-meteo.com/v1/archive?latitude=41.88&longitude=-87.63", host: "archive-api.open-meteo.com" });
+    const relayed = { ...answer("weather-history", "Source URL's host returned HTTP 503 - upstream issue, try again later"), status: 502 };
+    ok(Boolean((await bundleFailureGrade(t, relayed, runnerGets(503)))?.skip) && Boolean((await bundleFailureGrade(t, relayed, runnerGets(200)))?.fail),
+      "control (stub): a leg's relayed upstream 5xx is excused only when the runner's direct read fails too");
+    // token-diligence: the market kit's own rate-limit words, a recorded 429
+    // from the keyless market host, and the runner's read of the same request.
+    const tk = { slug: "token-diligence", method: "post", path: "/api/token-diligence" };
+    const tkAnswer = { status: 503, t0: 900, t1: 1100, threw: null, body: { error: "4 of 4 unit(s) could not be completed on the source's side (first: bitcoin, coin-profile: Market data upstream rate-limited this request - retry in about 60 seconds). Nothing was charged; retry later" } };
+    record({ host: "api.coingecko.com", url: "https://api.coingecko.com/api/v3/coins/bitcoin?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false&sparkline=false" });
+    const tkRefused = await bundleFailureGrade(tk, tkAnswer, runnerGets(429));
+    ok(Boolean(tkRefused?.skip) && /coin-profile/.test(tkRefused.skip), "control (stub): token-diligence's leg was rate-limited (429) and the runner's direct read is refused 429 too: excused, leg named");
+    ok(Boolean((await bundleFailureGrade(tk, tkAnswer, runnerGets(200)))?.fail), "control (stub): token-diligence's leg was rate-limited while the market host answers the runner's direct read: it FAILS");
+    ok(await bundleFailureGrade(tk, { ...tkAnswer, body: { error: tkAnswer.body.error.replace("Market data upstream rate-limited this request - retry in about 60 seconds", "This server paces its Market data requests and has no room this moment; retry in 1 s. This is on our side, not your input. You were not charged.") } }, runnerGets(429)) === null,
+      "control (stub): token-diligence's leg refused by this server's own pacing is not read as the source's limit (it fails by the rules below)");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
 async function main() {
@@ -798,7 +884,9 @@ async function main() {
 
   const pricing = await (await fetch(`${TARGET}/api/pricing`)).json();
   const spec = await (await fetch(`${TARGET}/openapi.json`)).json();
-  const { work, excluded } = strictScope(spec, pricing);
+  const scope = strictScope(spec, pricing);
+  const { excluded } = scope;
+  let { work } = scope;
   // Every weather tool is swept here on every commit, so test-all.js (which
   // skips what strictScopeKeys names and tolerates a 502/503/504) never
   // grades one of them.
@@ -818,6 +906,17 @@ async function main() {
     "metered Brave/OpenAI/E2B slugs are absent from the work list");
   ok(excluded.some((e) => e.slug === "search"),
     "Brave search was excluded by the filter (not merely absent from catalog)");
+
+  // NON_METERED_ONLY=slug,slug narrows the run to the named in-scope tools
+  // (a trace of one tool, driven and graded exactly as in the full sweep, a
+  // sampled family member included). It is refused under CI, where a narrowed
+  // run would pass with almost nothing asserted.
+  const only = new Set(String(process.env.NON_METERED_ONLY || "").split(",").map((s) => s.trim()).filter(Boolean));
+  if (only.size) {
+    if (process.env.CI) throw new Error("NON_METERED_ONLY narrows the sweep and is refused under CI");
+    work = work.filter((t) => only.has(t.slug));
+    ok(work.length === only.size, `NON_METERED_ONLY: every named tool is in scope (${work.map((t) => t.slug).join(", ") || "none"})`);
+  }
 
   console.log(`[non-metered] sweeping ${work.length} tools (excluded metered=${excluded.length})…`);
 
@@ -841,13 +940,14 @@ async function main() {
   await mapPool(work, CONCURRENCY, async (t) => {
     // Sampled out of this run's CoinGecko allowance. Skipped BEFORE the call,
     // because the whole point is not to spend the request.
-    if (COINGECKO_SLUGS.has(t.slug) && !CG_LIVE.has(t.slug)) {
+    if (COINGECKO_SLUGS.has(t.slug) && !CG_LIVE.has(t.slug) && !only.has(t.slug)) {
       skippedCoingecko++;
       done++;
       return;
     }
     const r = await callExample(t.path, t.method, t.op, t.slug);
     done++;
+    if (only.size) console.log(`\nattempts - ${t.slug}: ${r.attempts} (answered ${r.status || "nothing"})`);
     if (done % 40 === 0 || done === work.length) {
       process.stdout.write(`\r[non-metered] ${done}/${work.length}`);
     }
@@ -897,8 +997,21 @@ async function main() {
     // test-all.js (2026-08-25) that file graded these routes strictly; this
     // keeps that grade now that it no longer drives them. WALLET_ONLY_SLUGS is
     // the egress set, CI-proven by test-free-tier-egress.js.
-    if (!WALLET_ONLY_SLUGS.has(t.slug)) {
+    if (isPureCpuSlug(t.slug)) {
       liveFails.push(`${t.method.toUpperCase()} ${t.path} (${t.slug}, pure-CPU) → ${r.status || "threw"} ${errText(r.body, r.threw).slice(0, 160)}`);
+      return;
+    }
+
+    // A bundle's leg failing on the source's side: read against the runner
+    // before the rate-limit skip below, which asks the runner nothing.
+    const bundle = await bundleFailureGrade(t, r);
+    if (bundle?.skip) {
+      skippedRunnerUnreachable++;
+      console.log(`\nskip - ${bundle.skip}`);
+      return;
+    }
+    if (bundle?.fail) {
+      liveFails.push(bundle.fail);
       return;
     }
 
@@ -1044,7 +1157,8 @@ async function main() {
   for (const m of shapeMismatches.slice(0, 40)) console.error(`  shape - ${m}`);
 
   const accounted = asserted + skippedCoingecko;
-  ok(accounted >= Math.floor(MIN_IN_SCOPE * 0.8),
+  if (only.size) console.log(`# narrowed run (NON_METERED_ONLY): ${asserted} of ${work.length} named tool(s) asserted; the coverage floor is a full sweep's`);
+  else ok(accounted >= Math.floor(MIN_IN_SCOPE * 0.8),
     `enough tools were actually asserted (${asserted} run + ${skippedCoingecko} deliberately sampled out = ${accounted}), not soft-skipped away`);
 
   console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed — in-scope=${work.length} excluded=${excluded.length}`);

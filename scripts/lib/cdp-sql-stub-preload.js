@@ -14,6 +14,10 @@
 //   hold_<id>      held open (one "[cdp-sql-stub] held <id>" line) until the
 //                  file <id> exists in CDP_SQL_STUB_HOLD_DIR, then one row,
 //                  so a test can keep queries in flight as long as it needs;
+//   CDP_SQL_STUB_HOLD_TEXT  a query whose text holds this value is held the
+//                  same way under the id "own" (one "[cdp-sql-stub] held own"
+//                  line), so a test can keep one of the server's own reads,
+//                  whose SQL it does not write, in flight;
 //   anything else  one row (the health probe's known-good query included).
 // Every query answered prints one "[cdp-sql-stub] query" line, so a test can
 // count what reached the service apart from what the server recorded. Any
@@ -38,7 +42,8 @@ globalThis.fetch = async function cdpSqlStubFetch(input, init) {
   console.log("[cdp-sql-stub] query");
   if (/nope_column/.test(sql)) return J(400, { errorMessage: "Unknown identifier" });
   if (/fail_upstream/.test(sql)) return J(503, { errorMessage: "unavailable" });
-  const hold = /hold_(\w+)/.exec(sql)?.[1];
+  const holdText = process.env.CDP_SQL_STUB_HOLD_TEXT;
+  const hold = /hold_(\w+)/.exec(sql)?.[1] ?? (holdText && sql.includes(holdText) ? "own" : undefined);
   if (hold && process.env.CDP_SQL_STUB_HOLD_DIR) {
     const { existsSync } = await import("node:fs");
     const { join } = await import("node:path");

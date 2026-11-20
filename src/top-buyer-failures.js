@@ -30,10 +30,16 @@
 // spend rank, and the failures (slug, status, time, our error text).
 //
 // onchainSqlBusy (also on /api/gateway-status): alert while a watched payer
-// got onchain-sql's busy refusal (the server-wide in-flight query cap,
-// src/tools/cdp-kit.js: a 429, never charged) inside TOP_BUYER_FAIL_HOLD_MS;
-// one refusal is enough, since a top payer sends one query at a time. The
-// refusal is kept as one of the payer's failures with its kind ("sql-busy"),
+// got onchain-sql's busy refusal (the server-wide in-flight query cap or the
+// query service's send pacer, src/tools/cdp-kit.js: a 429, never charged)
+// inside TOP_BUYER_FAIL_HOLD_MS; one refusal is enough by default, since a
+// top payer told to wait is a paid call we did not serve. The rule is
+// ONCHAIN_SQL_BUSY_MIN refusals (default 1) inside TOP_BUYER_FAIL_WINDOW_MS
+// whose first and last are ONCHAIN_SQL_BUSY_SPAN_MS (default 0) or more
+// apart, held TOP_BUYER_FAIL_HOLD_MS after the refusal that met it: the two
+// settings let an operator ask for a sustained stretch instead (three
+// refusals a minute apart, say), and are unset by default. The refusal is
+// kept as one of the payer's failures with its kind ("sql-busy"),
 // so it is read from the same per-payer window. ok otherwise; unknown before
 // the first read of the top payers; off in FREE_MODE. Publicly the word only;
 // the operator view names each alerting payer by its first characters, its
@@ -55,6 +61,10 @@ export const failMin = (env = process.env) => intEnv(env.TOP_BUYER_FAIL_MIN, 3, 
 export const failWindowMs = (env = process.env) => intEnv(env.TOP_BUYER_FAIL_WINDOW_MS, 600_000, 1_000, 6 * 3_600_000);
 /** How long alert holds after the failure that met the rule (TOP_BUYER_FAIL_HOLD_MS, default 20 minutes). */
 export const failHoldMs = (env = process.env) => intEnv(env.TOP_BUYER_FAIL_HOLD_MS, 1_200_000, 0, 6 * 3_600_000);
+/** Busy refusals inside the window that raise onchainSqlBusy (ONCHAIN_SQL_BUSY_MIN, default 1: the first one). */
+export const sqlBusyMin = (env = process.env) => intEnv(env.ONCHAIN_SQL_BUSY_MIN, 1, 1, 1000);
+/** How far apart the first and last of those refusals are at least (ONCHAIN_SQL_BUSY_SPAN_MS, default 0: no span). */
+export const sqlBusySpanMs = (env = process.env) => intEnv(env.ONCHAIN_SQL_BUSY_SPAN_MS, 0, 0, 6 * 3_600_000);
 /** How many top payers are watched (TOP_BUYERS_COUNT, default 10). */
 export const topCount = (env = process.env) => intEnv(env.TOP_BUYERS_COUNT, 10, 1, 100);
 /** The spend window the top payers are ranked over, in days (TOP_BUYERS_DAYS, default 7). */
@@ -71,6 +81,36 @@ const PROC = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 let seq = 0;
 
 const local = new Map(); // payer -> [{ id, at, slug, status, error }], oldest first
+// Busy refusals are also kept per payer over TIME, not by count: a payer
+// refused several times a second fills the 50-event list above in seconds,
+// and under a rule set to a sustained stretch (ONCHAIN_SQL_BUSY_MIN and
+// ONCHAIN_SQL_BUSY_SPAN_MS) that stretch would read as one burst. This ring keeps the
+// newest and oldest refusals of the window plus hold and, past its size,
+// drops the refusal closest to the one before it, so what it keeps stays
+// spread over the whole stretch (busyRingSize: enough for the rule to read
+// ONCHAIN_SQL_BUSY_MIN refusals inside any one window of the kept span).
+const busyLocal = new Map(); // payer -> [{ id, at, slug, status, error, kind }], oldest first
+const BUSY_RING_MAX = 512;
+export function busyRingSize(env = process.env) {
+  const spans = Math.ceil(keepSpan(env) / failWindowMs(env));
+  return Math.min(BUSY_RING_MAX, Math.max(64, sqlBusyMin(env) * spans * 2));
+}
+function keepBusy(payer, ev, cutoff, env) {
+  let ring = busyLocal.get(payer);
+  if (ring) busyLocal.delete(payer);
+  ring = (ring || []).filter((e) => e.at > cutoff);
+  let i = ring.length;
+  while (i > 0 && ring[i - 1].at > ev.at) i--;
+  ring.splice(i, 0, ev);
+  const cap = busyRingSize(env);
+  while (ring.length > cap) {
+    let drop = 1, gap = Infinity;
+    for (let j = 1; j < ring.length - 1; j++) { const g = ring[j].at - ring[j - 1].at; if (g < gap) { gap = g; drop = j; } }
+    ring.splice(drop, 1);
+  }
+  busyLocal.set(payer, ring);
+  while (busyLocal.size > MAX_PAYERS) busyLocal.delete(busyLocal.keys().next().value);
+}
 const pending = new Set();
 let top = null; // { payers: [payer, ...] in rank order, at }
 let sharedCache = { at: 0, key: "", byPayer: null };
@@ -153,6 +193,7 @@ export function noteVerifiedPaidOutcome({ payer, slug, status, error = null, att
     while (list.length > MAX_EVENTS) list.shift();
     local.set(payer, list);
     while (local.size > MAX_PAYERS) local.delete(local.keys().next().value);
+    if (ev.kind === SQL_BUSY_KIND) keepBusy(payer, ev, cutoff, env);
     counts.recorded++;
     if (sharedLimitsEnabled()) {
       const p = shared.windowAdd(NAME, sharedKey(payer), { windowMs: keepSpan(env), member: JSON.stringify({ i: ev.id, s: ev.slug, c: ev.status, e: ev.error, ...(ev.kind ? { k: ev.kind } : {}) }), now: ev.at, score: ev.at })
@@ -172,6 +213,9 @@ export function sweepIdleTopBuyerFailures(now = Date.now(), env = process.env) {
   let dropped = 0;
   for (const [payer, list] of local) {
     if (!list.length || list[list.length - 1].at <= cutoff) { local.delete(payer); dropped++; }
+  }
+  for (const [payer, ring] of busyLocal) {
+    if (!ring.length || ring[ring.length - 1].at <= cutoff) busyLocal.delete(payer);
   }
   return dropped;
 }
@@ -314,8 +358,9 @@ export async function topBuyerFailuresStatus({ full = false, now = Date.now(), o
 }
 
 /**
- * onchainSqlBusy for /api/gateway-status. alert while a watched payer has a
- * busy refusal of onchain-sql inside TOP_BUYER_FAIL_HOLD_MS (one is enough);
+ * onchainSqlBusy for /api/gateway-status. alert while a watched payer's busy
+ * refusals of onchain-sql met the rule (sqlBusyMin inside the window,
+ * sqlBusySpanMs apart: one refusal by default) within TOP_BUYER_FAIL_HOLD_MS;
  * ok otherwise; unknown before the first read of the top payers; off in
  * FREE_MODE. Public: { status } only. Operator (`full`): the rule and, per
  * alerting payer, its short id, its spend rank and the refusal times. Never
@@ -325,22 +370,32 @@ export async function onchainSqlBusyStatus({ full = false, now = Date.now(), off
   try {
     if (off) return { status: "off" };
     if (!top) return { status: "unknown" };
-    const holdMs = failHoldMs(env);
-    const cutoff = now - holdMs;
+    const holdMs = failHoldMs(env), windowMs = failWindowMs(env), min = sqlBusyMin(env), spanMs = Math.min(sqlBusySpanMs(env), windowMs);
+    const cutoff = now - holdMs - windowMs;
     let fromShared = null, sharedRead = sharedLimitsEnabled() ? "unread" : "memory";
     try { fromShared = await sharedEvents(top.payers, now, env); if (fromShared) sharedRead = "on"; } catch { fromShared = null; }
     const alerting = [];
     top.payers.forEach((payer, i) => {
       const seen = new Map();
-      for (const e of [...(local.get(payer) || []), ...(fromShared?.get(payer) || [])]) if (e.kind === SQL_BUSY_KIND && e.at >= cutoff && e.at <= now && !seen.has(e.id)) seen.set(e.id, e);
-      if (!seen.size) return;
-      alerting.push({ payer, rank: i + 1, events: [...seen.values()].sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1)) });
+      for (const e of [...(busyLocal.get(payer) || []), ...(local.get(payer) || []), ...(fromShared?.get(payer) || [])]) if (e.kind === SQL_BUSY_KIND && e.at >= cutoff && e.at <= now && !seen.has(e.id)) seen.set(e.id, e);
+      if (seen.size < min) return;
+      const events = [...seen.values()].sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1));
+      // The latest refusal that met the rule: `min` refusals inside the
+      // window ending at it, the earliest of them spanMs or more before it.
+      let metAt = null;
+      for (let j = events.length - 1, lo = j; j >= min - 1 && metAt === null; j--) {
+        lo = Math.min(lo, j);
+        while (lo > 0 && events[j].at - events[lo - 1].at <= windowMs) lo--;
+        if (j - lo + 1 >= min && events[j].at - events[lo].at >= spanMs) metAt = events[j].at;
+      }
+      if (metAt === null || now - metAt > holdMs) return;
+      alerting.push({ payer, rank: i + 1, events });
     });
     const status = alerting.length ? "alert" : "ok";
     if (!full) return { status };
     return {
       status,
-      rule: { refusals: 1, holdMinutes: holdMs / 60_000, topBuyers: topCount(env), days: topDays(env) },
+      rule: { refusals: min, windowMinutes: windowMs / 60_000, spanSeconds: spanMs / 1000, holdMinutes: holdMs / 60_000, topBuyers: topCount(env), days: topDays(env) },
       watched: top.payers.length,
       topReadAt: top.at ? new Date(top.at).toISOString() : null,
       sharedStore: sharedRead,
@@ -352,8 +407,13 @@ export async function onchainSqlBusyStatus({ full = false, now = Date.now(), off
 /** Test seams. */
 export async function _flushTopBuyerWrites() { while (pending.size) await Promise.allSettled([...pending]); }
 export function _resetTopBuyerFailures() {
-  local.clear(); top = null; sharedCache = { at: 0, key: "", byPayer: null };
+  local.clear(); busyLocal.clear(); top = null; sharedCache = { at: 0, key: "", byPayer: null };
   counts = { recorded: 0, sharedWrites: 0, sharedWriteFailures: 0, sharedReadFailures: 0 };
   if (timer) { clearTimeout(timer); clearInterval(timer); timer = null; }
 }
-export function _localSizes() { let events = 0; for (const l of local.values()) events += l.length; return { payers: local.size, events }; }
+export function _localSizes() {
+  let events = 0, busyEvents = 0;
+  for (const l of local.values()) events += l.length;
+  for (const r of busyLocal.values()) busyEvents = Math.max(busyEvents, r.length);
+  return { payers: local.size, events, busyPayers: busyLocal.size, busyEvents };
+}

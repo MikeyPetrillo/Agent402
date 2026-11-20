@@ -60,6 +60,8 @@ t node scripts/test-shared-limits-crossprocess.js
 t node scripts/test-spend-words-shared-redis.js
 # topBuyerFailures read the same on a container that served none of the failures; a refusing store leaves this process's own word.
 t node scripts/test-top-buyer-failures-redis.js
+# A wallet session signed out on one server is refused by a second and by one started later (REAL redis)
+t node scripts/test-wallet-sign-out-redis.js
 # A close made while a connect is still in flight ends that connect too.
 t node scripts/test-shared-redis-close.js
 # The in-flight run cover: memory, a store that does not answer (local ledger decides), and real Redis.
@@ -108,6 +110,8 @@ t node scripts/test-email-links-outage-pg.js
 t node scripts/test-leased-loops.js
 # The call log: rows past the retention are deleted in batches under a lease; the pool's statement limit cuts a slow statement and the insert path never throws.
 t node scripts/test-analytics-retention.js
+# Per-tool reliability: answered over answered plus 5xx, p50/p95 over the same rows, bands not counts, unmeasured below the floor (REAL postgres)
+t node scripts/test-tool-reliability-pg.js
 # With more than one replica, a database error never lets a singleton (backup, reconcile) run on both.
 t node scripts/test-lease-failopen-replicas.js
 # A tick whose lease was lost stops before its next send, pull or paid run.
@@ -121,6 +125,8 @@ t node scripts/test-idempotency-unconfirmed.js
 t node scripts/test-stats-pg.js
 t node scripts/test-status-store-pg.js
 t node scripts/test-x402-economy-pg.js
+# Issued receipts on the database: one table under two loaders, one row per receipt, no other payer's, a refused write lands on retry, swept by age and rows; the audit report reads them
+t node scripts/test-audit-report-pg.js
 t node scripts/test-pow-pg.js
 t node scripts/test-memory-pg.js
 t node scripts/test-stripe-shadow-ledger-pg.js
@@ -221,6 +227,8 @@ t node scripts/test-wish-pg.js
 t node scripts/test-store-boot-blip-pg.js
 t node scripts/test-store-retry-recovery-pg.js
 t node scripts/test-json-document-outage-pg.js
+# Seller reputation on the state database: the record written in pieces and read back whole, a pass under another holder's lease skipped (the replica reads the row), two processes' delivery outcomes merged in one row.
+t node scripts/test-seller-reputation-pg.js
 # An import that timed out is a failed load (retried), never an empty store.
 t node scripts/test-json-document-import-fail-pg.js
 t node scripts/test-store-import-fail-pg.js

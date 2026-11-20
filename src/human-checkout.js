@@ -403,10 +403,14 @@ if (USE_PG) {
  * @param {string} deps.baseUrl
  * @param {string} [deps.storeDir]        override for tests
  * @param {(sale:object)=>void} [deps.onSale]  called once per DELIVERED report (accounting)
+ * @param {(p:object)=>string|null} [deps.signDelivery]  a signed receipt for a
+ *   paid purchase and its delivered report ({ product, input, reportText,
+ *   priceUsd, paymentIntent, deliveredAt }; src/receipt-signing.js
+ *   createCheckoutReceipt), stored on the record as `receipt`
  * @param {()=>number} [deps.now]
  * @param {(s:string)=>void} [deps.log]
  */
-export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log, owedResolveTimeoutMs = OWED_RESOLVE_TIMEOUT_MS, owedResolveRetryMs = OWED_RESOLVE_RETRY_MS, owedListWaitMs = OWED_LIST_WAIT_MS, owedRetryWaitMs = OWED_RETRY_WAIT_MS, owedRetryAbandonMs = OWED_RETRY_ABANDON_MS, sessionReadWaitMs = SESSION_READ_WAIT_MS, sessionReadAbandonMs = SESSION_READ_ABANDON_MS, readbackCallTimeoutMs = READBACK_CALL_TIMEOUT_MS }) {
+export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, signDelivery = null, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log, owedResolveTimeoutMs = OWED_RESOLVE_TIMEOUT_MS, owedResolveRetryMs = OWED_RESOLVE_RETRY_MS, owedListWaitMs = OWED_LIST_WAIT_MS, owedRetryWaitMs = OWED_RETRY_WAIT_MS, owedRetryAbandonMs = OWED_RETRY_ABANDON_MS, sessionReadWaitMs = SESSION_READ_WAIT_MS, sessionReadAbandonMs = SESSION_READ_ABANDON_MS, readbackCallTimeoutMs = READBACK_CALL_TIMEOUT_MS }) {
   const dir = storeDir || DEFAULT_DIR();
   try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort; writes will fail loudly below */ }
   const INFLIGHT = join(dir, "_inflight.json");   // sessionId -> claimedAt (ms)
@@ -973,12 +977,13 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // A delivered report's effects: the ready email, the follow-ups and the
   // sale. Run once per report, by the container whose record the buyer is
   // answered from (see ONE OUTCOME above).
-  function deliver(sessionId, session, p, input) {
+  function deliver(sessionId, session, p, input, receipt = null) {
     const email = session.customer_details?.email || session.customer_email;
     // `kind` + baseUrl let the email carry the matching MONITOR offer with
     // this target prefilled (the retention loop); a kind with no monitor
-    // simply gets no offer. See src/report-upgrade.js.
-    if (email) sendReportReadyEmail({ to: email, reportUrl: `${baseUrl}/r/${sessionId}`, productLabel: p.label, subjectOf: input, kind: p.kind, baseUrl }).catch(() => {});
+    // simply gets no offer. See src/report-upgrade.js. The signed receipt of
+    // the purchase rides along when one was signed.
+    if (email) sendReportReadyEmail({ to: email, reportUrl: `${baseUrl}/r/${sessionId}`, productLabel: p.label, subjectOf: input, kind: p.kind, baseUrl, receipt: typeof receipt === "string" && receipt ? receipt : null }).catch(() => {});
     // Post-purchase sequence (src/followups.js): the only moment the buyer's
     // address is in hand next to what they bought. Never stored on the record.
     if (email) { try { onDelivered?.({ sessionId, email, product: p.slug, kind: p.kind, label: p.label, input }); } catch { /* follow-ups never break delivery */ } }
@@ -992,7 +997,9 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     const session = await stripe.checkout.sessions.retrieve(sessionId);
     const p = Object.hasOwn(HUMAN_PRODUCTS, String(session?.metadata?.product)) ? HUMAN_PRODUCTS[session.metadata.product] : null;
     if (!p) return;
-    deliver(sessionId, session, p, unchunkInput(session.metadata || {}));
+    let receipt = null;
+    try { const rec = await readRec(sessionId); receipt = rec && rec.status === "done" && typeof rec.receipt === "string" ? rec.receipt : null; } catch { /* delivered without it */ }
+    deliver(sessionId, session, p, unchunkInput(session.metadata || {}), receipt);
   }
 
   // `seenClaimedAt` is the claimedAt of the stale claim this call is taking
@@ -1035,6 +1042,16 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
             ...(typeof bundle.groundingNote === "string" && bundle.groundingNote ? { groundingNote: bundle.groundingNote } : {}),
             at: new Date(now()).toISOString(),
           };
+          // A paid purchase gets a signed receipt over the checkout and the
+          // delivered report (a 100%-off code paid nothing: no receipt).
+          if (signDelivery && session.payment_status === "paid") {
+            try {
+              const pi = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id || null;
+              const paidUsd = Number.isFinite(Number(session.amount_total)) ? Number(session.amount_total) / 100 : p.price / 100;
+              const receipt = signDelivery({ product: p.slug, input, reportText: rec.report, priceUsd: paidUsd, paymentIntent: pi, deliveredAt: rec.at });
+              if (typeof receipt === "string" && receipt) rec.receipt = receipt;
+            } catch (e) { log(`[human-checkout] ${sessionId}: receipt not signed: ${String(e?.message || e).slice(0, 120)}`); }
+          }
           // The report exists and the upstream spend is made: from here a
           // database failure keeps the record for replay, never a refund.
           if (USE_PG) {
@@ -1044,7 +1061,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
             if (landed === false) return { status: "generating" };
             if (landed === "held") { log(`[human-checkout] ${sessionId}: the report was made but the row holds another outcome; nothing delivered from this container`); return { status: "generating" }; }
           } else { await writeRec(sessionId, rec); await patchIndex(INFLIGHT, sessionId, null); }
-          deliver(sessionId, session, p, input);
+          deliver(sessionId, session, p, input, rec.receipt);
           return rec;
         } catch (err) {
           log(`[human-checkout] report failed for ${sessionId} (${p.slug}): ${String(err?.message || err).slice(0, 160)}`);

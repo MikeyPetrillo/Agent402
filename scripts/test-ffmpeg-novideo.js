@@ -79,11 +79,17 @@ for (const [label, run] of [
 ]) {
   calls.length = 0;
   await settle(run());
-  const a = calls[0]?.args ?? [];
-  const i = a.indexOf("-i"), w = a.indexOf("-codec_whitelist");
-  const list = w >= 0 ? String(a[w + 1]).split(",") : [];
-  ok(calls.length === 1 && w >= 0 && w < i, `${label}: -codec_whitelist precedes -i (${calls[0]?.bin} ${a.slice(0, 4).join(" ")} ...)`);
-  ok(list.length > 0 && list.every((d) => allowed.includes(d)), `${label}: the whitelist names audio decoders only`);
+  // The two encodes read the file's declared length first (ffprobe), then
+  // encode (ffmpeg): every process either one starts is held to the list.
+  const want = label.startsWith("audio-") ? ["ffprobe", "ffmpeg"] : [label === "media-info" ? "ffprobe" : "ffmpeg"];
+  ok(calls.map((c) => c.bin).join(",") === want.join(","), `${label}: starts ${want.join(" then ")} (${calls.map((c) => c.bin).join(",")})`);
+  for (const c of calls) {
+    const a = c.args ?? [];
+    const i = a.indexOf("-i"), w = a.indexOf("-codec_whitelist");
+    const list = w >= 0 ? String(a[w + 1]).split(",") : [];
+    ok(w >= 0 && w < i, `${label}: -codec_whitelist precedes -i (${c.bin} ${a.slice(0, 4).join(" ")} ...)`);
+    ok(list.length > 0 && list.every((d) => allowed.includes(d)), `${label}: the ${c.bin} whitelist names audio decoders only`);
+  }
 }
 __setExecFileForTest(null);
 
