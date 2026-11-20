@@ -165,7 +165,7 @@ ok(dropUnsignedAuthorization({ payload: "text" }).payload === "text" && dropUnsi
     ok(!("authorization" in JSON.parse(Buffer.from(r.headers["payment-signature"], "base64").toString("utf8")).payload), "intake sends a channel header on without the block");
   }
   const upto = b64({ x402Version: 2, accepted: { scheme: "upto", network: BASE }, payload: { signature: "0xsig", permit2Authorization: { from: A, nonce: "3" } } });
-  ok(decodePaymentHeader(upto).payload.permit2Authorization.from === A && payerFromRequest(req(upto)) === A, "control: an upto payment keeps its signed Permit2 block and its payer");
+  ok(decodePaymentHeader(upto).payload.permit2Authorization?.from === A && payerFromRequest(req(upto)) === A, "control: an upto payment keeps its signed Permit2 block and its payer");
   ok(payerFromRequest(req(evm({ from: A, nonce: "0x01" }))) === A && decodePaymentHeader(b64({ x402Version: 1, scheme: "exact", network: "base", payload: { authorization: { from: A } } })).payload.authorization.from === A, "control: an exact payment keeps its block, v2 and v1");
 }
 
