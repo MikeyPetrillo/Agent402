@@ -710,7 +710,10 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   in `MPP_OFFER_WITHHOLD_USER_AGENTS` (comma list, matched without regard to case; default
   `python-httpx/`; `off` turns it off) gets a 402 with no `WWW-Authenticate: Payment` challenge
   (evm, tempo or card); the PAYMENT-REQUIRED header and the body are unchanged, and that 402 varies
-  on `X-Payment-Offers`. `X-Payment-Offers: mpp` (or `all`, a comma list) restores the challenges;
+  on `X-Payment-Offers` and `Accept-Payment`. `X-Payment-Offers: mpp` (or `all`, a comma list)
+  restores the challenges, and so does an `Accept-Payment` header with one well-formed
+  `method/intent` entry whose q is not 0 (MPP client libraries send it; a payment manager that
+  prefers MPP and stops on its failure sends neither);
   a request that arrived with `Authorization: Payment` is never gated (the raw header list and
   `req.mppCredential` are read, since the shim removes the header). The evm shim, the Tempo
   appender and the card appender all ask `mppChallengesSuppressed` (`src/mpp-fallback.js`), which

@@ -4,9 +4,10 @@
 // A client whose User-Agent starts with a listed prefix (default
 // "python-httpx/") gets a 402 with no `WWW-Authenticate: Payment` challenge:
 // the x402 PAYMENT-REQUIRED header and the 402 body are unchanged, so it pays
-// x402. `X-Payment-Offers: mpp` (or `all`) restores the MPP challenges. A
-// request that carries an MPP credential (`Authorization: Payment`) is never
-// gated. Every other client's 402 is untouched.
+// x402. `X-Payment-Offers: mpp` (or `all`), or an `Accept-Payment` header
+// naming an MPP method, restores the MPP challenges. A request that carries an
+// MPP credential (`Authorization: Payment`) is never gated. Every other
+// client's 402 is untouched.
 //
 // Part 1 boots a PAID server with the MPP evm, Tempo and card challenges on,
 // and reads EVERY priced route as Node, curl, no User-Agent, python-requests,
@@ -18,8 +19,8 @@
 //   - a python-httpx request carrying an MPP credential is challenged as today;
 //   - the operator view counts withheld and opted-in 402s, the public view
 //     publishes no count.
-// Part 2 boots with MPP_OFFER_WITHHOLD_USER_AGENTS set to another list, and
-// Part 3 with it set to off.
+// Part 2 boots with MPP_OFFER_WITHHOLD_USER_AGENTS set to another list,
+// Part 3 with it set to off, and Part 3b with MPP not configured.
 // Part 4 (offline) pins the predicate: prefix match, the opt-in values, the
 // credential exemption and one count per request.
 //
@@ -71,18 +72,31 @@ async function read(url, method, ua, extra = {}) {
 }
 
 // Every agent-facing text that describes what a 402 carries: agents.md (the
-// 402 body's howToPay), llms.txt, llms-full.txt, the how-to-pay page, the
+// 402 body's howToPay), llms.txt, llms-full.txt, skill.md, the how-to-pay,
+// what-is-mpp, x402-test, /learn/http-402 and x402-and-mpp guide pages, the
 // OpenAPI guidance and every operation's 402 description, and the connector's
 // payment.info.
+const GATE_PAGES = ["/agents.md", "/llms.txt", "/llms-full.txt", "/skill.md", "/how-to-pay", "/what-is-mpp", "/x402-test", "/learn/http-402", "/guides/x402-and-mpp"];
 async function gateSurfaces(base) {
   const out = {};
-  for (const path of ["/agents.md", "/llms.txt", "/llms-full.txt", "/how-to-pay"]) out[path] = await (await fetch(base + path)).text();
+  for (const path of GATE_PAGES) {
+    const r = await fetch(base + path);
+    if (r.status !== 200) fail(`${path} answered ${r.status}`);
+    out[path] = await r.text();
+  }
+  // The llms-full paragraph that says the 402 carries the challenges, on its own.
+  const full = out["/llms-full.txt"];
+  const at = full.indexOf("**MPP clients are first-class");
+  if (at < 0) fail("/llms-full.txt has no 'MPP clients are first-class' paragraph");
+  out["/llms-full.txt 'MPP clients are first-class' paragraph"] = full.slice(at, full.indexOf("\n\n", at) < 0 ? undefined : full.indexOf("\n\n", at));
   const spec = await (await fetch(`${base}/openapi.json`)).json();
   out["/openapi.json info.x-guidance"] = String(spec?.info?.["x-guidance"] || "");
   const descs = Object.values(spec?.paths || {}).flatMap((p) => Object.values(p || {})).map((o) => o?.responses?.[402]?.description).filter((d) => typeof d === "string");
   if (descs.length < 400) fail(`/openapi.json lists ${descs.length} 402 responses`);
-  // Every operation's description, joined so a single one without it fails.
-  out["/openapi.json 402 descriptions"] = descs.every((d) => d.includes("X-Payment-Offers: mpp") && d.includes("python-httpx/")) ? descs[0] : descs.find((d) => !d.includes("X-Payment-Offers"));
+  // Every operation's description: all name the gate, or none does. A mix
+  // reads as text that fails both the gate-on and the gate-off check.
+  const naming = descs.filter((d) => d.includes("X-Payment-Offers: mpp") && d.includes("python-httpx/")).length;
+  out["/openapi.json 402 descriptions"] = naming === descs.length || (naming === 0 && !descs.some((d) => d.includes("X-Payment-Offers"))) ? descs[0] : `MIXED: ${naming} of ${descs.length} name X-Payment-Offers`;
   const client = new Client({ name: "test-mpp-offer-gate", version: "0.0.0" });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
   try {
@@ -124,12 +138,20 @@ try {
     ok(httpx.status === 402 && httpx.methods.length === 0, `· ${method} ${path}: python-httpx gets no Payment challenge (got ${httpx.methods.join()})`);
     ok(httpx.pr === node.pr, `· ${method} ${path}: python-httpx gets Node's PAYMENT-REQUIRED header byte for byte`);
     ok(httpx.body === node.body, `· ${method} ${path}: python-httpx gets Node's 402 body byte for byte`);
-    ok(httpx.vary.includes("x-payment-offers") && httpx.vary.includes("user-agent"), `· ${method} ${path}: python-httpx's 402 varies on X-Payment-Offers and User-Agent`);
+    ok(httpx.vary.includes("x-payment-offers") && httpx.vary.includes("accept-payment") && httpx.vary.includes("user-agent"), `· ${method} ${path}: python-httpx's 402 varies on X-Payment-Offers, Accept-Payment and User-Agent`);
     httpx402++;
     for (const value of ["mpp", "MPP", " all ", "x402, mpp"]) {
       const o = await read(url, method, HTTPX, { "X-Payment-Offers": value });
       ok(o.status === 402 && o.methods.join() === node.methods.join() && o.pr === node.pr && o.body === node.body,
         `· ${method} ${path}: python-httpx with X-Payment-Offers: ${value} gets Node's challenges back (got ${o.methods.join()})`);
+      optIn402++;
+    }
+    // An MPP client library that names its methods in Accept-Payment (the
+    // MPP request header) is offered the challenges with no other header.
+    {
+      const o = await read(url, method, HTTPX, { "Accept-Payment": "tempo/charge" });
+      ok(o.status === 402 && o.methods.join() === node.methods.join() && o.pr === node.pr && o.body === node.body,
+        `· ${method} ${path}: python-httpx with Accept-Payment: tempo/charge gets Node's challenges back (got ${o.methods.join()})`);
       optIn402++;
     }
     const refused = await read(url, method, HTTPX, { "X-Payment-Offers": "x402" });
@@ -170,6 +192,10 @@ try {
       ok(text.includes("X-Payment-Offers: mpp") && text.includes("python-httpx/"), `${name} names the gated prefix and X-Payment-Offers: mpp`);
     }
     ok(!/BOTH headers, always/.test(s["/llms-full.txt"]), "/llms-full.txt no longer says every 402 carries both headers, always");
+    ok(!/Both headers are always present/.test(s["/skill.md"]), "/skill.md no longer says both headers are always present");
+    for (const name of ["/skill.md", "/llms-full.txt 'MPP clients are first-class' paragraph", "payment.info pay.mpp", "/openapi.json info.x-guidance"]) {
+      ok(s[name].includes("Accept-Payment"), `${name} names Accept-Payment as the other way back`);
+    }
   }
   await srv.stop();
   srv = null;
@@ -207,6 +233,24 @@ try {
   srv = null;
 
   // -------------------------------------------------------------------------
+  // Part 3b: the gate at its default, MPP not configured: no surface offers
+  // an opt-in to challenges this instance never sends, and python-httpx gets
+  // Node's 402.
+  // -------------------------------------------------------------------------
+  srv = await bootPaidServer({ label: "mpp-offer-gate-no-mpp", env: { AGENT402_OPERATOR_TOKEN: TOKEN, UNPAID_QUOTE_BUDGET_PER_HOUR: "off" } });
+  {
+    const u = `${srv.url}/api/uuid`;
+    const node = await read(u, "GET", "node");
+    const httpx = await read(u, "GET", HTTPX);
+    ok(node.status === 402 && node.methods.length === 0, "MPP off: Node's 402 carries no Payment challenge");
+    ok(httpx.status === 402 && httpx.pr === node.pr && httpx.body === node.body && httpx.vary.join() === node.vary.join(), "MPP off: python-httpx gets Node's 402, Vary included");
+    const s = await gateSurfaces(srv.url);
+    for (const [name, text] of Object.entries(s)) ok(!String(text).includes("X-Payment-Offers"), `MPP off: ${name} names no opt-in header`);
+  }
+  await srv.stop();
+  srv = null;
+
+  // -------------------------------------------------------------------------
   // Part 4: the predicate, offline
   // -------------------------------------------------------------------------
   const gate = await import("../src/mpp-offer-gate.js");
@@ -239,6 +283,23 @@ try {
     ok(mppOffersWithheldFor(req(HTTPX, { "x-payment-offers": v })) === true, `X-Payment-Offers: ${JSON.stringify(v)} does not opt in`);
   }
   ok(requestOptsIntoMppOffers(req(HTTPX, { "x-payment-offers": ["x402", "mpp"] })) === true, "a header sent twice is read as one list");
+  // Accept-Payment (the MPP request header naming the client's methods, as
+  // method/intent with an optional q) opts in when one entry is well formed
+  // and not refused with q=0.
+  for (const v of ["tempo/charge", "evm/charge, tempo/charge", "Tempo/Charge", "tempo/charge;q=0.5", "tempo / charge ; q=1", "*/*", "tempo/*", "junk, tempo/charge", "tempo/charge;q=0, evm/charge"]) {
+    ok(requestOptsIntoMppOffers(req(HTTPX, { "accept-payment": v })) === true, `Accept-Payment: ${JSON.stringify(v)} opts in`);
+    ok(mppOffersWithheldFor(req(HTTPX, { "accept-payment": v })) === false, `python-httpx with Accept-Payment: ${JSON.stringify(v)} is offered MPP`);
+  }
+  ok(requestOptsIntoMppOffers(req(HTTPX, { "accept-payment": ["junk", "tempo/charge"] })) === true, "an Accept-Payment sent twice is read as one list");
+  for (const v of ["", " ", "tempo", "tempo/", "/charge", "tempo/charge/x", "tempo/charge;q=0", "tempo/charge;q=0.000", "tempo/charge;q=abc", "a b/c", "x".repeat(9000), "a/".repeat(5000), "tempo/charge;q=0, evm/charge;q=0"]) {
+    ok(mppOffersWithheldFor(req(HTTPX, { "accept-payment": v })) === true, `Accept-Payment: ${JSON.stringify(v.length > 40 ? `${v.slice(0, 20)}... (${v.length})` : v)} does not opt in`);
+  }
+  {
+    const t0 = performance.now();
+    for (const v of ["a/".repeat(40000), `${" ".repeat(40000)}a`, `${"a".repeat(40000)} /`, `a/a;${"q=".repeat(20000)}`, `${",".repeat(40000)}x`]) requestOptsIntoMppOffers({ headers: { "accept-payment": v } });
+    const ms = performance.now() - t0;
+    ok(ms < 200, `five 40k-character hostile Accept-Payment values are read in ${ms.toFixed(1)} ms`);
+  }
   ok(mppOffersWithheldFor(req(HTTPX, { authorization: "Payment abc" })) === false, "a request carrying an MPP credential is not withheld");
   ok(mppOffersWithheldFor(req(HTTPX, { authorization: "payment abc" })) === false, "the credential scheme is read without regard to case");
   ok(mppOffersWithheldFor(req(HTTPX, { authorization: "Bearer a402_x" })) === true, "a bearer credential is not an MPP credential");
@@ -258,9 +319,11 @@ try {
   for (let i = 0; i < 3; i++) mppOffersWithheldFor(once);
   const opted = req(HTTPX, { "x-payment-offers": "mpp" });
   for (let i = 0; i < 3; i++) mppOffersWithheldFor(opted);
+  const optedAp = req(HTTPX, { "accept-payment": "tempo/charge" });
+  for (let i = 0; i < 3; i++) mppOffersWithheldFor(optedAp);
   mppOffersWithheldFor(req("node"));
   const st = mppOfferGateStatus();
-  ok(st.withheld === 1 && st.optedIn === 1, `each request is counted once (withheld ${st.withheld}, optedIn ${st.optedIn})`);
+  ok(st.withheld === 1 && st.optedIn === 2, `each request is counted once (withheld ${st.withheld}, optedIn ${st.optedIn})`);
   ok(st.enabled === true && st.userAgentPrefixes.join() === "python-httpx/", "the status names the switch and the list");
   {
     // A Vary is added on the gated client's response only.
@@ -271,7 +334,7 @@ try {
     const n = req("node");
     n.res = { vary: (h) => vary.push(`node:${h}`) };
     mppOffersWithheldFor(n);
-    ok(vary.join() === "X-Payment-Offers", `only the gated client's response varies on the opt-in header (${vary.join()})`);
+    ok(vary.join() === "X-Payment-Offers,Accept-Payment", `only the gated client's response varies on the opt-in headers (${vary.join()})`);
   }
   process.env.MPP_OFFER_WITHHOLD_USER_AGENTS = "off";
   _resetMppOfferGate();
@@ -287,6 +350,10 @@ try {
       const t = readFileSync(new URL(f, ROOT), "utf8");
       ok(t.includes(`${OFFER_REQUEST_HEADER}: mpp`), `${f} names ${OFFER_REQUEST_HEADER}: mpp`);
       for (const p of DEFAULT_WITHHELD_USER_AGENT_PREFIXES) ok(t.includes(p.replace(/\/$/, "")), `${f} names the default prefix ${p}`);
+    }
+    // The texts that say how the challenges come back name Accept-Payment too.
+    for (const f of ["wiki/Paying-with-MPP.md", "wiki/Self-Hosting.md", ".claude/rules/payments.md", "docs/configuration.json", "docs/configuration.md"]) {
+      ok(readFileSync(new URL(f, ROOT), "utf8").includes("Accept-Payment"), `${f} names Accept-Payment`);
     }
     // The opt-in alone does not make the payments plugin pay over Tempo: with
     // its default preferences it picks the evm challenge. The AgentCore pages

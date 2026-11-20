@@ -10,7 +10,10 @@
 //
 // OPT IN. `X-Payment-Offers: mpp` (or `all`; a comma list, read without regard
 // to case) restores the MPP challenges, byte for byte as other clients get
-// them. Any other value restores nothing.
+// them. Any other value restores nothing. So does `Accept-Payment`, the MPP
+// request header an MPP client library sends to name its methods: one
+// well-formed `method/intent` entry (either side may be `*`) whose q is not 0
+// is enough. A payment manager that sends neither keeps the x402 offer alone.
 //
 // NEVER GATED. A request that arrives with an MPP credential (`Authorization:
 // Payment ...`) is verified as before, and its 402 carries fresh challenges as
@@ -18,7 +21,7 @@
 // the request's raw header list and the shim's own mark are read as well.
 //
 // EVERY OTHER CLIENT is untouched: no header, no Vary, no body change. The
-// gated client's 402 varies on the opt-in header (it already varies on
+// gated client's 402 varies on both opt-in headers (it already varies on
 // User-Agent), so a cache never hands one answer to the other.
 //
 // Switch: MPP_OFFER_WITHHOLD_USER_AGENTS, a comma list of prefixes (unset or
@@ -29,6 +32,8 @@
 
 /** The request header that restores the MPP offers. */
 export const OFFER_REQUEST_HEADER = "X-Payment-Offers";
+/** The MPP request header that restores them too, when it names a method. */
+export const ACCEPT_PAYMENT_HEADER = "Accept-Payment";
 /** The values of that header that restore them. */
 export const OFFER_OPT_IN_VALUES = Object.freeze(["mpp", "all"]);
 /** The User-Agent prefixes gated when the switch is unset. */
@@ -57,7 +62,7 @@ export function mppOfferGateClause({ code = (s) => `\`${s}\``, env = process.env
   const prefixes = withheldUserAgentPrefixes(env).map((p) => code(p));
   if (prefixes.length === 0) return "";
   const names = prefixes.length === 1 ? prefixes[0] : `${prefixes.slice(0, -1).join(", ")} or ${prefixes.at(-1)}`;
-  return `a client whose User-Agent starts with ${names} gets the x402 offer alone, with no ${code("WWW-Authenticate: Payment")} challenge, unless it sends ${code(`${OFFER_REQUEST_HEADER}: mpp`)}`;
+  return `a client whose User-Agent starts with ${names} gets the x402 offer alone, with no ${code("WWW-Authenticate: Payment")} challenge, unless it sends ${code(`${OFFER_REQUEST_HEADER}: mpp`)} or an ${code(ACCEPT_PAYMENT_HEADER)} header naming an MPP method`;
 }
 
 /** The same clause as a sentence; "" when the gate is off. */
@@ -66,11 +71,36 @@ export function mppOfferGateSentence(opts) {
   return c ? `${c[0].toUpperCase()}${c.slice(1)}.` : "";
 }
 
-/** True when the request asks for the MPP offers by the opt-in header. */
+const headerList = (req, name) => {
+  const v = req?.headers?.[name.toLowerCase()];
+  return Array.isArray(v) ? v.join(",") : typeof v === "string" ? v : "";
+};
+
+// One Accept-Payment entry: `method/intent`, each a token or `*`, then
+// optional `;name=value` parameters. Bounded tokens, anchored, no nested
+// quantifier: linear in the entry's length.
+const ACCEPT_PAYMENT_ENTRY = /^(?:[a-z0-9_-]{1,64}|\*)[ \t]*\/[ \t]*(?:[a-z0-9_-]{1,64}|\*)$/i;
+const Q_VALUE = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
+
+/** True when one Accept-Payment entry names a method the client takes:
+ *  well formed, with no q or a valid q above 0. */
+function acceptPaymentEntryTakes(part) {
+  const [entry, ...params] = part.split(";");
+  if (!ACCEPT_PAYMENT_ENTRY.test(entry.trim())) return false;
+  for (const p of params) {
+    const eq = p.indexOf("=");
+    if (eq < 0 || p.slice(0, eq).trim().toLowerCase() !== "q") continue;
+    const q = p.slice(eq + 1).trim();
+    return Q_VALUE.test(q) && Number(q) > 0;
+  }
+  return true;
+}
+
+/** True when the request asks for the MPP offers: the opt-in header, or an
+ *  Accept-Payment header that names an MPP method. */
 export function requestOptsIntoMppOffers(req) {
-  const v = req?.headers?.[OFFER_REQUEST_HEADER.toLowerCase()];
-  const raw = Array.isArray(v) ? v.join(",") : typeof v === "string" ? v : "";
-  return raw.split(",").some((t) => OFFER_OPT_IN_VALUES.includes(t.trim().toLowerCase()));
+  if (headerList(req, OFFER_REQUEST_HEADER).split(",").some((t) => OFFER_OPT_IN_VALUES.includes(t.trim().toLowerCase()))) return true;
+  return headerList(req, ACCEPT_PAYMENT_HEADER).split(",").some(acceptPaymentEntryTakes);
 }
 
 const PAYMENT_SCHEME = /^\s*payment\s/i;
@@ -93,7 +123,7 @@ function userAgentGated(req, prefixes) {
 
 /**
  * Should this request's 402 be sent without MPP challenges? Decided once per
- * request; the first decision for a gated client adds the opt-in header to
+ * request; the first decision for a gated client adds the opt-in headers to
  * the response's Vary and is counted.
  */
 export function mppOffersWithheldFor(req) {
@@ -104,7 +134,7 @@ export function mppOffersWithheldFor(req) {
     if (prefixes.length === 0) return false;
     if (arrivedWithMppCredential(req)) return false;
     if (!userAgentGated(req, prefixes)) return false;
-    try { req.res?.vary?.(OFFER_REQUEST_HEADER); } catch { /* a Vary is never load-bearing for the decision */ }
+    try { req.res?.vary?.(OFFER_REQUEST_HEADER); req.res?.vary?.(ACCEPT_PAYMENT_HEADER); } catch { /* a Vary is never load-bearing for the decision */ }
     if (requestOptsIntoMppOffers(req)) { counts.optedIn++; return false; }
     counts.withheld++;
     return true;

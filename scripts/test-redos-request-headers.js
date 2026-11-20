@@ -123,7 +123,8 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
   const offerGate = await import("../src/mpp-offer-gate.js");
   const readers = {
     "mpp-offer-gate requestOptsIntoMppOffers (x-payment-offers)": (v) => offerGate.requestOptsIntoMppOffers({ headers: { "x-payment-offers": v } }),
-    "mpp-offer-gate mppOffersWithheldFor (x-payment-offers, authorization)": (v) => offerGate.mppOffersWithheldFor({ headers: { "user-agent": "python-httpx/1", "x-payment-offers": v, authorization: v }, rawHeaders: ["Authorization", v] }),
+    "mpp-offer-gate requestOptsIntoMppOffers (accept-payment)": (v) => offerGate.requestOptsIntoMppOffers({ headers: { "accept-payment": v } }),
+    "mpp-offer-gate mppOffersWithheldFor (x-payment-offers, accept-payment, authorization)": (v) => offerGate.mppOffersWithheldFor({ headers: { "user-agent": "python-httpx/1", "x-payment-offers": v, "accept-payment": v, authorization: v }, rawHeaders: ["Authorization", v] }),
     "mpp-offer-gate mppOffersWithheldFor (user-agent)": (v) => offerGate.mppOffersWithheldFor({ headers: { "user-agent": v }, rawHeaders: ["User-Agent", v] }),
     // The paid-call funnel's source words (src/funnel-sources.js), read on every paid-route finish.
     "funnel-sources uaFamilyOf": (v) => sources.uaFamilyOf(v),
