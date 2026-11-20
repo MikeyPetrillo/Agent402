@@ -350,8 +350,8 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
   ok(SUBSCRIPTION_RECEIPTS_KEPT > 0 && !TOMBSTONE_FIELDS.includes("signedReceipts"), `control: ${SUBSCRIPTION_RECEIPTS_KEPT} period receipts are kept, and an ended MPP subscription's reduced record drops them`);
   ok(/the report record on our server holds the session id, your input, the finished report and the signed receipt we issued for it at delivery \(SHA-256 digests of the request and of the report, the price and Stripe's payment id\), not the email/.test(privacy), "/privacy names the card report's signed receipt on the report record");
   ok(privacy.includes(`and the signed receipts of its ${SUBSCRIPTION_RECEIPTS_KEPT} most recent paid periods (each a record of SHA-256 digests, the amount and the payment reference, kept with the period's statement, which names the subject and the period), for the life of the subscription`), `/privacy names the monitor's ${SUBSCRIPTION_RECEIPTS_KEPT} kept period receipts`);
-  ok(/the email, the subject you asked us to watch and the signed period receipts are removed/.test(privacy), "/privacy says an ended MPP subscription's reduced record drops its period receipts");
-  ok(privacy.includes(`a signing key our server made for that subscription and the signed receipts of its ${SUBSCRIPTION_RECEIPTS_KEPT} most recent paid periods`), "/privacy names the period receipts on an MPP subscription's record");
+  ok(/the email and the subject you asked us to watch are removed, and so are the signed period receipts/.test(privacy), "/privacy says an ended MPP subscription's reduced record drops its period receipts");
+  ok(privacy.includes(`a signing key our server made for that subscription. Once a period is paid, the record also keeps the signed receipts of its ${SUBSCRIPTION_RECEIPTS_KEPT} most recent paid periods`), "/privacy names the period receipts on an MPP subscription's record");
 }
 
 // The privacy page's sanctions item names every payer screen the code runs:

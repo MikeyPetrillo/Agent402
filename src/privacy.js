@@ -246,8 +246,8 @@ so every claim below is verifiable in code.</p>
   recorded for billing and monitoring, without the prompt or completion text.${directUpstream}</li>
   <li><b>On-chain payments.</b> A per-call x402 or MPP payment carries no card number, name or email.
   A monitor subscription paid over MPP is different: its record holds the paying wallet together with the
-  subject you asked us to watch, the email you give for delivery (optional), a signing key our server
-  made for that subscription and ${periodReceipts}. A subscription you ask for and do not pay keeps the email, the subject and the key
+  subject you asked us to watch, the email you give for delivery (optional), and a signing key our server
+  made for that subscription. Once a period is paid, the record also keeps ${periodReceipts}. A subscription you ask for and do not pay keeps the email, the subject and the key
   while its offer can be paid (${mppOffer.payableMinutes} minutes), and a check that runs every ${mppOffer.sweepMinutes} minutes deletes all three within ${mppOffer.deletedWithin} of your request (a nightly backup made before then holds a copy until that backup is deleted, see Backups below). Your signed authorization lets that key send one payment per period from your
   account, in one token, to our address, up to the subscription price, until the expiry you signed. The
   key is kept only while a later payment can still be taken: it is deleted from our records when you cancel,
@@ -257,7 +257,7 @@ so every claim below is verifiable in code.</p>
   wire), whether it was one of our own test subscriptions, the paying wallet, the key's public
   address, the chain and token, the amount and billing period, the dates, the final state and the reason it
   ended, the last payment's transaction and a marker for a payment whose outcome was never confirmed;
-  the email, the subject you asked us to watch and the signed period receipts are removed. A check that runs every ${mppSub.sweepMinutes} minutes
+  the email and the subject you asked us to watch are removed, and so are the signed period receipts. A check that runs every ${mppSub.sweepMinutes} minutes
   does this for a subscription that ends on a date, and deletes the reduced record ${mppSub.keepDays} days after the subscription ends.
   Payments settle in USDC on the public Base blockchain (or the other chains listed at <a href="/pricing">/pricing</a>,
   USDG on Robinhood Chain, or MPP on Base, Celo or Tempo) via the x402 or MPP protocol; ${gatewayBatched ? "for a payment settled on chain, " : ""}wallet addresses, amounts, and
