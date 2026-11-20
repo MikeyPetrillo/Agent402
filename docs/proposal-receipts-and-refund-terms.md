@@ -18,8 +18,9 @@ receipt it signs over the request, the answer and the settlement.
 
 - A single-body answer: the response header `Agent402-Receipt`.
 - A streamed answer: after the last byte, over every byte streamed, as a
-  final server-sent event `event: agent402-receipt` on a `text/event-stream`
-  answer, and as an `Agent402-Receipt` HTTP trailer when the client sent
+  final server-sent comment line `: agent402-receipt <receipt>` on a
+  `text/event-stream` answer (a comment, which event-stream parsers skip),
+  and as an `Agent402-Receipt` HTTP trailer when the client sent
   `TE: trailers`.
 - An error answer, a failed settlement, or a free answer carries none.
 

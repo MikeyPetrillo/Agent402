@@ -57,14 +57,16 @@ export async function verifyReceipt(receipt, { keys = null, baseUrl = "https://a
   return { valid: true, reason: null, kid: head.kid, record };
 }
 
-/** The server-sent event that carries a streamed answer's receipt. */
-export const RECEIPT_SSE_EVENT = "agent402-receipt";
-const SSE_FRAME_HEAD = `\nevent: ${RECEIPT_SSE_EVENT}\ndata: `;
+/** The tag of the server-sent comment line that carries a streamed answer's
+ *  receipt. An event-stream parser skips a comment, so the line reaches no
+ *  event handler; keep the raw bytes to check it. */
+export const RECEIPT_SSE_COMMENT = "agent402-receipt";
+const SSE_FRAME_HEAD = `\n: ${RECEIPT_SSE_COMMENT} `;
 
 /**
  * Split a streamed (text/event-stream) answer, as received, into the bytes
  * its receipt covers and the receipt: the server ends a settled stream with
- * "\nevent: agent402-receipt\ndata: <receipt>\n\n" after the last byte the
+ * the comment line "\n: agent402-receipt <receipt>\n" after the last byte the
  * receipt's responseSha256 digests.
  * @param {string|Uint8Array} streamed  every byte of the answer, in order
  * @returns {{ body: Uint8Array, receipt: string|null }}
@@ -73,7 +75,7 @@ export function splitStreamedReceipt(streamed) {
   const buf = typeof streamed === "string" ? Buffer.from(streamed, "utf8") : Buffer.from(streamed ?? []);
   const at = buf.lastIndexOf(SSE_FRAME_HEAD);
   if (at < 0) return { body: buf, receipt: null };
-  const m = /^([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\n\n$/.exec(buf.subarray(at + Buffer.byteLength(SSE_FRAME_HEAD)).toString("utf8"));
+  const m = /^([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\n$/.exec(buf.subarray(at + Buffer.byteLength(SSE_FRAME_HEAD)).toString("utf8"));
   return m ? { body: buf.subarray(0, at), receipt: m[1] } : { body: buf, receipt: null };
 }
 
@@ -84,6 +86,6 @@ export function splitStreamedReceipt(streamed) {
  */
 export async function verifyStreamedReceipt(streamed, opts = {}) {
   const { body, receipt } = splitStreamedReceipt(streamed);
-  if (!receipt) return { valid: false, reason: "no_receipt_event" };
+  if (!receipt) return { valid: false, reason: "no_stream_receipt" };
   return verifyReceipt(receipt, { ...opts, body });
 }

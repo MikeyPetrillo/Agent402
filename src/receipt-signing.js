@@ -27,8 +27,11 @@
 //     `Agent402-Receipt` response header;
 //   - an answer written in parts (a stream): the digest covers every byte
 //     written, and the receipt follows the last byte as a final server-sent
-//     event (`event: agent402-receipt`, RECEIPT_SSE_EVENT) when the answer is
-//     text/event-stream, and as an `Agent402-Receipt` HTTP trailer when the
+//     comment line (`: agent402-receipt <receipt>`, RECEIPT_SSE_COMMENT) when
+//     the answer is text/event-stream (a comment, not an event: every
+//     event-stream parser skips it, so a client that JSON-parses each event's
+//     data, as OpenAI-compatible SDKs do, never meets it and finishes the
+//     stream as it would without it), and as an `Agent402-Receipt` HTTP trailer when the
 //     client sent `TE: trailers` on HTTP/1.1. A streamed answer that is
 //     neither (no event stream, no trailers asked for) carries none.
 // A 4xx/5xx, a failed settle (402), a free or trial answer carries none.
@@ -62,9 +65,10 @@ export const RECEIPT_VERSION = 1;
 export const SIGNED_RAILS = Object.freeze(["x402", "gateway-batched", "mpp-evm", "mpp-tempo", "mpp-stripe", "credits", "card-checkout", "card-subscription", "mpp-subscription"]);
 /** The rails the response signer signs on (the card checkout signs at delivery). */
 const RESPONSE_RAILS = Object.freeze(["x402", "gateway-batched", "mpp-evm", "mpp-tempo", "mpp-stripe", "credits"]);
-/** The server-sent event that carries a streamed answer's receipt. */
-export const RECEIPT_SSE_EVENT = "agent402-receipt";
-const SSE_FRAME_HEAD = `\nevent: ${RECEIPT_SSE_EVENT}\ndata: `;
+/** The tag of the server-sent comment line that carries a streamed answer's
+ *  receipt: `: agent402-receipt <receipt>`. */
+export const RECEIPT_SSE_COMMENT = "agent402-receipt";
+const SSE_FRAME_HEAD = `\n: ${RECEIPT_SSE_COMMENT} `;
 /** Upper bound on the header value: every string field is capped below. */
 export const RECEIPT_MAX_BYTES = 2048;
 const FIELD_MAX = 160;
@@ -261,25 +265,27 @@ export function verifyReceipt(jws, { keys = receiptKeys().keys, responseBody, re
 }
 
 /**
- * The final server-sent event that carries a streamed answer's receipt. It
- * opens with a newline, so it ends a last line the stream left open (an
- * empty line after a finished event dispatches nothing), and it follows the
- * last byte the receipt's digest covers.
+ * The final server-sent comment line that carries a streamed answer's
+ * receipt, after the last byte the receipt's digest covers. It opens with a
+ * newline, so it ends a last line the stream left open (an empty line after
+ * a finished event dispatches nothing), and it ends with a single newline:
+ * a comment needs no blank line, and one would dispatch an event the stream
+ * left open.
  */
-export function receiptSseFrame(jws) { return `${SSE_FRAME_HEAD}${jws}\n\n`; }
+export function receiptSseFrame(jws) { return `${SSE_FRAME_HEAD}${jws}\n`; }
 
 /**
  * Split an event-stream answer as received into the bytes the receipt's
  * responseSha256 covers and the receipt itself: { body: Buffer, receipt }
  * (receipt null, body the whole input, when the stream does not end with
- * the receipt event).
+ * the receipt line).
  */
 export function splitSseReceipt(streamed) {
   const buf = Buffer.isBuffer(streamed) ? streamed : typeof streamed === "string" ? Buffer.from(streamed, "utf8") : Buffer.from(streamed ?? []);
   const at = buf.lastIndexOf(SSE_FRAME_HEAD);
   if (at < 0) return { body: buf, receipt: null };
   const rest = buf.subarray(at + Buffer.byteLength(SSE_FRAME_HEAD)).toString("utf8");
-  const m = /^([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\n\n$/.exec(rest);
+  const m = /^([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\n$/.exec(rest);
   if (!m) return { body: buf, receipt: null };
   return { body: buf.subarray(0, at), receipt: m[1] };
 }
@@ -458,7 +464,7 @@ export function receiptSignerMiddleware({ describe, iss = null, signer = () => r
           if (jws) {
             if (trailerDeclared) res.addTrailers({ [RECEIPT_HEADER]: jws });
             if (eventStream) {
-              // The answer's last bytes, then the receipt event, then the end.
+              // The answer's last bytes, then the receipt line, then the end.
               if (chunk != null && bytesOf(chunk, encoding).length) origWrite.call(this, chunk, encoding);
               origWrite.call(this, receiptSseFrame(jws));
               return origEnd.call(this, cb);

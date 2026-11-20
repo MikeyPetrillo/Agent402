@@ -3,8 +3,11 @@
 // (src/receipt-signing.js, src/credits.js, src/human-checkout.js):
 //
 //   1. A streamed answer, over real HTTP: a settled event stream ends with an
-//      `agent402-receipt` event whose digest covers every byte streamed
-//      before it; a client that sent `TE: trailers` also gets the receipt as
+//      `: agent402-receipt <receipt>` comment line whose digest covers every
+//      byte streamed before it, and which an event-stream parser skips (it
+//      dispatches the same events as the stream without it, so a client that
+//      parses every event's data as JSON never sees the receipt); a client
+//      that sent `TE: trailers` also gets the receipt as
 //      an HTTP trailer; a stream that is neither an event stream nor asked
 //      for trailers, a non-200 and an unsettled stream carry none; a changed
 //      byte fails the check; the client helpers agree with the server.
@@ -17,10 +20,11 @@
 //      amount collected; a 100%-off session gets none; the report page and
 //      the ready email show it, a public view never does.
 //   4. A paid server with a key: a streamed chat answer on every wire ends
-//      with a receipt event that verifies end to end (client helper and POST
-//      /api/receipts/verify); a credits key's 200 carries the header, its
-//      stream the event; the conformance cells read signed on credits and
-//      card checkout. Without a key no stream carries the event.
+//      with a receipt comment that verifies end to end (client helper and POST
+//      /api/receipts/verify) and adds no event to the stream; a credits key's
+//      200 carries the header, its stream the comment; the conformance cells
+//      read signed on credits and card checkout; a signed paid answer logs no
+//      listener-leak warning. Without a key no stream carries the comment.
 import "./lib/offline-stores.js";
 import "./lib/file-mode.js";
 import http from "node:http";
@@ -30,8 +34,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
 import { textNamesUrl } from "./lib/url-host.js";
-import { loadReceiptKeys, verifyReceipt, receiptSignerMiddleware, splitSseReceipt, createCheckoutReceipt, requestDigest, RECEIPT_HEADER, RECEIPT_SSE_EVENT, RECEIPT_VERIFY_PATH, RECEIPT_KEYS_PATH, SIGNED_RAILS, CHECKOUT_RECEIPT_PATH } from "../src/receipt-signing.js";
-import { verifyStreamedReceipt, splitStreamedReceipt, verifyReceipt as clientVerify } from "../client/receipt.js";
+import { loadReceiptKeys, verifyReceipt, receiptSignerMiddleware, splitSseReceipt, createCheckoutReceipt, requestDigest, RECEIPT_HEADER, RECEIPT_SSE_COMMENT, RECEIPT_VERIFY_PATH, RECEIPT_KEYS_PATH, SIGNED_RAILS, CHECKOUT_RECEIPT_PATH } from "../src/receipt-signing.js";
+import { verifyStreamedReceipt, splitStreamedReceipt, verifyReceipt as clientVerify, RECEIPT_SSE_COMMENT as CLIENT_SSE_COMMENT } from "../client/receipt.js";
 import { createCredits, hashKey } from "../src/credits.js";
 import { createHumanCheckout } from "../src/human-checkout.js";
 import { buildReportReadyEmail } from "../src/email.js";
@@ -61,6 +65,31 @@ const call = (port, path, { te = false, body = "{}", headers = {} } = {}) => new
 });
 const listen = (app) => new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
 
+// The events a conforming event-stream parser dispatches (WHATWG HTML,
+// "Interpreting an event stream"): a line that starts with ":" is a comment
+// and dispatches nothing; `data:` lines build an event that a blank line
+// dispatches; an event still open when the stream ends is dropped. A client
+// that JSON-parses every event's data (the AI SDK's OpenAI-compatible
+// provider) reads exactly these.
+const sseEvents = (bytes) => {
+  const lines = Buffer.from(bytes).toString("utf8").split(/\r\n|\r|\n/);
+  lines.pop(); // the bytes after the last line end: an unfinished line
+  const out = [];
+  let data = null, event = "";
+  for (const line of lines) {
+    if (line === "") { if (data) out.push({ event: event || "message", data: data.join("\n") }); data = null; event = ""; continue; }
+    if (line.startsWith(":")) continue;
+    const at = line.indexOf(":");
+    const field = at < 0 ? line : line.slice(0, at);
+    let value = at < 0 ? "" : line.slice(at + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "data") (data ||= []).push(value);
+    else if (field === "event") event = value;
+  }
+  return out;
+};
+const strictJson = (events) => events.every((e) => e.data === "[DONE]" || (() => { try { JSON.parse(e.data); return true; } catch { return false; } })());
+
 // ---- 1. streamed answers over real HTTP ----
 {
   let describe = () => SETTLED;
@@ -81,34 +110,38 @@ const listen = (app) => new Promise((r) => { const s = app.listen(0, "127.0.0.1"
     const want = Buffer.from(FRAMES.join(""), "utf8");
     const r = await call(port, "/sse");
     const sp = splitSseReceipt(r.body);
-    await ok(r.status === 200 && !r.headers[RECEIPT_HEADER.toLowerCase()] && sp.receipt && sp.body.equals(want), "a settled event stream ends with the receipt event after the streamed bytes, which arrive unchanged");
-    await ok(r.body.toString("utf8").endsWith(`\nevent: ${RECEIPT_SSE_EVENT}\ndata: ${sp.receipt}\n\n`), "the event is `event: agent402-receipt` with the receipt as its data");
+    await ok(r.status === 200 && !r.headers[RECEIPT_HEADER.toLowerCase()] && sp.receipt && sp.body.equals(want), "a settled event stream ends with the receipt after the streamed bytes, which arrive unchanged");
+    await ok(r.body.toString("utf8").endsWith(`\n: ${RECEIPT_SSE_COMMENT} ${sp.receipt}\n`) && RECEIPT_SSE_COMMENT === "agent402-receipt" && CLIENT_SSE_COMMENT === RECEIPT_SSE_COMMENT, "the receipt rides as an SSE comment line, `: agent402-receipt <receipt>`, the same tag in the server and the client");
+    await ok(JSON.stringify(sseEvents(r.body)) === JSON.stringify(sseEvents(want)) && sseEvents(r.body).length === 3 && strictJson(sseEvents(r.body)), `an event-stream parser dispatches the same events with the receipt as without it, each JSON or [DONE] (${sseEvents(r.body).map((e) => e.event).join(", ")})`);
     const v = verifyReceipt(sp.receipt, { keys, responseBody: sp.body, request: { method: "POST", path: "/sse", body: {} } });
     await ok(v.valid && v.checks.response && v.checks.request && v.record.rail === "x402" && v.record.settlement === SETTLED.settlement, `the receipt verifies against the bytes streamed before it and the request sent (${v.reason})`);
     const cv = await verifyStreamedReceipt(r.body, { keys, request: { method: "POST", path: "/sse", body: {} } });
     const cs = splitStreamedReceipt(r.body);
     await ok(cv.valid && cs.receipt === sp.receipt && Buffer.from(cs.body).equals(sp.body), "the client's verifyStreamedReceipt and splitStreamedReceipt agree");
-    // Tamper: one streamed byte changed, the event moved, a frame dropped.
+    // Tamper: one streamed byte changed, a frame dropped, a forged receipt line.
     const flipped = Buffer.from(r.body); flipped[10] ^= 1;
     await ok((await verifyStreamedReceipt(flipped, { keys })).reason === "response_mismatch", "a changed streamed byte fails the check");
     const dropped = Buffer.concat([Buffer.from(FRAMES[0] + FRAMES[2]), r.body.subarray(want.length)]);
     await ok((await verifyStreamedReceipt(dropped, { keys })).reason === "response_mismatch", "a dropped frame fails the check");
-    await ok((await verifyStreamedReceipt(want, { keys })).reason === "no_receipt_event", "a stream with no receipt event reads no_receipt_event");
-    const forged = Buffer.concat([want, Buffer.from(`\nevent: ${RECEIPT_SSE_EVENT}\ndata: ${sp.receipt.slice(0, -4)}AAAA\n\n`)]);
-    await ok(!(await verifyStreamedReceipt(forged, { keys })).valid, "a changed signature in the event fails");
+    await ok((await verifyStreamedReceipt(want, { keys })).reason === "no_stream_receipt", "a stream with no receipt line reads no_stream_receipt");
+    const forged = Buffer.concat([want, Buffer.from(`\n: ${RECEIPT_SSE_COMMENT} ${sp.receipt.slice(0, -4)}AAAA\n`)]);
+    await ok(!(await verifyStreamedReceipt(forged, { keys })).valid, "a changed signature in the receipt line fails");
+    const notLast = Buffer.concat([r.body, Buffer.from("data: {}\n\n")]);
+    await ok(!splitSseReceipt(notLast).receipt && !splitStreamedReceipt(notLast).receipt, "a receipt line that is not the stream's last line is not read as its receipt");
 
     const rt = await call(port, "/sse", { te: true });
     const tsp = splitSseReceipt(rt.body);
     const tr = rt.trailers[RECEIPT_HEADER.toLowerCase()];
-    await ok(rt.headers.trailer === RECEIPT_HEADER && rt.headers["transfer-encoding"] === "chunked" && tr && tsp.receipt === tr, "with TE: trailers the stream declares the trailer and sends the same receipt as the trailer and the event");
+    await ok(rt.headers.trailer === RECEIPT_HEADER && rt.headers["transfer-encoding"] === "chunked" && tr && tsp.receipt === tr, "with TE: trailers the stream declares the trailer and sends the same receipt as the trailer and the receipt line");
     await ok(verifyReceipt(tr, { keys, responseBody: tsp.body }).valid, "the trailer receipt verifies against the streamed bytes");
 
     const ec = await call(port, "/sse-end-chunk");
     const esp = splitSseReceipt(ec.body);
-    await ok(esp.receipt && esp.body.equals(Buffer.from(FRAMES[0] + FRAMES[2])) && verifyReceipt(esp.receipt, { keys, responseBody: esp.body }).valid, "a last frame written by end() is digested and precedes the event");
+    await ok(esp.receipt && esp.body.equals(Buffer.from(FRAMES[0] + FRAMES[2])) && verifyReceipt(esp.receipt, { keys, responseBody: esp.body }).valid, "a last frame written by end() is digested and precedes the receipt line");
     const ol = await call(port, "/sse-open-line");
     const osp = splitSseReceipt(ol.body);
-    await ok(osp.receipt && osp.body.toString() === "data: partial" && verifyReceipt(osp.receipt, { keys, responseBody: osp.body }).valid, "a stream that stops mid-line: the event's leading newline ends that line and is not digested");
+    await ok(osp.receipt && osp.body.toString() === "data: partial" && verifyReceipt(osp.receipt, { keys, responseBody: osp.body }).valid, "a stream that stops mid-line: the receipt line's leading newline ends that line and is not digested");
+    await ok(sseEvents(ol.body).length === 0, `...and the receipt completes no event the stream left open (${JSON.stringify(sseEvents(ol.body))})`);
 
     const nd = await call(port, "/ndjson");
     await ok(nd.status === 200 && !nd.headers.trailer && !nd.trailers[RECEIPT_HEADER.toLowerCase()] && nd.body.toString() === '{"a":1}\n{"b":2}\n', "a stream that is not an event stream and did not ask for trailers: untouched, no receipt");
@@ -180,7 +213,7 @@ const listen = (app) => new Promise((r) => { const s = app.listen(0, "127.0.0.1"
 
     const s = await call(port, "/stream", { headers: auth });
     const sv = await verifyStreamedReceipt(s.body, { keys });
-    await ok(s.status === 200 && sv.valid && sv.record.rail === "credits" && hist().filter((e) => e.k === "charge").at(-1)?.d === sv.record.settlement && bal().balanceUsd === 0.98, `a credits stream ends with a receipt event naming its debit (${sv.reason})`);
+    await ok(s.status === 200 && sv.valid && sv.record.rail === "credits" && hist().filter((e) => e.k === "charge").at(-1)?.d === sv.record.settlement && bal().balanceUsd === 0.98, `a credits stream ends with a receipt line naming its debit (${sv.reason})`);
 
     const b = await call(port, "/boom", { headers: auth });
     await new Promise((res) => setTimeout(res, 50));
@@ -249,13 +282,14 @@ try {
     const bytes = Buffer.from(r.text, "utf8");
     const cv = await verifyStreamedReceipt(bytes, { keys: keyDoc.keys, request: { method: "POST", path: CHAT.path, body: CHAT.body } });
     const { body, receipt } = splitStreamedReceipt(bytes);
-    await ok(r.status === 200 && /text\/event-stream/.test(r.headers.get("content-type") || "") && Buffer.from(body).toString().includes('"content":" answer"') && cv.valid, `${wire}: a settled streamed chat answer ends with a receipt event that verifies against the bytes streamed and the request sent (${r.status}, ${cv.reason})`);
+    await ok(r.status === 200 && /text\/event-stream/.test(r.headers.get("content-type") || "") && Buffer.from(body).toString().includes('"content":" answer"') && cv.valid, `${wire}: a settled streamed chat answer ends with a receipt line that verifies against the bytes streamed and the request sent (${r.status}, ${cv.reason})`);
+    await ok(JSON.stringify(sseEvents(bytes)) === JSON.stringify(sseEvents(body)) && strictJson(sseEvents(bytes)) && sseEvents(bytes).at(-1)?.data === "[DONE]", `${wire}: a client that JSON-parses every event reads the answer's events and [DONE] last, never the receipt (${sseEvents(bytes).length} events)`);
     const settleRef = r.headers.get("payment-response") ? JSON.parse(Buffer.from(r.headers.get("payment-response"), "base64").toString("utf8")).transaction : r.headers.get("payment-receipt") ? JSON.parse(Buffer.from(r.headers.get("payment-receipt"), "base64url").toString("utf8")).reference : null;
     await ok(cv.record.settlement && cv.record.settlement === settleRef && cv.record.slug && cv.record.priceUsd, `${wire}: rail ${cv.record.rail}, the settlement the wire's own receipt names`);
     const api = await (await fetch(`${rig.url}${RECEIPT_VERIFY_PATH}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ receipt, body: Buffer.from(body).toString("utf8") }) })).json();
     await ok(api.valid === true && api.checks.response === true, `${wire}: POST ${RECEIPT_VERIFY_PATH} agrees on the streamed bytes`);
   }
-  // Credits on the booted server: the header on a one-piece answer, the event on a stream.
+  // Credits on the booted server: the header on a one-piece answer, the receipt line on a stream.
   {
     const auth = { authorization: `Bearer ${CREDIT_KEY}`, "content-type": "application/json" };
     const r = await fetch(`${rig.url}${HASH.path}`, { method: "POST", headers: auth, body: JSON.stringify(HASH.body) });
@@ -267,7 +301,7 @@ try {
     const s = await fetch(`${rig.url}${CHAT.path}`, { method: "POST", headers: auth, body: JSON.stringify(CHAT.body) });
     const sbytes = Buffer.from(await s.arrayBuffer());
     const sv = await verifyStreamedReceipt(sbytes, { keys: keyDoc.keys, request: { method: "POST", path: CHAT.path, body: CHAT.body } });
-    await ok(s.status === 200 && sv.valid && sv.record.rail === "credits", `credits: a streamed chat answer ends with a receipt event that verifies (${s.status}, ${sv.reason})`);
+    await ok(s.status === 200 && sv.valid && sv.record.rail === "credits", `credits: a streamed chat answer ends with a receipt line that verifies (${s.status}, ${sv.reason})`);
     const cl = await clientVerify(v.record ? r.headers.get(RECEIPT_HEADER) : "", { baseUrl: rig.url, body: text });
     await ok(cl.valid, "credits: the client fetches the keys and agrees");
     // An answer served without a run (a keyed replay of the same call) is
@@ -290,16 +324,20 @@ try {
     const row = doc.rails.find((r) => r.id === id);
     await ok(row?.features.signedReceipt.supported === true && /Agent402-Receipt|receipt/.test(row.features.signedReceipt.detail), `${id}: the conformance cell reads signed`);
   }
+  // Every paid answer above was signed, and the EVM ones kept for the audit
+  // report: the keeper's finish listener logs no listener-leak warning.
+  const leaks = rig.log().split("\n").filter((l) => /MaxListenersExceededWarning/.test(l) && /\bfinish listeners\b/.test(l));
+  await ok(leaks.length === 0, `no signed paid answer logs a finish-listener leak warning (${leaks.length}${leaks.length ? `: ${leaks[0].slice(0, 160)}` : ""})`);
 } finally { await rig.stop(); rig = null; }
 
-// Without a key: a settled stream carries no receipt event.
+// Without a key: a settled stream carries no receipt line.
 rig = await bootPaidWires({ label: "receipt-streams-off" });
 try {
   rig.st.llmStreamFrames = () => CHAT_FRAMES;
   const w = await rig.wallet("evm");
   rig.fund(w, 10n ** 12n);
   const r = await rig.pay(w, CHAT);
-  await ok(r.status === 200 && !r.text.includes(`event: ${RECEIPT_SSE_EVENT}`) && r.text.endsWith("data: [DONE]\n\n"), "no key: a settled stream ends as streamed, with no receipt event");
+  await ok(r.status === 200 && !r.text.includes(RECEIPT_SSE_COMMENT) && r.text.endsWith("data: [DONE]\n\n"), "no key: a settled stream ends as streamed, with no receipt line");
 } finally { await rig.stop(); rig = null; }
 
 console.log(`\n${pass} checks passed`);

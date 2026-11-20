@@ -311,7 +311,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   answer ended: `settleBeforeEnd` in `src/credits.js`, on while the signer is mounted, waiting at most
   `CREDITS_DEBIT_WAIT_MS`, default 3000, then retried as before with no receipt). A one-piece answer gets
   the header; an answer written in parts gets the digest of every byte written, then a final
-  `event: agent402-receipt` SSE event when it is `text/event-stream` and an `Agent402-Receipt` trailer when
+  `: agent402-receipt <jws>` SSE comment line when it is `text/event-stream` (a comment, never an event: a
+  client that JSON-parses every event's data never meets it) and an `Agent402-Receipt` trailer when
   the request sent `TE: trailers` on HTTP/1.1 (declared only on a 200 with no length; a declaration Node
   refuses is dropped, never the answer). A card-bought report is signed at delivery
   (`createCheckoutReceipt`, rail `card-checkout`, stored on the record, shown on `/r/<session>` and in the

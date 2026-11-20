@@ -236,10 +236,10 @@ Tools:
 
 ### 2026-11-18 (signed receipts on every paid call)
 Payments:
-- A streamed paid answer ends with an `event: agent402-receipt` server-sent
-  event whose data is the signed receipt over every byte streamed before it,
-  and also carries it as an `Agent402-Receipt` trailer when the client sends
-  `TE: trailers`.
+- A streamed paid answer ends with a `: agent402-receipt <receipt>`
+  server-sent comment line, which event-stream parsers skip, carrying the
+  signed receipt over every byte streamed before it, and also carries it as
+  an `Agent402-Receipt` trailer when the client sends `TE: trailers`.
 - A call paid with a prepaid credits key is debited before its answer ends
   and carries a signed receipt naming the key's id (never the key) and the
   debit's id, which the key's history records.
@@ -258,7 +258,7 @@ Site:
   keeps the line without the receipt clause.
 Packages:
 - agent402-client exports `verifyStreamedReceipt` and
-  `splitStreamedReceipt`, which check the receipt event that ends a streamed
+  `splitStreamedReceipt`, which check the receipt line that ends a streamed
   answer against the bytes streamed before it.
 
 ### 2026-11-18 (stock data tools not offered)

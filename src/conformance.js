@@ -37,7 +37,7 @@ import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { refundClauses, REPAYMENT_FAMILIES } from "./refund-terms.js";
 import { sanctionsScreenStatus } from "./sanctions-screen.js";
 import { PAYER_SCREEN_RAILS, x402ScreenKey } from "./payer-screen-rails.js";
-import { receiptsServed, SIGNED_RAILS, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_SSE_EVENT, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
+import { receiptsServed, SIGNED_RAILS, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_SSE_COMMENT, RECEIPT_VERIFY_PATH } from "./receipt-signing.js";
 
 export { CONFORMANCE_PATH };
 export const CONFORMANCE_VERSION = 1;
@@ -142,7 +142,7 @@ function signedCell(L, rail, header) {
     : NOT_SIGNED(header);
 }
 // How a streamed answer's receipt is delivered (src/receipt-signing.js).
-const STREAM_DELIVERY = `An event-stream answer (text/event-stream) gets the receipt after its last byte, over every byte streamed, as a final \`event: ${RECEIPT_SSE_EVENT}\` server-sent event; a streamed answer to a request that sent TE: trailers on HTTP/1.1 gets it as an ${RECEIPT_HEADER} trailer. A streamed answer that is neither carries no receipt.`;
+const STREAM_DELIVERY = `An event-stream answer (text/event-stream) gets the receipt after its last byte, over every byte streamed, as a final \`: ${RECEIPT_SSE_COMMENT} <receipt>\` server-sent comment line, which event-stream parsers skip; a streamed answer to a request that sent TE: trailers on HTTP/1.1 gets it as an ${RECEIPT_HEADER} trailer. A streamed answer that is neither carries no receipt.`;
 
 function x402ScreenCell(L, key, evm) {
   if (!L.payerScreen) return screenCell(false, "The x402 payer screen is not mounted on this server.", key);

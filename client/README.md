@@ -604,9 +604,11 @@ const v = await verifyReceipt(receipt, {
 ```
 
 A streamed answer (`stream: true` on the model routes) ends with one more
-server-sent event, `event: agent402-receipt`, whose data is the receipt over
-every byte streamed before it. Keep the bytes as they arrive and check them
-with `verifyStreamedReceipt` (`splitStreamedReceipt` separates the two):
+line, the server-sent comment `: agent402-receipt <receipt>`, carrying the
+receipt over every byte streamed before it. Event-stream parsers skip a
+comment, so your stream handling sees the same events as without it. Keep the
+bytes as they arrive and check them with `verifyStreamedReceipt`
+(`splitStreamedReceipt` separates the two):
 
 ```js
 import { verifyStreamedReceipt } from "agent402-client";

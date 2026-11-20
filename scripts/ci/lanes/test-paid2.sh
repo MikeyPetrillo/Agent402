@@ -33,7 +33,7 @@ t node scripts/test-answer-headers.js
 t node scripts/test-conformance.js
 # Signed receipts: the one key format and its refusals, sign and verify with tamper on every field, rotation, the header bound and the cost per call; with a key every settling wire's 200 carries a receipt that verifies and none on an error or a refused settle; without one no receipt and no cell claims it (boots paid servers - offline)
 t node scripts/test-receipt-signing.js
-# Signed receipts beyond a one-piece answer: a settled stream ends with an agent402-receipt event (and a trailer with TE: trailers) over every byte streamed, on every wire; a credits call is debited before its answer ends and its receipt names the key id and the debit; a card-bought report's receipt covers the checkout and the report text on its page and email; tamper fails (boots paid servers - offline)
+# Signed receipts beyond a one-piece answer: a settled stream ends with an agent402-receipt comment line no event parser dispatches (and a trailer with TE: trailers) over every byte streamed, on every wire; a credits call is debited before its answer ends and its receipt names the key id and the debit; a card-bought report's receipt covers the checkout and the report text on its page and email; tamper fails (boots paid servers - offline)
 t node scripts/test-receipt-streams.js
 # The audit report on a paid server with a key: one wallet's x402, MPP evm and Tempo calls each carry the receipt their header carried and verify through the public check, the summary verifies, another wallet sees none of them, EVM x402 only, and the store keeps one receipt per settled 200 (boots paid servers - offline)
 t node scripts/test-audit-report-paid.js

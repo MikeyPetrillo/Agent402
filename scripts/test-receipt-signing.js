@@ -187,13 +187,14 @@ try {
   const llms = await (await fetch(`${rig.url}/llms-full.txt`)).text();
   await ok(trust.includes(RECEIPT_HEADER) && trust.includes(RECEIPT_KEYS_PATH) && !trust.includes("no signature added by this server"), "with a key: /trust offers the signed receipt and its keys");
   await ok(llms.includes(RECEIPT_HEADER) && llms.includes(RECEIPT_VERIFY_PATH) && !llms.includes("`signedReceipt` reads false"), "with a key: llms-full.txt names the header and the check");
-  // A streamed answer's receipt follows its last byte as a server-sent event,
-  // so every surface that offers a receipt says how a stream carries it and
-  // none scopes it to answers that are not streamed.
+  // A streamed answer's receipt follows its last byte as a server-sent
+  // comment line, so every surface that offers a receipt says how a stream
+  // carries it (a comment, never an event a client would parse) and none
+  // scopes it to answers that are not streamed.
   const { readFileSync } = await import("node:fs");
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
   const scoped = [["/trust", textOf(trust)], ["llms-full.txt", llms], ["the conformance cell", row("x402:exact:eip155:8453").features.signedReceipt.detail], ["README.md", readme.split("\n").find((l) => l.includes("`Agent402-Receipt`")) || ""], ["client/README.md", readFileSync(new URL("../client/README.md", import.meta.url), "utf8").replace(/\s+/g, " ")]];
-  for (const [where, text] of scoped) await ok(/event: agent402-receipt/.test(text) && !/non-streamed|not streamed/.test(text), `${where}: a streamed answer's receipt event is described, and no answer is scoped out`);
+  for (const [where, text] of scoped) await ok(/: agent402-receipt &lt;receipt&gt;|: agent402-receipt <receipt>/.test(text) && /comment/.test(text) && !/event: agent402-receipt/.test(text) && !/non-streamed|not streamed/.test(text), `${where}: a streamed answer's receipt comment line is described, no receipt event is, and no answer is scoped out`);
   {
     const lede = ledeOf(await (await fetch(`${rig.url}/`)).text());
     const summary = (llms.match(/^> (.*)$/m) || [])[1] || "";
