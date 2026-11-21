@@ -416,6 +416,12 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
       ok(read("../src/slow-routes.js").includes(`"${t.slug}": null`), `${t.slug} is listed async-capable`);
       ok(new RegExp(`ROUTER_SLUGS = new Set\\(\\[[^\\]]*"${t.slug}"`).test(read("../src/stats.js")), `${t.slug} is in the stats router set`);
     }
+    // The catalog sweep runs every tier above the base one leniently (its
+    // example may route to an outside seller, refused where none is enabled).
+    const sweep = read("./test-all.js");
+    for (const t of EXEC_TIERS.filter((x) => x.slug !== "route-execute")) {
+      ok(sweep.includes(`"/api/route/${t.slug.replace("route-", "")}"`), `${t.slug} is in the catalog sweep's network list`);
+    }
     // The published MCP package picks the cheapest covering tier from maxUsd.
     const mcpSrc = read("../mcp/index.js");
     const ladder = mcpSrc.match(/const slug = ROUTER_TIERS\.find\(/) && mcpSrc.match(/const ROUTER_TIERS = (\[[^;]*\]);/);
