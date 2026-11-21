@@ -3,9 +3,20 @@
 // the glyph outlines as paths, so no renderer needs a font. /logo.svg serves it;
 // the favicon, the page chrome's nav and footer mark and the 512px icon PNG
 // (/favicon.png, the x402 listing icon) are the same art cropped to the mark.
+//
+// The file is read here, at import, like the fonts the brand images embed:
+// every page's chrome and four routes draw it, so a tree without it is a
+// build that must not start (the deploy keeps the previous one) rather than
+// one that answers pages 500. The error names the file, so a copy of the
+// tree made without assets/ reads as that, not as a fault of the importer.
 import { readFileSync } from "node:fs";
 
-export const LOGO_SVG = readFileSync(new URL("../assets/brand/logo.svg", import.meta.url), "utf8").trim();
+const LOGO_FILE = new URL("../assets/brand/logo.svg", import.meta.url);
+function readLogo() {
+  try { return readFileSync(LOGO_FILE, "utf8").trim(); }
+  catch (e) { throw new Error(`brand mark: assets/brand/logo.svg could not be read (${e.code || e.message}). src/brand-mark.js reads it when imported; an image or a copy of the tree must carry assets/ beside src/.`, { cause: e }); }
+}
+export const LOGO_SVG = readLogo();
 
 // The square around the glyphs and the dot, so the mark fills a small icon.
 export const MARK_VIEWBOX = "75 85 340 340";

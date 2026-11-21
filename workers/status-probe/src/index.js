@@ -29,6 +29,7 @@
 // synthetic calls a day would read as outside free-tier demand on /revenue.
 //
 // Deploy: see README.md. Requires the STATUS_PROBE_TOKEN secret.
+import { planTitleAdoption } from "./previous-issue-titles.js";
 
 const REQUIRED_NETWORK = "eip155:8453"; // Base is always expected in the offer
 const CATALOG_FLOOR = 400; // matches the heartbeat + sync-count floor
@@ -835,9 +836,17 @@ Auto-closes when nothing is owed.`,
     // A scheduled turn under contained() (containedTurns, src/contained-turn.js)
     // threw in each of the last three or more consecutive minutes: repeating
     // pages, ok clears, unknown does neither. Title matches heartbeat.yml's.
+    // The same issue carries a seller board whose rebuild is not running
+    // (boardRefresh, src/board-refresh-slots.js): stalled pages, held and
+    // unknown do neither, and the issue clears only when both words read ok
+    // (a build that has no boardRefresh word reads ok for it).
     title: "Scheduled check needs review: contained-turns",
     closeAfterTwoOk: true,
-    verdict: ({ gateway: b }) => wordVerdict(b.containedTurns?.status, ["repeating"], ["ok"]),
+    verdict: ({ gateway: b }) => {
+      const turns = wordVerdict(b.containedTurns?.status, ["repeating"], ["ok"]);
+      const boards = wordVerdict(b.boardRefresh === undefined ? "ok" : b.boardRefresh?.status, ["stalled"], ["ok"]);
+      return turns === "bad" || boards === "bad" ? "bad" : turns === "good" && boards === "good" ? "good" : "quiet";
+    },
     body: () => "/api/gateway-status reports containedTurns.status=repeating: a background turn (a drain slice, a rebuild step, a timer tick) has thrown in each of the last three or more consecutive minutes; the throw is caught and counted, so the process stays up and the work it guards is not being done. The names and counts are on the operator endpoint, /__operator/perf.json (containedTurns, operator token), and the server log carries one [contained-turn] line per name per minute. Auto-closes after two ok reads in a row.",
   },
   {
@@ -1379,6 +1388,17 @@ export async function issuesLogin(token, env = {}) {
 export const CLEARING_MARK = "First ok read at ";
 export const withClearingMark = (body, now) => `${String(body || "")}\n\n${CLEARING_MARK}${now}; closes on the next ok read.`;
 export const withoutClearingMark = (body) => { const s = String(body || ""); const i = s.indexOf(`\n\n${CLEARING_MARK}`); return i < 0 ? s : s.slice(0, i); };
+//
+// An issue still filed under a title a check carried before it was renamed
+// (./previous-issue-titles.js, the one list the workflows read too) is that
+// check's issue: it is listed under the check's current title, so a bad read
+// does not open a second issue and an ok read closes this one, and it is
+// retitled so the workflows' lookups by exact title find it as well. When the
+// check already has an issue under its current title, the older one is
+// closed. At most ADOPT_WRITES_PER_RUN writes a run (an invocation's
+// subrequests are counted); a write that fails is tried again next run, and
+// the issue is listed under the current title either way.
+export const ADOPT_WRITES_PER_RUN = 5;
 export async function openIssues(token, env = {}) {
   const self = (await issuesLogin(token, env)).toLowerCase();
   const r = await gh(`/repos/${ISSUES_REPO}/issues?state=open&per_page=100`, token);
@@ -1386,13 +1406,34 @@ export async function openIssues(token, env = {}) {
   const rows = await r.json();
   const byTitle = new Map();
   byTitle.bodies = new Map(); // title -> issue body, for the closeAfterTwoOk mark
+  const ours = [];
   for (const x of Array.isArray(rows) ? rows : []) {
     // Pull requests come back on this endpoint too; they are not alarms.
     if (!x || x.pull_request) continue;
     const author = String(x.user?.login || "").toLowerCase();
     if (author !== self && author !== WORKFLOW_BOT_LOGIN) continue;
+    ours.push(x);
     if (!byTitle.has(x.title)) { byTitle.set(x.title, x.number); byTitle.bodies.set(x.title, typeof x.body === "string" ? x.body : ""); }
   }
+  const plan = planTitleAdoption(ours.map((x) => ({ number: x.number, title: x.title, author: String(x.user?.login || "") })), { trusted: [self] });
+  let writes = 0;
+  const adopted = { retitled: [], closed: [] };
+  for (const a of plan.retitle) {
+    const x = ours.find((o) => o.number === a.number);
+    byTitle.delete(a.from); byTitle.bodies.delete(a.from);
+    byTitle.set(a.to, a.number); byTitle.bodies.set(a.to, typeof x?.body === "string" ? x.body : "");
+    if (writes >= ADOPT_WRITES_PER_RUN) continue;
+    writes++;
+    try { const w = await gh(`/repos/${ISSUES_REPO}/issues/${a.number}`, token, { method: "PATCH", body: JSON.stringify({ title: a.to }) }); if (w.ok) adopted.retitled.push(a.number); } catch { /* the next run retitles it */ }
+  }
+  for (const a of plan.close) {
+    if (byTitle.get(a.from) === a.number) { byTitle.delete(a.from); byTitle.bodies.delete(a.from); }
+    if (writes >= ADOPT_WRITES_PER_RUN) continue;
+    writes++;
+    try { const w = await gh(`/repos/${ISSUES_REPO}/issues/${a.number}`, token, { method: "PATCH", body: JSON.stringify({ state: "closed" }) }); if (w.ok) adopted.closed.push(a.number); } catch { /* the next run closes it */ }
+  }
+  if (adopted.retitled.length || adopted.closed.length) { try { console.log(JSON.stringify({ adoptedPreviousTitles: adopted })); } catch { /* logging changes nothing */ } }
+  byTitle.adopted = adopted;
   return byTitle;
 }
 

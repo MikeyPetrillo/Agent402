@@ -222,6 +222,8 @@ t node scripts/test-off-seller-route.js
 t node scripts/test-seller-tool-cap.js
 # A throw inside a scheduled turn (the drain, a shadow rebuild) or inside one seller's listing is contained: the process stays up, the other sellers answer, the counts reach the
 t node scripts/test-crash-containment.js
+# A mutation control's copy of the tree is made in one place and holds every path a src/ module reads when imported (src, scripts, assets, package.json); no suite copies src/ by hand
+t node scripts/test-module-tree-copy.js
 # Seller crawlers start on a production boot only: a CI=true FREE_MODE boot attempts no crawl request in 20 s (live control with the switches on); no workflow or test forces a crawl without a stub
 t node scripts/test-crawl-default-off.js
 # Every setImmediate/setTimeout/setInterval callback in the index module and the server runs under contained() or is allowlisted with a reason

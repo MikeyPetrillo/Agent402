@@ -174,7 +174,12 @@ const markRepeatsOfTx = db.prepare(`INSERT OR IGNORE INTO temp.sale_repeats (sal
     AND r.id > (SELECT MIN(f.id) FROM sales f WHERE f.tx = r.tx AND ${oneSaleScopeSql("f")})`);
 /** Re-read which rows under this settlement id are repeats (after a row under it was written). */
 function noteSettlementRows(tx) { if (typeof tx === "string" && tx) { unmarkRepeatsOfTx.run(tx); markRepeatsOfTx.run(tx); } }
-const qSettlementBooked = db.prepare(`SELECT 1 AS hit FROM sales f WHERE f.tx = ? AND ${oneSaleScopeSql("f")} AND f.${PUBLIC_RAIL_SQL} LIMIT 1`).pluck();
+// The writer asks this once per Solana sale, on the loop. INDEXED BY pins the
+// lookup to the settlement id: the table carries no ANALYZE statistics, and
+// left to itself the planner reads every usdc row through (rail, ts).
+const qSettlementBooked = db.prepare(`SELECT 1 AS hit FROM sales f INDEXED BY idx_sales_tx WHERE f.tx = ? AND ${oneSaleScopeSql("f")} AND f.${PUBLIC_RAIL_SQL} LIMIT 1`).pluck();
+/** The plan of the writer's settlement lookup, for scripts/test-sale-repeats.js. */
+export function settlementBookedPlan() { return db.prepare(`EXPLAIN QUERY PLAN ${qSettlementBooked.source}`).all("x").map((r) => r.detail); }
 const qRepeatRowCount = db.prepare("SELECT COUNT(*) FROM temp.sale_repeats").pluck();
 let repeatSalesRefused = 0;
 /** A second sale for a settlement that already holds one is not written; counted and logged (slug and network only). */

@@ -15,7 +15,7 @@
 import { Resolver, promises as dnsPromises } from "node:dns";
 import { validateAgentCard, A2A_WELL_KNOWN_PATHS } from "./a2a-card.js";
 import { assertQueryableName, canonicalDnsName } from "./dns-name-filter.js";
-import { dnsLookup } from "./dns.js";
+import { dnsLookup, SUPPORTED as DNS_RECORD_TYPES } from "./dns.js";
 import { markEndsAtCeiling } from "../run-ceiling.js";
 
 function bad(message, statusCode = 400) {
@@ -245,7 +245,7 @@ export const NETWORK_TOOLS = [
       inputSchema: {
         properties: {
           name: { type: "string", description: "Domain name, e.g. example.com" },
-          type: { type: "string", maxLength: 4, description: "Record type (default A)" },
+          type: { type: "string", enum: [...DNS_RECORD_TYPES], description: "Record type (default A)" },
         },
         required: ["name"],
       },

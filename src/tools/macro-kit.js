@@ -856,7 +856,7 @@ async function fredGetJsonOnce(url, extraHeaders = {}, timeoutMs = 15_000) {
 const FRED_UNITS = new Set(["lin", "chg", "ch1", "pch", "pc1", "pca", "cca", "log"]);
 // Likewise for frequency aggregation (daily series rolled up to weekly,
 // monthly, quarterly, etc.).
-const FRED_FREQ = new Set(["d", "w", "bw", "m", "q", "sa", "a", "wef", "weth", "wew", "wetu", "wem", "wesu", "wesa", "bwew", "bwem"]);
+export const FRED_FREQ = new Set(["d", "w", "bw", "m", "q", "sa", "a", "wef", "weth", "wew", "wetu", "wem", "wesu", "wesa", "bwew", "bwem"]);
 
 async function fredObservations({ seriesId, startDate, endDate, limit, units, frequency, latest = false }) {
   const key = requireFredKey();
@@ -887,12 +887,14 @@ async function fredObservations({ seriesId, startDate, endDate, limit, units, fr
   return obs;
 }
 
-// --- third-party series ---------------------------------------------------------
-// FRED's Terms of Use: a series whose notes carry a copyright notice is owned
-// by a third party, and using it beyond personal use needs that owner's
-// permission. fred-series and fred-release-observations therefore read a
-// series' notes before they serve its observations and refuse one that carries
-// such a notice, naming the owner the notice names. Series published by U.S.
+// --- series with a copyright notice ---------------------------------------------
+// FRED's Terms of Use: a series whose notes carry a copyright notice needs
+// the copyright owner's permission for use beyond personal use.
+// fred-series and fred-release-observations therefore read a series' notes
+// before they serve its observations and refuse one that carries such a
+// notice. What is known here is the notice, read from the notes by a text
+// rule: the refusal says the series carries a notice and quotes the name the
+// notice gives, and never states who owns the series. Series published by U.S.
 // government agencies and the Federal Reserve carry none. A verdict is kept
 // in this process (a series' notes change rarely), so a series is screened
 // with one metadata read and then none for FRED_SCREEN_TTL_MS.
@@ -902,6 +904,16 @@ export const FRED_SCREEN_MAX_ENTRIES = 5_000;
 // no verdict for; the rest are held back and named, and the next call goes on
 // from the verdicts kept.
 export const FRED_SCREEN_READS_PER_CALL = 40;
+// and for at most this long: a read that has not started by then is left for
+// the next call, so slow metadata reads cannot hold a release answer.
+export const FRED_SCREEN_BUDGET_MS = 8_000;
+let fredScreenBudgetMs = FRED_SCREEN_BUDGET_MS;
+/** Test seam: the screening time of one call (no argument restores the default). */
+export function _setFredScreenBudgetForTest(ms = FRED_SCREEN_BUDGET_MS) { fredScreenBudgetMs = ms; }
+// Why a series is in `withheld`: the notice in its notes, or the copyright
+// mark FRED's release answer carries for it.
+export const FRED_WITHHELD_NOTICE = "carries a copyright notice in its FRED notes";
+export const FRED_WITHHELD_MARKED = "carries FRED's copyright mark";
 const FRED_SCREEN_CONCURRENCY = 8;
 const fredScreen = new Map(); // seriesId -> { at, owner: string|null, copyrighted: boolean }
 /** Test seam: forget every screening verdict. */
@@ -959,12 +971,12 @@ async function fredScreenSeries(seriesId) {
   return fredScreenKeep(seriesId, verdictOfNotes(s.notes));
 }
 
-const FRED_OWNED_REASON = "its notes carry a copyright notice, and FRED's Terms of Use require the owner's permission to use such a series here";
-/** The 400 for a series a third party owns: the owner and the reason. A 4xx
- *  is never charged. */
+const FRED_NOTICE_REASON = "FRED's Terms of Use require the copyright owner's permission to use such a series here";
+/** The 400 for a series whose notes carry a copyright notice: the name the
+ *  notice gives and the reason. A 4xx is never charged. */
 function fredOwnedError(seriesId, owner) {
   return Object.assign(
-    bad(`FRED series ${seriesId} is owned by ${owner || "a third party"} and is not served here: ${FRED_OWNED_REASON}. Series published by U.S. government agencies and the Federal Reserve (for example GDPC1, CPIAUCSL, UNRATE, FEDFUNDS) are served. Terms: ${FRED_TERMS_URL}`),
+    bad(`FRED series ${seriesId} carries a copyright notice${owner ? ` (${owner})` : ""} in its FRED notes and is not served here: ${FRED_NOTICE_REASON}. Series published by U.S. government agencies and the Federal Reserve (for example GDPC1, CPIAUCSL, UNRATE, FEDFUNDS) are served. Terms: ${FRED_TERMS_URL}`),
     { thirdPartySeries: true, owner: owner || null, termsOfUse: FRED_TERMS_URL },
   );
 }
@@ -973,7 +985,7 @@ MACRO_TOOLS.push(
   {
     route: "GET /api/fred-series", name: "FRED time series", slug: "fred-series", category: "data", attribution: "fred", price: "$0.001",
     description:
-      "Fetch a FRED economic time series by series ID - GDP (GDPC1), CPI (CPIAUCSL), unemployment (UNRATE), fed funds (DFF), and so on, from FRED's ~800,000. Supports date windowing and the standard FRED units transformations (lin, chg, ch1, pch, pc1, pca, cca, log). ?seriesId=GDPC1&startDate=2018-01-01&endDate=2023-12-31&units=pc1. A series a third party owns (a copyright notice in its FRED notes) is refused with a 400 that names the owner; series from U.S. government agencies and the Federal Reserve are served. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+      "Fetch a FRED economic time series by series ID - GDP (GDPC1), CPI (CPIAUCSL), unemployment (UNRATE), fed funds (DFF), and so on, from FRED's ~800,000. Supports date windowing and the standard FRED units transformations (lin, chg, ch1, pch, pc1, pca, cca, log). ?seriesId=GDPC1&startDate=2018-01-01&endDate=2023-12-31&units=pc1. A series that carries a copyright notice in its FRED notes is refused with a 400 that quotes the name the notice gives; series from U.S. government agencies and the Federal Reserve are served. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fred", "series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed", "macro", "economic-data", "st-louis-fed"],
     discovery: {
       input: { seriesId: "GDPC1", startDate: "2018-01-01", endDate: "2022-12-31" },
@@ -983,8 +995,8 @@ MACRO_TOOLS.push(
           startDate: { type: "string", description: "ISO start date (YYYY-MM-DD), optional" },
           endDate: { type: "string", description: "ISO end date (YYYY-MM-DD), optional" },
           limit: { type: "number", description: "Max observations, 1-100000 (default 1000)" },
-          units: { type: "string", description: "Transformation: lin, chg, ch1, pch, pc1 (YoY %), pca, cca, log" },
-          frequency: { type: "string", maxLength: 1, description: "Aggregate to d/w/m/q/sa/a, etc. (optional)" },
+          units: { type: "string", enum: [...FRED_UNITS], description: "Transformation: lin, chg, ch1, pch, pc1 (YoY %), pca, cca, log" },
+          frequency: { type: "string", enum: [...FRED_FREQ], description: "Aggregate to a lower frequency: d, w, bw, m, q, sa, a, or a FRED week-ending code such as wef (optional)" },
         },
         required: ["seriesId"],
       },
@@ -1003,7 +1015,7 @@ MACRO_TOOLS.push(
       const frequency = i.frequency ? String(i.frequency).trim().toLowerCase() : undefined;
       if (frequency && !FRED_FREQ.has(frequency)) throw bad(`"frequency" must be one of: ${[...FRED_FREQ].join(", ")}`);
       // The series' notes are read first (kept verdicts cost no read): a
-      // series a third party owns is refused before its observations are read.
+      // series whose notes carry a copyright notice is refused before its observations are read.
       const verdict = await fredScreenSeries(seriesId);
       if (verdict.copyrighted) throw fredOwnedError(seriesId, verdict.owner);
       const observations = await fredObservations({ seriesId, startDate, endDate, limit, units, frequency });
@@ -1239,7 +1251,7 @@ MACRO_TOOLS.push(
     // Full release list: https://fred.stlouisfed.org/releases
     route: "GET /api/fred-release-observations", name: "FRED bulk release observations (v2)", slug: "fred-release-observations", category: "data", attribution: "fred", price: "$0.005",
     description:
-      "Bulk-fetch observations for every series in a FRED release in one call. Use it to grab an entire economic report (jobs report, CPI report, GDP release) without enumerating constituent series IDs first. Returns paginated; pass lastSeriesId + lastObservationDate back to fetch the next page. ?releaseId=18 for H.15 (Selected Interest Rates), 10 for CPI, 50 for Employment Situation, 53 for GDP. Series a third party owns (a copyright notice in the series notes) are held back and named in withheld with their owner, and matched, returned, complete and truncated say when a page is not whole. Source: FRED API v2 /release/observations endpoint. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+      "Bulk-fetch observations for every series in a FRED release in one call. Use it to grab an entire economic report (jobs report, CPI report, GDP release) without enumerating constituent series IDs first. Returns paginated; pass lastSeriesId + lastObservationDate back to fetch the next page. ?releaseId=18 for H.15 (Selected Interest Rates), 10 for CPI, 50 for Employment Situation, 53 for GDP. Series that carry a copyright notice in their FRED notes are held back and named in withheld with the name the notice gives, and matched, returned, complete and truncated say when a page is not whole. Source: FRED API v2 /release/observations endpoint. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fred", "release", "bulk", "observations", "v2", "cpi", "jobs", "gdp", "h15", "interest-rates", "employment", "macro", "economic-data"],
     discovery: {
       input: { releaseId: 18, startDate: "2026-05-01", endDate: "2026-06-01" },
@@ -1277,8 +1289,9 @@ MACRO_TOOLS.push(
       // Each series is screened before it is served: by the notes the release
       // answer carries for it when it carries any, else by the kept verdict,
       // else by one metadata read, at most FRED_SCREEN_READS_PER_CALL of those
-      // a call. A series a third party owns is held back and named with its
-      // owner; one this call could not screen is held back and counted.
+      // a call, inside FRED_SCREEN_BUDGET_MS. A series that carries a copyright
+      // notice is held back and named with the name the notice gives; one this
+      // call could not screen is held back and counted (`unscreened`).
       const all = Array.isArray(j?.series) ? j.series : [];
       const verdicts = new Map();
       const toRead = [];
@@ -1286,13 +1299,16 @@ MACRO_TOOLS.push(
         const id = String(s?.series_id ?? "");
         if (!id || verdicts.has(id)) continue;
         if (typeof s.notes === "string") verdicts.set(id, fredScreenKeep(id, verdictOfNotes(s.notes)));
-        else if (s.copyright_id != null) verdicts.set(id, fredScreenKeep(id, { copyrighted: true, owner: null }));
+        else if (s.copyright_id != null) verdicts.set(id, fredScreenKeep(id, { copyrighted: true, owner: null, marked: true }));
         else { const kept = fredScreenKept(id); if (kept) verdicts.set(id, kept); else toRead.push(id); }
       }
       const reading = toRead.slice(0, FRED_SCREEN_READS_PER_CALL);
       let next = 0;
+      // No read starts once the screening has used its time: what is left is
+      // not screened this call, counted in `unscreened`, and read on the next.
+      const screenUntil = Date.now() + fredScreenBudgetMs;
       await Promise.all(Array.from({ length: Math.min(FRED_SCREEN_CONCURRENCY, reading.length) }, async () => {
-        while (next < reading.length) {
+        while (next < reading.length && Date.now() < screenUntil) {
           const id = reading[next++];
           try { verdicts.set(id, await fredScreenSeries(id)); } catch { /* not screened: held back below */ }
         }
@@ -1302,14 +1318,14 @@ MACRO_TOOLS.push(
       const served = all.filter((s) => {
         const v = verdicts.get(String(s?.series_id ?? ""));
         if (!v) { unscreened++; return false; }
-        if (v.copyrighted) { withheld.push({ seriesId: s.series_id, owner: v.owner, reason: "third-party copyright" }); return false; }
+        if (v.copyrighted) { withheld.push({ seriesId: s.series_id, owner: v.owner, reason: v.marked ? FRED_WITHHELD_MARKED : FRED_WITHHELD_NOTICE }); return false; }
         return true;
       });
       if (all.length && !served.length) {
         if (!unscreened) {
           const owners = [...new Set(withheld.map((w) => w.owner).filter(Boolean))].slice(0, 5);
           throw Object.assign(
-            bad(`Every series on this page of FRED release ${releaseId} is owned by a third party${owners.length ? ` (${owners.join("; ")})` : ""} and is not served here: ${FRED_OWNED_REASON}. Terms: ${FRED_TERMS_URL}`),
+            bad(`Every series on this page of FRED release ${releaseId} carries a copyright notice${owners.length ? ` (${owners.join("; ")})` : ""} in its FRED notes${withheld.some((w) => w.reason === FRED_WITHHELD_MARKED) ? " or FRED's copyright mark" : ""} and is not served here: ${FRED_NOTICE_REASON}. Terms: ${FRED_TERMS_URL}`),
             { thirdPartySeries: true, termsOfUse: FRED_TERMS_URL },
           );
         }
@@ -1336,7 +1352,7 @@ MACRO_TOOLS.push(
           lastSeriesId: j?.last_series_id ?? j?.cursor?.last_series_id ?? null,
           lastObservationDate: j?.last_observation_date ?? j?.cursor?.last_observation_date ?? null,
         },
-        // Held back, in fields: series a third party owns, and series this
+        // Held back, in fields: series that carry a copyright notice, and series this
         // call did not screen (send the same request again to go on).
         ...(withheld.length ? { withheld } : {}),
         ...(unscreened ? { unscreened, unscreenedNote: "This many series on the page were not screened inside this call and are held back; send the same request again to go on." } : {}),

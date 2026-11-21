@@ -59,6 +59,15 @@ jobs:
           set -e
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           exit 0
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Alert (open issue) or clear (close issue)
         # One issue per episode, auto-closed by the next passing run. Exit 2
         # (refused to start) pages too: a silent skip is how alarms die.

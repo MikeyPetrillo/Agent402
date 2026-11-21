@@ -26,11 +26,12 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { childJson } from "./lib/child-json.js";
 import { spawn, spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ownStoreEnv } from "./lib/own-stores.js";
+import { copyModuleTree } from "./lib/tree-copy.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -345,14 +346,9 @@ ok(!/\[uncaughtException\]/.test(stderr), "the server never logged an uncaught e
 }
 
 // --- 3. the control: the same poison against copies with the containment removed
-// A copy of the module tree (never the working tree): src/, the scripts the
-// revenue readers import, package.json, and node_modules linked.
-const copy = join(dir, "copy");
-mkdirSync(copy);
-cpSync(SRC, join(copy, "src"), { recursive: true });
-cpSync(join(ROOT, "scripts"), join(copy, "scripts"), { recursive: true });
-cpSync(join(ROOT, "package.json"), join(copy, "package.json"));
-symlinkSync(realpathSync(join(ROOT, "node_modules")), join(copy, "node_modules"));
+// A copy of the module tree (never the working tree): every path a module in
+// src/ reads when imported, and node_modules linked (scripts/lib/tree-copy.js).
+const copy = copyModuleTree(ROOT, join(dir, "copy"));
 const INDEX_COPY = join(copy, "src", "x402-index.js");
 const original = readFileSync(INDEX_COPY, "utf8");
 function mutate(pairs) {

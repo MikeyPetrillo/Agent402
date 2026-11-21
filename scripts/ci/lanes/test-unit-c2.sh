@@ -45,6 +45,8 @@ t node scripts/test-feature-flags.js
 t node scripts/test-agentcore-page.js
 # Every issue a scheduled check opens is the fixed neutral title and body, in every workflow and the status Worker (offline)
 t node scripts/test-monitor-issue-wording.js
+# An open issue a check filed under its previous title gets the current one before any lookup: one list, the adoption script against a stand-in gh, the step in every job that looks an issue up (offline)
+t node scripts/test-issue-title-adoption.js
 # Router benchmarks: aggregates over the reputation records, no seller named, nothing under five sellers, no purchase count (offline, port 0)
 t node scripts/test-router-benchmarks.js
 # Price webhooks: input rules, bounds, price comparison, signed delivery, retries, the fetch guard, the served tool and its removal route (offline, port 0)

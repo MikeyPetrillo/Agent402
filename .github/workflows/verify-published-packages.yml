@@ -46,6 +46,15 @@ jobs:
       - name: Install from the registry and drive live prod
         run: node scripts/verify-published-packages.js
 
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Page on failure / recover on success
         if: always() && github.event_name == 'schedule'
         env:

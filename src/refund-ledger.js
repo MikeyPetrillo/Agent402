@@ -46,7 +46,7 @@
 // (reconcileFile: insert-if-absent by evidence, forward-only status). A debt
 // Postgres refuses is kept in a local dead-letter and replayed.
 import Database from "better-sqlite3";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady } from "./state-db.js";
@@ -872,13 +872,23 @@ export const RESEND_ANSWER_SENT = "answer sent";
  * over a still-owed row is taken back and a row voided under this void's own
  * note is owed again. A retry that arrives first lands the undo ahead of its
  * own void (every write drains the dead-letter first) and is served.
+ *
+ * Each call's void carries a mark of its own after the note (" [attempt
+ * <8 hex>]"), and its undo matches that exact note. Two resends of one
+ * payment that arrive together both read the row owed and would otherwise
+ * write the same note: when one void is confirmed (its answer goes out) and
+ * the other's write fails, the second's undo would find the first's void
+ * under "its" note and put a served row back to owed. With the mark, an undo
+ * takes back only the void its own call wrote. `attempt` is a test seam.
  * File mode: one synchronous statement, which lands or throws.
  */
-export function voidOwedOnResend(evidence, note) {
+const RESEND_ATTEMPT_RE = / \[attempt [0-9a-f]{8}\]$/;
+export function voidOwedOnResend(evidence, note, { attempt = null } = {}) {
   if (typeof evidence !== "string" || !evidence.trim() || !note || typeof note !== "string" || !note.trim()) return refuse();
   evidence = evidenceKey(evidence);
   if (!USE_PG) return voidOwedOnClaim(evidence, note);
-  const ev = evidence.trim(), n = noNul(note.trim());
+  const id = typeof attempt === "string" && /^[0-9a-f]{8}$/.test(attempt) ? attempt : randomBytes(4).toString("hex");
+  const ev = evidence.trim(), n = `${noNul(note.trim())} [attempt ${id}]`;
   const prior = String(refundByEvidence(ev)?.note || "") || null;
   const full = prior ? `${prior}; ${n}` : n;
   return writer.write("void-on-resend", async () => {
@@ -893,7 +903,10 @@ export function voidOwedOnResend(evidence, note) {
  *  True when the note was rewritten; database mode: a Promise of it. */
 export function noteResendAnswerSent(evidence, row, note) {
   const held = typeof row?.note === "string" ? row.note : "";
-  if (row?.status !== "void" || !note || !(held === note || held.endsWith(`; ${note}`))) return refuse();
+  // The note as the resend's void wrote it: with its attempt mark, or
+  // without one (a row voided by a build that wrote none, or in file mode).
+  const base = held.replace(RESEND_ATTEMPT_RE, "");
+  if (row?.status !== "void" || !note || !(base === note || base.endsWith(`; ${note}`))) return refuse();
   return renoteVoidRefund(evidence, held, `${held}; ${RESEND_ANSWER_SENT}`);
 }
 

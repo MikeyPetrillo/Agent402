@@ -113,6 +113,15 @@ jobs:
           . scripts/heartbeat-probe.sh
           record_observation "$STATUS" "$FAILS"
 
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       # Paywall not observed (the fallback): this run's paywall read is signed
       # with X-Heartbeat-Token, so the unpaid-quote budget never refuses it;
       # paywall_unknown=1 means it was refused anyway (POW_SECRET missing, or a
@@ -1814,8 +1823,20 @@ jobs:
         if: always()
         continue-on-error: true
         run: |
-          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.containedTurns.status // "unknown"' 2>/dev/null || echo unknown)
-          echo "containedTurns: $WORD"
+          # Two words, one issue: a scheduled turn that keeps throwing
+          # (containedTurns=repeating) and a seller board whose rebuild is not
+          # running (boardRefresh=stalled). Either pages; the issue clears only
+          # when both read ok (a build with no boardRefresh word reads ok for
+          # it); held and unknown do neither.
+          DOC=$(curl -s --max-time 15 "$PROD/api/gateway-status" || true)
+          TURNS=$(printf '%s' "$DOC" | jq -r '.containedTurns.status // "unknown"' 2>/dev/null || echo unknown)
+          BOARDS=$(printf '%s' "$DOC" | jq -r '.boardRefresh.status // (if has("boardRefresh") then "unknown" else "ok" end)' 2>/dev/null || echo unknown)
+          echo "containedTurns: $TURNS boardRefresh: $BOARDS"
+          case "$TURNS:$BOARDS" in
+            repeating:*|*:stalled) WORD=repeating ;;
+            ok:ok) WORD=ok ;;
+            *) WORD=unknown ;;
+          esac
           TITLE="Scheduled check needs review: contained-turns"
           # The mark counts only on its own line after a blank line, where
           # the status Worker writes and reads it.

@@ -54,6 +54,15 @@ jobs:
           POW_SECRET: ${{ secrets.POW_SECRET }}
         run: node scripts/tempo-subscription-canary.js
 
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       # Heartbeat-style paging: one issue per episode, closed by a green run.
       # `always()` so a FAILED canary still reaches this step - a paging step
       # that only runs on success is the class of bug that let the paid canary

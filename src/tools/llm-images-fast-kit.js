@@ -712,7 +712,7 @@ export const IMAGES_FAST_TOOLS = [
       input: { prompt: "A paper boat drifting down a rain-soaked gutter, close up, cinematic", aspect_ratio: "16:9" },
       inputSchema: {
         properties: {
-          prompt: { type: "string", description: `Text description of the clip (up to ${VIDEOS_MAX_PROMPT_CHARS.toLocaleString()} chars)` },
+          prompt: { type: "string", maxLength: VIDEOS_MAX_PROMPT_CHARS, description: `Text description of the clip (up to ${VIDEOS_MAX_PROMPT_CHARS.toLocaleString()} chars)` },
           aspect_ratio: { type: "string", enum: VIDEOS_ASPECT_RATIOS, description: "16:9 (default, 1280x720) or 9:16 (720x1280)" },
         },
         required: ["prompt"],

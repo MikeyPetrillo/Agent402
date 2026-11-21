@@ -88,6 +88,44 @@ const key = (suffix) => `replay-guard-redis-test:${runId}:${suffix}`;
   ok(ttl > 0 && ttl <= 5, `the consumed Redis key's TTL matches ttlMs (got ${ttl}s, expect 0 < ttl <= 5)`);
 }
 
+// --- 4b. Every consumed mark expires: its TTL is its hold, never a persistent key
+// A settled payment's mark is held while its authorization stays valid, which
+// a client can sign a century out. Whatever the hold, the key is written with
+// an expiry equal to it (TTL -1 would be a key the store keeps for good), and
+// so is its twin under the earlier key name.
+{
+  const R = await import("../src/replay-guard.js");
+  const fakeReq = (cred) => ({ header: (n) => (String(n).toLowerCase() === "x-payment" ? cred : undefined) });
+  const HOUR_S = R.SETTLED_HOLD_MS / 1000, MARGIN_S = R.CONSUMED_VALIDITY_MARGIN_MS / 1000;
+  const cases = [
+    // [label, validBefore from now (s) or null, settled, the mark's hold (s), the twin's hold (s)]
+    ["settled, no validBefore", null, true, HOUR_S, HOUR_S],
+    ["settled, valid three more hours", 3 * 3600, true, 3 * 3600 + MARGIN_S, 3 * 3600 + MARGIN_S],
+    ["settled, valid for 90 days", 90 * 86_400, true, 90 * 86_400 + MARGIN_S, R.MAX_SETTLED_VALIDITY_HOLD_MS / 1000],
+    ["settled, signed valid for centuries", 300 * 365 * 86_400, true, R.MAX_SETTLED_MARK_HOLD_MS / 1000, R.MAX_SETTLED_VALIDITY_HOLD_MS / 1000],
+    ["granted and not settled, valid three more hours", 3 * 3600, false, 3 * 3600 + MARGIN_S, 3 * 3600 + MARGIN_S],
+    ["settled, already expired", -3600, true, HOUR_S, HOUR_S],
+  ];
+  let n = 0;
+  for (const [label, validForS, settled, holdS, twinS] of cases) {
+    const cred = Buffer.from(JSON.stringify({ network: "eip155:8453", payload: { authorization: { nonce: `0x${runId}${++n}`, from: "0x" + "2".repeat(40) } } })).toString("base64");
+    const rk = paymentReplayKey(fakeReq(cred));
+    const m = /^n2:([0-9a-f]{64}):([0-9a-f]{64})$/.exec(rk);
+    const guard = createReplayGuard();
+    await guard.begin(rk);
+    const now = Date.now();
+    await guard.settle(rk, now, { validBeforeMs: validForS === null ? null : now + validForS * 1000, settled });
+    const ttl = await client.ttl(`replay:c:n2:${m[1]}`), twin = await client.ttl(`replay:c:n:${m[2]}`);
+    const near = (got, want) => got > 0 && got <= want + 1 && got >= want - 10;
+    ok(ttl !== -1 && twin !== -1 && near(ttl, holdS) && near(twin, twinS), `${label}: the mark's TTL is its hold and so is its twin's, neither key persistent (mark ${ttl} s of ${holdS}, twin ${twin} s of ${twinS})`);
+  }
+  // The store's own answer for a key with no expiry, so the check above can fail.
+  const bare = `replay-guard-redis-test:${runId}:no-expiry`;
+  await client.set(bare, "1");
+  ok(await client.ttl(bare) === -1, "control: a key written with no expiry reads TTL -1 on this store");
+  await client.del(bare);
+}
+
 // --- 5. Full paymentReplayKey() -> guard round trip, matching server.js's
 // real usage shape (not a synthetic string key). ----------------------------
 {

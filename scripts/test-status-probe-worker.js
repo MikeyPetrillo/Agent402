@@ -510,9 +510,9 @@ for (const [name, over, detail] of failCases) {
   const withGateway = (over) => ({ gateway: { ...HEALTHY_GATEWAY, ...over }, status: HEALTHY_STATUS });
   const ENV = { GITHUB_ISSUES_TOKEN: "t" };
   const realFetch = globalThis.fetch;
-  let created, closed, comments, calls;
+  let created, closed, comments, calls, patched;
   const mkGh = (openIssues = []) => {
-    created = []; closed = []; comments = []; calls = [];
+    created = []; closed = []; comments = []; calls = []; patched = [];
     globalThis.fetch = async (url, init = {}) => {
       const u = String(url); const m = (init.method || "GET").toUpperCase();
       calls.push(`${m} ${u.replace("https://api.github.com", "")}`);
@@ -521,7 +521,7 @@ for (const [name, over, detail] of failCases) {
       if (u.includes("/issues?state=open")) return Response.json(openIssues.map((x) => ({ user: { login: "probe-bot" }, ...x })));
       if (m === "POST" && /\/issues$/.test(u)) { created.push(JSON.parse(init.body)); return new Response("{}", { status: 201 }); }
       if (m === "POST" && /\/comments$/.test(u)) { comments.push(JSON.parse(init.body)); return new Response("{}", { status: 201 }); }
-      if (m === "PATCH" && /\/issues\/\d+$/.test(u)) { closed.push(u); return new Response("{}", { status: 200 }); }
+      if (m === "PATCH" && /\/issues\/\d+$/.test(u)) { closed.push(u); patched.push({ number: Number(u.split("/").pop()), ...JSON.parse(init.body) }); return new Response("{}", { status: 200 }); }
       return new Response("{}", { status: 200 });
     };
   };
@@ -570,6 +570,51 @@ for (const [name, over, detail] of failCases) {
     const r = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(HEALTHY) });
     assert.deepEqual(r.closed, ["Scheduled check needs review: buyer-wallet"]);
     assert.ok(closed[0].endsWith("/issues/78"));
+  });
+
+  // An issue opened before the titles were renamed is still the check's
+  // issue (workers/status-probe/src/previous-issue-titles.js).
+  const OLD_BUYER = "Upstream buyer wallet LOW (x402)", NEW_BUYER = "Scheduled check needs review: buyer-wallet";
+  await acheck("an open issue under a check's previous title is the check's: a bad read opens no second issue and the issue is retitled", async () => {
+    mkGh([{ number: 81, title: OLD_BUYER, user: { login: "github-actions[bot]" } }]);
+    const low = withGateway({ upstreamBuyer: { status: "low", trend: "ok" } });
+    const r = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(low, low) });
+    assert.deepEqual(r.opened, []);
+    assert.equal(created.length, 0, `created: ${JSON.stringify(created)}`);
+    assert.deepEqual(patched, [{ number: 81, title: NEW_BUYER }]);
+  });
+  await acheck("an ok read closes the issue filed under the previous title", async () => {
+    mkGh([{ number: 82, title: OLD_BUYER }]);
+    const r = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(HEALTHY) });
+    assert.deepEqual(r.closed, [NEW_BUYER]);
+    assert.ok(patched.some((x) => x.number === 82 && x.title === NEW_BUYER), `retitled: ${JSON.stringify(patched)}`);
+    assert.ok(patched.some((x) => x.number === 82 && x.state === "closed"), `closed: ${JSON.stringify(patched)}`);
+  });
+  await acheck("a previous-title issue whose check already has a current one is closed, and the current one stays the check's", async () => {
+    mkGh([{ number: 83, title: OLD_BUYER }, { number: 84, title: NEW_BUYER }]);
+    const low = withGateway({ upstreamBuyer: { status: "low", trend: "ok" } });
+    const r = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(low, low) });
+    assert.deepEqual(r.opened, []);
+    assert.deepEqual(patched, [{ number: 83, state: "closed" }]);
+  });
+  await acheck("a stranger's issue under a previous title is left alone: not retitled, not closed, and it suppresses no page", async () => {
+    mkGh([{ number: 85, title: OLD_BUYER, user: { login: "someone-else" } }]);
+    const low = withGateway({ upstreamBuyer: { status: "low", trend: "ok" } });
+    const r = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(low, low) });
+    assert.deepEqual(r.opened, [NEW_BUYER]);
+    assert.deepEqual(patched, []);
+  });
+  await acheck("a retitle GitHub refuses still leaves the issue the check's for this run, and at most ADOPT_WRITES_PER_RUN writes are made", async () => {
+    const { openIssues, ADOPT_WRITES_PER_RUN } = await import("../workers/status-probe/src/index.js");
+    const { PREVIOUS_TITLES, TITLE_PREFIX } = await import("../workers/status-probe/src/previous-issue-titles.js");
+    const many = Object.entries(PREVIOUS_TITLES).slice(0, ADOPT_WRITES_PER_RUN + 3).map(([check, olds], i) => ({ number: 300 + i, title: olds[0], check }));
+    mkGh(many);
+    const inner = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => ((init.method || "GET").toUpperCase() === "PATCH" ? (calls.push(`PATCH ${url}`), new Response("{}", { status: 422 })) : inner(url, init));
+    const open = await openIssues("t", {});
+    assert.equal(calls.filter((c) => c.startsWith("PATCH")).length, ADOPT_WRITES_PER_RUN);
+    for (const x of many) assert.equal(open.get(TITLE_PREFIX + x.check), x.number, `${x.check} is listed under its current title`);
+    assert.ok(!many.some((x) => open.has(x.title)), "no previous title is left in the list");
   });
 
   await acheck("an issue another account opened under an alarm title is not an alarm: never closed, never suppresses a page", async () => {

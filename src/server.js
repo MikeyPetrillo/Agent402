@@ -587,7 +587,7 @@ import { partialFields } from "./partial-answer.js";
 import { crawlSwitch } from "./crawl-switch.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
-import { addBoardRefreshQuietCheck } from "./board-refresh-slots.js";
+import { addBoardRefreshQuietCheck, boardRefreshStatus } from "./board-refresh-slots.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode, tempoRefusalProblem } from "./mpp-tempo.js";
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
@@ -4747,6 +4747,13 @@ app.get("/api/gateway-status", async (req, res) => {
     // consecutive minutes; the names are on the operator view and the counts
     // on /__operator/perf.json.
     containedTurns: (() => { try { return containedTurnsStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // boardRefresh reads ok / held / stalled: a seller board's rebuild gave an
+    // attempt up while the heap was high (held; it tries again every hour),
+    // has given up three in a row, or passed its run bound with none finished
+    // since (stalled; src/board-refresh-slots.js). In memory: a restart reads
+    // ok. Paged with containedTurns, as one issue. One word publicly; each
+    // board's counts for the operator.
+    boardRefresh: (() => { try { return boardRefreshStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // brokenListings reads ok / widespread: inside a rolling window (15
     // minutes) the distinct seller origins whose listings broke while they
     // were read (a statics or decoration throw, src/x402-index.js) reach both

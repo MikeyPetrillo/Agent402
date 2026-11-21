@@ -11,7 +11,7 @@
 //      is all third-party series.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { stubGuardResolver, offlineGuardAnswer } from "./lib/guard-resolver-stub.js";
-import { MACRO_TOOLS, fredCopyrightOf, _resetFredScreenForTest, FRED_SCREEN_READS_PER_CALL } from "../src/tools/macro-kit.js";
+import { MACRO_TOOLS, fredCopyrightOf, _resetFredScreenForTest, _setFredScreenBudgetForTest, FRED_SCREEN_READS_PER_CALL, FRED_SCREEN_BUDGET_MS } from "../src/tools/macro-kit.js";
 import { FRED_TERMS, FRED_TERMS_URL } from "../src/data-attribution.js";
 
 let fail = 0, pass = 0;
@@ -46,8 +46,8 @@ ok(FRED_TERMS.includes(FRED_TERMS_URL) && FRED_TERMS_URL === "https://fred.stlou
 ok(fredTools.every((t) => t.discovery.output.example.terms === FRED_TERMS), `every FRED tool's published example carries the terms line (missing: ${fredTools.filter((t) => t.discovery.output.example.terms !== FRED_TERMS).map((t) => t.slug).join(", ") || "none"})`);
 ok(MACRO_TOOLS.filter((t) => t.attribution !== "fred").every((t) => !("terms" in (t.discovery?.output?.example || {}))), "a tool on another source carries no FRED terms line");
 
-ok(/third party owns/.test(tool("fred-series").description) && /400/.test(tool("fred-series").description) && !/\bany of FRED/.test(tool("fred-series").description), "fred-series: the description says a third-party series is refused");
-ok(/withheld/.test(tool("fred-release-observations").description) && /third party owns/.test(tool("fred-release-observations").description), "fred-release-observations: the description says third-party series are held back");
+ok(/carries a copyright notice in its FRED notes is refused/.test(tool("fred-series").description) && !/third party owns|owned by/.test(tool("fred-series").description) && /400/.test(tool("fred-series").description) && !/\bany of FRED/.test(tool("fred-series").description), "fred-series: the description says a third-party series is refused");
+ok(/withheld/.test(tool("fred-release-observations").description) && /carry a copyright notice in their FRED notes/.test(tool("fred-release-observations").description) && !/third party owns|owned by/.test(tool("fred-release-observations").description), "fred-release-observations: the description says third-party series are held back");
 
 // --- stubbed FRED ----------------------------------------------------------------
 const realFetch = globalThis.fetch;
@@ -98,6 +98,9 @@ try {
   ok(e1?.statusCode === 400, `fred-series: a series whose notes carry a copyright notice is a 400 (got ${e1?.statusCode})`);
   ok(/S&P Dow Jones Indices LLC/.test(e1?.message || "") && /copyright notice/.test(e1?.message || "") && /owner's permission/.test(e1?.message || "") && e1.message.includes(FRED_TERMS_URL), `fred-series: the refusal names the owner, the reason and the terms (${e1?.message})`);
   ok(e1?.thirdPartySeries === true && e1.owner === "S&P Dow Jones Indices LLC", "fred-series: the refusal is marked with the owner");
+  // What is known is the notice in the notes, read by a text rule: the words
+  // say the series carries a notice and quote its name, never who owns it.
+  ok(e1.message.startsWith("FRED series SP500 carries a copyright notice (S&P Dow Jones Indices LLC) in its FRED notes and is not served here: ") && !/\bis owned by\b|\bowned by\b/.test(e1.message), `fred-series: the refusal says the series carries a copyright notice in its FRED notes, with the name the notice gives (${e1.message.slice(0, 120)})`);
   ok(count("/fred/series/observations") === 0, "fred-series: a refused series' observations are never read");
   const e1b = await caught(h("fred-series")({ seriesId: "SP500" }));
   ok(e1b?.statusCode === 400 && count("/fred/series") === 1, "fred-series: the refusal is kept, with no second read");
@@ -125,7 +128,7 @@ try {
   ] };
   const r = await h("fred-release-observations")({ releaseId: 18 });
   ok(r.series.map((s) => s.seriesId).join() === "UNRATE,INLINE2" && r.count === 2, `release: only series with no copyright notice are served (${r.series.map((s) => s.seriesId).join()})`);
-  ok(r.withheld.length === 3 && r.withheld.find((w) => w.seriesId === "SP500").owner === "S&P Dow Jones Indices LLC" && r.withheld.find((w) => w.seriesId === "INLINE1").owner === "Inline Owner Ltd" && r.withheld.find((w) => w.seriesId === "FLAGGED").owner === null && r.withheld.every((w) => w.reason === "third-party copyright"), `release: each held-back series is named with its owner and the reason (${JSON.stringify(r.withheld)})`);
+  ok(r.withheld.length === 3 && r.withheld.find((w) => w.seriesId === "SP500").owner === "S&P Dow Jones Indices LLC" && r.withheld.find((w) => w.seriesId === "INLINE1").owner === "Inline Owner Ltd" && r.withheld.find((w) => w.seriesId === "FLAGGED").owner === null && r.withheld.filter((w) => w.seriesId !== "FLAGGED").every((w) => w.reason === "carries a copyright notice in its FRED notes") && r.withheld.find((w) => w.seriesId === "FLAGGED").reason === "carries FRED's copyright mark", `release: each held-back series is named with its owner and the reason (${JSON.stringify(r.withheld)})`);
   ok(r.matched === 5 && r.returned === 2 && r.complete === false && r.truncated === true && !("unscreened" in r), "release: the answer says in fields that it is not the whole page");
   ok(count("/fred/series") === 2, `release: notes the release answer carries cost no metadata read (${count("/fred/series")} reads)`);
   ok(r.terms === FRED_TERMS, "release: the answer carries the terms line");
@@ -141,6 +144,7 @@ try {
   fresh();
   releaseBody = { release: { release_id: 999, name: "X" }, series: [{ series_id: "SP500", observations: obs }, { series_id: "BAMLH0A0HYM2", observations: obs }] };
   const e5 = await caught(h("fred-release-observations")({ releaseId: 999 }));
+  ok(/^Every series on this page of FRED release 999 carries a copyright notice \(.*\) in its FRED notes and is not served here: /.test(e5?.message || "") && !/owned by/.test(e5.message), `release: the page refusal says each series carries a copyright notice in its FRED notes (${String(e5?.message).slice(0, 110)})`);
   ok(e5?.statusCode === 400 && /S&P Dow Jones Indices LLC/.test(e5.message) && /ICE Data Indices, LLC/.test(e5.message) && e5.message.includes(FRED_TERMS_URL), `release: a page of third-party series only is a 400 naming the owners (${e5?.statusCode} ${e5?.message})`);
 
   // One call screens a bounded number of series; the rest are held back and counted, and the next call goes on.
@@ -151,6 +155,17 @@ try {
   ok(count("/fred/series") === FRED_SCREEN_READS_PER_CALL && big.count === FRED_SCREEN_READS_PER_CALL && big.unscreened === 15 && big.matched === many && big.truncated === true && typeof big.unscreenedNote === "string", `release: one call makes at most ${FRED_SCREEN_READS_PER_CALL} screening reads and counts what it held back (${count("/fred/series")} reads, ${big.count} served, ${big.unscreened} unscreened)`);
   const again = await h("fred-release-observations")({ releaseId: 10 });
   ok(again.count === many && !("unscreened" in again) && count("/fred/series") === many, "release: the next call screens the rest from the kept verdicts");
+
+  // The screening of one call is bounded in time as well: with the time used
+  // up no further read starts, and what was not read is counted, not served.
+  fresh();
+  _setFredScreenBudgetForTest(0);
+  releaseBody = { release: { release_id: 11, name: "PPI" }, series: [{ series_id: "UNRATE", notes: "Source: U.S. Bureau of Labor Statistics.", observations: obs }, ...Array.from({ length: 12 }, (_, k) => ({ series_id: `GOVLATE${k}`, observations: obs }))] };
+  const timed = await h("fred-release-observations")({ releaseId: 11 });
+  ok(count("/fred/series") === 0 && timed.count === 1 && timed.unscreened === 12 && timed.matched === 13 && timed.complete === false && timed.series.every((x) => x.seriesId === "UNRATE"), `release: once the screening time is used no read starts, and the 12 series not screened are counted and held back (${count("/fred/series")} reads, unscreened ${timed.unscreened})`);
+  _setFredScreenBudgetForTest();
+  const timedNext = await h("fred-release-observations")({ releaseId: 11 });
+  ok(timedNext.count === 13 && !("unscreened" in timedNext) && count("/fred/series") === 12 && FRED_SCREEN_BUDGET_MS >= 1000, "release: the next call reads them");
 
   // Nothing screened at all is the upstream's fault: a 503, never unscreened data.
   fresh(); metaStatus = 500;

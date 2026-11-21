@@ -63,6 +63,15 @@ jobs:
           if [ "$code" = "3" ]; then exit 0; fi
           exit "$code"
 
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       # Two issues, one per cause, so a failed sync is never hidden behind a
       # listing that is waiting for its source to be refreshed.
       - name: Page on failure / recover on success

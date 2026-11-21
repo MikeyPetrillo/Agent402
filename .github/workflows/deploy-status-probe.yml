@@ -135,6 +135,15 @@ jobs:
             { echo "deployed=$BUILD"; echo "want=$WANT"; } >> "$GITHUB_OUTPUT"
           fi
 
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Page on drift
         if: always()
         env:

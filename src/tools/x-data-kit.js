@@ -535,7 +535,7 @@ export const X_DATA_TOOLS = [
       input: { username: "coinbase" },
       inputSchema: {
         properties: {
-          username: { type: "string", maxLength: 15, description: "X username, with or without the leading @ (1-15 chars)." },
+          username: { type: "string", maxLength: 16, description: "X username, with or without the leading @ (1-15 chars after it)." },
         },
         required: ["username"],
       },
@@ -563,7 +563,7 @@ export const X_DATA_TOOLS = [
       inputSchema: {
         properties: {
           id: { type: "string", description: "Numeric X user id. Provide id OR username." },
-          username: { type: "string", maxLength: 15, description: "X username (resolved to an id first). Provide id OR username." },
+          username: { type: "string", maxLength: 16, description: "X username, with or without the leading @ (resolved to an id first). Provide id OR username." },
           max_results: { type: "number", description: "Tweets per page, 5-10 (default 10)." },
           exclude_retweets: { type: "boolean", description: "Drop retweets (default false)." },
           exclude_replies: { type: "boolean", description: "Drop replies (default false)." },

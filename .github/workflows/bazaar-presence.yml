@@ -110,6 +110,15 @@ jobs:
           path: .bazaar-presence
           key: bazaar-presence-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: bazaar-presence-
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Check the listing (reads only, pays nothing)
         id: check
         timeout-minutes: 25

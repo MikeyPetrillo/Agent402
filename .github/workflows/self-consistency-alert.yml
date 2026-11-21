@@ -84,6 +84,15 @@ jobs:
             DELIM="EOF_$(date +%s%N)_$RANDOM"
             { echo "detail<<$DELIM"; echo "$DETAIL"; echo "$DELIM"; } >> "$GITHUB_OUTPUT"
           fi
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Open, comment, or close the alert issue
         if: steps.check.outputs.status != 'skip'
         # DETAIL is live agent-facing content, not attacker-facing free text

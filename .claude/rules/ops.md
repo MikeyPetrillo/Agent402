@@ -57,7 +57,12 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   runs, an index crawl is in flight (`addBoardRefreshQuietCheck`) or the heap is above
   `BOARD_REFRESH_HEAP_SHARE` (default 0.7 of V8's limit; `off` or 0 disables). Held back by a
   peer or a crawl it runs anyway after `MAX_DEFER_MS` (45 minutes); held back by the heap it gives
-  the slot up with an error line and the next slot tries again. A boot rebuilds a board only when
+  the attempt up with an error line and tries again every hour (`GIVEN_UP_RETRY_MS`) until it runs.
+  A rebuild holds the gate at most `BOARD_REFRESH_RUN_MAX_MS` (default two hours): past it the gate
+  is released and the run's `signal` is aborted. `boardRefresh` on `/api/gateway-status` reads
+  `held` after a give-up and `stalled` after three in a row or a run past its bound with none
+  finished since; the heartbeat and the status Worker page on `stalled` under the `containedTurns`
+  issue, which clears only when both words read ok. A boot rebuilds a board only when
   its snapshot is older than its last slot. `LEADERBOARD_REFRESH_MS` puts the Base board on a
   plain interval of that length. Suite: `scripts/test-board-refresh-slots.js`.
 - **Solana history reads:** `src/solana-history-rpc.js` reads a transaction by signature from the
@@ -147,6 +152,14 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   The `brokenListings` word reads `widespread` while the distinct origins whose listings broke in a rolling
   15 minutes reach both 20 and 5% of the indexed origins (one seller's bad data never does; a code bug that
   breaks every listing does), paged the same way; both issues close only on the second ok read in a row.
+- **Issue titles a check had before:** the scheduled checks look their issue up by exact title. The
+  titles a check carried before a rename are in one list, `workers/status-probe/src/previous-issue-titles.js`
+  (the status Worker bundles it). The Worker reads it when it lists the open issues, and every workflow
+  job that looks an issue up first runs `node scripts/adopt-issue-titles.js` (`if: always()`,
+  `continue-on-error`): an open issue under a previous title, filed by the Actions bot or the
+  repository owner, is retitled to the check's current title, or closed when the current one is open.
+  A check renamed again gains its old title there; a new check gets an entry with an empty list
+  (`scripts/test-issue-title-adoption.js`).
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
   The `backup` word reads `unencrypted` while `BACKUP_ENCRYPTION_KEY` is unset in production
   (`NODE_ENV` or the platform's environment name), and `unconfigured` while the `BACKUP_S3_*`

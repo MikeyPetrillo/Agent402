@@ -216,6 +216,15 @@ jobs:
             server.log
           if-no-files-found: ignore
 
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       # Heartbeat-style: one open issue, and a clean run closes it.
       - name: Open or close the alert
         if: always()
@@ -300,12 +309,14 @@ jobs:
           CATALOG_BUY_MAX_USD: ${{ inputs.max_usd || '' }}
           TIER: ${{ inputs.tier || 'all' }}
           ONLY: ${{ inputs.only || '' }}
-          # The route-execute products pay an outside seller from the spending
-          # wallet (its own daily ceiling); the paid canary covers that path.
+          # The route-execute tiers whose published example buys from an outside
+          # seller (externalExample in src/tools/route-execute.js) pay it from the
+          # spending wallet (its own daily ceiling); the paid canary covers that
+          # path. scripts/test-self-funding.js reads this list against the table.
           # decide-execute's published example names a decision that exists only
           # after a paid decide call on the same server, so bought cold it answers
           # 404 (uncharged); scripts/test-decide-execute.js covers the run itself.
-          CATALOG_BUY_SKIP: route-execute-pro,route-execute-max,decide-execute
+          CATALOG_BUY_SKIP: route-execute-mid,route-execute-max,route-execute-pro,decide-execute
         run: |
           if [ -z "$BURNER_KEY" ]; then
             echo "::error::BURNER_KEY is not set in the spending environment; nothing can be bought"
@@ -356,6 +367,15 @@ jobs:
           # that old answers do not linger.
           retention-days: 30
 
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       # ONE issue. Opened on the first failing run, commented on each later one,
       # closed by a green full daily run. A run narrowed with `only` can open or
       # update it but never closes it: a narrow green proves nothing about the
@@ -372,7 +392,7 @@ jobs:
           DEFERRED: ${{ steps.buy.outputs.deferred }}
           TIER: ${{ inputs.tier || 'all' }}
           ONLY: ${{ inputs.only || '' }}
-          CATALOG_BUY_SKIP: route-execute-pro,route-execute-max,decide-execute
+          CATALOG_BUY_SKIP: route-execute-mid,route-execute-max,route-execute-pro,decide-execute
         run: |
           TITLE="Scheduled check needs review: catalog-buy"
           RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -544,6 +564,26 @@ jobs:
       issues: write
       actions: read
     steps:
+      # Only the two files the next step runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        continue-on-error: true
+        if: always()
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/adopt-issue-titles.js
+            workers/status-probe/src/previous-issue-titles.js
+
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Page if the pass failed, close the page when it passes
         env:
           GH_TOKEN: ${{ github.token }}
