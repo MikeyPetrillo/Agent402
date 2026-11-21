@@ -195,7 +195,10 @@ try {
     const param = (api.paths?.["/api/hash"]?.post?.parameters || []).find((x) => x.name === "X-Agent402-Wallet");
     ok(/premium and price floor still apply/.test(param?.description || "") && /answered 402 at the list price, and nothing is charged/.test(param?.description || ""), "and its description carries the rule the 402 body no longer spells out");
     const manifest = await fetch(`${B}/.well-known/x402`).then((r) => r.text());
-    ok(/X-Agent402-Wallet request header, when sent/.test(manifest), "the service manifest's data handling names the header and what it is read for");
+    const KEPT = "read against the sales ledger to decide that request's quote; the address and its count of paid days are held in memory for about 10 minutes and never written to a store";
+    ok(/X-Agent402-Wallet request header, when sent/.test(manifest) && manifest.includes(KEPT), "the service manifest's data handling names the header, what it is read for and what is kept");
+    const privacy = (await fetch(`${B}/privacy`).then((r) => r.text())).replace(/\s+/g, " ");
+    ok(/the wallet address a request names in the <code>X-Agent402-Wallet<\/code> header/.test(privacy) && privacy.includes(KEPT), "/privacy says the same thing in the same words");
     const anon = await fetch(`${B}/__operator/returning-wallets.json`);
     ok(anon.status === 404, "the operator view is not served without the token");
   }

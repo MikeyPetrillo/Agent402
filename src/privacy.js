@@ -22,6 +22,7 @@ import { settledHoldText, settledValidityHoldText, CONSUMED_VALIDITY_MARGIN_MS }
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
+import { returningWalletEnabled, returningWalletDataHandling, WALLET_HINT_HEADER } from "./returning-wallet.js";
 import { directUpstreamPrivacyText, directUpstreamThirdPartyText, directUpstreamLocationText, withDirectUpstreamDate } from "./gateway-direct-upstream.js";
 import { taskRetentionPublic } from "./mcp-tasks.js";
 import { solanaActivityStoreEnabled, solanaActivityMaxWallets, SOLANA_ACTIVITY_KEEP_DAYS } from "./solana-activity-store.js";
@@ -80,6 +81,10 @@ export function privacyPage(baseUrl) {
   const sharesOn = sharePagesMayBeLive();
   const sharesOffered = answerShareEnabled();
   const allowanceOn = firstCallAllowanceEnabled();
+  // The returning-wallet price (src/returning-wallet.js) ships behind a
+  // switch: the wallet header's clause appears only while it is on, in the
+  // words the service manifest's data handling prints.
+  const walletHint = returningWalletEnabled() ? returningWalletDataHandling() : null;
   // A facilitator that publishes the settlements it relays, on the chains
   // FACILITATOR_PUBLIC_INDEX_CHAINS lists: disclosed only while it applies,
   // and the no-sale line is then scoped to this list. While it renders, the
@@ -341,7 +346,8 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
 ` : ""}  <li><b>Payment metadata.</b> Beyond what the payment protocol needs to verify and settle a payment, our
   code reads these fields of a payment: the signed payer wallet address (already public on-chain), the
   scheme and network it settles on, the optional <code>payment-identifier</code> (used as an idempotency key
-  and kept with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), the payment's nonce and network (as an
+  and kept with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes),${walletHint ? ` the wallet address a request names in the
+  <code>${WALLET_HINT_HEADER}</code> header (${walletHint.read}; ${walletHint.kept}),` : ""} the payment's nonce and network (as an
   idempotency key for a re-sent payment, held with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), a digest of the payment's
   network, signed payer and nonce as a replay mark (kept about ${settledHoldText()} after a settled call, or until the
   authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later; for a grant
@@ -409,9 +415,10 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   contact those sites from our server with the URL you provided. Tools that read a third-party data
   source send it what the lookup needs (a ticker, a token or wallet address, a domain, a query).</li>
   <li><code>asn-info</code> looks an IP address up in Team Cymru's IP-to-ASN DNS zone, so the DNS
-  query carries that IP address. When our own resolver cannot answer it, the same query is sent once
-  through the public resolvers at 8.8.8.8 (Google Public DNS), 9.9.9.9 (Quad9) and 1.1.1.1
-  (Cloudflare), which see the query and our server's address, not yours.</li>
+  query carries that IP address. When our own resolver cannot answer it, the same query goes to a
+  public resolver: 8.8.8.8 (Google Public DNS) first, then 9.9.9.9 (Quad9) and then 1.1.1.1
+  (Cloudflare), each only if the one before it does not answer. A resolver that is asked sees the
+  query and our server's address, not yours.</li>
   <li><code>/api/search</code> and the other web search tools forward the query to the Brave Search API to produce results.
   The <code>/api/x-*</code> tools send the handle, post id or query to the X API.
   Report products and <code>/v1</code> calls that search the web send their search queries to Exa, through OpenRouter's web search.</li>
