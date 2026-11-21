@@ -33,9 +33,77 @@ export function walk(dir, out = []) {
   return out;
 }
 
-/** Strip // and block comments so a name only mentioned in prose is not a read. */
+// After one of these words a "/" starts a regular expression, not a division.
+const REGEX_AFTER_WORD = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
+
+/**
+ * Strip // and block comments so a name only mentioned in prose is not a read.
+ * A single pass over the source: string, template and regular-expression
+ * literals are copied whole (a "/*" or "//" inside one is text), and code
+ * inside a template's ${...} is read as code.
+ */
 export function stripComments(src) {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`\\])\/\/[^\n]*/g, "$1");
+  const n = src.length;
+  let out = "";
+  let i = 0;
+  let prev = ""; // the last significant code character ("w" for a word or number, "x" after a closing literal)
+  let word = ""; // that word, when prev is "w"
+  let depth = 0; // brace depth in code
+  const templates = []; // brace depth at each open ${ of a template
+  const isWord = (ch) => /[A-Za-z0-9_$]/.test(ch);
+  // Copy a template's text from i (just after a backtick or a closing brace
+  // of ${...}) to its closing backtick or its next ${.
+  const templateText = () => {
+    while (i < n) {
+      const ch = src[i];
+      if (ch === "\\") { out += src.slice(i, i + 2); i += 2; continue; }
+      if (ch === "`") { out += ch; i++; prev = "x"; return; }
+      if (ch === "$" && src[i + 1] === "{") { out += "${"; i += 2; templates.push(depth); depth++; prev = "("; return; }
+      out += ch; i++;
+    }
+  };
+  while (i < n) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (ch === "/" && next === "/") { const j = src.indexOf("\n", i); i = j < 0 ? n : j; continue; }
+    if (ch === "/" && next === "*") { const j = src.indexOf("*/", i + 2); i = j < 0 ? n : j + 2; out += " "; continue; }
+    if (ch === "\"" || ch === "'") {
+      let j = i + 1;
+      while (j < n && src[j] !== ch && src[j] !== "\n") j += src[j] === "\\" ? 2 : 1;
+      out += src.slice(i, j + 1); i = j + 1; prev = "x"; continue;
+    }
+    if (ch === "`") { out += ch; i++; templateText(); continue; }
+    if (ch === "/" && !(prev === "x" || prev === ")" || prev === "]" || prev === "}" || (prev === "w" && !REGEX_AFTER_WORD.has(word)))) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < n && src[j] !== "\n") {
+        const c = src[j];
+        if (c === "\\") { j += 2; continue; }
+        if (c === "[") inClass = true;
+        else if (c === "]") inClass = false;
+        else if (c === "/" && !inClass) break;
+        j++;
+      }
+      j++;
+      while (j < n && /[a-z]/i.test(src[j])) j++;
+      out += src.slice(i, j); i = j; prev = "x"; continue;
+    }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (templates.length && depth === templates[templates.length - 1]) {
+        templates.pop(); out += ch; i++; templateText(); continue;
+      }
+    }
+    if (isWord(ch)) {
+      let j = i;
+      while (j < n && isWord(src[j])) j++;
+      word = src.slice(i, j); out += word; i = j; prev = "w"; continue;
+    }
+    if (!/\s/.test(ch)) prev = ch;
+    out += ch; i++;
+  }
+  return out;
 }
 
 /**

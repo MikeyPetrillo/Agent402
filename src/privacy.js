@@ -11,6 +11,7 @@ import { KEEP_DAYS as DISCOVERY_REFUSALS_KEEP_DAYS } from "./discovery-refusals.
 import { WISH_STALE_DAYS, wishRetentionDays } from "./wish.js";
 import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
 import { RECEIPT_STORE_DAYS } from "./receipt-store.js";
+import { SUBSCRIPTION_RECEIPTS_KEPT } from "./receipt-signing.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
 import { creditsSalesEnabled, withCreditsSalesDate } from "./credits-sales.js";
 import { signInLifeWords, sessionIdleWords, sessionMaxWords, lowBalanceWords } from "./credits-figures.js";
@@ -23,6 +24,7 @@ import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 import { directUpstreamPrivacyText, directUpstreamThirdPartyText, directUpstreamLocationText, withDirectUpstreamDate } from "./gateway-direct-upstream.js";
 import { taskRetentionPublic } from "./mcp-tasks.js";
+import { solanaActivityStoreEnabled, solanaActivityMaxWallets, SOLANA_ACTIVITY_KEEP_DAYS } from "./solana-activity-store.js";
 import { oneHopPublicBounds } from "./sanctions-screen.js";
 import { endedRecordRetentionPublic, offerRetentionPublic } from "./mpp-subscription-retention.js";
 import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
@@ -54,6 +56,9 @@ export function privacyPage(baseUrl) {
   // Sales through a referral network's links (src/referral-gate.js): the
   // sentences about that channel appear only while this server has it.
   const referralOn = referralOffered();
+  // A monitor subscription's kept period receipts (src/receipt-signing.js
+  // appendPeriodReceipt): the same words on the card and the MPP record.
+  const periodReceipts = `the signed receipts of its ${SUBSCRIPTION_RECEIPTS_KEPT} most recent paid periods (each a record of SHA-256 digests, the amount and the payment reference, kept with the period's statement, which names the subject and the period)`;
   const walletSignInOn = walletSignInEnabled();
   // PostHog model-call and error events (src/posthog-observability.js): each
   // sentence renders only while its switch is on.
@@ -113,7 +118,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-19.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-20.</p>
 </section>
 
 <section>
@@ -165,8 +170,9 @@ so every claim below is verifiable in code.</p>
     deleted ${wishRetentionDays()} days after it was sent, leaving only its counts, kept under a keyed hash
     of the text (never the text);</li>
     <li>a call sent with <code>Prefer: respond-async</code>, and a long call the MCP connector runs as a
-    task, keeps its result (up to ${jobs.maxSize}) under the job or task id so you can fetch it; the record is
-    deleted ${jobs.keptFor} after the job was created. It is stored in the state database, so a nightly backup
+    task, keeps its result (up to ${jobs.maxSize}) under the job or task id so you can fetch it, and a random key
+    for the run that the sales ledger also books on the sale made for it, so a run a restart cut off can be checked
+    against its own sale; the record is deleted ${jobs.keptFor} after the job was created. It is stored in the state database, so a nightly backup
     made inside that time copies it (see Backups below);</li>
     <li>for a decision bought on <code>/api/decide</code>, we keep the task you describe, the plan we
     returned, the paying wallet and any feedback you report on its steps, for 30 days;</li>
@@ -243,7 +249,7 @@ so every claim below is verifiable in code.</p>
   <li><b>On-chain payments.</b> A per-call x402 or MPP payment carries no card number, name or email.
   A monitor subscription paid over MPP is different: its record holds the paying wallet together with the
   subject you asked us to watch, the email you give for delivery (optional), and a signing key our server
-  made for that subscription. A subscription you ask for and do not pay keeps the email, the subject and the key
+  made for that subscription. Once a period is paid, the record also keeps ${periodReceipts}. A subscription you ask for and do not pay keeps the email, the subject and the key
   while its offer can be paid (${mppOffer.payableMinutes} minutes), and a check that runs every ${mppOffer.sweepMinutes} minutes deletes all three within ${mppOffer.deletedWithin} of your request (a nightly backup made before then holds a copy until that backup is deleted, see Backups below). Your signed authorization lets that key send one payment per period from your
   account, in one token, to our address, up to the subscription price, until the expiry you signed. The
   key is kept only while a later payment can still be taken: it is deleted from our records when you cancel,
@@ -253,7 +259,7 @@ so every claim below is verifiable in code.</p>
   wire), whether it was one of our own test subscriptions, the paying wallet, the key's public
   address, the chain and token, the amount and billing period, the dates, the final state and the reason it
   ended, the last payment's transaction and a marker for a payment whose outcome was never confirmed;
-  the email and the subject you asked us to watch are removed. A check that runs every ${mppSub.sweepMinutes} minutes
+  the email and the subject you asked us to watch are removed, and so are the signed period receipts. A check that runs every ${mppSub.sweepMinutes} minutes
   does this for a subscription that ends on a date, and deletes the reduced record ${mppSub.keepDays} days after the subscription ends.
   Payments settle in USDC on the public Base blockchain (or the other chains listed at <a href="/pricing">/pricing</a>,
   USDG on Robinhood Chain, or MPP on Base, Celo or Tempo) via the x402 or MPP protocol; ${gatewayBatched ? "for a payment settled on chain, " : ""}wallet addresses, amounts, and
@@ -262,14 +268,20 @@ so every claim below is verifiable in code.</p>
   we keep a sales ledger of settled payments (wallet address, amount, chain, transaction id) for accounting
   and for refunding a call that was charged but failed.  The public <a href="/scorecard">buyer scorecard</a> is computed from that ledger and publishes monthly
   counts only (paying wallets, returning wallets, settled payments and amounts by chain), never a wallet
-  address; a count under 3 reads "&lt;3", and a month with fewer than 3 wallets is withheld.${scorecardPublishesTx() ? " It also links a few sample settlement transactions on public block explorers, which show the paying wallet on chain." : ""}</li>
+  address; a count under 3 reads "&lt;3", and a month with fewer than 3 wallets is withheld.${scorecardPublishesTx() ? " It also links a few sample settlement transactions on public block explorers, which show the paying wallet on chain." : ""}</li>${solanaActivityStoreEnabled() ? `
+  <li><b>Solana wallet activity.</b> To draw a Solana wallet's 30-day activity on its chain page, we read the payments that
+  wallet received from the public Solana chain, and keep, for up to ${solanaActivityMaxWallets()} wallets, the time, amount and
+  sending wallet address of each payment, in our state database, for ${SOLANA_ACTIVITY_KEEP_DAYS} days after it was last written
+  (a nightly backup made inside that time copies it, see Backups below). These are public on-chain records, read again
+  on the next view once they are deleted.</li>` : ""}
   <li><b>Card purchases (reports, monitors and prepaid credits).</b> Card details are entered on Stripe's
   hosted checkout and processed by <a href="https://stripe.com/privacy" rel="noopener">Stripe</a>; we never see card
   numbers. Stripe gives us the email address you entered, a customer and session id, and the payment
   status. A delivered report is private to its link unless you choose "Make public" on it, which gives it a second, unguessable address that anyone can read and search engines may index (you can make it private again any time, and the report never contains your name or email). We use the email to deliver what you bought and, after a one-off report, for at most two follow-up emails about that purchase (the monitor for the same subject two days later, other reports a week later), each carrying a link that stops them; if a report fails we email you about the refund. The report link, monitor reports and alerts are
   sent through a transactional email provider (ZeptoMail, with Resend as a fallback). Stripe keeps the
-  email address with your payment; the report record on our server holds the session id, your input and the
-  finished report, not the email. The email is kept in the follow-up and monitor records described here,
+  email address with your payment; the report record on our server holds the session id, your input, the
+  finished report and the signed receipt we issued for it at delivery (SHA-256 digests of the request and of
+  the report, the price and Stripe's payment id), not the email. The email is kept in the follow-up and monitor records described here,
   and a failed report is counted against a SHA-256 hash of the address (never the address) for 24 hours so
   repeated failures for one buyer stop further charges. Prepaid credits ${creditsSalesEnabled() ? "are sold by card at /credits" : "are not currently sold"}; for each key
   we keep a hash of the key (never the key), its balance and the calls it paid for, and from its purchase the email, the
@@ -277,8 +289,8 @@ so every claim below is verifiable in code.</p>
   terms questions, and Stripe's fingerprint of the card (a token, never the card number). We use the billing address to
   apply sales tax, the tax ID to sell to a business in the EU or the UK, and the email and card fingerprint to enforce the
   daily purchase limit.${creditsSalesEnabled() ? ` When you ask for a key's unspent balance back, the key's record also keeps the amount refunded, when you asked, and Stripe's id for the refund, so the refund is sent once and can be traced. <span id="credits-sign-in">The purchase email is also how you manage a balance: at <a href="/credits/account">/credits/account</a> you ask for a sign-in link, and we look up the balances bought with that email and send the link only to it (the answer is the same whether or not the address holds one). The link carries a signed token that works once, for ${signInLifeWords()}; we keep a record that it was used until it would have expired. Signing in sets one cookie, <code>a402_acct</code>, limited to /credits/account: it holds a random session id and scripts cannot read it. On our server we keep a hash of that id with your email and the time you signed in (a new key is issued only within ten minutes of it), and the session ends after ${sessionIdleWords()} without use, after ${sessionMaxWords()} at most, or when you sign out. A key's record also keeps its history (each charge with the tool and the amount, top-ups with the payment that made them, refunds, and when a new key was issued), shown only to you on that page and as a CSV you download, and whether you turned off the low-balance email. We email a receipt for each purchase and top-up, and a notice once each time a balance drops under ${lowBalanceWords()}, which you can turn off with the link in it or on the page.</span>` : ""} For a monitor
-  we also keep the subject you asked us to watch (a domain, ticker, fund, token or query), your email
-  and the most recent 12 reports we generated, for the life of the subscription. The input you give a report (a ticker, a
+  we also keep the subject you asked us to watch (a domain, ticker, fund, token or query), your email,
+  the most recent 12 reports we generated and ${periodReceipts}, for the life of the subscription. The input you give a report (a ticker, a
   domain, a research question) is stored with the paid session so the report can be generated once and
   served back to you; the finished report is served at an unguessable link and is not published.</li>
   <li><b>Operational telemetry.</b> The server records service events (tool called, payment settled,
@@ -369,10 +381,11 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   and dropped when the wallet has been idle ${COVER_IDLE_MINUTES} minutes (with no paid call in flight), at a later paid call to
   the server, which clears the longest idle wallets a few at a time; sooner when the server holds ${COVER_WALLETS_MAX.toLocaleString("en-US")}
   wallets (the longest idle first); or on restart.</li>
-  <li><b>Sanctions screening.</b> The paying address of an x402 payment, each address party to a Tempo
-  per-call payment our server settles itself, and the paying wallet of an MPP monitor subscription (before its
+  <li><b>Sanctions screening.</b> The paying address of an x402 payment or of an MPP evm payment, each address
+  party to a Tempo per-call payment our server settles itself, the paying wallet of a Tempo payment settled through
+  Tempo's relay (and the sender the relay settled on), and the paying wallet of an MPP monitor subscription (before its
   first payment and before each renewal) are checked against the US Treasury OFAC SDN list, which we download and
-  hold on our server. For such a Tempo payment and for a subscription payment we also read the paying wallet's recent
+  hold on our server. For a Tempo per-call payment our server settles itself and for a subscription payment we also read the paying wallet's recent
   inbound transfers (up to ${oneHop.maxTransfers}, from the last ${oneHop.lookbackDays} days) from Tempo's transfer data feed, which
   receives the wallet address, and check their senders against the same list. The result for that wallet
   (clean, flagged or listed) is kept under the wallet address for ${oneHop.ttlDays} days, then read again on its next payment.</li>

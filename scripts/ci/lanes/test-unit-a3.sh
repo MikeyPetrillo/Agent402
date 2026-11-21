@@ -32,7 +32,7 @@ t node scripts/test-mcp-x402-connector.js
 # A paid replay the hosted MCP connector stopped waiting for: the call id rides only the genuine marker, a settled answer the connector never read is booked as owed in either order (an event-loop stall reproduced over the real loopback client), one outcome per call, bounded entries, server and connector wiring pins (offline, port 0)
 t node scripts/test-mcp-loopback-cut.js
 
-# @step 2: Offline suites (20 scripts, one process each)
+# @step 2: Offline suites (21 scripts, one process each)
 # /llms.txt content lock (tool count + discovery URLs + PoW/MCP/wallet signals)
 t node scripts/test-llms-txt.js
 # Every HTML page names /llms.txt (head link + Link header); /api/pricing and the x402 manifest name EVM-only routes
@@ -51,6 +51,8 @@ t node scripts/test-us-spelling.js
 t node scripts/test-no-url-pathname.js
 # CHANGELOG.md and the /changelog page agree: no duplicated page item, and every dated group from 2026-11-05 on is in both with the same item counts (offline)
 t node scripts/test-changelog-parity.js
+# A changelog entry about something a switch sells is on /changelog and its feed only while the switch is on.
+t node scripts/test-changelog-switched.js
 # NOTICE, the README, CONTRIBUTING.md and /llms-full.txt carry one ownership sentence, word for word (offline)
 t node scripts/test-ownership-statement.js
 # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description

@@ -188,7 +188,8 @@ function read402(url, { method = "GET", headers = {}, body, timeoutMs = 20000 } 
       res.resume();
       const map = new Map();
       for (let i = 0; i < res.rawHeaders.length; i += 2) { const k = res.rawHeaders[i].toLowerCase(); map.set(k, map.has(k) ? `${map.get(k)}, ${res.rawHeaders[i + 1]}` : res.rawHeaders[i + 1]); }
-      res.on("end", () => resolve({ status: res.statusCode, headers: { get: (k) => map.get(String(k).toLowerCase()) ?? null, forEach: (fn) => map.forEach((v, k) => fn(v, k)) } }));
+      const lines = []; for (let i = 0; i < res.rawHeaders.length; i += 2) lines.push([res.rawHeaders[i], res.rawHeaders[i + 1]]);
+      res.on("end", () => resolve({ status: res.statusCode, lines, headers: { get: (k) => map.get(String(k).toLowerCase()) ?? null, forEach: (fn) => map.forEach((v, k) => fn(v, k)) } }));
     });
     req.on("timeout", () => req.destroy(new Error("timeout")));
     req.on("error", reject);
@@ -223,6 +224,16 @@ function projectTotal(prodRes, localRes, projectedPR) {
 // deployment), so prod's copy is not carried over when the local boot omits it.
 const LOCAL_DECIDES = new Set(["content-security-policy", "x-frame-options", "permissions-policy", "x-permitted-cross-domain-policies", "referrer-policy", "x-content-type-options"]);
 const CONCURRENCY = Number(process.env.CHALLENGE_CONCURRENCY) || 8;
+// One header line, measured as `name: value`: a parser that caps a line
+// (Python aiohttp's default max_field_size is 8,190) refuses the whole 402 on
+// one line past it. Every line but PAYMENT-REQUIRED is held to it here. The
+// default PAYMENT-REQUIRED is the full offer the Bazaar harvests whole (every
+// accept and extension land in the listing; scripts/listing-coverage.js), so
+// a line-capped client reads the compact one (X-Payment-Compact: 1, or an
+// aiohttp User-Agent; scripts/test-402-real-clients.js) and the routes whose
+// default line is over are reported, not failed.
+const MAX_LINE_BYTES = Number(process.env.MAX_HEADER_LINE_BYTES) || 8_190;
+const lineBytesOf = (name, value) => Buffer.byteLength(`${name}: ${value}`, "utf8");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
@@ -285,13 +296,23 @@ async function worker() {
     const h = res.headers.get("payment-required") || "";
     if (!h) { rows.push({ slug: t.slug, bytes: -1 }); continue; }
     const total = headerBytes(res);
-    let projected = null, projectedTotalLocal = null;
+    let projected = null, projectedTotalLocal = null, wwwProjected = null;
     if (localBase) {
       try {
         const lr = await read402(`${localBase}${t.path}`, { method: t.method, headers: { "content-type": "application/json" }, body: bodyFor(t), timeoutMs: 20000 });
         const lh = lr.status === 402 ? (lr.headers.get("payment-required") || "") : "";
         if (lh) { projected = projectBytes(h, lh); if (projected != null) projectedTotalLocal = projectTotal(res, lr, projected); }
+        const pw = res.headers.get("www-authenticate");
+        if (lh && pw) wwwProjected = mergeEvmChallenges(pw, lr.headers.get("www-authenticate") || "") || null;
       } catch { /* a route this tree does not serve (retired) keeps the measured figure */ }
+    }
+    // The longest line but PAYMENT-REQUIRED, as sent (WWW-Authenticate as
+    // projected with this tree's evm challenges when the local boot ran).
+    let otherLine = { name: null, bytes: 0 };
+    for (const [k, v] of res.lines) {
+      if (/^payment-required$/i.test(k)) continue;
+      const bytes = /^www-authenticate$/i.test(k) && wwwProjected ? lineBytesOf(k, wwwProjected) : lineBytesOf(k, v);
+      if (bytes > otherLine.bytes) otherLine = { name: k, bytes };
     }
     // Without the local boot, the projection is prod's own challenge plus this
     // tree's extra rails, and the total grows by the same bytes.
@@ -302,7 +323,7 @@ async function worker() {
     // The total is projected the same way: prod's other headers stay, the
     // challenge is this tree's.
     const gatedOnly = projectRailsOnly(h, { gated: true });
-    rows.push({ slug: t.slug, bytes: h.length, projected, total, projectedTotal: projectedTotalLocal, gatedExtra: gatedOnly != null ? Math.max(0, gatedOnly - h.length) : 0 });
+    rows.push({ slug: t.slug, bytes: h.length, projected, total, projectedTotal: projectedTotalLocal, gatedExtra: gatedOnly != null ? Math.max(0, gatedOnly - h.length) : 0, otherLine });
   }
 }
 await Promise.all(Array.from({ length: CONCURRENCY }, worker));
@@ -351,6 +372,15 @@ if (GATED_NETS.size) {
   const names = [...GATED_NETS].join(", ");
   if (gatedOver.length || gatedOverChallenge.length) console.log(`WARNING: gated rail(s) ${names} cannot be enabled yet: ${gatedOver.length} 402(s) would exceed ${MAX_TOTAL_HEADER_BYTES} total header bytes and ${gatedOverChallenge.length} challenge(s) ${MAX_HEADER_BYTES} bytes (worst: ${[...gatedOver].sort((a, b) => (judgedTotal(b) + b.gatedExtra) - (judgedTotal(a) + a.gatedExtra)).slice(0, 3).map((r) => `${r.slug} ${judgedTotal(r) + r.gatedExtra}`).join(", ")})`);
   else console.log(`ok - gated rail(s) ${names} would fit every 402 once enabled`);
+}
+// One header line.
+const lineOver = sized.filter((r) => r.otherLine.bytes > MAX_LINE_BYTES);
+const longestLine = [...sized].sort((a, b) => b.otherLine.bytes - a.otherLine.bytes)[0];
+ok(lineOver.length === 0, `on every 402 every header line but PAYMENT-REQUIRED is ${MAX_LINE_BYTES} bytes or less (longest ${longestLine.otherLine.name} ${longestLine.otherLine.bytes} on ${longestLine.slug})${lineOver.length ? `: ${lineOver.slice(0, 5).map((r) => `${r.slug} ${r.otherLine.name} ${r.otherLine.bytes}`).join(", ")} - a parser that caps a line refuses that 402 whatever PAYMENT-REQUIRED it asks for` : ""}`);
+const prLineOver = sized.filter((r) => lineBytesOf("PAYMENT-REQUIRED", "x".repeat(judged(r))) > MAX_LINE_BYTES);
+if (prLineOver.length) {
+  const w = [...prLineOver].sort((a, b) => judged(b) - judged(a))[0];
+  console.log(`note: the default PAYMENT-REQUIRED line is over ${MAX_LINE_BYTES} bytes on ${prLineOver.length} of ${sized.length} routes (longest ${lineBytesOf("PAYMENT-REQUIRED", "x".repeat(judged(w)))} on ${w.slug}); a line-capped client reads them through the compact header, and the full offer stays whole for the Bazaar`);
 }
 const overTotalOnProd = sized.filter((r) => r.total > MAX_TOTAL_HEADER_BYTES && judgedTotal(r) <= MAX_TOTAL_HEADER_BYTES);
 if (overTotalOnProd.length) console.log(`WARNING: production currently serves ${overTotalOnProd.length} 402(s) over ${MAX_TOTAL_HEADER_BYTES} total header bytes (${overTotalOnProd.slice(0, 3).map((r) => `${r.slug} ${r.total} -> ${r.projectedTotal}`).join(", ")}) - this tree brings them under`);

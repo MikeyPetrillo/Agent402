@@ -27,11 +27,61 @@ __resetRefunds();
   ok(listRefunds().length === 1, "exactly one row on the books");
 }
 
-// 2. Without a tx the fallback identity still cannot double-book a burst.
+// 2. Without a tx the fallback key carries the request: one request is one
+//    debt however often it is detected, and two charged failures of one payer
+//    on one route in one minute are two debts (the second used to share the
+//    first one's key and was never booked).
 {
+  const { fallbackEvidence } = await import("../src/refund-ledger.js");
   const row = { slug: "uuid", network: "stellar:pubnet", payer: "GBUYER", priceUsd: 0.002 };
-  recordRefundOwed(row); recordRefundOwed(row);
-  ok(listRefunds().filter((r) => r.slug === "uuid").length === 1, "no-tx fallback identity dedupes within the minute");
+  const reqA = "6f1c2b0e-0000-4000-8000-00000000000a", reqB = "6f1c2b0e-0000-4000-8000-00000000000b";
+  ok(recordRefundOwed({ ...row, requestId: reqA }) === true && recordRefundOwed({ ...row, requestId: reqA }) === false, "the same request detected twice is one debt");
+  ok(recordRefundOwed({ ...row, requestId: reqB }) === true, "a second request by the same payer on the same route in the same minute is its own debt");
+  ok(listRefunds().filter((r) => r.slug === "uuid").length === 2, "two failures in one minute: two rows on the books");
+  ok(recordRefundOwed({ ...row, slug: "uuid-2" }) === true && recordRefundOwed({ ...row, slug: "uuid-2" }) === true && listRefunds().filter((r) => r.slug === "uuid-2").length === 2, "a caller with no request id books each failure as its own request");
+  // A payer the rail does not name (a card payment): two buyers, one route, one minute.
+  ok(recordRefundOwed({ slug: "uuid-3", network: "stripe", payer: null, priceUsd: 0.01, requestId: reqA }) === true && recordRefundOwed({ slug: "uuid-3", network: "stripe", payer: null, priceUsd: 0.01, requestId: reqB }) === true, "two buyers with no payer recorded are never merged into one debt");
+  const key = listRefunds().find((r) => r.slug === "uuid" && r.evidence.endsWith(reqA))?.evidence || "";
+  ok(key.split("|").length === 4 && key.startsWith("GBUYER|uuid|"), `the fallback key is payer|slug|minute|request (${key.replace(/\|\d+\|/, "|<minute>|")})`);
+  const odd = fallbackEvidence({ payer: "P", slug: "s", requestId: "x|y" });
+  ok(!odd.endsWith("|x|y") && /^P\|s\|\d+\|[0-9a-f-]{36}$/.test(odd), "a request id outside the server's alphabet is not used (a fresh one stands in)");
+}
+
+// 2b. Every caller that books a debt on a request passes that request's id,
+//     so a debt with no settle tx is keyed to it (a missing id is a fresh key
+//     per detection: one request detected twice would book two debts). Read
+//     from the source: each recordRefundOwed({ ... }) call names requestId.
+{
+  const spansOf = (src) => {
+    const out = [];
+    for (let at = src.indexOf("recordRefundOwed({"); at >= 0; at = src.indexOf("recordRefundOwed({", at + 1)) {
+      let depth = 0, i = at + "recordRefundOwed(".length;
+      for (; i < src.length; i++) { if (src[i] === "{") depth++; else if (src[i] === "}" && --depth === 0) break; }
+      out.push(src.slice(at, i + 1));
+    }
+    return out;
+  };
+  const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+  for (const [file, want] of [["src/server.js", 5], ["src/mcp-http.js", 1]]) {
+    const spans = spansOf(read(file));
+    const missing = spans.filter((sp) => !/\brequestId\b/.test(sp));
+    ok(spans.length >= want && missing.length === 0, `${file}: every debt booking passes its request id (${spans.length} bookings${missing.length ? `; missing in: ${missing.map((m) => m.replace(/\s+/g, " ").slice(0, 70)).join(" | ")}` : ""})`);
+  }
+  ok(spansOf("recordRefundOwed({ slug, tx: null });").filter((sp) => !/\brequestId\b/.test(sp)).length === 1, "control: a booking without a request id is caught");
+  // The id a booking on a request passes is the server's own (req.debtKey),
+  // never the caller's X-Request-Id (req.requestId): two card buyers who send
+  // the same id and fail on one route in one minute are two debts.
+  const fromReq = spansOf(read("src/server.js")).filter((sp) => /\breq\./.test(sp));
+  const callerKeyed = fromReq.filter((sp) => !/requestId:\s*req\.debtKey\b/.test(sp) || /req\.requestId\b/.test(sp));
+  ok(fromReq.length >= 4 && callerKeyed.length === 0, `src/server.js: every debt booked on a request is keyed by the server-made req.debtKey (${fromReq.length} bookings${callerKeyed.length ? `; caller-keyed: ${callerKeyed.map((m) => m.replace(/\s+/g, " ").slice(0, 90)).join(" | ")}` : ""})`);
+  const { requestIdMiddleware } = await import("../src/request-id.js");
+  const mw = requestIdMiddleware();
+  const run = (incoming) => { const hdr = {}; const req = { header: (n) => (n.toLowerCase() === "x-request-id" ? incoming : undefined) }; mw(req, { setHeader: (k, v) => { hdr[k] = v; } }, () => {}); return { req, hdr }; };
+  const a = run("same-id-123"), b = run("same-id-123"), c = run("x|y");
+  ok(a.req.requestId === "same-id-123" && b.req.requestId === "same-id-123" && a.hdr["X-Request-Id"] === "same-id-123", "the caller's well-formed X-Request-Id is kept for logs and echoed");
+  ok(/^[0-9a-f-]{36}$/.test(a.req.debtKey) && a.req.debtKey !== b.req.debtKey && a.req.debtKey !== a.req.requestId && c.req.requestId !== "x|y", "the debt key is made per request, never the caller's id");
+  const row = { slug: "uuid-dk", network: "stripe", payer: null, priceUsd: 0.01 };
+  ok(recordRefundOwed({ ...row, requestId: a.req.debtKey }) === true && recordRefundOwed({ ...row, requestId: b.req.debtKey }) === true && listRefunds().filter((r) => r.slug === "uuid-dk").length === 2, "two buyers with no payer who send the same X-Request-Id: two debts");
 }
 
 // 3. Addresses are stored verbatim - case-folding merges distinct buyers on

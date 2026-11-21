@@ -159,6 +159,28 @@
    "pace": 5000
   },
   {
+   "slug": "coin-market-chart-range",
+   "name": "two weeks of bitcoin lead with volatility and drawdown",
+   "input": {
+    "coin": "bitcoin",
+    "lookback": "2w"
+   },
+   "expect": {
+    "gt": {
+     "summary.volatilityPct": 0
+    },
+    "lt": {
+     "summary.maxDrawdownPct": 0.0001
+    },
+    "populated": [
+     "summary.changePct",
+     "points[0]"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
    "slug": "coin-ohlc",
    "name": "30 days of eth",
    "input": {
@@ -825,6 +847,26 @@
     },
     "populated": [
      "markets[0]"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "rwa-markets",
+   "name": "commodities carry tracking against spot",
+   "input": {
+    "type": "commodity"
+   },
+   "expect": {
+    "matches": {
+     "markets[0].tracking.reference": "^X(AU|AG) spot$"
+    },
+    "gt": {
+     "markets[0].tracking.referencePrice": 0
+    },
+    "populated": [
+     "markets[0].tracking.premiumBps"
     ]
    },
    "paceKey": "coingecko",

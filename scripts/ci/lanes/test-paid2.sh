@@ -4,13 +4,17 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (19 scripts, one process each)
+# @step 1: Offline suites (21 scripts, one process each)
 # Native MPP on /mcp (stock MCP SDK client + mppx McpClient pays a wallet-only tool via the real gates; stub facilitator; -32042 wire; RFC 9457 problem on tamper - offline)
 t node scripts/test-mcp-mpp.js
 # A binary tool answer through a real MCP tools/call on both result paths
 t node scripts/test-mcp-binary-e2e.js
 # A paid call whose client hangs up is settled once and recorded once as owed (boots a paid server against a slow-settle stub facilitator - offline)
 t node scripts/test-hangup-settlement.js
+# A granted call answered with any 2xx consumes its payment, so the same payment never runs twice (paid boot, stub facilitator - offline)
+t node scripts/test-replay-consumed-2xx.js
+# A settled answer arrives whole after a long settle: every byte of a large answer and its settlement header, once, on every gate (paid boot, stub facilitator - offline)
+t node scripts/test-avm-long-settle-answer.js
 # Circle Gateway batched option: the client against a stub (supported, verify, settle, pending resolved on the transfer record, no fallback for a batched payment, gateway-batched
 t node scripts/test-gateway-nanopayments.js
 # Gateway withdraw script: --amount without --from refuses and names the domains, the signed burn intent expires at the source block plus a bounded window, an unreadable block

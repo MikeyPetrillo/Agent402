@@ -332,8 +332,8 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
       const spt = typeof v.validation?.spt === "string" && v.validation.spt ? v.validation.spt : null;
       const tokenKey = replayGuard && spt ? `stripe-spt:${spt}` : null;
       const unavailable = () => {
-        res.setHeader("Retry-After", "30");
-        return res.status(503).json({ error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and the card was not charged. Retry in about 30 seconds.", reason: "replay-store-unavailable" });
+        res.setHeader("Retry-After", "5");
+        return res.status(503).json({ error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and the card was not charged. Retry in about 5 seconds.", reason: "replay-store-unavailable" });
       };
       if (replayGuard && replayKey) {
         // The shared claim is required whenever another container may be

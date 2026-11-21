@@ -100,6 +100,37 @@ const NOTICE_2026_12_11 = {
     const r = K.RETIRING_MODELS[m];
     if (r && due(r.until)) { fail++; console.log(`FAIL ${where}: retired ${r.until}, still named`); } else pass++;
   }
+  // A tier list (metered's is the union of the flat lists) that names a
+  // retiring id by itself drops it on its date: /v1/models stops printing it
+  // then (advertisedPrefixes), and the entry would only be dead config.
+  for (const [slug, t] of Object.entries(K.TIERS)) {
+    for (const p of t.prefixes || []) {
+      const r = Object.hasOwn(K.RETIRING_MODELS, p) ? K.RETIRING_MODELS[p] : null;
+      if (!r) continue;
+      if (due(r.until)) { fail++; console.log(`FAIL ${slug} lists ${p} by name, retired ${r.until}: drop it from the list`); }
+      else console.log(`warn ${slug} lists ${p} by name; it retires ${r.until}: drop it from the list that day`);
+    }
+  }
+  // On the date of every retirement (and today), /v1/models and each tier's
+  // advertised list (what the live-catalog guard grades) name no id retired
+  // by then: an id the gateway serves as its successor is never advertised.
+  {
+    const retiredAt = (at) => Object.entries(K.RETIRING_MODELS).filter(([, r]) => !r.asItselfUntil || at >= Date.parse(`${r.until}T00:00:00Z`)).map(([id]) => id);
+    const days = [...new Set([...Object.values(K.RETIRING_MODELS).map((r) => Date.parse(`${r.until}T00:00:00Z`)), now])].sort((a, b) => a - b);
+    for (const at of days) {
+      K.setRetiringClockForTest(() => at);
+      try {
+        const gone = new Set(retiredAt(at));
+        const day = `${at === now ? "today, " : ""}${new Date(at).toISOString().slice(0, 10)}`;
+        const printed = K.modelsList().data.map((m) => m.id).filter((id) => gone.has(id));
+        const advertised = typeof K.advertisedPrefixes === "function"
+          ? Object.keys(K.TIERS).flatMap((s) => K.advertisedPrefixes(s).filter((p) => gone.has(p)).map((p) => `${s}:${p}`))
+          : ["advertisedPrefixes is not exported"];
+        if (!printed.length && !advertised.length) pass++;
+        else { fail++; console.log(`FAIL as of ${day}: retired ids still advertised (/v1/models: ${printed.join(", ") || "none"}; tier lists: ${advertised.join(", ") || "none"})`); }
+      } finally { K.setRetiringClockForTest(null); }
+    }
+  }
   K.setRetiringClockForTest(() => now);
   try {
     for (const [id, r] of Object.entries(K.RETIRING_MODELS)) {
@@ -118,6 +149,29 @@ const NOTICE_2026_12_11 = {
     const r = RETIRED_IMAGE_MODELS[t.model];
     if (r && due(r.until)) { fail++; console.log(`FAIL ${slug}: renders on ${t.model}, retired ${r.until}`); } else pass++;
   }
+}
+// The wiki and docs: a sentence that says an id "is served as itself until"
+// a date names the date RETIRING_MODELS holds, and none is left once that
+// date has passed (the id is then served by its successor).
+{
+  const { RETIRING_MODELS } = await import("../src/tools/llm-gateway-kit.js");
+  const { execFileSync } = await import("node:child_process");
+  const { readFileSync } = await import("node:fs");
+  const root = new URL("..", import.meta.url);
+  const files = execFileSync("git", ["ls-files", "wiki/*.md", "docs/*.md", "*.md"], { cwd: root, encoding: "utf8" }).split("\n").filter((f) => f && f !== "CHANGELOG.md");
+  let seen = 0;
+  for (const f of [...new Set(files)]) {
+    const text = readFileSync(new URL(f, root), "utf8").replace(/\s+/g, " ");
+    for (const m of text.matchAll(/`([\w.\/:-]+)` is served as itself until (?:its upstream expiration on )?(\d{4}-\d{2}-\d{2})/g)) {
+      seen++;
+      const r = RETIRING_MODELS[m[1]];
+      if (!r) { fail++; console.log(`FAIL ${f}: ${m[1]} is "served as itself until ${m[2]}" but RETIRING_MODELS has no entry`); }
+      else if (r.until !== m[2]) { fail++; console.log(`FAIL ${f}: ${m[1]} until ${m[2]}, RETIRING_MODELS ${r.until}`); }
+      else if (now >= Date.parse(`${m[2]}T00:00:00Z`)) { fail++; console.log(`FAIL ${f}: ${m[1]} is still "served as itself until ${m[2]}", a date that has passed: name its successor mapping instead`); }
+      else pass++;
+    }
+  }
+  console.log(`markdown "served as itself until" sentences read: ${seen}`);
 }
 console.log(`${pass} retirement checks clean, ${fail} failing`);
 process.exit(fail ? 1 : 0);

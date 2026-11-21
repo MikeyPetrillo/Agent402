@@ -54,6 +54,28 @@ for (const job of jobs) {
   }
 }
 ok(adapterSteps >= 1, `the scan found the adapter step (${adapterSteps})`);
+// The class, by what a step runs rather than its name: any deploy.yml step
+// that installs packages (npm or pip) with install-time code allowed blanks
+// every job-level secret. `npm ci --ignore-scripts` runs no dependency code
+// (the repo's supply-chain rule), so it is the one install exempt here.
+{
+  const wfParsed = load(text);
+  const PKG_INSTALL = /\bnpm (ci|install|i)\b|\bpip3? install\b|-m pip install\b/;
+  const installsWithCode = (run) => run.split("\n").some((l) => !/^\s*#/.test(l) && PKG_INSTALL.test(l) && !/\bnpm ci --ignore-scripts\b/.test(l));
+  let pkgSteps = 0, pipSteps = 0;
+  for (const [jn, job] of Object.entries(wfParsed.jobs || {})) {
+    const jobSecrets = Object.entries(job.env || {}).filter(([, v]) => /secrets\./.test(String(v))).map(([k]) => k);
+    for (const st of job.steps || []) {
+      const run = String(st.run || "");
+      if (!installsWithCode(run)) continue;
+      pkgSteps++;
+      if (/pip install/.test(run)) pipSteps++;
+      const missing = jobSecrets.filter((k) => String(st.env?.[k] ?? "x") !== "");
+      ok(missing.length === 0, `${jn}: "${String(st.name || "").slice(0, 48)}" installs packages with every job-level secret blanked${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
+    }
+  }
+  ok(pkgSteps >= 10 && pipSteps >= 1, `the scan found the package-install steps by what they run (${pkgSteps}, ${pipSteps} pip)`);
+}
 ok(checkedSteps >= 10, `the scan found the secretless install steps (${checkedSteps}) - zero would mean it is blind`);
 
 // Package code in a job that holds a deploy-class secret (a job under the
@@ -188,6 +210,86 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
   }
   for (const s of MUST) ok((runs.get(s) || 0) >= 1, `deploy.yml runs ${s} with the cost table (${runs.get(s) || 0} step(s))`);
   ok(runs.size >= MUST.length, `every deploy.yml step that runs a cost-table suite hands it the table (${runs.size} suites checked)`);
+}
+
+// THE CI DATA KEYS. The production CoinGecko key is not an Actions secret (CI
+// must never spend it), so no step reads secrets.COINGECKO_API_KEY. CI holds
+// two keys of its own: OPEN_METEO_API_KEY and COINGECKO_CI_API_KEY. Each is
+// handed ONLY to the step that boots the server the strict sweep drives (in
+// the sweep lane) and to the nightly corpus step, at step scope, never at job
+// or workflow scope; every other step, an install included, never sees them.
+// The keyed boot maps the CI key onto the server's own variable with the pro
+// tier and the sweep's per-run read cap, writes only the words keyed or
+// keyless (never a value) to the log and to GITHUB_ENV, and a check after the
+// lenient sweep fails the run when that cap is spent or a keyed read was
+// refused 429 (scripts/test-non-metered-examples.js --coingecko-run-check).
+{
+  const { CG_RUN_READ_CAP, CG_RUN_MAX_PER_MIN, CG_NIGHTLY_READ_CAP } = await import("./test-non-metered-examples.js");
+  const DATA_KEYS = ["OPEN_METEO_API_KEY", "COINGECKO_CI_API_KEY"];
+  const KEY_VARS = ["OPEN_METEO_API_KEY", "COINGECKO_API_KEY"];
+  const wfText = (f) => readFileSync(new URL(`../.github/workflows/${f}`, import.meta.url), "utf8");
+  for (const f of ["deploy.yml", "corpus-nightly.yml"]) {
+    ok(!/secrets\.COINGECKO_API_KEY\b/.test(wfText(f)), `${f}: no step reads secrets.COINGECKO_API_KEY (the production key is not an Actions secret; CI uses COINGECKO_CI_API_KEY)`);
+  }
+  // Every place a data key is read, by workflow: [job, step name].
+  const readsOf = (wf) => {
+    const out = [];
+    const scan = (env, where) => { for (const [k, v] of Object.entries(env || {})) for (const s of DATA_KEYS) if (new RegExp(`secrets\\.${s}\\b`).test(String(v))) out.push({ ...where, secret: s, as: k }); };
+    scan(wf.env, { scope: "workflow" });
+    for (const [jn, job] of Object.entries(wf.jobs || {})) {
+      scan(job.env, { scope: "job", job: jn });
+      for (const st of job.steps || []) scan(st.env, { scope: "step", job: jn, step: String(st.name || ""), st });
+    }
+    return out;
+  };
+  const deploy = load(text);
+  const dReads = readsOf(deploy);
+  ok(dReads.every((r) => r.scope === "step"), `deploy.yml: the data keys are read at step scope only${dReads.filter((r) => r.scope !== "step").map((r) => ` (${r.secret} at ${r.scope} scope${r.job ? ` in ${r.job}` : ""})`).join("")}`);
+  const KEYED_STEP = "Start server in free mode (the strict sweep's server; the CI data keys)";
+  const keyedSteps = [...new Set(dReads.map((r) => `${r.job}: ${r.step}`))];
+  ok(keyedSteps.length === 1 && keyedSteps[0] === `test-sweeps: ${KEYED_STEP}`, `deploy.yml: only the strict sweep's server step reads the data keys (${keyedSteps.join("; ") || "none"})`);
+  const keyed = deploy.jobs?.["test-sweeps"]?.steps?.find((st) => st.name === KEYED_STEP);
+  ok(Boolean(keyed), "test-sweeps holds the keyed server step");
+  if (keyed) {
+    const env = keyed.env || {};
+    const run = String(keyed.run || "");
+    ok(/^\$\{\{ secrets\.OPEN_METEO_API_KEY \}\}$/.test(String(env.OPEN_METEO_API_KEY)) && /^\$\{\{ secrets\.COINGECKO_CI_API_KEY \}\}$/.test(String(env.COINGECKO_API_KEY)),
+      "the keyed step hands the server OPEN_METEO_API_KEY and the CI CoinGecko key as COINGECKO_API_KEY");
+    ok(env.COINGECKO_API_TIER === "pro", `the keyed step sets COINGECKO_API_TIER=pro (got ${env.COINGECKO_API_TIER})`);
+    ok(String(env.COINGECKO_DAILY_MAX) === String(CG_RUN_READ_CAP), `the server's CoinGecko read ceiling is the sweep's per-run cap (${env.COINGECKO_DAILY_MAX} vs CG_RUN_READ_CAP ${CG_RUN_READ_CAP})`);
+    ok(String(env.COINGECKO_MAX_PER_MIN) === String(CG_RUN_MAX_PER_MIN), `the server's CoinGecko minute pacing is the sweep's (${env.COINGECKO_MAX_PER_MIN} vs ${CG_RUN_MAX_PER_MIN})`);
+    ok(/src\/server\.js/.test(run), "the keyed step boots the server (the only process that reads the keys)");
+    // A key variable is only ever tested for presence, never printed or exported.
+    const uses = KEY_VARS.flatMap((v) => [...run.matchAll(new RegExp(`(.{0,6})\\$\\{?${v}\\}?`, "g"))].map((m) => m[1]));
+    ok(uses.length >= 2 && uses.every((pre) => /-[nz] "$/.test(pre)), `the keyed step reads each key variable only in a presence test (${uses.length} use(s))`);
+    ok(!KEY_VARS.some((v) => new RegExp(`${v}=`).test(run.split("\n").filter((l) => /GITHUB_ENV|GITHUB_OUTPUT/.test(l)).join("\n"))), "the keyed step never writes a key to GITHUB_ENV or GITHUB_OUTPUT");
+    ok(/NON_METERED_CG_MODE=\$\w+.*GITHUB_ENV/.test(run) && /NON_METERED_OM_MODE=\$\w+.*GITHUB_ENV/.test(run), "the keyed step hands the later steps the words keyed or keyless for each source");
+    ok(/add-mask/.test(run) && /AGENT402_OPERATOR_TOKEN=/.test(run), "the keyed step masks the run's own operator token before the server reads it");
+  }
+  // The check after the lenient sweep: the cap and a keyed 429 fail the run.
+  const sweepSteps = deploy.jobs?.["test-sweeps"]?.steps || [];
+  const iCheck = sweepSteps.findIndex((st) => /test-non-metered-examples\.js --coingecko-run-check\b/.test(String(st.run || "")));
+  const iAll = sweepSteps.findIndex((st) => /scripts\/test-all\.js/.test(String(st.run || "")));
+  ok(iCheck > iAll && iAll >= 0, `test-sweeps checks the CoinGecko reads after the lenient sweep (check step ${iCheck}, test-all step ${iAll})`);
+  ok(iCheck >= 0 && /!cancelled\(\)/.test(String(sweepSteps[iCheck].if || "")), "the CoinGecko check runs whatever the sweeps answered (if: !cancelled())");
+  // Every other server boot in the deploy workflow is keyless for both sources.
+  for (const [jn, job] of Object.entries(deploy.jobs || {})) {
+    for (const st of job.steps || []) {
+      if (st.name === KEYED_STEP && jn === "test-sweeps") continue;
+      const env = { ...(deploy.env || {}), ...(job.env || {}), ...(st.env || {}) };
+      const leaked = KEY_VARS.filter((k) => env[k] !== undefined && String(env[k]).trim() !== "");
+      if (leaked.length) ok(false, `deploy.yml ${jn} "${String(st.name || "").slice(0, 50)}" carries ${leaked.join(", ")}`);
+    }
+  }
+  // The nightly corpus: the CI key on the corpus step alone, same tier and its own cap.
+  const corpus = load(wfText("corpus-nightly.yml"));
+  const cReads = readsOf(corpus);
+  ok(cReads.length >= 1 && cReads.every((r) => r.scope === "step" && r.job === "corpus" && /^Run the corpus/.test(r.step)), `corpus-nightly.yml: the CI key is read on the corpus step alone (${cReads.map((r) => `${r.scope}:${r.step || r.job}`).join("; ")})`);
+  const cStep = corpus.jobs?.corpus?.steps?.find((st) => /^Run the corpus/.test(String(st.name || "")));
+  const cEnv = cStep?.env || {};
+  ok(/^\$\{\{ secrets\.COINGECKO_CI_API_KEY \}\}$/.test(String(cEnv.COINGECKO_API_KEY)) && cEnv.COINGECKO_API_TIER === "pro" && String(cEnv.COINGECKO_DAILY_MAX) === String(CG_NIGHTLY_READ_CAP),
+    `corpus-nightly.yml: the corpus server gets the CI key as COINGECKO_API_KEY, the pro tier and the nightly read cap (${cEnv.COINGECKO_DAILY_MAX} vs ${CG_NIGHTLY_READ_CAP})`);
+  ok(/keyed/.test(String(cStep?.run || "")) && !/echo[^\n]*\$\{?COINGECKO_API_KEY/.test(String(cStep?.run || "")), "corpus-nightly.yml: the corpus step logs keyed or keyless, never the key");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

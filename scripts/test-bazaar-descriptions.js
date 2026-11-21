@@ -25,6 +25,11 @@ for (const [slug, text] of Object.entries(BAZAAR_DESCRIPTIONS)) {
   ok(!text.includes("—"), `${slug}: no em dashes`);
   ok(!/untrustedContent|\/api\/|see also/i.test(text), `${slug}: no internal cross-references / schema jargon`);
 }
+// weather-risk-brief's listing says what it sells, beside its four-source credit.
+{
+  const listed = bazaarCapDescription(BAZAAR_DESCRIPTIONS["weather-risk-brief"] || "");
+  ok(/0-100 risk score/.test(listed) && /Ranked/.test(listed) && /ECMWF is responsible/.test(listed), `weather-risk-brief: the listing names the score and the ranking and keeps the credit (${listed.slice(0, 80)})`);
+}
 // the flagships all have curated copy
 for (const must of ["search", "answer", "extract", "render", "vin-decode", "geo-lookup", "hash", "sql-guard", "route-execute", "v1-chat-auto", "v1-embeddings", "image-ocr", "memory-write", "memory-read"]) ok(!!BAZAAR_DESCRIPTIONS[must], `flagship ${must} has curated Bazaar copy`);
 // memory-read's listing: the catalog text is mostly query hints, so the

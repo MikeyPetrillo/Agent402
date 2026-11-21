@@ -558,11 +558,16 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   {
     const tempoAt = server.indexOf("if (req.tempoSettled) return next();");
     const awaitAt = server.indexOf("try { await reserveHangupForgiveness(", tempoAt);
-    const closeAt = server.indexOf("res.once(\"close\", () => { closed = true; if (reserved) settle(); });", tempoAt);
-    ok(tempoAt > 0 && awaitAt > tempoAt && awaitAt - tempoAt < 2000, "a request already settled before its handler (Tempo push) takes no ticket (the reservation is awaited: a promise with a shared store)");
-    ok(closeAt > tempoAt && closeAt < awaitAt, "the close listener is registered before the shared budget read, so a socket that closes during it is not missed");
+    const closeAt = server.indexOf("res.once(\"close\", () => {\n      closed = true;\n      if (!reserved) return;", tempoAt);
+    const outcomeAt = server.indexOf("onResponseEnd(req, res, () => { decided = true; if (late) { clearTimeout(late); late = null; } if (reserved) settle(); });", tempoAt);
+    ok(tempoAt > 0 && awaitAt > tempoAt && awaitAt - tempoAt < 3500, "a request already settled before its handler (Tempo push) takes no ticket (the reservation is awaited: a promise with a shared store)");
+    ok(closeAt > tempoAt && closeAt < awaitAt && outcomeAt > tempoAt && outcomeAt < awaitAt, "the close listener and the outcome listener are registered before the shared budget read, so a socket that closes during it is not missed");
     const tail = server.slice(awaitAt, awaitAt + 900);
-    ok(/reserved = true;\s*\n\s*if \(closed \|\| res\.destroyed\) \{\s*\n\s*settle\(\);/.test(tail), "the ticket is settled on close, including a close during the read");
+    ok(/reserved = true;\s*\n\s*if \(decided\) settle\(\);\s*\n\s*if \(closed \|\| res\.destroyed\) \{\s*\n\s*settle\(\);/.test(tail), "the ticket is settled once the response ended, including a close during the read");
+    // A close settles a channel's ticket at once and any other once the
+    // outcome is known (scripts/test-hangup-claim-wait.js drives it).
+    ok(/if \(decided \|\| isBatchSettlementRequest\(req\)\) \{ settle\(\); return; \}\s*\n\s*late = setTimeout\(contained\("hangup-ticket-late-settle", settle\), HANGUP_INFLIGHT_WINDOW_MS\(\)\);/.test(server.slice(closeAt, closeAt + 400)), "a close settles a payment channel's ticket at once, any other at its outcome (or one in-flight window later, inside contained())");
+    ok(outcomeAt > 0, "the outcome listener clears the late settle timer, so a buyer who left mid-run does not hold the request for the in-flight window");
     // What `settle()` passes as `abandoned` is pinned AFTER the booted cases
     // (b, b3, b4 drive the behavior), so a mutation there fails on behavior
     // first and the pin stays an extra.

@@ -285,7 +285,7 @@ const listed = newAccount();
   const flat = (s) => s.replace(/\s+/g, " ");
   const { privacyPage } = await import("../src/privacy.js");
   const p = flat(privacyPage("https://agent402.tools"));
-  ok(p.includes("and the paying wallet of an MPP monitor subscription (before its first payment and before each renewal) are checked against the US Treasury OFAC SDN list") && p.includes("For such a Tempo payment and for a subscription payment we also read the paying wallet's recent inbound transfers"),
+  ok(p.includes("and the paying wallet of an MPP monitor subscription (before its first payment and before each renewal) are checked against the US Treasury OFAC SDN list") && p.includes("For a Tempo per-call payment our server settles itself and for a subscription payment we also read the paying wallet's recent inbound transfers"),
     "/privacy says subscription payers are checked before the first payment and each renewal, and that their inbound transfers are read");
   const wiki = flat(readFileSync(new URL("../wiki/Security-Model.md", import.meta.url), "utf8"));
   ok(wiki.includes("A monitor subscription paid over MPP is sent by the server in either mode: its paying wallet is checked against the same list") && wiki.includes("when the transfer feed answers in time, before the first payment and before each renewal") && wiki.includes("If the list has not loaded, a subscription payment is sent and counted as unscreened."),

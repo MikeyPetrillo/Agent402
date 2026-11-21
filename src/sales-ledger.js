@@ -149,6 +149,17 @@ for (const h of [db, fileDb]) if (h) { try { h.exec("CREATE INDEX IF NOT EXISTS 
 // recorded before it existed and on sales no request carried (card checkout,
 // subscription invoices); readers report those as "unknown".
 for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN via TEXT"); } catch { /* exists */ } }
+// Additive column: the run a sale was made for (32 hex), set only on a sale
+// our own loopback made for a task or an async job that named its run
+// (src/sale-path.js saleRunKeyOf), so an interrupted run's sweep reads its
+// own sale by that key and never another call's (src/mcp-tasks.js). NULL on
+// every other sale. Read only by that sweep. The partial index holds only
+// keyed rows, so building it on an existing file is one pass and no entries.
+for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN run_key TEXT"); } catch { /* exists */ } }
+for (const h of [db, fileDb]) if (h) { try { h.exec("CREATE INDEX IF NOT EXISTS idx_sales_run_key ON sales (run_key) WHERE run_key IS NOT NULL"); } catch { /* exists */ } }
+const RUN_KEY_RE = /^[0-9a-f]{32}$/;
+/** A run key safe to store: 32 lower-case hex characters, else null. */
+export const cleanRunKey = (v) => (typeof v === "string" && RUN_KEY_RE.test(v) ? v : null);
 
 // Boot-time reclassification (2026-08-20): `internal` is decided at record
 // time, so a wallet that JOINS the burner/test set later leaves stale
@@ -193,7 +204,7 @@ const IMPORT_NAME = basename(DB_PATH);
 // in-memory mirror and the write-through file only in database mode, so file
 // mode's file is untouched.
 if (USE_PG) for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN sale_uid TEXT"); } catch { /* exists */ } }
-const SALE_COLS = ["id", "ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256", "attest_uid", "attest_tx", "via", ...(USE_PG ? ["sale_uid"] : [])];
+const SALE_COLS = ["id", "ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256", "attest_uid", "attest_tx", "via", "run_key", ...(USE_PG ? ["sale_uid"] : [])];
 const FEEDBACK_COLS = ["tx", "sale_id", "slug", "payer", "verdict", "reason", "ts"];
 const PG_DDL = () => `
   CREATE TABLE IF NOT EXISTS ${T("sales")} (
@@ -218,6 +229,7 @@ const PG_DDL = () => `
   ALTER TABLE ${T("sales")} ADD COLUMN IF NOT EXISTS sale_uid TEXT;
   CREATE UNIQUE INDEX IF NOT EXISTS sales_sale_uid ON ${T("sales")} (sale_uid);
   ALTER TABLE ${T("sales")} ADD COLUMN IF NOT EXISTS via TEXT;
+  ALTER TABLE ${T("sales")} ADD COLUMN IF NOT EXISTS run_key TEXT;
   CREATE TABLE IF NOT EXISTS ${T("sale_feedback")} (
     tx          TEXT PRIMARY KEY,
     sale_id     BIGINT NOT NULL,
@@ -242,6 +254,7 @@ const saleRowOf = (r) => cleanRow({
   payer: r.payer ?? null, tx: r.tx ?? null, internal: Number(r.internal) ? 1 : 0, wire: r.wire ?? null, quote_usd: num(r.quote_usd),
   response_sha256: r.response_sha256 ?? null, attest_uid: r.attest_uid ?? null, attest_tx: r.attest_tx ?? null,
   via: r.via ?? null,
+  run_key: cleanRunKey(r.run_key),
   ...(USE_PG ? { sale_uid: r.sale_uid ?? null } : {}),
 });
 const feedbackRowOf = (r) => cleanRow({ tx: r.tx, sale_id: Number(r.sale_id), slug: r.slug, payer: r.payer, verdict: r.verdict, reason: r.reason ?? null, ts: Number(r.ts) });
@@ -274,8 +287,9 @@ const writer = createLedgerWriter({ enqueue, ready: () => readyP(), deadLetter, 
 const SALE_INS_COLS = ["ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256"];
 const SALE_INS_TYPES = ["bigint", "text", "double precision", "text", "text", "text", "text", "integer", "text", "double precision", "text"];
 /** A sale's values carry its sale_uid as a twelfth value (an entry queued
- *  before sale_uid existed has eleven) and its path as a thirteenth (an entry
- *  queued before the path existed has twelve and lands with NULL). */
+ *  before sale_uid existed has eleven), its path as a thirteenth (an entry
+ *  queued before the path existed has twelve and lands with NULL) and its run
+ *  key as a fourteenth (an entry queued before it existed lands with NULL). */
 const uidOf = (vals) => (Array.isArray(vals) && typeof vals[11] === "string" && vals[11] ? vals[11] : null);
 /** INSERT a sale unless the same sale is already there. With a sale_uid that
  *  is the identity (the live write and the replay of one sale share it, two
@@ -283,8 +297,8 @@ const uidOf = (vals) => (Array.isArray(vals) && typeof vals[11] === "string" && 
  *  existed), the whole row: ts, slug, rail, payer and tx. A tx alone is never
  *  a sale's identity: two sales can name one payment (a subscription invoice,
  *  a webhook sent twice), so a replay must not drop the second. */
-const INSERT_SALE_BY_UID = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")}, sale_uid, via)
-  VALUES (${SALE_INS_COLS.map((_, i) => `$${i + 1}`).join(", ")}, $12, $13) ON CONFLICT (sale_uid) DO NOTHING RETURNING *`;
+const INSERT_SALE_BY_UID = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")}, sale_uid, via, run_key)
+  VALUES (${SALE_INS_COLS.map((_, i) => `$${i + 1}`).join(", ")}, $12, $13, $14) ON CONFLICT (sale_uid) DO NOTHING RETURNING *`;
 const INSERT_SALE_IF_ABSENT_ROW = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")})
   SELECT ${SALE_INS_COLS.map((_, i) => `$${i + 1}::${SALE_INS_TYPES[i]}`).join(", ")}
   WHERE NOT EXISTS (SELECT 1 FROM ${T("sales")} WHERE tx IS NOT DISTINCT FROM $7::text
@@ -292,7 +306,7 @@ const INSERT_SALE_IF_ABSENT_ROW = () => `INSERT INTO ${T("sales")} (${SALE_INS_C
   RETURNING *`;
 /** Insert-if-absent for one queued sale; resolves the row when this call inserted it. */
 async function insertSaleIfAbsent(vals) {
-  if (uidOf(vals)) return (await stateQuery(INSERT_SALE_BY_UID(), [...vals.slice(0, 12), cleanSalePath(vals[12])])).rows[0] || null;
+  if (uidOf(vals)) return (await stateQuery(INSERT_SALE_BY_UID(), [...vals.slice(0, 12), cleanSalePath(vals[12]), cleanRunKey(vals[13])])).rows[0] || null;
   return (await stateQuery(INSERT_SALE_IF_ABSENT_ROW(), vals.slice(0, 11))).rows[0] || null;
 }
 const FEEDBACK_IF_NEWER = () => `INSERT INTO ${T("sale_feedback")} (tx, sale_id, slug, payer, verdict, reason, ts) VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -509,7 +523,7 @@ export function salesDeadLetterState() {
 export async function _salesDeadLetterEntries() { return deadLetter ? deadLetter.entries() : []; }
 
 const insertSale = db.prepare(
-  "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, via) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, via, run_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 );
 
 /** Settle tx hash/signature out of the base64 PAYMENT-RESPONSE receipt. */
@@ -530,7 +544,7 @@ export function txFromPaymentResponse(headerValue) {
  * when the write failed), queued behind earlier writes so rows land in call
  * order; the serving path does not wait on it.
  */
-export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic, wire, quoteUsd, responseSha256, via }) {
+export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic, wire, quoteUsd, responseSha256, via, runKey = null }) {
   try {
     const p = normalizePayerAddress(payer); // lowercases EVM only — base58/Stellar stay case-exact
     const internal = Boolean(synthetic) || rail === "heartbeat" || (p !== null && BURNERS.has(p));
@@ -552,7 +566,7 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
       // The sale's own id, and the sale on local disk BEFORE it is queued: a
       // crash, a kill or a database that hangs through the shutdown flush
       // leaves it there, and the replay lands it once (by this id).
-      const pgVals = [...vals, randomUUID(), cleanSalePath(via)];
+      const pgVals = [...vals, randomUUID(), cleanSalePath(via), cleanRunKey(runKey)];
       return trackQueuedSale(pgVals[6], writer.write("record-sale", async () => {
         let row = await insertSaleIfAbsent(pgVals);
         // No row: this sale is already there (an earlier attempt whose reply was lost).
@@ -561,7 +575,7 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
         return true;
       }, { kind: "sale", payload: pgVals, onError: false }));
     }
-    insertSale.run(...vals, cleanSalePath(via));
+    insertSale.run(...vals, cleanSalePath(via), cleanRunKey(runKey));
   } catch { /* never break serving for accounting */ }
   return USE_PG ? Promise.resolve(false) : undefined;
 }
@@ -1042,6 +1056,28 @@ const qPayerReceipts = db.prepare(`
    WHERE payer = ? AND internal = 0 AND ts >= ? AND ts <= ?
    ORDER BY ts DESC
    LIMIT ?`);
+// One tool's sales to one wallet in a window, with the path each arrived on
+// (read only by the interrupted-run sweep, src/mcp-tasks.js).
+const qPayerToolSales = db.prepare(`
+  SELECT ts, ${BUYER_AMOUNT_SQL} AS price_usd, network, tx, via, run_key
+    FROM sales /* buyer-view */
+   WHERE payer = ? AND slug = ? AND internal = 0 AND ts >= ? AND ts <= ?
+   ORDER BY ts ASC
+   LIMIT ?`);
+// The sales booked for one run (its key), and one tool's outside sales in a
+// window by any wallet (read only by the same sweep).
+const qRunSales = db.prepare(`
+  SELECT ts, slug, ${BUYER_AMOUNT_SQL} AS price_usd, network, tx, payer, internal, via, run_key
+    FROM sales /* buyer-view */
+   WHERE run_key = ?
+   ORDER BY ts ASC
+   LIMIT ?`);
+const qToolSalesInWindow = db.prepare(`
+  SELECT ts, run_key
+    FROM sales /* buyer-view */
+   WHERE slug = ? AND internal = 0 AND ts >= ? AND ts <= ?
+   ORDER BY ts ASC
+   LIMIT ?`);
 const qPayerTotals = db.prepare(`
   SELECT COUNT(*) AS n, SUM(${BUYER_AMOUNT_SQL}) AS usd, MIN(ts) AS first_ts, MAX(ts) AS last_ts
   FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ?`);
@@ -1327,6 +1363,33 @@ export function badFeedback({ days = 30, limit = 50 } = {}) {
     at: new Date(r.ts).toISOString(), item: r.slug, reason: r.reason,
     settlementTx: r.tx, responseSha256: r.response_sha256 || null,
   }));
+}
+
+/** Sales of `slug` to `payer` between two times (ms), oldest first, at most
+ *  `limit`: [{ ts, priceUsd, network, tx, via }]. Database mode reads the
+ *  in-memory mirror, as payerReceipts does. */
+export function payerSalesOfTool(payer, slug, { fromMs, toMs, limit = 5 } = {}) {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return null;
+  return qPayerToolSales.all(payer, slug, fromMs, toMs, Math.min(Math.max(limit, 1), 50)).map((r) => ({
+    ts: r.ts, priceUsd: Number(r.price_usd) || null, network: r.network || null, tx: r.tx || null, via: r.via || null, runKey: r.run_key || null,
+  }));
+}
+/** The sales booked under one run key, oldest first, at most `limit`:
+ *  [{ ts, slug, priceUsd, network, tx, payer, internal, via, runKey }]; null
+ *  for a value that is not a run key. Database mode reads the mirror. */
+export function salesOfRun(runKey, { limit = 5 } = {}) {
+  const k = cleanRunKey(runKey);
+  if (!k) return null;
+  return qRunSales.all(k, Math.min(Math.max(limit, 1), 50)).map((r) => ({
+    ts: r.ts, slug: r.slug, priceUsd: Number(r.price_usd) || null, network: r.network || null, tx: r.tx || null,
+    payer: r.payer || null, internal: !!r.internal, via: r.via || null, runKey: r.run_key || null,
+  }));
+}
+/** One tool's outside sales between two times (ms), by any wallet, oldest
+ *  first, at most `limit`: [{ ts, runKey }]. Database mode reads the mirror. */
+export function toolSalesInWindow(slug, { fromMs, toMs, limit = 20 } = {}) {
+  if (typeof slug !== "string" || !slug || !Number.isFinite(fromMs) || !Number.isFinite(toMs)) return null;
+  return qToolSalesInWindow.all(slug, fromMs, toMs, Math.min(Math.max(limit, 1), 50)).map((r) => ({ ts: r.ts, runKey: r.run_key || null }));
 }
 
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.

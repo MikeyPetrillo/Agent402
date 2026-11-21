@@ -30,6 +30,17 @@
 //     `maxWaitMs: 0` (public when its slot is open now, keyed otherwise).
 //     Every read counts, per caller and by the reason the keyed lane got it
 //     (`solanaHistoryStatus({ full: true })`), and feeds the status word.
+//   * A caller with nobody waiting on it (the activity scans and the Solana
+//     board) passes `background`: the public lane first,
+//     queued for its slot (`SOLANA_HISTORY_BACKGROUND_MAX_WAIT_MS`), and the
+//     keyed lane only as a fallback that takes a unit of the day's background
+//     share of the keyed provider's ceiling (`history-background` in
+//     src/upstream-hard-caps.js, `SOLANA_HISTORY_BACKGROUND_KEYED_DAILY_MAX`,
+//     counted in the shared store). With the share spent the keyed lane is
+//     not tried: the read throws with `backgroundBudgetSpent` set, the caller
+//     keeps what it holds and says how old that is, and the read is left out
+//     of the status word (a spent share is the budget working, not a lane
+//     failing).
 //
 // Lane order (SOLANA_HISTORY_ALCHEMY_FIRST=on restores keyed-first):
 //   1. SOLANA_HISTORY_PUBLIC_RPCS (default: the public mainnet RPC),
@@ -39,6 +50,11 @@
 import { redactSecrets } from "./tools/redact.js";
 import { registerMemoryStore } from "./memory-stores.js";
 import { positiveNum as num } from "./env-num.js";
+import { hardCapNameForHost, takeHardCapShare, hardCapShareStatus } from "./upstream-hard-caps.js";
+import { egressCaller } from "./upstream-call-days.js";
+
+/** The share of the keyed provider's daily ceiling that background reads may use. */
+export const BACKGROUND_SHARE = "history-background";
 
 const PUBLIC_MAINNET = "https://api.mainnet-beta.solana.com";
 
@@ -90,8 +106,8 @@ export function solanaHistoryLanes(env = process.env) {
 // ---- per-lane state: pacing, cooldown, counters ---------------------------
 const laneState = new Map();   // url -> { nextAt, coolUntil, strikes }
 const counters = new Map();    // label -> { served, nulls, rateLimited, failed, skipped, keyed }
-const callers = new Map();     // caller -> { public, keyed, none, cacheHits, keyedBecause }
-let cacheHits = 0, allFailed = 0, startedAt = Date.now();
+const callers = new Map();     // caller -> { public, keyed, none, held, cacheHits, keyedBecause }
+let cacheHits = 0, allFailed = 0, heldForBudget = 0, startedAt = Date.now();
 const recent = [];             // last outcomes: "public" | "keyed" | "none"
 const RECENT_MAX = 200;
 // Why the keyed lane got a read: the caller asked for it first, or what the
@@ -105,7 +121,7 @@ const countOf = (lane) => {
   if (!c) { c = { served: 0, nulls: 0, rateLimited: 0, failed: 0, skipped: 0, keyed: lane.keyed }; counters.set(k, c); }
   return c;
 };
-const newTally = () => ({ public: 0, keyed: 0, none: 0, cacheHits: 0, keyedBecause: Object.fromEntries(KEYED_REASONS.map((r) => [r, 0])) });
+const newTally = () => ({ public: 0, keyed: 0, none: 0, held: 0, cacheHits: 0, keyedBecause: Object.fromEntries(KEYED_REASONS.map((r) => [r, 0])) });
 const tallyOf = (caller) => {
   let t = callers.get(caller);
   if (!t) { t = newTally(); callers.set(caller, t); }
@@ -147,7 +163,11 @@ export function trimTransaction(tx) {
 const CACHE_DEFAULT = 2048;
 const cacheMaxOf = (env) => (env.SOLANA_HISTORY_CACHE != null ? Math.max(0, Number(env.SOLANA_HISTORY_CACHE) || 0) : CACHE_DEFAULT);
 const cache = new Map();
-const cacheKey = (method, params) => (method === "getTransaction" && typeof params?.[0] === "string") ? `${params[0]}|${JSON.stringify(params[1] || {})}` : null;
+// Keyed by signature and encoding. The transaction version a caller says it
+// supports is not part of the key: the record kept is the same for every
+// version (see TX_VERSION_RE below), so the board and the activity scans,
+// which ask with different versions, share one entry per transaction.
+const cacheKey = (method, params) => (method === "getTransaction" && typeof params?.[0] === "string") ? `${params[0]}|${String(params[1]?.encoding || "")}` : null;
 function cacheGet(k) { if (!k || !cache.has(k)) return undefined; const v = cache.get(k); cache.delete(k); cache.set(k, v); return v; }
 function cachePut(k, v, max) {
   if (!k || v == null || max <= 0) return;
@@ -166,13 +186,14 @@ const TX_VERSION_RE = /Transaction version \((\d+)\) is not supported/i;
 const txVersionOf = (params) => Number(params?.[1]?.maxSupportedTransactionVersion ?? -1);
 const withTxVersion = (params, v) => [params[0], { ...(params[1] || {}), maxSupportedTransactionVersion: v }];
 
-async function postOnce(url, method, params, timeoutMs, fetchImpl) {
-  const r = await fetchImpl(url, {
+async function postOnce(url, method, params, timeoutMs, fetchImpl, caller = "other") {
+  // The call is counted under this reader's own caller (src/upstream-call-days.js).
+  const r = await egressCaller(`solana-history:${caller}`, () => fetchImpl(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
     signal: AbortSignal.timeout(timeoutMs),
-  });
+  }));
   if (r.status === 429) {
     const ra = Number(r.headers?.get?.("retry-after"));
     return { kind: "rateLimited", retryAfterMs: Number.isFinite(ra) && ra > 0 ? ra * 1000 : 0 };
@@ -192,6 +213,8 @@ async function postOnce(url, method, params, timeoutMs, fetchImpl) {
  *   maxWaitMs        longest a read queues for a public lane's pacing slot before skipping it
  *                    (SOLANA_HISTORY_PUBLIC_MAX_WAIT_MS, default 10000; 0 = never wait)
  *   keyedFirst       the keyed lane first and no queueing (a visitor is waiting on the answer)
+ *   background       nobody waits on the answer: public first and queued for its slot, the keyed
+ *                    lane only under the day's background share (see the header); wins over keyedFirst
  *   caller           label for the per-caller counts (default "other")
  *   lanes, fetchImpl test seams
  */
@@ -201,14 +224,17 @@ export async function solanaHistoryRead(method, params, opts = {}) {
   // cold activity scan) keeps the keyed lane first and never queues for a
   // public slot; it still shares the cache, the fallbacks and the counters,
   // and its reads feed the status word like any other (they were served keyed).
-  const keyedFirst = !!opts.keyedFirst;
+  const background = !!opts.background;
+  const keyedFirst = !!opts.keyedFirst && !background;
   const ordered = opts.lanes || solanaHistoryLanes(env);
   const lanes = keyedFirst ? [...ordered.filter((l) => l.keyed), ...ordered.filter((l) => !l.keyed)] : ordered;
   const fetchImpl = opts.fetchImpl || ((...a) => fetch(...a));
   const timeoutMs = opts.timeoutMs ?? 6000;
   const publicTimeoutMs = opts.publicTimeoutMs ?? num(env.SOLANA_HISTORY_PUBLIC_TIMEOUT_MS, 4000);
-  const maxWaitMs = opts.maxWaitMs ?? (keyedFirst ? 0 : env.SOLANA_HISTORY_PUBLIC_MAX_WAIT_MS != null ? Math.max(0, Number(env.SOLANA_HISTORY_PUBLIC_MAX_WAIT_MS) || 0) : 10_000);
-  const tally = tallyOf(String(opts.caller || "other"));
+  const envWait = (k, dflt) => (env[k] != null && String(env[k]).trim() !== "" ? Math.max(0, Number(env[k]) || 0) : dflt);
+  const maxWaitMs = opts.maxWaitMs ?? (keyedFirst ? 0 : background ? envWait("SOLANA_HISTORY_BACKGROUND_MAX_WAIT_MS", 30_000) : envWait("SOLANA_HISTORY_PUBLIC_MAX_WAIT_MS", 10_000));
+  const callerName = String(opts.caller || "other");
+  const tally = tallyOf(callerName);
   // What the first public lane did with this read, when a later lane serves it.
   let publicWhy = null;
   const settle = (outcome) => {
@@ -227,7 +253,7 @@ export async function solanaHistoryRead(method, params, opts = {}) {
   if (hit !== undefined) { cacheHits++; tally.cacheHits++; return hit; }
 
   const hasKeyed = lanes.some((l) => l.keyed);
-  let sawNull = false;
+  let sawNull = false, budgetSpent = false;
   const failures = [];
   const skip = (lane, c, why) => { c.skipped++; failures.push(`${laneLabel(lane.url)}: ${why}`); publicWhy ??= why; };
   for (const lane of lanes) {
@@ -247,9 +273,16 @@ export async function solanaHistoryRead(method, params, opts = {}) {
         if (st.coolUntil > Date.now()) { skip(lane, c, "cooling"); continue; }
       }
     }
+    if (lane.keyed && background) {
+      // The background share of the keyed provider's ceiling, taken before
+      // the call (a lane on another provider has no ceiling here: no unit).
+      let capName = lane.cap;
+      if (capName === undefined) { try { capName = hardCapNameForHost(new URL(lane.url).host); } catch { capName = null; } }
+      if (!takeHardCapShare(BACKGROUND_SHARE, capName)) { budgetSpent = true; c.skipped++; failures.push(`${laneLabel(lane.url)}: background share spent`); continue; }
+    }
     const laneTimeout = lane.keyed ? timeoutMs : publicTimeoutMs;
     const post = async (p) => {
-      try { return await postOnce(lane.url, method, p, laneTimeout, fetchImpl); }
+      try { return await postOnce(lane.url, method, p, laneTimeout, fetchImpl, callerName); }
       catch (e) { return { kind: "failed", why: redactSecrets(String(e?.name === "TimeoutError" ? "timeout" : (e?.message || e))).slice(0, 80), timeout: e?.name === "TimeoutError" || e?.name === "AbortError" }; }
     };
     // A version this lane already answered with is asked for up front.
@@ -289,9 +322,16 @@ export async function solanaHistoryRead(method, params, opts = {}) {
     failures.push(`${laneLabel(lane.url)}: ${out.why}`);
   }
   if (sawNull && !hasKeyed) { settle("public"); return null; }
-  allFailed++; settle("none");
   const err = new Error(`solana history read failed on every lane - ${failures.join(" | ")}`.slice(0, 300));
   err.lanes = failures;
+  if (budgetSpent) {
+    // Held, not failed: the keyed lane was not tried. Counted per caller and
+    // kept out of the window the status word reads.
+    heldForBudget++; tally.held++;
+    err.backgroundBudgetSpent = true;
+    throw err;
+  }
+  allFailed++; settle("none");
   throw err;
 }
 
@@ -334,13 +374,16 @@ export function solanaHistoryStatus({ full = false } = {}) {
   const byCaller = {};
   for (const [k, t] of callers) {
     byCaller[k] = JSON.parse(JSON.stringify(t));
-    for (const f of ["public", "keyed", "none", "cacheHits"]) reads[f] += t[f];
+    for (const f of ["public", "keyed", "none", "held", "cacheHits"]) reads[f] += t[f];
     for (const r of KEYED_REASONS) reads.keyedBecause[r] += t.keyedBecause[r];
   }
   return {
     status, sinceRestart: true, since: new Date(startedAt).toISOString(),
     order: onFlag(process.env.SOLANA_HISTORY_ALCHEMY_FIRST) ? "keyed-first" : "public-first",
     lanes, cacheHits, failedEveryLane: allFailed,
+    // Background reads the keyed lane was not tried for (its share was spent),
+    // and the share itself: used and budget for the UTC day, from the shared store.
+    heldForBudget, backgroundShare: (() => { try { return hardCapShareStatus()[BACKGROUND_SHARE] || null; } catch { return null; } })(),
     publicShare: total ? Number((servedPublic / total).toFixed(3)) : null,
     reads, callers: byCaller, cache: { size: cache.size, max: cacheMaxOf(process.env) },
   };
@@ -348,7 +391,7 @@ export function solanaHistoryStatus({ full = false } = {}) {
 
 export function __resetSolanaHistoryForTest() {
   laneState.clear(); counters.clear(); callers.clear(); cache.clear(); recent.length = 0;
-  cacheHits = 0; allFailed = 0; startedAt = Date.now();
+  cacheHits = 0; allFailed = 0; heldForBudget = 0; startedAt = Date.now();
 }
 
 // Operator heap read (/__operator/heap.json `stores`).

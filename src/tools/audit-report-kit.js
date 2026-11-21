@@ -1,5 +1,5 @@
-// Agent audit report: one wallet's full paid history with this server, as a
-// file a company can hand to an auditor.
+// Agent audit report: one wallet's paid history with this server, a record
+// of every paid call it made, with the repayments recorded for it beside it.
 //
 // IDENTITY. Like my-usage and receipts, the wallet is the one that SIGNED the
 // payment for this call (identityPayerOf: the EIP-3009 authorization.from the
@@ -18,6 +18,16 @@
 // Totals by tool and by UTC day cover the whole window; the rows are a page
 // (`limit`, `cursor`), stated in partial-answer fields (src/partial-answer.js).
 //
+// REPAYMENTS. Totals and rows are what the wallet paid. A charged call that
+// failed or was not delivered is repaid through the refund ledger
+// (src/refund-ledger.js); the JSON report lists the wallet's own refund rows
+// recorded in the window in `refunds` (owed, repaid, with the repayment
+// transaction) and never subtracts them from the totals (`netted: false`): a
+// refund row can stand for a payment no sale row holds (a late landing after
+// an error answer), so a net figure would misstate both. The read is the
+// wallet's newest AUDIT_REFUNDS_MAX rows; a read that fills it inside the
+// window says it may be partial.
+//
 // SIGNED SUMMARY. While receipts are served, the answer carries a summary
 // receipt signed with the same key: its responseSha256 is the SHA-256 of the
 // report object as sent (JSON.stringify of `report`, UTF-8) or, for
@@ -26,11 +36,14 @@
 // /api/receipts/verify with { receipt, body } checks it, as it checks each
 // row's receipt, and so does any Ed25519 library with the published keys.
 //
-// No write: the report reads the sales ledger and the receipt store; the
-// receipt store is written by the response signer for every paid call.
+// No write: the report reads the sales ledger, the refund ledger and the
+// receipt store; the receipt store is written by the response signer for
+// every paid call.
 import { createHash } from "node:crypto";
 import { identityPayerOf, freeModeOn, FREE_MODE_IDENTITY_NOTE } from "../payer.js";
 import { payerAuditRows, salesLedgerRefresh } from "../sales-ledger.js";
+import { refundsForPayer, refundLedgerRefresh } from "../refund-ledger.js";
+import { ownRefundsView } from "../refund-lookup.js";
 import { receiptsForSettlements, RECEIPT_STORE_DAYS } from "../receipt-store.js";
 import { buildReceiptRecord, signReceipt, requestDigest, responseDigest, receiptKeys, receiptsServed, RECEIPT_KEYS_PATH, RECEIPT_VERIFY_PATH, RECEIPT_MAX_BYTES } from "../receipt-signing.js";
 import { partialFields, clampFields } from "../partial-answer.js";
@@ -47,6 +60,8 @@ export const AUDIT_MAX_DAYS = 366;
 export const AUDIT_DEFAULT_DAYS = 30;
 export const AUDIT_MAX_LIMIT = 1000;
 export const AUDIT_DEFAULT_LIMIT = 200;
+/** The most refund rows one report reads (the wallet's newest). */
+export const AUDIT_REFUNDS_MAX = 500;
 export const CSV_MIME = "text/csv";
 const DAY_MS = 86_400_000;
 const CURSOR_MAX = 200;
@@ -149,6 +164,40 @@ function verificationOf(iss) {
 }
 
 /**
+ * The wallet's own refund rows recorded inside the window, as the refunds
+ * block: listed, never netted from the totals. `rowsOf` returns the wallet's
+ * newest rows (src/refund-ledger.js refundsForPayer); when it returns the
+ * whole cap and its oldest row is still inside the window, rows past the cap
+ * may be missing, and the block says so.
+ */
+export function auditRefundsBlock(wallet, { fromMs, toMs }, rowsOf = refundsForPayer, iss = "") {
+  const lookup = `${iss}/api/refunds?tx=`;
+  const empty = (read) => ({ netted: false, read, count: 0, owedUsd: 0, repaidUsd: 0, returned: 0, matched: read === "ok" ? 0 : null, complete: read === "ok", truncated: false, cap: AUDIT_REFUNDS_MAX, lookup, rows: [] });
+  let raw;
+  try { raw = rowsOf(wallet, { limit: AUDIT_REFUNDS_MAX }); } catch { return empty("unavailable"); }
+  if (!Array.isArray(raw)) return empty("unavailable");
+  const at = (r) => Number(r?.createdAt);
+  const inWindow = raw.filter((r) => Number.isFinite(at(r)) && at(r) >= fromMs && at(r) <= toMs).sort((a, b) => at(a) - at(b));
+  const oldest = raw.reduce((m, r) => (Number.isFinite(at(r)) ? Math.min(m, at(r)) : m), Infinity);
+  const more = raw.length >= AUDIT_REFUNDS_MAX && oldest >= fromMs;
+  const view = ownRefundsView(inWindow);
+  return {
+    netted: false,
+    read: "ok",
+    count: view.count,
+    owedUsd: view.owedUsd,
+    repaidUsd: view.paidUsd,
+    returned: view.count,
+    matched: more ? null : view.count,
+    complete: !more,
+    truncated: more,
+    cap: AUDIT_REFUNDS_MAX,
+    lookup,
+    rows: view.rows,
+  };
+}
+
+/**
  * The handler, with its readers and signer injectable so the whole path runs
  * offline in a test.
  */
@@ -157,6 +206,8 @@ export function makeAuditReportHandler(deps = {}) {
   const rowsOf = deps.payerAuditRows || payerAuditRows;
   const receiptsOf = deps.receiptsForSettlements || receiptsForSettlements;
   const refresh = deps.refresh || (async (ms = 2000) => { await Promise.race([salesLedgerRefresh().catch(() => {}), new Promise((r) => setTimeout(r, ms).unref?.())]); });
+  const refundsOf = deps.refundsForPayer || refundsForPayer;
+  const refundRefresh = deps.refundRefresh || (async (ms = 2000) => { await Promise.race([refundLedgerRefresh().catch(() => {}), new Promise((r) => setTimeout(r, ms).unref?.())]); });
   const signerOf = deps.signer || (() => (receiptsServed() ? receiptKeys().signer : null));
   const nowOf = deps.now || (() => Date.now());
 
@@ -168,7 +219,7 @@ export function makeAuditReportHandler(deps = {}) {
     }
     const now = nowOf();
     const w = auditWindowOf(input, now);
-    await refresh();
+    await Promise.all([refresh(), refundRefresh()]);
     const page = rowsOf(wallet, { fromMs: w.fromMs, toMs: w.toMs, after: w.after, limit: w.limit + 1 });
     const more = page.rows.length > w.limit;
     const rows = more ? page.rows.slice(0, w.limit) : page.rows;
@@ -221,6 +272,7 @@ export function makeAuditReportHandler(deps = {}) {
       byTool: page.byTool,
       byDay: page.byDay,
       receipts: { onThisPage: withReceipt, read: receiptRead, keptDays: RECEIPT_STORE_DAYS },
+      refunds: auditRefundsBlock(wallet, w, refundsOf, ctx.iss || ""),
       rows: out,
     };
 
@@ -267,9 +319,9 @@ export const AUDIT_TOOLS = [
     category: "payments",
     price: "$0.01",
     description:
-      "An audit report of your own wallet's paid history here, ready to hand to an auditor: every paid call over a window of up to a year, each with its time, tool and route, the amount paid, the rail and network, the settlement transaction or reference, the request and response SHA-256 digests, and the signed receipt issued for it, plus totals by tool and by day. The report itself carries a summary receipt signed with the same published key, so anyone can check it with POST /api/receipts/verify or offline. Keyed to the wallet that pays for the call, never a parameter: nobody can read another wallet's report. Requires an EIP-3009 payment (USDC on an EVM chain). Use format \"csv\" for the rows as a CSV file; pages with cursor.",
-    tags: ["audit", "receipts", "compliance", "accounting", "export", "csv", "wallet", "history"],
-    aliases: ["audit", "audit-export", "compliance-report", "spend-report", "agent-audit"],
+      "An audit report of your own wallet's paid history here, a record of every paid call: each call over a window of up to a year, with its time, tool and route, the amount paid, the rail and network, the settlement transaction or reference, the request and response SHA-256 digests, and the signed receipt issued for it, plus totals by tool and by day. Repayments of charged calls that failed or were not delivered are listed in a refunds block (owed and repaid, with the repayment transaction) and not netted from the totals. The report itself carries a summary receipt signed with the same published key, so anyone can check it with POST /api/receipts/verify or offline. Keyed to the wallet that pays for the call, never a parameter: nobody can read another wallet's report. Requires an EIP-3009 payment (USDC on an EVM chain). Use format \"csv\" for the call rows as a CSV file (the refunds block is in the JSON report); pages with cursor.",
+    tags: ["audit", "receipts", "refunds", "accounting", "export", "csv", "wallet", "history"],
+    aliases: ["audit", "audit-export", "spend-report", "agent-audit"],
     binaryTypes: [CSV_MIME],
     mimeType: "application/json",
     discovery: {
@@ -304,6 +356,7 @@ export const AUDIT_TOOLS = [
             byTool: [exTool("hash", 1, 0.001), exTool("my-usage", 1, 0.005)],
             byDay: [{ day: "2026-10-02", calls: 1, usd: 0.001 }, { day: "2026-10-03", calls: 1, usd: 0.005 }],
             receipts: { onThisPage: 2, read: "ok", keptDays: RECEIPT_STORE_DAYS },
+            refunds: { netted: false, read: "ok", count: 0, owedUsd: 0, repaidUsd: 0, returned: 0, matched: 0, complete: true, truncated: false, cap: AUDIT_REFUNDS_MAX, lookup: "https://agent402.tools/api/refunds?tx=", rows: [] },
             rows: [
               exRow("hash", "2026-10-02T09:15:00.000Z", "x402", "0x6563…", 0.001),
               exRow("my-usage", "2026-10-03T14:02:11.000Z", "mpp-evm", "0x9f86…", 0.005),

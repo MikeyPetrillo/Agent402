@@ -46,7 +46,8 @@ import { runAsJob, activeJobs } from "./active-jobs.js";
 import { contained, containedTurnsSummary, containedTurnsStatus } from "./contained-turn.js";
 import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, requestsDuring, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
 import { toolFailureMonitor, setIdenticalAnswerReader } from "./tool-failure-monitor.js";
-import { salePathOf } from "./sale-path.js";
+import { salePathOf, saleRunKeyOf } from "./sale-path.js";
+import { requestIdMiddleware } from "./request-id.js";
 import { answerContractOf, classifyAnswer, observeJsonAnswer } from "./answer-shape.js";
 import { createComputeBudget, shouldShedFree, noteShed, shedStatus, shedResponse, resetShedCounters, shedVerdict } from "./load-shed.js";
 import { createBoundedMemo, SHED } from "./bounded-memo.js";
@@ -352,7 +353,7 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
       onCredited: () => { console.warn(`[batch] hang-up on ${def.slug}: the charge is given back to the channel (the close landed inside the settle call)`); },
       onCreditRefused: (owedRow, how) => {
         console.warn(`[batch] hang-up on ${def.slug}: channel credit not taken (${how}); booked as owed`);
-        try { recordRefundOwed({ slug: def.slug, ...owedRow, httpStatus: 499, synthetic, hangupReason: "channel credit refused" }); } catch { /* logged above */ }
+        try { recordRefundOwed({ slug: def.slug, ...owedRow, httpStatus: 499, synthetic, hangupReason: "channel credit refused", requestId: req.debtKey }); } catch { /* logged above */ }
       },
     });
     if (hung.credited) return hung;
@@ -398,7 +399,7 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
   // The same push transfer was refused on input earlier and booked as owed
   // under its hash; INSERT OR IGNORE kept that 400 row. It is a disconnect
   // now: promote it, or the hang-up holds never see it.
-  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason }), (made) => {
+  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason, requestId: req.debtKey }), (made) => {
     if (!made && req.tempoSettled && tempoPushHashOf(req) === row.tx) void tempoPushDebts?.hungUp(row.tx, hangupReason);
   });
   // How long the buyer waited and which phase it left in: the figure that
@@ -793,7 +794,8 @@ import { spendWindowStatus, refreshSpendWindowShared } from "./router-spend-wind
 import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus, refreshXDataSpendShared } from "./tools/x-data-kit.js";
 import { jevSpendStatus, refreshJevSpendShared, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
-import { upstreamBudgetStatus } from "./upstream-budgets.js";
+import { upstreamBudgetStatus, startUpstreamBudgetSync } from "./upstream-budgets.js";
+import { flushUpstreamCallDays, upstreamCallDaysReport } from "./upstream-call-days.js";
 import { hardCapStatus, startHardCapSync } from "./upstream-hard-caps.js";
 import { b2bEnrichEnabled } from "./tools/b2b-enrich-kit.js";
 const X_DATA_TOOLS_ENABLED = xDataEnabled() ? X_DATA_TOOLS : [];
@@ -831,7 +833,7 @@ import { ledgerHomePage, socialCardText } from "./ledger-home.js";
 import { proofCell, homeProofFigures } from "./home-proof.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
-import { revenueSnapshot, revenueLiveStatus, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
+import { revenueSnapshot, revenueLiveStatus, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, solanaActivityView, solanaActivityStatus, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPageAsync, marketPanelHtml, catalogPayableOn } from "./market-page.js";
@@ -856,6 +858,7 @@ import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sha
 import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { flushSqlQueryStats, sqlQueryStatsReport, noteSqlBusy } from "./sql-query-stats.js";
+import { loadSolanaActivityState, noteSolanaActivityState, flushSolanaActivityStore, solanaActivityStoreStatus } from "./solana-activity-store.js";
 import { flushXSearchStats, xSearchStatsReport, xSearchAuthorsStatus } from "./x-search-stats.js";
 import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
@@ -1044,7 +1047,7 @@ import { withBudgetCeiling } from "./upstream-deadline.js";
 import { settleBreakerOtherLane } from "./gateway-settle-breaker.js";
 import { PAID_QUOTE_TRUST_MINUTES } from "./paid-quote-trust.js";
 import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush, recordReferralAnswer, referralAnswersByDay } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
@@ -2848,6 +2851,9 @@ installEgressMeter();
 }
 // The pay-as-you-go ceilings the meter enforces read and feed a shared daily total.
 startHardCapSync();
+// The upstream call budgets' shared day (src/upstream-budgets.js): each
+// process adds its calls to a shared daily counter and reads the total back.
+startUpstreamBudgetSync();
 // Composite runs inherit the drain signal on every outbound fetch (src/drain-abort.js).
 installDrainAwareFetch();
 // Outbound wait is charged to the request that made it (src/request-timing.js).
@@ -4095,18 +4101,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// Per-request id — useful for grepping logs when a buyer or operator forwards
-// a failing response. Honored from upstream (load balancer) if present and
-// well-formed; otherwise generated.
-app.use((req, res, next) => {
-  const incoming = req.header("x-request-id");
-  const rid = (typeof incoming === "string" && /^[A-Za-z0-9_.\-]{6,128}$/.test(incoming))
-    ? incoming
-    : randomUUID();
-  req.requestId = rid;
-  res.setHeader("X-Request-Id", rid);
-  next();
-});
+// Per-request ids (src/request-id.js): req.requestId for logs (honored from
+// upstream when well formed), and req.debtKey, made here and never read from
+// the request, which keys a debt that has no settle transaction.
+app.use(requestIdMiddleware());
 
 // Baseline security headers on every response. A loose CSP covers the HTML
 // landing/operator/leaderboard pages — they use inline styles + one inline
@@ -4179,7 +4177,7 @@ if (!stockDataEnabled()) {
     const slug = notOffered.get(String(req.path || "").toLowerCase().replace(/\/+$/, ""));
     if (!slug) return next();
     res.set("Cache-Control", "no-store");
-    return res.status(503).json({ ok: false, error: "not-offered", slug, message: stockNotOffered().message, list: `${BASE_URL}/api/pricing` });
+    return res.status(503).json({ ok: false, error: "not-offered", slug, message: stockNotOffered().message, list: `${BASE_URL}/api/pricing`, ...errorCodeField(503) });
   });
 }
 
@@ -4192,7 +4190,7 @@ if (!kalshiToolsEnabled()) {
     const slug = notOffered.get(String(req.path || "").toLowerCase().replace(/\/+$/, ""));
     if (!slug) return next();
     res.set("Cache-Control", "no-store");
-    return res.status(503).json({ ok: false, error: "not-offered", slug, message: kalshiNotOffered().message, list: `${BASE_URL}/api/pricing` });
+    return res.status(503).json({ ok: false, error: "not-offered", slug, message: kalshiNotOffered().message, list: `${BASE_URL}/api/pricing`, ...errorCodeField(503) });
   });
 }
 
@@ -4465,6 +4463,11 @@ app.get("/api/gateway-status", async (req, res) => {
   await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshJevSpendShared(), refreshSpendWindowShared(), refreshDirectSpendShared()]);
   const spend = { xDataSpend: xDataSpendStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
+  // Operator view only: which module made the day's calls to the on-chain
+  // data provider, and the last seven days (src/upstream-call-days.js).
+  if (full && budgets.upstreams?.alchemy) {
+    try { const h = await upstreamCallDaysReport("alchemy", { days: 7 }); budgets.upstreams.alchemy.callersToday = h.days[0]?.callers || {}; budgets.upstreams.alchemy.history = h.days; budgets.upstreams.alchemy.historyStored = h.stored; } catch { /* the counts above stand */ }
+  }
   // The global unsettled external-spend ceiling: one word, never a figure.
   const externalSpendGlobal = await globalUnsettledStatus().catch(() => ({ status: "unknown" }));
   const body = {
@@ -4493,7 +4496,7 @@ app.get("/api/gateway-status", async (req, res) => {
     externalSpendGlobal,
     // Solana history reads (getTransaction by signature): which lane serves
     // them. One word publicly; per-lane counts for the operator.
-    solanaHistory: (() => { try { return solanaHistoryStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    solanaHistory: (() => { try { const h = solanaHistoryStatus({ full }); return full ? { ...h, activity: solanaActivityStatus(), activityStore: solanaActivityStoreStatus() } : h; } catch { return { status: "unknown" }; } })(),
     // EVM log reads: which lane serves the revenue ledger's recent getLogs,
     // how the Base board read its window, and the activity scans. One word
     // publicly; per-caller counts for the operator.
@@ -7709,18 +7712,20 @@ app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), async (r
   const { id, action, tx, note } = req.body || {};
   const rowId = Number(id);
   if (!Number.isInteger(rowId) || rowId <= 0) return res.status(400).json({ error: "id required" });
-  let ok = false;
-  if (action === "paid") ok = await markRefundPaid(rowId, tx, note || null);
-  else if (action === "void") ok = await markRefundVoid(rowId, note);
   // `claim` moves owed -> sending before any broadcast, so a crash between
   // sending and marking paid cannot be re-sent by the next run. Only one
-  // caller can win a given row.
-  else if (action === "claim") ok = await claimRefundForSend(rowId, note || null);
-  // `release` puts a row stuck in `sending` back to owed, after a human has
-  // checked the chain and found nothing was sent. It needs that note.
-  else if (action === "release") ok = await releaseStuckSend(rowId, note);
-  else return res.status(400).json({ error: 'action must be "claim", "release" (requires note), "paid" (requires tx) or "void" (requires note)' });
-  if (!ok) return res.status(409).json({ error: "not updated - row missing, already resolved, not sending (release), or evidence missing (paid needs tx, void and release need a note)" });
+  // caller can win a given row. `release` puts a row stuck in `sending` back
+  // to owed, after a human has checked the chain and found nothing was sent.
+  // `paid` needs the outbound tx; `void` and `release` need a note.
+  if (!["paid", "void", "claim", "release"].includes(action)) return res.status(400).json({ error: 'action must be "claim", "release" (requires note), "paid" (requires tx) or "void" (requires note)' });
+  // 409 is a state conflict and nothing else (the runner reads it as "another
+  // run has this row"); a store that did not confirm the write is a 503.
+  const { refundRowUpdate } = await import("./refund-ledger.js");
+  const verdict = await refundRowUpdate({ id: rowId, action, tx, note });
+  res.set("Cache-Control", "private, no-store");
+  if (verdict === "invalid") return res.status(400).json({ error: "evidence missing: paid needs the outbound tx, void and release need a note" });
+  if (verdict === "store_failed") return res.status(503).json({ error: "the refund ledger did not confirm this write; read the row (refunds.json) before retrying, a write that timed out may have landed" });
+  if (verdict !== "updated") return res.status(409).json({ error: "not updated - row missing, already resolved, claimed by another run, or not sending (release)" });
   res.json({ ok: true, id: rowId, action, totals: refundTotals() });
 });
 app.get("/__operator/ledger-sync.json", async (req, res) => {
@@ -7802,7 +7807,7 @@ app.get("/api/skill-packs/:slug/prompt", (req, res) => {
       const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
       const replacement = rep ? { slug: rep.slug, route: rep.route, url: `${BASE_URL}${rep.route.split(" ")[1] || rep.route}` } : null;
       res.set(retirementHeaders(gone.retiredAt, replacement?.url));
-      return res.status(410).json({ ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement, list: `${BASE_URL}/api/skill-packs.json`, hint: `Skill pack ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : ""} Live packs: /api/skill-packs.json` });
+      return res.status(410).json({ ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement, list: `${BASE_URL}/api/skill-packs.json`, hint: `Skill pack ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : ""} Live packs: /api/skill-packs.json`, ...errorCodeField(410) });
     }
     // Indexes that read the documented template call it with the placeholder
     // itself; say so rather than answering as if the route were missing.
@@ -9025,6 +9030,8 @@ app.get("/algorand", async (req, res) => {
 // wallets here.
 const CHAIN_ACTIVITY_TTL_MS = 10 * 60_000;
 const PAGE_ACTIVITY_WAIT_MS = 5_000;
+// The longest a page view waits for a wallet's stored Solana scan state.
+const SOLANA_ACTIVITY_STORE_READ_MS = 1_500;
 const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
 const SOLANA_ADDR_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const chainActivityByWallet = new Map(); // "chainKey:wallet" -> { at, value, inFlight }
@@ -9083,8 +9090,9 @@ function paidScanAllowed() {
   return true;
 }
 
-async function scanActivity(chainKey, wallet, prior = null, { background = false } = {}) {
-  if (chainKey === "solana") return solanaActivity(wallet, { background });
+async function scanActivity(chainKey, wallet, prior = null) {
+  // Solana resumes from the prior scan's cursors and rows, as the EVM scan does.
+  if (chainKey === "solana") return solanaActivity(wallet, { prior });
   if (chainKey === "robinhood") return robinhoodActivity(wallet);
   if (chainKey === "base") {
     // Budget checked BEFORE the query, not after: the point is to not spend.
@@ -9117,6 +9125,24 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
   }
   let entry = chainActivityByWallet.get(key);
   if (!entry) { entry = { at: 0, value: null, inFlight: null }; chainActivityByWallet.set(key, entry); }
+  // A Solana wallet this process has not seen: its stored scan state (one
+  // small read, bounded; src/solana-activity-store.js) is served at once and
+  // resumed from, so a restart does not read the wallet's window again.
+  if (chainKey === "solana" && !entry.storeRead) {
+    entry.storeRead = (async () => {
+      let timer;
+      try {
+        const st = await Promise.race([loadSolanaActivityState(wallet), new Promise((r) => { timer = setTimeout(() => r(null), SOLANA_ACTIVITY_STORE_READ_MS); timer.unref?.(); })]);
+        if (st && !entry.scanState) {
+          entry.scanState = st;
+          // The stored answer says how old it is (asOf) and is refreshed below once past its TTL.
+          entry.value = solanaActivityView(wallet, st);
+          entry.at = Number(st.at) || 0;
+        }
+      } catch { /* a wallet the store cannot answer for is a cold wallet */ } finally { clearTimeout(timer); }
+    })();
+  }
+  if (entry.storeRead && entry.storeRead !== true) { await entry.storeRead; entry.storeRead = true; }
   const stale = Date.now() - entry.at >= CHAIN_ACTIVITY_TTL_MS;
   if (stale && !entry.inFlight) {
     entry.inFlight = (async () => {
@@ -9128,11 +9154,15 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
         // A refresh behind a cached chart is background work (the page is
         // served from the cache meanwhile); only a cold wallet has a view
         // waiting on it, and the scanner picks its RPC lanes by that.
-        const a = await scanActivity(chainKey, wallet, entry.scanState || null, { background: entry.value != null });
+        const a = await scanActivity(chainKey, wallet, entry.scanState || null);
         entry.at = Date.now();
         if (a && !a.error) {
           entry.value = a; // success — refresh the cached value
-          if (a.__scanState) entry.scanState = a.__scanState;
+          if (a.__scanState) {
+            entry.scanState = a.__scanState;
+            // Written by the store's own timer, never on this path.
+            if (chainKey === "solana") noteSolanaActivityState(wallet, a.__scanState);
+          }
         }
         // else: keep the prior good value (stale-serve) or stay null
       } catch {
@@ -10767,6 +10797,7 @@ const retiredConvertGone = (req, res) => {
       route: "POST /api/unit-convert",
       input: { value: Number.isFinite(num) ? num : null, from, to },
     },
+    ...errorCodeField(410),
   });
 };
 
@@ -11346,10 +11377,10 @@ app.get("/api/cache-stats", (_req, res) => res.json(cacheCounters()));
 // A settled job result that cannot be delivered (not retained, or its body
 // lost on the loopback) is a debt, on the receipt's proof only. Resolves
 // false when nothing was booked.
-const bookAsyncChargedFailure = async ({ slug, receipt, priceUsd }) => {
+const bookAsyncChargedFailure = async ({ slug, receipt, priceUsd, requestId = null }) => {
   try {
     if (!receiptProvesCharge(receipt)) return false;
-    await recordRefundOwed({ slug, network: receipt?.network ?? null, payer: receipt?.payer ?? null, priceUsd, tx: receipt?.transaction ?? null, httpStatus: 500 });
+    await recordRefundOwed({ slug, network: receipt?.network ?? null, payer: receipt?.payer ?? null, priceUsd, tx: receipt?.transaction ?? null, httpStatus: 500, requestId });
     // A duplicate (false) is a debt already on the books: still recorded.
     return true;
   } catch { return false; /* recording a debt must never break the serving path */ }
@@ -12618,9 +12649,12 @@ if (FREE_MODE) {
         requireShared: sharedClaimRequired({ longRunning: !!replayDef && isLongRunningSlug(replayDef.slug), draining: drainSignal().aborted }),
       });
       if (verdict === "unavailable") {
-        res.setHeader("Retry-After", "30");
+        // The claim waited its own bound (REQUIRED_CLAIM_OP_MS in
+        // src/replay-guard.js, 5 s); a store that answers again is waited for
+        // on the retry, so the retry is asked for after that long.
+        res.setHeader("Retry-After", "5");
         return res.status(503).json({
-          error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and nothing was charged. Retry in about 30 seconds.",
+          error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and nothing was charged. Retry in about 5 seconds.",
           reason: "replay-store-unavailable",
         });
       }
@@ -12648,20 +12682,26 @@ if (FREE_MODE) {
         // its nonce is spent on chain, but the gateway cache reader takes a
         // still-valid authorization the guard does not hold as its payer's
         // proof, and a far validBefore must not keep a key per paid call.
-        if (res.statusCode === 200) replayGuard.settle(replayKey, undefined, consumedHoldFor(req, { settled: !grantedUnsettled(req) })).catch(() => {});
+        if (granted()) replayGuard.settle(replayKey, undefined, consumedHoldFor(req, { settled: !grantedUnsettled(req) })).catch(() => {});
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
+      // Granted: any 2xx, since the paywall settles every handler answer
+      // under 400 (a 201 or 204 is as paid as a 200). The async front's 202
+      // (Prefer: respond-async) never reaches this guard: the front is mounted
+      // ahead of the paywall and answers before it (its loopback carries the
+      // payment and is the call this guard sees; scripts/test-replay-consumed-2xx.js).
+      const granted = () => res.statusCode >= 200 && res.statusCode < 300;
       res.on("finish", finishGuard);
-      // A refusal (anything but a 200) is released when it is ended: "finish"
+      // A refusal (anything not granted) is released when it is ended: "finish"
       // waits for the socket write, and a buyer that resent the same payment
       // as soon as the 402's headers arrived was refused as a replay in that
       // window. The paywall buffers the handler's answer and ends the
       // response through this wrapper once settlement is decided, so the
-      // status read here is the final one; a 200 still waits for "finish".
+      // status read here is the final one; a granted 2xx still waits for "finish".
       const endBeforeGuard = res.end;
       res.end = function replayGuardEnd(...args) {
         const out = endBeforeGuard.apply(this, args);
-        if (res.statusCode !== 200) finishGuard();
+        if (!granted()) finishGuard();
         return out;
       };
       // Client left before the response finished. On a close before the first
@@ -12883,6 +12923,9 @@ app.use((req, res, next) => {
             // The arrival path (src/sale-path.js): the connector's loopback,
             // one of our client packages by User-Agent token, or plain HTTP.
             via: salePathOf(req),
+            // The task or job run this sale was made for (our own loopback
+            // only), so a run a restart cut off reads its own sale.
+            runKey: saleRunKeyOf(req),
           });
           // A Tempo push transfer booked as owed when its first request was
           // refused on input is now claimed and served: void that debt.
@@ -12960,6 +13003,8 @@ app.use((req, res, next) => {
             httpStatus: res.statusCode,
             synthetic,
             wire: x402WireOf(req),
+            // The request it was charged on: the debt key when the receipt names no tx.
+            requestId: req.debtKey,
           });
           // Mirror to PostHog with payer attribution so a spike is alertable in
           // near-real-time and traceable to a wallet (the local table keeps only
@@ -13000,6 +13045,8 @@ app.use((req, res, next) => {
             httpStatus: res.statusCode,
             synthetic: isSyntheticRequest(req),
             wire: req.tempoSettled ? "mpp-tempo" : "mpp-stripe",
+            // The request it was charged on: the debt key when the receipt names no tx (a card payment names no payer either).
+            requestId: req.debtKey,
           }), (created) => {
             if (!created && req.tempoSettled && tempoPushDebts && typeof tx === "string") void tempoPushDebts.handlerFailed(tx, res.statusCode);
           });
@@ -13034,6 +13081,7 @@ app.use((req, res, next) => {
 // A free proof-of-work or trial call is not a charge and takes no ticket.
 // The abandoned records are read back before the listener opens: a deploy is a
 // restart, and a budget every restart refilled would not bound anything.
+import { INFLIGHT_WINDOW_MS as HANGUP_INFLIGHT_WINDOW_MS } from "./hangup-forgiveness.js";
 if (!FREE_MODE) {
   try {
     const r = loadHangupForgiveness();
@@ -13086,13 +13134,34 @@ if (!FREE_MODE) {
     // caps, so the run is recorded as abandoned and the budget bounds the
     // credit as it bounds every withheld charge.
     const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) && (!settleSentWhileConnected(req) || isBatchSettlementRequest(req)) });
-    res.once("close", () => { closed = true; if (reserved) settle(); });
+    // The ticket is settled once the response's outcome is known (the gate
+    // ended it, or it finished), not at the close: a close that lands while
+    // the settle path still waits (the authorization claim's store wait,
+    // after the client-gone check and before the settlement mark) reads "no
+    // settlement sent" at that moment, and the charge that then goes out
+    // would be counted against the budget as withheld. A payment channel's
+    // ticket is still settled at the close: its charge is given back only on
+    // an abandoned ticket, which recordHangupDebt reads when the gate ends
+    // the response, before the outcome runs. A response that never ends is
+    // settled one in-flight window after the close, as it reads then.
+    // The late timer is cleared when the outcome lands first, so a buyer who
+    // left mid-run does not hold the request for the whole window.
+    let decided = false, late = null;
+    onResponseEnd(req, res, () => { decided = true; if (late) { clearTimeout(late); late = null; } if (reserved) settle(); });
+    res.once("close", () => {
+      closed = true;
+      if (!reserved) return;
+      if (decided || isBatchSettlementRequest(req)) { settle(); return; }
+      late = setTimeout(contained("hangup-ticket-late-settle", settle), HANGUP_INFLIGHT_WINDOW_MS());
+      late.unref?.();
+    });
     // Priced at what this chain charges (the signed amount, or the gated
     // price through the chain's premium and floor), so a ticket holds the
     // charge it may forgive.
     try { await reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: ticketPriceUsd({ basePriceUsd: quotedPriceUsd(def, req), paymentHeader: paymentHeaderOf(req) }), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true }); }
     catch (err) { console.warn(`[hangup] ticket reservation failed (${String(err?.message || err).slice(0, 80)}); the call runs without a ticket`); }
     reserved = true;
+    if (decided) settle();
     if (closed || res.destroyed) {
       settle();
       try { res.status(499).json({ error: "The connection closed before the call started; nothing ran and nothing was charged.", tool: def.slug, charged: false }); } catch { /* socket already gone */ }
@@ -13335,10 +13404,10 @@ function contentsUrlOf(req, res, slug) {
   const def = CATALOG[`POST /api/${slug}`];
   let input;
   try { input = handlerInputOf(req, def); }
-  catch (e) { res.status(Number(e?.statusCode) === 400 ? 400 : 500).json({ error: e.message, tool: slug }); return null; }
+  catch (e) { const status = Number(e?.statusCode) === 400 ? 400 : 500; res.status(status).json({ error: e.message, tool: slug, ...errorCodeField(status) }); return null; }
   const refused = shapeRefusal(input, def);
-  if (refused) { res.status(400).json({ error: refused, tool: slug }); return null; }
-  if (!input.url) { res.status(400).json({ error: 'Missing "url" in JSON body' }); return null; }
+  if (refused) { res.status(400).json({ error: refused, tool: slug, ...errorCodeField(400) }); return null; }
+  if (!input.url) { res.status(400).json({ error: 'Missing "url" in JSON body', ...errorCodeField(400) }); return null; }
   return input.url;
 }
 
@@ -13354,7 +13423,7 @@ app.post("/api/extract", withToolCallLog("extract", async (req, res) => {
 
 app.get("/api/meta", withToolCallLog("meta", async (req, res) => {
   const { url } = req.query;
-  if (!url) return res.status(400).json({ error: 'Missing "url" query parameter' });
+  if (!url) return res.status(400).json({ error: 'Missing "url" query parameter', ...errorCodeField(400) });
   try {
     res.json(await fetchPageMeta(url));
   } catch (err) {
@@ -13364,7 +13433,7 @@ app.get("/api/meta", withToolCallLog("meta", async (req, res) => {
 
 app.get("/api/dns", withToolCallLog("dns", async (req, res) => {
   const { name, type } = req.query;
-  if (!name) return res.status(400).json({ error: 'Missing "name" query parameter' });
+  if (!name) return res.status(400).json({ error: 'Missing "name" query parameter', ...errorCodeField(400) });
   try {
     res.json(await dnsLookup(name, type));
   } catch (err) {
@@ -13402,7 +13471,7 @@ app.get("/api/screenshot", withToolCallLog("screenshot", async (req, res) => {
   const _t0 = Date.now();
   res.once("finish", () => { try { capturePostHogToolCall({ slug: "screenshot", latencyMs: Date.now() - _t0, cached: false, errored: res.statusCode >= 500, status: res.statusCode, synthetic: isSyntheticRequest(req) }); } catch { /* telemetry never breaks a response */ } });
   const { url, fullPage } = req.query;
-  if (!url) return res.status(400).json({ error: 'Missing "url" query parameter' });
+  if (!url) return res.status(400).json({ error: 'Missing "url" query parameter', ...errorCodeField(400) });
   const ac = new AbortController();
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
   try {
@@ -13421,7 +13490,7 @@ app.post("/api/pdf", withToolCallLog("pdf", async (req, res) => {
   const _t0 = Date.now();
   res.once("finish", () => { try { capturePostHogToolCall({ slug: "pdf", latencyMs: Date.now() - _t0, cached: false, errored: res.statusCode >= 500, status: res.statusCode, synthetic: isSyntheticRequest(req) }); } catch { /* telemetry never breaks a response */ } });
   const { url } = req.body ?? {};
-  if (!url) return res.status(400).json({ error: 'Missing "url" in JSON body' });
+  if (!url) return res.status(400).json({ error: 'Missing "url" in JSON body', ...errorCodeField(400) });
   try {
     res.json(await pdfToText(url));
   } catch (err) {
@@ -13456,7 +13525,7 @@ function memoryActor(req, res) {
   // so every memory route that changes state takes the signed payer only.
   const slug = CATALOG[`${req.method} ${req.path}`]?.slug;
   const id = resolveRouteIdentity(req, memoryScopeOf(slug), identityPayerOf(req));
-  if (id.error) { res.status(id.error.status).json({ error: id.error.message }); return null; }
+  if (id.error) { res.status(id.error.status).json({ error: id.error.message, ...errorCodeField(id.error.status) }); return null; }
   const payer = id.wallet;
   if (payer) return payer;
   if (FREE_MODE && req.query.ns) return `demo:${req.query.ns}`;
@@ -13464,6 +13533,7 @@ function memoryActor(req, res) {
     error: FREE_MODE
       ? `${FREE_MODE_IDENTITY_NOTE} For memory, pass ?ns=<name> to use a demo namespace.`
       : "No payer identity found on this request. Pay via x402 - the paying wallet is your identity.",
+    ...errorCodeField(400),
   });
   return null;
 }
@@ -13491,7 +13561,8 @@ const memHandler = (fn) => withToolCallLog((req) => CATALOG[`${req.method} ${req
   try {
     res.json(await fn(req, actor, targetOwner(req, actor)));
   } catch (err) {
-    res.status(err.statusCode || 500).json({ error: redactSecrets(err?.message) });
+    const status = err.statusCode || 500;
+    res.status(status).json({ error: redactSecrets(err?.message), ...errorCodeField(status) });
   }
 });
 
@@ -13990,11 +14061,12 @@ app.use((req, res) => {
         return res.status(410).json({
           ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement,
           hint: `${gone.kind === "pack" ? "Skill pack" : "Tool"} ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : " There is no direct replacement; the closest live tools are listed, or ask /api/find?q=<task>."}${!replacement && gone.note ? ` ${gone.note}` : ""}`,
-          find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions,
+          find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions, ...errorCodeField(410),
         });
       }
       try { capturePostHogToolGone({ route: req.path, replacement: "GET /api/find", source: toolGoneSourceOf({ headers: req.headers, surface: "http" }) }); } catch { /* telemetry never breaks a response */ }
-      return res.status(404).json({ ok: false, error: "not-found", hint: `No tool lives at ${req.path}. It may have been retired; the closest live tools are listed, or ask /api/find?q=<task>.`, find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions });
+      // errorCode: a tool switched off on this server (its route not mounted) answers here.
+      return res.status(404).json({ ok: false, error: "not-found", hint: `No tool lives at ${req.path}. It may have been retired; the closest live tools are listed, or ask /api/find?q=<task>.`, find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions, ...errorCodeField(404) });
     }
     return operatorNotFound(req, res);
   }
@@ -14035,7 +14107,7 @@ app.use((err, req, res, _next) => {
     // A 413 on a flat LLM tier is an agent with a big prompt (one client hit
     // it five times in 30 minutes, 2026-08-28): say where big bodies go.
     const tooLarge = status === 413 ? { hint: `Body over the ${req.path.startsWith("/v1/") ? "100 KB" : "size"} limit for ${req.path}. ${req.path.startsWith("/v1/") && !req.path.startsWith("/v1/metered") ? "The metered tier accepts 1 MB and prices from the body: POST /v1/metered/chat/completions (or /messages, /responses)." : "Split the input or use the route's documented size cap."}`, ...(req.path.startsWith("/v1/") && !req.path.startsWith("/v1/metered") ? { metered: `${BASE_URL}/v1/metered/chat/completions` } : {}) } : {};
-    res.status(status).json({ ok: false, error: status === 400 ? "bad-request" : status === 413 ? "payload-too-large" : status === 429 ? "rate-limited" : "internal", ...tooLarge });
+    res.status(status).json({ ok: false, error: status === 400 ? "bad-request" : status === 413 ? "payload-too-large" : status === 429 ? "rate-limited" : "internal", ...tooLarge, ...errorCodeField(status) });
   } else {
     const is404 = status === 404;
     const t = is404 ? "Page not found" : `Error ${status}`;
@@ -14252,10 +14324,11 @@ if (!mppCrawl.on) {
     // payTo the index knows, primed into the pay-time gate (src/solana-leaderboard.js).
     startSolanaLeaderboard({
       listPayTos: async () => (await import("./x402-index.js")).allSolanaPayToOriginsAsync(),
-      // getTransaction (immutable, by signature) goes public RPC first with the
-      // keyed lane behind it (src/solana-history-rpc.js); the signature and
+      // getTransaction (immutable, by signature) goes public RPC first, queued
+      // for its slot, with the keyed lane behind it only under the day's
+      // background share (src/solana-history-rpc.js); the signature and
       // token-account reads stay on the configured lane.
-      rpc: historyAwareRpc((method, params) => import("./solana-buyer.js").then((m) => m.solanaRpc(method, params)), { caller: "leaderboard" }),
+      rpc: historyAwareRpc((method, params) => import("./solana-buyer.js").then((m) => m.solanaRpc(method, params)), { caller: "leaderboard", background: true }),
       creditFromTx: (meta, payTo) => solanaCreditFromTx(meta, payTo),
       prime: (payTo, count) => import("./solana-buyer.js").then((m) => m.primeSvmInboundCount(payTo, count)),
       windowHours: Number(process.env.SOR_SVM_WINDOW_HOURS) || 168,
@@ -14442,7 +14515,7 @@ let drainDeadlineMs = DRAIN_DEADLINE_MS;
 // reads held; the flush round below waits on that write with the others.
 let boardSaveAtDrain = false;
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals()]).then(() => flushJsonDocuments({ timeoutMs }))]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals(), flushSolanaActivityStore({ max: 100 }), flushUpstreamCallDays()]).then(() => flushJsonDocuments({ timeoutMs }))]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });

@@ -64,6 +64,14 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   reasoning-effort row that apply only while the id is still served as itself (`pendingAsItself`).
   Tests move the clock with `setRetiringClockForTest`; `MODEL_RETIREMENTS_NOW=<ISO date>` runs
   `scripts/test-model-retirements.js` as of that day, to prove a change passes after a date.
+  A tier's list is advertised through `advertisedPrefixes` (`/v1/models`, the live guard's rules 1
+  and 1b): an exact id past its `RETIRING_MODELS` date shows as its successor where the tier admits
+  it, once, else is left out. `scripts/test-model-retirements.js` fails a tier list that still names
+  an id past its date and checks `/v1/models` and every tier's advertised list on each retirement
+  date. Live guard rule 4 on the metered tier (`meteredRowFit`, `METERED_MIN_FIT_SHARE` 0.5): that
+  tier sends the row as `provider.max_price` (`meteredBoundFor`), so a row fails only when no
+  endpoint, under half, or no tool-capable endpoint (where any takes tools) fits under it. Flat
+  tiers keep the dearest-routable-endpoint rule. A row is not raised to admit one dear endpoint.
 - **Reasoning fitted to the output cap** (chat, Messages, Responses; `reasoningForLink`,
   `fitEffortToBudget`, `fitBudgetForAnswer` in `llm-gateway-kit.js`): on each outbound link a
   buyer effort above "low" is sent as "low" when the link's cap is under `smallBudgetThreshold`
@@ -255,6 +263,11 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   for E2B's create also the SDK's AuthenticationError, RateLimitError and ServiceBusyError). A 2xx, 3xx or 5xx
   answer, a timeout and a reset keep their unit. The operator view counts the units given back as `releasedToday`.
   Suite: `scripts/test-upstream-hard-caps.js`.
+- **CoinGecko unpaid reads per caller:** `COINGECKO_UNSETTLED_PER_CALLER_HOUR` (default 8) is the most places one caller holds an hour in the share of CoinGecko reads for unconfirmed coin ids; past it that caller's ids are checked against the coin lists first, and no call is refused for it (`src/tools/coingecko-rate.js`).
+- **Crypto price second source:** crypto-price reads Hyperliquid `metaAndAssetCtxs` only through
+  `src/tools/hyperliquid-shared.js` (shared 5 s TTL; its transport validates shape before the cache stores it).
+  A suite that counts every fetch must answer `api.hyperliquid.xyz` itself
+  (`scripts/test-coingecko-rate.js`).
 - **Quoted material:** every report kit hands the model third-party text inside `quotedMaterial` blocks
   (`src/report-grounding.js`) and carries `QUOTED_MATERIAL_RULE`, or `QUOTED_DATA_RULE` (the same rule without its
   citation sentence) where the report lists no numbered sources: the domain audit's probe blocks and the token risk

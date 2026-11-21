@@ -175,6 +175,96 @@ function writeJsonAtomic(path, obj) {
   } catch { return false; }
 }
 
+// AN INTERRUPTED RUN'S PAYMENT. A run that dies with its process almost
+// always dies before its answer, and an answer that never came is never
+// settled. But the paid loopback may settle its 200 and book the sale just
+// before the process dies, before the task record is written: that buyer WAS
+// charged. So the words an orphan is resolved with are read from the sales
+// ledger (read only here), by the run's own key: each run names a random key
+// (newRunKey) on its record and on its loopback, and the route books it on
+// the sale it makes for that loopback (src/sale-path.js saleRunKeyOf), so a
+// sale is the run's only when it carries the run's key, never because of its
+// wallet, tool or time.
+//   - a sale under the run's key: charged; the debt goes to onChargedFailure
+//     on the sale's proof (its transaction and the payer the gate verified),
+//     and the words name the transaction;
+//   - none under the key, and no sale of the tool in the run's window that
+//     names no run: not charged, in the words this always had;
+//   - otherwise (a sale of the tool in the window that names no run, which a
+//     path that books no key may have made for this run; a record made
+//     before runs named a key, whose found sale cannot be tied to it; a
+//     ledger that could not be read): neither claim is made and nothing is
+//     booked.
+// The ledger is read only once it has loaded (database mode: the first pull,
+// then a pull of what other containers wrote), so an empty mirror is never
+// read as "no sale"; until then the answer is ORPHAN_LEDGER_UNLOADED.
+const RUN_KEY_RE = /^[0-9a-f]{32}$/;
+/** A run's key: 16 random bytes of hex, internal (never on the wire). */
+export const newRunKey = () => randomBytes(16).toString("hex");
+export const isRunKey = (v) => typeof v === "string" && RUN_KEY_RE.test(v);
+/** salesLedgerChargeOf's answer while the sales ledger has not loaded. */
+export const ORPHAN_LEDGER_UNLOADED = "ledger-unloaded";
+const LEDGER_WAIT_MS = 10_000;
+const LEDGER_FRESH_MS = 5_000;
+// One wait serves every orphan a sweep reads in a row (a sweep of many
+// orphans waits once, not once per orphan).
+let ledgerPull = null, ledgerPulledAt = 0;
+async function loadedSalesLedger() {
+  const ledger = await import("./sales-ledger.js");
+  if (!ledgerPull || (ledgerPulledAt && Date.now() - ledgerPulledAt > LEDGER_FRESH_MS)) {
+    ledgerPulledAt = 0;
+    ledgerPull = (async () => {
+      let timer = null;
+      const wait = new Promise((r) => { timer = setTimeout(r, LEDGER_WAIT_MS); timer.unref?.(); });
+      // The first load, then what other containers wrote since the last pull.
+      try { await Promise.race([Promise.resolve(ledger.salesLedgerRefresh?.()).catch(() => 0), wait]); } finally { clearTimeout(timer); ledgerPulledAt = Date.now(); }
+    })();
+  }
+  await ledgerPull;
+  return ledger.salesLedgerLoaded?.() === false ? null : ledger;
+}
+/** The sale an interrupted run made, from the sales ledger: { tx, network,
+ *  priceUsd, payer } when the run's key names exactly one, null when none
+ *  could be the run's, undefined when that cannot be said, and
+ *  ORPHAN_LEDGER_UNLOADED while the ledger has not loaded. `payer` is read
+ *  only for a record with no key (one made before runs named a key): a sale
+ *  found for it cannot be tied to it (undefined), none is null. */
+export async function salesLedgerChargeOf({ slug, runKey = null, payer = null, sinceMs, untilMs } = {}) {
+  if (typeof slug !== "string" || !slug) return undefined;
+  const keyed = isRunKey(runKey);
+  if (!keyed && (typeof payer !== "string" || !payer)) return undefined;
+  try {
+    const ledger = await loadedSalesLedger();
+    if (!ledger) return ORPHAN_LEDGER_UNLOADED;
+    if (!keyed) {
+      const rows = ledger.payerSalesOfTool(payer, slug, { fromMs: sinceMs, toMs: untilMs, limit: 1 });
+      if (!Array.isArray(rows)) return undefined;
+      return rows.length ? undefined : null;
+    }
+    const own = ledger.salesOfRun(runKey, { limit: 2 });
+    if (!Array.isArray(own)) return undefined;
+    const mine = own.filter((x) => x?.slug === slug);
+    if (mine.length > 1 || mine.length !== own.length) return undefined;
+    const row = mine[0];
+    if (row) {
+      if (row.internal) return undefined; // our own wallet: no debt to book
+      return { tx: typeof row.tx === "string" && row.tx ? row.tx : null, network: row.network || null, priceUsd: row.priceUsd, payer: row.payer || null };
+    }
+    // None under the key. A sale of the tool in the window that names no run
+    // was made on a path that books no key (or for another call): it could
+    // be this run's, so neither claim.
+    const LIMIT = 20;
+    const near = ledger.toolSalesInWindow(slug, { fromMs: sinceMs, toMs: untilMs, limit: LIMIT });
+    if (!Array.isArray(near) || near.length >= LIMIT) return undefined;
+    return near.some((x) => !x?.runKey) ? undefined : null;
+  } catch { return undefined; }
+}
+// How far before its record a run's sale may be booked (the connector starts
+// its loopback before the record is written; a run that answers inside the
+// gate window gets no record at all), and how long after its run bound.
+const ORPHAN_SALE_LEAD_MS = 1_000;
+const ORPHAN_SALE_TAIL_MS = 60_000;
+
 /**
  * Durable task store + lifecycle.
  *
@@ -184,6 +274,9 @@ function writeJsonAtomic(path, obj) {
  * @param {(s:string)=>void} [opts.log]
  * @param {(info:object)=>void} [opts.onChargedFailure]  called ONLY with positive
  *        proof of a settled charge we could not deliver; wired to the refund ledger.
+ * @param {(q:{slug:string,runKey:string|null,payer:string|null,sinceMs:number,untilMs:number})=>any} [opts.chargeOf]
+ *        the sale behind an interrupted run (default: the sales ledger, read
+ *        only; salesLedgerChargeOf above). Sync or a promise.
  * @param {string} [opts.bootId]  this process's identity. Defaults to the
  *        module-level BOOT_ID (one value per process, which is what makes "a
  *        record claimed by another boot" mean "its run died"). Overridable so a
@@ -206,7 +299,7 @@ export function taskRetentionPublic() {
   const keptFor = minutes % 60 === 0 ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}` : `${minutes} minutes`;
   return { ttlMs, maxBytes, keptFor, maxSize: `${Math.round(maxBytes / (1024 * 1024))} MB` };
 }
-export function createTaskStore({ dir, now = () => Date.now(), log = console.log, onChargedFailure = null, bootId = BOOT_ID, limits = {}, label = "mcp-tasks", freeMode = process.env.FREE_MODE === "true" } = {}) {
+export function createTaskStore({ dir, now = () => Date.now(), log = console.log, onChargedFailure = null, chargeOf = salesLedgerChargeOf, bootId = BOOT_ID, limits = {}, label = "mcp-tasks", freeMode = process.env.FREE_MODE === "true" } = {}) {
   const root = dir || DEFAULT_DIR();
   try { mkdirSync(root, { recursive: true }); } catch { /* writes fail loudly below */ }
 
@@ -217,14 +310,60 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
   const RUN_TIMEOUT_MS = num(limits.runMs ?? process.env.AGENT402_MCP_TASK_RUN_MS, 6 * 60_000);   // > the 4 min worst case
   const MAX_ACTIVE = num(limits.maxActive ?? process.env.AGENT402_MCP_TASK_MAX_ACTIVE, 64);
   const MAX_RESULT_BYTES = num(limits.maxResultBytes ?? process.env.AGENT402_MCP_TASK_MAX_RESULT_BYTES, TASK_MAX_RESULT_DEFAULT_BYTES);
+  // How long an orphan stays working while the sales ledger has not loaded
+  // (database mode), before it is worded with neither claim.
+  const ORPHAN_LEDGER_WAIT_MS = num(limits.ledgerWaitMs, 5 * 60_000);
 
   const runs = new Map(); // taskId -> AbortController for the live loopback
   const expired = (rec) => rec.ttlMs != null && now() - (rec.createdAtMs || 0) > rec.ttlMs;
   const ORPHAN_MESSAGE = `This run did not survive a server restart and was not completed. You were not charged: payment settles only on a delivered result${PUSH_EXCEPTION}. Please call again.`;
   const ORPHAN_ERROR = () => ({ code: TASK_INTERNAL_ERROR, message: `Task run interrupted by a server restart; not charged${PUSH_EXCEPTION}.` });
+  // Charged before the restart (a sale on the books for this run).
+  const ORPHAN_CHARGED_MESSAGE = (tx) => `This run did not survive a server restart and was not completed, but its payment settled before the restart${tx ? ` (transaction ${tx})` : ""}. The charge is recorded as owed in our refund ledger and repaid after review.${tx ? ` Check it, free, at GET /api/refunds/lookup?tx=${tx}.` : ""} A new call is a new paid call.`;
+  const ORPHAN_CHARGED_ERROR = () => ({ code: TASK_INTERNAL_ERROR, message: "Task run interrupted by a server restart after its payment settled; the charge is recorded as owed and repaid after review." });
+  // The sales ledger could not say.
+  const ORPHAN_UNREAD_MESSAGE = `This run did not survive a server restart and was not completed. Payment settles only on a delivered result${PUSH_EXCEPTION}; if a payment for this call did settle, check it, free, by its settlement transaction at GET /api/refunds/lookup?tx=<hash>. Please call again.`;
+  const ORPHAN_UNREAD_ERROR = () => ({ code: TASK_INTERNAL_ERROR, message: "Task run interrupted by a server restart." });
+  // The words and error for an orphan, from the sales ledger's answer.
+  const orphanWords = (sale) => (sale ? { statusMessage: ORPHAN_CHARGED_MESSAGE(sale.tx), error: ORPHAN_CHARGED_ERROR() }
+    : sale === null ? { statusMessage: ORPHAN_MESSAGE, error: ORPHAN_ERROR() }
+      : { statusMessage: ORPHAN_UNREAD_MESSAGE, error: ORPHAN_UNREAD_ERROR() });
+  // The sale behind an orphan: an object (charged), null (none), undefined
+  // (unread, or a sale that cannot be tied to this run), or
+  // ORPHAN_LEDGER_UNLOADED (the ledger has not loaded yet). A sale counts as
+  // the run's only under the run's own key: a record with no key (made
+  // before runs named one) is never worded charged.
+  async function orphanSale(rec) {
+    const keyed = isRunKey(rec?.runKey);
+    const payer = typeof rec?.payer === "string" && rec.payer ? rec.payer : null;
+    if ((!keyed && !payer) || typeof chargeOf !== "function") return undefined;
+    const since = Number(rec.createdAtMs) - ORPHAN_SALE_LEAD_MS;
+    const until = Math.min(now(), Number(rec.createdAtMs) + RUN_TIMEOUT_MS + ORPHAN_SALE_TAIL_MS);
+    if (!Number.isFinite(since) || !Number.isFinite(until)) return undefined;
+    let s;
+    try { s = await chargeOf({ slug: rec.slug, runKey: keyed ? rec.runKey : null, payer: keyed ? null : payer, sinceMs: since, untilMs: until }); } catch { return undefined; }
+    if (s === null || s === ORPHAN_LEDGER_UNLOADED) return s;
+    if (!s || typeof s !== "object" || !keyed) {
+      log(`[${label}] interrupted ${rec.slug} run: its sale cannot be tied to the run (no sale under its key, and the ledger could not say, or holds a sale of the tool in its window that names no run); worded with neither claim, nothing booked`);
+      return undefined;
+    }
+    return s;
+  }
+  // A charged orphan's debt, on the sale's proof (the ledger booked it once
+  // its settle succeeded, to the payer the gate verified). A sale with no
+  // transaction is keyed on the run, so a second sweep of the same run books
+  // no second debt. Never throws.
+  function bookOrphanCharge(rec, sale) {
+    try { onChargedFailure?.({ slug: rec.slug, receipt: { success: true, transaction: sale.tx, network: sale.network, payer: sale.payer ?? null }, priceUsd: sale.priceUsd, requestId: `task-${rec.taskId}` }); } catch { /* never break the sweep */ }
+    log(`[${label}] interrupted ${rec.slug} run had settled before the restart${sale.tx ? ` (tx ${String(sale.tx).slice(0, 18)})` : ""}; recorded for refund review`);
+  }
   const CANCEL_MESSAGE = "Canceled at your request. The run may still have completed and been charged; if it was, the charge is recorded as owed in our refund ledger and repaid after review. Do not retry blindly: a retry is a new paid call.";
 
-  const newRecord = (slug) => {
+  // `runKey`: the run's key (newRunKey), which its loopback sends and the
+  // route books on the sale it makes for it, so an orphan's payment is read
+  // by that key. Internal: never on the wire (publicTask). No payer is
+  // recorded: the one a sale carries is the one the gate verified.
+  const newRecord = (slug, runKey = null) => {
     const iso = new Date(now()).toISOString();
     return {
       taskId: newTaskId(),
@@ -241,6 +380,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
       owner: bootId,
       pid: process.pid,
       ...(freeMode ? { freeMode: true } : {}),
+      ...(isRunKey(runKey) ? { runKey } : {}),
     };
   };
   // A record made by a FREE_MODE process is not this paid store's to serve.
@@ -321,9 +461,33 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
 
     /** Boot sweep + TTL prune. Runs once at construction, BEFORE any tasks/get can
      *  be served, so a client never sees a stale `working` handle from a dead run. */
+    // The last sweep's sales-ledger read of its orphans (tests await it).
+    let orphansChecked = Promise.resolve(0);
+    /** Re-word orphans resolved with the unread words once the sales ledger
+     *  has answered for each (charged, or not charged). Resolves the count
+     *  re-worded; never rejects. */
+    async function checkOrphans(ids) {
+      let n = 0;
+      for (const id of ids) {
+        try {
+          const rec = read(id);
+          if (!rec || rec.status !== "failed" || rec.statusMessage !== ORPHAN_UNREAD_MESSAGE) continue;
+          const sale = await orphanSale(rec);
+          if (sale === undefined || sale === ORPHAN_LEDGER_UNLOADED) continue;
+          const again = read(id);
+          if (!again || again.status !== "failed" || again.statusMessage !== ORPHAN_UNREAD_MESSAGE) continue;
+          Object.assign(again, orphanWords(sale));
+          if (!write(again)) continue;
+          n++;
+          if (sale) bookOrphanCharge(again, sale);
+        } catch { /* the unread words stand */ }
+      }
+      return n;
+    }
     function sweep() {
       let orphaned = 0, pruned = 0;
       let files = [];
+      const orphans = [];
       try { files = readdirSync(root); } catch { return { orphaned, pruned }; }
       for (const f of files) {
         if (!f.endsWith(".json")) continue;
@@ -333,17 +497,18 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
         if (!rec || !rec.taskId) { try { unlinkSync(join(root, f)); } catch { /* gone */ } continue; }
         if (expired(rec)) { try { unlinkSync(join(root, f)); pruned++; } catch { /* gone */ } continue; }
         if (rec.status === "working" && rec.owner !== bootId && !runs.has(rec.taskId)) {
-          // The run died with its process. The paid loopback never returned a 200,
-          // so settlement was cancelled and the buyer was NOT charged - say so
-          // rather than leaving a handle that polls forever.
+          // The run died with its process: failed, rather than a handle that
+          // polls forever. Whether its payment settled first is read from the
+          // sales ledger (orphanSale); until it answers, the words claim
+          // neither (this sweep runs before the first tasks/get).
           rec.status = "failed";
-          rec.statusMessage = ORPHAN_MESSAGE;
-          rec.error = ORPHAN_ERROR();
-          write(rec);
+          Object.assign(rec, orphanWords(undefined));
+          if (write(rec)) orphans.push(rec.taskId);
           orphaned++;
         }
       }
       if (orphaned || pruned) log(`[${label}] boot sweep: ${orphaned} interrupted run(s) resolved as failed, ${pruned} expired task(s) pruned`);
+      if (orphans.length) orphansChecked = checkOrphans(orphans);
       return { orphaned, pruned };
     }
 
@@ -367,8 +532,8 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
      * a tasks/get for that id would resolve, so this writes to disk FIRST and
      * reports failure rather than handing out a handle that does not exist.
      */
-    function create({ slug, controller = null } = {}) {
-      const rec = newRecord(slug);
+    function create({ slug, controller = null, runKey = null } = {}) {
+      const rec = newRecord(slug, runKey);
       if (!write(rec)) return null;             // fail closed: no handle without durability
       if (controller) runs.set(rec.taskId, controller);
       return rec;
@@ -452,6 +617,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
     return {
       create, get, complete, fail, cancel, settle, sweep, update,
       activeCount, atCapacity, isRunning: (id) => runs.has(id),
+      orphansChecked: () => orphansChecked,
       backend: "file", ready: () => Promise.resolve(), close: () => {},
       bootId, TTL_MS, POLL_MS, RUN_TIMEOUT_MS, MAX_ACTIVE, MAX_RESULT_BYTES, dir: root,
       _reset() { runs.clear(); try { for (const f of readdirSync(root)) if (f.endsWith(".json")) unlinkSync(join(root, f)); } catch { /* nothing to clear */ } },
@@ -469,6 +635,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
     const T = (t) => `${stateDbSchema()}.${t}`;
     // Records this process created or settled: the synchronous capacity view.
     const mine = new Map(); // taskId -> rec
+    const unloadedSince = new Map(); // orphan taskId -> when a sweep first found the sales ledger unloaded
     const timers = [];
     let closed = false;
 
@@ -524,7 +691,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
       if (rec) mine.set(id, rec); // the capacity view reads the row's terminal state
     };
     async function sweep() {
-      let orphaned = 0, pruned = 0, cancelled = 0;
+      let orphaned = 0, pruned = 0, cancelled = 0, waiting = 0;
       try {
         const rows = await records.list(collection, { limit: 100_000 });
         const alive = new Map(); // owner -> boolean
@@ -543,17 +710,30 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
             alive.set(rec.owner, Boolean(holder));
           }
           if (alive.get(rec.owner)) continue;
+          // Charged or not, read from the sales ledger before the words are
+          // written (orphanSale; see salesLedgerChargeOf). A ledger that has
+          // not loaded yet leaves the row working for a later sweep (these
+          // words are written once), up to ORPHAN_LEDGER_WAIT_MS from the
+          // first sweep that found it; past that it reads unread.
+          let sale = await orphanSale(rec);
+          if (sale === ORPHAN_LEDGER_UNLOADED) {
+            const first = unloadedSince.get(id) ?? now();
+            unloadedSince.set(id, first);
+            if (now() - first < ORPHAN_LEDGER_WAIT_MS) { waiting++; continue; }
+            sale = undefined;
+          }
+          unloadedSince.delete(id);
           rec.status = "failed";
-          rec.statusMessage = ORPHAN_MESSAGE;
-          rec.error = ORPHAN_ERROR();
-          if (await putRow(stamp(rec))) orphaned++;
+          Object.assign(rec, orphanWords(sale));
+          if (await putRow(stamp(rec))) { orphaned++; if (sale) bookOrphanCharge(rec, sale); }
         }
       } catch (e) {
         log(`[${label}] sweep could not read the state database: ${String(e?.message || e).slice(0, 120)}`);
-        return { orphaned, pruned, cancelled };
+        return { orphaned, pruned, cancelled, waiting };
       }
       if (orphaned || pruned || cancelled) log(`[${label}] sweep: ${orphaned} interrupted run(s) resolved as failed, ${pruned} expired task(s) pruned, ${cancelled} run(s) stopped on a cancel from another container`);
-      return { orphaned, pruned, cancelled };
+      if (waiting) log(`[${label}] sweep: ${waiting} interrupted run(s) left working until the sales ledger has loaded`);
+      return { orphaned, pruned, cancelled, waiting };
     }
 
     /**
@@ -607,9 +787,9 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
     const atCapacity = () => activeCount() >= MAX_ACTIVE;
 
     /** Resolves the record once its row is stored, or null (fail closed). */
-    async function create({ slug, controller = null } = {}) {
+    async function create({ slug, controller = null, runKey = null } = {}) {
       await ready;
-      const rec = newRecord(slug);
+      const rec = newRecord(slug, runKey);
       try { if (!(await putRow(rec))) return null; }
       catch { return null; }
       mine.set(rec.taskId, rec);

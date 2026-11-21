@@ -63,6 +63,15 @@ const flat = (s) => { let out = "", inTag = false; for (const ch of s) { if (inT
     ok(p.includes(`inbound transfers (up to ${h.maxTransfers}, from the last ${h.lookbackDays} days)`) && p.includes(`is kept under the wallet address for ${h.ttlDays} days`),
       `/privacy ${label}: the funding screen reads ${h.maxTransfers} transfers and keeps its result ${h.ttlDays} days`);
     ok(t.includes(`which is kept for ${j.keptFor} after the job was created`), `/terms ${label}: generated content names the job result kept for ${j.keptFor}`);
+    // A job or task record keeps a random key for its run, which the sales
+    // ledger books on the run's sale (src/mcp-tasks.js newRunKey), read only
+    // when a restart cuts its run off; it keeps no paying wallet.
+    ok(/a random key\s+for the run that the sales ledger also books on the sale made for it, so a run a restart cut off can be checked\s+against its own sale/.test(p) && !/keeps that wallet on its record/.test(p), `/privacy ${label}: a job or task record names the run key it keeps, and no wallet`);
+    // The one-hop funding read runs for a Tempo payment our server settles
+    // itself and for a subscription, never for a relay payment (the relay
+    // screen is exact-match only: src/payer-screen-rails.js).
+    ok(!/screenFunding/.test(readFileSync(new URL("../src/payer-screen-rails.js", import.meta.url), "utf8")), `control: the relay payer screen runs no funding read`);
+    ok(p.includes("For a Tempo per-call payment our server settles itself and for a subscription payment we also read the paying wallet's recent") && !/For such a Tempo payment/.test(p), `/privacy ${label}: the funding read names the payments it runs for`);
     return { p, t };
   };
   const { p, t } = check("defaults");

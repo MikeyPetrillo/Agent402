@@ -24,6 +24,7 @@
 //     which is customer data we have no reason to hold
 //   * bounded memory: hosts are capped, and the counter resets daily
 import { hardCapRefusalForHost, hardCapNameForHost, releaseHardCap, neverReachedUpstream, upstreamRefusedBeforeWork } from "./upstream-hard-caps.js";
+import { CALLER_COUNTED, egressCallerLabel, noteUpstreamCall } from "./upstream-call-days.js";
 
 const MAX_HOSTS = 2000;          // far above the ~1,300 seen in a census run
 const counts = new Map();        // host -> { n, callers:Set, firstAt, lastAt }
@@ -177,6 +178,11 @@ export function installEgressMeter() {
         if (refusal) return Promise.reject(refusal);
         capName = h ? hardCapNameForHost(h) : null;
         if (capName) {
+          // Per-caller day counts for the upstreams that keep them
+          // (src/upstream-call-days.js): the label the calling module set, or
+          // the first file of ours on the stack. A stack is built only for
+          // an unlabelled call to such an upstream, never for other hosts.
+          if (CALLER_COUNTED.has(capName)) noteUpstreamCall(capName, egressCallerLabel() || callerOf(captureStack()));
           takenAt = Date.now();
           const sig = init?.signal ?? (input && typeof input === "object" && !(input instanceof URL) ? input.signal : null);
           abortedAtCall = sig?.aborted === true;

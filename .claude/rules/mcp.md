@@ -61,6 +61,22 @@ Loaded when a connector or front-door file is read.
   and `server.describe`; the access line names coins and wires from the rails list and the MPP
   config. The unpaid 402 body carries the access line and the `/agents.md` link only with
   `FRONT_DOOR_402=on` (exactly); otherwise the body is the offer alone.
+- **llms.txt short index:** `llmsTxt` (`src/seo.js`) keeps one clause per Key machine surfaces line
+  (`surfaceClause`, `SURFACE_CLAUSE_MAX`; an entry in its `brief` list keeps that surface's own words)
+  and points at /llms-full.txt, which keeps every line whole. `scripts/test-front-door.js` boot 3 runs
+  production's switches plus the batched and channel blocks under the 16,384-byte bound.
+- **Orphaned tasks and jobs:** each run names a key (`newRunKey`, `src/mcp-tasks.js`) kept on its
+  record (never on the wire; no payer is recorded) and sent on its loopback (`X-Agent402-Via-Run`
+  beside the connector's marker, `x-agent402-async-run` beside the job token); the route books it
+  on that sale's `run_key` (`saleRunKeyOf`, `src/sale-path.js`; read only beside its proof). An
+  orphan is worded from the sales ledger by that key: a sale under it is charged and booked once
+  through `onChargedFailure` to the sale's own payer (keyed `task-<taskId>` when it has no tx); none
+  under it and no sale of the tool in the window that names no run keeps the restart words it always
+  had (`ORPHAN_MESSAGE`, with the Tempo push exception); anything else
+  (an unkeyed sale of the tool in the window, a keyless record from before keys, an unreadable
+  ledger) claims neither and books nothing. The ledger is read only once loaded (bounded wait and
+  pull); the database sweep leaves an orphan working while it has not loaded, for up to
+  `limits.ledgerWaitMs` (5 minutes) (`scripts/test-mcp-task-orphan-charge.js`, `test-mcp-tasks-pg.js`).
 - **Shareable answers:** `src/answer-share.js`, off unless `ANSWER_SHARE=on` (exactly); then web.answer takes
   `share=true` and writes a public page after a settled 200 (`/answers/:id`, record at `/answers/:id.json`);
   off, no surface offers it and existing pages serve until expiry. `ANSWER_SHARE_TTL_DAYS` (default 30)

@@ -50,6 +50,9 @@ LLC: credit the entity, never a personal name.
 - `src/state-db.js`, `src/json-document.js`: the state database (Postgres) and the whole-file JSON
   store API; leases, store readiness and large rows in `.claude/rules/ops.md`.
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
+- `src/solana-history-rpc.js` (Solana transaction reads: public lane first, keyed lane behind it),
+  `src/solana-activity-store.js` (the activity scans' state across restarts),
+  `src/upstream-call-days.js` (per-caller daily call counts); detail in `.claude/rules/ops.md`.
 - `src/stats.js`, `src/sales-ledger.js`, `src/seo.js`, `src/pages.js`, `src/guides.js`,
   `src/privacy.js`, `src/terms.js`, `src/security-page.js`, `src/company.js`.
 - `facilitator/`: self-hosted Stellar facilitator (own lockfile; redeploys only on
@@ -166,9 +169,10 @@ LLC: credit the entity, never a personal name.
   is a bare badge line in README.md's "Independent records" section. No hidden
   character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an
   instruction file: `scripts/test-hidden-chars.js` scans CLAUDE.md, `.claude/`, `wiki/`, `docs/`,
-  the package READMEs, the adapter READMEs, `src/mcp-http.js`, `src/mcp-flagship.js`,
-  `src/server.js` and `mcp/index.js`; the same scan (`src/hidden-chars.js`) is a listing finding
-  in the index's injection screen.
+  the package READMEs, the adapter READMEs, the coding-agent plugins under `plugins/` and the
+  plugin manifests, `src/mcp-http.js`, `src/mcp-flagship.js`, `src/server.js` and
+  `mcp/index.js`; the same scan (`src/hidden-chars.js`) is a listing finding in the index's
+  injection screen.
 
 ## Key machine-readable surfaces (free)
 `/health`, `/api/pricing`, `/openapi.json`, `/llms.txt`, `/.well-known/x402`,

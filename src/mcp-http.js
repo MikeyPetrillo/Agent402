@@ -47,7 +47,7 @@ import {
 } from "./mcp-mpp.js";
 import {
   TASKS_EXTENSION, CLIENT_CAPABILITIES_META, TASK_INVALID_PARAMS, TASK_MISSING_CAPABILITY, TASK_INTERNAL_ERROR,
-  mcpTasksEnabled, clientDeclaresTasks, createTaskStore, createTaskResult, detailedTask, taskAck, isTaskMethod,
+  mcpTasksEnabled, clientDeclaresTasks, createTaskStore, createTaskResult, detailedTask, taskAck, isTaskMethod, newRunKey,
 } from "./mcp-tasks.js";
 import { SKILLS_EXTENSION, mcpSkillsEnabled, clientDeclaresSkills, isSkillMethod, buildSkillSet, handleSkillsRpc } from "./mcp-skills.js";
 import { EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug } from "./composite-spend-guard.js";
@@ -490,7 +490,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       // A settled 200 whose result we could not retain is the one charged-but-
       // undelivered case this path can produce. The refund ledger demands
       // POSITIVE proof of a charge, so an unreadable receipt records nothing.
-      onChargedFailure: async ({ slug, receipt, priceUsd }) => {
+      // `requestId` keys a debt that has no settle transaction to the run.
+      onChargedFailure: async ({ slug, receipt, priceUsd, requestId = null }) => {
         try {
           const { recordRefundOwed, receiptProvesCharge } = await import("./refund-ledger.js");
           if (!receiptProvesCharge(receipt)) return;
@@ -501,6 +502,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             priceUsd,
             tx: receipt?.transaction ?? receipt?.tx ?? null,
             httpStatus: 500,
+            requestId,
           });
         } catch { /* recording a debt must never break the serving path */ }
       },
@@ -1368,10 +1370,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       });
       const progressSink = registerProgressSink(progressWriter);
       const endProgress = () => { progressWriter.cancel(); progressSink.release(); };
+      // The run's key: sent on the loopback (the route books it on the sale it
+      // makes for this run) and kept on the task record, so a run a restart
+      // cuts off is read against its own sale (src/mcp-tasks.js).
+      const runKey = newRunKey();
       const run = mppLoopback({
         def: entry.def, params, credentialHeader, ip,
         signal: controller.signal, idempotencyKey, heartbeatToken,
-        timeoutMs: tasks.RUN_TIMEOUT_MS, progressKey: progressSink.key,
+        timeoutMs: tasks.RUN_TIMEOUT_MS, progressKey: progressSink.key, runKey,
       });
       // Never leave an unhandled rejection while the gate window races.
       const settled = run.then((r) => ({ r }), (e) => ({ e }));
@@ -1391,7 +1397,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
 
       // With the state database on, create() resolves once the row is stored
       // (file mode returns the record at once; await is a no-op there).
-      const rec = await tasks.create({ slug: entry.def.slug, controller });
+      // The run's key rides on the record (never on the wire). No payer is
+      // recorded: the credential is not verified here, and the sale the route
+      // books carries the payer its gate verified.
+      const rec = await tasks.create({ slug: entry.def.slug, controller, runKey });
       if (rec) {
         progressTaskId = rec.taskId;
         if (progressHeld) { const held = progressHeld; progressHeld = null; try { await tasks.update?.(rec.taskId, withMessage(held)); } catch { /* advisory */ } }

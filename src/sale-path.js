@@ -15,6 +15,7 @@
 // digits, dots, slashes and hyphens), never the full User-Agent, never an
 // address. Rows recorded before the column existed read "unknown".
 import { isMcpLoopback } from "./unpaid-quote-budget.js";
+import { loopbackRunKeyOf } from "./mcp-loopback.js";
 import { isX402McpRequest, MCP_X402_SALE_PATH } from "./mcp-x402-routes.js";
 import { indexerFor } from "./traffic-classifier.js";
 
@@ -60,6 +61,19 @@ export function salePathOf(req) {
     return clientTokenOf(ua) || (isBazaarUa(ua) ? BAZAAR_SALE_PATH : "http");
   } catch { return "http"; }
 }
+
+/** The run key the sales ledger books on this request's sale: the task run's
+ *  key on the connector's genuine loopback replay, or the job run's key on an
+ *  async job's genuine replay (src/async-jobs.js reads it only beside its
+ *  token), else null. Never caller text: each is read only with its proof. */
+export function saleRunKeyOf(req) {
+  try {
+    const mcp = loopbackRunKeyOf(req);
+    if (mcp) return mcp;
+    return req?.asyncJobLoopback === true && typeof req.asyncRunKey === "string" && RUN_RE.test(req.asyncRunKey) ? req.asyncRunKey : null;
+  } catch { return null; }
+}
+const RUN_RE = /^[0-9a-f]{32}$/;
 
 /** A stored value (or NULL) as its group: "x402-mcp", "mcp", "bazaar", "http", "unknown", or the package name. */
 export function salePathGroup(via) {

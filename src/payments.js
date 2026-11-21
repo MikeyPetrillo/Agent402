@@ -11,7 +11,7 @@ import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
-import { attributionTailOf, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION } from "./data-attribution.js";
+import { attributionTailOf, ATTRIBUTIONS, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION } from "./data-attribution.js";
 import { isBinaryListing, listingMimeTypeOf, binaryOutputExample, binaryOutputSchema, binaryListingsEnabled, withBinaryOutputType, JSON_MIME } from "./tool-media-type.js";
 import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute, uptoNetworkKept } from "./upto-gas-sponsoring.js";
 import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
@@ -1274,6 +1274,9 @@ export function bazaarTagsFor(item) {
  *  /api/find) is untouched. scripts/test-bazaar-descriptions.js pins every
  *  key to a real slug and the cap. */
 export const BAZAAR_DESCRIPTIONS = Object.freeze({
+  // The catalog text's lead is cut to fit the four-source data credit, which
+  // left the listing without the score and the ranking it sells.
+  "weather-risk-brief": `Ranked 7-day weather risk for up to 50 sites in one call: each site gets a 0-100 risk score from frost, heat, gust, heavy rain, snow and air-quality checks. Use it to triage many sites at once. ${ATTRIBUTIONS["open-meteo-copernicus-geonames"]}`,
   // 2026-09-22: the slugs buyers pay for most had catalog fallbacks; these
   // say what comes back and when to pick the tool.
   "crypto-price": `Live spot price for one or many coins in any quote currency: last price, 24h change, 24h volume and market cap per coin, from a maintained market feed and answered in under a second. Use it when an agent needs a current crypto price to size, compare or display, or a cheap read to poll on a schedule. ${COINGECKO_ATTRIBUTION}`,
@@ -3044,7 +3047,47 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   scheduleBazaarRouteCheck(routes);
   if (mcpHttpServer) scheduleBazaarRouteCheck(mcpRouteConfigs);
   if (!syncOnStart) return withMcpTwins(vendorMw, mcpVendorMw);
+  // The first init never waits on a facilitator the boot read gave up on.
+  // initialize() reads every facilitator's /supported through its memo, one
+  // after another, and a boot read that got no answer within our limit is
+  // still in flight there: the init, and every paid request waiting on it
+  // (withGuardedInit), would wait for that facilitator to answer, though the
+  // guard has already dropped the rails only it lists. Measured on a local
+  // boot: one facilitator silent past the boot read held the first unpaid 402
+  // for about 6 s (76 s with one silent for two minutes), where the build is
+  // a few milliseconds. So for the first attempt such a facilitator's read
+  // fails at once, exactly as a read that fails outright does (the init warns
+  // and goes on with the others), and its own read is put back when the
+  // attempt ends; the rail re-read below restores a rail it lists once it
+  // answers. Only a facilitator that cannot win any (network, scheme) the
+  // offer still carries is passed over: the init gives each pair to the
+  // first facilitator in order that lists it, so one placed before every
+  // facilitator that answered for some offered pair (CDP, first on Base, is
+  // the case that matters: the Bazaar indexes what settles through it) is
+  // still waited for, as before, and keeps its routes when it answers.
+  // Nothing an offer carries changes, and no offered pair changes facilitator.
+  const offeredAtInit = new Set([...evmCaip2, ...svmCaip2, ...stellarCaip2, ...avmCaip2]);
+  const firstAnswering = new Map();
+  (probedReads || []).forEach((r, j) => {
+    for (const k of r?.supported?.kinds || []) {
+      const key = `${k?.network} ${String(k?.scheme || "").toLowerCase()}`;
+      if (offeredAtInit.has(String(k?.network)) && !firstAnswering.has(key)) firstAnswering.set(key, j);
+    }
+  });
+  // Every pair the offer carries through these clients: exact on each
+  // offered network, upto on each upto network, batch-settlement on each
+  // channel network. A pair no answering facilitator lists can only be won
+  // by one that did not answer.
+  const offeredPairs = [...[...offeredAtInit].map((n) => `${n} exact`), ...uptoCaip2.map((n) => `${n} upto`), ...batchCaip2.map((n) => `${n} batch-settlement`)];
+  const cannotWinAnOfferedPair = (i) => i >= 0 && offeredPairs.every((p) => firstAnswering.has(p)) && [...firstAnswering.values()].every((j) => j < i);
+  const heldAtInit = failedReads.filter(({ client }) => cannotWinAnOfferedPair(facilitatorClients.indexOf(client))).map(({ client, label }) => {
+    const own = Object.prototype.hasOwnProperty.call(client, "getSupported");
+    const read = client.getSupported;
+    client.getSupported = () => Promise.reject(new Error(`${label} gave no /supported answer at boot; it is read again in the background`));
+    return () => { if (own) client.getSupported = read; else delete client.getSupported; };
+  });
   const init = createGuardedInit(httpServer);
+  if (heldAtInit.length) void init.ensure().finally(() => { for (const putBack of heldAtInit) putBack(); });
 
   // ---- A rail dropped on a FAILED /supported read rejoins the offer live ----
   //

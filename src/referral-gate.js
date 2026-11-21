@@ -2726,8 +2726,8 @@ export function createReferralGate({
       try { verdict = await replayGuard.begin(key, undefined, { requireShared: !!requireShared(def) }); }
       catch { verdict = "unavailable"; }
       if (verdict === "unavailable") {
-        res.setHeader("Retry-After", "30");
-        return res.status(503).json({ error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and nothing was charged. Retry in about 30 seconds.", reason: "replay-store-unavailable" });
+        res.setHeader("Retry-After", "5");
+        return res.status(503).json({ error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and nothing was charged. Retry in about 5 seconds.", reason: "replay-store-unavailable" });
       }
       if (verdict !== "ok") {
         counters.replays++;

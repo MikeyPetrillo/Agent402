@@ -56,4 +56,36 @@ const again = await backfillBrokenPackRefunds({ write: true });
 ok(again.minted === 0 && again.alreadyRecorded === 2, "a second run mints nothing (idempotent on the settle tx)");
 ok(listRefunds({ status: "owed", limit: 50 }).length === 2, "and does not duplicate the ledger rows");
 
+// A booking write the store does not take is never reported as already
+// recorded: it is counted (writeFailed) and, for named sales, named. The
+// failure is the store's own (a trigger that aborts the INSERT of these keys,
+// added by a second connection, the way a full disk or a lock refuses it).
+{
+  const FAIL_PACK_TX = "0x" + "f1".repeat(32);
+  const FAIL_NAMED_TX = "0x" + "f2".repeat(32);
+  const OK_NAMED_TX = "0x" + "f3".repeat(32);
+  const more = new Database(process.env.SALES_LEDGER_DB);
+  const add = more.prepare("INSERT INTO sales (ts,slug,price_usd,rail,network,payer,tx,internal) VALUES (?,?,?,?,?,?,?,?)");
+  add.run(IN_WINDOW, "skill-schema-evolution", 0.07, "usdc", "base", "0xoutsider", FAIL_PACK_TX, 0);
+  add.run(Date.now() - 60_000, "web-search", 0.02, "usdc", "base", "0x00000000000000000000000000000000000000c3", FAIL_NAMED_TX, 0);
+  add.run(Date.now() - 60_000, "web-search", 0.02, "usdc", "base", "0x00000000000000000000000000000000000000c3", OK_NAMED_TX, 0);
+  more.close();
+  const refundsDb = new Database(join(dir, "agent402-refunds.db"));
+  refundsDb.exec(`CREATE TRIGGER refuse_booking BEFORE INSERT ON refunds WHEN NEW.evidence IN ('${FAIL_PACK_TX}', '${FAIL_NAMED_TX}') BEGIN SELECT RAISE(ABORT, 'store refused the write'); END;`);
+
+  const pack = await backfillBrokenPackRefunds({ write: true });
+  ok(pack.writeFailed === 1 && pack.alreadyRecorded === 2 && pack.minted === 0, `a pack debt whose write fails is counted as failed, not already recorded (${JSON.stringify({ minted: pack.minted, alreadyRecorded: pack.alreadyRecorded, writeFailed: pack.writeFailed })})`);
+
+  const { backfillNamedSales } = await import("../src/refund-backfill.js");
+  const named = await backfillNamedSales({ txs: [FAIL_NAMED_TX, OK_NAMED_TX], note: "named sales owed back", write: true });
+  ok(named.minted === 1 && named.alreadyRecorded === 0 && named.writeFailed === 1, `a named sale whose booking write fails is never read as already recorded (${JSON.stringify({ minted: named.minted, alreadyRecorded: named.alreadyRecorded, writeFailed: named.writeFailed })})`);
+  ok(named.skipped.some((s) => s.tx === FAIL_NAMED_TX && s.reason === "write_failed") && named.owedUsd === 0.02 && Object.values(named.byPayer).reduce((n, p) => n + p.settlements, 0) === 1, "it is named in skipped as write_failed, and only the booked sale counts toward owedUsd and byPayer");
+  ok(!listRefunds({ status: "all", limit: 100 }).some((r) => r.evidence === FAIL_NAMED_TX || r.evidence === FAIL_PACK_TX), "control: the store really holds neither failed debt");
+
+  refundsDb.exec("DROP TRIGGER refuse_booking");
+  refundsDb.close();
+  const retry = await backfillNamedSales({ txs: [FAIL_NAMED_TX, OK_NAMED_TX], note: "named sales owed back", write: true });
+  ok(retry.minted === 1 && retry.alreadyRecorded === 1 && retry.writeFailed === 0 && !retry.skipped.length, "once the store takes writes again, a rerun books the failed one and reads the booked one as already recorded");
+}
+
 console.log(`\n${passed} passed, 0 failed`);

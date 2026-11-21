@@ -54,6 +54,9 @@ try {
 const { PRICE_FEED_TOOLS, clearPriceFeedCache } = await import("../src/tools/price-feed-kit.js");
 const { clearCryptoCache } = await import("../src/tools/crypto-kit.js");
 const J = (status, body) => new Response(typeof body === "string" ? body : JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+// crypto-price's second-source check reads Hyperliquid, not CoinGecko: the
+// counting stubs below refuse it and leave it out of every count.
+const isPriceCheck = (input) => new URL(typeof input === "string" ? input : input?.url ?? String(input)).hostname === "api.hyperliquid.xyz";
 {
   process.env.COINGECKO_API_KEY = "cg-test-key";
   process.env.COINGECKO_DAILY_MAX = "3";
@@ -109,7 +112,7 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
   const price = CRYPTO_TOOLS.find((t) => t.slug === "crypto-price").handler;
   const orig = globalThis.fetch;
   let fetched = 0, reply = null;
-  globalThis.fetch = async () => { fetched++; return reply(); };
+  globalThis.fetch = async (input) => { if (isPriceCheck(input)) return J(503, {}); fetched++; return reply(); };
   try {
     // One token left: the 429 is not retried.
     process.env.COINGECKO_MAX_PER_MIN = "1";
@@ -193,6 +196,7 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
   const listed = new Set(); // coins the list names later in the day (section 9)
   let slow = 0;
   globalThis.fetch = async (input) => {
+    if (isPriceCheck(input)) return J(503, {});
     const u = new URL(typeof input === "string" ? input : input.url ?? String(input));
     const p = u.pathname.replace(/^\/api\/v3/, "");
     paths.push(p + u.search);

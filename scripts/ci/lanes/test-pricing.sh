@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (62 scripts, one process each)
+# @step 1: Offline suites (63 scripts, one process each)
 # Moved here from test-unit-a (2026-08-25 rebalance): the pricing lane was
 # one 4.5-minute test; with that test bounded (see countTokensBounded in
 # llm-gateway-kit.js) it had four minutes of headroom.
@@ -38,7 +38,7 @@ t node scripts/test-payment-required-body.js
 t node scripts/test-price-from-catalog.js
 # The compact PAYMENT-REQUIRED header (X-Payment-Compact: 1 or an aiohttp User-Agent): under 7,500 bytes on every route, Bazaar extension and resource untouched, a stock client pays from it, the default header byte-identical (boots a paid server twice, offline)
 t node scripts/test-payment-required-compact.js
-# The three-line front door leads /llms.txt, /agents.md, the MCP server.describe answer and the unpaid 402 body
+# The three-line front door leads /llms.txt, /agents.md, the MCP server.describe answer and the unpaid 402 body; /llms.txt keeps one clause per machine surface and stays under 16,384 bytes on a boot with production's switches
 t node scripts/test-front-door.js
 # HEAD paywall bypass closed (HEAD on paid GET routes 402s with challenges + empty body; free surfaces untouched — offline)
 t node scripts/test-head-paywall.js
@@ -54,6 +54,8 @@ t node scripts/test-quoted-from-price.js
 t node scripts/test-bundle-products.js
 # Wholesale surface: v1 fields and error codes pinned, reliability bounded and honest, prices are the public ones, no licensed data listed, errorCode on tool errors (boots FREE_MODE, offline)
 t node scripts/test-wholesale.js
+# The holiday data credit and the wholesale compute family source say what is held.
+t node scripts/test-attribution-wording.js
 # Real sample reports: fixtures are finished reports, pages indexable with own title/JSON-LD, /reports links them, sitemap carries them (boots FREE_MODE, offline)
 t node scripts/test-sample-reports.js
 # openFDA 404 = no matches, an empty result: recall-report must not 502 on it (offline)
@@ -149,6 +151,10 @@ t node scripts/test-solana-leaderboard.js
 t node scripts/test-solana-leaderboard-checkpoint.js
 # Solana history reads public RPC first: keyed lane on 429/timeout/null, identical board, throws when every lane is down, pacing, counters (offline stub RPCs)
 t node scripts/test-solana-history-rpc.js
+# The Solana activity scan resumes from its state (one process and across a restart), queues for the public lane, and keeps the keyed fallback inside the day's background share
+t node scripts/test-solana-activity-resume.js
+# Two boots on one store: the second serves a wallet's chart from its stored scan state with no transaction read
+t node scripts/test-solana-activity-restart.js
 # Base board keeps its read log window: identical board to a full read across head advances, new/returning wallets, failed reads, restart, store mismatch, row cap, switch (offline stub RPC)
 t node scripts/test-leaderboard-log-cache.js
 # Base board log cache at the row cap: kept rows folded by index (identical order to a full read), only changed segments re-hashed and saved, no stale digest after any invalidation,

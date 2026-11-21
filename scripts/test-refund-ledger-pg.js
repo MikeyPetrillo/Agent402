@@ -327,6 +327,58 @@ try {
     const sol = "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW";
     ok((await rl.recordRefundOwed({ slug: "hash", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", payer: "SoLPaYeR", priceUsd: 0.01, tx: sol, httpStatus: 502 })) === true && (await pgRows("evidence = $1", [sol])).length === 1, "a Solana signature is stored exactly as given");
   }
+
+  // ---- a store that refuses a write is told apart from a state conflict ---------
+  // The operator update route answers 503 on "store_failed" and 409 only on
+  // "conflict"; a booking that did not land is "failed", never "exists". The
+  // refusal is the database's own (a trigger raising disk_full), and the debt
+  // it refused waits in the dead-letter and lands once the store takes writes.
+  {
+    const S = sdb.stateDbSchema();
+    await sdb.stateQuery(`CREATE FUNCTION ${S}.refuse_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'store refused the write' USING ERRCODE = '53100'; END $$`);
+    ok((await rl.recordRefundOwed({ slug: "sf", network: "eip155:8453", payer: "0x" + "a1".repeat(20), priceUsd: 0.01, tx: "0xstorefail1", httpStatus: 502 })) === true, "setup: an owed row");
+    const sid = Number(rl.refundByEvidence("0xstorefail1").id);
+    await sdb.stateQuery(`CREATE TRIGGER refuse_update BEFORE UPDATE ON ${T} FOR EACH ROW WHEN (OLD.id = ${sid}) EXECUTE FUNCTION ${S}.refuse_write()`);
+    ok((await rl.refundRowUpdate({ id: sid, action: "claim", note: "refund-run" })) === "store_failed", "a claim the store refuses reads store_failed (the route's 503), not a conflict");
+    ok((await rl.refundRowUpdate({ id: sid, action: "paid", tx: "0x" + "ab".repeat(32) })) === "store_failed" && (await rl.refundRowUpdate({ id: sid, action: "void", note: "n" })) === "store_failed", "so do a paid and a void it refuses");
+    ok((await rl.claimRefundForSend(sid, "refund-run")) === false, "the boolean export still reads false for it");
+    ok((await rl.refundRowUpdate({ id: 987654, action: "claim" })) === "conflict" && (await rl.refundRowUpdate({ id: sid, action: "paid" })) === "invalid", "control: a missing row is a conflict, a paid with no tx invalid");
+    await sdb.stateQuery(`DROP TRIGGER refuse_update ON ${T}`);
+    ok((await rl.refundRowUpdate({ id: sid, action: "claim", note: "refund-run" })) === "updated" && (await rl.refundRowUpdate({ id: sid, action: "claim", note: "again" })) === "conflict", "control: once the store takes writes, the claim lands and a second one is a conflict");
+
+    await sdb.stateQuery(`CREATE TRIGGER refuse_insert BEFORE INSERT ON ${T} FOR EACH ROW WHEN (NEW.evidence = '0xstorefail2') EXECUTE FUNCTION ${S}.refuse_write()`);
+    const debt = { slug: "sf", network: "eip155:8453", payer: "0x" + "a2".repeat(20), priceUsd: 0.01, tx: "0xstorefail2", httpStatus: 502 };
+    ok((await rl.recordRefundOwedVerdict(debt)) === "failed", "a debt the store refuses reads failed, never exists");
+    ok((await pgRows("evidence = $1", ["0xstorefail2"])).length === 0 && rl.refundDeadLetterCount() >= 1, "it is not in the table, and it waits in the dead-letter");
+    await sdb.stateQuery(`DROP TRIGGER refuse_insert ON ${T}`);
+    await rl.refundLedgerRefresh();
+    ok((await pgRows("evidence = $1", ["0xstorefail2"])).length === 1, "once the store takes writes, the replay lands it");
+    ok((await rl.recordRefundOwedVerdict(debt)) === "exists" && (await rl.recordRefundOwedVerdict({ ...debt, tx: "0xstorefail3" })) === "minted", "control: the same debt again is exists, a new one minted");
+  }
+
+  // ---- a38: the key lookup a write runs is planned on the lower(evidence) index ----
+  // Without statistics for the expression (a new index, a table not yet
+  // analyzed), ORDER BY id LIMIT 1 on the bare filter walks the primary key
+  // in id order: the whole table for a new key. The probe table has the
+  // ledger's shape, 50,000 rows, and autovacuum off, so it is never analyzed.
+  {
+    const S = sdb.stateDbSchema();
+    const P = `${S}.refunds_plan_probe`;
+    await sdb.stateQuery(`CREATE TABLE ${P} (LIKE ${T} INCLUDING DEFAULTS INCLUDING INDEXES) WITH (autovacuum_enabled = false)`);
+    await sdb.stateQuery(`INSERT INTO ${P} (id, evidence, slug, network, price_usd, created_at) SELECT g, '0x' || lpad(to_hex(g), 64, '0'), 'p', 'eip155:8453', 0, 0 FROM generate_series(1, 50000) g`);
+    const idx = (await sdb.stateQuery("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1 AND tablename = 'refunds_plan_probe'", [S])).rows;
+    const lcIndex = idx.find((r) => /lower\(evidence\)/.test(r.indexdef))?.indexname;
+    const pkey = idx.find((r) => /PRIMARY KEY|\(id\)$/.test(r.indexdef) && /UNIQUE/.test(r.indexdef) && /\(id\)/.test(r.indexdef))?.indexname;
+    ok(!!lcIndex && !!pkey, `setup: the probe has the lower(evidence) index and the primary key (${lcIndex}, ${pkey})`);
+    const plan = async (sql) => JSON.stringify((await sdb.stateQuery(`EXPLAIN (FORMAT JSON) ${sql}`, ["0x" + "f".repeat(64)])).rows[0]);
+    const before = await plan(`SELECT evidence FROM ${P} WHERE lower(evidence) = $1 ORDER BY id ASC LIMIT 1`);
+    ok(before.includes(`"Index Name":"${pkey}"`), "control: the bare filter with ORDER BY id LIMIT 1 walks the primary key on an unanalyzed table");
+    const sql = rl.__evidenceKeySql();
+    ok(sql.includes(`${T} `), "the seam is the statement the write runs, on the ledger table");
+    const after = await plan(sql.replace(`${T} `, `${P} `));
+    ok(after.includes(`"Index Name":"${lcIndex}"`) && !after.includes(`"Index Name":"${pkey}"`), `the write's lookup uses the lower(evidence) index, never the primary key walk (${after.match(/"Index Name":"[^"]+"/g)?.join(", ")})`);
+    await sdb.stateQuery(`DROP TABLE ${P}`);
+  }
 } finally {
   await sdb.__dropStateSchema();
   await sdb.closeStateDb();

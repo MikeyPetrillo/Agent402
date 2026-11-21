@@ -2313,7 +2313,7 @@ try {
       const vBefore = verifies();
       const u = await send(`${spy.url}/ref/echo`, { body: { text: "x" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
       knobs.requireShared = false;
-      ok(u.status === 503 && u.json?.reason === "replay-store-unavailable" && u.headers.get("retry-after") === "30" && begun[0] === true && verifies() === vBefore, `a claim the shared store must hold and cannot: 503 with Retry-After, nothing sent (${u.status})`);
+      ok(u.status === 503 && u.json?.reason === "replay-store-unavailable" && u.headers.get("retry-after") === "5" && /Retry in about 5 seconds\./.test(u.json?.error || "") && begun[0] === true && verifies() === vBefore, `a claim the shared store must hold and cannot: 503 with Retry-After, nothing sent (${u.status})`);
     } finally { await spy.close(); }
     // A drain: no new run starts, and a settle call in flight ends inside what the drain has left.
     knobs.draining = { active: true, leftMs: 60_000 };

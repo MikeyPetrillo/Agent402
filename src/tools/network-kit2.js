@@ -441,6 +441,32 @@ function reverseIpv4(ip) {
   return ip.split(".").reverse().join(".");
 }
 
+// Team Cymru's zone is answered fine by the big public resolvers even when a
+// host's own resolver returns SERVFAIL or times out on it (seen on CI runners).
+// A resolver failure (not an authoritative "no such name") is retried once
+// through public resolvers; ENOTFOUND and ENODATA are answers and pass through.
+const CYMRU_FALLBACK_SERVERS = Object.freeze(["8.8.8.8", "9.9.9.9", "1.1.1.1"]);
+const RESOLVER_FAILURE = new Set(["ESERVFAIL", "ETIMEOUT", "ETIMEDOUT", "ECONNREFUSED", "EREFUSED", "ECONNRESET", "ECANCELLED"]);
+function publicResolveTxt(name) {
+  const r = new dnsPromises.Resolver({ timeout: 3000, tries: 1 });
+  r.setServers([...CYMRU_FALLBACK_SERVERS]);
+  return r.resolveTxt(name).finally(() => { try { r.cancel(); } catch { /* ignore */ } });
+}
+// The lookups the handler makes; a test swaps them to prove the handler goes
+// through cymruTxt with the public fallback (setCymruLookups).
+const CYMRU_DEFAULT_LOOKUPS = Object.freeze({ primary: (n) => dnsPromises.resolveTxt(n), fallback: publicResolveTxt });
+let cymruLookups = CYMRU_DEFAULT_LOOKUPS;
+export function setCymruLookups(next) { cymruLookups = next ? { ...CYMRU_DEFAULT_LOOKUPS, ...next } : CYMRU_DEFAULT_LOOKUPS; }
+export const CYMRU_FALLBACK = CYMRU_FALLBACK_SERVERS;
+export async function cymruTxt(name, { primary = cymruLookups.primary, fallback = cymruLookups.fallback } = {}) {
+  try {
+    return await primary(name);
+  } catch (err) {
+    if (!RESOLVER_FAILURE.has(err?.code)) throw err;
+    return await fallback(name);
+  }
+}
+
 async function asnInfoHandler(body) {
   let ip = body?.ip || body?.address;
   if (!ip) {
@@ -460,7 +486,7 @@ async function asnInfoHandler(body) {
   const originHost = `${reverseIpv4(ip)}.origin.asn.cymru.com`;
   let originTxt;
   try {
-    const records = await dnsPromises.resolveTxt(originHost);
+    const records = await cymruTxt(originHost);
     originTxt = (records[0] || []).join("");
   } catch (err) {
     if (err.code === "ENOTFOUND" || err.code === "ENODATA") {
@@ -476,7 +502,7 @@ async function asnInfoHandler(body) {
   let owner = null;
   if (asn) {
     try {
-      const records = await dnsPromises.resolveTxt(`${asn}.asn.cymru.com`);
+      const records = await cymruTxt(`${asn}.asn.cymru.com`);
       const txt = (records[0] || []).join("");
       // "AS | CC | registry | date | name, CC"
       const parts = txt.split("|").map(s => s.trim());

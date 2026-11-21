@@ -182,7 +182,11 @@ export function paidAndSettled(req, res, { settleReceipt = null } = {}) {
     if (!res || res.statusCode !== 200) return false;
     if (String(res.getHeader?.("X-Replayed-Answer") ?? "") === "1") return false;
     if (allowanceServed(req)) return false;
-    if (req?.creditsSettled === true) return true;
+    // A credits 200 is debited unless it was served without a run (a keyed
+    // idempotent replay, a gateway cache hit: src/credits.js
+    // servedWithoutRun). The debit's own landing mark (creditsCharged) is not
+    // read: on the state database it lands after the response ends.
+    if (req?.creditsSettled === true) return !(req.gatewayCacheHit === true || String(res.getHeader?.("X-Idempotent-Replay") ?? "").toLowerCase() === "true");
     if (req?.tempoSettled === true || req?.stripeSettled === true) return true;
     if (res.getHeader?.("Payment-Receipt")) return true;
     const h = settleReceipt || res.getHeader?.("PAYMENT-RESPONSE") || res.getHeader?.("X-PAYMENT-RESPONSE");

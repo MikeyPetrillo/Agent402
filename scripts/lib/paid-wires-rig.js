@@ -173,7 +173,8 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
         return reply(200, { id: "gen-" + st.completions, object: "chat.completion", created: Math.floor(Date.now() / 1000), model: j.model || "x", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, cost: 0.000001 } });
       }
       if (req.method === "GET" && path.endsWith("/endpoints") && path.includes("/images/models/")) return reply(200, { data: { endpoints: [] } });
-      if (req.method === "POST" && /\/api\/v1\/images$/.test(path)) { st.images++; await sleep(st.llmDelayMs); return reply(200, { created: Math.floor(Date.now() / 1000), data: [{ b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" }], usage: { prompt_tokens: 0, completion_tokens: 0 } }); }
+      // st.imageB64 (when set): the image the stub answers, e.g. a large one.
+      if (req.method === "POST" && /\/api\/v1\/images$/.test(path)) { st.images++; await sleep(st.llmDelayMs); return reply(200, { created: Math.floor(Date.now() / 1000), data: [{ b64_json: st.imageB64 || "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" }], usage: { prompt_tokens: 0, completion_tokens: 0 } }); }
       if (req.method === "POST" && /audio\/speech/.test(path)) { res.writeHead(200, { "Content-Type": "audio/mpeg" }); return res.end(Buffer.alloc(2048, 7)); }
       return reply(200, { data: [] });
     }

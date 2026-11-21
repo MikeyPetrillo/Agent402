@@ -270,5 +270,149 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
   ok(/The log line written for a refused payment, and the timing line written for each paid call, also hold the payment's network, the route and the first characters of the paying address\./.test(privacy), "/privacy states what the payment log lines hold");
 }
 
+// Payer sanctions screening. The x402, MPP evm and Tempo relay screens fail
+// open while no sanctions list is loaded (and an EVM payment whose payer the
+// screen cannot read is served unscreened), so a page sentence that says a
+// payer is screened before the paid route runs states that case beside it,
+// and names the live word that says whether a list is loaded.
+{
+  const { trustPage } = await import("../src/trust-page.js");
+  const trust = text(trustPage("https://agent402.tools"));
+  const pages = { "/trust": trust, "/privacy": privacy, "/terms": terms, "/security": security };
+  const CLAIM = /[^.]*\b(?:screens?|screened|checked)\b[^.]*before the (?:paid )?route runs[^.]*\./gi;
+  const FAIL_OPEN = /no (?:sanctions )?list is loaded[^.]*fails? open[^.]*unscreened/i;
+  let claims = 0; const bare = [];
+  for (const [name, t] of Object.entries(pages)) {
+    for (const m of t.matchAll(CLAIM)) {
+      claims++;
+      const around = t.slice(Math.max(0, m.index - 300), m.index + m[0].length + 600);
+      if (!FAIL_OPEN.test(around)) bare.push(`${name}: "${m[0].trim().slice(0, 90)}"`);
+    }
+  }
+  ok(claims >= 1, `class: the pages' screened-before-the-route claims are found (${claims})`);
+  ok(bare.length === 0, `class: every screened-before-the-route claim states the fail-open case beside it${bare.length ? ` (bare: ${bare.join(" | ")})` : ""}`);
+  ok(!/Every rail that carries a payer address screens it/.test(trust), "/trust does not open the screening sentence unconditionally");
+  ok(/as is an EVM payment whose payer the screen cannot read/.test(trust), "/trust names the unreadable-payer case the x402 screen serves unscreened");
+  ok(/Tempo direct settlement is not offered/.test(trust), "/trust says Tempo direct settlement is not offered while no list is loaded");
+  ok(/sanctionsScreen word on \/api\/gateway-status reads missing while no list is loaded/.test(trust), "/trust names the live word that says whether a list is loaded");
+  // Controls: the code still does what the scoped sentence says.
+  const screen = src("src/x402-payer-screen.js");
+  ok(/serving x402 payments unscreened/.test(screen) && /named no payer this screen reads[^\n]*served unscreened/.test(screen), "control: the x402 screen serves unscreened with no list, and an unreadable EVM payer unscreened");
+  ok(/serving Tempo payments unscreened/.test(src("src/payer-screen-rails.js")), "control: the Tempo relay screen serves unscreened with no list");
+  ok(/tempoSettlementMode\(\) === "relay" \|\| sanctionsScreenStatus\(\) !== "missing"/.test(src("src/mpp-tempo.js")), "control: Tempo direct mode offers no challenge while no list is loaded");
+  ok(/: \{ status: sanctionsScreenStatus\(\) \}/.test(src("src/server.js")), "control: /api/gateway-status publishes the sanctionsScreen word to everyone");
+  ok("missing" === (await import("../src/sanctions-screen.js")).sanctionsScreenStatus(), "control: with no list loaded the word reads missing");
+}
+
+// The audit report sums what the wallet paid; repayments of charged calls are
+// listed beside it, never netted from it, and the listing says so. It is a
+// record of paid calls, not a compliance product: no compliance tag or alias.
+{
+  const kit = await import("../src/tools/audit-report-kit.js");
+  const def = kit.AUDIT_TOOLS.find((t) => t.slug === "audit-report");
+  ok(!/hand to an auditor|ready to hand/i.test(def.description), "audit-report: the description does not sell the report as ready for an auditor");
+  ok(!def.tags.includes("compliance") && !def.aliases.includes("compliance-report") && !def.aliases.some((a) => /compliance/.test(a)), "audit-report: no compliance tag or alias");
+  ok(/not netted/.test(def.description) && /refunds/.test(def.description), "audit-report: the description says repayments are listed and not netted");
+  ok(!/compliance|hand to an auditor/i.test(src("src/tools/audit-report-kit.js").split("\n").slice(0, 3).join("\n")), "audit-report: the kit's header names no auditor hand-off");
+  const DAY = 86_400_000, T0 = Date.parse("2026-10-01T00:00:00Z");
+  const W = "0x" + "a1".repeat(20);
+  const sale = { id: 1, ts: T0 + 2 * DAY, slug: "hash", priceUsd: 0.05, quotedUsd: null, rail: "x402", wire: "x402", network: "eip155:8453", tx: "0x" + "11".repeat(32) };
+  const page = { rows: [sale], matched: 1, totals: { calls: 1, paidUsd: 0.05, firstAt: new Date(sale.ts).toISOString(), lastAt: new Date(sale.ts).toISOString() }, byTool: [{ slug: "hash", calls: 1, usd: 0.05 }], byDay: [{ day: "2026-10-03", calls: 1, usd: 0.05 }] };
+  const ref = (id, status, usd, at, paidTx = null) => ({ evidence: "0x" + String(id).padStart(2, "0").repeat(32), network: "eip155:8453", priceUsd: usd, status, paidTx, createdAt: at, resolvedAt: paidTx ? at + 1000 : null });
+  const inWindow = [ref(21, "paid", 0.05, T0 + 2 * DAY, "0x" + "22".repeat(32)), ref(23, "owed", 0.02, T0 + 3 * DAY)];
+  const outside = [ref(24, "paid", 0.4, T0 - 5 * DAY, "0x" + "25".repeat(32))];
+  let asked = null;
+  const run = (refundsForPayer) => kit.makeAuditReportHandler({ payerOf: () => W, signer: () => null, refresh: async () => {}, refundRefresh: async () => {}, now: () => T0 + 10 * DAY, payerAuditRows: () => page, receiptsForSettlements: async () => new Map(), refundsForPayer })({ from: "2026-10-01", to: "2026-10-10" }, { headers: {} });
+  const r = await run((p, o) => { asked = { p, o }; return [...inWindow, ...outside]; });
+  const b = r.report.refunds || {};
+  ok(asked?.p === W, "audit-report: the refunds read is the paying wallet's own");
+  ok(b.netted === false && b.count === 2 && b.repaidUsd === 0.05 && b.owedUsd === 0.02, `audit-report: the refunds block lists the window's repaid and owed rows, not netted (${JSON.stringify({ netted: b.netted, count: b.count, repaidUsd: b.repaidUsd, owedUsd: b.owedUsd })})`);
+  ok(r.report.totals.paidUsd === 0.05 && !("netPaidUsd" in r.report.totals), "audit-report: totals stay what the wallet paid; nothing is subtracted");
+  ok(Array.isArray(b.rows) && b.rows.every((x) => x.tx !== outside[0].evidence) && b.rows.some((x) => x.status === "paid" && x.refundTx), "audit-report: a refund recorded outside the window is left out; a repaid row names its repayment");
+  ok(b.complete === true && b.truncated === false, "audit-report: a read under the cap is complete");
+  ok(r.reportSha256 === kit.reportDigest(r.report), "audit-report: the report digest covers the refunds block");
+  const capped = Array.from({ length: kit.AUDIT_REFUNDS_MAX }, (_, i) => ref(30 + (i % 60), "owed", 0.001, T0 + 9 * DAY - i));
+  const rc = (await run(() => capped)).report.refunds || {};
+  ok(rc.complete === false && rc.truncated === true && rc.count === kit.AUDIT_REFUNDS_MAX, `audit-report: a read that fills the cap inside the window says it may be partial (${rc.complete}, ${rc.count})`);
+  const rf = (await run(() => { throw new Error("store down"); })).report.refunds || {};
+  ok(rf.read === "unavailable" && rf.count === 0 && rf.netted === false, "audit-report: a refunds read that fails says unavailable, never zero owed as fact");
+}
+
+// Signed receipts kept outside the receipt store: a delivered card report
+// keeps the receipt issued at delivery on its record, and a monitor
+// subscription keeps its most recent paid periods' receipts (the count the
+// code keeps) until the record ends; /privacy names both.
+{
+  const { SUBSCRIPTION_RECEIPTS_KEPT } = await import("../src/receipt-signing.js");
+  const { TOMBSTONE_FIELDS } = await import("../src/mpp-subscriptions.js");
+  ok(/if \(typeof receipt === "string" && receipt\) rec\.receipt = receipt;/.test(src("src/human-checkout.js")), "control: a delivered card report keeps its signed receipt on the report record");
+  ok(/signedReceipts: appendPeriodReceipt\(kept, r\)/.test(src("src/stripe-subscriptions.js")) && /signedReceipts: appendPeriodReceipt\(rec\.signedReceipts, r\)/.test(src("src/mpp-subscriptions.js")), "control: card and MPP monitor subscriptions keep their period receipts on the record");
+  ok(SUBSCRIPTION_RECEIPTS_KEPT > 0 && !TOMBSTONE_FIELDS.includes("signedReceipts"), `control: ${SUBSCRIPTION_RECEIPTS_KEPT} period receipts are kept, and an ended MPP subscription's reduced record drops them`);
+  ok(/the report record on our server holds the session id, your input, the finished report and the signed receipt we issued for it at delivery \(SHA-256 digests of the request and of the report, the price and Stripe's payment id\), not the email/.test(privacy), "/privacy names the card report's signed receipt on the report record");
+  ok(privacy.includes(`and the signed receipts of its ${SUBSCRIPTION_RECEIPTS_KEPT} most recent paid periods (each a record of SHA-256 digests, the amount and the payment reference, kept with the period's statement, which names the subject and the period), for the life of the subscription`), `/privacy names the monitor's ${SUBSCRIPTION_RECEIPTS_KEPT} kept period receipts`);
+  ok(/the email and the subject you asked us to watch are removed, and so are the signed period receipts/.test(privacy), "/privacy says an ended MPP subscription's reduced record drops its period receipts");
+  ok(privacy.includes(`a signing key our server made for that subscription. Once a period is paid, the record also keeps the signed receipts of its ${SUBSCRIPTION_RECEIPTS_KEPT} most recent paid periods`), "/privacy names the period receipts on an MPP subscription's record");
+}
+
+// The privacy page's sanctions item names every payer screen the code runs:
+// x402, the MPP evm wire, Tempo settled by our server, Tempo settled through
+// Tempo's relay, and MPP monitor subscriptions.
+{
+  ok(/sanctionsScreening: x402ScreenCell\(L, "mpp-evm", true\)/.test(src("src/conformance.js")), "control: the MPP evm wire is screened by the x402 payer screen");
+  ok(/Tempo relay payer screen/.test(src("src/payer-screen-rails.js")) && /mpp-tempo-relay/.test(src("src/conformance.js")), "control: a Tempo payment settled through the relay has its paying wallet screened");
+  const item = privacy.slice(privacy.indexOf("Sanctions screening."), privacy.indexOf("Memory tools."));
+  ok(/[Tt]he paying address of an x402 payment or of an MPP evm payment/.test(item), "/privacy: the sanctions item names the MPP evm payer");
+  ok(/the paying wallet of a Tempo payment settled through Tempo's relay \(and the sender the relay settled on\)/.test(item), "/privacy: the sanctions item names the Tempo relay screen");
+}
+
+// Signed receipts cover the direct routes. A referral copy (/ref/<slug>) is
+// never signed (src/server.js receiptFieldsOf), and a streamed answer that is
+// neither an event stream nor sent with TE: trailers carries none: the
+// lead sentence stays the owner's line, and the surfaces that detail the
+// receipt state both exceptions. This block runs last: it loads a key.
+{
+  ok(/function receiptFieldsOf\(req, res\) \{\n\s+if \(FREE_MODE \|\| String\(req\.path \|\| ""\)\.startsWith\("\/ref\/"\)\) return null;/.test(src("src/server.js")), "control: a /ref answer is never signed");
+  ok(/A streamed answer that is[\s/]+neither \(no event stream, no trailers asked for\) carries none\./.test(src("src/receipt-signing.js")) && /A streamed answer that is neither carries no receipt\./.test(src("src/conformance.js")), "control: a stream that is neither an event stream nor asked trailers carries no receipt");
+  const readme = src("README.md").replace(/\*\*/g, "");
+  const bullet = readme.split("\n").find((l) => /signed receipt/.test(l) && /^- /.test(l)) || "";
+  ok(!/Buyer protection/.test(readme), "README: no \"Buyer protection\" heading (it reads as a guarantee program)");
+  ok(/on the direct routes carries a signed receipt/.test(bullet) && /a tool bought through a referral link carries none/.test(bullet) && /event-stream comment line/.test(bullet) && /TE: trailers/.test(bullet), `README: the money-path bullet scopes the signed receipt to the direct routes and names both exceptions ("${bullet.slice(0, 80)}...")`);
+  // Every markdown tree: a sentence that says every settled paid answer is
+  // signed scopes it to the direct routes, and its paragraph names the
+  // referral exception (a /ref answer carries no receipt).
+  {
+    const { execFileSync } = await import("node:child_process");
+    const mdFiles = execFileSync("git", ["ls-files", "*.md"], { cwd: new URL("..", import.meta.url), encoding: "utf8" }).split("\n").filter((f) => f && !f.startsWith(".claude/") && f !== "CHANGELOG.md");
+    const unscoped = [];
+    for (const f of mdFiles) {
+      const paras = src(f).split(/\n\s*\n/).map((p) => p.replace(/\s+/g, " "));
+      for (const para of paras) {
+        for (const m of para.matchAll(/[^.]*\bevery (?:settled )?paid answer\b[^.]*\./gi)) {
+          if (!/on the direct routes/i.test(m[0]) || !/referral/i.test(para)) unscoped.push(`${f}: "${m[0].trim().slice(0, 90)}"`);
+        }
+      }
+    }
+    ok(mdFiles.length > 20 && unscoped.length === 0, `markdown: every "every settled paid answer" scopes the receipt to the direct routes and names the referral exception (${unscoped.join("; ") || `${mdFiles.length} files read`})`);
+  }
+  ok(!/every paid path is signed/.test(src("src/positioning.js")) && /\/ref\/ copy is never signed/.test(src("src/positioning.js")), "positioning.js: the lead's comment states the receipt's scope, not every paid path");
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { resetReceiptKeys, receiptsServed } = await import("../src/receipt-signing.js");
+  const { markGateMounted } = await import("../src/gate-mounts.js");
+  const { trustPage } = await import("../src/trust-page.js");
+  const pem = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" });
+  resetReceiptKeys({ RECEIPT_SIGNING_KEY: Buffer.from(pem).toString("base64"), RECEIPT_SIGNING_KEY_ID: "legal-test" });
+  markGateMounted("receiptSigner");
+  ok(receiptsServed(), "control: a key is loaded and the signer mounted");
+  const REF = { REFERRAL_PAY_TO: "0x00000000000000000000000000000000000000a1", REFERRAL_FACILITATOR_URL: "http://127.0.0.1:9/", REFERRAL_SIGNER_KEY: "11".repeat(32), REFERRAL_SLUGS: "hash", REFERRAL_PARITY_GRANDFATHERED: "hash", REFERRAL_SETUP_URL: "https://setup.example/referral", REFERRAL_COMMISSION_BPS: "default:1234", REFERRAL_MERCHANT_ID: "4242", REFERRAL_PAYOUT_ADDRESS: "0x00000000000000000000000000000000000000b2" };
+  const NOTE = "A tool bought through a referral link carries no signed receipt from this server; the payment's transaction on chain is its record.";
+  const off = text(trustPage("https://agent402.tools"));
+  const saved = Object.fromEntries(Object.keys(REF).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, REF);
+  const on = text(trustPage("https://agent402.tools"));
+  for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  ok(on.includes(NOTE), "/trust: with referral links offered, the receipt step says a referral purchase carries no signed receipt");
+  ok(!off.includes(NOTE) && !/referral/i.test(off), "/trust: with no referral links, the page names none");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

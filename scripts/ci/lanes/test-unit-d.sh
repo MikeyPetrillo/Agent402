@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (165 scripts, one process each)
+# @step 1: Offline suites (169 scripts, one process each)
 # Client route discovery and output validation (clean-room behavior test, offline)
 t node scripts/test-cleanroom-client-contract.js
 # Paid scan budget (a public route must not spend without limit)
@@ -179,6 +179,8 @@ t node scripts/test-outbound-destinations.js
 t node scripts/test-refund-lookup.js
 # Refund ledger routes: a full refund run's call burst is never refused; the runner resends only a 429 (boots its own server)
 t node scripts/test-refund-ledger-limiter.js
+# Operator refund update: 409 only for a state conflict, 503 when the store refuses the write, 400 for missing evidence (boots its own server)
+t node scripts/test-refund-update-route.js
 # Daily MPP reconciliation (every mismatch category, unknown never ok, idempotent reruns, words-only public status, operator-only routes — offline)
 t node scripts/test-mpp-reconcile.js
 # Refund pre-send proof (same payer, our payTo, enough value, on a transaction that actually succeeded — offline)
@@ -187,6 +189,9 @@ t node scripts/test-payment-verify.js
 t node scripts/test-refund-run-self-funding.js
 # Refund job on Tempo and Solana: dry run plans only, claim before send, one send per debt, outbound proof before paid, void never sent (stubs only, offline)
 t node scripts/test-refund-run-chains.js
+# Refund job receipt hosts: REFUND_RPC_<id> first, an empty receipt read again, then the next host; no URL in any reason or log line; the real job proving a Celo receipt (stubs only, offline)
+t node scripts/test-refund-receipt-hosts.js
+t node scripts/test-asn-resolver-fallback.js
 # Payment-header precedence (attribution must follow the header the middleware SETTLES from — offline)
 t node scripts/test-payer-header-order.js
 # Refund monitor (stuck sends page, in-flight ones do not, and no address ever reaches a public issue — offline)
@@ -211,6 +216,8 @@ t node scripts/test-sync-count-floor.js
 t node scripts/test-invariants.js
 # CDP kit unit tests (JWT signing both key formats, validation, faucet gate — offline)
 t node scripts/test-cdp-kit.js
+# onchain-sql busy answer spread, in-flight place wait (first come first served), pairs back to back, monotonic pacer clock (offline)
+t node scripts/test-onchain-sql-pacer.js
 # onchain-sql query-count histogram: queries per call by how the response ended, stored as counts only, 35 days kept (offline)
 t node scripts/test-sql-query-stats.js
 # CDP facilitator config built on the kit's JWT minter (header groups, claims, wire path; offline)
@@ -365,6 +372,8 @@ t node scripts/test-supply-chain-guards.js
 t node scripts/test-wallet-e2e.js
 # MCP Registry find-latest-version helper (used by the publish job to auto-deprecate a superseded version — offline)
 t node scripts/test-mcp-find-latest-version.js
+# Stripe Link canary reads every CLI answer shape and says why it stops (offline)
+t node scripts/test-stripe-link-canary.js
 # FFmpeg video-decode lockout (R-06: every ffmpeg and ffprobe call passes an audio-only -codec_whitelist before -i, so the MagicYUV video decoder never opens; offline)
 t node scripts/test-ffmpeg-novideo.js
 # Log-injection guard (F24 — CR/LF + ANSI + control chars stripped from attacker-controlled log text — offline)
@@ -440,6 +449,8 @@ t node scripts/test-brave-leak.js
 t node scripts/test-ci-key-exposure.js
 # Daily call budgets for every paid upstream (Brave, Alchemy, CoinGecko, OpenAI, E2B, Neynar)
 t node scripts/test-upstream-budgets.js
+# Per-caller call counts by UTC day for the on-chain data provider: labels, a deploy adds to the stored day, seven days of history
+t node scripts/test-upstream-call-days.js
 t node scripts/test-upstream-hard-caps.js
 # /api/gateway-status is public: verdicts only, never limits or balances
 t node scripts/test-gateway-status-privacy.js

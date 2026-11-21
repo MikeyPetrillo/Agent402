@@ -175,6 +175,11 @@ function fakeStore() {
   ok(!paidAndSettled({}, res(400, { "payment-response": receipt({ success: true }) })) && !paidAndSettled({ creditsSettled: true }, res(500)), "a 4xx or 5xx is never paid");
   ok(!paidAndSettled({}, res(200, { "payment-response": receipt({ success: true }), "x-replayed-answer": "1" })), "a replayed answer (no second settle) is not paid");
   ok(!paidAndSettled({ [ALLOWANCE_STATE]: { state: "served" } }, res(200, { "payment-response": receipt({ success: true }) })), "a first-call allowance grant is not paid");
+  // A credits 200 served without a run is not debited (src/credits.js
+  // servedWithoutRun): a keyed idempotent replay or a gateway cache hit.
+  ok(!paidAndSettled({ creditsSettled: true }, res(200, { "x-idempotent-replay": "true" })), "a credits 200 answered from the idempotency store (never debited) is not paid");
+  ok(!paidAndSettled({ creditsSettled: true, gatewayCacheHit: true }, res(200)), "a credits 200 answered from the gateway cache (never debited) is not paid");
+  ok(paidAndSettled({ creditsSettled: true, creditsCharged: 0.01 }, res(200)), "a credits 200 whose debit landed is paid");
 }
 // The unpaid price-check budget reads the trust.
 {

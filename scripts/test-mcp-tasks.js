@@ -105,8 +105,8 @@ const jsonRes = (status, body, headers = {}) => ({
 // call records the abort signal so cancellation can be observed.
 const calls = [];
 let plan = {};
-async function stubLoopback({ def: d, params, signal, timeoutMs, progressKey, credentialHeader }) {
-  const rec = { slug: d.slug, params, signal, timeoutMs, aborted: false, progressKey, credentialHeader };
+async function stubLoopback({ def: d, params, signal, timeoutMs, progressKey, credentialHeader, runKey }) {
+  const rec = { slug: d.slug, params, signal, timeoutMs, aborted: false, progressKey, credentialHeader, runKey };
   calls.push(rec);
   const p = plan[d.slug] || { delayMs: 0, res: jsonRes(200, { ok: true, slug: d.slug }) };
   // What the real paid route does with the progress key: the middleware finds
@@ -439,6 +439,17 @@ ok(cutoffs.length === 0, "a cancel the buyer asked for is not a connector cut-of
   plan = { research: { delayMs: 700, res: jsonRes(200, { report: "x".repeat(5_000) }, { "payment-response": settle, "payment-receipt": mppReceipt }) } };
   const lost = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "research", params: { q: "hello" } }, _meta: { ...CLIENT_CAPS, "org.paymentauth/credential": credential } });
   ok(lost.result?.resultType === "task", "the paid run is handed back as a task");
+  {
+    // The connector's wiring: the run's key goes on the loopback (the route
+    // books it on the sale it makes) and on the stored record, and the record
+    // keeps no payer read from the credential (the gate has not verified it
+    // when the record is written).
+    const stored = JSON.parse(readFileSync(join(STORE_DIR, `${lost.result.taskId}.json`), "utf8"));
+    const sent = calls.filter((c) => c.slug === "research").at(-1);
+    ok(/^[0-9a-f]{32}$/.test(String(sent?.runKey)) && stored.runKey === sent.runKey, `the task's loopback names the run's key and the record keeps the same key (sent ${sent?.runKey}, stored ${stored.runKey})`);
+    ok(!("payer" in stored) && !JSON.stringify(stored).includes(payer.slice(2)), "the task record keeps no payer from the unverified credential");
+    ok(!JSON.stringify(lost.result).includes(stored.runKey), "the run's key is not on the wire");
+  }
   await sleep(900);
   const got = await rpc("tasks/get", { taskId: lost.result.taskId, _meta: CLIENT_CAPS });
   ok(got.result?.status === "failed", "its result could not be retained, so the task is failed");
@@ -524,11 +535,16 @@ const orphanId = orphan.result.taskId;
 ok(JSON.parse(readFileSync(join(STORE_DIR, `${orphanId}.json`), "utf8")).status === "working", "the orphan-to-be is on disk as working");
 
 // Simulated restart: a NEW store over the SAME directory is a new boot.
-const rebooted = createTaskStore({ dir: STORE_DIR, bootId: "a-different-process", log: () => {} });
+// The sales ledger holds no sale for this run (the loopback never settled).
+const rebooted = createTaskStore({ dir: STORE_DIR, bootId: "a-different-process", log: () => {}, chargeOf: () => null });
+const sweptNow = rebooted.get(orphanId);
+ok(sweptNow && sweptNow.status === "failed", "after a restart, a run orphaned by the old process is resolved as FAILED (never a handle that polls forever)");
+await rebooted.orphansChecked();
 const swept = rebooted.get(orphanId);
-ok(swept && swept.status === "failed", "after a restart, a run orphaned by the old process is resolved as FAILED (never a handle that polls forever)");
 ok(/restart/i.test(swept.statusMessage || ""), "the record says plainly that a restart interrupted it");
-ok(/not charged/i.test(swept.statusMessage || ""), "and that the buyer was not charged (the run never delivered a 200, so settlement was cancelled)");
+// The run's key is on the record, so the sales ledger was read for the run's
+// own sale: none, not charged (test-mcp-task-orphan-charge.js covers the rest).
+ok(/^[0-9a-f]{32}$/.test(String(swept.runKey)) && /not charged/i.test(swept.statusMessage || ""), `and says it was not charged once the sales ledger was read for the run's own sale (run key recorded: ${Boolean(swept.runKey)})`);
 const doneRec = rebooted.get(handle.taskId);
 ok(doneRec && doneRec.status === "completed" && doneRec.result, "a COMPLETED task and its result survive the restart intact");
 
@@ -702,7 +718,7 @@ rmSync(TMP, { recursive: true, force: true });
 {
   const { readFileSync: rf } = await import("node:fs");
   const src = rf(new URL("../src/mcp-tasks.js", import.meta.url), "utf8");
-  ok(/ORPHAN_MESSAGE = `[^`]*not charged[^`]*\$\{PUSH_EXCEPTION\}/.test(src) && /ORPHAN_ERROR[^\n]*not charged\$\{PUSH_EXCEPTION\}/.test(src), "the restart-orphan messages carry the Tempo push exception");
+  ok(/ORPHAN_MESSAGE = `[^`]*not charged[^`]*\$\{PUSH_EXCEPTION\}/.test(src) && /ORPHAN_ERROR[^\n]*not charged\$\{PUSH_EXCEPTION\}/.test(src) && /ORPHAN_UNREAD_MESSAGE = `[^`]*\$\{PUSH_EXCEPTION\}/.test(src), "the restart-orphan messages carry the Tempo push exception");
 }
 
 console.log(`\ntest-mcp-tasks: ${pass} passed, ${fail} failed`);

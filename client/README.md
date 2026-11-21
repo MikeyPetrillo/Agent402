@@ -584,8 +584,9 @@ dispatcher installed, requests go out through yours unchanged. Pass
 
 ## Checking a signed receipt (`verifyReceipt`)
 
-When the server signs receipts, every settled paid answer carries a
-receipt: a compact JWS (EdDSA, Ed25519) over the route, a digest of the
+When the server signs receipts, every settled paid answer on the direct routes
+carries a receipt (a tool bought through a referral link carries none; its
+transaction on chain is its record): a compact JWS (EdDSA, Ed25519) over the route, a digest of the
 request, the sha256 of the answer bytes, the price, the rail, the network,
 the payer and the settlement. A one-piece answer carries it as the
 `Agent402-Receipt` header. The client never checks it on its own; call

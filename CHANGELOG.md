@@ -4,7 +4,160 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
-## Unreleased
+## v2.9.0 - 2026-11-20
+
+### 2026-11-20 (first paid request after a restart)
+Payments:
+- The first paid request after a restart is answered at once, even when a
+  fallback settlement service is slow to answer (the first service listed for
+  a network is still waited for); that service rejoins the offer as soon as
+  it answers.
+
+### 2026-11-20 (ASN lookups ride out a failing resolver)
+Tools:
+- asn-info reads Team Cymru's DNS zone. When the host's own resolver fails
+  on that zone (a resolver error such as a SERVFAIL or a timeout), the lookup
+  is retried once through public resolvers; a name with no record is still answered at once.
+
+### 2026-11-20 (where errorCode rides)
+Wholesale:
+- Every error answer a tool's route writes, other than a 402, carries
+  `errorCode` beside the message: an input refused before payment, a body
+  the server cannot read (400) or that is over its size limit (413), a run
+  that ended in an error, a retired route (410), a paused or switched-off
+  tool (503), and a tool whose route is not served on this server, which
+  answers 404 as any unknown path under /api does. A 402 is the payment-required answer: it follows the x402 and MPP
+  wire formats and carries no `errorCode`. Its `payment_required` row stays
+  in the contract's code table with the new field `carried: false`; every
+  other row reads `carried: true`.
+
+### 2026-11-20 (retired model ids leave the model list)
+Gateway:
+- `meta-llama/llama-3.2-1b-instruct` and `meta-llama/llama-3.2-3b-instruct`
+  reached their upstream expiration and are no longer listed on the nano tier
+  or `GET /v1/models`. A call naming either is served by
+  `mistralai/ministral-3b-2512` at the tier and price of the route called, the
+  swap named in `agent402_model_substituted`.
+- From a model's retirement date `GET /v1/models` lists its successor in its
+  place (or leaves it out on a tier that does not serve the successor), so
+  every id it prints is served as itself.
+
+### 2026-11-20 (settled answers and interrupted runs)
+Payments:
+- A buyer who leaves while a payment is still settling no longer spends
+  hang-up forgiveness when the charge went through; the charge is booked as
+  owed and repaid.
+- A task or job interrupted by a restart now checks whether its payment
+  settled: when a sale tied to that run is on the books, the task says so,
+  names the transaction, and the charge is booked for repayment; when the
+  sale cannot be tied to the run, the task makes neither claim and names the
+  free refund lookup.
+- When the shared payment store is briefly unavailable, paid routes now ask
+  for a retry after 5 seconds instead of 30.
+- A paid call answered with any success status now uses up its payment
+  authorization, so it cannot run a second time.
+
+### 2026-11-20 (refund pipeline)
+Payments:
+- A refund run reads each payment's receipt from a configured source first
+  and reads an empty answer again before it tries the next, so an older Celo
+  debt can be proven and repaid instead of held.
+- Two failed paid calls by one wallet on one route in the same minute are
+  recorded as two refunds owed.
+- A refund run can be narrowed to named rows, and stops starting new refunds
+  before its time limit, so no refund is cut off halfway.
+
+### 2026-11-20 (legal claims, receipts and llms.txt)
+Site:
+- /trust says when payer sanctions screening is in force. While no list is
+  loaded, Tempo direct settlement is not offered and the other screens serve
+  payments unscreened. The `sanctionsScreen` word on `/api/gateway-status`
+  says which case holds.
+Surfaces:
+- The audit report lists the wallet's own repayments in a refunds block
+  (owed and repaid, with the repayment transaction). They are never netted
+  from the totals.
+Site:
+- The privacy policy names the signed receipt kept with a delivered card
+  report, the receipts of a monitor's most recent paid periods, and the MPP
+  evm and Tempo relay payer screens.
+- The README and /trust say a signed receipt covers the direct routes. A
+  tool bought through a referral link carries none, and a stream carries its
+  receipt as a final event-stream comment line or a trailer.
+Surfaces:
+- /llms.txt names each machine surface in one clause and points at
+  /llms-full.txt for every line in full.
+Site:
+- The refund terms say a disconnect past the hang-up budget is reviewed
+  before it is repaid, and a credits debit is re-credited to its key.
+
+### 2026-11-20 (crypto answers you can check)
+Tools:
+- `crypto-price` now checks each USD price against a second source,
+  Hyperliquid's oracle price, and adds `divergencePct`, a `stale` flag per
+  coin and a `check` field naming the source.
+- `crypto-market` adds turnover and distance below the all-time high, and
+  works as a screener over the top 250 coins (market cap, volume, turnover,
+  24h change band, distance from the high, sort) with `matched` and
+  `truncated` fields.
+- `crypto-history`, `coin-market-chart-range` and `coin-ohlc` lead with the
+  window's return, annualized volatility and max drawdown.
+- `rwa-markets` and `rwa-asset` show tokenized gold and silver against the
+  spot price, as a premium in basis points.
+
+### 2026-11-20 (onchain-sql answers and pacing)
+Tools:
+- `onchain-sql`: two calls sent close together are no longer spaced apart;
+  the query service still receives at most two queries a second.
+- `onchain-sql`: when every query place is busy, a call waits up to about 3
+  seconds for one instead of being refused at once; a busy refusal asks for a
+  retry in 4 to 6 seconds.
+- `onchain-sql`: a query the service cuts off at its time limit answers 422
+  with hint `timed-out`, a 502 that returns at once says to retry, and
+  narrow-query answers carry `charged: false` and `upstreamMs`.
+- `onchain-sql`: an answer larger than 16 MB is answered 502 and not
+  charged.
+- `onchain-sql` and `onchain-sql-schema`: a call paid on Solana finishes
+  within 40 seconds, inside the payment's valid life.
+
+### 2026-11-20 (agent402-mcp 0.14.1 and the CI catalog sweep)
+Packages:
+- agent402-mcp 0.14.1 is a version-only release, so the MCP Registry entry
+  carries the current title; each publish now marks every older registry
+  version deprecated, so the registry lists one current version.
+Operations:
+- CI's catalog sweep reads CoinGecko and Open-Meteo under a per-run
+  CoinGecko read cap, and a run that spends the cap or meets a rate limit
+  fails.
+
+### 2026-11-20 (long recordings transcription)
+Tools:
+- A server that sets `TRANSCRIBE_LONG=on` lists and serves
+  `/api/transcribe-long` (model-backed), the long-recording transcription
+  tier: an audio file at a URL, up to 30 minutes and 25 MB, answered like
+  the other tiers (`diarize: true` adds speaker labels and word timestamps).
+  It runs up to 230 seconds on a long file, so it is paid on the EVM `exact`
+  rails only, and `Prefer: respond-async` returns a job link at once.
+  Without the switch the route is not listed or served.
+
+### 2026-11-20 (Solana activity charts across restarts, call budgets across deploys)
+Site:
+- A Solana chain page's 30-day activity chart keeps its history across
+  restarts, and a wallet too busy for one scan continues from where the last
+  scan stopped until its window is covered. When the newest payments could
+  not be read, the panel prints when they were last read in full (`as of
+  <time> UTC`).
+Operations:
+- The Solana activity scans and the Solana leaderboard read transaction
+  history through the public RPC lane first and queue for it. The keyed lane
+  serves those background reads only up to a daily share of its ceiling
+  (`SOLANA_HISTORY_BACKGROUND_KEYED_DAILY_MAX`); past it the views serve
+  what they hold with its age. `SOLANA_ACTIVITY_STORE=off` keeps scan state
+  in memory only.
+- The `upstreamBudgets` word on `/api/gateway-status` is built from the UTC
+  day's call count across deploys and replicas when a shared store is
+  configured. The operator view adds which module made the day's calls to
+  the on-chain data provider and seven days of daily counts.
 
 ### 2026-11-19 (onchain query answers that cannot be read)
 Tools:
@@ -234,8 +387,8 @@ Tools:
   GTIN-14 barcode number and returns the expected digit and the 14-digit
   form. It is pure computation and free through proof of work.
 Credits:
-- Holiday data by Nager.Date, which Agent402 sponsors; every tool that
-  serves it carries the credit.
+- Holiday data by Nager.Date, used under a sponsorship held for this
+  service; every tool that serves it carries the credit.
 
 ### 2026-11-18 (site motion and charts)
 Site:

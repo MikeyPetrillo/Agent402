@@ -31,7 +31,7 @@ import { CG_API_HOSTS } from "./coingecko-endpoint.js";
 import { partialFields } from "../partial-answer.js";
 import { withBudgetCeiling } from "../upstream-deadline.js";
 import { bundlePriceUsd, unitPartsUsd, usdText, BUNDLE_DISCOUNT } from "../bundle-pricing.js";
-import { OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, COINGECKO_ATTRIBUTION } from "../data-attribution.js";
+import { ATTRIBUTIONS, OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, COINGECKO_ATTRIBUTION } from "../data-attribution.js";
 
 const bad = weatherBad;
 
@@ -270,8 +270,17 @@ async function weatherRiskBrief(input, ctx) {
     method: `riskScore adds ${Object.entries(WEATHER_RISK_WEIGHTS).map(([k, v]) => `${k} ${v}`).join(", ")} points (capped at 100) for each signal present: the threshold rules over the next 168 forecast hours, heavyRainLikely when at least ${HEAVY_RAIN_LIKELY * 100}% of ensemble members give ${HEAVY_RAIN_MM} mm or more on the wettest forecast day, poorAir when the current US AQI is above ${POOR_AIR_AQI}. vsLastYear compares the forecast days with the same dates a year earlier. Forecasts and ensemble output are raw model data, not station-calibrated.`,
     pricing: pricingFields(rows.length, WEATHER_RISK_LEGS),
     source: "computed from Open-Meteo forecast, air quality, archive and ensemble data (CC BY 4.0)",
-    credits: [OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT],
+    credits: weatherCredits(rows),
   };
+}
+
+/** The credits a weather-risk-brief answer carries: Open-Meteo's, the CAMS
+ *  (air quality) and C3S (archive) Copernicus credits every site reads, and
+ *  GeoNames' when a site was named by place (its coordinates and the place
+ *  name in the row are GeoNames data, src/tools/weather-kit.js resolveLocation). */
+export function weatherCredits(rows) {
+  const byPlace = (rows || []).some((r) => typeof r?.site?.place === "string");
+  return [OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, ...(byPlace ? [GEONAMES_ATTRIBUTION] : [])];
 }
 
 // ---------------------------------------------------------------- filings
@@ -522,10 +531,10 @@ export const BUNDLE_TOOLS = [
     // The hosts its legs read (scripts/lib/upstream-outage.js reads this list).
     upstreamHosts: ["api.open-meteo.com", "archive-api.open-meteo.com", "air-quality-api.open-meteo.com", "ensemble-api.open-meteo.com", "geocoding-api.open-meteo.com"],
     category: "data",
-    attribution: "open-meteo",
+    attribution: "open-meteo-copernicus-geonames",
     ...quoted(WEATHER_RISK_LEGS, weatherUnitsCount, WEATHER_RISK_MAX_SITES),
     description:
-      `One 7-day weather risk read for up to ${WEATHER_RISK_MAX_SITES} sites in one call: per site the daily forecast, hour-by-hour checks for frost, heat, high gusts, intense rain and snow over the next 168 hours, current air quality, the same dates a year earlier, and the ensemble probability of ${HEAVY_RAIN_MM} mm or more of rain on the wettest forecast day; each site gets a 0-100 risk score from the signals present and the sites are ranked. Priced per site: the five weather tools it runs (${WEATHER_RISK_LEGS.join(", ")}) less ${Math.round(BUNDLE_DISCOUNT * 100)}%, ${perUnit(WEATHER_RISK_LEGS)} a site, quoted in the 402 for the sites you send. A site is {"lat","lon"} or {"place"} with an optional "name". Deterministic code over the forecast data, no model. ${OPEN_METEO_ATTRIBUTION}`,
+      `One 7-day weather risk read for up to ${WEATHER_RISK_MAX_SITES} sites in one call: per site the daily forecast, hour-by-hour checks for frost, heat, high gusts, intense rain and snow over the next 168 hours, current air quality, the same dates a year earlier, and the ensemble probability of ${HEAVY_RAIN_MM} mm or more of rain on the wettest forecast day; each site gets a 0-100 risk score from the signals present and the sites are ranked. Priced per site: the five weather tools it runs (${WEATHER_RISK_LEGS.join(", ")}) less ${Math.round(BUNDLE_DISCOUNT * 100)}%, ${perUnit(WEATHER_RISK_LEGS)} a site, quoted in the 402 for the sites you send. A site is {"lat","lon"} or {"place"} with an optional "name". Deterministic code over the forecast data, no model. ${ATTRIBUTIONS["open-meteo-copernicus-geonames"]}`,
     tags: ["weather", "risk", "portfolio", "sites", "logistics", "insurance", "forecast", "bundle"],
     discovery: {
       bodyType: "json",
@@ -553,7 +562,7 @@ export const BUNDLE_TOOLS = [
           method: "riskScore adds frost 15, heat 20, highGusts 25, intenseRain 15, snow 15, heavyRainLikely 15, poorAir 10 points (capped at 100) for each signal present.",
           pricing: pricingFields(WEATHER_EXAMPLE_SITES.length, WEATHER_RISK_LEGS),
           source: "computed from Open-Meteo forecast, air quality, archive and ensemble data (CC BY 4.0)",
-          credits: [OPEN_METEO_ATTRIBUTION],
+          credits: weatherCredits(WEATHER_EXAMPLE_SITES.map((site) => ({ site }))),
         },
       },
     },
