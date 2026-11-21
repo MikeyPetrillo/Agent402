@@ -77,6 +77,8 @@ t node scripts/test-paid-scripts-guarded.js
 # Every paid route's 402 challenge parses under the official x402 core schemas (five tags at most);
 # boots the real server against a local facilitator /supported stub, never pays
 t node scripts/test-bazaar-contracts.js
+# The same sweep with the returning-wallet price on: each eligible route's 402 body carries the offer in fields and stays inside the byte bounds
+t node scripts/test-bazaar-contracts-returning-wallet.js
 # A 402's shortened example is replayed from /openapi.json; html-frames' example fits whole (offline)
 t node scripts/test-replayable-example.js
 # Our own listing text (every 402, /api/pricing, /openapi.json, /.well-known/x402) passes

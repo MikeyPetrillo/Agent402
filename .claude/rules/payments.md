@@ -556,8 +556,13 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   request that names a wallet in `X-Agent402-Wallet` is quoted the route's x402 EVM `exact` accepts
   under list (`RETURNING_WALLET_DISCOUNT_BPS`, default 1000, at most 5000) when that wallet has paid
   on `RETURNING_WALLET_MIN_PAID_DAYS` (default 3) distinct days inside
-  `RETURNING_WALLET_WINDOW_DAYS` (default 30), read from the sales ledger (cached per wallet,
-  bounded per minute; past the bound an unknown wallet is quoted list, never refused). The hint only
+  `RETURNING_WALLET_WINDOW_DAYS` (default 30), read from the sales ledger (cached per wallet for
+  ten minutes, then dropped from memory, never stored; fresh reads bounded per minute per client
+  address, `LOOKUPS_PER_ADDRESS_PER_MINUTE`, and across all callers, `LOOKUPS_PER_MINUTE`; past a
+  bound an unknown wallet is quoted list, never refused, and a cached wallet keeps its quote). The
+  discount is taken from the list price, then the chain's premium and floor apply: a chain at its
+  floor quotes the list amount, and the gate notes each accept (`noteReturningWalletAccept`) so the
+  402 names such chains (`atListOn`) or reads `applied: false, why: "price_floor"`. The hint only
   changes a quote: on the paid request the price is decided again from the authorization's `from`,
   any other payer is priced at list (a 402, nothing charged), and a refusing onBeforeSettle hook
   (`HOOK_NAMES.returningWallet`) aborts a discounted settle whose proven payer is not the quoted
@@ -565,8 +570,11 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   or model-backed route, a route with lasting effect or one that spends this host's wallet, a slug
   in `REFERRAL_SLUGS` (the public route never undercuts its referral copy), our own wallets. Every
   other accept and every published price stay at list; an eligible route's 402 body carries
-  `returningWalletPrice`, and `/llms.txt` and the route's OpenAPI operation name the header only
-  while the switch is on. Figures: `/__operator/returning-wallets.json`. Suites:
+  `returningWalletPrice` (fields only, at most `OFFER_MAX_BYTES`; `why` is one word when a named
+  wallet's quote did not change), and `/llms-full.txt` and the route's OpenAPI operation state the
+  rule in prose, only while the switch is on; the Bazaar contract sweep runs a second pass with
+  the switch on (lane test-unit-b4). `/privacy` and the manifest's data handling print one shared
+  text (`returningWalletDataHandling`). Figures: `/__operator/returning-wallets.json`. Suites:
   `scripts/test-returning-wallet.js`, `scripts/test-returning-wallet-paid.js`.
 - **Sale source:** `src/sale-source.js`: a card checkout request carries the page's `utm_source`;
   only a name in `KNOWN_SALE_SOURCES` is kept, in the checkout session's metadata and in the sale's
