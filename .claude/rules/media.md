@@ -21,15 +21,27 @@ Loaded when a media, document or worker-pool tool file is read.
 - **Media and documents:** the OCR language data is baked into the image at build
   (`scripts/fetch-tessdata.js`, pinned and hash-checked; `OCR_TESSDATA_DIR` overrides the
   directory), so `image-ocr` never fetches a model at request time; an engine that does not
-  start within `OCR_INIT_TIMEOUT_MS` (default 30000) answers 503. **OCR admission:** one image
-  over `OCR_LARGE_PIXELS` (16 MP) is in the engine at a time, at most `OCR_LARGE_QUEUE_MAX` (2)
-  wait up to `OCR_LARGE_WAIT_MS` (15 s) and the next is a 503 with Retry-After (no upstream call);
-  admission is per caller (signed payer, credits key, Tempo sender, else the client address,
-  `ocrCallerOf` in `src/tools/ocr-kit.js`): a caller holding nothing is never refused while a
-  queued place belongs to a caller that holds another, which loses that place with a 503. A
-  caller is its strongest key, for admission as for eviction, so buyers who share an address are
-  separate callers; a request that names none (unsigned, behind a CDN edge with no proof of its
-  client) is always a newcomer (`ANONYMOUS_CALLER`, `src/dispatch-caller.js`). On the
+  start within `OCR_INIT_TIMEOUT_MS` (default 30000) answers 503. **OCR turns:** one image
+  over `OCR_LARGE_PIXELS` (16 MP) is in an engine at a time, in an engine of its own that is
+  terminated when the image is done; smaller images run one at a time on their language's worker;
+  at most `OCR_WORKER_MAX` (3) engines run at once. Turns are fair across callers
+  (`src/caller-turns.js`; a caller is `ocrCallerOf`: signed payer, credits key, Tempo sender, else
+  the client address, every key counted): images are read in arrival order, a caller's later
+  images standing where its earlier one left the engine, so one caller's run of images (from one
+  wallet, several wallets behind one address, or one wallet from several addresses) waits behind
+  what other callers sent meanwhile. An image holds its engine `OCR_RUN_MAX_MS` (120 s) at most
+  and never past its connection's CDN window (422 `image-too-slow`), `OCR_TURN_MS` (30 s) once
+  another caller's image waits for that engine (it gives way with a retryable 503), and only
+  while its caller's connection is open (499). Engine time that ends without an answer counts
+  `OCR_UNPAID_WEIGHT` (4) times against that caller's place in line. A call waits in line
+  `OCR_LARGE_WAIT_MS` (one turn and the engine's retirement, 45 s), then a 503 with Retry-After,
+  and keeps its place for the retry (a ticket, two minutes, renewed by each retry); no call that
+  arrives later is read ahead of it. The line holds `OCR_QUEUE_MAX` (64) images, `OCR_LARGE_QUEUE_MAX` (8) of them
+  large, and `OCR_QUEUE_MAX_BYTES` (96 MB): when full, a caller holding nothing takes a place
+  from a caller holding several (its own key, then an address holding several), then from
+  whatever stands behind it; a caller that holds places is the one refused
+  (`src/caller-places.js`). A request that names no caller (unsigned, behind a CDN edge with no
+  proof of its client: `ANONYMOUS_CALLER`, `src/dispatch-caller.js`) shares one key. On the
   free tier the caller is the client address. Suite: `scripts/test-ocr-crash.js`. PDF transforms
   (`src/tools/pdf-ops.js`) run in a fresh worker thread per call (`pdf-offthread.js`,
   `pdf-worker.js`) with a heap limit, a decoded-stream cap and a deadline that terminates it

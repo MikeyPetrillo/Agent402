@@ -13,7 +13,8 @@
 import { loadTesseract } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
 import { admissionCallerOf } from "../dispatch-caller.js";
-import { createCallerPlaces, placeKeysOf } from "../caller-places.js";
+import { createCallerTurns, TurnRefused } from "../caller-turns.js";
+import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { notChargedOn } from "../not-charged.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,11 +45,15 @@ export function tessdataInstalled(lang) {
 // eviction. tesseract.js workers load the language model on first use, so a
 // warm worker keeps model loading off the per-call path. Every worker that
 // leaves the map (evicted, or dropped after a failure) is terminated once its
-// in-flight recognitions finish, so a caller alternating languages never grows
-// the thread count past the cap.
+// in-flight recognition finishes, so a caller alternating languages never grows
+// the thread count past the cap. An image over OCR_LARGE_PIXELS is read by an
+// engine of its own (never a language's warm worker), which counts toward the
+// same cap and is terminated when the image is done.
 export const OCR_WORKER_MAX = 3;
 const OCR_INIT_TIMEOUT_MS = Number(process.env.OCR_INIT_TIMEOUT_MS) || 30_000;
 const workers = new Map(); // lang -> { promise, active, retired }
+let ownEngines = 0; // engines alive outside the map (one large image each)
+const standIns = new Map(); // lang -> a stand-in engine (tests)
 
 // Each entry carries `gone`, settled once its worker has terminated (or never
 // started), so a caller that must wait for the thread to be gone can await it.
@@ -74,18 +79,15 @@ function dropEntry(lang, entry) {
   retireEntry(entry);
 }
 
-function getWorkerEntry(lang) {
-  let entry = workers.get(lang);
-  if (entry) {
-    workers.delete(lang); // re-insert to mark most recently used
-    workers.set(lang, entry);
-    return entry;
-  }
+/** Start an engine for `lang` (not yet in the map): its worker, under the
+ *  startup deadline. */
+function startEntry(lang) {
+  if (standIns.has(lang)) return newEntry(Promise.resolve(standIns.get(lang)));
   if (!tessdataInstalled(lang)) {
     throw bad(`OCR language data for "${lang}" is not installed on this server`, 503);
   }
   mkdirSync(TESS_CACHE_DIR, { recursive: true });
-  entry = newEntry(null);
+  const entry = newEntry(null);
   const started = loadTesseract().then(({ createWorker }) => createWorker(lang, undefined, {
     langPath: TESSDATA_DIR,
     cachePath: TESS_CACHE_DIR,
@@ -106,7 +108,8 @@ function getWorkerEntry(lang) {
   }));
   // tesseract.js never settles createWorker when language initialization fails
   // (an unreadable data file), so startup carries its own deadline. A worker
-  // that starts after the deadline is terminated as soon as it appears.
+  // that starts after the deadline, or after its entry was retired (a run
+  // ended before the engine was up), is terminated as soon as it appears.
   let timer;
   const deadline = new Promise((_, reject) => {
     timer = setTimeout(() => reject(bad(`OCR engine for "${lang}" did not start`, 503)), OCR_INIT_TIMEOUT_MS);
@@ -115,22 +118,54 @@ function getWorkerEntry(lang) {
   entry.promise = Promise.race([started, deadline]);
   entry.promise.finally(() => clearTimeout(timer)).catch(() => {});
   started.then((w) => { if (entry.retired && entry.active === 0) w.terminate(); }).catch(() => {});
-  // A worker that fails to start leaves the map so the next request retries.
-  entry.promise.catch(() => dropEntry(lang, entry));
-  workers.set(lang, entry);
-  while (workers.size > OCR_WORKER_MAX) {
-    const [oldLang, oldest] = workers.entries().next().value;
-    dropEntry(oldLang, oldest);
-  }
   return entry;
 }
 
-/** Test hook: how many language workers are held, and terminate them all. */
+/** Engines alive never pass OCR_WORKER_MAX: the least recently used language
+ *  worker leaves the map to make room for one more (never `keep`). */
+function makeRoom(keep = null) {
+  while (workers.size + ownEngines > OCR_WORKER_MAX) {
+    const others = [...workers.entries()].filter(([, e]) => e !== keep);
+    // An idle worker first: one that is reading stays warm for its language.
+    const oldest = others.find(([, e]) => e.active === 0) ?? others[0];
+    if (!oldest) return;
+    dropEntry(oldest[0], oldest[1]);
+  }
+}
+
+function getWorkerEntry(lang) {
+  let entry = workers.get(lang);
+  if (entry) {
+    workers.delete(lang); // re-insert to mark most recently used
+    workers.set(lang, entry);
+    return entry;
+  }
+  entry = startEntry(lang);
+  // A worker that fails to start leaves the map so the next request retries.
+  entry.promise.catch(() => dropEntry(lang, entry));
+  workers.set(lang, entry);
+  makeRoom(entry);
+  return entry;
+}
+
+/** An engine for one large image, outside the map and inside the cap. */
+function startOwnEngine(lang) {
+  const entry = startEntry(lang);
+  entry.own = true;
+  ownEngines++;
+  entry.gone.then(() => { ownEngines--; });
+  entry.promise.catch(() => retireEntry(entry));
+  makeRoom();
+  return entry;
+}
+
+/** Test hook: how many engines are held, and terminate them all. */
 export const __ocrTest = {
-  workerCount: () => workers.size,
-  /** Put a stand-in engine in a language's slot (fault-path tests). */
-  inject(lang, worker) { workers.set(lang, newEntry(Promise.resolve(worker))); },
-  async shutdown() { for (const [lang, entry] of [...workers]) dropEntry(lang, entry); },
+  workerCount: () => workers.size + ownEngines,
+  /** Put a stand-in engine in a language's place (fault-path tests): every
+   *  engine started for that language is this one, until the next inject. */
+  inject(lang, worker) { standIns.set(lang, worker); workers.delete(lang); },
+  async shutdown() { standIns.clear(); for (const [lang, entry] of [...workers]) dropEntry(lang, entry); },
 };
 
 function decodeImageInput(input) {
@@ -407,34 +442,74 @@ const rejectionText = (e) => String((e && typeof e === "object" && e.message) ||
 // is an engine fault, a 5xx, never the caller's.
 export const DECODE_FAILURE = /attempting to read image|pixRead|Aborted\(|ERR_OUT_OF_RANGE|ERR_BUFFER_OUT_OF_BOUNDS/i;
 
-// A large image costs the engine several bytes a pixel while it reads (a 64 MP
-// photo grew the process by about 560 MB), and the language workers (one per
-// language, OCR_WORKER_MAX of them) run side by side, so three at once would
-// hold gigabytes. Only one image above OCR_LARGE_PIXELS is in the engine at a
-// time; the next waits up to OCR_LARGE_WAIT_MS for its turn (at most
-// OCR_LARGE_QUEUE_MAX waiting), then answers 503 with Retry-After. Smaller
-// images never wait here. The slot is held until the worker that read the
-// image has terminated (its memory is gone), up to OCR_LARGE_RETIRE_WAIT_MS.
+// TURNS IN THE ENGINE. A large image costs the engine several bytes a pixel
+// while it reads (a 64 MP photo grew the process by about 560 MB), so only one
+// image above OCR_LARGE_PIXELS is in an engine at a time, in an engine of its
+// own that is terminated when the image is done (its memory is gone before
+// the next one starts, up to OCR_LARGE_RETIRE_WAIT_MS). Smaller images run on
+// their language's worker, one at a time per language, and never wait behind
+// a large one. At most OCR_WORKER_MAX engines run at once.
 //
-// Admission is per caller (every key its request carries: the signed payer, a
-// credits key, a Tempo sender and the client address; for a step an
-// in-process executor runs, those of the call that dispatched it,
-// src/dispatch-caller.js), counted under each key (src/caller-places.js). A
-// queued place is taken back only by the holder's strongest key (its signed
-// payer, credits key or Tempo sender; the address only for a caller that signs
-// nothing), so buyers who share an address never bump each other: a caller with nothing in the slot or its queue
-// is never refused for want of room while a queued place belongs to a caller
-// that already holds the slot or another place. That place goes to it, and
-// the caller it was taken from is answered 503 (not charged), so one caller's
-// run of large images cannot hold every place.
+// Whose image is read next is decided across callers, not requests
+// (src/caller-turns.js): a caller is every key its request carries (the
+// signed payer, a credits key, a Tempo sender, the client address; for a step
+// an in-process executor runs, those of the call that dispatched it,
+// src/dispatch-caller.js). Images are read in the order they arrived, except
+// that a caller's images are ordered as if each had arrived when its earlier
+// one left the engine: one caller's second image waits behind every other
+// caller's image that arrived before its first one ended.
+//
+// An image holds its engine for a bounded time:
+//   - OCR_RUN_MAX_MS at most, and never past the time its own connection
+//     waits for an answer (the CDN's window); past that it is a 422 that
+//     says to downscale it;
+//   - while another caller's image waits for that engine, OCR_TURN_MS from
+//     the later of its own start and that image's place in line; then the
+//     image in the engine gives way with a retryable 503 and the waiting one
+//     is read;
+//   - until its caller's connection closes: an abandoned image leaves the
+//     engine, or the line, at once.
+// Every one of those answers is uncharged, so the engine time such an image
+// held (and a body that did not decode) counts OCR_UNPAID_WEIGHT times
+// against its caller's place in line: a caller whose images fail, run out of
+// time or are abandoned stands behind what other callers send meanwhile.
+//
+// So an image waits at most OCR_TURN_MS plus the engine's retirement for each
+// caller that stood ahead of it when it arrived, and behind one other
+// caller, whatever that caller sends, that is one turn: OCR_LARGE_WAIT_MS
+// (the longest a call waits in line) is that long. A call that waited out its
+// time keeps its place in line for its retry (a ticket, two minutes, renewed
+// by each retry), and no call that arrives later is ever read ahead of it.
+//
+// The line is bounded for memory: OCR_QUEUE_MAX images wait in all
+// (OCR_LARGE_QUEUE_MAX of them large), holding at most OCR_QUEUE_MAX_BYTES
+// between them. When it is full, a caller holding nothing takes the newest
+// waiting place of a caller that holds several (by its own key, then by a
+// key it shares: several wallets on one address); a caller that already
+// holds places is the one answered busy (src/caller-places.js).
 export const OCR_LARGE_PIXELS = 16_000_000;
-export const OCR_LARGE_WAIT_MS = 15_000;
-export const OCR_LARGE_QUEUE_MAX = 2;
+const envMs = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n >= 1_000 ? n : dflt; };
+export const OCR_TURN_MS = envMs("OCR_TURN_MS", 30_000);
+export const OCR_RUN_MAX_MS = Math.max(OCR_TURN_MS, envMs("OCR_RUN_MAX_MS", 120_000));
 export const OCR_LARGE_RETIRE_WAIT_MS = 10_000;
-let largeBusy = false;
-let largeHolder = null;
-const largeWaiters = [];
-const largeCallers = createCallerPlaces(); // caller -> places held (the slot and queued)
+export const OCR_LARGE_WAIT_MS = OCR_TURN_MS + OCR_LARGE_RETIRE_WAIT_MS + 5_000;
+export const OCR_LARGE_QUEUE_MAX = 8;
+export const OCR_QUEUE_MAX = 64;
+export const OCR_QUEUE_MAX_BYTES = 96 * 1024 * 1024;
+/** Engine time that ended without an answer counts this many times (src/caller-turns.js). */
+export const OCR_UNPAID_WEIGHT = 4;
+/** A call waits in line only while its connection still leaves this long to read it. */
+const OCR_MIN_RUN_MS = 5_000;
+const LARGE_LANE = "large";
+const laneOf = (lang) => `lang:${lang}`;
+const limits = { turnMs: OCR_TURN_MS, runMaxMs: OCR_RUN_MAX_MS, waitMs: OCR_LARGE_WAIT_MS, retireMs: OCR_LARGE_RETIRE_WAIT_MS };
+const turns = createCallerTurns({
+  maxRunning: OCR_WORKER_MAX,
+  maxWaiters: OCR_QUEUE_MAX,
+  maxWaitersOf: (lane) => (lane === LARGE_LANE ? OCR_LARGE_QUEUE_MAX : OCR_QUEUE_MAX),
+  maxBytes: OCR_QUEUE_MAX_BYTES,
+  unpaidWeight: OCR_UNPAID_WEIGHT,
+});
 
 function largeBusyError() {
   return Object.assign(
@@ -443,49 +518,70 @@ function largeBusyError() {
   );
 }
 
-// A place with no caller key is counted under the one shared key, never not
-// at all, so the eviction rule below sees it (src/caller-places.js).
-const holdPlace = (who) => largeCallers.hold(who);
-const freePlace = (who) => largeCallers.free(who);
-
-/** Wait for the large-image slot; resolves to its release function. */
-function acquireLargeSlot(waitMs = OCR_LARGE_WAIT_MS, who = null) {
-  const release = () => releaseLargeSlot(who);
-  if (!largeBusy) { largeBusy = true; largeHolder = who; holdPlace(who); return Promise.resolve(release); }
-  if (largeWaiters.length >= OCR_LARGE_QUEUE_MAX) {
-    // A newcomer takes the last queued place of a caller holding more than one.
-    const victimAt = largeCallers.victims(largeWaiters, who)?.[0] ?? -1;
-    if (victimAt < 0) return Promise.reject(largeBusyError());
-    const [victim] = largeWaiters.splice(victimAt, 1);
-    clearTimeout(victim.timer);
-    freePlace(victim.who);
-    victim.reject(largeBusyError());
-  }
-  holdPlace(who);
-  return new Promise((resolve, reject) => {
-    const waiter = { who, reject, resolve: () => { clearTimeout(waiter.timer); largeHolder = who; resolve(release); } };
-    waiter.timer = setTimeout(() => {
-      const i = largeWaiters.indexOf(waiter);
-      if (i >= 0) largeWaiters.splice(i, 1);
-      freePlace(who);
-      reject(largeBusyError());
-    }, waitMs);
-    largeWaiters.push(waiter);
-  });
+function laneBusyError() {
+  return Object.assign(
+    bad("image-ocr has other images in this language waiting ahead of this one; retry in a few seconds.", 503),
+    { retryAfter: 10, shed: true, hint: "ocr-busy", chargeClaim: true },
+  );
 }
 
-function releaseLargeSlot(who = null) {
-  freePlace(who);
-  const next = largeWaiters.shift();
-  if (next) next.resolve(); // the slot passes straight to the next waiter
-  else { largeBusy = false; largeHolder = null; }
+/** The image in the engine gave its turn to another caller's waiting image. */
+function gaveWayError(large, ms) {
+  return Object.assign(
+    bad(`image-ocr gave this image's turn to another caller's waiting image after ${Math.round(ms / 1000)} s in the engine; send it again, or downscaled so it reads sooner.`, 503),
+    { retryAfter: 30, shed: true, hint: large ? "large-image-busy" : "ocr-busy", chargeClaim: true },
+  );
 }
 
-/** Test hook for the large-image slot. */
+/** The image was not read inside the time one image may hold an engine. */
+function tooSlowError(ms) {
+  const fix = "Downscale or crop the image and send it again. Text that stays about 20 pixels tall or more reads as well at a smaller size.";
+  return Object.assign(
+    bad(`the image was not read within ${Math.round(ms / 1000)} s, as long as image-ocr can spend on one image here. ${fix}`, 422),
+    { hint: "image-too-slow", chargeClaim: true, fix, howToCallNote: "Send this request again with the image downscaled or cropped." },
+  );
+}
+
+/** The caller's connection closed before the image was read: the dispatcher
+ *  reads this shape (src/hangup-settlement.js isClientGoneAbort) as a 499. */
+function clientGone() {
+  return Object.assign(new Error("The connection closed before the image was read."), { name: "AbortError", statusCode: 499, clientGone: true, chargeClaim: true });
+}
+
+/** True when the request's connection closed before any response header. */
+function clientLeft(req) {
+  if (!req || typeof req !== "object") return false;
+  const res = req.res;
+  if (!res || typeof res !== "object" || res.headersSent) return false;
+  if (Object.hasOwn(req, "__a402ClientGoneAt") && Number(req.__a402ClientGoneAt) > 0) return true;
+  return res.destroyed === true || req.socket?.destroyed === true;
+}
+
+/** Call `left` once if the request's connection closes unanswered; returns the unwatch. */
+function watchClient(req, left) {
+  const res = req && typeof req === "object" ? req.res : null;
+  if (!res || typeof res.once !== "function" || typeof res.removeListener !== "function") return () => {};
+  const onClose = () => { if (clientLeft(req)) left(); };
+  res.once("close", onClose);
+  return () => res.removeListener("close", onClose);
+}
+
+/** Test hook for the engines' turns. */
 export const __ocrLargeTest = {
-  acquire: acquireLargeSlot,
-  state: () => ({ busy: largeBusy, waiting: largeWaiters.length, holder: largeHolder == null ? null : placeKeysOf(largeHolder)[0], callers: largeCallers.callers() }),
+  /** Take a turn on the large lane; resolves to its release function. */
+  acquire(waitMs = limits.waitMs, who = null, bytes = 0) {
+    const pending = turns.acquire(LARGE_LANE, who, { waitMs, bytes });
+    const out = pending.then((turn) => Object.assign((how) => turn.release(how), { turn }), (e) => { throw e instanceof TurnRefused && e.why !== "left" ? largeBusyError() : e; });
+    out.cancel = () => pending.cancel();
+    return out;
+  },
+  state: () => turns.state(LARGE_LANE),
+  lane: (lang) => turns.state(laneOf(lang)),
   recognize: doRecognize,
+  /** Set the time limits for a test; returns the function that restores them. */
+  limits(next) { const was = { ...limits }; Object.assign(limits, next); return () => { Object.assign(limits, was); }; },
+  /** Forget every caller's used time and kept place. */
+  reset: () => turns.reset(),
 };
 
 /** The caller a large image's place is held for: the request's, else the
@@ -495,51 +591,91 @@ function ocrCallerOf(req) {
   return admissionCallerOf(req);
 }
 
-async function doRecognize(buf, lang, fmt, pixels = 0, who = null) {
-  const release = pixels > OCR_LARGE_PIXELS ? await acquireLargeSlot(OCR_LARGE_WAIT_MS, who) : null;
-  const used = {};
-  try {
-    return await recognizeOn(buf, lang, fmt, used);
-  } finally {
-    if (release) {
-      // The engine's WASM memory grows to fit the largest image it read and
-      // never shrinks (a 64 MP image left a worker about 560 MB larger), so
-      // the worker that read a large image is retired once its calls finish,
-      // and the slot passes on once that worker has terminated.
-      const entry = used.entry;
-      if (entry) {
-        dropEntry(lang, entry);
-        let timer;
-        await Promise.race([entry.gone, new Promise((r) => { timer = setTimeout(r, OCR_LARGE_RETIRE_WAIT_MS); timer.unref?.(); })]);
-        clearTimeout(timer);
-      }
-      release();
-    }
-  }
-}
+const within = (promise, ms) => {
+  let timer;
+  return Promise.race([promise, new Promise((r) => { timer = setTimeout(r, ms); timer.unref?.(); })]).finally(() => clearTimeout(timer));
+};
 
-async function recognizeOn(buf, lang, fmt, used = {}) {
-  const entry = getWorkerEntry(lang);
-  used.entry = entry;
-  entry.active++;
+async function doRecognize(buf, lang, fmt, pixels = 0, who = null, req = null, heldBytes = buf.length) {
+  const large = pixels > OCR_LARGE_PIXELS;
+  const busy = () => (large ? largeBusyError() : laneBusyError());
+  // The time this request's own connection still waits for an answer.
+  const left = cdnSyncLeftMs(req);
+  const windowEnd = left === null ? Infinity : Date.now() + left;
+  if (clientLeft(req)) throw clientGone();
+  const pending = turns.acquire(large ? LARGE_LANE : laneOf(lang), who, { waitMs: Math.min(limits.waitMs, windowEnd - Date.now() - OCR_MIN_RUN_MS), bytes: heldBytes });
+  // A caller that leaves gives up its place in line, then its engine.
+  let onLeft = () => pending.cancel();
+  const unwatch = watchClient(req, () => onLeft());
+  let turn;
+  try { turn = await pending; } catch (e) {
+    unwatch();
+    if (e instanceof TurnRefused) throw e.why === "left" ? clientGone() : busy();
+    throw e;
+  }
+  let entry = null, cut = null, timer = null, failed = false, unpaid = false;
   try {
-    const worker = await entry.promise;
-    const { data } = await worker.recognize(buf);
-    return data;
-  } catch (e) {
-    // On a worker-side crash drop this language's worker so the next request
-    // gets a fresh one; this avoids one bad input poisoning the process.
-    dropEntry(lang, entry);
-    if (e?.statusCode === 503) throw e;
-    const why = rejectionText(e);
-    if (DECODE_FAILURE.test(why)) throw undecodable(fmt, "is corrupt or truncated");
-    // An engine fault on an image that passed the header check: the reason
-    // goes to the log, the caller gets a 5xx (not charged) without it.
-    console.error("[ocr] engine failed:", why || "no reason given");
-    throw bad("OCR engine failed on this image; retry the call", 500);
+    const stop = new Promise((resolve) => {
+      const end = (why) => { if (!cut) { cut = why; resolve({ cut }); } };
+      onLeft = () => end("gone");
+      const deadlineAt = Math.min(turn.startedAt + limits.runMaxMs, windowEnd);
+      const arm = () => {
+        clearTimeout(timer);
+        if (cut) return;
+        const now = Date.now();
+        // A window that ended on an image that waited in line is the line's doing.
+        if (now >= deadlineAt) return end(deadlineAt === windowEnd && turn.waitedMs > 1_000 ? "window" : "deadline");
+        const yieldAt = turn.yieldAt(limits.turnMs);
+        if (now >= yieldAt) return end("yield");
+        timer = setTimeout(arm, Math.min(deadlineAt, yieldAt) - now);
+      };
+      turn.onChange = arm;
+      arm();
+    });
+    if (clientLeft(req)) onLeft();
+    let out = cut ? { cut } : null;
+    if (!out) {
+      entry = large ? startOwnEngine(lang) : getWorkerEntry(lang);
+      entry.active++;
+      // A run that is cut short is not waited for: its engine is terminated below.
+      const work = entry.promise.then((worker) => worker.recognize(buf)).then((r) => ({ data: r.data }), (error) => ({ error }));
+      out = await Promise.race([work, stop]);
+    }
+    if (out.cut) {
+      unpaid = true;
+      const ms = Date.now() - turn.startedAt;
+      throw out.cut === "gone" ? clientGone() : out.cut === "yield" ? gaveWayError(large, ms) : out.cut === "window" ? busy() : tooSlowError(ms);
+    }
+    if ("error" in out) {
+      failed = true;
+      const e = out.error;
+      if (e?.statusCode === 503) throw e;
+      const why = rejectionText(e);
+      if (DECODE_FAILURE.test(why)) { unpaid = true; throw undecodable(fmt, "is corrupt or truncated"); }
+      // An engine fault on an image that passed the header check: the reason
+      // goes to the log, the caller gets a 5xx (not charged) without it.
+      console.error("[ocr] engine failed:", why || "no reason given");
+      throw bad("OCR engine failed on this image; retry the call", 500);
+    }
+    return out.data;
   } finally {
-    entry.active--;
-    if (entry.retired) retireEntry(entry);
+    clearTimeout(timer);
+    turn.onChange = null;
+    unwatch();
+    if (entry) {
+      entry.active--;
+      // The engine's WASM memory grows to fit the largest image it read and
+      // never shrinks, so a large image's own engine is terminated when the
+      // image is done. A run that was cut short is still inside its engine,
+      // and a failed one may have poisoned it: that engine is terminated too
+      // and the next call gets a fresh one. The turn passes on once the
+      // engine is gone.
+      if (entry.own) retireEntry(entry);
+      else if (cut || failed) dropEntry(lang, entry);
+      else if (entry.retired) retireEntry(entry);
+      if (entry.own || cut) await within(entry.gone, limits.retireMs);
+    }
+    turn.release({ unpaid });
   }
 }
 
@@ -612,7 +748,9 @@ async function readImageText(i, req) {
   const fmt = imageFormatOf(buf);
   if (!fmt) throw notAnImage(buf, from);
   const { width, height } = checkImageHeader(buf, fmt);
-  const data = await doRecognize(buf, lang, fmt, width * height, ocrCallerOf(req));
+  // What this call holds while it waits: the image, and its base64 text when sent that way.
+  const heldBytes = buf.length + (typeof i.image === "string" ? i.image.length : 0);
+  const data = await doRecognize(buf, lang, fmt, width * height, ocrCallerOf(req), req, heldBytes);
   const lines = (data.lines ?? []).map((l) => ({
     text: (l.text ?? "").replace(/\s+$/g, ""),
     confidence: typeof l.confidence === "number" ? +l.confidence.toFixed(2) : null,
