@@ -118,7 +118,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-20.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-21.</p>
 </section>
 
 <section>
@@ -281,7 +281,10 @@ so every claim below is verifiable in code.</p>
   sent through a transactional email provider (ZeptoMail, with Resend as a fallback). Stripe keeps the
   email address with your payment; the report record on our server holds the session id, your input, the
   finished report and the signed receipt we issued for it at delivery (SHA-256 digests of the request and of
-  the report, the price and Stripe's payment id), not the email. The email is kept in the follow-up and monitor records described here,
+  the report, the price and Stripe's payment id), not the email. When the link that brought you here names the site it came from
+  (a <code>utm_source</code> tag), a card checkout you start carries that name: Stripe's record of the checkout and our sales ledger keep it with
+  the sale, so we can count card sales by source. It is the name of a site we list, never anything about you, and nothing is kept in your browser
+  for it: the page's links to the report and monitor storefronts carry the tag in their address. The email is kept in the follow-up and monitor records described here,
   and a failed report is counted against a SHA-256 hash of the address (never the address) for 24 hours so
   repeated failures for one buyer stop further charges. Prepaid credits ${creditsSalesEnabled() ? "are sold by card at /credits" : "are not currently sold"}; for each key
   we keep a hash of the key (never the key), its balance and the calls it paid for, and from its purchase the email, the

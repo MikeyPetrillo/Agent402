@@ -21,7 +21,7 @@
         var r = await fetch("/api/buy", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ product: btn.dataset.buyProduct, input: btn.dataset.buyInput }),
+          body: JSON.stringify({ product: btn.dataset.buyProduct, input: btn.dataset.buyInput, source: (window.a402Source && window.a402Source()) || undefined }),
         });
         var j = await r.json();
         if (j && j.url) { ga("checkout_started", { product: btn.dataset.buyProduct, kind: "programmatic" }); window.location = j.url; return; }
