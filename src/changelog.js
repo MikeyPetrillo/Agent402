@@ -23,7 +23,7 @@ const ENTRIES = [
     date: "2026-11-20",
     title: "Where errorCode rides",
     items: [
-      "Wholesale: Every error answer a tool's route writes, other than a 402, carries `errorCode` beside the message (an input refused before payment, a run that ended in an error, a retired route and a paused or switched-off tool). A 402 is the payment-required answer: it follows the x402 and MPP wire formats and carries no `errorCode`. Its `payment_required` row stays in the contract's code table with the new field `carried: false`; every other row reads `carried: true`.",
+      "Wholesale: Every error answer a tool's route writes, other than a 402, carries `errorCode` beside the message: an input refused before payment, a body the server cannot read (400) or that is over its size limit (413), a run that ended in an error, a retired route (410), a paused or switched-off tool (503), and a tool whose route is not served on this server, which answers 404 as any unknown path under /api does. A 402 is the payment-required answer: it follows the x402 and MPP wire formats and carries no `errorCode`. Its `payment_required` row stays in the contract's code table with the new field `carried: false`; every other row reads `carried: true`.",
     ],
   },
   {
