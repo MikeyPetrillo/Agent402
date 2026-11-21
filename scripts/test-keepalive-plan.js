@@ -16,7 +16,7 @@ import { randomBytes } from "node:crypto";
 import { chmod } from "node:fs/promises";
 import { load } from "js-yaml";
 import {
-  KEEPALIVE_CEILING_USD, usdMicros, exemptKind, aboveCeilingRoutes, passMicros, spendCapVerdict, routeCountVerdict,
+  KEEPALIVE_CEILING_USD, usdMicros, exemptKind, fromInputOf, aboveCeilingRoutes, passMicros, spendCapVerdict, routeCountVerdict,
   priceSnapshot, changedPriceRoutes, burnerLowWaterUsd, PRICE_CHANGE_MAX_ROUTES,
 } from "./lib/keepalive-plan.js";
 import { LASTING_EFFECT_SLUG_LIST } from "../src/lasting-effect-slugs.js";
@@ -70,6 +70,16 @@ const DOLLAR_FIGURE = /\$\s?\d/;
   ok(KEEPALIVE_CEILING_USD === 0.1 && usdMicros("$0.10") === 100_000 && usdMicros("free") === 0 && usdMicros(0.101) === 101_000, "prices read as integer micro-USD");
   const weekly = load(read(".github/workflows/bazaar-keepalive.yml"));
   ok(weekly.on.workflow_dispatch.inputs.max_price_usd.default === String(KEEPALIVE_CEILING_USD.toFixed(2)), `the tail starts where the weekly pass's ceiling ends (${weekly.on.workflow_dispatch.inputs.max_price_usd.default})`);
+}
+
+// --- a quoted route with a fromInput is bought; one without is not ----------
+{
+  const floored = row("quoted-floor", "$0.14", { quoted: true, fromInput: { sites: [{ lat: 1, lon: 2 }] } });
+  ok(exemptKind(floored) === null && JSON.stringify(fromInputOf(floored)) === '{"sites":[{"lat":1,"lon":2}]}', "a quoted route that publishes a fromInput is not an exempt kind, and its body is read");
+  ok(["", null, [], "x", 5].every((v) => exemptKind(row("q", "$0.14", { quoted: true, fromInput: v })) === "quoted"), "a quoted route with no fromInput, or one that is not an object, stays exempt");
+  ok(exemptKind(row("q", "$0.50", { quoted: true, fromInput: { a: 1 }, pricedByModel: true })) === "model-priced" && exemptKind(row("decide-execute", "$0.40", { quoted: true, fromInput: { a: 1 } })) === "lasting-effect", "a fromInput lifts only the quoted exemption, never the others");
+  const sel = aboveCeilingRoutes({ endpoints: [...CATALOG, floored] }).map((r) => r.slug);
+  ok(sel.includes("quoted-floor") && !sel.includes("quoted-one"), `the tail pass takes a quoted route above the ceiling only with its fromInput (${sel.join(", ")})`);
 }
 
 // --- changed-price detection -----------------------------------------------

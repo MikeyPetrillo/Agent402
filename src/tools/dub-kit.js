@@ -218,6 +218,8 @@ export const DUB_TOOLS = [
     // Priced by tier: the standard sum, or the hd sum when the body says tier "hd".
     quote: (body) => dubPriceUsd(body && String(body.tier ?? "").trim().toLowerCase() === "hd" ? "hd" : "standard"),
     quoteMaxUsd: dubPriceUsd("hd"),
+    // A standard-tier body, quoted at the list price; the keep-alive buys it.
+    fromInput: { text: "Hello from Agent402!", targetLanguage: "es", voice: "nova", format: "mp3", json: true },
     modelBacked: true,
     binaryTypes: [...new Set(Object.values(FORMAT_CONTENT_TYPES))],
     // Raw audio by default, but the published example asks for json: true,

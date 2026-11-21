@@ -62,6 +62,7 @@ import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
 import { renderArticle, screenshotPage, rasterizeSvg, withHtmlFramesFailureBound } from "./tools/render.js";
+import { LOGO_SVG, FAVICON_SVG, FAVICON_VERSION } from "./brand-mark.js";
 import { renderWithStaticRead } from "./tools/render-static.js";
 import { mountAnswerShares, removeShare } from "./answer-share.js";
 import { workerEnabled, runOnWorker, assertWorkerConfig, setWorkerOutcomeObserver } from "./worker-client.js";
@@ -2679,6 +2680,22 @@ for (const def of Object.values(CATALOG)) {
   // is the ceiling only for the tools that do not.
   if (typeof def.quote === "function") def.quoteRange = { minUsd: floor, maxUsd: Number.isFinite(def.quoteMaxUsd) && def.quoteMaxUsd >= floor ? def.quoteMaxUsd : METERED_MAX_QUOTE_USD };
   else if (typeof def.tierQuote === "function") def.quoteRange = { minUsd: floor, maxUsd: Math.max(floor, FLAT_TIER_MAX_USD) };
+}
+// A quoted tool may declare `fromInput`: a small valid body its 402 quotes at
+// or under the list price. /api/pricing publishes it, and the Bazaar
+// keep-alive pays with it, since a quoted route's published example can ask
+// more than the list price and the keep-alive never pays over list. A body
+// that does not quote inside the list price is dropped here, so a published
+// one always does (scripts/test-quoted-from-price.js reads the live 402s).
+for (const def of Object.values(CATALOG)) {
+  if (def.fromInput === undefined) continue;
+  const list = Number(String(def.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+  let q = NaN;
+  try { q = typeof def.quote === "function" && def.fromInput && typeof def.fromInput === "object" ? Number(def.quote(def.fromInput)) : NaN; } catch { q = NaN; }
+  if (!(Number.isFinite(q) && q > 0 && q <= list + 1e-9)) {
+    console.warn(`[catalog] ${def.slug}: fromInput dropped (its quote is not inside the list price)`);
+    delete def.fromInput;
+  }
 }
 // The attest tool refuses to attest a sale of an identity-bound route (a
 // memory read or a usage report is the buyer's own business, and an
@@ -10450,26 +10467,25 @@ const BRAND = { paper: "#0B0C0E", card: "#141619", panel: "#141619", panel2: "#1
 // design-tokens: off-end
 const BRAND_DEFS = `<defs><linearGradient id="milled" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.milledA}"/><stop offset="1" stop-color="${BRAND.milledB}"/></linearGradient><linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.panel2}"/><stop offset="1" stop-color="${BRAND.paper}"/></linearGradient></defs>`;
 
-// Brand mark — the milled square: a light brushed-aluminum rounded square on
-// the obsidian ground with "402" in dark mono, matching the nav/footer mark.
-// The PNG is rasterized once via the existing headless Chromium and cached for
-// the process lifetime (marketplaces and link previews often refuse SVG).
-const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">${BRAND_FONT_STYLE}${BRAND_DEFS}<rect width="512" height="512" rx="96" fill="${BRAND.paper}"/><rect x="106" y="106" width="300" height="300" rx="72" fill="url(#milled)"/><text x="256" y="301" font-size="118" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} text-anchor="middle" letter-spacing="-6" fill="${BRAND.paper}">402</text></svg>`;
+// Brand mark: the vector logo and the favicon crop (src/brand-mark.js, from
+// assets/brand/logo.svg), the same art as the PNG below.
 app.get("/logo.svg", (_req, res) => res.type("image/svg+xml").set("Cache-Control", "public, max-age=86400").send(LOGO_SVG));
 
-// Favicon-scale mark: the logo's 150px glyphs cover ~40% of the canvas, which
-// reads as a plain black square in a 16px browser tab. This variant fills the
-// frame ("402" at 82% width, the brand period as a corner dot) so the mark
-// survives tab scale. Marketplaces/link previews keep the roomier LOGO_SVG.
-const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">${BRAND_FONT_STYLE}${BRAND_DEFS}<rect width="512" height="512" rx="112" fill="${BRAND.paper}"/><rect x="40" y="40" width="432" height="432" rx="104" fill="url(#milled)"/><text x="256" y="322" font-size="196" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} text-anchor="middle" letter-spacing="-12" fill="${BRAND.paper}">402</text></svg>`;
-
+// The PNG logo is the brand mark (black ground, "402", red dot), 512 by 512,
+// a committed file (assets/brand/logo.png, the same art as
+// docs/logo-current.png): the apple-touch-icon, the schema.org logo, the MCP
+// and A2A icons and the press kit read it. A change of art bumps the ?v= on
+// the apple-touch-icon link (src/ledger-chrome.js) and LOGO_PNG_VERSION. Only
+// that versioned URL is immutable: the bare one (schema.org, MCP, A2A) keeps a
+// day's cache, so a new mark reaches those readers.
+const LOGO_PNG_VERSION = "3";
 let logoPngCache = null;
-app.get("/logo.png", async (_req, res) => {
+app.get("/logo.png", (req, res) => {
   try {
-    logoPngCache ??= await rasterizeSvg(LOGO_SVG, 512);
-    res.type("image/png").set("Cache-Control", "public, max-age=31536000, immutable").send(logoPngCache);
+    logoPngCache ??= readFileSync(new URL("../assets/brand/logo.png", import.meta.url));
+    res.type("image/png").set("Cache-Control", req.query?.v === LOGO_PNG_VERSION ? "public, max-age=31536000, immutable" : "public, max-age=86400").send(logoPngCache);
   } catch {
-    // No Chromium on this instance — the SVG is always available.
+    // The file is part of the image; the SVG stands in if it is ever missing.
     res.redirect(302, "/logo.svg");
   }
 });
@@ -10477,14 +10493,17 @@ app.get("/logo.png", async (_req, res) => {
 // Anthropic directory) resolve our 402 mark instead of a generic globe. The SVG
 // is always available; the .ico serves the rasterized PNG (favicon clients
 // accept PNG bytes) and falls back to the SVG if Chromium is unavailable.
-app.get("/favicon.svg", (_req, res) =>
-  res.type("image/svg+xml").set("Cache-Control", "public, max-age=31536000, immutable").send(FAVICON_SVG)
+// Only the URL the page head links (?v=FAVICON_VERSION) is immutable; a bare
+// one (the x402 listing icon, outside fetchers) keeps a day's cache.
+const faviconCache = (req) => (req.query?.v === FAVICON_VERSION ? "public, max-age=31536000, immutable" : "public, max-age=86400");
+app.get("/favicon.svg", (req, res) =>
+  res.type("image/svg+xml").set("Cache-Control", faviconCache(req)).send(FAVICON_SVG)
 );
 let faviconPngCache = null;
-const sendFaviconPng = async (_req, res) => {
+const sendFaviconPng = async (req, res) => {
   try {
     faviconPngCache ??= await rasterizeSvg(FAVICON_SVG, 512);
-    res.type("image/png").set("Cache-Control", "public, max-age=31536000, immutable").send(faviconPngCache);
+    res.type("image/png").set("Cache-Control", faviconCache(req)).send(faviconPngCache);
   } catch {
     res.redirect(302, "/favicon.svg");
   }
@@ -11289,7 +11308,7 @@ app.get("/api/pricing", (_req, res) => {
     openapi: `${BASE_URL}/openapi.json`,
     categories: Object.fromEntries(Object.entries(CATEGORIES).map(([k, v]) => [k, v.label])),
     endpoints: Object.entries(CATALOG).map(([route, def]) => {
-      const { name, price, description, category, slug, tierQuote, quote, quoteRange, quoteFormula } = def;
+      const { name, price, description, category, slug, tierQuote, quote, quoteRange, quoteFormula, fromInput } = def;
       const [method, path] = route.split(" ");
       return {
         method,
@@ -11313,7 +11332,8 @@ app.get("/api/pricing", (_req, res) => {
         // Said on the row so a consumer that budgets per route never takes the
         // floor for the price: the live 402 for a given body lands anywhere in
         // the range. Absent on fixed-price routes, whose 402 is the list price.
-        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd }, ...(quoteFormula ? { quoteFormula } : {}) } : {}),
+        // fromInput, when the tool declares one: a body quoted at or under `price`.
+        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd }, ...(quoteFormula ? { quoteFormula } : {}), ...(fromInput ? { fromInput } : {}) } : {}),
         // Published per row because the doc's own description says these are
         // marked: a consumer that wants only deterministic code should be able
         // to FILTER for it rather than take a sentence's word for it.

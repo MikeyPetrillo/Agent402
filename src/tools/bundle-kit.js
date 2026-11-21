@@ -504,11 +504,13 @@ async function tokenDiligence(input, ctx) {
 // Price per request: the rule over the units the body names (the 402 quotes
 // the body); the list price is one unit's, the ceiling the most units a call
 // takes. `count` never passes the ceiling: a body over it is unreadable (the
-// handler refuses it, uncharged) and is quoted as one unit.
-const quoted = (legs, count, max) => ({
+// handler refuses it, uncharged) and is quoted as one unit. `fromInput` is a
+// one-unit body, quoted at the list price (the keep-alive buys it).
+const quoted = (legs, count, max, fromInput) => ({
   price: usdText(bundlePriceUsd(1, legs, legPrice)),
   quote: (body) => bundlePriceUsd(count(body), legs, legPrice),
   quoteMaxUsd: bundlePriceUsd(max, legs, legPrice),
+  fromInput,
 });
 const perUnit = (legs) => usdText(bundlePriceUsd(1, legs, legPrice));
 
@@ -532,7 +534,7 @@ export const BUNDLE_TOOLS = [
     upstreamHosts: ["api.open-meteo.com", "archive-api.open-meteo.com", "air-quality-api.open-meteo.com", "ensemble-api.open-meteo.com", "geocoding-api.open-meteo.com"],
     category: "data",
     attribution: "open-meteo-copernicus-geonames",
-    ...quoted(WEATHER_RISK_LEGS, weatherUnitsCount, WEATHER_RISK_MAX_SITES),
+    ...quoted(WEATHER_RISK_LEGS, weatherUnitsCount, WEATHER_RISK_MAX_SITES, { sites: [WEATHER_EXAMPLE_SITES[0]] }),
     description:
       `One 7-day weather risk read for up to ${WEATHER_RISK_MAX_SITES} sites in one call: per site the daily forecast, hour-by-hour checks for frost, heat, high gusts, intense rain and snow over the next 168 hours, current air quality, the same dates a year earlier, and the ensemble probability of ${HEAVY_RAIN_MM} mm or more of rain on the wettest forecast day; each site gets a 0-100 risk score from the signals present and the sites are ranked. Priced per site: the five weather tools it runs (${WEATHER_RISK_LEGS.join(", ")}) less ${Math.round(BUNDLE_DISCOUNT * 100)}%, ${perUnit(WEATHER_RISK_LEGS)} a site, quoted in the 402 for the sites you send. A site is {"lat","lon"} or {"place"} with an optional "name". Deterministic code over the forecast data, no model. ${ATTRIBUTIONS["open-meteo-copernicus-geonames"]}`,
     tags: ["weather", "risk", "portfolio", "sites", "logistics", "insurance", "forecast", "bundle"],
@@ -574,7 +576,7 @@ export const BUNDLE_TOOLS = [
     slug: "filings-brief",
     upstreamHosts: ["data.sec.gov", "www.sec.gov", "efts.sec.gov"],
     category: "data",
-    ...quoted(FILINGS_BRIEF_LEGS, filingUnitsCount, FILINGS_BRIEF_MAX_COMPANIES),
+    ...quoted(FILINGS_BRIEF_LEGS, filingUnitsCount, FILINGS_BRIEF_MAX_COMPANIES, { tickers: [FILINGS_EXAMPLE[0]] }),
     description:
       `One SEC EDGAR brief for up to ${FILINGS_BRIEF_MAX_COMPANIES} US public companies in one call: per company the latest annual and quarterly financials as filed (revenue, net and operating income, assets, liabilities, equity, EPS, operating cash flow) with margins and leverage computed, filing activity (latest 10-K and 10-Q, days since the latest periodic report, 8-K count over 90 days, the newest filings with links) and Form 4 filing activity over 90 days; flags for net loss, negative equity, high leverage, a missing periodic report, busy insider filing and frequent 8-Ks, with the set ranked by revenue and net margin. Priced per company: the three EDGAR tools it runs (${FILINGS_BRIEF_LEGS.join(", ")}) less ${Math.round(BUNDLE_DISCOUNT * 100)}%, ${perUnit(FILINGS_BRIEF_LEGS)} a company, quoted in the 402 for the tickers you send. Deterministic code over public-domain SEC data, no model; facts, not investment advice.`,
     tags: ["sec", "edgar", "filings", "financials", "peers", "10-k", "insider", "bundle"],
@@ -610,7 +612,7 @@ export const BUNDLE_TOOLS = [
     upstreamHosts: CG_API_HOSTS,
     category: "crypto",
     attribution: "coingecko",
-    ...quoted(TOKEN_DILIGENCE_LEGS, coinUnitsCount, TOKEN_DILIGENCE_MAX_COINS),
+    ...quoted(TOKEN_DILIGENCE_LEGS, coinUnitsCount, TOKEN_DILIGENCE_MAX_COINS, { coins: [COINS_EXAMPLE[0]] }),
     description:
       `One market diligence read for up to ${TOKEN_DILIGENCE_MAX_COINS} coins in one call: per coin the profile and market snapshot (price, market cap, fully diluted value, volume, supply, all-time high) with turnover, dilution and circulating share computed, one year of candles reduced to return, largest drawdown and annualized volatility, and contract addresses per chain; flags for high dilution, thin turnover, far below the all-time high, high volatility and a deep drawdown, with the list ranked by market cap, one-year return and volatility. Priced per coin: the two tools it runs (${TOKEN_DILIGENCE_LEGS.join(", ")}) less ${Math.round(BUNDLE_DISCOUNT * 100)}%, ${perUnit(TOKEN_DILIGENCE_LEGS)} a coin, quoted in the 402 for the coins you send. Coins by coin id (coin-search finds one). Deterministic code, no model; market facts, not investment advice. ${COINGECKO_ATTRIBUTION}`,
     tags: ["crypto", "token", "diligence", "volatility", "drawdown", "dilution", "portfolio", "bundle"],

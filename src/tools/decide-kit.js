@@ -1127,6 +1127,8 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       // floor is the cheapest depth and the ceiling is full.
       quoteMinUsd: Math.min(...DEPTHS.map((d) => priceForDepth(d))),
       quoteMaxUsd: priceForDepth("full"),
+      // The cheapest depth, quoted under the list price; the keep-alive buys it.
+      fromInput: { task: "resolve an ENS name", depth: "quick" },
       description: decideDescription(),
       tags: ["agents", "routing", "planning", "discovery", "x402"],
       discovery: {

@@ -107,7 +107,7 @@ import { readFileSync, existsSync, appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { chainOf, routeSellsOn, walkAgreed, BAZAAR_REGISTRY_URL } from "./listing-coverage.js";
 import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
-import { usdMicros, passMicros, spendCapVerdict } from "./lib/keepalive-plan.js";
+import { usdMicros, passMicros, spendCapVerdict, fromInputOf } from "./lib/keepalive-plan.js";
 import { selectMcpListings, isMcpFeedRow, mcpOfferProblems, mcpListingSlugOf, publishedPayTo, usdText, MCP_LISTING_TOOLS } from "./lib/mcp-listings.js";
 import { connectMcp, askMcpOffer, buyMcpListing } from "./lib/mcp-x402-client.js";
 // viem + @x402/* are loaded lazily so DRY_RUN works without them installed.
@@ -310,6 +310,9 @@ async function loadCatalog() {
     // control proves the probe can still see a leak. So this is a MEASURED
     // "costs nothing upstream", not a hand-kept list that drifts.
     computePayable: t.computePayable === true,
+    // A quoted route's published example can ask more than its list price,
+    // which the buy never pays; its fromInput is quoted inside it.
+    fromInput: fromInputOf(t),
   }));
 }
 
@@ -396,10 +399,14 @@ async function speechClip() {
 }
 
 /** The url and fetch init one sweep buy sends: query parameters for a GET, a
- *  file part for a multipart route, the JSON example otherwise. */
+ *  file part for a multipart route, the JSON example otherwise. A quoted route
+ *  with a fromInput (scripts/lib/keepalive-plan.js) sends that body instead of
+ *  its example. */
 export async function sweepRequest(t, examples, { target = TARGET, headers = {}, clip = speechClip } = {}) {
   const key = `${t.method} ${t.path}`;
-  const example = examples.get(key) || {};
+  const from = fromInputOf(t);
+  if (from && t.method !== "GET") return { url: `${target}${t.path}`, init: { method: t.method, headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(from) } };
+  const example = from || examples.get(key) || {};
   if (t.method === "GET") return { url: `${target}${t.path}${Object.keys(example).length ? "?" + new URLSearchParams(example).toString() : ""}`, init: { method: "GET", headers: { ...headers } } };
   const fields = examples.multipart?.get(key);
   // No Content-Type on a multipart body: fetch writes it with the boundary.
