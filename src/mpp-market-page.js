@@ -9,6 +9,7 @@ import { ledgerShell, ledgerFooterCompact, esc, safeHref, breadcrumbNavFromLd } 
 import { mppChallengeRails } from "./mpp-shim.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 import { mppCrawlIntervalLabel } from "./mpp-index.js";
+import { cadenceWords, BOARD_REFRESH_MS } from "./refresh-cadence.js";
 import { hostRowHtml } from "./host-entry.js";
 
 // Crawled seller data is third-party input: only http(s) may become an href
@@ -128,7 +129,7 @@ function leaderboardHtml(lb, host = null) {
     ? `<div class="mlb-scroll"><table>
       <thead><tr><th class="num">#</th><th>Seller &middot; Tempo recipient</th><th class="num" title="inbound USDC.e transfers in the read window">${esc(windowLabel)}</th><th class="num" title="rolling 7 days of observed transfers">7d</th><th class="num" title="rolling 30 days of observed transfers">30d</th><th class="num" title="distinct payer addresses in the read window">Payers</th><th class="num" title="7-day observed volume">Volume 7d</th><th>Router</th></tr></thead>
       <tbody>${trs}</tbody></table></div>`
-    : `<p style="color:var(--muted);font-size:var(--fs-md);margin:0;">${lb?.generatedAt ? "No verified seller's recipient received a USDC.e transfer on Tempo in the window." : "First on-chain read pending - the leaderboard rebuilds every 30 minutes from the verified index above."}</p>`;
+    : `<p style="color:var(--muted);font-size:var(--fs-md);margin:0;">${lb?.generatedAt ? "No verified seller's recipient received a USDC.e transfer on Tempo in the window." : "First on-chain read pending - the leaderboard rebuilds ${cadenceWords(BOARD_REFRESH_MS)} from the verified index above."}</p>`;
   const zero = rows.length - active.length; // host row already left out of both
   // (rows here are lb.rows; a row is active with a window OR a 30d count)
   return `

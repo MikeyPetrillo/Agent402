@@ -586,6 +586,7 @@ import { partialFields } from "./partial-answer.js";
 import { crawlSwitch } from "./crawl-switch.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
+import { addBoardRefreshQuietCheck } from "./board-refresh-slots.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode, tempoRefusalProblem } from "./mpp-tempo.js";
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
@@ -10184,7 +10185,7 @@ app.get("/api/route/external-debug", async (req, res) => {
 // TOP N of that board and never the whole of it. Free, like /api/find +
 // /api/route:
 // discovery primitives shouldn't cost money. Snapshot is cached in memory and
-// refreshed every 4 hours (see startLeaderboardRefresh below): each request is a
+// refreshed twice a day (see startLeaderboardRefresh below): each request is a
 // sub-millisecond read, never a live Bazaar walk.
 //
 // Query params (all optional):
@@ -14329,12 +14330,12 @@ if (!mppCrawl.on) {
   // MPP leaderboard: on-chain ranking of the verified sellers above by inbound
   // USDC.e transfers on Tempo (src/mpp-leaderboard.js). Rides the crawler's
   // switch (nothing to rank without it) plus its own escape hatch; the
-  // rebuild is one batched eth_getLogs per 33k-block chunk every 30 min.
+  // rebuild is one batched eth_getLogs per 33k-block chunk at its fixed slots.
   if (String(process.env.MPP_LEADERBOARD || "").toLowerCase() === "off") {
     console.log("[mpp-leaderboard] disabled (MPP_LEADERBOARD=off)");
   } else {
     startMppLeaderboard({ self: tempoSelfRecipient() });
-    // Solana SPL leaderboard: hourly batched credits scan over every Solana
+    // Solana SPL leaderboard: a batched credits scan at its fixed slots over every Solana
     // payTo the index knows, primed into the pay-time gate (src/solana-leaderboard.js).
     startSolanaLeaderboard({
       listPayTos: async () => (await import("./x402-index.js")).allSolanaPayToOriginsAsync(),
@@ -14432,7 +14433,8 @@ if (_monitors && process.env.MONITOR_SCHEDULER !== "off") bootStep("monitors.sta
 // chain's public RPC from it.
 if (revenueWarmupEnabled()) bootStep("revenueSnapshot", () => revenueSnapshot(revenueWallets()).catch(() => { /* first pageview warms instead */ }));
 
-// x402 Leaderboard cache: warms once at boot, refreshes every 4 hours. Failures keep
+// x402 Leaderboard cache: warm-started at boot, rebuilt at its fixed slots
+// (src/board-refresh-slots.js). Failures keep
 // the previous good snapshot rather than wiping it — a transient RPC outage
 // shouldn't make /api/leaderboard return nothing. Fire-and-forget so a slow
 // Bazaar walk can't delay boot or /health.
@@ -14477,6 +14479,8 @@ bootStep("setAlgorandCrawlSources", () => {
     countInbound: makeIndexerInboundCount(getJsonAcross, ALGORAND_INDEXER_BASES),
   });
 });
+// A board rebuild that is due waits while an index crawl is in flight.
+addBoardRefreshQuietCheck(() => (crawlInProgress() ? "an index crawl is in flight" : null));
 bootStep("startLeaderboardRefresh", () => startLeaderboardRefresh({
   crawledWallets: (chain) => allPayToOriginsAsync(chain?.caip2 || "eip155:8453"),
   // The prices those wallets' own routes publish, so a transfer to a wallet

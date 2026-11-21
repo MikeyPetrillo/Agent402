@@ -623,7 +623,7 @@ may still clamp it, and the read site is the reference.
 | `LEADERBOARD_LOG_CACHE_MAX_ROWS` | Leaderboard log cache maximum rows. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_REORG_BLOCKS` | Leaderboard log cache reorg blocks. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_SEGMENT_BLOCKS` | Leaderboard log cache segment blocks. |  | `src/leaderboard-log-cache.js` |
-| `LEADERBOARD_REFRESH_MS` | Leaderboard refresh, in milliseconds. |  | `src/refresh-cadence.js` |
+| `LEADERBOARD_REFRESH_MS` | Leaderboard refresh, in milliseconds. |  | `src/leaderboard.js`, `src/refresh-cadence.js` |
 | `LEADERBOARD_SNAPSHOT_FILE` | Leaderboard snapshot file path. | `/data/leaderboard-snapshot.json` | `src/leaderboard.js` |
 | `LEADERBOARD_WINDOW_SECONDS` | Leaderboard window, in seconds. |  | `src/leaderboard.js` |
 
@@ -831,7 +831,7 @@ may still clamp it, and the read site is the reference.
 | `POW_DB_PATH` | Proof-of-work database path. |  | `src/pow.js` |
 | `POW_DIFFICULTY` | Proof-of-work difficulty in leading zero bits (8 to 28). |  | `src/pow.js` |
 | `POW_PG_REFRESH_MS` | Proof-of-work Postgres refresh, in milliseconds. |  | `src/pow.js` |
-| `POW_SECRET` | Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process). | `traffic` | `src/discovery-refusals.js`, `src/hangup-forgiveness.js`, `src/payments.js` and 8 more |
+| `POW_SECRET` | Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process). | `traffic` | `src/discovery-refusals.js`, `src/first-call-allowance.js`, `src/hangup-forgiveness.js` and 9 more |
 | `POW_TTL_SECONDS` | Proof-of-work lifetime, in seconds. |  | `src/pow.js` |
 
 ## PROGRAMMATIC
@@ -1364,7 +1364,7 @@ may still clamp it, and the read site is the reference.
 | --- | --- | --- | --- |
 | `TRAFFIC_CRAWLER_PATHS` | Traffic crawler paths. | `25` | `src/traffic-classifier.js` |
 | `TRAFFIC_DIR` | Traffic directory. |  | `src/traffic-classifier.js` |
-| `TRAFFIC_HASH_SALT` | Traffic hash salt. |  | `src/traffic-classifier.js` |
+| `TRAFFIC_HASH_SALT` | Traffic hash salt. |  | `src/first-call-allowance.js`, `src/traffic-classifier.js` |
 | `TRAFFIC_PERSIST_MS` | Traffic persist, in milliseconds. | `60` | `src/traffic-classifier.js` |
 | `TRAFFIC_RETENTION_DAYS` | Traffic retention, in days. |  | `src/traffic-classifier.js` |
 | `TRAFFIC_WINDOW_MS` | Traffic window, in milliseconds. | `10` | `src/traffic-classifier.js` |

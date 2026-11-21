@@ -167,7 +167,7 @@ const snap = {
   mode = "dead";
   const second = await refreshMppLeaderboard({ snapshot: snap, rpcFn, now: 20, self: null });
   ok(second.rows.length === 3 && second.rows[0].transfers === 2 && /rpc down/.test(second.lastError || ""), "an RPC failure keeps the PREVIOUS board up and records the error");
-  ok(mppLeaderboardSnapshot(20 + 4 * 60 * 60 * 1000).stale === true, "a board that has not been rebuilt in 90 min reads stale at read time");
+  ok(mppLeaderboardSnapshot(20 + 35 * 60 * 60 * 1000).stale !== true && mppLeaderboardSnapshot(20 + 37 * 60 * 60 * 1000).stale === true, "a board that has missed three rebuilds (36 hours) reads stale at read time, and not before");
   __testReset();
   ok(mppLeaderboardSnapshot().rows.length === 0 && mppLeaderboardSnapshot().stale === true, "cold snapshot is empty + stale, never fabricated");
 }

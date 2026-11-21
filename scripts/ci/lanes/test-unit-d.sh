@@ -321,6 +321,8 @@ t node scripts/test-scoreboard.js
 t node scripts/test-mcp-x402-routes.js
 # First-call allowance returning payers (operator view): granted wallets with a later outside paid sale, and within 7 days; one batched ledger read, cached (offline, temp SQLite ledger)
 t node scripts/test-first-call-allowance-returned.js
+# The seller boards rebuild at fixed slots, one at a time, never beside a crawl or under a high heap; a boot rebuilds only a missed slot (offline, simulated clock)
+t node scripts/test-board-refresh-slots.js
 t node scripts/test-attest-kit.js
 # One mirror pull in flight; a fresh lookup during a running pull waits and pulls again (offline)
 t node scripts/test-single-flight.js

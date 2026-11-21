@@ -50,6 +50,7 @@ export function evidencePayerCount(payerSet, recipient, ours = OUR_EVM_WALLETS) 
 }
 import { tempoFeedEnabled, emptyFeedState, syncTempoTransfers, feedStats, feedHistoryDays, persistFeedStateAsync, loadFeedState, feedCovers, loadFeedStateAsync, feedStateUnread } from "./tempo-transfers.js";
 import { registerMemoryStore } from "./memory-stores.js";
+import { scheduleBoardRefresh, SLOT_PEER_FRESH_MS, BOARD_REFRESH_MS } from "./board-refresh-slots.js";
 
 // Transfer-feed window when the Tempo data API is the source (a time window,
 // not a block window): 24h. The RPC path keeps its ~15h block window.
@@ -60,8 +61,9 @@ const USDC_LC = TEMPO_USDC.toLowerCase();
 export const MPP_LB_WINDOW_BLOCKS = 99_000; // rpc.tempo.xyz eth_getLogs cap is 100k
 const CHUNK_BLOCKS = 33_000;
 const MIN_CHUNK_BLOCKS = 2_000;
-export const MPP_LB_REFRESH_MS = 30 * 60 * 1000;
-export const MPP_LB_STALE_MS = 3 * MPP_LB_REFRESH_MS; // 90 min without a good rebuild = stale
+// Twice a day at the board's fixed slots (src/board-refresh-slots.js).
+export const MPP_LB_REFRESH_MS = BOARD_REFRESH_MS;
+export const MPP_LB_STALE_MS = 3 * MPP_LB_REFRESH_MS; // three missed rebuilds = stale
 export const MPP_LB_CACHE_FILE = process.env.MPP_LB_CACHE_FILE || "/data/mpp-leaderboard-cache.json";
 
 const addrTopic = (addr) => "0x" + String(addr).toLowerCase().slice(2).padStart(64, "0");
@@ -444,19 +446,21 @@ export function startMppLeaderboard({ self = null, delayMs = 120_000 } = {}) {
   if (timer) return;
   const warmed = loadPersistedMppLeaderboard();
   if (warmed) console.log(`[mpp-leaderboard] warm-started ${current.rows.length} recipients from ${MPP_LB_CACHE_FILE}`);
-  // First build after the MPP crawler's boot pass has verified sellers and
-  // captured their live offers (99 seeds at concurrency 10 with an 8s probe
-  // timeout is ~10s typical, ~80s worst) - an empty snapshot would rank
-  // nobody and then sit for 30 min. A second early pass at +10 min catches
-  // sellers whose first probe was slow; then the steady 30-min cadence.
-  const kick = setTimeout(() => { refreshMppLeaderboard({ self }); }, delayMs);
-  kick.unref?.();
-  const kick2 = setTimeout(() => { refreshMppLeaderboard({ self }); }, delayMs + 8 * 60 * 1000);
-  kick2.unref?.();
-  timer = setInterval(() => { refreshMppLeaderboard({ self }); }, MPP_LB_REFRESH_MS);
-  timer.unref?.();
+  // The slots (src/board-refresh-slots.js): fixed hours, one board at a
+  // time. A boot rebuilds only a board with no snapshot since its last slot:
+  // then the first build follows the MPP crawler's boot pass (it has verified
+  // sellers and captured their live offers by `delayMs`; an empty snapshot
+  // would rank nobody until the next slot), and a second pass eight minutes
+  // after it catches sellers whose first probe was slow.
+  timer = scheduleBoardRefresh({
+    board: "mpp",
+    run: ({ slot }) => refreshMppLeaderboard(slot ? { self, peerFreshMs: SLOT_PEER_FRESH_MS } : { self }),
+    snapshotAt: () => Number(current?.generatedAt) || 0,
+    bootDelayMs: delayMs,
+    secondKickMs: 8 * 60 * 1000,
+  });
 }
-export function stopMppLeaderboard() { if (timer) clearInterval(timer); timer = null; }
+export function stopMppLeaderboard() { if (timer) timer.stop(); timer = null; }
 export function __testReset() { current = null; inFlight = null; feedState = null; stopMppLeaderboard(); }
 
 // Operator heap read (/__operator/heap.json `stores`).

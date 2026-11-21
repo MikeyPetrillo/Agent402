@@ -14,6 +14,7 @@
     "AGENT402_URL": "named in a code sample a page shows (the reader's own program)",
     "AGENT402_WALLET_KEY": "named in a code sample a page shows (the reader's own program)",
     "AGENT_KEY": "named in a code sample a page shows (the reader's own program)",
+    "BOARD_REFRESH_HEAP_SHARE": "Share of the V8 heap limit above which a due seller-board rebuild waits (default 0.7; 0 or off disables).",
     "BOOT_PROBE_TIMEOUT": "an error code",
     "CDP_WALLET_SECRET": "named in a code sample a page shows (the reader's own program)",
     "CIRCLE_NETWORK_ERROR": "an error code",

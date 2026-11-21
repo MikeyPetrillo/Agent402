@@ -15,7 +15,7 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
 const H = 3_600_000;
 const cad = await import("../src/refresh-cadence.js");
 ok(cad.REVENUE_SNAPSHOT_DEFAULT_TTL_MS === 4 * H && cad.REVENUE_SNAPSHOT_TTL_MS === 4 * H, "the live rail scan refreshes every 4 hours by default");
-ok(cad.LEADERBOARD_DEFAULT_REFRESH_MS === 4 * H && cad.LEADERBOARD_REFRESH_MS === 4 * H, "the Base seller leaderboard refreshes every 4 hours by default");
+ok(cad.LEADERBOARD_DEFAULT_REFRESH_MS === 12 * H && cad.LEADERBOARD_REFRESH_MS === 12 * H && cad.BOARD_REFRESH_MS === 12 * H, "the Base seller leaderboard refreshes every 12 hours by default");
 ok(cad.cadenceWords(4 * H) === "every 4 hours" && cad.cadenceWords(H) === "hourly" && cad.cadenceWords(30 * 60_000) === "every 30 minutes" && cad.cadenceBadge(4 * H) === "EVERY 4H", "the cadence words follow the value");
 
 // The env overrides are read at import: a child process with them set.
@@ -182,7 +182,7 @@ ok(!TYPED_HOURLY.test(src("ledger-home.js")) && /href="\/leaderboard"/.test(src(
 const { ledgerLeaderboardPage } = await import("../src/ledger-leaderboard.js");
 let html = "";
 try { html = String(await ledgerLeaderboardPage({ snapshot: { rows: [], totalSellers: 0, asOf: new Date(clock).toISOString(), windowLabel: "7d" } }) || ""); } catch { html = ""; }
-ok(html.length > 1000 && /every 4 hours/.test(html) && /EVERY 4H/.test(html) && !/\$\{/.test(html), "the rendered leaderboard page says every 4 hours with no unrendered template text");
+ok(html.length > 1000 && /every 12 hours/.test(html) && /EVERY 12H/.test(html) && !/\$\{/.test(html), "the rendered leaderboard page says every 12 hours with no unrendered template text");
 
 // The status Worker pages on the word too: stale pages, fresh and due clear, cold and absent do neither.
 {
