@@ -916,9 +916,9 @@ function multisigApprovalsCommitment(sig, signPayload) {
  *               { account, ledger } where `account` is the balance it is
  *               judged on and `ledger` is null (the account's own ledger: a
  *               signer the signature proves, written into the fee-payer slot
- *               as someone else) or a ledger of its own ("multisig:" plus the
- *               config commitment when the owner approvals verify, else
- *               "unverified"). Never a key for a per-buyer bound. Else null.
+ *               as someone else) or "unverified" (a multisig envelope,
+ *               whether or not its owner approvals verify against the config
+ *               it carries). Never a key for a per-buyer bound. Else null.
  *  Offline and synchronous; never throws. Exported for tests. */
 export function inspectTempoSender(authorizationHeader, { now = Date.now() } = {}) {
   const out = { claimed: null, verified: null, envelope: null, keychain: null, booking: null, reason: "" };
@@ -964,7 +964,11 @@ export function inspectTempoSender(authorizationHeader, { now = Date.now() } = {
     if (sig.type === "multisig") {
       if (lcAddress(sig.account) !== out.claimed) return { ...out, reason: "the multisig account is not the named sender" };
       const commitment = multisigApprovalsCommitment(sig, signPayload);
-      return { ...out, booking: { account: out.claimed, ledger: commitment ? `multisig:${commitment}` : "unverified" }, reason: commitment ? "multisig envelope: the owner approvals verify; the account's config is not checked" : "multisig envelope: the owner approvals do not verify" };
+      // One ledger per named account whatever the approvals say: they are
+      // checked only against the config the envelope carries, so a config
+      // made fresh for each request would otherwise open a fresh, empty
+      // ledger every time.
+      return { ...out, booking: { account: out.claimed, ledger: "unverified" }, reason: commitment ? "multisig envelope: the owner approvals verify; the account's config is not checked" : "multisig envelope: the owner approvals do not verify" };
     }
   } catch {
     return { ...out, reason: "the signature does not verify" };

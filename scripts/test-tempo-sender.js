@@ -165,7 +165,6 @@ function oxMultisig({ account = msAccount, signers = msOwners.map((o) => o.k), t
 const TX_MULTISIG_REAL = oxMultisig();
 const TX_MULTISIG_SHORT = oxMultisig({ signers: [msOwners[0].k] });
 const TX_MULTISIG_TWICE = oxMultisig({ signers: [msOwners[0].k, msOwners[0].k] });
-const msCommitment = lc(MultisigConfig.getCommitment({ version: 0n, threshold: 2, owners: msOwners.map((o) => ({ owner: o.a, weight: 1 })) }));
 const TX_FEE_SLOT_VICTIM = oxSigned({ sender: victim });
 const TX_FEE_SLOT_SELF = oxSigned({ sender: attacker });
 const victimP256 = P256.getPublicKey({ privateKey: P256.randomPrivateKey() });
@@ -240,7 +239,7 @@ const TX_FIRST_USE_OX = await firstUse(oxAgent, oxKeyAuthorization({ address: ox
   ok(m.booking?.account === victim && m.booking?.ledger === "unverified", `A: a multisig envelope whose approvals do not verify is booked against the account it names, in the unverified ledger (${JSON.stringify(m.booking)})`);
   ok(fs.booking?.account === attacker && fs.booking?.ledger === null, `A: another address in the fee-payer slot is booked against the signer, whose balance the transaction draws on (${JSON.stringify(fs.booking)})`);
   const mr = inspectTempoSender(credential(TX_MULTISIG_REAL));
-  ok(mr.envelope === "multisig" && mr.claimed === msAccount && mr.verified === null && mr.booking?.account === msAccount && mr.booking?.ledger === `multisig:${msCommitment}`, `A: a multisig whose owner approvals reach its threshold is still not verified, and is booked in its config's own ledger (${mr.booking?.ledger?.slice(0, 20)}...)`);
+  ok(mr.envelope === "multisig" && mr.claimed === msAccount && mr.verified === null && mr.booking?.account === msAccount && mr.booking?.ledger === "unverified", `A: a multisig whose owner approvals reach its threshold is still not verified, and is booked in the named account's one unverified ledger, never one per config (${mr.booking?.ledger})`);
   for (const [name, raw] of [["one approval of two", TX_MULTISIG_SHORT], ["one owner approving twice", TX_MULTISIG_TWICE]]) {
     const x = inspectTempoSender(credential(raw));
     ok(x.verified === null && x.booking?.account === msAccount && x.booking?.ledger === "unverified", `A: a multisig with ${name} is booked in the unverified ledger, not the config's (${x.booking?.ledger})`);
@@ -519,7 +518,7 @@ async function listen(app) {
   // refused before the handler, uncharged, and books nothing against the
   // named account.
   keychainAnswer = async () => null;
-  for (const [name, raw, pull, pullLedger] of [["a multisig envelope", TX_MULTISIG, victim, "unverified"], ["a multisig whose approvals verify", TX_MULTISIG_REAL, msAccount, `multisig:${msCommitment}`], ["a fee-payer-slot sender", TX_FEE_SLOT_VICTIM, attacker, null]]) {
+  for (const [name, raw, pull, pullLedger] of [["a multisig envelope", TX_MULTISIG, victim, "unverified"], ["a multisig whose approvals verify", TX_MULTISIG_REAL, msAccount, "unverified"], ["a fee-payer-slot sender", TX_FEE_SLOT_VICTIM, attacker, null]]) {
     r = await get("/plain", raw);
     ok(r.status === 200 && r.body.sender === null && r.body.key === "ip:198.51.100.7" && r.body.pull === pull && r.body.pullLedger === pullLedger, `C: ${name} on an ordinary route is served, its bounds keyed on the client IP, its pull booked against ${pull === attacker ? "the signer" : "the named account"} (${JSON.stringify(r.body)})`);
   }
