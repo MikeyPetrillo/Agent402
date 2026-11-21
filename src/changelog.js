@@ -22,6 +22,13 @@ const mppOfferGateShown = () => mppMethodsSummary().enabled && mppOfferGateEnabl
 const ENTRIES = [
   {
     date: "2026-11-21",
+    title: "Balance checks for calls in flight",
+    items: [
+      "Operations: A balance read that is dropped before it is made gives a unit of the daily read budget back only when it took one, so the day's count matches the reads made.",
+    ],
+  },
+  {
+    date: "2026-11-21",
     title: "Multisig Tempo payments and DNS names",
     items: [
       "Payments: A Tempo pull credential in a multisig envelope is counted against its account's balance, with no fixed number of calls at once, once a payment from that account under the same multisig config has settled here.",

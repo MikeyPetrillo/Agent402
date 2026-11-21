@@ -1034,6 +1034,55 @@ for (const readMs of [600, 450]) {
   caps._resetHardCaps();
 }
 
+// ---- a read dropped unmade gives back the budget unit it took, and none when it took none ----
+{
+  const caps = await import("../src/upstream-hard-caps.js");
+  const share = () => caps.hardCapShareStatus()["cover-reads"];
+  fresh(); caps._resetHardCaps();
+  process.env.INFLIGHT_COVER_READS_DAILY_MAX = "8";
+  process.env.AGENT402_BASE_RPC = "https://base-mainnet.g.alchemy.com/v2/test-key"; // Base reads reach the capped host
+  try {
+    let made = 0;
+    _setBalanceReaderForTest(async () => { made++; await sleep(400); return PRICE * 100n; });
+    _setPaidRecordForTest(() => true);
+    // Nine wallets, one run in flight each (a first run needs no read).
+    const firsts = []; for (let i = 0; i < 9; i++) firsts.push(await admit(W(0x90 + i)));
+    // Eight second runs: eight slow reads fill the read lane and spend the day's budget of eight.
+    const slow = Array.from({ length: 8 }, (_, i) => admit(W(0x90 + i), { settleWaitMs: 2000 }));
+    await sleep(20);
+    const spent = share();
+    // A ninth wallet's second run: its read is past the budget (it takes no
+    // unit), waits behind the full lane, and its admission ends before its turn.
+    const quick = await admit(W(0x98), { settleWaitMs: 100 });
+    const queued = inflightCoverStatus();
+    const slowDone = await Promise.all(slow);
+    await sleep(250);
+    const after = share(), st = inflightCoverStatus();
+    ok(spent.usedToday === 8 && spent.status === "spent" && queued.readsPastBudget === 1 && st.readsDropped === 1 && made === 8, `control: eight reads spend the budget of eight; a ninth wallet's read past it is dropped unmade when its admission has gone (used ${spent.usedToday}, past budget ${queued.readsPastBudget}, dropped ${st.readsDropped}, reads made ${made})`);
+    ok(after.usedToday === 8 && after.releasedToday === 0 && after.status === "spent", `a dropped read that took no unit gives none back: the day's count still reads the eight reads made (used ${after.usedToday}, released ${after.releasedToday}, ${after.status})`);
+    for (const x of [...firsts, quick, ...slowDone]) x.release?.();
+    // Control: a read that DID take a unit and is dropped unmade gives it back.
+    fresh(); caps._resetHardCaps();
+    made = 0;
+    _setBalanceReaderForTest(async () => { made++; await sleep(300); return PRICE * 100n; });
+    _setPaidRecordForTest(() => true);
+    process.env.INFLIGHT_COVER_READS_DAILY_MAX = "50";
+    const f2 = []; for (let i = 0; i < 9; i++) f2.push(await admit(W(0xb0 + i)));
+    const s2 = Array.from({ length: 8 }, (_, i) => admit(W(0xb0 + i), { settleWaitMs: 2000 }));
+    await sleep(20);
+    const q2 = await admit(W(0xb8), { settleWaitMs: 100 });
+    const d2 = await Promise.all(s2);
+    await sleep(250);
+    const a2 = share();
+    ok(made === 8 && inflightCoverStatus().readsDropped === 1 && a2.usedToday === 8 && a2.releasedToday === 1, `control: inside the budget, a ninth read that took a unit and was dropped unmade gives it back (reads made ${made}, used ${a2.usedToday}, released ${a2.releasedToday})`);
+    for (const x of [...f2, q2, ...d2]) x.release?.();
+  } finally {
+    delete process.env.INFLIGHT_COVER_READS_DAILY_MAX;
+    delete process.env.AGENT402_BASE_RPC;
+    caps._resetHardCaps();
+  }
+}
+
 // ---- a Tempo pull whose sender is not proven is booked on the client address it came from, on no account ----
 {
   const ACCT = W(0xd9), CUR = "0x20c000000000000000000000b9537d11c60e8b50";

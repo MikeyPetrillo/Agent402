@@ -219,7 +219,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   Tempo lists; `AGENT402_BASE_RPC` for Base) takes a unit of the `cover-reads` share in
   `src/upstream-hard-caps.js` (`HARD_CAP_SHARES`, shared across replicas like the ceilings):
   `INFLIGHT_COVER_READS_DAILY_MAX`, default a fifth of `HARDCAP_ALCHEMY_CALLS`, a set value held to
-  half of it (the ceiling off: the set value, or none). A read dropped unmade gives its unit back.
+  half of it (the ceiling off: the set value, or none). A read dropped unmade gives its unit back
+  when it took one (a read made past the budget took none).
   Past it a wallet still gets one read a minute (`BUDGET_SPENT_WALLET_GAP_MS`, `readsPastBudget`), so
   a funded wallet held to the allowance recovers within a minute instead of at midnight; any other
   read is not made (`readsOverBudget`) and the call is judged exactly as when reads are down (the

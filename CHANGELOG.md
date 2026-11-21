@@ -6,6 +6,12 @@ carries its own version on npm.
 
 ## v2.10.0 - 2026-11-21
 
+### 2026-11-21 (balance checks for calls in flight)
+Operations:
+- A balance read that is dropped before it is made gives a unit of the
+  daily read budget back only when it took one, so the day's count matches
+  the reads made.
+
 ### 2026-11-21 (multisig Tempo payments and DNS names)
 Payments:
 - A Tempo pull credential in a multisig envelope is counted against its

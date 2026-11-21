@@ -782,8 +782,11 @@ function balanceFor(coverKey, terms, now, minSeq = 0, background = false) {
   // upstream takes a unit of admission's own share of that ceiling; past it
   // no read is made, and the caller is judged as when reads are down (the
   // kept read, or the allowance).
+  // Whether this read took a unit of the day's budget: a read made past the
+  // budget (below) took none, and gives none back when it is dropped.
   const unitAt = Date.now();
-  if (!takeHardCapShare("cover-reads", terms?.ceiling ?? null, unitAt)) {
+  const unitTaken = takeHardCapShare("cover-reads", terms?.ceiling ?? null, unitAt);
+  if (!unitTaken) {
     // Spent: still one read per wallet per BUDGET_SPENT_WALLET_GAP_MS, so a
     // funded wallet judged on the allowance recovers within a minute, and at
     // most pastBudgetReadsPerMin() such reads in any minute for all wallets.
@@ -819,7 +822,7 @@ function balanceFor(coverKey, terms, now, minSeq = 0, background = false) {
       // Its turn in the lane has come and every admission that asked for it
       // has gone (refused, admitted another way, hung up): the read is not
       // made. It says nothing about the account's reads.
-      if (entry.asked && entry.waiters <= 0) { stats.readsDropped++; releaseHardCapShare("cover-reads", terms?.ceiling ?? null, unitAt); return null; }
+      if (entry.asked && entry.waiters <= 0) { stats.readsDropped++; if (unitTaken) releaseHardCapShare("cover-reads", terms?.ceiling ?? null, unitAt); return null; }
       entry.seq = ++eventSeq;
       entry.reading = true;
       const atomic = await reader(terms);
