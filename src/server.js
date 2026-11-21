@@ -5101,7 +5101,7 @@ app.get("/og/agentic-finance.png", async (_req, res) => {
 });
 app.get("/faq", (_req, res) => htmlCache(res, 300, 900).send(faqPage(BASE_URL)));
 app.get("/integrations", (_req, res) => htmlCache(res, 300, 900).send(ledgerIntegrationsPage(BASE_URL)));
-// AWS Bedrock AgentCore (src/agentcore-page.js): a platform page, not a package page.
+// Amazon Bedrock AgentCore (src/agentcore-page.js): a platform page, not a package page.
 app.get(`/integrations/${AGENTCORE_SLUG}`, (_req, res) => htmlCache(res, 300, 900).send(agentcorePage(BASE_URL, CATALOG)));
 // One page per published package (src/integration-pages.js); tool links resolve against CATALOG.
 app.get("/integrations/:slug", (req, res) => {

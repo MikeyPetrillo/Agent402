@@ -1,4 +1,4 @@
-// /integrations/agentcore - AWS Bedrock AgentCore: tools through an AgentCore
+// /integrations/agentcore - Amazon Bedrock AgentCore: tools through an AgentCore
 // Gateway target, payment through AgentCore Payments.
 //
 // Every sentence about what this server answers is read from the switch that
@@ -57,8 +57,8 @@ const pre = (text) => codeBlock(`<code>${esc(text)}</code>`, { html: true, style
  */
 export function agentcorePage(baseUrl, catalog = {}, { tempo = tempoEnabled(), env = process.env } = {}) {
   const canonical = `${baseUrl}/integrations/${AGENTCORE_SLUG}`;
-  const title = `${AGENTCORE_NAME} integration`;
-  const description = "Use Agent402 tools from an AWS Bedrock AgentCore agent: add an AgentCore Gateway target from openapi.json or the hosted MCP connector, and pay per call through AgentCore Payments over x402.";
+  const title = `Agent402 with ${AGENTCORE_NAME}`;
+  const description = "Use Agent402 tools from an Amazon Bedrock AgentCore agent: add an AgentCore Gateway target from openapi.json or the hosted MCP connector, and pay per call through AgentCore Payments over x402.";
   const sample = repoUrl(`tree/main/${SAMPLE_DIR}`);
   const gatewaySample = repoUrl(`tree/main/${GATEWAY_DIR}`);
   const x402Alone = pluginGetsX402Alone(env);
@@ -102,7 +102,7 @@ export function agentcorePage(baseUrl, catalog = {}, { tempo = tempoEnabled(), e
   const body = `
   <div style="max-width:980px;margin:0 auto;padding:50px 30px 64px;">
     <nav class="ml-crumb" aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/integrations" style="color:var(--muted);text-decoration:none;">integrations</a><span class="ml-crumb-cur">&#160;/ <span style="color:var(--ink);">${esc(AGENTCORE_NAME)}</span></span></nav>
-    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 18px;">${esc(AGENTCORE_NAME)}</h1>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 18px;">Agent402 with ${esc(AGENTCORE_NAME)}</h1>
     <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.7;margin:0 0 34px;max-width:760px;">Agent402 serves an AgentCore agent two things: a tool catalog to add as an AgentCore Gateway target, and an x402 offer on every paid call. The sample on this page pays that offer through AgentCore Payments.</p>
 
     <section id="setup" style="margin-bottom:34px;">

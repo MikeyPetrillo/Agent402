@@ -9,7 +9,7 @@
 //      - with no wallet, it falls back to a pure-CPU tool paid with a
 //        sub-second proof-of-work: no wallet, no API key, no AWS account.
 //
-// Same code runs unchanged on AWS Bedrock AgentCore — just remove the SDK stub
+// Same code runs unchanged on Amazon Bedrock AgentCore — just remove the SDK stub
 // below and install `@strands-agents/sdk`. On AgentCore, pass the fetch that
 // AgentCore Payments hands you in place of the local x402 fetch.
 

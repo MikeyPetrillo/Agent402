@@ -1,7 +1,7 @@
 // The AgentCore EIP-712 domain-name fallback, proven through the REAL server.
 //
 // Measured 2026-08-28 (reported upstream as awslabs/agentcore-samples#2002):
-// AWS Bedrock AgentCore Payments signs Base USDC EIP-3009 authorizations under
+// Amazon Bedrock AgentCore Payments signs Base USDC EIP-3009 authorizations under
 // EIP-712 domain name "USDC" while Base USDC's contract says "USD Coin", so the
 // facilitator answers invalid_exact_evm_payload_signature. Their manager prefers
 // MPP and falls back to x402 only on a challenge SELECTION error - never on a

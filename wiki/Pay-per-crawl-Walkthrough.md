@@ -185,6 +185,6 @@ The Worker and Next.js templates share the edge build's Web-Crypto core; the Doc
 ## See also
 
 - [[Pay-per-crawl]] - full reference (modes, dashboards, deploy templates)
-- [[AWS Bedrock AgentCore]] - the buy side: agents paying tollbooths over x402
+- [[Amazon Bedrock AgentCore|AWS-Bedrock-AgentCore]] - the buy side: agents paying tollbooths over x402
 - [`tollbooth/demo.js`](https://github.com/MikeyPetrillo/Agent402/blob/main/tollbooth/demo.js) - `node demo.js` narrated end-to-end demo
 - [`examples/agentcore-tollbooth/`](https://github.com/MikeyPetrillo/Agent402/tree/main/examples/agentcore-tollbooth) - Strands agent paying a tollbooth

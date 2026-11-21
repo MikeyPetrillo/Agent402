@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deterministic x402 buy of an Agent402 tool from AWS Bedrock AgentCore Payments.
+Deterministic x402 buy of an Agent402 tool from Amazon Bedrock AgentCore Payments.
 
 This is the RELIABLE proof of the loop (no LLM in the path): it fetches a paid
 Agent402 endpoint, gets the HTTP 402, asks AgentCore Payments to sign the x402

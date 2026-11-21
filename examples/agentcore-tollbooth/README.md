@@ -1,6 +1,6 @@
 # Strands agent paying a tollbooth: agents paying agents
 
-This is the **reverse flow** of [`examples/agentcore/`](../agentcore). Instead of a Strands agent buying from Agent402, here a Strands agent (the kind you'd deploy on AWS Bedrock AgentCore) **pays** a self-hosted [`agent402-tollbooth`](https://www.npmjs.com/package/agent402-tollbooth) gate over x402.
+This is the **reverse flow** of [`examples/agentcore/`](../agentcore). Instead of a Strands agent buying from Agent402, here a Strands agent (the kind you'd deploy on Amazon Bedrock AgentCore) **pays** a self-hosted [`agent402-tollbooth`](https://www.npmjs.com/package/agent402-tollbooth) gate over x402.
 
 End to end: agent → tollbooth-gated site → 402 → proof-of-work → 200 + content. No signup, no account: just the two open-source halves of x402 meeting in the middle.
 
@@ -55,6 +55,6 @@ The tollbooth doesn't change: same `createTollbooth({ payTo: "0xYourWallet" })`.
 ## See also
 
 - [`examples/agentcore/`](../agentcore): buy side: Strands agent calling Agent402 tools
-- [Wiki: AWS Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore): the 5-minute recipe
+- [Wiki: Amazon Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore): the 5-minute recipe
 - [Wiki: Pay-per-crawl](https://github.com/MikeyPetrillo/Agent402/wiki/Pay-per-crawl): tollbooth modes (observe / bots / all / strict), dashboard, deploy templates
 - [`tollbooth/demo.js`](../../tollbooth/demo.js): the original narrated demo (no Strands, just an HTTP client)

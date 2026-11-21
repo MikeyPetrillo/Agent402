@@ -1,6 +1,6 @@
 # AgentCore x402 buyer - buy an Agent402 tool from a Bedrock AgentCore agent
 
-A minimal sample showing an **AWS Bedrock AgentCore** agent paying for an
+A minimal sample showing an **Amazon Bedrock AgentCore** agent paying for an
 **Agent402** tool over **x402**. The AgentCore-managed wallet holds the funds and
 the AgentCore **Payments** service signs each micropayment; the agent code contains
 no keys and no payment logic.

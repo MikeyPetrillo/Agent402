@@ -5,7 +5,7 @@
 export const PLATFORM_INTEGRATIONS = Object.freeze([
   Object.freeze({
     slug: "agentcore",
-    name: "AWS Bedrock AgentCore",
+    name: "Amazon Bedrock AgentCore",
     line: "Catalog tools through an AgentCore Gateway target, paid through AgentCore Payments.",
     surface: "openapi.json · /mcp",
     llms: "set up an AgentCore Gateway target from openapi.json or the hosted MCP connector, and pay per call through AgentCore Payments over x402",

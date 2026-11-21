@@ -168,7 +168,7 @@ Site:
 - `/reports?product=<id>&input=<value>` opens the storefront with that
   report selected and its field filled; nothing is submitted until the buyer
   presses the button.
-- /integrations/agentcore covers AWS Bedrock AgentCore: catalog tools
+- /integrations/agentcore covers Amazon Bedrock AgentCore: catalog tools
   through an AgentCore Gateway target, payment through AgentCore Payments,
   and the buyer sample.
 - Social cards draw the brand mark from the logo file, and /logo.png,

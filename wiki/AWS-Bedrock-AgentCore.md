@@ -1,8 +1,8 @@
-# AWS Bedrock AgentCore
+# Amazon Bedrock AgentCore
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-[AWS Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) is a fully-managed orchestrator for **x402** - the same protocol [Agent402](https://agent402.tools) speaks natively. That means Agent402 snaps into AgentCore as a first-class tool source with **no protocol bridging code**: AgentCore handles the wallet and the signing, Agent402 supplies the catalog and serves the 402 challenges.
+[Amazon Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) is a fully-managed orchestrator for **x402** - the same protocol [Agent402](https://agent402.tools) speaks natively. That means Agent402 snaps into AgentCore as a first-class tool source with **no protocol bridging code**: AgentCore handles the wallet and the signing, Agent402 supplies the catalog and serves the 402 challenges.
 
 This page is a 5-minute recipe to wire the two together - buy side (let an AgentCore agent call Agent402 tools) and sell side (charge AgentCore agents that crawl *your* site, using `agent402-tollbooth`).
 

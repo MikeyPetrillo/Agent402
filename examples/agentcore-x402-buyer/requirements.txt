@@ -1,4 +1,4 @@
-# AWS Bedrock AgentCore + Strands buyer sample.
+# Amazon Bedrock AgentCore + Strands buyer sample.
 # Python 3.10+.
 boto3>=1.35
 bedrock-agentcore[strands-agents]

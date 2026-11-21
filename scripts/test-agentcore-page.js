@@ -97,7 +97,10 @@ for (const [label, env] of [["gate off", { MPP_OFFER_WITHHOLD_USER_AGENTS: "off"
   ok(other.includes("$0.777") && !other.includes("$0.001"), "a changed catalog price changes the card");
   ok(!/\$\d/.test(main(agentcorePage(BASE, {}, { tempo: true, env: {} }))), "with no catalog the page quotes no price");
   ok(!html.includes("—") && !/\bcolour|favour|behaviour\b/.test(t), "no em dash, US spelling");
-  ok(/<title>[^<]*AWS Bedrock AgentCore/.test(html) && html.includes(`<link rel="canonical" href="${BASE}/integrations/${AGENTCORE_SLUG}"`), "title and canonical");
+  // AWS's trademark guidelines: the product is "Amazon Bedrock AgentCore", and
+  // our own brand comes first (no AWS mark more prominent than ours).
+  ok(/<h1[^>]*>Agent402 with Amazon Bedrock AgentCore<\/h1>/.test(html) && /<title>Agent402 with Amazon Bedrock AgentCore/.test(html) && !/AWS Bedrock AgentCore/.test(html), "the heading and title name Agent402 first and the product by its own name");
+  ok(/<title>[^<]*Amazon Bedrock AgentCore/.test(html) && html.includes(`<link rel="canonical" href="${BASE}/integrations/${AGENTCORE_SLUG}"`), "title and canonical");
   eq((html.match(/<h1\b/g) || []).length, 1, "one h1");
 }
 {

@@ -104,7 +104,7 @@ const ENTRIES = [
       "Site: The site menu, the openings of /learn and /how-to-pay, /llms.txt and /llms-full.txt link ask402.ai, the maintainer's plain-language guide to x402 and MPP for people.",
       "Site: /what-is-x402, /what-is-mpp and /learn/x402 are titled for how each protocol runs on this server, and each links the guide's explainer for the general question.",
       "Site: `/reports?product=<id>&input=<value>` opens the storefront with that report selected and its field filled; nothing is submitted until the buyer presses the button.",
-      "Site: /integrations/agentcore covers AWS Bedrock AgentCore: catalog tools through an AgentCore Gateway target, payment through AgentCore Payments, and the buyer sample.",
+      "Site: /integrations/agentcore covers Amazon Bedrock AgentCore: catalog tools through an AgentCore Gateway target, payment through AgentCore Payments, and the buyer sample.",
       "Site: Social cards draw the brand mark from the logo file, and /logo.png, /logo.svg, the favicons and the nav mark serve the same art.",
       "Site: Vulnerability reports go to security@agent402.tools; support, billing, legal and abuse questions go to help@agent402.tools.",
       "Docs: The MPP examples list the tokens the evm method signs for (USDC on Base and on Celo), so they pay as written.",
