@@ -5,6 +5,7 @@
 // replaced with a placeholder); the live 402 lists one accepts entry per
 // accepted chain. Each entry's `summary` is reused verbatim by /llms-full.txt.
 import { siteOrgRef } from "./site-org.js";
+import { GUIDE_SITE, GUIDE_SITE_NAME, guideLink } from "./ask402-links.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-door.js";
 import { connectorWires, connectorPayText, connectorLongCallText, X402_MCP_PAYMENT_KEY, X402_MCP_RECEIPT_KEY } from "./connector-pay.js";
@@ -448,7 +449,7 @@ export function learnIndex(baseUrl) {
   <section style="max-width:1180px;margin:0 auto;padding:52px 30px 64px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">learn</span></nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1;margin:0 0 16px;">How agents pay for APIs</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 34px;">Six explainers, each with a working example. For one-paragraph definitions of every term, see the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>; to wire payments into a framework, see <a href="/integrations" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">integrations</a>.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 34px;">Six explainers, each with a working example. For one-paragraph definitions of every term, see the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>; to wire payments into a framework, see <a href="/integrations" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">integrations</a>. For x402 and MPP in plain English, read ${guideLink(GUIDE_SITE, GUIDE_SITE_NAME)}.</p>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;">
 ${cards}
     </div>

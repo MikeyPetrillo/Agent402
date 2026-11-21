@@ -2,6 +2,7 @@ import { RAILS_AMP, RAILS_OS, RAILS, railKey } from "./rails.js";
 import { metaTitle, metaDescription } from "./seo-meta.js";
 import { ogSectionFor } from "./og-cards.js";
 import { REPO_URL } from "./repo-link.js";
+import { GUIDE_SITE, GUIDE_SITE_NAME } from "./ask402-links.js";
 import { siteOrgLd, siteOrgId, mppOffered } from "./site-org.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 // The path of the request a page is being rendered for. A page's canonical is
@@ -872,6 +873,7 @@ function docsPanelNav() {
                 <a href="/what-is-mpp" class="mlnav-row"><span style="font-weight:700;">what is MPP</span><span class="mlnav-faint">Payment auth</span></a>
                 <a href="/agentic-finance" class="mlnav-row"><span style="font-weight:700;">agentic finance</span><span class="mlnav-faint">the category</span></a>
                 <a href="/glossary" class="mlnav-row"><span style="font-weight:700;">glossary</span><span class="mlnav-faint">the terms</span></a>
+                <a href="${GUIDE_SITE}" rel="noopener" class="mlnav-row"><span style="font-weight:700;">${GUIDE_SITE_NAME}</span><span class="mlnav-faint">plain-English guide</span></a>
                 </span>
                 </span>
                 <a href="/docs" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">read the docs</span><span style="opacity:.7;">→</span></a>
@@ -939,8 +941,8 @@ function navItemHtml(item, activePath, chainInfo, groupHrefs) {
   return groupTriggerHtml(item, groupHrefs[item.panel].has(activePath), PANEL_HTML[item.panel](chainInfo));
 }
 
-const mmLink = (href, label, active, extra = "") =>
-  `<a href="${esc(href)}" class="ml-mm-link${active ? " ml-mm-active" : ""}${extra}">${esc(label)}</a>`;
+const mmLink = (href, label, active, extra = "", attrs = "") =>
+  `<a href="${esc(href)}"${attrs} class="ml-mm-link${active ? " ml-mm-active" : ""}${extra}">${esc(label)}</a>`;
 
 // Mobile menu - every destination flattened into a tap list (the hover
 // dropdowns don't work on touch, so the chains, sell, marketplace, and "our
@@ -995,6 +997,7 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/what-is-x402", "what is x402 / MPP", activePath === "/what-is-x402")}
       ${mmLink("/agentic-finance", "agentic finance", activePath === "/agentic-finance")}
       ${mmLink("/glossary", "glossary", activePath === "/glossary")}
+      ${mmLink(GUIDE_SITE, `${GUIDE_SITE_NAME} · plain-English guide`, false, "", ' rel="noopener"')}
       ${mmLink("/quickstart", "quickstart", activePath === "/quickstart")}
       ${mmLink("/how-to-pay", "how to pay · every rail", activePath === "/how-to-pay")}
       ${mmLink("/guides", "guides", activePath === "/guides")}
