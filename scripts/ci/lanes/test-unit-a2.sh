@@ -169,6 +169,8 @@ t node scripts/test-scan-state-version-pg.js
 t node scripts/test-revenue-ledger-pg.js
 t node scripts/test-revenue-ledger-enable-pg.js
 t node scripts/test-refund-ledger-pg.js
+# A resend's void lands now or not at all: a debt whose buyer never retries stays owed after a store outage (real Postgres behind a relay)
+t node scripts/test-resend-void-pg.js
 t node scripts/test-sales-ledger-pg.js
 # A receipt check on one container finds a sale another just recorded.
 t node scripts/test-sale-lookup-crosscontainer-pg.js

@@ -813,7 +813,7 @@ import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
 import { isBinaryListing, listingMimeTypeOf, responseTypesOf } from "./tool-media-type.js";
-import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict, noteChargedAfterServe } from "./idempotency.js";
+import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict, noteChargedAfterServe, RESEND_SERVED_NOTE } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PACK_SLUGS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
@@ -1047,7 +1047,7 @@ import { withBudgetCeiling } from "./upstream-deadline.js";
 import { settleBreakerOtherLane } from "./gateway-settle-breaker.js";
 import { PAID_QUOTE_TRUST_MINUTES } from "./paid-quote-trust.js";
 import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedOnResend, noteResendAnswerSent, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush, recordReferralAnswer, referralAnswersByDay } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
@@ -12081,14 +12081,19 @@ app.use(createIdempotency({
     // has already claimed or paid is not voided, and then the answer is not
     // served either, so a buyer is served once, never both served and
     // refunded. No row, or one already void, serves. A void that did not land
-    // while the row still reads owed (a failed or queued ledger write, which
-    // lands later) asks for a retry instead of refusing as refunded.
+    // while the row still reads owed (a failed ledger write) asks for a retry
+    // instead of refusing as refunded; that void is never replayed later
+    // (voidOwedOnResend), so a buyer who does not retry before the stored
+    // answer expires keeps the debt owed.
     const { verdict, voided, row } = await chargedReplayVerdict(charged.tx, {
-      voidOnClaim: (tx) => voidOwedOnClaim(tx, "served on the resend of the same payment"),
+      voidOnClaim: (tx) => voidOwedOnResend(tx, RESEND_SERVED_NOTE),
       rowOf: (tx) => refundByEvidenceFresh(tx),
     });
     if (verdict === "serve") {
       if (voided) console.log(`[hangup] undelivered answer served on resend (${req.method} ${req.path} tx=${charged.tx}); its debt is void`);
+      // A row an earlier resend voided without being served (its void's
+      // answer was lost): this answer goes out, and the note says so.
+      else if (row) { try { await noteResendAnswerSent(charged.tx, row, RESEND_SERVED_NOTE); } catch { /* best effort */ } }
       return;
     }
     if (verdict === "pending") {

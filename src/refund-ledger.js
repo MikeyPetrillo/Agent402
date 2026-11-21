@@ -317,6 +317,17 @@ const OWED_CHANGES = {
            WHERE evidence = $1 AND status = 'void' AND note = $2 RETURNING *),
          m AS (UPDATE ${T("refund_marks")} SET state = 'owed' WHERE evidence IN (SELECT evidence FROM r))
          SELECT * FROM r`,
+  // The undo of a resend's void the store did not confirm (voidOwedOnResend):
+  // a row voided under exactly that void's note ($2) with nobody served is
+  // owed again under the note it had ($3), and a void mark over a row that is
+  // owed (or owed again) is taken back, so a send can claim it. A row whose
+  // note has moved on (answered on a later resend) is left as it is.
+  unserve: () => `WITH r AS (
+           UPDATE ${T("refunds")} SET status = 'owed', resolved_at = NULL, note = $3::text, updated_at = ${PG_NOW_MS}
+           WHERE evidence = $1 AND status = 'void' AND note = $2 RETURNING *),
+         m AS (UPDATE ${T("refund_marks")} SET state = 'owed' WHERE evidence = $1 AND state = 'void'
+               AND (EXISTS (SELECT 1 FROM r) OR EXISTS (SELECT 1 FROM ${T("refunds")} x WHERE x.evidence = $1 AND x.status = 'owed')))
+         SELECT * FROM r`,
   // A held claim that was served: its note says so, so reopen never matches it.
   renoteVoid: () => `UPDATE ${T("refunds")} SET note = $3, updated_at = ${PG_NOW_MS} WHERE evidence = $1 AND status = 'void' AND note = $2 RETURNING *`,
 };
@@ -845,6 +856,45 @@ export function voidOwedOnClaim(evidence, note) {
     return owedChange("void-on-claim", "void", [evidence.trim(), noNul(note.trim()), Date.now()]);
   }
   try { return voidOwedByEvidence.run({ evidence: evidence.trim(), note: note.trim(), resolvedAt: Date.now() }).changes > 0; } catch { return false; }
+}
+
+/** What a void row's note gains once its stored answer went out on a resend. */
+export const RESEND_ANSWER_SENT = "answer sent";
+/**
+ * The void a resend of a charged, undelivered answer takes before that answer
+ * is served (src/server.js onReplay). Like voidOwedOnClaim, except that it
+ * lands now or not at all: a write the database did not confirm is NOT kept
+ * for a later replay, because the buyer is then asked to retry and may never
+ * do so, and a void landing after the stored answer has expired would leave
+ * them charged, unserved and unrefunded. What IS kept (dead-lettered) for such
+ * a write is its undo (`unserve`): the write may have landed in part or in
+ * full before the connection failed, so once the database answers a void mark
+ * over a still-owed row is taken back and a row voided under this void's own
+ * note is owed again. A retry that arrives first lands the undo ahead of its
+ * own void (every write drains the dead-letter first) and is served.
+ * File mode: one synchronous statement, which lands or throws.
+ */
+export function voidOwedOnResend(evidence, note) {
+  if (typeof evidence !== "string" || !evidence.trim() || !note || typeof note !== "string" || !note.trim()) return refuse();
+  evidence = evidenceKey(evidence);
+  if (!USE_PG) return voidOwedOnClaim(evidence, note);
+  const ev = evidence.trim(), n = noNul(note.trim());
+  const prior = String(refundByEvidence(ev)?.note || "") || null;
+  const full = prior ? `${prior}; ${n}` : n;
+  return writer.write("void-on-resend", async () => {
+    const r = await runOwedChange("void", [ev, n, Date.now()]);
+    return applyOrRefresh(r, "evidence = $1", [ev]);
+  }, { onFail: () => { owedChange("unserve-resend", "unserve", [ev, full, prior]).catch(() => {}); } });
+}
+
+/** A resend served from a row that was ALREADY void under a resend's note
+ *  (voided by an earlier attempt whose answer never went out): the note says
+ *  the answer was sent, so that attempt's undo no longer matches the row.
+ *  True when the note was rewritten; database mode: a Promise of it. */
+export function noteResendAnswerSent(evidence, row, note) {
+  const held = typeof row?.note === "string" ? row.note : "";
+  if (row?.status !== "void" || !note || !(held === note || held.endsWith(`; ${note}`))) return refuse();
+  return renoteVoidRefund(evidence, held, `${held}; ${RESEND_ANSWER_SENT}`);
 }
 
 /** The void a Tempo push claim takes BEFORE its handler runs, so a refund
