@@ -22,10 +22,16 @@ Router:
 Tools:
 - `price-webhook` (`POST /api/price-webhook`) registers an https URL that
   gets one signed POST when the list price of a tool it watches changes on
-  this server. The answer carries the subscription's id and its secret, each
-  delivery carries an `X-Agent402-Signature` header to check against that
-  secret, a 410 from the receiver removes the subscription, and `POST
-  /api/price-webhook/unsubscribe` removes it, free.
+  this server. The answer carries the subscription's id, its secret and
+  `expiresAt`; each delivery carries an `X-Agent402-Signature` header to
+  check against that secret, a 410 from the receiver removes the
+  subscription, and `POST /api/price-webhook/unsubscribe` removes it, free.
+  A subscription lasts 90 days, and registering the same URL again from the
+  same wallet renews it with the same id and secret. One wallet holds up to
+  25, a registration is kept only when its call settles, and many
+  subscriptions may name one receiving host. Each delivery attempt waits a
+  few seconds for the receiver, so a receiver that does not answer does not
+  hold up the others.
 Surfaces:
 - A tool priced per request can carry `fromInput` on `/api/pricing`: a small
   valid body that its 402 quotes at or under the list price.
@@ -33,7 +39,9 @@ Operations:
 - A server with no signing key (`PRICE_WEBHOOK_SIGNING_KEY`, else
   `POW_SECRET`) answers a price webhook registration 503 and stores nothing;
   `PRICE_WEBHOOK_DELIVERIES=off` holds deliveries while registrations and
-  removals keep working.
+  removals keep working. `PRICE_WEBHOOK_LIFETIME_DAYS` sets how long a
+  subscription lasts and `PRICE_WEBHOOK_MAX_PER_PAYER` how many one wallet
+  holds.
 - `SOR_EVM_UNPROVEN_CHAINS` lists EVM chains other than Base on which the
   router tries a seller below the settlement floor, under one per-call
   ceiling (`SOR_EVM_UNPROVEN_MAX_USD`) and the per-seller and daily windows
@@ -64,7 +72,11 @@ Tools:
 - `asn-info` gives its owner-name lookup a 3 second limit of its own; when
   the name cannot be read, `owner` is null and `ownerUnavailable` is true.
 - Input schemas, on `/openapi.json` too, carry `maxLength` on the string
-  fields a tool caps by length.
+  fields a tool caps by length, and `dns.type` and the `frequency` and
+  `units` of `fred-series` publish the values they take as `enum`. A cap
+  admits every form the tool accepts (`llm-context.lang`, an X username with
+  its leading @, `fc-user-casts.username`), and `v1-videos.prompt`,
+  `judge.state` and `decisions.input` publish theirs.
 Privacy:
 - /privacy names the public resolvers an `asn-info` lookup can pass through
   when this server's own resolver cannot answer it.
@@ -79,6 +91,10 @@ Tools:
 - A freed audio decode slot goes to the waiting caller that holds the fewest
   places, first come among equals, and wallets paying from one address take
   their turn as one caller.
+- When the `image-ocr` line or the audio decode queue is full, the caller
+  that already has a call running or waiting there is the one answered busy,
+  and a caller with none is still queued, up to a larger bound set by the
+  memory the waiting calls may hold.
 Payments:
 - A settled payment's replay mark is kept about an hour after the call, or
   until the authorization's own validBefore plus 10 minutes when that is
@@ -96,6 +112,8 @@ Refunds:
   settled) is served when the same payment is sent again, and its debt is
   closed first. When the store does not confirm that close, the buyer is
   asked to retry, and a buyer who does not retry keeps the debt owed.
+- When that payment is sent again twice at once and one of the two is
+  served, its debt stays closed whatever the other attempt's outcome.
 
 ### 2026-11-21 (balance checks for calls in flight)
 Payments:
@@ -159,8 +177,10 @@ Privacy:
   browser.
 Surfaces:
 - The seller leaderboards (Base, Solana and MPP) rebuild every 12 hours,
-  each at its own fixed times an hour apart from the others, and never two
-  at once.
+  each at its own fixed times an hour apart from the others, and a rebuild
+  that is due waits while another runs. A rebuild held back by memory tries
+  again every hour, and `/api/gateway-status` carries `boardRefresh`, whose
+  `status` reads ok, held or stalled.
 Operations:
 - An issue a scheduled check opens carries a fixed title that names the
   check and a body that links the run; the reading that tripped it stays in

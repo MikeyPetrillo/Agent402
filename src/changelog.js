@@ -10,6 +10,7 @@ import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, TRANSCRIBE_LONG_RUN_
 import { speechAdditions } from "./tools/llm-gateway-kit.js";
 import { returningWalletEnabled, WALLET_HINT_HEADER } from "./returning-wallet.js";
 import { BOARD_REFRESH_MS } from "./refresh-cadence.js";
+import { lifetimeMs as priceWebhookLifetimeMs, maxPerRegistrant as priceWebhookMaxPerRegistrant } from "./price-webhooks.js";
 import { REVISIT_CAP_MS, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, revisitIntervalMs, probeShareLabel } from "./seller-load.js";
 
 // A timer figure as an entry prints it, read from the module that runs it.
@@ -25,6 +26,10 @@ const mppOfferGateShown = () => mppMethodsSummary().enabled && mppOfferGateEnabl
 export const namedSpeechShown = () => process.env.OPENROUTER_TTS_ENABLED === "true" && speechAdditions().length > 0;
 export const namedTranscriptionShown = () => Object.keys(STT_TIERS).some((slug) => (slug !== "transcribe-long" || sttLongEnabled()) && sttAdditions(slug).length > 0);
 
+// The price webhook figures an entry prints, as this server is set (src/price-webhooks.js).
+const WEBHOOK_LIFETIME_DAYS = Math.round(priceWebhookLifetimeMs() / 86_400_000);
+const WEBHOOK_PER_WALLET = priceWebhookMaxPerRegistrant();
+
 // An entry with `shownWhen` describes something a switch sells: the page and
 // the feed show it only while that function reads true (CHANGELOG.md scopes
 // the same item to a server that sets the switch).
@@ -35,9 +40,9 @@ const ENTRIES = [
     items: [
       "Router: `route-execute-mid` (`POST /api/route/execute-mid`) is a new execution tier between `route-execute-plus` and `route-execute-max`: one flat price for a tool priced above the plus tier's cap and at or under its own. /api/pricing lists its price, and /api/route names the tier a tool needs in `executeVia`.",
       "Router: `GET /api/router-benchmarks` gives this server's measurements of outside sellers in aggregate: the share of the router's recorded purchases a seller answered 200 after payment, and the uptime, responsiveness and price-match scores of the sellers the router bought from beside the indexed sellers it did not buy from. No seller is named, and a statistic is published only when at least five sellers are scored on it.",
-      "Tools: `price-webhook` (`POST /api/price-webhook`) registers an https URL that gets one signed POST when the list price of a tool it watches changes on this server. The answer carries the subscription's id and its secret, each delivery carries an `X-Agent402-Signature` header to check against that secret, a 410 from the receiver removes the subscription, and `POST /api/price-webhook/unsubscribe` removes it, free.",
+      `Tools: \`price-webhook\` (\`POST /api/price-webhook\`) registers an https URL that gets one signed POST when the list price of a tool it watches changes on this server. The answer carries the subscription's id, its secret and \`expiresAt\`; each delivery carries an \`X-Agent402-Signature\` header to check against that secret, a 410 from the receiver removes the subscription, and \`POST /api/price-webhook/unsubscribe\` removes it, free. A subscription lasts ${WEBHOOK_LIFETIME_DAYS} days, and registering the same URL again from the same wallet renews it with the same id and secret. One wallet holds up to ${WEBHOOK_PER_WALLET}, a registration is kept only when its call settles, and many subscriptions may name one receiving host. Each delivery attempt waits a few seconds for the receiver, so a receiver that does not answer does not hold up the others.`,
       "Surfaces: A tool priced per request can carry `fromInput` on `/api/pricing`: a small valid body that its 402 quotes at or under the list price.",
-      "Operations: A server with no signing key (`PRICE_WEBHOOK_SIGNING_KEY`, else `POW_SECRET`) answers a price webhook registration 503 and stores nothing; `PRICE_WEBHOOK_DELIVERIES=off` holds deliveries while registrations and removals keep working.",
+      "Operations: A server with no signing key (`PRICE_WEBHOOK_SIGNING_KEY`, else `POW_SECRET`) answers a price webhook registration 503 and stores nothing; `PRICE_WEBHOOK_DELIVERIES=off` holds deliveries while registrations and removals keep working. `PRICE_WEBHOOK_LIFETIME_DAYS` sets how long a subscription lasts and `PRICE_WEBHOOK_MAX_PER_PAYER` how many one wallet holds.",
       "Operations: `SOR_EVM_UNPROVEN_CHAINS` lists EVM chains other than Base on which the router tries a seller below the settlement floor, under one per-call ceiling (`SOR_EVM_UNPROVEN_MAX_USD`) and the per-seller and daily windows the Base tier uses. Unset, that tier stays on Base alone.",
       "Operations: The Bazaar keep-alive pays a route priced per request with its `fromInput` body, and never above the list price.",
     ],
@@ -52,7 +57,7 @@ const ENTRIES = [
       "Tools: Each tool that reads FRED puts a `terms` field in its answer, linking FRED's Terms of Use. `fred-series` answers a series that carries a copyright notice in its FRED notes with a 400 that quotes the name the notice gives, and `fred-release-observations` holds such series back in `withheld` and counts series it could not screen in time in `unscreened`.",
       "Tools: `email-validate` adds `mailboxProvider`: who hosts the domain's mail (`id`, `name`, `type`), read from the MX records it already looks up, and null when the domain has no MX.",
       "Tools: `asn-info` gives its owner-name lookup a 3 second limit of its own; when the name cannot be read, `owner` is null and `ownerUnavailable` is true.",
-      "Tools: Input schemas, on `/openapi.json` too, carry `maxLength` on the string fields a tool caps by length.",
+      "Tools: Input schemas, on `/openapi.json` too, carry `maxLength` on the string fields a tool caps by length, and `dns.type` and the `frequency` and `units` of `fred-series` publish the values they take as `enum`. A cap admits every form the tool accepts (`llm-context.lang`, an X username with its leading @, `fc-user-casts.username`), and `v1-videos.prompt`, `judge.state` and `decisions.input` publish theirs.",
       "Privacy: /privacy names the public resolvers an `asn-info` lookup can pass through when this server's own resolver cannot answer it.",
     ],
   },
@@ -62,10 +67,12 @@ const ENTRIES = [
     items: [
       "Tools: `image-ocr` reads images in turn across callers, each within a set time. A caller's first image is read to the end even while others wait; a call that waits out its time in line answers 503 with a Retry-After and keeps its place for its retry; and an image that cannot be read in time answers 422 with a note to downscale it.",
       "Tools: A freed audio decode slot goes to the waiting caller that holds the fewest places, first come among equals, and wallets paying from one address take their turn as one caller.",
+      "Tools: When the `image-ocr` line or the audio decode queue is full, the caller that already has a call running or waiting there is the one answered busy, and a caller with none is still queued, up to a larger bound set by the memory the waiting calls may hold.",
       "Payments: A settled payment's replay mark is kept about an hour after the call, or until the authorization's own validBefore plus 10 minutes when that is later, however far out that is (it was at most 30 days after the call). /privacy and the dataHandling list on /.well-known/x402 state the hold.",
       "Payments: A Solana payment refused because its transaction's recent blockhash is no longer valid carries `reason: \"blockhash-expired\"`, whether that was read when the payment was checked or when it was settled, and its hint says to ask for a fresh 402 and build the transaction on a fresh blockhash.",
       "Payments: A Solana settlement is booked as one sale: the sales ledger keeps at most one sale for a settlement signature, and every count and sum of sales reads it once.",
       "Refunds: An answer that was charged and never delivered (the buyer left while it settled) is served when the same payment is sent again, and its debt is closed first. When the store does not confirm that close, the buyer is asked to retry, and a buyer who does not retry keeps the debt owed.",
+      "Refunds: When that payment is sent again twice at once and one of the two is served, its debt stays closed whatever the other attempt's outcome.",
     ],
   },
   {
@@ -100,7 +107,7 @@ const ENTRIES = [
       "Site: Vulnerability reports go to security@agent402.tools; support, billing, legal and abuse questions go to help@agent402.tools.",
       "Docs: The MPP examples list the tokens the evm method signs for (USDC on Base and on Celo), so they pay as written.",
       "Privacy: /privacy says what a card checkout keeps when the link that led to it names a listed site in `utm_source`: that name, with the sale, in Stripe's record of the checkout and in the sales ledger, and nothing in the browser.",
-      `Surfaces: The seller leaderboards (Base, Solana and MPP) rebuild every ${BOARD_REFRESH_MS / 3_600_000} hours, each at its own fixed times an hour apart from the others, and never two at once.`,
+      `Surfaces: The seller leaderboards (Base, Solana and MPP) rebuild every ${BOARD_REFRESH_MS / 3_600_000} hours, each at its own fixed times an hour apart from the others, and a rebuild that is due waits while another runs. A rebuild held back by memory tries again every hour, and \`/api/gateway-status\` carries \`boardRefresh\`, whose \`status\` reads ok, held or stalled.`,
       "Operations: An issue a scheduled check opens carries a fixed title that names the check and a body that links the run; the reading that tripped it stays in the run log. A check whose issue body is its own saved state keeps that body.",
     ],
   },
