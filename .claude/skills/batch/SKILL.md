@@ -117,6 +117,10 @@ pinned to the tested SHA, every required check green.
   explained or fixed.
 - The deploy job's "Bazaar listing validation on the new build" step is green.
 - For a `[publish]` commit: `npm view <pkg> version` equals the package's `package.json`.
+- For a deploy that adds routes: dispatch `bazaar-presence.yml` on `main` (one process, no matrix;
+  it buys each newly missing route once, under its cap) and read `0 still missing`. The deploy's
+  own register job runs only on its marker, so a new route is otherwise unlisted until the next
+  scheduled check.
 
 Result: each of the four reads recorded with its value.
 

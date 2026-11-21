@@ -54,10 +54,10 @@ Tools:
 - coins-list joins the routes that are retired and answer 410; coins-list
   names coin-search as the replacement.
 - Each tool that reads FRED puts a `terms` field in its answer, linking
-  FRED's Terms of Use. `fred-series` answers a series a third party owns (a
-  copyright notice in its FRED notes) with a 400 that names the owner, and
-  `fred-release-observations` holds such series back and names them in
-  `withheld`.
+  FRED's Terms of Use. `fred-series` answers a series that carries a
+  copyright notice in its FRED notes with a 400 that quotes the name the
+  notice gives, and `fred-release-observations` holds such series back in
+  `withheld` and counts series it could not screen in time in `unscreened`.
 - `email-validate` adds `mailboxProvider`: who hosts the domain's mail
   (`id`, `name`, `type`), read from the MX records it already looks up, and
   null when the domain has no MX.
