@@ -306,6 +306,32 @@ async function readReferenceMap() {
 /** Test seam: forget a failed check, so the next call reads again. */
 export function resetPriceCheck() { checkDownUntil = 0; }
 
+/**
+ * The check a price answer carries, written onto its rows: `stale` (the
+ * upstream timestamp is older than STALE_AFTER_SECONDS; null with no
+ * timestamp) and `divergencePct` (a USD price's gap to the second source, in
+ * percent; null where that source lists no market for the coin, or no check
+ * ran). `entries` is [coinId, row] pairs, each row holding `price` and
+ * `lastUpdated`. Returns the answer's `check` word: the second source's name,
+ * "usd-only", "no-reference" (no coin asked has a mapped market) or
+ * "unavailable". Never throws; at most one reference read.
+ */
+export async function applyPriceCheck(entries, currency) {
+  let check = "usd-only", map = null;
+  if (currency === "usd") {
+    if (!entries.some(([id]) => Object.hasOwn(ID_TO_SYMBOL, id))) check = "no-reference";
+    else { map = await readReferenceMap(); check = map ? CHECK_SOURCE : "unavailable"; }
+  }
+  const now = Date.now();
+  for (const [id, row] of entries) {
+    const at = row.lastUpdated ? Date.parse(row.lastUpdated) : NaN;
+    row.stale = Number.isFinite(at) ? (now - at) / 1000 > STALE_AFTER_SECONDS : null;
+    const ref = referencePriceOf(map, id);
+    row.divergencePct = ref && typeof row.price === "number" ? +(((row.price - ref) / ref) * 100).toFixed(4) : null;
+  }
+  return check;
+}
+
 // --- crypto-market's screen ---------------------------------------------------------
 // With any screen field (or a sort other than rank), crypto-market reads the
 // top SCREEN_UNIVERSE coins by market cap in one upstream read, applies the
@@ -429,18 +455,7 @@ export const CRYPTO_TOOLS = [
       // The check: every price says whether its upstream timestamp is stale,
       // and a USD price says how far it sits from the second source (null
       // where that source has no listed market for the coin, or no check ran).
-      let check = "usd-only", map = null;
-      if (currency === "usd") {
-        if (!Object.keys(out).some((id) => Object.hasOwn(ID_TO_SYMBOL, id))) check = "no-reference";
-        else { map = await readReferenceMap(); check = map ? CHECK_SOURCE : "unavailable"; }
-      }
-      const now = Date.now();
-      for (const [id, row] of Object.entries(out)) {
-        const at = row.lastUpdated ? Date.parse(row.lastUpdated) : NaN;
-        row.stale = Number.isFinite(at) ? (now - at) / 1000 > STALE_AFTER_SECONDS : null;
-        const ref = referencePriceOf(map, id);
-        row.divergencePct = ref && typeof row.price === "number" ? +(((row.price - ref) / ref) * 100).toFixed(4) : null;
-      }
+      const check = await applyPriceCheck(Object.entries(out), currency);
       return { currency, count: Object.keys(out).length, check, coins: out, ...(unknown.length ? { unknown } : {}) };
     },
   },

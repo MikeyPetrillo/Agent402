@@ -269,26 +269,6 @@
    "pace": 5000
   },
   {
-   "slug": "coins-list",
-   "name": "filter by symbol",
-   "input": {
-    "symbol": "eth"
-   },
-   "expect": {
-    "gte": {
-     "count": 1
-    },
-    "equals": {
-     "coins[0].symbol": "eth"
-    },
-    "populated": [
-     "coins[0].id"
-    ]
-   },
-   "paceKey": "coingecko",
-   "pace": 5000
-  },
-  {
    "slug": "contract-code",
    "name": "an EOA has no code",
    "input": {
@@ -512,7 +492,7 @@
   },
   {
    "slug": "exchange-rates",
-   "name": "btc-denominated rates",
+   "name": "fiat crosses per usd with the reference check",
    "input": {
     "currencies": "usd,jpy",
     "type": "fiat"
@@ -520,11 +500,38 @@
    "expect": {
     "equals": {
      "count": 2,
-     "base": "BTC",
-     "rates[0].code": "usd"
+     "base": "USD",
+     "rates[0].code": "usd",
+     "rates[0].rate": 1
     },
     "gt": {
-     "rates[0].perBtc": 1000
+     "rates[0].perBtc": 1000,
+     "rates[1].rate": 10
+    },
+    "matches": {
+     "check": "^(ecb-reference|unavailable)$"
+    }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "exchange-rates",
+   "name": "a crypto base has no reference",
+   "input": {
+    "currencies": "usd",
+    "base": "btc"
+   },
+   "expect": {
+    "equals": {
+     "count": 1,
+     "base": "BTC",
+     "check": "no-reference",
+     "rates[0].code": "usd",
+     "rates[0].referenceRate": null
+    },
+    "gt": {
+     "rates[0].rate": 1000
     }
    },
    "paceKey": "coingecko",

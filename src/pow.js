@@ -207,7 +207,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // node otherwise) - egress, so never free-tier.
   "chain-nonce", "chain-storage", "chain-pending", "chain-total-supply", "chain-erc1155-balance",
   "fc-cast-search", "fc-channel-feed", "fc-trending", "fc-user-casts", "fc-cast", "fc-cast-replies", "fc-channel", "fc-user-search", "fc-cast-metrics",  // farcaster-social-kit.js (egress)
-  "coin-price-by-contract", "coin-profile", "coin-history", "coin-ohlc", "coin-market-chart-range", "coin-categories", "global-defi", "exchanges", "exchange-tickers", "exchange-rates", "coin-search", "coins-list",
+  "coin-price-by-contract", "coin-profile", "coin-history", "coin-ohlc", "coin-market-chart-range", "coin-categories", "global-defi", "exchanges", "exchange-tickers", "exchange-rates", "coin-search",
   "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer",  // crypto-markets-kit.js (egress)
   "attest",  // attest-kit.js (writes an EAS attestation on Base from the spending wallet: gas, never free)
   // sanctions-kit.js. Not upstream COST - the lists are free - but a free tier

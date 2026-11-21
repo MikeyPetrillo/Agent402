@@ -1,6 +1,11 @@
 // Price-feed kit: one deterministic gateway tool over a public price feed:
 //
-//   • price-coingecko — CoinGecko public simple/price (keyless free tier)
+//   • price-coingecko: spot prices by coin id, each checked here the way
+//     crypto-price checks its own (src/tools/crypto-kit.js applyPriceCheck):
+//     `stale` from the upstream timestamp and, in USD, `divergencePct`
+//     against a second source, with `check` naming that source. The answer
+//     is this server's computed product over the price read, not the read
+//     passed along.
 //
 // Wallet-only (each call costs egress + counts against the upstream's public
 // rate limit), never PoW-eligible. Covered by scripts/test-price-feed-kit.js.
@@ -10,6 +15,7 @@ import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { knownIdsGate } from "./crypto-markets-kit.js";
+import { applyPriceCheck } from "./crypto-kit.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, and a read that outlives it is a 503 naming the
@@ -90,7 +96,7 @@ export const PRICE_FEED_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "Live spot price for up to 25 coins by coin id, one row per id in the order asked: prices[] of {id, price, change24h, lastUpdated}. Identify coins by their coin ID slug (bitcoin, ethereum, solana, usd-coin, ...), as an array or a comma-separated string; for ticker symbols (BTC, ETH) plus volume and market cap use crypto-price. Defaults to USD; pass vsCurrency to denominate in EUR, JPY, ETH, BTC, etc. change24h is filled only when include24hChange is true. An unknown id comes back with a null price and is listed in unknown.",
+      "Checked live spot price for up to 25 coins by coin id, one row per id in the order asked: prices[] of {id, price, change24h, lastUpdated, stale, divergencePct}. stale is true when the upstream timestamp is older than 10 minutes; divergencePct, in usd, is the gap in percent to the oracle price of the coin's perpetual on Hyperliquid, an on-chain perp exchange (null where it lists none), and check names that second source or says why no check ran (usd-only, no-reference, unavailable). Identify coins by their coin ID slug (bitcoin, ethereum, solana, usd-coin, ...), as an array or a comma-separated string; for ticker symbols (BTC, ETH) plus volume and market cap use crypto-price. Defaults to USD; pass vsCurrency to denominate in EUR, JPY, ETH, BTC, etc. change24h is filled only when include24hChange is true. An unknown id comes back with a null price and is listed in unknown.",
     tags: ["crypto", "price", "spot", "market"],
     discovery: {
       bodyType: "json",
@@ -105,10 +111,10 @@ export const PRICE_FEED_TOOLS = [
       },
       output: {
         example: {
-          count: 2, vsCurrency: "usd",
+          count: 2, vsCurrency: "usd", check: "hyperliquid-oracle",
           prices: [
-            { id: "bitcoin", price: 67000.12, change24h: null, lastUpdated: "2026-09-24T14:50:20.000Z" },
-            { id: "ethereum", price: 3500.05, change24h: null, lastUpdated: "2026-09-24T14:50:20.000Z" },
+            { id: "bitcoin", price: 67000.12, change24h: null, lastUpdated: "2026-09-24T14:50:20.000Z", stale: false, divergencePct: 0.03 },
+            { id: "ethereum", price: 3500.05, change24h: null, lastUpdated: "2026-09-24T14:50:20.000Z", stale: false, divergencePct: -0.05 },
           ],
         },
       },
@@ -140,7 +146,7 @@ export const PRICE_FEED_TOOLS = [
       const data = await feedFetch(url, { step: "simple price" });
       const prices = ids.map((id) => {
         const row = data[id];
-        if (!row) return { id, price: null, change24h: null, lastUpdated: null };
+        if (!row) return { id, price: null, change24h: null, lastUpdated: null, stale: null, divergencePct: null };
         return {
           id,
           price: typeof row[vs] === "number" ? row[vs] : null,
@@ -158,7 +164,12 @@ export const PRICE_FEED_TOOLS = [
       if (knownIds.length && knownIds.every((id) => typeof data[id]?.[vs] !== "number")) throw bad(`vsCurrency "${vs}" is not supported by CoinGecko's simple price endpoint (try usd, eur, gbp, btc, eth)`);
       const unknown = ids.filter((id) => !data[id]);
       if (unknown.length === prices.length) throw bad(`unknown CoinGecko id(s): ${unknown.join(", ")}`, 404);
-      return { count: prices.length, vsCurrency: vs, prices, ...(unknown.length ? { unknown } : {}) };
+      // The check (crypto-kit applyPriceCheck): each priced row says whether
+      // its timestamp is stale and, in USD, how far it sits from the second
+      // source. It runs after the refusals above, so an answer that is a 4xx
+      // never spends the reference read.
+      const check = await applyPriceCheck(prices.filter((p) => data[p.id]).map((p) => [p.id, p]), vs);
+      return { count: prices.length, vsCurrency: vs, check, prices, ...(unknown.length ? { unknown } : {}) };
     },
   },
 ];

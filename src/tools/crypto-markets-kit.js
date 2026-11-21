@@ -51,7 +51,53 @@ export const TTL = Object.freeze({ price: 60_000, list: 300_000, coinList: 600_0
 const MAX_ENTRIES = 256;
 const cache = createCgCache("markets", { max: MAX_ENTRIES, keepParsed: true });
 
-export function clearCryptoMarketsCache() { cache.clear(); historyMisses.clear(); }
+export function clearCryptoMarketsCache() { cache.clear(); historyMisses.clear(); ecbTable = null; ecbDownUntil = 0; }
+
+// --- exchange-rates' reference: the ECB's rates ---------------------------------
+// The cross rates exchange-rates computes are compared with the European
+// Central Bank's euro foreign exchange reference rates, the FX tools' own
+// source (src/tools/frankfurter.js; free to reuse with the ECB cited). One
+// USD-based table, kept in this process for ECB_TABLE_TTL_MS (the ECB
+// publishes once a business day) and read under a short cap of its own: a
+// reference that cannot be read leaves the answer as it is
+// (`check: "unavailable"`) and is not tried again for ECB_BACKOFF_MS.
+export const ECB_CHECK = "ecb-reference";
+export const ECB_READ_MS = 2_500;
+export const ECB_TABLE_TTL_MS = 30 * 60_000;
+export const ECB_BACKOFF_MS = 30_000;
+let ecbTable = null; // { at, date, rates: { EUR: 0.85, ... } } per 1 USD
+let ecbDownUntil = 0;
+let ecbInFlight = null;
+/** The USD-based reference table, or null. Never throws. */
+async function readEcbTable() {
+  const now = Date.now();
+  if (ecbTable && now - ecbTable.at < ECB_TABLE_TTL_MS) return ecbTable;
+  if (now < ecbDownUntil) return null;
+  ecbInFlight ||= (async () => {
+    try {
+      const ctx = { label: "Reference rates", step: "reference rates", timeoutMs: ECB_READ_MS, tag: "[crypto-markets]" };
+      const res = await upstreamFetch(ratesUrl({ base: "USD" }), { headers: { "User-Agent": userAgent(), Accept: "application/json" } }, ctx);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const shaped = latestShape(JSON.parse(await bodyUnderDeadline(res.text(), ctx)), "USD");
+      if (!shaped || !Object.keys(shaped.rates).length) throw new Error("no rates");
+      ecbTable = { at: Date.now(), date: shaped.date, rates: shaped.rates };
+      return ecbTable;
+    } catch {
+      ecbDownUntil = Date.now() + ECB_BACKOFF_MS;
+      return null;
+    } finally { ecbInFlight = null; }
+  })();
+  return ecbInFlight;
+}
+/** Units of `code` per 1 USD in the reference table, or null. */
+function ecbPerUsd(table, code) {
+  const c = String(code).toUpperCase();
+  if (c === "USD") return 1;
+  const v = Object.hasOwn(table.rates, c) ? table.rates[c] : null;
+  return typeof v === "number" && v > 0 ? v : null;
+}
+/** A rate at 8 significant digits. */
+function sig(x) { return Number.isFinite(x) ? Number(x.toPrecision(8)) : null; }
 
 function userAgent() {
   return (process.env.CRYPTO_USER_AGENT || "").trim() || "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
@@ -76,6 +122,7 @@ function headers() {
 import { cgTake, cgRefusal, resetCgRateLimit, cgReserveUnconfirmed, cgScopeAll, cgNoteUnknownId, cgUnknownToday, cgForgetUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
+import { ratesUrl, latestShape, ECB_FX_SOURCE } from "./frankfurter.js";
 export { resetCgRateLimit };
 
 // `reduce` (optional): { name, fn }. The upstream body is passed through fn
@@ -996,34 +1043,35 @@ export const CRYPTO_MARKETS_TOOLS = [
   },
 
   // ===========================================================================
-  // exchange-rates: BTC-based rates.
+  // exchange-rates: cross rates in a base the caller picks, computed here
+  // from the market table and checked against the ECB reference rates.
   // ===========================================================================
   {
     route: "GET /api/exchange-rates",
-    name: "BTC exchange rates",
+    name: "Cross rates with ECB check",
     slug: "exchange-rates",
     category: "crypto",
     price: "$0.005",
     description:
-      "BTC-denominated exchange rates for ~60 units: crypto (ETH, LTC, BNB, SOL, ...), fiat (USD, EUR, JPY, ...) and commodities (gold, silver ounces), each as units per 1 BTC with name and type. Optional `currencies` filter (comma-separated unit codes) and `type` filter (crypto, fiat, commodity). One call gives a consistent cross-rate table: BTC in gold ounces, ETH/BTC, USD/JPY via BTC. Cached in-process for 60 seconds.",
-    tags: ["crypto", "exchange-rates", "btc", "fiat", "gold", "cross-rate", "fx"],
+      "Cross rates for ~60 units in a base you choose (default usd): crypto, fiat and commodities (gold, silver ounces). Each row has rate, the units of that code per 1 base, computed here through the market table's BTC quotes, plus perBtc. A fiat pair the European Central Bank publishes also carries referenceRate (the ECB reference cross) and divergencePct (the market rate's gap to it, in percent). check says whether that comparison ran (ecb-reference, no-reference, unavailable) and referenceDate is the ECB's publication day. Optional `currencies` (comma-separated unit codes) and `type` (crypto, fiat, commodity) filters. Cached in-process: the market table for 60 seconds, the reference rates for 30 minutes.",
+    tags: ["crypto", "exchange-rates", "btc", "fiat", "gold", "cross-rate", "fx", "ecb"],
     discovery: {
-      input: { currencies: "usd,eur,eth,xau" },
+      input: { currencies: "eur,eth" },
       inputSchema: {
         properties: {
           currencies: { type: "string", description: "Optional comma-separated unit codes to keep (usd, eur, eth, xau, ...). Default: all." },
           type: { type: "string", description: "Optional filter: crypto, fiat or commodity." },
+          base: { type: "string", description: "Unit code every rate is quoted against (default usd): any code in the table, e.g. usd, eur, btc, eth, xau." },
         },
       },
       output: {
         example: {
           source: "coingecko", fetchedAt: "2026-08-22T13:20:00.000Z", cached: false,
-          base: "BTC", count: 4,
+          base: "USD", count: 2, check: "ecb-reference", referenceDate: "2026-08-21",
+          referenceSource: "European Central Bank euro foreign exchange reference rates (via Frankfurter)",
           rates: [
-            { code: "usd", name: "US Dollar", unit: "$", type: "fiat", perBtc: 77018 },
-            { code: "eur", name: "Euro", unit: "€", type: "fiat", perBtc: 65600.2 },
-            { code: "eth", name: "Ether", unit: "ETH", type: "crypto", perBtc: 31.813 },
-            { code: "xau", name: "Gold - Troy Ounce", unit: "XAU", type: "commodity", perBtc: 22.91 },
+            { code: "eur", name: "Euro", unit: "€", type: "fiat", rate: 0.85175, perBtc: 65600.2, referenceRate: 0.8521, divergencePct: -0.0411 },
+            { code: "eth", name: "Ether", unit: "ETH", type: "crypto", rate: 0.00041306, perBtc: 31.813, referenceRate: null, divergencePct: null },
           ],
         },
       },
@@ -1032,13 +1080,44 @@ export const CRYPTO_MARKETS_TOOLS = [
       const want = i.currencies == null || i.currencies === "" ? null : new Set(takeIdList(i.currencies, "currencies", 60));
       const type = i.type == null || i.type === "" ? null : String(i.type).trim().toLowerCase();
       if (type && !["crypto", "fiat", "commodity"].includes(type)) throw bad('"type" must be crypto, fiat or commodity');
+      const base = i.base == null || i.base === "" ? "usd" : takeId(i.base, "base");
       const { data, fetchedAt, cached } = await cgGet("/exchange_rates", {}, TTL.price);
       const r = data?.rates;
       if (!r || typeof r !== "object") throw bad("Market data upstream returned an unexpected shape", 502);
+      const baseKey = Object.keys(r).find((code) => code.toLowerCase() === base);
+      const basePerBtc = baseKey == null ? null : num(r[baseKey]?.value);
+      if (!(basePerBtc > 0)) throw bad(`"base" must be a unit code in the table (e.g. usd, eur, btc, eth, xau); "${base}" is not one`);
       const rates = Object.entries(r)
         .filter(([code, v]) => (!want || want.has(code.toLowerCase())) && (!type || v?.type === type))
-        .map(([code, v]) => ({ code, name: v?.name ?? null, unit: v?.unit ?? null, type: v?.type ?? null, perBtc: num(v?.value) }));
-      return { source: SOURCE, fetchedAt, cached, base: "BTC", count: rates.length, rates };
+        .map(([code, v]) => {
+          const perBtc = num(v?.value);
+          return { code, name: v?.name ?? null, unit: v?.unit ?? null, type: v?.type ?? null, rate: perBtc == null ? null : sig(perBtc / basePerBtc), perBtc, referenceRate: null, divergencePct: null };
+        });
+      // The reference check: a fiat row against a fiat base, both on the ECB's
+      // list. Nothing to compare (a crypto or commodity base, or no other fiat row)
+      // reads no reference; a reference that cannot be read leaves the rates
+      // as they are.
+      let check = "no-reference", ref = null;
+      const fiat = (code) => r[Object.keys(r).find((k) => k.toLowerCase() === code)]?.type === "fiat";
+      if (fiat(base) && rates.some((row) => row.type === "fiat" && row.code.toLowerCase() !== base)) {
+        ref = await readEcbTable();
+        check = !ref ? "unavailable" : "no-reference";
+        const refBase = ref ? ecbPerUsd(ref, base) : null;
+        if (refBase) {
+          for (const row of rates) {
+            const refCode = row.type === "fiat" ? ecbPerUsd(ref, row.code.toLowerCase()) : null;
+            if (!refCode || row.rate == null) continue;
+            row.referenceRate = sig(refCode / refBase);
+            row.divergencePct = +(((row.rate - row.referenceRate) / row.referenceRate) * 100).toFixed(4);
+            check = ECB_CHECK;
+          }
+        }
+      }
+      return {
+        source: SOURCE, fetchedAt, cached, base: base.toUpperCase(), count: rates.length, check,
+        ...(check === ECB_CHECK ? { referenceDate: ref.date, referenceSource: ECB_FX_SOURCE } : {}),
+        rates,
+      };
     },
   },
 
@@ -1090,64 +1169,9 @@ export const CRYPTO_MARKETS_TOOLS = [
     },
   },
 
-  // ===========================================================================
-  // coins-list: the full id list, paged, optional platform contracts.
-  // ===========================================================================
-  {
-    route: "GET /api/coins-list",
-    name: "All coin ids (paged)",
-    slug: "coins-list",
-    category: "crypto",
-    price: "$0.005",
-    description:
-      "The complete list of tracked coins (~18k) as {id, symbol, name}, paged: `page` + `perPage` (1-500, default 250). Set `includePlatforms: true` to add each coin's contract address per platform. Pass `platform` (e.g. base, solana, ethereum) to keep only coins with a contract there, or `symbol` to keep one ticker (exact, case-insensitive) across all its namesakes. For bulk id resolution, building a local symbol map, or enumerating every token on one chain; for a single lookup use coin-search. The upstream list is fetched once and cached in-process for 10 minutes, so paging through it costs the shared quota one call.",
-    tags: ["crypto", "coins", "list", "ids", "symbols", "platforms", "contracts", "bulk"],
-    discovery: {
-      input: { symbol: "usdc", includePlatforms: true },
-      inputSchema: {
-        properties: {
-          page: { type: "number", description: "Page number (default 1)." },
-          perPage: { type: "number", description: "Rows per page, 1-500 (default 250)." },
-          includePlatforms: { type: "boolean", description: "Include contract addresses per platform (default false)." },
-          platform: { type: "string", description: "Keep only coins with a contract on this platform id (implies includePlatforms)." },
-          symbol: { type: "string", description: "Keep only coins with this ticker symbol (exact, case-insensitive)." },
-        },
-      },
-      output: {
-        example: {
-          source: "coingecko", fetchedAt: "2026-08-22T13:20:00.000Z", cached: false,
-          page: 1, perPage: 250, total: 3, totalPages: 1, count: 3, filters: { symbol: "usdc", platform: null },
-          coins: [
-            { id: "usd-coin", symbol: "usdc", name: "USDC", platforms: { ethereum: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", base: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", solana: "EPjFWdd5AuFqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" } },
-          ],
-        },
-      },
-    },
-    handler: async (i) => {
-      const page = takeInt(i.page, "page", { min: 1, max: 100000, dflt: 1 });
-      const perPage = takeInt(i.perPage, "perPage", { min: 1, max: 500, dflt: 250 });
-      const platform = takeId(i.platform, "platform", { required: false });
-      const includePlatforms = takeBool(i.includePlatforms, false) || Boolean(platform);
-      const symbol = i.symbol == null || i.symbol === "" ? null : String(i.symbol).trim().toLowerCase();
-      if (symbol != null && (symbol.length > 32 || /\s/.test(symbol))) throw bad('"symbol" must be a single ticker (max 32 chars)');
-      const { data, fetchedAt, cached } = await cgGet("/coins/list", { include_platform: includePlatforms ? "true" : undefined }, TTL.coinList);
-      if (!Array.isArray(data)) throw bad("Market data upstream returned an unexpected shape", 502);
-      let rows = data;
-      if (symbol != null) rows = rows.filter((c) => typeof c?.symbol === "string" && c.symbol.toLowerCase() === symbol);
-      if (platform) rows = rows.filter((c) => c?.platforms && typeof c.platforms[platform] === "string" && c.platforms[platform]);
-      const total = rows.length;
-      const totalPages = Math.max(1, Math.ceil(total / perPage));
-      const slice = rows.slice((page - 1) * perPage, page * perPage);
-      const coins = slice.map((c) => {
-        const row = { id: c.id ?? null, symbol: c.symbol ?? null, name: c.name ?? null };
-        if (includePlatforms) {
-          row.platforms = Object.fromEntries(Object.entries(c.platforms || {}).filter(([k, v]) => k && typeof v === "string" && v));
-        }
-        return row;
-      });
-      return { source: SOURCE, fetchedAt, cached, page, perPage, total, totalPages, count: coins.length, filters: { symbol, platform }, coins };
-    },
-  },
+  // coins-list was RETIRED 2026-11-21: it served the upstream's whole id list,
+  // page by page, with nothing computed here (src/retired-tools.js points it
+  // at coin-search, which resolves a name or ticker to its ids).
 ];
 
 // --- Real-world assets (tokenized stocks, ETFs, commodities) ------------------

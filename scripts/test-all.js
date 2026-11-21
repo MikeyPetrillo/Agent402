@@ -71,7 +71,7 @@ const NETWORK = new Set([
   "/v1/images/fast", "/v1/images/pro", "/v1/images/edits", "/v1/videos/generations",  // llm-images-fast-kit.js
   "/api/asset-transfers", "/api/token-balances", "/api/token-allowance", "/api/tx-receipt", "/api/block-receipts", "/api/token-price-history", "/api/wallet-transfers-multichain",  // alchemy-data-kit.js
   "/api/fc-cast-search", "/api/fc-channel-feed", "/api/fc-trending", "/api/fc-user-casts", "/api/fc-cast", "/api/fc-cast-replies", "/api/fc-channel", "/api/fc-user-search", "/api/fc-cast-metrics",  // farcaster-social-kit.js
-  "/api/coin-price-by-contract", "/api/coin-profile", "/api/coin-history", "/api/coin-ohlc", "/api/coin-market-chart-range", "/api/coin-categories", "/api/global-defi", "/api/exchanges", "/api/exchange-tickers", "/api/exchange-rates", "/api/coin-search", "/api/coins-list",
+  "/api/coin-price-by-contract", "/api/coin-profile", "/api/coin-history", "/api/coin-ohlc", "/api/coin-market-chart-range", "/api/coin-categories", "/api/global-defi", "/api/exchanges", "/api/exchange-tickers", "/api/exchange-rates", "/api/coin-search",
   "/api/rwa-list", "/api/rwa-markets", "/api/rwa-asset", "/api/rwa-issuers", "/api/rwa-issuer",  // crypto-markets-kit.js
   "/api/attest",  // attest-kit.js (needs the spending wallet + Base gas; keyless CI answers 503)
   // sanctions-kit.js: both routes read a cached copy of the OFAC SDN export,

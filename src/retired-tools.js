@@ -97,6 +97,9 @@ export const RETIRED_TOOLS = Object.freeze({
   "stock-dividends": { retiredAt: "2026-09-20", replacement: null },
   "earnings-calendar": { retiredAt: "2026-09-20", replacement: null },
   "dividend-calendar": { retiredAt: "2026-09-20", replacement: null },
+  // 2026-11-21: the whole upstream id list, paged, with nothing computed
+  // here; coin-search resolves a name or ticker to its ids.
+  "coins-list": { retiredAt: "2026-11-21", replacement: "coin-search" },
   // 2026-09-11: a composite that never sold; the company-dossier pack runs the
   // same five calls.
   "research-company": { retiredAt: "2026-09-11", replacement: "skill-company-dossier" },
