@@ -466,10 +466,14 @@ export const DECODE_FAILURE = /attempting to read image|pixRead|Aborted\(|ERR_OU
 //     be answered and settled (its connection's CDN window, its payment
 //     authorization's life: `callLeftMs`); past that it is a 422 that says
 //     to downscale it;
-//   - while another caller's image waits for that engine, OCR_TURN_MS from
-//     the later of its own start and that image's place in line; then the
-//     image in the engine gives way with a retryable 503 and the waiting one
-//     is read;
+//   - for a caller that has already used an engine in the last
+//     OCR_FRESH_WINDOW_MS (ten minutes; every key counts, answered or not):
+//     once another caller's image waits for that engine, OCR_TURN_MS from the
+//     later of its own start and that image's place in line; then the image
+//     in the engine gives way with a retryable 503 and the waiting one is
+//     read. A caller's first image in that window is never asked to give
+//     way: it runs to the limit above even while others wait, so ordinary
+//     demand never ends one caller's one long image;
 //   - until its caller's connection closes: an abandoned image leaves the
 //     engine, or the line, at once.
 // Every one of those answers is uncharged, so the engine time such an image
@@ -477,10 +481,11 @@ export const DECODE_FAILURE = /attempting to read image|pixRead|Aborted\(|ERR_OU
 // against its caller's place in line: a caller whose images fail, run out of
 // time or are abandoned stands behind what other callers send meanwhile.
 //
-// So an image waits at most OCR_TURN_MS plus the engine's retirement for each
-// caller that stood ahead of it when it arrived, and behind one other
-// caller, whatever that caller sends, that is one turn: OCR_LARGE_WAIT_MS
-// (the longest a call waits in line) is that long. A call that waited out its
+// So an image waits, for each caller that stood ahead of it when it arrived,
+// at most OCR_TURN_MS plus the engine's retirement when that caller has used
+// an engine in the window, and at most that caller's own run limit when it
+// has not (its first image). OCR_LARGE_WAIT_MS, the longest a call waits in
+// line, covers one whole first image ahead. A call that waited out its
 // time keeps its place in line for its retry (a ticket, two minutes, renewed
 // by each retry), and no call that arrives later is ever read ahead of it.
 //
@@ -495,7 +500,9 @@ const envMs = (name, dflt) => { const n = Number(process.env[name]); return Numb
 export const OCR_TURN_MS = envMs("OCR_TURN_MS", 30_000);
 export const OCR_RUN_MAX_MS = Math.max(OCR_TURN_MS, envMs("OCR_RUN_MAX_MS", 120_000));
 export const OCR_LARGE_RETIRE_WAIT_MS = 10_000;
-export const OCR_LARGE_WAIT_MS = OCR_TURN_MS + OCR_LARGE_RETIRE_WAIT_MS + 5_000;
+export const OCR_LARGE_WAIT_MS = OCR_RUN_MAX_MS + OCR_LARGE_RETIRE_WAIT_MS + 5_000;
+/** A caller with no engine time in this long is never asked to give way (src/caller-turns.js). */
+export const OCR_FRESH_WINDOW_MS = 10 * 60_000;
 export const OCR_LARGE_QUEUE_MAX = 8;
 export const OCR_QUEUE_MAX = 64;
 export const OCR_QUEUE_MAX_BYTES = 96 * 1024 * 1024;
@@ -512,6 +519,7 @@ const turns = createCallerTurns({
   maxWaitersOf: (lane) => (lane === LARGE_LANE ? OCR_LARGE_QUEUE_MAX : OCR_QUEUE_MAX),
   maxBytes: OCR_QUEUE_MAX_BYTES,
   unpaidWeight: OCR_UNPAID_WEIGHT,
+  freshWindowMs: OCR_FRESH_WINDOW_MS,
 });
 
 function largeBusyError() {

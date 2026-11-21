@@ -21,7 +21,9 @@
 //     checked out is a 500 without the engine's text.
 // (5) Turns in the engines (src/caller-turns.js): images are read in turn
 //     across callers, not requests; one image holds an engine for a bounded
-//     time and gives way once another caller's image has waited a turn; an
+//     time; a caller's first image in ten minutes runs to that bound even
+//     while others wait, and a caller that has used an engine in that time
+//     gives way once another caller's image has waited a turn; an
 //     abandoned or failing image frees its turn at once; the line is bounded
 //     and the caller that holds places is the one answered busy. The first
 //     block there is the reproduction: one party's three wallets on three
@@ -35,7 +37,7 @@ import { Jimp } from "jimp";
 import { withPushExceptionText } from "../src/prepayment-refusal.js";
 import { PUSH_EXCEPTION } from "../src/tempo-push-debts.js";
 import { deflateSync, crc32 } from "node:zlib";
-import { OCR_TOOLS, OCR_MAX_PIXELS, OCR_MAX_SIDE, OCR_LARGE_PIXELS, OCR_LARGE_QUEUE_MAX, OCR_LARGE_WAIT_MS, OCR_LARGE_RETIRE_WAIT_MS, OCR_TURN_MS, OCR_RUN_MAX_MS, OCR_QUEUE_MAX, OCR_QUEUE_MAX_BYTES, OCR_UNPAID_WEIGHT, OCR_WORKER_MAX, __ocrLargeTest, ocrDownscaleSide, imageFormatOf, checkImageHeader, tessdataInstalled, __ocrTest } from "../src/tools/ocr-kit.js";
+import { OCR_TOOLS, OCR_MAX_PIXELS, OCR_MAX_SIDE, OCR_LARGE_PIXELS, OCR_LARGE_QUEUE_MAX, OCR_LARGE_WAIT_MS, OCR_LARGE_RETIRE_WAIT_MS, OCR_TURN_MS, OCR_RUN_MAX_MS, OCR_QUEUE_MAX, OCR_QUEUE_MAX_BYTES, OCR_UNPAID_WEIGHT, OCR_FRESH_WINDOW_MS, OCR_WORKER_MAX, __ocrLargeTest, ocrDownscaleSide, imageFormatOf, checkImageHeader, tessdataInstalled, __ocrTest } from "../src/tools/ocr-kit.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -287,7 +289,7 @@ async function call(input) {
   // as the party kept sending.)
   {
     L.reset?.();
-    const restore = L.limits?.({ turnMs: 150, waitMs: 3_000, runMaxMs: 5_000, retireMs: 200 }) ?? (() => {});
+    const restore = L.limits?.({ turnMs: 150, waitMs: 6_000, runMaxMs: 5_000, retireMs: 200 }) ?? (() => {});
     const SLOW = 4200, QUICK = 4100;
     const widthOf = (buf) => buf.readUInt32BE(16);
     __ocrTest.inject("tur", {
@@ -310,8 +312,9 @@ async function call(input) {
     const t0 = Date.now();
     const first = await ocr.handler({ image: quick, lang: "tur" }, honest).then((r) => r, (e) => e);
     const firstMs = Date.now() - t0;
-    ok(first?.text === "read" && firstMs <= 3 * (150 + 200) + 400,
-      `while one party's three wallets on three addresses keep a slow large image in the engine and two more waiting, another payer's large image is read, within a turn for each caller ahead of it (answered ${first?.statusCode ?? 200} after ${firstMs} ms)`);
+    // Each of the three is new here, so its first image (1,200 ms) runs whole.
+    ok(first?.text === "read" && firstMs <= 3 * (1_200 + 200) + 400,
+      `while one party's three wallets on three addresses keep a slow large image in the engine and two more waiting, another payer's large image is read, after one run for each new caller ahead of it (answered ${first?.statusCode ?? 200} after ${firstMs} ms)`);
     const waits = [];
     for (let i = 0; i < 6; i++) {
       await sleep(60);
@@ -319,11 +322,13 @@ async function call(input) {
       const r = await ocr.handler({ image: quick, lang: "tur" }, honest).then((x) => x, (e) => e);
       waits.push({ read: r?.text === "read", ms: Date.now() - t, status: r?.statusCode ?? 200 });
     }
-    ok(waits.every((w) => w.read && w.ms <= 150 + 200 + 250),
-      `...and while the party keeps sending, each of its next six is read within one turn (150 ms) and the engine's retirement of asking (${waits.map((w) => `${w.status}/${w.ms}ms`).join(", ")})`);
+    // From then on every one of the party's callers has used the engine: each
+    // gives way after a turn (150 ms), and its unanswered time puts it later.
+    ok(waits.every((w) => w.read && w.ms <= 3 * (150 + 200) + 250) && waits.slice(-3).every((w) => w.ms <= 150 + 200 + 250),
+      `...and while the party keeps sending, each of its next six is read within a turn (150 ms) for each of the party's callers ahead, the later ones within one (${waits.map((w) => `${w.status}/${w.ms}ms`).join(", ")})`);
     stop = true;
     await Promise.all(loops);
-    ok(partyGot.length > 0 && partyGot.every((st) => st === 503 || st === 200) && !L.state().busy && L.state().callers === 0, `the party's images that outran their turn were answered 503 (retryable, uncharged), never an engine fault, and every place is free afterwards (${[...new Set(partyGot)].join(", ")})`);
+    ok(partyGot.filter((st) => st === 200).length >= 3 && partyGot.every((st) => st === 503 || st === 200) && !L.state().busy && L.state().callers === 0, `each of the party's callers had its first image read whole, its later ones that outran their turn were answered 503 (retryable, uncharged), never an engine fault, and every place is free afterwards (${partyGot.join(",")})`);
     restore();
   }
 
@@ -672,12 +677,14 @@ async function call(input) {
   {
     const { createCallerTurns, TurnRefused } = await import("../src/caller-turns.js");
     let t = 1_000_000;
-    const room = createCallerTurns({ maxRunning: 2, ticketMs: 1_000, ticketsMax: 2, unpaidWeight: 4, now: () => t });
+    const room = createCallerTurns({ maxRunning: 2, ticketMs: 1_000, ticketsMax: 2, unpaidWeight: 4, freshWindowMs: 600_000, now: () => t });
     const refusal = (p) => p.then(() => null, (e) => e);
+    // Every caller below has used an engine already (a turn that took no time).
+    for (const who of [["payer:a", "ip:1"], "ip:2", "ip:3"]) (await room.acquire("x", who, { waitMs: 50 })).release();
     // Giving way: one turn after the later of the run's start and the waiting
     // call's arrival; the runner's own waiting call never counts.
     const a = await room.acquire("x", ["payer:a", "ip:1"], { waitMs: 50 });
-    ok(a.yieldAt(300) === Infinity, "with nobody waiting a run is never asked to give way");
+    ok(a.fresh === false && a.yieldAt(300) === Infinity, "with nobody waiting a run is never asked to give way");
     t += 400;
     const own = room.acquire("x", ["payer:a2", "ip:1"], { waitMs: 60_000 });
     ok(a.yieldAt(300) === Infinity, "a waiting call that shares a key with the run (another wallet on its address) never ends it");
@@ -745,10 +752,77 @@ async function call(input) {
     ok(room.state("x").running === 0 && room.state("x").callers === 0, "the room empties after the ticket cases");
   }
 
+  // --- who is asked to give way: the record of engine use (src/caller-turns.js) ---
+  {
+    const { createCallerTurns } = await import("../src/caller-turns.js");
+    let t = 5_000_000;
+    const WINDOW = 600_000;
+    const room = createCallerTurns({ maxRunning: 2, freshWindowMs: WINDOW, now: () => t });
+    const waitingOther = () => room.acquire("x", `ip:other-${t}`, { waitMs: 60_000 });
+    /** Take lane x for `who` while another caller waits; answers { fresh, yieldAt } and frees both. */
+    const probe = async (who, how) => {
+      const turn = await room.acquire("x", who, { waitMs: 50 });
+      const other = waitingOther();
+      const seen = { fresh: turn.fresh, yieldAt: turn.yieldAt(300), startedAt: turn.startedAt };
+      turn.release(how);
+      (await other).release();
+      return seen;
+    };
+    // A caller's first call is never asked to give way; its next is, one turn after the waiting call arrived.
+    const first = await probe(["payer:w1", "ip:10.0.0.1"]);
+    ok(first.fresh === true && first.yieldAt === Infinity, "a caller with no engine time on record is never asked to give way, though another caller waits");
+    t += 1_000;
+    const second = await probe(["payer:w1", "ip:10.0.0.1"]);
+    ok(second.fresh === false && second.yieldAt === second.startedAt + 300, `its next call is asked to give way a turn after the other caller arrived (${second.yieldAt - second.startedAt} ms)`);
+    // Every key counts: a new wallet on that address, and that wallet from a new address.
+    t += 1_000;
+    const newWallet = await probe(["payer:w2", "ip:10.0.0.1"]);
+    const newAddress = await probe(["payer:w1", "ip:10.0.0.2"]);
+    ok(newWallet.fresh === false && newAddress.fresh === false, "a new wallet on an address on record, and a wallet on record from a new address, are callers on record");
+    // The record is written when the turn starts: a call still in an engine counts.
+    const held = await room.acquire("x", ["payer:w3", "ip:10.0.0.3"], { waitMs: 50 });
+    const same = await room.acquire("y", ["payer:w3", "ip:10.0.0.3"], { waitMs: 50 });
+    ok(held.fresh === true && same.fresh === false, "a caller with a call still in one engine is on record when its next one starts in another");
+    same.release(); held.release();
+    // Nothing the caller does clears it: an unanswered turn, a call that gave up its place in line.
+    t += 1_000;
+    const failed = await probe(["payer:w4", "ip:10.0.0.4"], { unpaid: true });
+    const blocker = await room.acquire("x", "ip:10.0.0.9", { waitMs: 50 });
+    const leaving = room.acquire("x", ["payer:w4", "ip:10.0.0.4"], { waitMs: 60_000 });
+    leaving.cancel();
+    await leaving.catch(() => {});
+    blocker.release();
+    const afterFailing = await probe(["payer:w4", "ip:10.0.0.4"]);
+    ok(failed.fresh === true && afterFailing.fresh === false, "a turn that ended unanswered and a place given up in line leave the caller on record");
+    // Only the window passing does: ten minutes after its last use the caller is new again.
+    await probe(["payer:w1", "ip:10.0.0.1"]); // its last use is now
+    t += WINDOW - 1;
+    const justInside = await probe(["payer:w1", "ip:10.0.0.1"]);
+    t += WINDOW;
+    const past = await probe(["payer:w1", "ip:10.0.0.1"]);
+    ok(justInside.fresh === false && past.fresh === true, "inside the window the caller stays on record; once it has passed since its last use the caller is new again");
+    // The record is bounded. When a key still inside the window has to leave
+    // it, every caller it cannot place is taken to be on record for a window,
+    // so filling the record buys nobody the long turn.
+    let u = 9_000_000;
+    const small = createCallerTurns({ freshWindowMs: WINDOW, keysMax: 4, now: () => u });
+    const use = async (who) => { const turn = await small.acquire("x", who, { waitMs: 50 }); const fresh = turn.fresh; turn.release(); return fresh; };
+    const firsts = [];
+    for (const who of ["ip:a", "ip:b", "ip:c", "ip:d"]) { firsts.push(await use(who)); u += 10; }
+    ok(firsts.every((f) => f === true) && small.state("x").recorded === 4, `four callers fit the record, each new (${small.state("x").recorded} keys)`);
+    const fifth = await use("ip:e"); // pushes ip:a out while it is still inside the window
+    u += 10;
+    const pushedOut = await use("ip:a");
+    const unknown = await use("ip:never-seen");
+    ok(fifth === true && small.state("x").recorded === 4 && pushedOut === false && unknown === false, `past its size the record holds no more keys (${small.state("x").recorded}), and a caller it no longer holds, or never held, is taken to be on record`);
+    u += WINDOW + 1;
+    ok(await use("ip:after-the-window") === true, "a window after the record last overflowed, a new caller is new again");
+  }
+
   // --- an image holds its engine for a bounded time ---
   {
     L.reset();
-    ok(OCR_TURN_MS === 30_000 && OCR_RUN_MAX_MS === 120_000 && OCR_LARGE_WAIT_MS === OCR_TURN_MS + OCR_LARGE_RETIRE_WAIT_MS + 5_000, `one image holds an engine 120 s at most, 30 s once another caller's image waits, and a call waits in line one turn and the engine's retirement (${OCR_LARGE_WAIT_MS} ms)`);
+    ok(OCR_TURN_MS === 30_000 && OCR_RUN_MAX_MS === 120_000 && OCR_FRESH_WINDOW_MS === 600_000 && OCR_LARGE_WAIT_MS === OCR_RUN_MAX_MS + OCR_LARGE_RETIRE_WAIT_MS + 5_000, `one image holds an engine 120 s at most, 30 s once another caller's image waits when its own caller used an engine in the last ten minutes, and a call waits in line one whole run and the engine's retirement (${OCR_LARGE_WAIT_MS} ms)`);
     const restore = L.limits({ turnMs: 150, waitMs: 2_000, runMaxMs: 400, retireMs: 200 });
     const big = pngHead(4100, 4100), small = pngHead(16, 16);
     let terminated = 0;
@@ -772,27 +846,73 @@ async function call(input) {
     const after = await ocr.handler({ image: small.toString("base64"), lang: "tur" }, { headers: {}, ip: "203.0.113.21" });
     ok(after.text === "after", "the next image in that language is read by a fresh worker");
 
-    // While another caller's image waits, the image in the engine keeps it
-    // for one turn from that arrival, then gives way with a retryable 503.
+    // A caller's FIRST image (no engine time on record) runs to the end even
+    // while another caller's image waits, and that one is read next.
     restore();
     const restore2 = L.limits({ turnMs: 150, waitMs: 2_000, runMaxMs: 5_000, retireMs: 200 });
     L.reset();
-    let calls = 0;
-    __ocrTest.inject("tur", { recognize: () => (++calls === 1 ? new Promise(() => {}) : Promise.resolve({ data: { text: "second", lines: [] } })), terminate: async () => {} });
+    const quickThen = (ms, text) => ({ recognize: (buf) => new Promise((r) => setTimeout(() => r({ data: { text: buf.readUInt32BE(16) === 4200 ? text : "quick", lines: [] } }), buf.readUInt32BE(16) === 4200 ? ms : 5)), terminate: async () => {} });
+    const long = pngHead(4200, 4200); // the stand-in takes five turns' time on this one
+    __ocrTest.inject("tur", quickThen(750, "long"));
     t0 = Date.now();
-    const holder = ocr.handler({ image: big.toString("base64"), lang: "tur" }, { headers: {}, ip: "203.0.113.22" }).then(() => null, (e) => e);
+    const firstTimer = ocr.handler({ image: long.toString("base64"), lang: "tur" }, { headers: {}, ip: "203.0.113.22" }).then((r) => r, (e) => e);
+    await sleep(100);
+    const behind = ocr.handler({ image: big.toString("base64"), lang: "tur" }, { headers: {}, ip: "203.0.113.23" }).then((r) => ({ r, ms: Date.now() - t0 }), (e) => ({ r: e, ms: Date.now() - t0 }));
+    const whole = await firstTimer;
+    const wholeMs = Date.now() - t0;
+    const next = await behind;
+    ok(whole?.text === "long" && wholeMs >= 740, `a caller's first image runs to the end (five turns' time) though another caller's image waits (${whole?.statusCode ?? 200} after ${wholeMs} ms)`);
+    ok(next.r?.text === "quick" && next.ms >= 740 && next.ms <= 750 + 200 + 400, `...and the waiting image is read next, in the same call (${next.r?.statusCode ?? 200} after ${next.ms} ms)`);
+    // The same caller's NEXT long image: it has used the engine, so once
+    // another caller's image has waited a turn it gives way with a retryable 503.
+    t0 = Date.now();
+    const holder = ocr.handler({ image: long.toString("base64"), lang: "tur" }, { headers: {}, ip: "203.0.113.22" }).then(() => null, (e) => e);
     await sleep(100);
     const arrived = Date.now();
     const waiter = await ocr.handler({ image: big.toString("base64"), lang: "tur" }, { headers: {}, ip: "203.0.113.23" }).then((r) => r, (e) => e);
     const waitedMs = Date.now() - arrived;
     const gave = await holder;
-    ok(waiter?.text === "second" && waitedMs >= 140 && waitedMs <= 150 + 200 + 250, `another caller's large image is read one turn after it arrived (${waiter?.statusCode ?? 200} after ${waitedMs} ms)`);
+    ok(waiter?.text === "quick" && waitedMs >= 140 && waitedMs <= 150 + 200 + 250, `behind a caller that has already used the engine, another caller's large image is read one turn after it arrived (${waiter?.statusCode ?? 200} after ${waitedMs} ms)`);
     ok(gave?.statusCode === 503 && gave.shed === true && gave.retryAfter === 30 && gave.hint === "large-image-busy" && /gave this image's turn/.test(gave.message) && /Nothing was charged\.$/.test(gave.message), `the image that held the engine gives way with a retryable 503 that says nothing was charged (${gave?.statusCode} ${gave?.hint})`);
+    // Every key counts: another wallet on the address that used the engine,
+    // and a wallet that used it from another address, give way too. So does a
+    // caller whose only image so far failed or was abandoned.
+    {
+      const gaveWay = async (holderReq, otherIp) => {
+        const h = ocr.handler({ image: long.toString("base64"), lang: "tur" }, holderReq).then((r) => r?.text, (e) => e.statusCode);
+        await sleep(60);
+        await ocr.handler({ image: big.toString("base64"), lang: "tur" }, { headers: {}, ip: otherIp }).catch(() => {});
+        return h;
+      };
+      L.reset();
+      await ocr.handler({ image: big.toString("base64"), lang: "tur" }, paidReq(wallet(0xe1), "203.0.113.90"));
+      const newWallet = await gaveWay(paidReq(wallet(0xe2), "203.0.113.90"), "203.0.113.91");
+      const newAddress = await gaveWay(paidReq(wallet(0xe1), "203.0.113.92"), "203.0.113.93");
+      ok(newWallet === 503 && newAddress === 503, `a new wallet on an address that used the engine, and a wallet that used it from a new address, give way after a turn (${newWallet}, ${newAddress})`);
+      const control = await gaveWay(paidReq(wallet(0xe3), "203.0.113.94"), "203.0.113.95");
+      ok(control === "long", `control: a wallet and an address with no engine time between them are a new caller, read whole (${control})`);
+      // A failed image and an abandoned one leave their caller on record.
+      __ocrTest.inject("tur", { recognize: () => Promise.reject("Error: Error attempting to read image."), terminate: async () => {} });
+      const failedFirst = await ocr.handler({ image: big.toString("base64"), lang: "tur" }, { headers: {}, ip: "203.0.113.96" }).then(() => 200, (e) => e.statusCode);
+      __ocrTest.inject("tur", { recognize: () => new Promise(() => {}), terminate: async () => {} });
+      const { EventEmitter } = await import("node:events");
+      const res = Object.assign(new EventEmitter(), { headersSent: false, destroyed: false, writableEnded: false });
+      const leaverReq = { headers: {}, ip: "203.0.113.97", res, socket: { destroyed: false } };
+      const abandoned = ocr.handler({ image: big.toString("base64"), lang: "tur" }, leaverReq).then(() => 200, (e) => e.statusCode);
+      await sleep(40);
+      res.destroyed = true; leaverReq.socket.destroyed = true; res.emit("close");
+      const abandonedFirst = await abandoned;
+      __ocrTest.inject("tur", quickThen(750, "long"));
+      const afterFailed = await gaveWay({ headers: {}, ip: "203.0.113.96" }, "203.0.113.98");
+      const afterAbandoned = await gaveWay({ headers: {}, ip: "203.0.113.97" }, "203.0.113.99");
+      ok(failedFirst === 422 && abandonedFirst === 499 && afterFailed === 503 && afterAbandoned === 503, `a caller whose only image so far failed (${failedFirst}) or was abandoned (${abandonedFirst}) has used the engine: its next long image gives way (${afterFailed}, ${afterAbandoned})`);
+    }
     // Control: the caller's OWN second image waiting never ends its first.
     L.reset();
-    calls = 0;
-    __ocrTest.inject("tur", { recognize: () => (++calls === 1 ? new Promise((r) => setTimeout(() => r({ data: { text: "first", lines: [] } }), 500)) : Promise.resolve({ data: { text: "second", lines: [] } })), terminate: async () => {} });
+    let calls = 0;
+    __ocrTest.inject("tur", { recognize: () => (++calls === 2 ? new Promise((r) => setTimeout(() => r({ data: { text: "first", lines: [] } }), 500)) : Promise.resolve({ data: { text: "second", lines: [] } })), terminate: async () => {} });
     const same = { headers: {}, ip: "203.0.113.24" };
+    await ocr.handler({ image: big.toString("base64"), lang: "tur" }, same); // this caller has used the engine
     const own1 = ocr.handler({ image: big.toString("base64"), lang: "tur" }, same).then((r) => r, (e) => e);
     await sleep(30);
     const own2 = ocr.handler({ image: big.toString("base64"), lang: "tur" }, same).then((r) => r, (e) => e);

@@ -32,10 +32,13 @@ Loaded when a media, document or worker-pool tool file is read.
   what other callers sent meanwhile. An image holds its engine `OCR_RUN_MAX_MS` (120 s) at most
   and never past the time its call can be answered and settled (the CDN window, the payment
   authorization's life; 422 `image-too-slow`), `OCR_TURN_MS` (30 s) once
-  another caller's image waits for that engine (it gives way with a retryable 503), and only
-  while its caller's connection is open (499). Engine time that ends without an answer counts
+  another caller's image waits for that engine when its own caller has used an engine in the last
+  `OCR_FRESH_WINDOW_MS` (ten minutes, every key, answered or not; it gives way with a retryable
+  503; a caller's first image in that window is never asked to give way), and only while its
+  caller's connection is open (499). Engine time that ends without an answer counts
   `OCR_UNPAID_WEIGHT` (4) times against that caller's place in line. A call waits in line
-  `OCR_LARGE_WAIT_MS` (one turn and the engine's retirement, 45 s), then a 503 with Retry-After,
+  `OCR_LARGE_WAIT_MS` (one whole run and the engine's retirement, 135 s, never past its own
+  call's time), then a 503 with Retry-After,
   and keeps its place for the retry (a ticket, two minutes, renewed by each retry); no call that
   arrives later is read ahead of it. The line holds `OCR_QUEUE_MAX` (64) images, `OCR_LARGE_QUEUE_MAX` (8) of them
   large, and `OCR_QUEUE_MAX_BYTES` (96 MB): when full, a caller holding nothing takes a place
