@@ -868,8 +868,8 @@ function docsPanelNav() {
                 <a href="/status" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">status</span><span class="mlnav-faint">uptime from outside probes</span></a>
                 <span class="mlnav-label">WHAT THIS IS</span>
                 <a href="/101" class="mlnav-row"><span style="font-weight:700;">x402 &amp; MPP 101</span><span class="mlnav-faint">walkthrough</span></a>
-                <a href="/what-is-x402" class="mlnav-row"><span style="font-weight:700;">what is x402</span><span class="mlnav-faint">HTTP 402</span></a>
-                <a href="/what-is-mpp" class="mlnav-row"><span style="font-weight:700;">what is MPP</span><span class="mlnav-faint">Payment auth</span></a>
+                <a href="/what-is-x402" class="mlnav-row"><span style="font-weight:700;">x402 and MPP</span><span class="mlnav-faint">on Agent402</span></a>
+                <a href="/what-is-mpp" class="mlnav-row"><span style="font-weight:700;">MPP</span><span class="mlnav-faint">on Agent402</span></a>
                 <a href="/agentic-finance" class="mlnav-row"><span style="font-weight:700;">agentic finance</span><span class="mlnav-faint">the category</span></a>
                 <a href="/glossary" class="mlnav-row"><span style="font-weight:700;">glossary</span><span class="mlnav-faint">the terms</span></a>
                 <a href="${GUIDE_SITE}" rel="noopener" class="mlnav-row"><span style="font-weight:700;">${GUIDE_SITE_NAME}</span><span class="mlnav-faint">plain-language guide</span></a>
@@ -993,7 +993,7 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/docs", "docs", activePath === "/docs")}
       ${mmLink("/proof", "receipts", activePath === "/proof")}
       ${mmLink("/101", "x402 & MPP 101 · walkthrough", activePath === "/101")}
-      ${mmLink("/what-is-x402", "what is x402 / MPP", activePath === "/what-is-x402")}
+      ${mmLink("/what-is-x402", "x402 and MPP on Agent402", activePath === "/what-is-x402")}
       ${mmLink("/agentic-finance", "agentic finance", activePath === "/agentic-finance")}
       ${mmLink("/glossary", "glossary", activePath === "/glossary")}
       ${mmLink(GUIDE_SITE, `${GUIDE_SITE_NAME} · plain-language guide`, false, "", ' rel="noopener"')}
