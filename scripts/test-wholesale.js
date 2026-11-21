@@ -369,6 +369,23 @@ try {
     ok(unreadable.status === 400 && unreadable.json?.errorCode === "invalid_input", `a body the server cannot read answers 400 with errorCode "invalid_input" (${unreadable.status} ${JSON.stringify(unreadable.json?.errorCode)})`);
     const tooBig = await readAnswer(await fetch(`${U}/api/json-format`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ json: "x".repeat(300_000) }) }));
     ok(tooBig.status === 413 && tooBig.json?.errorCode === "input_too_large", `a body over the size limit answers 413 with errorCode "input_too_large" (${tooBig.status} ${JSON.stringify(tooBig.json?.errorCode)})`);
+    // The published sentences against what this boot just answered: each
+    // kind of answer seen carrying errorCode is named, with its status, in
+    // the scope sentence and in no clause of the not-carried one, and every
+    // status the scope sentence names is one seen carrying it here.
+    const seen = [
+      { status: 400, words: /cannot read/, carried: unreadable.status === 400 && unreadable.json?.errorCode === stableErrorCode(400) },
+      { status: 413, words: /size limit/, carried: tooBig.status === 413 && tooBig.json?.errorCode === stableErrorCode(413) },
+      { status: 404, words: /not served/, carried: unmounted.length === 0 },
+      { status: 410, words: /retired route/, carried: wrong.length === 0 },
+      { status: 503, words: /switched off/, carried: wrongOff.length === 0 },
+    ];
+    const names = (text, st) => new RegExp(`\\(${st}\\)|answers ${st}\\b`).test(text);
+    const unnamed = seen.filter((x) => x.carried && !(names(SCOPE, x.status) && x.words.test(SCOPE))).map((x) => x.status);
+    const denied = seen.filter((x) => x.carried && (x.words.test(NOT_CARRIED) || new RegExp(`\\b${x.status}\\b`).test(NOT_CARRIED))).map((x) => x.status);
+    const claimed = [...SCOPE.matchAll(/\((\d{3})\)|answers (\d{3})\b/g)].map((m) => Number(m[1] || m[2]));
+    const unseen = claimed.filter((st) => !seen.some((x) => x.status === st && x.carried));
+    ok(unnamed.length === 0 && denied.length === 0 && unseen.length === 0 && claimed.length >= seen.length, `the contract's sentences match the answers this boot carries errorCode on (not in the scope: ${unnamed.join(", ") || "none"}; in the not-carried sentence: ${denied.join(", ") || "none"}; claimed but not seen: ${unseen.join(", ") || "none"})`);
   }
   {
     // The compute family is our own computation: no tool that serves this
