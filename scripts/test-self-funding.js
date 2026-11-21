@@ -1,8 +1,9 @@
 // Self-funding SOR burner economics — offline unit tests.
 //   node scripts/test-self-funding.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { acceptsForItem, SELF_FUNDING_SLUGS } from "../src/payments.js";
-import { buyerPaymentNetwork } from "../src/tools/route-execute.js";
+import { readFileSync } from "node:fs";
+import { acceptsForItem, SELF_FUNDING_SLUGS, AVM_SELF_FUNDING_SLUGS } from "../src/payments.js";
+import { buyerPaymentNetwork, EXEC_TIERS } from "../src/tools/route-execute.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
@@ -16,7 +17,38 @@ const rails = {
   upstreamBuyerAddress: BURNER,
 };
 
-ok(SELF_FUNDING_SLUGS.has("route-execute") && SELF_FUNDING_SLUGS.has("route-execute-plus") && SELF_FUNDING_SLUGS.has("route-execute-max"), "all three route-execute tiers are self-funding slugs");
+// Every list of the route-execute tiers is read against the tier table
+// (EXEC_TIERS, src/tools/route-execute.js), so a tier added there and left
+// out of a list fails here by name.
+const TIER_SLUGS = EXEC_TIERS.map((t) => t.slug);
+const missingFrom = (set) => TIER_SLUGS.filter((s) => !set.has(s));
+ok(TIER_SLUGS.length >= 5 && TIER_SLUGS.includes("route-execute-mid") && TIER_SLUGS.includes("route-execute-pro"), `the tier table is read (${TIER_SLUGS.join(", ")})`);
+ok(missingFrom(SELF_FUNDING_SLUGS).length === 0, `every route-execute tier in the tier table is a self-funding slug (${missingFrom(SELF_FUNDING_SLUGS).join(", ") || "none missing"})`);
+ok(missingFrom(AVM_SELF_FUNDING_SLUGS).length === 0, `and settles its Algorand leg to the AVM spending wallet (${missingFrom(AVM_SELF_FUNDING_SLUGS).join(", ") || "none missing"})`);
+{
+  const strays = [...SELF_FUNDING_SLUGS, ...AVM_SELF_FUNDING_SLUGS].filter((s) => /^route-execute/.test(s) && !TIER_SLUGS.includes(s));
+  ok(strays.length === 0, `no route-execute name in either set is absent from the tier table (${strays.join(", ") || "none"})`);
+}
+// The catalog buy (spend.yml) leaves out every tier whose published example
+// buys from an outside seller: bought there, it would spend the router's
+// wallet on a seller. Both steps that carry the list carry the same one.
+{
+  const yml = readFileSync(new URL("../.github/workflows/spend.yml", import.meta.url), "utf8");
+  const lists = [...yml.matchAll(/^\s*CATALOG_BUY_SKIP:\s*(\S+)\s*$/gm)].map((m) => m[1].split(",").map((s) => s.trim()).filter(Boolean));
+  const external = EXEC_TIERS.filter((t) => t.externalExample).map((t) => t.slug);
+  const absent = lists.flatMap((l, i) => external.filter((s) => !l.includes(s)).map((s) => `${s} (list ${i + 1})`));
+  const stale = lists.flatMap((l, i) => l.filter((s) => /^route-execute/.test(s) && !external.includes(s)).map((s) => `${s} (list ${i + 1})`));
+  ok(lists.length === 2 && external.length >= 3 && external.includes("route-execute-mid"), `spend.yml carries the catalog buy's skip list in both steps and the table marks the tiers whose example buys outside (${lists.length} lists; ${external.join(", ")})`);
+  ok(absent.length === 0, `every route-execute tier whose published example buys from an outside seller is on the catalog buy's skip list (${absent.join(", ") || "none absent"})`);
+  ok(stale.length === 0 && new Set(lists.map((l) => l.join(","))).size === 1, `the two lists are one list and name no route-execute tier the table does not mark (${stale.join(", ") || "none"})`);
+}
+// The same for every tier's legs: Base to the spending wallet, the other EVM
+// chains and Solana unchanged.
+for (const slug of TIER_SLUGS) {
+  const legs = acceptsForItem({ slug, price: "$0.01" }, rails);
+  const on = (net) => legs.find((a) => a.network === net)?.payTo;
+  ok(on("eip155:8453") === BURNER && on("eip155:137") === TREASURY && on("solana:x") === "SoLwallet", `${slug}: the Base leg pays the spending wallet, Polygon the treasury, Solana its own wallet`);
+}
 // House rule (2026-07-29): everything that SPENDS from the burner SETTLES to
 // the burner. The five explorer tools that also spent from it were retired on
 // 2026-09-22 (src/retired-tools.js); a retired slug left in the set would be a
@@ -59,7 +91,7 @@ ok(noBurner.find((a) => a.network === "eip155:8453").payTo === TREASURY, "no bur
     algorandWallet: ALGO_TREASURY,
     avmUpstreamBuyerAddress: AVM_BUYER,
   };
-  for (const slug of ["route-execute", "route-execute-plus", "route-execute-max"]) {
+  for (const slug of TIER_SLUGS) {
     const a = acceptsForItem({ slug, price: "$0.01" }, avmRails).find((x) => x.network === "algorand:mainnet");
     ok(a?.payTo === AVM_BUYER, `${slug} Algorand leg pays the AVM spending wallet (chain-matched self-funding)`);
   }
