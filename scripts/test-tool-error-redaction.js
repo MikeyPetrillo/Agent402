@@ -232,7 +232,7 @@ const OP_TOKEN = ["op", "Canary", "Token", RUN].join("");
   // The answer may carry the stable errorCode beside the scrubbed message (src/stable-error-code.js).
   ok(/json\(\{ error: redactSecrets\(err\?\.message\)(?:, \.\.\.errorCodeField\(status\))? \}\)/.test(mem) && !/error: err\?\.message/.test(mem), "the memory routes answer the scrubbed message");
   // No route block answers or logs a thrown message raw: inside every app
-  // route (literal paths and the catalog binder's app[method](path, ...)), a
+  // route (literal paths, paths held in a named constant and the catalog binder's app[method](path, ...)), a
   // line that builds a json/send answer, a problem body, an error/detail/message field or a
   // console line from e.message or err.message wraps it in redactSecrets.
   // ALLOW lists lines whose message is proven constant (none today).
@@ -242,8 +242,8 @@ const OP_TOKEN = ["op", "Canary", "Token", RUN].join("");
   const lines = server.split("\n");
   let route = null; const raw = []; let routes = 0, opRoutes = 0;
   for (const [i, line] of lines.entries()) {
-    const m = /^\s*app\.(?:get|post|put|delete|all|use)\(\s*"([^"]+)"|^\s*app\[/.exec(line);
-    if (m) { route = m[1] || "catalog binder"; routes++; if (route.startsWith("/__operator")) opRoutes++; }
+    const m = /^\s*app\.(?:get|post|put|delete|all|use)\(\s*(?:"([^"]+)"|([A-Z][A-Z0-9_]*)\s*,)|^\s*app\[/.exec(line);
+    if (m) { route = m[1] || m[2] || "catalog binder"; routes++; if (route.startsWith("/__operator")) opRoutes++; }
     else if (/^(?:function|async function|const|let|export|for) /.test(line)) route = null;
     if (!route || /^\s*\/\//.test(line) || !ANSWER.test(line) || !RAW.test(line)) continue;
     if (ALLOW.some((a) => line.includes(a))) continue;

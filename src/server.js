@@ -3450,7 +3450,7 @@ app.get("/__operator/returning-wallets.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const cfg = returningWalletStatus();
   let returnRate = null;
-  try { await salesLedgerReady(); returnRate = await externalReturnRateAsync({ days: 60, minPaidDays: cfg.minPaidDays }); } catch (e) { returnRate = { error: String(e?.message || e).slice(0, 120) }; }
+  try { await salesLedgerReady(); returnRate = await externalReturnRateAsync({ days: 60, minPaidDays: cfg.minPaidDays }); } catch (e) { returnRate = { error: redactSecrets(String(e?.message || e)).slice(0, 120) }; }
   res.set("Cache-Control", "private, no-store").json({ ...cfg, returnRate });
 });
 // Judge timing (src/judge-timing.js): p50 and p95 per backend read and per
@@ -9911,7 +9911,7 @@ app.post(PRICE_WEBHOOK_UNSUBSCRIBE_PATH, express.json({ limit: "4kb" }), async (
   } catch (e) {
     const status = Number(e?.statusCode) >= 400 && Number(e?.statusCode) < 600 ? Number(e.statusCode) : 500;
     if (e?.retryAfterSeconds) res.set("Retry-After", String(e.retryAfterSeconds));
-    res.set("Cache-Control", "no-store").status(status).json({ removed: false, error: status === 500 ? "the removal failed on this server; retry" : String(e.message) });
+    res.set("Cache-Control", "no-store").status(status).json({ removed: false, error: status === 500 ? "the removal failed on this server; retry" : redactSecrets(String(e.message)) });
   }
 });
 // Router benchmarks (src/router-benchmarks.js): aggregates over the reputation
@@ -13207,7 +13207,7 @@ if (!FREE_MODE) {
   try {
     const r = loadHangupForgiveness();
     if (r.loaded) console.log(`[hangup] forgiveness records restored: ${r.global} service-wide, ${r.keys} keys`);
-  } catch (err) { console.warn(`[hangup] forgiveness records not restored: ${err?.message || err}`); }
+  } catch (err) { console.warn(`[hangup] forgiveness records not restored: ${redactSecrets(String(err?.message || err))}`); }
   app.use(async (req, res, next) => {
     const def = CATALOG[`${req.method} ${req.path}`];
     // Every catalog answer past the gates is counted by its final status
@@ -13280,7 +13280,7 @@ if (!FREE_MODE) {
     // price through the chain's premium and floor), so a ticket holds the
     // charge it may forgive.
     try { await reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd: ticketPriceUsd({ basePriceUsd: quotedPriceUsd(def, req), paymentHeader: paymentHeaderOf(req) }), slug: def.slug, spendsOwnWallet: def.spendsOwnWallet === true }); }
-    catch (err) { console.warn(`[hangup] ticket reservation failed (${String(err?.message || err).slice(0, 80)}); the call runs without a ticket`); }
+    catch (err) { console.warn(`[hangup] ticket reservation failed (${redactSecrets(String(err?.message || err)).slice(0, 80)}); the call runs without a ticket`); }
     reserved = true;
     if (decided) settle();
     if (closed || res.destroyed) {
@@ -13305,7 +13305,7 @@ if (!FREE_MODE) {
     if (res.getHeader("X-Pow-Accepted") || res.getHeader("X-Trial-Accepted")) return next();
     let a = null;
     try { a = await claimFirstCallAllowance(req, res, def, { ip: req.ip, synthetic: isSyntheticRequest(req), hasPaidSale: payerHasPaidSale }); }
-    catch (err) { console.warn(`[allowance] claim failed (${String(err?.message || err).slice(0, 80)}); the call is paid as usual`); }
+    catch (err) { console.warn(`[allowance] claim failed (${redactSecrets(String(err?.message || err)).slice(0, 80)}); the call is paid as usual`); }
     if (a?.granted) onResponseEnd(req, res, () => { void finishFirstCallAllowance(req).catch(() => {}); });
     next();
   });
