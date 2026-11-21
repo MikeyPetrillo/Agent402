@@ -118,6 +118,8 @@ t node scripts/test-ssrf-redirect-hops.js
 # Guard lookups run on c-ares, not the thread pool: a full pool and unanswered names never delay a healthy one
 t node scripts/test-dns-pool-starvation.js
 t node scripts/test-dns-name-filter.js
+# email-validate names the mailbox provider from the MX lookup it already makes (offline)
+t node scripts/test-mailbox-provider.js
 t node scripts/test-undici-dispatcher.js
 # Discovery & trust surfaces (/.well-known/x402, /api/reliability)
 t node scripts/test-discovery.js

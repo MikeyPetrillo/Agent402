@@ -5,6 +5,7 @@
 // (via bad()) for invalid input.
 import { createHash, createHmac, randomBytes, randomUUID, randomInt } from "node:crypto";
 import { resolveMx, Resolver } from "node:dns/promises";
+import { mailboxProviderOf } from "./mailbox-provider.js";
 import { markEndsAtCeiling, capByCeiling, atCeiling, ceilingPassed, ceilingCutError, assertBeforeCeiling } from "../run-ceiling.js";
 import { isIP } from "node:net";
 import { FETCH_UA } from "../user-agents.js";
@@ -1643,6 +1644,11 @@ function compareSemver(a, b) {
   return a.prerelease < b.prerelease ? -1 : 1;
 }
 
+// email-validate's MX lookup, replaceable in a test (no network there).
+let mxLookup = resolveMx;
+/** Test seam: `fn(domain)` answers the MX rows; no argument restores DNS. */
+export function _setMxLookupForTest(fn) { mxLookup = typeof fn === "function" ? fn : resolveMx; }
+
 const validationTools = [
   {
     route: "POST /api/email-validate",
@@ -1650,8 +1656,8 @@ const validationTools = [
     slug: "email-validate",
     category: "validation",
     price: "$0.001",
-    description: "Validate an email address: syntax check plus live MX record lookup on the domain (deliverability signal, not a guarantee).",
-    tags: ["email", "validate", "mx", "deliverability"],
+    description: "Validate an email address: syntax check plus live MX record lookup on the domain (deliverability signal, not a guarantee). mailboxProvider names who hosts the domain's mail, read from those MX records: {id, name, type}, with type hosted (Google Workspace / Gmail, Microsoft 365 / Outlook, Zoho and other known hosts), gateway, forwarding, disposable, self-hosted or unknown; null when the domain has no MX.",
+    tags: ["email", "validate", "mx", "deliverability", "mailbox-provider", "disposable"],
     discovery: {
       bodyType: "json",
       input: { email: "someone@gmail.com" },
@@ -1662,7 +1668,7 @@ const validationTools = [
       // example.com publishes a null MX (RFC 7505: accepts no mail), so its
       // honest answer is deliverableDomain:false with no records; the
       // documented example must show a domain that does receive mail.
-      output: { example: { email: "someone@gmail.com", syntaxValid: true, domain: "gmail.com", mxRecords: ["gmail-smtp-in.l.google.com", "alt1.gmail-smtp-in.l.google.com"], deliverableDomain: true } },
+      output: { example: { email: "someone@gmail.com", syntaxValid: true, domain: "gmail.com", mxRecords: ["gmail-smtp-in.l.google.com", "alt1.gmail-smtp-in.l.google.com"], deliverableDomain: true, mailboxProvider: { id: "google", name: "Google Workspace / Gmail", type: "hosted" } } },
     },
     handler: async (input) => {
       const email = need(input, "email").trim();
@@ -1675,12 +1681,13 @@ const validationTools = [
           // RFC 7505 null MX ("0 .") declares the domain accepts NO mail; Node
           // hands it back as exchange "" or "." and it used to count as a
           // record, so example.com read deliverable (corpus, 2026-09-06).
-          mxRecords = (await resolveMx(domain)).sort((a, b) => a.priority - b.priority).map((r) => r.exchange).filter((x) => x && x !== ".");
+          mxRecords = (await mxLookup(domain)).sort((a, b) => a.priority - b.priority).map((r) => r.exchange).filter((x) => x && x !== ".");
         } catch {
           mxRecords = [];
         }
       }
-      return { email, syntaxValid, domain, mxRecords: mxRecords.slice(0, 10), deliverableDomain: mxRecords.length > 0 };
+      // Who hosts the mail, from the MX hosts just read (no further lookup).
+      return { email, syntaxValid, domain, mxRecords: mxRecords.slice(0, 10), deliverableDomain: mxRecords.length > 0, mailboxProvider: mailboxProviderOf(mxRecords, domain) };
     },
   },
   {
