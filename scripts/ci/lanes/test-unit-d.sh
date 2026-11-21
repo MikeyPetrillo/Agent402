@@ -321,6 +321,8 @@ t node scripts/test-scoreboard.js
 t node scripts/test-mcp-x402-routes.js
 # First-call allowance returning payers (operator view): granted wallets with a later outside paid sale, and within 7 days; one batched ledger read, cached (offline, temp SQLite ledger)
 t node scripts/test-first-call-allowance-returned.js
+# The seller boards rebuild at fixed slots, one at a time, never beside a crawl or under a high heap; a boot rebuilds only a missed slot (offline, simulated clock)
+t node scripts/test-board-refresh-slots.js
 t node scripts/test-attest-kit.js
 # One mirror pull in flight; a fresh lookup during a running pull waits and pulls again (offline)
 t node scripts/test-single-flight.js
@@ -493,6 +495,10 @@ t node scripts/test-loop-gate.js
 # Judgment backends: order, the private-table bound on Luna, one answer shape per route, /v1/decisions wire (offline, stubbed)
 t node scripts/test-judge-luna.js
 t node scripts/test-judge-preview.js
+# Judge timing: p50 and p95 per backend read and per walk, outcomes and fallbacks, on the operator view and an hourly log line (offline)
+t node scripts/test-judge-timing.js
+# The returning-wallet price: settings, routes never discounted, price math, the payment signer decides (never the hint), settle check, bounded ledger read (offline)
+t node scripts/test-returning-wallet.js
 # Decision-1: the shared client, the internal fallback at every Jev call site, the third paid backend and its private-table bound (offline, stubbed)
 t node scripts/test-decision-one.js
 # Wish-board input hygiene (a client bug is not market demand)

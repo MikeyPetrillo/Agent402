@@ -10,7 +10,7 @@
 // page that types the exception would be wrong the day the tier is switched
 // off. Derive both from the same function the router reads.
 import { svmUnprovenAllowanceAtomic } from "./solana-buyer.js";
-import { baseUnprovenAllowanceUsd, baseUnprovenSellerDailyUsd, baseUnprovenLaneDailyUsd } from "./base-unproven.js";
+import { baseUnprovenAllowanceUsd, baseUnprovenSellerDailyUsd, baseUnprovenLaneDailyUsd, evmUnprovenAllowanceByChain } from "./base-unproven.js";
 import { ROUTE_ORDER, routeTiebreakProse } from "./route-order.js";
 import { usdFigure } from "./price-usd.js";
 
@@ -41,8 +41,16 @@ export function routingProofSentence() {
     if (base > 0) tiers.push(`${usd(base)} a call on Base${caps ? ` (${caps})` : ""}`);
     if (sol > 0) tiers.push(`${usd(sol)} a call on Solana`);
   }
+  // The other EVM chains the operator lists share one ceiling and Base's
+  // daily caps (one day across chains).
+  const others = Object.entries(evmUnprovenAllowanceByChain());
+  if (others.length) {
+    const names = others.map(([c]) => c[0].toUpperCase() + c.slice(1));
+    const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+    tiers.push(`${usd(others[0][1])} a call on ${list}`);
+  }
   if (!tiers.length) return "Sellers are routable on proven on-chain settlement.";
-  return `Sellers are routable on proven on-chain settlement, with one exception: a seller with no settlement history yet is tried only after every proven candidate, capped at ${tiers.join(" and ")}, and flagged unproven on the receipt.`;
+  return `Sellers are routable on proven on-chain settlement, with one exception: a seller with no settlement history yet is tried only after every proven candidate, capped at ${tiers.length > 2 ? `${tiers.slice(0, -1).join(", ")} and ${tiers[tiers.length - 1]}` : tiers.join(" and ")}, and flagged unproven on the receipt.`;
 }
 
 /**

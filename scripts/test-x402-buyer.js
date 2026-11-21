@@ -573,7 +573,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
   const payFn = src.slice(src.indexOf("export async function payX402"));
-  const at = payFn.indexOf('chain === "base" && allowUnproven');
+  const at = payFn.indexOf("const ceiling = unprovenAllowanceAtomicFor(chain);");
   ok(at > payFn.indexOf("quoteWithinCap(quotedAtomic, maxAtomic)") && at < payFn.indexOf("reserveSpend(quotedAtomic)"), "unproven Base: the ceiling check sits after the cap check and before any budget hold or signature");
   const capAt = payFn.indexOf("reserveUnprovenSellerSpend(");
   ok(capAt > at && capAt > payFn.indexOf("let committed = false;\n  try {") && capAt < payFn.indexOf("createPaymentPayload("), "unproven Base: the per-seller daily cap is reserved after the ceiling check, inside the budget hold's try (a refusal gives the hold back), and before any signature");

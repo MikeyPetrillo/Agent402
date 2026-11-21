@@ -63,6 +63,7 @@ export function passingHook(name, fn) {
 export const HOOK_NAMES = Object.freeze({
   arcContractWalletGate: "arc-contract-wallet-gate",
   walletBlocklist: "wallet-blocklist",
+  returningWallet: "returning-wallet",
   clientGone: "client-gone",
   settleSent: "settle-sent",
 });

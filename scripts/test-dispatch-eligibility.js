@@ -250,10 +250,10 @@ ok(dispatchEligibility({ local: true }).reason === "local_catalog" && dispatchEl
   }
   const { readFileSync } = await import("node:fs");
   const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/verdict\.chains\.base\?\.unprovenTier === true/.test(srv), "the resolver admits only on the label's own unprovenTier verdict");
+  ok(/!eligible && verdict\.chains\[chain\]\?\.unprovenTier === true/.test(srv), "the resolver admits only on the label's own unprovenTier verdict");
   ok(/\(a\.unproven \? 1 : 0\) - \(b\.unproven \? 1 : 0\)\) \|\| \(b\.settled - a\.settled\)/.test(srv), "the resolver orders unproven Base candidates after every proven one");
-  ok(/live && chain === "base" && r\.unproven[\s\S]{0,400}readLivePayTo\(\)[\s\S]{0,200}if \(!livePayTo\)/.test(srv), "an unproven Base candidate with an unreadable live payTo is not paid");
-  ok(/r\.unproven && chain === "base" && r\.chainProvenPayTo/.test(srv), "the payment is pinned to the unproven candidate's own live payTo");
+  ok(/live && isEvmBuyerChain\(chain\) && r\.unproven\) \{[\s\S]{0,100}readLivePayTo\(\)[\s\S]{0,200}if \(!livePayTo\)/.test(srv), "an unproven candidate with an unreadable live payTo is not paid");
+  ok(/r\.unproven && isEvmBuyerChain\(chain\) && r\.chainProvenPayTo/.test(srv), "the payment is pinned to the unproven candidate's own live payTo");
 }
 
 // Every lane figure prints through usdFigure: the floor-only reason quotes the

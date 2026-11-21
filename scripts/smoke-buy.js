@@ -1,5 +1,5 @@
 // Generic one-shot paid tool smoke test (owner-approved). Buys ONE tool from
-// production with real USDC on Base to confirm it works end-to-end (Chromium
+// production with real USDC on Base (or the chain SMOKE_NETWORK names) to confirm it works end-to-end (Chromium
 // render, a live-data tool like FRED, etc.). Marks the buy as internal traffic
 // (X-Heartbeat-Token) so it doesn't pollute the sales ledger.
 //
@@ -12,6 +12,10 @@
 //                 service; REQUIRED whenever SMOKE_TARGET names an outside seller)
 //   SMOKE_RECEIPT_OUT  path of a NEW file for the seller-signed offer receipt
 //                 (optional); when set and the seller returns none, the run fails
+//   SMOKE_NETWORK the one chain to pay on: base (default), arc, celo, polygon,
+//                 arbitrum or robinhood, or the CAIP-2 id of one. The key must
+//                 hold that chain's token; the cap and the signed-value check
+//                 are the same on every chain.
 //   SMOKE_TARGET  full origin to buy from INSTEAD of production (an external
 //                 x402 seller compatibility check, e.g. https://seller.example).
 //                 The internal-traffic marker is suppressed for external
@@ -23,6 +27,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { createHmac, createHash } from "node:crypto";
 import { decodeSettlementHeader, receiptOutputPath, signedOfferReceiptFromSettlement, writeSignedOfferReceipt } from "./lib/smoke-receipt.js";
 import { assertOwnPaidTarget, guardCappedSigning } from "./lib/buyer-guard.js";
+import { smokeNetwork, SMOKE_NETWORK_NAMES } from "./lib/smoke-network.js";
 
 const EXTERNAL_TARGET = (process.env.SMOKE_TARGET || "").trim().replace(/\/+$/, "");
 // SMOKE_TARGET is the explicit outside-seller mode (capped below); TARGET_URL
@@ -46,6 +51,9 @@ try { RECEIPT_OUT = receiptOutputPath(process.env.SMOKE_RECEIPT_OUT); } catch (e
 // which extension is responsible. Comma-separated, e.g. "offer-receipt".
 const STRIP_EXT = (process.env.SMOKE_STRIP_EXTENSIONS || "").split(",").map((x) => x.trim()).filter(Boolean);
 if (!ROUTE) { console.error("smoke-buy: SMOKE_ROUTE is required (e.g. /api/unemployment-rate)"); process.exit(2); }
+// Checked before any key: a chain outside the buyer table is never paid on.
+const SMOKE_NETWORK = smokeNetwork(process.env.SMOKE_NETWORK);
+if (!SMOKE_NETWORK) { console.error(`smoke-buy: SMOKE_NETWORK ${JSON.stringify(String(process.env.SMOKE_NETWORK).trim())} is not an EVM chain this check pays on (${SMOKE_NETWORK_NAMES.join(", ")}, or a CAIP-2 id of one); not paying`); process.exit(2); }
 // An outside seller is paid real USDC: the operator states what a good answer holds.
 if (EXTERNAL_TARGET && !EXPECT) { console.error("smoke-buy: SMOKE_EXPECT is required when SMOKE_TARGET selects an external target"); process.exit(2); }
 
@@ -59,15 +67,15 @@ const [{ privateKeyToAccount }, { x402Client }, { ExactEvmScheme }, { wrapFetchW
   import("viem/accounts"), import("@x402/core/client"), import("@x402/evm/exact/client"), import("@x402/fetch"),
 ]);
 const account = privateKeyToAccount(pk);
-console.log(`buyer: ${account.address}`);
+console.log(`buyer: ${account.address} on ${SMOKE_NETWORK}`);
 const client = disableVendorSpendControls(new x402Client());
-// Base only, x402 v2 only: the exact scheme is registered for the one CAIP-2
-// network this check pays on, so no v1 network name and no other chain can be
-// selected. Cap on the accept actually SIGNED: SMOKE_MAX_USD (default 0.05),
+// One chain (Base unless SMOKE_NETWORK names another), x402 v2 only: the exact
+// scheme is registered for the one CAIP-2 network this check pays on, so no
+// v1 network name and no other chain can be selected. Cap on the accept actually SIGNED: SMOKE_MAX_USD (default 0.05),
 // priced from the known-assets table (never the seller's decimals hint), with
 // the signed authorization's value checked before the payment is sent
 // (scripts/lib/buyer-guard.js).
-const SMOKE_NETWORKS = ["eip155:8453"];
+const SMOKE_NETWORKS = [SMOKE_NETWORK];
 const evmScheme = new ExactEvmScheme(account);
 for (const network of SMOKE_NETWORKS) client.register(network, evmScheme);
 guardCappedSigning(client, { maxUsd: SMOKE_MAX_USD, networks: SMOKE_NETWORKS });

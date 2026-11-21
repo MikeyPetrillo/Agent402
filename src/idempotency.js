@@ -144,6 +144,9 @@ export function noteChargedAfterServe(req, charged) {
   try { return fn({ tx: charged.tx, network: charged.network ?? null, wire: charged.wire ?? null }) === true; } catch { return false; }
 }
 
+/** The note a debt's void carries when its stored answer is served on a resend. */
+export const RESEND_SERVED_NOTE = "served on the resend of the same payment";
+
 export function implicitReplayAllowed(def, req, { hasLastingEffect, isIdentityBound }) {
   return Boolean(def) && !hasLastingEffect(def.slug) && !isIdentityBound(def) && req?.body?.stream !== true;
 }
@@ -157,15 +160,18 @@ export function implicitReplayAllowed(def, req, { hasLastingEffect, isIdentityBo
  *     ledger write failed or is queued (a queued void lands later), so
  *     refusing as refunded would leave the buyer neither served nor repaid;
  *     the resend is asked to retry, and then reads whichever landed.
- *  voidOnClaim(tx) and rowOf(tx) are the ledger's voidOwedOnClaim and
- *  refundByEvidenceFresh; either may throw or answer a promise. */
+ *  voidOnClaim(tx) and rowOf(tx) are the ledger's voidOwedOnResend (a void
+ *  that lands now or not at all, so a debt whose buyer never retries stays
+ *  owed) and refundByEvidenceFresh; either may throw or answer a promise.
+ *  A "serve" on a row that was already void hands the row back (`row`), so
+ *  the caller can note that its answer went out. */
 export async function chargedReplayVerdict(tx, { voidOnClaim, rowOf }) {
   let voided = false;
   try { voided = (await voidOnClaim(tx)) === true; } catch { voided = false; }
   if (voided) return { verdict: "serve", voided: true };
   let row = null;
   try { row = await rowOf(tx); } catch { row = null; }
-  if (!row || row.status === "void") return { verdict: "serve", voided: false };
+  if (!row || row.status === "void") return { verdict: "serve", voided: false, ...(row ? { row } : {}) };
   if (row.status === "owed") return { verdict: "pending", row };
   return { verdict: "refunded", row };
 }

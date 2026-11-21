@@ -75,6 +75,7 @@ import { stateDbEnabled, records } from "./state-db.js";
 import { handlerInputOf } from "./handler-input.js";
 import { wantsShare, answerShareEnabled } from "./answer-share.js";
 import { decodePaymentHeader } from "./payment-header.js";
+import { usdFigure } from "./price-usd.js";
 
 export const ALLOWANCE_HEADER = "X-Agent402-Allowance";
 export const ALLOWANCE_HEADER_VALUE = "first-call";
@@ -226,8 +227,56 @@ let deniedToday = { day: "", byReason: {} };
 export const NEW_WALLET_SLUG_CAP = 50;
 let newWalletDeniedToday = { day: "", byReason: {}, unclassified: {} };
 let lifecycleToday = { day: "", claimed: 0, served: 0, released: 0 };
+// THE REFUSAL LOG. The counts above are this process's and are gone at the
+// next deploy, so they are also written to the log: the finished day's totals
+// once when the day turns, and the day so far at most once per
+// REFUSAL_LOG_EVERY_MS while refusals keep arriving. Reasons and catalog slugs
+// only, never a payer.
+export const REFUSAL_LOG_EVERY_MS = 60 * 60_000;
+let refusalLogAt = 0;
+const countsOf = (o) => Object.entries(o || {}).sort(([a], [b]) => a.localeCompare(b)).map(([k, n]) => `${k}=${n}`).join(", ");
+/** One log line for a day's refusals, or null when the day has none. */
+export function allowanceRefusalLogLine(denied, newWallets, { soFar = false } = {}) {
+  const all = countsOf(denied?.byReason);
+  if (!all) return null;
+  const fresh = Object.entries(newWallets?.byReason || {}).sort(([a], [b]) => a.localeCompare(b))
+    .map(([r, v]) => `${r}=${v.total} (${countsOf(v.bySlug)})`).join(", ");
+  const unclassified = countsOf(newWallets?.unclassified);
+  return `[allowance] refusals${soFar ? " so far" : ""} ${denied.day}: ${all}${fresh ? ` | new wallets: ${fresh}` : ""}${unclassified ? ` | payer not read: ${unclassified}` : ""}`;
+}
+function logFinishedDay(now, day) {
+  // The day turned: the finished day's totals, once (the counters reset next).
+  if (!deniedToday.day || deniedToday.day === day) return;
+  const line = allowanceRefusalLogLine(deniedToday, newWalletDeniedToday.day === deniedToday.day ? newWalletDeniedToday : null);
+  if (line) console.log(line);
+  refusalLogAt = now;
+}
+function logDaySoFar(now) {
+  if (!refusalLogAt) { refusalLogAt = now; return; }
+  if (now - refusalLogAt < REFUSAL_LOG_EVERY_MS) return;
+  refusalLogAt = now;
+  const line = allowanceRefusalLogLine(deniedToday, newWalletDeniedToday.day === deniedToday.day ? newWalletDeniedToday : null, { soFar: true });
+  if (line) console.log(line);
+}
+/** A served grant's payer in the log: a salted sha256 prefix (the salt the
+ *  traffic rollups use, src/traffic-classifier.js), the same for one wallet
+ *  on every line, never the address. */
+export function allowancePayerHash(payer) {
+  if (typeof payer !== "string" || !payer) return "?";
+  const salt = process.env.TRAFFIC_HASH_SALT || process.env.POW_SECRET || "traffic";
+  return createHash("sha256").update(`${salt}|${normalizePayerAddress(payer) || payer}`).digest("hex").slice(0, 12);
+}
+/** The log line of one served grant: route, network, payer hash, list price. */
+export function allowanceGrantLogLine(a) {
+  return `[allowance] first-call grant served on ${a?.slug} (${a?.network}) payer=${allowancePayerHash(a?.payer)} list=${usdFigure((Number(a?.micro) || 0) / MICRO)}; settlement skipped, nothing charged`;
+}
 function noteDenied(reason, now, slug = null, payerClass = "unknown") {
   const day = dayOf(now);
+  try { logFinishedDay(now, day); } catch { /* a log line never decides a claim */ }
+  countDenied(reason, day, slug, payerClass);
+  try { logDaySoFar(now); } catch { /* as above */ }
+}
+function countDenied(reason, day, slug, payerClass) {
   if (deniedToday.day !== day) deniedToday = { day, byReason: {} };
   deniedToday.byReason[reason] = (deniedToday.byReason[reason] || 0) + 1;
   if (newWalletDeniedToday.day !== day) newWalletDeniedToday = { day, byReason: {}, unclassified: {} };
@@ -471,7 +520,7 @@ export async function finishFirstCallAllowance(req, { now = Date.now() } = {}) {
       catch (e) { lastStoreError = `record: ${String(e?.message || e).slice(0, 80)}`; }
     }
     noteLifecycle("served", now);
-    console.log(`[allowance] first-call grant served on ${a.slug} (${a.network}); settlement skipped, nothing charged`);
+    console.log(allowanceGrantLogLine(a));
     return true;
   }
   const r = await evalBounded(RELEASE, [k.wallet, k.usd, k.count, k.ip], [a.token, a.micro]);
@@ -603,4 +652,4 @@ export async function firstCallAllowanceStatus({ now = Date.now(), returned = nu
 /** Test seam: how many claimed payments this process holds. */
 export function _allowanceClaimsHeld() { return claimsByPayment.size; }
 /** Test seam. */
-export function _resetFirstCallAllowance() { claimsByPayment.clear(); returnedCache = null; returnedInflight = null; lastStoreError = null; deniedToday = { day: "", byReason: {} }; newWalletDeniedToday = { day: "", byReason: {}, unclassified: {} }; lifecycleToday = { day: "", claimed: 0, served: 0, released: 0 }; }
+export function _resetFirstCallAllowance() { claimsByPayment.clear(); returnedCache = null; returnedInflight = null; lastStoreError = null; refusalLogAt = 0; deniedToday = { day: "", byReason: {} }; newWalletDeniedToday = { day: "", byReason: {}, unclassified: {} }; lifecycleToday = { day: "", claimed: 0, served: 0, released: 0 }; }

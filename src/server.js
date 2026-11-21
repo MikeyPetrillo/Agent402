@@ -586,6 +586,7 @@ import { partialFields } from "./partial-answer.js";
 import { crawlSwitch } from "./crawl-switch.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
+import { addBoardRefreshQuietCheck } from "./board-refresh-slots.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode, tempoRefusalProblem } from "./mpp-tempo.js";
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
@@ -813,7 +814,7 @@ import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
 import { isBinaryListing, listingMimeTypeOf, responseTypesOf } from "./tool-media-type.js";
-import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict, noteChargedAfterServe } from "./idempotency.js";
+import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict, noteChargedAfterServe, RESEND_SERVED_NOTE } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, STOCK_CORE_PACK_SLUGS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
@@ -863,7 +864,7 @@ import { flushXSearchStats, xSearchStatsReport, xSearchAuthorsStatus } from "./x
 import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
-import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
+import { dispatchEligibility, dispatchLegend, unprovenLaneAtLivePayTo } from "./dispatch-eligibility.js";
 import { routeExcludedCategory } from "./route-category.js";
 import { tempoCandidateOf, resolvedCandidateOf } from "./sor-candidates.js";
 import { baseUnprovenAllowanceUsd, configureUnprovenSharedPayTos } from "./base-unproven.js";
@@ -871,7 +872,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
+import { topExternalPayersAsync, payerPaidDays, externalReturnRateAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -979,6 +980,8 @@ import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, l
 import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
 import { rerankMisses, rerankEnabled } from "./discovery-rerank.js";
 import { JUDGE_TOOLS, judgeEnabled } from "./tools/judge-kit.js";
+import { judgeTimingReport } from "./judge-timing.js";
+import { returningWalletEnabled, returningWalletOfferMiddleware, returningWalletStatus, configureReturningWallet } from "./returning-wallet.js";
 import { JUDGE_PREVIEW_TOOLS, judgePreviewEnabled } from "./tools/judge-preview-kit.js";
 import { LOOP_GATE_TOOLS } from "./tools/loop-gate-kit.js";
 
@@ -1047,7 +1050,7 @@ import { withBudgetCeiling } from "./upstream-deadline.js";
 import { settleBreakerOtherLane } from "./gateway-settle-breaker.js";
 import { PAID_QUOTE_TRUST_MINUTES } from "./paid-quote-trust.js";
 import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedOnResend, noteResendAnswerSent, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush, recordReferralAnswer, referralAnswersByDay } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
@@ -1798,11 +1801,12 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
   // `executeViaWhenEligible` and `executeViaCallableNow` says false in so many
   // words. The tier is still useful (it is what the buyer would pay once the
   // seller proves out), it just must not look like a button.
-  // A row in the Base unproven tier IS dispatched (after every proven
-  // candidate, src/base-unproven.js and resolveExternalSeller), so it is
-  // callable now too, marked as the unproven lane.
+  // A row in the unproven tier (Base's, or a listed chain's) IS dispatched
+  // (after every proven candidate, src/base-unproven.js and
+  // resolveExternalSeller), so it is callable now too, marked as the
+  // unproven lane.
   const { executeVia, ...rest } = row;
-  const unprovenLane = !verdict.eligible && rowLevel && verdict.chains?.base?.unprovenTier === true;
+  const unprovenLane = !verdict.eligible && rowLevel && Object.values(verdict.chains || {}).some((c) => c?.unprovenTier === true);
   const affordance = executeVia === undefined ? {} : (verdict.eligible
     ? { executeVia, executeViaCallableNow: true }
     : unprovenLane
@@ -1995,7 +1999,8 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     // THE EVM FAMILY: Base, and every other chain src/evm-buyer-chains.js
     // lists that SOR_EVM_CHAINS enables (route-execute never asks for one it
     // does not). One gate for all of them, keyed on the chain's CAIP-2 id;
-    // the unproven tier below stays Base's.
+    // the unproven tier below is Base's and each chain's the operator lists
+    // (SOR_EVM_UNPROVEN_CHAINS), read from the same labelled verdict.
     const evmCfg = evmBuyerChain(chain);
     const { results } = await routeRows({ query: task, top: onlyUrl ? 200 : 20, include: "external", ...(chain !== "base" ? { networkFilter: evmCfg.caip2, strictNetwork: true } : {}), ...indexCtx() });
     // The SAME evidence object every public label reads (dispatchEvidence):
@@ -2040,7 +2045,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // else wrong and a price within the ceiling. Kept, marked, and
         // ordered after every proven candidate; paid only at the wallet its
         // own live 402 names (below) and never above the ceiling (payX402).
-        if (!eligible && chain === "base" && verdict.chains.base?.unprovenTier === true) {
+        if (!eligible && verdict.chains[chain]?.unprovenTier === true) {
           r.unproven = true;
           gateDrops.byReason.unproven_admitted = (gateDrops.byReason.unproven_admitted || 0) + 1;
           return true;
@@ -2316,13 +2321,14 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // gate with the origin's binding and the address its live 402 actually
         // asks us to pay: it counts only when THAT wallet's own evidence clears
         // the floor; unreadable is not a match.
-        // An UNPROVEN Base candidate has no evidence to bind; it is pinned to
-        // the address its own live 402 names instead, and an unreadable one
-        // is not paid (the payment re-checks the accept it signs against it).
-        if (live && chain === "base" && r.unproven) {
+        // An UNPROVEN candidate has no evidence to bind; it is pinned to
+        // the address its own live 402 names on the chain being paid instead,
+        // and an unreadable one is not paid (the payment re-checks the accept
+        // it signs against it).
+        if (live && isEvmBuyerChain(chain) && r.unproven) {
           const livePayTo = await readLivePayTo();
           if (!livePayTo) {
-            console.warn(`[sor] skipping unproven Base candidate ${r.seller}: its live payTo could not be read`);
+            console.warn(`[sor] skipping unproven ${chain} candidate ${r.seller}: its live payTo could not be read`);
             live = false;
           } else {
             // The unproven lane is the label's (withDispatchFields): the same
@@ -2331,16 +2337,16 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
             // without this an origin whose withheld history sits at a shared
             // wallet (evidence_payto_shared, which the label keeps out of the
             // lane) was paid in it.
-            const lane = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: ["base"], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null, evidence: r.binding || undefined, livePayTo });
-            if (lane.chains.base?.unprovenTier !== true) {
-              console.warn(`[sor] skipping unproven Base candidate ${r.seller}: ${lane.chains.base?.detail || lane.reason} at its live payTo`);
+            const lane = unprovenLaneAtLivePayTo({ chain, row: r, livePayTo, minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS });
+            if (lane?.unprovenTier !== true) {
+              console.warn(`[sor] skipping unproven ${chain} candidate ${r.seller}: ${lane?.detail || lane?.reason || "not in the lane"} at its live payTo`);
               live = false;
               gateDrops.total++;
-              const why = lane.chains.base?.reason || "other";
+              const why = lane?.reason || "other";
               gateDrops.byReason[why] = (gateDrops.byReason[why] || 0) + 1;
             } else {
               r.chainProvenPayTo = livePayTo;
-              console.log(`[sor] admitting Base candidate ${r.seller} as UNPROVEN (${r.priceUsd} is within the unproven ceiling) - tried after proven sellers`);
+              console.log(`[sor] admitting ${chain} candidate ${r.seller} as UNPROVEN (${r.priceUsd} is within the unproven ceiling) - tried after proven sellers`);
             }
           }
         }
@@ -2377,7 +2383,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     // `wire` rides through: a Tempo candidate settles over MPP and its receipt
     // must say so (the first live Tempo SOR buy labelled it x402, 2026-08-27).
     if (live) {
-      resolved.push(resolvedCandidateOf(r, { provenPayTo: (r.unproven && chain === "base" && r.chainProvenPayTo) || provenPayToByOrigin?.get(norm(r.seller)) || r.chainProvenPayTo || null, evidenceWallets }));
+      resolved.push(resolvedCandidateOf(r, { provenPayTo: (r.unproven && isEvmBuyerChain(chain) && r.chainProvenPayTo) || provenPayToByOrigin?.get(norm(r.seller)) || r.chainProvenPayTo || null, evidenceWallets }));
       // Only PROVEN candidates count toward the limit: an unproven one must
       // never crowd out a proven seller ranked below it.
       if (resolved.filter((x) => !x.unproven).length >= Math.max(1, limit)) break;
@@ -3395,6 +3401,9 @@ startSharedLimitsProbe();
 // the sales ledger shortly after boot and then on a timer, never on a
 // request's path: topBuyerFailures on /api/gateway-status watches their
 // verified paid calls for failures.
+// The returning-wallet price reads a wallet's paid days from the sales ledger
+// (the mirror, in database mode) and never discounts one of our own wallets.
+configureReturningWallet({ paidDays: (wallet, sinceMs) => payerPaidDays(wallet, sinceMs), isOurs: (w) => isOwnWallet(w) });
 if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerReady(); return topExternalPayersAsync(o); }, isOwn: (p) => isOwnWallet(p), firstMs: Math.min(5_000, topRefreshMs()) });
 // Per-tool and per-upstream failure detail (src/tool-failure-monitor.js):
 // slugs, classes, last messages, upstream outcomes, facilitator refusals.
@@ -3410,6 +3419,24 @@ if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerRea
 // imageGenModeration: image-gen renders and content-check refusals by the
 // moderation level sent, and requests sent again without the parameter, since
 // boot (src/tools/image-gen-kit.js; counts only).
+// The returning-wallet price (src/returning-wallet.js): the settings in
+// force, this process's counts (hints seen, discounted quotes and payments,
+// payments from another wallet) and the outside payers' return rate over the
+// last 60 days from the sales ledger (wallets by distinct paid days).
+app.get("/__operator/returning-wallets.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  const cfg = returningWalletStatus();
+  let returnRate = null;
+  try { await salesLedgerReady(); returnRate = await externalReturnRateAsync({ days: 60, minPaidDays: cfg.minPaidDays }); } catch (e) { returnRate = { error: String(e?.message || e).slice(0, 120) }; }
+  res.set("Cache-Control", "private, no-store").json({ ...cfg, returnRate });
+});
+// Judge timing (src/judge-timing.js): p50 and p95 per backend read and per
+// whole walk, outcomes, and how often a fallback answered. This process's own
+// samples; no payer, input or answer.
+app.get("/__operator/judge-timing.json", (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store").json(judgeTimingReport());
+});
 app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
@@ -10181,7 +10208,7 @@ app.get("/api/route/external-debug", async (req, res) => {
 // TOP N of that board and never the whole of it. Free, like /api/find +
 // /api/route:
 // discovery primitives shouldn't cost money. Snapshot is cached in memory and
-// refreshed every 4 hours (see startLeaderboardRefresh below): each request is a
+// refreshed twice a day (see startLeaderboardRefresh below): each request is a
 // sub-millisecond read, never a live Bazaar walk.
 //
 // Query params (all optional):
@@ -11867,6 +11894,10 @@ if (!FREE_MODE) {
   // header, `async` block in the JSON body). Mounted after the mirror so its
   // send wrapper runs first and the mirror's protocol keys still win.
   app.use(asyncAdviceMiddleware((req) => CATALOG[`${req.method} ${req.path}`] || null));
+  // The returning-wallet price (src/returning-wallet.js; off unless its
+  // switch is on): an eligible route's JSON 402 names the hint header and
+  // the terms, and says whether this request's quote carries the discount.
+  if (returningWalletEnabled()) app.use(returningWalletOfferMiddleware((req) => CATALOG[`${req.method} ${req.path}`] || null));
   app.use(verifyHintMiddleware());
 
   const mppShim = createMppShim({
@@ -12090,14 +12121,19 @@ app.use(createIdempotency({
     // has already claimed or paid is not voided, and then the answer is not
     // served either, so a buyer is served once, never both served and
     // refunded. No row, or one already void, serves. A void that did not land
-    // while the row still reads owed (a failed or queued ledger write, which
-    // lands later) asks for a retry instead of refusing as refunded.
+    // while the row still reads owed (a failed ledger write) asks for a retry
+    // instead of refusing as refunded; that void is never replayed later
+    // (voidOwedOnResend), so a buyer who does not retry before the stored
+    // answer expires keeps the debt owed.
     const { verdict, voided, row } = await chargedReplayVerdict(charged.tx, {
-      voidOnClaim: (tx) => voidOwedOnClaim(tx, "served on the resend of the same payment"),
+      voidOnClaim: (tx) => voidOwedOnResend(tx, RESEND_SERVED_NOTE),
       rowOf: (tx) => refundByEvidenceFresh(tx),
     });
     if (verdict === "serve") {
       if (voided) console.log(`[hangup] undelivered answer served on resend (${req.method} ${req.path} tx=${charged.tx}); its debt is void`);
+      // A row an earlier resend voided without being served (its void's
+      // answer was lost): this answer goes out, and the note says so.
+      else if (row) { try { await noteResendAnswerSent(charged.tx, row, RESEND_SERVED_NOTE); } catch { /* best effort */ } }
       return;
     }
     if (verdict === "pending") {
@@ -14333,12 +14369,12 @@ if (!mppCrawl.on) {
   // MPP leaderboard: on-chain ranking of the verified sellers above by inbound
   // USDC.e transfers on Tempo (src/mpp-leaderboard.js). Rides the crawler's
   // switch (nothing to rank without it) plus its own escape hatch; the
-  // rebuild is one batched eth_getLogs per 33k-block chunk every 30 min.
+  // rebuild is one batched eth_getLogs per 33k-block chunk at its fixed slots.
   if (String(process.env.MPP_LEADERBOARD || "").toLowerCase() === "off") {
     console.log("[mpp-leaderboard] disabled (MPP_LEADERBOARD=off)");
   } else {
     startMppLeaderboard({ self: tempoSelfRecipient() });
-    // Solana SPL leaderboard: hourly batched credits scan over every Solana
+    // Solana SPL leaderboard: a batched credits scan at its fixed slots over every Solana
     // payTo the index knows, primed into the pay-time gate (src/solana-leaderboard.js).
     startSolanaLeaderboard({
       listPayTos: async () => (await import("./x402-index.js")).allSolanaPayToOriginsAsync(),
@@ -14436,7 +14472,8 @@ if (_monitors && process.env.MONITOR_SCHEDULER !== "off") bootStep("monitors.sta
 // chain's public RPC from it.
 if (revenueWarmupEnabled()) bootStep("revenueSnapshot", () => revenueSnapshot(revenueWallets()).catch(() => { /* first pageview warms instead */ }));
 
-// x402 Leaderboard cache: warms once at boot, refreshes every 4 hours. Failures keep
+// x402 Leaderboard cache: warm-started at boot, rebuilt at its fixed slots
+// (src/board-refresh-slots.js). Failures keep
 // the previous good snapshot rather than wiping it — a transient RPC outage
 // shouldn't make /api/leaderboard return nothing. Fire-and-forget so a slow
 // Bazaar walk can't delay boot or /health.
@@ -14481,6 +14518,8 @@ bootStep("setAlgorandCrawlSources", () => {
     countInbound: makeIndexerInboundCount(getJsonAcross, ALGORAND_INDEXER_BASES),
   });
 });
+// A board rebuild that is due waits while an index crawl is in flight.
+addBoardRefreshQuietCheck(() => (crawlInProgress() ? "an index crawl is in flight" : null));
 bootStep("startLeaderboardRefresh", () => startLeaderboardRefresh({
   crawledWallets: (chain) => allPayToOriginsAsync(chain?.caip2 || "eip155:8453"),
   // The prices those wallets' own routes publish, so a transfer to a wallet

@@ -307,6 +307,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "x402-quote", "usdc-balance", "tx-status", "gas-estimate", "x402-verify", "transfer-authorization", "ens-resolve", "x402-audit",
   "route-execute-max", // external tier can spend upstream — wallet-only
   "route-execute-plus", // same reasoning: proportional middle tier, spends upstream
+  "route-execute-mid", // same reasoning: the band between plus and max, spends upstream
   // route-execute-pro is the highest external tier and must never be
   // PoW-eligible: the free tier has no per-caller spend cap, because
   // external-spend-guard.js's maySpend() returns ok:true, uncapped, whenever

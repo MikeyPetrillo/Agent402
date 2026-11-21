@@ -27,7 +27,7 @@ export const OUR_HOSTS = ["agent402.tools"];
 // Slugs whose answer names outside sellers, counterparties or wallets by design.
 export const CAPTURE_DENY = new Set([
   // router tiers and anything that buys from an outside seller
-  "route-execute", "route-execute-plus", "route-execute-pro", "route-execute-max", "seller-payability",
+  "route-execute", "route-execute-plus", "route-execute-mid", "route-execute-pro", "route-execute-max", "seller-payability",
   // seller and index tools
   "seller-trust", "seller-dossier", "x402-market-pulse", "x402-trending", "x402-quote", "x402-verify", "x402-audit",
   "demand-radar", "bestsellers", "sellers-list",

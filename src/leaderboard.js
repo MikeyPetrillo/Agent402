@@ -22,7 +22,7 @@
 //
 // Why server-side caching matters: a full run is ~28 Bazaar pages + several
 // eth_getLogs calls (~30s-2min). We cache the snapshot in memory and refresh
-// every 4 hours; the endpoint reads from cache so each request is sub-millisecond.
+// twice a day; the endpoint reads from cache so each request is sub-millisecond.
 
 import { existsSync } from "node:fs";
 import { createDocumentCache } from "./json-document.js";
@@ -38,6 +38,7 @@ import { createLogWindowCache, createLogCacheStore, logCacheEnabled, decodeTrans
 
 import { createBlockClock, rpcHeaderReader } from "./block-clock.js";
 import { LEADERBOARD_REFRESH_MS } from "./refresh-cadence.js";
+import { scheduleBoardRefresh, SLOT_PEER_FRESH_MS } from "./board-refresh-slots.js";
 import { registerMemoryStore } from "./memory-stores.js";
 // The board's window is a span of TIME (24h by default, 7d in production),
 // and the scan finds the block where it starts by BLOCK TIMESTAMP
@@ -1716,12 +1717,14 @@ let cached = {
   refreshIntervalMs: null,
 };
 let refreshTimer = null;
+let slotSchedule = null;
 
-// Four hours (was one; src/refresh-cadence.js): every refresh re-reads the
-// board's window through the metered keyed RPCs. The router's seller evidence
-// comes from this snapshot, so a newly proven seller qualifies within one
-// refresh. LEADERBOARD_REFRESH_MS overrides it, like SOLANA_LB_REFRESH_MS for
-// the Solana board.
+// Twice a day at the board's fixed slots (src/board-refresh-slots.js,
+// src/refresh-cadence.js): every refresh re-reads the board's window through
+// the metered keyed RPCs. The router's seller evidence comes from this
+// snapshot, so a newly proven seller qualifies within one refresh.
+// LEADERBOARD_REFRESH_MS overrides it with a plain interval, like
+// SOLANA_LB_REFRESH_MS for the Solana board.
 const REFRESH_INTERVAL_MS = LEADERBOARD_REFRESH_MS;
 
 // The Base board's log window cache (src/leaderboard-log-cache.js): one per
@@ -1838,7 +1841,7 @@ async function refreshOnceUnleased({ peerFreshMs = 0, ...opts } = {}) {
  * default cadence, LEADERBOARD_REFRESH_MS (useful in tests).
  */
 export function startLeaderboardRefresh(opts = {}) {
-  if (refreshTimer) return;
+  if (refreshTimer || slotSchedule) return;
   const intervalMs = opts.intervalMs ?? REFRESH_INTERVAL_MS;
   cached.refreshIntervalMs = intervalMs;
   // Warm-start from the persisted full snapshot so getLeaderboardSnapshot serves
@@ -1862,8 +1865,23 @@ export function startLeaderboardRefresh(opts = {}) {
   // self-time in the boot profile) competed with the first health check, and
   // the disk snapshot above serves the page meanwhile. opts.firstDelayMs: 0
   // keeps the old behaviour for callers that need the refresh at once.
-  if (process.env.X402_SYNC_ON_START !== "false") {
-    const firstDelayMs = Number.isFinite(opts.firstDelayMs) ? opts.firstDelayMs : Number(process.env.LEADERBOARD_FIRST_REFRESH_DELAY_MS ?? 20_000);
+  const bootKick = process.env.X402_SYNC_ON_START !== "false";
+  const firstDelayMs = Number.isFinite(opts.firstDelayMs) ? opts.firstDelayMs : Number(process.env.LEADERBOARD_FIRST_REFRESH_DELAY_MS ?? 20_000);
+  // THE SLOTS (src/board-refresh-slots.js): with no interval named (by the
+  // caller or LEADERBOARD_REFRESH_MS) the board rebuilds at its fixed hours,
+  // never beside another board's rebuild or an index crawl and never while
+  // the heap is high, and a boot rebuilds only a board that has no snapshot
+  // since its last slot.
+  if (opts.intervalMs == null && !(Number(process.env.LEADERBOARD_REFRESH_MS) > 0)) {
+    slotSchedule = scheduleBoardRefresh({
+      board: "base",
+      run: ({ slot }) => refreshOnce(slot ? { ...opts, peerFreshMs: SLOT_PEER_FRESH_MS } : opts),
+      snapshotAt: () => Date.parse(cached.snapshot?.asOf || "") || 0,
+      bootDelayMs: bootKick ? Math.max(0, firstDelayMs) : null,
+    });
+    return;
+  }
+  if (bootKick) {
     const first = setTimeout(() => refreshOnce(opts).catch(() => {}), Math.max(0, firstDelayMs));
     if (typeof first.unref === "function") first.unref();
   }
@@ -1878,6 +1896,7 @@ export function stopLeaderboardRefresh() {
     clearInterval(refreshTimer);
     refreshTimer = null;
   }
+  if (slotSchedule) { slotSchedule.stop(); slotSchedule = null; }
 }
 
 /**

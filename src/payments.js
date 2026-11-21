@@ -43,6 +43,7 @@ import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, t
 import { lateSettleHolder, OWED_ELSEWHERE, ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere, releasingClaimsOnRefusal, settledRefundOwedResult, txServedElsewhere } from "./settlement-claims.js";
 import { randomUUID } from "node:crypto";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
+import { returningWalletEnabled, returningWalletRouteRefusal, returningWalletQuote, returningWalletSettleDecision, RETURNING_WALLET_MISMATCH } from "./returning-wallet.js";
 import { registerLateSettleHook } from "./late-settlements.js";
 import { RAW_SETTLE_RECEIPT } from "./settle-fault.js";
 import { chargeCancelledForClientGone, registerSettleSentHook, settleSentWhileConnected, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
@@ -553,11 +554,11 @@ export const isIdentityBoundRoute = (def) =>
 // EXEC_TIERS so the next tier cannot repeat that).
 // Router tiers only - the subset whose Algorand revenue is chain-matched to
 // the AVM spending wallet (see avmPayToFor).
-export const AVM_SELF_FUNDING_SLUGS = new Set(["route-execute", "route-execute-plus", "route-execute-max", "route-execute-pro"]);
+export const AVM_SELF_FUNDING_SLUGS = new Set(["route-execute", "route-execute-plus", "route-execute-mid", "route-execute-max", "route-execute-pro"]);
 const AVM_UPSTREAM_BUYER_ADDRESS = (process.env.ALGORAND_UPSTREAM_BUYER_ADDRESS || "").trim();
 
 export const SELF_FUNDING_SLUGS = new Set([
-  "route-execute", "route-execute-plus", "route-execute-max", "route-execute-pro",
+  "route-execute", "route-execute-plus", "route-execute-mid", "route-execute-max", "route-execute-pro",
 ]);
 const UPSTREAM_BUYER_ADDRESS = (process.env.X402_UPSTREAM_BUYER_ADDRESS || "").trim();
 
@@ -707,8 +708,23 @@ export function acceptsForItem(item, rails) {
   // names another flat tier's model at that tier's price (price by model), and
   // the handler serves that tier only when the stash covers it.
   const quoteFn = typeof item.quote === "function" ? item.quote : typeof item.tierQuote === "function" ? item.tierQuote : null;
-  const priceOf = (caip2) => {
-    if (!quoteFn) return priceForNetwork(item.price, caip2);
+  // THE RETURNING-WALLET PRICE (src/returning-wallet.js; off unless its
+  // switch is on). On an eligible flat route the x402 EVM `exact` accept is
+  // priced per request: list, or the discount when the request's wallet hint
+  // names a qualifying wallet and, on the paid request, the payment is signed
+  // from that wallet. Decided once per request; every other accept stays a
+  // fixed list price, and with the switch off every accept does.
+  const loyal = !quoteFn && returningWalletEnabled() && returningWalletRouteRefusal(item) === null;
+  const priceOf = (caip2, { exactEvm = false } = {}) => {
+    if (!quoteFn && !(loyal && exactEvm)) return priceForNetwork(item.price, caip2);
+    if (!quoteFn) return async (ctx) => {
+      let price = item.price;
+      try {
+        const q = returningWalletQuote(ctx?.adapter?.req, item);
+        if (q?.applied === true && typeof q.price === "string") price = q.price;
+      } catch { price = item.price; }
+      return priceForNetwork(price, caip2);
+    };
     return async (ctx) => {
       let usd = null;
       try {
@@ -736,7 +752,7 @@ export function acceptsForItem(item, rails) {
   // A tool may name the only networks it can serve (`onlyNetworks`): offering
   // a rail its handler cannot use would take a payment it then has to refuse.
   const allowed = Array.isArray(item.onlyNetworks) && item.onlyNetworks.length ? new Set(item.onlyNetworks) : null;
-  const evm = evmCaip2.filter((caip2) => !allowed || allowed.has(caip2)).map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2 }));
+  const evm = evmCaip2.filter((caip2) => !allowed || allowed.has(caip2)).map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2, { exactEvm: true }), network: caip2 }));
   // `upto` rides ALONGSIDE `exact` on the gated networks, at the identical
   // price and payTo. The scheme is chosen per payment-option, not per
   // registration, so dual-advertising means emitting a second option - which is
@@ -2674,6 +2690,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       count: (network, reason, held) => toolFailureMonitor().noteFundingRefusal({ network, reason, held }),
     });
   }
+  // A discounted request (src/returning-wallet.js) settles only for the
+  // wallet the discount was given to: checked with the other hooks that can
+  // abort a settle, before the authorization claim.
+  registerReturningWalletSettleHook(server);
   registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
@@ -3321,6 +3341,21 @@ export function registerWalletBlocklistPayerEnrichment(server) {
       }
     }
   });
+}
+
+/** The returning-wallet settle check (src/returning-wallet.js): a discounted
+ *  request settles only for the wallet it was quoted for. A throw refuses the
+ *  settle too (the buyer is not charged). */
+export function registerReturningWalletSettleHook(server) {
+  server.onBeforeSettle(refusingHook(HOOK_NAMES.returningWallet, (ctx) => {
+    const d = returningWalletSettleDecision(ctx);
+    if (!d) return;
+    console.warn(`[payments] returning-wallet price refused before settlement: the payer is not the wallet it was quoted for (${ctx?.requirements?.network})`);
+    return { abort: true, reason: d.reason, message: "This payment was signed for a returning-wallet price by a wallet other than the one it was quoted for, so it was not settled. Nothing was charged; request the resource again for the list price." };
+  }, {
+    reason: RETURNING_WALLET_MISMATCH,
+    message: "The returning-wallet check could not run for this payment, so it was not settled. Nothing was charged; retry shortly.",
+  }));
 }
 
 // A throw refuses the settlement (the buyer is not charged): a payer the

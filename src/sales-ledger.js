@@ -1094,6 +1094,50 @@ export function payerHasPaidSale(payer) {
   if (!p) return false;
   return Boolean(qPayerAnySale.get(p));
 }
+// Distinct UTC days on which a payer has an outside paid sale since `sinceMs`
+// (the returning-wallet price's bar, src/returning-wallet.js). One seek on
+// idx_sales_payer over that payer's rows in the window; INDEXED BY pins it
+// (the table carries no ANALYZE statistics). The caller caches the answer.
+const qPayerPaidDays = db.prepare(`
+  SELECT COUNT(DISTINCT CAST(ts / 86400000 AS INTEGER)) AS d
+    FROM sales INDEXED BY idx_sales_payer
+   WHERE payer = ? AND ts >= ? AND internal = 0 AND rail IN ${PAYING_RAILS_SQL}`);
+/** Distinct paid UTC days of a payer since `sinceMs` (0 for an unreadable address). Database mode: the mirror. */
+export function payerPaidDays(payer, sinceMs) {
+  const p = normalizePayerAddress(payer);
+  if (!p) return 0;
+  return Number(qPayerPaidDays.get(p, Number(sinceMs) || 0)?.d) || 0;
+}
+// The return rate of outside payers over a window, for the operator view: how
+// many wallets paid on one day only, on two, and on `minPaidDays` or more.
+// Read a page at a time (one row per payer and day), our own wallets left out.
+const qPayerDaysPage = db.prepare(`
+  SELECT DISTINCT payer, CAST(ts / 86400000 AS INTEGER) AS day
+  ${WINDOW_PAGE} AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL`);
+function* externalReturnRateSteps({ days = 60, minPaidDays = 3, now = Date.now() } = {}) {
+  const since = now - days * 86_400_000;
+  const byPayer = new Map();
+  yield* windowPages(since, (a, b) => {
+    for (const r of qPayerDaysPage.all(a, b, since)) {
+      if (BURNERS.has(r.payer) || BURNERS.has(String(r.payer).toLowerCase())) continue;
+      let set = byPayer.get(r.payer);
+      if (!set) { set = new Set(); byPayer.set(r.payer, set); }
+      set.add(r.day);
+    }
+  });
+  let one = 0, two = 0, more = 0, qualifying = 0;
+  for (const set of byPayer.values()) {
+    if (set.size === 1) one++; else if (set.size === 2) two++; else more++;
+    if (set.size >= minPaidDays) qualifying++;
+  }
+  const payers = byPayer.size;
+  return { windowDays: days, minPaidDays, payers, paidOneDayOnly: one, paidTwoDays: two, paidThreeOrMoreDays: more, paidAgainOnAnotherDay: two + more, returnRate: payers ? Math.round(((two + more) / payers) * 1000) / 1000 : null, qualifying };
+}
+/** The outside payers' return rate over `days`, spread over event-loop turns. */
+export function externalReturnRateAsync({ days = 60, minPaidDays = 3, now = Date.now() } = {}) { return runStepsAsync(externalReturnRateSteps({ days, minPaidDays, now })); }
+/** The same, in one turn (tests and small ledgers). */
+export function externalReturnRate({ days = 60, minPaidDays = 3, now = Date.now() } = {}) { return runSteps(externalReturnRateSteps({ days, minPaidDays, now })); }
+
 // Returning grant holders (the first-call allowance's operator figure): for
 // each (payer, grant time) pair, the first outside paid sale strictly after
 // the grant. One query per chunk of pairs, never one per wallet. Each pair is

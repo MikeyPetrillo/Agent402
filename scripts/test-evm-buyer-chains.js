@@ -170,7 +170,7 @@ reset();
   ok(r.e?.refused === true && r.e?.committed === false && asked?.chain === "polygon" && asked?.token === chains.EVM_BUYER_CHAINS.polygon.asset && /^0x[0-9a-f]{64}$/i.test(asked?.nonce || ""), `polygon: a refused paid retry is proven unused on the chain's own token and released (${r.e?.message})`);
   ok(_spentThisWindow() === held, "polygon: the hold was given back");
   const u = await buy("polygon", [acceptOn("polygon")], { allowUnproven: true });
-  ok(u.e?.statusCode === 409 && /Base only/.test(u.e.message), "the unproven lane is not opened off Base");
+  ok(u.e?.statusCode === 409 && /unproven lane is not on for polygon/.test(u.e.message), "the unproven lane is not opened on a chain the operator has not listed");
 }
 
 // --- route-execute: dispatch, per-chain day, per-chain low balance -----------

@@ -1735,7 +1735,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             totalSellers: Array.isArray(lb.rows) ? lb.rows.length : 0,
             results: rows,
             ...(rows.some((r) => r.untrustedContent) ? { containsUntrustedContent: true } : {}),
-            ...(lb.stale ? { note: "Leaderboard is stale or still warming - the first on-chain read runs a couple of minutes after boot and every 30 min after." } : {}),
+            ...(lb.stale ? { note: "Leaderboard is stale or still warming - the on-chain read runs twice a day." } : {}),
             source: `${baseUrl}/api/mpp-leaderboard`,
           });
         }
