@@ -1055,8 +1055,13 @@ export function openapiSpec(baseUrl, catalog) {
           required: required.includes(name),
           description: schema.description,
           // A string field's published length cap (maxLength, the number the
-          // handler enforces) rides on the parameter as it does on a JSON body.
-          schema: { type: QUERY_PARAM_TYPES.has(schema.type) ? schema.type : "string", ...(Number.isInteger(schema.maxLength) && (!QUERY_PARAM_TYPES.has(schema.type) || schema.type === "string") ? { maxLength: schema.maxLength } : {}) },
+          // handler enforces) and its closed set of values (enum) ride on the
+          // parameter as they do on a JSON body.
+          schema: {
+            type: QUERY_PARAM_TYPES.has(schema.type) ? schema.type : "string",
+            ...(Number.isInteger(schema.maxLength) && (!QUERY_PARAM_TYPES.has(schema.type) || schema.type === "string") ? { maxLength: schema.maxLength } : {}),
+            ...(schema.type === "string" && Array.isArray(schema.enum) && schema.enum.length > 0 && schema.enum.every((v) => typeof v === "string") ? { enum: [...schema.enum] } : {}),
+          },
           ...(discovery?.input?.[name] !== undefined ? { example: discovery.input[name] } : {}),
         })),
         ...headerParams,

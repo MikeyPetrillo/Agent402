@@ -183,17 +183,19 @@ try {
     ok(fits(prop("fc-user-casts", "username"), fcName) && (await taken("fc-user-casts", "username", fcName, true)) && !fits(prop("fc-user-casts", "username"), `${fcName}x`), `a Farcaster username's cap is the longest ENS name the handler takes behind an @ (${fcName.length})`);
     ok(prop("v1-videos", "prompt").maxLength === VIDEOS_MAX_PROMPT_CHARS && prop("judge", "state").maxLength === 8000 && prop("decisions", "input").maxLength === 8000, `the caps a key gate hid are published (v1-videos.prompt ${prop("v1-videos", "prompt").maxLength}, judge.state ${prop("judge", "state").maxLength}, decisions.input ${prop("decisions", "input").maxLength})`);
   }
-  // /openapi.json carries the cap for both request shapes: a query parameter
-  // of a GET route and a property of a JSON body.
+  // /openapi.json carries the cap and the closed set for both request shapes:
+  // a query parameter of a GET route and a property of a JSON body.
   {
     const { openapiSpec } = await import("../src/pages.js");
-    const mk = (route, slug) => ({ route, slug, name: slug, category: "test", price: "$0.001", description: "A test tool.", tags: ["test"], discovery: { input: { q: "x" }, inputSchema: { properties: { q: { type: "string", maxLength: 64, description: "Query" }, n: { type: "number", description: "Count" }, free: { type: "string", description: "No cap" } }, required: ["q"] }, output: { example: { ok: true } } }, handler: async () => ({ ok: true }) });
+    const mk = (route, slug) => ({ route, slug, name: slug, category: "test", price: "$0.001", description: "A test tool.", tags: ["test"], discovery: { input: { q: "x" }, inputSchema: { properties: { q: { type: "string", maxLength: 64, description: "Query" }, n: { type: "number", description: "Count" }, free: { type: "string", description: "No cap" }, kind: { type: "string", enum: ["a", "bb", "wide"], description: "One of a set" } }, required: ["q"] }, output: { example: { ok: true } } }, handler: async () => ({ ok: true }) });
     const spec = openapiSpec("https://spec.test", { "GET /api/cap-get": mk("GET /api/cap-get", "cap-get"), "POST /api/cap-post": mk("POST /api/cap-post", "cap-post") });
     const params = spec.paths?.["/api/cap-get"]?.get?.parameters || [];
     const q = params.find((x) => x.name === "q"), n = params.find((x) => x.name === "n"), free = params.find((x) => x.name === "free");
     const body = spec.paths?.["/api/cap-post"]?.post?.requestBody?.content?.["application/json"]?.schema?.properties || {};
     ok(q?.schema?.maxLength === 64 && q.schema.type === "string" && !("maxLength" in (n?.schema || {})) && !("maxLength" in (free?.schema || {})), `a GET route's query parameter carries the field's maxLength in /openapi.json (${JSON.stringify(q?.schema)})`);
     ok(body.q?.maxLength === 64 && !("maxLength" in (body.free || {})), `a JSON body's property carries it too (${JSON.stringify(body.q)})`);
+    const kind = params.find((x) => x.name === "kind");
+    ok(kind?.schema?.enum?.join() === "a,bb,wide" && kind.schema.type === "string" && !("enum" in (q?.schema || {})) && !("enum" in (free?.schema || {})) && body.kind?.enum?.join() === "a,bb,wide", `a field's closed set (enum) is on the GET route's query parameter and on the JSON body's property (${JSON.stringify(kind?.schema)})`);
   }
 } finally { online(); }
 
