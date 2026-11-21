@@ -309,7 +309,7 @@ ${solanaSectionHtml(solana)}
              operator is simply an error - both need saying here, where the
              numbers are, plus a route to get a row corrected. -->
         <p style="font-size:var(--fs-md);line-height:1.6;color:var(--faint);margin:12px 0 0;">What this is not: an assessment of any business or its operators. Every figure is an on-chain reading as of the snapshot above. A concentrated row is the ordinary shape for a seller with one large integration partner, a seller in its first weeks, or a seller whose buyers run many agents from one wallet, and we are <strong>not asserting that any flagged row is inauthentic</strong>.</p>
-        <p style="font-size:var(--fs-md);line-height:1.6;color:var(--faint);margin:12px 0 0;">Corrections: readings go stale, and wallets can fold to the wrong operator. A seller who believes their row misreads them can write to <a href="mailto:mike@agent402.tools" style="color:var(--accent);">mike@agent402.tools</a> and we will re-scan and correct or withdraw it.</p>
+        <p style="font-size:var(--fs-md);line-height:1.6;color:var(--faint);margin:12px 0 0;">Corrections: readings go stale, and wallets can fold to the wrong operator. A seller who believes their row misreads them can write to <a href="mailto:help@agent402.tools" style="color:var(--accent);">help@agent402.tools</a> and we will re-scan and correct or withdraw it.</p>
       </div>
     </div>
   </section>

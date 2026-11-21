@@ -567,7 +567,7 @@ export const TTS_TOOLS = [
       input: { text: "Hello from Agent402!", voice: "alloy", format: "mp3" },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Text to convert to speech (max 800 chars)" },
+          text: { type: "string", maxLength: 800, description: "Text to convert to speech (max 800 chars)" },
           voice: { type: "string", description: "Voice: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer (default: alloy) - mapped to the nearest Kokoro voice, which is named back in the response" },
           format: { type: "string", description: "Audio format: mp3 or pcm (default: mp3). The other formats are on /api/tts" },
         },
@@ -600,7 +600,7 @@ export const TTS_TOOLS = [
       input: { text: "Hello from Agent402!", voice: "alloy", format: "mp3" },
       inputSchema: {
         properties: {
-          text: { type: "string", description: `Text to convert to speech (max ${TIERS.tts.maxChars} chars)` },
+          text: { type: "string", maxLength: 2000, description: `Text to convert to speech (max ${TIERS.tts.maxChars} chars)` },
           voice: { type: "string", description: "Voice: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer (default: alloy), each mapped to its own voice, or a named voice (george, sarah, adam, alice, bella, bill, brian, callum, charlie, chris, daniel, eric, harry, jessica, laura, liam, lily, matilda, river, roger, will)" },
           format: { type: "string", description: "Audio format: mp3, opus, aac, flac, wav, pcm (default: mp3)" },
         },
@@ -633,7 +633,7 @@ export const TTS_TOOLS = [
       input: { text: "Hello from Agent402!", voice: "alloy", format: "mp3" },
       inputSchema: {
         properties: {
-          text: { type: "string", description: `Text to convert to speech (max ${TIERS["tts-hd"].maxChars} chars)` },
+          text: { type: "string", maxLength: 2000, description: `Text to convert to speech (max ${TIERS["tts-hd"].maxChars} chars)` },
           voice: { type: "string", description: "Voice: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer (default: alloy), each mapped to its own voice, or a named voice (george, sarah, adam, alice, bella, bill, brian, callum, charlie, chris, daniel, eric, harry, jessica, laura, liam, lily, matilda, river, roger, will)" },
           format: { type: "string", description: "Audio format: mp3, opus, aac, flac, wav, pcm (default: mp3)" },
         },

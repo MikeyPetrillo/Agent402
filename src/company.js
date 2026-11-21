@@ -11,12 +11,13 @@ import { ORG_SAME_AS } from "./org-profiles.js";
 import { ERC8004_IDENTITY_REGISTRY, erc8004AgentId } from "./tools/a2a-card.js";
 import { companyPostalLine } from "./email.js";
 const usd0 = (cents) => `$${(cents / 100).toFixed(0)}`;
-// The business's public contact points. Every role reads an existing mailbox:
-// the operator mailbox for support, security and billing, the company mailbox
-// for partnerships. The phone is the business voice line; the postal address
+// The business's public contact points, by role: the help address for
+// support, billing, legal and abuse, the security address for vulnerability
+// reports, the company mailbox for partnerships. The copyright agent's
+// address on /terms is the one registered for that agent and is kept there. The phone is the business voice line; the postal address
 // is COMPANY_POSTAL_ADDRESS, the same value every outbound email ends with.
 export const COMPANY_PHONE = Object.freeze({ display: "(704) 313-8483", tel: "+17043138483" });
-export const COMPANY_MAILBOXES = Object.freeze({ operator: "mike@agent402.tools", company: "hello@havok.holdings" });
+export const COMPANY_MAILBOXES = Object.freeze({ operator: "help@agent402.tools", security: "security@agent402.tools", company: "hello@havok.holdings" });
 export const LEGAL_ENTITY_SENTENCE = "Cardhavok LLC (doing business as Havok Holdings LLC)";
 
 export function companyPage(baseUrl) {
@@ -44,12 +45,12 @@ export function companyPage(baseUrl) {
     <div class="co-links" style="display:flex;gap:18px;flex-wrap:wrap;">${links.map(([href, label]) => `<a href="${esc(href)}" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">${esc(label)} →</a>`).join("")}</div></div>
   </div>
 </section>`;
-  const op = COMPANY_MAILBOXES.operator, co = COMPANY_MAILBOXES.company;
+  const op = COMPANY_MAILBOXES.operator, co = COMPANY_MAILBOXES.company, sec = COMPANY_MAILBOXES.security;
   const mail = (a) => `<a href="mailto:${esc(a)}" style="color:var(--ink);">${esc(a)}</a>`;
   const postal = companyPostalLine();
   const contacts = [
     ["Email", `${mail(op)}<br><span style="font-size:var(--fs-base);">Support, billing and refunds, legal and abuse.</span>`],
-    ["Security", `A <a href="${repoUrl("security/advisories/new")}" rel="noopener" style="color:var(--ink);">private advisory</a> (preferred, see /security), or email`],
+    ["Security", `A <a href="${repoUrl("security/advisories/new")}" rel="noopener" style="color:var(--ink);">private advisory</a> (preferred, see /security), or email ${mail(sec)}.`],
     ["Partnerships and investors", mail(co)],
     ["Phone", `<a href="tel:${COMPANY_PHONE.tel}" style="color:var(--ink);">${esc(COMPANY_PHONE.display)}</a>`],
     ...(postal ? [["Mail", esc(postal)]] : []),
@@ -82,7 +83,7 @@ ${contactRow}
   <div class="co-form" style="max-width:640px;background:var(--card);border:1px solid var(--hairline);padding:28px 28px 24px;">
     <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);margin:0 0 6px;">Send a message.</h2>
     <p style="color:var(--muted);font-size:var(--fs-md);margin:0 0 20px;">Opens in your email app, pre-filled and ready to send.</p>
-    <form id="contactForm" action="mailto:mike@agent402.tools" method="POST" enctype="text/plain">
+    <form id="contactForm" action="mailto:${esc(COMPANY_MAILBOXES.operator)}" method="POST" enctype="text/plain">
       <div class="co-field"><label for="ct-name">Name</label><input type="text" id="ct-name" name="name" required placeholder="Your name"></div>
       <div class="co-field"><label for="ct-email">Email</label><input type="email" id="ct-email" name="email" required placeholder="you@example.com"></div>
       <div class="co-field"><label for="ct-msg">Message</label><textarea id="ct-msg" name="message" required placeholder="What's on your mind?"></textarea></div>

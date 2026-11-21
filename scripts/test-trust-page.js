@@ -246,15 +246,16 @@ ok(llmsFullTxt(BASE, {}).includes(`(${BASE}/trust)`), "llms-full.txt lists /trus
   {
     // One email row names every role the operator mailbox answers, so the address is printed once in the table.
     const table = (html.match(/<table class="co-contacts"[\s\S]*?<\/table>/) || [""])[0];
-    ok((table.match(/mailto:mike@agent402\.tools/g) || []).length === 1 && /Support, billing and refunds, legal and abuse/.test(table), "/company prints the operator mailbox once, with the roles it answers");
-    ok((pageText(html).match(/mike@agent402\.tools/g) || []).length === 1, "/company shows the operator mailbox as text once (the contact table); the form and the footer link to it without repeating it");
+    ok((table.match(/mailto:help@agent402\.tools/g) || []).length === 1 && /Support, billing and refunds, legal and abuse/.test(table) && (table.match(/mailto:security@agent402\.tools/g) || []).length === 1, "/company prints the help address once, with the roles it answers, and the security address once in its own row");
+    ok((pageText(html).match(/help@agent402\.tools/g) || []).length === 1 && !/mike@agent402\.tools/.test(html), "/company shows the help address as text once (the contact table); the form and the footer link to it without repeating it");
   }
   ok(!/<th scope="row">Mail<\/th>/.test(html), "with COMPANY_POSTAL_ADDRESS unset, no postal row is printed");
-  // Every role reads one of the two existing mailboxes: no invented addresses.
+  // Every role reads one of the role addresses: no other address on the page.
   const boxes = [...new Set([...html.matchAll(/mailto:([^"?]+)/g)].map((m) => m[1]))].sort();
-  ok(JSON.stringify(boxes) === JSON.stringify(Object.values(COMPANY_MAILBOXES).sort()), `/company prints exactly the two existing mailboxes (${boxes.length})`);
+  ok(JSON.stringify(boxes) === JSON.stringify(Object.values(COMPANY_MAILBOXES).sort()), `/company prints exactly the role addresses: help, security and the company mailbox (${boxes.length})`);
   const others = ["src/privacy.js", "src/security-page.js", "SECURITY.md"].map(src).join("\n");
-  ok(others.includes(`mailto:${COMPANY_MAILBOXES.operator}`) || others.includes(COMPANY_MAILBOXES.operator), "the operator mailbox is the one /privacy, /security and SECURITY.md already name");
+  ok(src("src/privacy.js").includes(COMPANY_MAILBOXES.operator) && src("src/security-page.js").includes(COMPANY_MAILBOXES.security) && src("SECURITY.md").includes(COMPANY_MAILBOXES.security), "/privacy names the help address; /security and SECURITY.md name the security address");
+  void others;
   ok(/"@type": "ContactPoint", contactType: "billing support"/.test(src("src/company.js")) && html.includes('"telephone":"+17043138483"'), "the JSON-LD carries the billing contact and the phone");
   process.env.COMPANY_POSTAL_ADDRESS = "Havok Holdings LLC\nPO Box 65\nSample Town, NC 00000";
   const withPostal = companyPage(BASE);

@@ -919,7 +919,7 @@ const SCHEMA = {
   type: "object",
   required: ["ticker"],
   properties: {
-    ticker: { type: "string", description: "US stock ticker to cover, e.g. AAPL." },
+    ticker: { type: "string", maxLength: 10, description: "US stock ticker to cover, e.g. AAPL." },
     days: { type: "number", description: "Insider-flow lookback in days, 7-365 (default 90)." },
     focus: { type: "array", items: { type: "string" }, description: "Optional aspects for the dossier leg to emphasize (<= 8), e.g. [\"litigation\", \"debt\"]." },
   },

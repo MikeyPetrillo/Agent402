@@ -118,7 +118,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-20.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-21.</p>
 </section>
 
 <section>
@@ -405,6 +405,10 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   <li>Tools that fetch external URLs (<code>extract</code>, <code>render</code>, <code>screenshot</code>, …)
   contact those sites from our server with the URL you provided. Tools that read a third-party data
   source send it what the lookup needs (a ticker, a token or wallet address, a domain, a query).</li>
+  <li><code>asn-info</code> looks an IP address up in Team Cymru's IP-to-ASN DNS zone, so the DNS
+  query carries that IP address. When our own resolver cannot answer it, the same query is sent once
+  through the public resolvers at 8.8.8.8 (Google Public DNS), 9.9.9.9 (Quad9) and 1.1.1.1
+  (Cloudflare), which see the query and our server's address, not yours.</li>
   <li><code>/api/search</code> and the other web search tools forward the query to the Brave Search API to produce results.
   The <code>/api/x-*</code> tools send the handle, post id or query to the X API.
   Report products and <code>/v1</code> calls that search the web send their search queries to Exa, through OpenRouter's web search.</li>
@@ -480,7 +484,7 @@ in every alert). Where your browser reports a European time zone, the cookie wai
 elsewhere it is set until you say no, and the choice is yours to make either way. You have the right to ask for access to your data, to have it corrected or erased, to
 receive it in a portable form, to object to processing based on our legitimate interest, to withdraw
 consent, and to complain to your supervisory authority. To exercise a right, email
-<a href="mailto:mike@agent402.tools">mike@agent402.tools</a>; we answer within one month. The service is
+<a href="mailto:help@agent402.tools">help@agent402.tools</a>; we answer within one month. The service is
 operated from the United States, and the data described here is processed and stored there${directUpstreamWhere}.</p>
 
 <h2>Children</h2>
@@ -492,10 +496,10 @@ an email address or other information, write to the address below and we will de
 <p>Wallet addresses associated with <a href="/terms">terms</a> violations may be blocked and retained
 on a blocklist for as long as needed to enforce the block. We disclose information and preserve
 records in response to valid legal process, and report content where the law requires it. Requests
-and abuse reports: <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>.</p>
+and abuse reports: <a href="mailto:help@agent402.tools">help@agent402.tools</a>.</p>
 
 <h2>Operator &amp; contact</h2>
-<p>Agent402.Tools is operated by <strong>Cardhavok LLC</strong>, doing business as <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>,
+<p>Agent402.Tools is operated by <strong>Cardhavok LLC</strong>, doing business as <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:help@agent402.tools">help@agent402.tools</a>,
 <a href="${repoUrl("issues")}" rel="noopener">GitHub issues</a>,
 or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.</p>
 </div>

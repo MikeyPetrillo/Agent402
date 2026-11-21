@@ -5211,7 +5211,7 @@ export const LLM_GATEWAY_TOOLS = [
       input: { input: "Agent402 is an open-source x402 tool server." },
       inputSchema: {
         properties: {
-          input: { type: "string", description: "Text to embed - a string or an array of up to 64 strings (16k chars total)" },
+          input: { type: "string", maxLength: 16000, description: "Text to embed - a string or an array of up to 64 strings (16k chars total)" },
           model: { type: "string", description: `Optional - ${EMBEDDINGS_DEFAULT_MODEL} (default), text-embedding-3-large, or text-embedding-ada-002` },
           dimensions: { type: "number", description: "Optional output dimensions (3-small/3-large only)" },
         },
@@ -5235,7 +5235,7 @@ export const LLM_GATEWAY_TOOLS = [
       input: { query: "What is the capital of France?", documents: ["Paris is the capital of France.", "Berlin is the capital of Germany.", "Madrid is in Spain."], top_n: 2 },
       inputSchema: {
         properties: {
-          query: { type: "string", description: "The search query (max 500 chars)" },
+          query: { type: "string", maxLength: 500, description: "The search query (max 500 chars)" },
           documents: { type: "array", items: { type: "string" }, description: "Documents to rank (1-50 strings, 1,600 chars each, 40k total)" },
           top_n: { type: "integer", description: "Optional - return only the top N results" },
           cache: { type: "boolean", description: "Optional - false disables the default-on response cache" },
@@ -5260,7 +5260,7 @@ export const LLM_GATEWAY_TOOLS = [
       input: { prompt: "A minimalist watercolor of a fox reading a newspaper in a forest clearing" },
       inputSchema: {
         properties: {
-          prompt: { type: "string", description: "Text description of the image to generate (up to 4,000 chars)" },
+          prompt: { type: "string", maxLength: 4000, description: "Text description of the image to generate (up to 4,000 chars)" },
           zdr: { type: "boolean", description: "Optional - true routes only to zero-data-retention providers" },
         },
         required: ["prompt"],
@@ -5286,7 +5286,7 @@ export const LLM_GATEWAY_TOOLS = [
       input: { input: "Agent402 serves 500+ tools, paid per call.", voice: "alloy" },
       inputSchema: {
         properties: {
-          input: { type: "string", description: "Text to speak (up to 2,000 chars)" },
+          input: { type: "string", maxLength: 2000, description: "Text to speak (up to 2,000 chars)" },
           voice: { type: "string", description: "OpenAI voice name - alloy (default), ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer, verse - or a native voice id from GET /v1/models (e.g. en_paul_cheerful)" },
           response_format: { type: "string", description: '"mp3" (default) or "pcm"' },
           model: { type: "string", description: "Optional - pin a chain model (e.g. mistralai/voxtral-mini-tts-2603); the rest stay as fallbacks" },

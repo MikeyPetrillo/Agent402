@@ -513,7 +513,7 @@ const CRYPTO_SIGNALS_TOOLS_RAW = [
       input: { query: "bitcoin", limit: 10 },
       inputSchema: {
         properties: {
-          query: { type: "string", description: "Optional keywords (space-separated, max 10); matched case-insensitively against title + summary." },
+          query: { type: "string", maxLength: 200, description: "Optional keywords (space-separated, max 10); matched case-insensitively against title + summary." },
           match: { type: "string", description: "all (default): every keyword must appear; any: at least one." },
           sources: { type: "array", items: { type: "string" }, description: `Optional subset of source ids: ${SOURCE_IDS.join(", ")}.` },
           hours: { type: "number", description: "Only items published within the last N hours (default 48, max 168)." },
@@ -613,7 +613,7 @@ const CRYPTO_SIGNALS_TOOLS_RAW = [
       input: { coin: "BTC", interval: "1h", limit: 200, points: 5 },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Perp ticker, e.g. BTC, ETH, SOL." },
+          coin: { type: "string", maxLength: 32, description: "Perp ticker, e.g. BTC, ETH, SOL." },
           interval: { type: "string", description: "Candle interval (default 1h): 1m 3m 5m 15m 30m 1h 2h 4h 8h 12h 1d 3d 1w 1M." },
           limit: { type: "number", description: "Candles to compute over (default 200, max 500). EMA200 needs 200, MACD 34, RSI/ATR 15, SMA/Bollinger 20." },
           indicators: { type: "array", items: { type: "string" }, description: `Optional subset of: ${INDICATOR_IDS.join(", ")} (default all).` },

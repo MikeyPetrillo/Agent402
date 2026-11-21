@@ -241,7 +241,7 @@ export const CODE_RUN_TOOLS = [
       input: { code: "print('Hello from Agent402!')", language: "python" },
       inputSchema: {
         properties: {
-          code: { type: "string", description: "Source code to execute (max 10,000 chars)" },
+          code: { type: "string", maxLength: 10000, description: "Source code to execute (max 10,000 chars)" },
           language: { type: "string", description: "Language: python (default) or javascript" },
         },
         required: ["code"],
@@ -272,7 +272,7 @@ export const CODE_RUN_TOOLS = [
       input: { code: "print('Hello from Agent402!')", language: "python" },
       inputSchema: {
         properties: {
-          code: { type: "string", description: "Source code to execute (max 50,000 chars)" },
+          code: { type: "string", maxLength: 50000, description: "Source code to execute (max 50,000 chars)" },
           language: { type: "string", description: "Language: python (default) or javascript" },
         },
         required: ["code"],

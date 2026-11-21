@@ -131,6 +131,6 @@ become aware that would make these representations inaccurate in any respect.
 
 ## Questions
 
-Write to mike@agent402.tools. A contributor who prefers to sign a copy of this
+Write to help@agent402.tools. A contributor who prefers to sign a copy of this
 agreement, or whose employer needs a corporate agreement, can ask for one
 there.

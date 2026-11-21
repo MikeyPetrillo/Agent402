@@ -161,7 +161,7 @@ To pay for wallet-only tools, hand the SDK a payment-aware fetch:
 import { Fetch, evm, tempo } from "mppx/client";
 import { privateKeyToAccount } from "viem/accounts";
 const account = privateKeyToAccount(process.env.AGENT_KEY);
-const mppFetch = Fetch.from({ methods: [tempo.charge({ account }), evm.charge({ account })] });
+const mppFetch = Fetch.from({ methods: [tempo.charge({ account }), evm.charge({ account, currencies: [evm.assets.base.USDC, evm.assets.celo.USDC] })] });
 const a = new Agent402({ fetch: mppFetch, maxPerCallUsd: 0.05 });
 \`\`\`
 

@@ -1176,11 +1176,27 @@
       "expect": {
         "equals": {
           "syntaxValid": true,
-          "deliverableDomain": false
+          "deliverableDomain": false,
+          "mailboxProvider": null
         },
         "empty": [
           "mxRecords"
         ]
+      }
+    },
+    {
+      "slug": "email-validate",
+      "name": "the mailbox provider is read from the MX records",
+      "input": {
+        "email": "someone@gmail.com"
+      },
+      "expect": {
+        "equals": {
+          "syntaxValid": true,
+          "deliverableDomain": true,
+          "mailboxProvider.id": "google",
+          "mailboxProvider.type": "hosted"
+        }
       }
     },
     {

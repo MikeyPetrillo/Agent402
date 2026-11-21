@@ -694,11 +694,24 @@ export function referralOffered(env = process.env) {
 export const REFERRAL_PARITY_GRANDFATHERED = Object.freeze([]);
 /** True when a definition's published example, example output or input
  *  schema text names one of `hosts` (compared in lower case). */
+/** The input a request with no input runs: a per-request priced tool's
+ *  declared `discovery.startingInput` (its smallest request, the one quoted
+ *  at its list price), else the published example. null when the tool has
+ *  neither as a non-empty object. */
+export function bareInputOf(def) {
+  const usable = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length > 0;
+  const starting = def?.discovery?.startingInput;
+  if (priceFnOf(def) && usable(starting)) return starting;
+  const example = def?.discovery?.input;
+  return usable(example) ? example : null;
+}
+/** True when the bare-request input is the declared starting input (not the example). */
+export const bareInputIsStarting = (def) => { const b = bareInputOf(def); return b !== null && b === def?.discovery?.startingInput; };
 export function namesOwnHost(def, hosts = []) {
   const list = (hosts || []).map((h) => String(h || "").trim().toLowerCase()).filter(Boolean);
   if (!list.length || !def || typeof def !== "object") return false;
   let text = "";
-  try { text = JSON.stringify([def.discovery?.input ?? null, def.discovery?.example ?? null, def.discovery?.output ?? null, def.discovery?.inputSchema ?? null]).toLowerCase(); } catch { return true; }
+  try { text = JSON.stringify([def.discovery?.input ?? null, def.discovery?.startingInput ?? null, def.discovery?.example ?? null, def.discovery?.output ?? null, def.discovery?.inputSchema ?? null]).toLowerCase(); } catch { return true; }
   return list.some((h) => text.includes(h));
 }
 
@@ -744,6 +757,14 @@ export function referralIneligibility(def, { identityBound = false, lastingEffec
   let listed = null;
   try { listed = baseUnitsOf(priceForNetwork(def.price, REFERRAL_NETWORK)); } catch { listed = null; }
   if (listed === null) return "its list price is not a whole number of USDC base units";
+  // A declared starting input is what a request with no input runs, and its
+  // 402 says the price quoted is the list price: the quote for that input
+  // must be exactly that, or the listing would show a price no call is sold at.
+  if (bareInputIsStarting(def)) {
+    let quoted = null;
+    try { const usd = Number(priceFnOf(def)(structuredClone(def.discovery.startingInput))); quoted = Number.isFinite(usd) && usd > 0 ? baseUnitsOf(priceForNetwork(usdText(usd), REFERRAL_NETWORK)) : null; } catch { quoted = null; }
+    if (quoted === null || quoted !== listed) return "its starting input is not quoted at its list price";
+  }
   return null;
 }
 
@@ -1945,7 +1966,7 @@ export function createReferralGate({
       // A request with no input runs the tool's published example (below):
       // the 402 for it says so and shows that input, in a field of this
       // server's own beside the fields the network reads.
-      ...(req.__a402ReferralExample === true && def.discovery?.input ? { emptyRequest: { note: "A request with no input runs this tool's published example, shown here as input, at the price quoted. Send your own input to run that instead.", input: def.discovery.input } } : {}),
+      ...(req.__a402ReferralExample === true && bareInputOf(def) ? { emptyRequest: { note: bareInputIsStarting(def) ? "A request with no input runs this tool's smallest request, shown here as input, at the price quoted: its list price. Send your own input to run that instead; the price follows the request." : "A request with no input runs this tool's published example, shown here as input, at the price quoted. Send your own input to run that instead.", input: bareInputOf(def) } } : {}),
     };
   }
 
@@ -2515,8 +2536,12 @@ export function createReferralGate({
       // or a JSON body that is exactly {}. Any other body (text, a form, a
       // JSON array, a body this route does not parse) is the buyer's own
       // request and is served as the direct route serves it.
-      const example = def.discovery?.input;
-      if (isEmptyRequest(req) && input && typeof input === "object" && Object.keys(input).length === 0 && example && typeof example === "object" && !Array.isArray(example) && Object.keys(example).length > 0) {
+      // A tool priced per request may declare its smallest request
+      // (`discovery.startingInput`): the empty request then runs that, so the
+      // price a bare request is quoted is the tool's list price, the one a
+      // listing shows, and the paid call runs exactly the request it quoted.
+      const example = bareInputOf(def);
+      if (isEmptyRequest(req) && input && typeof input === "object" && Object.keys(input).length === 0 && example) {
         req.__handlerInput = structuredClone(example);
         input = handlerInputOf(req, def);
         req.__a402ReferralExample = true;

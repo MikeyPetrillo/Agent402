@@ -301,7 +301,7 @@ const HTML_TOOL_DEFS = [
         properties: {
           html: { type: "string", description: "Raw HTML string to scan (max 5MB)" },
           base: { type: "string", description: "Optional base URL to resolve relative hrefs against" },
-          filter: { type: "string", description: "Optional regex applied to the href - only matching links are returned" },
+          filter: { type: "string", maxLength: 200, description: "Optional regex applied to the href - only matching links are returned" },
           limit: { type: "number", description: "Max links to return, 1-1000 (default 200)" },
           unique: { type: "boolean", description: "Deduplicate by href (default true)" },
         },

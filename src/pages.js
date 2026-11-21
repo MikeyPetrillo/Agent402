@@ -714,7 +714,7 @@ export function faqItems() {
   { g: "sellers", q: "How does the Smart Order Router decide which seller to route to?", a: `${routerRankingSentence()} If the model declines every candidate, route-and-execute refuses before anything is paid. ${routingProofSentence()} More: <a href="/guides/smart-order-router">the router guide</a>.` },
   { g: "service", q: "How do I know the service is honest?", a: 'The server is open source; CI re-tests every tool that runs without a third-party key against its own documented example before each deploy. The wallet-identity tools (memory and usage), which need a paying wallet, ' + (kalshiToolsEnabled() ? 'and one prediction-market family whose upstream throttles CI runners ' : '') + 'get a looser check, and one rate-limited data family runs on a rotation, covered across runs. Revenue settles on chain to the receiving wallets listed in <a href="/.well-known/x402">/.well-known/x402</a> (agent402.base.eth on Base and the other EVM chains).' },
   { g: "service", q: "Is Agent402 self-hostable and open source?", a: 'Yes - the server is open source under the AGPL-3.0 license (the client SDK, MCP connector, and tollbooth are MIT). Clone the repo and run it yourself for free, with or without payments enabled. It also ships agent402-tollbooth, an open-source pay-per-crawl gate for charging AI crawlers on your own site.' },
-  { g: "service", q: "Who runs Agent402?", a: `Havok Holdings LLC - a public, contactable maintainer reachable at <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>, on <a href="${REPO_URL}">GitHub</a>, and on <a href="https://x.com/Agent402Tools">X</a>.` },
+  { g: "service", q: "Who runs Agent402?", a: `Havok Holdings LLC - a public, contactable maintainer reachable at <a href="mailto:help@agent402.tools">help@agent402.tools</a>, on <a href="${REPO_URL}">GitHub</a>, and on <a href="https://x.com/Agent402Tools">X</a>.` },
   ];
 }
 
@@ -1053,7 +1053,9 @@ export function openapiSpec(baseUrl, catalog) {
           in: "query",
           required: required.includes(name),
           description: schema.description,
-          schema: { type: QUERY_PARAM_TYPES.has(schema.type) ? schema.type : "string" },
+          // A string field's published length cap (maxLength, the number the
+          // handler enforces) rides on the parameter as it does on a JSON body.
+          schema: { type: QUERY_PARAM_TYPES.has(schema.type) ? schema.type : "string", ...(Number.isInteger(schema.maxLength) && (!QUERY_PARAM_TYPES.has(schema.type) || schema.type === "string") ? { maxLength: schema.maxLength } : {}) },
           ...(discovery?.input?.[name] !== undefined ? { example: discovery.input[name] } : {}),
         })),
         ...headerParams,
@@ -1214,7 +1216,7 @@ export function openapiSpec(baseUrl, catalog) {
         `${frontDoorOneLine(catalog)} ${leadSentence({ mpp: Boolean(mppShort), receipts: receiptsServed() })} ${SUPPORT_LINE} The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Each priced operation is paid per call over x402 (${RAILS_OR}; identity-bound and long-running operations take EVM chains only, and each operation's description names its own rails)${mppShort ? `, or over MPP (Machine Payments Protocol: ${mppShort})` : ""} - no signup, no API keys - the first request returns HTTP 402 carrying ${mppShort ? "both offers, an x402 or mppx client pays" : "the offer, an x402 client pays"} and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
       // Email doubles as x402scan's ownership-verification signal; it is the
       // same public maintainer contact the /.well-known/x402 manifest names.
-      contact: { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: baseUrl },
+      contact: { name: "Havok Holdings LLC", email: "help@agent402.tools", url: baseUrl },
       // Agent-facing quickstart read by MPP/x402 discovery crawlers
       // (info.x-guidance in MPPScan's audit).
       "x-guidance":

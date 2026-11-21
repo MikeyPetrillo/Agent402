@@ -153,7 +153,7 @@ export const FEEDBACK_TOOLS = [
         properties: {
           tx: { type: "string", description: "Settlement transaction of the call you are rating, as carried in that response's PAYMENT-RESPONSE (x402) or Payment-Receipt (MPP) header." },
           verdict: { type: "string", description: '"good" (it delivered what it promised) or "bad" (it did not).' },
-          reason: { type: "string", description: "What happened, in your own words. Optional on \"good\", required on \"bad\" (10 characters minimum, 1000 maximum). Stored for the operator, never published." },
+          reason: { type: "string", maxLength: 1000, description: "What happened, in your own words. Optional on \"good\", required on \"bad\" (10 characters minimum, 1000 maximum). Stored for the operator, never published." },
         },
         required: ["tx", "verdict"],
       },

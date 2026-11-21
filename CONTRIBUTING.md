@@ -5,7 +5,7 @@ tool** - Agent402 is a catalog, and every good tool makes the whole thing more
 useful to every agent that connects. Bug fixes and docs are just as welcome.
 
 Issues and tool ideas: [open an issue](https://github.com/MikeyPetrillo/Agent402/issues).
-For anything that doesn't fit a public issue, email **mike@agent402.tools**.
+For anything that doesn't fit a public issue, email **help@agent402.tools**.
 
 ## Licensing, sign-off and the contributor agreement
 
@@ -205,7 +205,7 @@ Small, focused PRs merge fastest. Three things worth knowing before you open one
 - **Merit, not payment.** PRs are reviewed and accepted on what they fix.
   Opening one creates no payment obligation on either side, and a PR must
   not be conditional on one. Proposals for paid work go to
-  **mike@agent402.tools**, not into a PR or an issue.
+  **help@agent402.tools**, not into a PR or an issue.
 - **Money-path changes are reviewed as a set.** Anything touching payments,
   the router's buyer, or settlement is landed alongside our own next round
   of changes there rather than merged alone, however green the checks are.

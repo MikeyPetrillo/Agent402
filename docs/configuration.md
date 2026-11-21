@@ -12,7 +12,7 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1083 variables in 111 groups.
+1085 variables in 111 groups.
 
 ## Contents
 
@@ -211,6 +211,8 @@ may still clamp it, and the read site is the reference.
 | `CDP_API_KEY_ID` | Coinbase Developer Platform key id: settlement through its facilitator and Bazaar discovery. |  | `src/cdp-facilitator.js`, `src/guides.js`, `src/integration-pages.js` and 2 more |
 | `CDP_API_KEY_SECRET` | Coinbase Developer Platform key secret (a credential, set on the host). |  | `src/cdp-facilitator.js`, `src/guides.js`, `src/integration-pages.js` and 2 more |
 | `CDP_FACILITATOR_URL` | Cdp facilitator URL. |  | `src/payments.js` |
+| `CDP_SQL_API_KEY_ID` | Coinbase Developer Platform key id for the onchain SQL reads only (query run and schema); with it or its secret unset, those reads sign with CDP_API_KEY_ID. Settlement always uses the main key. |  | `src/tools/cdp-kit.js` |
+| `CDP_SQL_API_KEY_SECRET` | Secret of the onchain SQL key (a credential, set on the host); used only together with CDP_SQL_API_KEY_ID. |  | `src/tools/cdp-kit.js` |
 | `CDP_SQL_SEND_GAP_MS` | Spacing between queries one replica sends to the onchain query service, in milliseconds (at least 100; multiplied by RATE_LIMIT_REPLICAS, and the result is held at 2500; a send waits for its slot up to 3 seconds or four of these gaps, whichever is longer). |  | `src/tools/cdp-kit.js` |
 
 ## CELO

@@ -142,7 +142,7 @@ import { privateKeyToAccount } from "viem/accounts";
 const payFetch = Fetch.from({
   methods: [evm.charge({
     account: privateKeyToAccount(KEY),
-    currencies: [evm.assets.base.USDC],
+    currencies: [evm.assets.base.USDC, evm.assets.celo.USDC], // the tokens the evm method may sign for
     maxAmount: "1.00",
   })],
 });

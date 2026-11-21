@@ -23,7 +23,6 @@
   "GET /api/coin-ohlc",
   "GET /api/coin-price-by-contract",
   "GET /api/coin-search",
-  "GET /api/coins-list",
   "GET /api/college-lookup",
   "GET /api/company-financials",
   "GET /api/contract-code",

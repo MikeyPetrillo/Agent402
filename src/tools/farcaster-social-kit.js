@@ -536,7 +536,7 @@ const USER_EXAMPLE = {
 const RATE_LIMIT_EXAMPLE = { limit: 300, remaining: 299, resetAt: "2026-08-22T13:20:00.000Z" };
 const ENVELOPE_EXAMPLE = { source: "neynar", fetchedAt: "2026-08-22T13:19:12.000Z", cached: false, rateLimit: RATE_LIMIT_EXAMPLE };
 
-const CURSOR_PROP = { type: "string", description: "Opaque pagination cursor from a previous call's nextCursor." };
+const CURSOR_PROP = { type: "string", maxLength: 512, description: "Opaque pagination cursor from a previous call's nextCursor." };
 
 export const FARCASTER_SOCIAL_TOOLS = [
   {
@@ -555,11 +555,11 @@ export const FARCASTER_SOCIAL_TOOLS = [
         type: "object",
         required: ["q"],
         properties: {
-          q: { type: "string", description: "Search text (1-256 chars)." },
+          q: { type: "string", maxLength: 256, description: "Search text (1-256 chars)." },
           mode: { type: "string", enum: ["literal", "semantic", "hybrid"], description: "Match mode (default literal)." },
           sort: { type: "string", enum: ["desc_chron", "chron"], description: "Newest first (default) or oldest first." },
           authorFid: { type: "integer", description: "Only casts by this fid." },
-          channel: { type: "string", description: "Only casts in this channel id (e.g. base)." },
+          channel: { type: "string", maxLength: 64, description: "Only casts in this channel id (e.g. base)." },
           limit: { type: "integer", minimum: 1, maximum: 100, description: "Results per page (default 25)." },
           cursor: CURSOR_PROP,
         },
@@ -589,7 +589,7 @@ export const FARCASTER_SOCIAL_TOOLS = [
       inputSchema: {
         type: "object",
         properties: {
-          channel: { type: "string", description: "Channel id (e.g. base). One of channel/channels required." },
+          channel: { type: "string", maxLength: 64, description: "Channel id (e.g. base). One of channel/channels required." },
           channels: { type: "array", items: { type: "string" }, maxItems: 10, description: "Up to 10 channel ids merged into one feed." },
           withReplies: { type: "boolean", description: "Include replies (default false)." },
           withRecasts: { type: "boolean", description: "Include recasts (default true)." },
@@ -655,9 +655,9 @@ export const FARCASTER_SOCIAL_TOOLS = [
         type: "object",
         properties: {
           fid: { type: "integer", description: "Farcaster ID (one of fid/username required)." },
-          username: { type: "string", description: "Farcaster username, optional leading @ (one of fid/username required; costs one extra upstream lookup)." },
+          username: { type: "string", maxLength: 16, description: "Farcaster username, optional leading @ (one of fid/username required; costs one extra upstream lookup)." },
           includeReplies: { type: "boolean", description: "Include the user's replies (default false)." },
-          channel: { type: "string", description: "Only casts in this channel id." },
+          channel: { type: "string", maxLength: 64, description: "Only casts in this channel id." },
           limit: { type: "integer", minimum: 1, maximum: 100, description: "Results per page (default 25)." },
           cursor: CURSOR_PROP,
         },
@@ -767,7 +767,7 @@ export const FARCASTER_SOCIAL_TOOLS = [
         type: "object",
         required: ["id"],
         properties: {
-          id: { type: "string", description: "Channel id (e.g. base) or its https parent URL." },
+          id: { type: "string", maxLength: 64, description: "Channel id (e.g. base) or its https parent URL." },
         },
       },
       output: { example: { ...ENVELOPE_EXAMPLE, channel: CHANNEL_EXAMPLE } },
@@ -790,7 +790,7 @@ export const FARCASTER_SOCIAL_TOOLS = [
         type: "object",
         required: ["q"],
         properties: {
-          q: { type: "string", description: "Name or username fragment (1-100 chars)." },
+          q: { type: "string", maxLength: 100, description: "Name or username fragment (1-100 chars)." },
           limit: { type: "integer", minimum: 1, maximum: 10, description: "Results per page (default 5)." },
           cursor: CURSOR_PROP,
         },
@@ -815,10 +815,10 @@ export const FARCASTER_SOCIAL_TOOLS = [
         type: "object",
         required: ["q"],
         properties: {
-          q: { type: "string", description: "Search text (1-256 chars)." },
+          q: { type: "string", maxLength: 256, description: "Search text (1-256 chars)." },
           interval: { type: "string", enum: ["1d", "7d", "30d", "90d", "180d"], description: "Lookback window (default 7d)." },
           authorFid: { type: "integer", description: "Only casts by this fid." },
-          channel: { type: "string", description: "Only casts in this channel id." },
+          channel: { type: "string", maxLength: 64, description: "Only casts in this channel id." },
         },
       },
       output: {

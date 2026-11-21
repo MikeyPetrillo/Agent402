@@ -275,10 +275,10 @@ export const LLM_CONTEXT_TOOLS = [
       input: { query: "x402 payment protocol", maxTokens: 2048 },
       inputSchema: {
         properties: {
-          query: { type: "string", description: "Search query (1-400 chars, max 50 words)" },
+          query: { type: "string", maxLength: 400, description: "Search query (1-400 chars, max 50 words)" },
           maxTokens: { type: "number", description: "Approximate token budget for the returned context, 1024-32768 (default 4096)" },
           country: { type: "string", description: "Optional 2-letter country code (upstream default us)" },
-          lang: { type: "string", description: "Optional language code for results, e.g. en or en-gb (upstream default en)" },
+          lang: { type: "string", maxLength: 8, description: "Optional language code for results, e.g. en or en-gb (upstream default en)" },
           safesearch: { type: "string", description: "Optional adult-content filter: off, moderate, or strict" },
           freshness: { type: "string", description: "Optional recency filter: pd, pw, pm, py, or a YYYY-MM-DDtoYYYY-MM-DD range" },
         },

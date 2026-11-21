@@ -278,8 +278,8 @@ export const LOOP_GATE_TOOLS = [{
       type: "object",
       required: ["goal", "lastOutput", "iteration"],
       properties: {
-        goal: { type: "string", description: `What the loop is trying to accomplish. Up to ${LOOP_LIMITS.goalChars} characters.` },
-        lastOutput: { type: ["string", "object"], description: `What the iteration that just finished produced, or a digest of it. Up to ${LOOP_LIMITS.outputChars} characters.` },
+        goal: { type: "string", maxLength: 600, description: `What the loop is trying to accomplish. Up to ${LOOP_LIMITS.goalChars} characters.` },
+        lastOutput: { type: ["string", "object"], maxLength: 3000, description: `What the iteration that just finished produced, or a digest of it. Up to ${LOOP_LIMITS.outputChars} characters.` },
         iteration: { type: "integer", minimum: 1, description: "The number of iterations completed so far (the one that produced lastOutput)." },
         maxIterations: { type: "integer", minimum: 1, description: "Optional. At iteration >= maxIterations the answer is stop, decided in code." },
         budget: { type: "object", description: "Optional { spentUsd, maxUsd }. At spentUsd >= maxUsd the answer is stop, decided in code.", properties: { spentUsd: { type: "number", minimum: 0 }, maxUsd: { type: "number", exclusiveMinimum: 0 } } },

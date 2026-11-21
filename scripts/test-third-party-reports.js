@@ -69,7 +69,7 @@ ok(Object.isFrozen(NOTICE), "the notice is frozen: a caller cannot edit it out o
     const html = await fetch(`${target}/leaderboard`).then((r) => r.text());
     ok(/not asserting that any flagged row is inauthentic/i.test(html),
       "rendered /leaderboard says plainly what a concentration flag does NOT mean");
-    ok(/mike@agent402\.tools/.test(html) && /correct or withdraw/i.test(html),
+    ok(/help@agent402\.tools/.test(html) && /correct or withdraw/i.test(html),
       "rendered /leaderboard names a correction route");
     ok(/an assessment of any business/i.test(html),
       "rendered /leaderboard disclaims assessing the business");

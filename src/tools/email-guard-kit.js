@@ -408,9 +408,9 @@ export const EMAIL_GUARD_TOOLS = [
       inputSchema: {
         properties: {
           raw: { type: "string", description: "The whole RFC 5322 message as received, headers and body, multipart allowed (max 1 MB). Send this or the parts below, not both." },
-          subject: { type: "string", description: "Subject header (parts mode)" },
-          from: { type: "string", description: "From header, display name and address (parts mode)" },
-          replyTo: { type: "string", description: "Reply-To header (parts mode)" },
+          subject: { type: "string", maxLength: 8000, description: "Subject header (parts mode)" },
+          from: { type: "string", maxLength: 4000, description: "From header, display name and address (parts mode)" },
+          replyTo: { type: "string", maxLength: 4000, description: "Reply-To header (parts mode)" },
           html: { type: "string", description: "The text/html part (parts mode, max 1 MB)" },
           text: { type: "string", description: "The text/plain part (parts mode, max 1 MB)" },
           links: { type: "array", items: { oneOf: [{ type: "string" }, { type: "object", properties: { href: { type: "string" }, text: { type: "string" } }, required: ["href"] }] }, description: "Links already extracted from the mail, as hrefs or { href, text } (parts mode, max 500)" },

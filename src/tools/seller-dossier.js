@@ -519,7 +519,7 @@ export const NOTICE = Object.freeze({
   notAnAssessment: "This is not an assessment of the business, its operators, their conduct or their creditworthiness, and it is not advice. Flags describe what our crawler read and what our router experienced, not conclusions about the seller.",
   unobserved: "\"Not observed\" means we hold no reading, not that the thing did not happen. Absence of evidence here is absence of OUR evidence.",
   pointInTime: "Every figure is as of generatedAt and may already be stale; re-read before relying on it.",
-  corrections: "A seller who believes a line misreads them can write to mike@agent402.tools and we will re-read the origin and correct or withdraw the line.",
+  corrections: "A seller who believes a line misreads them can write to help@agent402.tools and we will re-read the origin and correct or withdraw the line.",
 });
 
 // The flag a seller payable through the Base unproven lane carries; the

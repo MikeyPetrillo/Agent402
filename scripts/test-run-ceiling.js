@@ -21,7 +21,7 @@ import dnsPromises from "node:dns/promises";
 import { stubGuardResolver, offlineGuardAnswer } from "./lib/guard-resolver-stub.js";
 
 const { withRunCeiling, ceilingLeftMs } = await import("../src/run-ceiling.js");
-const kits = await Promise.all(["kit.js", "gov-kit.js", "data-kit.js", "weather-kit.js", "weather-probability-kit.js", "weather-plan-kit.js", "macro-kit.js", "network-kit.js"].map((f) => import(`../src/tools/${f}`)));
+const kits = await Promise.all(["kit.js", "gov-kit.js", "data-kit.js", "weather-kit.js", "weather-probability-kit.js", "weather-plan-kit.js", "macro-kit.js", "network-kit.js", "bundle-kit.js"].map((f) => import(`../src/tools/${f}`)));
 const MARKED = kits.flatMap((m) => Object.values(m).filter(Array.isArray).flat()).filter((d) => d && d.endsAtCeiling === true && typeof d.handler === "function");
 
 let passed = 0, failed = 0;
@@ -88,7 +88,7 @@ async function drive(def, input, { ceilingMs, dnsMs, upstream }) {
 const describe = (r) => `ended ${r.endedMs} ms; ${r.started.map((e) => `${e.kind} ${e.what}@${e.at}${e.endedAt === null ? " NOT ENDED" : `-${e.endedAt}`}`).join(", ") || "nothing started"}; ${r.out.hung ? "NEVER CAME BACK" : r.out.error ? `error ${r.out.error.statusCode ?? r.out.error.message}` : `VALUE ${JSON.stringify(r.out.value).slice(0, 80)}`}`;
 
 try {
-  ok(MARKED.length === 44 && ceilingLeftMs() === Infinity, `44 tool definitions declare that their upstream work ends at a run's ceiling (${MARKED.length}), and this suite itself runs with none`);
+  ok(MARKED.length === 47 && ceilingLeftMs() === Infinity, `47 tool definitions declare that their upstream work ends at a run's ceiling (${MARKED.length}), and this suite itself runs with none`);
 
   // 1. A slow name lookup (longer than the ceiling) and an upstream that never answers.
   const CEILING = 300;

@@ -173,8 +173,11 @@ Every paid route answers `402` with both an x402 offer and MPP challenges, so ei
 
 ```js
 import { Mppx, tempo, evm } from "mppx/client";
-const account = (await import("viem/accounts")).privateKeyToAccount(process.env.AGENT_KEY);
-const res = await Mppx.create({ methods: [tempo.charge({ account }), evm.charge({ account })] }).fetch("https://agent402.tools/api/uuid");
+import { privateKeyToAccount } from "viem/accounts";
+const account = privateKeyToAccount(process.env.AGENT_KEY);
+// The evm method signs for the tokens you list: USDC on Base and on Celo.
+const methods = [tempo.charge({ account }), evm.charge({ account, currencies: [evm.assets.base.USDC, evm.assets.celo.USDC] })];
+const res = await Mppx.create({ methods }).fetch("https://agent402.tools/api/uuid");
 ```
 
 **x402** (USDC on Base and other chains) with [`@x402/fetch`](https://www.npmjs.com/package/@x402/fetch):
@@ -209,7 +212,7 @@ More: [Paying with MPP](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-wi
 | **Crypto derivatives & options** | `perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`, `perp-open-interest`, `perp-klines`, `perp-orderbook` (live perpetuals: mark/oracle price, funding, OI, candles, depth); `options-summary`, `crypto-options-chain`, `options-ticker` (options book, IV and greeks) - $0.001 to $0.005 a call, no exchange account |
 | **DeFi, venues & stablecoins (computed answers)** | `lending-rates` (Aave v3 and Compound v3 supply and borrow rates read from the contracts), `funding-screener` (one coin's funding across every listed venue), `stablecoin-depeg-watch` (USD stablecoins off peg now, over 24 hours and 7 days), `exchange-spread` (a coin's price per venue against the median), `dex-pool-health`, `dex-volume-board`, `defi-screener`, `chain-board` - $0.005 a call |
 | **Solana token intel** | `sol-token-pairs`, `sol-token-search`, `sol-trending`, `sol-price`, `sol-swap-quote`, `sol-token-lookup` - markets, prices and routing for any mint |
-| **Crypto market coverage** | `crypto-news`, `crypto-indicators` (RSI, MACD, moving averages, computed here), `crypto-market-pulse`, `coin-profile`, `coin-history`, `coin-ohlc`, `coin-market-chart-range`, `coin-categories`, `coin-price-by-contract` (price by token ADDRESS, no coin id needed), `global-defi`, `exchanges`, `exchange-tickers`, `exchange-rates`, `coin-search`, `coins-list` - plus tokenized real-world assets from the same CoinGecko key: `rwa-list`, `rwa-markets`, `rwa-asset`, `rwa-issuers`, `rwa-issuer` (tokenized stocks, ETFs and commodities with onchain market data and the issuers behind them) |
+| **Crypto market coverage** | `crypto-news`, `crypto-indicators` (RSI, MACD, moving averages, computed here), `crypto-market-pulse`, `coin-profile`, `coin-history`, `coin-ohlc`, `coin-market-chart-range`, `coin-categories`, `coin-price-by-contract` (price by token ADDRESS, no coin id needed), `global-defi`, `exchanges`, `exchange-tickers`, `exchange-rates`, `coin-search` - plus tokenized real-world assets from the same CoinGecko key: `rwa-list`, `rwa-markets`, `rwa-asset`, `rwa-issuers`, `rwa-issuer` (tokenized stocks, ETFs and commodities with onchain market data and the issuers behind them) |
 | **Indexed chain data** | `asset-transfers` (filtered transfer history), `token-balances`, `token-allowance`, `tx-receipt` (decoded transfers), `block-receipts`, `token-price-history` - indexed reads across the major EVM chains, no node and no key of your own |
 | **Farcaster social** | `fc-cast-search`, `fc-channel-feed`, `fc-trending`, `fc-user-casts`, `fc-cast`, `fc-cast-replies`, `fc-channel`, `fc-user-search`, `fc-cast-metrics` - search, feeds and engagement metrics on the onchain social graph |
 | **Site crawling** | `site-map` (enumerate a site's URLs) and `site-crawl` (breadth-first crawl to clean markdown, robots-respecting, hard page/depth/time budgets) - the deterministic pair behind any "read this whole site" task |
@@ -737,7 +740,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
   earlier under AGPL-3.0 or MIT, whose authors keep their copyright (see [NOTICE](NOTICE)).
 - The server is AGPL-3.0-or-later and every published package is MIT (details under Legal
   below). For a commercial license to the code, write to
-  [mike@agent402.tools](mailto:mike@agent402.tools) or see
+  [help@agent402.tools](mailto:help@agent402.tools) or see
   [agent402.tools/company](https://agent402.tools/company).
 - Outside contributions carry a DCO sign-off on every commit and the contributor license
   agreement in [CLA.md](CLA.md), which covers new and earlier contributions; see
@@ -762,7 +765,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 
 ## Contact
 
-- **Email:** [mike@agent402.tools](mailto:mike@agent402.tools)
+- **Email:** [help@agent402.tools](mailto:help@agent402.tools)
 - **X / Twitter:** [@Agent402Tools](https://x.com/Agent402Tools)
 - **GitHub:** [MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402)
 

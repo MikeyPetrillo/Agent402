@@ -51,7 +51,55 @@ export const TTL = Object.freeze({ price: 60_000, list: 300_000, coinList: 600_0
 const MAX_ENTRIES = 256;
 const cache = createCgCache("markets", { max: MAX_ENTRIES, keepParsed: true });
 
-export function clearCryptoMarketsCache() { cache.clear(); historyMisses.clear(); }
+export function clearCryptoMarketsCache() { cache.clear(); historyMisses.clear(); ecbTable = null; ecbDownUntil = 0; }
+
+// --- exchange-rates' reference: the ECB's rates ---------------------------------
+// The cross rates exchange-rates computes are compared with the European
+// Central Bank's euro foreign exchange reference rates, the FX tools' own
+// source (src/tools/frankfurter.js; free to reuse with the ECB cited). One
+// USD-based table, kept in this process for ECB_TABLE_TTL_MS (the ECB
+// publishes once a business day) and read under a short cap of its own: a
+// reference that cannot be read leaves the answer as it is
+// (`check: "unavailable"`) and is not tried again for ECB_BACKOFF_MS.
+export const ECB_CHECK = "ecb-reference";
+// The citation the answer carries (the ECB asks to be named as the source).
+export const ECB_REFERENCE_SOURCE = "European Central Bank reference rates (via Frankfurter)";
+export const ECB_READ_MS = 2_500;
+export const ECB_TABLE_TTL_MS = 30 * 60_000;
+export const ECB_BACKOFF_MS = 30_000;
+let ecbTable = null; // { at, date, rates: { EUR: 0.85, ... } } per 1 USD
+let ecbDownUntil = 0;
+let ecbInFlight = null;
+/** The USD-based reference table, or null. Never throws. */
+async function readEcbTable() {
+  const now = Date.now();
+  if (ecbTable && now - ecbTable.at < ECB_TABLE_TTL_MS) return ecbTable;
+  if (now < ecbDownUntil) return null;
+  ecbInFlight ||= (async () => {
+    try {
+      const ctx = { label: "Reference rates", step: "reference rates", timeoutMs: ECB_READ_MS, tag: "[crypto-markets]" };
+      const res = await upstreamFetch(ratesUrl({ base: "USD" }), { headers: { "User-Agent": userAgent(), Accept: "application/json" } }, ctx);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const shaped = latestShape(JSON.parse(await bodyUnderDeadline(res.text(), ctx)), "USD");
+      if (!shaped || !Object.keys(shaped.rates).length) throw new Error("no rates");
+      ecbTable = { at: Date.now(), date: shaped.date, rates: shaped.rates };
+      return ecbTable;
+    } catch {
+      ecbDownUntil = Date.now() + ECB_BACKOFF_MS;
+      return null;
+    } finally { ecbInFlight = null; }
+  })();
+  return ecbInFlight;
+}
+/** Units of `code` per 1 USD in the reference table, or null. */
+function ecbPerUsd(table, code) {
+  const c = String(code).toUpperCase();
+  if (c === "USD") return 1;
+  const v = Object.hasOwn(table.rates, c) ? table.rates[c] : null;
+  return typeof v === "number" && v > 0 ? v : null;
+}
+/** A rate at 8 significant digits. */
+function sig(x) { return Number.isFinite(x) ? Number(x.toPrecision(8)) : null; }
 
 function userAgent() {
   return (process.env.CRYPTO_USER_AGENT || "").trim() || "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
@@ -76,6 +124,7 @@ function headers() {
 import { cgTake, cgRefusal, resetCgRateLimit, cgReserveUnconfirmed, cgScopeAll, cgNoteUnknownId, cgUnknownToday, cgForgetUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
+import { ratesUrl, latestShape } from "./frankfurter.js";
 export { resetCgRateLimit };
 
 // `reduce` (optional): { name, fn }. The upstream body is passed through fn
@@ -450,9 +499,9 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { platform: "ethereum", contracts: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", currency: "usd" },
       inputSchema: {
         properties: {
-          platform: { type: "string", description: "Asset platform id: ethereum, base, polygon-pos, arbitrum-one, optimistic-ethereum, binance-smart-chain, solana, avalanche, ... " },
+          platform: { type: "string", maxLength: 100, description: "Asset platform id: ethereum, base, polygon-pos, arbitrum-one, optimistic-ethereum, binance-smart-chain, solana, avalanche, ... " },
           contracts: { type: "string", description: "Comma-separated contract addresses (max 25). Also accepts an array." },
-          currency: { type: "string", description: "vs currency (default usd): fiat (usd, eur) or crypto (btc, eth)." },
+          currency: { type: "string", maxLength: 8, description: "vs currency (default usd): fiat (usd, eur) or crypto (btc, eth)." },
         },
         required: ["platform", "contracts"],
       },
@@ -511,8 +560,8 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { coin: "ethereum", currency: "usd" },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Coin id (bitcoin, ethereum, usd-coin, ...). Use coin-search to resolve a symbol." },
-          currency: { type: "string", description: "vs currency for the market block (default usd)." },
+          coin: { type: "string", maxLength: 100, description: "Coin id (bitcoin, ethereum, usd-coin, ...). Use coin-search to resolve a symbol." },
+          currency: { type: "string", maxLength: 8, description: "vs currency for the market block (default usd)." },
         },
         required: ["coin"],
       },
@@ -606,10 +655,10 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { coin: "bitcoin", daysAgo: 30, currency: "usd" },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Coin id (bitcoin, ethereum, ...)." },
+          coin: { type: "string", maxLength: 100, description: "Coin id (bitcoin, ethereum, ...)." },
           date: { type: "string", description: "Snapshot date YYYY-MM-DD (UTC), within the past 365 days. Alternative to daysAgo." },
           daysAgo: { type: "number", description: "Days before today, 1-365 (used when date is absent; default 30)." },
-          currency: { type: "string", description: "Currency to call out (default usd); all currencies are still returned under `allCurrencies`." },
+          currency: { type: "string", maxLength: 8, description: "Currency to call out (default usd); all currencies are still returned under `allCurrencies`." },
         },
         required: ["coin"],
       },
@@ -674,9 +723,9 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { coin: "bitcoin", days: 7, currency: "usd" },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Coin id (bitcoin, ethereum, ...)." },
+          coin: { type: "string", maxLength: 100, description: "Coin id (bitcoin, ethereum, ...)." },
           days: { type: "number", description: "1, 7, 14, 30, 90, 180 or 365 (default 7)." },
-          currency: { type: "string", description: "vs currency (default usd)." },
+          currency: { type: "string", maxLength: 8, description: "vs currency (default usd)." },
         },
         required: ["coin"],
       },
@@ -737,11 +786,11 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { coin: "ethereum", lookback: "3d" },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Coin id (bitcoin, ethereum, ...)." },
+          coin: { type: "string", maxLength: 100, description: "Coin id (bitcoin, ethereum, ...)." },
           from: { type: "string", description: "Window start: unix seconds or ISO-8601 date. Default = to minus 24h." },
           to: { type: "string", description: "Window end: unix seconds or ISO-8601 date. Default = now." },
           lookback: { type: "string", description: "Alternative to from: a window ending at `to`, like \"6h\", \"3d\" or \"2w\"." },
-          currency: { type: "string", description: "vs currency (default usd)." },
+          currency: { type: "string", maxLength: 8, description: "vs currency (default usd)." },
         },
         required: ["coin"],
       },
@@ -893,7 +942,7 @@ export const CRYPTO_MARKETS_TOOLS = [
         properties: {
           limit: { type: "number", description: "List mode: 1-100 exchanges (default 25)." },
           page: { type: "number", description: "List mode: page number (default 1)." },
-          exchange: { type: "string", description: "Profile mode: one exchange id (binance, gdax, kraken, okex, bybit_spot, ...)." },
+          exchange: { type: "string", maxLength: 100, description: "Profile mode: one exchange id (binance, gdax, kraken, okex, bybit_spot, ...)." },
         },
       },
       output: {
@@ -958,7 +1007,7 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { exchange: "binance", coins: "ethereum", limit: 5 },
       inputSchema: {
         properties: {
-          exchange: { type: "string", description: "Exchange id (binance, gdax, kraken, ...). See the exchanges tool." },
+          exchange: { type: "string", maxLength: 100, description: "Exchange id (binance, gdax, kraken, ...). See the exchanges tool." },
           coins: { type: "string", description: "Optional comma-separated coin ids to filter (max 10), e.g. \"bitcoin,ethereum\"." },
           page: { type: "number", description: "Page of 100 tickers upstream (default 1)." },
           limit: { type: "number", description: "Max tickers returned from that page, 1-100 (default 50)." },
@@ -996,7 +1045,8 @@ export const CRYPTO_MARKETS_TOOLS = [
   },
 
   // ===========================================================================
-  // exchange-rates: BTC-based rates.
+  // exchange-rates: cross rates in a base the caller picks, computed here
+  // from the market table and checked against the ECB reference rates.
   // ===========================================================================
   {
     route: "GET /api/exchange-rates",
@@ -1005,25 +1055,25 @@ export const CRYPTO_MARKETS_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "BTC-denominated exchange rates for ~60 units: crypto (ETH, LTC, BNB, SOL, ...), fiat (USD, EUR, JPY, ...) and commodities (gold, silver ounces), each as units per 1 BTC with name and type. Optional `currencies` filter (comma-separated unit codes) and `type` filter (crypto, fiat, commodity). One call gives a consistent cross-rate table: BTC in gold ounces, ETH/BTC, USD/JPY via BTC. Cached in-process for 60 seconds.",
-    tags: ["crypto", "exchange-rates", "btc", "fiat", "gold", "cross-rate", "fx"],
+      "BTC-denominated exchange rates for ~60 units: crypto, fiat and commodities (gold, silver ounces), each with perBtc (units per 1 BTC), name and type. rate is the same cross per 1 `base` (default btc; base=usd, eur, eth or xau quotes another unit), computed here. A fiat row the European Central Bank publishes carries referenceRate (the ECB rate per 1 referenceBase: the base when fiat, else USD) and divergencePct, the market cross's gap to it in percent; check says whether that ran. Optional `currencies` and `type` (crypto, fiat, commodity) filters. Cached in-process: the market table 60 seconds, the reference rates 30 minutes.",
+    tags: ["crypto", "exchange-rates", "btc", "fiat", "gold", "cross-rate", "fx", "ecb"],
     discovery: {
-      input: { currencies: "usd,eur,eth,xau" },
+      input: { currencies: "eur,eth" },
       inputSchema: {
         properties: {
           currencies: { type: "string", description: "Optional comma-separated unit codes to keep (usd, eur, eth, xau, ...). Default: all." },
           type: { type: "string", description: "Optional filter: crypto, fiat or commodity." },
+          base: { type: "string", maxLength: 100, description: "Unit `rate` is quoted in (default btc): usd, eur, eth, xau, ..." },
         },
       },
       output: {
         example: {
           source: "coingecko", fetchedAt: "2026-08-22T13:20:00.000Z", cached: false,
-          base: "BTC", count: 4,
+          base: "BTC", count: 2, check: "ecb-reference", referenceBase: "USD", referenceDate: "2026-08-21",
+          referenceSource: ECB_REFERENCE_SOURCE,
           rates: [
-            { code: "usd", name: "US Dollar", unit: "$", type: "fiat", perBtc: 77018 },
-            { code: "eur", name: "Euro", unit: "€", type: "fiat", perBtc: 65600.2 },
-            { code: "eth", name: "Ether", unit: "ETH", type: "crypto", perBtc: 31.813 },
-            { code: "xau", name: "Gold - Troy Ounce", unit: "XAU", type: "commodity", perBtc: 22.91 },
+            { code: "eur", name: "Euro", unit: "€", type: "fiat", perBtc: 65600.2, rate: 65600.2, referenceRate: 0.8521, divergencePct: -0.0411 },
+            { code: "eth", name: "Ether", unit: "ETH", type: "crypto", perBtc: 31.813, rate: 31.813, referenceRate: null, divergencePct: null },
           ],
         },
       },
@@ -1032,13 +1082,50 @@ export const CRYPTO_MARKETS_TOOLS = [
       const want = i.currencies == null || i.currencies === "" ? null : new Set(takeIdList(i.currencies, "currencies", 60));
       const type = i.type == null || i.type === "" ? null : String(i.type).trim().toLowerCase();
       if (type && !["crypto", "fiat", "commodity"].includes(type)) throw bad('"type" must be crypto, fiat or commodity');
+      // No `base` is the answer this route has always given: BTC as the base,
+      // every row's perBtc. `base=<code>` quotes the crosses in another unit.
+      const base = i.base == null || i.base === "" ? "btc" : takeId(i.base, "base");
       const { data, fetchedAt, cached } = await cgGet("/exchange_rates", {}, TTL.price);
       const r = data?.rates;
       if (!r || typeof r !== "object") throw bad("Market data upstream returned an unexpected shape", 502);
+      const keyOf = (code) => Object.keys(r).find((k) => k.toLowerCase() === code);
+      const perBtcOf = (code) => { const k = keyOf(code); return k == null ? null : num(r[k]?.value); };
+      const basePerBtc = perBtcOf(base);
+      if (!(basePerBtc > 0)) throw bad(`"base" must be a unit code in the table (e.g. usd, eur, btc, eth, xau); "${base}" is not one`);
       const rates = Object.entries(r)
         .filter(([code, v]) => (!want || want.has(code.toLowerCase())) && (!type || v?.type === type))
-        .map(([code, v]) => ({ code, name: v?.name ?? null, unit: v?.unit ?? null, type: v?.type ?? null, perBtc: num(v?.value) }));
-      return { source: SOURCE, fetchedAt, cached, base: "BTC", count: rates.length, rates };
+        .map(([code, v]) => {
+          const perBtc = num(v?.value);
+          return { code, name: v?.name ?? null, unit: v?.unit ?? null, type: v?.type ?? null, perBtc, rate: perBtc == null ? null : sig(perBtc / basePerBtc), referenceRate: null, divergencePct: null };
+        });
+      // The reference check: each fiat row's cross against the reference base
+      // (the base itself when it is a fiat unit, else USD), set beside the
+      // ECB's rate for the same pair. Nothing to compare (no fiat row but the
+      // reference base) reads no reference; a reference that cannot be read
+      // leaves the rates as they are.
+      const isFiat = (code) => r[keyOf(code)]?.type === "fiat";
+      const refBaseCode = isFiat(base) ? base : "usd";
+      const refBasePerBtc = perBtcOf(refBaseCode);
+      let check = "no-reference", ref = null;
+      if (refBasePerBtc > 0 && rates.some((row) => row.type === "fiat" && row.code.toLowerCase() !== refBaseCode)) {
+        ref = await readEcbTable();
+        check = !ref ? "unavailable" : "no-reference";
+        const refBase = ref ? ecbPerUsd(ref, refBaseCode) : null;
+        if (refBase) {
+          for (const row of rates) {
+            const refCode = row.type === "fiat" ? ecbPerUsd(ref, row.code.toLowerCase()) : null;
+            if (!refCode || row.perBtc == null) continue;
+            row.referenceRate = sig(refCode / refBase);
+            row.divergencePct = +(((row.perBtc / refBasePerBtc - row.referenceRate) / row.referenceRate) * 100).toFixed(4);
+            check = ECB_CHECK;
+          }
+        }
+      }
+      return {
+        source: SOURCE, fetchedAt, cached, base: base.toUpperCase(), count: rates.length, check,
+        ...(check === ECB_CHECK ? { referenceBase: refBaseCode.toUpperCase(), referenceDate: ref.date, referenceSource: ECB_REFERENCE_SOURCE } : {}),
+        rates,
+      };
     },
   },
 
@@ -1058,7 +1145,7 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { query: "usdc", limit: 5 },
       inputSchema: {
         properties: {
-          query: { type: "string", description: "Name, symbol or fragment, 1-64 chars (e.g. \"usdc\", \"render\", \"pepe\")." },
+          query: { type: "string", maxLength: 64, description: "Name, symbol or fragment, 1-64 chars (e.g. \"usdc\", \"render\", \"pepe\")." },
           limit: { type: "number", description: "Max results per group, 1-50 (default 10)." },
         },
         required: ["query"],
@@ -1090,64 +1177,9 @@ export const CRYPTO_MARKETS_TOOLS = [
     },
   },
 
-  // ===========================================================================
-  // coins-list: the full id list, paged, optional platform contracts.
-  // ===========================================================================
-  {
-    route: "GET /api/coins-list",
-    name: "All coin ids (paged)",
-    slug: "coins-list",
-    category: "crypto",
-    price: "$0.005",
-    description:
-      "The complete list of tracked coins (~18k) as {id, symbol, name}, paged: `page` + `perPage` (1-500, default 250). Set `includePlatforms: true` to add each coin's contract address per platform. Pass `platform` (e.g. base, solana, ethereum) to keep only coins with a contract there, or `symbol` to keep one ticker (exact, case-insensitive) across all its namesakes. For bulk id resolution, building a local symbol map, or enumerating every token on one chain; for a single lookup use coin-search. The upstream list is fetched once and cached in-process for 10 minutes, so paging through it costs the shared quota one call.",
-    tags: ["crypto", "coins", "list", "ids", "symbols", "platforms", "contracts", "bulk"],
-    discovery: {
-      input: { symbol: "usdc", includePlatforms: true },
-      inputSchema: {
-        properties: {
-          page: { type: "number", description: "Page number (default 1)." },
-          perPage: { type: "number", description: "Rows per page, 1-500 (default 250)." },
-          includePlatforms: { type: "boolean", description: "Include contract addresses per platform (default false)." },
-          platform: { type: "string", description: "Keep only coins with a contract on this platform id (implies includePlatforms)." },
-          symbol: { type: "string", description: "Keep only coins with this ticker symbol (exact, case-insensitive)." },
-        },
-      },
-      output: {
-        example: {
-          source: "coingecko", fetchedAt: "2026-08-22T13:20:00.000Z", cached: false,
-          page: 1, perPage: 250, total: 3, totalPages: 1, count: 3, filters: { symbol: "usdc", platform: null },
-          coins: [
-            { id: "usd-coin", symbol: "usdc", name: "USDC", platforms: { ethereum: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", base: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", solana: "EPjFWdd5AuFqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" } },
-          ],
-        },
-      },
-    },
-    handler: async (i) => {
-      const page = takeInt(i.page, "page", { min: 1, max: 100000, dflt: 1 });
-      const perPage = takeInt(i.perPage, "perPage", { min: 1, max: 500, dflt: 250 });
-      const platform = takeId(i.platform, "platform", { required: false });
-      const includePlatforms = takeBool(i.includePlatforms, false) || Boolean(platform);
-      const symbol = i.symbol == null || i.symbol === "" ? null : String(i.symbol).trim().toLowerCase();
-      if (symbol != null && (symbol.length > 32 || /\s/.test(symbol))) throw bad('"symbol" must be a single ticker (max 32 chars)');
-      const { data, fetchedAt, cached } = await cgGet("/coins/list", { include_platform: includePlatforms ? "true" : undefined }, TTL.coinList);
-      if (!Array.isArray(data)) throw bad("Market data upstream returned an unexpected shape", 502);
-      let rows = data;
-      if (symbol != null) rows = rows.filter((c) => typeof c?.symbol === "string" && c.symbol.toLowerCase() === symbol);
-      if (platform) rows = rows.filter((c) => c?.platforms && typeof c.platforms[platform] === "string" && c.platforms[platform]);
-      const total = rows.length;
-      const totalPages = Math.max(1, Math.ceil(total / perPage));
-      const slice = rows.slice((page - 1) * perPage, page * perPage);
-      const coins = slice.map((c) => {
-        const row = { id: c.id ?? null, symbol: c.symbol ?? null, name: c.name ?? null };
-        if (includePlatforms) {
-          row.platforms = Object.fromEntries(Object.entries(c.platforms || {}).filter(([k, v]) => k && typeof v === "string" && v));
-        }
-        return row;
-      });
-      return { source: SOURCE, fetchedAt, cached, page, perPage, total, totalPages, count: coins.length, filters: { symbol, platform }, coins };
-    },
-  },
+  // coins-list was RETIRED 2026-11-21: it served the upstream's whole id list,
+  // page by page, with nothing computed here (src/retired-tools.js points it
+  // at coin-search, which resolves a name or ticker to its ids).
 ];
 
 // --- Real-world assets (tokenized stocks, ETFs, commodities) ------------------
@@ -1282,7 +1314,7 @@ const RWA_TOOLS = [
       input: { type: "stock", order: "market_cap_desc", perPage: 10 },
       inputSchema: {
         properties: {
-          currency: { type: "string", description: "vs currency (default usd)." },
+          currency: { type: "string", maxLength: 8, description: "vs currency (default usd)." },
           type: { type: "string", description: "stock | etf | commodity (default: all)." },
           ids: { type: "string", description: "Comma-separated asset ids to fetch instead of a ranked page (max 50), e.g. gold,nvidia." },
           order: { type: "string", description: "market_cap_desc (default) | market_cap_asc | volume_desc | volume_asc." },
@@ -1327,8 +1359,8 @@ const RWA_TOOLS = [
       input: { id: "gold", currency: "usd" },
       inputSchema: {
         properties: {
-          id: { type: "string", description: "Asset id from rwa-list (gold, nvidia, tesla, ...)." },
-          currency: { type: "string", description: "vs currency for the market block (default usd)." },
+          id: { type: "string", maxLength: 100, description: "Asset id from rwa-list (gold, nvidia, tesla, ...)." },
+          currency: { type: "string", maxLength: 8, description: "vs currency for the market block (default usd)." },
         },
         required: ["id"],
       },
@@ -1395,7 +1427,7 @@ const RWA_TOOLS = [
     discovery: {
       input: { id: "coinbase-ecosystem" },
       inputSchema: {
-        properties: { id: { type: "string", description: "Issuer id from rwa-issuers (coinbase-ecosystem, ...)." } },
+        properties: { id: { type: "string", maxLength: 100, description: "Issuer id from rwa-issuers (coinbase-ecosystem, ...)." } },
         required: ["id"],
       },
       output: {

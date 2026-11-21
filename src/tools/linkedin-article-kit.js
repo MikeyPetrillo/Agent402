@@ -264,12 +264,12 @@ export function makeLinkedInHandler(tierSlug) {
 const SCHEMA = {
   type: "object",
   properties: {
-    topic: { type: "string", description: "What the article is about (up to 600 chars). The research runs on this." },
-    angle: { type: "string", description: "Optional: the take or thesis to argue." },
-    audience: { type: "string", description: "Optional: who it is for, e.g. CFOs at mid-market SaaS." },
-    tone: { type: "string", description: "Optional voice, default: professional, first-person, direct." },
+    topic: { type: "string", maxLength: 600, description: "What the article is about (up to 600 chars). The research runs on this." },
+    angle: { type: "string", maxLength: 400, description: "Optional: the take or thesis to argue." },
+    audience: { type: "string", maxLength: 200, description: "Optional: who it is for, e.g. CFOs at mid-market SaaS." },
+    tone: { type: "string", maxLength: 80, description: "Optional voice, default: professional, first-person, direct." },
     author: { type: "object", properties: { name: { type: "string" }, role: { type: "string" } }, description: "Optional byline the article is written as." },
-    cta: { type: "string", description: "Optional closing call to action." },
+    cta: { type: "string", maxLength: 200, description: "Optional closing call to action." },
     length: { type: "string", enum: ["short", "standard", "long"], description: "~600 / ~1,000 / ~1,500 words (default standard)." },
     images: { type: "object", properties: { cover: { type: "boolean", description: "Generate the cover image (default true)." }, inline: { type: "number", description: "In-article images, 0 or 1 (default 1)." }, style: { type: "string", description: "Visual style for the generated images." } } },
     hashtags: { type: "number", description: "Hashtags on the companion post, 0-5 (default 4)." },

@@ -454,7 +454,12 @@ function publicResolveTxt(name) {
 }
 // The lookups the handler makes; a test swaps them to prove the handler goes
 // through cymruTxt with the public fallback (setCymruLookups).
-const CYMRU_DEFAULT_LOOKUPS = Object.freeze({ primary: (n) => dnsPromises.resolveTxt(n), fallback: publicResolveTxt });
+// The owner lookup (the AS's name) is the second query and only adds a name
+// to an answer that already holds the origin record: it gets a deadline of
+// its own, the host resolver and the public fallback together, so a resolver
+// that never answers cannot hold the call.
+export const ASN_OWNER_LOOKUP_MS = 3_000;
+const CYMRU_DEFAULT_LOOKUPS = Object.freeze({ primary: (n) => dnsPromises.resolveTxt(n), fallback: publicResolveTxt, ownerMs: ASN_OWNER_LOOKUP_MS });
 let cymruLookups = CYMRU_DEFAULT_LOOKUPS;
 export function setCymruLookups(next) { cymruLookups = next ? { ...CYMRU_DEFAULT_LOOKUPS, ...next } : CYMRU_DEFAULT_LOOKUPS; }
 export const CYMRU_FALLBACK = CYMRU_FALLBACK_SERVERS;
@@ -498,22 +503,35 @@ async function asnInfoHandler(body) {
   const [asnRaw, prefix, country, registry, allocationDate] = originTxt.split("|").map(s => s.trim());
   const asn = asnRaw ? `AS${asnRaw.split(/\s+/)[0]}` : null;
 
-  // Second query: AS owner name.
-  let owner = null;
+  // Second query: AS owner name, under its own deadline. A name the zone
+  // does not hold is an answer (owner null); a lookup that failed or ran out
+  // of time says so (`ownerUnavailable`), so a null owner is never read as
+  // "this AS has no name".
+  let owner = null, ownerUnavailable = false;
   if (asn) {
+    let timer;
+    const late = new Promise((resolve) => { timer = setTimeout(resolve, cymruLookups.ownerMs, null); });
     try {
-      const records = await cymruTxt(`${asn}.asn.cymru.com`);
-      const txt = (records[0] || []).join("");
-      // "AS | CC | registry | date | name, CC"
-      const parts = txt.split("|").map(s => s.trim());
-      owner = parts[4] || null;
-    } catch { /* leave owner null; primary record already returned */ }
+      const lookup = cymruTxt(`${asn}.asn.cymru.com`);
+      lookup.catch(() => {}); // a rejection after the deadline is already answered
+      const records = await Promise.race([lookup, late]);
+      if (records === null) ownerUnavailable = true;
+      else {
+        const txt = (records[0] || []).join("");
+        // "AS | CC | registry | date | name, CC"
+        const parts = txt.split("|").map(s => s.trim());
+        owner = parts[4] || null;
+      }
+    } catch (err) {
+      if (err?.code !== "ENOTFOUND" && err?.code !== "ENODATA") ownerUnavailable = true;
+    } finally { clearTimeout(timer); }
   }
 
   return {
     ip,
     asn,
     owner,
+    ...(ownerUnavailable ? { ownerUnavailable: true } : {}),
     prefix: prefix || null,
     country: country || null,
     registry: registry || null,
@@ -539,7 +557,7 @@ export const NETWORK_TOOLS2 = [
       inputSchema: {
         type: "object",
         properties: {
-          domain: { type: "string", description: "Domain to search (also accepts host/hostname/url/email)" },
+          domain: { type: "string", maxLength: 253, description: "Domain to search (also accepts host/hostname/url/email)" },
           includeExpired: { type: "boolean", description: "Include expired certs (default false)" },
           limit: { type: "integer", description: "Max certs to return (1–500, default 50)" },
         },
@@ -657,7 +675,7 @@ export const NETWORK_TOOLS2 = [
     category: "network",
     price: "$0.001",
     description:
-      "Look up the Autonomous System (ASN), prefix, country, registry, and allocation date for an IPv4 address - or for a hostname (which is resolved first). Uses a free public DNS-based IP→ASN mapping service; no HTTPS upstream, no auth, no rate-limit headaches.",
+      "Look up the Autonomous System (ASN), its owner name, prefix, country, registry, and allocation date for an IPv4 address - or for a hostname (which is resolved first). Uses a free public DNS-based IP→ASN mapping service; no HTTPS upstream, no auth, no rate-limit headaches. The owner name is a second lookup with its own 3 second limit: when it cannot be read, owner is null and ownerUnavailable is true.",
     tags: ["security", "network", "geolocation", "asn"],
     discovery: {
       bodyType: "json",
@@ -665,7 +683,7 @@ export const NETWORK_TOOLS2 = [
         type: "object",
         properties: {
           ip: { type: "string", description: "IPv4 address to look up (mutually exclusive with host)" },
-          host: { type: "string", description: "Hostname to resolve first (also accepts hostname/domain/url/email)" },
+          host: { type: "string", maxLength: 253, description: "Hostname to resolve first (also accepts hostname/domain/url/email)" },
         },
       },
       input: { ip: "8.8.8.8" },

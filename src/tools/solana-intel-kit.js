@@ -727,7 +727,7 @@ export const SOLANA_INTEL_TOOLS = [
       input: { mint: MINTS.JUP },
       inputSchema: {
         properties: {
-          mint: { type: "string", description: "Base58 SPL token mint address." },
+          mint: { type: "string", maxLength: 44, description: "Base58 SPL token mint address." },
         },
         required: ["mint"],
       },
@@ -854,7 +854,7 @@ export const SOLANA_INTEL_TOOLS = [
       input: { mint: MINTS.JUP, marketLimit: 5, holderLimit: 10 },
       inputSchema: {
         properties: {
-          mint: { type: "string", description: "Base58 SPL token mint address." },
+          mint: { type: "string", maxLength: 44, description: "Base58 SPL token mint address." },
           marketLimit: { type: "number", description: "Deepest markets to include (1-25, default 5)." },
           holderLimit: { type: "number", description: "Top holders to include (1-20, default 20)." },
         },
@@ -956,7 +956,7 @@ export const SOLANA_INTEL_TOOLS = [
       input: { mint: MINTS.JUP, limit: 10 },
       inputSchema: {
         properties: {
-          mint: { type: "string", description: "Base58 SPL token mint address." },
+          mint: { type: "string", maxLength: 44, description: "Base58 SPL token mint address." },
           limit: { type: "number", description: "Holders to return (1-20, default 20)." },
         },
         required: ["mint"],
@@ -1033,7 +1033,7 @@ export const SOLANA_INTEL_TOOLS = [
       input: { mint: MINTS.JUP, limit: 5 },
       inputSchema: {
         properties: {
-          mint: { type: "string", description: "Base58 SPL token mint address." },
+          mint: { type: "string", maxLength: 44, description: "Base58 SPL token mint address." },
           limit: { type: "number", description: "Pairs to return, deepest first (1-30, default 10)." },
         },
         required: ["mint"],
@@ -1081,7 +1081,7 @@ export const SOLANA_INTEL_TOOLS = [
       input: { query: "JUP", limit: 5 },
       inputSchema: {
         properties: {
-          query: { type: "string", description: "Token name, ticker, or address (1-80 chars)." },
+          query: { type: "string", maxLength: 80, description: "Token name, ticker, or address (1-80 chars)." },
           limit: { type: "number", description: "Pairs to return (1-30, default 10)." },
         },
         required: ["query"],
@@ -1338,8 +1338,8 @@ export const SOLANA_INTEL_TOOLS = [
       input: { inputMint: MINTS.SOL, outputMint: MINTS.USDC, amount: "1000000000", slippageBps: 50 },
       inputSchema: {
         properties: {
-          inputMint: { type: "string", description: "Base58 mint you sell." },
-          outputMint: { type: "string", description: "Base58 mint you buy." },
+          inputMint: { type: "string", maxLength: 44, description: "Base58 mint you sell." },
+          outputMint: { type: "string", maxLength: 44, description: "Base58 mint you buy." },
           amount: { type: "string", description: "Input amount in base units (integer string; 1 SOL = 1000000000 lamports, 1 USDC = 1000000)." },
           slippageBps: { type: "number", description: "Slippage tolerance in basis points (0-5000, default 50 = 0.5%)." },
         },
@@ -1411,7 +1411,7 @@ export const SOLANA_INTEL_TOOLS = [
       input: { query: MINTS.JUP, limit: 3 },
       inputSchema: {
         properties: {
-          query: { type: "string", description: "Mint address, ticker, or token name (1-80 chars)." },
+          query: { type: "string", maxLength: 80, description: "Mint address, ticker, or token name (1-80 chars)." },
           limit: { type: "number", description: "Matches to return (1-20, default 5)." },
         },
         required: ["query"],

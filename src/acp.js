@@ -57,7 +57,7 @@ export function acpManifest({ baseUrl, network, networks, wallet, toolCount, pow
     merchant: {
       name: "Agent402.Tools",
       url: baseUrl,
-      support_email: "mike@agent402.tools",
+      support_email: "help@agent402.tools",
       logo_url: `${baseUrl}/icon-192.png`,
     },
     service: {

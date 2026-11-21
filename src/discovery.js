@@ -39,7 +39,7 @@ import { GOOD_READ_MAX_MS, SETTLED_MARK_MS, COVER_WALLETS_MAX, sharedWindowMs } 
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { toolReliabilityEnabled, TOOL_RELIABILITY_PATH } from "./tool-reliability.js";
 const REPO = REPO_URL;
-const MAINTAINER = { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: REPO };
+const MAINTAINER = { name: "Havok Holdings LLC", email: "help@agent402.tools", url: REPO };
 
 /** A dollar figure exactly as priced: cents at a cent or more ($3.30, $0.50),
  *  and every significant sub-cent digit ($0.0005, $0.0025), never rounded. */
