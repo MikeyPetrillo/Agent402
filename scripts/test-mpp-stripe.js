@@ -43,6 +43,20 @@ const testMethod = stripeMethods.charge({ client: new Stripe("sk_test_fakekey"),
 ok(stripeEnabled(), "stripeEnabled true with both env vars");
 ok(typeof mintStripeChallenge({ priceUsd: 0.50, realm: REALM }) === "string", "mint: $0.50 route yields a challenge");
 ok(mintStripeChallenge({ priceUsd: 0.25, realm: REALM }) === null, "mint: below the $0.50 card minimum mints nothing");
+// The amount on the wire: the request takes decimal dollars ("0.50") and
+// mppx's transform stores cents, so a $0.50 route's challenge carries "50".
+// Passing cents to the request (or dropping the decimal string) would carry
+// "5000": a 100x charge.
+{
+  const wire = (p) => Challenge.deserialize(mintStripeChallenge({ priceUsd: p, realm: REALM })).request;
+  const half = wire(0.50), five = wire(5.00), odd = wire(1.23);
+  ok(half.amount === "50" && five.amount === "500" && odd.amount === "123", `mint: the challenge carries the price in cents ($0.50 -> ${half.amount}, $5.00 -> ${five.amount}, $1.23 -> ${odd.amount})`);
+  ok(half.currency === "usd" && half.methodDetails?.networkId === PROFILE && JSON.stringify(half.methodDetails?.paymentMethodTypes) === '["card"]', "mint: currency usd, our profile and card in methodDetails");
+  // Our own minted challenge, paid back, binds on its route at 50 cents.
+  const minted = Credential.serialize({ challenge: Challenge.deserialize(mintStripeChallenge({ priceUsd: 0.50, realm: REALM })), payload: { type: "spt", spt: "spt_test_mint" } });
+  const mb = checkStripeCredentialBinding(minted, { secretKey: SECRET, realm: REALM, priceFor, method: "POST", path: "/paid" });
+  ok(mb.ok === true && mb.amountCents === 50, `mint: a credential over our own minted $0.50 challenge binds on the $0.50 route at 50 cents (${mb.reason || mb.amountCents})`);
+}
 
 function credFor({ priceUsd = 0.50, realm = REALM, secretKey = SECRET, networkId = PROFILE, spt = "spt_test_123" } = {}) {
   const challenge = Challenge.fromMethod(testMethod, {
@@ -315,9 +329,15 @@ for (const seam of [true, false]) {
     ok(f2.status === 200 && runs.get("spt_retry") === 2 && captures.get("spt_retry") === 1, `gate H: after a failed run the same token (and credential) runs once more and is captured once (${f2.status}, runs ${runs.get("spt_retry")}, captures ${captures.get("spt_retry")})`);
 
     declineNext = 1;
-    const d1 = await post(tokenCred("spt_decline"));
+    const declinedCred = tokenCred("spt_decline");
+    const d1 = await post(declinedCred);
     const d2 = await post(tokenCred("spt_decline"));
     ok(d1.status === 402 && d2.status === 200 && runs.get("spt_decline") === 2 && captures.get("spt_decline") === 1, `gate H: a capture that fails releases the token; the next credential with it runs and is captured (${d1.status}, ${d2.status})`);
+    // The credential whose capture failed stays spent: sent again it is
+    // refused before the handler, so the handler never reruns unpaid.
+    const d3 = await post(declinedCred);
+    ok(d3.status === 402 && /already used or is in flight/.test(d3.body?.detail || "") && runs.get("spt_decline") === 2 && captures.get("spt_decline") === 1, `gate H: the credential whose capture failed, sent again, is refused before the handler, nothing captured (${d3.status}, runs ${runs.get("spt_decline")}, captures ${captures.get("spt_decline")})`);
+    ok(/Nothing was charged/.test(d1.body?.detail || ""), `gate H: the failed capture tells the buyer nothing was charged (${String(d1.body?.detail || "").slice(0, 120)})`);
 
     const two = await Promise.all([post(tokenCred("spt_a")), post(tokenCred("spt_b"))]);
     ok(two.every((r) => r.status === 200) && runs.get("spt_a") === 1 && runs.get("spt_b") === 1 && captures.get("spt_a") === 1 && captures.get("spt_b") === 1, `gate H: two tokens at once run independently (${two.map((r) => r.status)})`);

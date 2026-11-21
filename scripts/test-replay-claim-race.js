@@ -158,6 +158,31 @@ try {
     ok(g._state().inFlight === 0, "no per-process claim is left behind");
   }
 
+  // ---- 7. The fallback claim's write meets a name another container holds, --
+  //         which then lets it go (its run failed). The deferred writer keeps
+  //         trying and takes the name within its period, not at the next 30 s
+  //         renewal: a third container then reads the payment in flight.
+  {
+    const store = memStore();
+    __setTestClient(store);
+    const opts = { deferredWriteMs: 100, renewMs: 60_000 };
+    const other = createReplayGuard(opts);
+    const mine = createReplayGuard(opts);
+    const third = createReplayGuard(opts);
+    ok(await other.begin("n:race-7", undefined, { requireShared: true }) === "ok", "another container holds the payment on the store");
+    store.plan.push("fail");
+    ok(await mine.begin("n:race-7") === "ok", "this container's store read fails: it takes the per-process claim");
+    await sleep(350);
+    ok(claimsIn(store).length === 1, `while the other holds the name, this claim is not written over it (claims in store: ${claimsIn(store).length})`);
+    await other.release("n:race-7");
+    await sleep(350);
+    ok(claimsIn(store).length === 1, `once the other lets the name go, the deferred writer takes it (claims in store: ${claimsIn(store).length})`);
+    const t = await third.begin("n:race-7", undefined, { requireShared: true });
+    ok(t === "inflight", `a third container reads the payment in flight, inside the renewal period (got ${t})`);
+    await mine.settle("n:race-7");
+    ok(await third.begin("n:race-7", undefined, { requireShared: true }) === "consumed", "and consumed once this container settles it");
+  }
+
   // ---- 4. Control: a payment nobody else holds is granted on the fallback ----
   {
     const store = memStore();

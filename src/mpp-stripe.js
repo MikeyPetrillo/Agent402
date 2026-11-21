@@ -438,8 +438,12 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
         console.warn(`[mpp-stripe] settle failed AFTER a successful handler (${req.method} ${req.path}) — buyer answered 402, not charged: ${b.error}`);
         bufferedCalls = [];
         restore();
-        sendMppProblem(res, mppProblem("verification-failed", `Payment verification failed: Stripe did not capture the charge (${String(b.reason || "no detail").slice(0, 160)}).`));
-        releaseReplay();
+        sendMppProblem(res, mppProblem("verification-failed", `Payment verification failed: Stripe did not capture the charge (${String(b.reason || "no detail").slice(0, 160)}). Nothing was charged; request the resource again for a fresh challenge.`));
+        // The handler ran and nothing was captured: the credential stays
+        // spent, so sending it again cannot run the handler a second time
+        // unpaid. Its payment token was not captured and is released: under
+        // a fresh challenge it is checked and captured again like any other.
+        settleReplay();
         return;
       }
       console.log(`[mpp-stripe] settled ${req.method} ${req.path} pi=${b.receipt?.reference || "?"}`);
