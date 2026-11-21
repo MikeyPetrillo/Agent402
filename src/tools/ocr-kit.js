@@ -15,6 +15,8 @@ import { safeFetch } from "./fetch-guard.js";
 import { admissionCallerOf } from "../dispatch-caller.js";
 import { createCallerTurns, TurnRefused } from "../caller-turns.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
+import { evmCredentialBudgetMs } from "../evm-validity.js";
+import { freeModeOn } from "../payer.js";
 import { notChargedOn } from "../not-charged.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -460,9 +462,10 @@ export const DECODE_FAILURE = /attempting to read image|pixRead|Aborted\(|ERR_OU
 // caller's image that arrived before its first one ended.
 //
 // An image holds its engine for a bounded time:
-//   - OCR_RUN_MAX_MS at most, and never past the time its own connection
-//     waits for an answer (the CDN's window); past that it is a 422 that
-//     says to downscale it;
+//   - OCR_RUN_MAX_MS at most, and never past the time its own call can still
+//     be answered and settled (its connection's CDN window, its payment
+//     authorization's life: `callLeftMs`); past that it is a 422 that says
+//     to downscale it;
 //   - while another caller's image waits for that engine, OCR_TURN_MS from
 //     the later of its own start and that image's place in line; then the
 //     image in the engine gives way with a retryable 503 and the waiting one
@@ -533,11 +536,13 @@ function gaveWayError(large, ms) {
   );
 }
 
-/** The image was not read inside the time one image may hold an engine. */
-function tooSlowError(ms) {
+/** The image was not read inside the time one image may hold an engine, or
+ *  (`own`) inside the time its own call could still be answered and settled. */
+function tooSlowError(ms, own = false) {
   const fix = "Downscale or crop the image and send it again. Text that stays about 20 pixels tall or more reads as well at a smaller size.";
+  const limit = own ? "as long as this call's connection and payment authorization allow" : "as long as image-ocr spends on one image";
   return Object.assign(
-    bad(`the image was not read within ${Math.round(ms / 1000)} s, as long as image-ocr can spend on one image here. ${fix}`, 422),
+    bad(`the image was not read within ${Math.round(ms / 1000)} s, ${limit}. ${fix}`, 422),
     { hint: "image-too-slow", chargeClaim: true, fix, howToCallNote: "Send this request again with the image downscaled or cropped." },
   );
 }
@@ -591,6 +596,21 @@ function ocrCallerOf(req) {
   return admissionCallerOf(req);
 }
 
+/** How long this request's call can still be answered and settled: its
+ *  connection's CDN answer window (src/cdn-sync-window.js) and its payment
+ *  authorization's settleable life, or a run window its gate presented
+ *  (src/evm-validity.js), whichever ends first; null when nothing bounds it.
+ *  In FREE_MODE no payment header is verified, so none bounds a call there. */
+function callLeftMs(req) {
+  if (!req || typeof req !== "object") return null;
+  let left = cdnSyncLeftMs(req);
+  try {
+    const paid = req.headers && typeof req.headers === "object" && !freeModeOn() ? evmCredentialBudgetMs(req) : null;
+    if (paid !== null) left = left === null ? paid : Math.min(left, paid);
+  } catch { /* no bound to read */ }
+  return left;
+}
+
 const within = (promise, ms) => {
   let timer;
   return Promise.race([promise, new Promise((r) => { timer = setTimeout(r, ms); timer.unref?.(); })]).finally(() => clearTimeout(timer));
@@ -599,8 +619,7 @@ const within = (promise, ms) => {
 async function doRecognize(buf, lang, fmt, pixels = 0, who = null, req = null, heldBytes = buf.length) {
   const large = pixels > OCR_LARGE_PIXELS;
   const busy = () => (large ? largeBusyError() : laneBusyError());
-  // The time this request's own connection still waits for an answer.
-  const left = cdnSyncLeftMs(req);
+  const left = callLeftMs(req);
   const windowEnd = left === null ? Infinity : Date.now() + left;
   if (clientLeft(req)) throw clientGone();
   const pending = turns.acquire(large ? LARGE_LANE : laneOf(lang), who, { waitMs: Math.min(limits.waitMs, windowEnd - Date.now() - OCR_MIN_RUN_MS), bytes: heldBytes });
@@ -623,8 +642,8 @@ async function doRecognize(buf, lang, fmt, pixels = 0, who = null, req = null, h
         clearTimeout(timer);
         if (cut) return;
         const now = Date.now();
-        // A window that ended on an image that waited in line is the line's doing.
-        if (now >= deadlineAt) return end(deadlineAt === windowEnd && turn.waitedMs > 1_000 ? "window" : "deadline");
+        // The call's own time ending on an image that waited in line is the line's doing.
+        if (now >= deadlineAt) return end(deadlineAt !== windowEnd ? "deadline" : turn.waitedMs > 1_000 ? "line" : "window");
         const yieldAt = turn.yieldAt(limits.turnMs);
         if (now >= yieldAt) return end("yield");
         timer = setTimeout(arm, Math.min(deadlineAt, yieldAt) - now);
@@ -644,7 +663,7 @@ async function doRecognize(buf, lang, fmt, pixels = 0, who = null, req = null, h
     if (out.cut) {
       unpaid = true;
       const ms = Date.now() - turn.startedAt;
-      throw out.cut === "gone" ? clientGone() : out.cut === "yield" ? gaveWayError(large, ms) : out.cut === "window" ? busy() : tooSlowError(ms);
+      throw out.cut === "gone" ? clientGone() : out.cut === "yield" ? gaveWayError(large, ms) : out.cut === "line" ? busy() : tooSlowError(ms, out.cut === "window");
     }
     if ("error" in out) {
       failed = true;

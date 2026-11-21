@@ -30,7 +30,8 @@ Loaded when a media, document or worker-pool tool file is read.
   images standing where its earlier one left the engine, so one caller's run of images (from one
   wallet, several wallets behind one address, or one wallet from several addresses) waits behind
   what other callers sent meanwhile. An image holds its engine `OCR_RUN_MAX_MS` (120 s) at most
-  and never past its connection's CDN window (422 `image-too-slow`), `OCR_TURN_MS` (30 s) once
+  and never past the time its call can be answered and settled (the CDN window, the payment
+  authorization's life; 422 `image-too-slow`), `OCR_TURN_MS` (30 s) once
   another caller's image waits for that engine (it gives way with a retryable 503), and only
   while its caller's connection is open (499). Engine time that ends without an answer counts
   `OCR_UNPAID_WEIGHT` (4) times against that caller's place in line. A call waits in line

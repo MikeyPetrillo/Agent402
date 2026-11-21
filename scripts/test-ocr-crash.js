@@ -815,6 +815,29 @@ async function call(input) {
     ok(noWait?.statusCode === 503 && noWait.hint === "large-image-busy" && Date.now() - t0 < 500, `a call whose connection leaves no time to read it after a wait is answered busy at once (${noWait?.statusCode} after ${Date.now() - t0} ms)`);
     holdW();
     restore2();
+    // A payment authorization that will have expired bounds the run the same
+    // way: it ends while the payment could still settle. In FREE_MODE no
+    // payment header is verified, so a typed one bounds nothing.
+    {
+      const restore3 = L.limits({ turnMs: 150, waitMs: 2_000, runMaxMs: 2_000, retireMs: 200 });
+      const { SETTLE_RULE_SECONDS, SETTLE_MARGIN_SECONDS } = await import("../src/evm-validity.js");
+      const authorized = (validForSeconds, ip) => {
+        const h = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { network: "eip155:8453" }, payload: { authorization: { from: wallet(0xd0), validBefore: String(Math.floor(Date.now() / 1000) + validForSeconds) } } })).toString("base64");
+        return { ip, headers: { "payment-signature": h }, header: (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined) };
+      };
+      __ocrTest.inject("tur", never());
+      const run = async (req) => { const t = Date.now(); const e = await ocr.handler({ image: big.toString("base64"), lang: "tur" }, req).then(() => null, (x) => x); return { status: e?.statusCode, hint: e?.hint, ms: Date.now() - t, message: String(e?.message) }; };
+      // One second of settleable life at most: the facilitator's rule and the settle margin come off first.
+      const short = await run(authorized(SETTLE_RULE_SECONDS + SETTLE_MARGIN_SECONDS + 1, "203.0.113.28"));
+      ok(short.status === 422 && short.hint === "image-too-slow" && short.ms < 1_300 && /payment authorization/.test(short.message), `a run ends while its payment authorization can still settle (${short.status} after ${short.ms} ms)`);
+      const long = await run(authorized(300, "203.0.113.29"));
+      ok(long.status === 422 && long.ms >= 1_980 && /spends on one image/.test(long.message), `control: an authorization with minutes left does not shorten the run (${long.status} after ${long.ms} ms)`);
+      process.env.FREE_MODE = "true";
+      const free = await run(authorized(1, "203.0.113.31"));
+      delete process.env.FREE_MODE;
+      ok(free.status === 422 && free.ms >= 1_980, `control: in FREE_MODE a typed payment header bounds nothing (${free.status} after ${free.ms} ms)`);
+      restore3();
+    }
     ok(!L.state().busy && L.state().callers === 0, "every place is released after the time-limit cases");
   }
 
