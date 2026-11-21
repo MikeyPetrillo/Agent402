@@ -224,6 +224,12 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   (`scripts/test-deploy-release-order.js` pins the step).
 - `heartbeat.yml` probes prod on a schedule and opens issues for outages and low balances; a
   daily paid canary (`scripts/paid-canary.js`) buys across every rail. No open issues = healthy.
+- An issue a scheduled check opens is public, so it carries fixed neutral text: the title
+  `Scheduled check needs review: <check name>` and a body that links the run
+  (`scripts/lib/monitor-issue-text.js`). Which reading, route, model or upstream it was stays in
+  the run log, or the status Worker's own log. `scripts/test-monitor-issue-wording.js` holds every
+  workflow and the Worker to it and lists the exceptions (a check whose issue body is its saved
+  state, a buyer's own report), so a new check's issue uses the same text.
 - Keep-alive knobs (repo variables): `BAZAAR_PRICE_CHANGE_MAX_USD` caps the deploy job's one buy
   of each route whose fixed price changed (default 5), and
   `BAZAAR_PRICE_CHANGE_MAX_ROUTES` its route count (default 25; raised for one repricing
@@ -256,12 +262,12 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   variable `ADVISORY_TRIAGE_MAX_HOURS` (default 24), and on a read it cannot make
   (`scripts/advisory-triage-check.js`): it reads with the Actions secret `ADVISORY_READ_TOKEN`
   (fine-grained, this repo, Security advisories read); a GHSA id in the repo variable
-  `ADVISORY_TRIAGE_ACK` (comma list) does not page. The issue is fixed text pointing to the
-  Security tab (no id, age or count), never commented on while open; ids and ages go to the job log.
+  `ADVISORY_TRIAGE_ACK` (comma list) does not page. The issue is the fixed neutral
+  text (no id, age or count), never commented on while open; ids and ages go to the job log.
 - `model-drift.yml` runs the live-catalog guard (`scripts/test-gateway-model-ids.js`) every 6 hours,
   never on a push, and keeps one issue open while it fails (a cost row under its dearest live
   endpoint, or more than 15% above it for every servable model the row owns); its output is
-  redacted before log or issue (`scripts/test-model-drift-redaction.js`).
+  redacted before the log and never reaches the issue (`scripts/test-model-drift-redaction.js`).
 - `bazaar-rank.yml` checks weekly that our own routes answer our main discovery queries
   (`scripts/bazaar-rank-monitor.js`) and keeps one issue open naming each absent query; a query
   text in the repo variable `BAZAAR_RANK_ACK` (comma list, unset by default) does not page, and a

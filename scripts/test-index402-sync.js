@@ -268,7 +268,7 @@ function runSync(port, env = {}) {
   for (let i = runAt + 1; i < lines.length && (lines[i].trim() === "" || lines[i].match(/^\s*/)[0].length >= indent); i++) body.push(lines[i].slice(indent));
   const script = body.join("\n");
   ok(at > 0 && script.includes("gh issue create") && script.length > 500, "the page step's script is read from the workflow");
-  const FAIL = "402 Index price sync FAILING", BACK = "402 Index listing written back at an old price";
+  const FAIL = "Scheduled check needs review: index-price-sync", BACK = "Scheduled check needs review: index-price-writeback";
   const dir = mkdtempSync(join(tmpdir(), "idx-page-"));
   // The stub answers list and view from STATE and appends every write to LOG.
   writeFileSync(join(dir, "gh"), `#!/usr/bin/env node
@@ -281,7 +281,7 @@ else fs.appendFileSync(process.env.GH_STUB_LOG, JSON.stringify(a) + "\\n");
   const page = (code, state) => {
     const log = join(dir, `log-${Math.random().toString(36).slice(2)}`);
     writeFileSync(log, "");
-    const r = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", RUN_URL: "https://run.example/1", GH_TOKEN: "x", ...(code === null ? {} : { CODE: String(code) }), GH_STUB_STATE: JSON.stringify(state), GH_STUB_LOG: log } });
+    const r = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", GITHUB_SERVER_URL: "https://git.example", GITHUB_RUN_ID: "1", RUN_URL: "https://run.example/1", GH_TOKEN: "x", ...(code === null ? {} : { CODE: String(code) }), GH_STUB_STATE: JSON.stringify(state), GH_STUB_LOG: log } });
     const calls = readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
     return { status: r.status, err: r.stderr, calls, did: (verb, title) => calls.some((c) => c[1] === verb && (title === undefined || c.includes(title))) };
   };
@@ -297,29 +297,29 @@ else fs.appendFileSync(process.env.GH_STUB_LOG, JSON.stringify(a) + "\\n");
   p = page(1, failOpen);
   ok(p.calls.length === 0, "a failed sync with its issue open writes nothing more");
   p = page(3, none);
-  ok(p.did("create", BACK) && !p.did("create", FAIL) && p.calls.some((c) => c.join(" ").includes("stale_days=0")), "a listing written back opens its own issue, naming stale_days=0 in the remedy");
+  ok(p.did("create", BACK) && !p.did("create", FAIL) && !p.calls.some((c) => c.join(" ").includes("stale_days")), "a listing written back opens its own issue, with the fixed text and no remedy in it");
   p = page(3, failOpen);
   ok(p.did("close") && p.calls.some((c) => c[1] === "close" && c[2] === "7") && p.did("create", BACK), "exit 3 means the sync worked: the sync issue closes and the written-back issue opens");
   p = page(1, backOpen());
   ok(p.did("create", FAIL) && !p.did("close"), "a failed sync beside an open written-back issue opens the sync issue and leaves the other");
   p = page(0, backOpen());
-  ok(!p.did("close") && p.calls.some((c) => c[1] === "comment" && c.join(" ").includes("Clean daily run")), "the first clean daily run leaves the written-back issue open with a marker");
-  p = page(0, backOpen([{ body: "Clean daily run at x: one more in a row closes this.", createdAt: ago(24) }]));
+  ok(!p.did("close") && p.calls.some((c) => c[1] === "comment" && c.join(" ").endsWith("state: clean")), "the first clean daily run leaves the written-back issue open with a marker");
+  p = page(0, backOpen([{ body: "Still needs review at x. Run: y state: clean", createdAt: ago(24) }]));
   ok(p.calls.some((c) => c[1] === "close" && c[2] === "9"), "the second clean daily run in a row closes it");
-  p = page(0, backOpen([{ body: "Clean daily run at x", createdAt: ago(24 * 5) }]));
+  p = page(0, backOpen([{ body: "Still needs review at x. Run: y state: clean", createdAt: ago(24 * 5) }]));
   ok(!p.did("close") && p.did("comment"), "a clean marker older than a day and a half does not count as in a row");
-  p = page(0, backOpen([{ body: "Clean daily run at x", createdAt: ago(48) }, { body: "Written back again at y", createdAt: ago(24) }]));
-  ok(!p.did("close") && p.calls.some((c) => c.join(" ").includes("Clean daily run")), "a written-back run between two clean ones starts the count again");
-  p = page(0, backOpen([{ body: "Clean daily run at x", createdAt: ago(30) }, { body: "Written back again at y", createdAt: ago(10) }]));
+  p = page(0, backOpen([{ body: "Still needs review at x. Run: y state: clean", createdAt: ago(48) }, { body: "Still needs review at y. Run: y state: again", createdAt: ago(24) }]));
+  ok(!p.did("close") && p.calls.some((c) => c.join(" ").endsWith("state: clean")), "a written-back run between two clean ones starts the count again");
+  p = page(0, backOpen([{ body: "Still needs review at x. Run: y state: clean", createdAt: ago(30) }, { body: "Still needs review at y. Run: y state: again", createdAt: ago(10) }]));
   ok(!p.did("close") && p.did("comment"), "a recent clean marker with a written-back one after it does not close");
-  p = page(3, backOpen([{ body: "Clean daily run at x", createdAt: ago(24) }]));
-  ok(p.calls.length === 1 && p.calls[0][1] === "comment" && p.calls[0].join(" ").includes("Written back again"), "written back after a clean run is marked once");
-  p = page(3, backOpen([{ body: "Written back again at y", createdAt: ago(24) }]));
+  p = page(3, backOpen([{ body: "Still needs review at x. Run: y state: clean", createdAt: ago(24) }]));
+  ok(p.calls.length === 1 && p.calls[0][1] === "comment" && p.calls[0].join(" ").endsWith("state: again"), "written back after a clean run is marked once");
+  p = page(3, backOpen([{ body: "Still needs review at y. Run: y state: again", createdAt: ago(24) }]));
   ok(p.calls.length === 0, "written back day after day adds no comment");
   // Only this workflow's own issues and comments count.
-  p = page(0, backOpen([{ body: "Clean daily run at x", createdAt: ago(24), author: { login: "someone-else" } }]));
+  p = page(0, backOpen([{ body: "Still needs review at x. Run: y state: clean", createdAt: ago(24), author: { login: "someone-else" } }]));
   ok(!p.did("close") && p.did("comment"), "a clean marker written by another account does not count toward the close");
-  p = page(0, backOpen([{ body: "Clean daily run at x", createdAt: ago(24) }, { body: "Written back again at y", createdAt: ago(2), author: { login: "someone-else" } }]));
+  p = page(0, backOpen([{ body: "Still needs review at x. Run: y state: clean", createdAt: ago(24) }, { body: "Still needs review at y. Run: y state: again", createdAt: ago(2), author: { login: "someone-else" } }]));
   ok(p.calls.some((c) => c[1] === "close" && c[2] === "9"), "a written-back marker from another account does not hold the issue open");
   p = page(3, { open: [{ number: 4, title: BACK, author: { login: "someone-else" } }] });
   ok(p.did("create", BACK), "an issue with the same title opened by another account is not taken for ours");
@@ -329,7 +329,7 @@ else fs.appendFileSync(process.env.GH_STUB_LOG, JSON.stringify(a) + "\\n");
   ok(DEFAULT_RUN_BUDGET_MS <= 13 * 60_000 && limitMin * 60_000 >= DEFAULT_RUN_BUDGET_MS + 6 * 60_000, `the job limit (${limitMin} min) leaves six minutes past the run budget (${DEFAULT_RUN_BUDGET_MS} ms) for a write already started`);
   ok(/node scripts\/index402-sync\.js\n\s+code=\$\?\n\s+echo "code=\$code" >> "\$GITHUB_OUTPUT"\n[^\n]*\n\s+if \[ "\$code" = "3" \]; then exit 0; fi\n\s+exit "\$code"/.test(wf), "the sync step ends with the script's own exit code (3 reads as passed: its issue reports it), so a failed run reads failed");
   ok(!/^concurrency:/m.test(wf) && /\n    concurrency:\n      group: index402-sync\n      cancel-in-progress: false/.test(wf), "the concurrency group is on the job, so a skipped run never replaces a waiting daily run");
-  ok(/slugs set to the route's slug, stale_days=0, and max_price_usd and max_spend_usd/.test(script), "the remedy names the exact-match input and both caps");
+  ok(/slugs set to the route's slug, stale_days=0, and max_price_usd and max_spend_usd/.test(script), "the remedy (in the run log) names the exact-match input and both caps");
   {
     const ka = readFileSync(new URL("../.github/workflows/bazaar-keepalive.yml", import.meta.url), "utf8");
     ok(/\n      slugs:\n/.test(ka) && /SLUGS: \$\{\{ inputs\.slugs \}\}/.test(ka) && /\n      stale_days:\n/.test(ka) && /\n      max_price_usd:\n/.test(ka) && /\n      max_spend_usd:\n/.test(ka), "every input the remedy names exists on the keep-alive workflow");

@@ -43,3 +43,5 @@ t node scripts/test-load-concurrency.js
 t node scripts/test-feature-flags.js
 # /integrations/agentcore: copy follows the MPP offer gate and the Tempo switch; route, index, sitemaps, llms.txt and page date (offline, port 0)
 t node scripts/test-agentcore-page.js
+# Every issue a scheduled check opens is the fixed neutral title and body, in every workflow and the status Worker (offline)
+t node scripts/test-monitor-issue-wording.js

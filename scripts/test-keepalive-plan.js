@@ -299,7 +299,7 @@ if [ "$1 $2" = "issue view" ]; then printf '%s' "$VIEW_JSON" | jq -r "$jqx"; exi
 echo "$1 $2 $3" >> "$GH_LOG"
 `);
   for (const f of ["node", "curl", "gh"]) await chmod(join(dir, f), 0o755);
-  const TITLE = "Canary burner LOW (Base)";
+  const TITLE = "Scheduled check needs review: canary-wallet";
   const hoursAgo = (h) => new Date(Date.now() - h * 3600_000).toISOString();
   const runHb = ({ lw = "21", open = false, view = null, balance = 10 }) => {
     const log = join(dir, "gh.log");

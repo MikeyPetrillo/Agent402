@@ -61,7 +61,7 @@ ok(triggerAt > upsertAt && upsertAt >= 0, "the deploy trigger runs after the ups
     ok(tail >= 40, `the ${label} step's tail keeps a whole default run (${tail} lines)`);
     ok(!/flagship/i.test(`${step.name || ""} ${run}`), `the ${label} step names what it checked as checked routes`);
   }
-  ok(/TITLE="Bazaar listing validation FAILED"/.test(String(hbStep.run || "")), "the heartbeat's issue title is unchanged");
+  ok(/TITLE="Scheduled check needs review: listing-validation"/.test(String(hbStep.run || "")), "the heartbeat's issue title is unchanged");
   // A non-JSON listing that is valid but not indexed is a warning in both
   // steps (and a job-summary line on the heartbeat), never an issue; an
   // INVALID one adds the listing switch to the deploy error and to the
@@ -72,10 +72,10 @@ ok(triggerAt > upsertAt && upsertAt >= 0, "the deploy trigger runs after the ups
   for (const [label, step] of [["deploy", bazaar], ["heartbeat", hbStep]]) {
     const run = String(step.run || "");
     ok(/grep '\^WARN not-indexed ' \| while IFS= read -r LINE; do echo "::warning::Bazaar: \$LINE"/.test(run), `the ${label} step turns each WARN not-indexed line into a warning`);
-    ok(run.includes(`if echo "$OUT" | grep -q '^NONJSON-INVALID '; then HINT=" ${LEVER}"; fi`), `the ${label} step names the listing switch when a non-JSON listing is INVALID`);
+    if (label === "deploy") ok(run.includes(`if echo "$OUT" | grep -q '^NONJSON-INVALID '; then HINT=" ${LEVER}"; fi`), `the ${label} step names the listing switch when a non-JSON listing is INVALID`);
   }
   ok(/could not be read\.\$HINT"; exit 1/.test(String(bazaar.run || "")), "the deploy step's error ends with the switch");
-  ok(/>> "\$GITHUB_STEP_SUMMARY"/.test(String(hbStep.run || "")) && /A green run closes this\.%s' "\$DETAIL" "\$HINT"\)/.test(String(hbStep.run || "")), "the heartbeat writes the WARN lines to the job summary and ends its issue body with the switch");
+  ok(/>> "\$GITHUB_STEP_SUMMARY"/.test(String(hbStep.run || "")) && !/HINT|DETAIL/.test(String(hbStep.run || "")), "the heartbeat writes the WARN lines to the job summary; its issue is the fixed text, with no validator line or switch in it");
   ok(!/gh issue (create|close|comment)[^\n]*not-indexed/.test(String(hbStep.run || "")), "no issue is opened or closed on a not-indexed listing");
 }
 

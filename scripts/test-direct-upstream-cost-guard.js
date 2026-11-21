@@ -455,7 +455,7 @@ setEnv({});
   const { spawnSync } = await import("node:child_process");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const TITLE = "directUpstream: the direct upstream is degraded";
+  const TITLE = "Scheduled check needs review: direct-upstream";
   ok(!/cheap|undercut|not_cheaper|unreadable/i.test(TITLE), "the title is neutral");
   {
     // The skip codes land on the operator view and in logs: mechanism names only.
@@ -488,12 +488,12 @@ printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\x1e' >> "$GH_LOG"
     const made = hb({ ...OKW, directUpstream: { status: w } }).filter((c) => c[1] === "create");
     const body = made[0]?.[made[0].indexOf("--body") + 1] || "";
     ok(made.length === 1 && made[0][made[0].indexOf("--title") + 1] === TITLE, `heartbeat: ${w} opens one issue under the title`);
-    ok(new RegExp(`directUpstream\\.status=${w}\\.`).test(body) && body.includes("/__operator/direct-upstream.json") && !/\d\.\d|\$|cheap|undercut/i.test(body), `heartbeat: the ${w} body names the word and the operator endpoint, no figure or comparison`);
+    ok(/^A scheduled check reported a result that needs review\. Run: /.test(body) && !/directUpstream|__operator|\d\.\d|\$|cheap|undercut/i.test(body), `heartbeat: the ${w} body is the fixed text; no word, endpoint, no figure or comparison`);
     ok(hb({ ...OKW, directUpstream: { status: w } }, TITLE).some((c) => c[1] === "comment" && c[2] === "41"), `heartbeat: ${w} with an open issue comments`);
   }
   for (const w of ["ok", "off"]) ok(hb({ ...OKW, directUpstream: { status: w } }, TITLE).filter((c) => c[1] === "close" && c[2] === "41").length === 1, `heartbeat: ${w} closes the issue`);
   for (const w of ["starting", "unknown", "price_guard", "unreadable"]) ok(hb({ ...OKW, directUpstream: { status: w } }, TITLE).filter((c) => c[1] === "close" || c[1] === "create").length === 0, `heartbeat: ${w} does neither`);
-  ok(hb({ ...OKW, toolFailures: { status: "failing" } }).some((c) => c[1] === "create" && c[c.indexOf("--body") + 1].includes("/__operator/tool-failures.json")), "heartbeat: the other words keep their operator endpoint");
+  ok(hb({ ...OKW, toolFailures: { status: "failing" } }).some((c) => c[1] === "create" && c[c.indexOf("--body") + 1].startsWith("A scheduled check reported a result that needs review.")), "heartbeat: the other words post the same fixed text");
   rmSync(dir, { recursive: true, force: true });
   const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
   const a = ALARMS.find((x) => x.title === TITLE);

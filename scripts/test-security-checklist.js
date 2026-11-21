@@ -146,7 +146,7 @@ const CHECKLIST = [
   ] },
   { area: "launch", item: "suspicious activity pages: wrong operator credentials counted shared, published as a word, paged by the heartbeat", guards: [
     ["scripts/test-operator-auth.js", "wrong operator credentials are counted"],
-    [".github/workflows/heartbeat.yml", ".operatorAuth.status", "Operator token guessing ELEVATED"],
+    [".github/workflows/heartbeat.yml", ".operatorAuth.status", "Scheduled check needs review: operator-auth"],
   ] },
 ];
 

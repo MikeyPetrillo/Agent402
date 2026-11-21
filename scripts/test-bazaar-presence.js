@@ -128,7 +128,7 @@ const slugsOf = (list) => list.map((r) => r.slug).sort();
   ok(body.includes("`POST /api/cheap-a`") && body.includes("observed to leave"), "the issue names the route path and says it was observed to leave");
   ok(!/\b\d+\s+routes?\b/.test(body) && !DOLLAR_FIGURE.test(body), "the issue carries no count and no figure");
   ok(!/30 days|cull|removes? (?:a |any )?resource/i.test(body), "the issue states no rule of the listing's");
-  ok(ISSUE_TITLE === "Bazaar presence check", "the title is fixed");
+  ok(ISSUE_TITLE === "Scheduled check needs review: listing-presence", "the title is fixed");
 }
 
 // --- an unreadable listing ---------------------------------------------------------

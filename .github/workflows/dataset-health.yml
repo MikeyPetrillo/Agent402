@@ -56,13 +56,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OUTCOME: ${{ steps.check.outcome }}
         run: |
-          TITLE="Dataset record UNHEALTHY"
-          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
-          BODY_TAIL=$(tail -n 25 /tmp/health.log 2>/dev/null || echo "(no output - the check itself failed to run)")
+          TITLE="Scheduled check needs review: dataset"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$OUTCOME" = "failure" ]; then
-            BODY=$(printf 'The daily ecosystem record failed its health check.\n\nThis check counts VALUES, not statuses: a table can record every row and still be worthless if a load-bearing column is null on all of them, which is exactly what shipped on 2026-09-11. It reads the bucket, not the server memory, so a deploy cannot cause this.\n\n```\n%s\n```\n\nRun: %s/%s/actions/runs/%s\nA clean run closes this.' "$BODY_TAIL" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
-            if [ -n "$EXISTING" ]; then gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "$BODY";
-            else gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"; fi
+            if [ -n "$EXISTING" ]; then gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID";
+            else gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."; fi
           elif [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "$(printf 'Recovered at %s.\n\n```\n%s\n```' "$(date -u +%FT%TZ)" "$BODY_TAIL")"
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi

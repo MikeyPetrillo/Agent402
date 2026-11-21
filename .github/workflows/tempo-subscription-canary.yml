@@ -66,12 +66,12 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          TITLE="MPP subscription rail FAILING"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number -q '.[0].number' || true)
+          TITLE="Scheduled check needs review: subscription-canary"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' || true)
           if [ "$OUTCOME" = "success" ]; then
             [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" \
-              --comment "Recovered: a real activation and a real pulled renewal both settled at $(date -u +%FT%TZ). $RUN_URL" || true
+              --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           else
             [ -n "$OPEN" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-              --body "The daily Tempo subscription canary failed. This rail bills by PULLING on a delegated access key with no buyer present and no relay verdict to read, so a broken renewal means subscribers are served for free until their grace window ends rather than anything erroring loudly. Check the gas sponsor's PathUSD balance first (gas is paid in PathUSD, not the USDC.e the products are priced in) and then prod's [mpp-subs] log lines. $RUN_URL"
+              --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
           fi

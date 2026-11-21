@@ -13,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { load as yamlLoad } from "js-yaml";
+import { OPEN_BODY_RE } from "./lib/monitor-issue-text.js";
 
 let pass = 0, fail = 0;
 async function check(name, fn) {
@@ -24,16 +25,16 @@ const wf = yamlLoad(await readFile(new URL("../.github/workflows/heartbeat.yml",
 const steps = Object.values(wf.jobs).flatMap((j) => j.steps || []);
 const step = steps.find((s) => String(s.name || "").startsWith("Tool, upstream and facilitator failure checks"));
 const TITLES = {
-  toolFailures: "toolFailures: a tool is answering 5xx to buyers",
-  upstreamHealth: "upstreamHealth: an upstream is timing out or failing",
-  facilitatorFunds: "facilitatorFunds: a facilitator refused settlement",
+  toolFailures: "Scheduled check needs review: tool-failures",
+  upstreamHealth: "Scheduled check needs review: upstream-health",
+  facilitatorFunds: "Scheduled check needs review: facilitator-funds",
   // facilitatorFunds=low (a settlement signer short of gas) has its own title.
-  facilitatorGas: "facilitatorFunds: a facilitator's settlement gas is running low",
-  buyerRefusals: "buyerRefusals: a paying buyer was refused by the settle breaker",
+  facilitatorGas: "Scheduled check needs review: facilitator-funds (b)",
+  buyerRefusals: "Scheduled check needs review: buyer-refusals",
   // Distinct buyers' /v1 payments failing to settle (an alarm; nothing is refused for it).
-  settleFailures: "settleFailures: a burst of buyers' payments verified and then failed to settle",
+  settleFailures: "Scheduled check needs review: settle-failures",
   // Report runs served and then unsettled (an alarm; nothing is refused for it).
-  unsettledReports: "unsettledReports: a burst of report runs were served and then did not settle",
+  unsettledReports: "Scheduled check needs review: unsettled-reports",
 };
 const titleOf = (field, word) => (field === "facilitatorFunds" && word === "low" ? TITLES.facilitatorGas : TITLES[field]);
 const fieldOf = (key) => (key === "facilitatorGas" ? "facilitatorFunds" : key);
@@ -54,7 +55,8 @@ if [ "$1 $2" = "issue list" ] && [ -n "$ISSUES_JSON" ]; then
   printf '%s' "$ISSUES_JSON" | jq -r "$jqx"; exit 0
 fi
 if [ "$1 $2" = "issue list" ]; then
-  for a in "$@"; do case "$a" in *"$OPEN_TITLE"*) [ -n "$OPEN_TITLE" ] && echo "$OPEN_NUM" && exit 0;; esac; done
+  # The exact title, as the step's own filter keeps it (the titles share a prefix).
+  for a in "$@"; do [ -n "$OPEN_TITLE" ] && { [ "$a" = "in:title \\"$OPEN_TITLE\\"" ] || [ "$a" = "$OPEN_TITLE in:title" ]; } && echo "$OPEN_NUM" && exit 0; done
   exit 0
 fi
 printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\x1e' >> "$GH_LOG"
@@ -104,11 +106,11 @@ try {
       const c = created(calls);
       assert.equal(c.length, 1);
       assert.equal(c[0].title, titleOf(field, word));
-      assert.match(c[0].body, new RegExp(`${field}\\.status=${word}\\.`));
-      assert.match(c[0].body, /\/__operator\/tool-failures\.json/);
+      assert.match(c[0].body, OPEN_BODY_RE);
+      assert.doesNotMatch(c[0].body, /status=|__operator/);
       // The word's own field name is the one place "Funds" may appear.
       assert.doesNotMatch(c[0].body.replace(/facilitatorFunds/g, ""), PRIVATE, `no slug, count, upstream, facilitator or funding detail: ${c[0].body}`);
-      assert.doesNotMatch(c[0].title.replace(/facilitatorFunds/g, ""), PRIVATE);
+      assert.doesNotMatch(c[0].title.replace(/facilitator-funds/g, ""), PRIVATE);
     });
   }
 
@@ -119,8 +121,8 @@ try {
     let r = await run({ gateway: { ...OK, [F]: { status: "burst" } }, op: OP });
     const c = created(r.calls);
     assert.deepEqual(c.map((x) => x.title), [TITLES[F]]);
-    assert.ok(c[0].body.includes(`${F}.status=burst.`), c[0].body);
-    assert.match(c[0].body, /operator endpoint, \/api\/gateway-status \(operator token\)/);
+    assert.match(c[0].body, OPEN_BODY_RE);
+    assert.doesNotMatch(c[0].body, /status=|operator/);
     assert.doesNotMatch(c[0].body, PRIVATE, `no count or detail: ${c[0].body}`);
     r = await run({ gateway: { ...OK, [F]: { status: "ok" } } });
     assert.deepEqual(created(r.calls), [], "control: ok opens nothing");
@@ -157,7 +159,7 @@ try {
 
   // The Gateway pending book (src/gateway-nanopayments.js): its own step and
   // title; unresolved and full page, ok and off close, pending does neither.
-  const GP_TITLE = "Gateway pending settlements need attention";
+  const GP_TITLE = "Scheduled check needs review: gateway-settlements";
   const gpStep = steps.find((s) => String(s.name || "").startsWith("Gateway pending settlements check"));
   await check("gatewayPending: unresolved and full open one issue, ok and off close it, pending and unknown do neither", async () => {
     assert.ok(gpStep, "heartbeat.yml has the Gateway pending step");
@@ -167,7 +169,7 @@ try {
       const { calls } = await run({ gateway: { gatewayPending: { status: w } }, script: gpStep.run });
       const c = created(calls);
       assert.deepEqual(c.map((x) => x.title), [GP_TITLE], w);
-      assert.match(c[0].body, new RegExp(`gatewayPending\\.status=${w}\\.`));
+      assert.match(c[0].body, OPEN_BODY_RE);
     }
     let r = await run({ gateway: { gatewayPending: { status: "full" } }, open: GP_TITLE, script: gpStep.run });
     assert.deepEqual(created(r.calls), [], "an open issue gets a comment, not a second issue");
@@ -190,7 +192,7 @@ try {
   // The CDN origin secret (src/cdn-client-ip.js): its own step and title;
   // unauthenticated pages, ok and off close, unknown and absent do neither,
   // and the body names no address or count.
-  const CDN_TITLE = "CDN origin secret: edge traffic reached the origin unauthenticated";
+  const CDN_TITLE = "Scheduled check needs review: cdn-origin";
   const cdnStep = steps.find((s) => String(s.name || "").startsWith("CDN origin secret check"));
   await check("cdnOrigin: unauthenticated opens one issue, ok and off close it, unknown and absent do neither", async () => {
     assert.ok(cdnStep, "heartbeat.yml has the CDN origin step");
@@ -200,9 +202,9 @@ try {
     const { calls } = await run({ gateway: { cdnOrigin: { status: "unauthenticated" } }, script: cdnStep.run });
     const c = created(calls);
     assert.deepEqual(c.map((x) => x.title), [CDN_TITLE]);
-    assert.match(c[0].body, /cdnOrigin\.status=unauthenticated/);
-    assert.match(c[0].body, /CDN_ORIGIN_SECRET/);
-    assert.doesNotMatch(c[0].body, /\b\d{1,3}(\.\d{1,3}){3}\b/, "no address in the body");
+    assert.match(c[0].body, OPEN_BODY_RE);
+    assert.doesNotMatch(c[0].body, /cdnOrigin|CDN_ORIGIN_SECRET/);
+    assert.doesNotMatch(c[0].body.replace(/Run: \S*/, ""), /\b\d{1,3}(\.\d{1,3}){3}\b/, "no address in the body");
     let r = await run({ gateway: { cdnOrigin: { status: "unauthenticated" } }, open: CDN_TITLE, script: cdnStep.run });
     assert.deepEqual(created(r.calls), [], "an open issue gets a comment, not a second issue");
     assert.ok(r.calls.some((x) => x[0] === "issue" && x[1] === "comment" && x[2] === "41"));
@@ -229,7 +231,7 @@ try {
   // Listings failing to read across many origins (src/x402-index.js): its own
   // step and title; widespread pages, ok closes, unknown and absent do
   // neither, and the body names no origin or count.
-  const BL_TITLE = "brokenListings: seller listings are failing to read across many origins";
+  const BL_TITLE = "Scheduled check needs review: seller-listings";
   const blStep = steps.find((s) => String(s.name || "").startsWith("Broken listings check"));
   await check("brokenListings: widespread opens one issue, ok closes it, unknown and absent do neither", async () => {
     assert.ok(blStep, "heartbeat.yml has the broken listings step");
@@ -239,9 +241,9 @@ try {
     const { calls } = await run({ gateway: { brokenListings: { status: "widespread" } }, script: blStep.run });
     const c = created(calls);
     assert.deepEqual(c.map((x) => x.title), [BL_TITLE]);
-    assert.match(c[0].body, /brokenListings\.status=widespread/);
-    assert.match(c[0].body, /\/__operator\/perf\.json/);
-    assert.doesNotMatch(c[0].body.replace("last 15 minutes", ""), /https?:\/\/|\d/, "no origin or count in the body (the window is the one figure)");
+    assert.match(c[0].body, OPEN_BODY_RE);
+    assert.doesNotMatch(c[0].body, /brokenListings|__operator/);
+    assert.doesNotMatch(c[0].body.replace(/Run: \S*/, ""), /https?:\/\/|\d/, "no origin or count in the body");
     let r = await run({ gateway: { brokenListings: { status: "widespread" } }, open: BL_TITLE, script: blStep.run });
     assert.deepEqual(created(r.calls), [], "an open issue gets a comment, not a second issue");
     assert.ok(r.calls.some((x) => x[0] === "issue" && x[1] === "comment" && x[2] === "41"));
@@ -253,7 +255,7 @@ try {
     const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
     const a = ALARMS.find((x) => x.title === BL_TITLE);
     assert.ok(a, "the Worker carries the same title");
-    assert.equal(a.body({}), c[0].body, "the Worker's body is the step's body");
+    assert.notEqual(a.body({}), c[0].body, "the Worker's detail text is not what the step posts");
     const j = (gw) => judge({ gateway: gw })[BL_TITLE];
     assert.equal(j({ brokenListings: { status: "widespread" } }), "bad");
     assert.equal(j({ brokenListings: { status: "ok" } }), "good");
@@ -265,12 +267,12 @@ try {
   // read: their words live in memory, so a restart reads ok at once. The
   // first ok read leaves a mark line in the issue body, a bad read removes
   // it, an ok read that finds it closes.
-  const CT_TITLE = "containedTurns: a scheduled turn is throwing every minute";
+  const CT_TITLE = "Scheduled check needs review: contained-turns";
   const ctStep = steps.find((s) => String(s.name || "").startsWith("Contained turn check"));
   // speechUpstream too: a dead primary with sparse traffic reads probing
   // between cool-downs, so its clear words (ok and probing) close only on the
   // second clear read in a row, run here on probing.
-  const SP_TITLE = "Speech upstream breaker COOLING (backup voices serving)";
+  const SP_TITLE = "Scheduled check needs review: speech-upstream";
   const spStep = steps.find((s) => String(s.name || "").startsWith("Speech upstream check"));
   const edited = (calls) => calls.filter((c) => c[0] === "issue" && c[1] === "edit").map((c) => c[c.indexOf("--body") + 1]);
   for (const [field, badWord, title, st, okWord = "ok"] of [["containedTurns", "repeating", CT_TITLE, ctStep], ["brokenListings", "widespread", BL_TITLE, blStep], ["speechUpstream", "cooling", SP_TITLE, spStep, "probing"]]) {
@@ -367,14 +369,14 @@ try {
     }
   });
 
-  // "Paywall not observed": the heartbeat opens it, the status Worker closes
+  // "Scheduled check needs review: paywall-read": the heartbeat opens it, the status Worker closes
   // it. Run after run of refused reads (a mismatched POW_SECRET) keeps ONE
   // issue: an open alarm (exact title, the workflow bot or the owner) gets a
   // comment; only an outsider's or a near-title issue leaves it to open ours.
   await check("Paywall not observed: an open alarm gets a comment, never a second issue; an outsider's does not suppress it", async () => {
     const pw = steps.find((s) => String(s.name || "").startsWith("Paywall observation check"));
     assert.ok(pw, "heartbeat.yml has the paywall observation step");
-    const T = "Paywall not observed";
+    const T = "Scheduled check needs review: paywall-read";
     const { PAYWALL_UNOBSERVED_TITLE } = await import("../workers/status-probe/src/index.js");
     assert.equal(PAYWALL_UNOBSERVED_TITLE, T, "the step's title is the Worker's");
     const go = (issues, unknown = "1") => run({ gateway: {}, issues, script: pw.run, extraEnv: { PAYWALL_UNKNOWN: unknown } });

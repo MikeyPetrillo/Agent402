@@ -224,14 +224,13 @@ jobs:
           FAILED: ${{ steps.grade.outcome }}
           SLUGS: ${{ steps.pick.outputs.slugs }}
         run: |
-          TITLE="Paid report quality REGRESSED"
-          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          TITLE="Scheduled check needs review: report-quality"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$FAILED" = "failure" ]; then
-            BODY="A graded report came back THIN or unreachable for: $SLUGS. A thin report is one that returned materially less work than its own tier config promises (searches run vs planned, source count vs pool), or that carried dangling citations, unverified numbers, or a pile of absence phrases. The run log names the exact failure per report, and quality.json is attached. Nobody is refunded automatically - check whether real buyers got the same answer. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            if [ -n "$EXISTING" ]; then gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "$BODY";
-            else gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"; fi
+            if [ -n "$EXISTING" ]; then gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID";
+            else gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."; fi
           elif [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Clean run on $SLUGS: every graded report met its tier's own expectations. $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
   # Buy every tool from production at its list price and grade the answer, so a
@@ -256,7 +255,7 @@ jobs:
   #
   # A tool the cap left unbought is cap-deferred (exit 4), counted apart from
   # failures. This job never records a /status observation: settlement is the
-  # paid canary's observation. One issue, "Catalog buy FAILING", names the
+  # paid canary's observation. One issue, "Scheduled check needs review: catalog-buy", names the
   # failing slugs; a green full daily run closes it.
   catalog-buy:
     if: inputs.job == 'catalog-buy'
@@ -375,36 +374,25 @@ jobs:
           ONLY: ${{ inputs.only || '' }}
           CATALOG_BUY_SKIP: route-execute-pro,route-execute-max,decide-execute
         run: |
-          TITLE="Catalog buy FAILING"
+          TITLE="Scheduled check needs review: catalog-buy"
           RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           SCOPE="tier $TIER"; [ -n "$ONLY" ] && SCOPE="$SCOPE, only '$ONLY'"
           case "$RESULT" in
             ok)
               if [ -n "$OPEN" ] && [ -z "$ONLY" ] && [ "$TIER" = "daily" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every tool bought at list price passed its grade ($GRADED graded) at $(date -u +%FT%TZ). Run: $RUN"
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
               fi
               exit 0 ;;
             fail)
-              DEFER_LINE=""; [ "${DEFERRED:-0}" != "0" ] && DEFER_LINE="Deferred (not bought, nothing known): $DEFERRED tool(s): $DEFERRING"
-              BODY="Bought from production and graded like the strict sweep ($SCOPE): $FAILED of $GRADED failed, $DEFERRED deferred. A grade names what the paid answer lacked: http-NNN (the status), error-field (a 200 carrying an error), missing-keys (documented output keys absent), empty (an array the published example shows populated came back empty), unsettled (a 402 after paying), quote-over-list (a fixed-price tool's live 402 asked more than its list price and was not signed), quote-over-ceiling (a quoted tool's live 402 asked more than its documented ceiling and was not signed), no-example (no usable published example). A deferred tool was not bought because the run's spend cap was reached, or (no-own-sale) because it names a sale this run makes and none settled; it is counted apart because nothing is known about it. The step summary carries the full table and the graded report is attached to the run.
-
-          Failing: $FAILING
-          $DEFER_LINE
-
-          Run: $RUN
-          A buyer copying the published example gets the same answer; fix the tool or its example, then dispatch spend.yml with job catalog-buy. A green full daily run closes this." ;;
-            deferred)
-              BODY="Every tool bought from production passed its grade ($SCOPE, $GRADED graded), but $DEFERRED tool(s) were not bought, so nothing is known about them: $DEFERRING. A plain slug was cut by the run's spend cap: raise max_usd, or dispatch spend.yml with job catalog-buy and tier weekly for the products the daily cap cannot fit. A slug marked no-own-sale names a sale this run makes, and none settled to name. Run: $RUN" ;;
-            unfunded)
-              BODY="The catalog buy did not start ($SCOPE): the burner's Base USDC balance is below this run's planned spend plus the floor, so nothing was bought and nothing was checked. This is funding, not a tool failure. Top up the burner (the run log names the address), then dispatch spend.yml with job catalog-buy; a green run closes this. Run: $RUN" ;;
-            *)
-              BODY="The catalog buy did not produce a verdict ($SCOPE, result '$RESULT'): the catalog was not checked. Run: $RUN" ;;
+                echo "catalog buy: $FAILED of $GRADED failed, $DEFERRED deferred ($SCOPE)" ;;
+              deferred|unfunded|*)
+                echo "catalog buy result: $RESULT ($SCOPE)" ;;
           esac
           if [ -n "$OPEN" ]; then
-            gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ). $BODY"
+            gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
           fi
           exit 1
 
@@ -454,7 +442,7 @@ jobs:
   # grading. Request headers are never recorded.
   #
   # `legs` narrows a run to chosen legs and `only` (comma-separated slugs) to
-  # chosen routes. One issue, "Listing pass FAILED", stays open while a run
+  # chosen routes. One issue, "Scheduled check needs review: listing-pass", stays open while a run
   # fails and closes on the next green run.
   listing-pass:
     if: inputs.job == 'listing-pass' || github.event_name == 'schedule'
@@ -563,8 +551,8 @@ jobs:
           STARTED: ${{ needs.listing-pass.outputs.started }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          TITLE="Listing pass FAILED"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          TITLE="Scheduled check needs review: listing-pass"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           # A pass that never started (its spending approval was not given)
           # spent nothing and failed nothing: no page, and an open page stays.
           if [ "$STARTED" != "true" ]; then
@@ -573,12 +561,12 @@ jobs:
           fi
           if [ "$PASS" != "success" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A listing pass did not complete (result: $PASS, trigger: ${GITHUB_EVENT_NAME}). While it fails, a route the Bazaar or the PayAI registry lacks on Base or Solana stays unlisted there. Read the run: each leg is a log group; exit 2 is a refused preflight (the settle-via preference not honored, PayAI not listing the chain, or a secret missing) and that leg spent nothing; exit 1 names the route whose buy failed. Records: the listing-pass artifact on $RUN_URL. Re-run: \`gh workflow run spend.yml --ref main -f job=listing-pass\`."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ) (result: $PASS). $RUN_URL"
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the listing pass completed at $(date -u +%FT%TZ). $RUN_URL"
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
   # Buy ONE tool from production with real USDC on Base to confirm it works

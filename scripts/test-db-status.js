@@ -74,7 +74,7 @@ ok(/export async function pingLeadsDb/.test(leads), "leads-db exports pingLeadsD
 // (6) the heartbeat has the leg and it reads the fields this module emits
 const hb = await import("node:fs").then((fs) => fs.readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"));
 ok(/\.databases\.leads\.status/.test(hb) && /\.databases\.analytics\.status/.test(hb), "heartbeat reads databases.{leads,analytics}.status");
-ok(/Postgres UNREACHABLE/.test(hb), "heartbeat opens the Postgres UNREACHABLE issue");
+ok(/TITLE="Scheduled check needs review: analytics-store"/.test(hb), "heartbeat opens the store issue under its neutral title");
 // SINGLE RETRY, like every other probe in that file. Without it the leg paged
 // on 2026-08-29 during our OWN deploy: a reading taken while the containers
 // swapped, with the fresh container's pools still re-initializing behind its

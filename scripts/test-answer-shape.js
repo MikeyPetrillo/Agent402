@@ -31,6 +31,7 @@ import { load as yamlLoad } from "js-yaml";
 import { answerContractOf, classifyAnswer, observeJsonAnswer, identicalAnswerFlags, EMPTY_RESULT_OK, populatedArrayKeys } from "../src/answer-shape.js";
 import { createToolFailureMonitor, BUCKET_MS } from "../src/tool-failure-monitor.js";
 import { getFreePorts } from "./lib/free-port.js";
+import { OPEN_BODY_RE } from "./lib/monitor-issue-text.js";
 
 let pass = 0, fail = 0;
 async function check(name, fn) {
@@ -276,7 +277,7 @@ await check("answerDigestWindow over a scratch ledger: external rows with a dige
 });
 
 // ---- alarm: heartbeat.yml step and the status Worker ---------------------------------
-const TITLE = "toolAnswers: a tool is answering empty or error-shaped 200s";
+const TITLE = "Scheduled check needs review: tool-answers";
 await check("heartbeat.yml: degraded opens one issue (word and operator endpoint only), open comments, ok closes, unknown does neither", async () => {
   const wf = yamlLoad(await readFile(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"));
   const step = Object.values(wf.jobs).flatMap((j) => j.steps || []).find((s) => String(s.name || "").startsWith("Tool answer shape check"));
@@ -305,8 +306,9 @@ printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\n' >> "$GH_LOG"
     assert.equal(created.length, 1);
     assert.equal(created[0][created[0].indexOf("--title") + 1], TITLE);
     const body = created[0][created[0].indexOf("--body") + 1];
-    assert.match(body, /toolAnswers\.status=degraded\./);
-    assert.match(body, /\/__operator\/tool-failures\.json/);
+    // The public issue is the fixed text; the word and the endpoint are in the run log.
+    assert.match(body, OPEN_BODY_RE);
+    assert.doesNotMatch(body, /toolAnswers|degraded|__operator/);
     calls = await run("degraded", TITLE);
     assert.ok(calls.some((c) => c[1] === "comment" && c[2] === "41") && !calls.some((c) => c[1] === "create"));
     calls = await run("ok", TITLE);

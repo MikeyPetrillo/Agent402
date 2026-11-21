@@ -348,6 +348,11 @@ async function record(prod, token, components, url) {
 // This Worker never COMMENTS on an open issue. It runs 288 times a day; the
 // heartbeat's "still low" comment would be 288 comments a day. Open and closed
 // is the whole state that matters, and heartbeat.yml still comments when it runs.
+// What a public issue says: that a scheduled check needs review, and when the
+// probe saw it. Which check, reading or upstream is in the title's check name
+// and this Worker's own log, never in the issue body.
+export const NEUTRAL_ISSUE_TEXT = "A scheduled check reported a result that needs review.";
+export const neutralIssueBody = (now) => `${NEUTRAL_ISSUE_TEXT} Observed by the status probe at ${now}, confirmed by a second reading. This issue closes when the check next passes, or by hand after review.`;
 const ISSUES_REPO = "MikeyPetrillo/Agent402";
 const CONFIRM_DELAY_MS = 30000;
 // Issue opens and closes per run (one subrequest each); the rest wait a run.
@@ -389,7 +394,7 @@ const TOPUP = "Balances are deliberately not published on /api/gateway-status; r
 // runs is about 15 minutes.
 export const PROBE_CADENCE_MS = 5 * 60_000; // wrangler.toml: crons = ["*/5 * * * *"]
 export const PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS = 3;
-export const PAYWALL_UNOBSERVED_TITLE = "Paywall not observed";
+export const PAYWALL_UNOBSERVED_TITLE = "Scheduled check needs review: paywall-read";
 /** Milliseconds since any observer last recorded a paywall row, or NaN when unknown. */
 export function paywallNewestAgeMs(c) {
   const comp = Array.isArray(c?.status?.components) ? c.status.components.find((x) => x?.key === "paywall") : null;
@@ -413,13 +418,13 @@ const failureWordBody = (field, word) =>
 
 export const ALARMS = [
   {
-    title: "Gateway credits LOW (OpenRouter)",
+    title: "Scheduled check needs review: gateway-credits",
     verdict: ({ gateway: b }) => (b.status === "low" ? "bad" : b.status === "ok" ? "good" : "quiet"),
     body: () =>
       "The OpenRouter balance behind the /v1 gateway is below the low-water mark (OPENROUTER_LOW_CREDITS_USD) OR the production key's own monthly USD limit has under 25% left (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is canceled, so x402 buyers are NOT charged but every /v1 sale is lost until it is topped up. Auto top-up is on for this account, so a low balance means a refill did not land (declined card, or auto top-up switched off): check https://openrouter.ai/settings/credits. Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402).",
   },
   {
-    title: "Gateway balance UNREADABLE (OpenRouter)",
+    title: "Scheduled check needs review: gateway-credits-read",
     // A balance we cannot READ is its own alarm once it persists: "unknown"
     // never paged, which is exactly how a dead alarm stays dead.
     verdict: ({ gateway: b }) =>
@@ -428,7 +433,7 @@ export const ALARMS = [
       `/api/gateway-status has reported status=unknown for ${Number(b.unknownForMinutes || 0)} minutes: neither OpenRouter /credits nor /key answered readably with the production key. The low-balance alarm is blind while this lasts. Check the key (https://openrouter.ai/settings/keys), OpenRouter status, and the server log for fetch errors.`,
   },
   {
-    title: "Upstream buyer wallet LOW (x402)",
+    title: "Scheduled check needs review: buyer-wallet",
     verdict: ({ gateway: b }) => lowOk(b.upstreamBuyer?.status),
     body: () =>
       "The x402 upstream spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD). When it empties, route-execute external buys and seller-payability refuse (x402 buyers are not charged, but those paths go dark). attest signs from the same wallet but pays Base gas in ETH, which this alarm reads nothing about. Top up: send USDC on Base to the upstream buyer address (see CLAUDE.md env docs).",
@@ -437,7 +442,7 @@ export const ALARMS = [
   // all of them ("off" with none enabled never pages). Titles match
   // heartbeat.yml's exactly.
   {
-    title: "EVM chains upstream buyer wallet LOW (x402)",
+    title: "Scheduled check needs review: evm-buyer-wallets",
     verdict: ({ gateway: b }) => {
       const s = b.upstreamBuyerEvm?.status;
       return s === "low" ? "bad" : s === "ok" || s === "off" ? "good" : "quiet";
@@ -446,7 +451,7 @@ export const ALARMS = [
       "The x402 spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD_<CHAIN>, else UPSTREAM_BUYER_LOW_USD) on at least one chain SOR_EVM_CHAINS enables; the operator view of /api/gateway-status names which. External routing on that chain refuses 503 while it reads low (x402 buyers are not charged). Top up: send that chain's stablecoin to the spending wallet address on that chain.",
   },
   {
-    title: "EVM chains upstream buyer wallet UNREADABLE (x402)",
+    title: "Scheduled check needs review: evm-buyer-wallets-read",
     // A balance we cannot read is its own alarm once it persists, so a dead
     // RPC never silences the low alarm above.
     verdict: ({ gateway: b }) => {
@@ -459,7 +464,7 @@ export const ALARMS = [
       "/api/gateway-status has reported upstreamBuyerEvm.status=unknown for an hour or more: the spending wallet's balance could not be read on at least one chain SOR_EVM_CHAINS enables, so the low-balance alarm for that chain is blind. Check that chain's RPC (EVM_RPC_<chain id>) and the server log. Auto-closes on the next readable read.",
   },
   {
-    title: "Upstream buyer wallet is DRAINING (unexplained fall)",
+    title: "Scheduled check needs review: buyer-wallet-trend",
     // The route-execute tiers that spend from that wallet also settle into it,
     // so a healthy trend is flat or rising. A low-water alarm fires after the
     // money is gone; this fires on the first unexplained dollar. A manual
@@ -469,19 +474,19 @@ export const ALARMS = [
       "The x402 upstream spending wallet has fallen below its high-water mark across several consecutive reads.\n\nThe route-execute tiers are SELF-FUNDING: they settle into this wallet and each charges more than it can spend, so their traffic can only raise the balance. A sustained fall means one of:\n\n1. A manual withdrawal - close this issue if that was you.\n2. seller-payability or attest, which spend from this wallet without settling into it (seller-payability probes external sellers; attest pays Base gas in ETH). A slow trickle from those is expected and sits inside the tolerance; a sustained fall is not.\n3. Upstream spend whose revenue never arrived: a buyer's payment verified and then failed to settle, which is the drain the per-payer ceiling in src/external-spend-guard.js bounds. Check /__operator/stats and the route-execute receipts.\n4. Something we do not understand, which is why this alarm exists.\n\n" + TOPUP,
   },
   {
-    title: "Algorand upstream buyer wallet LOW (x402)",
+    title: "Scheduled check needs review: algorand-buyer-wallet",
     verdict: ({ gateway: b }) => lowOk(b.upstreamBuyerAvm?.status),
     body: () =>
       "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD, default $0.50) - or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (x402 buyers are not charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address (see CLAUDE.md env docs).",
   },
   {
-    title: "Tempo upstream buyer wallet LOW (MPP)",
+    title: "Scheduled check needs review: tempo-buyer-wallet",
     verdict: ({ gateway: b }) => lowOk(b.upstreamBuyerTempo?.status),
     body: () =>
       "The Tempo (MPP) spending wallet (TEMPO_UPSTREAM_BUYER_KEY) behind the SOR's Tempo external leg is below the low-water mark (TEMPO_UPSTREAM_BUYER_LOW_USD, default $0.50). It is funded in USDC.e on Tempo. When it empties, MPP external routing goes dark (a pull buyer is not charged on Tempo; a push transfer sent before the call is recorded as owed and repaid). Top up with fund-tempo-fee-payer.yml (token=usdc) or directly.",
   },
   {
-    title: "Subscription gas sponsor LOW (PathUSD)",
+    title: "Scheduled check needs review: subscription-gas-sponsor",
     // Watches PATHUSD, not USDC.e: a sponsored transaction pays its fee in
     // Tempo's default token, so a sponsor full of USDC.e and empty of PathUSD
     // is EMPTY for this purpose. An empty sponsor fails activations loudly but
@@ -492,7 +497,7 @@ export const ALARMS = [
       "The Tempo subscription gas sponsor (TEMPO_SUBSCRIPTION_FEE_PAYER_KEY) is below the low-water mark (TEMPO_SUBSCRIPTION_FEE_PAYER_LOW_USD, default $0.25) in PATHUSD - the token Tempo charges sponsored fees in, NOT the USDC.e the products are priced in. An empty sponsor fails subscription activations loudly (402, nobody charged) but sends RENEWALS to past_due, so existing subscribers keep being served for free until their grace window ends. Top up with fund-tempo-fee-payer.yml and token=pathusd.",
   },
   {
-    title: "Subscription gas sponsor CEILING reached",
+    title: "Scheduled check needs review: subscription-gas-sponsor-limit",
     // Our own 24 h ceiling on sponsored subscription sends: while it holds,
     // renewals are refused before broadcast and go past_due, so it pages.
     verdict: ({ gateway: b }) => {
@@ -507,7 +512,7 @@ export const ALARMS = [
     // and `analytics` (ANALYTICS_DATABASE_URL, else DATABASE_URL). They can be
     // one database or two; the title names the probes, not two containers,
     // and matches heartbeat.yml's.
-    title: "Postgres UNREACHABLE (leads/analytics)",
+    title: "Scheduled check needs review: analytics-store",
     verdict: ({ gateway: b }) => {
       const leads = b.databases?.leads?.status;
       const analytics = b.databases?.analytics?.status;
@@ -519,7 +524,7 @@ export const ALARMS = [
       `A Postgres database is unreachable from production (leads=${DB_WORDS.has(b.databases?.leads?.status) ? b.databases.leads.status : "unknown"}, analytics=${DB_WORDS.has(b.databases?.analytics?.status) ? b.databases.analytics.status : "unknown"}, per /api/gateway-status; "leads" is the DATABASE_URL database by its historical name). The app keeps serving - the tool-call analytics simply stop being recorded - so this does not show as an outage anywhere else. Check the Postgres services in the Railway project (a stopped container looks exactly like this; the platform's own image updates restart them). The app boot log carries a [leads-db]/[analytics-db] probe line naming the failing family/port.`,
   },
   {
-    title: "Operator token guessing ELEVATED",
+    title: "Scheduled check needs review: operator-auth",
     verdict: ({ gateway: b }) => (b.operatorAuth?.status === "elevated" ? "bad" : b.operatorAuth?.status === "ok" ? "good" : "quiet"),
     body: ({ gateway: b }) =>
       `/api/gateway-status reports operatorAuth.status=elevated: ${b.operatorAuth?.failures1h ?? "?"} wrong operator credentials in the last hour (threshold OPERATOR_AUTH_FAIL_ALERT). The per-IP limiter caps each source; this is the aggregate. If it persists, rotate AGENT402_OPERATOR_TOKEN on Railway and in Actions secrets. Auto-closes when the rate drops.`,
@@ -529,7 +534,7 @@ export const ALARMS = [
     // and a post that fails loses an approved slot for good unless someone
     // looks. One word on /api/gateway-status: these four page, ok and off
     // clear, and retrying (a post waiting for its one retry) does neither.
-    title: "Tweet queue needs attention (server poster)",
+    title: "Scheduled check needs review: post-queue",
     verdict: ({ gateway: b }) => {
       const w = b.tweetQueue?.status;
       if (TWEET_QUEUE_BAD.has(w)) return "bad";
@@ -551,7 +556,7 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     // Arc settlements Circle left pending (src/circle-pending.js): unresolved
     // (kept, needs an operator) and full page; ok and off clear;
     // near_capacity and unknown do neither. Same title as heartbeat.yml.
-    title: "Arc pending settlements need attention",
+    title: "Scheduled check needs review: arc-settlements",
     verdict: ({ gateway: b }) => {
       const w = b.circlePending?.status;
       if (w === "unresolved" || w === "full") return "bad";
@@ -569,7 +574,7 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     // covers it from there). unresolved (an entry still waiting past its
     // bound) and full page; ok and off clear; pending, near_capacity and
     // unknown do neither. Same title as heartbeat.yml.
-    title: "Gateway pending settlements need attention",
+    title: "Scheduled check needs review: gateway-settlements",
     verdict: ({ gateway: b }) => {
       const w = b.gatewayPending?.status;
       if (w === "unresolved" || w === "full") return "bad";
@@ -587,7 +592,7 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     // unresolved (kept for a human, or outside the book) and full page; ok
     // and near_capacity clear (an operator resolution can leave the book near
     // its bound); unknown does neither. Same title as heartbeat.yml.
-    title: "Late settlements need attention",
+    title: "Scheduled check needs review: late-settlements",
     verdict: ({ gateway: b }) => {
       const w = b.lateSettlements?.status;
       if (w === "unresolved" || w === "full") return "bad";
@@ -605,7 +610,7 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     // 2026-10-02), so this Worker pages within minutes. Title matches that
     // workflow's exactly; this Worker is the one that CLOSES it, when the
     // server's window reads clear.
-    title: "Charged failure: a paid tool returned an error to a paying agent",
+    title: "Scheduled check needs review: charged-failure",
     verdict: ({ gateway: b }) => (b.chargedFailures?.status === "recent" ? "bad" : b.chargedFailures?.status === "ok" ? "good" : "quiet"),
     body: ({ gateway: b }) =>
       `/api/gateway-status reports chargedFailures.status=recent: at least one paid call in the last ${Number(b.chargedFailures?.windowHours) || 6} h settled on chain and then answered an error, so a buyer paid and got nothing. The itemised rows (slug, status, time) are on /__operator/stats -> chargedFailures; each is also a debt in the refund ledger (/__operator/refunds.json). Fix the failing tool, then run the refund job for the owed rows. Auto-closes when the window reads clear.`,
@@ -616,7 +621,7 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     // noticing (2026-10-06: 44 debts to one buyer, found by reading the
     // ledger). owed (any buyer's debt past a short grace), aging and stuck
     // page; ok clears; unknown or absent does neither.
-    title: "Refunds owed to a buyer are waiting",
+    title: "Scheduled check needs review: refunds",
     verdict: ({ gateway: b }) => {
       const w = b.refundsOwed?.status;
       if (w === "owed" || w === "aging" || w === "stuck") return "bad";
@@ -629,7 +634,7 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     // snapshot is past its period plus grace, or still misses an offered rail
     // past the grace (2026-11-06: a deploy adopted a saved copy without a newly
     // offered rail). stale pages; fresh and due clear; cold or absent does neither.
-    title: "Live revenue read is stale",
+    title: "Scheduled check needs review: revenue-read",
     verdict: ({ gateway: b }) => {
       const w = b.revenueLive?.status;
       if (w === "stale") return "bad";
@@ -643,7 +648,7 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     // owed by hand (creditsRefunds on /api/gateway-status), as is a refund a
     // key holder asked for that could not be sent. owed pages; ok
     // clears; unknown or absent does neither.
-    title: "A refused credits purchase was not refunded",
+    title: "Scheduled check needs review: credits-refund",
     verdict: ({ gateway: b }) => {
       const w = b.creditsRefunds?.status;
       if (w === "owed") return "bad";
@@ -661,7 +666,7 @@ Auto-closes when nothing is owed.`,
     // journals live in Redis but an entry sits on the container's disk)
     // page; none and off clear; pending (the replay is working) and unknown
     // do neither. Title matches heartbeat.yml's.
-    title: "Ledger rows waiting on local disk (dead-letter stuck)",
+    title: "Scheduled check needs review: ledger-rows",
     verdict: ({ gateway: b }) => {
       const w = b.ledgerDeadLetter?.status;
       if (w === "stuck" || w === "local") return "bad";
@@ -677,7 +682,7 @@ Auto-closes when nothing is owed.`,
     // inside the window than the threshold) pages; ok and new (a first buy
     // from a newly proven seller is expected) clear; unknown does neither.
     // Title matches heartbeat.yml's.
-    title: "Outbound payments reached a burst of NEW destinations",
+    title: "Scheduled check needs review: outbound-payments",
     verdict: ({ gateway: b }) => {
       const w = b.outboundDestinations?.status;
       if (w === "burst") return "bad";
@@ -691,33 +696,33 @@ Auto-closes when nothing is owed.`,
     // failing page, ok clears, unknown does neither. Titles match
     // heartbeat.yml's. The issues are public: a body carries the word and the
     // operator endpoint only, never a slug, an upstream or a facilitator.
-    title: "toolFailures: a tool is answering 5xx to buyers",
+    title: "Scheduled check needs review: tool-failures",
     verdict: ({ gateway: b }) => wordVerdict(b.toolFailures?.status, ["degraded", "failing"], ["ok"]),
     body: ({ gateway: b }) => failureWordBody("toolFailures", b.toolFailures?.status === "failing" ? "failing" : "degraded"),
   },
   {
-    title: "upstreamHealth: an upstream is timing out or failing",
+    title: "Scheduled check needs review: upstream-health",
     verdict: ({ gateway: b }) => wordVerdict(b.upstreamHealth?.status, ["degraded", "failing"], ["ok"]),
     body: ({ gateway: b }) => failureWordBody("upstreamHealth", b.upstreamHealth?.status === "failing" ? "failing" : "degraded"),
   },
   {
     // Our own limit passed on one upstream for several callers while others
     // answered (src/unanswered-rule.js): neutral, no claim the upstream failed.
-    title: "upstreamHealth: an upstream did not answer within our limit",
+    title: "Scheduled check needs review: upstream-health (b)",
     verdict: ({ gateway: b }) => wordVerdict(b.upstreamHealth?.status, ["unanswered"], ["ok"]),
     body: () => failureWordBody("upstreamHealth", "unanswered"),
   },
   {
     // Settle refusals (refused) and a facilitator in its settle cool-down
     // (demoted, src/settle-demotion.js).
-    title: "facilitatorFunds: a facilitator refused settlement",
+    title: "Scheduled check needs review: facilitator-funds",
     verdict: ({ gateway: b }) => wordVerdict(b.facilitatorFunds?.status, ["refused", "demoted"], ["ok"]),
     body: ({ gateway: b }) => failureWordBody("facilitatorFunds", b.facilitatorFunds?.status === "demoted" ? "demoted" : "refused"),
   },
   {
     // A facilitator's settlement signer short of gas before it starts
     // refusing (low, src/facilitator-gas.js). Title matches heartbeat.yml's.
-    title: "facilitatorFunds: a facilitator's settlement gas is running low",
+    title: "Scheduled check needs review: facilitator-funds (b)",
     verdict: ({ gateway: b }) => wordVerdict(b.facilitatorFunds?.status, ["low"], ["ok"]),
     body: () => `${failureWordBody("facilitatorFunds", "low")} low means a settlement signer's gas runway is under the floor (relayersLow). A balance our checker could not read reads unknown and pages under its own title only once that has held for hours; the operator detail counts it (relayersUnread).`,
   },
@@ -726,7 +731,7 @@ Auto-closes when nothing is owed.`,
     // FACILITATOR_UNREAD_PAGE_HOURS (alert=sustained beside unknown,
     // src/tool-failure-monitor.js). A short spell of unknown pages nothing;
     // a read balance (ok or low) closes it. Title matches heartbeat.yml's.
-    title: "facilitatorFunds: a settlement signer's balance could not be read for hours",
+    title: "Scheduled check needs review: facilitator-funds (c)",
     verdict: ({ gateway: b }) => (b.facilitatorFunds?.status === "unknown" && b.facilitatorFunds?.alert === "sustained" ? "bad" : ["ok", "low"].includes(b.facilitatorFunds?.status) ? "good" : "quiet"),
     body: () => `${failureWordBody("facilitatorFunds", "unknown")} unknown with alert=sustained means our checker has not read a settlement signer's balance for longer than FACILITATOR_UNREAD_PAGE_HOURS (default 6), so its gas runway is not known; the operator detail counts it (relayersUnread, unreadSince). Closes when the balance reads again (ok or low).`,
   },
@@ -736,7 +741,7 @@ Auto-closes when nothing is owed.`,
     // above take over those states, so it never stays open beside them).
     // Never opens: the verdict is "good" or "quiet", never "bad". Title
     // matches heartbeat.yml's.
-    title: "facilitatorFunds: a facilitator's settlement gas is running low or could not be read",
+    title: "Scheduled check needs review: facilitator-funds (d)",
     verdict: ({ gateway: b }) => (["ok", "low", "unknown"].includes(b.facilitatorFunds?.status) ? "good" : "quiet"),
     body: () => failureWordBody("facilitatorFunds", "low"),
   },
@@ -744,7 +749,7 @@ Auto-closes when nothing is owed.`,
     // The settle breaker refused a buyer that had settled a call in its
     // window (buyerRefusals, src/gateway-settle-breaker.js): refusing pages,
     // ok clears, unknown does neither. Title matches heartbeat.yml's.
-    title: "buyerRefusals: a paying buyer was refused by the settle breaker",
+    title: "Scheduled check needs review: buyer-refusals",
     verdict: ({ gateway: b }) => wordVerdict(b.buyerRefusals?.status, ["refusing"], ["ok"]),
     body: () => `${failureWordBody("buyerRefusals", "refusing")} refusing means a wallet, Tempo sender, credits key or address that had settled at least one call inside the breaker's window was then refused for its settle failures; the operator detail has the count, the server log the [gateway-breaker] line.`,
   },
@@ -754,7 +759,7 @@ Auto-closes when nothing is owed.`,
     // served and then refused at settlement past its own count (settleFailures,
     // src/gateway-settle-breaker.js): burst pages, ok clears, unknown does
     // neither. No request is refused for it. Title matches heartbeat.yml's.
-    title: "settleFailures: a burst of buyers' payments verified and then failed to settle",
+    title: "Scheduled check needs review: settle-failures",
     verdict: ({ gateway: b }) => wordVerdict(b.settleFailures?.status, ["burst"], ["ok"]),
     body: () => "/api/gateway-status reports settleFailures.status=burst. The detail is on the operator read of /api/gateway-status (operator token). Auto-closes when the word is ok. burst means one of these happened inside one breaker window: the number of distinct buyers whose /v1 payments verified, were served and then failed to settle reached GATEWAY_SETTLE_BREAKER_GLOBAL_MAX; one buyer's /v1 failures read refusing on GATEWAY_SETTLE_BREAKER_MULTI_NETWORK_MIN networks; or one buyer's paid calls, on any paid route, were served and then refused at settlement past that buyer's refusing count (GATEWAY_SETTLE_BREAKER_OVERRUN_ALARM runs beyond it). The word holds for one window after that. No request is refused for it. The server log has the [gateway-breaker] line, which says which.",
   },
@@ -764,7 +769,7 @@ Auto-closes when nothing is owed.`,
     // (unsettledReports, src/composite-spend-guard.js): burst pages, ok
     // clears, unknown does neither. No request is refused for it. Title
     // matches heartbeat.yml's.
-    title: "unsettledReports: a burst of report runs were served and then did not settle",
+    title: "Scheduled check needs review: unsettled-reports",
     verdict: ({ gateway: b }) => wordVerdict(b.unsettledReports?.status, ["burst"], ["ok"]),
     body: () => "/api/gateway-status reports unsettledReports.status=burst. The detail is on the operator read of /api/gateway-status (operator token). Auto-closes when the word is ok. burst means the number of report or media runs that spent upstream and then did not settle (a failed settlement, or a 5xx after the run) reached COMPOSITE_GUARD_GLOBAL_MAX_FAILS inside one guard window, each buyer counted for at most its own per-buyer limit; the word holds for COMPOSITE_GUARD_GLOBAL_PAUSE_MS after that. No request is refused for it. The server log has the [composite-guard] line.",
   },
@@ -774,7 +779,7 @@ Auto-closes when nothing is owed.`,
     // ROBINHOOD_RELAYER_FIRST_ALERT_HOURS (robinhoodSettler,
     // src/robinhood-order.js): relayer pages, ok and off clear, unknown does
     // neither. Title matches heartbeat.yml's.
-    title: "robinhoodSettler: our own relayer has been settling Robinhood sales for hours",
+    title: "Scheduled check needs review: robinhood-settler",
     verdict: ({ gateway: b }) => wordVerdict(b.robinhoodSettler?.status, ["relayer"], ["ok", "off"]),
     body: () => `${failureWordBody("robinhoodSettler", "relayer")} relayer means the listed Robinhood Chain facilitator's settlement signer has read dry for longer than ROBINHOOD_RELAYER_FIRST_ALERT_HOURS (default 6), so our own relayer settles every Robinhood sale first and pays its gas; the operator detail (robinhoodOrder) names the facilitator and since when.`,
   },
@@ -784,7 +789,7 @@ Auto-closes when nothing is owed.`,
     // than MPP_SUB_UNCONFIRMED_ALERT_HOURS (subscriptionRenewals,
     // src/mpp-subscriptions.js): unconfirmed pages, ok and off clear, unknown
     // does neither. Title matches heartbeat.yml's.
-    title: "subscriptionRenewals: a monitor renewal has stayed unconfirmed for hours",
+    title: "Scheduled check needs review: subscription-renewals",
     verdict: ({ gateway: b }) => wordVerdict(b.subscriptionRenewals?.status, ["unconfirmed"], ["ok", "off"]),
     body: () => "/api/gateway-status reports subscriptionRenewals.status=unconfirmed. The detail is on the operator endpoint, /__operator/monitors.json (operator token). Auto-closes when the word is ok. unconfirmed means a renewal's send has gone undecided on chain for longer than MPP_SUB_UNCONFIRMED_ALERT_HOURS (default 3), so that subscription waits past_due and nothing is signed again until the chain read decides it.",
   },
@@ -793,7 +798,7 @@ Auto-closes when nothing is owed.`,
     // degraded pages, ok and off clear, starting and anything else do
     // neither. The reason code is on the operator read only. Title matches
     // heartbeat.yml's.
-    title: "directUpstream: the direct upstream is degraded",
+    title: "Scheduled check needs review: direct-upstream",
     verdict: ({ gateway: b }) => wordVerdict(b.directUpstream?.status, ["degraded"], ["ok", "off"]),
     body: () => "/api/gateway-status reports directUpstream.status=degraded. The detail is on the operator endpoint, /__operator/direct-upstream.json (operator token). Auto-closes when the word is ok.",
   },
@@ -803,7 +808,7 @@ Auto-closes when nothing is owed.`,
     // high pages, ok and off clear, anything else (unknown: the shared day
     // not read yet) does neither. An alarm only: every call is still served.
     // Title matches heartbeat.yml's.
-    title: "directUpstreamSpend: the direct upstream's daily spend is high",
+    title: "Scheduled check needs review: direct-upstream-spend",
     verdict: ({ gateway: b }) => wordVerdict(b.directUpstreamSpend?.status, ["high"], ["ok", "off"]),
     body: () => "/api/gateway-status reports directUpstreamSpend.status=high. The detail is on the operator endpoint, /__operator/direct-upstream.json (operator token). Auto-closes when the word is ok.",
   },
@@ -814,7 +819,7 @@ Auto-closes when nothing is owed.`,
     // process has seen neither outcome yet) does neither, so a deploy never
     // closes it while the balance is still empty. Those calls were served by
     // OpenRouter. Title matches heartbeat.yml's.
-    title: "directUpstreamBalance: the direct upstream's prepaid balance is exhausted",
+    title: "Scheduled check needs review: direct-upstream-balance",
     verdict: ({ gateway: b }) => wordVerdict(b.directUpstreamBalance?.status, ["exhausted"], ["ok", "off"]),
     body: () => "/api/gateway-status reports directUpstreamBalance.status=exhausted. The detail is on the operator endpoint, /__operator/direct-upstream.json (operator token). Auto-closes when the word is ok.",
   },
@@ -822,7 +827,7 @@ Auto-closes when nothing is owed.`,
     // Paid 200s whose body is empty or error-shaped (toolAnswers,
     // src/answer-shape.js): degraded pages, ok clears, unknown does neither.
     // Title matches heartbeat.yml's.
-    title: "toolAnswers: a tool is answering empty or error-shaped 200s",
+    title: "Scheduled check needs review: tool-answers",
     verdict: ({ gateway: b }) => wordVerdict(b.toolAnswers?.status, ["degraded"], ["ok"]),
     body: () => failureWordBody("toolAnswers", "degraded"),
   },
@@ -830,7 +835,7 @@ Auto-closes when nothing is owed.`,
     // A scheduled turn under contained() (containedTurns, src/contained-turn.js)
     // threw in each of the last three or more consecutive minutes: repeating
     // pages, ok clears, unknown does neither. Title matches heartbeat.yml's.
-    title: "containedTurns: a scheduled turn is throwing every minute",
+    title: "Scheduled check needs review: contained-turns",
     closeAfterTwoOk: true,
     verdict: ({ gateway: b }) => wordVerdict(b.containedTurns?.status, ["repeating"], ["ok"]),
     body: () => "/api/gateway-status reports containedTurns.status=repeating: a background turn (a drain slice, a rebuild step, a timer tick) has thrown in each of the last three or more consecutive minutes; the throw is caught and counted, so the process stays up and the work it guards is not being done. The names and counts are on the operator endpoint, /__operator/perf.json (containedTurns, operator token), and the server log carries one [contained-turn] line per name per minute. Auto-closes after two ok reads in a row.",
@@ -839,7 +844,7 @@ Auto-closes when nothing is owed.`,
     // Listings of many distinct origins broke while read inside the window
     // (brokenListings, src/x402-index.js): widespread pages, ok clears,
     // unknown does neither. Title matches heartbeat.yml's.
-    title: "brokenListings: seller listings are failing to read across many origins",
+    title: "Scheduled check needs review: seller-listings",
     closeAfterTwoOk: true,
     verdict: ({ gateway: b }) => wordVerdict(b.brokenListings?.status, ["widespread"], ["ok"]),
     body: () => "/api/gateway-status reports brokenListings.status=widespread: inside the last 15 minutes the seller listings of many distinct origins (past a floor and a share of the indexed origins) threw while they were read and were dropped, which one seller's bad data does not do; a code bug in how listings are read is emptying external routing while the process stays up. The origins and counts are on the operator endpoint, /__operator/perf.json (brokenListings, operator token). Auto-closes after two ok reads in a row.",
@@ -850,7 +855,7 @@ Auto-closes when nothing is owed.`,
     // unknown and off do neither. The payer, the tools and our error text are
     // on the operator view only; this text names none of them. Title
     // matches heartbeat.yml's.
-    title: "topBuyerFailures: a top paying buyer is getting failed answers",
+    title: "Scheduled check needs review: top-buyer-failures",
     verdict: ({ gateway: b }) => wordVerdict(b.topBuyerFailures?.status, ["alert"], ["ok"]),
     body: () => "/api/gateway-status reports topBuyerFailures.status=alert: one of our top outside payers by paid spend over the last week has had TOP_BUYER_FAIL_MIN or more failed final answers (any status that is not a success, except a refusal of the caller's own input that the answer attributes to the caller or to no one) to verified paid requests inside TOP_BUYER_FAIL_WINDOW_MS. The payer's short id, its spend rank, the tools, statuses, times and the first characters of the error text we sent are on the operator view of /api/gateway-status (topBuyerFailures, operator token). Read them, fix the failing tool or path, and check whether what we told the buyer was true. Nothing is refused for it. Auto-closes when the word reads ok.",
   },
@@ -860,7 +865,7 @@ Auto-closes when nothing is owed.`,
     // neither. The payer and the times are on the operator view only; this
     // text names none of them and carries no figure. Title matches
     // heartbeat.yml's.
-    title: "onchainSqlBusy: a top paying buyer was told the query service is busy",
+    title: "Scheduled check needs review: query-service",
     verdict: ({ gateway: b }) => wordVerdict(b.onchainSqlBusy?.status, ["alert"], ["ok"]),
     body: () => "/api/gateway-status reports onchainSqlBusy.status=alert: one of our top outside payers by paid spend over the last week got the busy refusal of the onchain query tool (the server-wide limit on queries in flight, or the send rate the query service allows; refused before settlement, told to retry in a few seconds) inside TOP_BUYER_FAIL_HOLD_MS. One refusal raises it unless ONCHAIN_SQL_BUSY_MIN and ONCHAIN_SQL_BUSY_SPAN_MS are set to ask for more of them over a stretch. The payer's short id, its spend rank and the refusal times are on the operator view of /api/gateway-status (onchainSqlBusy, operator token); the daily busy counts by caller are on /__operator/tool-failures.json (onchainSqlQueries, operator token). Read them and decide whether the in-flight limit should rise. Nothing is refused for this alarm. Auto-closes when the word reads ok.",
   },
@@ -869,7 +874,7 @@ Auto-closes when nothing is owed.`,
     // src/redis-persistence.js): what INFO persistence says about the Redis
     // behind REDIS_URL. off and degraded page; on clears; unknown does
     // neither. Title matches heartbeat.yml's.
-    title: "Redis append-only persistence is not on",
+    title: "Scheduled check needs review: store-persistence",
     verdict: ({ gateway: b }) => {
       const w = b.redisPersistence?.status;
       if (REDIS_PERSISTENCE_BAD.has(w)) return "bad";
@@ -891,7 +896,7 @@ While either lasts the money journals stay on each container's local disk (LEDGE
     // bucket in production with a state database) page; ok clears; off (no
     // bucket on a boot that is not production or has no state database) and
     // unknown do neither. Title matches heartbeat.yml's.
-    title: "Offsite backup is not current",
+    title: "Scheduled check needs review: offsite-backup",
     verdict: ({ gateway: b }) => {
       const w = b.backup?.status;
       if (BACKUP_BAD.has(w)) return "bad";
@@ -914,31 +919,31 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
   // GitHub delivers hours late or not at all. Each is one word on
   // /api/gateway-status and each title matches heartbeat.yml's exactly.
   {
-    title: "Solana upstream buyer wallet LOW (x402)",
+    title: "Scheduled check needs review: solana-buyer-wallet",
     verdict: ({ gateway: b }) => lowOk(b.upstreamBuyerSvm?.status),
     body: () =>
       "The Solana x402 spending wallet (SOLANA_UPSTREAM_BUYER_KEY) behind the SOR's Solana external routing is below the low-water mark (SOLANA_UPSTREAM_BUYER_LOW_USD). When it empties, Solana external routing fails 502 (x402 buyers are not charged, but the path goes dark). Top up: send USDC on Solana to the SVM spending wallet address.",
   },
   {
-    title: "Stellar facilitator fee account LOW (XLM)",
+    title: "Scheduled check needs review: stellar-fee-account",
     verdict: ({ gateway: b }) => lowOk(b.stellarFacilitator?.status),
     body: () =>
       "The self-hosted Stellar facilitator's signing account is below its low-water mark (FACILITATOR_LOW_BALANCE_XLM on the agent402-facilitator service). That account pays the transaction fee on every Stellar settlement, so when it empties, Stellar settlements stop landing - x402 buyers are not charged, but the rail goes dark and the paid canary reports it as a rail failure rather than as an empty wallet. Top up: send XLM to the address on the facilitator's GET /health (signerAddress). Auto-closes when the balance recovers.",
   },
   {
-    title: "Upstream call budget ELEVATED",
+    title: "Scheduled check needs review: upstream-call-budget",
     verdict: ({ gateway: b }) => wordVerdict(b.upstreamBudgets?.status, ["elevated"], ["ok"]),
     body: () =>
       "`/api/gateway-status.upstreamBudgets` reports **elevated**: at least one upstream's daily call budget is reached. These are our outbound call counts against a daily budget, not a vendor balance; the per-upstream rows are on the operator view of the same endpoint. Check whether a loop, a new sweep or real demand is behind it, then either fix the cause or raise that upstream's budget variable. The counter is daily and resets on deploy, so the real figure is at or above what the operator view shows.",
   },
   {
-    title: "Upstream hard ceiling REACHED",
+    title: "Scheduled check needs review: upstream-ceiling",
     verdict: ({ gateway: b }) => wordVerdict(b.upstreamHardCaps?.status, ["capped"], ["ok"]),
     body: () =>
       "`/api/gateway-status.upstreamHardCaps` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (not charged on x402) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable.",
   },
   {
-    title: "X data daily spend OVER its ceiling",
+    title: "Scheduled check needs review: post-data-spend",
     // over: past the alarm ceiling and still serving. capped: the hard
     // ceiling refuses, or refused a call within the last hour. off is the
     // owner's switch and does not page.
@@ -947,7 +952,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
       "`/api/gateway-status.xDataSpend` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed `X_DATA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `X_DATA_DAILY_HARD_MAX_USD` was refused 503 (not charged on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `X_DATA_DAILY_MAX_USD`, otherwise the next UTC day.",
   },
   {
-    title: "Router spend per minute OVER its ceiling",
+    title: "Scheduled check needs review: router-spend",
     // The router's per-minute holds for outside sellers
     // (src/router-spend-window.js). over: a minute passed the alarm ceiling
     // and every purchase was made. capped: a purchase was refused at the
@@ -962,7 +967,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // GATEWAY_WITHDRAW_ALERT_USD until an operator moves the balance (a
     // failed read keeps the last figure), so it pages at once. ok and off
     // clear; unknown does neither. Same title as heartbeat.yml.
-    title: "Gateway balance READY to withdraw",
+    title: "Scheduled check needs review: gateway-balance",
     verdict: ({ gateway: b }) => wordVerdict(b.gatewayBalance?.status, ["withdraw"], ["ok", "off"]),
     body: () =>
       "/api/gateway-status reports gatewayBalance.status=withdraw: the Circle Gateway balance that batched payments are credited to has reached GATEWAY_WITHDRAW_ALERT_USD. Nothing is refused for it; the balance stays off chain until it is moved. Read the figure on the operator view of /api/gateway-status, then move it on chain with node scripts/gateway-withdraw.js (human-run, a dry run unless --execute is passed). Auto-closes when the word reads ok or off.",
@@ -973,7 +978,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // the page reads the second word: alert=sustained once degraded has held
     // ten minutes without a break. on and memory clear; degraded with
     // alert=ok, unknown and a build without the second word do neither.
-    title: "Shared limits store DEGRADED (Redis)",
+    title: "Scheduled check needs review: shared-limits-store",
     verdict: ({ gateway: b }) => sustainedVerdict(b.sharedLimits, ["on", "memory"]),
     body: () =>
       "/api/gateway-status reports sharedLimits.alert=sustained: commands to the Redis behind the shared admission and money controls have failed or timed out for ten minutes or more without a break, or the client has not connected since boot. Every control keeps deciding on its own process's counters, so nothing is refused for it, but the limits are not shared across containers and start again on a restart. Check the Redis service and REDIS_URL on Railway and the server log for [shared-limits] lines; the operator view of /api/gateway-status carries the counts and the last error. Auto-closes when sharedLimits.status reads on or memory.",
@@ -983,7 +988,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // reads pending until the next retry pass lands the mark, seconds after
     // a store blip, so the page reads alert=sustained (pending held ten
     // minutes without a break). ok clears; pending with alert=ok does neither.
-    title: "Replay store marks PENDING (Redis)",
+    title: "Scheduled check needs review: replay-store-marks",
     verdict: ({ gateway: b }) => sustainedVerdict(b.replayStore, ["ok"]),
     body: () =>
       "/api/gateway-status reports replayStore.alert=sustained: a settled payment's consumed mark has waited ten minutes or more to reach the shared store (Redis). This process refuses that payment from its own mark and the retry loop keeps writing it; until it lands, another container does not see the mark and a restart drops it. Check the Redis service and the server log for [replay-guard] lines; the operator view of /api/gateway-status carries the counts. Auto-closes when replayStore.status reads ok.",
@@ -993,7 +998,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // capped pages, ok clears; unknown and absent do neither. The UTC day
     // rolling reads ok again.
     // Title and body match heartbeat.yml's.
-    title: "Route judgment token ceiling CAPPED for the day",
+    title: "Scheduled check needs review: route-judgment-budget",
     verdict: ({ gateway: b }) => wordVerdict(b.jevSpend?.status, ["capped"], ["ok"]),
     body: () =>
       "/api/gateway-status reports jevSpend.status=capped: the route judgment used its daily token ceiling (JEV_DAILY_MAX_TOKENS). Until the UTC day ends, route and route-execute rank without the judgment (the order before it): buyers are still served, with a weaker ranking. The day's tokens, the free share and the refusals are on the operator view of /api/gateway-status (jevSpend, operator token). Raise the ceiling on Railway or leave it. Auto-closes when the word reads ok.",
@@ -1004,7 +1009,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // purchase was refused on it inside the hold), ok and off clear; near is
     // a forecast and does neither, as do unknown and absent.
     // Title and body match heartbeat.yml's.
-    title: "External spend global ceiling REFUSING",
+    title: "Scheduled check needs review: external-spend",
     verdict: ({ gateway: b }) => wordVerdict(b.externalSpendGlobal?.status, ["refusing"], ["ok", "off"]),
     body: () =>
       "/api/gateway-status reports externalSpendGlobal.status=refusing: the unsettled spend our route-execute wallets have put out to outside sellers, across every payer, reached the global ceiling, or a purchase was refused on it within the last minute. A route-execute purchase past the ceiling is refused before our wallet pays the seller (external routing reads as paused for every buyer) until earlier spends settle. Check the settle path for buyers whose payments are not landing (the operator views of /api/gateway-status and /__operator/refunds.json) and the [spend-guard] lines in the server log. Auto-closes when the word reads ok or off.",
@@ -1015,7 +1020,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // every lane), publics and fallback clear; idle (no read since restart),
     // unknown and absent do neither.
     // Title and body match heartbeat.yml's.
-    title: "Solana history reads FAILING on every lane",
+    title: "Scheduled check needs review: history-reads",
     verdict: ({ gateway: b }) => wordVerdict(b.solanaHistory?.status, ["failing"], ["publics", "fallback"]),
     body: () =>
       "/api/gateway-status reports solanaHistory.status=failing: most recent Solana transaction-history reads failed on every lane, public and keyed. The revenue ledger and the Solana boards read through them and stop advancing until a lane answers. The per-lane counts, the reasons and the cache are on the operator view of /api/gateway-status (solanaHistory, operator token); check the keyed endpoint's variable on Railway. Auto-closes when the word reads publics or fallback.",
@@ -1025,7 +1030,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // recent reads failed on every lane), publics and fallback clear; idle,
     // unknown and absent do neither.
     // Title and body match heartbeat.yml's.
-    title: "EVM log reads FAILING on every lane",
+    title: "Scheduled check needs review: log-reads",
     verdict: ({ gateway: b }) => wordVerdict(b.evmLogs?.status, ["failing"], ["publics", "fallback"]),
     body: () =>
       "/api/gateway-status reports evmLogs.status=failing: most recent EVM log reads failed on every lane, public and configured. The revenue ledger's recent window, the Base board and the activity scans read through them and stop advancing until a lane answers. The per-caller counts are on the operator view of /api/gateway-status (evmLogs, operator token); check the configured RPC variables on Railway. Auto-closes when the word reads publics or fallback.",
@@ -1040,7 +1045,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // again on its next failed probe, and one probing read between two
     // cool-downs is not a recovery. Unknown and absent do neither.
     // Title and body match heartbeat.yml's.
-    title: "Speech upstream breaker COOLING (backup voices serving)",
+    title: "Scheduled check needs review: speech-upstream",
     closeAfterTwoOk: true,
     verdict: ({ gateway: b }) => wordVerdict(b.speechUpstream?.status, ["cooling"], ["ok", "probing"]),
     body: () =>
@@ -1053,7 +1058,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // trial measures nothing), on and spent clear (spent is the day's cap
     // working as set); unknown and absent do neither.
     // Title and body match heartbeat.yml's.
-    title: "First-call allowance UNAVAILABLE (shared store)",
+    title: "Scheduled check needs review: first-call-allowance",
     verdict: ({ gateway: b }) => wordVerdict(b.firstCallAllowance?.status, ["unavailable"], ["on", "spent"]),
     body: () =>
       "/api/gateway-status reports firstCallAllowance.status=unavailable: the first-call allowance could not read its day counters in the shared store (Redis), so no first call is granted. Buyers still meet the usual payment offer and nothing is refused for it, but the trial records nothing while it lasts. Check the Redis service and REDIS_URL on Railway, and the sharedLimits word; the last store error is on /__operator/refunds.json. Auto-closes when the word reads on or spent.",
@@ -1064,7 +1069,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // X_SEARCH_AUTHOR_DAILY_ALERT), ok
     // clears; unknown and absent do neither. An alarm only: nothing is
     // refused. Title and body match heartbeat.yml's.
-    title: "X search author reads OVER the daily alert",
+    title: "Scheduled check needs review: post-author-reads",
     verdict: ({ gateway: b }) => wordVerdict(b.xSearchAuthors?.status, ["alert"], ["ok"]),
     body: () =>
       "/api/gateway-status reports xSearchAuthors.status=alert: x-search-recent returned more expanded authors today than X_SEARCH_AUTHOR_DAILY_ALERT; X bills each expanded author as a user read. Every call is still served and nothing is refused. The day's count and the mark are on the operator view of /api/gateway-status (xSearchAuthors), the per-call histogram on /__operator/tool-failures.json; the daily X ceiling (X_DATA_DAILY_MAX_USD) still bounds the whole X spend. Auto-closes when the word reads ok (the next UTC day, or a raised mark).",
@@ -1074,7 +1079,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // attention pages, ok clears; unknown and absent (the gate not mounted)
     // do neither. The reasons are on the operator view only. Title and body
     // match heartbeat.yml's.
-    title: "referralSettlement: referral settlements need attention",
+    title: "Scheduled check needs review: referral-settlement",
     verdict: ({ gateway: b }) => wordVerdict(b.referralSettlement?.status, ["attention"], ["ok"]),
     body: () =>
       "/api/gateway-status reports referralSettlement.status=attention: the referral copies of paid routes need an operator. The word reads attention while any of these holds: a settlement open past fifteen minutes (in doubt, charged and not yet delivered, or unconfirmed); a settlement kept for an operator (a settle success the chain contradicts, one whose receipt cannot be read, one whose receipt read in full does not prove the sale, or one the split contract routed to this merchant that the proof rule does not accept); a tool's sales arriving under the amount the commission map expects, or a tool stopped (its product id differs from the receipt's, or its sales arrive under its stop floor, or sales charged before its rate was proven hold its place); a tool listed for the referral copies that this server does not serve (refused at boot, for as long as it is listed), or one whose published example answer is over the answer bound (every request with no input is refused there, until a restart or an operator clears it); new payments held because contradicted successes came from several payers; unsettled runs from many payers, with payers that have no paid sale limited to a share of the run slots; many answers over the answer bound from one client address inside the unsettled-run window, each an unpaid tool run (an alarm only: nobody is refused for it, and it clears as those runs leave the window); the referral facilitator refused this server's own request in the last fifteen minutes; the facilitator left two or more calls in a row unanswered over ten minutes, or the chain head could not be read for five (both age out thirty minutes after the last such call); an intent to settle could not be stored, the settlement store is not taking writes, or intent writes to it failed or were late in the last five minutes; the settlement book is full; a settlement was retired at capacity or closed as unrecognized in the last day and has not been acknowledged; or records of refused settles dropped at capacity went without a verdict in the last day (given up, or pushed out), so a payment that landed for one of them would not have been found, and that has not been acknowledged. The reasons and the open settlements are on the operator view (/__operator/referral.json, operator token), where an entry is resolved by hand with a note, entries of one state are resolved together, and the retired, closed and dropped records are acknowledged. No payment on a referral copy is settled twice. While the book is full, the store is not taking writes, the chain head cannot be read, or this server's own request keeps being refused, paid calls on the referral copies are answered as unavailable before anything runs. Auto-closes when the word reads ok.",
@@ -1092,7 +1097,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // can sit at the edge of its window. A build that reads status ok with no
     // second word clears too; unknown and absent do neither.
     // Title and body match heartbeat.yml's.
-    title: "Coverage balance reads DEGRADED (calls in flight)",
+    title: "Scheduled check needs review: coverage-balance-reads",
     closeAfterTwoOk: true,
     verdict: ({ gateway: b }) => coverageReadsAlarmVerdict(b.coverageReads),
     body: () =>
@@ -1103,7 +1108,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // (it is configured but did not build at boot, so the recurring-monitor
     // routes are not mounted); on and off clear; unknown and absent do
     // neither. Title and body match heartbeat.yml's.
-    title: "MPP subscription engine FAILED to start",
+    title: "Scheduled check needs review: subscription-engine",
     verdict: ({ gateway: b }) => wordVerdict(b.mppSubscriptions?.status, ["failed"], ["on", "off"]),
     body: () =>
       "/api/gateway-status reports mppSubscriptions.status=failed: MPP recurring subscriptions are configured but the engine did not build at boot (the installed mppx has no subscription method, or the build threw or refused), so the recurring-monitor routes are not mounted and renewals of existing subscriptions do not run. Read the [mpp-subs] init failed line in the boot log on Railway, then fix and redeploy. Auto-closes when the word reads on or off.",
@@ -1112,37 +1117,37 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // The weather kit's Open-Meteo reads (openMeteo, server.js): refused
     // pages (the last keyed outcome was a refusal); ok and off
     // clear; unknown and absent do neither. Title and body match heartbeat.yml's.
-    title: "Open-Meteo keyed reads REFUSED",
+    title: "Scheduled check needs review: weather-keyed-reads",
     verdict: ({ gateway: b }) => wordVerdict(b.openMeteo?.status, ["refused"], ["ok", "off"]),
     body: () =>
       "/api/gateway-status reports openMeteo.status=refused: Open-Meteo refused the weather tools' keyed requests (two in a row, or one bad-request answer naming the API key) with no keyed success since (the key was not accepted, or does not cover that API), so those calls answer a temporary service error. Read the [open-meteo] keyed request refused line in the server log on Railway, then check OPEN_METEO_API_KEY and the Open-Meteo account. Auto-closes when the word reads ok or off.",
   },
   {
-    title: "State database DEGRADED (Postgres)",
+    title: "Scheduled check needs review: state-database",
     verdict: ({ gateway: b }) => wordVerdict(b.stateDb?.status, ["degraded"], ["on"]),
     body: () =>
       "/api/gateway-status.stateDb reports **degraded** on two readings 30 s apart: the Postgres behind STATE_DATABASE_URL refused, dropped or hung on a statement, its schema setup failed, or a moved store has not loaded since boot. The moved stores (subscriptions, alerts, monitor runs, listings, leaderboards, logs) cannot be written while it lasts; loops with external effects skip their ticks, internal loops on a container up for more than ten minutes keep running without their lease. Check the Postgres service on Railway and the boot log ([state-db] lines). Auto-closes when the status reads on.",
   },
   {
-    title: "Sanctions lists STALE or UNLOADED (OFAC SDN)",
+    title: "Scheduled check needs review: screening-lists",
     verdict: ({ gateway: b }) => wordVerdict(b.sanctions?.status, ["stale", "unloaded"], ["ok"]),
     body: ({ gateway: b }) =>
       `The OFAC SDN list behind sanctions-wallet, sanctions-name and the router's payout screen reads ${b.sanctions?.status === "unloaded" ? "unloaded" : "stale"} on /api/gateway-status. stale: the 12-hourly refresh has failed for over a day and screening is answering from an old copy. unloaded: it never loaded after boot and every screening call is refused 503. The operator view of /api/gateway-status carries the last error; the source is OFAC's SDN.XML export, loaded by src/ofac-sdn.js for src/tools/sanctions-kit.js. Auto-closes when it reads ok.`,
   },
   {
-    title: "Payment-party screen STALE or MISSING (OFAC SDN)",
+    title: "Scheduled check needs review: payment-party-screen",
     verdict: ({ gateway: b }) => wordVerdict(b.sanctionsScreen?.status, ["stale", "missing"], ["fresh"]),
     body: ({ gateway: b }) =>
       `The payment-party screen reads ${b.sanctionsScreen?.status === "missing" ? "missing" : "stale"} on /api/gateway-status (sanctionsScreen.status). stale: no successful refresh in two refresh periods (12 h by default) and the screen is checking payments against the last good set. missing: no list is loaded, so Tempo direct mode offers no tempo challenge and x402 payments are served unscreened until one loads. The operator view of /api/gateway-status carries lastError and lastAttemptAt; the source is OFAC's SDN.XML export (src/ofac-sdn.js, read by src/sanctions-screen.js). Auto-closes when it reads fresh.`,
   },
   {
-    title: "Transactional email is not sending",
+    title: "Scheduled check needs review: transactional-email",
     verdict: ({ gateway: b }) => wordVerdict(b.email?.status, ["exhausted", "failing"], ["ok"]),
     body: ({ gateway: b }) =>
       `/api/gateway-status reports email.status=${b.email?.status === "failing" ? "failing" : "exhausted"}. exhausted: the provider refused the last send for credits or quota - top up the email provider's prepaid credits. failing: another refusal; the provider's error code is on the operator read of /api/gateway-status and in the [email] log line. Report links, credits keys, alert confirmations and monitor emails do not reach buyers while this is open. Auto-closes when a send is delivered.`,
   },
   {
-    title: "Upstream cost table missing or incomplete in production",
+    title: "Scheduled check needs review: cost-table",
     verdict: ({ gateway: b }) => wordVerdict(b.upstreamCosts?.status, ["missing", "partial"], ["ok"]),
     body: ({ gateway: b }) =>
       `/api/gateway-status reports upstreamCosts.status=${b.upstreamCosts?.status === "partial" ? "partial" : "missing"}. partial: the private cost table loaded but lacks a key a serving path reads (that path refuses with 503, nobody is charged) or has a model row that did not parse. missing: production is running without the private cost table, so the metered tier, embeddings, images, video, Exa and X reads refuse (503, nobody is charged) and the flat chat tiers price at their caps. The boot log line [upstream-costs] names what is missing. Update the UPSTREAM_COSTS_JSON variable on Railway (and the Actions secret). Auto-closes when it reads ok.`,
@@ -1152,7 +1157,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // stale pages (no run has finished inside its gap, so the mismatch words
     // read unknown and page nothing); ok and off clear; unknown (no run yet)
     // and absent do neither. Title and body match heartbeat.yml's.
-    title: "MPP daily reconciliation is NOT RUNNING",
+    title: "Scheduled check needs review: payment-reconciliation-run",
     verdict: ({ gateway: b }) => wordVerdict(b.mppReconcile?.run, ["stale"], ["ok", "off"]),
     body: () =>
       "/api/gateway-status reports mppReconcile.run=stale: the daily MPP reconciliation (src/mpp-reconcile.js) has not finished a run inside its allowed gap, so MPP sales are not being checked against the chain and the mismatch alarms read unknown. Read /__operator/mpp-reconcile.json (operator token) and the [mpp-reconcile] lines in the server log on Railway. A run that failed is tried again on the hourly check and can be started from the operator endpoint. A run that never ended holds every later one, an operator's included (it joins the run in flight): restart the service. Auto-closes when the word reads ok or off.",
@@ -1160,7 +1165,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
   {
     // The daily MPP reconciliation (src/mpp-reconcile.js): the latest
     // reconciled day. mismatch pages, ok clears, unknown does neither.
-    title: "MPP reconciliation MISMATCH",
+    title: "Scheduled check needs review: payment-reconciliation",
     verdict: ({ gateway: b }) => wordVerdict(b.mppReconcile?.status, ["mismatch"], ["ok"]),
     body: ({ gateway: b }) => {
       const r = b.mppReconcile || {};
@@ -1179,7 +1184,7 @@ Full detail: GET /__operator/mpp-reconcile.json (operator token). Re-run a day: 
     // here, so one event is one page); an unknown day (stale or unread) says
     // nothing about the window's age, so it is quiet too. Clears when the
     // window reads ok, which it does once the mismatched day leaves it.
-    title: "MPP reconciliation 7-day window MISMATCH",
+    title: "Scheduled check needs review: payment-reconciliation-window",
     verdict: ({ gateway: b }) => {
       const r = b.mppReconcile;
       if (!r) return "quiet";
@@ -1187,12 +1192,12 @@ Full detail: GET /__operator/mpp-reconcile.json (operator token). Re-run a day: 
       return r.window7d === "mismatch" && r.status === "ok" ? "bad" : "quiet";
     },
     body: ({ gateway: b }) =>
-      `/api/gateway-status reports mppReconcile.window7d=mismatch while the latest day (${dayOf(b.mppReconcile?.day)}) reads ok. The window is the seven UTC days ending at that day, reconciled as one range, so it holds a disagreement from any of them: usually a day whose own "MPP reconciliation MISMATCH" issue closed when the next day read clean, without the disagreement being resolved. One class only the window sees: one settlement booked on two rows more than an hour apart across a day boundary (duplicate_tx). Read /__operator/mpp-reconcile.json: window.mismatches lists each item with its time and category. Resolve or explain each one. Closes when the window reads ok, which also happens once the mismatched day leaves the seven-day window.`,
+      `/api/gateway-status reports mppReconcile.window7d=mismatch while the latest day (${dayOf(b.mppReconcile?.day)}) reads ok. The window is the seven UTC days ending at that day, reconciled as one range, so it holds a disagreement from any of them: usually a day whose own "Scheduled check needs review: payment-reconciliation" issue closed when the next day read clean, without the disagreement being resolved. One class only the window sees: one settlement booked on two rows more than an hour apart across a day boundary (duplicate_tx). Read /__operator/mpp-reconcile.json: window.mismatches lists each item with its time and category. Resolve or explain each one. Closes when the window reads ok, which also happens once the mismatched day leaves the seven-day window.`,
   },
   {
     // A paid-but-failed MPP call in the last 24 h, read live from the refund
     // ledger. charged_failed pages, ok clears, unknown does neither.
-    title: "MPP paid-but-failed call",
+    title: "Scheduled check needs review: payment-call-outcome",
     verdict: ({ gateway: b }) => wordVerdict(b.mppReconcile?.chargedFailedStatus, ["charged_failed"], ["ok"]),
     body: () =>
       "An MPP call (Tempo, Stripe SPT or the MPP evm wire) settled and was then answered with a non-200 in the last 24 hours, so the buyer paid and did not get their answer. The debt is on the refund ledger; see GET /__operator/refunds.json and the [mpp-tempo]/[mpp-stripe] CHARGED-BUT-NOT-SERVED log line for the cause. Closes when the 24-hour count is back to zero.",
@@ -1210,7 +1215,7 @@ Full detail: GET /__operator/mpp-reconcile.json (operator token). Re-run a day: 
     // the canary to self-heal. That needs Actions write, which would also let
     // this credential deploy production and spend wallets - the whole reason it
     // is an issues-only token. So it pages, and the body says what to run.
-    title: "Settlement stale - the paid canary is not buying",
+    title: "Scheduled check needs review: settlement-age",
     verdict: ({ status }) => {
       const c = (status?.components || []).find((x) => x?.key === "settlement");
       if (!c) return "quiet";
@@ -1234,7 +1239,7 @@ This observer cannot dispatch the canary itself (it holds an issues-only credent
     // (cdnOrigin on /api/gateway-status, src/cdn-client-ip.js): each such
     // request is keyed on the edge address, not its client. unauthenticated
     // pages; ok and off clear; unknown or absent does neither.
-    title: "CDN origin secret: edge traffic reached the origin unauthenticated",
+    title: "Scheduled check needs review: cdn-origin",
     verdict: ({ gateway: b }) => {
       const w = b.cdnOrigin?.status;
       if (w === "unauthenticated") return "bad";
@@ -1485,10 +1490,12 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
         method: "POST",
         body: JSON.stringify({
           title: a.title,
-          body: `${a.body(body)}\n\n---\nObserved from outside production by the status Worker (Cloudflare cron) at ${now}, confirmed by a second reading. Auto-closes when the condition clears.`,
+          body: neutralIssueBody(now),
         }),
       });
       if (r.ok) opened.push(a.title);
+      // The reading's detail goes to this Worker's own log, never the public issue.
+      try { console.log(JSON.stringify({ alarm: a.title, opened: r.ok, detail: a.body(body) })); } catch { /* a detail that cannot be built changes nothing */ }
     } else if (v === "bad" && existing) {
       // The count of ok reads starts again: the mark line comes off.
       await gh(`/repos/${ISSUES_REPO}/issues/${existing}`, token, { method: "PATCH", body: JSON.stringify({ body: withoutClearingMark(bodyOf(a.title)) }) });
@@ -1516,7 +1523,7 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
 // gap. Title matches heartbeat.yml's exactly, and this Worker opens AND closes
 // it: heartbeat.yml ran every 4-7 h in practice (measured 2026-10-02), which
 // is how long an outage could go unpaged.
-export const DOWN_TITLE = "Heartbeat: production DOWN";
+export const DOWN_TITLE = "Scheduled check needs review: availability";
 export async function syncOutage(env, { apiFailed, detail = "", sleep = (ms) => new Promise((r) => setTimeout(r, ms)), confirmDelayMs = 45000, healthRead, openList = null } = {}) {
   const token = env.GITHUB_ISSUES_TOKEN;
   if (!token) return { action: "none", error: "no GITHUB_ISSUES_TOKEN" };
@@ -1534,8 +1541,9 @@ export async function syncOutage(env, { apiFailed, detail = "", sleep = (ms) => 
   if (down && !existing) {
     const r = await gh(`/repos/${ISSUES_REPO}/issues`, token, {
       method: "POST",
-      body: JSON.stringify({ title: DOWN_TITLE, body: `GET ${prod}/health failed on four reads over about two minutes (${detail || "no detail"}).\n\nRailway dashboard: https://railway.app - check the agent402 service and its latest deployment. A deploy's no-container window is 60-90 s, shorter than this check.\n\n---\nObserved from outside production by the status Worker (Cloudflare cron) at ${now}. Auto-closes when /health answers again.` }),
+      body: JSON.stringify({ title: DOWN_TITLE, body: neutralIssueBody(now) }),
     });
+    try { console.log(JSON.stringify({ alarm: DOWN_TITLE, opened: r.ok, detail: String(detail || "no detail").slice(0, 200) })); } catch { /* logging changes nothing */ }
     return { action: r.ok ? "opened" : "open-failed" };
   }
   if (!apiFailed && existing) {

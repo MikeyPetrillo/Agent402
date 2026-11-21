@@ -91,7 +91,7 @@ jobs:
         env:
           RESULT: ${{ steps.guard.outputs.exit }}
         run: |
-          TITLE="Upstream model price drift"
+          TITLE="Scheduled check needs review: model-catalog"
           LEGACY="Gateway model/price guard FAILING"
           RUN="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           find_issue() { gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$1\"" --json number,title --jq "[.[] | select(.title == \"$1\")][0].number // empty"; }
@@ -99,29 +99,14 @@ jobs:
           # The nightly corpus workflow used to own this check under another title.
           OLD=$(find_issue "$LEGACY")
           if [ -n "$OLD" ]; then
-            gh issue close "$OLD" --repo "$GITHUB_REPOSITORY" --comment "Superseded: the live catalog guard now runs every 6 hours in model-drift.yml and reports under \"$TITLE\". Run: $RUN"
+            gh issue close "$OLD" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
           if [ "$RESULT" != "0" ]; then
-            FAILS=$(grep -E '^FAIL ' guard.log 2>/dev/null | head -30 || true)
-            if [ -z "$FAILS" ]; then FAILS="(no FAIL lines: the guard itself did not complete; log tail follows)
-          $(tail -25 guard.log 2>/dev/null)"; fi
-            FAILS=$(printf '%s\n' "$FAILS" | perl -pe "$REDACT_RATES")
-            BODY="The live-catalog guard (every 6 hours) failed: an advertised, ranked, fallback, image or speech id is gone upstream, a private cost row is UNDER its dearest live endpoint on a flat tier (the clamp lets too many tokens through), too few of a model's endpoints fit under the row the metered tier sends as its price bound (metered calls to that model are refused upstream), a private cost row is more than 15% ABOVE the dearest live endpoint of every servable model it owns (stale high: metered quotes are inflated and the model can be kept off a tier), a private cost row has no long-context tier, or one under the upstream price, where an endpoint bills more past a prompt size the tier admits, a mapped direct-upstream model is degraded on its public listing (serving already keeps it on OpenRouter), or a ranked model expires inside the warning window. Serving re-checks each model against its own cost row, so this is a table to update, not an outage. Amounts are withheld here. Run: $RUN
-
-          \`\`\`
-          $FAILS
-          \`\`\`
-
-          Reproduce locally (full detail): \`node scripts/test-gateway-model-ids.js\` with the private cost table."
             if [ -n "$OPEN" ]; then
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ). Run: $RUN
-
-          \`\`\`
-          $FAILS
-          \`\`\`"
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the live catalog guard passed at $(date -u +%FT%TZ). Run: $RUN"
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
