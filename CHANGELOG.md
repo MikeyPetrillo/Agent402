@@ -4,6 +4,147 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## v2.10.0 - 2026-11-21
+
+### 2026-11-21 (x402 by default for python-httpx clients)
+Payments:
+- On a server that offers MPP, a client whose User-Agent starts with
+  `python-httpx/` gets a 402 that carries the x402 offer alone: the
+  `PAYMENT-REQUIRED` header and the body are unchanged, with no
+  `WWW-Authenticate: Payment` challenge, so it pays over x402 with no setup.
+- Such a client gets the MPP challenges back, in the usual order, by sending
+  `X-Payment-Offers: mpp` (or `all`), or an `Accept-Payment` header naming an
+  MPP method such as `tempo/charge`. A request that carries an MPP credential
+  is verified as before.
+Surfaces:
+- The agent docs, /what-is-mpp, /x402-test, the guides and the MCP
+  connector's payment note name this rule and the opt-in header while the
+  server offers MPP.
+Operations:
+- `MPP_OFFER_WITHHOLD_USER_AGENTS` sets the User-Agent prefixes (a comma
+  list); `off` offers MPP to every client.
+Packages:
+- The AgentCore buyer sample hands the payment service the x402 offer alone,
+  and its Tempo probe sends `X-Payment-Offers: mpp`.
+
+### 2026-11-21 (Tempo pull credentials and balance cover)
+Payments:
+- A Tempo pull credential signed by an access key that Tempo does not
+  confirm for the account it names now answers that the credential was
+  validated, the transaction was not broadcast and nothing was charged.
+- Access-key checks for Tempo pull credentials wait in arrival order; when
+  the queue is full the call answers 503 with a Retry-After at once, and
+  nothing is charged.
+- The in-flight balance check counts a Tempo pull credential whose sender is
+  not verified (a multisig account, for one) against the account it draws
+  on, in a ledger kept apart from that account's verified calls.
+- A wallet's paid calls are admitted at once on its last balance read while
+  that read is under a minute old (was five minutes);
+  `INFLIGHT_COVER_KEPT_AT_ONCE_MS` sets the window.
+- Once this server's daily budget of balance reads is spent, reads are
+  capped per minute across all wallets
+  (`INFLIGHT_COVER_PAST_BUDGET_READS_PER_MIN`), and a call refused for its
+  balance answers Retry-After with the seconds until its wallet is read
+  again, at most 60.
+- Solana payments from one wallet share one in-flight ledger whether the
+  transfer names its accounts directly or through an address lookup table,
+  and a delegate's transfer adds the source account's balance.
+
+### 2026-11-21 (card payments and card report refunds)
+Payments:
+- A card payment whose capture fails after the call ran answers that nothing
+  was charged and asks for a fresh challenge; the same credential is not
+  accepted again.
+- A card report refund that Stripe has accepted but not finished is marked
+  pending, read again every 5 minutes, and leaves the owed list once it
+  completes.
+Surfaces:
+- The `refundsOwed` word on `/api/gateway-status` carries `ledger` and
+  `card` beside `status`; `card` reads none, pending, refused or unknown.
+Reports:
+- The message at a card report's repeat-failure limit says no new attempt
+  was made for the purchase, and ends with the refund's outcome once.
+- Publishing a report mints one public link, even when it is published from
+  two places at once.
+
+### 2026-11-21 (router matches and seller records)
+Router:
+- The router buys only from an outside seller whose listing matches enough
+  of the task's words. When none is left, the answer is a 404 that says the
+  sellers matched too few of the task's words and nothing was spent.
+- Filler words (the, a, an, for, tool, tools, api, apis) no longer count
+  toward a match.
+- A pause under one of this server's own spend ceilings names its rule:
+  `reason` reads `routing_paused`, `rule` names the ceiling, `attribution`
+  reads `ours`, with a hint, a next step and `retryAfterSeconds`. This covers
+  route-execute, the flight routes, seller-payability and attest.
+Index:
+- A paywall check on a seller record that did not read a 402 carries a
+  fixed `reason` code (answered_free, auth_required, redirected,
+  client_error, server_error, probe_malformed, probe_incomplete) and its
+  sentence on `/api/index?seller=`, and the seller dossier names it.
+- A seller's x402 manifest can set a top-level `revisitAfterSeconds`: each
+  crawl read then waits at least that long, up to the crawler's cap. It only
+  lengthens the wait; /crawler documents it.
+Tools:
+- `dns` is served like the other network tools, with the same route, price
+  and example; its lookup ends at a run's time limit.
+
+### 2026-11-21 (FDA, CVE, X and wallet data)
+Tools:
+- `drug-shortages` searches the FDA drug shortage list by drug name,
+  therapeutic category or status.
+- `drug-orange-book` reads FDA Orange Book products with patents,
+  exclusivity codes and therapeutic equivalence codes, by name, active
+  ingredient or application number.
+- `cve-lookup` adds CISA's SSVC decision points with the Track, Track*,
+  Attend or Act decision for a given `missionImpact` (each level without
+  one), and says whether NVD or only the CNA scored the record.
+- `x-post-counts` counts posts on X matching a query by day, hour or minute
+  over the last 7 days; `x-trends` reads X's trending topics for a location.
+- `wallet-transfers-multichain` reads a wallet's transfers on up to 5 EVM
+  networks in one call, with each network's state in the answer.
+
+### 2026-11-21 (weather answers cached)
+Tools:
+- Current, forecast, historical, plan and probability weather answers are
+  kept for a few minutes, and each listing says for how long;
+  `OPEN_METEO_READ_CACHE=off` reads every request upstream.
+- The daily, hourly, historical and probability weather listings lead with
+  the words a buyer searches for.
+Surfaces:
+- The `openMeteo` word on `/api/gateway-status` reads `refused` while any
+  Open-Meteo API's last keyed read was refused, so a key that covers some of
+  them and not others shows.
+
+### 2026-11-21 (wallet subscriptions for monitors)
+Site:
+- On a server with MPP subscriptions on, /monitors shows how to subscribe
+  with a wallet over MPP beside the card checkout.
+Payments:
+- A retried subscribe that is handed its subscription no longer also leaves
+  its first payment owed as a refund.
+Operations:
+- On a file-backed store, the sweep of unpaid subscription offers gives
+  other requests a turn as it runs.
+
+### 2026-11-21 (wallet sign-in)
+Payments:
+- On a server with wallet sign-in on, each caller and each network holds a
+  bounded number of pending sign-ins, so a busy caller never blocks anyone
+  else's sign-in.
+
+### 2026-11-21 (agent402-client 0.10.1 and site analytics)
+Packages:
+- agent402-client 0.10.1: with the `x402Client` passed, a paid request whose
+  connection failed before any answer is resent once with the payment
+  already signed, so it settles at most once (`retryResets: false` turns it
+  off).
+- The AgentKit example pins agent402-client 0.10.0.
+Site:
+- Automated browsers are tagged as internal traffic in the site's
+  analytics; the page still loads its tag.
+
 ## v2.9.0 - 2026-11-20
 
 ### 2026-11-20 (first paid request after a restart)

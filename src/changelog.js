@@ -1,6 +1,10 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { OFFER_SWEEP_FIRST_MS, OFFER_SWEEP_INTERVAL_MS } from "./mpp-subscription-retention.js";
-import { READBACK_FIRST_MS, READBACK_INTERVAL_MS } from "./card-refund-readback.js";
+import { READBACK_FIRST_MS, READBACK_INTERVAL_MS, READBACK_PENDING_INTERVAL_MS } from "./card-refund-readback.js";
+import { DEFAULT_WITHHELD_USER_AGENT_PREFIXES, mppOfferGateEnabled } from "./mpp-offer-gate.js";
+import { mppMethodsSummary } from "./mpp-offers.js";
+import { mppSubscriptionsEnabled } from "./mpp-subscriptions.js";
+import { walletSignInEnabled } from "./wallet-sign-in.js";
 import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel as span, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
 import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, TRANSCRIBE_LONG_RUN_SECONDS, sttLongEnabled } from "./tools/stt-kit.js";
 import { REVISIT_CAP_MS, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, revisitIntervalMs, probeShareLabel } from "./seller-load.js";
@@ -8,10 +12,108 @@ import { REVISIT_CAP_MS, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOS
 // A timer figure as an entry prints it, read from the module that runs it.
 const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a minute" : `${n} minutes`; };
 
+// The offer gate entry: shown while this server sends MPP challenges and the
+// gate is on (src/mpp-offer-gate.js).
+const mppOfferGateShown = () => mppMethodsSummary().enabled && mppOfferGateEnabled();
+
 // An entry with `shownWhen` describes something a switch sells: the page and
 // the feed show it only while that function reads true (CHANGELOG.md scopes
 // the same item to a server that sets the switch).
 const ENTRIES = [
+  {
+    date: "2026-11-21",
+    title: "x402 by default for python-httpx clients",
+    shownWhen: mppOfferGateShown,
+    items: [
+      `Payments: On a server that offers MPP, a client whose User-Agent starts with \`${DEFAULT_WITHHELD_USER_AGENT_PREFIXES[0]}\` gets a 402 that carries the x402 offer alone: the \`PAYMENT-REQUIRED\` header and the body are unchanged, with no \`WWW-Authenticate: Payment\` challenge, so it pays over x402 with no setup.`,
+      "Payments: Such a client gets the MPP challenges back, in the usual order, by sending `X-Payment-Offers: mpp` (or `all`), or an `Accept-Payment` header naming an MPP method such as `tempo/charge`. A request that carries an MPP credential is verified as before.",
+      "Surfaces: The agent docs, /what-is-mpp, /x402-test, the guides and the MCP connector's payment note name this rule and the opt-in header while the server offers MPP.",
+      "Operations: `MPP_OFFER_WITHHOLD_USER_AGENTS` sets the User-Agent prefixes (a comma list); `off` offers MPP to every client.",
+      "Packages: The AgentCore buyer sample hands the payment service the x402 offer alone, and its Tempo probe sends `X-Payment-Offers: mpp`.",
+    ],
+  },
+  {
+    date: "2026-11-21",
+    title: "Tempo pull credentials and balance cover",
+    items: [
+      "Payments: A Tempo pull credential signed by an access key that Tempo does not confirm for the account it names now answers that the credential was validated, the transaction was not broadcast and nothing was charged.",
+      "Payments: Access-key checks for Tempo pull credentials wait in arrival order; when the queue is full the call answers 503 with a Retry-After at once, and nothing is charged.",
+      "Payments: The in-flight balance check counts a Tempo pull credential whose sender is not verified (a multisig account, for one) against the account it draws on, in a ledger kept apart from that account's verified calls.",
+      "Payments: A wallet's paid calls are admitted at once on its last balance read while that read is under a minute old (was five minutes); `INFLIGHT_COVER_KEPT_AT_ONCE_MS` sets the window.",
+      "Payments: Once this server's daily budget of balance reads is spent, reads are capped per minute across all wallets (`INFLIGHT_COVER_PAST_BUDGET_READS_PER_MIN`), and a call refused for its balance answers Retry-After with the seconds until its wallet is read again, at most 60.",
+      "Payments: Solana payments from one wallet share one in-flight ledger whether the transfer names its accounts directly or through an address lookup table, and a delegate's transfer adds the source account's balance.",
+    ],
+  },
+  {
+    date: "2026-11-21",
+    title: "Card payments and card report refunds",
+    items: [
+      "Payments: A card payment whose capture fails after the call ran answers that nothing was charged and asks for a fresh challenge; the same credential is not accepted again.",
+      `Payments: A card report refund that Stripe has accepted but not finished is marked pending, read again every ${mins(READBACK_PENDING_INTERVAL_MS)}, and leaves the owed list once it completes.`,
+      "Surfaces: The `refundsOwed` word on `/api/gateway-status` carries `ledger` and `card` beside `status`; `card` reads none, pending, refused or unknown.",
+      "Reports: The message at a card report's repeat-failure limit says no new attempt was made for the purchase, and ends with the refund's outcome once.",
+      "Reports: Publishing a report mints one public link, even when it is published from two places at once.",
+    ],
+  },
+  {
+    date: "2026-11-21",
+    title: "Router matches and seller records",
+    items: [
+      "Router: The router buys only from an outside seller whose listing matches enough of the task's words. When none is left, the answer is a 404 that says the sellers matched too few of the task's words and nothing was spent.",
+      "Router: Filler words (the, a, an, for, tool, tools, api, apis) no longer count toward a match.",
+      "Router: A pause under one of this server's own spend ceilings names its rule: `reason` reads `routing_paused`, `rule` names the ceiling, `attribution` reads `ours`, with a hint, a next step and `retryAfterSeconds`. This covers route-execute, the flight routes, seller-payability and attest.",
+      "Index: A paywall check on a seller record that did not read a 402 carries a fixed `reason` code (answered_free, auth_required, redirected, client_error, server_error, probe_malformed, probe_incomplete) and its sentence on `/api/index?seller=`, and the seller dossier names it.",
+      "Index: A seller's x402 manifest can set a top-level `revisitAfterSeconds`: each crawl read then waits at least that long, up to the crawler's cap. It only lengthens the wait; /crawler documents it.",
+      "Tools: `dns` is served like the other network tools, with the same route, price and example; its lookup ends at a run's time limit.",
+    ],
+  },
+  {
+    date: "2026-11-21",
+    title: "FDA, CVE, X and wallet data",
+    items: [
+      "Tools: `drug-shortages` searches the FDA drug shortage list by drug name, therapeutic category or status.",
+      "Tools: `drug-orange-book` reads FDA Orange Book products with patents, exclusivity codes and therapeutic equivalence codes, by name, active ingredient or application number.",
+      "Tools: `cve-lookup` adds CISA's SSVC decision points with the Track, Track*, Attend or Act decision for a given `missionImpact` (each level without one), and says whether NVD or only the CNA scored the record.",
+      "Tools: `x-post-counts` counts posts on X matching a query by day, hour or minute over the last 7 days; `x-trends` reads X's trending topics for a location.",
+      "Tools: `wallet-transfers-multichain` reads a wallet's transfers on up to 5 EVM networks in one call, with each network's state in the answer.",
+    ],
+  },
+  {
+    date: "2026-11-21",
+    title: "Weather answers cached",
+    items: [
+      "Tools: Current, forecast, historical, plan and probability weather answers are kept for a few minutes, and each listing says for how long; `OPEN_METEO_READ_CACHE=off` reads every request upstream.",
+      "Tools: The daily, hourly, historical and probability weather listings lead with the words a buyer searches for.",
+      "Surfaces: The `openMeteo` word on `/api/gateway-status` reads `refused` while any Open-Meteo API's last keyed read was refused, so a key that covers some of them and not others shows.",
+    ],
+  },
+  {
+    date: "2026-11-21",
+    title: "Wallet subscriptions for monitors",
+    shownWhen: mppSubscriptionsEnabled,
+    items: [
+      "Site: On a server with MPP subscriptions on, /monitors shows how to subscribe with a wallet over MPP beside the card checkout.",
+      "Payments: A retried subscribe that is handed its subscription no longer also leaves its first payment owed as a refund.",
+      "Operations: On a file-backed store, the sweep of unpaid subscription offers gives other requests a turn as it runs.",
+    ],
+  },
+  {
+    date: "2026-11-21",
+    title: "Wallet sign-in",
+    shownWhen: walletSignInEnabled,
+    items: [
+      "Payments: On a server with wallet sign-in on, each caller and each network holds a bounded number of pending sign-ins, so a busy caller never blocks anyone else's sign-in.",
+    ],
+  },
+  {
+    date: "2026-11-21",
+    title: "agent402-client 0.10.1 and site analytics",
+    items: [
+      "Packages: agent402-client 0.10.1: with the `x402Client` passed, a paid request whose connection failed before any answer is resent once with the payment already signed, so it settles at most once (`retryResets: false` turns it off).",
+      "Packages: The AgentKit example pins agent402-client 0.10.0.",
+      "Site: Automated browsers are tagged as internal traffic in the site's analytics; the page still loads its tag.",
+    ],
+  },
   {
     date: "2026-11-20",
     title: "First paid request after a restart",
