@@ -668,6 +668,7 @@
     "rot13": "src/tools/kit2.js",
     "route-execute": "src/tools/route-execute.js",
     "route-execute-max": "src/tools/route-execute.js",
+    "route-execute-mid": "src/tools/route-execute.js",
     "route-execute-plus": "src/tools/route-execute.js",
     "route-execute-pro": "src/tools/route-execute.js",
     "rsi": "src/tools/stats-kit.js",

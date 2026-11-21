@@ -553,11 +553,11 @@ export const isIdentityBoundRoute = (def) =>
 // EXEC_TIERS so the next tier cannot repeat that).
 // Router tiers only - the subset whose Algorand revenue is chain-matched to
 // the AVM spending wallet (see avmPayToFor).
-export const AVM_SELF_FUNDING_SLUGS = new Set(["route-execute", "route-execute-plus", "route-execute-max", "route-execute-pro"]);
+export const AVM_SELF_FUNDING_SLUGS = new Set(["route-execute", "route-execute-plus", "route-execute-mid", "route-execute-max", "route-execute-pro"]);
 const AVM_UPSTREAM_BUYER_ADDRESS = (process.env.ALGORAND_UPSTREAM_BUYER_ADDRESS || "").trim();
 
 export const SELF_FUNDING_SLUGS = new Set([
-  "route-execute", "route-execute-plus", "route-execute-max", "route-execute-pro",
+  "route-execute", "route-execute-plus", "route-execute-mid", "route-execute-max", "route-execute-pro",
 ]);
 const UPSTREAM_BUYER_ADDRESS = (process.env.X402_UPSTREAM_BUYER_ADDRESS || "").trim();
 

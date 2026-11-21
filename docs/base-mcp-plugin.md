@@ -198,13 +198,14 @@ resolves the best-matching tool and runs it in the same paid request, returning
 `{ result, receipt }`. With `include: "external"` the underlying tool may belong
 to another x402 seller; the router buys the result from that seller and sells it to you.
 
-There are four rungs, so the flat price stays proportional to what is
+There are five rungs, so the flat price stays proportional to what is
 being bought. Pick the cheapest rung that covers the underlying tool's price:
 
 | Underlying tool price | Fee | Route |
 |---|---|---|
 | ≤ $0.005 | $0.01 | `POST /api/route/execute` |
 | ≤ $0.04 | $0.05 | `POST /api/route/execute-plus` |
+| ≤ $0.10 | $0.12 | `POST /api/route/execute-mid` |
 | ≤ $0.50 | $0.55 | `POST /api/route/execute-max` |
 | ≤ $3.00 | $3.30 | `POST /api/route/execute-pro` |
 

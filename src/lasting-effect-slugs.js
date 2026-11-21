@@ -9,7 +9,7 @@ const LASTING_EFFECT_SLUGS = new Set([
   "memory-write", "memory-incr", "memory-cas", "memory-grant", "memory-revoke", "memory-remember", "memory-forget",
   "attest",
   "feedback",
-  "route-execute", "route-execute-plus", "route-execute-max", "route-execute-pro",
+  "route-execute", "route-execute-plus", "route-execute-mid", "route-execute-max", "route-execute-pro",
   "seller-payability",
   "flight-search", "flight-status",
   "decide-execute",

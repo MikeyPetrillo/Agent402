@@ -977,7 +977,7 @@ server.setRequestHandler("tools/list", redacted(withCatalog(async () => {
         properties: {
           task: { type: "string", description: "Plain-language task, e.g. 'crypto news headlines' or 'sentiment of a tweet'. Resolved to a proven external seller." },
           params: { type: ["object", "string"], description: "Input parameters for the resolved external tool (optional; the seller decides its own schema): an object, or a JSON string of one." },
-          maxUsd: { type: "number", description: "Max underlying seller price in USD. Default 0.005 (the $0.01 fee tier); above 0.005 and up to 0.04 uses the $0.05 tier; above 0.04 the $0.55 tier (seller up to $0.50)." },
+          maxUsd: { type: "number", description: "Max underlying seller price in USD. Default 0.005 (the $0.01 fee tier); above 0.005 and up to 0.04 uses the $0.05 tier; above 0.04 and up to 0.10 the $0.12 tier; above 0.10 the $0.55 tier (seller up to $0.50)." },
         },
         required: ["task"],
       },
@@ -1218,12 +1218,17 @@ server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) =
       if (!task) return { content: [{ type: "text", text: "router.execute requires a 'task' (plain-language description of what you need)." }], isError: true };
       const maxUsd = Number(args.maxUsd) > 0 ? Number(args.maxUsd) : 0.005;
       // Pick the CHEAPEST tier whose underlying cap covers maxUsd. The ladder
-      // has three rungs; skipping the middle one billed 11x for a mid-priced
-      // seller (a $0.02 seller went through the $0.55 tier instead of $0.05).
+      // skipped a middle rung once and billed 11x for a mid-priced seller (a
+      // $0.02 seller went through the $0.55 tier instead of $0.05).
       // Keep this ordered cheapest-first so a new rung is a one-line insert.
-      const slug = maxUsd > 0.04 ? "route-execute-max"
-        : maxUsd > 0.005 ? "route-execute-plus"
-        : "route-execute";
+      // A server that does not list a rung yet is served by the next one up.
+      const ROUTER_TIERS = [
+        { slug: "route-execute", underlyingMaxUsd: 0.005 },
+        { slug: "route-execute-plus", underlyingMaxUsd: 0.04 },
+        { slug: "route-execute-mid", underlyingMaxUsd: 0.1 },
+        { slug: "route-execute-max", underlyingMaxUsd: 0.5 },
+      ];
+      const slug = ROUTER_TIERS.find((t) => maxUsd <= t.underlyingMaxUsd && catalog.has(t.slug))?.slug || "route-execute-max";
       const tool = catalog.get(slug);
       if (!tool) return { content: [{ type: "text", text: `External routing (${slug}) is not in the catalog from ${BASE} yet. It may be rolling out; retry shortly.` }], isError: true };
       // Body matches the route-execute input schema; include:"external" is what

@@ -48,7 +48,7 @@ const NO_TYPICAL = new Set(["decide-execute"]);
 // Async-capable, not advertised as slow. maxSeconds is the handler's own
 // deadline where it has one.
 const ASYNC_CAPABLE = Object.freeze({
-  "route-execute": null, "route-execute-plus": null, "route-execute-max": null, "route-execute-pro": null,
+  "route-execute": null, "route-execute-plus": null, "route-execute-mid": null, "route-execute-max": null, "route-execute-pro": null,
   "seller-payability": 55,
   "v1-images-fast": null, "v1-images-pro": null,
   // v1-images-edit is not here: it takes a multipart upload, and a job replays

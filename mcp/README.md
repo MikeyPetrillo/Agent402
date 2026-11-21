@@ -125,6 +125,7 @@ its variable name, not its value.
   | --- | --- | --- |
   | ≤ $0.005 | $0.01 | `POST /api/route/execute` |
   | ≤ $0.04 | $0.05 | `POST /api/route/execute-plus` |
+  | ≤ $0.10 | $0.12 | `POST /api/route/execute-mid` |
   | ≤ $0.50 | $0.55 | `POST /api/route/execute-max` |
 
   A tool priced above the tier's ceiling returns a self-correcting 409 naming its direct route.

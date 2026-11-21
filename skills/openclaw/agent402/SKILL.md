@@ -135,9 +135,9 @@ each tier's current price.
 ## One-shot dispatch: `POST /api/route/execute`
 
 Pay one flat fee, describe the task (or name the slug), and the router
-resolves the best match and runs it in the same request. Four tiers cover
+resolves the best match and runs it in the same request. Five tiers cover
 increasingly expensive underlying tools: `/api/route/execute`,
-`/api/route/execute-plus`, `/api/route/execute-max` and
+`/api/route/execute-plus`, `/api/route/execute-mid`, `/api/route/execute-max` and
 `/api/route/execute-pro`. `GET /api/route?q=<task>` (free) shows which tool
 matches and which tier it needs.
 
