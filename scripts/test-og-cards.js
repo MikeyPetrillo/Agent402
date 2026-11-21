@@ -105,6 +105,12 @@ ok(/\/card\.png\?v=/.test(await og("/company")), "a page with no section keeps t
 ok(/\/og\/agentic-finance\.png/.test(await og("/agentic-finance")), "the pre-existing explicit card is untouched");
 const svgRes = await fetch(`${BASE}/og/markets.svg`);
 ok(svgRes.status === 200 && /svg\+xml/.test(svgRes.headers.get("content-type")), "/og/markets.svg answers 200 image/svg+xml");
+{ // The square mark's gradient left with the square: no served card defines or paints it.
+  for (const p of ["/card.svg", "/og/markets.svg", "/x-header.svg"]) {
+    const svg = await (await fetch(BASE + p)).text();
+    ok(!/id="milled"/.test(svg) && !svg.includes("url(#milled)"), `${p} carries no gradient for the mark the tile replaced`);
+  }
+}
 const missing = await fetch(`${BASE}/og/nope.png`);
 ok(missing.status === 404, "an unknown section id is a 404, not a card");
 const png = await fetch(`${BASE}/og/docs.png`, { redirect: "manual" });

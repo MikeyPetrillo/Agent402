@@ -43,7 +43,10 @@ same wallet again. That body also carries `needs`: the `network`, `asset` and `a
 `usd`) the refused call asked for. A Solana refusal body with `requote: true` means the facilitator
 that quote named refused the x402 payment before broadcasting it: nothing was charged, so request the route
 again without a payment header and sign against that fresh 402, which names another facilitator's fee
-payer when one is available. Every route's challenge is
+payer when one is available. A Solana refusal with `reason: "blockhash-expired"` means the
+transaction's recent blockhash was no longer valid when the payment was checked or settled (a Solana
+transaction lands for about 60 to 90 seconds after its blockhash): nothing was charged, so ask for a
+fresh 402 and build the transaction on a fresh blockhash. Every route's challenge is
 valid under `@x402/core`'s own schemas (CI runs all 500+ routes through the official parser),
 and it carries a typed output schema twice: inside the `bazaar` discovery extension (with the
 input schema and an example) and as `accepts[0].outputSchema` on the first accept, so a client

@@ -269,12 +269,16 @@ const full = await call(A, WIN);
   try {
     const busy = () => { const r = mk(); for (let i = 0; i < r.getMaxListeners(); i++) r.on("finish", () => {}); return r; };
     const sol = busy(); const before = sol.listenerCount("finish");
+    const skippedBefore = store.receiptStoreCounts().skipped;
     store.keepReceiptOnFinalOk(J, rec("sol", { payer: SOL }), null, sol, keep);
     const card = busy();
     store.keepReceiptOnFinalOk(J, rec("card", { rail: "mpp-stripe", payer: null }), null, card, keep);
+    ok(store.receiptStoreCounts().skipped === skippedBefore + 2, `a receipt the store never keeps is counted for the operator (skipped ${skippedBefore} -> ${store.receiptStoreCounts().skipped})`);
     ok(sol.listenerCount("finish") === before && card.listenerCount("finish") === before, `a receipt the store never keeps adds no finish listener (${sol.listenerCount("finish")}, ${card.listenerCount("finish")} of ${before})`);
     const evm = busy();
+    const skippedMid = store.receiptStoreCounts().skipped;
     store.keepReceiptOnFinalOk(J, rec("evm"), null, evm, keep);
+    ok(store.receiptStoreCounts().skipped === skippedMid, "a receipt the store keeps is not counted as skipped");
     await new Promise((r) => setImmediate(r));
     ok(evm.listenerCount("finish") === before + 1 && warnings.length === 0, `a kept receipt's listener on a response with ten already raises no listener-leak warning (${warnings.join(" | ") || "none"})`);
     evm.emit("finish"); sol.emit("finish"); card.emit("finish");

@@ -10468,7 +10468,7 @@ const BRAND_FONT_STYLE = `<style>
 // design-tokens: off-start (rasterized logo, favicon and social-card SVG: no CSS engine)
 const BRAND = { paper: "#0B0C0E", card: "#141619", panel: "#141619", panel2: "#1C2024", ink: "#E9EAEC", muted: "#B3B9C0", faint: "#868D95", hairline: "#2C3136", accent: "#9EF0B0", amber: "#F0B35E", milledA: "#F6F7F8", milledB: "#C9CED3", mono: "'Geist Mono',Menlo,Consolas,monospace", display: "'Geist',system-ui,sans-serif" };
 // design-tokens: off-end
-const BRAND_DEFS = `<defs><linearGradient id="milled" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.milledA}"/><stop offset="1" stop-color="${BRAND.milledB}"/></linearGradient><linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.panel2}"/><stop offset="1" stop-color="${BRAND.paper}"/></linearGradient></defs>`;
+const BRAND_DEFS = `<defs><linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.panel2}"/><stop offset="1" stop-color="${BRAND.paper}"/></linearGradient></defs>`;
 
 // Brand mark: the vector logo and the favicon crop (src/brand-mark.js, from
 // assets/brand/logo.svg), the same art as the PNG below.

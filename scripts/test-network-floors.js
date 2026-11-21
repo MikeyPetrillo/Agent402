@@ -189,5 +189,32 @@ await check("the changelog's Robinhood price item holds on a server that sets th
   assert.equal(applyNetworkFloor("$0.001", RH, networkPriceFloors(OLD)), FLOOR, "set: that floor");
 });
 
+// A floor, a premium and a relayer minimum are read through the same integer
+// scaling the challenge is minted with (src/base-units.js), so a value whose
+// float product sits just under a half (0.0040005 * 1e6 is 4000.4999...)
+// gives the same micro-dollars in a floor as in the amount a buyer signs.
+await check("floors, premiums and the relayer minimum scale a price as the minted amount does", async () => {
+  const { usdToBaseUnits } = await import("../src/base-units.js");
+  const EDGE = "0.0040005", want = Number(usdToBaseUnits(EDGE, 6));
+  assert.equal(want, 4001, "the exact scaling rounds the half up");
+  assert.notEqual(Math.round(Number(EDGE) * 1e6), want, "control: the float product rounds it down");
+  assert.equal(networkPriceFloors({ NETWORK_PRICE_FLOORS: `${BASE}=${EDGE}` }).get(BASE), want, "NETWORK_PRICE_FLOORS");
+  assert.equal(networkPriceFloors({ ROBINHOOD_MIN_PRICE_USD: EDGE }).get(RH), want, "ROBINHOOD_MIN_PRICE_USD");
+  assert.equal(robinhoodRelayerMinUnits({ ROBINHOOD_RELAYER_MIN_PRICE_USD: EDGE }), BigInt(want), "the relayer minimum in base units");
+  assert.equal(parseNetworkPremiums(`${OP}=${EDGE}`).get(OP), want, "NETWORK_PRICE_PREMIUMS");
+  // A price at the edge is compared and added in the same units.
+  const floors = new Map([[BASE, 4001]]);
+  assert.equal(applyNetworkFloor(`$${EDGE}`, BASE, floors), `$${EDGE}`, "a price that scales to the floor is at the floor, and is left as quoted");
+  assert.equal(priceForNetwork(`$${EDGE}`, OP, new Map([[OP, 1000]]), new Map()), "$0.005001", "a premium adds to the exact micro-dollars");
+  // The guides' worked amounts are the same scaling of the catalog price: a
+  // page rendered over a catalog priced at the edge prints the minted amount.
+  const { howToPayPage } = await import("../src/how-to-pay.js");
+  const { guidePage } = await import("../src/guides.js");
+  const pay = howToPayPage("https://x.test", { "POST /api/hash": { slug: "hash", price: `$${EDGE}`, route: "POST /api/hash", name: "Hash", description: "d", category: "encoding" } });
+  assert.ok(pay.includes(`&quot;amount&quot;:&quot;${want}&quot;`) && !pay.includes("&quot;amount&quot;:&quot;4000&quot;"), "the how-to-pay page's worked amount");
+  const guide = guidePage("https://x.test", "x402-in-5-minutes", { "POST /api/extract": { slug: "extract", price: `$${EDGE}` } });
+  assert.ok(guide.includes(String(want)) && !/\b4000\b/.test(guide), "the quickstart guide's worked amount");
+});
+
 console.log(failures ? `\nFAILED (${failures})` : "\nall passed");
 process.exit(failures ? 1 : 0);

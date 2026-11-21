@@ -16,7 +16,12 @@
 // price). Under it the listed facilitators alone settle the sale, and a
 // refusal from them stands as the buyer's 402.
 //
-// No imports: page and guide modules read the floor without loading payments.
+// Its one import is the integer price scaling (src/base-units.js, a leaf): page
+// and guide modules read the floor without loading payments.
+import { usdToBaseUnits } from "./base-units.js";
+
+/** A dollar amount in integer micro-dollars, scaled as a minted amount is. */
+const microOf = (usd) => Number(usdToBaseUnits(usd, 6));
 
 export const ROBINHOOD_CAIP2 = "eip155:4663";
 export const ROBINHOOD_MIN_PRICE_DEFAULT_USD = 0;
@@ -39,7 +44,7 @@ export function robinhoodRelayerMinPriceUsd(env = process.env) {
 
 /** The same minimum in the token's base units (USDG has 6 decimals). */
 export function robinhoodRelayerMinUnits(env = process.env) {
-  return BigInt(Math.round(robinhoodRelayerMinPriceUsd(env) * 1e6));
+  return usdToBaseUnits(robinhoodRelayerMinPriceUsd(env), 6);
 }
 
 /** caip2 -> floor in integer micro-dollars. A malformed or negative entry is
@@ -51,14 +56,14 @@ export function networkPriceFloors(env = process.env) {
     const net = eq > 0 ? pair.slice(0, eq).trim() : "";
     const usd = eq > 0 ? Number(pair.slice(eq + 1)) : NaN;
     if (!net || !Number.isFinite(usd) || usd < 0) { console.warn(`[payments] NETWORK_PRICE_FLOORS entry ignored (malformed or negative): "${pair}"`); continue; }
-    if (usd > 0) out.set(net, Math.round(usd * 1e6));
+    if (usd > 0) out.set(net, microOf(usd));
   }
   if (!out.has(ROBINHOOD_CAIP2)) {
     const raw = env.ROBINHOOD_MIN_PRICE_USD;
     const usd = raw === undefined || String(raw).trim() === "" ? ROBINHOOD_MIN_PRICE_DEFAULT_USD : Number(raw);
     if (!Number.isFinite(usd) || usd < 0) console.warn(`[payments] ROBINHOOD_MIN_PRICE_USD ignored (malformed or negative): "${raw}"; using ${ROBINHOOD_MIN_PRICE_DEFAULT_USD}`);
     const use = Number.isFinite(usd) && usd >= 0 ? usd : ROBINHOOD_MIN_PRICE_DEFAULT_USD;
-    if (use > 0) out.set(ROBINHOOD_CAIP2, Math.round(use * 1e6));
+    if (use > 0) out.set(ROBINHOOD_CAIP2, microOf(use));
   }
   return out;
 }
@@ -76,6 +81,6 @@ export function applyNetworkFloor(price, network, floors = networkPriceFloors())
   if (!floor) return price;
   const m = /^\$(\d+(?:\.\d+)?)$/.exec(String(price));
   if (!m) return price;
-  if (Math.round(Number(m[1]) * 1e6) >= floor) return price;
+  if (microOf(m[1]) >= floor) return price;
   return "$" + (floor / 1e6).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
 }

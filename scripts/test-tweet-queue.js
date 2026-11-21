@@ -589,7 +589,9 @@ function mk(items, { clock = T0 + MIN, script = [], raw = null, ...extra } = {})
     const real = globalThis.fetch;
     globalThis.fetch = async (url, init) => {
       const u = String(url?.url || url);
-      if (u.startsWith("https://api.twitter.com/")) {
+      // The parsed host, compared whole (never a substring of the URL string).
+      const at = (() => { try { return new URL(u); } catch { return null; } })();
+      if (at && at.protocol === "https:" && at.hostname === "api.twitter.com") {
         appendFileSync(process.env.TQ_STUB_LOG, (init?.method || "GET") + " " + u + "\\n");
         return new Response(JSON.stringify({ data: { id: "1900000000000000001" } }), { status: 201, headers: { "content-type": "application/json" } });
       }

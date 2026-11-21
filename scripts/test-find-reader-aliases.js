@@ -4,30 +4,18 @@
 // a search to clean up a piece of text (no page, no URL) does not go to the
 // extractor, which fetches a URL.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const port = await getFreePort();
-const out = [];
-const proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-const keep = (c) => { out.push(String(c)); if (out.length > 200) out.shift(); };
-proc.stdout.on("data", keep); proc.stderr.on("data", keep);
-const base = `http://127.0.0.1:${port}`;
+// Port 0, read back from the listening line (scripts/lib/boot-server.js); its own stores.
+const srv = await bootServer({ stores: "find-aliases", env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" } });
+const proc = srv.child;
+const base = srv.url;
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) {
-    try { up = (await fetch(`${base}/health`)).ok; } catch { /* not listening yet */ }
-    if (!up) await sleep(500);
-  }
-  ok(up, "server booted");
-  if (!up) { console.log(out.join("").slice(-3000)); throw new Error("server did not boot"); }
+  ok(true, "server booted");
   const findTop = async (q) => (await (await fetch(`${base}/api/find?q=${encodeURIComponent(q)}&k=3`)).json()).results?.[0]?.slug;
   const routeTop = async (q) => (await (await fetch(`${base}/api/route?q=${encodeURIComponent(q)}&include=local&top=3`)).json()).results?.[0]?.slug;
   for (const q of ["reader mode", "clean readable text from a web page", "page to markdown", "readable text"]) {

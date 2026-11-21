@@ -1,6 +1,7 @@
 // Server-rendered technical guides — the prose layer for organic search.
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
+import { usdToBaseUnits } from "./base-units.js";
 import { siteOrgRef } from "./site-org.js";
 import { REPO_URL, repoUrl } from "./repo-link.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
@@ -98,7 +99,7 @@ function resolveGuideTokens(text, catalog) {
   };
   return resolveRailCountTokens(String(text))
     .replace(/\{\{price:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? def(slug).price : "(price on /api/pricing)"))
-    .replace(/\{\{amount:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? String(Math.round(priceUsd(def(slug).price) * 1e6)) : "<amount>"))
+    .replace(/\{\{amount:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? String(usdToBaseUnits(priceUsd(def(slug).price), 6)) : "<amount>"))
     // {{jobs:<slug>[,<slug>]}}: whether a route runs as a job, read from the
     // async profile the catalog carries (src/slow-routes.js) and the slow-sync
     // window (SLOW_SYNC_WINDOW_SECONDS): "yes, required" when a paid call

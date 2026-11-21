@@ -6,10 +6,9 @@
 // FREE_MODE server with a known secret, plants a pending record in the same
 // store the server reads, and drives confirm / unsubscribe / stop end to end.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 import { createFreeAlerts, defaultStorePath } from "../src/free-alerts.js";
 
 let pass = 0; let proc = null;
@@ -29,11 +28,13 @@ const id = Object.keys(fa._store().alerts).find((k) => fa._store().alerts[k].ema
 ok(id && mail.length === 1, "pending record planted, confirmation captured");
 const confirmK = fa.sign(id, "confirm"), unsubK = fa.sign(id, "unsubscribe");
 
-const PORT = await getFreePort();
-const B = `http://127.0.0.1:${PORT}`;
-proc = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", POW_SECRET: SECRET, FREE_ALERTS_SECRET: "", MPP_SECRET_KEY: "", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", FREE_ALERTS: "off" }, stdio: "ignore" });
+// Port 0, read back from the listening line (scripts/lib/boot-server.js). The
+// caller's stores are kept: the record planted above is in the store the
+// server reads.
+const srv = await bootServer({ stores: false, env: { FREE_MODE: "true", POW_SECRET: SECRET, FREE_ALERTS_SECRET: "", MPP_SECRET_KEY: "", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", FREE_ALERTS: "off" } });
+proc = srv.child;
+const B = srv.url;
 try {
-  for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
   ok((await fetch(`${B}/health`)).ok, "server booted with the test secret");
   const forged = await fetch(`${B}/alerts/confirm?id=${id}&k=forged`);
   ok(forged.status === 400, `forged confirmation -> 400 (got ${forged.status})`);

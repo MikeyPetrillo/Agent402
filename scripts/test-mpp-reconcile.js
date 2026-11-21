@@ -116,6 +116,11 @@ ok(statusWordFor({ ...blindButDup, tempoConfigured: true }) === "mismatch", "led
 ok(statusWordFor({ ...clean, sources: { chain: { complete: false } }, tempoConfigured: false }) === "ok", "no Tempo recipient configured: nothing to read, the leg is not unknown");
 ok(statusWordFor(null) === "unknown", "never run is unknown");
 const noStripe = reconcileRecords({ start: START, end: END, ledgerRows: [row(11, { wire: "mpp-stripe", tx: "pi_x" })], transfers: { complete: true, rows: [] } });
+{ // A card row is held to the cents the charge was minted for (src/base-units.js: $0.285 is 29 cents, as the mint rounds it), never the float product (28.499...).
+  const edgeRows = [row(40, { wire: "mpp-stripe", network: "stripe", tx: "pi_edge_short", priceUsd: 0.285 }), row(41, { wire: "mpp-stripe", network: "stripe", tx: "pi_edge_full", priceUsd: 0.285 })];
+  const edge = reconcileRecords({ start: START, end: END, ledgerRows: edgeRows, transfers: [], refunds: [], evmChecks: { configured: false, results: new Map() }, stripeChecks: { configured: true, results: new Map([["pi_edge_short", { status: "succeeded", amountCents: 28 }], ["pi_edge_full", { status: "succeeded", amountCents: 29 }]]) }, currencies: [USDCE, PATHUSD], isOwnWallet: () => false });
+  ok(edge.mismatches.some((m) => m.category === "stripe_mismatch" && m.tx === "pi_edge_short") && !edge.mismatches.some((m) => m.tx === "pi_edge_full"), `a card charge one cent under the minted amount is a mismatch; the minted amount is not (${edge.counts.stripe_mismatch.total})`);
+}
 ok(noStripe.sources.stripe.checked === false && /not checked/.test(noStripe.sources.stripe.reason) && noStripe.counts.stripe_mismatch.total === 0, "no Stripe key: 'not checked', never a failure");
 
 // --- the reconciler: idempotence, persistence, status views -----------------
