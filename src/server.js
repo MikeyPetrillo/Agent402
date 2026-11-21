@@ -806,6 +806,8 @@ import { USAGE_TOOLS } from "./tools/usage-kit.js";
 import { AUDIT_TOOLS, setAuditReportContext } from "./tools/audit-report-kit.js";
 import { keepReceiptOnFinalOk, startReceiptStoreSweep, receiptStoreCounts } from "./receipt-store.js";
 import { FEEDBACK_TOOLS } from "./tools/feedback-kit.js";
+import { PRICE_WEBHOOK_TOOLS, setPriceWebhookCatalog } from "./tools/price-webhook-kit.js";
+import { priceWebhooks, startPriceWebhooks, signingKeyOf as priceWebhookSigningKey, UNSUBSCRIBE_PATH as PRICE_WEBHOOK_UNSUBSCRIBE_PATH } from "./price-webhooks.js";
 import { CHAIN_RPC_TOOLS } from "./tools/chain-rpc-kit.js";
 import { chainNamespaceMiddleware, chainNamespaceMap, chainVerbAliasesByRoute } from "./chain-namespace.js";
 import { corsMiddleware, allowCorsPrefix } from "./cors.js";
@@ -898,7 +900,7 @@ const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePr
 // status probe's mark) or a payer that is one of our wallets. Stats only.
 const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -2687,6 +2689,8 @@ for (const def of Object.values(CATALOG)) {
 // attestation is public and permanent); it learns which slugs those are here,
 // from the same predicate, so the two can never disagree.
 setIdentityBoundSlugs(new Set(Object.values(CATALOG).filter((d) => d.identityBound).map((d) => d.slug)));
+// Price webhooks (src/price-webhooks.js): a registration names catalog slugs.
+setPriceWebhookCatalog(() => new Set(Object.values(CATALOG).map((d) => d?.slug).filter(Boolean)));
 // The audit report (src/tools/audit-report-kit.js) names each row's route
 // from the same catalog, and its summary receipt the same issuer.
 {
@@ -9844,6 +9848,18 @@ function reputationKeyOf(raw) {
   const qBare = q.replace(/^https?:\/\//, "");
   return reputationKeys.bare.get(qBare) || (qBare.includes("/") ? null : reputationKeys.byHost.get(qBare) || null);
 }
+// Remove a price webhook (src/price-webhooks.js): free, by the id and secret
+// the registration returned. An unknown id and a wrong secret read the same.
+app.post(PRICE_WEBHOOK_UNSUBSCRIBE_PATH, express.json({ limit: "4kb" }), async (req, res) => {
+  try {
+    const out = await priceWebhooks().unsubscribe(req.body);
+    res.set("Cache-Control", "no-store").status(out.removed ? 200 : 404).json(out.removed ? out : { removed: false, error: "no price webhook with that id and secret" });
+  } catch (e) {
+    const status = Number(e?.statusCode) >= 400 && Number(e?.statusCode) < 600 ? Number(e.statusCode) : 500;
+    if (e?.retryAfterSeconds) res.set("Retry-After", String(e.retryAfterSeconds));
+    res.set("Cache-Control", "no-store").status(status).json({ removed: false, error: status === 500 ? "the removal failed on this server; retry" : String(e.message) });
+  }
+});
 // Router benchmarks (src/router-benchmarks.js): aggregates over the reputation
 // records this process holds; computed once per record version, no seller named.
 app.get(ROUTER_BENCHMARKS_PATH, async (_req, res) => {
@@ -14286,6 +14302,12 @@ if (!x402Crawl.on) {
       await indexRowsReady({ ourTools: ourToolsAsIndexRows(), excludeOrigin: BASE_URL });
     })().catch((e) => console.warn(`[index] boot warm failed (the first reader builds it): ${String(e?.message || e).slice(0, 120)}`));
   } });
+}
+// Price webhooks (src/price-webhooks.js): with a signing key set, record the
+// catalog's list prices (queueing one delivery per subscription that watches a
+// changed price) and start the delivery turn. Leased, so one replica does each.
+if (priceWebhookSigningKey()) {
+  startPriceWebhooks({ prices: () => Object.fromEntries(Object.values(CATALOG).filter((d) => d?.slug && typeof d.price === "string").map((d) => [d.slug, d.price])) });
 }
 // Seller reputation (src/seller-reputation.js): recorded and computed only
 // where the production crawl runs (the same switch), never on a CI, test or

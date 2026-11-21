@@ -47,3 +47,5 @@ t node scripts/test-agentcore-page.js
 t node scripts/test-monitor-issue-wording.js
 # Router benchmarks: aggregates over the reputation records, no seller named, nothing under five sellers, no purchase count (offline, port 0)
 t node scripts/test-router-benchmarks.js
+# Price webhooks: input rules, bounds, price comparison, signed delivery, retries, the fetch guard, the served tool and its removal route (offline, port 0)
+t node scripts/test-price-webhooks.js

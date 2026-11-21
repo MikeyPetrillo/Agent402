@@ -400,6 +400,7 @@
     "premarket-quote",
     "price-coingecko",
     "price-pyth",
+    "price-webhook",
     "prime-factorize",
     "public-holidays",
     "punycode-convert",

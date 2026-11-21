@@ -176,6 +176,7 @@
     "src/tools/pdf.js": "2026-10-13",
     "src/tools/prediction-market-kit.js": "2026-11-18",
     "src/tools/price-feed-kit.js": "2026-11-17",
+    "src/tools/price-webhook-kit.js": "2026-11-21",
     "src/tools/provenance.js": "2026-07-18",
     "src/tools/recall-report-kit.js": "2026-11-08",
     "src/tools/redact.js": "2026-11-19",
