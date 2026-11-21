@@ -189,6 +189,8 @@ try {
     ok(/a payment of the lower amount from any other wallet is answered 402 at the list price, and nothing is charged/.test(llms) && !/any other payer is quoted list/.test(llms), "and says what the gate does with another wallet's payment of the lower amount");
     const short = await fetch(`${B}/llms.txt`).then((r) => r.text());
     ok(!/X-Agent402-Wallet/.test(short), "CONTROL the rule is on llms-full.txt, not on llms.txt");
+    const notes = (await fetch(`${B}/changelog`).then((r) => r.text())).replace(/\s+/g, " ");
+    ok(/\/llms-full\.txt states the rule/.test(notes) && !/\/llms\.txt states the rule/.test(notes), "the release notes name the document that carries the rule");
     const api = await fetch(`${B}/openapi.json`).then((r) => r.json());
     const headersOf = (path) => (api.paths?.[path]?.post?.parameters || []).filter((p) => p.in === "header").map((p) => p.name);
     ok(headersOf("/api/hash").includes("X-Agent402-Wallet") && !headersOf("/api/base64").includes("X-Agent402-Wallet"), `the OpenAPI document declares the header on an eligible route only (${headersOf("/api/hash").join(", ")} / ${headersOf("/api/base64").join(", ")})`);

@@ -60,7 +60,7 @@ const ENTRIES = [
     date: "2026-11-21",
     title: "image-ocr turns, replay marks and Solana sales",
     items: [
-      "Tools: `image-ocr` reads images in turn across callers, each within a set time. A caller's first image in ten minutes is never asked to give way to another caller's waiting image; a call that waits out its time in line answers 503 with a Retry-After and keeps its place for its retry; and an image that cannot be read in time answers 422 with a note to downscale it.",
+      "Tools: `image-ocr` reads images in turn across callers, each within a set time. A caller's first image is read to the end even while others wait; a call that waits out its time in line answers 503 with a Retry-After and keeps its place for its retry; and an image that cannot be read in time answers 422 with a note to downscale it.",
       "Tools: A freed audio decode slot goes to the waiting caller that holds the fewest places, first come among equals, and wallets paying from one address take their turn as one caller.",
       "Payments: A settled payment's replay mark is kept about an hour after the call, or until the authorization's own validBefore plus 10 minutes when that is later, however far out that is (it was at most 30 days after the call). /privacy and the dataHandling list on /.well-known/x402 state the hold.",
       "Payments: A Solana payment refused because its transaction's recent blockhash is no longer valid carries `reason: \"blockhash-expired\"`, whether that was read when the payment was checked or when it was settled, and its hint says to ask for a fresh 402 and build the transaction on a fresh blockhash.",
@@ -110,9 +110,12 @@ const ENTRIES = [
     shownWhen: returningWalletEnabled,
     items: [
       `Payments: On a server that sets \`RETURNING_WALLET_PRICE=on\`, a buyer that names its wallet in the \`${WALLET_HINT_HEADER}\` request header gets that call's 402 with the route's x402 \`exact\` offer on EVM chains at a lower price, once the wallet has paid on enough distinct days (\`RETURNING_WALLET_MIN_PAID_DAYS\` inside \`RETURNING_WALLET_WINDOW_DAYS\`; \`RETURNING_WALLET_DISCOUNT_BPS\` sets the discount). Every other offer, and every surface that publishes a price, stays at list.`,
+      "Payments: The discount is taken from the route's list price; a chain's premium and price floor still apply, so a chain at its floor quotes the same amount, and the 402 names that chain instead of saying the discount was applied there.",
       "Payments: The lower price holds only for a payment signed by the named wallet: a payment of the lower amount from any other wallet is answered 402 with the list price, and nothing is charged.",
+      "Payments: The ledger reads behind a quote are bounded per client address and across all callers; past a bound a wallet not read yet is quoted list, never refused, and a wallet already read keeps its price.",
       "Payments: Routes priced per request, metered and model-backed routes, and routes whose effect outlives the answer or that spend this server's own wallet are always quoted at list.",
-      `Surfaces: With the switch on, /llms.txt states the rule, an eligible route's 402 body states the offer in \`returningWalletPrice\`, and its operation in /openapi.json lists the \`${WALLET_HINT_HEADER}\` header.`,
+      `Surfaces: With the switch on, /llms-full.txt states the rule, an eligible route's 402 body states the offer in \`returningWalletPrice\`, and its operation in /openapi.json lists the \`${WALLET_HINT_HEADER}\` header.`,
+      `Privacy: With the switch on, /privacy and the service manifest's data handling say what the \`${WALLET_HINT_HEADER}\` header is read for and how long the named wallet is held in memory.`,
     ],
   },
   {

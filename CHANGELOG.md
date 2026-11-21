@@ -72,10 +72,10 @@ Privacy:
 ### 2026-11-21 (image-ocr turns, replay marks and Solana sales)
 Tools:
 - `image-ocr` reads images in turn across callers, each within a set time. A
-  caller's first image in ten minutes is never asked to give way to another
-  caller's waiting image; a call that waits out its time in line answers 503
-  with a Retry-After and keeps its place for its retry; and an image that
-  cannot be read in time answers 422 with a note to downscale it.
+  caller's first image is read to the end even while others wait; a call
+  that waits out its time in line answers 503 with a Retry-After and keeps
+  its place for its retry; and an image that cannot be read in time answers
+  422 with a note to downscale it.
 - A freed audio decode slot goes to the waiting caller that holds the fewest
   places, first come among equals, and wallets paying from one address take
   their turn as one caller.
@@ -176,16 +176,27 @@ Payments:
   inside `RETURNING_WALLET_WINDOW_DAYS`; `RETURNING_WALLET_DISCOUNT_BPS`
   sets the discount). Every other offer, and every surface that publishes a
   price, stays at list.
+- The discount is taken from the route's list price; a chain's premium and
+  price floor still apply, so a chain at its floor quotes the same amount,
+  and the 402 names that chain instead of saying the discount was applied
+  there.
 - The lower price holds only for a payment signed by the named wallet: a
   payment of the lower amount from any other wallet is answered 402 with the
   list price, and nothing is charged.
+- The ledger reads behind a quote are bounded per client address and across
+  all callers; past a bound a wallet not read yet is quoted list, never
+  refused, and a wallet already read keeps its price.
 - Routes priced per request, metered and model-backed routes, and routes
   whose effect outlives the answer or that spend this server's own wallet
   are always quoted at list.
 Surfaces:
-- With the switch on, /llms.txt states the rule, an eligible route's 402
-  body states the offer in `returningWalletPrice`, and its operation in
+- With the switch on, /llms-full.txt states the rule, an eligible route's
+  402 body states the offer in `returningWalletPrice`, and its operation in
   /openapi.json lists the `X-Agent402-Wallet` header.
+Privacy:
+- With the switch on, /privacy and the service manifest's data handling say
+  what the `X-Agent402-Wallet` header is read for and how long the named
+  wallet is held in memory.
 
 ### 2026-11-21 (named speech models)
 Gateway:
