@@ -94,6 +94,7 @@ const ENTRIES = [
       "Payments: Until then, and under any other config, calls paid that way run four at once per client address (`INFLIGHT_COVER_UNREAD_MAX` sets the number), whichever account each names; a call past that answers 429 with `Retry-After: 5` (`Retry-After: 30` on the report and media routes) and nothing is charged.",
       "Payments: Calls an account pays for with its own key, or with an access key Tempo confirms for it, are counted against that account's balance alone.",
       "Tools: The DNS, mail and certificate tools look up a name in one normalized form (lowercase, no trailing dots or surrounding spaces), and `dns` answers with that form in `name`.",
+      "Tools: `dkim-lookup` answers a selector that makes no DNS name with the domain (an empty label, a label over 63 characters, a whole name over 253) with a 400 that names the field.",
     ],
   },
   {

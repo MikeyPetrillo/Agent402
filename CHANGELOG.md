@@ -152,6 +152,9 @@ Tools:
 - The DNS, mail and certificate tools look up a name in one normalized form
   (lowercase, no trailing dots or surrounding spaces), and `dns` answers
   with that form in `name`.
+- `dkim-lookup` answers a selector that makes no DNS name with the domain
+  (an empty label, a label over 63 characters, a whole name over 253) with a
+  400 that names the field.
 
 ### 2026-11-21 (the guide site, report links and the brand mark)
 Site:
