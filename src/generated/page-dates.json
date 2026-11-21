@@ -96,7 +96,7 @@
     "src/tools/email-guard-kit.js": "2026-11-18",
     "src/tools/email-guard-mime.js": "2026-10-29",
     "src/tools/embed-kit.js": "2026-11-18",
-    "src/tools/enrich-kit.js": "2026-11-19",
+    "src/tools/enrich-kit.js": "2026-11-21",
     "src/tools/exchange-calendars.js": "2026-11-18",
     "src/tools/extract.js": "2026-10-19",
     "src/tools/farcaster-social-kit.js": "2026-10-14",

@@ -668,7 +668,7 @@ export const ENRICH_TOOLS = [
             { href: "https://agent402.tools/favicon.svg?v=3", rel: "icon", sizes: null, type: "image/svg+xml", mask: false },
             { href: "https://agent402.tools/favicon.ico?v=3", rel: "icon", sizes: "512x512", type: "image/png", mask: false },
             { href: "https://agent402.tools/favicon.ico?v=3", rel: "shortcut icon", sizes: null, type: null, mask: false },
-            { href: "https://agent402.tools/logo.png?v=2", rel: "apple-touch-icon", sizes: null, type: null, mask: false },
+            { href: "https://agent402.tools/logo.png?v=3", rel: "apple-touch-icon", sizes: null, type: null, mask: false },
           ],
         },
       },

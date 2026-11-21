@@ -108,7 +108,7 @@ export const LEDGER_HEAD = `<link rel="preload" href="/fonts/geist-400-latin.wof
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=3">
 <link rel="icon" type="image/png" sizes="512x512" href="/favicon.ico?v=3">
 <link rel="shortcut icon" href="/favicon.ico?v=3">
-<link rel="apple-touch-icon" href="/logo.png?v=2">`;
+<link rel="apple-touch-icon" href="/logo.png?v=3">`;
 
 // ---------------------------------------------------------------------------
 // Design-token CSS + base reset + keyframes + shared chrome styles

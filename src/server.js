@@ -10462,13 +10462,21 @@ app.get("/logo.svg", (_req, res) => res.type("image/svg+xml").set("Cache-Control
 // survives tab scale. Marketplaces/link previews keep the roomier LOGO_SVG.
 const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">${BRAND_FONT_STYLE}${BRAND_DEFS}<rect width="512" height="512" rx="112" fill="${BRAND.paper}"/><rect x="40" y="40" width="432" height="432" rx="104" fill="url(#milled)"/><text x="256" y="322" font-size="196" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} text-anchor="middle" letter-spacing="-12" fill="${BRAND.paper}">402</text></svg>`;
 
+// The PNG logo is the brand mark (black ground, "402", red dot), 512 by 512,
+// a committed file (assets/brand/logo.png, the same art as
+// docs/logo-current.png): the apple-touch-icon, the schema.org logo, the MCP
+// and A2A icons and the press kit read it. A change of art bumps the ?v= on
+// the apple-touch-icon link (src/ledger-chrome.js) and LOGO_PNG_VERSION. Only
+// that versioned URL is immutable: the bare one (schema.org, MCP, A2A) keeps a
+// day's cache, so a new mark reaches those readers.
+const LOGO_PNG_VERSION = "3";
 let logoPngCache = null;
-app.get("/logo.png", async (_req, res) => {
+app.get("/logo.png", (req, res) => {
   try {
-    logoPngCache ??= await rasterizeSvg(LOGO_SVG, 512);
-    res.type("image/png").set("Cache-Control", "public, max-age=31536000, immutable").send(logoPngCache);
+    logoPngCache ??= readFileSync(new URL("../assets/brand/logo.png", import.meta.url));
+    res.type("image/png").set("Cache-Control", req.query?.v === LOGO_PNG_VERSION ? "public, max-age=31536000, immutable" : "public, max-age=86400").send(logoPngCache);
   } catch {
-    // No Chromium on this instance — the SVG is always available.
+    // The file is part of the image; the SVG stands in if it is ever missing.
     res.redirect(302, "/logo.svg");
   }
 });

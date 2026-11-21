@@ -22,9 +22,11 @@ t node scripts/test-tool-page-mpp.js
 # Every tool category is a CATEGORIES key (breadcrumb + category page), decide included (offline + booted)
 TARGET_URL=http://localhost:3000 t node scripts/test-tool-categories.js
 
-# @step 2: Offline suites (17 scripts, one process each)
+# @step 2: Offline suites (18 scripts, one process each)
 # Static page renders smoke (every HTML surface returns 200 with the right page-specific title)
 t node scripts/test-static-pages.js
+# /logo.png serves the committed brand mark (512 by 512); only the versioned apple-touch-icon URL is immutable (boots FREE_MODE, offline)
+t node scripts/test-logo-png.js
 # Page weight: each site page's first-visit transfer inside its budget, the font set inside one budget, and no committed media over its kind's budget or 2 MB (boots a real server, offline)
 t node scripts/test-page-weight.js
 t node scripts/test-page-weight.js --self-test
