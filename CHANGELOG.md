@@ -21,8 +21,9 @@ Router:
   is published only when at least five sellers are scored on it.
 Tools:
 - `price-webhook` (`POST /api/price-webhook`) registers an https URL that
-  gets one signed POST when the list price of a tool it watches changes on
-  this server. The answer carries the subscription's id, its secret and
+  gets a signed POST when the list price of a tool it watches changes on
+  this server; a delivery that is not answered 2xx is tried again with the
+  same `X-Agent402-Delivery` id, so a receiver can drop a repeat. The answer carries the subscription's id, its secret and
   `expiresAt`; each delivery carries an `X-Agent402-Signature` header to
   check against that secret, a 410 from the receiver removes the
   subscription, and `POST /api/price-webhook/unsubscribe` removes it, free.

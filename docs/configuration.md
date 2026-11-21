@@ -856,7 +856,7 @@ may still clamp it, and the read site is the reference.
 | `PRICE_WEBHOOK_LIFETIME_DAYS` | How long a price webhook registration lasts, in days; registering the same URL again from the same payer renews it. | `90` | `src/changelog.js`, `src/price-webhooks.js` |
 | `PRICE_WEBHOOK_MAX` | Number of price webhook registrations from which a new one first removes those whose deliveries fail; twice this number is the most the server keeps. | `5000` | `src/price-webhooks.js` |
 | `PRICE_WEBHOOK_MAX_PER_PAYER` | Most price webhook registrations one registrant (the payer; in FREE_MODE the client address) may hold. | `25` | `src/changelog.js`, `src/price-webhooks.js` |
-| `PRICE_WEBHOOK_SIGNING_KEY` | Key the price webhook secrets are derived from (unset: POW_SECRET; neither set: a registration answers 503 and nothing is stored or sent). |  | `src/changelog.js`, `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_SIGNING_KEY` | Key the price webhook secrets and registrant digests are derived from (unset: POW_SECRET; neither set: a registration answers 503 and nothing is stored or sent). Never change it, or POW_SECRET while it is the fallback, once subscriptions exist: every secret and digest changes with it. |  | `src/changelog.js`, `src/price-webhooks.js` |
 
 ## PROGRAMMATIC
 

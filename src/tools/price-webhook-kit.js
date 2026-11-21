@@ -1,5 +1,5 @@
 // price-webhook-kit - `POST /api/price-webhook`: register an https URL that
-// gets one signed POST when the list price of a watched tool changes.
+// gets a signed POST when the list price of a watched tool changes.
 // The rules (what is watched, the signature, the retries, the bounds) are in
 // src/price-webhooks.js; this file is the catalog entry, its input checks,
 // who the registrant is and when the registration is kept.
@@ -16,7 +16,7 @@
 // settled call confirms it, any other outcome removes it. A call with no
 // response to wait for (a step an in-process executor runs) is kept at once.
 import { createHash } from "node:crypto";
-import { priceWebhooks, PRICE_WEBHOOK_SLUG, UNSUBSCRIBE_PATH, SIGNATURE_HEADER, SIGNATURE_SCHEME, EVENT_PRICE_CHANGED, MAX_SLUGS, MAX_URL_CHARS, RETRY_DELAYS_MS, lifetimeMs, maxPerRegistrant } from "../price-webhooks.js";
+import { priceWebhooks, PRICE_WEBHOOK_SLUG, UNSUBSCRIBE_PATH, SIGNATURE_HEADER, DELIVERY_HEADER, SIGNATURE_SCHEME, EVENT_PRICE_CHANGED, MAX_SLUGS, MAX_URL_CHARS, RETRY_DELAYS_MS, lifetimeMs, maxPerRegistrant } from "../price-webhooks.js";
 import { identityPayerOf, paymentHeaderOf, freeModeOn } from "../payer.js";
 import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
 import { currentDispatchCaller, IN_PROCESS_CALLER, ANONYMOUS_CALLER } from "../dispatch-caller.js";
@@ -87,7 +87,7 @@ export const PRICE_WEBHOOK_TOOLS = [
     category: "payments",
     price: "$0.01",
     description:
-      `Register an https URL and get one signed POST when the list price of a tool you watch changes on this server. Give "url" and, optionally, "slugs" (up to ${MAX_SLUGS} tool slugs; omit it to watch every tool). The answer carries the subscription id and its secret: each delivery is JSON ({ type: "${EVENT_PRICE_CHANGED}", changes: [{ slug, from, to }] }) with an ${SIGNATURE_HEADER} header, t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>" with the secret>, so the receiver can check it came from here. A subscription lasts ${LIFETIME_DAYS} days ("expiresAt"); register the same url again from the same wallet to renew it (same id and secret). One wallet holds up to ${PER_REGISTRANT}. A delivery is tried up to ${ATTEMPTS} times; a 2xx ends it and a 410 removes the subscription. Remove it yourself, free, with POST ${UNSUBSCRIBE_PATH} and the id and secret. The watched price is the list price on /api/pricing; a tool that is quoted per request keeps its list price there. Deterministic code, no model.`,
+      `Register an https URL and get a signed POST when the list price of a tool you watch changes on this server (a retry carries the same ${DELIVERY_HEADER} id). Give "url" and, optionally, "slugs" (up to ${MAX_SLUGS} tool slugs; omit it to watch every tool). The answer carries the subscription id and its secret: each delivery is JSON ({ type: "${EVENT_PRICE_CHANGED}", changes: [{ slug, from, to }] }) with an ${SIGNATURE_HEADER} header, t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>" with the secret>, so the receiver can check it came from here. A subscription lasts ${LIFETIME_DAYS} days ("expiresAt"); register the same url again from the same wallet to renew it (same id and secret). One wallet holds up to ${PER_REGISTRANT}. A delivery is tried up to ${ATTEMPTS} times; a 2xx ends it and a 410 removes the subscription. Remove it yourself, free, with POST ${UNSUBSCRIBE_PATH} and the id and secret. The watched price is the list price on /api/pricing; a tool that is quoted per request keeps its list price there. Deterministic code, no model.`,
     tags: ["webhook", "price", "pricing", "notification", "callback", "subscribe"],
     aliases: ["price-alert", "price-change-webhook", "pricing-webhook"],
     discovery: {

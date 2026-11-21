@@ -1,4 +1,4 @@
-// Price webhooks: a buyer registers an https URL and gets one signed POST when
+// Price webhooks: a buyer registers an https URL and gets a signed POST when
 // the list price of a watched tool changes.
 //
 // WHAT IS WATCHED. The catalog's own list price per slug (the `price` each
