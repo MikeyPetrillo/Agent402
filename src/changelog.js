@@ -21,6 +21,13 @@ const ENTRIES = [
   },
   {
     date: "2026-11-20",
+    title: "ASN lookups ride out a failing resolver",
+    items: [
+      "Tools: asn-info reads Team Cymru's DNS zone. When the host's own resolver fails on that zone (a SERVFAIL or a timeout), the lookup is retried once through public resolvers; a name with no record is still answered at once.",
+    ],
+  },
+  {
+    date: "2026-11-20",
     title: "Where errorCode rides",
     items: [
       "Wholesale: Every error answer a tool's route writes, other than a 402, carries `errorCode` beside the message: an input refused before payment, a body the server cannot read (400) or that is over its size limit (413), a run that ended in an error, a retired route (410), a paused or switched-off tool (503), and a tool whose route is not served on this server, which answers 404 as any unknown path under /api does. A 402 is the payment-required answer: it follows the x402 and MPP wire formats and carries no `errorCode`. Its `payment_required` row stays in the contract's code table with the new field `carried: false`; every other row reads `carried: true`.",

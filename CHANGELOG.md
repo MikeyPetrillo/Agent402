@@ -13,6 +13,12 @@ Payments:
   a network is still waited for); that service rejoins the offer as soon as
   it answers.
 
+### 2026-11-20 (ASN lookups ride out a failing resolver)
+Tools:
+- asn-info reads Team Cymru's DNS zone. When the host's own resolver fails
+  on that zone (a SERVFAIL or a timeout), the lookup is retried once through
+  public resolvers; a name with no record is still answered at once.
+
 ### 2026-11-20 (where errorCode rides)
 Wholesale:
 - Every error answer a tool's route writes, other than a 402, carries

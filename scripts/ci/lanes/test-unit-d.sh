@@ -191,6 +191,7 @@ t node scripts/test-refund-run-self-funding.js
 t node scripts/test-refund-run-chains.js
 # Refund job receipt hosts: REFUND_RPC_<id> first, an empty receipt read again, then the next host; no URL in any reason or log line; the real job proving a Celo receipt (stubs only, offline)
 t node scripts/test-refund-receipt-hosts.js
+t node scripts/test-asn-resolver-fallback.js
 # Payment-header precedence (attribution must follow the header the middleware SETTLES from — offline)
 t node scripts/test-payer-header-order.js
 # Refund monitor (stuck sends page, in-flight ones do not, and no address ever reaches a public issue — offline)
