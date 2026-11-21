@@ -31,7 +31,7 @@ const NO_KEY = "smoke-buy: no BURNER_KEY / KEY_FILE — cannot run the paid chec
 
 function baseEnv() {
   const env = { ...process.env };
-  for (const k of ["BURNER_KEY", "SMOKE_EXPECT", "SMOKE_TARGET", "TARGET_URL", "SMOKE_RECEIPT_OUT"]) delete env[k];
+  for (const k of ["BURNER_KEY", "SMOKE_EXPECT", "SMOKE_TARGET", "TARGET_URL", "SMOKE_RECEIPT_OUT", "SMOKE_NETWORK"]) delete env[k];
   env.SMOKE_ROUTE = "/api/external-canary";
   env.KEY_FILE = KEY_FILE;
   return env;
@@ -66,6 +66,23 @@ try {
   runCase("TARGET_URL names another origin", { TARGET_URL: OTHER, SMOKE_EXPECT: "" },
     `smoke-buy: refusing to pay "${OTHER}": not our service. Set ALLOW_EXTERNAL_PAID_TARGET=1 to pay another origin.`);
   runCase("TARGET_URL on loopback", { TARGET_URL: "http://127.0.0.1:9", SMOKE_EXPECT: "" }, NO_KEY);
+
+  // The pay network: Base unless SMOKE_NETWORK names another EVM buyer chain
+  // (a name or its CAIP-2 id); anything else is refused before a key is read.
+  runCase("unknown pay network", { SMOKE_NETWORK: "solana", SMOKE_EXPECT: "" },
+    'smoke-buy: SMOKE_NETWORK "solana" is not an EVM chain this check pays on (base, arc, celo, polygon, arbitrum, robinhood, or a CAIP-2 id of one); not paying');
+  runCase("two pay networks", { SMOKE_NETWORK: "base,celo", SMOKE_EXPECT: "" },
+    'smoke-buy: SMOKE_NETWORK "base,celo" is not an EVM chain this check pays on (base, arc, celo, polygon, arbitrum, robinhood, or a CAIP-2 id of one); not paying');
+  runCase("pay network by name", { SMOKE_NETWORK: " Celo ", SMOKE_EXPECT: "" }, NO_KEY);
+  runCase("pay network by CAIP-2 id", { SMOKE_NETWORK: "eip155:137", SMOKE_EXPECT: "" }, NO_KEY);
+  {
+    const { smokeNetwork } = await import("./lib/smoke-network.js");
+    check(smokeNetwork("") === "eip155:8453" && smokeNetwork(undefined) === "eip155:8453", "no SMOKE_NETWORK pays on Base");
+    check(smokeNetwork("celo") === "eip155:42220" && smokeNetwork("eip155:42161") === "eip155:42161" && smokeNetwork("Robinhood") === "eip155:4663", "a chain name or id maps to its one CAIP-2 network");
+    check(smokeNetwork("eip155:1") === null && smokeNetwork("tempo") === null && smokeNetwork("base celo") === null, "a chain outside the buyer table maps to nothing");
+    const src = readFileSync(SCRIPT, "utf8");
+    check(/const SMOKE_NETWORKS = \[SMOKE_NETWORK\];/.test(src) && !/SMOKE_NETWORKS = \["eip155:8453"\]/.test(src), "the scheme and the signing guard are registered for that one network only");
+  }
 
   // Receipt output preflight.
   const existing = join(TMP, "existing-receipt.json");

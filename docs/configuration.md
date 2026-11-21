@@ -12,7 +12,7 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1077 variables in 110 groups.
+1079 variables in 110 groups.
 
 ## Contents
 
@@ -1179,6 +1179,8 @@ may still clamp it, and the read site is the reference.
 | `SOR_CHAIN_REFUSAL_OURS_MIN` | Router chain refusal ours minimum. |  | `src/x402-buyer.js` |
 | `SOR_CHAIN_REFUSAL_WINDOW_MS` | Router chain refusal window, in milliseconds. |  | `src/x402-buyer.js` |
 | `SOR_EVM_CHAINS` | Router EVM chains. |  | `src/evm-buyer-chains.js` |
+| `SOR_EVM_UNPROVEN_CHAINS` | EVM chains other than Base on which the router tries a seller below the settlement floor under the unproven ceiling (comma separated names or CAIP-2 ids; unset = Base only). |  | `src/base-unproven.js` |
+| `SOR_EVM_UNPROVEN_MAX_USD` | Router unproven ceiling per call on the chains SOR_EVM_UNPROVEN_CHAINS lists, in USD (default 0.01; 0 or off switches them off). |  | `src/base-unproven.js` |
 | `SOR_EXTERNAL_DEADLINE_MS` | Router external deadline, in milliseconds. |  | `src/tools/route-execute.js` |
 | `SOR_EXTERNAL_ENABLED` | Router external enabled (switch). |  | `src/server.js` |
 | `SOR_MAX_CANDIDATES` | Router maximum candidates. | `3` | `src/tools/route-execute.js` |

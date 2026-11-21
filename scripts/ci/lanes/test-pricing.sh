@@ -125,6 +125,8 @@ t node scripts/test-avm-buyer-legacy-network.js
 t node scripts/test-dispatch-eligibility.js
 # The router's buyer on every EVM chain SOR_EVM_CHAINS enables
 t node scripts/test-evm-buyer-chains.js
+# The unproven-seller tier on the other EVM router chains: off until listed, own ceiling, shared daily caps, label and payer (offline, one free-mode boot pair)
+t node scripts/test-evm-unproven-chains.js
 # Routes that sell personal data about individuals stay listed and are never ranked, labeled eligible or paid; worker thread agrees (in-process pool + a free boot, offline)
 t node scripts/test-router-people-data.js
 # The raw-text gate before the category patterns never skips text the normalized gate would pass (offline)

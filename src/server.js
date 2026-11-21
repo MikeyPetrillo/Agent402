@@ -863,7 +863,7 @@ import { flushXSearchStats, xSearchStatsReport, xSearchAuthorsStatus } from "./x
 import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
-import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
+import { dispatchEligibility, dispatchLegend, unprovenLaneAtLivePayTo } from "./dispatch-eligibility.js";
 import { routeExcludedCategory } from "./route-category.js";
 import { tempoCandidateOf, resolvedCandidateOf } from "./sor-candidates.js";
 import { baseUnprovenAllowanceUsd, configureUnprovenSharedPayTos } from "./base-unproven.js";
@@ -1798,11 +1798,12 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
   // `executeViaWhenEligible` and `executeViaCallableNow` says false in so many
   // words. The tier is still useful (it is what the buyer would pay once the
   // seller proves out), it just must not look like a button.
-  // A row in the Base unproven tier IS dispatched (after every proven
-  // candidate, src/base-unproven.js and resolveExternalSeller), so it is
-  // callable now too, marked as the unproven lane.
+  // A row in the unproven tier (Base's, or a listed chain's) IS dispatched
+  // (after every proven candidate, src/base-unproven.js and
+  // resolveExternalSeller), so it is callable now too, marked as the
+  // unproven lane.
   const { executeVia, ...rest } = row;
-  const unprovenLane = !verdict.eligible && rowLevel && verdict.chains?.base?.unprovenTier === true;
+  const unprovenLane = !verdict.eligible && rowLevel && Object.values(verdict.chains || {}).some((c) => c?.unprovenTier === true);
   const affordance = executeVia === undefined ? {} : (verdict.eligible
     ? { executeVia, executeViaCallableNow: true }
     : unprovenLane
@@ -1995,7 +1996,8 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     // THE EVM FAMILY: Base, and every other chain src/evm-buyer-chains.js
     // lists that SOR_EVM_CHAINS enables (route-execute never asks for one it
     // does not). One gate for all of them, keyed on the chain's CAIP-2 id;
-    // the unproven tier below stays Base's.
+    // the unproven tier below is Base's and each chain's the operator lists
+    // (SOR_EVM_UNPROVEN_CHAINS), read from the same labelled verdict.
     const evmCfg = evmBuyerChain(chain);
     const { results } = await routeRows({ query: task, top: onlyUrl ? 200 : 20, include: "external", ...(chain !== "base" ? { networkFilter: evmCfg.caip2, strictNetwork: true } : {}), ...indexCtx() });
     // The SAME evidence object every public label reads (dispatchEvidence):
@@ -2040,7 +2042,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // else wrong and a price within the ceiling. Kept, marked, and
         // ordered after every proven candidate; paid only at the wallet its
         // own live 402 names (below) and never above the ceiling (payX402).
-        if (!eligible && chain === "base" && verdict.chains.base?.unprovenTier === true) {
+        if (!eligible && verdict.chains[chain]?.unprovenTier === true) {
           r.unproven = true;
           gateDrops.byReason.unproven_admitted = (gateDrops.byReason.unproven_admitted || 0) + 1;
           return true;
@@ -2316,13 +2318,14 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // gate with the origin's binding and the address its live 402 actually
         // asks us to pay: it counts only when THAT wallet's own evidence clears
         // the floor; unreadable is not a match.
-        // An UNPROVEN Base candidate has no evidence to bind; it is pinned to
-        // the address its own live 402 names instead, and an unreadable one
-        // is not paid (the payment re-checks the accept it signs against it).
-        if (live && chain === "base" && r.unproven) {
+        // An UNPROVEN candidate has no evidence to bind; it is pinned to
+        // the address its own live 402 names on the chain being paid instead,
+        // and an unreadable one is not paid (the payment re-checks the accept
+        // it signs against it).
+        if (live && isEvmBuyerChain(chain) && r.unproven) {
           const livePayTo = await readLivePayTo();
           if (!livePayTo) {
-            console.warn(`[sor] skipping unproven Base candidate ${r.seller}: its live payTo could not be read`);
+            console.warn(`[sor] skipping unproven ${chain} candidate ${r.seller}: its live payTo could not be read`);
             live = false;
           } else {
             // The unproven lane is the label's (withDispatchFields): the same
@@ -2331,16 +2334,16 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
             // without this an origin whose withheld history sits at a shared
             // wallet (evidence_payto_shared, which the label keeps out of the
             // lane) was paid in it.
-            const lane = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: ["base"], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null, evidence: r.binding || undefined, livePayTo });
-            if (lane.chains.base?.unprovenTier !== true) {
-              console.warn(`[sor] skipping unproven Base candidate ${r.seller}: ${lane.chains.base?.detail || lane.reason} at its live payTo`);
+            const lane = unprovenLaneAtLivePayTo({ chain, row: r, livePayTo, minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS });
+            if (lane?.unprovenTier !== true) {
+              console.warn(`[sor] skipping unproven ${chain} candidate ${r.seller}: ${lane?.detail || lane?.reason || "not in the lane"} at its live payTo`);
               live = false;
               gateDrops.total++;
-              const why = lane.chains.base?.reason || "other";
+              const why = lane?.reason || "other";
               gateDrops.byReason[why] = (gateDrops.byReason[why] || 0) + 1;
             } else {
               r.chainProvenPayTo = livePayTo;
-              console.log(`[sor] admitting Base candidate ${r.seller} as UNPROVEN (${r.priceUsd} is within the unproven ceiling) - tried after proven sellers`);
+              console.log(`[sor] admitting ${chain} candidate ${r.seller} as UNPROVEN (${r.priceUsd} is within the unproven ceiling) - tried after proven sellers`);
             }
           }
         }
@@ -2377,7 +2380,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     // `wire` rides through: a Tempo candidate settles over MPP and its receipt
     // must say so (the first live Tempo SOR buy labelled it x402, 2026-08-27).
     if (live) {
-      resolved.push(resolvedCandidateOf(r, { provenPayTo: (r.unproven && chain === "base" && r.chainProvenPayTo) || provenPayToByOrigin?.get(norm(r.seller)) || r.chainProvenPayTo || null, evidenceWallets }));
+      resolved.push(resolvedCandidateOf(r, { provenPayTo: (r.unproven && isEvmBuyerChain(chain) && r.chainProvenPayTo) || provenPayToByOrigin?.get(norm(r.seller)) || r.chainProvenPayTo || null, evidenceWallets }));
       // Only PROVEN candidates count toward the limit: an unproven one must
       // never crowd out a proven seller ranked below it.
       if (resolved.filter((x) => !x.unproven).length >= Math.max(1, limit)) break;

@@ -903,6 +903,8 @@
     "SOR_CHAIN_REFUSAL_OURS_MIN": "Router chain refusal ours minimum.",
     "SOR_CHAIN_REFUSAL_WINDOW_MS": "Router chain refusal window, in milliseconds.",
     "SOR_EVM_CHAINS": "Router EVM chains.",
+    "SOR_EVM_UNPROVEN_CHAINS": "EVM chains other than Base on which the router tries a seller below the settlement floor under the unproven ceiling (comma separated names or CAIP-2 ids; unset = Base only).",
+    "SOR_EVM_UNPROVEN_MAX_USD": "Router unproven ceiling per call on the chains SOR_EVM_UNPROVEN_CHAINS lists, in USD (default 0.01; 0 or off switches them off).",
     "SOR_EXTERNAL_DEADLINE_MS": "Router external deadline, in milliseconds.",
     "SOR_EXTERNAL_ENABLED": "Router external enabled (switch).",
     "SOR_MAX_CANDIDATES": "Router maximum candidates.",

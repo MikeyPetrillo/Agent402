@@ -220,7 +220,7 @@ export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getPayT
           "advertisedNetworks is what the seller publishes, which is not proof it settles there",
           "no liveness probe is performed at call time - a listed seller can still be down right now; `paywall` is from the last crawl, and null means not yet probed rather than healthy",
           "healthScore measures whether the manifest parsed, NOT whether paid routes work - read it with `paywall`, never instead of it",
-          "routableByOurRouter is true when either lane can pay; the unproven lane is Base only, tried after every proven seller for the task, and flagged unproven on the buyer's receipt - read routableAsProven for the proven-only answer",
+          "routableByOurRouter is true when either lane can pay; the unproven lane read here is the Base one, tried after every proven seller for the task, and flagged unproven on the buyer's receipt - read routableAsProven for the proven-only answer",
           "routerGate.routerUnderlyingCapUsd is the cheapest route-execute tier's cap; lanes.proven.tiers lists every tier that can pay a proven route",
         ],
         evidenceSource: "x402 seller crawl + on-chain settlement counts + the router's per-route dispatch verdicts",
