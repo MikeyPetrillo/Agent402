@@ -205,7 +205,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `KEPT_AT_ONCE_MS` (5 min, the settlement refresh's age) and covers every run it has in flight
   plus this one (`lowerOf`, with another container's runs added) is admitted on it at once, with no
   read waited for (`admittedAtOnceOnKeptRead`); only before the judgment asked for a read of its
-  own, and only on a read begun after another container's view when one holds a run. A run that
+  own, and only on a read begun after another container's view when one holds a run. With the
+  shared half on, the wallet's settled mark is read first (once per judgment, `readSettledMark`):
+  a settlement another container made drops the kept read, and the run is judged on a new one. A run that
   read does not cover, or an older read, is judged as before (the one-price mirror still refuses).
   *The read gap:* a wallet's reads are at least `INFLIGHT_COVER_READ_GAP_MS` apart (default and
   most 10 s, the read cache's length, past which a gap changes nothing; least 1 s); inside it a

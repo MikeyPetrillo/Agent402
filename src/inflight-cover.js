@@ -98,7 +98,10 @@
 //       judged at once: a last good read no older than the at-once window
 //         that covers every run in flight plus this one (less what left
 //         since) admits the run at once, with no read waited for. A run it
-//         does not cover is judged as above. The window bounds how long a
+//         does not cover is judged as above. With a shared store the
+//         wallet's last-settlement mark is read first, and a settlement
+//         another container made drops the read (the run then waits for a
+//         new one). The window bounds how long a
 //         wallet that moved funds out elsewhere after that read can still be
 //         admitted on it (a transfer this server did not make is seen only by
 //         a new read).
@@ -998,6 +1001,16 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       readUntil = Math.max(waitUntil, mono() + FOREIGN_REREAD_MS);
       return true;
     };
+    // The wallet's last-settlement mark in the shared store, read at most
+    // once in a judgment (markRead). A settlement this process did not make
+    // was never taken off this wallet's reads, so the last good read goes.
+    const readSettledMark = async () => {
+      try {
+        const m = await shared.flagGet(SETTLED_NAME, coverKey, { now: Date.now() });
+        const at = m?.ok && m.until > Date.now() ? m.until - SETTLED_MARK_MS : 0;
+        if (at > w.settledAt) { w.settledAt = at; w.good = null; stats.foreignSettlementsSeen++; }
+      } catch { /* the mark could not be read: this process's own stands */ }
+    };
     for (;;) {
       if (terms.unproven) {
         // AN UNPROVEN SENDER is judged on no balance: the account it names
@@ -1027,13 +1040,7 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
         // is read once, before verify's proof is trusted.
         if (sharedId && !markRead) {
           markRead = true;
-          try {
-            const m = await shared.flagGet(SETTLED_NAME, coverKey, { now: Date.now() });
-            const at = m?.ok && m.until > Date.now() ? m.until - SETTLED_MARK_MS : 0;
-            // A settlement this process did not make: its amount was never
-            // taken off this wallet's reads, so the last good read goes.
-            if (at > w.settledAt) { w.settledAt = at; w.good = null; stats.foreignSettlementsSeen++; }
-          } catch { /* the mark could not be read: this process's own stands */ }
+          await readSettledMark();
           continue;
         }
         const settledSince = w.settledAt > arrived;
@@ -1055,6 +1062,16 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       if (!asBefore && !lastRec && freshAfter === 0 && !followUpRead) {
         const g = w.good;
         if (g && g.seq > (foreign ? sharedSeq : 0) && Date.now() - g.at <= keptAtOnceMs()) {
+          // With other containers, a kept read is trusted only once their
+          // settlements have been looked for: the wallet's mark is read
+          // first (once in this judgment), and a settlement made elsewhere
+          // drops the read, so the run is judged on a new one (a burst
+          // shares it; a wallet that can pay is admitted on it).
+          if (sharedId && !markRead) {
+            markRead = true;
+            await readSettledMark();
+            continue;
+          }
           const now0 = judgedSet(ledger.get(coverKey) || { count: 0, atomic: 0n, settling: 0 }, others);
           if (lowerOf(g) >= now0.atomic + terms.atomic) { how = "covered"; stats.admittedAtOnceOnKeptRead++; break; }
         }

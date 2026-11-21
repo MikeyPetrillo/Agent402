@@ -24,6 +24,7 @@ const ENTRIES = [
     date: "2026-11-21",
     title: "Balance checks for calls in flight",
     items: [
+      "Payments: On a deployment with more than one server, a wallet's call is admitted at once on its last balance read only when no other server has settled a payment of that wallet since; when one has, the balance is read again first and the calls that arrived together share that read.",
       "Operations: A balance read that is dropped before it is made gives a unit of the daily read budget back only when it took one, so the day's count matches the reads made.",
     ],
   },
