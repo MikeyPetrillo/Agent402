@@ -78,8 +78,8 @@ print("AGENT402 — agent402.tools/api/hash ($0.001, mainnet)")
 print("=" * 60 + "\n")
 
 result = agent(
-    'POST to https://agent402.tools/api/hash with Content-Type application/json '
-    'and body {"text":"hello world","algo":"sha256"}. '
+    'POST to https://agent402.tools/api/hash with Content-Type application/json, '
+    'the header X-Payment-Offers: mpp, and body {"text":"hello world","algo":"sha256"}. '
     "Report: (1) the hex value returned, (2) whether a Payment-Receipt header "
     "was present and its decoded contents."
 )

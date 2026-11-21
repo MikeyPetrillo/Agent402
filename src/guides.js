@@ -17,6 +17,7 @@ import { routerPayChains } from "./tools/route-execute.js";
 import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE, METERED_MAX_INPUT_CHARS_CEILING } from "./tools/llm-gateway-kit.js";
 import { routingProofSentence, routerRankingSentence } from "./routing-proof.js";
 import { mppEvmDiscoveryRails } from "./mpp-shim.js";
+import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
 import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "./mcp-flagship.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
@@ -116,6 +117,10 @@ function resolveGuideTokens(text, catalog) {
     // (isLongRunningSlug), which take x402 exact on EVM chains only, as a
     // code-formatted list. A list with none of them is an error.
     .replace(/\{\{evmOnly:([a-z0-9,-]+)\}\}/g, (_, list) => evmOnlyStagesText(list.split(",")))
+    // {{mppOfferGate}}: which clients get the x402 offer alone and how they
+    // get the MPP challenges back (src/mpp-offer-gate.js), as a sentence led
+    // by a space; nothing when the gate is off or no MPP challenge is sent.
+    .replace(/\{\{mppOfferGate\}\}/g, () => { const s = mppOfferGateSentenceIfOffered(); return s ? ` ${s}` : ""; })
     .replace(/\{\{routerTiers\}\}/g, () => {
       if (!bySlug) return "The tiers and their prices are listed at [/api/pricing](https://agent402.tools/api/pricing).";
       const rows = [...bySlug.values()]
@@ -1533,7 +1538,7 @@ relay - not EIP-3009, no x402 facilitator involved, a genuinely separate
 settlement path from everything below. A 402 on this server carries both
 \`evm\` and \`tempo\` MPP challenges (the buyer's client picks whichever it
 speaks), except on wallet-identity-bound routes (memory, usage) and
-long-running ones (the report products), which carry no \`tempo\` challenge.
+long-running ones (the report products), which carry no \`tempo\` challenge.{{mppOfferGate}}
 Only \`evm\`'s mechanics are what the rest of this guide describes.
 
 ## What actually changes on the wire (the \`evm\` method)
@@ -2260,6 +2265,11 @@ connector as an MCP server target. Paid calls ride
 the agent forwards our \`402\` payload, AgentCore signs it from its managed
 wallet, and the retry carries the signed payment header; every Agent402 route
 answers a stock x402 v2 challenge, so nothing on our side needs configuring.
+The Payments plugin's client (User-Agent \`python-httpx\`) gets the x402 offer
+alone and pays over x402 with no setup; to pay over MPP on Tempo, send
+\`X-Payment-Offers: mpp\` with the request, hold Tempo funds, and configure
+the plugin with \`network_preferences_config=["tempo:4217", "eip155:4217"]\`
+(Tempo first) and \`buyer_pays_gas_fees=True\`.
 
 ## VS Code
 

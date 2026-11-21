@@ -45,13 +45,16 @@ const answer = await hashTool.handler(BODY);
 ok(answer && /^[0-9a-f]{64}$/.test(answer.hex || ""), `the hash tool answers a hex digest (${Object.keys(answer || {}).join(", ")})`);
 
 // --- 1. our real 402 -------------------------------------------------------------
-const srv = await bootPaidServer({ label: "agentcore-recipe" });
+// MPP on, as in production: the recipe's urllib client is not a gated
+// User-Agent, so its 402 carries the MPP challenges beside the x402 offer.
+const srv = await bootPaidServer({ label: "agentcore-recipe", env: { MPP_SECRET_KEY: "agentcore-recipe-secret" } });
 let real;
 try {
-  const r = await fetch(`${srv.url}/api/hash`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(BODY) });
-  real = { status: r.status, header: r.headers.get("payment-required") || "", body: await r.text() };
+  const r = await fetch(`${srv.url}/api/hash`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json", "user-agent": "Python-urllib/3.12" }, body: JSON.stringify(BODY) });
+  real = { status: r.status, header: r.headers.get("payment-required") || "", www: r.headers.get("www-authenticate") || "", body: await r.text() };
 } finally { await srv.stop(); }
 ok(real.status === 402 && real.header.length > 100, `our POST /api/hash answers 402 with a PAYMENT-REQUIRED header (${real.status})`);
+ok(/^Payment\s/i.test(real.www), "and, to the recipe's urllib client, MPP challenges in WWW-Authenticate");
 
 // --- 2. the stand-in seller ------------------------------------------------------
 const PROOF = "stub-signed-payment";
@@ -63,7 +66,7 @@ const seller = createServer((req, res) => {
     const paid = req.headers["payment-signature"] === PROOF;
     seen.push({ method: req.method, url: req.url, paid, body: raw });
     if (!paid) {
-      res.writeHead(402, { "content-type": "application/json", "payment-required": real.header });
+      res.writeHead(402, { "content-type": "application/json", "payment-required": real.header, "www-authenticate": real.www });
       return res.end(real.body);
     }
     res.writeHead(200, { "content-type": "application/json", "payment-response": "stub-settlement" });
@@ -120,7 +123,10 @@ try {
   const call = JSON.parse(readFileSync(record, "utf8"));
   const req = call.payment_required_request || {};
   const hdrs = Object.fromEntries(Object.entries(req.headers || {}).map(([k, v]) => [k.toLowerCase(), v]));
-  ok(req.statusCode === 402 && hdrs["payment-required"] === real.header && req.body === real.body, "the payment service is handed our 402 whole: status, PAYMENT-REQUIRED header and body");
+  ok(req.statusCode === 402 && hdrs["payment-required"] === real.header && req.body === real.body, "the payment service is handed our 402: status, PAYMENT-REQUIRED header and body");
+  // The payment service pays an MPP challenge whenever one is handed to it;
+  // the recipe pays over x402, so it hands over the x402 offer alone.
+  ok(!("www-authenticate" in hdrs), `the payment service is handed no WWW-Authenticate challenge (got ${Object.keys(hdrs).join(", ")})`);
   ok(call.payment_instrument_id === "pi-test" && call.payment_session_id === "ps-test" && typeof call.client_token === "string" && call.client_token.length >= 32, "the recipe names its instrument and session and sends a fresh client token");
   ok(seen.length === 2 && !seen[0].paid && seen[1].paid && JSON.parse(seen[1].body).text === "hello world", "one unpaid call, then one retry carrying the returned payment header and the same body");
 

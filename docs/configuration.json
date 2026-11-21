@@ -548,6 +548,7 @@
     "MPP_EVM_DOMAIN_FALLBACK": "MPP EVM domain fallback.",
     "MPP_EVM_DOMAIN_FALLBACK_MAX_RESPONSES": "MPP EVM domain fallback maximum responses.",
     "MPP_EVM_DOMAIN_FALLBACK_TTL_MS": "MPP EVM domain fallback lifetime, in milliseconds.",
+    "MPP_OFFER_WITHHOLD_USER_AGENTS": "Comma list of User-Agent prefixes whose 402s carry no MPP challenge, only the x402 offer (default python-httpx/; off turns it off). The header X-Payment-Offers: mpp, or an Accept-Payment header naming an MPP method, restores the challenges.",
     "MPP_INDEX_CACHE_FILE": "MPP index cache file path.",
     "MPP_INDEX_CRAWL": "on crawls the MPP seller index regardless of environment detection; off stops it.",
     "MPP_INDEX_PULL_MS": "MPP index pull, in milliseconds.",

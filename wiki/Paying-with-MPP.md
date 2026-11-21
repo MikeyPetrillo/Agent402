@@ -2,7 +2,7 @@
 
 **MPP** (Machine Payments Protocol) is an open, IETF-track HTTP payment scheme: the server answers `402` with `WWW-Authenticate: Payment`, the client replies with `Authorization: Payment`, and a settled response carries a signed `Payment-Receipt`. Spec and tooling: [tempoxyz/mpp](https://github.com/tempoxyz/mpp) · [mpp.dev](https://mpp.dev) · client/server library [`mppx`](https://www.npmjs.com/package/mppx).
 
-Every paid endpoint on Agent402.Tools is **dual-stack**: the same 402 carries an x402 offer *and* an MPP challenge. Same URL, same price - the buyer's client picks the wire. MPP is one of the two wires underneath [[Agentic Finance]], agents that pay and get paid on their own; Agent402 is its applied layer.
+Every paid endpoint on Agent402.Tools is **dual-stack**: the same 402 carries an x402 offer *and* an MPP challenge (a `python-httpx` client gets the x402 offer alone unless it asks for MPP; see [which routes offer which method](#which-routes-offer-which-method-and-in-what-order)). Same URL, same price - the buyer's client picks the wire. MPP is one of the two wires underneath [[Agentic Finance]], agents that pay and get paid on their own; Agent402 is its applied layer.
 
 ## What settles, where
 
@@ -19,6 +19,8 @@ The 402 lists the challenges in a fixed order: `tempo` (one per currency, USDC.e
 - `evm` is offered on every paid route.
 - `tempo` is offered on every paid route except the identity-bound ones (wallet-keyed memory, usage history, attestations, feedback), whose identity is the signed EIP-3009 payer, and the long-running ones (report products, video, the fast and pro image tiers, seller payability checks), which can outlive a Tempo credential.
 - `stripe` is offered on routes priced $0.50 or more. Identity-bound routes and the routes that buy from an outside seller (the route-execute tiers, `seller-payability`, `/api/decide/execute` and the flight routes) never offer it.
+
+A client whose User-Agent starts with `python-httpx/` gets the x402 offer alone: its `402` carries the `PAYMENT-REQUIRED` header and the same body, with no `WWW-Authenticate: Payment` challenge, so it pays over x402. To be offered MPP from such a client, send `X-Payment-Offers: mpp` (or `all`) with the request, or an `Accept-Payment` header naming the MPP methods it pays with (for example `Accept-Payment: tempo/charge`, which MPP client libraries send on their own); the `402` then carries the challenges above in the same order. A request that carries an MPP credential is always verified as usual.
 
 Each paid operation in [`/openapi.json`](https://agent402.tools/openapi.json) lists the same offers in the same order under `x-payment-info.offers` (method, currency, chain, amount in the currency's smallest unit), and [`/.well-known/x402`](https://agent402.tools/.well-known/x402) summarizes them under `mpp`.
 
