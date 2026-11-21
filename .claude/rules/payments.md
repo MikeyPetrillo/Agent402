@@ -44,6 +44,16 @@ paths:
 Loaded when a payment-path file is read. The settlement-ordering rule in the root
 `CLAUDE.md` governs everything here.
 
+- **One settlement, one sale:** a Solana settlement signature stands behind one sale
+  (`src/sale-repeats.js`). The ledger's writer does not write a second sale under one (file and
+  database modes, the dead-letter replay included; counted on `/__operator/sales.json`
+  `settlementRepeats`), and every statement in `src/sales-ledger.js` that names the paying,
+  counted or buyer rails carries `ONCE_SQL` (or reads `WINDOW_PAGE`), so a repeat row already on
+  the books is in no count or sum (`scripts/test-sale-repeats.js` compares every reader on a file
+  with and without repeat rows; add a new summing reader to its READERS). The rule is not an EVM
+  hash's, a card invoice's or a private-rail transaction's: each can stand behind several sales.
+  `scripts/sale-repeats.js` lists stored repeats (dry run by default); its `--apply` is the
+  owner's call.
 - **Idempotency:** opt-in `Idempotency-Key` (and x402 `payment-identifier` as an alias), bound
   to credential + route + query + body, committed only after a settled 200. With no explicit key, an
   x402 EVM payment's identity (network, signed payer, nonce; `paymentNonceIdentityOf`) is the

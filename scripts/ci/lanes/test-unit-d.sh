@@ -301,6 +301,8 @@ t node scripts/test-code-run-caps.js
 t node scripts/test-safe-regex.js
 # Sales ledger unit tests (named sales, internal/external classification, revenue math — offline)
 t node scripts/test-sales-ledger.js
+# One settlement, one sale: the writer does not write a second sale for a Solana signature, every counting reader reads a file with repeat rows as the file without them, the operator script's dry run changes nothing (offline)
+t node scripts/test-sale-repeats.js
 # Referral sales in the sales figures: once, outside, under the slug, at the gross (never the net, never named); the on-chain buyer behind the split contract; the operator reconciliation against a seeded book
 t node scripts/test-referral-counting.js
 # Weekly outside MPP agents: counts only, internal excluded, new vs returning over all history, operator-only route
