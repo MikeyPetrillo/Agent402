@@ -754,7 +754,7 @@ may still clamp it, and the read site is the reference.
 | `OPENROUTER_LOW_KEY_LIMIT_FRACTION` | Openrouter low key limit fraction. |  | `src/tools/llm-gateway-kit.js` |
 | `OPENROUTER_MANAGEMENT_KEY` | Model aggregator management key, read only for the credits low-water alarm. |  | `src/tools/llm-gateway-kit.js` |
 | `OPENROUTER_PROVIDER_SORT` | Openrouter provider sort. | `on` | `src/tools/llm-gateway-kit.js` |
-| `OPENROUTER_TTS_ENABLED` | Openrouter speech enabled (switch). |  | `src/server.js`, `src/tools/llm-gateway-kit.js` |
+| `OPENROUTER_TTS_ENABLED` | Openrouter speech enabled (switch). |  | `src/changelog.js`, `src/server.js`, `src/tools/llm-gateway-kit.js` |
 
 ## OUR
 
@@ -842,7 +842,7 @@ may still clamp it, and the read site is the reference.
 | `POW_DB_PATH` | Proof-of-work database path. |  | `src/pow.js` |
 | `POW_DIFFICULTY` | Proof-of-work difficulty in leading zero bits (8 to 28). |  | `src/pow.js` |
 | `POW_PG_REFRESH_MS` | Proof-of-work Postgres refresh, in milliseconds. |  | `src/pow.js` |
-| `POW_SECRET` | Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process). | `traffic` | `src/discovery-refusals.js`, `src/first-call-allowance.js`, `src/hangup-forgiveness.js` and 10 more |
+| `POW_SECRET` | Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process). | `traffic` | `src/changelog.js`, `src/discovery-refusals.js`, `src/first-call-allowance.js` and 11 more |
 | `POW_TTL_SECONDS` | Proof-of-work lifetime, in seconds. |  | `src/pow.js` |
 
 ## PRICE
@@ -855,7 +855,7 @@ may still clamp it, and the read site is the reference.
 | `PRICE_WEBHOOK_DELIVERY_INTERVAL_MS` | How often due price webhook deliveries are sent, in milliseconds. | `60000` | `src/price-webhooks.js` |
 | `PRICE_WEBHOOK_MAX` | Most price webhook registrations this server keeps. | `5000` | `src/price-webhooks.js` |
 | `PRICE_WEBHOOK_MAX_PER_HOST` | Most price webhook registrations one target host may hold. | `20` | `src/price-webhooks.js` |
-| `PRICE_WEBHOOK_SIGNING_KEY` | Key the price webhook secrets are derived from (unset: POW_SECRET; neither set: a registration answers 503 and nothing is stored or sent). |  | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_SIGNING_KEY` | Key the price webhook secrets are derived from (unset: POW_SECRET; neither set: a registration answers 503 and nothing is stored or sent). |  | `src/changelog.js`, `src/price-webhooks.js` |
 
 ## PROGRAMMATIC
 
@@ -1211,8 +1211,8 @@ may still clamp it, and the read site is the reference.
 | `SOR_CHAIN_REFUSAL_OURS_MIN` | Router chain refusal ours minimum. |  | `src/x402-buyer.js` |
 | `SOR_CHAIN_REFUSAL_WINDOW_MS` | Router chain refusal window, in milliseconds. |  | `src/x402-buyer.js` |
 | `SOR_EVM_CHAINS` | Router EVM chains. |  | `src/evm-buyer-chains.js` |
-| `SOR_EVM_UNPROVEN_CHAINS` | EVM chains other than Base on which the router tries a seller below the settlement floor under the unproven ceiling (comma separated names or CAIP-2 ids; unset = Base only). |  | `src/base-unproven.js` |
-| `SOR_EVM_UNPROVEN_MAX_USD` | Router unproven ceiling per call on the chains SOR_EVM_UNPROVEN_CHAINS lists, in USD (default 0.01; 0 or off switches them off). |  | `src/base-unproven.js` |
+| `SOR_EVM_UNPROVEN_CHAINS` | EVM chains other than Base on which the router tries a seller below the settlement floor under the unproven ceiling (comma separated names or CAIP-2 ids; unset = Base only). |  | `src/base-unproven.js`, `src/changelog.js` |
+| `SOR_EVM_UNPROVEN_MAX_USD` | Router unproven ceiling per call on the chains SOR_EVM_UNPROVEN_CHAINS lists, in USD (default 0.01; 0 or off switches them off). |  | `src/base-unproven.js`, `src/changelog.js` |
 | `SOR_EXTERNAL_DEADLINE_MS` | Router external deadline, in milliseconds. |  | `src/tools/route-execute.js` |
 | `SOR_EXTERNAL_ENABLED` | Router external enabled (switch). |  | `src/server.js` |
 | `SOR_MAX_CANDIDATES` | Router maximum candidates. | `3` | `src/tools/route-execute.js` |
@@ -1611,7 +1611,7 @@ may still clamp it, and the read site is the reference.
 | `MONITOR_SCHEDULER` | off stops the scheduler that runs recurring monitors. |  | `src/server.js` |
 | `MPPSCAN_API_URL` | Mppscan API URL. | `https://www.mppscan.com/api/trpc/servers.list` | `src/mpp-index.js` |
 | `MPPSCAN_DISCOVERY_URL` | Mppscan discovery URL. | `https://www.mppscan.com/` | `src/mpp-index.js` |
-| `NAMED_AUDIO_MODELS` | Comma list of the named speech and transcription model ids to serve beside the default chains, or all (unset: none). Each also needs its cost row, inside the route's margin bound. |  | `src/speech-additions.js` |
+| `NAMED_AUDIO_MODELS` | Comma list of the named speech and transcription model ids to serve beside the default chains, or all (unset: none). Each also needs its cost row, inside the route's margin bound. |  | `src/changelog.js`, `src/speech-additions.js` |
 | `NETWORKS_VERIFY_AGE_MS` | Networks verify age, in milliseconds. |  | `src/crawl-cadence.js` |
 | `NEW_CATALOG_QUOTE_BURST` | New catalog quote burst. | `60` | `src/x402-index.js` |
 | `NEYNAR_API_KEY` | Neynar API key (a credential, set on the host). |  | `src/tools/farcaster-social-kit.js`, `src/tools/onchain-identity-kit.js` |

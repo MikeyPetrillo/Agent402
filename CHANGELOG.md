@@ -4,24 +4,115 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
-## v2.10.0 - 2026-11-21
+## v2.11.0 - 2026-11-21
+
+### 2026-11-21 (a mid router tier, price webhooks and router benchmarks)
+Router:
+- `route-execute-mid` (`POST /api/route/execute-mid`) is a new execution
+  tier between `route-execute-plus` and `route-execute-max`: one flat price
+  for a tool priced above the plus tier's cap and at or under its own.
+  /api/pricing lists its price, and /api/route names the tier a tool needs
+  in `executeVia`.
+- `GET /api/router-benchmarks` gives this server's measurements of outside
+  sellers in aggregate: the share of the router's recorded purchases a
+  seller answered 200 after payment, and the uptime, responsiveness and
+  price-match scores of the sellers the router bought from beside the
+  indexed sellers it did not buy from. No seller is named, and a statistic
+  is published only when at least five sellers are scored on it.
+Tools:
+- `price-webhook` (`POST /api/price-webhook`) registers an https URL that
+  gets one signed POST when the list price of a tool it watches changes on
+  this server. The answer carries the subscription's id and its secret, each
+  delivery carries an `X-Agent402-Signature` header to check against that
+  secret, a 410 from the receiver removes the subscription, and `POST
+  /api/price-webhook/unsubscribe` removes it, free.
+Surfaces:
+- A tool priced per request can carry `fromInput` on `/api/pricing`: a small
+  valid body that its 402 quotes at or under the list price.
+Operations:
+- A server with no signing key (`PRICE_WEBHOOK_SIGNING_KEY`, else
+  `POW_SECRET`) answers a price webhook registration 503 and stores nothing;
+  `PRICE_WEBHOOK_DELIVERIES=off` holds deliveries while registrations and
+  removals keep working.
+- `SOR_EVM_UNPROVEN_CHAINS` lists EVM chains other than Base on which the
+  router tries a seller below the settlement floor, under one per-call
+  ceiling (`SOR_EVM_UNPROVEN_MAX_USD`) and the per-seller and daily windows
+  the Base tier uses. Unset, that tier stays on Base alone.
+- The Bazaar keep-alive pays a route priced per request with its `fromInput`
+  body, and never above the list price.
+
+### 2026-11-21 (checked coin prices, FRED terms and mailbox providers)
+Tools:
+- `price-coingecko` rows carry `stale` and, in USD, `divergencePct` against
+  a second source, and the answer's `check` names that source or says why no
+  check ran, as `crypto-price` does.
+- `exchange-rates` keeps its BTC-denominated answer (`perBtc`) and adds
+  `rate`, the same cross per 1 `base` (default btc; `base=usd`, `eur`, `eth`
+  or `xau` quotes another unit). A fiat row the European Central Bank
+  publishes carries `referenceRate` and `divergencePct`, the market cross's
+  gap to it in percent.
+- coins-list joins the routes that are retired and answer 410; coins-list
+  names coin-search as the replacement.
+- Each tool that reads FRED puts a `terms` field in its answer, linking
+  FRED's Terms of Use. `fred-series` answers a series a third party owns (a
+  copyright notice in its FRED notes) with a 400 that names the owner, and
+  `fred-release-observations` holds such series back and names them in
+  `withheld`.
+- `email-validate` adds `mailboxProvider`: who hosts the domain's mail
+  (`id`, `name`, `type`), read from the MX records it already looks up, and
+  null when the domain has no MX.
+- `asn-info` gives its owner-name lookup a 3 second limit of its own; when
+  the name cannot be read, `owner` is null and `ownerUnavailable` is true.
+- Input schemas, on `/openapi.json` too, carry `maxLength` on the string
+  fields a tool caps by length.
+Privacy:
+- /privacy names the public resolvers an `asn-info` lookup can pass through
+  when this server's own resolver cannot answer it.
+
+### 2026-11-21 (image-ocr turns, replay marks and Solana sales)
+Tools:
+- `image-ocr` reads images in turn across callers, each within a set time. A
+  caller's first image in ten minutes is never asked to give way to another
+  caller's waiting image; a call that waits out its time in line answers 503
+  with a Retry-After and keeps its place for its retry; and an image that
+  cannot be read in time answers 422 with a note to downscale it.
+- A freed audio decode slot goes to the waiting caller that holds the fewest
+  places, first come among equals, and wallets paying from one address take
+  their turn as one caller.
+Payments:
+- A settled payment's replay mark is kept about an hour after the call, or
+  until the authorization's own validBefore plus 10 minutes when that is
+  later, however far out that is (it was at most 30 days after the call).
+  /privacy and the dataHandling list on /.well-known/x402 state the hold.
+- A Solana payment refused because its transaction's recent blockhash is no
+  longer valid carries `reason: "blockhash-expired"`, whether that was read
+  when the payment was checked or when it was settled, and its hint says to
+  ask for a fresh 402 and build the transaction on a fresh blockhash.
+- A Solana settlement is booked as one sale: the sales ledger keeps at most
+  one sale for a settlement signature, and every count and sum of sales
+  reads it once.
+Refunds:
+- An answer that was charged and never delivered (the buyer left while it
+  settled) is served when the same payment is sent again, and its debt is
+  closed first. When the store does not confirm that close, the buyer is
+  asked to retry, and a buyer who does not retry keeps the debt owed.
 
 ### 2026-11-21 (balance checks for calls in flight)
 Payments:
-- On a deployment with more than one server, a wallet's call is admitted
-  at once on its last balance read only when no other server has settled a
+- On a deployment with more than one server, a wallet's call is admitted at
+  once on its last balance read only when no other server has settled a
   payment of that wallet since; when one has, the balance is read again
   first and the calls that arrived together share that read.
 - A Solana payment is counted against the balance of the token account it
   pays from. A wallet that pays from several token accounts at once is
   counted per account, each account covering its own calls in flight.
 - A Solana payment that names its accounts through an address lookup table
-  is counted against the largest single token account of the mint the
-  wallet holds.
+  is counted against the largest single token account of the mint the wallet
+  holds.
 Operations:
-- A balance read that is dropped before it is made gives a unit of the
-  daily read budget back only when it took one, so the day's count matches
-  the reads made.
+- A balance read that is dropped before it is made gives a unit of the daily
+  read budget back only when it took one, so the day's count matches the
+  reads made.
 
 ### 2026-11-21 (multisig Tempo payments and DNS names)
 Payments:
@@ -31,13 +122,88 @@ Payments:
 - Until then, and under any other config, calls paid that way run four at
   once per client address (`INFLIGHT_COVER_UNREAD_MAX` sets the number),
   whichever account each names; a call past that answers 429 with
-  `Retry-After: 5` and nothing is charged.
+  `Retry-After: 5` (`Retry-After: 30` on the report and media routes) and
+  nothing is charged.
 - Calls an account pays for with its own key, or with an access key Tempo
   confirms for it, are counted against that account's balance alone.
 Tools:
 - The DNS, mail and certificate tools look up a name in one normalized form
   (lowercase, no trailing dots or surrounding spaces), and `dns` answers
   with that form in `name`.
+
+### 2026-11-21 (the guide site, report links and the brand mark)
+Site:
+- The site menu, the openings of /learn and /how-to-pay, /llms.txt and
+  /llms-full.txt link ask402.ai, the maintainer's plain-language guide to
+  x402 and MPP for people.
+- /what-is-x402, /what-is-mpp and /learn/x402 are titled for how each
+  protocol runs on this server, and each links the guide's explainer for the
+  general question.
+- `/reports?product=<id>&input=<value>` opens the storefront with that
+  report selected and its field filled; nothing is submitted until the buyer
+  presses the button.
+- /integrations/agentcore covers AWS Bedrock AgentCore: catalog tools
+  through an AgentCore Gateway target, payment through AgentCore Payments,
+  and the buyer sample.
+- Social cards draw the brand mark from the logo file, and /logo.png,
+  /logo.svg, the favicons and the nav mark serve the same art.
+- Vulnerability reports go to security@agent402.tools; support, billing,
+  legal and abuse questions go to help@agent402.tools.
+Docs:
+- The MPP examples list the tokens the evm method signs for (USDC on Base
+  and on Celo), so they pay as written.
+Privacy:
+- /privacy says what a card checkout keeps when the link that led to it
+  names a listed site in `utm_source`: that name, with the sale, in Stripe's
+  record of the checkout and in the sales ledger, and nothing in the
+  browser.
+Surfaces:
+- The seller leaderboards (Base, Solana and MPP) rebuild every 12 hours,
+  each at its own fixed times an hour apart from the others, and never two
+  at once.
+Operations:
+- An issue a scheduled check opens carries a fixed title that names the
+  check and a body that links the run; the reading that tripped it stays in
+  the run log. A check whose issue body is its own saved state keeps that
+  body.
+
+### 2026-11-21 (a lower price for a returning wallet)
+Payments:
+- On a server that sets `RETURNING_WALLET_PRICE=on`, a buyer that names its
+  wallet in the `X-Agent402-Wallet` request header gets that call's 402 with
+  the route's x402 `exact` offer on EVM chains at a lower price, once the
+  wallet has paid on enough distinct days (`RETURNING_WALLET_MIN_PAID_DAYS`
+  inside `RETURNING_WALLET_WINDOW_DAYS`; `RETURNING_WALLET_DISCOUNT_BPS`
+  sets the discount). Every other offer, and every surface that publishes a
+  price, stays at list.
+- The lower price holds only for a payment signed by the named wallet: a
+  payment of the lower amount from any other wallet is answered 402 with the
+  list price, and nothing is charged.
+- Routes priced per request, metered and model-backed routes, and routes
+  whose effect outlives the answer or that spend this server's own wallet
+  are always quoted at list.
+Surfaces:
+- With the switch on, /llms.txt states the rule, an eligible route's 402
+  body states the offer in `returningWalletPrice`, and its operation in
+  /openapi.json lists the `X-Agent402-Wallet` header.
+
+### 2026-11-21 (named speech models)
+Gateway:
+- On a server that lists them in `NAMED_AUDIO_MODELS`, more speech models
+  (model-backed) can be named in `model` on `POST /v1/audio/speech`, each
+  with its own voices and the default chain behind it as fallbacks, at the
+  route's price and cap. `GET /v1/models` lists the ones the server serves,
+  and a request that names any other model is a 400.
+
+### 2026-11-21 (named transcription models)
+Tools:
+- On a server that lists them in `NAMED_AUDIO_MODELS`, more transcription
+  models (model-backed) can be named in `model` on the URL transcribe
+  routes, at the tier's price and cap and not beside `diarize`. A tier's
+  input schema lists the ones the server serves on it, the answer names the
+  model that served it, and a request that names any other model is a 400.
+
+## v2.10.0 - 2026-11-21
 
 ### 2026-11-21 (x402 by default for python-httpx clients)
 Payments:
