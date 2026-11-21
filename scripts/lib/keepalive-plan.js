@@ -28,8 +28,17 @@ export function usdMicros(price) {
 
 export const microsToUsd = (m) => Math.round(m) / 1e6;
 
+/** The body a quoted route's keep-alive buy sends: the row's `fromInput` (the
+ *  server publishes one only when its 402 quotes it at or under the list
+ *  price), else null. The buy still holds each signature to the list price. */
+export function fromInputOf(row) {
+  const v = row?.fromInput;
+  return v && typeof v === "object" && !Array.isArray(v) ? v : null;
+}
+
 /** Why a route is never bought by these passes, or null. A quoted route's list
- *  price is a floor (its 402 asks what the input costs); a model-priced route's
+ *  price is a floor (its 402 asks what the input costs), so one is bought only
+ *  with its fromInput, a body quoted inside the list price; a model-priced route's
  *  price follows the model a caller names; a route whose effect outlives the
  *  answer (the server's list, src/lasting-effect-slugs.js: it spends our own
  *  wallet, buys from an outside seller, or writes something lasting, such as
@@ -39,7 +48,7 @@ export const microsToUsd = (m) => Math.round(m) / 1e6;
  *  A row that carries the server's flags is read by them too. */
 export function exemptKind(row) {
   if (!row || typeof row !== "object") return "unreadable";
-  if (row.quoted === true) return "quoted";
+  if (row.quoted === true && !fromInputOf(row)) return "quoted";
   if (row.pricedByModel === true) return "model-priced";
   if (typeof row.slug === "string" && /^route-execute(-|$)/.test(row.slug)) return "route-execute";
   if (hasLastingEffect(row.slug) || row.lastingEffect === true || row.spendsOwnWallet === true || row.paysThirdPartySeller === true) return "lasting-effect";

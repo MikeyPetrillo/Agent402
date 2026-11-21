@@ -2688,6 +2688,22 @@ for (const def of Object.values(CATALOG)) {
   if (typeof def.quote === "function") def.quoteRange = { minUsd: floor, maxUsd: Number.isFinite(def.quoteMaxUsd) && def.quoteMaxUsd >= floor ? def.quoteMaxUsd : METERED_MAX_QUOTE_USD };
   else if (typeof def.tierQuote === "function") def.quoteRange = { minUsd: floor, maxUsd: Math.max(floor, FLAT_TIER_MAX_USD) };
 }
+// A quoted tool may declare `fromInput`: a small valid body its 402 quotes at
+// or under the list price. /api/pricing publishes it, and the Bazaar
+// keep-alive pays with it, since a quoted route's published example can ask
+// more than the list price and the keep-alive never pays over list. A body
+// that does not quote inside the list price is dropped here, so a published
+// one always does (scripts/test-quoted-from-price.js reads the live 402s).
+for (const def of Object.values(CATALOG)) {
+  if (def.fromInput === undefined) continue;
+  const list = Number(String(def.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+  let q = NaN;
+  try { q = typeof def.quote === "function" && def.fromInput && typeof def.fromInput === "object" ? Number(def.quote(def.fromInput)) : NaN; } catch { q = NaN; }
+  if (!(Number.isFinite(q) && q > 0 && q <= list + 1e-9)) {
+    console.warn(`[catalog] ${def.slug}: fromInput dropped (its quote is not inside the list price)`);
+    delete def.fromInput;
+  }
+}
 // The attest tool refuses to attest a sale of an identity-bound route (a
 // memory read or a usage report is the buyer's own business, and an
 // attestation is public and permanent); it learns which slugs those are here,
@@ -11272,7 +11288,7 @@ app.get("/api/pricing", (_req, res) => {
     openapi: `${BASE_URL}/openapi.json`,
     categories: Object.fromEntries(Object.entries(CATEGORIES).map(([k, v]) => [k, v.label])),
     endpoints: Object.entries(CATALOG).map(([route, def]) => {
-      const { name, price, description, category, slug, tierQuote, quote, quoteRange, quoteFormula } = def;
+      const { name, price, description, category, slug, tierQuote, quote, quoteRange, quoteFormula, fromInput } = def;
       const [method, path] = route.split(" ");
       return {
         method,
@@ -11296,7 +11312,8 @@ app.get("/api/pricing", (_req, res) => {
         // Said on the row so a consumer that budgets per route never takes the
         // floor for the price: the live 402 for a given body lands anywhere in
         // the range. Absent on fixed-price routes, whose 402 is the list price.
-        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd }, ...(quoteFormula ? { quoteFormula } : {}) } : {}),
+        // fromInput, when the tool declares one: a body quoted at or under `price`.
+        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd }, ...(quoteFormula ? { quoteFormula } : {}), ...(fromInput ? { fromInput } : {}) } : {}),
         // Published per row because the doc's own description says these are
         // marked: a consumer that wants only deterministic code should be able
         // to FILTER for it rather than take a sentence's word for it.
