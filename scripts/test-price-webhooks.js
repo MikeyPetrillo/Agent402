@@ -231,7 +231,9 @@ try {
     eq((await r.pw.deliverDue()).delivered, 1, "on: it is sent");
     const st = await r.pw.status();
     eq([st.configured, st.deliveries, st.subscriptions, st.queued, st.sinceBoot.delivered], [true, "on", 1, 0, 1], "the status is counts only");
-    ok(!JSON.stringify(st).includes("buyer.test"), "and names no target");
+    // No free text anywhere in it: every value is a count, a flag or the on/off word.
+    const leaves = (v) => (v && typeof v === "object" ? Object.values(v).flatMap(leaves) : [v]);
+    ok(leaves(st).length > 4 && leaves(st).every((v) => typeof v === "number" || typeof v === "boolean" || v === null || v === "on" || v === "off"), `and names no target (${JSON.stringify(st)})`);
   }
 
   // ---- Part 2: the real guard ------------------------------------------------------

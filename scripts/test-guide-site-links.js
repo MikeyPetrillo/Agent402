@@ -68,9 +68,15 @@ for (const [path, html] of Object.entries(PAGES)) {
 // ---- link back: the agent-facing index ------------------------------------------------------
 {
   // The short index names it in its opening pointers; the full text lists it with the reading list.
-  const named = (txt) => txt.split("\n").filter((l) => l.includes("ask402.ai"));
+  // A line names the guide when one of its words is the guide's name, or an
+  // address on the guide's host (the host is parsed and compared whole).
+  const guideHosts = new Set([GUIDE_SITE_NAME, new URL(GUIDE_SITE).hostname]);
+  const hostOf = (w) => { try { return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(w) ? w : `https://${w}`).hostname; } catch { return null; } };
+  const wordsOf = (l) => l.split(/[\s()[\]<>"']+/).map((w) => w.replace(/[.,:;!?]+$/, "")).filter(Boolean);
+  const named = (txt) => txt.split("\n").filter((l) => wordsOf(l).some((w) => guideHosts.has(hostOf(w))));
+  const TAIL = " x402 and MPP in plain language, for people: https://www.ask402.ai.";
   const short = named(llmsTxt(B, {})), full = named(llmsFullTxt(B, {}));
-  ok(short.length === 1 && short[0].endsWith(" x402 and MPP in plain language, for people: https://www.ask402.ai."), `/llms.txt names the guide once, with its other pointers (${short.map((l) => l.slice(-80)).join(" | ")})`);
+  ok(short.length === 1 && short[0].slice(-TAIL.length) === TAIL, `/llms.txt names the guide once, with its other pointers (${short.map((l) => l.slice(-80)).join(" | ")})`);
   ok(full.length === 1 && full[0] === "- [ask402.ai](https://www.ask402.ai): x402 and MPP explained in plain language, for people", `/llms-full.txt lists the guide on one line (${full.join(" | ")})`);
 }
 

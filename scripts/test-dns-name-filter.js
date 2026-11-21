@@ -192,7 +192,7 @@ await queriesExactly("domain-audit DNS posture, one trailing dot", ["example.com
   before = queried.length; err = null;
   try { r = await spf.handler({ domain: "spf-b.example" }); } catch (e) { err = e; }
   const asked = queried.slice(before);
-  ok(!err && r?.hasRecord === true && asked.includes("_spf.example.com") && asked.every((q) => q === "spf-b.example" || q === "_spf.example.com"), `spf-check: an include target written with an escape is asked of no resolver, and the check still answers (${err?.message || "answered"}, asked ${JSON.stringify(asked)})`);
+  ok(!err && r?.hasRecord === true && asked.some((q) => q === "_spf.example.com") && asked.every((q) => q === "spf-b.example" || q === "_spf.example.com"), `spf-check: an include target written with an escape is asked of no resolver, and the check still answers (${err?.message || "answered"}, asked ${JSON.stringify(asked)})`);
   canned.clear();
 }
 // The whole run: nothing reached the resolver stub that the filter would not
