@@ -23,6 +23,7 @@ import { upstreamCosts } from "../upstream-costs.js";
 import { askDecisionOne, decisionOneEnabled, openRouterDecisionsEnabled, jevOpenRouterModel, DECISION_ONE_MODEL, GEMINI_DECISION_MODEL, JUDGMENT_KEY_REFUSED, JUDGMENT_BALANCE_OUT, decisionsRequestBytes } from "../decision-one.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
 import { upstreamFetch, bodyUnderDeadline, withBudget, currentBudget, handlerBudgetMs, PAYMENT_WINDOW_BUDGET_MS, attributed, ATTRIBUTION, KIND } from "../upstream-deadline.js";
+import { noteJudgeBackend, noteJudgeWalk } from "../judge-timing.js";
 
 // FOUR MODELS, one answer shape. On /v1/judge TypeSafe's Jev answers first,
 // then the same Jev version over OpenRouter (a second route to one model),
@@ -332,14 +333,27 @@ function recordJudgeSpend(tier, backend, out) {
  *  uncharged 5xx, so one sale never pays two upstreams. */
 async function firstAnswer(order, attempt) {
   let last = null;
+  // Every read and the whole walk are timed (src/judge-timing.js): operator
+  // figures only, and a timing call never decides or fails a judgment.
+  const walkStart = performance.now();
+  const tried = [];
+  const timed = (fn) => { try { fn(); } catch { /* timing never fails a judgment */ } };
   for (const b of order) {
-    try { return { backend: b, out: await attempt(b) }; }
+    const t0 = performance.now();
+    tried.push(b);
+    try {
+      const out = await attempt(b);
+      timed(() => { noteJudgeBackend(b, performance.now() - t0, "ok"); noteJudgeWalk({ ms: performance.now() - walkStart, tried, served: b }); });
+      return { backend: b, out };
+    }
     catch (e) {
       last = e;
+      timed(() => noteJudgeBackend(b, performance.now() - t0, e?.mayBeBilled ? "unconfirmed" : "failed"));
       console.warn(`[judge] ${b} failed: ${String(e?.message || e).slice(0, 120)}`);
       if (e?.mayBeBilled) break;
     }
   }
+  if (tried.length) timed(() => noteJudgeWalk({ ms: performance.now() - walkStart, tried, served: null }));
   throw last || Object.assign(new Error("Judgment is not configured on this server."), { statusCode: 503 });
 }
 

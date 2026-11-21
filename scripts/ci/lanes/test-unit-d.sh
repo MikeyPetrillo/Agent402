@@ -495,6 +495,8 @@ t node scripts/test-loop-gate.js
 # Judgment backends: order, the private-table bound on Luna, one answer shape per route, /v1/decisions wire (offline, stubbed)
 t node scripts/test-judge-luna.js
 t node scripts/test-judge-preview.js
+# Judge timing: p50 and p95 per backend read and per walk, outcomes and fallbacks, on the operator view and an hourly log line (offline)
+t node scripts/test-judge-timing.js
 # Decision-1: the shared client, the internal fallback at every Jev call site, the third paid backend and its private-table bound (offline, stubbed)
 t node scripts/test-decision-one.js
 # Wish-board input hygiene (a client bug is not market demand)

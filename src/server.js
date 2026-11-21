@@ -980,6 +980,7 @@ import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, l
 import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
 import { rerankMisses, rerankEnabled } from "./discovery-rerank.js";
 import { JUDGE_TOOLS, judgeEnabled } from "./tools/judge-kit.js";
+import { judgeTimingReport } from "./judge-timing.js";
 import { JUDGE_PREVIEW_TOOLS, judgePreviewEnabled } from "./tools/judge-preview-kit.js";
 import { LOOP_GATE_TOOLS } from "./tools/loop-gate-kit.js";
 
@@ -3414,6 +3415,13 @@ if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerRea
 // imageGenModeration: image-gen renders and content-check refusals by the
 // moderation level sent, and requests sent again without the parameter, since
 // boot (src/tools/image-gen-kit.js; counts only).
+// Judge timing (src/judge-timing.js): p50 and p95 per backend read and per
+// whole walk, outcomes, and how often a fallback answered. This process's own
+// samples; no payer, input or answer.
+app.get("/__operator/judge-timing.json", (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store").json(judgeTimingReport());
+});
 app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
