@@ -49,6 +49,10 @@ LLC: credit the entity, never a personal name.
   repaid only after on-chain proof (`src/payment-verify.js`).
 - `src/state-db.js`, `src/json-document.js`: the state database (Postgres) and the whole-file JSON
   store API; leases, store readiness and large rows in `.claude/rules/ops.md`.
+- `src/price-webhooks.js` (a signed POST when a watched list price changes; `.claude/rules/cdn.md`),
+  `src/router-benchmarks.js` (`/api/router-benchmarks`, aggregates over the reputation records),
+  `src/speech-additions.js` (named speech and transcription models, each gated on its cost row),
+  `src/feature-flags.js` (runtime switches: a flag provider, then the variable, then the default).
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
 - `src/solana-history-rpc.js` (Solana transaction reads: public lane first, keyed lane behind it),
   `src/solana-activity-store.js` (the activity scans' state across restarts),

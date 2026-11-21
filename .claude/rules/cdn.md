@@ -8,6 +8,9 @@ paths:
   - "src/large-body-gate.js"
   - "src/tools/fetch-guard.js"
   - "src/mcp-loopback.js"
+  - "src/price-webhooks.js"
+  - "src/tools/price-webhook-kit.js"
+  - "src/feature-flags.js"
 ---
 
 # Request edge: CDN, client address, async jobs, large bodies, outbound fetches
@@ -34,3 +37,15 @@ Loaded when an edge, job or fetch-guard file is read.
   `source-unreachable`, advising to check the URL or retry; the attribution vocabulary lives in `src/upstream-deadline.js`, where a named upstream whose host name does not resolve is `attribution: "unknown"`, `hint: "connect-failed"`, and only a lookup our resolver could not finish is `our-egress`. The MCP connector's loopback replay carries a
   per-process secret in its marker (`src/mcp-loopback.js`); an inbound marker is stripped by the
   first middleware, so only the real replay is exempt from the discovery limits.
+- **Price webhooks** (`src/price-webhooks.js`, `POST /api/price-webhook`): a registration keeps an https URL
+  and the slugs it watches; at boot the catalog's list prices are compared with the ones kept and each
+  subscription that watches a changed slug gets one queued delivery (`price-webhooks-note`, leased). The
+  delivery turn (`price-webhooks-deliver`, leased) sends each through `probePublicUrl` (the host checked,
+  the address re-checked at connect, no redirect followed) with a signature header keyed by a secret
+  derived from the signing key and the subscription id, so no secret is stored; a 2xx ends it, a 410
+  removes the subscription, anything else is retried on `RETRY_DELAYS_MS` and then dropped. Bounds:
+  `PRICE_WEBHOOK_MAX`, `PRICE_WEBHOOK_MAX_PER_HOST`, 50 slugs. A documentation host is answered in full and
+  nothing is stored. The slug is in the lasting-effect list; removal is the free
+  `POST /api/price-webhook/unsubscribe`. `PRICE_WEBHOOK_DELIVERIES` is a runtime switch
+  (`src/feature-flags.js`: a flag provider when one is registered, else the variable, else the declared
+  default). Suite: `scripts/test-price-webhooks.js`.
