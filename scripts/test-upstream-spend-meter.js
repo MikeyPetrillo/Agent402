@@ -63,7 +63,7 @@ const T = {
   media: { "fake/image-model": { worstCaseUsd: 1, listedMaxUsd: 1 }, "black-forest-labs/flux-3-image-klein": { worstCaseUsd: 1, listedMaxUsd: 1 } },
   fees: { webSearchPerUse: 0.25, groundedPerCall: 0.125, rerankPerUnit: 5, settlementPerCall: 0.5 },
   meter: { markup: 1.25 },
-  vendor: { x: { postRead: 0.5, userRead: 0.25 }, decisions: { luna: 1, decisionOne: 1, gemini: 1, jev: 1, maxShare: 0.9 }, cdp: { sqlQuery: 0.5 }, direct: { minSaving: 0.5 } },
+  vendor: { x: { postRead: 0.5, userRead: 0.25, countsRequest: 0.5, trendsRequest: 0.5 }, decisions: { luna: 1, decisionOne: 1, gemini: 1, jev: 1, maxShare: 0.9 }, cdp: { sqlQuery: 0.5 }, direct: { minSaving: 0.5 } },
 };
 U.setUpstreamCostsForTest(T);
 ok(U.upstreamCostsStatus() === "ok", "the fake table is complete (every key a serving path reads)");
