@@ -349,10 +349,14 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   const { tmpdir } = await import("node:os");
   const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
   const values = [];
+  // The wallet hint each request to the paid route carried (null: none), and on which other paths one arrived.
+  const hints = [], hintedElsewhere = [];
   let accept = null;
   const stub = createServer((req, res) => {
     req.resume();
     const u = new URL(req.url, "http://stub");
+    if (u.pathname === "/api/probe") hints.push(req.headers["x-agent402-wallet"] ?? null);
+    else if (req.headers["x-agent402-wallet"]) hintedElsewhere.push(u.pathname);
     const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
     if (u.pathname === "/api/pricing") return send(200, { endpoints: [{ slug: "probe", method: "GET", path: "/api/probe", price: "$0.001", description: "probe", category: "util", computePayable: false }] });
     if (u.pathname === "/openapi.json") return send(200, { paths: {} });
@@ -377,6 +381,12 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   try {
     const honest = await callOnce({ amount: "1000" });
     if (honest.isError || values.length !== 1 || values[0] !== "1000") fail(`control: an honest $0.001 accept is signed and sent for its amount (${JSON.stringify(values)}, ${text(honest).slice(0, 200)})`);
+    // The paid call names the wallet it pays from on the request the 402
+    // answers and on the signed retry, and on no other request.
+    const { privateKeyToAccount } = await import("viem/accounts");
+    const wallet = privateKeyToAccount("0x" + "33".repeat(32)).address;
+    if (hints.length < 2 || !hints.every((h) => h === wallet)) fail(`every request of a paid call carries X-Agent402-Wallet with the paying wallet (${JSON.stringify(hints)} vs ${wallet})`);
+    if (hintedElsewhere.length) fail(`the wallet hint is sent on the paid route only (also on ${hintedElsewhere.join(", ")})`);
     const split = await callOnce({ amount: "1000", maxAmountRequired: "500000000" });
     if (!split.isError || values.length !== 1 || !/Refused without paying/.test(text(split))) fail(`an accept whose amount fields differ is not signed (${JSON.stringify(values)}, ${text(split).slice(0, 200)})`);
     const over = await callOnce({ amount: "1000" }, ["--import", preload]);

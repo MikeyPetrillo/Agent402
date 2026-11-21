@@ -131,6 +131,8 @@ const GATEWAY_PENDING_MAX_WAIT_MS = 30_000;
 export const GATEWAY_MAX_TIMEOUT_SECONDS = 7 * 24 * 3600 + 3600;
 const GATEWAY_DOCS_URL = "https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway";
 const EVM_ADDR = /^0x[0-9a-fA-F]{40}$/;
+/** The request header a paid call names its wallet in. */
+export const WALLET_HINT_HEADER = "X-Agent402-Wallet";
 // The GatewayWallet contract each chain's batched accept must name as its
 // verifyingContract (Circle's published addresses: one address on every
 // mainnet Gateway serves, another on every testnet). A batched accept naming
@@ -271,10 +273,16 @@ export class Agent402 {
     maxPerCallUsd = undefined, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null, payNetworks = null,
     maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null,
     respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null, gateway = null, userAgent = null, retryResets = true,
-    timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
+    timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, walletAddress = null } = {}) {
     this.userAgent = userAgentOf(userAgent);
     this.respondAsync = respondAsync;
     this.gateway = normalizeGateway(gateway);
+    // The EVM wallet this client pays from, named on paid calls (the
+    // X-Agent402-Wallet header) so a seller that prices a returning wallet
+    // lower can quote it on that call. A caller's payFetch hides its signer,
+    // so the address is given here; a Gateway signer's address is used when
+    // none is. Never sent on a free read; a malformed value is ignored.
+    this.walletAddress = EVM_ADDR.test(String(walletAddress || "")) ? String(walletAddress) : (this.gateway?.signer && EVM_ADDR.test(String(this.gateway.signer.address || "")) ? String(this.gateway.signer.address) : null);
     this.asyncTimeoutMs = numOrNull(asyncTimeoutMs) ?? DEFAULT_ASYNC_TIMEOUT_MS;
     this.onProgress = typeof onProgress === "function" ? onProgress : null;
     this.creditsKey = typeof creditsKey === "string" && /^a402_[A-Za-z0-9_-]{32,64}$/.test(creditsKey) ? creditsKey : null;
@@ -683,6 +691,9 @@ export class Agent402 {
       // UA set here too (not only in the this.f wrapper) so the x402 payFetch
       // path - the one that settles real payments - always carries it.
       const headers = { "User-Agent": this.userAgent, "Idempotency-Key": idem, ...extraHeaders };
+      // The wallet hint rides every request of a call that can only be paid
+      // for (a wallet-only tool's first request, and the paid send).
+      if (this.walletAddress && (paid || tool.computePayable === false)) headers[WALLET_HINT_HEADER] = this.walletAddress;
       let url = `${this.baseUrl}${tool.path}`;
       // A request that can carry a payment never follows a redirect: followed,
       // it would answer a 402 from another origin with a signature to that

@@ -47,6 +47,8 @@ t node scripts/test-stream-empty-answer.js
 t node scripts/test-challenge-life.js
 # Golden trajectories: 56 fixed route-execute tasks through the real paid server, resolver and payer against a stub seller ecosystem, each graded step by step (candidates, order
 t node scripts/test-golden-trajectories.js
+# The returning-wallet price end to end: discounted quote and settle for the hinted wallet, another wallet refused at list with the facilitator never asked (boots paid servers, stub facilitator)
+t node scripts/test-returning-wallet-paid.js
 # One-product MCP endpoint (/mcp/sec): profile lists only the SEC tools, hides the catalog meta tools, /mcp unchanged (boots a free server)
 t node scripts/test-mcp-sec.js
 # MCP wire: a 2026-07-28 client that opens with initialize is served the negotiated revision; tools/call arguments past the element bound are InvalidParams on /mcp and on the stdio

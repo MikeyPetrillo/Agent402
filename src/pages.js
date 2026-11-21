@@ -9,6 +9,7 @@ import { PAYMENT_RETRY_VERBS_NOTE } from "./tool-error-fields.js";
 import { openapiRequestBody } from "./openapi-request.js";
 import { asyncAdvice } from "./slow-routes.js";
 import { leaderboardCadence } from "./refresh-cadence.js";
+import { returningWalletHeaderParam } from "./returning-wallet.js";
 import { binaryTypesOf, responseTypesOf, JSON_MIME } from "./tool-media-type.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
 import { REPO_URL } from "./repo-link.js";
@@ -1036,6 +1037,7 @@ export function openapiSpec(baseUrl, catalog) {
           ? { type: "string", examples: ["respond-async", `wait=${tool.asyncProfile.maxSeconds}`] }
           : { type: "string", enum: ["respond-async"] },
       }] : []),
+      ...(returningWalletHeaderParam(tool) ? [returningWalletHeaderParam(tool)] : []),
       ...(isComputePayable(tool) ? [{
         name: "X-Pow-Solution",
         in: "header",

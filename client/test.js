@@ -1631,6 +1631,38 @@ const fakeRouter = () => {
   ok(new Agent402({ fetchImpl: grab, userAgent: "two tokens/1" }).userAgent === expectedUa && new Agent402({ fetchImpl: grab, userAgent: 7 }).userAgent === expectedUa, "a malformed userAgent is ignored");
 }
 
+// Offline: the wallet hint. A client told which wallet it pays from names it
+// in X-Agent402-Wallet on the paid call (the request a 402 answers and the
+// signed retry follow), so a seller that prices a returning wallet lower can
+// quote it on that call. Never on a free read, never without an address, and
+// never a malformed one.
+{
+  const seen = [];
+  const grab = async (url, init) => { seen.push({ url: String(url), hint: init?.headers?.["X-Agent402-Wallet"] ?? null }); return { ok: true, status: 200, json: async () => ({ endpoints: [] }), headers: new Headers() }; };
+  const W = "0x" + "Ab".repeat(20);
+  const cheap = () => new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.01" }]]);
+  const c = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: grab, fetchImpl: grab, walletAddress: W });
+  await c._loadCatalog();
+  ok(seen.length >= 1 && seen.every((x) => x.hint === null), "a free read (the catalog) carries no wallet hint");
+  seen.length = 0;
+  c._catalog = cheap();
+  await c.call("cheap");
+  ok(seen.length >= 1 && seen.every((x) => x.hint === W) && c.walletAddress === W, `every request of the paid call names the wallet (${JSON.stringify(seen)})`);
+  seen.length = 0;
+  const none = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: grab, fetchImpl: grab });
+  none._catalog = cheap();
+  await none.call("cheap");
+  ok(seen.length >= 1 && seen.every((x) => x.hint === null) && none.walletAddress === null, "with no address the paid call carries no hint");
+  seen.length = 0;
+  const free = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: grab, fetchImpl: grab, walletAddress: W });
+  free._catalog = new Map([["hashy", { method: "POST", path: "/api/hashy", computePayable: true, price: "$0.001" }]]);
+  await free.call("hashy").catch(() => {});
+  ok(seen.length >= 1 && seen[0].hint === null, "a tool with a free tier is first asked without the hint");
+  for (const bad of ["0x1234", "nope", 7, "", null]) ok(new Agent402({ fetchImpl: grab, walletAddress: bad }).walletAddress === null, `a malformed walletAddress is ignored (${JSON.stringify(bad)})`);
+  const viaGateway = new Agent402({ fetchImpl: grab, gateway: { signer: { address: W, signTypedData: async () => "0x" } } });
+  ok(viaGateway.walletAddress === W, "a Gateway signer's address is the wallet when none is named");
+}
+
 // Offline: a slow route (async.recommended on its /api/pricing row) is sent
 // with Prefer: respond-async and collected from its job link: 202, then
 // polling that honors Retry-After, then the route's 200 with its receipt

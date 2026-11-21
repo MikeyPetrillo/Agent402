@@ -53,6 +53,8 @@ export interface Agent402Options {
   fetchImpl?: FetchLike;
   /** A calling package's own product token ("name/version"). */
   userAgent?: string;
+  /** The EVM wallet this client pays from, sent as X-Agent402-Wallet on paid calls so a seller can quote a returning wallet its price on that call. A Gateway signer's address is used when omitted. */
+  walletAddress?: string;
   /** Refuse a TLS chain through a distrusted intermediate CA (default true). */
   tlsDistrust?: boolean;
   /** Resend the SDK's own request once on a connection reset, and with x402Client a paid request with the payment already signed (default true). */
@@ -159,6 +161,7 @@ export class Agent402 {
   constructor(opts?: Agent402Options);
   readonly baseUrl: string;
   readonly userAgent: string;
+  readonly walletAddress: string | null;
   readonly timeoutMs: number | null;
   find(task: string, opts?: { k?: number }): Promise<FindResult[]>;
   route(task: string, opts?: { k?: number; include?: "all" | "external" | "local"; network?: string }): Promise<RouteAnswer>;
@@ -228,6 +231,8 @@ export class AsyncJobPendingError extends Error {
   mayBeCharged: true;
 }
 
+/** The request header a paid call names its wallet in. */
+export const WALLET_HINT_HEADER: "X-Agent402-Wallet";
 export const DEFAULT_BASE_URL: string;
 /** The per-call ceiling a client gets when maxPerCallUsd is not set (USD). */
 export const DEFAULT_MAX_PER_CALL_USD: number;

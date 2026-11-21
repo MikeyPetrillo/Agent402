@@ -332,6 +332,24 @@ function getPayFetch() {
   return payFetchPromise;
 }
 
+// The EVM wallet AGENT_KEY pays from, named on every paid call in the
+// X-Agent402-Wallet header so a server that prices a returning wallet lower
+// can quote it on that call. Null without an EVM key or when the key is
+// malformed (the paid path reports that itself); never sent on a free call.
+let walletHintPromise = null;
+function walletHint() {
+  walletHintPromise ??= (async () => {
+    if (!AGENT_KEY) return null;
+    try { const { privateKeyToAccount } = await import("viem/accounts"); return evmAccount(privateKeyToAccount).address; } catch { return null; }
+  })();
+  return walletHintPromise;
+}
+/** The headers a paid call adds for its wallet hint ({} when there is none). */
+async function walletHintHeaders() {
+  const address = await walletHint();
+  return address ? { "X-Agent402-Wallet": address } : {};
+}
+
 /** The viem account for AGENT_KEY, or walletKeyError. */
 function evmAccount(privateKeyToAccount) {
   try { return privateKeyToAccount(AGENT_KEY.trim()); } catch { throw walletKeyError("AGENT_KEY", "a 0x-prefixed 32-byte hex private key"); }
@@ -551,7 +569,8 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     const entry = { usd: price, signed: false, sent: false, refusal: null };
     pendingSpend.add(entry);
     try {
-      const first = await signCtx.run(entry, () => payFetch(url, { ...paidInit, headers: { ...init.headers, ...asyncHeaders } }));
+      const hintHeaders = await walletHintHeaders();
+      const first = await signCtx.run(entry, () => payFetch(url, { ...paidInit, headers: { ...init.headers, ...asyncHeaders, ...hintHeaders } }));
       if (isRedirect(first)) {
         pendingSpend.delete(entry);
         // A signature already sent leaves that payment's outcome unknown, so

@@ -872,7 +872,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
+import { topExternalPayersAsync, payerPaidDays, externalReturnRateAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -981,6 +981,7 @@ import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
 import { rerankMisses, rerankEnabled } from "./discovery-rerank.js";
 import { JUDGE_TOOLS, judgeEnabled } from "./tools/judge-kit.js";
 import { judgeTimingReport } from "./judge-timing.js";
+import { returningWalletEnabled, returningWalletOfferMiddleware, returningWalletStatus, configureReturningWallet } from "./returning-wallet.js";
 import { JUDGE_PREVIEW_TOOLS, judgePreviewEnabled } from "./tools/judge-preview-kit.js";
 import { LOOP_GATE_TOOLS } from "./tools/loop-gate-kit.js";
 
@@ -3400,6 +3401,9 @@ startSharedLimitsProbe();
 // the sales ledger shortly after boot and then on a timer, never on a
 // request's path: topBuyerFailures on /api/gateway-status watches their
 // verified paid calls for failures.
+// The returning-wallet price reads a wallet's paid days from the sales ledger
+// (the mirror, in database mode) and never discounts one of our own wallets.
+configureReturningWallet({ paidDays: (wallet, sinceMs) => payerPaidDays(wallet, sinceMs), isOurs: (w) => isOwnWallet(w) });
 if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerReady(); return topExternalPayersAsync(o); }, isOwn: (p) => isOwnWallet(p), firstMs: Math.min(5_000, topRefreshMs()) });
 // Per-tool and per-upstream failure detail (src/tool-failure-monitor.js):
 // slugs, classes, last messages, upstream outcomes, facilitator refusals.
@@ -3415,6 +3419,17 @@ if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerRea
 // imageGenModeration: image-gen renders and content-check refusals by the
 // moderation level sent, and requests sent again without the parameter, since
 // boot (src/tools/image-gen-kit.js; counts only).
+// The returning-wallet price (src/returning-wallet.js): the settings in
+// force, this process's counts (hints seen, discounted quotes and payments,
+// payments from another wallet) and the outside payers' return rate over the
+// last 60 days from the sales ledger (wallets by distinct paid days).
+app.get("/__operator/returning-wallets.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  const cfg = returningWalletStatus();
+  let returnRate = null;
+  try { await salesLedgerReady(); returnRate = await externalReturnRateAsync({ days: 60, minPaidDays: cfg.minPaidDays }); } catch (e) { returnRate = { error: String(e?.message || e).slice(0, 120) }; }
+  res.set("Cache-Control", "private, no-store").json({ ...cfg, returnRate });
+});
 // Judge timing (src/judge-timing.js): p50 and p95 per backend read and per
 // whole walk, outcomes, and how often a fallback answered. This process's own
 // samples; no payer, input or answer.
@@ -11879,6 +11894,10 @@ if (!FREE_MODE) {
   // header, `async` block in the JSON body). Mounted after the mirror so its
   // send wrapper runs first and the mirror's protocol keys still win.
   app.use(asyncAdviceMiddleware((req) => CATALOG[`${req.method} ${req.path}`] || null));
+  // The returning-wallet price (src/returning-wallet.js; off unless its
+  // switch is on): an eligible route's JSON 402 names the hint header and
+  // the terms, and says whether this request's quote carries the discount.
+  if (returningWalletEnabled()) app.use(returningWalletOfferMiddleware((req) => CATALOG[`${req.method} ${req.path}`] || null));
   app.use(verifyHintMiddleware());
 
   const mppShim = createMppShim({

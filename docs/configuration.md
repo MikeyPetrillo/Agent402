@@ -12,11 +12,11 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1079 variables in 110 groups.
+1083 variables in 111 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -918,7 +918,7 @@ may still clamp it, and the read site is the reference.
 | `REFERRAL_SETUP_URL` | The network's setup document (https), echoed in the 402. |  | `src/referral-gate.js` |
 | `REFERRAL_SHORT_NET_MAX` | Sales on one slug under that floor before new calls on it answer 503; a model-backed tool stops at one (0: never). |  | `src/referral-gate.js` |
 | `REFERRAL_SIGNER_KEY` | Dedicated key that signs referral facilitator requests and holds no funds (a credential, set on the host). |  | `src/referral-gate.js`, `src/router-pool.js` |
-| `REFERRAL_SLUGS` | Comma list of catalog slugs also served under /ref/<slug> (one of the eight settings the referral gate requires). |  | `src/referral-gate.js` |
+| `REFERRAL_SLUGS` | Comma list of catalog slugs also served under /ref/<slug> (one of the eight settings the referral gate requires). |  | `src/referral-gate.js`, `src/returning-wallet.js` |
 | `REFERRAL_STORE_COOLDOWN_MS` | A store hold lasts this long (doubling to 10 minutes while failures stay in the window), then a probe write must stand. |  | `src/referral-gate.js` |
 | `REFERRAL_STORE_WINDOW_MS` | The window of intent-write failures (refused, or late): two in it hold paid calls before the handler. |  | `src/referral-gate.js` |
 | `REFERRAL_STORE_WRITE_MS` | An intent write to the settlement store that has not answered by then is given up (503, nothing settled). |  | `src/referral-gate.js` |
@@ -964,6 +964,15 @@ may still clamp it, and the read site is the reference.
 | `RERANK_CANDIDATES` | Rerank candidates. | `5` | `src/discovery-rerank.js` |
 | `RERANK_CONSIDER_CONFIDENCE` | Rerank consider confidence. | `0.6` | `src/discovery-rerank.js` |
 | `RERANK_MAX_ROWS` | Rerank maximum rows. | `40` | `src/discovery-rerank.js` |
+
+## RETURNING
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `RETURNING_WALLET_DISCOUNT_BPS` | Returning-wallet discount in basis points (default 1000; at most 5000). |  | `src/returning-wallet.js` |
+| `RETURNING_WALLET_MIN_PAID_DAYS` | Distinct paid days a wallet needs inside the window for the returning-wallet price (default 3). |  | `src/returning-wallet.js` |
+| `RETURNING_WALLET_PRICE` | Set to on to quote a qualifying wallet named in the X-Agent402-Wallet header a lower price on eligible routes' x402 EVM exact accepts (off by default). |  | `src/returning-wallet.js` |
+| `RETURNING_WALLET_WINDOW_DAYS` | Window, in days, the returning-wallet price counts paid days over (default 30). |  | `src/returning-wallet.js` |
 
 ## REVENUE
 
