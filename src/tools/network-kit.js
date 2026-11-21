@@ -14,7 +14,7 @@
 // fans out 5–8 DNS queries; per-query timeouts cap the worst case at ~5s.
 import { Resolver, promises as dnsPromises } from "node:dns";
 import { validateAgentCard, A2A_WELL_KNOWN_PATHS } from "./a2a-card.js";
-import { assertQueryableName } from "./dns-name-filter.js";
+import { assertQueryableName, canonicalDnsName } from "./dns-name-filter.js";
 import { dnsLookup } from "./dns.js";
 import { markEndsAtCeiling } from "../run-ceiling.js";
 
@@ -57,7 +57,11 @@ function pickHost(input, primary = "domain", aliases = ["host", "hostname", "url
 // Wrap dnsPromises.resolve(host, type) so the per-call timeout is enforced and
 // upstream NXDOMAIN/NODATA become structured returns, not thrown errors.
 async function resolveType(host, type, timeoutMs = 4000) {
-  assertQueryableName(host);
+  // The name the filter judged (its canonical form) is the name asked for. A
+  // name with none (an include target in a record someone else published) is
+  // asked of no resolver: the answer a resolver gives a malformed name.
+  if (!canonicalDnsName(host)) return { records: [], error: "EBADNAME" };
+  host = assertQueryableName(host);
   try {
     const records = await Promise.race([
       dnsPromises.resolve(host, type),

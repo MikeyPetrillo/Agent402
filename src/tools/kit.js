@@ -10,7 +10,7 @@ import { isIP } from "node:net";
 import { FETCH_UA } from "../user-agents.js";
 import { noteHostRequest } from "../seller-load.js"; // the request log /crawler describes
 import tls from "node:tls";
-import { assertQueryableName } from "./dns-name-filter.js";
+import { assertQueryableName, canonicalDnsName } from "./dns-name-filter.js";
 import { Worker } from "node:worker_threads";
 import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
@@ -1669,13 +1669,15 @@ const validationTools = [
       const syntaxValid = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) && email.length <= 254;
       const domain = syntaxValid ? email.split("@")[1].toLowerCase() : null;
       let mxRecords = [];
-      if (domain) assertQueryableName(domain);
-      if (domain) {
+      // The name the filter judged (its canonical form) is the name asked
+      // for; a domain that has none is asked of no resolver.
+      const asked = domain && canonicalDnsName(domain) ? assertQueryableName(domain) : null;
+      if (asked) {
         try {
           // RFC 7505 null MX ("0 .") declares the domain accepts NO mail; Node
           // hands it back as exchange "" or "." and it used to count as a
           // record, so example.com read deliverable (corpus, 2026-09-06).
-          mxRecords = (await resolveMx(domain)).sort((a, b) => a.priority - b.priority).map((r) => r.exchange).filter((x) => x && x !== ".");
+          mxRecords = (await resolveMx(asked)).sort((a, b) => a.priority - b.priority).map((r) => r.exchange).filter((x) => x && x !== ".");
         } catch {
           mxRecords = [];
         }
@@ -2252,9 +2254,10 @@ const networkTools = [
       // cannot point the socket at an internal address after the check passes.
       let ip = host;
       if (!isIP(host)) {
-        assertQueryableName(host);
+        // The name the filter judged (its canonical form) is the name asked for.
+        const asked = assertQueryableName(host);
         // The address guard's own bounded resolver (c-ares, off the thread pool).
-        const resolved = await resolveHostAddress(host).catch((e) => {
+        const resolved = await resolveHostAddress(asked).catch((e) => {
           // A resolver that cannot answer is ours to retry, not the caller's input.
           if (isTransientLookupError(e)) throw lookupUnavailable(e);
           throw bad(UNRESOLVED_OR_PRIVATE);
