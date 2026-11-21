@@ -440,10 +440,15 @@ let measureQueuedBytes = 0;
 // the caller that dispatched it). Each caller's slots and queued places are
 // counted (src/caller-places.js): when the queue is full, a caller holding
 // nothing takes the newest queued places of callers holding more than one
-// (each answered busy, the caller's retryable 503) until its call fits, and a
-// slot that frees goes to the waiter whose caller holds the fewest places
-// (first come among equals). So one caller's run of files cannot hold every
-// slot and place while another caller's first file is refused.
+// (by the holder's own key, then, for a new payer from a new address, by any
+// key that holds several: wallets paying from one address; each answered
+// busy, the caller's retryable 503) until its call fits, and a slot that
+// frees goes to the waiter with the fewest places under any of its keys
+// (first come among equals). So one caller's run of files, from one wallet
+// or from several behind one address, cannot hold every slot and place while
+// another caller's first file is refused or waits behind them all. A decode
+// holds its slot for a bounded time (MEASURE_MIN_DECODE_MS, up to
+// MEASURE_MAX_DECODE_MS with a deadline), whatever its outcome.
 const measurePlaces = createCallerPlaces();
 // Resolves true with a slot held, "full" when the queue is full (by count or
 // by the bytes its waiters hold) or its place was taken by a caller holding
@@ -480,7 +485,7 @@ const measureRelease = (who = IN_PROCESS_CALLER) => {
   measurePlaces.free(who);
   let at = -1, least = Infinity;
   for (let i = 0; i < measureWaiters.length; i++) {
-    const n = measurePlaces.count(measureWaiters[i].who);
+    const n = measurePlaces.most(measureWaiters[i].who);
     if (n < least) { least = n; at = i; }
   }
   if (at >= 0) measureWaiters.splice(at, 1)[0].grant(); // the slot passes straight to that waiter
