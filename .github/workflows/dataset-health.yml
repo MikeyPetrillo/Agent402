@@ -50,6 +50,15 @@ jobs:
           node scripts/dataset-health.mjs 2>&1 | tee /tmp/health.log
           exit "${PIPESTATUS[0]}"
 
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Open or close the alert
         if: always()
         env:

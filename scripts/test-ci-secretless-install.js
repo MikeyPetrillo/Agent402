@@ -163,7 +163,7 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
 // The Algorand sweep imports src/payments.js, whose import chain opens a
 // SQLite file at load, so its install must build better-sqlite3's binding
 // (everything else installs with scripts off), and the token stays on the
-// issue step, after the sweep.
+// issue steps, after the sweep.
 {
   const wf = load(readFileSync(new URL("../.github/workflows/algorand-rail-canary.yml", import.meta.url), "utf8"));
   const steps = wf.jobs?.canary?.steps || [];
@@ -172,7 +172,10 @@ for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
   ok(iInstall >= 0 && /&& npm rebuild better-sqlite3 &&/.test(install) && !/npm (ci|install)(?![^&]*--ignore-scripts)/.test(install), `algorand-rail-canary.yml: the install rebuilds better-sqlite3 and runs every other install with scripts off (${install.slice(0, 120)})`);
   const iSweep = steps.findIndex((st) => /algorand-rail-canary\.js/.test(String(st.run || "")));
   const tokenSteps = steps.map((st, i) => [i, st]).filter(([, st]) => SECRETISH.test(String(st.env?.GH_TOKEN || ""))).map(([i]) => i);
-  ok(iSweep > iInstall && tokenSteps.length === 1 && tokenSteps[0] > iSweep && /gh issue/.test(String(steps[tokenSteps[0]].run || "")), `algorand-rail-canary.yml: the workflow token is on the issue step alone, after the sweep (steps ${tokenSteps.join(", ")})`);
+  // The issue steps: the one that opens or closes the issue, and the one
+  // before it that gives an issue under a previous title the current one.
+  const issueStep = (st) => /gh issue/.test(String(st.run || "")) || String(st.run || "").trim() === "node scripts/adopt-issue-titles.js";
+  ok(iSweep > iInstall && tokenSteps.length >= 1 && tokenSteps.length <= 2 && tokenSteps.every((i) => i > iSweep && issueStep(steps[i])) && tokenSteps.some((i) => /gh issue/.test(String(steps[i].run || ""))), `algorand-rail-canary.yml: the workflow token is on the issue steps alone, after the sweep (steps ${tokenSteps.join(", ")})`);
 }
 
 // The other direction: a suite that needs the private cost table

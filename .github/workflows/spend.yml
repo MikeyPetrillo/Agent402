@@ -216,6 +216,15 @@ jobs:
             server.log
           if-no-files-found: ignore
 
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       # Heartbeat-style: one open issue, and a clean run closes it.
       - name: Open or close the alert
         if: always()
@@ -357,6 +366,15 @@ jobs:
           # Long enough to apply a week's examples after review, short enough
           # that old answers do not linger.
           retention-days: 30
+
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
 
       # ONE issue. Opened on the first failing run, commented on each later one,
       # closed by a green full daily run. A run narrowed with `only` can open or
@@ -546,6 +564,26 @@ jobs:
       issues: write
       actions: read
     steps:
+      # Only the two files the next step runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        continue-on-error: true
+        if: always()
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/adopt-issue-titles.js
+            workers/status-probe/src/previous-issue-titles.js
+
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       - name: Page if the pass failed, close the page when it passes
         env:
           GH_TOKEN: ${{ github.token }}

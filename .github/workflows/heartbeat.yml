@@ -113,6 +113,15 @@ jobs:
           . scripts/heartbeat-probe.sh
           record_observation "$STATUS" "$FAILS"
 
+      # An open issue this check filed under a previous title gets the current
+      # one, so the lookups below find it (scripts/adopt-issue-titles.js).
+      - name: Adopt an open issue filed under a previous title
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/adopt-issue-titles.js
+
       # Paywall not observed (the fallback): this run's paywall read is signed
       # with X-Heartbeat-Token, so the unpaid-quote budget never refuses it;
       # paywall_unknown=1 means it was refused anyway (POW_SECRET missing, or a
