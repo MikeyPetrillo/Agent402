@@ -115,7 +115,7 @@ ok(cad.cadenceWords(cad.LEADERBOARD_DEFAULT_REFRESH_MS) === "every 12 hours" && 
   s2.stop();
 }
 
-// --- a high heap defers, then gives the slot up -----------------------------------------
+// --- a high heap defers, then gives the attempt up and tries again in an hour ---------
 {
   S.__resetBoardRefresh();
   const c = clock(DAY0 + 8 * H + 59 * MIN);
@@ -131,8 +131,10 @@ ok(cad.cadenceWords(cad.LEADERBOARD_DEFAULT_REFRESH_MS) === "every 12 hours" && 
   await c.runTo(DAY0 + 21 * H + S.MAX_DEFER_MS + 5 * MIN);
   ok(runs.length === 1 && errors.length === 1 && /given up/.test(errors[0]) && /the heap is high/.test(errors[0]), `a heap that stays high gives the slot up, with an error line, and never rebuilds into it (${errors[0] || "none"})`);
   high = false;
+  await c.runTo(DAY0 + 22 * H + S.MAX_DEFER_MS + 2 * MIN);
+  ok(runs.length === 2 && runs[1] === DAY0 + 21 * H + S.MAX_DEFER_MS + S.GIVEN_UP_RETRY_MS, `the given-up rebuild tries again an hour later and runs once the heap is down (${runs.length} runs)`);
   await c.runTo(DAY0 + 33 * H + 2 * MIN);
-  ok(runs.length === 2, "the next slot rebuilds");
+  ok(runs.length === 3 && runs[2] === DAY0 + 33 * H, "the next slot rebuilds");
   s.stop();
   ok(S.heapIsHigh({ share: 0.7, used: 80, limit: 100 }) === true && S.heapIsHigh({ share: 0.7, used: 60, limit: 100 }) === false && S.heapIsHigh({ share: 0, used: 99, limit: 100 }) === false, "the heap check compares used to V8's limit, and a share of 0 switches it off");
   ok(S.boardRefreshHeapShare({}) === 0.7 && S.boardRefreshHeapShare({ BOARD_REFRESH_HEAP_SHARE: "0.5" }) === 0.5 && S.boardRefreshHeapShare({ BOARD_REFRESH_HEAP_SHARE: "off" }) === 0 && S.boardRefreshHeapShare({ BOARD_REFRESH_HEAP_SHARE: "9" }) === 0.7 && S.boardRefreshHeapShare({ BOARD_REFRESH_HEAP_SHARE: "abc" }) === 0.7, "BOARD_REFRESH_HEAP_SHARE: a share, off, and a malformed value reads as the default");
@@ -170,6 +172,89 @@ ok(cad.cadenceWords(cad.LEADERBOARD_DEFAULT_REFRESH_MS) === "every 12 hours" && 
   s.stop();
   await c.runTo(DAY0 + 48 * H);
   ok(n === 0, "a stopped schedule never rebuilds");
+}
+
+// --- a given-up rebuild tries again every hour until it runs ---------------------------
+{
+  S.__resetBoardRefresh();
+  const slot = DAY0 + cad.BOARD_SLOT_HOURS_UTC.solana[0] * H;
+  const c = clock(slot - 5 * MIN);
+  const runs = [], errors = [];
+  let high = true;
+  const s = S.scheduleBoardRefresh({ board: "solana", now: c.now, setTimer: c.setTimer, clearTimer: c.clearTimer, heapHigh: () => high, log: { ...quiet, error: (m) => errors.push(m) }, run: async () => { runs.push(c.now()); } });
+  ok(S.boardRefreshStatus().status === "ok", "before any slot the word reads ok");
+  await c.runTo(slot + 46 * MIN);
+  ok(errors.length === 1 && /tries again in 60 min/.test(errors[0]) && S.boardRefreshStatus().status === "held", `the first give-up says when it tries again and the word reads held (${errors[0]})`);
+  await c.runTo(slot + 2 * H + 31 * MIN); // the retry at +1h45 waited its own 45 minutes
+  ok(runs.length === 0 && errors.length === 2 && S.boardRefreshStatus().status === "held", "an hour later it tries again, and gives that attempt up too while the heap stays high");
+  await c.runTo(slot + 4 * H + 16 * MIN);
+  const full = S.boardRefreshStatus({ full: true });
+  ok(errors.length === 3 && S.STALLED_AFTER_GIVEN_UP === 3 && full.status === "stalled" && full.boards.solana.givenUpInARow === 3 && full.boards.solana.givenUpTotal === 3 && JSON.stringify(S.boardRefreshStatus()) === '{"status":"stalled"}', `three given up in a row read stalled: one word publicly, the counts on the full view (${JSON.stringify(full.boards.solana)})`);
+  high = false;
+  await c.runTo(slot + 5 * H + 16 * MIN);
+  ok(runs.length === 1 && runs[0] === slot + 5 * H + 15 * MIN && S.boardRefreshStatus().status === "ok", `once the heap comes down the next hourly try rebuilds, hours before the next slot, and the word reads ok (ran ${runs.length ? (runs[0] - slot) / MIN : "never"} min after the slot)`);
+  await c.runTo(slot + 11 * H + 59 * MIN);
+  ok(runs.length === 1, "no further retry runs once it has rebuilt");
+  await c.runTo(slot + 12 * H + MIN);
+  ok(runs.length === 2 && S.boardRefreshStatus({ full: true }).boards.solana.givenUpTotal === 3, "the next slot rebuilds as usual");
+  s.stop();
+}
+// A rebuild that starts for another reason cancels the pending retry.
+{
+  S.__resetBoardRefresh();
+  const slot = DAY0 + cad.BOARD_SLOT_HOURS_UTC.mpp[0] * H;
+  const c = clock(slot - 5 * MIN);
+  const runs = [];
+  let high = true;
+  const s = S.scheduleBoardRefresh({ board: "mpp", now: c.now, setTimer: c.setTimer, clearTimer: c.clearTimer, heapHigh: () => high, log: quiet, givenUpRetryMs: 13 * H, run: async () => { runs.push(c.now()); } });
+  await c.runTo(slot + 46 * MIN);
+  high = false;
+  await c.runTo(slot + 12 * H + MIN); // the next slot runs first
+  await c.runTo(slot + 14 * H);       // the retry was due at +13h45
+  ok(runs.length === 1 && runs[0] === slot + 12 * H, `a rebuild that ran since cancels the pending retry: one rebuild, not two (${runs.map((t) => (t - slot) / MIN)})`);
+  s.stop();
+}
+
+// --- a rebuild that never settles gives the gate back at its bound ----------------------
+{
+  S.__resetBoardRefresh();
+  const slot = DAY0 + cad.BOARD_SLOT_HOURS_UTC.base[0] * H;
+  const c = clock(slot - 5 * MIN);
+  const errors = [], started = [], signals = [];
+  const settle = [];
+  const s = S.scheduleBoardRefresh({ board: "base", now: c.now, setTimer: c.setTimer, clearTimer: c.clearTimer, heapHigh: () => false, runMaxMs: 30 * MIN, log: { ...quiet, error: (m) => errors.push(m) },
+    run: ({ signal }) => { started.push(c.now()); signals.push(signal); return new Promise((res) => settle.push(res)); } });
+  await c.runTo(slot + MIN);
+  ok(started.length === 1 && S.boardRefreshRunning() === "base" && S.boardRefreshStatus().status === "ok", "a rebuild that is running holds the gate");
+  await c.runTo(slot + 31 * MIN);
+  const st = S.boardRefreshStatus({ full: true });
+  ok(S.boardRefreshRunning() === null && errors.length === 1 && /still running after 30 min/.test(errors[0]) && signals[0].aborted === true && st.status === "stalled" && st.boards.base.pastItsBound === true, `past its bound the gate is released, the run's signal is aborted, an error line is written and the word reads stalled (${errors[0]})`);
+  // The board's next slot rebuilds again (it used to spend every later tick on "its own rebuild is still running").
+  await c.runTo(slot + 12 * H + MIN);
+  ok(started.length === 2 && S.boardRefreshRunning() === "base", "the board's next slot rebuilds: a hung rebuild no longer ends the board's rebuilds");
+  // The first run settles now, late: it must not release the gate the second run holds.
+  settle[0]();
+  await c.runTo(slot + 12 * H + 2 * MIN);
+  ok(S.boardRefreshRunning() === "base" && S.boardRefreshStatus().status === "stalled", "a run that settles after its bound releases nothing: the later run still holds the gate");
+  settle[1]();
+  await c.runTo(slot + 12 * H + 3 * MIN);
+  const done = S.boardRefreshStatus({ full: true });
+  ok(S.boardRefreshRunning() === null && done.status === "ok" && done.boards.base.pastItsBound === false && done.boards.base.pastItsBoundTotal === 1, "a run that finishes inside its bound releases the gate and the word reads ok again");
+  await c.runTo(slot + 12 * H + 40 * MIN);
+  ok(errors.length === 1, "a finished run's bound never fires");
+  s.stop();
+}
+// A peer never waits on a hung rebuild past the bound, and a stopped schedule's hung rebuild still gives the gate back.
+{
+  S.__resetBoardRefresh();
+  const slotBase = DAY0 + cad.BOARD_SLOT_HOURS_UTC.base[0] * H;
+  const c = clock(slotBase - 5 * MIN);
+  const a = S.scheduleBoardRefresh({ board: "base", now: c.now, setTimer: c.setTimer, clearTimer: c.clearTimer, heapHigh: () => false, runMaxMs: 10 * MIN, log: quiet, run: () => new Promise(() => {}) });
+  await c.runTo(slotBase + MIN);
+  a.stop();
+  await c.runTo(slotBase + 11 * MIN);
+  ok(S.boardRefreshRunning() === null, "the gate comes back at the bound even when the schedule that started the rebuild was stopped");
+  ok(S.boardRefreshRunMaxMs({}) === 2 * H && S.boardRefreshRunMaxMs({ BOARD_REFRESH_RUN_MAX_MS: "600000" }) === 600_000 && S.boardRefreshRunMaxMs({ BOARD_REFRESH_RUN_MAX_MS: "5" }) === 2 * H && S.boardRefreshRunMaxMs({ BOARD_REFRESH_RUN_MAX_MS: "soon" }) === 2 * H, "BOARD_REFRESH_RUN_MAX_MS sets the bound; under a minute or malformed reads as two hours");
 }
 
 console.log(`\ntest-board-refresh-slots: ${pass} passed, ${fail} failed`);

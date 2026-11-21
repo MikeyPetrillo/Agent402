@@ -836,9 +836,17 @@ Auto-closes when nothing is owed.`,
     // A scheduled turn under contained() (containedTurns, src/contained-turn.js)
     // threw in each of the last three or more consecutive minutes: repeating
     // pages, ok clears, unknown does neither. Title matches heartbeat.yml's.
+    // The same issue carries a seller board whose rebuild is not running
+    // (boardRefresh, src/board-refresh-slots.js): stalled pages, held and
+    // unknown do neither, and the issue clears only when both words read ok
+    // (a build that has no boardRefresh word reads ok for it).
     title: "Scheduled check needs review: contained-turns",
     closeAfterTwoOk: true,
-    verdict: ({ gateway: b }) => wordVerdict(b.containedTurns?.status, ["repeating"], ["ok"]),
+    verdict: ({ gateway: b }) => {
+      const turns = wordVerdict(b.containedTurns?.status, ["repeating"], ["ok"]);
+      const boards = wordVerdict(b.boardRefresh === undefined ? "ok" : b.boardRefresh?.status, ["stalled"], ["ok"]);
+      return turns === "bad" || boards === "bad" ? "bad" : turns === "good" && boards === "good" ? "good" : "quiet";
+    },
     body: () => "/api/gateway-status reports containedTurns.status=repeating: a background turn (a drain slice, a rebuild step, a timer tick) has thrown in each of the last three or more consecutive minutes; the throw is caught and counted, so the process stays up and the work it guards is not being done. The names and counts are on the operator endpoint, /__operator/perf.json (containedTurns, operator token), and the server log carries one [contained-turn] line per name per minute. Auto-closes after two ok reads in a row.",
   },
   {

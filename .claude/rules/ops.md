@@ -57,7 +57,12 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   runs, an index crawl is in flight (`addBoardRefreshQuietCheck`) or the heap is above
   `BOARD_REFRESH_HEAP_SHARE` (default 0.7 of V8's limit; `off` or 0 disables). Held back by a
   peer or a crawl it runs anyway after `MAX_DEFER_MS` (45 minutes); held back by the heap it gives
-  the slot up with an error line and the next slot tries again. A boot rebuilds a board only when
+  the attempt up with an error line and tries again every hour (`GIVEN_UP_RETRY_MS`) until it runs.
+  A rebuild holds the gate at most `BOARD_REFRESH_RUN_MAX_MS` (default two hours): past it the gate
+  is released and the run's `signal` is aborted. `boardRefresh` on `/api/gateway-status` reads
+  `held` after a give-up and `stalled` after three in a row or a run past its bound with none
+  finished since; the heartbeat and the status Worker page on `stalled` under the `containedTurns`
+  issue, which clears only when both words read ok. A boot rebuilds a board only when
   its snapshot is older than its last slot. `LEADERBOARD_REFRESH_MS` puts the Base board on a
   plain interval of that length. Suite: `scripts/test-board-refresh-slots.js`.
 - **Solana history reads:** `src/solana-history-rpc.js` reads a transaction by signature from the

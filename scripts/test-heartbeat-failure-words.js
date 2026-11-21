@@ -335,6 +335,37 @@ try {
     });
   }
 
+  // boardRefresh (src/board-refresh-slots.js) pages under the same issue as
+  // containedTurns: stalled is a bad read, held and unknown are neither, and
+  // the issue clears only when both words read ok.
+  await check("boardRefresh=stalled pages under the contained-turns issue; held does nothing; the issue clears only when both words read ok", async () => {
+    const ISSUE = "A scheduled check reported a result that needs review.";
+    const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
+    const j = (gw) => judge({ gateway: gw })[CT_TITLE];
+    assert.ok(ALARMS.some((a) => a.title === CT_TITLE));
+    for (const [gw, verdict] of [
+      [{ containedTurns: { status: "ok" }, boardRefresh: { status: "stalled" } }, "bad"],
+      [{ containedTurns: { status: "repeating" }, boardRefresh: { status: "ok" } }, "bad"],
+      [{ containedTurns: { status: "ok" }, boardRefresh: { status: "ok" } }, "good"],
+      [{ containedTurns: { status: "ok" } }, "good"], // a build with no boardRefresh word
+      [{ containedTurns: { status: "ok" }, boardRefresh: { status: "held" } }, "quiet"],
+      [{ containedTurns: { status: "ok" }, boardRefresh: { status: "unknown" } }, "quiet"],
+      [{ containedTurns: { status: "unknown" }, boardRefresh: { status: "ok" } }, "quiet"],
+      [{ containedTurns: { status: "ok" }, boardRefresh: {} }, "quiet"],
+    ]) {
+      assert.equal(j(gw), verdict, `the Worker judges ${JSON.stringify(gw)} ${verdict}`);
+      // The heartbeat step, as written, on the same reading.
+      const fresh = await run({ gateway: gw, script: ctStep.run });
+      assert.deepEqual(created(fresh.calls).map((c) => c.title), verdict === "bad" ? [CT_TITLE] : [], `the step ${verdict === "bad" ? "opens the issue" : "opens nothing"} on ${JSON.stringify(gw)}`);
+      const open = await run({ gateway: gw, open: CT_TITLE, body: ISSUE, script: ctStep.run });
+      assert.equal(edited(open.calls).length, verdict === "good" ? 1 : 0, `only a reading with both words ok marks the open issue (${JSON.stringify(gw)})`);
+      assert.equal(closed(open.calls).length, 0);
+      const marked = await run({ gateway: gw, open: CT_TITLE, body: `${ISSUE}\n\nFirst ok read at x; closes on the next ok read.`, script: ctStep.run });
+      assert.equal(closed(marked.calls).length, verdict === "good" ? 1 : 0, `only a second reading with both words ok closes (${JSON.stringify(gw)})`);
+      assert.deepEqual(edited(marked.calls), verdict === "bad" ? [ISSUE] : [], `a bad reading takes the mark off (${JSON.stringify(gw)})`);
+    }
+  });
+
   await check("the status Worker maps the same three words under the same titles", async () => {
     const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
     for (const t of Object.values(TITLES)) assert.ok(ALARMS.some((a) => a.title === t), `Worker has "${t}"`);
