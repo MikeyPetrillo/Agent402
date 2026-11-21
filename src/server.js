@@ -62,7 +62,7 @@ import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
 import { renderArticle, screenshotPage, rasterizeSvg, withHtmlFramesFailureBound } from "./tools/render.js";
-import { LOGO_SVG, FAVICON_SVG, FAVICON_VERSION } from "./brand-mark.js";
+import { LOGO_SVG, FAVICON_SVG, FAVICON_VERSION, brandMarkTile } from "./brand-mark.js";
 import { renderWithStaticRead } from "./tools/render-static.js";
 import { mountAnswerShares, removeShare } from "./answer-share.js";
 import { workerEnabled, runOnWorker, assertWorkerConfig, setWorkerOutcomeObserver } from "./worker-client.js";
@@ -553,7 +553,7 @@ import { proofPage } from "./proof.js";
 import { glossaryPage } from "./glossary.js";
 import { x402101Page } from "./x402-101.js";
 import { aifiCardSvg } from "./aifi-card.js";
-import { sectionCardSvg, ogSectionIds } from "./og-cards.js";
+import { sectionCardSvg, ogSectionIds, toolCardSvg } from "./og-cards.js";
 import { robotsTxt, sitemapXml, llmsTxt, llmsFullTxt, sitemapIndex, sitemapPages, sitemapTools, sitemapGuides, sitemapSkills, sitemapReports, sitemapCategories, sitemapLearn } from "./seo.js";
 import { clampedTitles, META_TITLE_MAX } from "./seo-meta.js";
 import { integrationPage } from "./integration-pages.js";
@@ -10529,8 +10529,8 @@ const cardSvg = (width = 1200, height = 630) => {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${BRAND_FONT_STYLE}${BRAND_DEFS}
   <rect width="${width}" height="${height}" fill="${BRAND.paper}"/>
   <g transform="translate(${tx},${ty}) scale(${s})">
-  <!-- nav row: milled mark + wordmark -->
-  <rect x="72" y="64" width="44" height="44" rx="12" fill="url(#milled)"/>
+  <!-- nav row: the brand mark + wordmark -->
+  ${brandMarkTile(72, 64, 44, { stroke: BRAND.hairline })}
   <text x="132" y="96" font-size="30" font-weight="600" font-family=${display} letter-spacing="-0.5" fill="${BRAND.ink}">Agent402</text>
   <text x="1128" y="95" font-size="20" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">agent402.tools</text>
   <!-- headline -->
@@ -10573,7 +10573,7 @@ const xHeaderSvg = (width = 1500, height = 500) => {
     <stop offset="1" stop-color="${BRAND.milledA}" stop-opacity="0.13"/>
   </linearGradient></defs>
   <rect x="760" y="0" width="740" height="500" fill="url(#xfade)"/>
-  <rect x="88" y="66" width="62" height="62" rx="16" fill="url(#milled)"/>
+  ${brandMarkTile(88, 66, 62, { stroke: BRAND.hairline })}
   <text x="170" y="115" font-size="50" font-weight="600" font-family=${display} letter-spacing="-1" fill="${BRAND.ink}">Agent402</text>
   <text x="88" y="238" font-size="80" font-weight="600" font-family=${display} letter-spacing="-3" fill="${BRAND.ink}">The web, priced per call.</text>
   <text x="88" y="292" font-size="30" font-family=${display} fill="${BRAND.muted}">${n.toLocaleString("en-US")} tools an agent can pay for and use, in one call.</text>
@@ -10907,12 +10907,7 @@ app.get("/tools/:slug/card.png", async (req, res) => {
   const tools = toolList(CATALOG);
   const tool = tools.find((t) => t.slug === req.params.slug);
   if (!tool) return res.status(404).json({ error: "not found" });
-  const catLabel = CATEGORIES[tool.category]?.label ?? tool.category;
-  const svgEsc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const nameT = tool.name.length > 36 ? tool.name.slice(0, 34) + "\u2026" : tool.name;
-  const descT = tool.description.length > 74 ? tool.description.slice(0, 72) + "\u2026" : tool.description;
-  const free = POW_SLUGS.has(tool.slug) ? "FREE w/ PoW \u00b7 " : "";
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630">${BRAND_FONT_STYLE}${BRAND_DEFS}<rect width="1200" height="630" fill="${BRAND.paper}"/><g><rect x="36" y="36" width="1128" height="558" rx="20" fill="${BRAND.card}" stroke="${BRAND.hairline}" stroke-width="2"/><rect x="84" y="88" width="56" height="56" rx="14" fill="url(#milled)"/><text x="112" y="128" font-size="24" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} text-anchor="middle" letter-spacing="-1" fill="${BRAND.paper}">402</text><text x="162" y="118" font-size="26" font-weight="600" font-family=${JSON.stringify(BRAND.display)} fill="${BRAND.ink}">Agent402</text><text x="170" y="146" font-size="20" font-family=${JSON.stringify(BRAND.mono)} fill="${BRAND.muted}">${svgEsc(catLabel)}</text><line x1="84" y1="172" x2="1116" y2="172" stroke="${BRAND.hairline}" stroke-width="2"/><text x="84" y="308" font-size="58" font-weight="600" font-family=${JSON.stringify(BRAND.display)} letter-spacing="-2" fill="${BRAND.ink}">${svgEsc(nameT)}</text><text x="84" y="372" font-size="22" font-family=${JSON.stringify(BRAND.mono)} fill="${BRAND.muted}">${svgEsc(descT)}</text><line x1="84" y1="440" x2="1116" y2="440" stroke="${BRAND.hairline}" stroke-width="2"/><text x="84" y="496" font-size="29" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} fill="${BRAND.accent}">${svgEsc(free)}${svgEsc(tool.price)} per call \u00b7 ${svgEsc(tool.method)} ${svgEsc(tool.path)}</text><text x="84" y="550" font-size="23" font-family=${JSON.stringify(BRAND.mono)} fill="${BRAND.muted}">Pay in USDC on Base via x402 - no API key, no signup</text></g></svg>`;
+  const svg = toolCardSvg({ name: tool.name, description: tool.description, price: tool.price, method: tool.method, path: tool.path, categoryLabel: CATEGORIES[tool.category]?.label ?? tool.category, free: POW_SLUGS.has(tool.slug) }, { BRAND, BRAND_DEFS, BRAND_FONT_STYLE });
   try {
     if (!toolCardCache.has(tool.slug)) toolCardCache.set(tool.slug, await rasterizeSvg(svg, { width: 1200, height: 630 }));
     res.set("Cache-Control", "public, max-age=86400").type("image/png").send(toolCardCache.get(tool.slug));

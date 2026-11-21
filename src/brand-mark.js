@@ -22,3 +22,21 @@ export function brandMarkSvg(size) {
 /** The cache-bust the page head links the favicon files with; only those
  *  versioned URLs are cached as immutable. Bump it when the art changes. */
 export const FAVICON_VERSION = "4";
+
+/** The mark as a tile on a social card (a 1200 by 630 SVG that is rasterized):
+ *  the logo's own black ground, white 402 and red dot, cropped to the mark,
+ *  corners rounded. `stroke` draws a hairline around it, so the black tile
+ *  reads on a card whose own ground is near black. No font: the glyphs are
+ *  the logo file's paths. */
+export function brandMarkTile(x, y, size, { stroke = "" } = {}) {
+  const r = +(size * 0.25).toFixed(2);
+  const id = `brand-mark-${x}-${y}-${size}`;
+  const box = `x="${x}" y="${y}" width="${size}" height="${size}"`;
+  return `<g data-brand-mark="402"><clipPath id="${id}"><rect ${box} rx="${r}"/></clipPath><g clip-path="url(#${id})"><svg ${box} viewBox="${MARK_VIEWBOX}">${inner}</svg></g>${stroke ? `<rect ${box} rx="${r}" fill="none" stroke="${stroke}" stroke-width="1.5"/>` : ""}</g>`;
+}
+
+/** The cache-bust on the card URLs that carry no version of their own (a tool
+ *  page's card, a shared answer's card, the Agentic Finance card). The home
+ *  and section cards are versioned by a hash of the home card instead. Bump
+ *  it when the art on those cards changes. */
+export const CARD_ART_VERSION = "2";

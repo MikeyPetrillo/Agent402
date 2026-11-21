@@ -45,6 +45,7 @@ import { kalshiToolsEnabled } from "./kalshi-switch.js";
 import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
 import { toolJudgeEnabled } from "./tool-judge.js";
 import { fromPriceLabel } from "./quoted-from.js";
+import { CARD_ART_VERSION } from "./brand-mark.js";
 
 // A price in base units of an offer's token (src/base-units.js), or null
 // when the price is not a dollar figure.
@@ -598,7 +599,7 @@ ${paidCallScript()}`;
     canonical,
     baseUrl,
     activePath: "/tools",
-    ogImage: `${baseUrl}/tools/${tool.slug}/card.png`,
+    ogImage: `${baseUrl}/tools/${tool.slug}/card.png?v=${CARD_ART_VERSION}`,
     jsonLd,
     extraCss: TOOL_PAGE_CSS + PAID_CALL_CSS,
     body,

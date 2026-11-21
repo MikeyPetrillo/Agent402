@@ -11,6 +11,7 @@ import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
 import { resolveRailCountTokens } from "./rails.js";
+import { CARD_ART_VERSION } from "./brand-mark.js";
 
 // The one-sentence definition: the visible lede and the DefinedTerm description.
 const DEFINITION = "Agentic Finance (AIFI) is software agents paying and getting paid on their own: per request, from a non-custodial wallet, over the open protocols x402 and MPP, with a verifiable receipt for each call.";
@@ -93,7 +94,7 @@ ${ledgerFooterCompact()}`;
 
   return ledgerShell({
     title, description, canonical, baseUrl, activePath: "/what-is-x402", extraCss,
-    ogImage: `${baseUrl}/og/agentic-finance.png`,
+    ogImage: `${baseUrl}/og/agentic-finance.png?v=${CARD_ART_VERSION}`,
     jsonLd: [orgLd, termLd, breadcrumbLd, articleLd, faqLd],
     body,
   });

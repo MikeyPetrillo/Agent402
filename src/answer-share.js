@@ -44,6 +44,7 @@ import { payerFromRequest } from "./payer.js";
 import { createLimiter } from "./rate-limit.js";
 import { onResponseEnd } from "./hangup-settlement.js";
 import { allowanceOf } from "./allowance-state.js";
+import { brandMarkTile, CARD_ART_VERSION } from "./brand-mark.js";
 
 const DAY_MS = 86_400_000;
 /** The switch: shares are created only while ANSWER_SHARE is exactly "on" (read per call). */
@@ -408,7 +409,7 @@ export function answerSharePage(rec, { baseUrl: origin = baseUrl, price = "" } =
     title: `${rec.question.length > 70 ? `${rec.question.slice(0, 68)}…` : rec.question} - shared answer`,
     description: `A cited, model-backed answer from Agent402 web.answer with ${cites.length} source${cites.length === 1 ? "" : "s"}.`,
     canonical, baseUrl: origin, activePath: "__none__", robots: "noindex, nofollow",
-    ogImage: `${origin}/answers/${rec.id}/card.png`, extraCss: PAGE_CSS, body,
+    ogImage: `${origin}/answers/${rec.id}/card.png?v=${CARD_ART_VERSION}`, extraCss: PAGE_CSS, body,
   });
 }
 
@@ -461,7 +462,7 @@ export function answerShareCardSvg(rec, { BRAND, BRAND_DEFS = "", BRAND_FONT_STY
   const lines = q.map((l, i) => `<text x="72" y="${262 + i * 76}" font-size="62" font-weight="600" font-family=${display} letter-spacing="-2" fill="${BRAND.ink}">${x(l)}</text>`).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">${BRAND_FONT_STYLE}${BRAND_DEFS}
   <rect width="1200" height="630" fill="${BRAND.paper}"/>
-  <rect x="72" y="64" width="44" height="44" rx="12" fill="url(#milled)"/>
+  ${brandMarkTile(72, 64, 44, { stroke: BRAND.hairline })}
   <text x="132" y="96" font-size="30" font-weight="600" font-family=${display} letter-spacing="-0.5" fill="${BRAND.ink}">Agent402</text>
   <text x="1128" y="95" font-size="20" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">web.answer · ${x(day(rec.createdAt))}</text>
   <text x="72" y="178" font-size="22" font-family=${mono} fill="${BRAND.faint}">Asked by the caller</text>

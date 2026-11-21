@@ -14,6 +14,7 @@ import { routingProofSentence } from "./routing-proof.js";
 import { resolveRailCountTokens } from "./rails.js";
 import { powCostPhrase } from "./pow.js";
 import { LEARN_BY_GLOSSARY_ID, learnBySlug } from "./learn.js";
+import { CARD_ART_VERSION } from "./brand-mark.js";
 
 // { id, name, alt?: [names], def, see: [[href, label]] } - keep `def` a single
 // plain-text paragraph: it is rendered verbatim AND emitted as the DefinedTerm
@@ -177,7 +178,7 @@ ${ledgerFooterCompact()}`;
 
   return ledgerShell({
     title, description, canonical, baseUrl, activePath: "/agentic-finance", extraCss,
-    ogImage: `${baseUrl}/og/agentic-finance.png`,
+    ogImage: `${baseUrl}/og/agentic-finance.png?v=${CARD_ART_VERSION}`,
     jsonLd: [orgLd, breadcrumbLd, setLd, pageLd],
     body,
   });

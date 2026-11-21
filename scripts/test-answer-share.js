@@ -38,6 +38,7 @@ process.env.ANSWER_SHARE = "on";
 process.env.ANSWER_SHARE_PER_HOUR = "3";
 const { EventEmitter } = await import("node:events");
 const AS = await import("../src/answer-share.js");
+const { CARD_ART_VERSION } = await import("../src/brand-mark.js");
 
 let pass = 0, proc = null, facilitator = null;
 const serverLog = [];
@@ -102,7 +103,7 @@ const checkHostile = (html, where) => {
   checkHostile(page, "page");
   ok(page.includes("&lt;script&gt;alert(&quot;q&quot;)&lt;/script&gt; what is x402?"), "the question is escaped");
   ok(/<meta name="robots" content="noindex, nofollow">/.test(page), "the page carries a noindex robots meta");
-  ok(page.includes(`<meta property="og:image" content="https://agent402.example/answers/${id}/card.png">`), "the page's og:image is its own card");
+  ok(page.includes(`<meta property="og:image" content="https://agent402.example/answers/${id}/card.png?v=${CARD_ART_VERSION}">`), "the page's og:image is its own card, under the card art version");
   ok(/model-backed answer/.test(page) && /generated for the caller/.test(page) && page.includes("2026-11-03"), "the page says it is model-backed, generated for the caller, with the date");
   ok(page.includes('<a href="/tools/answer">web.answer</a> · $0.08 per call'), "a footer link to the tool page, with the catalog price");
   ok(page.includes("&lt;b onmouseover=alert(3)&gt;") && page.includes('<span class="as-src-link">javascript:alert(4)</span>'), "a hostile snippet is text and a non-web source URL is not a link");
