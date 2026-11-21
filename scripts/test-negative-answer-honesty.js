@@ -141,8 +141,8 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
   ok(/getIndexReadiness/.test(dossier) && /e\.statusCode = 503/.test(dossier),
     "the $0.05 seller dossier refuses rather than selling 'never crawled' about a seller our index has not finished loading");
 
-  ok(/function sendToolError\(res, err, slug\)/.test(server) && (server.match(/sendToolError\(res, err, "/g) || []).length >= 6,
-    "the six URL-taking routes outside the generic binder relay through ONE helper: each had its own copy of the old relay, so teaching the binder alone would have left them answering the old way");
+  ok(/function sendToolError\(res, err, slug\)/.test(server) && (server.match(/sendToolError\(res, err, "/g) || []).length >= 5,
+    "the five URL-taking routes outside the generic binder relay through ONE helper (dns moved into the network kit, under the binder): each had its own copy of the old relay, so teaching the binder alone would have left them answering the old way");
   // Line-based, skipping comments: the helper's own docstring QUOTES the relay
   // it replaced, and a naive scan of the whole file reads that as a survivor.
   const bareRelay = server.split("\n").filter((l) => !/^\s*(\/\/|\*)/.test(l))
