@@ -197,6 +197,8 @@
     "CDP_API_KEY_ID": "Coinbase Developer Platform key id: settlement through its facilitator and Bazaar discovery.",
     "CDP_API_KEY_SECRET": "Coinbase Developer Platform key secret (a credential, set on the host).",
     "CDP_FACILITATOR_URL": "Cdp facilitator URL.",
+    "CDP_SQL_API_KEY_ID": "Coinbase Developer Platform key id for the onchain SQL reads only (query run and schema); with it or its secret unset, those reads sign with CDP_API_KEY_ID. Settlement always uses the main key.",
+    "CDP_SQL_API_KEY_SECRET": "Secret of the onchain SQL key (a credential, set on the host); used only together with CDP_SQL_API_KEY_ID.",
     "CDP_SQL_SEND_GAP_MS": "Spacing between queries one replica sends to the onchain query service, in milliseconds (at least 100; multiplied by RATE_LIMIT_REPLICAS, and the result is held at 2500; a send waits for its slot up to 3 seconds or four of these gaps, whichever is longer).",
     "CELO_FACILITATOR_KEY": "Celo facilitator key (a credential, set on the host).",
     "CELO_FACILITATOR_URL": "Celo facilitator URL.",

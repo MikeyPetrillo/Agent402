@@ -38,6 +38,23 @@ const CDP_HOST = "api.cdp.coinbase.com";
 
 const keyId = () => (process.env.CDP_API_KEY_ID || "").trim();
 const keySecret = () => (process.env.CDP_API_KEY_SECRET || "").trim();
+// The SQL API (query run and schema) may sign with a key pair of its own,
+// CDP_SQL_API_KEY_ID + CDP_SQL_API_KEY_SECRET, so its request budget is the
+// SQL key's and settlement (src/cdp-facilitator.js, the main pair only) never
+// shares it. Both halves must be set: with either missing the SQL reads sign
+// with the main pair whole, never one half of each. Read at call time; a key
+// is never logged (the id rides the token's kid and sub, and redactSecrets
+// scrubs both variables by name from any upstream text).
+const sqlKeyId = () => (process.env.CDP_SQL_API_KEY_ID || "").trim();
+const sqlKeySecret = () => (process.env.CDP_SQL_API_KEY_SECRET || "").trim();
+const SQL_API_PATH_RE = /^\/platform\/v2\/data\/query\/(run|schema)$/;
+/** The key pair a CDP call to `path` signs with: { apiKeyId, apiKeySecret,
+ *  source } with source "sql" (the SQL API's own pair) or "main". */
+export function cdpCredentialsFor(path) {
+  const pathname = String(path ?? "").split("?")[0];
+  if (SQL_API_PATH_RE.test(pathname) && sqlKeyId() && sqlKeySecret()) return { apiKeyId: sqlKeyId(), apiKeySecret: sqlKeySecret(), source: "sql" };
+  return { apiKeyId: keyId(), apiKeySecret: keySecret(), source: "main" };
+}
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -686,7 +703,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
   // A query the handler rewrote (the row-size measure and filter) is ours:
   // its failure is never logged as the buyer's query.
   const logFailed = (status, tookMs) => { if (!rewritten) logFailedBuyerQuery(status, tookMs, body?.sql); };
-  if (!keyId() || !keySecret()) {
+  if (!cdpCredentialsFor(path).apiKeyId || !cdpCredentialsFor(path).apiKeySecret) {
     throw bad("This tool is temporarily unavailable: the operator has not configured Coinbase Developer Platform credentials (CDP_API_KEY_ID / CDP_API_KEY_SECRET).", 503);
   }
   // Ride out a transient CDP-side blip (a 5xx from their indexer, a timeout)
@@ -734,7 +751,9 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
       if (queries.left() <= 0) throw queryBudgetSpentError(queries);
       queries.sent++;
     }
-    const jwt = await mintCdpJwt({ method, path });
+    // Read per attempt, so a pair set or cleared between attempts is honored.
+    const { apiKeyId, apiKeySecret } = cdpCredentialsFor(path);
+    const jwt = await mintCdpJwt({ method, path, apiKeyId, apiKeySecret });
     const started = Date.now();
     let res;
     try {
@@ -841,7 +860,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
 
 /** True when CDP credentials are configured (cdpSql/cdpFetch can run). Cheap
  *  pre-check so hot paths can fall back without triggering cdpFetch's 503 throw. */
-export function cdpConfigured() { return !!(keyId() && keySecret()); }
+export function cdpConfigured() { const c = cdpCredentialsFor(SQL_QUERY_PATH); return !!(c.apiKeyId && c.apiKeySecret); }
 
 /** Run a read-only ClickHouse SELECT over Coinbase's indexed, decoded chain data
  *  (base.events, base.transactions, …) and return the result rows as an array.

@@ -222,6 +222,8 @@ t node scripts/test-sync-count-floor.js
 t node scripts/test-invariants.js
 # CDP kit unit tests (JWT signing both key formats, validation, faucet gate — offline)
 t node scripts/test-cdp-kit.js
+# onchain SQL reads sign with their own CDP key pair, the main pair when it is unset (offline)
+t node scripts/test-cdp-sql-key.js
 # onchain-sql busy answer spread, in-flight place wait (first come first served), pairs back to back, monotonic pacer clock (offline)
 t node scripts/test-onchain-sql-pacer.js
 # onchain-sql query-count histogram: queries per call by how the response ended, stored as counts only, 35 days kept (offline)
