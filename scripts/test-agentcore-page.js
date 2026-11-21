@@ -8,6 +8,7 @@
 // Part 2 boots a FREE_MODE server on port 0 and reads the route, the
 // integrations index, the sitemaps, /llms.txt and the page date.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { bootServer } from "./lib/boot-server.js";
 import { agentcorePage, pluginGetsX402Alone, AGENTCORE_SLUG, AGENTCORE_NAME } from "../src/agentcore-page.js";
@@ -37,8 +38,8 @@ const OPT_IN = `${OFFER_REQUEST_HEADER}: mpp`;
   // Gate at its default (python-httpx/), Tempo offered: x402 alone, and the opt-in header.
   const t = render({ tempo: true, env: {} });
   ok(pluginGetsX402Alone({}), "the default gate lists the plugin's client");
-  ok(t.includes("this server answers that client with the x402 offer alone"), "default: x402-alone sentence");
-  ok(t.includes("x402 is the default"), "default: x402 named the default");
+  ok(t.includes("is answered with the x402 offer alone") && t.includes("A request whose User-Agent starts with python-httpx/"), "default: x402-alone sentence, said of this server's answer to that User-Agent");
+  ok(t.includes("x402 is this server's default for the Payments plugin's HTTP client"), "default: x402 named this server's default");
   ok(t.includes(OPT_IN), "default + Tempo: the opt-in header is named");
   ok(t.includes('network_preferences_config=["tempo:4217", "eip155:4217"]') && t.includes("buyer_pays_gas_fees=True"), "default + Tempo: the plugin configuration");
   ok(t.includes("USDC.e or PathUSD on Tempo"), "default + Tempo: the funds");
@@ -53,7 +54,7 @@ const OPT_IN = `${OFFER_REQUEST_HEADER}: mpp`;
 for (const [label, env] of [["gate off", { MPP_OFFER_WITHHOLD_USER_AGENTS: "off" }], ["gate lists another client", { MPP_OFFER_WITHHOLD_USER_AGENTS: "curl/" }]]) {
   ok(!pluginGetsX402Alone(env), `${label}: the plugin's client is not listed`);
   const t = render({ tempo: true, env });
-  ok(!t.includes("x402 offer alone") && !t.includes("x402 is the default"), `${label}: no x402-alone claim`);
+  ok(!t.includes("x402 offer alone") && !t.includes("x402 is this server's default") && t.includes("Every 402 here carries the PAYMENT-REQUIRED header and the full x402 offer in the body, payable in USDC."), `${label}: no x402-alone claim`);
   ok(!t.includes(OFFER_REQUEST_HEADER), `${label}: no opt-in header (the challenges ride every 402)`);
   ok(t.includes("The same 402 carries the MPP challenges") && t.includes("network_preferences_config"), `${label} + Tempo: MPP paragraph without the header`);
   const n = render({ tempo: false, env });
@@ -68,9 +69,25 @@ for (const [label, env] of [["gate off", { MPP_OFFER_WITHHOLD_USER_AGENTS: "off"
   // Setup, sample, derived prices and labels.
   const html = agentcorePage(BASE, CATALOG, { tempo: true, env: {} });
   const t = main(html);
-  ok(t.includes(`curl -s ${BASE}/openapi.json -o openapi.json`) && t.includes("agentcore add gateway-target --type open-api-schema --schema openapi.json"), "OpenAPI target commands on this base URL");
-  ok(t.includes(`${BASE}/mcp`), "MCP target URL on this base URL");
-  ok(t.includes("The Gateway does not pay a 402 on the hop to its target"), "where payment happens");
+  // The commands run as written: each is the Gateway example's own command (its README), on this base URL.
+  const oneLine = (x) => x.replace(/\\\s*\n\s*/g, " ").replace(/[ \t]+/g, " ");
+  const readme = readFileSync(new URL("../examples/agentcore-gateway/README.md", import.meta.url), "utf8");
+  const readmeCommands = oneLine(readme).split("\n").map((l) => l.trim()).filter((l) => l.startsWith("agentcore ")).map((l) => l.replaceAll("https://agent402.tools", BASE));
+  const pageCommands = [...html.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/g)].flatMap((m) => oneLine(m[1].replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')).split("\n").map((l) => l.trim())).filter((l) => l.startsWith("agentcore "));
+  const targets = pageCommands.filter((c) => c.startsWith("agentcore add gateway-target"));
+  ok(targets.length === 2 && targets.every((c) => /--name \S+/.test(c) && /--outbound-auth NONE\b/.test(c) && /--gateway Agent402Gateway\b/.test(c)), `each gateway-target command names the target, its gateway and the outbound auth (${targets.join(" | ")})`);
+  ok(readmeCommands.filter((c) => c.startsWith("agentcore add gateway-target")).length === 2 && pageCommands.length >= 5 && pageCommands.every((c) => readmeCommands.includes(c)), `every agentcore command on the page is the Gateway example's (${pageCommands.filter((c) => !readmeCommands.includes(c)).join(" | ") || "all found"})`);
+  ok(pageCommands.includes("agentcore add gateway --name Agent402Gateway --protocol-type MCP --authorizer-type AWS_IAM") && pageCommands.indexOf("agentcore add gateway --name Agent402Gateway --protocol-type MCP --authorizer-type AWS_IAM") < pageCommands.indexOf(targets[0]), "the gateway the targets name is created first");
+  ok(t.includes(`curl -s ${BASE}/openapi.json -o openapi.json`) && t.includes("--schema ./openapi.json"), "OpenAPI target commands on this base URL");
+  ok(t.includes(`--endpoint ${BASE}/mcp`), "MCP target URL on this base URL");
+  ok(html.includes("examples/agentcore-gateway"), "the Gateway example is linked");
+  // AgentCore is AWS's product: what it does is attributed to AWS's documentation, with the link; the rest is what this server answers.
+  ok(t.includes("This server answers an unpaid call to a paid route with 402, whether it arrives directly or through a Gateway target."), "where a paid call stands, said of this server");
+  ok(/<a href="https:\/\/docs\.aws\.amazon\.com\/bedrock-agentcore\/latest\/devguide\/payments\.html"[^>]*>AWS's documentation<\/a> says AgentCore Payments /.test(html), "what AgentCore Payments does is attributed to AWS's documentation, linked");
+  for (const unattributed of ["The Gateway does not pay", "The Gateway lists the tools", "The Gateway turns", "settles each 402", "The agent code holds no key", "spend limit bounds what it pays", "with nothing to configure", "The agent gets the connector's tools", "The plugin pays over x402", "The plugin calls sellers", "Gateway target can read", "paid from the wallet"]) {
+    ok(!t.includes(unattributed), `no sentence states AWS's product behavior as fact ("${unattributed}")`);
+  }
+  ok(t.includes("with no extra configuration on this server's side"), "configuration is said of this server's side");
   ok(t.includes("direct_buy.py") && t.includes("agent_buy.py") && html.includes("examples/agentcore-x402-buyer"), "the sample and its two entry points");
   ok(t.includes("a cited answer from a model-backed tool"), "the answer step is labeled model-backed when the catalog says so");
   ok(!main(agentcorePage(BASE, { ...CATALOG, "GET /api/answer": { slug: "answer", name: "Cited answer", price: "$0.02" } }, { tempo: true, env: {} })).includes("model-backed tool"), "and not labeled when it does not");
