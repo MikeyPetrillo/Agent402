@@ -20,6 +20,7 @@
 //      the mppx stripe method's verify -> createPaymentIntent), authoritative
 //      by return value - there is no relay that can report failure for a
 //      settled charge, so no chain-truth confirm is needed (unlike tempo).
+//      A capture with NO answer is not a refusal: see settleStripeCredential.
 //   3. Cards have a $0.50 minimum (SPT), so stripe/charge is offered ONLY on
 //      routes priced >= $0.50 - a challenge is never minted below that.
 //
@@ -33,6 +34,7 @@ import { Challenge, Credential, Expires, Method } from "mppx";
 import { receiptHeader as stripeReceiptHeader, txFromReceiptHeader as stripeTxFromReceiptHeader } from "./mpp-receipt.js";
 import { stripe as stripeMethods } from "mppx/server";
 import { createHmac } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mppProblem, markMppProblem, sendMppProblem } from "./mpp-problem.js";
 import { chargeCancelledForClientGone, markSettleSent, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { challengeLifeShortfall, challengeLifeReason, presentChallengeWindow } from "./challenge-life.js";
@@ -73,15 +75,46 @@ function stripeMethod() {
   const profile = stripeProfileId();
   const sig = `${key}|${profile}`;
   if (cachedMethod && cachedKeyProfile === sig) return cachedMethod;
-  const client = newStripeClient(key);
-  cachedMethod = stripeMethods.spt({
-    client,
-    networkId: profile,
-    paymentMethodTypes: ["card"],
-    livemode: !key.includes("_test_"),
-  });
+  cachedMethod = methodOver(newStripeClient(key));
   cachedKeyProfile = sig;
   return cachedMethod;
+}
+function methodOver(client) {
+  return stripeMethods.spt({
+    client: tracedClient(client),
+    networkId: stripeProfileId(),
+    paymentMethodTypes: ["card"],
+    livemode: !stripeSecretKey().includes("_test_"),
+  });
+}
+
+// What one capture sent to Stripe and what came back. mppx reports every
+// failure of its PaymentIntent call as one error carrying a message only, so
+// the client it is given records the call here (per capture, by async
+// context): whether the request was sent at all, Stripe's own error or
+// result, and the exact parameters and idempotency key, which a second send
+// needs. Each send is ONE HTTP attempt (no SDK retry): a retried send that
+// Stripe answers from its idempotency record cannot be told from a credential
+// presented twice, and the capture makes its own single second send below.
+const captureTrace = new AsyncLocalStorage();
+function tracedClient(real) {
+  return {
+    paymentIntents: {
+      create: async (params, options) => {
+        const t = captureTrace.getStore();
+        const opts = { ...options, maxNetworkRetries: 0 };
+        if (t) { t.sent = true; t.client = real; t.params = params; t.options = opts; }
+        try {
+          const r = await real.paymentIntents.create(params, opts);
+          if (t) t.result = r;
+          return r;
+        } catch (e) {
+          if (t) t.error = e;
+          throw e;
+        }
+      },
+    },
+  };
 }
 
 // Integer cents by the same half-up rule every rail uses (src/base-units.js).
@@ -232,20 +265,97 @@ export async function checkGrantedToken(spt, amountCents, { fetchImpl = fetch, s
   return { ok: true };
 }
 
+// A PaymentIntent in one of these states took no money and takes none unless
+// the buyer acts on it again.
+const UNCHARGED_INTENT_STATES = new Set(["requires_payment_method", "requires_action", "requires_confirmation", "canceled"]);
+/** Stripe's HTTP status on an error, or 0 when there was no answer. */
+const stripeStatusOf = (e) => { const n = Number(e?.statusCode); return Number.isInteger(n) ? n : 0; };
+// Stripe ANSWERED and refused: a decline or a request error. 409 (the same
+// idempotency key is still being processed) and 408 are not answers about the
+// charge.
+const refusedByStripe = (e) => { const sc = stripeStatusOf(e); return sc >= 400 && sc < 500 && sc !== 409 && sc !== 408; };
+const receiptFor = (pi) => ({ method: "stripe", status: "success", timestamp: new Date().toISOString(), reference: pi.id });
+const intentRef = (pi) => (typeof pi?.id === "string" && /^pi_[A-Za-z0-9_]{1,200}$/.test(pi.id) ? pi.id : null);
+export const STRIPE_RESEND_TIMEOUT_MS = 15_000;
+
 /** Terminal — settles the card via a Stripe PaymentIntent (mppx stripe method's
  *  broadcast -> createPaymentIntent with the SPT). Call ONLY after a <400
- *  handler response. Returns { ok, receipt } or { ok:false, error }. */
-export async function settleStripeCredential(authorizationHeader) {
+ *  handler response. Three outcomes:
+ *    { ok: true, receipt }                      captured;
+ *    { ok: false, error, reason }               DEFINITIVE: nothing was charged
+ *      (the request never left, Stripe answered a decline or a request error,
+ *      or the PaymentIntent stands in a state that took no money);
+ *    { ok: false, unconfirmed: true, reference, challengeId, error, reason }
+ *      the outcome is not known (no answer, a connection error, a 5xx, a
+ *      PaymentIntent still processing, anything unclassified) and one second
+ *      send under the SAME idempotency key did not settle it either. Stripe
+ *      answers a repeated key from the first request's record, so the second
+ *      send reads the first one's outcome when it reached Stripe and makes the
+ *      charge once when it did not; a PaymentIntent it returns as succeeded is
+ *      this capture's own and is reported as captured.
+ *  `reference` is the PaymentIntent id when Stripe named one. */
+export async function settleStripeCredential(authorizationHeader, { client = null, resendTimeoutMs = STRIPE_RESEND_TIMEOUT_MS } = {}) {
+  const trace = { sent: false };
+  // 900, not 300: Stripe's permission errors put the fix ("Enabling X
+  // permissions on this key would allow this request") past char 300, and
+  // the first live buy's log cut it off. Operator log only - the buyer sees
+  // `reason`, never Stripe's words.
+  const words = (e) => String(e?.message || e).slice(0, 900);
+  const refused = (e, reason = "Stripe declined the charge") => ({ ok: false, error: words(e), reason });
+  let thrown;
   try {
-    const receipt = await Method.broadcastCredential([stripeMethod()], authorizationHeader);
+    const receipt = await captureTrace.run(trace, () => Method.broadcastCredential([client ? methodOver(client) : stripeMethod()], authorizationHeader));
     return { ok: true, receipt };
-  } catch (e) {
-    // 900, not 300: Stripe's permission errors put the fix ("Enabling X
-    // permissions on this key would allow this request") past char 300, and
-    // the first live buy's log cut it off. Operator log only - the buyer sees
-    // `reason`, never Stripe's words.
-    return { ok: false, error: String(e?.message || e).slice(0, 900), reason: "Stripe declined or could not capture the charge" };
+  } catch (e) { thrown = e; }
+  // Nothing was sent to Stripe (an expired challenge, a malformed payload).
+  if (!trace.sent) return refused(thrown, "the credential was refused before any charge was attempted");
+  let challengeId = null;
+  try { challengeId = String(Credential.deserialize(authorizationHeader).challenge.id).slice(0, 120); } catch { /* the note goes without it */ }
+  const unconfirmed = (e, pi = null) => ({ ok: false, unconfirmed: true, reference: intentRef(pi), challengeId, error: words(e), reason: "Stripe did not confirm whether the charge went through" });
+  // Stripe returned a PaymentIntent and mppx refused it.
+  if (trace.result) {
+    const pi = trace.result;
+    // The first send answered from Stripe's idempotency record: this
+    // credential was captured by an earlier request, not by this one.
+    if (pi.lastResponse?.headers?.["idempotent-replayed"] === "true") return refused(thrown, "this credential's charge was already processed by an earlier request");
+    if (pi.status === "succeeded" && intentRef(pi)) return { ok: true, receipt: receiptFor(pi), recovered: true };
+    if (UNCHARGED_INTENT_STATES.has(pi.status)) return refused(thrown, "Stripe did not complete the charge");
+    return unconfirmed(thrown, pi);
   }
+  if (trace.error && refusedByStripe(trace.error)) return refused(thrown);
+  // No answer about the charge. One second send, same parameters, same key.
+  try {
+    const pi = await trace.client.paymentIntents.create(trace.params, { ...trace.options, maxNetworkRetries: 0, timeout: resendTimeoutMs });
+    if (pi?.status === "succeeded" && intentRef(pi)) return { ok: true, receipt: receiptFor(pi), recovered: true };
+    if (UNCHARGED_INTENT_STATES.has(pi?.status)) return refused(thrown, "Stripe did not complete the charge");
+    return unconfirmed(thrown, pi);
+  } catch (e2) {
+    if (refusedByStripe(e2)) return refused(e2);
+    return unconfirmed(e2);
+  }
+}
+
+/** What the buyer is told when a capture's outcome is not known. */
+export const STRIPE_UNCONFIRMED_TEXT = "Payment not confirmed: Stripe did not answer whether the card charge went through, so this request was not served. The charge is recorded for review: if the card was charged, it is refunded. This credential is spent; request the resource again for a fresh challenge.";
+
+/** The refund-ledger row for a capture whose outcome is not known
+ *  (recordRefundOwed's arguments): a card debt on the mpp-stripe wire, keyed
+ *  on the PaymentIntent when Stripe named one, else on the request. The note
+ *  says how the row is resolved and names the challenge id the PaymentIntent
+ *  carries in its metadata (mpp_challenge_id), which is how it is found. */
+export function unconfirmedCaptureDebt({ slug, priceUsd, httpStatus = 402, synthetic = false, requestId = null, reference = null, challengeId = null } = {}) {
+  return {
+    slug,
+    network: "stripe",
+    payer: null,
+    priceUsd: Number(priceUsd) || 0,
+    tx: reference || null,
+    httpStatus,
+    synthetic,
+    wire: "mpp-stripe",
+    requestId,
+    note: `card capture unconfirmed: refund if Stripe shows the charge, else void${challengeId ? `; PaymentIntent metadata mpp_challenge_id=${challengeId}` : ""}`,
+  };
 }
 
 // The Payment-Receipt header and its reverse: the method-agnostic pair in mpp-receipt.js.
@@ -285,7 +395,7 @@ export function createStripeChallengeAppender({ realm, secretKey, priceFor } = {
 // INBOUND: settle a stripe/charge credential. Same buffer-then-decide
 // discipline as the tempo gate. Refuses to mount without a secret + priceFor.
 // ---------------------------------------------------------------------------
-export function createStripeGate({ validate = validateStripeCredential, settle = settleStripeCredential, checkToken = checkGrantedToken, replayGuard, secretKey, realm, priceFor } = {}) {
+export function createStripeGate({ validate = validateStripeCredential, settle = settleStripeCredential, checkToken = checkGrantedToken, replayGuard, secretKey, realm, priceFor, onUnconfirmed = null } = {}) {
   if (!stripeEnabled()) return null;
   if (typeof priceFor !== "function") {
     console.error("[mpp-stripe] REFUSING to mount the Stripe gate: priceFor is required to bind credentials to route prices");
@@ -436,6 +546,24 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
       // The charge leaves from here: a close after this did not withhold it.
       markSettleSent(req);
       const b = await settle(auth);
+      if (!b.ok && b.unconfirmed === true) {
+        // The capture's outcome is not known: the card may have been charged.
+        // The buyer is answered 402 and told so, never that nothing was
+        // charged; the credential stays spent; and once that answer is
+        // written the possible charge is booked as owed (onUnconfirmed), so
+        // it is refunded if Stripe shows it and voided if not.
+        console.error(`[mpp-stripe] CAPTURE-UNCONFIRMED after a successful handler (${req.method} ${req.path} pi=${b.reference || "?"}) - buyer answered 402, booked for review: ${b.error}`);
+        bufferedCalls = [];
+        restore();
+        req.stripeUnconfirmed = true;
+        sendMppProblem(res, mppProblem("verification-failed", STRIPE_UNCONFIRMED_TEXT, { details: { reason: "capture-unconfirmed", charged: "unconfirmed" } }));
+        settleReplay();
+        if (typeof onUnconfirmed === "function") {
+          try { onUnconfirmed(req, res, { reference: b.reference || null, challengeId: b.challengeId || null, amountCents: binding.amountCents }); }
+          catch (e) { console.error(`[mpp-stripe] CAPTURE-UNCONFIRMED could not be booked (${req.method} ${req.path} pi=${b.reference || "?"}): ${String(e?.message || e).slice(0, 200)}`); }
+        }
+        return;
+      }
       if (!b.ok) {
         console.warn(`[mpp-stripe] settle failed AFTER a successful handler (${req.method} ${req.path}) — buyer answered 402, not charged: ${b.error}`);
         bufferedCalls = [];
@@ -448,7 +576,7 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
         settleReplay();
         return;
       }
-      console.log(`[mpp-stripe] settled ${req.method} ${req.path} pi=${b.receipt?.reference || "?"}`);
+      console.log(`[mpp-stripe] settled ${req.method} ${req.path} pi=${b.receipt?.reference || "?"}${b.recovered ? " (confirmed on the second send)" : ""}`);
       const receiptHeader = stripeReceiptHeader(b.receipt);
       restore();
       if (receiptHeader) res.setHeader("Payment-Receipt", receiptHeader);

@@ -370,6 +370,14 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `PAYER_SCREEN_RAILS` and to `x402ScreenKey`, in the change that offers it; the suite refuses a
   listed address at every listed field with an unlisted control. An EVM payment none of whose
   fields reads is served and counted (`servedUnscreened`, `unreadablePayer` on the operator view).
+- **A card capture with no answer:** `settleStripeCredential` (`src/mpp-stripe.js`) reads what the
+  capture sent and got back. Definitive (nothing sent, a 4xx from Stripe other than 408 or 409, a
+  PaymentIntent in a state that took no money): the card gate's 402 says the card was not charged. Anything else is
+  sent once more under the same idempotency key (each send is one HTTP attempt, no SDK retry): a
+  succeeded PaymentIntent is served as paid; an outcome still unknown answers 402 with
+  `STRIPE_UNCONFIRMED_TEXT` and is booked in the refund ledger after the answer is written
+  (`unconfirmedCaptureDebt`, wire `mpp-stripe`). The credential stays spent either way. A new
+  failure shape is unconfirmed unless it is proven to take no money.
 - **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
   in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
   route that outlives the claim's expiry cannot run twice on one payment. Every command the guard

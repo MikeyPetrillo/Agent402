@@ -52,9 +52,16 @@ Payments:
 
 ### 2026-11-21 (card payments and card report refunds)
 Payments:
-- A card payment whose capture fails after the call ran answers that nothing
+- A card payment that Stripe declines after the call ran answers that nothing
   was charged and asks for a fresh challenge; the same credential is not
   accepted again.
+- A card capture that Stripe does not answer (a timeout, a connection error
+  or a 5xx) is sent once more under the same idempotency key: a charge
+  Stripe confirms is served as paid, with its receipt. When the outcome is
+  still not known the 402 says the charge is not confirmed, the credential
+  is spent, and the possible charge is recorded as owed (the `refundsOwed`
+  word on `/api/gateway-status` reads owed) until it is refunded or shown
+  not to exist.
 - A card report refund that Stripe has accepted but not finished is marked
   pending, read again every 5 minutes, and leaves the owed list once it
   completes.

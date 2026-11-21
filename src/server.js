@@ -622,7 +622,7 @@ import { networkFloorUsd } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential, configureTempoLateWatches } from "./mpp-tempo.js";
 import { createLateWatchLedger, startLateWatchSweep } from "./tempo-late-watches.js";
-import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
+import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader, unconfirmedCaptureDebt } from "./mpp-stripe.js";
 import { confirmTempoSettlement } from "./tempo-confirm.js";
 import { KIT } from "./tools/kit.js";
 import { redactSecrets } from "./tools/redact.js";
@@ -11990,6 +11990,18 @@ if (!FREE_MODE) {
       if (!def) return null;
       const priceUsd = cardPriceUsd(def, req);
       return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def), longRunning: isLongRunningSlug(def.slug), runSeconds: routeRunSeconds(def.slug) } : null;
+    },
+    // A capture whose outcome Stripe did not confirm (src/mpp-stripe.js): the
+    // buyer was answered 402 and the card may have been charged. Booked in
+    // the refund ledger like any card charge that was not served, so the
+    // refundsOwed word reads owed until the row is refunded (Stripe shows the
+    // charge) or voided (it does not). Keyed on the PaymentIntent when Stripe
+    // named one, else on the request; the note names the challenge id the
+    // PaymentIntent carries in its metadata.
+    onUnconfirmed: (req, res, { reference, challengeId } = {}) => {
+      const def = CATALOG[`${req.method} ${req.path}`];
+      if (!def || res.statusCode < 400) return;
+      whenVerdict(recordRefundOwed(unconfirmedCaptureDebt({ slug: def.slug, priceUsd: cardPriceUsd(def, req) || 0, httpStatus: res.statusCode, synthetic: isSyntheticRequest(req), requestId: req.debtKey, reference, challengeId })), () => {});
     },
   });
   if (stripeGate) {
