@@ -3,7 +3,7 @@
 // the lookup is retried once through public resolvers. An authoritative
 // "no such name" (ENOTFOUND, ENODATA) is an answer and is never retried.
 import "./lib/offline-stores.js";
-const { cymruTxt } = await import("../src/tools/network-kit2.js");
+const { cymruTxt, setCymruLookups, CYMRU_FALLBACK, NETWORK_TOOLS2 } = await import("../src/tools/network-kit2.js");
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok - " + m); } else { fail++; console.error("FAIL - " + m); } };
 const err = (code) => Object.assign(new Error(`query ${code}`), { code });
@@ -31,5 +31,22 @@ for (const code of ["ENOTFOUND", "ENODATA"]) {
   catch (e) { threw = e.code; }
   ok(threw === "ETIMEOUT", "both failing surfaces the fallback's error (the handler answers 502, uncharged)");
 }
+
+// The caller path: the asn-info handler itself goes through cymruTxt, so a
+// failing host resolver is answered from the public fallback (both lookups).
+{
+  const asnTool = NETWORK_TOOLS2.find((d) => d.slug === "asn-info");
+  const seen = [];
+  setCymruLookups({
+    primary: async (n) => { seen.push(["primary", n]); throw err("ESERVFAIL"); },
+    fallback: async (n) => { seen.push(["fallback", n]); return n.endsWith(".origin.asn.cymru.com") ? REC : [["15169 | US | arin | 2000-03-30 | GOOGLE, US"]]; },
+  });
+  try {
+    const r = await asnTool.handler({ ip: "8.8.8.8" });
+    ok(r.asn === "AS15169" && r.owner === "GOOGLE, US", `the handler answers from the fallback when the host resolver fails (${r.asn}, ${r.owner})`);
+    ok(seen.filter(([w]) => w === "fallback").length === 2 && seen.every(([, n]) => n.endsWith(".asn.cymru.com")), "both handler lookups (origin and owner) went through the fallback, inside the Cymru zone only");
+  } finally { setCymruLookups(null); }
+}
+ok(JSON.stringify([...CYMRU_FALLBACK]) === JSON.stringify(["8.8.8.8", "9.9.9.9", "1.1.1.1"]), "the default fallback is the three public resolvers");
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -452,7 +452,13 @@ function publicResolveTxt(name) {
   r.setServers([...CYMRU_FALLBACK_SERVERS]);
   return r.resolveTxt(name).finally(() => { try { r.cancel(); } catch { /* ignore */ } });
 }
-export async function cymruTxt(name, { primary = (n) => dnsPromises.resolveTxt(n), fallback = publicResolveTxt } = {}) {
+// The lookups the handler makes; a test swaps them to prove the handler goes
+// through cymruTxt with the public fallback (setCymruLookups).
+const CYMRU_DEFAULT_LOOKUPS = Object.freeze({ primary: (n) => dnsPromises.resolveTxt(n), fallback: publicResolveTxt });
+let cymruLookups = CYMRU_DEFAULT_LOOKUPS;
+export function setCymruLookups(next) { cymruLookups = next ? { ...CYMRU_DEFAULT_LOOKUPS, ...next } : CYMRU_DEFAULT_LOOKUPS; }
+export const CYMRU_FALLBACK = CYMRU_FALLBACK_SERVERS;
+export async function cymruTxt(name, { primary = cymruLookups.primary, fallback = cymruLookups.fallback } = {}) {
   try {
     return await primary(name);
   } catch (err) {

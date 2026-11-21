@@ -23,7 +23,7 @@ const ENTRIES = [
     date: "2026-11-20",
     title: "ASN lookups ride out a failing resolver",
     items: [
-      "Tools: asn-info reads Team Cymru's DNS zone. When the host's own resolver fails on that zone (a SERVFAIL or a timeout), the lookup is retried once through public resolvers; a name with no record is still answered at once.",
+      "Tools: asn-info reads Team Cymru's DNS zone. When the host's own resolver fails on that zone (a resolver error such as a SERVFAIL or a timeout), the lookup is retried once through public resolvers; a name with no record is still answered at once.",
     ],
   },
   {
