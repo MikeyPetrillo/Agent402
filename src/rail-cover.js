@@ -20,13 +20,18 @@
 //     whose owner approvals verify against a config the chain has already
 //     accepted for that account, in a payment this server settled, is the
 //     account's own, and its terms are a verified sender's.
-//   - Solana: the WALLET, the transfer's authority (always a static key), the
-//     mint, and the accept's amount, judged on all the wallet holds of the
-//     mint (`byOwner`), whether the transfer names its accounts in the static
-//     keys or through an address lookup table: one wallet paying in both
-//     shapes is one ledger. When the source token account is static and is
-//     not one of the wallet's own (a delegate's transfer), its balance is
-//     added to the wallet's.
+//   - Solana: a transfer debits ONE token account. With the source account
+//     in the static keys, the payment is keyed on that SOURCE account and
+//     judged on what it holds, whoever owns it (the wallet's own, or one a
+//     delegate's transfer names): each source account backs its own runs, so
+//     a wallet paying from several accounts is judged per account. `owner`
+//     is the WALLET, the transfer's authority (always a static key), which
+//     the paid record is kept under. When an account of the transfer is an
+//     address-lookup-table entry the source is not known here: the payment
+//     is keyed on the wallet (`byOwner`) and judged on the LARGEST single
+//     account of the mint the wallet owns, the most one transfer can draw.
+//     A wallet's runs in the two shapes are counted together
+//     (src/inflight-cover.js), since one account may back both.
 //   - Algorand: the sender of the signed payment transaction, the accept's
 //     asset id and amount.
 //   - Stellar: the `from` of the invoked transfer, the accept's asset
@@ -38,10 +43,10 @@
 // BALANCES. One bounded read each, null when it cannot be read (the caller
 // treats null as unknown, never as zero):
 //   - Tempo: balanceOf on the TIP-20 token through TEMPO_RPC_URL.
-//   - Solana: the sum of the wallet's token accounts of the mint
-//     (getTokenAccountsByOwner with the mint, SOLANA_RPCS; a wallet with none
-//     reads as unknown, never zero), plus a static source account that is not
-//     among them (getTokenAccountBalance, on the same RPC).
+//   - Solana: the source token account's balance (getTokenAccountBalance,
+//     SOLANA_RPCS); for a wallet-keyed payment, the largest of the wallet's
+//     token accounts of the mint (getTokenAccountsByOwner with the mint; a
+//     wallet with none reads as unknown, never zero).
 //   - Algorand: the account's holding of the asset from algod
 //     (ALGORAND_ALGOD_BASES).
 //   - Circle Gateway batched: the signer's available Gateway balance on the
@@ -179,15 +184,15 @@ export async function nonEvmCoverTermsOf(req) {
     const t = svmTransferAccounts(tx);
     if (t) {
       if (t.mint !== asset) return null;
-      // Keyed on the wallet (the transfer's authority, which the paid record
-      // is kept under too), the same ledger a lookup-table payment of that
-      // wallet is kept in. `source`: the static source token account, added
-      // to the wallet's balance when it is not one of the wallet's own.
-      return { rail: "svm", byOwner: true, payer: t.authority, owner: t.authority, source: t.source, network, asset, atomic };
+      // Keyed on the SOURCE token account, the one account the transfer
+      // debits, and judged on what that account holds. `owner`: the wallet
+      // (the transfer's authority), which the paid record is kept under.
+      return { rail: "svm", payer: t.source, owner: t.authority, source: t.source, network, asset, atomic };
     }
-    // An account of the transfer is a lookup-table entry: keyed on the wallet
-    // (its authority, read from the static keys), whose balance is what it
-    // holds of the accepted mint (the gate matched the mint before verify).
+    // An account of the transfer is a lookup-table entry, so its source is
+    // not known here: keyed on the wallet (its authority, read from the
+    // static keys) and judged on the largest single account of the accepted
+    // mint it owns (the gate matched the mint before verify).
     const a = svmTransferAuthority(tx);
     if (!a?.found || typeof a.authority !== "string" || !a.authority) return null;
     return { rail: "svm", byOwner: true, payer: a.authority, owner: a.authority, network, asset, atomic };
@@ -238,31 +243,23 @@ async function tempoBalance({ payer, asset }, timeoutMs) {
   }, timeoutMs);
 }
 const SVM_OWNER_ACCOUNTS_MAX = 64;
-async function svmBalance({ payer, asset, byOwner, source }, timeoutMs) {
+async function svmBalance({ payer, asset, byOwner }, timeoutMs) {
   const { SOLANA_RPCS } = await import("./solana-history-rpc.js");
   if (byOwner === true) {
     return firstAnswer(SOLANA_RPCS, async (u, o) => {
       const r = await postRpc(u, "getTokenAccountsByOwner", [payer, { mint: asset }, { encoding: "jsonParsed" }], o);
       const list = r?.value;
-      if (!Array.isArray(list) || list.length > SVM_OWNER_ACCOUNTS_MAX) return null;
-      let sum = 0n, sourceIn = false;
+      if (!Array.isArray(list) || !list.length || list.length > SVM_OWNER_ACCOUNTS_MAX) return null;
+      // One transfer debits one of these accounts, so the most it can draw
+      // is the largest of them, never their sum.
+      let largest = 0n;
       for (const e of list) {
         const info = e?.account?.data?.parsed?.info;
         const amt = info?.tokenAmount?.amount;
         if (info?.mint !== asset || typeof amt !== "string" || !UINT.test(amt)) return null;
-        if (typeof source === "string" && e?.pubkey === source) sourceIn = true;
-        sum += BigInt(amt);
+        if (BigInt(amt) > largest) largest = BigInt(amt);
       }
-      // A static source that is not the wallet's own (a delegate's
-      // transfer): what moves is that account's balance, so it is added.
-      if (typeof source === "string" && source && !sourceIn) {
-        const b = await postRpc(u, "getTokenAccountBalance", [source], o);
-        const amt = b?.value?.amount;
-        if (typeof amt !== "string" || !UINT.test(amt)) return null;
-        return sum + BigInt(amt);
-      }
-      if (!list.length) return null;
-      return sum;
+      return largest;
     }, timeoutMs);
   }
   return firstAnswer(SOLANA_RPCS, async (u, o) => {

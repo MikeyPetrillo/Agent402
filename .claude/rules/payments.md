@@ -269,10 +269,15 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   the reservations it still holds back (`beatOnce`).
   Terms (`coverTermsOfRequest`): the x402 EVM authorization or Permit2 (the MPP evm wire arrives as
   one), a Circle Gateway batched payment (judged on the signer's Gateway balance, `/v1/balances`), a
-  Tempo pull credential from a verified sender (`req.mppTempoPull`), and Solana (the transfer's
-  SOURCE token account; the paid record is the authority's; when an account of the transfer is a
-  lookup-table entry, the WALLET, its static authority, `byOwner`, read as the sum of its token
-  accounts of the accepted mint by `getTokenAccountsByOwner`, none reading unknown), Algorand and Stellar payments
+  Tempo pull credential from a verified sender (`req.mppTempoPull`), and Solana (a transfer
+  debits ONE token account: the transfer's SOURCE token account, keyed and judged on that account
+  alone, `getTokenAccountBalance`, whoever owns it, so a wallet paying from several accounts is
+  judged per account; the paid record is the authority's, `owner`; when an account of the transfer
+  is a lookup-table entry the source is not known, so the WALLET, its static authority, `byOwner`,
+  read as the LARGEST single token account of the accepted mint it owns by
+  `getTokenAccountsByOwner`, never their sum, none reading unknown; a wallet's runs in the two
+  shapes are counted together in one process, `ownerStatic` in `src/inflight-cover.js`, since one
+  account may back both), Algorand and Stellar payments
   (`src/rail-cover.js`, amount and asset from the matched `accepted`). Balance reads, one bounded
   read each, null = unknown: EVM `balanceOf` (chains from the rails table), Tempo `balanceOf` on
   `TEMPO_RPC_URL`, Solana `getTokenAccountBalance`, algod's asset holding, Horizon's classic balance

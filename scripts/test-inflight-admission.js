@@ -1304,21 +1304,22 @@ for (const readMs of [600, 450]) {
   } finally { shared.flagSet = realSet; shared.flagGet = realGet; _resetTempoMultisigProofsForTest(); }
 }
 
-// ---- a Solana payment whose transfer accounts sit in a lookup table is keyed on the wallet ----
+// ---- a Solana payment is judged on the ONE token account it debits ----
 {
   const kit = await import("@solana/kit");
   const SOLNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", CB = "ComputeBudget111111111111111111111111111111";
   const u64 = (v) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(v), true); return b; };
   const buyer = await kit.generateKeyPairSigner(), fp = await kit.generateKeyPairSigner();
-  const src = (await kit.generateKeyPairSigner()).address, payTo = (await kit.generateKeyPairSigner()).address, table = (await kit.generateKeyPairSigner()).address;
+  const addr = async () => (await kit.generateKeyPairSigner()).address;
+  const src = await addr(), src2 = await addr(), lent = await addr(), payTo = await addr(), table = await addr();
   const blockhash = { blockhash: kit.blockhash("11111111111111111111111111111111"), lastValidBlockHeight: 0n };
   let seq = 0;
-  const txOf = async (inTable) => {
+  const txOf = async (inTable, source = src) => {
     const ixs = [
       { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([2, 0x20, 0x4e, 0, 0]) },
       { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([3, ...u64(++seq)]) },
       { programAddress: kit.address(TOKEN), accounts: [
-        { address: kit.address(src), role: kit.AccountRole.WRITABLE },
+        { address: kit.address(source), role: kit.AccountRole.WRITABLE },
         { address: kit.address(USDC), role: kit.AccountRole.READONLY },
         { address: kit.address(payTo), role: kit.AccountRole.WRITABLE },
         { address: buyer.address, role: kit.AccountRole.READONLY_SIGNER, signer: buyer },
@@ -1328,48 +1329,95 @@ for (const readMs of [600, 450]) {
     if (inTable.length) msg = kit.compressTransactionMessageUsingAddressLookupTables(msg, { [table]: inTable.map((a) => kit.address(a)) });
     return kit.getBase64EncodedWireTransaction(await kit.partiallySignTransaction([buyer.keyPair], kit.compileTransaction(msg)));
   };
-  const solReq = async (inTable) => reqFor(b64({ x402Version: 2, accepted: { scheme: "exact", network: SOLNET, asset: USDC, amount: String(PRICE), payTo, extra: { feePayer: fp.address } }, payload: { transaction: await txOf(inTable) } }));
-  const alt = await coverTermsOfRequest(await solReq([src, USDC, payTo]));
+  // `inTable`: the transfer's accounts that sit in a lookup table ([] = all static).
+  const solReq = async (inTable, source = src) => reqFor(b64({ x402Version: 2, accepted: { scheme: "exact", network: SOLNET, asset: USDC, amount: String(PRICE), payTo, extra: { feePayer: fp.address } }, payload: { transaction: await txOf(inTable, source) } }));
+  const LUT = [src, USDC, payTo];
+  const admitS = async (inTable, source) => { const req = await solReq(inTable, source); try { return { req, release: await admitCoveredRun(req) }; } catch (err) { return { req, err }; } };
+  const alt = await coverTermsOfRequest(await solReq(LUT));
   const stat = await coverTermsOfRequest(await solReq([]));
-  ok(alt?.rail === "svm" && alt.byOwner === true && alt.payer === buyer.address && alt.owner === buyer.address && alt.asset === USDC && alt.atomic === PRICE, `source, mint and destination in a lookup table: the payment is keyed on the wallet, the transfer's authority (${alt?.payer === buyer.address ? "the wallet" : alt?.payer})`);
-  ok(stat?.rail === "svm" && stat.byOwner === true && stat.payer === buyer.address && stat.owner === buyer.address && stat.source === src && stat.asset === USDC, `all static: keyed on the wallet too, the same ledger as its lookup-table payments, the source kept for the balance read (${stat?.payer === buyer.address ? "the wallet" : stat?.payer})`);
-  // The balance: the sum of the wallet's token accounts of the mint (the RPC stubbed, no network).
+  ok(stat?.rail === "svm" && stat.byOwner !== true && stat.payer === src && stat.source === src && stat.owner === buyer.address && stat.asset === USDC && stat.atomic === PRICE, `all static: the payment is keyed on the SOURCE token account it debits, and the wallet (the authority) owns its paid record (${stat?.payer === src ? "the source account" : stat?.payer})`);
+  ok(alt?.rail === "svm" && alt.byOwner === true && alt.payer === buyer.address && alt.owner === buyer.address && alt.asset === USDC && alt.atomic === PRICE, `source, mint and destination in a lookup table: the source is not known, so the payment is keyed on the wallet, the transfer's authority (${alt?.payer === buyer.address ? "the wallet" : alt?.payer})`);
+  // The RPC, stubbed (no network): the wallet's token accounts of the mint,
+  // and any account's own balance.
   const realFetch = globalThis.fetch;
   const asked = [];
-  let accounts = [PRICE, PRICE], srcOwned = true, delegated = 0n;
+  let owned = new Map([[src, PRICE], [src2, 9n * PRICE]]);
+  const others = new Map([[lent, 5n * PRICE]]);
   globalThis.fetch = async (url, init) => {
     const j = JSON.parse(init?.body || "{}");
     asked.push(j);
-    const result = j.method === "getTokenAccountsByOwner" ? { context: { slot: 1 }, value: accounts.map((a, i) => ({ pubkey: i === 0 && srcOwned ? src : `acct${i}`, account: { data: { parsed: { info: { mint: j.params?.[1]?.mint, owner: j.params?.[0], tokenAmount: { amount: String(a), decimals: 6 } } } } } })) }
-      : j.method === "getTokenAccountBalance" ? { context: { slot: 1 }, value: { amount: String(delegated), decimals: 6 } } : null;
+    const one = j.method === "getTokenAccountBalance" ? (owned.get(j.params?.[0]) ?? others.get(j.params?.[0])) : undefined;
+    const result = j.method === "getTokenAccountsByOwner" ? { context: { slot: 1 }, value: [...owned].map(([pubkey, a]) => ({ pubkey, account: { data: { parsed: { info: { mint: j.params?.[1]?.mint, owner: j.params?.[0], tokenAmount: { amount: String(a), decimals: 6 } } } } } })) }
+      : j.method === "getTokenAccountBalance" && one !== undefined ? { context: { slot: 1 }, value: { amount: String(one), decimals: 6 } } : null;
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), { status: 200, headers: { "content-type": "application/json" } });
   };
   try {
-    ok((await readRailBalance(alt)) === 2n * PRICE && asked[0]?.method === "getTokenAccountsByOwner" && asked[0].params[0] === buyer.address && asked[0].params[1]?.mint === USDC, `its balance is the sum of the wallet's accounts of the mint, read with getTokenAccountsByOwner (${asked[0]?.method})`);
-    accounts = [];
+    // The balances: one account each, never the sum of the wallet's accounts.
+    ok((await readRailBalance(stat)) === PRICE && asked.length === 1 && asked[0].method === "getTokenAccountBalance" && asked[0].params[0] === src, `a static payment's balance is its source account's alone, one read (${asked.map((x) => x.method).join()})`);
+    asked.length = 0;
+    ok((await readRailBalance(alt)) === 9n * PRICE && asked[0]?.method === "getTokenAccountsByOwner" && asked[0].params[0] === buyer.address && asked[0].params[1]?.mint === USDC, `a lookup-table payment's balance is the LARGEST single account of the mint the wallet owns, not their sum of ten prices (${asked[0]?.method})`);
+    const kept = owned; owned = new Map();
     ok((await readRailBalance(alt)) === null, "a wallet with no account of the mint reads unknown, never zero");
-    accounts = [PRICE, PRICE];
-    // Through the admission, with the real reader: two prices cover two runs, a third is refused.
+    owned = kept;
+    const delegate = await coverTermsOfRequest(await solReq([], lent));
+    ok(delegate?.payer === lent && delegate.owner === buyer.address && (await readRailBalance(delegate)) === 5n * PRICE, "a static source the wallet does not own (a delegate's transfer) is judged on that account's balance");
+
+    // The source account holds one price; another account of the mint, which
+    // no payment here names, holds nine. One price can settle.
     fresh();
     _setPaidRecordForTest(() => true);
-    const runs = [];
-    for (let i = 0; i < 3; i++) { const req = await solReq([src, USDC, payTo]); try { runs.push({ release: await admitCoveredRun(req) }); } catch (err) { runs.push({ err }); } }
-    ok(runs[0].release && runs[1].release && runs[2].err?.statusCode === 429 && runs[2].err.coverRefusal === "short" && inflightCoverStatus().walletsInFlight === 1, `three lookup-table payments from one wallet holding two prices: two admitted, the third refused as short (${runs.map((x) => (x.release ? "admitted" : x.err?.coverRefusal)).join(", ")})`);
+    let runs = []; for (let i = 0; i < 12; i++) runs.push(await admitS([]));
+    ok(runs.filter((x) => x.release).length === 1 && runs.slice(1).every((x) => x.err?.statusCode === 429 && x.err.coverRefusal === "short"), `twelve payments at once from a source account holding one price: one is admitted, whatever the wallet's other accounts hold (${runs.filter((x) => x.release).length} of 12)`);
     for (const x of runs) x.release?.();
-    // One wallet paying in both shapes is one ledger: a static and a
-    // lookup-table payment of the wallet are judged together on its two prices.
+    // A wallet paying from several accounts at once is judged per account,
+    // and served for what each one covers.
     fresh();
     _setPaidRecordForTest(() => true);
+    owned = new Map([[src, 2n * PRICE], [src2, 3n * PRICE]]);
+    const from1 = [], from2 = [];
+    for (let i = 0; i < 4; i++) { from1.push(await admitS([], src)); from2.push(await admitS([], src2)); }
+    ok(from1.filter((x) => x.release).length === 2 && from2.filter((x) => x.release).length === 3 && inflightCoverStatus().walletsInFlight === 2, `a wallet paying at once from two accounts holding two and three prices: two run from the first and three from the second, each account backing its own (${from1.filter((x) => x.release).length} and ${from2.filter((x) => x.release).length})`);
+    // The paid record is the wallet's, whichever account pays.
+    _resetPaidRecordForTest();
+    from1[0].release.settled();
+    ok(hasPaidRecord(buyer.address) === true, "a settlement from any of its accounts is the wallet's paid record");
+    for (const x of [...from1, ...from2]) x.release?.();
+
+    // Lookup-table payments: the wallet's ledger, on its largest account.
+    fresh();
+    _setPaidRecordForTest(() => true);
+    owned = new Map([[src, 2n * PRICE], [src2, PRICE]]);
+    runs = []; for (let i = 0; i < 4; i++) runs.push(await admitS(LUT));
+    ok(runs.filter((x) => x.release).length === 2 && runs[2].err?.coverRefusal === "short" && inflightCoverStatus().walletsInFlight === 1, `four lookup-table payments from a wallet whose accounts hold two prices and one: two admitted on the largest account (not three on the sum), the rest refused as short (${runs.map((x) => (x.release ? "admitted" : x.err?.coverRefusal)).join(", ")})`);
+    for (const x of runs) x.release?.();
+    // One wallet paying in both shapes: one account may back both, so the
+    // two shapes are counted together.
+    fresh();
+    _setPaidRecordForTest(() => true);
+    owned = new Map([[src, 2n * PRICE]]);
     const mixed = [];
-    for (const inTable of [[], [src, USDC, payTo], [], [src, USDC, payTo]]) { const req = await solReq(inTable); try { mixed.push({ release: await admitCoveredRun(req) }); } catch (err) { mixed.push({ err }); } }
-    ok(mixed[0].release && mixed[1].release && mixed[2].err?.coverRefusal === "short" && mixed[3].err?.coverRefusal === "short" && inflightCoverStatus().walletsInFlight === 1, `a mixed burst of static and lookup-table payments from one wallet holding two prices: two admitted in one ledger, the rest refused as short (${mixed.map((x) => (x.release ? "admitted" : x.err?.coverRefusal)).join(", ")})`);
-    for (const x of mixed) x.release?.();
-    // A static transfer from a token account the wallet does not own (a
-    // delegate): that account's balance is added to the wallet's.
-    asked.length = 0; srcOwned = false; delegated = 5n * PRICE;
-    ok((await readRailBalance(stat)) === 7n * PRICE && asked.map((x) => x.method).join() === "getTokenAccountsByOwner,getTokenAccountBalance" && asked[1].params[0] === src, `a static source that is not among the wallet's accounts is read and added (${asked.map((x) => x.method).join()})`);
-    asked.length = 0; srcOwned = true;
-    ok((await readRailBalance(stat)) === 2n * PRICE && asked.length === 1, "control: a static source among the wallet's own accounts is counted once, with no second read");
+    for (const inTable of [[], LUT, [], LUT]) mixed.push(await admitS(inTable));
+    ok(mixed[0].release && mixed[1].release && mixed[2].err?.coverRefusal === "short" && mixed[3].err?.coverRefusal === "short", `a mixed burst of static and lookup-table payments from one account holding two prices: two admitted, the rest refused as short (${mixed.map((x) => (x.release ? "admitted" : x.err?.coverRefusal)).join(", ")})`);
+    mixed[0].req.res = { statusCode: 402 }; mixed[0].release();
+    const afterLeft = await admitS(LUT);
+    ok(afterLeft.release, "...and when a static run leaves, a lookup-table payment of the wallet takes its place");
+    for (const x of [...mixed, afterLeft]) x.release?.();
+    ok(inflightCoverStatus().runsInFlight === 0, "nothing is left in flight");
+    // One price in the account: whichever shape comes first holds it.
+    owned = new Map([[src, PRICE]]);
+    for (const [first, second, name] of [[[], LUT, "a static run then a lookup-table payment"], [LUT, [], "a lookup-table run then a static payment"]]) {
+      fresh();
+      _setPaidRecordForTest(() => true);
+      const one = await admitS(first), two = await admitS(second);
+      ok(one.release && two.err?.coverRefusal === "short", `${name}, one price in the account: the second is refused as short, not admitted on its own empty ledger (${two.err?.coverRefusal || "admitted"})`);
+      one.release?.(); two.release?.();
+    }
+    fresh();
+    _setPaidRecordForTest(() => true);
+    owned = new Map([[src, 2n * PRICE]]);
+    const again = await admitS(LUT), again2 = await admitS(LUT), again3 = await admitS(LUT);
+    ok(again.release && again2.release && again3.err?.coverRefusal === "short", "control: with nothing static in flight the wallet's lookup-table payments have its largest account to themselves");
+    for (const x of [again, again2]) x.release?.();
   } finally { globalThis.fetch = realFetch; }
 }
 
