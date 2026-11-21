@@ -4,6 +4,7 @@ import { ogSectionFor } from "./og-cards.js";
 import { REPO_URL } from "./repo-link.js";
 import { siteOrgLd, siteOrgId, mppOffered } from "./site-org.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { brandMarkSvg, FAVICON_VERSION } from "./brand-mark.js";
 // The path of the request a page is being rendered for. A page's canonical is
 // its SECTION (/reports for a paid report at /r/<id>), so analytics decisions
 // that depend on the URL being a bearer link read this instead (server.js runs
@@ -105,9 +106,9 @@ export const LEDGER_HEAD = `<link rel="preload" href="/fonts/geist-400-latin.wof
 @font-face{font-family:'Geist Fallback';font-weight:600;src:local('Arial'),local('Roboto'),local('Helvetica Neue');size-adjust:107.3817%;ascent-override:93.5914%;descent-override:27.4721%;line-gap-override:0%}@font-face{font-family:'Geist Fallback';font-weight:700;src:local('Arial'),local('Roboto'),local('Helvetica Neue');size-adjust:107.3817%;ascent-override:93.5914%;descent-override:27.4721%;line-gap-override:0%}
 @font-face{font-family:'Geist Mono Fallback';src:local('Courier New'),local('Courier'),local('Roboto Mono');size-adjust:99.9837%;ascent-override:100.5164%;descent-override:29.5048%;line-gap-override:0%}
 </style>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=3">
-<link rel="icon" type="image/png" sizes="512x512" href="/favicon.ico?v=3">
-<link rel="shortcut icon" href="/favicon.ico?v=3">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=${FAVICON_VERSION}">
+<link rel="icon" type="image/png" sizes="512x512" href="/favicon.ico?v=${FAVICON_VERSION}">
+<link rel="shortcut icon" href="/favicon.ico?v=${FAVICON_VERSION}">
 <link rel="apple-touch-icon" href="/logo.png?v=3">`;
 
 // ---------------------------------------------------------------------------
@@ -762,14 +763,12 @@ const STATIC_CHAINS = RAILS.map((r) => ({ label: railKey(r), href: `/${railKey(r
 // real data exists; until then (or if it throws) nav() falls back to
 // STATIC_CHAINS so it never crashes and never blocks a page render.
 let navDataProvider = null;
-// The "402" tile from /logo.svg, drawn inline at nav/footer size (no request,
-// no font file: the page already loads Geist Mono). Gradient ids carry a
-// suffix because the nav and footer marks share one page.
-// design-tokens: off-start (the brand mark is drawn with fixed colors: it is the same tile in both themes)
-export function brandMark(size, id) {
-  return `<svg aria-hidden="true" focusable="false" width="${size}" height="${size}" viewBox="0 0 512 512" style="display:block;flex:none;"><defs><linearGradient id="bm-${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F6F7F8"/><stop offset="1" stop-color="#C9CED3"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="#0B0C0E"/><rect x="104" y="104" width="304" height="304" rx="64" fill="url(#bm-${id})"/><text x="256" y="300" font-size="150" font-weight="700" font-family="'Geist Mono',Menlo,Consolas,monospace" text-anchor="middle" letter-spacing="-9" fill="#0B0C0E">402</text></svg>`;
+// The brand mark (src/brand-mark.js, the art of /logo.svg), drawn inline at
+// nav/footer size: no request and no font. `id` is kept for callers; the
+// mark carries no ids, so two on one page never clash.
+export function brandMark(size, _id) {
+  return brandMarkSvg(size);
 }
-// design-tokens: off-end
 
 export function setNavIndexProvider(fn) { navDataProvider = fn; }
 

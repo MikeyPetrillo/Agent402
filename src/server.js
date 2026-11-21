@@ -62,6 +62,7 @@ import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
 import { renderArticle, screenshotPage, rasterizeSvg, withHtmlFramesFailureBound } from "./tools/render.js";
+import { LOGO_SVG, FAVICON_SVG, FAVICON_VERSION } from "./brand-mark.js";
 import { renderWithStaticRead } from "./tools/render-static.js";
 import { mountAnswerShares, removeShare } from "./answer-share.js";
 import { workerEnabled, runOnWorker, assertWorkerConfig, setWorkerOutcomeObserver } from "./worker-client.js";
@@ -10449,18 +10450,9 @@ const BRAND = { paper: "#0B0C0E", card: "#141619", panel: "#141619", panel2: "#1
 // design-tokens: off-end
 const BRAND_DEFS = `<defs><linearGradient id="milled" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.milledA}"/><stop offset="1" stop-color="${BRAND.milledB}"/></linearGradient><linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.panel2}"/><stop offset="1" stop-color="${BRAND.paper}"/></linearGradient></defs>`;
 
-// Brand mark — the milled square: a light brushed-aluminum rounded square on
-// the obsidian ground with "402" in dark mono, matching the nav/footer mark.
-// The PNG is rasterized once via the existing headless Chromium and cached for
-// the process lifetime (marketplaces and link previews often refuse SVG).
-const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">${BRAND_FONT_STYLE}${BRAND_DEFS}<rect width="512" height="512" rx="96" fill="${BRAND.paper}"/><rect x="106" y="106" width="300" height="300" rx="72" fill="url(#milled)"/><text x="256" y="301" font-size="118" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} text-anchor="middle" letter-spacing="-6" fill="${BRAND.paper}">402</text></svg>`;
+// Brand mark: the vector logo and the favicon crop (src/brand-mark.js, from
+// assets/brand/logo.svg), the same art as the PNG below.
 app.get("/logo.svg", (_req, res) => res.type("image/svg+xml").set("Cache-Control", "public, max-age=86400").send(LOGO_SVG));
-
-// Favicon-scale mark: the logo's 150px glyphs cover ~40% of the canvas, which
-// reads as a plain black square in a 16px browser tab. This variant fills the
-// frame ("402" at 82% width, the brand period as a corner dot) so the mark
-// survives tab scale. Marketplaces/link previews keep the roomier LOGO_SVG.
-const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">${BRAND_FONT_STYLE}${BRAND_DEFS}<rect width="512" height="512" rx="112" fill="${BRAND.paper}"/><rect x="40" y="40" width="432" height="432" rx="104" fill="url(#milled)"/><text x="256" y="322" font-size="196" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} text-anchor="middle" letter-spacing="-12" fill="${BRAND.paper}">402</text></svg>`;
 
 // The PNG logo is the brand mark (black ground, "402", red dot), 512 by 512,
 // a committed file (assets/brand/logo.png, the same art as
@@ -10484,14 +10476,17 @@ app.get("/logo.png", (req, res) => {
 // Anthropic directory) resolve our 402 mark instead of a generic globe. The SVG
 // is always available; the .ico serves the rasterized PNG (favicon clients
 // accept PNG bytes) and falls back to the SVG if Chromium is unavailable.
-app.get("/favicon.svg", (_req, res) =>
-  res.type("image/svg+xml").set("Cache-Control", "public, max-age=31536000, immutable").send(FAVICON_SVG)
+// Only the URL the page head links (?v=FAVICON_VERSION) is immutable; a bare
+// one (the x402 listing icon, outside fetchers) keeps a day's cache.
+const faviconCache = (req) => (req.query?.v === FAVICON_VERSION ? "public, max-age=31536000, immutable" : "public, max-age=86400");
+app.get("/favicon.svg", (req, res) =>
+  res.type("image/svg+xml").set("Cache-Control", faviconCache(req)).send(FAVICON_SVG)
 );
 let faviconPngCache = null;
-const sendFaviconPng = async (_req, res) => {
+const sendFaviconPng = async (req, res) => {
   try {
     faviconPngCache ??= await rasterizeSvg(FAVICON_SVG, 512);
-    res.type("image/png").set("Cache-Control", "public, max-age=31536000, immutable").send(faviconPngCache);
+    res.type("image/png").set("Cache-Control", faviconCache(req)).send(faviconPngCache);
   } catch {
     res.redirect(302, "/favicon.svg");
   }
