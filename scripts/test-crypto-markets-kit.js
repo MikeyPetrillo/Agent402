@@ -139,8 +139,20 @@ ok(calls.length === 2, "cache: cleared cache fetches again");
   const ecbCalls = () => calls.filter((c) => c.url.hostname === "api.frankfurter.dev");
   const row = (a, code) => a.rates.find((x) => x.code === code);
   reset(); setRoutes();
-  const x1 = await h("exchange-rates")({});
-  ok(x1.base === "USD" && x1.count === 7 && row(x1, "usd").rate === 1 && row(x1, "eur").rate === 0.85 && row(x1, "eth").rate === 0.0004 && row(x1, "xau").rate === 0.00025 && row(x1, "btc").rate === 0.0000125, "exchange-rates: each rate is units of the code per 1 base (default usd), computed through the BTC quotes");
+  // No parameter: the answer this route gave before the computed fields, field
+  // for field (BTC as the base, each row's perBtc), with the new ones beside.
+  {
+    const d0 = await h("exchange-rates")({});
+    const OLD_TOP = ["source", "fetchedAt", "cached", "base", "count", "rates"], OLD_ROW = ["code", "name", "unit", "type", "perBtc"];
+    ok(OLD_TOP.every((k) => k in d0) && d0.source === "coingecko" && d0.base === "BTC" && d0.count === 7 && d0.rates.length === 7 && typeof d0.fetchedAt === "string" && d0.cached === false, `exchange-rates: with no base the answer keeps every old field, BTC as the base (${Object.keys(d0).join()})`);
+    ok(d0.rates.every((x) => OLD_ROW.every((k) => k in x) && Object.keys(x).slice(0, 5).join() === OLD_ROW.join()) && JSON.stringify(d0.rates.map((x) => [x.code, x.name, x.unit, x.type, x.perBtc])) === JSON.stringify(Object.entries(table.rates).map(([code, v]) => [code, v.name, v.unit, v.type, v.value])), "exchange-rates: each default row is the old row (code, name, unit, type, perBtc), in the table's order");
+    ok(d0.rates.every((x) => x.rate === x.perBtc) && row(d0, "btc").rate === 1, "exchange-rates: the default rate is the BTC cross, equal to perBtc");
+    ok(d0.check === "ecb-reference" && d0.referenceBase === "USD" && row(d0, "eur").referenceRate === 0.8 && row(d0, "eur").divergencePct === 6.25 && row(d0, "usd").referenceRate === 1 && row(d0, "eth").referenceRate === null, `exchange-rates: beside them, a fiat row's cross against USD is set against the ECB rate (${d0.referenceBase}, ${row(d0, "eur").divergencePct})`);
+    ok(JSON.stringify(await h("exchange-rates")({ base: "btc" })) === JSON.stringify({ ...d0, cached: true }), "exchange-rates: base=btc is the default answer");
+    reset(); setRoutes();
+  }
+  const x1 = await h("exchange-rates")({ base: "usd" });
+  ok(x1.base === "USD" && x1.referenceBase === "USD" && x1.count === 7 && row(x1, "usd").rate === 1 && row(x1, "eur").rate === 0.85 && row(x1, "eth").rate === 0.0004 && row(x1, "xau").rate === 0.00025 && row(x1, "btc").rate === 0.0000125, "exchange-rates: each rate is units of the code per 1 base (default usd), computed through the BTC quotes");
   ok(row(x1, "eur").perBtc === 68000 && row(x1, "usd").perBtc === 80000, "exchange-rates: perBtc stays on every row");
   ok(x1.check === ECB_CHECK && x1.check === "ecb-reference" && x1.referenceDate === "2026-11-20" && /European Central Bank/.test(x1.referenceSource), `exchange-rates: check names the reference, with its date and source (${x1.check})`);
   ok(row(x1, "eur").referenceRate === 0.8 && row(x1, "eur").divergencePct === 6.25 && row(x1, "jpy").referenceRate === 160 && row(x1, "jpy").divergencePct === -6.25, `exchange-rates: a fiat row carries the ECB cross and the gap to it in percent (${row(x1, "eur").divergencePct}, ${row(x1, "jpy").divergencePct})`);
@@ -150,8 +162,8 @@ ok(calls.length === 2, "cache: cleared cache fetches again");
   const x2 = await h("exchange-rates")({ base: "EUR", currencies: "usd,jpy,eth" });
   ok(x2.base === "EUR" && x2.count === 3 && row(x2, "usd").rate === 1.1764706 && row(x2, "usd").referenceRate === 1.25 && row(x2, "jpy").referenceRate === 200 && row(x2, "jpy").divergencePct === -11.7647 && row(x2, "eth").referenceRate === null, `exchange-rates: another fiat base is crossed on both sides (${JSON.stringify(row(x2, "usd"))})`);
   ok(calls.length === 2 && x2.cached === true, "exchange-rates: a second base reads neither upstream again");
-  const x3 = await h("exchange-rates")({ base: "btc" });
-  ok(x3.base === "BTC" && x3.check === "no-reference" && !("referenceDate" in x3) && row(x3, "usd").rate === 80000 && row(x3, "usd").referenceRate === null, "exchange-rates: a crypto base has no reference and still answers every cross");
+  const x3 = await h("exchange-rates")({ base: "eth" });
+  ok(x3.base === "ETH" && x3.check === "ecb-reference" && x3.referenceBase === "USD" && row(x3, "usd").rate === 2500 && row(x3, "eur").referenceRate === 0.8, "exchange-rates: a crypto base answers every cross, with the fiat rows checked against USD");
   const x4 = await h("exchange-rates")({ base: "aed", type: "fiat" });
   ok(x4.check === "no-reference" && row(x4, "eur").referenceRate === null, "exchange-rates: a fiat base the ECB does not publish says no-reference");
   await throws(h("exchange-rates")({ base: "zzz" }), 400, "exchange-rates: a base outside the table", /"base" must be a unit code/);
@@ -162,7 +174,7 @@ ok(calls.length === 2, "cache: cleared cache fetches again");
   ok(x5.check === "no-reference" && ecbCalls().length === 0, "exchange-rates: nothing to compare reads no reference");
   // The reference failing leaves the rates as they are, and is not retried at once.
   reset(); setRoutes(); ecb = () => jsonRes(500, "down");
-  const x6 = await h("exchange-rates")({});
+  const x6 = await h("exchange-rates")({ base: "usd" });
   ok(x6.check === "unavailable" && row(x6, "eur").rate === 0.85 && row(x6, "eur").referenceRate === null && row(x6, "eur").divergencePct === null && !("referenceDate" in x6), "exchange-rates: a reference that cannot be read answers the rates with check unavailable");
   await h("exchange-rates")({ base: "eur" });
   ok(ecbCalls().length === 1, "exchange-rates: a failed reference read is not tried again inside the back-off");
@@ -170,7 +182,7 @@ ok(calls.length === 2, "cache: cleared cache fetches again");
   ok((await h("exchange-rates")({})).check === "unavailable", "exchange-rates: an empty reference answer is unavailable, never a comparison");
   const def = CRYPTO_MARKETS_TOOLS.find((t) => t.slug === "exchange-rates");
   const ex = def.discovery.output.example;
-  ok(ex.base === "USD" && ex.check === "ecb-reference" && ex.rates.every((x) => "rate" in x && "referenceRate" in x && "divergencePct" in x) && ex.rates.some((x) => typeof x.divergencePct === "number"), "exchange-rates: the published example shows the computed fields");
+  ok(ex.base === "BTC" && ex.referenceBase === "USD" && ex.rates.every((x) => x.rate === x.perBtc) && ex.check === "ecb-reference" && ex.rates.every((x) => "rate" in x && "referenceRate" in x && "divergencePct" in x) && ex.rates.some((x) => typeof x.divergencePct === "number"), "exchange-rates: the published example shows the computed fields");
   ok(def.discovery.inputSchema.properties.base && /referenceRate/.test(def.description) && /European Central Bank/.test(def.description), "exchange-rates: schema lists base, description names the reference");
   reset();
 }

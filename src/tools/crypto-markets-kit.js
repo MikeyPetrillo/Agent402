@@ -62,6 +62,8 @@ export function clearCryptoMarketsCache() { cache.clear(); historyMisses.clear()
 // reference that cannot be read leaves the answer as it is
 // (`check: "unavailable"`) and is not tried again for ECB_BACKOFF_MS.
 export const ECB_CHECK = "ecb-reference";
+// The citation the answer carries (the ECB asks to be named as the source).
+export const ECB_REFERENCE_SOURCE = "European Central Bank reference rates (via Frankfurter)";
 export const ECB_READ_MS = 2_500;
 export const ECB_TABLE_TTL_MS = 30 * 60_000;
 export const ECB_BACKOFF_MS = 30_000;
@@ -122,7 +124,7 @@ function headers() {
 import { cgTake, cgRefusal, resetCgRateLimit, cgReserveUnconfirmed, cgScopeAll, cgNoteUnknownId, cgUnknownToday, cgForgetUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
-import { ratesUrl, latestShape, ECB_FX_SOURCE } from "./frankfurter.js";
+import { ratesUrl, latestShape } from "./frankfurter.js";
 export { resetCgRateLimit };
 
 // `reduce` (optional): { name, fn }. The upstream body is passed through fn
@@ -1048,12 +1050,12 @@ export const CRYPTO_MARKETS_TOOLS = [
   // ===========================================================================
   {
     route: "GET /api/exchange-rates",
-    name: "Cross rates with ECB check",
+    name: "BTC exchange rates",
     slug: "exchange-rates",
     category: "crypto",
     price: "$0.005",
     description:
-      "Cross rates for ~60 units in a base you choose (default usd): crypto, fiat and commodities (gold, silver ounces). Each row has rate, the units of that code per 1 base, computed here through the market table's BTC quotes, plus perBtc. A fiat pair the European Central Bank publishes also carries referenceRate (the ECB reference cross) and divergencePct (the market rate's gap to it, in percent). check says whether that comparison ran (ecb-reference, no-reference, unavailable) and referenceDate is the ECB's publication day. Optional `currencies` (comma-separated unit codes) and `type` (crypto, fiat, commodity) filters. Cached in-process: the market table for 60 seconds, the reference rates for 30 minutes.",
+      "BTC-denominated exchange rates for ~60 units: crypto, fiat and commodities (gold, silver ounces), each with perBtc (units per 1 BTC), name and type. rate is the same cross per 1 `base` (default btc; base=usd, eur, eth or xau quotes another unit), computed here. A fiat row the European Central Bank publishes carries referenceRate (the ECB rate per 1 referenceBase: the base when fiat, else USD) and divergencePct, the market cross's gap to it in percent; check says whether that ran. Optional `currencies` and `type` (crypto, fiat, commodity) filters. Cached in-process: the market table 60 seconds, the reference rates 30 minutes.",
     tags: ["crypto", "exchange-rates", "btc", "fiat", "gold", "cross-rate", "fx", "ecb"],
     discovery: {
       input: { currencies: "eur,eth" },
@@ -1061,17 +1063,17 @@ export const CRYPTO_MARKETS_TOOLS = [
         properties: {
           currencies: { type: "string", description: "Optional comma-separated unit codes to keep (usd, eur, eth, xau, ...). Default: all." },
           type: { type: "string", description: "Optional filter: crypto, fiat or commodity." },
-          base: { type: "string", maxLength: 100, description: "Unit code every rate is quoted against (default usd): any code in the table, e.g. usd, eur, btc, eth, xau." },
+          base: { type: "string", maxLength: 100, description: "Unit `rate` is quoted in (default btc): usd, eur, eth, xau, ..." },
         },
       },
       output: {
         example: {
           source: "coingecko", fetchedAt: "2026-08-22T13:20:00.000Z", cached: false,
-          base: "USD", count: 2, check: "ecb-reference", referenceDate: "2026-08-21",
-          referenceSource: "European Central Bank euro foreign exchange reference rates (via Frankfurter)",
+          base: "BTC", count: 2, check: "ecb-reference", referenceBase: "USD", referenceDate: "2026-08-21",
+          referenceSource: ECB_REFERENCE_SOURCE,
           rates: [
-            { code: "eur", name: "Euro", unit: "€", type: "fiat", rate: 0.85175, perBtc: 65600.2, referenceRate: 0.8521, divergencePct: -0.0411 },
-            { code: "eth", name: "Ether", unit: "ETH", type: "crypto", rate: 0.00041306, perBtc: 31.813, referenceRate: null, divergencePct: null },
+            { code: "eur", name: "Euro", unit: "€", type: "fiat", perBtc: 65600.2, rate: 65600.2, referenceRate: 0.8521, divergencePct: -0.0411 },
+            { code: "eth", name: "Ether", unit: "ETH", type: "crypto", perBtc: 31.813, rate: 31.813, referenceRate: null, divergencePct: null },
           ],
         },
       },
@@ -1080,42 +1082,48 @@ export const CRYPTO_MARKETS_TOOLS = [
       const want = i.currencies == null || i.currencies === "" ? null : new Set(takeIdList(i.currencies, "currencies", 60));
       const type = i.type == null || i.type === "" ? null : String(i.type).trim().toLowerCase();
       if (type && !["crypto", "fiat", "commodity"].includes(type)) throw bad('"type" must be crypto, fiat or commodity');
-      const base = i.base == null || i.base === "" ? "usd" : takeId(i.base, "base");
+      // No `base` is the answer this route has always given: BTC as the base,
+      // every row's perBtc. `base=<code>` quotes the crosses in another unit.
+      const base = i.base == null || i.base === "" ? "btc" : takeId(i.base, "base");
       const { data, fetchedAt, cached } = await cgGet("/exchange_rates", {}, TTL.price);
       const r = data?.rates;
       if (!r || typeof r !== "object") throw bad("Market data upstream returned an unexpected shape", 502);
-      const baseKey = Object.keys(r).find((code) => code.toLowerCase() === base);
-      const basePerBtc = baseKey == null ? null : num(r[baseKey]?.value);
+      const keyOf = (code) => Object.keys(r).find((k) => k.toLowerCase() === code);
+      const perBtcOf = (code) => { const k = keyOf(code); return k == null ? null : num(r[k]?.value); };
+      const basePerBtc = perBtcOf(base);
       if (!(basePerBtc > 0)) throw bad(`"base" must be a unit code in the table (e.g. usd, eur, btc, eth, xau); "${base}" is not one`);
       const rates = Object.entries(r)
         .filter(([code, v]) => (!want || want.has(code.toLowerCase())) && (!type || v?.type === type))
         .map(([code, v]) => {
           const perBtc = num(v?.value);
-          return { code, name: v?.name ?? null, unit: v?.unit ?? null, type: v?.type ?? null, rate: perBtc == null ? null : sig(perBtc / basePerBtc), perBtc, referenceRate: null, divergencePct: null };
+          return { code, name: v?.name ?? null, unit: v?.unit ?? null, type: v?.type ?? null, perBtc, rate: perBtc == null ? null : sig(perBtc / basePerBtc), referenceRate: null, divergencePct: null };
         });
-      // The reference check: a fiat row against a fiat base, both on the ECB's
-      // list. Nothing to compare (a crypto or commodity base, or no other fiat row)
-      // reads no reference; a reference that cannot be read leaves the rates
-      // as they are.
+      // The reference check: each fiat row's cross against the reference base
+      // (the base itself when it is a fiat unit, else USD), set beside the
+      // ECB's rate for the same pair. Nothing to compare (no fiat row but the
+      // reference base) reads no reference; a reference that cannot be read
+      // leaves the rates as they are.
+      const isFiat = (code) => r[keyOf(code)]?.type === "fiat";
+      const refBaseCode = isFiat(base) ? base : "usd";
+      const refBasePerBtc = perBtcOf(refBaseCode);
       let check = "no-reference", ref = null;
-      const fiat = (code) => r[Object.keys(r).find((k) => k.toLowerCase() === code)]?.type === "fiat";
-      if (fiat(base) && rates.some((row) => row.type === "fiat" && row.code.toLowerCase() !== base)) {
+      if (refBasePerBtc > 0 && rates.some((row) => row.type === "fiat" && row.code.toLowerCase() !== refBaseCode)) {
         ref = await readEcbTable();
         check = !ref ? "unavailable" : "no-reference";
-        const refBase = ref ? ecbPerUsd(ref, base) : null;
+        const refBase = ref ? ecbPerUsd(ref, refBaseCode) : null;
         if (refBase) {
           for (const row of rates) {
             const refCode = row.type === "fiat" ? ecbPerUsd(ref, row.code.toLowerCase()) : null;
-            if (!refCode || row.rate == null) continue;
+            if (!refCode || row.perBtc == null) continue;
             row.referenceRate = sig(refCode / refBase);
-            row.divergencePct = +(((row.rate - row.referenceRate) / row.referenceRate) * 100).toFixed(4);
+            row.divergencePct = +(((row.perBtc / refBasePerBtc - row.referenceRate) / row.referenceRate) * 100).toFixed(4);
             check = ECB_CHECK;
           }
         }
       }
       return {
         source: SOURCE, fetchedAt, cached, base: base.toUpperCase(), count: rates.length, check,
-        ...(check === ECB_CHECK ? { referenceDate: ref.date, referenceSource: ECB_FX_SOURCE } : {}),
+        ...(check === ECB_CHECK ? { referenceBase: refBaseCode.toUpperCase(), referenceDate: ref.date, referenceSource: ECB_REFERENCE_SOURCE } : {}),
         rates,
       };
     },

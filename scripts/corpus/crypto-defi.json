@@ -492,7 +492,7 @@
   },
   {
    "slug": "exchange-rates",
-   "name": "fiat crosses per usd with the reference check",
+   "name": "btc-denominated rates, the default, with the reference check beside",
    "input": {
     "currencies": "usd,jpy",
     "type": "fiat"
@@ -500,13 +500,12 @@
    "expect": {
     "equals": {
      "count": 2,
-     "base": "USD",
-     "rates[0].code": "usd",
-     "rates[0].rate": 1
+     "base": "BTC",
+     "rates[0].code": "usd"
     },
     "gt": {
      "rates[0].perBtc": 1000,
-     "rates[1].rate": 10
+     "rates[0].rate": 1000
     },
     "matches": {
      "check": "^(ecb-reference|unavailable)$"
@@ -517,21 +516,21 @@
   },
   {
    "slug": "exchange-rates",
-   "name": "a crypto base has no reference",
+   "name": "crosses in another base",
    "input": {
-    "currencies": "usd",
-    "base": "btc"
+    "currencies": "usd,jpy",
+    "type": "fiat",
+    "base": "usd"
    },
    "expect": {
     "equals": {
-     "count": 1,
-     "base": "BTC",
-     "check": "no-reference",
+     "count": 2,
+     "base": "USD",
      "rates[0].code": "usd",
-     "rates[0].referenceRate": null
+     "rates[0].rate": 1
     },
     "gt": {
-     "rates[0].rate": 1000
+     "rates[1].rate": 10
     }
    },
    "paceKey": "coingecko",
