@@ -23,6 +23,7 @@ import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 import { returningWalletEnabled, returningWalletDataHandling, WALLET_HINT_HEADER } from "./returning-wallet.js";
+import { lifetimeMs as priceWebhookLifetimeMs } from "./price-webhooks.js";
 import { directUpstreamPrivacyText, directUpstreamThirdPartyText, directUpstreamLocationText, withDirectUpstreamDate } from "./gateway-direct-upstream.js";
 import { taskRetentionPublic } from "./mcp-tasks.js";
 import { solanaActivityStoreEnabled, solanaActivityMaxWallets, SOLANA_ACTIVITY_KEEP_DAYS } from "./solana-activity-store.js";
@@ -181,6 +182,12 @@ so every claim below is verifiable in code.</p>
     made inside that time copies it (see Backups below);</li>
     <li>for a decision bought on <code>/api/decide</code>, we keep the task you describe, the plan we
     returned, the paying wallet and any feedback you report on its steps, for 30 days;</li>
+    <li>a registration on <code>/api/price-webhook</code> keeps the URL you register, the tools it watches
+    and a keyed digest of the registrant (the paying wallet or key, or the client address on a server that
+    takes no payment; never the wallet or the address itself), and nothing else about the caller in that
+    record, until the subscription ends (${Math.round(priceWebhookLifetimeMs() / 86_400_000)} days after the registration or its last renewal) or is
+    removed, an ended one being deleted the next time the server takes a registration or restarts; a delivery sends your
+    receiver the price changes and the subscription's id, never who registered it;</li>
     <li>for a paid call, the sales ledger keeps the tool's name and a SHA-256 hash of the response we
     served, so a receipt can prove what was delivered; the response itself is not kept. It also keeps
     how the call arrived: through our hosted MCP connector, from one of our client packages (its name

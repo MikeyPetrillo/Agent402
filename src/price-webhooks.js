@@ -41,8 +41,9 @@
 // cap. A subscription stored by a build that kept no expiry gets one lifetime
 // from the first store write of this one.
 //
-// THE STORE'S BOUND. Expired subscriptions are removed whenever the store is
-// written. From PRICE_WEBHOOK_MAX on, a new registration first removes the
+// THE STORE'S BOUND. Expired subscriptions are removed at every registration
+// and each time the prices are recorded (a boot); one that has expired is
+// never delivered to in between. From PRICE_WEBHOOK_MAX on, a new registration first removes the
 // subscriptions whose last delivery was dropped after every attempt (the most
 // failures first, then the oldest) and is admitted all the same, up to twice
 // that number, the hard bound (a 503 with Retry-After, nothing charged).
@@ -302,7 +303,7 @@ export function createPriceWebhooks({
     }
   }
 
-  /** What every store write does first: remove what has ended (an expired
+  /** What a registration and a price record do first: remove what has ended (an expired
    *  subscription, a registration or renewal never reported settled), give a
    *  subscription stored with no expiry its lifetime, drop what they leave
    *  behind. True when anything changed. */

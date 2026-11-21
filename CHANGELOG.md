@@ -48,6 +48,10 @@ Operations:
   the Base tier uses. Unset, that tier stays on Base alone.
 - The Bazaar keep-alive pays a route priced per request with its `fromInput`
   body, and never above the list price.
+Privacy:
+- /privacy and the service manifest's data handling say what a price webhook
+  registration keeps (the URL, the tools it watches and a keyed digest of
+  the registrant) and for how long.
 
 ### 2026-11-21 (checked coin prices, FRED terms and mailbox providers)
 Tools:

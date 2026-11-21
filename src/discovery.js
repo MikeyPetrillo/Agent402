@@ -33,6 +33,7 @@ import { WINDOW_MS as LATE_SETTLE_WINDOW_MS, MAX_AGE_MS as LATE_SETTLE_MAX_AGE_M
 import { settledHoldText, settledValidityHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 import { returningWalletEnabled, returningWalletDataHandling, WALLET_HINT_HEADER } from "./returning-wallet.js";
+import { lifetimeMs as priceWebhookLifetimeMs } from "./price-webhooks.js";
 import { publicIndexManifest } from "./facilitator-public-index.js";
 import { referralOffered } from "./referral-gate.js";
 import { GOOD_READ_MAX_MS, SETTLED_MARK_MS, COVER_WALLETS_MAX, sharedWindowMs } from "./inflight-cover.js";
@@ -219,6 +220,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
           `a digest of the payment's network, signed payer and nonce: as a replay mark, kept about ${settledHoldText()} after a settled call, or until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later; for a grant that was not settled (a forgiven hang-up${firstCallAllowanceEnabled() ? ", a served first-call allowance" : ""}), whose authorization is still live on chain, until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes, which can be long when the client signs a long validity window`,
           "the paying wallet of a Solana payment (the transfer's authority) or its signers: to tell one paying wallet from another in failure telemetry, stored only as a keyed hash",
           "the source of a Tempo MPP credential (a did:pkh address): to classify the payer of a sale",
+          `the payer of a price-webhook registration (the signed EVM payer, a credits key, a Tempo sender, the signer of a Solana, Algorand or Stellar payment; for any other credential, a digest of it): to count the subscriptions that registrant holds, stored only as a keyed digest with the subscription, until it ends (${Math.round(priceWebhookLifetimeMs() / 86_400_000)} days after the registration or its last renewal) or is removed`,
           "a Tempo pull credential answered 402 after its broadcast failed, with its route, amount and the payer it names: kept until the check for a late landing ends (minutes; at most 24 hours while the chain cannot be read), so a transfer that lands after the 402 is booked as owed",
           "the payer named in the facilitator's settlement receipt: recorded with the sale when the payment itself names none we can verify",
           `an EIP-3009 authorization on an EVM chain whose settlement was answered unconfirmed, with its payer, nonce, route, amount and validBefore: kept until the check for a late landing ends (at least ${Math.round(LATE_SETTLE_WINDOW_MS / 60000)} minutes, and never before its validBefore has passed; one still open after ${Math.round(LATE_SETTLE_MAX_AGE_MS / 3600000)} hours, because the chain cannot be read or the authorization is still valid, is kept until it closes or is resolved by hand), so a transfer that lands is booked as owed`,

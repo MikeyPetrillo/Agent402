@@ -45,6 +45,7 @@ const ENTRIES = [
       "Operations: A server with no signing key (`PRICE_WEBHOOK_SIGNING_KEY`, else `POW_SECRET`) answers a price webhook registration 503 and stores nothing; `PRICE_WEBHOOK_DELIVERIES=off` holds deliveries while registrations and removals keep working. `PRICE_WEBHOOK_LIFETIME_DAYS` sets how long a subscription lasts and `PRICE_WEBHOOK_MAX_PER_PAYER` how many one wallet holds.",
       "Operations: `SOR_EVM_UNPROVEN_CHAINS` lists EVM chains other than Base on which the router tries a seller below the settlement floor, under one per-call ceiling (`SOR_EVM_UNPROVEN_MAX_USD`) and the per-seller and daily windows the Base tier uses. Unset, that tier stays on Base alone.",
       "Operations: The Bazaar keep-alive pays a route priced per request with its `fromInput` body, and never above the list price.",
+      "Privacy: /privacy and the service manifest's data handling say what a price webhook registration keeps (the URL, the tools it watches and a keyed digest of the registrant) and for how long.",
     ],
   },
   {
