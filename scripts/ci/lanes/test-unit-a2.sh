@@ -200,6 +200,8 @@ t node scripts/test-hangup-forgiveness-redis.js
 t node scripts/test-first-call-allowance.js
 # The allowance's settle skip is keyed by the payment (network, payer, nonce), never by finding the request: a moved adapter path still skips a granted 200 (REAL redis, in-process).
 t node scripts/test-first-call-allowance-hook.js
+# First-call allowance log lines: a salted payer hash and the list price on a grant, refusal counts per day (offline)
+t node scripts/test-first-call-allowance-log.js
 # The grant's record on Postgres keeps the claim time, so a paid call booked while a slow free call ran reads as a return (REAL redis + postgres, in-process).
 t node scripts/test-first-call-allowance-record-pg.js
 t node scripts/test-external-spend-guard-pg.js
