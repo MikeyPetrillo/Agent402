@@ -663,6 +663,7 @@
     "regulatory-watch": "src/skills.js",
     "relative-time": "src/tools/kit2.js",
     "render": "src/tools/skill-runner.js",
+    "research": "src/tools/research-deep-kit.js",
     "research-max": "src/tools/research-deep-kit.js",
     "research-pro": "src/tools/research-deep-kit.js",
     "robots-check": "src/tools/kit.js",

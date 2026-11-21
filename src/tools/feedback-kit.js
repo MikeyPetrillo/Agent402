@@ -197,7 +197,7 @@ export const FEEDBACK_TOOLS = [
           windowDays: 90,
           tools: [
             { slug: "crypto-price", good: 14, bad: 1, total: 15, raters: 9 },
-            { slug: "research", good: 3, bad: 0, total: 3, raters: 3 },
+            { "slug": "research", good: 3, bad: 0, total: 3, raters: 3 },
           ],
           totals: { good: 17, bad: 1, total: 18, tools: 2 },
           note: "Counts only. Every verdict was written by the wallet that paid for that call, one per settlement transaction. `raters` is distinct wallets: ten verdicts from one wallet is one opinion. Who said what, and their words, are never published.",
