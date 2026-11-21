@@ -69,7 +69,7 @@ const skipE2b = process.env.E2B_LIVE_TEST !== "1";
 
 const NETWORK = new Set([
   "/v1/images/fast", "/v1/images/pro", "/v1/images/edits", "/v1/videos/generations",  // llm-images-fast-kit.js
-  "/api/asset-transfers", "/api/token-balances", "/api/token-allowance", "/api/tx-receipt", "/api/block-receipts", "/api/token-price-history",  // alchemy-data-kit.js
+  "/api/asset-transfers", "/api/token-balances", "/api/token-allowance", "/api/tx-receipt", "/api/block-receipts", "/api/token-price-history", "/api/wallet-transfers-multichain",  // alchemy-data-kit.js
   "/api/fc-cast-search", "/api/fc-channel-feed", "/api/fc-trending", "/api/fc-user-casts", "/api/fc-cast", "/api/fc-cast-replies", "/api/fc-channel", "/api/fc-user-search", "/api/fc-cast-metrics",  // farcaster-social-kit.js
   "/api/coin-price-by-contract", "/api/coin-profile", "/api/coin-history", "/api/coin-ohlc", "/api/coin-market-chart-range", "/api/coin-categories", "/api/global-defi", "/api/exchanges", "/api/exchange-tickers", "/api/exchange-rates", "/api/coin-search", "/api/coins-list",
   "/api/rwa-list", "/api/rwa-markets", "/api/rwa-asset", "/api/rwa-issuers", "/api/rwa-issuer",  // crypto-markets-kit.js
@@ -92,7 +92,7 @@ const NETWORK = new Set([
   "/api/perp-dexs", "/api/perp-dex-markets", "/api/perp-dex-limits",
   "/api/options-summary", "/api/crypto-options-chain", "/api/options-ticker",
   "/api/token-safety", "/api/sol-token-safety", "/api/sol-token-report", "/api/sol-token-holders", "/api/sol-token-pairs", "/api/sol-token-search", "/api/sol-trending", "/api/sol-price", "/api/sol-swap-quote", "/api/sol-token-lookup",
-  "/api/x-search-recent", "/api/x-user", "/api/x-user-tweets", "/api/x-tweet", "/api/x-users-lookup",
+  "/api/x-search-recent", "/api/x-user", "/api/x-user-tweets", "/api/x-tweet", "/api/x-users-lookup", "/api/x-post-counts", "/api/x-trends",
   "/api/hunter-domain-search", "/api/hunter-email-finder", "/api/hunter-email-verify", "/api/hunter-company", "/api/apollo-people-search", "/api/apollo-org-enrich", "/api/apollo-person-match",
   "/api/extract", "/api/meta", "/api/dns", "/api/render", "/api/screenshot", "/api/pdf",
   "/api/http-check", "/api/fetch-json", "/api/tls-cert", "/api/whois", "/api/robots-check", "/api/sitemap",
@@ -130,7 +130,7 @@ const NETWORK = new Set([
   "/api/gov-data", "/api/weather-alerts", "/api/earthquakes",
   "/api/drug-recalls", "/api/food-recalls", "/api/drug-adverse-events", "/api/vin-decode", "/api/vehicle-recalls",
   "/api/device-recalls", "/api/college-lookup", "/api/fec-candidates",
-  "/api/drug-label", "/api/drug-ndc", "/api/device-510k", "/api/device-adverse-events",
+  "/api/drug-label", "/api/drug-ndc", "/api/device-510k", "/api/device-adverse-events", "/api/drug-shortages", "/api/drug-orange-book",
   "/api/federal-awards", "/api/geo-lookup", "/api/fema-disasters",
   "/api/image-ocr",
   // Image-kit URL tools: the examples fetch sample-photo.jpg from our own

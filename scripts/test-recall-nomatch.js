@@ -56,8 +56,8 @@ try {
     "a truncated no-match body": () => res(404, '{"error":{"code":"NOT_FO'),
     "a 404 with another error code": () => res(404, JSON.stringify({ error: { code: "SERVER_ERROR", message: "x" } })),
   };
-  for (const slug of ["drug-recalls", "food-recalls", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "device-510k", "device-adverse-events"]) {
-    const input = slug === "drug-ndc" ? { ndc: "58151-155" } : slug === "drug-adverse-events" ? { drug: "ibuprofen" } : slug === "drug-label" ? { name: "lipitor" } : slug === "device-510k" ? { applicant: "medtronic" } : slug === "device-adverse-events" ? { brand: "minimed" } : { q: "insulin pump", limit: 5 };
+  for (const slug of ["drug-recalls", "food-recalls", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "device-510k", "device-adverse-events", "drug-shortages", "drug-orange-book"]) {
+    const input = slug === "drug-shortages" ? { name: "lidocaine" } : slug === "drug-orange-book" ? { name: "ozempic" } : slug === "drug-ndc" ? { ndc: "58151-155" } : slug === "drug-adverse-events" ? { drug: "ibuprofen" } : slug === "drug-label" ? { name: "lipitor" } : slug === "device-510k" ? { applicant: "medtronic" } : slug === "device-adverse-events" ? { brand: "minimed" } : { q: "insulin pump", limit: 5 };
     let reads = 0, err = null, out = null;
     globalThis.fetch = async () => { reads++; return other404["a bare 404 with no body"](); };
     try { out = await bySlug(slug).handler(input); } catch (e) { err = e; }

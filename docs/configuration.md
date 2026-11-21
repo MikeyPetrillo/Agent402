@@ -12,7 +12,7 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1072 variables in 110 groups.
+1076 variables in 110 groups.
 
 ## Contents
 
@@ -506,6 +506,7 @@ may still clamp it, and the read site is the reference.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `HARDCAP_ALCHEMY_CALLS` | Hardcap alchemy calls. |  | `src/upstream-hard-caps.js` |
+| `HARDCAP_ALCHEMY_MULTICHAIN_NETWORKS` | Network reads a day by the multichain wallet transfers tool, one per network a call asks for (default 30000; off disables, 0 refuses all). |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_BRAVE_CALLS` | Hardcap brave calls. |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_E2B_SANDBOXES` | Hardcap e2b sandboxes. |  | `src/upstream-hard-caps.js` |
 | `HARDCAP_OPENAI_CALLS` | Hardcap openai calls. |  | `src/upstream-hard-caps.js` |
@@ -570,7 +571,9 @@ may still clamp it, and the read site is the reference.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `INFLIGHT_COVER` | Inflight cover. |  | `src/inflight-cover-state.js` |
+| `INFLIGHT_COVER_KEPT_AT_ONCE_MS` | (no purpose line) |  | `src/inflight-cover.js` |
 | `INFLIGHT_COVER_LIVE_TTL_MS` | Inflight cover live lifetime, in milliseconds. |  | `src/inflight-cover.js` |
+| `INFLIGHT_COVER_PAST_BUDGET_READS_PER_MIN` | (no purpose line) |  | `src/inflight-cover.js` |
 | `INFLIGHT_COVER_READS_DAILY_MAX` | Reads a day that reach the capped on-chain data host (unset: a fifth of HARDCAP_ALCHEMY_CALLS; never over half of it). |  | `src/upstream-hard-caps.js` |
 | `INFLIGHT_COVER_READ_GAP_MS` | A wallet's reads are at least this far apart; inside it its last read is judged as it is (1000 to 10000). |  | `src/inflight-cover.js` |
 | `INFLIGHT_COVER_SHARED_WINDOW_MS` | Inflight cover shared window, in milliseconds. |  | `src/inflight-cover.js` |
@@ -1586,6 +1589,7 @@ may still clamp it, and the read site is the reference.
 | `OPENAI_DECISIONS_URL` | Openai decisions URL. | `https://api.openai.com/v1/decisions` | `src/tools/judge-kit.js` |
 | `OPENFDA_API_KEY` | Openfda API key (a credential, set on the host). |  | `src/tools/gov-kit.js` |
 | `OPEN_METEO_API_KEY` | Key for the weather data provider; unset uses its public hosts. |  | `src/tools/weather-kit.js` |
+| `OPEN_METEO_READ_CACHE` | off reads every forecast, archive and ensemble request upstream; unset keeps each successful read for a few minutes (src/tools/weather-kit.js). |  | `src/tools/weather-kit.js` |
 | `OPERATOR_AUTH_FAIL_ALERT` | Failed operator-token attempts per hour before the guessing alarm pages. | `100` | `src/server.js` |
 | `OPERATOR_SESSION_IDLE_SECONDS` | Idle lifetime of a browser operator session, in seconds. |  | `src/server.js` |
 | `OWED_ESCALATE_DAYS` | Owed escalate, in days. |  | `src/tempo-push-debts.js` |

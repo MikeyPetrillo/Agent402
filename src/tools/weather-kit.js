@@ -63,24 +63,30 @@ function logKeyedRefusal(req, status) {
   console.warn(`[open-meteo] keyed request refused (HTTP ${status}) for the ${req.api} API (${req.publicHost}): OPEN_METEO_API_KEY is not accepted there or does not cover that API; answered 503, not charged`);
 }
 
-// The openMeteo word on /api/gateway-status, from the last keyed outcome in
-// this process (production runs one replica): off (no key); unknown until the
-// first keyed outcome (a fresh process has not tried the key yet, so the
-// pagers neither open nor close on it); ok after a keyed success; refused
-// after two keyed refusals in a row, or at once on a 400 whose reason names
-// the API key. A word changes only on the next keyed outcome, never with time.
-let keyedOutcome = null; // null | "ok" | "refused"
-let refusalRun = 0;
+// The openMeteo word on /api/gateway-status, from the last keyed outcome of
+// each Open-Meteo API in this process (production runs one replica): off (no
+// key); unknown until the first keyed outcome (a fresh process has not tried
+// the key yet, so the pagers neither open nor close on it); refused while any
+// API's last keyed outcome is a refusal (two in a row on that API, or one 400
+// whose reason names the API key); ok when every API with an outcome last
+// succeeded. Each API keeps its own outcome and run, so a key that covers some
+// APIs and not others reads refused however many reads succeed on the others.
+// A word changes only on the next keyed outcome, never with time.
+const keyedOutcomes = new Map(); // api -> { outcome: null | "ok" | "refused", run }
+const apiState = (api) => { let st = keyedOutcomes.get(api); if (!st) { st = { outcome: null, run: 0 }; keyedOutcomes.set(api, st); } return st; };
 export function openMeteoStatus({ env = process.env } = {}) {
   if (!openMeteoKey(env)) return { status: "off" };
-  return { status: keyedOutcome ?? "unknown" };
+  const outcomes = [...keyedOutcomes.values()].map((st) => st.outcome).filter(Boolean);
+  if (outcomes.includes("refused")) return { status: "refused" };
+  return { status: outcomes.length ? "ok" : "unknown" };
 }
-function noteKeyedSuccess() { keyedOutcome = "ok"; refusalRun = 0; }
-function noteKeyedRefusal(namesKey) {
-  refusalRun += 1;
-  if (namesKey || refusalRun >= 2) keyedOutcome = "refused";
+function noteKeyedSuccess(api) { const st = apiState(api); st.outcome = "ok"; st.run = 0; }
+function noteKeyedRefusal(api, namesKey) {
+  const st = apiState(api);
+  st.run += 1;
+  if (namesKey || st.run >= 2) st.outcome = "refused";
 }
-export function _resetOpenMeteoStatus({ logs = false } = {}) { keyedOutcome = null; refusalRun = 0; if (logs) refusalLoggedAt.clear(); }
+export function _resetOpenMeteoStatus({ logs = false } = {}) { keyedOutcomes.clear(); if (logs) refusalLoggedAt.clear(); }
 
 // Open-Meteo answers a key it does not accept (unknown, revoked, or a plan
 // that does not cover the API) with 400 and a JSON reason naming the key or
@@ -103,7 +109,7 @@ function openMeteoFailure(err, req) {
   const up = err?.upstreamStatus;
   const reason = up === 400 ? refusalReason(err?.upstreamBody) : "";
   if (req.keyed && (up === 401 || up === 403 || (up === 400 && KEY_REFUSAL_REASON_RE.test(reason)))) {
-    noteKeyedRefusal(up === 400 && NAMES_KEY_RE.test(reason));
+    noteKeyedRefusal(req.api, up === 400 && NAMES_KEY_RE.test(reason));
     logKeyedRefusal(req, up);
     return Object.assign(new Error("Weather data is temporarily unavailable because of a service problem on our side, not your input - retry later"), {
       statusCode: 503, upstreamStatus: up, attribution: "ours", noRetry: true, retryAfter: 60,
@@ -114,19 +120,73 @@ function openMeteoFailure(err, req) {
   return err;
 }
 
+// --- A short read cache (forecast, archive and ensemble reads) ---------------
+// A board of cities, a pack's stops or a buyer asking the same question twice
+// sends the same request again within minutes; Open-Meteo's own data changes
+// more slowly than that. A successful read is kept in this process for its
+// API's TTL, keyed on the exact request (API, path and every parameter, never
+// the key), so two answers are equal whenever the upstream's would have been.
+// Coordinates are not rounded: Open-Meteo downscales to the point's own
+// elevation, so a nearby point can read a different temperature. The body is
+// kept as text and parsed for every caller, so no answer shares an object with
+// another. Bounded by count and by bytes; the oldest entry leaves first.
+// Geocoding has its own place cache above; air quality is read fresh.
+// OPEN_METEO_READ_CACHE=off reads every request upstream.
+//   forecast  5 minutes: current conditions come from 15-minute data and the
+//             models refresh hourly
+//   ensemble 15 minutes: the ensemble runs refresh every 6 to 12 hours
+//   archive  60 minutes: the archive gains a day at a time
+export const OPEN_METEO_CACHE_TTL_MS = Object.freeze({ forecast: 5 * 60_000, ensemble: 15 * 60_000, archive: 60 * 60_000 });
+export const OPEN_METEO_CACHE_MAX = 2000;
+export const OPEN_METEO_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const readCache = new Map(); // key -> { at, ttl, html }
+let readCacheBytes = 0;
+const readCacheOn = () => String(process.env.OPEN_METEO_READ_CACHE ?? "").trim().toLowerCase() !== "off";
+/** The sentence a cached tool's listing carries: how old an answer can be. */
+export const cacheNote = (api) => `Cached for up to ${Math.round(OPEN_METEO_CACHE_TTL_MS[api] / 60_000)} minutes.`;
+function readCacheKey(api, path, params) {
+  const q = [...new URLSearchParams(params)].filter(([k]) => k !== "apikey").sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `${api} ${path}?${new URLSearchParams(q)}`;
+}
+function readCacheDrop(key) {
+  const hit = readCache.get(key);
+  if (!hit) return;
+  readCache.delete(key);
+  readCacheBytes -= hit.html.length;
+}
+function readCacheGet(key) {
+  const hit = readCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at >= hit.ttl) { readCacheDrop(key); return null; }
+  return hit.html;
+}
+function readCachePut(key, html, ttl) {
+  if (html.length > OPEN_METEO_CACHE_MAX_BYTES / 8) return; // one body never takes most of the room
+  readCacheDrop(key);
+  readCache.set(key, { at: Date.now(), ttl, html });
+  readCacheBytes += html.length;
+  while (readCache.size > OPEN_METEO_CACHE_MAX || readCacheBytes > OPEN_METEO_CACHE_MAX_BYTES) readCacheDrop(readCache.keys().next().value);
+}
+export function _resetOpenMeteoCache() { readCache.clear(); readCacheBytes = 0; }
+export function _openMeteoCacheStats() { return { entries: readCache.size, bytes: readCacheBytes, keys: [...readCache.keys()] }; }
+
 // One retry on a transient 502/503/504 - added 2026-08-12 after
 // weather-hourly hit exactly this shape live in CI (a plain 15s timeout,
 // zero retries previously; api.open-meteo.com answered fine on a later
 // attempt). retryTransient never retries a deterministic 4xx or a 429.
 export async function openMeteoJson(api, path, params, env = process.env) {
   const req = openMeteoRequest(api, path, params, env);
+  const ttl = readCacheOn() ? OPEN_METEO_CACHE_TTL_MS[api] : 0;
+  const cacheKey = ttl ? readCacheKey(api, path, params) : null;
+  const kept = cacheKey ? readCacheGet(cacheKey) : null;
+  if (kept !== null) return JSON.parse(kept);
   let html;
   try {
     ({ html } = await retryTransient(() => safeFetch(req.url, { maxBytes: 2 * 1024 * 1024, ownUpstream: true, errorBodyMaxBytes: req.keyed ? 2048 : 0 })));
   } catch (err) {
     throw openMeteoFailure(err, req);
   }
-  if (req.keyed) noteKeyedSuccess();
+  if (req.keyed) noteKeyedSuccess(req.api);
   let data;
   try {
     data = JSON.parse(html);
@@ -136,6 +196,8 @@ export async function openMeteoJson(api, path, params, env = process.env) {
   // Every answer read here is an object or a list of them. A body that parses
   // to anything else (null, a string, a number) is an upstream failure.
   if (data === null || typeof data !== "object") throw bad("Upstream returned an unexpected body", 502);
+  // Only a readable answer is kept; an Open-Meteo error body ({ error: true }) is not.
+  if (cacheKey && data.error !== true) readCachePut(cacheKey, html, ttl);
   return data;
 }
 
@@ -340,7 +402,7 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      `Current weather conditions for any location on Earth: temperature, feels-like, humidity, wind speed/direction/gusts, precipitation, cloud cover, pressure, and human-readable condition. Global coverage by coordinates or place name; no account needed. ?lat=48.86&lon=2.35 or ?place=Paris. ${OPEN_METEO_ATTRIBUTION}`,
+      `Current weather conditions for any location on Earth: temperature, feels-like, humidity, wind speed/direction/gusts, precipitation, cloud cover, pressure, and human-readable condition. Global coverage by coordinates or place name; no account needed. ${cacheNote("forecast")} ?lat=48.86&lon=2.35 or ?place=Paris. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "current", "temperature", "wind", "global"],
     discovery: {
       input: { lat: 48.8566, lon: 2.3522 },
@@ -413,7 +475,7 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      `7-day daily weather forecast for any location: high/low temp, precipitation sum and probability, max wind, UV index, sunrise/sunset. Global coverage by coordinates or place name; no account needed. ?lat=35.68&lon=139.69 or ?place=Tokyo. ${OPEN_METEO_ATTRIBUTION}`,
+      `Weather forecast by day for any location, 7 days by default and up to 16: high/low temp, precipitation sum and probability, max wind, UV index, sunrise/sunset. Global coverage by coordinates or place name; no account needed. ${cacheNote("forecast")} ?lat=35.68&lon=139.69 or ?place=Tokyo. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "forecast", "daily", "global"],
     discovery: {
       input: { lat: 35.6762, lon: 139.6503 },
@@ -484,7 +546,7 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      `48-hour hourly weather forecast for any location: temperature, precipitation probability and amount, wind, cloud cover, humidity. Global coverage by coordinates or place name; no account needed. ?lat=-33.87&lon=151.21 or ?place=Sydney. ${OPEN_METEO_ATTRIBUTION}`,
+      `Hourly weather forecast for any location, 48 hours by default and up to 168: temperature, precipitation probability and amount, wind, cloud cover, humidity. Global coverage by coordinates or place name; no account needed. ${cacheNote("forecast")} ?lat=-33.87&lon=151.21 or ?place=Sydney. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "forecast", "hourly", "global"],
     discovery: {
       input: { lat: -33.8688, lon: 151.2093 },
@@ -552,7 +614,7 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      `Historical daily weather for any location and date range (up to 1 year): high/low temp, precipitation, wind, conditions. Global archive from 1940 to the most recent days (reanalysis, with weather-model data for the latest days); by coordinates or place name; no account needed. ?lat=51.51&lon=-0.13&start=2025-06-01&end=2025-06-07 (or ?place=London). ${ATTRIBUTIONS["open-meteo-c3s"]}`,
+      `Historical weather by day for any location and date range (up to 1 year): high/low temp, precipitation, wind, conditions. Global archive from 1940 to the most recent days (reanalysis, with weather-model data for the latest days); by coordinates or place name; no account needed. ${cacheNote("archive")} ?lat=51.51&lon=-0.13&start=2025-06-01&end=2025-06-07 (or ?place=London). ${ATTRIBUTIONS["open-meteo-c3s"]}`,
     tags: ["weather", "historical", "archive", "climate", "global"],
     discovery: {
       input: { lat: 51.5074, lon: -0.1278, start: "2025-06-01", end: "2025-06-07" },

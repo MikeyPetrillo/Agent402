@@ -24,6 +24,9 @@
 //   node scripts/test-weather-probability.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { stubGuardResolver } from "./lib/guard-resolver-stub.js";
+// This suite counts the kit's own reads against stubbed answers; the read
+// cache (src/tools/weather-kit.js, tested in test-open-meteo-keyed.js) is off.
+process.env.OPEN_METEO_READ_CACHE = "off";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };

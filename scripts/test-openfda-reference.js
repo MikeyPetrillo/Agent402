@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // openFDA reference tools: drug-label, drug-ndc, device-510k,
-// device-adverse-events (src/tools/gov-kit.js).
+// device-adverse-events, drug-shortages, drug-orange-book (src/tools/gov-kit.js).
 //
 //   node scripts/test-openfda-reference.js            (offline, stubbed fetch)
 //   OPENFDA_LIVE=1 node scripts/test-openfda-reference.js   (also runs each
@@ -45,6 +45,16 @@ const MDR = { report_number: "2032227-2026-1", mdr_report_key: "50955055", date_
   device: [{ brand_name: "Example Pump", generic_name: "INSULIN PUMP", manufacturer_d_name: "MEDTRONIC MINIMED", device_report_product_code: "LZG", openfda: { device_class: "2", device_name: "Pump, Infusion, Insulin" }, gmdn_term: "GMDN-SHOULD-NOT-APPEAR" }],
   mdr_text: [{ text_type_code: "Additional Manufacturer Narrative", text: "manufacturer note" }, { text_type_code: "Description of Event or Problem", text: NARRATIVE }] };
 
+// A drug shortage row as openFDA serves it: the company phone line rides in
+// contact_info and is never copied (a shortage row names the product, not a person).
+const SHORTAGE = { update_type: "Reverified", initial_posting_date: "04/10/2020", package_ndc: "0409-4276-01", generic_name: "Lidocaine Hydrochloride Injection", contact_info: "844-646-4398", availability: "Limited Availability", update_date: "11/19/2026", therapeutic_category: ["Anesthesia"], dosage_form: "Injection", presentation: "Lidocaine, Injection, 1% (NDC 0409-4276-01)", company_name: "Pfizer Inc.", status: "Current", shortage_reason: "Demand increase for the drug", related_info: "Next delivery expected in December",
+  openfda: { brand_name: ["XYLOCAINE"], generic_name: ["LIDOCAINE HYDROCHLORIDE"], application_number: ["NDA006488"], manufacturer_name: ["Hospira, Inc."], route: ["INFILTRATION"] } };
+// An Orange Book product as openFDA serves it: patents and exclusivity codes beside one product.
+const ORANGE = { approval_date: "20241209", product_number: "004",
+  patents: [{ patent_number: "8536122", expiration_date: "20260320", drug_substance_flag: true, drug_product_flag: true, patent_use_code: "U-2628", patent_submission_date: "20250506" }, ...Array.from({ length: 30 }, (_, k) => ({ patent_number: String(11000000 + k), expiration_date: "20340502", drug_product_flag: true }))],
+  exclusivity: [{ exclusivity_code: "I-976", exclusivity_expiration_date: "20281017" }],
+  products: [{ active_ingredients: [{ name: "SEMAGLUTIDE", strength: "1.5MG" }], brand_name: "OZEMPIC", application_name: "NOVO", application_type: "N", application_number: "213051", therapeutic_equivalence_codes: ["AB"], reference_listed_drug: true, reference_standard: true, marketing_status: "HUMAN PRESCRIPTION DRUG", application_full_name: "NOVO NORDISK INC", dosage_form: "TABLET", route: "ORAL" }] };
+
 const sent = [];
 let mode = "ok";
 const realFetch = globalThis.fetch;
@@ -58,6 +68,8 @@ globalThis.fetch = async (url) => {
   if (u.pathname === "/drug/label.json") return json(200, { meta: meta(259), results: [LABEL] });
   if (u.pathname === "/drug/ndc.json") return json(200, { meta: meta(1), results: [NDC] });
   if (u.pathname === "/device/510k.json") return json(200, { meta: meta(1587), results: [K510] });
+  if (u.pathname === "/drug/shortages.json") return json(200, { meta: meta(87), results: [SHORTAGE] });
+  if (u.pathname === "/drug/orangebook.json") return json(200, { meta: meta(10), results: [ORANGE] });
   if (u.pathname === "/device/event.json") {
     const count = u.searchParams.get("count");
     if (count === "event_type.exact") return json(200, { meta: {}, results: [{ term: "Malfunction", count: 900 }, { term: "Injury", count: 90 }, { term: "", count: 2 }] });
@@ -71,7 +83,7 @@ const search = (u) => u.searchParams.get("search");
 
 try {
   // ---- catalog envelope ------------------------------------------------------
-  for (const s of ["drug-label", "drug-ndc", "device-510k", "device-adverse-events"]) {
+  for (const s of ["drug-label", "drug-ndc", "device-510k", "device-adverse-events", "drug-shortages", "drug-orange-book"]) {
     const t = tool(s);
     ok(t && t.price === "$0.004" && t.category === "data" && t.route === `GET /api/${s}` && t.discovery?.input && t.discovery?.inputSchema && t.discovery?.output?.example, `${s}: tool shape, priced like the kit's other openFDA reads`);
     ok(!/—/.test(t.description), `${s}: no em dash in the description`);
@@ -88,6 +100,10 @@ try {
   await throws(h("device-adverse-events")({}), 400, "device-adverse-events: a filter is required");
   await throws(h("device-adverse-events")({ device: "pump", since: "2026-13-45" }), 400, "device-adverse-events: since must be a date");
   await throws(h("drug-label")({ name: "x".repeat(101) }), 400, "drug-label: over-long term refused");
+  await throws(h("drug-shortages")({}), 400, "drug-shortages: a filter is required");
+  await throws(h("drug-shortages")({ name: "lidocaine", status: "sometimes" }), 400, "drug-shortages: status must be a listed value");
+  await throws(h("drug-orange-book")({}), 400, "drug-orange-book: name or applicationNumber required");
+  await throws(h("drug-orange-book")({ applicationNumber: "NDA-12" }), 400, "drug-orange-book: application number shape");
   ok(sent.length === 0, "validation failures made no upstream request");
 
   // ---- drug-label ------------------------------------------------------------
@@ -128,6 +144,28 @@ try {
   ok(r.matched === 1587 && r.returned === 1 && r.truncated === true, "device-510k: partial fields");
   await h("device-510k")({ kNumber: "k233210" });
   ok(search(last()) === 'k_number:"K233210"', "device-510k: K number upper-cased");
+
+  // ---- drug-shortages ---------------------------------------------------------
+  r = await h("drug-shortages")({ name: "lidocaine", status: "current", limit: 3 });
+  ok(last().pathname === "/drug/shortages.json" && search(last()) === '(generic_name:"lidocaine" OR openfda.brand_name:"lidocaine" OR openfda.generic_name:"lidocaine") AND status:"Current"' && last().searchParams.get("sort") === "update_date:desc" && last().searchParams.get("limit") === "3", `drug-shortages: name across generic and brand, status filter, newest update first (${search(last())})`);
+  const S = r.shortages[0];
+  ok(S.genericName === "Lidocaine Hydrochloride Injection" && S.status === "Current" && S.availability === "Limited Availability" && S.company === "Pfizer Inc." && S.packageNdc === "0409-4276-01" && S.brandNames[0] === "XYLOCAINE" && S.therapeuticCategories[0] === "Anesthesia" && S.reason === "Demand increase for the drug", "drug-shortages: product, status, availability, company, reason");
+  ok(S.updateDate === "2026-11-19" && S.initialPostingDate === "2020-04-10" && S.discontinuedDate === null, "drug-shortages: US dates read as ISO days, an absent date is null");
+  ok(!JSON.stringify(r).includes("844-646-4398"), "drug-shortages: the company phone line never rides through");
+  ok(r.matched === 87 && r.returned === 1 && r.complete === false && /public domain/.test(r.source) && /not medical advice/.test(r.disclaimer), "drug-shortages: partial fields, disclaimer and source");
+  await h("drug-shortages")({ category: "Oncology", status: "to be discontinued" });
+  ok(search(last()) === 'therapeutic_category:"Oncology" AND status:"To Be Discontinued"', `drug-shortages: category alone, status spelled as FDA lists it (${search(last())})`);
+
+  // ---- drug-orange-book --------------------------------------------------------
+  r = await h("drug-orange-book")({ name: "ozempic", limit: 2 });
+  ok(last().pathname === "/drug/orangebook.json" && search(last()) === 'products.brand_name:"ozempic" OR products.active_ingredients.name:"ozempic"' && last().searchParams.get("sort") === "approval_date:desc", `drug-orange-book: brand or ingredient, newest approval first (${search(last())})`);
+  const O = r.products[0];
+  ok(O.brandName === "OZEMPIC" && O.applicationNumber === "N213051" && O.applicationType === "NDA" && O.productNumber === "004" && O.applicant === "NOVO NORDISK INC" && O.approvalDate === "2024-12-09" && O.referenceListedDrug === true && O.teCodes[0] === "AB" && O.activeIngredients[0].strength === "1.5MG", "drug-orange-book: product identity, application, TE code, RLD");
+  ok(O.patents.length === 20 && O.patentCount === 31 && O.patents[0].patentNumber === "8536122" && O.patents[0].expirationDate === "2026-03-20" && O.patents[0].drugSubstance === true && O.patents[0].useCode === "U-2628", "drug-orange-book: patents shaped, capped at 20 with the full count beside them");
+  ok(O.exclusivities[0].code === "I-976" && O.exclusivities[0].expirationDate === "2028-10-17", "drug-orange-book: exclusivity codes and dates");
+  ok(r.matched === 10 && r.returned === 1 && r.truncated === true, "drug-orange-book: partial fields");
+  await h("drug-orange-book")({ applicationNumber: "N213051" });
+  ok(search(last()) === 'products.application_number:"213051"', `drug-orange-book: an application number searches its six digits (${search(last())})`);
 
   // ---- device-adverse-events ---------------------------------------------------
   sent.length = 0;
@@ -176,6 +214,8 @@ if (process.env.OPENFDA_LIVE === "1") {
     "drug-ndc": (r) => r.count >= 1 && r.products[0].productNdc === "58151-155",
     "device-510k": (r) => r.count >= 1 && /^K\d{6}$/.test(r.clearances[0].kNumber),
     "device-adverse-events": (r) => r.totalReports > 0 && r.eventTypes.length > 0 && r.topProblems.length > 0 && r.recentReports.length >= 1,
+    "drug-shortages": (r) => r.count >= 1 && r.shortages[0].genericName && r.shortages[0].status,
+    "drug-orange-book": (r) => r.count >= 1 && r.products[0].brandName && r.products.some((p) => p.patents.length > 0),
   };
   for (const [s, check] of Object.entries(checks)) {
     const t0 = Date.now();

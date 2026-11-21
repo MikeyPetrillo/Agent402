@@ -202,7 +202,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "token-brief", "filing-report",  // token-brief-kit.js: keyless Solana egress + Opus synthesis, metered
   "linkedin-article",              // linkedin-article-kit.js: research + Opus + image generation, metered
   "v1-images-fast", "v1-images-pro", "v1-images-edit", "v1-videos",  // llm-images-fast-kit.js (OpenRouter spend)
-  "asset-transfers", "token-balances", "token-allowance", "tx-receipt", "block-receipts", "token-price-history",  // alchemy-data-kit.js (egress)
+  "asset-transfers", "token-balances", "token-allowance", "tx-receipt", "block-receipts", "token-price-history", "wallet-transfers-multichain",  // alchemy-data-kit.js (egress)
   // chain-rpc-kit.js: one JSON-RPC read each (Alchemy CU when keyed, a public
   // node otherwise) - egress, so never free-tier.
   "chain-nonce", "chain-storage", "chain-pending", "chain-total-supply", "chain-erc1155-balance",
@@ -228,7 +228,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "perp-dexs", "perp-dex-markets", "perp-dex-limits",  // HIP-3 builder-deployed perp dexs (Hyperliquid info egress) - 2026-09-18
   "options-summary", "crypto-options-chain", "options-ticker",
   "sol-token-safety", "sol-token-report", "sol-token-holders", "sol-token-pairs", "sol-token-search", "sol-trending", "sol-price", "sol-swap-quote", "sol-token-lookup",
-  "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup",
+  "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup", "x-post-counts", "x-trends",
   "hunter-domain-search", "hunter-email-finder", "hunter-email-verify", "hunter-company", "apollo-people-search", "apollo-org-enrich", "apollo-person-match",
   "extract", "meta", "dns", "render", "screenshot", "pdf", "multi-search",
   // Browser pool (a held Chromium slot per call): browser-measure-kit.js.
@@ -244,7 +244,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "gov-data", "weather-alerts", "earthquakes",
   "drug-recalls", "food-recalls", "drug-adverse-events", "vin-decode", "vehicle-recalls",
   "device-recalls", "college-lookup", "fec-candidates",
-  "drug-label", "drug-ndc", "device-510k", "device-adverse-events",
+  "drug-label", "drug-ndc", "device-510k", "device-adverse-events", "drug-shortages", "drug-orange-book",
   "federal-awards", "geo-lookup", "fema-disasters",
   "barcode-lookup", "fx-rate", "weather-forecast",
   // Locale/time reference (data-kit): Nager.Date egress → wallet-only.

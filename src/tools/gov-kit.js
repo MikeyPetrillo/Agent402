@@ -13,6 +13,8 @@
 //   drug-ndc            FDA NDC directory by NDC or name (openFDA)
 //   device-510k         FDA 510(k) clearances (openFDA)
 //   device-adverse-events FDA device MDR counts, top problems, newest reports (openFDA)
+//   drug-shortages      FDA drug shortage list by drug, category or status (openFDA)
+//   drug-orange-book    FDA Orange Book products, patents and exclusivity (openFDA)
 //   college-lookup      US colleges via the Dept of Ed College Scorecard
 //   fec-candidates      US federal election candidates (FEC)
 //   federal-awards      US federal contract awards (USAspending, POST search)
@@ -291,6 +293,72 @@ export function k510Row(r) {
     thirdPartyReview: r?.third_party_flag === "Y" ? true : r?.third_party_flag === "N" ? false : null,
     applicantCity: r?.city || null, applicantState: r?.state || null, applicantCountry: r?.country_code || null,
     url: k ? `https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpmn/pmn.cfm?ID=${encodeURIComponent(k)}` : null,
+  };
+}
+// ---- openFDA drug shortages and the Orange Book ------------------------------
+// Both public domain under openFDA's CC0 terms (read again 2026-11-20); neither
+// endpoint carries GMDN content. A shortage row's contact_info is the
+// company's phone line and is never copied; dates there are US-style
+// MM/DD/YYYY, read as ISO days.
+export const usDate = (s) => {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(s ?? "").trim());
+  return m ? `${m[3]}-${m[1]}-${m[2]}` : null;
+};
+// The status words FDA uses on the shortage list, keyed by their lower case.
+export const SHORTAGE_STATUSES = Object.freeze({ current: "Current", resolved: "Resolved", "to be discontinued": "To Be Discontinued" });
+export function shortageRow(r) {
+  const o = r?.openfda || {};
+  return {
+    genericName: cut(r?.generic_name, 300),
+    brandNames: capList(o.brand_name, 5),
+    status: r?.status ?? null,
+    availability: r?.availability ?? null,
+    company: r?.company_name ?? null,
+    presentation: cut(r?.presentation, 300),
+    dosageForm: r?.dosage_form ?? null,
+    packageNdc: r?.package_ndc ?? null,
+    therapeuticCategories: capList(r?.therapeutic_category, 10),
+    reason: cut(r?.shortage_reason, 300),
+    relatedInfo: cut(r?.related_info, 500),
+    resolvedNote: cut(r?.resolved_note, 300),
+    updateType: r?.update_type ?? null,
+    updateDate: usDate(r?.update_date),
+    initialPostingDate: usDate(r?.initial_posting_date),
+    discontinuedDate: usDate(r?.discontinued_date),
+    applicationNumber: first(o.application_number),
+  };
+}
+export const ORANGE_PATENTS_MAX = 20;
+const APP_TYPES = { N: "NDA", A: "ANDA" };
+export function orangeBookRow(r) {
+  const p = Array.isArray(r?.products) ? r.products[0] || {} : {};
+  const patents = Array.isArray(r?.patents) ? r.patents : [];
+  const excl = Array.isArray(r?.exclusivity) ? r.exclusivity : Array.isArray(r?.exclusivities) ? r.exclusivities : [];
+  const flag = (v) => (v === true ? true : null);
+  return {
+    brandName: p.brand_name ?? null,
+    activeIngredients: (Array.isArray(p.active_ingredients) ? p.active_ingredients : []).slice(0, 20).map((a) => ({ name: a?.name ?? null, strength: a?.strength ?? null })),
+    dosageForm: p.dosage_form ?? null,
+    route: p.route ?? null,
+    applicant: p.application_full_name ?? p.application_name ?? null,
+    applicationType: APP_TYPES[p.application_type] ?? p.application_type ?? null,
+    applicationNumber: p.application_number ? `${p.application_type || ""}${p.application_number}` : null,
+    productNumber: r?.product_number ?? null,
+    marketingStatus: p.marketing_status ?? null,
+    teCodes: capList(p.therapeutic_equivalence_codes, 10),
+    referenceListedDrug: typeof p.reference_listed_drug === "boolean" ? p.reference_listed_drug : null,
+    referenceStandard: typeof p.reference_standard === "boolean" ? p.reference_standard : null,
+    approvalDate: fdaDate(r?.approval_date),
+    patents: patents.slice(0, ORANGE_PATENTS_MAX).map((x) => ({
+      patentNumber: x?.patent_number ?? null,
+      expirationDate: fdaDate(x?.expiration_date),
+      drugSubstance: flag(x?.drug_substance_flag),
+      drugProduct: flag(x?.drug_product_flag),
+      useCode: x?.patent_use_code ?? null,
+      submissionDate: fdaDate(x?.patent_submission_date),
+    })),
+    patentCount: patents.length,
+    exclusivities: excl.slice(0, 20).map((x) => ({ code: x?.exclusivity_code ?? null, expirationDate: fdaDate(x?.exclusivity_expiration_date) })),
   };
 }
 export const MDR_EXCERPT_CHARS = 280;
@@ -941,6 +1009,104 @@ export const GOV_TOOLS = [
       };
     },
   },
+  {
+    route: "GET /api/drug-shortages", name: "FDA drug shortages", slug: "drug-shortages", category: "data", price: "$0.004",
+    description:
+      "Search the FDA drug shortage list (openFDA) by drug name (generic or brand), therapeutic category or status (current, resolved, to be discontinued): each listed product with its status, availability, company, presentation and package NDC, the stated shortage reason and related information, and the posting, update and discontinuation dates. Newest update first; the answer says how many listings matched. Live FDA data. ?name=lidocaine&status=current",
+    tags: ["fda", "drug", "shortage", "drug-shortage", "supply", "pharmacy", "openfda", "health", "government"],
+    discovery: {
+      input: { name: "lidocaine", status: "current", limit: 5 },
+      inputSchema: {
+        properties: {
+          name: { type: "string", description: "Generic or brand drug name, e.g. lidocaine" },
+          category: { type: "string", description: "Therapeutic category as FDA lists it, e.g. Oncology or Anesthesia" },
+          status: { type: "string", description: "current, resolved or to be discontinued (default: any)" },
+          limit: { type: "number", description: "Listings to return, 1-20 (default 5)" },
+        },
+        required: [],
+      },
+      output: {
+        example: {
+          query: { name: "lidocaine", category: null, status: "Current" }, count: 1,
+          shortages: [{ genericName: "Lidocaine Hydrochloride Injection", brandNames: ["XYLOCAINE"], status: "Current", availability: "Limited Availability", company: "Pfizer Inc.", presentation: "Lidocaine, Injection, 1% (NDC 0409-4276-01)", dosageForm: "Injection", packageNdc: "0409-4276-01", therapeuticCategories: ["Anesthesia"], reason: "Demand increase for the drug", relatedInfo: "Next delivery expected in December", resolvedNote: null, updateType: "Reverified", updateDate: "2026-11-19", initialPostingDate: "2020-04-10", discontinuedDate: null, applicationNumber: "NDA006488" }],
+          returned: 1, matched: 87, complete: false, truncated: true,
+          disclaimer: FDA_DISCLAIMER, source: "api.fda.gov (openFDA drug shortages, public domain)",
+        },
+      },
+    },
+    handler: async (i) => {
+      const name = fdaTerm(i.name ?? i.q, "name");
+      const category = fdaTerm(i.category, "category");
+      const rawStatus = String(i.status ?? "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+      if (rawStatus && !SHORTAGE_STATUSES[rawStatus]) throw bad('"status" must be current, resolved or to be discontinued');
+      const status = rawStatus ? SHORTAGE_STATUSES[rawStatus] : "";
+      if (!name && !category) throw bad('"name" (generic or brand drug name) or "category" (therapeutic category) is required');
+      const limit = Math.min(Math.max(parseInt(i.limit, 10) || 5, 1), 20);
+      const clauses = [];
+      if (name) clauses.push(`(generic_name:"${name}" OR openfda.brand_name:"${name}" OR openfda.generic_name:"${name}")`);
+      if (category) clauses.push(`therapeutic_category:"${category}"`);
+      if (status) clauses.push(`status:"${status}"`);
+      const data = await getJsonAllowEmpty(`https://api.fda.gov/drug/shortages.json?search=${fdaSearch(clauses, "AND")}&limit=${limit}&sort=update_date:desc${openFdaKeyParam()}`);
+      const shortages = (data?.results ?? []).map(shortageRow);
+      return {
+        query: { name: name || null, category: category || null, status: status || null },
+        count: shortages.length,
+        shortages,
+        ...partialFields(data?.meta?.results?.total ?? shortages.length, shortages.length),
+        ...clampFields(i.limit, 20),
+        disclaimer: FDA_DISCLAIMER,
+        source: "api.fda.gov (openFDA drug shortages, public domain)",
+      };
+    },
+  },
+  {
+    route: "GET /api/drug-orange-book", name: "FDA Orange Book lookup", slug: "drug-orange-book", category: "data", price: "$0.004",
+    description:
+      "Look up the FDA Orange Book (openFDA) by brand name, active ingredient or application number: each approved product with its applicant, application type and number, dosage form, route, strengths, therapeutic equivalence codes, reference listed drug flag, approval date, listed patents (number, expiration, drug substance or product claim, use code) and exclusivity codes with their expiration dates. Newest approval first; the answer says how many products matched. Live FDA data. ?name=ozempic",
+    tags: ["fda", "drug", "orange-book", "patent", "exclusivity", "generic", "therapeutic-equivalence", "openfda", "government"],
+    discovery: {
+      input: { name: "ozempic", limit: 3 },
+      inputSchema: {
+        properties: {
+          name: { type: "string", description: "Brand name or active ingredient, e.g. ozempic or semaglutide" },
+          applicationNumber: { type: "string", description: "NDA or ANDA number, six digits with an optional N or A prefix, e.g. N213051" },
+          limit: { type: "number", description: "Products to return, 1-20 (default 5)" },
+        },
+        required: [],
+      },
+      output: {
+        example: {
+          query: { name: "ozempic", applicationNumber: null }, count: 1,
+          products: [{ brandName: "OZEMPIC", activeIngredients: [{ name: "SEMAGLUTIDE", strength: "1.5MG" }], dosageForm: "TABLET", route: "ORAL", applicant: "NOVO NORDISK INC", applicationType: "NDA", applicationNumber: "N213051", productNumber: "004", marketingStatus: "HUMAN PRESCRIPTION DRUG", teCodes: [], referenceListedDrug: true, referenceStandard: true, approvalDate: "2024-12-09",
+            patents: [{ patentNumber: "10278923", expirationDate: "2034-05-02", drugSubstance: true, drugProduct: true, useCode: "U-2628", submissionDate: "2025-02-21" }], patentCount: 9,
+            exclusivities: [{ code: "I-976", expirationDate: "2028-10-17" }] }],
+          returned: 1, matched: 10, complete: false, truncated: true, maxPatents: ORANGE_PATENTS_MAX,
+          disclaimer: FDA_DISCLAIMER, source: "api.fda.gov (openFDA Orange Book, public domain)",
+        },
+      },
+    },
+    handler: async (i) => {
+      const rawApp = String(i.applicationNumber ?? "").trim().toUpperCase().replace(/^(NDA|ANDA)\s*/, (m) => m[0]);
+      if (rawApp && !/^[NA]?\d{6}$/.test(rawApp)) throw bad('"applicationNumber" must be six digits with an optional N or A prefix, e.g. N213051');
+      const app = rawApp.replace(/^[NA]/, "");
+      const name = app ? "" : fdaTerm(i.name ?? i.q, "name");
+      if (!app && !name) throw bad('"name" (brand or active ingredient) or "applicationNumber" is required');
+      const limit = Math.min(Math.max(parseInt(i.limit, 10) || 5, 1), 20);
+      const clauses = app ? [`products.application_number:"${app}"`] : [`products.brand_name:"${name}"`, `products.active_ingredients.name:"${name}"`];
+      const data = await getJsonAllowEmpty(`https://api.fda.gov/drug/orangebook.json?search=${fdaSearch(clauses, "OR")}&limit=${limit}&sort=approval_date:desc${openFdaKeyParam()}`);
+      const products = (data?.results ?? []).map(orangeBookRow);
+      return {
+        query: { name: name || null, applicationNumber: rawApp || null },
+        count: products.length,
+        products,
+        ...partialFields(data?.meta?.results?.total ?? products.length, products.length),
+        ...clampFields(i.limit, 20),
+        maxPatents: ORANGE_PATENTS_MAX,
+        disclaimer: FDA_DISCLAIMER,
+        source: "api.fda.gov (openFDA Orange Book, public domain)",
+      };
+    },
+  },
 
   // ---- College Scorecard (api.data.gov) — our DATA_GOV_API_KEY -------------
   {
@@ -1237,4 +1403,4 @@ export const GOV_TOOLS = [
 // read helper and its retry), which ends at a run's ceiling when one is set
 // (src/run-ceiling.js): a caller that stops waiting at a deadline of its own
 // can serve them. A handler that gains another kind of wait leaves this list.
-markEndsAtCeiling(GOV_TOOLS, ["device-510k", "device-adverse-events", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "earthquakes", "fec-candidates", "federal-awards", "fema-disasters", "food-recalls", "geo-lookup", "vehicle-recalls", "vin-decode", "weather-alerts"]);
+markEndsAtCeiling(GOV_TOOLS, ["device-510k", "device-adverse-events", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "drug-orange-book", "drug-recalls", "drug-shortages", "earthquakes", "fec-candidates", "federal-awards", "fema-disasters", "food-recalls", "geo-lookup", "vehicle-recalls", "vin-decode", "weather-alerts"]);
