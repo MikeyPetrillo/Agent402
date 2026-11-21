@@ -101,7 +101,7 @@ try {
     eq((await r.pw.deliverDue()).skipped, "no-signing-key", "and nothing is delivered");
     // The documentation host still answers in full (nothing is kept for it).
     const doc = await r.pw.register({ url: "https://example.com/h", slugs: ["hash"] }, { known: KNOWN });
-    ok(/^whsec_[0-9a-f]{64}$/.test(doc.secret) && doc.registered === false && r.stored() === null, "no signing key: the documentation host answer has every field and stores nothing");
+    ok(/^a402whsec_[0-9a-f]{64}$/.test(doc.secret) && doc.registered === false && r.stored() === null, "no signing key: the documentation host answer has every field and stores nothing");
     await refuses(() => r.pw.register({ url: "http://example.com/h" }, { known: KNOWN }), 400, /https/, "no signing key: an input error is still the caller's 400");
     // POW_SECRET stands in when the dedicated key is unset.
     const viaPow = rig({ env: { POW_SECRET: "pow-secret" } });
@@ -128,14 +128,14 @@ try {
     const body = r.stored();
     eq(body.subs[reg.id], { url: "https://hooks.buyer.test/a", host: "hooks.buyer.test", slugs: ["search"], at: r.clock.t, exp: r.clock.t + lifetimeMs({}) }, "the stored record is the URL, host, slugs, time and expiry");
     eq(reg.expiresAt, new Date(r.clock.t + 90 * DAY).toISOString(), "the answer says when it expires: 90 days on");
-    ok(!JSON.stringify(body).includes("whsec_") && !JSON.stringify(body).includes(KEY), "no secret and no key is stored");
+    ok(!JSON.stringify(body).includes("a402whsec_") && !JSON.stringify(body).includes(KEY), "no secret and no key is stored");
     // A refused URL check stores nothing.
     const bad = rig({ checkUrl: async () => { throw Object.assign(new Error("URL host could not be resolved, or resolves to a private address"), { statusCode: 400 }); } });
     await refuses(() => bad.pw.register({ url: "https://hooks.private.test/a" }, { known: KNOWN }), 400, /private address/, "a target the guard refuses is a 400");
     eq(bad.stored(), null, "and nothing is stored");
 
     // Removal: the wrong secret and an unknown id read the same; the right one removes.
-    eq(await r.pw.unsubscribe({ id: reg.id, secret: `whsec_${"0".repeat(64)}` }), { removed: false }, "a wrong secret removes nothing");
+    eq(await r.pw.unsubscribe({ id: reg.id, secret: `a402whsec_${"0".repeat(64)}` }), { removed: false }, "a wrong secret removes nothing");
     eq(await r.pw.unsubscribe({ id: `pw_${"0".repeat(32)}`, secret: secretFor(KEY, `pw_${"0".repeat(32)}`) }), { removed: false }, "an unknown id removes nothing");
     ok(r.stored().subs[reg.id], "the subscription is still there");
     await refuses(() => r.pw.unsubscribe({ id: "nope", secret: "x" }), 400, /id/, "a malformed id is a 400");
@@ -360,7 +360,7 @@ try {
     // Computed here from the documented scheme, not with the module's own function.
     const t = Math.floor(r.clock.t / 1000);
     eq(sig, `t=${t},v1=${createHmac("sha256", reg.secret).update(`${t}.${s.body}`).digest("hex")}`, "a receiver following the documented scheme computes the same header");
-    eq(reg.secret, `whsec_${createHmac("sha256", KEY).update(`price-webhook-secret|${reg.id}`).digest("hex")}`, "the secret is the keyed digest of the subscription id");
+    eq(reg.secret, `a402whsec_${createHmac("sha256", KEY).update(`price-webhook-secret|${reg.id}`).digest("hex")}`, "the secret is the keyed digest of the subscription id");
     eq((await r.pw.deliverDue()).sent, 0, "nothing is sent twice");
   }
   {
@@ -563,7 +563,7 @@ try {
     // The published example answers in full and stores nothing.
     const ex = await post("/api/price-webhook", PRICE_WEBHOOK_TOOLS[0].discovery.input);
     eq(ex.status, 200, "the published example answers 200");
-    ok(/^pw_[0-9a-f]{32}$/.test(ex.json.id) && /^whsec_[0-9a-f]{64}$/.test(ex.json.secret) && ex.json.registered === false && ex.json.unsubscribe.url.endsWith(UNSUBSCRIBE_PATH), "with an id, a secret and the removal route");
+    ok(/^pw_[0-9a-f]{32}$/.test(ex.json.id) && /^a402whsec_[0-9a-f]{64}$/.test(ex.json.secret) && ex.json.registered === false && ex.json.unsubscribe.url.endsWith(UNSUBSCRIBE_PATH), "with an id, a secret and the removal route");
     eq(Object.keys(ex.json).sort(), Object.keys(PRICE_WEBHOOK_TOOLS[0].discovery.output.example).sort(), "and the fields its documented answer shows");
     eq(Object.keys(JSON.parse(readFileSync(seeded, "utf8")).subs).sort(), [watcher, other].sort(), "nothing is stored for the example");
     // A registration over HTTP is kept once its response has ended. FREE_MODE
@@ -586,7 +586,7 @@ try {
     eq((await post("/api/price-webhook", {})).status, 400, "no url is a 400");
     // The removal route.
     eq((await post(UNSUBSCRIBE_PATH, { id: "nope" })).status, 400, "removal: a malformed id is a 400");
-    const wrong = await post(UNSUBSCRIBE_PATH, { id: watcher, secret: `whsec_${"0".repeat(64)}` });
+    const wrong = await post(UNSUBSCRIBE_PATH, { id: watcher, secret: `a402whsec_${"0".repeat(64)}` });
     eq([wrong.status, wrong.json.removed], [404, false], "removal: a wrong secret is a 404");
     const right = await post(UNSUBSCRIBE_PATH, { id: watcher, secret: secretFor("a-pow-secret-for-the-test", watcher) });
     eq([right.status, right.json], [200, { removed: true }], "removal: the right secret removes it");

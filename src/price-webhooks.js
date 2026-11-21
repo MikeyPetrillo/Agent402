@@ -142,7 +142,7 @@ function bad(message, statusCode = 400, extra = null) {
 
 /** The subscription's secret: derived, never stored. */
 export function secretFor(signingKey, id) {
-  return `whsec_${createHmac("sha256", String(signingKey)).update(`price-webhook-secret|${id}`).digest("hex")}`;
+  return `a402whsec_${createHmac("sha256", String(signingKey)).update(`price-webhook-secret|${id}`).digest("hex")}`;
 }
 /** What is stored for a registrant: a keyed digest, so the document names no wallet and no address. */
 export function ownerDigest(signingKey, registrant) {

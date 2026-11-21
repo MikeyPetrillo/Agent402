@@ -62,7 +62,7 @@ try {
     const sawPending = await eventually(() => subsFor(urlBroke).some(([, s]) => s.pending > Date.now() && s.pending <= Date.now() + PENDING_MS));
     const r = await call;
     await ok(sawPending, `${wire}: while the settlement is under way the registration is stored as pending (control: the handler ran)`);
-    await ok(r.status === 402 && rig.outcomesOf(broke).refused === 1 && !/whsec_/.test(r.text), `${wire}: the settlement is refused and the call answers 402 without the secret (${r.status}, settle ${JSON.stringify(rig.outcomesOf(broke))})`);
+    await ok(r.status === 402 && rig.outcomesOf(broke).refused === 1 && !/a402whsec_/.test(r.text), `${wire}: the settlement is refused and the call answers 402 without the secret (${r.status}, settle ${JSON.stringify(rig.outcomesOf(broke))})`);
     await ok(await eventually(() => subsFor(urlBroke).length === 0), `${wire}: a registration whose settlement failed leaves nothing stored (${JSON.stringify(subsFor(urlBroke))})`);
     await sleep(150);
     await ok(subsFor(urlBroke).length === 0 && stored().subs[paid.json.id] !== undefined, `${wire}: and it stays so, with the settled one untouched`);

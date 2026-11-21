@@ -107,7 +107,7 @@ export const PRICE_WEBHOOK_TOOLS = [
           id: "pw_3f9a1c2e4b6d8f0a1c3e5a7b9d1f2e4c",
           url: "https://example.com/",
           slugs: ["answer", "search"],
-          secret: "whsec_<64 hex characters>",
+          secret: "a402whsec_<64 hex characters>",
           signature: { header: SIGNATURE_HEADER, scheme: SIGNATURE_SCHEME },
           event: EVENT_PRICE_CHANGED,
           unsubscribe: { method: "POST", url: `https://agent402.tools${UNSUBSCRIBE_PATH}`, body: { id: "pw_3f9a1c2e4b6d8f0a1c3e5a7b9d1f2e4c", secret: "<the secret above>" } },
