@@ -37,7 +37,7 @@ ok(!/\u2014/.test(html), "no em dash on /monitors");
   // The wallet path (MPP) is offered only where the server mounts it.
   const on = monitorsPage("https://agent402.tools", null, { wallet: true });
   ok(!/id="wallet"|\/api\/mpp\/monitors|href="#wallet"|card or wallet/.test(html), "wallet path off: /monitors offers the card checkout only");
-  ok(/<section class="manage" id="wallet">/.test(on) && on.includes("https://agent402.tools/api/mpp/monitors/subscribe") && on.includes('href="#wallet"') && /beyond your card or wallet/.test(on),
+  ok(/<section class="manage" id="wallet">/.test(on) && (on.match(/https:\/\/[^\s"'<>&]+/g) || []).some((u) => u === "https://agent402.tools/api/mpp/monitors/subscribe") && on.includes('href="#wallet"') && /beyond your card or wallet/.test(on),
     "wallet path on: /monitors shows the wallet subscribe request beside the card checkout");
   ok(on.indexOf('id="wallet"') > on.indexOf('class="products"') && on.indexOf('id="wallet"') < on.indexOf('id="manage"'), "the wallet section sits after the cards and before manage");
   ok(Object.keys(MONITOR_PRODUCTS).every((k) => on.includes(`<code>${k}</code>`)), "every product name is listed for the wallet request");

@@ -241,12 +241,12 @@ globalThis.fetch = async (url) => { fetchCalls++; lastUrl = new URL(String(url))
   const COUNTS = { data: [
     { start: "2026-11-18T00:00:00.000Z", end: "2026-11-19T00:00:00.000Z", tweet_count: 40 },
     { start: "2026-11-19T00:00:00.000Z", end: "2026-11-20T00:00:00.000Z", post_count: 62 },
-  ], meta: { total_tweet_count: 102, next_token: "1jzu9lk96gu5npwh" } };
+  ], meta: { total_tweet_count: 102, next_token: "page-two" } };
   globalThis.fetch = async (url) => { fetchCalls++; lastUrl = new URL(String(url)); return jsonRes(200, COUNTS); };
   fetchCalls = 0;
   const out = await h("x-post-counts")({ query: "x402 -is:retweet", start_time: "2026-11-18T00:00:00Z" });
   ok(lastUrl.origin + lastUrl.pathname === "https://api.x.com/2/tweets/counts/recent" && lastUrl.searchParams.get("query") === "x402 -is:retweet" && lastUrl.searchParams.get("granularity") === "day" && lastUrl.searchParams.get("start_time") === "2026-11-18T00:00:00.000Z", "counts: /2/tweets/counts/recent with query, day buckets by default, start_time normalized");
-  ok(out.total === 102 && out.buckets.length === 2 && out.buckets[0].count === 40 && out.buckets[1].count === 62 && out.buckets[1].start === "2026-11-19T00:00:00.000Z" && out.granularity === "day" && out.nextToken === "1jzu9lk96gu5npwh" && fetchCalls === 1, "counts: buckets read from either count field name, total and nextToken carried, one upstream call");
+  ok(out.total === 102 && out.buckets.length === 2 && out.buckets[0].count === 40 && out.buckets[1].count === 62 && out.buckets[1].start === "2026-11-19T00:00:00.000Z" && out.granularity === "day" && out.nextToken === "page-two" && fetchCalls === 1, "counts: buckets read from either count field name, total and nextToken carried, one upstream call");
   await h("x-post-counts")({ query: "x402", granularity: "hour" });
   ok(lastUrl.searchParams.get("granularity") === "hour" && !lastUrl.searchParams.has("start_time"), "counts: granularity on the wire, absent window left to X's default (the last 7 days)");
   const tool = X_DATA_TOOLS.find((t) => t.slug === "x-post-counts");
