@@ -30,6 +30,7 @@ import { CRYPTO_MARKETS_TOOLS } from "./crypto-markets-kit.js";
 import { CG_API_HOSTS } from "./coingecko-endpoint.js";
 import { partialFields } from "../partial-answer.js";
 import { withBudgetCeiling } from "../upstream-deadline.js";
+import { markEndsAtCeiling, ceilingLeftMs, CEILING_TIMER_SLACK_MS } from "../run-ceiling.js";
 import { bundlePriceUsd, unitPartsUsd, usdText, BUNDLE_DISCOUNT } from "../bundle-pricing.js";
 import { ATTRIBUTIONS, OPEN_METEO_ATTRIBUTION, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION, COINGECKO_ATTRIBUTION } from "../data-attribution.js";
 
@@ -67,6 +68,9 @@ const statusOf = (e) => (Number.isInteger(e?.statusCode) ? e.statusCode : 502);
 export const LEG_RETRY_PAUSE_MS = 1_500;
 const RETRYABLE = new Set([429, 502, 503, 504]);
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+// Under a run's ceiling (src/run-ceiling.js) a retry is made only when its
+// pause ends before the ceiling: no leg is started after it.
+const pauseFitsCeiling = (ms) => ceilingLeftMs() > ms + CEILING_TIMER_SLACK_MS;
 const isThrottled = (e) => e?.upstreamStatus === 429 || e?.throttled === true;
 async function runLeg(slug, input, ctx, { retries = 1 } = {}) {
   for (let attempt = 0; ; attempt++) {
@@ -74,7 +78,8 @@ async function runLeg(slug, input, ctx, { retries = 1 } = {}) {
       return await legTool(slug).handler(input, ctx);
     } catch (e) {
       const throttled = isThrottled(e);
-      if (attempt < retries && RETRYABLE.has(statusOf(e)) && !throttled && e?.noRetry !== true && !ctx?.signal?.aborted) { await pause(LEG_RETRY_PAUSE_MS); continue; }
+      if (e?.ceilingCut === true) throw e;
+      if (attempt < retries && RETRYABLE.has(statusOf(e)) && !throttled && e?.noRetry !== true && !ctx?.signal?.aborted && pauseFitsCeiling(LEG_RETRY_PAUSE_MS)) { await pause(LEG_RETRY_PAUSE_MS); continue; }
       throw Object.assign(new Error(String(e?.message || "leg failed").slice(0, 300)), { statusCode: statusOf(e), leg: slug, retryAfter: Number.isInteger(e?.retryAfter) ? e.retryAfter : undefined, ...(throttled ? { throttled: true } : {}) });
     }
   }
@@ -512,6 +517,12 @@ const quoted = (legs, count, max) => ({
 });
 const perUnit = (legs) => usdText(bundlePriceUsd(1, legs, legPrice));
 
+// STARTING INPUT: each bundle declares `discovery.startingInput`, its smallest
+// request (one unit), which quotes the list price. A surface that must show
+// or buy one price for a tool priced per request reads it: a referral copy's
+// request with no input runs it (src/referral-gate.js bareInputOf), where the
+// published example, several units, would be quoted several times the list
+// price.
 const WEATHER_EXAMPLE_SITES = [
   { name: "Chicago DC", lat: 41.88, lon: -87.63 }, { name: "Houston DC", lat: 29.76, lon: -95.37 },
   { name: "Denver DC", lat: 39.74, lon: -104.99 }, { name: "Miami DC", lat: 25.76, lon: -80.19 },
@@ -539,6 +550,8 @@ export const BUNDLE_TOOLS = [
     discovery: {
       bodyType: "json",
       input: { sites: WEATHER_EXAMPLE_SITES },
+      // The smallest request, one unit, quoted at the list price (see STARTING INPUT below).
+      startingInput: { sites: WEATHER_EXAMPLE_SITES.slice(0, 1) },
       inputSchema: {
         properties: {
           sites: { type: "array", description: `1 to ${WEATHER_RISK_MAX_SITES} sites, each {"lat","lon"} or {"place"} with an optional "name" (a place name string also works)`, items: { type: "object", properties: { name: { type: "string", description: "Your label for the site (up to 80 characters)" }, lat: { type: "number", description: "Latitude, -90 to 90" }, lon: { type: "number", description: "Longitude, -180 to 180" }, place: { type: "string", description: "A city, town or region name instead of lat/lon" } } } },
@@ -581,6 +594,7 @@ export const BUNDLE_TOOLS = [
     discovery: {
       bodyType: "json",
       input: { tickers: FILINGS_EXAMPLE },
+      startingInput: { tickers: FILINGS_EXAMPLE.slice(0, 1) },
       inputSchema: {
         properties: { tickers: { type: "array", items: { type: "string" }, description: `1 to ${FILINGS_BRIEF_MAX_COMPANIES} US stock tickers (a comma-separated string also works)` } },
         required: ["tickers"],
@@ -617,6 +631,7 @@ export const BUNDLE_TOOLS = [
     discovery: {
       bodyType: "json",
       input: { coins: COINS_EXAMPLE },
+      startingInput: { coins: COINS_EXAMPLE.slice(0, 1) },
       inputSchema: {
         properties: { coins: { type: "array", items: { type: "string" }, description: `1 to ${TOKEN_DILIGENCE_MAX_COINS} coin ids as coin-search returns them (a comma-separated string also works)` } },
         required: ["coins"],
@@ -645,3 +660,11 @@ export const BUNDLE_TOOLS = [
 
 export const BUNDLE_LEGS = Object.freeze({ "weather-risk-brief": WEATHER_RISK_LEGS, "filings-brief": FILINGS_BRIEF_LEGS, "token-diligence": TOKEN_DILIGENCE_LEGS });
 export const BUNDLE_MAX_UNITS = Object.freeze({ "weather-risk-brief": WEATHER_RISK_MAX_SITES, "filings-brief": FILINGS_BRIEF_MAX_COMPANIES, "token-diligence": TOKEN_DILIGENCE_MAX_COINS });
+
+// Every upstream wait of a bundle is a leg's: each leg handler either reads
+// with fixed timeouts the run's ceiling cuts short (the weather kits) or runs
+// under a handler budget the ceiling caps (the filings and coin kits), and
+// the one wait of the bundle's own, the pause before a leg's retry, is not
+// taken when it would end after the ceiling. A caller that stops waiting at a
+// deadline of its own can serve them (src/run-ceiling.js).
+markEndsAtCeiling(BUNDLE_TOOLS, ["weather-risk-brief", "filings-brief", "token-diligence"]);

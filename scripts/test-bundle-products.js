@@ -63,6 +63,16 @@ for (const t of BUNDLE_TOOLS) {
   const many = Array.from({ length: max + 5 }, (_, i) => (key === "sites" ? { lat: i % 80, lon: i % 170 } : key === "tickers" ? `T${String.fromCharCode(65 + (i % 26))}${i}` : `coin-${i}`));
   ok(t.quote({ [key]: many }) <= t.quoteMaxUsd, `${t.slug}: a body over the cap is never quoted past the ceiling (the handler refuses it, uncharged)`);
   ok(t.quote({}) === bundlePriceUsd(1, legs, priceOf) && t.quote({ [key]: "x" }) > 0, `${t.slug}: an unreadable body is quoted at one unit (the handler then refuses it)`);
+  // The starting input: the smallest request, one unit, quoted at the list
+  // price. A surface that shows or buys one price for the tool reads it (a
+  // referral copy's request with no input runs it).
+  {
+    const start = t.discovery.startingInput;
+    const units = start ? Object.values(start)[0] : null;
+    ok(start && Object.keys(start).join() === key && Array.isArray(units) && units.length === 1 && JSON.stringify(units[0]) === JSON.stringify(ex[key][0]), `${t.slug}: declares a one-unit starting input, the example's first unit`);
+    ok(usdText(t.quote(structuredClone(start))) === t.price && t.quote(start) < t.quote(ex), `${t.slug}: the starting input is quoted at the list price (${usdText(t.quote(start))}), under the example's quote`);
+    ok(t.endsAtCeiling === true, `${t.slug}: declares that its upstream work ends at a run's ceiling (scripts/test-run-ceiling.js drives it)`);
+  }
   ok(t.modelBacked !== true && !/\bmodel-backed\b/.test(t.description) && /no model/.test(t.description), `${t.slug}: deterministic, says so, not model-backed`);
   ok(!FREE_TIER_SLUGS.has(t.slug), `${t.slug}: not on the free tier (wallet-only)`);
   ok(WALLET_ONLY_SLUGS.has(t.slug) && Array.isArray(t.upstreamHosts) && t.upstreamHosts.length > 0 && t.upstreamHosts.every((h) => upstreamHostsForSlug(t.slug).has(h)),
