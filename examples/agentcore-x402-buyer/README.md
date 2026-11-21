@@ -39,7 +39,7 @@ two rails Agent402 serves.
 > body and leaves out `WWW-Authenticate`. The plugin's built-in `http_request` calls
 > sellers with the `python-httpx` User-Agent, and agent402.tools answers that client with
 > the x402 offer alone (no `WWW-Authenticate: Payment` challenge), so the plugin pays over
-> x402 too. Nothing to configure here. To pay over MPP on Tempo instead, send
+> x402 too, with no extra configuration. To pay over MPP on Tempo instead, send
 > `X-Payment-Offers: mpp` with the request, hold Tempo funds, and configure the plugin with
 > `network_preferences_config=["tempo:4217", "eip155:4217"]` (Tempo first) and
 > `buyer_pays_gas_fees=True`, as [`tempo-mpp-probe/mpp_tempo_buy.py`](tempo-mpp-probe/mpp_tempo_buy.py) does.

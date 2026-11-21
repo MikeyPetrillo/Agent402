@@ -11,7 +11,9 @@
 // OPT IN. `X-Payment-Offers: mpp` (or `all`; a comma list, read without regard
 // to case) restores the MPP challenges, byte for byte as other clients get
 // them. Any other value restores nothing. So does `Accept-Payment`, the MPP
-// request header an MPP client library sends to name its methods: one
+// request header that names a client's methods (the Python MPP SDK sends it
+// from version 0.11.0; earlier versions do not, so a client on one sends
+// X-Payment-Offers): one
 // well-formed `method/intent` entry (either side may be `*`) whose q is not 0
 // is enough. A payment manager that sends neither keeps the x402 offer alone.
 //

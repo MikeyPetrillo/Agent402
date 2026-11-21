@@ -25,7 +25,7 @@ const ENTRIES = [
     title: "x402 by default for python-httpx clients",
     shownWhen: mppOfferGateShown,
     items: [
-      `Payments: On a server that offers MPP, a client whose User-Agent starts with \`${DEFAULT_WITHHELD_USER_AGENT_PREFIXES[0]}\` gets a 402 that carries the x402 offer alone: the \`PAYMENT-REQUIRED\` header and the body are unchanged, with no \`WWW-Authenticate: Payment\` challenge, so it pays over x402 with no setup.`,
+      `Payments: On a server that offers MPP, a client whose User-Agent starts with \`${DEFAULT_WITHHELD_USER_AGENT_PREFIXES[0]}\` gets a 402 that carries the x402 offer alone: the \`PAYMENT-REQUIRED\` header and the body are unchanged, with no \`WWW-Authenticate: Payment\` challenge, so it pays over x402 with no extra configuration.`,
       "Payments: Such a client gets the MPP challenges back, in the usual order, by sending `X-Payment-Offers: mpp` (or `all`), or an `Accept-Payment` header naming an MPP method such as `tempo/charge`. A request that carries an MPP credential is verified as before.",
       "Surfaces: The agent docs, /what-is-mpp, /x402-test, the guides and the MCP connector's payment note name this rule and the opt-in header while the server offers MPP.",
       "Operations: `MPP_OFFER_WITHHOLD_USER_AGENTS` sets the User-Agent prefixes (a comma list); `off` offers MPP to every client.",
@@ -103,7 +103,7 @@ const ENTRIES = [
     title: "Wallet sign-in",
     shownWhen: walletSignInEnabled,
     items: [
-      "Payments: On a server with wallet sign-in on, each caller and each network holds a bounded number of pending sign-ins, so a busy caller never blocks anyone else's sign-in.",
+      "Payments: On a server with wallet sign-in on, each caller and each network holds a bounded number of pending sign-ins; a full bound expires the oldest.",
     ],
   },
   {

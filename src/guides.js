@@ -2266,7 +2266,7 @@ the agent forwards our \`402\` payload, AgentCore signs it from its managed
 wallet, and the retry carries the signed payment header; every Agent402 route
 answers a stock x402 v2 challenge, so nothing on our side needs configuring.
 The Payments plugin's client (User-Agent \`python-httpx\`) gets the x402 offer
-alone and pays over x402 with no setup; to pay over MPP on Tempo, send
+alone and pays over x402 with no extra configuration; to pay over MPP on Tempo, send
 \`X-Payment-Offers: mpp\` with the request, hold Tempo funds, and configure
 the plugin with \`network_preferences_config=["tempo:4217", "eip155:4217"]\`
 (Tempo first) and \`buyer_pays_gas_fees=True\`.

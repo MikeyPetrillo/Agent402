@@ -692,7 +692,7 @@ may still clamp it, and the read site is the reference.
 | `MPP_LB_CACHE_FILE` | MPP lb cache file path. | `/data/mpp-leaderboard-cache.json` | `src/mpp-leaderboard.js` |
 | `MPP_LB_SOURCE` | MPP lb source. |  | `src/server.js`, `src/tempo-transfers.js` |
 | `MPP_LEADERBOARD` | MPP leaderboard. |  | `src/server.js` |
-| `MPP_OFFER_WITHHOLD_USER_AGENTS` | Comma list of User-Agent prefixes whose 402s carry no MPP challenge, only the x402 offer (default python-httpx/; off turns it off). The header X-Payment-Offers: mpp, or an Accept-Payment header naming an MPP method, restores the challenges. |  | `src/changelog.js`, `src/mpp-offer-gate.js` |
+| `MPP_OFFER_WITHHOLD_USER_AGENTS` | Comma list of User-Agent prefixes whose 402s carry no MPP challenge, only the x402 offer (default python-httpx/; off turns it off). The header X-Payment-Offers: mpp, or an Accept-Payment header naming an MPP method, restores the challenges. The Python MPP SDK sends Accept-Payment from version 0.11.0; a python-httpx client on an earlier version sends X-Payment-Offers: mpp. |  | `src/changelog.js`, `src/mpp-offer-gate.js` |
 | `MPP_RECONCILE` | MPP reconcile. |  | `src/mpp-reconcile.js` |
 | `MPP_RECONCILE_EXPLAINED_FILE` | MPP reconcile explained file path. | `/data/mpp-reconcile-explained.json` | `src/mpp-reconcile.js` |
 | `MPP_RECONCILE_FILE` | MPP reconcile file path. | `/data/mpp-reconcile.json` | `src/mpp-reconcile.js` |

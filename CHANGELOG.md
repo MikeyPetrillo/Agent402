@@ -11,7 +11,8 @@ Payments:
 - On a server that offers MPP, a client whose User-Agent starts with
   `python-httpx/` gets a 402 that carries the x402 offer alone: the
   `PAYMENT-REQUIRED` header and the body are unchanged, with no
-  `WWW-Authenticate: Payment` challenge, so it pays over x402 with no setup.
+  `WWW-Authenticate: Payment` challenge, so it pays over x402 with no extra
+  configuration.
 - Such a client gets the MPP challenges back, in the usual order, by sending
   `X-Payment-Offers: mpp` (or `all`), or an `Accept-Payment` header naming an
   MPP method such as `tempo/charge`. A request that carries an MPP credential
@@ -138,8 +139,7 @@ Operations:
 ### 2026-11-21 (wallet sign-in)
 Payments:
 - On a server with wallet sign-in on, each caller and each network holds a
-  bounded number of pending sign-ins, so a busy caller never blocks anyone
-  else's sign-in.
+  bounded number of pending sign-ins; a full bound expires the oldest.
 
 ### 2026-11-21 (agent402-client 0.10.1 and site analytics)
 Packages:
