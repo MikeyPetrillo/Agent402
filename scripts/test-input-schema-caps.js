@@ -54,7 +54,6 @@ const NOT_ONE_FIELD = new Map([
 // with why no cap of the field's is hidden behind that answer.
 const ANSWERS_BEFORE_READING = new Map([
   ["v1-chat-ox.model", "the tier's one model was withdrawn upstream, so every call is answered 503 whatever it sends"],
-  ["dkim-lookup.selector", "a selector that makes no DNS name is answered in a resolver's words for a malformed name (502), with no lookup sent"],
 ]);
 // A cap that holds on a value no generated form makes: the longest value the
 // handler takes, built here from the kit's own rule.

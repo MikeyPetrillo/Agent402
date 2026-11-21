@@ -120,6 +120,34 @@ for (const slug of ["dns-propagation", "spf-check", "dmarc-check", "email-delive
   await refusesBeforeQuery(slug, () => tool(NETWORK_TOOLS, slug).handler({ domain: "corp.internal" }));
 }
 await refusesBeforeQuery("dkim-lookup", () => tool(NETWORK_TOOLS, "dkim-lookup").handler({ domain: "corp.internal", selector: "s1" }));
+// A selector that makes no DNS name with the domain is the caller's 400 naming
+// the field, with no query sent: an empty label, a label past 63 characters,
+// a whole name past 253. The longest selector that fits is still looked up.
+{
+  const dkim = tool(NETWORK_TOOLS, "dkim-lookup");
+  const answerOf = async (selector, domain = "example.com") => {
+    const before = queried.length;
+    try { await dkim.handler({ domain, selector }); return { status: 200, asked: queried.slice(before) }; }
+    catch (e) { return { status: e.statusCode, message: String(e.message), asked: queried.slice(before) }; }
+  };
+  const fits = (n) => { let v = ""; while (v.length < n) v += (v ? "." : "") + "a".repeat(Math.min(63, n - v.length - (v ? 1 : 0))); return v; };
+  const most = 253 - "._domainkey.example.com".length; // the longest selector example.com leaves room for
+  const cases = [
+    ["a label of 64 characters", "a".repeat(64)],
+    ["a long run of letters", "a".repeat(5000)],
+    ["a doubled dot", "a..b"], ["a leading dot", ".a"], ["a trailing dot", "a."], ["dots alone", ".."],
+    ["a name one character past 253", fits(most + 1)],
+  ];
+  for (const [label, selector] of cases) {
+    const r = await answerOf(selector);
+    ok(r.status === 400 && /"selector"/.test(r.message) && r.asked.length === 0, `dkim-lookup answers ${label} with a 400 that names the field, and asks no resolver (${r.status}, ${r.asked.length} asked, "${String(r.message).slice(0, 60)}")`);
+  }
+  ok(fits(most).length === most && fits(most + 1).length === most + 1 && fits(most + 1).split(".").every((l) => l.length >= 1 && l.length <= 63), "(control) the long selectors are made of labels a DNS name allows");
+  for (const [label, selector] of [["a label of 63 characters", "a".repeat(63)], ["the longest name that fits", fits(most)], ["an underscore and a hyphen", "_s-1"]]) {
+    const r = await answerOf(selector);
+    ok(r.status === 200 && r.asked.length === 1 && r.asked[0] === `${selector}._domainkey.example.com`, `dkim-lookup looks up ${label} (${r.status}, asked ${r.asked.length})`);
+  }
+}
 
 const asn = tool(NETWORK_TOOLS2, "asn-info");
 await refusesBeforeQuery("asn-info (host)", () => asn.handler({ host: "db.internal" }));

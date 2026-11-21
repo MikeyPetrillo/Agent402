@@ -22,6 +22,10 @@ function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
+// What a DNS name holds (RFC 1035): one label, and the whole name in text form.
+const DNS_LABEL_MAX = 63;
+const DNS_NAME_MAX = 253;
+
 // Normalize whatever the caller sends as a "domain" / "host" / "url" / "email"
 // down to a registrable hostname. Email gets the local-part stripped; URLs get
 // reduced to hostname; trailing dots and case are normalized.
@@ -634,7 +638,7 @@ export const NETWORK_TOOLS = [
       inputSchema: {
         properties: {
           domain: { type: "string", description: "Domain name (also accepts email/url/host)" },
-          selector: { type: "string", description: "DKIM selector, e.g. \"default\", \"google\", \"selector1\"" },
+          selector: { type: "string", description: `DKIM selector, e.g. "default", "google", "selector1". Letters, digits, dot, hyphen and underscore; each dot-separated label at most ${DNS_LABEL_MAX} characters, and <selector>._domainkey.<domain> at most ${DNS_NAME_MAX} in all.` },
         },
         required: ["domain", "selector"],
       },
@@ -660,7 +664,13 @@ export const NETWORK_TOOLS = [
       const selector = String(input.selector || "").trim();
       if (!selector) throw bad('Missing "selector". Send {"domain":"example.com","selector":"default"}');
       if (!/^[a-zA-Z0-9._-]+$/.test(selector)) throw bad("Invalid selector - letters, digits, dot, hyphen, underscore only");
+      // The selector must make a DNS name with the domain: a caller's 400 here,
+      // not a resolver's words for a malformed name after the fact.
+      const labels = selector.split(".");
+      if (labels.some((l) => l.length === 0)) throw bad('Invalid "selector": it has an empty label (a leading, trailing or doubled dot). Send it as the s= tag of a DKIM-Signature header gives it, e.g. "selector1"');
+      if (labels.some((l) => l.length > DNS_LABEL_MAX)) throw bad(`Invalid "selector": a label is longer than ${DNS_LABEL_MAX} characters, the most one label of a DNS name holds`);
       const fullName = `${selector}._domainkey.${domain}`;
+      if (fullName.length > DNS_NAME_MAX) throw bad(`Invalid "selector": <selector>._domainkey.${domain} would be ${fullName.length} characters, and a DNS name holds at most ${DNS_NAME_MAX}`);
       const { records, error } = await resolveType(fullName, "TXT");
       if (error) throw bad(`DNS lookup failed for ${fullName}: ${error}`, 502);
       const txt = joinTxtRecords(records);
