@@ -64,4 +64,23 @@
       }
     });
   });
+  // A prefilled link, /reports?product=<product id>&input=<value>: the card
+  // that sells that product is marked selected and brought into view, and its
+  // field is filled and focused. The value is set as the field's text, so it
+  // is checked on submit exactly as typed text is. Nothing is submitted here:
+  // a checkout starts only when the buyer presses the button. A product this
+  // page does not sell leaves the page as it is.
+  try {
+    var q = new URLSearchParams(location.search), want = q.get("product"), kindFor = null;
+    for (var k in sel) if (Object.prototype.hasOwnProperty.call(sel, k) && sel[k] === want) kindFor = k;
+    var pre = kindFor && document.getElementById("in-" + kindFor);
+    var card = pre && pre.closest(".pcard");
+    if (card) {
+      var given = q.get("input");
+      if (given) pre.value = given;
+      card.classList.add("sel");
+      card.scrollIntoView({ block: "center" });
+      pre.focus({ preventScroll: true });
+    }
+  } catch (e) { /* the plain page */ }
 })();
