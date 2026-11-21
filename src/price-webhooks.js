@@ -11,7 +11,7 @@
 //   { type: "price.changed", id, deliveryId, sentAt, changes: [{ slug, from, to }],
 //     unsubscribe: { method, url, body } }
 // signed with the subscription's secret:
-//   X-Agent402-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, `${t}.${body}`)>
+//   X-Agent402-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<body>")>
 // The secret is derived from this server's signing key and the subscription
 // id (HMAC), so no secret is stored: the document holds the URL, the id and a
 // keyed digest of the registrant (never the wallet or the address itself).
@@ -97,6 +97,8 @@ export const PRICE_WEBHOOKS_DOC = "price-webhooks";
 export const PRICE_WEBHOOK_SLUG = "price-webhook";
 export const UNSUBSCRIBE_PATH = "/api/price-webhook/unsubscribe";
 export const SIGNATURE_HEADER = "X-Agent402-Signature";
+/** The header's value in words: v1 is the HMAC of the timestamp, a dot and the body as sent. Written with <t> and <body> (no template placeholder: published surfaces carry it as text). */
+export const SIGNATURE_SCHEME = 't=<unix seconds>,v1=<hex HMAC-SHA256, with the secret, of "<t>.<body>": the timestamp, a dot, and the body as sent>';
 export const EVENT_HEADER = "X-Agent402-Event";
 export const DELIVERY_HEADER = "X-Agent402-Delivery";
 export const EVENT_PRICE_CHANGED = "price.changed";
@@ -275,7 +277,7 @@ export function createPriceWebhooks({
     url: sub.url,
     slugs: sub.slugs || "all",
     secret: secretFor(key, id),
-    signature: { header: SIGNATURE_HEADER, scheme: "t=<unix seconds>,v1=<hex HMAC-SHA256 of `${t}.${body}` with the secret>" },
+    signature: { header: SIGNATURE_HEADER, scheme: SIGNATURE_SCHEME },
     event: EVENT_PRICE_CHANGED,
     unsubscribe: { method: "POST", url: `${baseUrl()}${UNSUBSCRIBE_PATH}`, body: { id, secret: "<the secret above>" } },
     expiresAt: new Date(sub.exp).toISOString(),

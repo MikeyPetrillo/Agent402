@@ -16,7 +16,7 @@
 // settled call confirms it, any other outcome removes it. A call with no
 // response to wait for (a step an in-process executor runs) is kept at once.
 import { createHash } from "node:crypto";
-import { priceWebhooks, PRICE_WEBHOOK_SLUG, UNSUBSCRIBE_PATH, SIGNATURE_HEADER, EVENT_PRICE_CHANGED, MAX_SLUGS, MAX_URL_CHARS, RETRY_DELAYS_MS, lifetimeMs, maxPerRegistrant } from "../price-webhooks.js";
+import { priceWebhooks, PRICE_WEBHOOK_SLUG, UNSUBSCRIBE_PATH, SIGNATURE_HEADER, SIGNATURE_SCHEME, EVENT_PRICE_CHANGED, MAX_SLUGS, MAX_URL_CHARS, RETRY_DELAYS_MS, lifetimeMs, maxPerRegistrant } from "../price-webhooks.js";
 import { identityPayerOf, paymentHeaderOf, freeModeOn } from "../payer.js";
 import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
 import { currentDispatchCaller, IN_PROCESS_CALLER, ANONYMOUS_CALLER } from "../dispatch-caller.js";
@@ -92,7 +92,9 @@ export const PRICE_WEBHOOK_TOOLS = [
     aliases: ["price-alert", "price-change-webhook", "pricing-webhook"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://example.com/hooks/agent402-prices", slugs: ["search", "answer"] },
+      // The root of a documentation host: answered in full, nothing stored or sent
+      // (a path on a reserved example host is refused by scripts/test-example-urls-fetchable.js).
+      input: { url: "https://example.com/", slugs: ["search", "answer"] },
       inputSchema: {
         properties: {
           url: { type: "string", maxLength: MAX_URL_CHARS, description: "The https URL that receives the signed POST. No credentials in the URL; it must resolve to a public address." },
@@ -103,10 +105,10 @@ export const PRICE_WEBHOOK_TOOLS = [
       output: {
         example: {
           id: "pw_3f9a1c2e4b6d8f0a1c3e5a7b9d1f2e4c",
-          url: "https://example.com/hooks/agent402-prices",
+          url: "https://example.com/",
           slugs: ["answer", "search"],
           secret: "whsec_<64 hex characters>",
-          signature: { header: SIGNATURE_HEADER, scheme: "t=<unix seconds>,v1=<hex HMAC-SHA256 of `${t}.${body}` with the secret>" },
+          signature: { header: SIGNATURE_HEADER, scheme: SIGNATURE_SCHEME },
           event: EVENT_PRICE_CHANGED,
           unsubscribe: { method: "POST", url: `https://agent402.tools${UNSUBSCRIBE_PATH}`, body: { id: "pw_3f9a1c2e4b6d8f0a1c3e5a7b9d1f2e4c", secret: "<the secret above>" } },
           expiresAt: "2027-02-19T12:00:00.000Z",
