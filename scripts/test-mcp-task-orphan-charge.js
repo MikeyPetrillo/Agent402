@@ -24,13 +24,22 @@
 //      taken as the run's: the run's own keyed sale is, beside it;
 //   h. a sale with no transaction is booked under the run's own key, so two
 //      sweeps of one run book one debt;
-//   i. a ledger that has not loaded is never read as "no sale".
+//   i. a ledger that has not loaded is never read as "no sale";
+//   j. two sales under one run key read unknown, never the first;
+//   k. our own wallet's sale under the key reads unknown (no debt to book);
+//   l. a full page of the tool's keyed sales in the window may hide an
+//      unkeyed one past it: unknown, never "no sale";
+//   m. in database mode a ledger that never loads (the state database takes
+//      the connection and never answers) reads ORPHAN_LEDGER_UNLOADED through
+//      the real lookup, never "no sale", and one wait serves the reads after it.
 // Real sales ledger (SQLite, a file of this run's own), real file task store.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { execFile } from "node:child_process";
+import { createServer } from "node:net";
 
 const TMP = mkdtempSync(join(tmpdir(), "a402-orphan-charge-"));
 process.env.SALES_LEDGER_DB = join(TMP, "sales.db");
@@ -235,6 +244,54 @@ const neither = (r) => r?.status === "failed" && /restart/.test(r.statusMessage)
   ok((await salesLedgerChargeOf({ slug: "busy-tool", runKey: key(), sinceMs: t0, untilMs: Date.now() + 1000 })) === undefined, "a run with no sale under its key, in a window full of the tool's other sales, reads unknown");
   ok((await salesLedgerChargeOf({ slug: "other-slug", runKey: K, sinceMs: t0, untilMs: Date.now() + 1000 })) === undefined, "a sale under the key for another tool reads unknown, never as the run's");
   ok((await salesLedgerChargeOf({ slug: "busy-tool", runKey: key(), sinceMs: Date.now() + 5_000, untilMs: Date.now() + 10_000 })) === null, "control: an empty window with no sale under the key reads as no sale");
+}
+
+// j, k, l: the default lookup's guards, read directly.
+{
+  const { salesLedgerChargeOf } = tasksMod;
+  const t0 = Date.now() - 1000;
+  const win = () => ({ sinceMs: t0, untilMs: Date.now() + 1000 });
+  const KJ = key();
+  sale({ slug: "j-tool", payer: W("5A0b"), tx: "0x" + "a1".repeat(32), via: "mcp", runKey: KJ });
+  sale({ slug: "j-tool", payer: W("5A0b"), tx: "0x" + "a2".repeat(32), via: "mcp", runKey: KJ });
+  await ledger.salesLedgerFlush?.();
+  const j = await salesLedgerChargeOf({ slug: "j-tool", runKey: KJ, ...win() });
+  ok(j === undefined, `j. two sales under one run key read unknown, never the first (${JSON.stringify(j)})`);
+  const KK = key();
+  sale({ slug: "k-tool", payer: W("5A0c"), tx: "0x" + "b1".repeat(32), via: "mcp", runKey: KK, synthetic: true });
+  await ledger.salesLedgerFlush?.();
+  const k = await salesLedgerChargeOf({ slug: "k-tool", runKey: KK, ...win() });
+  ok(k === undefined, `k. our own wallet's sale under the key reads unknown, with no debt to book (${JSON.stringify(k)})`);
+  for (let i = 0; i < 20; i++) sale({ slug: "l-tool", payer: W("5A0d"), tx: "0x" + (i + 16).toString(16).padStart(2, "0").repeat(32), via: "mcp", runKey: key() });
+  await ledger.salesLedgerFlush?.();
+  await new Promise((r) => setTimeout(r, 20));
+  sale({ slug: "l-tool", payer: W("5A0d"), tx: "0x" + "c1".repeat(32), via: "http" });
+  await ledger.salesLedgerFlush?.();
+  const l = await salesLedgerChargeOf({ slug: "l-tool", runKey: key(), ...win() });
+  ok(l === undefined, `l. a full page of other runs' keyed sales in the window reads unknown, never no sale (${JSON.stringify(l)})`);
+}
+// m. database mode, a ledger that never loads, read through the real lookup
+// in a child process (the ledger's mode is read once at import).
+{
+  const held = [];
+  const silent = createServer((c) => held.push(c));
+  await new Promise((r) => silent.listen(0, "127.0.0.1", r));
+  const code = `
+    const t = await import(${JSON.stringify(new URL("../src/mcp-tasks.js", import.meta.url).href)});
+    const q = { slug: "m-tool", runKey: "${"9e".repeat(16)}", sinceMs: Date.now() - 1000, untilMs: Date.now() + 1000 };
+    const a0 = Date.now(); const a = await t.salesLedgerChargeOf(q); const a1 = Date.now();
+    const b = await t.salesLedgerChargeOf(q); const b1 = Date.now();
+    const c = await Promise.all([t.salesLedgerChargeOf(q), t.salesLedgerChargeOf(q)]); const c1 = Date.now();
+    console.log(JSON.stringify({ a, b, c, first: a1 - a0, second: b1 - a1, third: c1 - b1, U: t.ORPHAN_LEDGER_UNLOADED }));
+    process.exit(0);`;
+  const env = { ...process.env, STATE_DATABASE_URL: `postgres://postgres@127.0.0.1:${silent.address().port}/none?sslmode=disable`, SALES_LEDGER_DB: join(TMP, "m-sales.db") };
+  const r = await new Promise((res) => execFile(process.execPath, ["--input-type=module", "-e", code], { env, encoding: "utf8", timeout: 120_000 }, (error, stdout, stderr) => res({ error, stdout, stderr })));
+  for (const c of held) c.destroy();
+  silent.close();
+  const line = String(r.stdout || "").trim().split("\n").filter((x) => x.startsWith("{")).pop();
+  let m = null; try { m = JSON.parse(line); } catch { /* reported below */ }
+  ok(m && typeof m.U === "string" && m.a === m.U && m.b === m.U && m.c.every((x) => x === m.U), `m. a ledger that never loads reads ORPHAN_LEDGER_UNLOADED, never no sale (${line || String(r.stderr || "").slice(-300)})`);
+  ok(m && m.first >= 5000 && m.second < 1000 && m.third < 1000, `m. reads inside the fresh window reuse the one wait (first ${m?.first} ms, second ${m?.second} ms, two at once ${m?.third} ms)`);
 }
 
 try { rmSync(TMP, { recursive: true, force: true }); } catch { /* temp */ }
