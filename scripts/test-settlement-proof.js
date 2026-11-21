@@ -227,10 +227,23 @@ const merchant = (m, payments, payers = 3, volumeUsd = 1) => ({ merchant: m, pay
 {
   const { readFileSync } = await import("node:fs");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  // An unproven Base candidate (2026-09-30) binds to the address its own
-  // live 402 named; every other candidate still binds to the proven one.
-  ok(/provenPayTo:\s*\(r\.unproven && chain === "base" && r\.chainProvenPayTo\) \|\| provenPayToByOrigin\?\.get\(norm\(r\.seller\)\)/.test(server),
+  // An unproven candidate on an EVM buyer chain (Base since 2026-09-30, the
+  // other chains of src/evm-buyer-chains.js since the unproven tier reached
+  // them) binds to the address its own live 402 named; every other candidate
+  // still binds to the proven one. The rule is the helper's, so the pin reads
+  // three things: the resolver asks the helper, the helper is the table's own
+  // (not a local of the same name), and the table's answer is every EVM buyer
+  // chain and no other rail.
+  ok(/provenPayTo:\s*\(r\.unproven && isEvmBuyerChain\(chain\) && r\.chainProvenPayTo\) \|\| provenPayToByOrigin\?\.get\(norm\(r\.seller\)\)/.test(server),
     "resolveExternalSeller returns provenPayTo, so the spend has an address to bind against");
+  ok(/import \{[^}]*\bisEvmBuyerChain\b[^}]*\} from "\.\/evm-buyer-chains\.js";/.test(server) && !/(?:function|const|let|var)\s+isEvmBuyerChain\b/.test(server),
+    "the resolver's isEvmBuyerChain is the one src/evm-buyer-chains.js exports");
+  const { EVM_BUYER_CHAINS, isEvmBuyerChain } = await import("../src/evm-buyer-chains.js");
+  const evmChains = Object.keys(EVM_BUYER_CHAINS);
+  ok(evmChains.includes("base") && evmChains.length > 1 && evmChains.every((c) => isEvmBuyerChain(c) && /^eip155:\d+$/.test(EVM_BUYER_CHAINS[c].caip2)),
+    `an unproven candidate binds to its own live address on every EVM buyer chain (${evmChains.join(", ")})`);
+  ok(["solana", "tempo", "algorand", "stellar", "", null, undefined, "toString", "__proto__", "BASE"].every((c) => !isEvmBuyerChain(c)),
+    "and on no other rail: a non-EVM chain, an empty name and an inherited key bind to the proven address");
   const buyer = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
   // `payable.payTo` is the whole point (the accept being signed, never
   // accepts[0]); anything after it is allowed, because the call gained an
