@@ -12,7 +12,7 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1083 variables in 111 groups.
+1084 variables in 111 groups.
 
 ## Contents
 
@@ -1589,6 +1589,7 @@ may still clamp it, and the read site is the reference.
 | `MONITOR_SCHEDULER` | off stops the scheduler that runs recurring monitors. |  | `src/server.js` |
 | `MPPSCAN_API_URL` | Mppscan API URL. | `https://www.mppscan.com/api/trpc/servers.list` | `src/mpp-index.js` |
 | `MPPSCAN_DISCOVERY_URL` | Mppscan discovery URL. | `https://www.mppscan.com/` | `src/mpp-index.js` |
+| `NAMED_AUDIO_MODELS` | Comma list of the named speech and transcription model ids to serve beside the default chains, or all (unset: none). Each also needs its cost row, inside the route's margin bound. |  | `src/speech-additions.js` |
 | `NETWORKS_VERIFY_AGE_MS` | Networks verify age, in milliseconds. |  | `src/crawl-cadence.js` |
 | `NEW_CATALOG_QUOTE_BURST` | New catalog quote burst. | `60` | `src/x402-index.js` |
 | `NEYNAR_API_KEY` | Neynar API key (a credential, set on the host). |  | `src/tools/farcaster-social-kit.js`, `src/tools/onchain-identity-kit.js` |

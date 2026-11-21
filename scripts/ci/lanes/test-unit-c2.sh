@@ -49,3 +49,5 @@ t node scripts/test-monitor-issue-wording.js
 t node scripts/test-router-benchmarks.js
 # Price webhooks: input rules, bounds, price comparison, signed delivery, retries, the fetch guard, the served tool and its removal route (offline, port 0)
 t node scripts/test-price-webhooks.js
+# Named speech and transcription models: served and listed only with a cost row inside the margin bound (offline, stubbed upstream)
+t node scripts/test-speech-additions.js

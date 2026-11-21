@@ -62,6 +62,7 @@ import { evmCredentialSettleableMs, evmCredentialExpiry } from "../evm-validity.
 import { noteChatAttemptBound } from "../slow-paid-calls.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
+import { admittedSpeechAdditions } from "../speech-additions.js";
 import { cacheGet, cacheSet } from "../cache.js";
 import { unknownModelVerdict, isListedModel, contextTokensOf, listedModelsWithContext, MAX_SUGGESTIONS } from "../model-catalog.js";
 import { stripControlChars } from "../prepayment-refusal.js";
@@ -4362,6 +4363,14 @@ export const SPEECH_MODELS = [
   },
 ];
 
+/** The speech models a buyer can name beside the chain (src/speech-additions.js):
+ *  each is served and listed only while its private cost row is present and
+ *  SPEECH_MAX_CHARS on it stays inside the margin bound of the price. Read at
+ *  call time, so a row added to the table turns its model on. */
+export function speechAdditions() {
+  return admittedSpeechAdditions({ priceUsd: SPEECH_PRICE, maxChars: SPEECH_MAX_CHARS });
+}
+
 /** The provider's voice id for a requested voice on this chain link:
  *  OpenAI name → mapped; the link's own native id → itself; another link's
  *  native id (chain walked past its model) → this link's alloy; a retired
@@ -4384,21 +4393,28 @@ export function validateSpeechRequest(input) {
   // as fallbacks (same semantics as the chat tiers: a buyer's pick should
   // not turn a provider outage into their 502).
   let chain = SPEECH_MODELS;
+  const additions = speechAdditions();
   if (input.model !== undefined) {
     // The caller's own spelling is matched too: canonicalModel prefixes some
     // bare names (grok-* becomes x-ai/grok-*), which would turn a documented
     // alias such as "grok-voice-tts" into an id no entry carries.
     const raw = String(input.model).trim().toLowerCase();
     const m = canonicalModel(input.model).toLowerCase();
-    const hit = SPEECH_MODELS.find((e) => m === e.id || e.aliases.includes(m) || raw === e.id || e.aliases.includes(raw));
+    // A chain link, or a named model this server serves beside the chain; a
+    // named one goes first and the whole chain stays behind it as fallbacks.
+    const hit = [...SPEECH_MODELS, ...additions].find((e) => m === e.id || e.aliases.includes(m) || raw === e.id || e.aliases.includes(raw));
     if (!hit) {
-      throw bad(`"model" must be one of: ${SPEECH_MODELS.map((e) => e.id).join(", ")} (or omit it for the default chain)`);
+      throw bad(`"model" must be one of: ${[...SPEECH_MODELS, ...additions].map((e) => e.id).join(", ")} (or omit it for the default chain)`);
     }
     chain = [hit, ...SPEECH_MODELS.filter((e) => e !== hit)];
   }
   const voice = input.voice === undefined ? "alloy" : String(input.voice);
   if (!OPENAI_SPEECH_VOICES.includes(voice) && !SPEECH_MODELS.some((e) => e.voices.has(voice) || e.legacyVoices?.[voice])) {
-    throw bad(`"voice" must be an OpenAI voice name (${OPENAI_SPEECH_VOICES.join(", ")}) or a native voice id from GET /v1/models`);
+    // A voice only a named model has is spoken only by that model: no chain
+    // link carries it, so without the model named it would be dropped.
+    const owner = additions.find((e) => e.voices.has(voice));
+    if (!owner) throw bad(`"voice" must be an OpenAI voice name (${OPENAI_SPEECH_VOICES.join(", ")}) or a native voice id from GET /v1/models`);
+    if (chain[0] !== owner) throw bad(`"voice" ${voice} is a voice of ${owner.id}: name that model in "model" to use it`);
   }
   const format = input.response_format === undefined ? "mp3" : String(input.response_format);
   if (!SPEECH_FORMATS[format]) throw bad(`"response_format" must be one of: ${Object.keys(SPEECH_FORMATS).join(", ")}`);
@@ -5432,7 +5448,9 @@ export function modelsList() {
   // The speech route is registered only under OPENROUTER_TTS_ENABLED=true
   // (server.js GATEWAY_TOOLS_ENABLED); a boot without it advertised the five
   // TTS models at an endpoint that answered 404 (cross-surface test, 2026-09-06).
-  for (const m of process.env.OPENROUTER_TTS_ENABLED === "true" ? SPEECH_MODELS : []) {
+  // The chain's links, then the named models this server serves beside it
+  // (speechAdditions: none while its cost row is absent).
+  for (const m of process.env.OPENROUTER_TTS_ENABLED === "true" ? [...SPEECH_MODELS, ...speechAdditions()] : []) {
     data.push({
       id: m.id,
       object: "model",

@@ -657,6 +657,7 @@
     "POW_DB_PATH": "Proof-of-work database path.",
     "POW_DIFFICULTY": "Proof-of-work difficulty in leading zero bits (8 to 28).",
     "POW_PG_REFRESH_MS": "Proof-of-work Postgres refresh, in milliseconds.",
+    "NAMED_AUDIO_MODELS": "Comma list of the named speech and transcription model ids to serve beside the default chains, or all (unset: none). Each also needs its cost row, inside the route's margin bound.",
     "POW_SECRET": "Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process).",
     "PRICE_WEBHOOKS_FILE": "File for price webhook registrations, the kept list prices and queued deliveries.",
     "PRICE_WEBHOOK_DELIVERIES": "Runtime switch for outbound price webhook deliveries (on; off: registrations and removals keep working and queued deliveries wait).",

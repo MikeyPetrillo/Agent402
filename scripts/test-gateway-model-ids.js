@@ -210,6 +210,30 @@ for (const e of TTS_BACKUP_ENTRIES) {
   const liveSec = await dearest(DIARIZE_MODEL), perMin = upstreamCosts().sttPerMinute[DIARIZE_MODEL];
   ok(liveSec !== null && Number.isFinite(perMin) && perMin >= liveSec * 60 - 1e-9, brief(DIARIZE_MODEL, `${DIARIZE_MODEL}: private per-minute row ${perMin} covers ${liveSec}/s`));
 }
+// 1d2. The named models beside the chains (src/speech-additions.js). Each is
+//      live, and a speech one still serves every voice its map and its list
+//      name. A speech addition's private row covers its dearest live endpoint
+//      per character, as every other speech row does. A transcription
+//      addition's row is NOT compared with the listing here: the listed unit
+//      differs by provider and is not established for these models, so a
+//      model is switched on (NAMED_AUDIO_MODELS) only after a supervised paid
+//      call measures what one audio minute bills.
+{
+  const { SPEECH_ADDITIONS, STT_ADDITIONS } = await import("../src/speech-additions.js");
+  const sttLive = (await (await fetch("https://openrouter.ai/api/v1/models?output_modalities=transcription", { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json().catch(() => null))?.data || [];
+  for (const a of SPEECH_ADDITIONS) {
+    const m = speech.find((x) => x.id === a.id);
+    const listed = new Set(m?.supported_voices || []);
+    const gone = [...a.voices].filter((v) => !listed.has(v));
+    ok(!!m && gone.length === 0, `named speech model ${a.id} is live and serves every voice we list${gone.length ? ` (gone: ${gone.slice(0, 8).join(", ")})` : ""}`);
+    const row = upstreamCosts().speech[a.id];
+    const j = await (await fetch(`https://openrouter.ai/api/v1/models/${a.id}/endpoints`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json().catch(() => null);
+    const prices = (j?.data?.endpoints || []).map((e) => { const r = Number(e?.pricing?.prompt); const d = Number(e?.pricing?.discount) || 0; return d > 0 && d < 1 ? r / (1 - d) : r; }).filter(Number.isFinite);
+    const live = prices.length ? Math.max(...prices) : null;
+    ok(live !== null && Number.isFinite(row) && row >= live - 1e-12, brief(a.id, `${a.id}: private row ${row} covers the dearest endpoint ${live}/char`));
+  }
+  for (const a of STT_ADDITIONS) ok(sttLive.some((x) => x.id === a.id), `named transcription model ${a.id} is live`);
+}
 // 1e. Our audio data policy (src/openrouter-audio-policy.js) sends zdr:true to
 //     the models in AUDIO_ZDR_MODELS. That is only safe while EVERY endpoint
 //     OpenRouter lists for the model is a ZDR endpoint: otherwise the flag
@@ -220,7 +244,8 @@ for (const e of TTS_BACKUP_ENTRIES) {
   const { AUDIO_ZDR_MODELS } = await import("../src/openrouter-audio-policy.js");
   const { TTS_TIERS, TTS_BACKUP_MODELS } = await import("../src/tools/tts-kit.js");
   const { DIARIZE_MODEL } = await import("../src/tools/stt-kit.js");
-  const sent = new Set([...SPEECH_MODELS.map((m) => m.id), ...Object.values(TTS_TIERS).flatMap((t) => t.chain || [t.model]), ...TTS_BACKUP_MODELS, DIARIZE_MODEL]);
+  const { ADDITION_MODEL_IDS } = await import("../src/speech-additions.js");
+  const sent = new Set([...SPEECH_MODELS.map((m) => m.id), ...Object.values(TTS_TIERS).flatMap((t) => t.chain || [t.model]), ...TTS_BACKUP_MODELS, DIARIZE_MODEL, ...ADDITION_MODEL_IDS]);
   ok([...AUDIO_ZDR_MODELS].every((id) => sent.has(id)), `every zdr audio model is one we send${[...AUDIO_ZDR_MODELS].filter((id) => !sent.has(id)).map((id) => ` (stale: ${id})`).join("")}`);
   const zdrNames = new Set(((await (await fetch("https://openrouter.ai/api/v1/endpoints/zdr", { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json().catch(() => null))?.data || []).map((e) => e.name));
   ok(zdrNames.size > 50, `the ZDR endpoint list is readable (${zdrNames.size} endpoints)`);

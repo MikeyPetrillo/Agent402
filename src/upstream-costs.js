@@ -57,8 +57,18 @@ const REQUIRED = [
   ["openai", "gpt-image-2.6-flare"], ["openai", "gpt-image-2.6-sunburst"],
   // The image edit route's only link (llm-images-fast-kit.js).
   ["media", "black-forest-labs/flux-3-image-klein"],
-  // The /api/tts backup that is not a /v1/audio/speech link (tts-kit.js).
+  // The /api/tts backup that is not a /v1/audio/speech link (tts-kit.js);
+  // also a model a buyer can name on /v1/audio/speech (speech-additions.js).
   ["speech", "mistralai/voxtral-mini-tts-3-0"],
+  // The named models beside the speech and transcription chains
+  // (src/speech-additions.js ADDITION_COST_KEYS): speech in USD per character,
+  // transcription in USD per audio minute. A model is served and listed only
+  // while NAMED_AUDIO_MODELS names it and its row is present, so a complete
+  // table turns nothing on by itself.
+  ["speech", "elevenlabs/eleven-v3-conversational"],
+  ["sttPerMinute", "mistralai/voxtral-mini-transcribe-3-0"],
+  ["sttPerMinute", "mistralai/voxtral-small-transcribe-3-0"],
+  ["sttPerMinute", "microsoft/mai-transcribe-2"],
   // The SQL query service, USD per query: every query cdp-kit.js's query run
   // sends for onchain-sql (the buyer's query and its recovery runs, at most
   // SQL_QUERY_BUDGET per call), which the margin test prices against the
