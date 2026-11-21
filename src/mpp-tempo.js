@@ -826,22 +826,20 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
 // it keys on the client IP (the callers' own fallback), never on an
 // unverified sender.
 //
-// The in-flight coverage check (src/inflight-cover.js) still books such a
-// pull against an account, so its runs at once are bounded by a balance and
-// not only by the address it came from:
+// The in-flight coverage check (src/inflight-cover.js) still bounds such a
+// pull's runs at once, on what this server does know:
 //   - an address in the fee-payer slot that is not the signer: the SIGNER,
 //     whose balance is the one a Tempo transaction draws on (the chain reads
 //     the sender from the signature), in the signer's own ledger (only the
 //     holder of that key can book there);
-//   - a multisig envelope: the account it names, judged on that account's
-//     balance, in a ledger of its own apart from the account's verified
-//     runs, so a credential that only names an account never holds that
-//     account's own calls back. When the owners' approvals verify here
-//     (each a primitive signature over the multisig digest, by a distinct
-//     owner of the config the envelope carries, together reaching its
-//     threshold), the ledger is that config's (its commitment), which nobody
-//     without those owners' keys can book into; whether the config is the
-//     account's own is a chain read this gate does not make.
+//   - every other sender that is not proven (a multisig envelope above all:
+//     its owners' approvals can be checked here only against the config the
+//     envelope itself carries, and whether that config is the named
+//     account's is a chain read this gate has no means to make): the CLIENT
+//     ADDRESS it came from, one ledger for everything that address sends
+//     this way. Not the account it names (anyone can name an account, so
+//     that account's ledger and balance are never touched by it), and not
+//     the config or key it carries (a caller can make a new one per request).
 // ---------------------------------------------------------------------------
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const lcAddress = (a) => (typeof a === "string" && ADDRESS_RE.test(a) ? a.toLowerCase() : null);
@@ -912,13 +910,16 @@ function multisigApprovalsCommitment(sig, signPayload) {
  *               (inlineAuthorizationProves), which the read accepts only
  *               while the chain holds no record of the key. Else null.
  *    booking  - for a sender that is NOT verified, what the in-flight
- *               coverage check books the pull against (see the note above):
- *               { account, ledger } where `account` is the balance it is
- *               judged on and `ledger` is null (the account's own ledger: a
- *               signer the signature proves, written into the fee-payer slot
- *               as someone else) or "unverified" (a multisig envelope,
- *               whether or not its owner approvals verify against the config
- *               it carries). Never a key for a per-buyer bound. Else null.
+ *               coverage check is told (see the note above): { account,
+ *               ledger }. `ledger` null: `account` is a signer the signature
+ *               proves, written into the fee-payer slot as someone else, and
+ *               the pull is judged in that account's own ledger. `ledger`
+ *               "unverified": a multisig envelope, whether or not its owner
+ *               approvals verify against the config it carries; `account` is
+ *               only the account it names, and the pull is booked on the
+ *               client address, on no account. Never a key for a per-buyer
+ *               bound. Else null (the gate books that on the client address
+ *               too).
  *  Offline and synchronous; never throws. Exported for tests. */
 export function inspectTempoSender(authorizationHeader, { now = Date.now() } = {}) {
   const out = { claimed: null, verified: null, envelope: null, keychain: null, booking: null, reason: "" };
@@ -964,10 +965,10 @@ export function inspectTempoSender(authorizationHeader, { now = Date.now() } = {
     if (sig.type === "multisig") {
       if (lcAddress(sig.account) !== out.claimed) return { ...out, reason: "the multisig account is not the named sender" };
       const commitment = multisigApprovalsCommitment(sig, signPayload);
-      // One ledger per named account whatever the approvals say: they are
-      // checked only against the config the envelope carries, so a config
-      // made fresh for each request would otherwise open a fresh, empty
-      // ledger every time.
+      // Unproven whatever the approvals say: they are checked only against
+      // the config the envelope carries, which anyone can write for any
+      // account, new for each request. The account is named here, never
+      // booked (the gate books the pull on the client address).
       return { ...out, booking: { account: out.claimed, ledger: "unverified" }, reason: commitment ? "multisig envelope: the owner approvals verify; the account's config is not checked" : "multisig envelope: the owner approvals do not verify" };
     }
   } catch {
@@ -1912,12 +1913,18 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       if (binding.payloadType === "transaction") presentChallengeWindow(req, binding.expiresAtMs);
       if (binding.payloadType === "transaction" && req.mppTempoSender) {
         req.mppTempoPull = { sender: req.mppTempoSender, currency: String(binding.challenge?.request?.currency || ""), amountAtomic: String(binding.amountAtomic) };
-      } else if (binding.payloadType === "transaction" && senderInfo?.booking && !senderInfo.keychain && lcAddress(senderInfo.booking.account)) {
-        // A sender that is not verified (a multisig envelope, another address
-        // in the fee-payer slot): its per-buyer bounds stay on the client IP,
-        // and the coverage check books the pull against the account it draws
-        // on (see inspectTempoSender's booking), in the ledger named there.
-        req.mppTempoPull = { sender: senderInfo.booking.account, ledger: senderInfo.booking.ledger || null, currency: String(binding.challenge?.request?.currency || ""), amountAtomic: String(binding.amountAtomic) };
+      } else if (binding.payloadType === "transaction") {
+        // A sender that is not verified: its per-buyer bounds stay on the
+        // client IP. Another address in the fee-payer slot is booked against
+        // its signer, which the signature proves (that account's own ledger).
+        // Everything else (a multisig envelope, any other shape this gate
+        // could not prove) is marked unverified, and the coverage check books
+        // it on the client address alone (see the note above
+        // inspectTempoSender): the account it names is carried only so that
+        // account's records learn of a payment the chain did take from it.
+        const b = senderInfo?.booking;
+        const proven = b && b.ledger == null ? lcAddress(b.account) : null;
+        req.mppTempoPull = { sender: proven || lcAddress(b?.account) || senderInfo?.claimed || null, ledger: proven ? null : "unverified", currency: String(binding.challenge?.request?.currency || ""), amountAtomic: String(binding.amountAtomic) };
       }
       // The tempo credential is the ONLY payment evidence on this request.
       // Drop any x402 payment header that rode alongside it: the dispatcher

@@ -22,9 +22,7 @@
 //     shim), a Tempo pull credential from a sender the gate verified
 //     (signed by an access key: judged on the account that pays, the one the
 //     key signs for; a pull with another address in the fee-payer slot is
-//     judged on its signer, the account it draws on; a multisig envelope on
-//     the account it names, in a ledger of its own apart from that account's
-//     verified runs, never that account's paid record), and a
+//     judged on its signer, the account it draws on), and a
 //     Solana, Algorand or Stellar x402 payment (src/rail-cover.js; a Solana
 //     transfer that names an account through a lookup table is keyed on the
 //     paying wallet and judged on all it holds of the mint). Not
@@ -35,6 +33,19 @@
 //     where it is paid from.
 //     A payment with no readable terms is not judged here; the settle
 //     breaker counts its runs in flight (src/gateway-settle-breaker.js).
+//   - AN UNPROVEN SENDER (a Tempo multisig envelope: it names an account,
+//     and whether its config is that account's is not something this server
+//     can check) is booked on no account. Its ledger is the client address
+//     it came from, one for everything that address sends this way, whatever
+//     account, config or key each credential names; it is judged on no
+//     balance and has no paid record: INFLIGHT_COVER_UNREAD_MAX runs in
+//     flight, the allowance of a wallet whose balance was never read. The
+//     account it names keeps its ledger, its balance and its paid record to
+//     itself: nothing sent this way is counted against them or read from
+//     them, so one balance backs one ledger. When such a payment SETTLES,
+//     the chain took it from that account, and the account's own records are
+//     told the way they are of a settlement another container made (the last
+//     good read is forgotten; the next judgment reads again).
 //   - The first run in flight needs no read: verify already proved the
 //     balance covers it (unless a run of the wallet settled after the request
 //     arrived: verify may predate that payment, so the run is judged). A later one reads balanceOf once, cached for a few
@@ -909,17 +920,22 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
   if (terms.rail === "evm" && !terms.asset) {
     try { const { EVM } = await import("./revenue-live.js"); const t = EVM[CHAIN_BY_CAIP2[terms.network]]?.token; if (typeof t === "string" && HEX_ADDR.test(t)) terms.asset = t.toLowerCase(); } catch { /* keyed without it */ }
   }
-  // A Tempo pull whose sender is not verified is booked in a ledger of its
-  // own (terms.ledger), judged on the account's balance but apart from that
-  // account's verified runs (src/rail-cover.js tempoCoverTermsOf).
-  const coverKey = `${terms.network}|${terms.asset || "-"}|${terms.payer}${terms.ledger ? `|${terms.ledger}` : ""}`;
-  // Which daily ceiling this wallet's reads count against, if any.
-  terms.ceiling = await ceilingOfRead(terms);
+  // The account's own key: one ledger per balance.
+  const accountKey = `${terms.network}|${terms.asset || "-"}|${terms.payer}`;
+  // A Tempo pull whose sender is not proven (terms.unproven, the client
+  // address: src/rail-cover.js tempoCoverTermsOf) is booked on that address
+  // alone, never under the account, token, config or key it names: nothing a
+  // caller writes into a credential opens another ledger, and no account's
+  // ledger holds a run its owner is not shown to have sent.
+  const coverKey = terms.unproven ? `${terms.network}|unproven|${terms.unproven}` : accountKey;
+  // Which daily ceiling this wallet's reads count against, if any (an
+  // unproven sender is judged on no balance, so it makes no read).
+  terms.ceiling = terms.unproven ? null : await ceilingOfRead(terms);
   // The wallet the paid record is kept under (a Solana payment draws on a
   // token account; its authority is the wallet).
-  // A ledger of its own (an unverified Tempo sender) is never the named
-  // account's paid record, and its settlements add nothing to that record.
-  const owner = terms.ledger ? null : terms.owner || terms.payer;
+  // An unproven sender has none: it neither reads the named account's paid
+  // record nor adds to it.
+  const owner = terms.unproven ? null : terms.owner || terms.payer;
   // Read once, here: the allowance on an unread balance is the one the wallet
   // had when this admission began.
   const paidAtStart = owner ? hasPaidRecord(owner) : false;
@@ -974,6 +990,25 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       return true;
     };
     for (;;) {
+      if (terms.unproven) {
+        // AN UNPROVEN SENDER is judged on no balance: the account it names
+        // is not shown to be its own, and that account's balance already
+        // backs the account's own ledger. It gets the allowance of a wallet
+        // with no paid record whose balance was never read, for everything
+        // in flight from its client address (here and on other containers).
+        const cur = judgedSet(ledger.get(coverKey) || { count: 0, atomic: 0n, settling: 0 }, others);
+        if (cur.count < unreadMax()) { how = "unread"; break; }
+        stats.refused++;
+        stats.refusedUnread++;
+        const e = new Error(`This payment's sender could not be confirmed before the call runs (a multisig envelope names its account without proving it), so calls paid this way run ${unreadMax()} at a time from one client address, and ${cur.count} are in progress. Your input is fine: retry the same call after Retry-After, once one of them has settled. A payment signed by the account's own key, or by an access key the chain lists for it, is not held to this. You have not been charged.`);
+        e.statusCode = 429;
+        e.coverRefusal = "unread";
+        e.attribution = "ours";
+        e.hint = "cover-unread";
+        e.fix = "Your input is fine. Retry the same call after Retry-After, when a call paid this way from this address has settled.";
+        e.retryAfter = asBefore ? 30 : 5;
+        throw e;
+      }
       const held = ledger.get(coverKey);
       // Nothing in flight: verify's proof stands, unless a run of the wallet
       // settled after this request arrived (verify may have seen the balance
@@ -1249,6 +1284,17 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       walletOf(coverKey).settledAt = at;
       // The mark other containers read before they trust verify's proof.
       if (SHARED) void sharedWrite(SHARED_NAME, shared.flagSet(SETTLED_NAME, coverKey, at + SETTLED_MARK_MS));
+      // An unproven sender's payment that SETTLED was taken by the chain from
+      // the account it named, a run that account's own ledger never held: the
+      // account's records are told as they are of a settlement another
+      // container made (its last good read is forgotten, a judgment under way
+      // reads again, and verify's proof is not trusted for a call that
+      // arrived before it). Its paid record is not touched.
+      if (terms.unproven && terms.payer) {
+        walletOf(accountKey).settledAt = at;
+        noteDeparture(accountKey);
+        if (SHARED) void sharedWrite(SHARED_NAME, shared.flagSet(SETTLED_NAME, accountKey, at + SETTLED_MARK_MS));
+      }
     }
     // Every read record held for the wallet takes this run's amount off (it
     // stays a lower bound), every run being judged is told a run has left,
@@ -1258,7 +1304,7 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
     // should its balance become unreadable: one read in the background, when
     // it has none younger than the at-once window and the lane has room
     // (at most one such read per wallet in that time; nothing waits for it).
-    if (settled === true) {
+    if (settled === true && !terms.unproven) {
       const w2 = walletOf(coverKey);
       const net = networkOf(coverKey);
       const backingOff = Date.now() - (netFailedAt.get(net) || 0) < BG_BACKOFF_MS;

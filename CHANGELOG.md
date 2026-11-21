@@ -6,6 +6,20 @@ carries its own version on npm.
 
 ## v2.10.0 - 2026-11-21
 
+### 2026-11-21 (multisig Tempo payments and DNS names)
+Payments:
+- A Tempo pull credential in a multisig envelope runs four calls at once per
+  client address (`INFLIGHT_COVER_UNREAD_MAX` sets the number), whichever
+  account it names; a call past that answers 429 with `Retry-After: 5` and
+  nothing is charged. Such a credential is no longer counted against the
+  balance of the account it names.
+- Calls an account pays for with its own key, or with an access key Tempo
+  confirms for it, are counted against that account's balance alone.
+Tools:
+- The DNS, mail and certificate tools look up a name in one normalized form
+  (lowercase, no trailing dots or surrounding spaces), and `dns` answers
+  with that form in `name`.
+
 ### 2026-11-21 (x402 by default for python-httpx clients)
 Payments:
 - On a server that offers MPP, a client whose User-Agent starts with

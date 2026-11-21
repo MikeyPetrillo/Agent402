@@ -1033,31 +1033,126 @@ for (const readMs of [600, 450]) {
   caps._resetHardCaps();
 }
 
-// ---- a Tempo pull whose sender is not verified is judged on the account it names, in a ledger of its own ----
+// ---- a Tempo pull whose sender is not proven is booked on the client address it came from, on no account ----
 {
-  fresh();
   const ACCT = W(0xd9), CUR = "0x20c000000000000000000000b9537d11c60e8b50";
-  const tempoReq = (ledger) => ({ tempoSettling: true, mppTempoPull: { sender: ACCT, currency: CUR, amountAtomic: String(PRICE), ...(ledger ? { ledger } : {}) }, header: () => undefined });
-  const admitT = async (ledger) => { const req = tempoReq(ledger); try { return { req, release: await admitCoveredRun(req) }; } catch (err) { return { req, err }; } };
+  const X = "198.51.100.7", Y = "203.0.113.9";
+  const RICH = (i) => "0x" + (0xe000 + i).toString(16).padStart(40, "0");
+  // `ledger`: the gate's mark on a pull whose sender it could not prove.
+  const tempoReq = ({ sender = ACCT, ledger = null, ip = X } = {}) => ({ tempoSettling: true, ip, mppTempoPull: { sender, currency: CUR, amountAtomic: String(PRICE), ...(ledger ? { ledger } : {}) }, header: () => undefined });
+  const admitT = async (o) => { const req = tempoReq(o); try { return { req, release: await admitCoveredRun(req) }; } catch (err) { return { req, err }; } };
+  const un = (o = {}) => admitT({ ledger: "unverified", ...o });
+  const endUnpaid = (x) => { if (x.release) { x.req.res = { statusCode: 402 }; x.release(); } };
+  const balances = new Map();
   let reads = 0;
-  _setBalanceReaderForTest(async (t) => { reads++; return t.payer === ACCT ? PRICE : 0n; });
+  const reader = async (t) => { reads++; return balances.has(t.payer) ? balances.get(t.payer) : 1_000_000n * PRICE; };
+
+  // The terms: the account is only named; the key is the client address.
+  {
+    const t = await coverTermsOfRequest(tempoReq({ ledger: "unverified" }));
+    ok(t?.unproven === `ip:${X}` && t.payer === ACCT, `a pull the gate marked unverified carries the client address it came from (${t?.unproven})`);
+    const v = await coverTermsOfRequest(tempoReq());
+    ok(v && v.unproven === undefined && v.payer === ACCT, "control: a verified pull carries none");
+    const a6 = await coverTermsOfRequest(tempoReq({ ledger: "unverified", ip: "2001:db8:1:2:3:4:5:6" })), b6 = await coverTermsOfRequest(tempoReq({ ledger: "unverified", ip: "2001:db8:1:2:aaaa::1" }));
+    ok(a6?.unproven === b6?.unproven && /\/64$/.test(a6?.unproven || ""), `an IPv6 client is keyed by its /64, as every per-address guard keys it (${a6?.unproven})`);
+    const none = await coverTermsOfRequest({ ...tempoReq({ ledger: "unverified" }), ip: undefined });
+    ok(typeof none?.unproven === "string" && none.unproven.length > 3, `a request with no readable address still has a key (one shared by all such requests), never no terms (${none?.unproven})`);
+    const anyMark = await coverTermsOfRequest(tempoReq({ ledger: `multisig:0x${"ab".repeat(32)}` })), noAcct = await coverTermsOfRequest(tempoReq({ ledger: "unverified", sender: null }));
+    ok(anyMark?.unproven === `ip:${X}` && noAcct?.unproven === `ip:${X}` && noAcct.payer === null, "any unverified mark, and a pull that names no account at all, is keyed the same way");
+  }
+
+  // 1. Nothing a caller writes opens another ledger: a new account, a new
+  //    config or a new key per request all land on the one address.
+  fresh();
+  _setBalanceReaderForTest(reader);
   _setPaidRecordForTest(() => true);
-  const v1 = await admitT(null), v2 = await admitT(null);
-  ok(v1.release && v2.err?.coverRefusal === "short", "control: the account's verified pulls, one price: one admitted, the next refused short");
-  const u1 = await admitT("unverified");
-  ok(u1.release, `a pull from an unverified sender naming the account sits in a ledger of its own: the account's own run in flight does not count against it (${u1.err?.coverRefusal || "admitted"})`);
-  const u2 = await admitT("unverified");
-  ok(u2.err?.coverRefusal === "short" && reads >= 2, `...and it is judged on the account's balance: a second one is refused short (${u2.err?.coverRefusal || "admitted"})`);
-  const m1 = await admitT(`multisig:0x${"ab".repeat(32)}`);
-  ok(m1.release && inflightCoverStatus().walletsInFlight === 3, "a multisig config's own ledger is apart from both");
-  for (const x of [v1, u1, m1]) x.release?.();
-  // Never the account's paid record: with reads down, the small allowance, not the paid one.
+  reads = 0;
+  const named = []; for (let i = 0; i < 8; i++) named.push(await un({ sender: RICH(i) }));
+  ok(named.filter((x) => x.release).length === 4 && named.slice(4).every((x) => x.err?.statusCode === 429 && x.err.coverRefusal === "unread"), `eight unproven pulls from one address, each naming a different funded account: four run, the rest are refused 429 (${named.filter((x) => x.release).length} of 8 admitted)`);
+  const configs = []; for (let i = 0; i < 8; i++) configs.push(await admitT({ sender: RICH(0), ledger: `multisig:0x${String(i).repeat(64)}` }));
+  ok(configs.every((x) => x.err?.coverRefusal === "unread"), `...and a new config per request naming one funded account opens no ledger of its own (${configs.filter((x) => x.release).length} of 8 admitted beside the four)`);
+  ok(reads === 0, `an unproven pull is judged on no balance: no read was made for any of them (${reads})`);
+  ok(named.filter((x) => x.release).every((x) => coveredRunStateOf(x.req) === "unread"), "each is admitted on the allowance (unread), never as covered by a balance");
+  {
+    const e = named[4].err;
+    ok(e?.retryAfter === 5 && e.attribution === "ours" && /You have not been charged\.$/.test(e.message) && /4 at a time/.test(e.message) && notCallersInput(e), `the refusal says what the bound is, asks for a retry in 5 s and says nothing was charged (${String(e?.message).slice(0, 90)}...)`);
+  }
+  const other = []; for (let i = 0; i < 6; i++) other.push(await un({ sender: RICH(i), ip: Y }));
+  ok(other.filter((x) => x.release).length === 4, `control: another client address has an allowance of its own (${other.filter((x) => x.release).length} of 6)`);
+  endUnpaid(named[0]);
+  const next = await un({ sender: RICH(9) });
+  ok(next.release, "control: when one of the address's runs ends, its next one is admitted");
+  for (const x of [...named, ...other, next]) endUnpaid(x);
+  ok(inflightCoverStatus().runsInFlight === 0, "nothing is left in flight");
+
+  // 2. A credential that only names an account changes nothing for that
+  //    account: not its own multisig pulls from another address, not its
+  //    verified pulls, not its balance record.
+  fresh();
+  _setBalanceReaderForTest(reader);
+  balances.set(ACCT, PRICE);
+  const forged = []; for (let i = 0; i < 6; i++) forged.push(await un({ ip: X }));
+  ok(forged.filter((x) => x.release).length === 4, "an address sends pulls that name an account it does not hold: four are in flight");
+  const own = await un({ ip: Y });
+  ok(own.release, `the account's own multisig pull, from its own address, is admitted beside them (${own.err?.coverRefusal || "admitted"})`);
+  reads = 0;
+  const v1 = await admitT(), v2 = await admitT();
+  ok(v1.release && coveredRunStateOf(v1.req) === "covered" && v2.err?.coverRefusal === "short" && reads === 1, `the account's verified pulls are judged on its balance exactly as with nothing else in flight: one price, one admitted, the next refused short (${v2.err?.coverRefusal || "admitted"}, reads ${reads})`);
+  for (const x of [...forged, own, v1]) endUnpaid(x);
+
+  // 3. One balance backs one ledger. With the account's own runs holding all
+  //    of it, pulls that name the account are not admitted on it again.
+  fresh();
+  _setBalanceReaderForTest(reader);
+  balances.set(ACCT, 20n * PRICE);
+  const held = []; for (let i = 0; i < 21; i++) held.push(await admitT());
+  ok(held.filter((x) => x.release).length === 20 && held[20].err?.coverRefusal === "short", "control: the account's verified pulls hold its whole balance (20 in flight, the 21st refused short)");
+  const beside = []; for (let i = 0; i < 12; i++) beside.push(await un({ ip: i < 6 ? X : Y }));
+  const covered = [...held, ...beside].filter((x) => x.release && coveredRunStateOf(x.req) === "covered").length;
+  ok(covered === 20 && beside.every((x) => !x.release || coveredRunStateOf(x.req) === "unread"), `the runs admitted as covered by the account's balance never exceed it, whatever names the account (${covered} covered, balance 20 prices)`);
+  ok(beside.filter((x) => x.release).length === 8, `...what runs beside them is the fixed allowance of each client address, not a second balance (${beside.filter((x) => x.release).length} of 12 from two addresses)`);
+  for (const x of [...held, ...beside]) endUnpaid(x);
+
+  // 4. A settlement the chain took from the named account reaches that
+  //    account's own records: its kept read is not judged on as if the
+  //    payment had not happened.
+  fresh();
+  _setBalanceReaderForTest(reader);
+  balances.set(ACCT, 2n * PRICE);
+  const k1 = await admitT(), k2 = await admitT();
+  ok(k1.release && k2.release, "control: the account has a balance read (two prices), kept by this server");
+  endUnpaid(k1); endUnpaid(k2);
+  const paid = await un({ ip: Y });
+  balances.set(ACCT, PRICE); // the chain took one price from the account
+  paid.release?.settled();
+  reads = 0;
+  const a1 = await admitT(), a2 = await admitT();
+  ok(a1.release && a2.err?.coverRefusal === "short" && reads === 1, `after a multisig payment of the account's settles, its next calls are judged on a balance read taken after it (second call: ${a2.err?.coverRefusal || "admitted on the read from before"}, reads ${reads})`);
+  endUnpaid(a1);
+  // ...and that is all it reaches: never the account's paid record.
+  fresh();
+  _setBalanceReaderForTest(reader);
+  const s1 = await un({ ip: Y });
+  s1.release?.settled();
+  ok(hasPaidRecord(ACCT) === false, "a settled pull from an unproven sender adds nothing to the named account's paid record");
+  const sv = await admitT();
+  sv.release.settled();
+  ok(hasPaidRecord(ACCT) === true, "control: the account's own verified settlement does");
+  // Nor does it read it: with every account holding a paid record, the
+  // allowance is still the one of a wallet with none.
   fresh();
   _setBalanceReaderForTest(async () => { throw new Error("rpc down"); });
   _setPaidRecordForTest(() => true);
-  const un = []; for (let i = 0; i < 8; i++) un.push(await admitT("unverified"));
-  ok(un.filter((x) => x.release).length === 4, `reads down, an unverified sender gets the allowance of a wallet with no paid record (${un.filter((x) => x.release).length} of 8)`);
-  for (const x of un) x.release?.();
+  const down = []; for (let i = 0; i < 8; i++) down.push(await un());
+  ok(down.filter((x) => x.release).length === 4, `an unproven sender gets the allowance of a wallet with no paid record, whatever record the account it names holds (${down.filter((x) => x.release).length} of 8)`);
+  const vd = []; for (let i = 0; i < 18; i++) vd.push(await admitT());
+  ok(vd.filter((x) => x.release).length === 16, `control: the account's own pulls, reads down, get the allowance of its paid record with those four in flight (${vd.filter((x) => x.release).length} of 18)`);
+  for (const x of [...down, ...vd]) endUnpaid(x);
+  // The status word reads balance reads, and none was due here.
+  fresh();
+  _setBalanceReaderForTest(reader);
+  for (const x of [await un(), await un()]) endUnpaid(x);
+  ok(coverageReadsWord() === "ok", `an unproven pull does not move the balance-read status word (${coverageReadsWord()})`);
 }
 
 // ---- a Solana payment whose transfer accounts sit in a lookup table is keyed on the wallet ----

@@ -518,7 +518,8 @@ async function listen(app) {
   // refused before the handler, uncharged, and books nothing against the
   // named account.
   keychainAnswer = async () => null;
-  for (const [name, raw, pull, pullLedger] of [["a multisig envelope", TX_MULTISIG, victim, "unverified"], ["a multisig whose approvals verify", TX_MULTISIG_REAL, msAccount, "unverified"], ["a fee-payer-slot sender", TX_FEE_SLOT_VICTIM, attacker, null]]) {
+  const forgedP256Named = inspectTempoSender(credential(TX_P256_FORGED)).claimed;
+  for (const [name, raw, pull, pullLedger] of [["a multisig envelope", TX_MULTISIG, victim, "unverified"], ["a multisig whose approvals verify", TX_MULTISIG_REAL, msAccount, "unverified"], ["a fee-payer-slot sender", TX_FEE_SLOT_VICTIM, attacker, null], ["a p256 envelope carrying someone else's public key (no booking of its own: marked unverified like every sender this gate cannot prove)", TX_P256_FORGED, forgedP256Named, "unverified"]]) {
     r = await get("/plain", raw);
     ok(r.status === 200 && r.body.sender === null && r.body.key === "ip:198.51.100.7" && r.body.pull === pull && r.body.pullLedger === pullLedger, `C: ${name} on an ordinary route is served, its bounds keyed on the client IP, its pull booked against ${pull === attacker ? "the signer" : "the named account"} (${JSON.stringify(r.body)})`);
   }
@@ -596,6 +597,99 @@ async function listen(app) {
     ok(r3.status === 402 && r3.body.details?.reason === "sender-unverified", `C: a definite no from the chain is still 402 sender-unverified (${r3.status})`);
   }
   server.close();
+}
+
+// ---------------------------------------------------------------------------
+// C2. The gate and the in-flight coverage check together: a pull whose sender
+//     is not proven is booked on the client address it came from. Nothing its
+//     credential names (an account, a config, a key) opens another ledger,
+//     and nothing it names is held back by it.
+// ---------------------------------------------------------------------------
+{
+  const { admitCoveredRun, coverTermsOfRequest, coveredRunStateOf, inflightCoverStatus, _resetInflightCoverForTest, _setBalanceReaderForTest } = await import("../src/inflight-cover.js");
+  const { hasPaidRecord, _resetPaidRecordForTest } = await import("../src/paid-record.js");
+  _resetInflightCoverForTest(); _resetPaidRecordForTest();
+  const PRICE_ATOMIC = 50000n;
+  // The account each credential names holds one price, except the funded ones.
+  const funded = new Set();
+  let reads = 0;
+  _setBalanceReaderForTest(async (t) => { reads++; return funded.has(t.payer) ? 1000n * PRICE_ATOMIC : PRICE_ATOMIC; });
+  /** A multisig envelope for `account` under a config made for this one
+   *  request: a new owner key, whose approval verifies against that config. */
+  const freshConfigFor = (account) => {
+    const k = generatePrivateKey();
+    const base = TxEnvelopeTempo.from(TX);
+    const config = { version: 0n, threshold: 1, owners: [{ owner: lc(privateKeyToAccount(k).address), weight: 1 }] };
+    const digest = MultisigConfig.getSignPayload({ account, config, payload: TxEnvelopeTempo.getSignPayload(base) });
+    return TxEnvelopeTempo.serialize(base, { signature: SignatureEnvelope.from({ account, config, signatures: [SignatureEnvelope.from(Secp256k1.sign({ payload: digest, privateKey: k }))] }) });
+  };
+  ok(/approvals verify/.test(inspectTempoSender(credential(freshConfigFor(victim))).reason), "C2: (control) a config made for the request verifies against itself, for any account it names");
+  let open = null; // while set, an admitted /hold run waits on it
+  const app = express();
+  app.set("trust proxy", true);
+  app.use(createTempoGate({
+    secretKey: SECRET, realm: REALM, priceFor: (_m, path) => (path === "/hold" ? { priceUsd: 0.05 } : null),
+    validate: async () => ({ ok: true, validation: {} }),
+    broadcast: async () => ({ ok: true, receipt: { method: "tempo", status: "success", reference: "0x0t", timestamp: new Date().toISOString() } }),
+    verifyKeychainSender: async () => null,
+    pushSender: async () => null, // offline: never the real Tempo RPC
+  }));
+  app.use(paywallStub);
+  app.get("/hold", async (req, res) => {
+    const terms = await coverTermsOfRequest(req);
+    let release;
+    try { release = await admitCoveredRun(req); } catch (e) { return res.status(e.statusCode || 500).json({ error: e.message, coverRefusal: e.coverRefusal || null, retryAfter: e.retryAfter ?? null }); }
+    res.on("finish", () => release?.());
+    if (req.query.wait === "1" && open) await open.promise;
+    res.json({ state: coveredRunStateOf(req), unproven: terms?.unproven ?? null, named: terms?.payer ?? null });
+  });
+  const { server, url } = await listen(app);
+  const call = async (raw, { from, wait = false } = {}) => { const r = await fetch(`${url}/hold${wait ? "?wait=1" : ""}`, { headers: { Authorization: credential(raw), "X-Forwarded-For": from } }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
+  const hold = () => { let done; const promise = new Promise((r) => { done = r; }); open = { promise, done }; };
+  const X = "198.51.100.7", Y = "203.0.113.9";
+  const until = async (cond) => { for (let i = 0; i < 200 && !cond(); i++) await sleep(10); return cond(); };
+
+  // A new config for every request, each naming a different funded account.
+  hold();
+  const whales = Array.from({ length: 8 }, () => lc(privateKeyToAccount(generatePrivateKey()).address));
+  for (const w of whales) funded.add(w);
+  let pending = whales.map((w) => call(freshConfigFor(w), { from: X, wait: true }));
+  ok(await until(() => inflightCoverStatus().runsInFlight === 4 && inflightCoverStatus().refused === 4), `C2: eight pulls from one address, each a new config naming a different funded account: four run at once and four are refused (${inflightCoverStatus().runsInFlight} in flight, ${inflightCoverStatus().refused} refused)`);
+  // ...and one funded account named under a new config each time.
+  const sameWhale = await Promise.all(Array.from({ length: 4 }, () => call(freshConfigFor(whales[0]), { from: X })));
+  ok(sameWhale.every((r) => r.status === 429 && r.body.coverRefusal === "unread"), `C2: a new config per request naming one funded account opens no ledger of its own either (${sameWhale.map((r) => r.status).join(",")})`);
+  ok(reads === 0, `C2: none of them was judged on the balance of the account it names (${reads} reads)`);
+  open.done();
+  let done = await Promise.all(pending);
+  ok(done.filter((r) => r.status === 200).length === 4 && done.filter((r) => r.status === 429 && r.body.coverRefusal === "unread" && r.body.retryAfter === 5 && /You have not been charged\.$/.test(r.body.error)).length === 4 && done.filter((r) => r.status === 200).every((r) => r.body.unproven === `ip:${X}` && r.body.state === "unread"), `C2: the four that ran were booked on the client address and admitted on the allowance; the four refused were 429, uncharged, Retry-After 5 (${done.map((r) => r.status).join(",")})`);
+  ok(await until(() => inflightCoverStatus().runsInFlight === 0), "C2: nothing is left in flight");
+  ok(whales.every((w) => hasPaidRecord(w) === false), "C2: the pulls that settled left no paid record under the accounts they named");
+
+  // Pulls that only NAME an account, from an address that is not its own,
+  // while the account pays for itself from another address.
+  hold();
+  pending = [msAccount, msAccount, lc(plain.address), lc(plain.address)].map((a) => call(freshConfigFor(a), { from: X, wait: true }));
+  ok(await until(() => inflightCoverStatus().runsInFlight === 4), "C2: four pulls from one address name two accounts it does not hold, all in flight");
+  let r = await call(TX_MULTISIG_REAL, { from: Y });
+  ok(r.status === 200 && r.body.unproven === `ip:${Y}` && r.body.named === msAccount, `C2: the multisig account's own pull, from its own address, runs beside them (${r.status} ${r.body.coverRefusal || ""})`);
+  r = await call(TX_PLAIN, { from: Y });
+  ok(r.status === 200 && r.body.unproven === null && r.body.state === "covered" && r.body.named === lc(plain.address), `C2: the other account's verified pull runs in its own ledger, as with nothing else in flight (${r.status} ${JSON.stringify(r.body)})`);
+  open.done();
+  done = await Promise.all(pending);
+  ok(done.every((x) => x.status === 200), "C2: (control) the four ran");
+  // Control: an honest multisig buyer is served, up to the allowance at once.
+  ok(await until(() => inflightCoverStatus().runsInFlight === 0), "C2: nothing is left in flight");
+  hold();
+  const refused0 = inflightCoverStatus().refused;
+  pending = Array.from({ length: 5 }, () => call(TX_MULTISIG_REAL, { from: Y, wait: true }));
+  ok(await until(() => inflightCoverStatus().runsInFlight === 4 && inflightCoverStatus().refused === refused0 + 1), "C2: (control) a multisig buyer's own pulls run four at once from its address");
+  open.done();
+  done = await Promise.all(pending);
+  r = await call(TX_MULTISIG_REAL, { from: Y });
+  ok(done.filter((x) => x.status === 200).length === 4 && done.filter((x) => x.status === 429).length === 1 && r.status === 200, `C2: ...a fifth at once is asked to retry, and is served once one has ended (${done.map((x) => x.status).join(",")} then ${r.status})`);
+  open = null;
+  server.close();
+  _resetInflightCoverForTest(); _resetPaidRecordForTest();
 }
 
 // ---------------------------------------------------------------------------

@@ -22,6 +22,15 @@ const mppOfferGateShown = () => mppMethodsSummary().enabled && mppOfferGateEnabl
 const ENTRIES = [
   {
     date: "2026-11-21",
+    title: "Multisig Tempo payments and DNS names",
+    items: [
+      "Payments: A Tempo pull credential in a multisig envelope runs four calls at once per client address (`INFLIGHT_COVER_UNREAD_MAX` sets the number), whichever account it names; a call past that answers 429 with `Retry-After: 5` and nothing is charged. Such a credential is no longer counted against the balance of the account it names.",
+      "Payments: Calls an account pays for with its own key, or with an access key Tempo confirms for it, are counted against that account's balance alone.",
+      "Tools: The DNS, mail and certificate tools look up a name in one normalized form (lowercase, no trailing dots or surrounding spaces), and `dns` answers with that form in `name`.",
+    ],
+  },
+  {
+    date: "2026-11-21",
     title: "x402 by default for python-httpx clients",
     shownWhen: mppOfferGateShown,
     items: [

@@ -11,11 +11,11 @@
 //     signed by an access key, the account the key signs for, which is the
 //     account that pays), the challenge's currency and amount (src/mpp-tempo.js sets them on the
 //     request). A push credential is final before the handler and has none.
-//     A pull whose sender is not verified (a multisig envelope, another
-//     address in the fee-payer slot) names the account it draws on and, for
-//     a multisig envelope, a ledger of its own (`ledger`, see
-//     inspectTempoSender's booking), so it never shares the verified
-//     account's ledger.
+//     A pull with another address in the fee-payer slot draws on its signer,
+//     which the signature proves. A multisig envelope proves no account (the
+//     gate marks it `ledger`, see inspectTempoSender's booking): its terms
+//     carry `unproven`, the client address it came from, and the coverage
+//     check books it there, on no account's ledger and on no balance.
 //   - Solana: the WALLET, the transfer's authority (always a static key), the
 //     mint, and the accept's amount, judged on all the wallet holds of the
 //     mint (`byOwner`), whether the transfer names its accounts in the static
@@ -54,21 +54,32 @@ import { paymentHeaderOf } from "./payer.js";
 import { decodePaymentHeader } from "./payment-header.js";
 import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
 import { svmTransferAccounts, svmTransferAuthority, isSvmNetwork } from "./svm-payer.js";
+import { limiterKey } from "./rate-limit.js";
 
 const UINT = /^\d{1,39}$/;
 const HEX_ADDR = /^0x[0-9a-fA-F]{40}$/;
-const TEMPO_LEDGER = /^(?:unverified|multisig:0x[0-9a-f]{64})$/;
 export const RAIL_READ_TIMEOUT_MS = 2_500;
 
-/** The verified Tempo pull payment on this request, or null. */
+/** The client address a request came from, as every per-address guard keys
+ *  it (an IPv6 address by its /64); one shared key when none can be read. */
+function clientAddressKey(req) {
+  const ip = typeof req.ip === "string" && req.ip.trim() ? req.ip.trim() : req.socket?.remoteAddress;
+  return `ip:${ip ? limiterKey(String(ip).trim()) : "?"}`;
+}
+
+/** The Tempo pull payment on this request, or null. One whose sender the gate
+ *  did not prove (any `ledger` mark) carries `unproven`: the client address,
+ *  the only thing about its sender this server knows. */
 export function tempoCoverTermsOf(req) {
   const t = req && typeof req === "object" && req.tempoSettling === true ? req.mppTempoPull : null;
   if (!t || typeof t !== "object") return null;
   const payer = String(t.sender || ""), asset = String(t.currency || ""), amount = String(t.amountAtomic ?? "");
-  if (!HEX_ADDR.test(payer) || !HEX_ADDR.test(asset) || !UINT.test(amount)) return null;
-  const ledger = t.ledger == null ? null : String(t.ledger);
-  if (ledger !== null && !TEMPO_LEDGER.test(ledger)) return null;
-  return { rail: "tempo", payer: payer.toLowerCase(), network: "tempo", asset: asset.toLowerCase(), atomic: BigInt(amount), ...(ledger ? { ledger } : {}) };
+  if (!HEX_ADDR.test(asset) || !UINT.test(amount)) return null;
+  const terms = { rail: "tempo", payer: HEX_ADDR.test(payer) ? payer.toLowerCase() : null, network: "tempo", asset: asset.toLowerCase(), atomic: BigInt(amount) };
+  // Unproven: `payer` is only the account the credential names (none when it
+  // names none), never a key.
+  if (t.ledger != null) return { ...terms, unproven: clientAddressKey(req) };
+  return terms.payer ? terms : null;
 }
 
 /** The verified Solana, Algorand or Stellar payment on this request, or null. */

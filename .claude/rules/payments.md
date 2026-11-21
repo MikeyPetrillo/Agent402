@@ -274,7 +274,16 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   read each, null = unknown: EVM `balanceOf` (chains from the rails table), Tempo `balanceOf` on
   `TEMPO_RPC_URL`, Solana `getTokenAccountBalance`, algod's asset holding, Horizon's classic balance
   of the asset whose contract id is the accept's. Never judged here: credits, a card, a Tempo push
-  credential. A run leaves on its settle success (x402 afterSettle, the fallback chain, the Tempo
+  credential. **An unproven Tempo sender** (a pull the gate could not prove: a multisig envelope,
+  whose config cannot be checked here, or any other shape; `mppTempoPull.ledger`) is booked on the
+  client address it came from (`unproven` on the terms, `clientAddressKey` in `src/rail-cover.js`),
+  one ledger for everything that address sends this way whatever account, config or key each
+  credential names: no balance is read, it has no paid record, and `INFLIGHT_COVER_UNREAD_MAX`
+  runs are in flight at once (429 `unread`, `Retry-After: 5`, past it). The account it names is
+  never booked, read or credited, so one balance backs one ledger; when such a pull settles, the
+  named account's records are told as of a settlement another container made (the last good read
+  is forgotten). A new sender shape the gate cannot prove gets the same mark, never a ledger keyed
+  on anything the credential carries. A run leaves on its settle success (x402 afterSettle, the fallback chain, the Tempo
   gate), which is also the payer's paid record, or when its response ends.
   `INFLIGHT_COVER=composite`: the check covers the report and media routes only, and the settle
   breaker counts no runs in flight; `INFLIGHT_COVER=off`: the check is off everywhere. Not behind
