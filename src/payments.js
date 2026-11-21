@@ -2690,18 +2690,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       count: (network, reason, held) => toolFailureMonitor().noteFundingRefusal({ network, reason, held }),
     });
   }
-  registerWalletBlocklistHook(server);
   // A discounted request (src/returning-wallet.js) settles only for the
-  // wallet the discount was given to. A throw refuses the settle too.
-  server.onBeforeSettle(refusingHook(HOOK_NAMES.returningWallet, (ctx) => {
-    const d = returningWalletSettleDecision(ctx);
-    if (!d) return;
-    console.warn(`[payments] returning-wallet price refused before settlement: the payer is not the wallet it was quoted for (${ctx?.requirements?.network})`);
-    return { abort: true, reason: d.reason, message: "This payment was signed for a returning-wallet price by a wallet other than the one it was quoted for, so it was not settled. Nothing was charged; request the resource again for the list price." };
-  }, {
-    reason: RETURNING_WALLET_MISMATCH,
-    message: "The returning-wallet check could not run for this payment, so it was not settled. Nothing was charged; retry shortly.",
-  }));
+  // wallet the discount was given to: checked with the other hooks that can
+  // abort a settle, before the authorization claim.
+  registerReturningWalletSettleHook(server);
+  registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
   // A first-call allowance grant (src/first-call-allowance.js) skips the
@@ -3348,6 +3341,21 @@ export function registerWalletBlocklistPayerEnrichment(server) {
       }
     }
   });
+}
+
+/** The returning-wallet settle check (src/returning-wallet.js): a discounted
+ *  request settles only for the wallet it was quoted for. A throw refuses the
+ *  settle too (the buyer is not charged). */
+export function registerReturningWalletSettleHook(server) {
+  server.onBeforeSettle(refusingHook(HOOK_NAMES.returningWallet, (ctx) => {
+    const d = returningWalletSettleDecision(ctx);
+    if (!d) return;
+    console.warn(`[payments] returning-wallet price refused before settlement: the payer is not the wallet it was quoted for (${ctx?.requirements?.network})`);
+    return { abort: true, reason: d.reason, message: "This payment was signed for a returning-wallet price by a wallet other than the one it was quoted for, so it was not settled. Nothing was charged; request the resource again for the list price." };
+  }, {
+    reason: RETURNING_WALLET_MISMATCH,
+    message: "The returning-wallet check could not run for this payment, so it was not settled. Nothing was charged; retry shortly.",
+  }));
 }
 
 // A throw refuses the settlement (the buyer is not charged): a payer the
