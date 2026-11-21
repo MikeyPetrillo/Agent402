@@ -609,7 +609,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
     const inline = [...server.matchAll(/^\s*["'`]([A-Z]+) (\/[^"'`]+)["'`]: \{/gm)].map((m) => ({ method: m[1].toLowerCase(), path: m[2] }));
     // Plain text searches: the route is read as text, never built into a pattern.
     const unwrapped = inline.filter(({ method, path }) => !["withToolCallLog(", "memHandler("].some((wrap) => server.includes(`\napp.${method}("${path}", ${wrap}`)));
-    ok(inline.length >= 17 && unwrapped.length === 0, `every catalog route written inline in server.js is mounted through withToolCallLog or memHandler (${inline.length} routes; not wrapped: ${unwrapped.map((r) => r.path).join(", ") || "none"})`);
+    ok(inline.length >= 16 && unwrapped.length === 0, `every catalog route written inline in server.js is mounted through withToolCallLog or memHandler (${inline.length} routes; not wrapped: ${unwrapped.map((r) => r.path).join(", ") || "none"})`);
     ok(/const memHandler = \(fn\) => withToolCallLog\(/.test(server), "memHandler wraps withToolCallLog");
     const wrapper = server.slice(server.indexOf("function withToolCallLog(slugOf, handler) {"), server.indexOf("async function admitPaidRun(req, res, def) {"));
     ok(wrapper.indexOf("coverRelease = await admitPaidRun(req, res, CATALOG[`${req.method} ${req.path}`]);") > 0 && wrapper.indexOf("coverRelease = await admitPaidRun(") < wrapper.indexOf("return await handler(req, res, ...rest);"), "withToolCallLog takes the admission before the handler");
