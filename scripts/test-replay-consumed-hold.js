@@ -9,11 +9,11 @@
 // spent on chain, but the gateway cache reader (src/gateway-cache-scope.js)
 // takes a still-valid authorization the guard does not hold as its payer's
 // proof, so the mark must not lapse while the authorization could be read
-// there. That hold is bounded (MAX_SETTLED_VALIDITY_HOLD_MS from the settle):
-// a mark held to a far validBefore for every paid call would keep one
-// long-lived key each (a client signing century-long validity windows grows
-// the store by one key per call), so a century-long authorization keeps its
-// key for the bound and no longer, and a payment with the stock five-minute
+// there, however far out its client signed validBefore (the hard bound is
+// MAX_SETTLED_MARK_HOLD_MS from the settle, the furthest a validBefore is
+// read). A far validBefore keeps ONE long-lived key per paid call: the twin
+// under the earlier key name ends MAX_SETTLED_VALIDITY_HOLD_MS from the
+// settle at the latest. A payment with the stock five-minute
 // expiry keeps the default hour. A grant that was NOT settled (a hang-up the forgiveness budget
 // forgave: the buyer was told it was free) leaves the authorization live, so
 // its mark is held past the authorization's own validBefore
@@ -41,7 +41,7 @@ if (!process.env.REDIS_URL) {
   process.exit(1);
 }
 const { createClient } = await import("redis");
-const { CONSUMED_VALIDITY_MARGIN_MS, MAX_SETTLED_VALIDITY_HOLD_MS, SETTLED_HOLD_MS } = await import("../src/replay-guard.js");
+const { CONSUMED_VALIDITY_MARGIN_MS, MAX_SETTLED_VALIDITY_HOLD_MS, MAX_SETTLED_MARK_HOLD_MS, SETTLED_HOLD_MS } = await import("../src/replay-guard.js");
 
 const [PORT, FAC_PORT] = await getFreePorts(2);
 const B = `http://127.0.0.1:${PORT}`;
@@ -117,7 +117,7 @@ try {
 
   // 1. Settled 200s. The mark is written after the response ends, so each
   // read waits for the key (with a deadline).
-  const HOUR_S = SETTLED_HOLD_MS / 1000, BOUND_S = MAX_SETTLED_VALIDITY_HOLD_MS / 1000, MARGIN_S = CONSUMED_VALIDITY_MARGIN_MS / 1000;
+  const HOUR_S = SETTLED_HOLD_MS / 1000, BOUND_S = MAX_SETTLED_VALIDITY_HOLD_MS / 1000, HARD_S = MAX_SETTLED_MARK_HOLD_MS / 1000, MARGIN_S = CONSUMED_VALIDITY_MARGIN_MS / 1000;
   const paySettled = async (label, validBefore) => {
     const nonce = "0x" + randomBytes(32).toString("hex");
     const s0 = settles;
@@ -148,10 +148,19 @@ try {
       // second settle or handler run either way.
       ok((again.status === 409 || again.status === 200) && settles === s0, `settled, valid ${label}: the same authorization again settles nothing (${again.status}, settle +${settles - s0})`);
     }
-    // c. Valid for centuries: the settled bound, no long-lived key.
+    // c. Valid 31 days and a year, past the twin's bound: the mark still
+    // lasts until the authorization expires plus the margin (the cache
+    // reader would take the authorization as its payer's proof once the mark
+    // lapsed), the twin for its bound: one long-lived key.
+    for (const [label, life] of [["31 days", 31 * 24 * 3600], ["a year", YEAR_S]]) {
+      const m = await paySettled(`settled, valid ${label}`, Math.floor(Date.now() / 1000) + life);
+      ok(m.ttl > life + MARGIN_S - 30 && m.ttl <= life + MARGIN_S + 1, `settled, valid ${label}: the consumed mark lasts until the authorization expires plus the margin (TTL ${m.ttl} s, expiry in ${life} s)`);
+      ok(m.twin > BOUND_S - 30 && m.twin <= BOUND_S, `settled, valid ${label}: its twin under the earlier key name ends at the twin's bound (TTL ${m.twin} s, bound ${BOUND_S} s)`);
+    }
+    // d. Valid for centuries: the mark for the hard bound, the twin for its own.
     const c = await paySettled("settled, valid for centuries");
-    ok(c.ttl > BOUND_S - 30 && c.ttl <= BOUND_S, `settled, valid for centuries: the consumed mark is held for the settled bound, not to the authorization's validBefore (TTL ${c.ttl} s, bound ${BOUND_S} s)`);
-    ok(c.twin > 0 && c.twin <= BOUND_S && c.ttl < YEAR_S, `settled, valid for centuries: no key outlives the bound (twin TTL ${c.twin} s)`);
+    ok(c.ttl > HARD_S - 30 && c.ttl <= HARD_S, `settled, valid for centuries: the consumed mark is held for the hard bound (TTL ${c.ttl} s, bound ${HARD_S} s)`);
+    ok(c.twin > BOUND_S - 30 && c.twin <= BOUND_S, `settled, valid for centuries: the twin under the earlier key name does not outlive its bound: one long-lived key (twin TTL ${c.twin} s)`);
   }
 
   // 2. A forgiven hang-up: granted, not settled, held past validBefore.

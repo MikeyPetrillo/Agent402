@@ -406,11 +406,14 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   is held while its authorization stays valid (`validBefore` plus a margin, never under the default
   hold): the gateway cache reader (`src/gateway-cache-scope.js`) takes a still-valid authorization
   the guard does not hold as its payer's proof, so a settled mark must not lapse first. A settled
-  call's hold ends `MAX_SETTLED_VALIDITY_HOLD_MS` (30 days) after its settle at the latest, so no
-  `validBefore` keeps a key per paid call for longer; past that bound a settled mark is let go (its
-  nonce is spent on chain, so it cannot be charged again), and an authorization signed valid from
-  the epoch for longer than the bound is the one case the reader cannot tell from a fresh payment in
-  its last minutes. A grant that was not settled (`grantedUnsettled` in
+  call's mark is held to its `validBefore` however far out, up to the hard bound
+  `MAX_SETTLED_MARK_HOLD_MS` (100 years, the furthest any `validBefore` is read) after its settle;
+  the reader takes no authorization that has been valid for longer than that bound, counted from its
+  `validAfter`, the epoch included, so the guard holds every settled authorization the reader could
+  take. That is one long-lived key per settled payment that signs such a window: the mark's twin
+  under the earlier key name (read only by a build from before the key change) ends
+  `MAX_SETTLED_VALIDITY_HOLD_MS` (30 days) after the settle at the latest, as does the stored answer
+  of an unconfirmed settlement. A grant that was not settled (`grantedUnsettled` in
   `src/hangup-settlement.js`: a forgiven hang-up, a first-call allowance) is held to its
   `validBefore` in full, since that authorization is still live on chain. The call site is
   `consumedHoldFor`; a longer hold is a longer TTL on the same writes

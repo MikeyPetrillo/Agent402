@@ -18,7 +18,7 @@ import { signInLifeWords, sessionIdleWords, sessionMaxWords, lowBalanceWords } f
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { WINDOW_MS as LATE_SETTLE_WINDOW_MS, MAX_AGE_MS as LATE_SETTLE_MAX_AGE_MS } from "./late-settlements.js";
 import { WINDOW_MS as SETTLE_FAILURE_WINDOW_MS } from "./gateway-settle-breaker.js";
-import { settledHoldText, settledValidityHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
+import { settledHoldText, settledMarkHoldText, settledValidityHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
@@ -118,7 +118,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-20.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-21.</p>
 </section>
 
 <section>
@@ -341,7 +341,7 @@ ${walletSignInOn ? `  <li id="wallet-sign-in"><b>Wallet sign-in.</b> You can sig
   and kept with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), the payment's nonce and network (as an
   idempotency key for a re-sent payment, held with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), a digest of the payment's
   network, signed payer and nonce as a replay mark (kept about ${settledHoldText()} after a settled call, or until the
-  authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later, at most ${settledValidityHoldText()} after the call; for a grant
+  authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later, at most ${settledMarkHoldText()} after the call; for a grant
   that was not settled, a forgiven hang-up${allowanceOn ? " or a served first-call allowance" : ""}, whose authorization is still live
   on chain, until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes, which can be long when the client
   signs a long validity window), the paying wallet of a Solana payment (the transfer's authority) or its signers (stored only

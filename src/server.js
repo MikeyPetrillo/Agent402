@@ -12707,10 +12707,12 @@ if (FREE_MODE) {
         // allowance: src/hangup-settlement.js grantedUnsettled) leaves the
         // authorization live on chain, so its mark is held until the
         // authorization itself expires. A settled grant is held that long
-        // too, up to the guard's settled bound (MAX_SETTLED_VALIDITY_HOLD_MS):
-        // its nonce is spent on chain, but the gateway cache reader takes a
+        // too (to the guard's hard bound, MAX_SETTLED_MARK_HOLD_MS): its
+        // nonce is spent on chain, but the gateway cache reader takes a
         // still-valid authorization the guard does not hold as its payer's
-        // proof, and a far validBefore must not keep a key per paid call.
+        // proof. Only its twin under the earlier key name ends sooner
+        // (MAX_SETTLED_VALIDITY_HOLD_MS), so a far validBefore keeps one
+        // long-lived key per paid call.
         if (granted()) replayGuard.settle(replayKey, undefined, consumedHoldFor(req, { settled: !grantedUnsettled(req) })).catch(() => {});
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
