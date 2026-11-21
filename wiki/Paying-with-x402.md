@@ -44,8 +44,8 @@ same wallet again. That body also carries `needs`: the `network`, `asset` and `a
 that quote named refused the x402 payment before broadcasting it: nothing was charged, so request the route
 again without a payment header and sign against that fresh 402, which names another facilitator's fee
 payer when one is available. A Solana refusal with `reason: "blockhash-expired"` means the
-transaction's recent blockhash was no longer valid when the payment was checked or settled (a Solana
-transaction lands for about 60 to 90 seconds after its blockhash): nothing was charged, so ask for a
+x402 payment's transaction names a recent blockhash that was no longer valid when it was checked or settled (a Solana
+transaction lands for about 60 to 90 seconds after its blockhash): nothing was charged on x402, so ask for a
 fresh 402 and build the transaction on a fresh blockhash. Every route's challenge is
 valid under `@x402/core`'s own schemas (CI runs all 500+ routes through the official parser),
 and it carries a typed output schema twice: inside the `bazaar` discovery extension (with the
