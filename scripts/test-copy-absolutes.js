@@ -442,6 +442,17 @@ const FORBIDDEN = [
       ["scripts/test-copy-absolutes.js", "this rule's own comment and its MUST_FAIL table quote the claims verbatim"],
     ]),
   },
+  {
+    // Copy written for every reader says "plain language": naming one
+    // language for clear writing leaves out readers of every other. Hyphen or
+    // space, any case, in copy and in comments alike.
+    re: /\bplain[- ]english\b/i,
+    why: 'say "plain language": the phrase names one language for clear writing',
+    exempt: new Map([
+      ["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"],
+      ["src/x402-index.js", "a comment quotes a placeholder value a listing may carry, as written"],
+    ]),
+  },
 ];
 
 // The one sentence holding a match: from the last ". " (or "; ") before it to
@@ -526,11 +537,13 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "Over x402 a failure cancels settlement. You pay only for delivered results."],
                        ["<control>", "<h3>Is this Solana token safe to touch</h3>"],
                        ["<control>", "Site pages meet WCAG 2.1 AA on contrast, labels, links and keyboard access."],
+                       ["<control>", "x402 and MPP explained in plain English, for people."],
+                       ["<control>", "A Plain-English guide to the terms."],
                        ["src/<control>.js", "<p><strong>Twelve chains.</strong> A buyer pays on whichever chain"],
                        ["src/<control>.js", "settling USDC on Base (plus eleven more rails), across all twelve chains"],
                        ["src/<control>.js", "// a comment that says twelve chains is not served copy"]]);
-const CONTROL_EXPECTED = 39;
-ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 30 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
+const CONTROL_EXPECTED = 41;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 32 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);

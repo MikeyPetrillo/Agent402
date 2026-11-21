@@ -1,4 +1,4 @@
-// The plain-English guide to x402 and MPP for people: ask402.ai, a site this
+// The plain-language guide to x402 and MPP for people: ask402.ai, a site this
 // project's maintainer also operates. It answers the general questions (what
 // x402 is, what MPP is); the pages here cover how each protocol runs on this
 // server and link there for the introduction. One place for its addresses, so

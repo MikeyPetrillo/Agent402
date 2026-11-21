@@ -724,7 +724,7 @@ ${toolReliabilityEnabled() ? `- [Per-tool reliability](${baseUrl}${TOOL_RELIABIL
 - [x402 & MPP 101](${baseUrl}/101): the ten-minute walkthrough for people new to the space - plain language, speaker notes, and a live demo (402 quote decoded, pay with a puzzle, real receipts)
 - [Glossary](${baseUrl}/glossary): x402, MPP, HTTP 402, facilitator, EIP-3009, receipts, settlement, rails, dual-stack, PoW tier, SOR, tollbooth - every term defined once, with anchors
 - [x402 and MPP on Agent402](${baseUrl}/what-is-x402) / [MPP on Agent402](${baseUrl}/what-is-mpp): how each payment wire runs on this server
-- [${GUIDE_SITE_NAME}](${GUIDE_SITE}): x402 and MPP explained in plain English, for people
+- [${GUIDE_SITE_NAME}](${GUIDE_SITE}): x402 and MPP explained in plain language, for people
 - [How to pay](${baseUrl}/how-to-pay): from nothing to a paid call on every rail (x402 on each listed chain, MPP over Tempo, EVM or card, proof-of-work): what you need, the 402 flow, a snippet, the receipt, and what happens to the money when a call fails
 - [Speech](${baseUrl}/speech): the model-backed speech tools (text-to-speech tiers, transcription with speaker labels, the OpenAI-shaped wires) with voices, formats, caps and the fallback chain read from the tools themselves
 - [Learn](${baseUrl}/learn): explainers with real headers - [x402](${baseUrl}/learn/x402), [HTTP 402](${baseUrl}/learn/http-402), [MPP](${baseUrl}/learn/mpp), [agent payments](${baseUrl}/learn/agent-payments), [pay-per-call APIs](${baseUrl}/learn/pay-per-call-api), [payments over MCP](${baseUrl}/learn/mcp-payments)
@@ -835,7 +835,7 @@ ${summary}
 
 Base URL: ${baseUrl}
 
-The full text, with every skill pack and every tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing. x402 and MPP in plain English, for people: ${GUIDE_SITE}.
+The full text, with every skill pack and every tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing. x402 and MPP in plain language, for people: ${GUIDE_SITE}.
 
 ${[
     frontDoorMarkdown(catalog, baseUrl),

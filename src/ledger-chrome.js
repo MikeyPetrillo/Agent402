@@ -873,7 +873,7 @@ function docsPanelNav() {
                 <a href="/what-is-mpp" class="mlnav-row"><span style="font-weight:700;">what is MPP</span><span class="mlnav-faint">Payment auth</span></a>
                 <a href="/agentic-finance" class="mlnav-row"><span style="font-weight:700;">agentic finance</span><span class="mlnav-faint">the category</span></a>
                 <a href="/glossary" class="mlnav-row"><span style="font-weight:700;">glossary</span><span class="mlnav-faint">the terms</span></a>
-                <a href="${GUIDE_SITE}" rel="noopener" class="mlnav-row"><span style="font-weight:700;">${GUIDE_SITE_NAME}</span><span class="mlnav-faint">plain-English guide</span></a>
+                <a href="${GUIDE_SITE}" rel="noopener" class="mlnav-row"><span style="font-weight:700;">${GUIDE_SITE_NAME}</span><span class="mlnav-faint">plain-language guide</span></a>
                 </span>
                 </span>
                 <a href="/docs" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">read the docs</span><span style="opacity:.7;">→</span></a>
@@ -997,7 +997,7 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/what-is-x402", "what is x402 / MPP", activePath === "/what-is-x402")}
       ${mmLink("/agentic-finance", "agentic finance", activePath === "/agentic-finance")}
       ${mmLink("/glossary", "glossary", activePath === "/glossary")}
-      ${mmLink(GUIDE_SITE, `${GUIDE_SITE_NAME} · plain-English guide`, false, "", ' rel="noopener"')}
+      ${mmLink(GUIDE_SITE, `${GUIDE_SITE_NAME} · plain-language guide`, false, "", ' rel="noopener"')}
       ${mmLink("/quickstart", "quickstart", activePath === "/quickstart")}
       ${mmLink("/how-to-pay", "how to pay · every rail", activePath === "/how-to-pay")}
       ${mmLink("/guides", "guides", activePath === "/guides")}

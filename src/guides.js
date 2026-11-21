@@ -185,7 +185,7 @@ Your client calls a paid endpoint and gets a \`402\` quote; it signs a USDC
 authorization from its own wallet and retries, and the server settles only when
 the response succeeds, so a failed x402 call is not charged (a payment that lands late is repaid after on-chain proof).
 The headers, step
-by step: [how x402 works](/learn/x402). In plain English: [What is x402?](${GUIDE_EXPLAINERS.x402}) on ${GUIDE_SITE_NAME}.
+by step: [how x402 works](/learn/x402). In plain language: [What is x402?](${GUIDE_EXPLAINERS.x402}) on ${GUIDE_SITE_NAME}.
 
 ## See a quote (free)
 

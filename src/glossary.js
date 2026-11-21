@@ -94,7 +94,7 @@ export function glossaryPage(baseUrl) {
   const canonical = `${baseUrl}/glossary`;
   const title = "Agentic Finance (AIFI) glossary: x402, MPP, facilitators and receipts";
   const description =
-    "Plain-English definitions of the vocabulary of Agentic Finance (AIFI): x402, MPP, HTTP 402, payment requirements and challenges, facilitators, EIP-3009, receipts, settlement, wallets as identity, rails, dual-stack, the proof-of-work free tier, the Smart Order Router, the tollbooth, and more. Each term links to the page that goes deep.";
+    "Plain-language definitions of the vocabulary of Agentic Finance (AIFI): x402, MPP, HTTP 402, payment requirements and challenges, facilitators, EIP-3009, receipts, settlement, wallets as identity, rails, dual-stack, the proof-of-work free tier, the Smart Order Router, the tollbooth, and more. Each term links to the page that goes deep.";
 
   const orgLd = siteOrgLd(baseUrl);
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [

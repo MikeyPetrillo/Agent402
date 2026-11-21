@@ -519,7 +519,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   // Two consequences, and the second is the expensive one:
   //   * a buyer who trusts the top hit pays for a tool that cannot help;
   //   * the demand board's find-miss signal can NEVER fire for a capability
-  //     gap phrased in plain English, so it only ever captured gibberish
+  //     gap phrased in plain language, so it only ever captured gibberish
   //     ("undefined", "[object object]") and is structurally blind to what we
   //     should build next. "No demand for X" was unfalsifiable.
   //
