@@ -21,7 +21,10 @@
 //     scheme's verify accepts; the MPP evm wire arrives as one through the
 //     shim), a Tempo pull credential from a sender the gate verified
 //     (signed by an access key: judged on the account that pays, the one the
-//     key signs for), and a
+//     key signs for; a pull with another address in the fee-payer slot is
+//     judged on its signer, the account it draws on; a multisig envelope on
+//     the account it names, in a ledger of its own apart from that account's
+//     verified runs, never that account's paid record), and a
 //     Solana, Algorand or Stellar x402 payment (src/rail-cover.js; a Solana
 //     transfer that names an account through a lookup table is keyed on the
 //     paying wallet and judged on all it holds of the mint). Not
@@ -74,11 +77,14 @@
 //         once.
 //     A wallet gets a last good read from any read made for it, and from one
 //     read taken in the background when a payment of its settles and it has
-//     none younger than GOOD_READ_REFRESH_MS (5 minutes).
-//       judged at once: a last good read no older than KEPT_AT_ONCE_MS that
-//         covers every run in flight plus this one (less what left since)
-//         admits the run at once, with no read waited for. A run it does not
-//         cover is judged as above.
+//     none younger than the at-once window (keptAtOnceMs, one minute).
+//       judged at once: a last good read no older than the at-once window
+//         that covers every run in flight plus this one (less what left
+//         since) admits the run at once, with no read waited for. A run it
+//         does not cover is judged as above. The window bounds how long a
+//         wallet that moved funds out elsewhere after that read can still be
+//         admitted on it (a transfer this server did not make is seen only by
+//         a new read).
 //     A wallet's reads are at least the READ GAP apart (readGapMs), and reads
 //     that reach a capped on-chain data host spend a daily budget of their
 //     own under that ceiling (src/upstream-hard-caps.js, `cover-reads`); past
@@ -209,6 +215,15 @@ const READ_DOWN_WAIT_MS = 25;
 const READ_FAIL_GAP_MS = 1_000;
 /** Past the day's read budget, one read per wallet this often. */
 const BUDGET_SPENT_WALLET_GAP_MS = 60_000;
+/** Past the day's read budget, at most this many reads in any minute for all
+ *  wallets together (INFLIGHT_COVER_PAST_BUDGET_READS_PER_MIN, default 30;
+ *  0 makes none), so wallets arriving one after another all day cannot spend
+ *  what the on-chain ceiling keeps for paid tools. Per process. */
+function pastBudgetReadsPerMin() {
+  const n = Number(process.env.INFLIGHT_COVER_PAST_BUDGET_READS_PER_MIN);
+  return Number.isInteger(n) && n >= 0 ? Math.min(n, 10_000) : 30;
+}
+const pastBudgetReadTimes = []; // when each past-budget read of the last minute was made, oldest first
 /** A balance record this young is judged on without another read. */
 const FRESH_ENOUGH_MS = 1_000;
 /** THE READ GAP: a wallet's admission reads are at least this far apart
@@ -277,16 +292,25 @@ const waiters = new Map(); // coverKey -> Set<() => void>, woken when a run leav
  *  the wallet is one this server has not read, and the allowance applies. */
 export const GOOD_READ_MAX_MS = 15 * 60_000;
 const WALLETS_MAX = 50_000;
-/** A wallet whose payment settles gets a read in the background when its
- *  last good read is older than this (or it has none). */
-const GOOD_READ_REFRESH_MS = 5 * 60_000;
 /** JUDGED AT ONCE: off the report and media routes, a wallet whose last good
- *  read is no older than this, and covers every run it has in flight plus
- *  this one less what its runs took since, is admitted on it at once: no
- *  call waits for a new read. One it does not cover, or older, is judged as
- *  before (a read is waited for). The settlement refresh keeps a paying
- *  wallet's read inside it. */
-export const KEPT_AT_ONCE_MS = GOOD_READ_REFRESH_MS;
+ *  read is no older than the at-once window (keptAtOnceMs), and covers every
+ *  run it has in flight plus this one less what its runs took since, is
+ *  admitted on it at once: no call waits for a new read. One it does not
+ *  cover, or older, is judged as before (a read is waited for). A wallet
+ *  whose payment settles gets a read in the background when its last good
+ *  read is older than the window (or it has none), which keeps a paying
+ *  wallet's read inside it. The window is also how long a wallet that moved
+ *  funds out elsewhere can be admitted on a read taken before: about (kept
+ *  balance / price) - 1 runs per burst, our cost, bounded by the settle
+ *  breaker. KEPT_AT_ONCE_MS is the default (one minute);
+ *  INFLIGHT_COVER_KEPT_AT_ONCE_MS sets it, held between the read gap and
+ *  five minutes. */
+export const KEPT_AT_ONCE_MS = 60_000;
+const KEPT_AT_ONCE_MAX_MS = 5 * 60_000;
+export function keptAtOnceMs() {
+  const n = Number(process.env.INFLIGHT_COVER_KEPT_AT_ONCE_MS);
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.max(n, readGapMs()), KEPT_AT_ONCE_MAX_MS) : KEPT_AT_ONCE_MS;
+}
 /** The per-wallet store's bound (exported for the privacy page). */
 export const COVER_WALLETS_MAX = WALLETS_MAX;
 /** How long a shared reservation nobody removed can stay (a server that stops mid-call). */
@@ -398,7 +422,7 @@ const SETTLED = Symbol("a402.inflightCoverSettled");
 // in flight, or a balance read that covers the sum) or "unread" (the balance
 // could not be read; inside the small unread allowance). The mark is
 // COVER_STATE (src/inflight-cover-state.js).
-const stats = { refusedInReadGap: 0, readsPastBudget: 0, admittedAtOnceOnKeptRead: 0, readsOverBudget: 0, admitted: 0, foreignSettlementsSeen: 0, backgroundReadsSkipped: 0, admittedPastKeptRead: 0, backgroundReads: 0, readsWentDown: 0, admittedOnKeptRead: 0, refusedOnKeptRead: 0, judgedAfterSettlement: 0, reservationsWrittenBack: 0, readsDropped: 0, deadReservationsIgnored: 0, settledReleases: 0, admittedByRead: 0, admittedUnread: 0, admittedTrusted: 0, refusedSettling: 0, freshReads: 0, readsTimedOut: 0, refused: 0, refusedUnread: 0, settleWaits: 0, foreignWaits: 0, withdrawals: 0, putBackMisses: 0, sharedMisses: 0, foreignReads: 0 };
+const stats = { readsPastBudgetCapped: 0, refusedUntilBudgetRead: 0, refusedInReadGap: 0, readsPastBudget: 0, admittedAtOnceOnKeptRead: 0, readsOverBudget: 0, admitted: 0, foreignSettlementsSeen: 0, backgroundReadsSkipped: 0, admittedPastKeptRead: 0, backgroundReads: 0, readsWentDown: 0, admittedOnKeptRead: 0, refusedOnKeptRead: 0, judgedAfterSettlement: 0, reservationsWrittenBack: 0, readsDropped: 0, deadReservationsIgnored: 0, settledReleases: 0, admittedByRead: 0, admittedUnread: 0, admittedTrusted: 0, refusedSettling: 0, freshReads: 0, readsTimedOut: 0, refused: 0, refusedUnread: 0, settleWaits: 0, foreignWaits: 0, withdrawals: 0, putBackMisses: 0, sharedMisses: 0, foreignReads: 0 };
 
 /**
  * The OTHER runs a shared window read reports: everything but this run's own
@@ -744,10 +768,21 @@ function balanceFor(coverKey, terms, now, minSeq = 0, background = false) {
   const unitAt = Date.now();
   if (!takeHardCapShare("cover-reads", terms?.ceiling ?? null, unitAt)) {
     // Spent: still one read per wallet per BUDGET_SPENT_WALLET_GAP_MS, so a
-    // funded wallet judged on the allowance recovers within a minute.
-    if (now - (w.pastBudgetAt || 0) < BUDGET_SPENT_WALLET_GAP_MS) { stats.readsOverBudget++; return null; }
-    w.pastBudgetAt = now; stats.readsPastBudget++;
-  }
+    // funded wallet judged on the allowance recovers within a minute, and at
+    // most pastBudgetReadsPerMin() such reads in any minute for all wallets.
+    // A wallet held by either has `readHeldUntil`: when its next read can be
+    // made (what a refusal's Retry-After says, see admitCoveredRun).
+    const ownNext = (w.pastBudgetAt || 0) + BUDGET_SPENT_WALLET_GAP_MS;
+    if (now < ownNext) { stats.readsOverBudget++; w.readHeldUntil = ownNext; return null; }
+    while (pastBudgetReadTimes.length && pastBudgetReadTimes[0] <= now - 60_000) pastBudgetReadTimes.shift();
+    if (pastBudgetReadTimes.length >= pastBudgetReadsPerMin()) {
+      stats.readsOverBudget++; stats.readsPastBudgetCapped++;
+      w.readHeldUntil = pastBudgetReadTimes.length ? pastBudgetReadTimes[0] + 60_000 : now + 60_000;
+      return null;
+    }
+    pastBudgetReadTimes.push(now);
+    w.pastBudgetAt = now; w.readHeldUntil = 0; stats.readsPastBudget++;
+  } else w.readHeldUntil = 0;
   w.readAt = now;
   let held = false;
   const gen = laneGen, network = networkOf(coverKey);
@@ -821,6 +856,18 @@ async function readWithin(coverKey, terms, minSeq, until) {
   return null;
 }
 
+/** When a wallet whose balance reads spend the daily budget can next be read,
+ *  while that budget is spent and the wallet is held (its minute, or the
+ *  global cap's), else 0. */
+function nextBudgetReadAt(w, terms, now = Date.now()) {
+  if (!terms?.ceiling) return 0;
+  const own = w.pastBudgetAt ? w.pastBudgetAt + BUDGET_SPENT_WALLET_GAP_MS : 0;
+  const held = Math.max(own, w.readHeldUntil || 0);
+  if (held <= now) return 0;
+  const row = hardCapShareStatus(now)["cover-reads"];
+  return row && row.of === terms.ceiling && row.status === "spent" ? held : 0;
+}
+
 /** Resolves when a run leaves `coverKey`'s ledger, or after `ms`. */
 function nextRelease(coverKey, ms) {
   return new Promise((resolve) => {
@@ -862,15 +909,20 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
   if (terms.rail === "evm" && !terms.asset) {
     try { const { EVM } = await import("./revenue-live.js"); const t = EVM[CHAIN_BY_CAIP2[terms.network]]?.token; if (typeof t === "string" && HEX_ADDR.test(t)) terms.asset = t.toLowerCase(); } catch { /* keyed without it */ }
   }
-  const coverKey = `${terms.network}|${terms.asset || "-"}|${terms.payer}`;
+  // A Tempo pull whose sender is not verified is booked in a ledger of its
+  // own (terms.ledger), judged on the account's balance but apart from that
+  // account's verified runs (src/rail-cover.js tempoCoverTermsOf).
+  const coverKey = `${terms.network}|${terms.asset || "-"}|${terms.payer}${terms.ledger ? `|${terms.ledger}` : ""}`;
   // Which daily ceiling this wallet's reads count against, if any.
   terms.ceiling = await ceilingOfRead(terms);
   // The wallet the paid record is kept under (a Solana payment draws on a
   // token account; its authority is the wallet).
-  const owner = terms.owner || terms.payer;
+  // A ledger of its own (an unverified Tempo sender) is never the named
+  // account's paid record, and its settlements add nothing to that record.
+  const owner = terms.ledger ? null : terms.owner || terms.payer;
   // Read once, here: the allowance on an unread balance is the one the wallet
   // had when this admission began.
-  const paidAtStart = hasPaidRecord(owner);
+  const paidAtStart = owner ? hasPaidRecord(owner) : false;
   const waitUntil = mono() + settleWaitMs;
   // `left` counts this wallet's runs that leave the ledger while this one is
   // judged (release() bumps it). Once one has, verify's proof no longer holds
@@ -950,7 +1002,7 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       // settlement, so only a read begun after the shared view decides.
       const foreign = foreignHeld(others, held, judges.size);
       if (foreign) stats.foreignReads++;
-      // JUDGED AT ONCE on the wallet's last good read (KEPT_AT_ONCE_MS): only
+      // JUDGED AT ONCE on the wallet's last good read (keptAtOnceMs): only
       // off the report and media routes, only before this judgment has asked
       // for a read of its own, only on a read that satisfies every ordering
       // rule a new one would (begun after another container's view), and only
@@ -958,7 +1010,7 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       // since. The check and the admission below run with no await between.
       if (!asBefore && !lastRec && freshAfter === 0 && !followUpRead) {
         const g = w.good;
-        if (g && g.seq > (foreign ? sharedSeq : 0) && Date.now() - g.at <= KEPT_AT_ONCE_MS) {
+        if (g && g.seq > (foreign ? sharedSeq : 0) && Date.now() - g.at <= keptAtOnceMs()) {
           const now0 = judgedSet(ledger.get(coverKey) || { count: 0, atomic: 0n, settling: 0 }, others);
           if (lowerOf(g) >= now0.atomic + terms.atomic) { how = "covered"; stats.admittedAtOnceOnKeptRead++; break; }
         }
@@ -1089,8 +1141,17 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       // the read gap (no read was made for this call): a retry before the gap
       // ends is judged on the same record, so Retry-After is the time left in
       // the gap. (A refusal on a read this judgment made says 30 s, which is
-      // past the gap: that retry is read again.)
+      // past the gap: that retry is read again, unless the day's read budget
+      // is spent: see heldUntil below.)
       const gapLeftMs = rec && !kept && rec.seq <= seqAtStart ? readGapMs() - (Date.now() - rec.at) : 0;
+      // PAST THE DAY'S READ BUDGET a refusal that only a new read can change
+      // (short of funds, or a kept read with nothing in flight) is not read
+      // again until the wallet's next read past the budget (its minute, or
+      // the global cap's): Retry-After says when that is, not the read gap
+      // or 30 s, which a retry would meet still held. A refusal a run in
+      // flight can clear by ending keeps its own Retry-After.
+      const readsOnlyChange = !asBefore && (block === "short" || block === "beside" || (block === "kept" && cur.count <= 0));
+      const heldUntil = readsOnlyChange ? nextBudgetReadAt(w, terms, Date.now()) : 0;
       const gapHeld = !asBefore && (block === "short" || block === "beside") && gapLeftMs > 0;
       const addFunds = !asBefore && (block === "short" || block === "beside");
       if (gapHeld) stats.refusedInReadGap++;
@@ -1136,6 +1197,10 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       // it (at least a second, at most the gap); funds added meanwhile count
       // at that retry.
       e.retryAfter = asBefore ? 30 : gapHeld ? Math.min(Math.max(1, Math.ceil(gapLeftMs / 1000)), Math.ceil(readGapMs() / 1000)) : block === "short" || block === "beside" ? 30 : 5;
+      if (heldUntil) {
+        const heldS = Math.min(Math.ceil(BUDGET_SPENT_WALLET_GAP_MS / 1000), Math.max(1, Math.ceil((heldUntil - Date.now()) / 1000)));
+        if (heldS > e.retryAfter) { e.retryAfter = heldS; stats.refusedUntilBudgetRead++; }
+      }
       throw e;
     }
     admitted = true;
@@ -1179,7 +1244,7 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
     } else {
       try { const a = settledAtomic == null ? null : BigInt(settledAtomic); took = a != null && a > 0n && a <= terms.atomic ? a : terms.atomic; } catch { took = terms.atomic; }
       stats.settledReleases++;
-      notePaidSettlement(owner);
+      if (owner) notePaidSettlement(owner);
       const at = Date.now();
       walletOf(coverKey).settledAt = at;
       // The mark other containers read before they trust verify's proof.
@@ -1191,13 +1256,13 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
     noteDeparture(coverKey, { local: true, leftAtomic: took });
     // A wallet that has just paid gets a last good read to be judged on
     // should its balance become unreadable: one read in the background, when
-    // it has none younger than GOOD_READ_REFRESH_MS and the lane has room
+    // it has none younger than the at-once window and the lane has room
     // (at most one such read per wallet in that time; nothing waits for it).
     if (settled === true) {
       const w2 = walletOf(coverKey);
       const net = networkOf(coverKey);
       const backingOff = Date.now() - (netFailedAt.get(net) || 0) < BG_BACKOFF_MS;
-      if ((!w2.good || Date.now() - w2.good.at > GOOD_READ_REFRESH_MS) && !pendingReads.has(coverKey)) {
+      if ((!w2.good || Date.now() - w2.good.at > keptAtOnceMs()) && !pendingReads.has(coverKey)) {
         if (backingOff || laneOf(net).bgWaiters.length >= BG_QUEUE_MAX) stats.backgroundReadsSkipped++;
         else {
           const r = balanceFor(coverKey, terms, Date.now(), 0, true);
@@ -1291,13 +1356,14 @@ export function _ageUnreadDecisionsForTest(ms) {
 export function inflightCoverStatus() {
   let runs = 0;
   for (const e of ledger.values()) runs += e.count;
-  return { readGapMs: readGapMs(), readBudget: hardCapShareStatus()["cover-reads"] || null, enabled: inflightCoverEnabled(), mode: inflightCoverMode(), readsQueued: readsQueuedNow(), walletsKept: wallets.size, accountsReadDown: [...readsDown.values()].filter((t) => t > Date.now()).length, goodReadMaxMs: GOOD_READ_MAX_MS, unreadPaidMax: unreadPaidMax(), shared: SHARED, walletsInFlight: ledger.size, runsInFlight: runs, viewsKept: lastForeign.size, unreadMax: unreadMax(), ...stats };
+  return { readGapMs: readGapMs(), keptAtOnceMs: keptAtOnceMs(), pastBudgetReadsPerMin: pastBudgetReadsPerMin(), readBudget: hardCapShareStatus()["cover-reads"] || null, enabled: inflightCoverEnabled(), mode: inflightCoverMode(), readsQueued: readsQueuedNow(), walletsKept: wallets.size, accountsReadDown: [...readsDown.values()].filter((t) => t > Date.now()).length, goodReadMaxMs: GOOD_READ_MAX_MS, unreadPaidMax: unreadPaidMax(), shared: SHARED, walletsInFlight: ledger.size, runsInFlight: runs, viewsKept: lastForeign.size, unreadMax: unreadMax(), ...stats };
 }
 
 /** Test-only: every kept read is made `ms` older. */
-export function _ageKeptReadsForTest(ms, { pastBudget = false } = {}) { for (const w of wallets.values()) { if (w.good) w.good.at -= ms; w.touched -= ms; if (pastBudget && w.pastBudgetAt) w.pastBudgetAt -= ms; } }
+export function _ageKeptReadsForTest(ms, { pastBudget = false } = {}) { for (const w of wallets.values()) { if (w.good) w.good.at -= ms; w.touched -= ms; if (pastBudget && w.pastBudgetAt) w.pastBudgetAt -= ms; if (pastBudget && w.readHeldUntil) w.readHeldUntil -= ms; } if (pastBudget) for (let i = 0; i < pastBudgetReadTimes.length; i++) pastBudgetReadTimes[i] -= ms; }
 /** Test-only. */
 export function _resetInflightCoverForTest() {
+  pastBudgetReadTimes.length = 0;
   ledger.clear(); wallets.clear(); downLogged.clear(); ownReservations.clear(); lastBeatAt = 0; unreadMinutes.clear(); pendingReads.clear(); queuedReads.clear(); lastForeign.clear(); judging.clear(); liveSeen.clear(); readsDown.clear(); lastDecidedUnreadAt = 0; laneGen++; for (const l of lanes.values()) for (const w of [...l.waiters.splice(0), ...l.bgWaiters.splice(0)]) w(); lanes.clear(); netFailedAt.clear(); reader = readBalance;
   for (const set of waiters.values()) for (const wake of [...set]) wake();
   waiters.clear();
