@@ -22,12 +22,13 @@
 //     shim), a Tempo pull credential from a sender the gate verified
 //     (signed by an access key: judged on the account that pays, the one the
 //     key signs for; a pull with another address in the fee-payer slot is
-//     judged on its signer, the account it draws on; a multisig envelope on
-//     the account it names, in a ledger of its own apart from that account's
-//     verified runs, never that account's paid record), and a
+//     judged on its signer, the account it draws on), and a
 //     Solana, Algorand or Stellar x402 payment (src/rail-cover.js; a Solana
-//     transfer that names an account through a lookup table is keyed on the
-//     paying wallet and judged on all it holds of the mint). Not
+//     payment is keyed on the SOURCE token account it debits and judged on
+//     what that account holds; one that names an account through a lookup
+//     table is keyed on the paying wallet and judged on the largest single
+//     account of the mint it owns; a wallet's runs in the two shapes are
+//     counted together, see ownerStatic). Not
 //     covered, because the price is not drawn from the wallet after the
 //     handler: credits (held at authorize), a card, a Tempo push credential
 //     (final before the handler). A Circle Gateway batched payment is
@@ -35,6 +36,25 @@
 //     where it is paid from.
 //     A payment with no readable terms is not judged here; the settle
 //     breaker counts its runs in flight (src/gateway-settle-breaker.js).
+//   - AN UNPROVEN SENDER (a Tempo multisig envelope: it names an account,
+//     and whether its config is that account's is not something this server
+//     can check) is booked on no account. Its ledger is the client address
+//     it came from, one for everything that address sends this way, whatever
+//     account, config or key each credential names; it is judged on no
+//     balance and has no paid record: INFLIGHT_COVER_UNREAD_MAX runs in
+//     flight, the allowance of a wallet whose balance was never read. The
+//     account it names keeps its ledger, its balance and its paid record to
+//     itself: nothing sent this way is counted against them or read from
+//     them, so one balance backs one ledger. When such a payment SETTLES,
+//     the chain took it from that account, and the account's own records are
+//     told the way they are of a settlement another container made (the last
+//     good read is forgotten; the next judgment reads again).
+//     A MULTISIG ACCOUNT PROVEN BY SETTLEMENT is not unproven: once a pull
+//     under a config has settled through the Tempo gate, a later pull naming
+//     the account under the same config commitment, with approvals that
+//     verify, arrives here with a verified sender's terms (src/rail-cover.js
+//     tempoCoverTermsOf): the account's ledger, its balance, its paid record,
+//     no fixed number at once.
 //   - The first run in flight needs no read: verify already proved the
 //     balance covers it (unless a run of the wallet settled after the request
 //     arrived: verify may predate that payment, so the run is judged). A later one reads balanceOf once, cached for a few
@@ -81,7 +101,10 @@
 //       judged at once: a last good read no older than the at-once window
 //         that covers every run in flight plus this one (less what left
 //         since) admits the run at once, with no read waited for. A run it
-//         does not cover is judged as above. The window bounds how long a
+//         does not cover is judged as above. With a shared store the
+//         wallet's last-settlement mark is read first, and a settlement
+//         another container made drops the read (the run then waits for a
+//         new one). The window bounds how long a
 //         wallet that moved funds out elsewhere after that read can still be
 //         admitted on it (a transfer this server did not make is seen only by
 //         a new read).
@@ -269,6 +292,13 @@ const isOurs = (member) => String(member).startsWith(`${PROC}:`);
 export const _inflightCoverShared = SHARED;
 
 const ledger = new Map(); // coverKey -> { count, atomic: bigint, settling }
+// A SOLANA WALLET PAYING IN BOTH SHAPES. A payment that names its source
+// account is kept in that account's ledger; one whose source sits in a lookup
+// table is kept in the wallet's. One account may back both, so each shape's
+// judgment counts the other's runs in flight in this process: a source-keyed
+// run adds the wallet ledger's, and a wallet-keyed run adds the wallet's
+// source-keyed runs, summed here. wallet key -> { count, atomic }.
+const ownerStatic = new Map();
 const waiters = new Map(); // coverKey -> Set<() => void>, woken when a run leaves
 // PER-WALLET STATE, one object per coverKey:
 //   taken     the sum of what this process's runs took from the wallet: a
@@ -765,8 +795,11 @@ function balanceFor(coverKey, terms, now, minSeq = 0, background = false) {
   // upstream takes a unit of admission's own share of that ceiling; past it
   // no read is made, and the caller is judged as when reads are down (the
   // kept read, or the allowance).
+  // Whether this read took a unit of the day's budget: a read made past the
+  // budget (below) took none, and gives none back when it is dropped.
   const unitAt = Date.now();
-  if (!takeHardCapShare("cover-reads", terms?.ceiling ?? null, unitAt)) {
+  const unitTaken = takeHardCapShare("cover-reads", terms?.ceiling ?? null, unitAt);
+  if (!unitTaken) {
     // Spent: still one read per wallet per BUDGET_SPENT_WALLET_GAP_MS, so a
     // funded wallet judged on the allowance recovers within a minute, and at
     // most pastBudgetReadsPerMin() such reads in any minute for all wallets.
@@ -802,7 +835,7 @@ function balanceFor(coverKey, terms, now, minSeq = 0, background = false) {
       // Its turn in the lane has come and every admission that asked for it
       // has gone (refused, admitted another way, hung up): the read is not
       // made. It says nothing about the account's reads.
-      if (entry.asked && entry.waiters <= 0) { stats.readsDropped++; releaseHardCapShare("cover-reads", terms?.ceiling ?? null, unitAt); return null; }
+      if (entry.asked && entry.waiters <= 0) { stats.readsDropped++; if (unitTaken) releaseHardCapShare("cover-reads", terms?.ceiling ?? null, unitAt); return null; }
       entry.seq = ++eventSeq;
       entry.reading = true;
       const atomic = await reader(terms);
@@ -909,17 +942,28 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
   if (terms.rail === "evm" && !terms.asset) {
     try { const { EVM } = await import("./revenue-live.js"); const t = EVM[CHAIN_BY_CAIP2[terms.network]]?.token; if (typeof t === "string" && HEX_ADDR.test(t)) terms.asset = t.toLowerCase(); } catch { /* keyed without it */ }
   }
-  // A Tempo pull whose sender is not verified is booked in a ledger of its
-  // own (terms.ledger), judged on the account's balance but apart from that
-  // account's verified runs (src/rail-cover.js tempoCoverTermsOf).
-  const coverKey = `${terms.network}|${terms.asset || "-"}|${terms.payer}${terms.ledger ? `|${terms.ledger}` : ""}`;
-  // Which daily ceiling this wallet's reads count against, if any.
-  terms.ceiling = await ceilingOfRead(terms);
+  // The account's own key: one ledger per balance.
+  const accountKey = `${terms.network}|${terms.asset || "-"}|${terms.payer}`;
+  // A Tempo pull whose sender is not proven (terms.unproven, the client
+  // address: src/rail-cover.js tempoCoverTermsOf) is booked on that address
+  // alone, never under the account, token, config or key it names: nothing a
+  // caller writes into a credential opens another ledger, and no account's
+  // ledger holds a run its owner is not shown to have sent.
+  const coverKey = terms.unproven ? `${terms.network}|unproven|${terms.unproven}` : accountKey;
+  // A Solana payment's wallet key, and what the wallet's runs in the OTHER
+  // shape hold in this process (see ownerStatic): nothing for every other rail.
+  const walletKey = terms.rail === "svm" && terms.owner ? `${terms.network}|${terms.asset || "-"}|${terms.owner}` : null;
+  const sourceKeyed = walletKey !== null && terms.byOwner !== true && walletKey !== coverKey;
+  const otherShape = () => (walletKey === null ? null : sourceKeyed ? ledger.get(walletKey) : terms.byOwner === true ? ownerStatic.get(walletKey) : null) || null;
+  const withOtherShape = (set) => { const o = otherShape(); return o && o.count > 0 ? { ...set, count: set.count + o.count, atomic: set.atomic + o.atomic } : set; };
+  // Which daily ceiling this wallet's reads count against, if any (an
+  // unproven sender is judged on no balance, so it makes no read).
+  terms.ceiling = terms.unproven ? null : await ceilingOfRead(terms);
   // The wallet the paid record is kept under (a Solana payment draws on a
   // token account; its authority is the wallet).
-  // A ledger of its own (an unverified Tempo sender) is never the named
-  // account's paid record, and its settlements add nothing to that record.
-  const owner = terms.ledger ? null : terms.owner || terms.payer;
+  // An unproven sender has none: it neither reads the named account's paid
+  // record nor adds to it.
+  const owner = terms.unproven ? null : terms.owner || terms.payer;
   // Read once, here: the allowance on an unread balance is the one the wallet
   // had when this admission began.
   const paidAtStart = owner ? hasPaidRecord(owner) : false;
@@ -973,23 +1017,46 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       readUntil = Math.max(waitUntil, mono() + FOREIGN_REREAD_MS);
       return true;
     };
+    // The wallet's last-settlement mark in the shared store, read at most
+    // once in a judgment (markRead). A settlement this process did not make
+    // was never taken off this wallet's reads, so the last good read goes.
+    const readSettledMark = async () => {
+      try {
+        const m = await shared.flagGet(SETTLED_NAME, coverKey, { now: Date.now() });
+        const at = m?.ok && m.until > Date.now() ? m.until - SETTLED_MARK_MS : 0;
+        if (at > w.settledAt) { w.settledAt = at; w.good = null; stats.foreignSettlementsSeen++; }
+      } catch { /* the mark could not be read: this process's own stands */ }
+    };
     for (;;) {
+      if (terms.unproven) {
+        // AN UNPROVEN SENDER is judged on no balance: the account it names
+        // is not shown to be its own, and that account's balance already
+        // backs the account's own ledger. It gets the allowance of a wallet
+        // with no paid record whose balance was never read, for everything
+        // in flight from its client address (here and on other containers).
+        const cur = judgedSet(ledger.get(coverKey) || { count: 0, atomic: 0n, settling: 0 }, others);
+        if (cur.count < unreadMax()) { how = "unread"; break; }
+        stats.refused++;
+        stats.refusedUnread++;
+        const e = new Error(`This payment's sender could not be confirmed before the call runs (a multisig envelope names its account without proving it), so calls paid this way run ${unreadMax()} at a time from one client address, and ${cur.count} are in progress. Your input is fine: retry the same call after Retry-After, once one of them has settled. A payment signed by the account's own key, or by an access key the chain lists for it, is not held to this, and neither is a multisig account once a payment of its own has settled here. You have not been charged.`);
+        e.statusCode = 429;
+        e.coverRefusal = "unread";
+        e.attribution = "ours";
+        e.hint = "cover-unread";
+        e.fix = "Your input is fine. Retry the same call after Retry-After, when a call paid this way from this address has settled.";
+        e.retryAfter = asBefore ? 30 : 5;
+        throw e;
+      }
       const held = ledger.get(coverKey);
       // Nothing in flight: verify's proof stands, unless a run of the wallet
       // settled after this request arrived (verify may have seen the balance
       // before that payment left it): then this run is judged like any other.
-      if (me.left === 0 && (!held || held.count <= 0) && !foreignHeld(others, held)) {
+      if (me.left === 0 && (!held || held.count <= 0) && !foreignHeld(others, held) && !(otherShape()?.count > 0)) {
         // Another container may have settled a run of this wallet: its mark
         // is read once, before verify's proof is trusted.
         if (sharedId && !markRead) {
           markRead = true;
-          try {
-            const m = await shared.flagGet(SETTLED_NAME, coverKey, { now: Date.now() });
-            const at = m?.ok && m.until > Date.now() ? m.until - SETTLED_MARK_MS : 0;
-            // A settlement this process did not make: its amount was never
-            // taken off this wallet's reads, so the last good read goes.
-            if (at > w.settledAt) { w.settledAt = at; w.good = null; stats.foreignSettlementsSeen++; }
-          } catch { /* the mark could not be read: this process's own stands */ }
+          await readSettledMark();
           continue;
         }
         const settledSince = w.settledAt > arrived;
@@ -1011,7 +1078,17 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       if (!asBefore && !lastRec && freshAfter === 0 && !followUpRead) {
         const g = w.good;
         if (g && g.seq > (foreign ? sharedSeq : 0) && Date.now() - g.at <= keptAtOnceMs()) {
-          const now0 = judgedSet(ledger.get(coverKey) || { count: 0, atomic: 0n, settling: 0 }, others);
+          // With other containers, a kept read is trusted only once their
+          // settlements have been looked for: the wallet's mark is read
+          // first (once in this judgment), and a settlement made elsewhere
+          // drops the read, so the run is judged on a new one (a burst
+          // shares it; a wallet that can pay is admitted on it).
+          if (sharedId && !markRead) {
+            markRead = true;
+            await readSettledMark();
+            continue;
+          }
+          const now0 = withOtherShape(judgedSet(ledger.get(coverKey) || { count: 0, atomic: 0n, settling: 0 }, others));
           if (lowerOf(g) >= now0.atomic + terms.atomic) { how = "covered"; stats.admittedAtOnceOnKeptRead++; break; }
         }
       }
@@ -1046,7 +1123,7 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       // Re-read the ledger AFTER the awaits: other runs may have been admitted
       // meanwhile, and the check and the admission (synchronous, below) must
       // see the same numbers, with another container's runs added on.
-      const cur = judgedSet(ledger.get(coverKey) || { count: 0, atomic: 0n, settling: 0 }, others);
+      const cur = withOtherShape(judgedSet(ledger.get(coverKey) || { count: 0, atomic: 0n, settling: 0 }, others));
       const need = cur.atomic + terms.atomic;
       const beside = foreignHeld(others, ledger.get(coverKey), judges.size);
       // Why this run cannot start now, or null when it can.
@@ -1215,11 +1292,13 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
   entry.count += 1;
   entry.atomic += terms.atomic;
   ledger.set(coverKey, entry);
+  if (sourceKeyed) { const o = ownerStatic.get(walletKey) || { count: 0, atomic: 0n }; o.count += 1; o.atomic += terms.atomic; ownerStatic.set(walletKey, o); }
   stats.admitted++;
   let released = false, settling = false;
   const release = (settled = false, settledAtomic = null) => {
     if (released) return;
     released = true;
+    if (sourceKeyed) { const o = ownerStatic.get(walletKey); if (o) { o.count -= 1; o.atomic -= terms.atomic; if (o.count <= 0) ownerStatic.delete(walletKey); } }
     if (sharedId) void removeShared(coverKey, sharedId, terms.atomic);
     const e = ledger.get(coverKey);
     if (e) {
@@ -1249,6 +1328,17 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       walletOf(coverKey).settledAt = at;
       // The mark other containers read before they trust verify's proof.
       if (SHARED) void sharedWrite(SHARED_NAME, shared.flagSet(SETTLED_NAME, coverKey, at + SETTLED_MARK_MS));
+      // An unproven sender's payment that SETTLED was taken by the chain from
+      // the account it named, a run that account's own ledger never held: the
+      // account's records are told as they are of a settlement another
+      // container made (its last good read is forgotten, a judgment under way
+      // reads again, and verify's proof is not trusted for a call that
+      // arrived before it). Its paid record is not touched.
+      if (terms.unproven && terms.payer) {
+        walletOf(accountKey).settledAt = at;
+        noteDeparture(accountKey);
+        if (SHARED) void sharedWrite(SHARED_NAME, shared.flagSet(SETTLED_NAME, accountKey, at + SETTLED_MARK_MS));
+      }
     }
     // Every read record held for the wallet takes this run's amount off (it
     // stays a lower bound), every run being judged is told a run has left,
@@ -1258,7 +1348,7 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
     // should its balance become unreadable: one read in the background, when
     // it has none younger than the at-once window and the lane has room
     // (at most one such read per wallet in that time; nothing waits for it).
-    if (settled === true) {
+    if (settled === true && !terms.unproven) {
       const w2 = walletOf(coverKey);
       const net = networkOf(coverKey);
       const backingOff = Date.now() - (netFailedAt.get(net) || 0) < BG_BACKOFF_MS;
@@ -1364,7 +1454,7 @@ export function _ageKeptReadsForTest(ms, { pastBudget = false } = {}) { for (con
 /** Test-only. */
 export function _resetInflightCoverForTest() {
   pastBudgetReadTimes.length = 0;
-  ledger.clear(); wallets.clear(); downLogged.clear(); ownReservations.clear(); lastBeatAt = 0; unreadMinutes.clear(); pendingReads.clear(); queuedReads.clear(); lastForeign.clear(); judging.clear(); liveSeen.clear(); readsDown.clear(); lastDecidedUnreadAt = 0; laneGen++; for (const l of lanes.values()) for (const w of [...l.waiters.splice(0), ...l.bgWaiters.splice(0)]) w(); lanes.clear(); netFailedAt.clear(); reader = readBalance;
+  ledger.clear(); ownerStatic.clear(); wallets.clear(); downLogged.clear(); ownReservations.clear(); lastBeatAt = 0; unreadMinutes.clear(); pendingReads.clear(); queuedReads.clear(); lastForeign.clear(); judging.clear(); liveSeen.clear(); readsDown.clear(); lastDecidedUnreadAt = 0; laneGen++; for (const l of lanes.values()) for (const w of [...l.waiters.splice(0), ...l.bgWaiters.splice(0)]) w(); lanes.clear(); netFailedAt.clear(); reader = readBalance;
   for (const set of waiters.values()) for (const wake of [...set]) wake();
   waiters.clear();
   for (const k of Object.keys(stats)) stats[k] = 0;

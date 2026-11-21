@@ -6,6 +6,39 @@ carries its own version on npm.
 
 ## v2.10.0 - 2026-11-21
 
+### 2026-11-21 (balance checks for calls in flight)
+Payments:
+- On a deployment with more than one server, a wallet's call is admitted
+  at once on its last balance read only when no other server has settled a
+  payment of that wallet since; when one has, the balance is read again
+  first and the calls that arrived together share that read.
+- A Solana payment is counted against the balance of the token account it
+  pays from. A wallet that pays from several token accounts at once is
+  counted per account, each account covering its own calls in flight.
+- A Solana payment that names its accounts through an address lookup table
+  is counted against the largest single token account of the mint the
+  wallet holds.
+Operations:
+- A balance read that is dropped before it is made gives a unit of the
+  daily read budget back only when it took one, so the day's count matches
+  the reads made.
+
+### 2026-11-21 (multisig Tempo payments and DNS names)
+Payments:
+- A Tempo pull credential in a multisig envelope is counted against its
+  account's balance, with no fixed number of calls at once, once a payment
+  from that account under the same multisig config has settled here.
+- Until then, and under any other config, calls paid that way run four at
+  once per client address (`INFLIGHT_COVER_UNREAD_MAX` sets the number),
+  whichever account each names; a call past that answers 429 with
+  `Retry-After: 5` and nothing is charged.
+- Calls an account pays for with its own key, or with an access key Tempo
+  confirms for it, are counted against that account's balance alone.
+Tools:
+- The DNS, mail and certificate tools look up a name in one normalized form
+  (lowercase, no trailing dots or surrounding spaces), and `dns` answers
+  with that form in `name`.
+
 ### 2026-11-21 (x402 by default for python-httpx clients)
 Payments:
 - On a server that offers MPP, a client whose User-Agent starts with

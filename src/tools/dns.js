@@ -1,5 +1,5 @@
 import { Resolver } from "node:dns/promises";
-import { internalNameReason } from "./dns-name-filter.js";
+import { assertQueryableName } from "./dns-name-filter.js";
 import { atCeiling, assertBeforeCeiling, ceilingPassed, ceilingCutError } from "../run-ceiling.js";
 
 const SUPPORTED = ["A", "AAAA", "MX", "TXT", "NS", "CNAME"];
@@ -12,19 +12,13 @@ export async function dnsLookup(name, type = "A") {
     err.statusCode = 400;
     throw err;
   }
-  // The shared internal-name filter (trailing dot stripped first).
-  const refused = internalNameReason(name);
-  if (refused) {
-    const err = new Error(refused);
-    err.statusCode = 400;
-    throw err;
-  }
-  name = String(name).trim().replace(/\.$/, "");
-  if (!/^[a-zA-Z0-9._-]{1,253}$/.test(name)) {
-    const err = new Error("Invalid domain name");
-    err.statusCode = 400;
-    throw err;
-  }
+  const invalid = () => Object.assign(new Error("Invalid domain name"), { statusCode: 400 });
+  const text = String(name ?? "").trim();
+  if (!/^[a-zA-Z0-9._-]+$/.test(text)) throw invalid();
+  // The shared internal-name filter: the name it judged (its canonical form)
+  // is the name the resolver is asked for. Throws the 400.
+  name = assertQueryableName(text);
+  if (name.length > 253) throw invalid();
   // A resolver of its own per lookup, so a run's ceiling (src/run-ceiling.js;
   // none on a direct route) can cancel this query and nothing else's: the
   // lookup is the tool's only upstream wait, and it ends at the ceiling.

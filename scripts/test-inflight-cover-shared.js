@@ -370,6 +370,43 @@ if (ROLE === "model") {
     const none = await C._liveBeatForTest(Date.now() + 20 * 60_000);
     ok(none === 0 || !winOf(kR).has(mine[0]), "model: a reservation already removed is not written back");
   }
+  {
+    // JUDGED AT ONCE beside other containers. A kept balance read is trusted
+    // only once the wallet's last-settlement mark has been read: another
+    // container that admitted and settled runs of the wallet between two of
+    // this one's views left nothing in the window, only its mark and a lower
+    // balance on chain.
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (const [label, left, want] of [["the balance left covers one run", 1n, 0], ["control: the balance left still covers them all", 20n, 12]]) {
+      C._resetInflightCoverForTest();
+      const W = "0x" + (want ? "e2" : "e1").repeat(20), k = coverKeyOf(W);
+      let chain = 10n * PRICE, made = 0;
+      C._setBalanceReaderForTest(async () => { made++; return chain; });
+      // This container: one long run in flight, and a second call that reads
+      // the balance (ten prices) and ends.
+      const a1 = await attempt(C, W);
+      const a2 = await attempt(C, W); a2.release?.();
+      const kept = made;
+      // Control: nothing settled elsewhere, so a call is admitted at once on the kept read.
+      let s0 = C.inflightCoverStatus();
+      const c1 = await attempt(C, W);
+      let s1 = C.inflightCoverStatus();
+      ok(typeof c1.release === "function" && made === kept && s1.admittedAtOnceOnKeptRead === s0.admittedAtOnceOnKeptRead + 1 && s1.foreignSettlementsSeen === s0.foreignSettlementsSeen, `model, at once (${label}): control, with no settlement elsewhere a call is admitted on the kept read with no new read`);
+      c1.release?.();
+      // Another container settles nine runs of the wallet: what is left is
+      // the balance on chain and that container's mark.
+      chain = left * PRICE;
+      marks.set(k, Date.now() + 5 + C.SETTLED_MARK_MS);
+      await sleep(30);
+      s0 = C.inflightCoverStatus();
+      const burst = []; for (let i = 0; i < 12; i++) burst.push(await attempt(C, W));
+      s1 = C.inflightCoverStatus();
+      const admitted = burst.filter((x) => x.release).length;
+      ok(admitted === want && s1.foreignSettlementsSeen === s0.foreignSettlementsSeen + 1 && made === kept + 1 && burst.every((x) => x.release || x.err?.coverRefusal === "short"),
+        `model, at once (${label}): the mark is read before the kept read is trusted; a settlement made elsewhere drops it and the burst of 12 is judged on one new read: ${want} admitted (${admitted} admitted, new reads ${made - kept}, settlements seen ${s1.foreignSettlementsSeen - s0.foreignSettlementsSeen})`);
+      for (const x of [a1, ...burst]) x.release?.();
+    }
+  }
   console.log(`CHILD_PASS ${pass}`);
   process.exit(0);
 }

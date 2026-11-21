@@ -215,7 +215,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `KEPT_AT_ONCE_MS` (5 min, the settlement refresh's age) and covers every run it has in flight
   plus this one (`lowerOf`, with another container's runs added) is admitted on it at once, with no
   read waited for (`admittedAtOnceOnKeptRead`); only before the judgment asked for a read of its
-  own, and only on a read begun after another container's view when one holds a run. A run that
+  own, and only on a read begun after another container's view when one holds a run. With the
+  shared half on, the wallet's settled mark is read first (once per judgment, `readSettledMark`):
+  a settlement another container made drops the kept read, and the run is judged on a new one. A run that
   read does not cover, or an older read, is judged as before (the one-price mirror still refuses).
   *The read gap:* a wallet's reads are at least `INFLIGHT_COVER_READ_GAP_MS` apart (default and
   most 10 s, the read cache's length, past which a gap changes nothing; least 1 s); inside it a
@@ -229,7 +231,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   Tempo lists; `AGENT402_BASE_RPC` for Base) takes a unit of the `cover-reads` share in
   `src/upstream-hard-caps.js` (`HARD_CAP_SHARES`, shared across replicas like the ceilings):
   `INFLIGHT_COVER_READS_DAILY_MAX`, default a fifth of `HARDCAP_ALCHEMY_CALLS`, a set value held to
-  half of it (the ceiling off: the set value, or none). A read dropped unmade gives its unit back.
+  half of it (the ceiling off: the set value, or none). A read dropped unmade gives its unit back
+  when it took one (a read made past the budget took none).
   Past it a wallet still gets one read a minute (`BUDGET_SPENT_WALLET_GAP_MS`, `readsPastBudget`), so
   a funded wallet held to the allowance recovers within a minute instead of at midnight; any other
   read is not made (`readsOverBudget`) and the call is judged exactly as when reads are down (the
@@ -276,15 +279,40 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   the reservations it still holds back (`beatOnce`).
   Terms (`coverTermsOfRequest`): the x402 EVM authorization or Permit2 (the MPP evm wire arrives as
   one), a Circle Gateway batched payment (judged on the signer's Gateway balance, `/v1/balances`), a
-  Tempo pull credential from a verified sender (`req.mppTempoPull`), and Solana (the transfer's
-  SOURCE token account; the paid record is the authority's; when an account of the transfer is a
-  lookup-table entry, the WALLET, its static authority, `byOwner`, read as the sum of its token
-  accounts of the accepted mint by `getTokenAccountsByOwner`, none reading unknown), Algorand and Stellar payments
+  Tempo pull credential from a verified sender (`req.mppTempoPull`), and Solana (a transfer
+  debits ONE token account: the transfer's SOURCE token account, keyed and judged on that account
+  alone, `getTokenAccountBalance`, whoever owns it, so a wallet paying from several accounts is
+  judged per account; the paid record is the authority's, `owner`; when an account of the transfer
+  is a lookup-table entry the source is not known, so the WALLET, its static authority, `byOwner`,
+  read as the LARGEST single token account of the accepted mint it owns by
+  `getTokenAccountsByOwner`, never their sum, none reading unknown; a wallet's runs in the two
+  shapes are counted together in one process, `ownerStatic` in `src/inflight-cover.js`, since one
+  account may back both), Algorand and Stellar payments
   (`src/rail-cover.js`, amount and asset from the matched `accepted`). Balance reads, one bounded
   read each, null = unknown: EVM `balanceOf` (chains from the rails table), Tempo `balanceOf` on
   `TEMPO_RPC_URL`, Solana `getTokenAccountBalance`, algod's asset holding, Horizon's classic balance
   of the asset whose contract id is the accept's. Never judged here: credits, a card, a Tempo push
-  credential. A run leaves on its settle success (x402 afterSettle, the fallback chain, the Tempo
+  credential. **An unproven Tempo sender** (a pull the gate could not prove: a multisig envelope,
+  whose config cannot be checked here, or any other shape; `mppTempoPull.ledger`) is booked on the
+  client address it came from (`unproven` on the terms, `clientAddressKey` in `src/rail-cover.js`),
+  one ledger for everything that address sends this way whatever account, config or key each
+  credential names: no balance is read, it has no paid record, and `INFLIGHT_COVER_UNREAD_MAX`
+  runs are in flight at once (429 `unread`, `Retry-After: 5`, past it). The account it names is
+  never booked, read or credited, so one balance backs one ledger; when such a pull settles, the
+  named account's records are told as of a settlement another container made (the last good read
+  is forgotten). A new sender shape the gate cannot prove gets the same mark, never a ledger keyed
+  on anything the credential carries. **A multisig account proven by settlement** is the exception:
+  when a pull whose owner approvals verify against the config it carries (`booking.commitment`)
+  settles, the gate records the pair (account, config commitment) from its settled path
+  (`noteTempoMultisigSettled` in `src/rail-cover.js`; nothing in a request writes it), and a later
+  pull naming that account under the same commitment, with approvals that verify, gets a verified
+  sender's terms: the account's ledger, balance and paid record, no fixed number at once
+  (per-buyer bounds stay on the client IP). The pair is a flag in the shared-limits store
+  (`tempo-multisig-proof`, read by every container and after a restart; with no shared store it is
+  the process's own), lasts `MULTISIG_PROOF_MS` (30 days) past the last settled pull, is written
+  through at most once a day, and is withdrawn when a pull under it is not settled for a cause
+  that is not ours (`tempoRefusalFault` other than `not-buyer`); a store that does not answer
+  leaves the pairs this process has read. A run leaves on its settle success (x402 afterSettle, the fallback chain, the Tempo
   gate), which is also the payer's paid record, or when its response ends.
   `INFLIGHT_COVER=composite`: the check covers the report and media routes only, and the settle
   breaker counts no runs in flight; `INFLIGHT_COVER=off`: the check is off everywhere. Not behind

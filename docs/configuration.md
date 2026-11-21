@@ -579,7 +579,7 @@ may still clamp it, and the read site is the reference.
 | `INFLIGHT_COVER_READS_DAILY_MAX` | Reads a day that reach the capped on-chain data host (unset: a fifth of HARDCAP_ALCHEMY_CALLS; never over half of it). |  | `src/upstream-hard-caps.js` |
 | `INFLIGHT_COVER_READ_GAP_MS` | A wallet's reads are at least this far apart; inside it its last read is judged as it is (1000 to 10000). |  | `src/inflight-cover.js` |
 | `INFLIGHT_COVER_SHARED_WINDOW_MS` | Inflight cover shared window, in milliseconds. |  | `src/inflight-cover.js` |
-| `INFLIGHT_COVER_UNREAD_MAX` | Inflight cover unread maximum. |  | `src/inflight-cover.js` |
+| `INFLIGHT_COVER_UNREAD_MAX` | Inflight cover unread maximum. |  | `src/changelog.js`, `src/inflight-cover.js` |
 | `INFLIGHT_COVER_UNREAD_PAID_MAX` | Inflight cover unread paid maximum. |  | `src/inflight-cover.js` |
 
 ## JUDGE
