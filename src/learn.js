@@ -5,6 +5,7 @@
 // replaced with a placeholder); the live 402 lists one accepts entry per
 // accepted chain. Each entry's `summary` is reused verbatim by /llms-full.txt.
 import { siteOrgRef } from "./site-org.js";
+import { GUIDE_SITE, GUIDE_SITE_NAME, GUIDE_EXPLAINERS, guideLink } from "./ask402-links.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-door.js";
 import { connectorWires, connectorPayText, connectorLongCallText, X402_MCP_PAYMENT_KEY, X402_MCP_RECEIPT_KEY } from "./connector-pay.js";
@@ -162,8 +163,9 @@ export const LEARN = [
     term: "x402",
     alt: ["x402 protocol", "HTTP 402 payments"],
     glossary: "x402",
-    title: "What is x402? The HTTP payment protocol, explained",
-    description: "x402 turns HTTP 402 Payment Required into a working payment: a machine-readable price in a header, a signed stablecoin authorization on the retry, and a receipt on the answer. How it works, with the exact headers this server sends.",
+    title: "x402 on Agent402: the headers, the offer and the receipt",
+    guide: ["x402", "x402", "What is x402?"],
+    description: "x402 on Agent402, header by header: the price in PAYMENT-REQUIRED, the signed stablecoin authorization on the retry, and the receipt on the answer.",
     summary: "x402 is an open protocol that makes HTTP 402 Payment Required a working payment flow: the server puts machine-readable payment terms in a PAYMENT-REQUIRED header, the client retries with a signed stablecoin authorization in PAYMENT-SIGNATURE, a facilitator verifies and settles it on chain, and the answer carries a PAYMENT-RESPONSE receipt.",
     sections: [
       ["The short version", [
@@ -225,7 +227,8 @@ export const LEARN = [
     alt: ["Machine Payments Protocol", "Payment HTTP authentication scheme"],
     glossary: "mpp",
     title: "MPP challenges and credentials: the Payment auth scheme by header",
-    description: "MPP carries pay-per-request payments in HTTP's standard authentication headers: WWW-Authenticate: Payment, Authorization: Payment and Payment-Receipt. How a challenge is built, with a real one from this server, and how to pay it.",
+    guide: ["mpp", "MPP", "What is MPP?"],
+    description: "MPP on Agent402, header by header: WWW-Authenticate: Payment, Authorization: Payment and Payment-Receipt, with a real challenge and how to pay it.",
     summary: "MPP (the Machine Payments Protocol) carries pay-per-request payments through HTTP's standard authentication headers: a 402 challenges with WWW-Authenticate: Payment, the client answers with an Authorization: Payment credential, and the settled response returns a signed Payment-Receipt. Its evm method settles USDC by EIP-3009; its tempo method settles natively on Tempo.",
     sections: [
       ["Payment as an HTTP auth scheme", [
@@ -411,6 +414,7 @@ export function learnPage(baseUrl, slug) {
     ${breadcrumbNavFromLd(baseUrl, breadcrumbLd)}
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 18px;max-width:860px;">${esc(l.term)}</h1>
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--ink);margin:0 0 8px;max-width:780px;">${esc(l.summary)}</p>
+    ${l.guide ? `<p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 8px;max-width:780px;">For ${esc(l.guide[1])} in plain language, read ${guideLink(GUIDE_EXPLAINERS[l.guide[0]], esc(l.guide[2]))} on ${GUIDE_SITE_NAME}.</p>` : ""}
     <div class="lp-body">
 ${sections}
       <h2>Related</h2>
@@ -448,7 +452,7 @@ export function learnIndex(baseUrl) {
   <section style="max-width:1180px;margin:0 auto;padding:52px 30px 64px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">learn</span></nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1;margin:0 0 16px;">How agents pay for APIs</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 34px;">Six explainers, each with a working example. For one-paragraph definitions of every term, see the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>; to wire payments into a framework, see <a href="/integrations" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">integrations</a>.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 34px;">Six explainers, each with a working example. For one-paragraph definitions of every term, see the <a href="/glossary" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">glossary</a>; to wire payments into a framework, see <a href="/integrations" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">integrations</a>. For x402 and MPP in plain language, read ${guideLink(GUIDE_SITE, GUIDE_SITE_NAME)}.</p>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;">
 ${cards}
     </div>

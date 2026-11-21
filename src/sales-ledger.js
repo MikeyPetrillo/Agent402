@@ -54,6 +54,7 @@ import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtim
 import { retryingLoad } from "./store-retry.js";
 import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
 import { cleanSalePath, salePathGroup } from "./sale-path.js";
+import { cleanSaleSource } from "./sale-source.js";
 import { ARRIVALS, arrivalOfSale } from "./funnel.js";
 import { enableWal } from "./sqlite-wal.js";
 import { isOneSaleSettlement, oneSaleScopeSql, repeatRowsSql } from "./sale-repeats.js";
@@ -187,6 +188,11 @@ export function saleRepeatStats() {
   try { rows = Number(qRepeatRowCount.get()) || 0; } catch { /* unreadable: 0 */ }
   return { repeatRows: rows, refusedSinceBoot: repeatSalesRefused };
 }
+// Additive column: the named source a card sale arrived from
+// (src/sale-source.js), carried from the checkout request through the checkout
+// session's metadata. NULL on every sale that named none and on every rail
+// but the card's. Read only by the operator's count of card sales by source.
+for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN source TEXT"); } catch { /* exists */ } }
 const RUN_KEY_RE = /^[0-9a-f]{32}$/;
 /** A run key safe to store: 32 lower-case hex characters, else null. */
 export const cleanRunKey = (v) => (typeof v === "string" && RUN_KEY_RE.test(v) ? v : null);
@@ -234,7 +240,7 @@ const IMPORT_NAME = basename(DB_PATH);
 // in-memory mirror and the write-through file only in database mode, so file
 // mode's file is untouched.
 if (USE_PG) for (const h of [db, fileDb]) if (h) { try { h.exec("ALTER TABLE sales ADD COLUMN sale_uid TEXT"); } catch { /* exists */ } }
-const SALE_COLS = ["id", "ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256", "attest_uid", "attest_tx", "via", "run_key", ...(USE_PG ? ["sale_uid"] : [])];
+const SALE_COLS = ["id", "ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256", "attest_uid", "attest_tx", "via", "run_key", "source", ...(USE_PG ? ["sale_uid"] : [])];
 const FEEDBACK_COLS = ["tx", "sale_id", "slug", "payer", "verdict", "reason", "ts"];
 const PG_DDL = () => `
   CREATE TABLE IF NOT EXISTS ${T("sales")} (
@@ -260,6 +266,7 @@ const PG_DDL = () => `
   CREATE UNIQUE INDEX IF NOT EXISTS sales_sale_uid ON ${T("sales")} (sale_uid);
   ALTER TABLE ${T("sales")} ADD COLUMN IF NOT EXISTS via TEXT;
   ALTER TABLE ${T("sales")} ADD COLUMN IF NOT EXISTS run_key TEXT;
+  ALTER TABLE ${T("sales")} ADD COLUMN IF NOT EXISTS source TEXT;
   CREATE TABLE IF NOT EXISTS ${T("sale_feedback")} (
     tx          TEXT PRIMARY KEY,
     sale_id     BIGINT NOT NULL,
@@ -285,6 +292,7 @@ const saleRowOf = (r) => cleanRow({
   response_sha256: r.response_sha256 ?? null, attest_uid: r.attest_uid ?? null, attest_tx: r.attest_tx ?? null,
   via: r.via ?? null,
   run_key: cleanRunKey(r.run_key),
+  source: r.source ?? null,
   ...(USE_PG ? { sale_uid: r.sale_uid ?? null } : {}),
 });
 const feedbackRowOf = (r) => cleanRow({ tx: r.tx, sale_id: Number(r.sale_id), slug: r.slug, payer: r.payer, verdict: r.verdict, reason: r.reason ?? null, ts: Number(r.ts) });
@@ -319,7 +327,8 @@ const SALE_INS_TYPES = ["bigint", "text", "double precision", "text", "text", "t
 /** A sale's values carry its sale_uid as a twelfth value (an entry queued
  *  before sale_uid existed has eleven), its path as a thirteenth (an entry
  *  queued before the path existed has twelve and lands with NULL) and its run
- *  key as a fourteenth (an entry queued before it existed lands with NULL). */
+ *  key as a fourteenth (an entry queued before it existed lands with NULL),
+ *  and its source as a fifteenth (the same). */
 const uidOf = (vals) => (Array.isArray(vals) && typeof vals[11] === "string" && vals[11] ? vals[11] : null);
 /** INSERT a sale unless the same sale is already there. With a sale_uid that
  *  is the identity (the live write and the replay of one sale share it, two
@@ -330,8 +339,8 @@ const uidOf = (vals) => (Array.isArray(vals) && typeof vals[11] === "string" && 
 /** False for a sale whose settlement can hold one sale only (src/sale-repeats.js) and already holds one. */
 const PG_NOT_BOOKED = () => `NOT (${oneSaleScopeSql().replace(/\brail\b/g, "$4::text").replace(/\bnetwork\b/g, "$5::text").replace(/\btx\b/g, "$7::text")}
     AND EXISTS (SELECT 1 FROM ${T("sales")} f WHERE f.tx = $7::text AND ${oneSaleScopeSql("f")}))`;
-const INSERT_SALE_BY_UID = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")}, sale_uid, via, run_key)
-  SELECT ${SALE_INS_COLS.map((_, i) => `$${i + 1}::${SALE_INS_TYPES[i]}`).join(", ")}, $12::text, $13::text, $14::text
+const INSERT_SALE_BY_UID = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")}, sale_uid, via, run_key, source)
+  SELECT ${SALE_INS_COLS.map((_, i) => `$${i + 1}::${SALE_INS_TYPES[i]}`).join(", ")}, $12::text, $13::text, $14::text, $15::text
   WHERE ${PG_NOT_BOOKED()}
   ON CONFLICT (sale_uid) DO NOTHING RETURNING *`;
 const INSERT_SALE_IF_ABSENT_ROW = () => `INSERT INTO ${T("sales")} (${SALE_INS_COLS.join(", ")})
@@ -342,7 +351,7 @@ const INSERT_SALE_IF_ABSENT_ROW = () => `INSERT INTO ${T("sales")} (${SALE_INS_C
   RETURNING *`;
 /** Insert-if-absent for one queued sale; resolves the row when this call inserted it. */
 async function insertSaleIfAbsent(vals) {
-  if (uidOf(vals)) return (await stateQuery(INSERT_SALE_BY_UID(), [...vals.slice(0, 12), cleanSalePath(vals[12]), cleanRunKey(vals[13])])).rows[0] || null;
+  if (uidOf(vals)) return (await stateQuery(INSERT_SALE_BY_UID(), [...vals.slice(0, 12), cleanSalePath(vals[12]), cleanRunKey(vals[13]), cleanSaleSource(vals[14])])).rows[0] || null;
   return (await stateQuery(INSERT_SALE_IF_ABSENT_ROW(), vals.slice(0, 11))).rows[0] || null;
 }
 const FEEDBACK_IF_NEWER = () => `INSERT INTO ${T("sale_feedback")} (tx, sale_id, slug, payer, verdict, reason, ts) VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -559,7 +568,7 @@ export function salesDeadLetterState() {
 export async function _salesDeadLetterEntries() { return deadLetter ? deadLetter.entries() : []; }
 
 const insertSale = db.prepare(
-  "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, via, run_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, via, run_key, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 );
 
 /** Settle tx hash/signature out of the base64 PAYMENT-RESPONSE receipt. */
@@ -580,7 +589,7 @@ export function txFromPaymentResponse(headerValue) {
  * when the write failed), queued behind earlier writes so rows land in call
  * order; the serving path does not wait on it.
  */
-export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic, wire, quoteUsd, responseSha256, via, runKey = null }) {
+export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic, wire, quoteUsd, responseSha256, via, runKey = null, source = null }) {
   try {
     const p = normalizePayerAddress(payer); // lowercases EVM only — base58/Stellar stay case-exact
     const internal = Boolean(synthetic) || rail === "heartbeat" || (p !== null && BURNERS.has(p));
@@ -602,7 +611,7 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
       // The sale's own id, and the sale on local disk BEFORE it is queued: a
       // crash, a kill or a database that hangs through the shutdown flush
       // leaves it there, and the replay lands it once (by this id).
-      const pgVals = [...vals, randomUUID(), cleanSalePath(via), cleanRunKey(runKey)];
+      const pgVals = [...vals, randomUUID(), cleanSalePath(via), cleanRunKey(runKey), cleanSaleSource(source)];
       return trackQueuedSale(pgVals[6], writer.write("record-sale", async () => {
         let row = await insertSaleIfAbsent(pgVals);
         // No row: this sale is already there (an earlier attempt whose reply was lost).
@@ -614,7 +623,7 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
       }, { kind: "sale", payload: pgVals, onError: false }));
     }
     if (isOneSaleSettlement({ rail: vals[3], network: vals[4], tx: vals[6] }) && qSettlementBooked.get(vals[6])) { refuseRepeatSale(vals[1], vals[4]); return undefined; }
-    insertSale.run(...vals, cleanSalePath(via), cleanRunKey(runKey));
+    insertSale.run(...vals, cleanSalePath(via), cleanRunKey(runKey), cleanSaleSource(source));
   } catch { /* never break serving for accounting */ }
   return USE_PG ? Promise.resolve(false) : undefined;
 }
@@ -1140,7 +1149,7 @@ export function payerHasPaidSale(payer) {
 const qPayerPaidDays = db.prepare(`
   SELECT COUNT(DISTINCT CAST(ts / 86400000 AS INTEGER)) AS d
     FROM sales INDEXED BY idx_sales_payer
-   WHERE payer = ? AND ts >= ? AND internal = 0 AND rail IN ${PAYING_RAILS_SQL}`);
+   WHERE payer = ? AND ts >= ? AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ${ONCE_SQL}`);
 /** Distinct paid UTC days of a payer since `sinceMs` (0 for an unreadable address). Database mode: the mirror. */
 export function payerPaidDays(payer, sinceMs) {
   const p = normalizePayerAddress(payer);
@@ -1991,7 +2000,32 @@ function* salesSummarySteps({ days = 30, detailed = false } = {}) {
       payer: r.payer, sales: r.sales, revenueUsd: +r.revenue.toFixed(4), lastAt: new Date(r.last_ts).toISOString(),
     })),
     byPath: salesByPath({ days }),
+    cardBySource: cardSalesBySource({ days }),
   };
+}
+
+// External card sales per named source (operator only): one-off reports and
+// subscription invoices, counted apart. A sale that named no source is under
+// `noSource`.
+const qCardBySource = db.prepare(`
+  SELECT source, wire, COUNT(*) AS n, COALESCE(SUM(price_usd), 0) AS usd
+  FROM sales WHERE internal = 0 AND rail = 'card' AND ts >= ?
+  GROUP BY source, wire`);
+/** { days, sources: { [name]: { sales, revenueUsd, reports, subscriptionInvoices } }, noSource: {...} } over the window. */
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
+export function cardSalesBySource({ days = 30 } = {}) {
+  const since = Date.now() - Math.max(0, Number(days) || 0) * 86_400_000;
+  const blank = () => ({ sales: 0, revenueUsd: 0, reports: 0, subscriptionInvoices: 0 });
+  const sources = {}, noSource = blank();
+  for (const r of qCardBySource.all(since)) {
+    const e = r.source ? (sources[r.source] || (sources[r.source] = blank())) : noSource;
+    const n = Number(r.n) || 0;
+    e.sales += n;
+    e.revenueUsd += Number(r.usd) || 0;
+    if (r.wire === "stripe-subscription") e.subscriptionInvoices += n; else e.reports += n;
+  }
+  for (const e of [noSource, ...Object.values(sources)]) e.revenueUsd = +e.revenueUsd.toFixed(2);
+  return { days, sources, noSource };
 }
 
 // External paid sales per arrival path (operator only). One row per (stored

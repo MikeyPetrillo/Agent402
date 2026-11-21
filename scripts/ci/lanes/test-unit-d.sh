@@ -67,6 +67,10 @@ t node scripts/test-badge-contrast.js
 t node scripts/test-ga-snippet.js
 # GA key events: buy clicks and checkout starts reach GA with the product only (stub DOM, offline)
 t node scripts/test-ga-key-events.js
+# Prefilled storefront link (/reports?product=&input=): the page's own script selects the card and fills the field in a DOM, never submits, unknown product is the plain page, the server never writes the value into the HTML
+t node scripts/test-reports-prefill.js
+# The plain-language guide site: named in the menu, /learn, /how-to-pay and llms.txt as plain links; this site's explainer pages link its explainers, keep their own canonical and stay indexable
+t node scripts/test-guide-site-links.js
 # Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
 t node scripts/test-analytics-privacy.js
 # Age, self-hosted fonts, analytics off-switches, recurring-mail stop links, renewal terms after purchase, the copyright agent
@@ -317,6 +321,8 @@ t node scripts/test-referral-counting.js
 t node scripts/test-mpp-agents-weekly.js
 # Arrival path per sale (mcp, client package, http) on the operator surfaces; sweep/burst cohorts; the Gateway test buyer is ours
 t node scripts/test-sale-path.js
+# Named source of a card sale: utm_source from the page address through the checkout request, the session metadata and the sale hook to the ledger; unlisted values dropped; counted on /__operator/sales.json only (booted, Stripe answered by a local stub)
+t node scripts/test-sale-source.js
 # Paid-call funnel per day and arrival path (probes, 402s served, attempts, settlements, refusal classes, callers that never came back), the ledger half and weekly figures, a 400k-row cost bound, operator-only /__operator/funnel.json (paid boot, stub facilitator)
 t node scripts/test-funnel.js
 # Funnel sources: User-Agent family, Referer class, the discovery document a caller read last (keyed hash, window, cap), no-payment reasons, next-step and timeout counts on a real traffic store

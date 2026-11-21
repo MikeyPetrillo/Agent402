@@ -15,6 +15,7 @@
 // that never arrives is booked as owed.
 import { usdToBaseUnits } from "./base-units.js";
 import { siteOrgLd } from "./site-org.js";
+import { GUIDE_SITE, GUIDE_SITE_NAME, guideLink } from "./ask402-links.js";
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { RAILS, railKey, x402EvmOnly, liveRails } from "./rails.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
@@ -159,7 +160,7 @@ console.log(res.status, res.headers.get("payment-receipt"), await res.json());`;
       <div>
         <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);text-wrap:balance;">How to pay for <span style="color:var(--accent);">one call</span></h1>
         <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">Every paid route answers an unpaid request with a 402 that names the price and every way to pay it.</strong> Pay with a stablecoin from a wallet over ${link("/what-is-x402", "x402")} or ${link("/what-is-mpp", "MPP")}, with a card where the price allows it, with a prepaid key, or with a solved puzzle on the pure-CPU tools. Same URL, same answer, same receipt.</p>
-        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">Prices on this page are read from the catalog that ${link("/api/pricing", "/api/pricing")} serves.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">Prices on this page are read from the catalog that ${link("/api/pricing", "/api/pricing")} serves. New to x402 or MPP? ${guideLink(GUIDE_SITE, GUIDE_SITE_NAME)} explains both in plain language.</p>
       </div>
       <div style="border:1px solid var(--hairline);background:var(--panel);">
         <div style="padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);${mono}font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);">ON THIS PAGE</div>

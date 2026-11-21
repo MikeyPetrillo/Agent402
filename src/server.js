@@ -3577,8 +3577,8 @@ try {
     // Each paid period (the first invoice and every renewal) gets a signed
     // receipt while receipts are served (src/receipt-signing.js).
     signPeriod: (d) => (receiptsServed() ? createSubscriptionReceipt({ iss: BASE_URL, ...d }) : null),
-    onInvoicePaid: ({ invoiceId, product, amountUsd }) => {
-      recordSale({ slug: product || "monitor", priceUsd: amountUsd, rail: "card", network: "stripe", payer: null, tx: invoiceId, wire: "stripe-subscription" });
+    onInvoicePaid: ({ invoiceId, product, amountUsd, source }) => {
+      recordSale({ slug: product || "monitor", priceUsd: amountUsd, rail: "card", network: "stripe", payer: null, tx: invoiceId, wire: "stripe-subscription", source });
       try { capturePostHogHumanFunnel({ step: "monitor_paid", product: product || "monitor", priceUsd: amountUsd }); } catch { /* telemetry never breaks the request */ }
     },
     // One-shot payment sessions are fulfilled from the webhook too, so a buyer
@@ -5638,8 +5638,8 @@ if (humanCheckoutEnabled()) {
       // Card sales land in the SAME sales ledger as x402 settlements (rail
       // "card", network "stripe", the PaymentIntent as tx) so /revenue and the
       // operator surfaces see the human front door.
-      onSale: ({ product, priceUsd, paymentIntent }) => {
-        recordSale({ slug: product, priceUsd, rail: "card", network: "stripe", payer: null, tx: paymentIntent, wire: "stripe-checkout" });
+      onSale: ({ product, priceUsd, paymentIntent, source }) => {
+        recordSale({ slug: product, priceUsd, rail: "card", network: "stripe", payer: null, tx: paymentIntent, wire: "stripe-checkout", source });
         try { capturePostHogHumanFunnel({ step: "paid", product, priceUsd }); } catch { /* telemetry never breaks the request */ }
       },
       // A signed receipt over the purchase and the delivered report, while
@@ -5667,7 +5667,7 @@ if (humanCheckoutEnabled()) {
       if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
       const product = typeof req.body?.product === "string" ? req.body.product.slice(0, 40) : null;
       try {
-        const url = (await _humanCheckout.createSession(req.body?.product, req.body?.input)).url;
+        const url = (await _humanCheckout.createSession(req.body?.product, req.body?.input, { source: req.body?.source })).url;
         try { capturePostHogHumanFunnel({ step: "checkout_started", product, kind: HUMAN_PRODUCTS[product]?.kind, priceUsd: HUMAN_PRODUCTS[product] ? HUMAN_PRODUCTS[product].price / 100 : null }); } catch { /* telemetry never breaks the request */ }
         res.json({ url });
       }
@@ -5728,7 +5728,7 @@ if (_subs) {
   app.post("/api/subscribe", async (req, res) => {
     if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
     try {
-      const url = (await _subs.createCheckout(req.body?.product, req.body?.target)).url;
+      const url = (await _subs.createCheckout(req.body?.product, req.body?.target, { source: req.body?.source })).url;
       try { capturePostHogHumanFunnel({ step: "monitor_checkout_started", product: typeof req.body?.product === "string" ? req.body.product.slice(0, 40) : null }); } catch { /* telemetry never breaks the request */ }
       res.json({ url });
     }

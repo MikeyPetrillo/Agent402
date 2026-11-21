@@ -271,3 +271,11 @@ window.a402CodeBlocks=function(root){try{
   })(blocks[i]);}
 }catch(e){}};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){window.a402CodeBlocks(document);});else window.a402CodeBlocks(document);
+/* a402: source tag. A visit that lands with utm_source=<name> (a short
+   lower-case token) keeps that name for a card checkout: the storefront
+   scripts send it with the checkout request (the server keeps only a name it
+   lists), and this page's links to the report and monitor storefronts carry
+   the tag forward. Nothing is stored in the browser. */
+window.a402Source=function(){try{var v=new URLSearchParams(location.search).get('utm_source')||'';return /^[a-z0-9][a-z0-9_-]{0,31}$/.test(v)?v:'';}catch(e){return '';}};
+window.a402TagLinks=function(root){try{var s=window.a402Source();if(!s)return;var links=root.querySelectorAll('a[href]');for(var i=0;i<links.length;i++){var m=/^(\/(?:reports|monitors)(?:\/[^?#]*)?)(#.*)?$/.exec(links[i].getAttribute('href')||'');if(m)links[i].setAttribute('href',m[1]+'?utm_source='+s+(m[2]||''));}}catch(e){}};
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){window.a402TagLinks(document);});else window.a402TagLinks(document);

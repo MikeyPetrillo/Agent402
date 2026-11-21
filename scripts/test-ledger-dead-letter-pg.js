@@ -110,9 +110,11 @@ try {
   // The landed sale is the queued one, value for value (a lost reply leaves exactly that row).
   const queued = (await sl._salesDeadLetterEntries()).find((e) => e.kind === "sale" && e.payload[6] === "0xdl-sale2")?.payload;
   // (twelve values and the sale_uid, then the arrival path, src/sale-path.js,
-  // then the run key, src/mcp-tasks.js)
-  await sdb.stateQuery(`INSERT INTO ${S}.sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, sale_uid, via, run_key)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`, queued);
+  // then the run key, src/mcp-tasks.js, then the card sale's source,
+  // src/sale-source.js)
+  ok(queued?.length === 15, `a queued sale carries fifteen values (${queued?.length})`);
+  await sdb.stateQuery(`INSERT INTO ${S}.sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, sale_uid, via, run_key, source)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`, queued);
   // ---- (4) and a fresh boot reading the same file is the one that replays --------
   const childSrc = `
     const rl = await import(${JSON.stringify(join(ROOT, "src/refund-ledger.js"))});
@@ -260,15 +262,19 @@ try {
       const keyed = [realNow(), "run", 0.01, "usdc", "base", PAYER, "0xrun-entry", 0, "x402", null, null, "00000000-0000-4000-8000-00000000a7a3", "mcp", "7c".repeat(16)];
       const Database = (await import("better-sqlite3")).default;
       const f = new Database(join(DIR, "agent402-sales.db"));
-      for (const v of [pre, keyed]) f.prepare("INSERT INTO pg_dead_letter (kind, payload, at) VALUES ('sale', ?, ?)").run(JSON.stringify(v), realNow());
+      // One queued with a card sale's source (fifteen values) lands with it.
+      const sourced = [realNow(), "dossier", 2, "card", "stripe", null, "pi_source-entry", 0, "stripe-checkout", null, null, "00000000-0000-4000-8000-00000000a7a4", null, null, "ask402"];
+      for (const v of [pre, keyed, sourced]) f.prepare("INSERT INTO pg_dead_letter (kind, payload, at) VALUES ('sale', ?, ?)").run(JSON.stringify(v), realNow());
       f.close();
     }
     await settle();
     const landed = (await sdb.stateQuery(`SELECT tx, via, run_key FROM ${S}.sales WHERE tx IN ('0xprerun-entry', '0xrun-entry') ORDER BY tx`)).rows;
     ok(landed.length === 2 && landed.find((r) => r.tx === "0xprerun-entry")?.via === "mcp" && landed.find((r) => r.tx === "0xprerun-entry")?.run_key === null && landed.find((r) => r.tx === "0xrun-entry")?.run_key === "7c".repeat(16), `an entry queued before the run key (thirteen values) lands with no key, one with a key lands with it (${JSON.stringify(landed)})`);
+    const srcRows = (await sdb.stateQuery(`SELECT tx, source FROM ${S}.sales WHERE tx IN ('0xrun-entry', 'pi_source-entry') ORDER BY tx`)).rows;
+    ok(srcRows.find((r) => r.tx === "0xrun-entry")?.source === null && srcRows.find((r) => r.tx === "pi_source-entry")?.source === "ask402", `an entry queued before the source (fourteen values) lands with none, one with a source lands with it (${JSON.stringify(srcRows)})`);
     cutRelay();
     await sl.recordSale({ slug: "uid", priceUsd: 0.01, rail: "usdc", network: "base", payer: PAYER, tx: "0xuid-entry" });
-    ok((await sl._salesDeadLetterEntries()).some((e) => Array.isArray(e.payload) && e.payload.length === 14 && /^[0-9a-f-]{36}$/.test(e.payload[11]) && e.payload[12] === null && e.payload[13] === null), "a new entry carries the sale's id as a twelfth value, its arrival path as a thirteenth and its run key as a fourteenth");
+    ok((await sl._salesDeadLetterEntries()).some((e) => Array.isArray(e.payload) && e.payload.length === 15 && /^[0-9a-f-]{36}$/.test(e.payload[11]) && e.payload[12] === null && e.payload[13] === null && e.payload[14] === null), "a new entry carries the sale's id as a twelfth value, its arrival path as a thirteenth, its run key as a fourteenth and its source as a fifteenth");
     // A sale that arrived from one of our client packages keeps its path through the outage.
     await sl.recordSale({ slug: "via", priceUsd: 0.01, rail: "usdc", network: "base", payer: PAYER, tx: "0xvia-entry", via: "agent402-client/x" });
     ok((await sl._salesDeadLetterEntries()).some((e) => Array.isArray(e.payload) && e.payload[6] === "0xvia-entry" && e.payload[12] === "agent402-client/x"), "a queued sale carries its arrival path (agent402-client/x)");

@@ -215,7 +215,7 @@
       try {
         var r = await fetch("/api/subscribe", {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ product: box.getAttribute("data-product"), target: box.getAttribute("data-target") }),
+          body: JSON.stringify({ product: box.getAttribute("data-product"), target: box.getAttribute("data-target"), source: (window.a402Source && window.a402Source()) || undefined }),
         });
         var j = await r.json();
         if (j && j.url) { window.location = j.url; return; }
@@ -246,7 +246,7 @@
       try { if (window.posthog && window.posthog.capture) window.posthog.capture("report_buy_click", { product: s.product, kind: "sample" }); } catch (e) { /* telemetry never blocks a buy */ }
       ga("report_buy_click", { product: s.product, kind: "sample" });
       try {
-        var r = await fetch("/api/buy", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ product: s.product, input: input }) });
+        var r = await fetch("/api/buy", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ product: s.product, input: input, source: (window.a402Source && window.a402Source()) || undefined }) });
         var j = await r.json();
         if (j && j.url) { ga("checkout_started", { product: s.product, kind: "sample" }); window.location = j.url; return; }
         err.textContent = (j && j.error) || "Could not start checkout.";
