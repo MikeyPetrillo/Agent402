@@ -12,7 +12,7 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1094 variables in 113 groups.
+1095 variables in 113 groups.
 
 ## Contents
 
@@ -853,8 +853,9 @@ may still clamp it, and the read site is the reference.
 | `PRICE_WEBHOOKS_FILE` | File for price webhook registrations, the kept list prices and queued deliveries. | `/data/price-webhooks.json` | `src/price-webhooks.js` |
 | `PRICE_WEBHOOK_DELIVERIES` | Runtime switch for outbound price webhook deliveries (on; off: registrations and removals keep working and queued deliveries wait). |  | `src/price-webhooks.js` |
 | `PRICE_WEBHOOK_DELIVERY_INTERVAL_MS` | How often due price webhook deliveries are sent, in milliseconds. | `60000` | `src/price-webhooks.js` |
-| `PRICE_WEBHOOK_MAX` | Most price webhook registrations this server keeps. | `5000` | `src/price-webhooks.js` |
-| `PRICE_WEBHOOK_MAX_PER_HOST` | Most price webhook registrations one target host may hold. | `20` | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_LIFETIME_DAYS` | How long a price webhook registration lasts, in days; registering the same URL again from the same payer renews it. | `90` | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_MAX` | Number of price webhook registrations from which a new one first removes those whose deliveries fail; twice this number is the most the server keeps. | `5000` | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_MAX_PER_PAYER` | Most price webhook registrations one registrant (the payer; in FREE_MODE the client address) may hold. | `25` | `src/price-webhooks.js` |
 | `PRICE_WEBHOOK_SIGNING_KEY` | Key the price webhook secrets are derived from (unset: POW_SECRET; neither set: a registration answers 503 and nothing is stored or sent). |  | `src/changelog.js`, `src/price-webhooks.js` |
 
 ## PROGRAMMATIC

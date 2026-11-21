@@ -33,6 +33,8 @@ t node scripts/test-inflight-burst.js
 t node scripts/test-inflight-admission.js
 # A header a handler set for its answer is not sent on a refusal: dub on Tempo pull, MPP evm and x402 (boots a paid server - offline)
 t node scripts/test-answer-headers.js
+# Price webhooks on a paid server: a registration whose settlement is refused leaves nothing stored, the registrant is the payer on Base, Tempo and Solana, its own excess is the 409, the same URL again renews in place (boots a paid server - offline)
+t node scripts/test-price-webhooks-paid.js
 # The conformance document's cells against the code: every wire paid (an error not settled, a success settled with the receipt the cell names, replay and idempotency as claimed), switches flipped change their cells, FREE_MODE offers nothing, and its refund terms are the /terms sentences (boots paid servers - offline)
 t node scripts/test-conformance.js
 # Signed receipts: the one key format and its refusals, sign and verify with tamper on every field, rotation, the header bound and the cost per call; with a key every settling wire's 200 carries a receipt that verifies and none on an error or a refused settle; without one no receipt and no cell claims it (boots paid servers - offline)
