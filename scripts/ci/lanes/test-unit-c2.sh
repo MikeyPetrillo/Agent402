@@ -39,3 +39,5 @@ t node scripts/test-mpp-discovery-parity.js
 t node scripts/test-mpp-flagship.js
 # 30 concurrent buyers for 45 s against a FREE_MODE server on a free port, /health probed beside them
 t node scripts/test-load-concurrency.js
+# Runtime switches: provider, then environment, then the declared default; booleans and declared names only (offline)
+t node scripts/test-feature-flags.js
