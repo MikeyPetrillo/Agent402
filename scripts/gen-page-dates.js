@@ -7,14 +7,19 @@
 //   node scripts/gen-page-dates.js --check    exit 1 when the committed table
 //                                             disagrees with git history
 //
-// Two maps:
+// Three maps:
 //   files        module path -> the date of the newest commit touching it
 //                (a file with uncommitted changes dates today, since the
 //                commit that carries it lands today)
 //   toolSources  tool slug -> the kit file that defines it, from the literal
-//                `slug: "..."` in src/tools/*.js and src/skills.js; a slug
-//                built from a template, or defined in two files, is left out
-//                and its page carries no lastmod
+//                `slug: "..."` in src/tools/*.js; a slug built from a
+//                template, or defined in two kits, is left out and its page
+//                carries no lastmod
+//   packSources  skill pack slug -> the pack module (src/skills.js), from the
+//                literal `slug: "..."` there
+// A tool's page is /tools/<slug> and a pack's is /skills/<slug>, so the two
+// are scanned apart: a pack that shares a tool's name is another page, and
+// never makes the tool's slug ambiguous.
 //
 // The production image carries no git history, so this runs where history
 // exists (a checkout) and the result is committed. scripts/test-page-dates.js
@@ -51,26 +56,43 @@ function dirtyFiles() {
   return out;
 }
 
+/** The module that defines every skill pack. */
+export const PACK_FILE = "src/skills.js";
+
+function kitFiles() {
+  return readdirSync(join(ROOT, "src", "tools")).filter((f) => f.endsWith(".js")).map((f) => `src/tools/${f}`).sort();
+}
+/** Every file a tool or pack page is dated by. */
 function toolFiles() {
-  const kits = readdirSync(join(ROOT, "src", "tools")).filter((f) => f.endsWith(".js")).map((f) => `src/tools/${f}`);
-  return [...kits, "src/skills.js"].sort();
+  return [...kitFiles(), PACK_FILE].sort();
 }
 
-/** slug -> file for every literal slug defined in one kit file. A slug named
- *  in several files (a pack step, a feedback or attest reference) belongs to
- *  the one that also names its route, `/api/<slug>`; still ambiguous, it is
- *  left out. */
-export function scanToolSources(files = toolFiles()) {
+/** The literal slugs a file's text defines or names. */
+function literalSlugs(text) {
+  return [...text.matchAll(SLUG_RE)].map((m) => m[1] || m[2] || m[3]);
+}
+
+/** toolSources: slug -> kit for every literal slug defined in one kit file. A
+ *  slug named in several kits (a bundle step, a feedback or attest reference)
+ *  belongs to the one that also names its route, `/api/<slug>`; still
+ *  ambiguous, it is left out. packSources: slug -> the pack module, for every
+ *  literal slug there. The pack module is not a kit, so a pack's name is never
+ *  a candidate for a tool's slug. */
+export function scanToolSources(files = kitFiles(), packFile = PACK_FILE) {
   const owners = new Map();
   const texts = new Map();
   for (const file of files) {
+    if (file === packFile) continue;
     const text = readFileSync(join(ROOT, file), "utf8");
     texts.set(file, text);
-    for (const m of text.matchAll(SLUG_RE)) {
-      const slug = m[1] || m[2] || m[3];
+    for (const slug of literalSlugs(text)) {
       if (!owners.has(slug)) owners.set(slug, new Set());
       owners.get(slug).add(file);
     }
+  }
+  const packSources = {};
+  if (packFile && existsSync(join(ROOT, packFile))) {
+    for (const slug of [...new Set(literalSlugs(readFileSync(join(ROOT, packFile), "utf8")))].sort()) packSources[slug] = packFile;
   }
   const out = {};
   const ambiguous = [];
@@ -84,7 +106,7 @@ export function scanToolSources(files = toolFiles()) {
     if (candidates.length === 1) out[slug] = candidates[0];
     else ambiguous.push(`${slug} (${candidates.join(", ")})`);
   }
-  return { toolSources: out, ambiguous };
+  return { toolSources: out, packSources, ambiguous };
 }
 
 export function buildTable() {
@@ -99,8 +121,8 @@ export function buildTable() {
     try { date = git("log", "-1", "--no-merges", "--format=%cs", "--", file); } catch { date = ""; }
     files[file] = date || today();
   }
-  const { toolSources, ambiguous } = scanToolSources();
-  return { table: { files, toolSources }, missing, ambiguous };
+  const { toolSources, packSources, ambiguous } = scanToolSources();
+  return { table: { files, toolSources, packSources }, missing, ambiguous };
 }
 
 export function readTable() {
@@ -121,7 +143,10 @@ export function diffTables(stored, fresh) {
   for (const file of Object.keys(sf)) if (!(file in ff)) out.push(`files: ${file} no longer a page source`);
   const st = (stored && stored.toolSources) || {}, ft = fresh.toolSources;
   for (const [slug, file] of Object.entries(ft)) if (st[slug] !== file) out.push(`toolSources: ${slug} -> ${file} (stored ${st[slug] || "nothing"})`);
-  for (const slug of Object.keys(st)) if (!(slug in ft)) out.push(`toolSources: ${slug} no longer defined by a literal slug`);
+  for (const slug of Object.keys(st)) if (!(slug in ft)) out.push(`toolSources: ${slug} no longer defined by a literal slug in a kit`);
+  const sp = (stored && stored.packSources) || {}, fp = fresh.packSources || {};
+  for (const [slug, file] of Object.entries(fp)) if (sp[slug] !== file) out.push(`packSources: ${slug} -> ${file} (stored ${sp[slug] || "nothing"})`);
+  for (const slug of Object.keys(sp)) if (!(slug in fp)) out.push(`packSources: ${slug} no longer defined by a literal slug in the pack module`);
   return out;
 }
 
@@ -130,6 +155,7 @@ function serialize(table) {
     note: "Generated by scripts/gen-page-dates.js; src/page-dates.js reads it for sitemap lastmod. Regenerate with --write after editing a page module or a tool kit.",
     files: table.files,
     toolSources: table.toolSources,
+    packSources: table.packSources,
   }, null, 2) + "\n";
 }
 
@@ -142,8 +168,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   }
   const { table, missing, ambiguous } = buildTable();
   if (missing.length) { console.error(`gen-page-dates: page sources not on disk: ${missing.join(", ")}`); process.exit(1); }
-  if (ambiguous.length) console.log(`slugs defined in more than one file (no lastmod): ${ambiguous.join("; ")}`);
-  console.log(`${Object.keys(table.files).length} files dated, ${Object.keys(table.toolSources).length} tool slugs mapped`);
+  if (ambiguous.length) console.log(`tool slugs defined in more than one kit (no lastmod): ${ambiguous.join("; ")}`);
+  console.log(`${Object.keys(table.files).length} files dated, ${Object.keys(table.toolSources).length} tool slugs and ${Object.keys(table.packSources).length} pack slugs mapped`);
   if (write) {
     mkdirSync(dirname(OUT), { recursive: true });
     writeFileSync(OUT, serialize(table));

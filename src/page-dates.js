@@ -8,6 +8,9 @@
 //
 //   static pages      the newest commit touching the module that renders them
 //   tool pages        the newest commit touching the kit that defines the tool
+//   skill pack pages  the newest commit touching the module that defines the
+//                     pack (a pack and a tool may share a name: /skills/<slug>
+//                     and /tools/<slug> are two pages with two sources)
 //   legal pages       the "last updated" date the page itself prints
 //   sample reports    the fixture's own generation date
 //   public reports    the report's publication date
@@ -109,14 +112,15 @@ function loadTable() {
   if (table) return table;
   try {
     const j = JSON.parse(readFileSync(new URL("./generated/page-dates.json", import.meta.url), "utf8"));
-    table = { files: j.files && typeof j.files === "object" ? j.files : {}, toolSources: j.toolSources && typeof j.toolSources === "object" ? j.toolSources : {} };
+    const map = (m) => (m && typeof m === "object" ? m : {});
+    table = { files: map(j.files), toolSources: map(j.toolSources), packSources: map(j.packSources) };
   } catch {
-    table = { files: {}, toolSources: {} };
+    table = { files: {}, toolSources: {}, packSources: {} };
   }
   return table;
 }
 /** Test seam: replace the table (a test proves the lookup, not the file). */
-export function _setPageDatesTable(t) { table = t ? { files: t.files || {}, toolSources: t.toolSources || {} } : null; }
+export function _setPageDatesTable(t) { table = t ? { files: t.files || {}, toolSources: t.toolSources || {}, packSources: t.packSources || {} } : null; }
 
 const validDay = (d) => (typeof d === "string" && ISO_DAY.test(d) ? d : null);
 
@@ -148,7 +152,18 @@ export function legalLastmod(path) {
 /** lastmod for a /tools/<slug> page: the kit that defines the slug. */
 export function toolLastmod(slug) {
   const { toolSources } = loadTable();
-  const file = toolSources[String(slug || "")];
+  const key = String(slug || "");
+  const file = Object.hasOwn(toolSources, key) ? toolSources[key] : null;
+  return file ? filesLastmod([file]) : null;
+}
+
+/** lastmod for a /skills/<slug> page: the module that defines the pack, or
+ *  null when the table does not list the slug as a pack. Read apart from the
+ *  tools, so a pack and a tool of one name each keep their own source. */
+export function packLastmod(slug) {
+  const { packSources } = loadTable();
+  const key = String(slug || "");
+  const file = Object.hasOwn(packSources, key) ? packSources[key] : null;
   return file ? filesLastmod([file]) : null;
 }
 
@@ -159,6 +174,9 @@ export function pageLastmod(path) {
   if (PAGE_SOURCES[p]) return filesLastmod(PAGE_SOURCES[p]);
   if (p.startsWith("/tools/category/")) return null;
   if (p.startsWith("/tools/")) return toolLastmod(p.slice("/tools/".length));
+  // A listed pack is dated by the module that defines it; any other page
+  // under /skills/ falls to the family below (the module that renders them).
+  if (p.startsWith("/skills/") && packLastmod(p.slice("/skills/".length))) return packLastmod(p.slice("/skills/".length));
   for (const [prefix, files] of FAMILY_SOURCES) if (p.startsWith(prefix)) return filesLastmod(files);
   return null;
 }
