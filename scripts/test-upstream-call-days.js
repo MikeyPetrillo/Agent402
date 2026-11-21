@@ -117,7 +117,7 @@ const DAY = 86_400_000;
   const other = Object.keys(callers).find((k) => k !== "solana-history:leaderboard");
   ok(other === "revenue-live.js" && callers[other] === 1, `an unlabelled call is counted under the module that made it, never under the meter itself (${other})`);
   ok(caps.hardCapStatus().upstreams.alchemy.usedToday === 2, "control: the hard ceiling counted the same two calls");
-  ok(!JSON.stringify(r).includes("/v2/k") && !JSON.stringify(r).includes("example.org"), "no path, key or uncounted host is kept");
+  ok(!JSON.stringify(r).includes("/v2/k") && !/example\.org/.test(JSON.stringify(r)), "no path, key or uncounted host is kept");
   globalThis.fetch = realFetch;
   await new Promise((r2) => { srv.closeAllConnections?.(); srv.close(() => r2()); });
 }

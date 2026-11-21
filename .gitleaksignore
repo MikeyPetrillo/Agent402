@@ -34,3 +34,29 @@ e00b2d19c697b9e6a2fd4ae2ef419b69f8a310cd:src/receipt-signing.js:private-key:50
 065904c2f0ba4e3378dc517871347f2e358af8ec:src/receipt-signing.js:private-key:49
 87de2ed04816f54711fac9048900e25dbbf56870:scripts/test-receipt-signing.js:private-key:58
 87de2ed04816f54711fac9048900e25dbbf56870:src/receipt-signing.js:private-key:49
+# A test's placeholder key in scripts/test-refund-receipt-hosts.js (proves a key
+# never reaches a log), replaced in a later commit by a lower-entropy literal; not a credential.
+08c8573fc95f656dccc30f2e5e6f619289a292fa:scripts/test-refund-receipt-hosts.js:generic-api-key:63
+08c8573fc95f656dccc30f2e5e6f619289a292fa:scripts/test-refund-receipt-hosts.js:generic-api-key:114
+08c8573fc95f656dccc30f2e5e6f619289a292fa:scripts/test-refund-receipt-hosts.js:generic-api-key:158
+1b58e55f741810624f7749080dcf104c2be3862e:scripts/test-refund-receipt-hosts.js:generic-api-key:63
+1b58e55f741810624f7749080dcf104c2be3862e:scripts/test-refund-receipt-hosts.js:generic-api-key:114
+1b58e55f741810624f7749080dcf104c2be3862e:scripts/test-refund-receipt-hosts.js:generic-api-key:158
+419317cbcae882238ff0235853eef1b389bbf552:scripts/test-refund-receipt-hosts.js:generic-api-key:63
+419317cbcae882238ff0235853eef1b389bbf552:scripts/test-refund-receipt-hosts.js:generic-api-key:114
+419317cbcae882238ff0235853eef1b389bbf552:scripts/test-refund-receipt-hosts.js:generic-api-key:158
+47c15781e61ef59d111f4067a4c59c28b47a96dd:scripts/test-refund-receipt-hosts.js:generic-api-key:63
+47c15781e61ef59d111f4067a4c59c28b47a96dd:scripts/test-refund-receipt-hosts.js:generic-api-key:114
+47c15781e61ef59d111f4067a4c59c28b47a96dd:scripts/test-refund-receipt-hosts.js:generic-api-key:158
+4eebf7551f8a6b9f70fcd3a0b10296ba85f8bcb7:scripts/test-refund-receipt-hosts.js:generic-api-key:63
+4eebf7551f8a6b9f70fcd3a0b10296ba85f8bcb7:scripts/test-refund-receipt-hosts.js:generic-api-key:114
+4eebf7551f8a6b9f70fcd3a0b10296ba85f8bcb7:scripts/test-refund-receipt-hosts.js:generic-api-key:158
+98e8530668559495703ff27d707065e81749d758:scripts/test-refund-receipt-hosts.js:generic-api-key:63
+98e8530668559495703ff27d707065e81749d758:scripts/test-refund-receipt-hosts.js:generic-api-key:114
+98e8530668559495703ff27d707065e81749d758:scripts/test-refund-receipt-hosts.js:generic-api-key:158
+b94853f595968b1b49b58cdae42e935bf520b672:scripts/test-refund-receipt-hosts.js:generic-api-key:63
+b94853f595968b1b49b58cdae42e935bf520b672:scripts/test-refund-receipt-hosts.js:generic-api-key:114
+b94853f595968b1b49b58cdae42e935bf520b672:scripts/test-refund-receipt-hosts.js:generic-api-key:158
+ed1581991aa8331f99967ac02086f447e41f3c24:scripts/test-refund-receipt-hosts.js:generic-api-key:63
+ed1581991aa8331f99967ac02086f447e41f3c24:scripts/test-refund-receipt-hosts.js:generic-api-key:114
+ed1581991aa8331f99967ac02086f447e41f3c24:scripts/test-refund-receipt-hosts.js:generic-api-key:158

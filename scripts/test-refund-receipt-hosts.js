@@ -60,7 +60,7 @@ const server = http.createServer(async (req, res) => {
   const { method, id } = JSON.parse((await readBody(req)) || "{}");
   reads[`${host}:${method}`] = (reads[`${host}:${method}`] || 0) + 1;
   const reply = (body) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ jsonrpc: "2.0", id, ...body })); };
-  if (host === "broken") return reply({ error: { code: -32005, message: `limit reached for ${base}/broken?apikey=SECRETKEY0123456789` } });
+  if (host === "broken") return reply({ error: { code: -32005, message: `limit reached for ${base}/broken?apikey=keykeykeykeykeykeykey` } });
   if (method === "eth_getTransactionReceipt") {
     if (host === "hist") return reply({ result: receiptFor(BUYER, PAYTO, 10_000) });
     if (host === "flaky") return reply({ result: reads[`${host}:${method}`] > flakyEmpty ? receiptFor(BUYER, PAYTO, 10_000) : null });
@@ -111,7 +111,7 @@ try {
 
   // ---- no URL in any reason --------------------------------------------------------
   {
-    const KEY = "SECRETKEY0123456789";
+    const KEY = "keykeykeykeykeykeykey";
     const broken = await verify(() => at("broken"));
     ok(broken.verified === false && /could not read the transaction/.test(broken.reason) && !broken.reason.includes(KEY) && !broken.reason.includes(base) && broken.reason.includes("<url>"), `a node's error that quotes its keyed URL reaches the reason without it (${broken.reason})`);
     // fetch cannot parse a host with a space, and quotes the whole value back.
@@ -155,7 +155,7 @@ try {
 
   // ---- the real job, with refund.yml's Celo host ------------------------------------------
   {
-    const KEY = "SECRETKEY0123456789";
+    const KEY = "keykeykeykeykeykeykey";
     const seen = { claims: 0, receiptReads: 0 };
     const job = http.createServer(async (req, res) => {
       const url = new URL(req.url, "http://stub");
