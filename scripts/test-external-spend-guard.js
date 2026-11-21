@@ -254,10 +254,10 @@ const noEnv = () => { for (const k of Object.keys(process.env)) if (k.startsWith
     "an unattributable payer is refused too - the chain check runs before the payer check");
   // Another chain is untouched.
   ok(maySpend(P, 0.9, { chain: "solana", ...CEIL }).ok, "another chain's wallet has its own day");
-  // A per-payer refusal carries NO code, so the two are distinguishable.
+  // A per-payer refusal carries its OWN code, so the two are distinguishable.
   const perPayer = maySpend(P, 5, { maxUnsettledUsd: 0.5, chain: "solana", walletDailyMaxUsd: 100 });
-  ok(perPayer.ok === false && perPayer.code === undefined && /has not settled/.test(perPayer.reason),
-    "a per-payer refusal has no code; only the wallet ceiling does");
+  ok(perPayer.ok === false && perPayer.code === "payer_unsettled_ceiling" && /has not settled/.test(perPayer.reason),
+    "a per-payer refusal has its own code, never the wallet ceiling's");
 }
 
 {

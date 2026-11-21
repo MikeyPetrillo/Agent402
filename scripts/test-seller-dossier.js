@@ -279,6 +279,12 @@ check("crawl failure, robots block, failed paywall probe and injected listing te
   assert.equal(r.identity.listingTextLooksInjected, true);
   assert.equal(r.identity.robotsBlocked, true);
 });
+check("a failed paywall probe carries its reason code and the flag reads its sentence", () => {
+  const r = base({ detail: { ...DETAIL, paywall: { ok: false, status: 401, url: "https://seller.example/api/a", reason: "auth_required", reasonNote: "the paid route answered 401 or 403: it asks for an account credential, not a payment" } } });
+  assert.equal(r.health.paywallProbe.reason, "auth_required");
+  assert.ok(r.flags.some((f) => /paywall probe failed \(the paid route answered 401 or 403: it asks for an account credential, not a payment, HTTP 401\)/.test(f)), r.flags.join(" | "));
+  assert.equal(base().health.paywallProbe.reason, null, "a passing probe carries no reason");
+});
 check("registration timestamps are ISO and a missing one is null, never an epoch", () => {
   const r = base();
   assert.equal(r.identity.firstRegisteredAt, new Date(NOW - 30 * DAY).toISOString());

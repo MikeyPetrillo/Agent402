@@ -1150,25 +1150,6 @@ const CATALOG = {
       },
     },
   },
-  "GET /api/dns": {
-    name: "DNS lookup",
-    slug: "dns",
-    category: "network",
-    price: "$0.001",
-    description: "Resolve one common DNS record type for a domain: answers name, type and records[] as the resolver returns them. Types: A, AAAA (addresses as strings), MX ({exchange, priority} objects), TXT (each record an array of its strings), NS and CNAME (hostnames). For SPF, DMARC or a full mail-security read use spf-check, dmarc-check or email-deliverability.",
-    tags: ["dns", "domains", "networking"],
-    discovery: {
-      input: { name: "example.com", type: "A" },
-      inputSchema: {
-        properties: {
-          name: { type: "string", description: "Domain name, e.g. example.com" },
-          type: { type: "string", description: "Record type (default A)" },
-        },
-        required: ["name"],
-      },
-      output: { example: { name: "example.com", type: "A", records: ["93.184.215.14"] } },
-    },
-  },
   "POST /api/render": {
     name: "Browser render",
     slug: "render",
@@ -2072,8 +2053,19 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         return eligible;
       })
       // Proven first, most settled first; unproven after every proven one.
-      .sort((a, b) => ((a.unproven ? 1 : 0) - (b.unproven ? 1 : 0)) || (b.settled - a.settled))
-      .slice(0, 5);
+      .sort((a, b) => ((a.unproven ? 1 : 0) - (b.unproven ? 1 : 0)) || (b.settled - a.settled));
+    // Then the match floor (routeMatchOrder, src/tools/route-execute.js),
+    // BEFORE the cut to five: a candidate far below the best match follows
+    // every one that meets it, inside each lane, and one under the floor is
+    // dropped, so volume alone never puts a weak match first.
+    // A pinned endpoint (a decision's own step) was chosen already.
+    if (!onlyUrl) {
+      const { routeMatchOrder } = await import("./tools/route-execute.js");
+      const matched = routeMatchOrder(task, candidates, { group: (r) => (r.unproven ? 1 : 0) });
+      if (matched.dropped > 0) { gateDrops.total += matched.dropped; gateDrops.byReason.below_match_floor = (gateDrops.byReason.below_match_floor || 0) + matched.dropped; }
+      candidates = matched.items;
+    }
+    candidates = candidates.slice(0, 5);
   } else {
     // A chain no buyer here pays on resolves nothing.
     candidates = [];
@@ -13441,16 +13433,6 @@ app.get("/api/meta", withToolCallLog("meta", async (req, res) => {
   }
 }));
 
-app.get("/api/dns", withToolCallLog("dns", async (req, res) => {
-  const { name, type } = req.query;
-  if (!name) return res.status(400).json({ error: 'Missing "name" query parameter', ...errorCodeField(400) });
-  try {
-    res.json(await dnsLookup(name, type));
-  } catch (err) {
-    sendToolError(res, err, "dns");
-  }
-}));
-
 app.post("/api/render", withToolCallLog("render", async (req, res) => {
   // Bespoke route (outside the generic binder): record the same tool_call the
   // binder emits, so latency and errors exist for it (none did until 2026-09-22).
@@ -13513,13 +13495,12 @@ app.post("/api/pdf", withToolCallLog("pdf", async (req, res) => {
 // read as "call directly" before, and a plan whose only payable render was
 // ours had nothing to run (2026-10-01 prod check). The public routes above are
 // unchanged; core catalog entries are not mounted by the kit binder, and all
-// five stay wallet-only.
+// four stay wallet-only (dns is a kit tool, src/tools/network-kit.js).
 {
   const needUrl = (i) => { const u = String(i?.url || "").trim(); if (!u) throw Object.assign(new Error('"url" is required'), { statusCode: 400 }); return u; };
   const set = (route, fn) => { if (CATALOG[route] && typeof CATALOG[route].handler !== "function") CATALOG[route].handler = fn; };
   set("POST /api/extract", async (i) => extractArticle(needUrl(i)));
   set("GET /api/meta", async (i) => fetchPageMeta(needUrl(i)));
-  set("GET /api/dns", async (i) => { const name = String(i?.name || "").trim(); if (!name) throw Object.assign(new Error('"name" is required'), { statusCode: 400 }); return dnsLookup(name, i?.type); });
   set("POST /api/render", async (i) => renderPage(needUrl(i)));
   set("POST /api/pdf", async (i) => pdfToText(needUrl(i)));
 }

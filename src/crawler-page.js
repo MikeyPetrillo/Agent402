@@ -18,7 +18,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { NAMED_CLIENT_BUDGET_MULTIPLIER, unpaidQuoteBudgetPerHour } from "./unpaid-quote-budget.js";
 import { CRAWLER_UA, PROBE_UA, ROUTER_UA, FETCH_UA, SITE_CRAWL_UA, SITE_CRAWL_TOKEN, CRAWLER_TOKEN, RETIRED_BARE_UA } from "./user-agents.js";
 import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
-import { REVISIT_CAP_MS, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, probeShareLabel } from "./seller-load.js";
+import { REVISIT_CAP_MS, REVISIT_HINT_FIELD, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, probeShareLabel } from "./seller-load.js";
 
 // The strings each component sends come from one list (src/user-agents.js),
 // so the page cannot quote a User-Agent we do not use.
@@ -32,6 +32,8 @@ export const ROBOTS_LEGACY_TOKEN = "Agent402";
 // Every span on this page is printed from the constant the code runs on
 // (scripts/test-crawler-page.js fails on a figure typed into the prose).
 const span = spanLabel;
+// The revisit hint's worked example on the page, in seconds.
+const HINT_EXAMPLE_SECONDS = 21600;
 
 // What the crawler reads and how robots.txt applies to each read, written from
 // src/x402-index.js (probePath, robotsForbids, enrichLiveQuotes, probePaywall,
@@ -69,6 +71,9 @@ const SECTIONS = [
       REVISIT_CAP_MS > 0
         ? `When your manifest and <code>/openapi.json</code> come back unchanged (a 304, or the same bytes as last time), the wait before the next read doubles each time, up to ${esc(span(REVISIT_CAP_MS))}. A changed document, a purchase from you that did not deliver, or registering again at <a href="/sell">/sell</a> puts the origin back on the regular cycle.`
         : `Every origin is read on the regular cycle.`,
+      ...(REVISIT_CAP_MS > 0
+        ? [`To set your own pace, add a top-level <code>"${esc(REVISIT_HINT_FIELD)}"</code> to your manifest at <code>/.well-known/x402</code>: a number of seconds to wait between reads, for example <code>"${esc(REVISIT_HINT_FIELD)}": ${HINT_EXAMPLE_SECONDS}</code> for ${esc(span(HINT_EXAMPLE_SECONDS * 1000))}. Each read then waits at least that long, up to ${esc(span(REVISIT_CAP_MS))}. It only ever lengthens our wait: a value shorter than our current wait changes nothing. A purchase from you that did not deliver, or registering again at <a href="/sell">/sell</a>, still brings the next read forward.`]
+        : []),
       DAILY_BUDGET > 0
         ? `The crawler, the unpaid price checks and the MPP index's scheduled reads together keep to about ${esc(DAILY_BUDGET.toLocaleString("en-US"))} requests a day to one site on its own account (a crawl already under way finishes its reads), counted per registrable domain, or per hostname on shared hosting such as a platform subdomain or a cloud API host. The unpaid price checks take at most ${esc(probeShareLabel())} of that, so the document reads always have the rest. Past it, they wait for the next day (UTC). The reads a registration of the site asks for are counted apart and never use that allowance, so a registration someone else makes never holds back the site's own crawl${REGISTRATION_HOURLY_MAX > 0 ? `, and one caller's registrations send one site at most ${esc(String(REGISTRATION_HOURLY_MAX))} document reads and paywall checks an hour, however many of them name it` : ""}${REGISTRATION_HOST_HOURLY_MAX > 0 ? `. Past ${esc(String(REGISTRATION_HOST_HOURLY_MAX))} such reads of one site in an hour from every caller together, the rest are sent one every ${esc(String(REGISTRATION_PACE_MS / 1000))} seconds` : ""}. A name under a wildcard or dynamic DNS service is counted on its own allowance, like a site on any other shared hosting, whatever address it points at. A site whose documents moved to another site is counted on its own allowance. Every request that follows such a move to the other site, a document read or a price check, is held to ${esc(DAILY_BUDGET.toLocaleString("en-US"))} more a day there, apart from that site's own allowance: past it those requests are not sent until the next day, and the moved site's listing stays as it was. The router's request before a purchase for a paying caller is counted on its own, so buyers never use up that allowance, and purchases always go through.`
         : `This deployment sets no daily request budget per site.`,

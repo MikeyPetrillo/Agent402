@@ -32,7 +32,7 @@ import { createHash } from "node:crypto";
 import { assertSigningAllowed } from "../signing-halt.js";
 import { saleByTxFresh, setAttestation, queuedSaleWrites } from "../sales-ledger.js";
 import { withLease } from "../state-db.js";
-import { maySpend, noteSpend, adjustSpend, reserveSpend, composeReserve } from "../external-spend-guard.js";
+import { maySpend, noteSpend, adjustSpend, reserveSpend, composeReserve, spendRefusalFields } from "../external-spend-guard.js";
 import { identityPayerOf, freeModeOn, FREE_MODE_IDENTITY_NOTE } from "../payer.js";
 
 // Slugs whose sales are never attestable (memory reads, the usage report):
@@ -310,7 +310,7 @@ export function makeAttestHandler(deps = {}) {
     // against the Base wallet's daily ceiling first (a refusal there is a
     // pause, not a charge), then corrected to the estimate.
     const allowed = await reserve(null, MAX_GAS_USD(), { chain: "base" });
-    if (!allowed.ok) throw bad(`Attestations are briefly paused: ${allowed.reason} Nothing was charged; retry later.`, 503);
+    if (!allowed.ok) throw Object.assign(bad(`Attestations are briefly paused: ${allowed.reason} Nothing was charged; retry later.`, 503), spendRefusalFields(allowed));
     const handle = allowed.handle ?? null;
     // server.js resolves this on the post-settlement finish hook (the
     // seller-payability rule); without it the booking stands for the whole

@@ -24,6 +24,8 @@
 // throws fall in three or more distinct minutes (a loop that ticks every 30 or
 // 60 minutes never throws in adjacent minutes; a clean run clears it). A single
 // throw, two with a gap, or a burst inside one minute never trips it.
+import { noteTurn } from "./active-jobs.js";
+
 const NAMES_MAX = 200;
 const NAME_MAX = 80;
 const MESSAGE_MAX = 160;
@@ -86,8 +88,12 @@ export function contained(name, fn) {
   if (typeof fn !== "function") throw new TypeError("contained(name, fn): fn must be a function");
   return function containedTurn(...args) {
     let out;
+    // The synchronous part of the turn is timed for the [loop-lag] line
+    // (src/active-jobs.js noteTurn); an async fn's later turns are its own.
+    const at = Date.now(), t0 = performance.now();
     try { out = fn.apply(this, args); }
     catch (e) { noteContainedThrow(name, e, { run: true }); return undefined; }
+    finally { try { noteTurn(name, at, performance.now() - t0); } catch { /* timing is best-effort */ } }
     if (out && typeof out.then === "function") out.then(() => noteContainedOk(name), (e) => noteContainedThrow(name, e, { run: true }));
     else noteContainedOk(name);
     return out;

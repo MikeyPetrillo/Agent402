@@ -87,5 +87,49 @@ ok((src.match(/setInterval/g) || []).length === 1, "exactly one timer");
   ok(/gc=\$\{Math\.round\(gcMinute\.ms\)\}ms/.test(src) && /gcPhrase\(late, now\)/.test(src), "the minute line and the stall line both carry it");
 }
 
+// TURNS NAMED: a stall inside a contained() callback (a crawl slice, the
+// route-index shadow build) names the turn and how long its synchronous part
+// ran, on the [loop-lag] line and in the stall ring; a timed span inside a
+// turn (the crawl's manifest passes, the shadow finish) is named the same way.
+{
+  const { contained } = await import("../src/contained-turn.js");
+  const { turnsDuring, timeSpan, noteTurn, TURN_NOTE_MS, _resetTurnsForTest } = await import("../src/active-jobs.js");
+  const { recentStalls } = await import("../src/loop-lag.js");
+  _resetTurnsForTest();
+  resetLoopLag();
+  const turnLines = [];
+  const stop2 = startLoopLagMonitor({ tickMs: 50, warnMs: 200, log: (m) => turnLines.push(m) });
+  await sleep(120);
+  setTimeout(contained("index-crawl-cycle", () => { timeSpan("crawl-manifest-passes seller.example", () => blockFor(300)); blockFor(150); }), 0);
+  await sleep(400);
+  stop2();
+  const line = turnLines.find((l) => /event loop blocked/.test(l)) || "";
+  const m = / turns: (.*)$/.exec(line);
+  ok(!!m, `the stall line carries a turns: field (${line})`);
+  const named = m ? m[1].split(", ") : [];
+  const turnMs = Number(/^index-crawl-cycle (\d+)ms$/.exec(named.find((x) => x.startsWith("index-crawl-cycle ")) || "")?.[1]);
+  const spanMs = Number(/^crawl-manifest-passes seller\.example (\d+)ms$/.exec(named.find((x) => x.startsWith("crawl-manifest-passes ")) || "")?.[1]);
+  ok(turnMs >= 400 && turnMs < 2000, `it names the contained turn with its synchronous time (${turnMs}ms)`);
+  ok(spanMs >= 280 && spanMs < turnMs, `and the span inside it with its own (${spanMs}ms)`);
+  ok(named[0]?.startsWith("index-crawl-cycle "), "longest first");
+  ok(recentStalls()[0]?.turns?.some((t) => t.startsWith("index-crawl-cycle ")), "the stall ring keeps the turns too");
+  // Short turns are not kept; old ones fall outside a later window.
+  _resetTurnsForTest();
+  noteTurn("tiny", Date.now(), TURN_NOTE_MS - 1);
+  noteTurn("old", Date.now() - 60_000, 500);
+  ok(turnsDuring(Date.now() - 1000, Date.now()).length === 0, "a turn under TURN_NOTE_MS or outside the window is not named");
+  // A turn's throw is still contained, and still timed.
+  _resetTurnsForTest();
+  const at0 = Date.now();
+  contained("thrower", () => { blockFor(40); throw new Error("x"); })();
+  ok(turnsDuring(at0 - 10, Date.now()).some((t) => t.startsWith("thrower ")), "a turn that throws is timed as well");
+  // The index wires the two spans the crawl stalls pointed at.
+  const idx = await (await import("node:fs/promises")).readFile(new URL("../src/x402-index.js", import.meta.url), "utf8");
+  const passStart = idx.indexOf("const manifestPassAt = Date.now(), manifestPassT0 = performance.now();");
+  const passEnd = idx.indexOf("noteTurn(`crawl-manifest-passes ${hostOfOriginForSpan(originUrl)}`, manifestPassAt, performance.now() - manifestPassT0);");
+  ok(passStart > 0 && passEnd > passStart && idx.slice(passStart, passEnd).includes("mergeManifestIntoTools(") && idx.slice(passStart, passEnd).includes("stampDeclared("), "the crawl's manifest passes are timed as one span named with the seller's host");
+  ok(/finally \{\s*noteTurn\("route-index-shadow-finish", finishAt, performance\.now\(\) - finishT0\);/.test(idx), "the shadow build's unsliced finish is timed as its own span");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

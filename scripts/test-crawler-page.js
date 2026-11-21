@@ -30,6 +30,13 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const html = crawlerPage("https://agent402.tools", { unpaidQuoteBudget: 0 });
 const text = decodeEntities(stripTags(stripInlineTags(html))).replace(/\s+/g, " ");
 
+// ---- the seller's cadence hint is documented as built -------------------------
+{
+  const { REVISIT_HINT_FIELD, REVISIT_CAP_MS } = await import("../src/seller-load.js");
+  ok(REVISIT_CAP_MS > 0 && text.includes(`add a top-level "${REVISIT_HINT_FIELD}" to your manifest at /.well-known/x402`) && /It only ever lengthens our wait/.test(text),
+    "the page documents the manifest's revisit hint by the field the crawl reads, and that it only lengthens the wait");
+}
+
 // ---- the page's identity strings are the crawler's ---------------------------
 const idxSrc = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
 const mppSrc = readFileSync(new URL("../src/mpp-index.js", import.meta.url), "utf8");

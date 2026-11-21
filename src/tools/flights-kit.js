@@ -29,7 +29,7 @@
 // call (uncharged to the buyer) rather than paying a second seller.
 import { markUntrusted } from "./provenance.js";
 import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
-import { maySpend as realMaySpend, noteSpend as realNoteSpend, adjustSpend as realAdjustSpend, reserveSpend as realReserveSpend, composeReserve } from "../external-spend-guard.js";
+import { maySpend as realMaySpend, noteSpend as realNoteSpend, adjustSpend as realAdjustSpend, reserveSpend as realReserveSpend, composeReserve, spendRefusalFields } from "../external-spend-guard.js";
 import { payerFromRequest } from "../payer.js";
 
 function bad(message, statusCode = 400) {
@@ -286,9 +286,9 @@ export function buildFlightTools({ sellers, pay, now = () => Date.now(), maySpen
       const spendPayer = payerFromRequest(req) || (req?.mppTempoSender ? `tempo:${req.mppTempoSender}` : null) || (req?.ip ? `ip:${req.ip}` : null);
       const allowed = await reserve(spendPayer, worst, { chain: "base" });
       if (!allowed?.ok) {
-        throw bad(allowed?.code === "wallet_daily_ceiling"
+        throw Object.assign(bad(allowed?.code === "wallet_daily_ceiling"
           ? "Flight data purchases have reached today's ceiling; they resume tomorrow (nothing was charged)"
-          : "Flight data purchases are paused right now; try again shortly (nothing was charged)", 429);
+          : "Flight data purchases are paused right now; try again shortly (nothing was charged)", 429), spendRefusalFields(allowed));
       }
       const handle = allowed.handle ?? null;
       if (handle && req && typeof req === "object") req.__externalSpend = handle;

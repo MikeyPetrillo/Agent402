@@ -15,6 +15,8 @@
 import { Resolver, promises as dnsPromises } from "node:dns";
 import { validateAgentCard, A2A_WELL_KNOWN_PATHS } from "./a2a-card.js";
 import { assertQueryableName } from "./dns-name-filter.js";
+import { dnsLookup } from "./dns.js";
+import { markEndsAtCeiling } from "../run-ceiling.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -221,6 +223,36 @@ export function providerForMx(mxHosts) {
 }
 
 export const NETWORK_TOOLS = [
+  // ────────── dns ──────────
+  // GET /api/dns, a kit tool since it left server.js's bespoke routes: same
+  // route, slug, price and example, now with a handler(input) the referral
+  // gate can serve. Its one upstream wait (the lookup) ends at a run's
+  // ceiling (src/tools/dns.js), so it is marked endsAtCeiling below.
+  {
+    route: "GET /api/dns",
+    name: "DNS lookup",
+    slug: "dns",
+    category: "network",
+    price: "$0.001",
+    description: "Resolve one common DNS record type for a domain: answers name, type and records[] as the resolver returns them. Types: A, AAAA (addresses as strings), MX ({exchange, priority} objects), TXT (each record an array of its strings), NS and CNAME (hostnames). For SPF, DMARC or a full mail-security read use spf-check, dmarc-check or email-deliverability.",
+    tags: ["dns", "domains", "networking"],
+    discovery: {
+      input: { name: "example.com", type: "A" },
+      inputSchema: {
+        properties: {
+          name: { type: "string", description: "Domain name, e.g. example.com" },
+          type: { type: "string", description: "Record type (default A)" },
+        },
+        required: ["name"],
+      },
+      output: { example: { name: "example.com", type: "A", records: ["93.184.215.14"] } },
+    },
+    handler: async (input) => {
+      const name = String(input?.name ?? "").trim();
+      if (!name) throw bad('"name" is required: the domain to look up, e.g. example.com');
+      return dnsLookup(name, input?.type ?? "A");
+    },
+  },
   // ────────── a2a-card-fetch ──────────
   // Mini-A2A interop (#461 demand cluster): resolve + fetch an A2A Agent Card
   // from a site (canonical /.well-known/agent-card.json, then the older
@@ -823,3 +855,8 @@ export const NETWORK_TOOLS = [
     },
   },
 ];
+
+// dns: its one upstream wait, the lookup, is canceled at a run's ceiling
+// (src/tools/dns.js), and nothing starts after it. A caller that stops
+// waiting at a deadline (the referral gate) can serve it.
+markEndsAtCeiling(NETWORK_TOOLS, ["dns"]);

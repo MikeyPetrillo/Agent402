@@ -68,6 +68,10 @@ ok(refusalReason("anything", 200) === null, "a success carries no reason");
 ok(refusalReason("", 400) === "other", "an empty message still classifies rather than throwing");
 ok(refusalReason(undefined, 400) === "other", "a missing message still classifies");
 ok(refusalReason("x", 413) === "too_large" && refusalReason("x", 404) === "not_found", "the statuses that speak for themselves are read from the status");
+ok(refusalReason("2 outside seller(s) matched those words on base, and none of them does that task (judged). Nothing was spent.", 404) === "judged_no_match"
+  && refusalReason("2 outside seller(s) matched those words on base, and none of them does that task (matched too few of the task's words to buy). Nothing was spent.", 404) === "judged_no_match"
+  && refusalReason("No external x402 seller matched that task. Explore /api/route?q=<task>&include=external.", 404) === "no_seller_matched",
+  "the router's 404 no-match refusals keep their routing class");
 
 // The vocabulary is a closed set a query can GROUP BY.
 ok(new Set(REFUSAL_REASONS).size === REFUSAL_REASONS.length && REFUSAL_REASONS.includes("other"), "the vocabulary is unique and always has a fallback");
