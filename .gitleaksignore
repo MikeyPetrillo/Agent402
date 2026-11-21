@@ -71,3 +71,16 @@ ed1581991aa8331f99967ac02086f447e41f3c24:scripts/test-refund-receipt-hosts.js:ge
 8fba9dd514d3c8fffb01fe2fee134457f210d5ac:scripts/test-x-data-kit.js:generic-api-key:249
 96ad1e292d7491c9027063988548fd521ecfa19f:scripts/test-x-data-kit.js:generic-api-key:244
 96ad1e292d7491c9027063988548fd521ecfa19f:scripts/test-x-data-kit.js:generic-api-key:249
+# The same fixture line as the merge commit that brought it into a piece branch reports it.
+6ab474e4d26c51869b19b68ca0b9d2512d9860fc:scripts/test-x-data-kit.js:generic-api-key:244
+6ab474e4d26c51869b19b68ca0b9d2512d9860fc:scripts/test-x-data-kit.js:generic-api-key:249
+# The price-webhook tool's published example secret as first committed (src/tools/price-webhook-kit.js):
+# a made-up documentation value, replaced by a placeholder in a later commit; never a credential.
+# The merge commits that carried the file report the same line.
+a318635dbe1ce80ae014442ae03313268befb9af:src/tools/price-webhook-kit.js:generic-api-key:51
+374fa133a5a7deba491d9697be12bbe2290d5164:src/tools/price-webhook-kit.js:generic-api-key:51
+520d110060fb54bba5c36c8b0806962dc1e37e36:src/tools/price-webhook-kit.js:generic-api-key:51
+4e2b8d5d969a0cf1285af0f57182753bffade66a:src/tools/price-webhook-kit.js:generic-api-key:51
+e85a31fdd905376ae52b46c61e440331a15f2f94:src/tools/price-webhook-kit.js:generic-api-key:51
+b0bb8517733ee43a263267ddd58c2a2b2780fb3a:src/tools/price-webhook-kit.js:generic-api-key:51
+4885d92300e0cef0f85fa573627bf4079d84cb59:src/tools/price-webhook-kit.js:generic-api-key:51

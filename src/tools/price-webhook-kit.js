@@ -6,7 +6,7 @@
 // The registration outlives the answer, so the slug is in the lasting-effect
 // list (src/lasting-effect-slugs.js): a hang-up is never forgiven, the call is
 // never replayed implicitly and it is never settled in a batch.
-import { priceWebhooks, PRICE_WEBHOOK_SLUG, UNSUBSCRIBE_PATH, SIGNATURE_HEADER, EVENT_PRICE_CHANGED, MAX_SLUGS, RETRY_DELAYS_MS } from "../price-webhooks.js";
+import { priceWebhooks, PRICE_WEBHOOK_SLUG, UNSUBSCRIBE_PATH, SIGNATURE_HEADER, EVENT_PRICE_CHANGED, MAX_SLUGS, MAX_URL_CHARS, RETRY_DELAYS_MS } from "../price-webhooks.js";
 
 // The catalog's slugs, handed over by server.js once the catalog is built.
 let knownSlugs = () => null;
@@ -38,7 +38,7 @@ export const PRICE_WEBHOOK_TOOLS = [
       input: { url: "https://example.com/hooks/agent402-prices", slugs: ["search", "answer"] },
       inputSchema: {
         properties: {
-          url: { type: "string", description: "The https URL that receives the signed POST. No credentials in the URL; it must resolve to a public address." },
+          url: { type: "string", maxLength: MAX_URL_CHARS, description: "The https URL that receives the signed POST. No credentials in the URL; it must resolve to a public address." },
           slugs: { type: "array", items: { type: "string" }, description: `Tool slugs to watch (up to ${MAX_SLUGS}), as listed on /api/pricing. Omit it to watch every tool.` },
         },
         required: ["url"],
@@ -48,7 +48,7 @@ export const PRICE_WEBHOOK_TOOLS = [
           id: "pw_3f9a1c2e4b6d8f0a1c3e5a7b9d1f2e4c",
           url: "https://example.com/hooks/agent402-prices",
           slugs: ["answer", "search"],
-          secret: "whsec_5d41402abc4b2a76b9719d911017c5925d41402abc4b2a76b9719d911017c592",
+          secret: "whsec_<64 hex characters>",
           signature: { header: SIGNATURE_HEADER, scheme: "t=<unix seconds>,v1=<hex HMAC-SHA256 of `${t}.${body}` with the secret>" },
           event: EVENT_PRICE_CHANGED,
           unsubscribe: { method: "POST", url: `https://agent402.tools${UNSUBSCRIBE_PATH}`, body: { id: "pw_3f9a1c2e4b6d8f0a1c3e5a7b9d1f2e4c", secret: "<the secret above>" } },
