@@ -17,5 +17,5 @@
 <!--
 Contributions are reviewed and accepted on their merits. Opening a PR does not
 create a payment obligation on either side, and a PR must not be conditional on
-one. If you want to propose paid work, email mike@agent402.tools instead.
+one. If you want to propose paid work, email help@agent402.tools instead.
 -->

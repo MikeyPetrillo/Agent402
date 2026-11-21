@@ -468,7 +468,7 @@ const SCHEMA = {
   type: "object",
   required: ["ticker"],
   properties: {
-    ticker: { type: "string", description: "US stock ticker to investigate, e.g. AAPL." },
+    ticker: { type: "string", maxLength: 10, description: "US stock ticker to investigate, e.g. AAPL." },
     focus: { type: "array", items: { type: "string" }, description: "Optional aspects to emphasize (<= 8), e.g. [\"litigation\", \"debt\"]." },
     format: { type: "string", enum: ["markdown", "json"], description: "Response shape (default markdown dossier)." },
   },

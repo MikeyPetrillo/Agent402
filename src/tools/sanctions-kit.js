@@ -274,7 +274,7 @@ export const SANCTIONS_TOOLS = [
     description: "Is this blockchain address on the OFAC SDN list? Screens any address against every Digital Currency Address OFAC publishes (Bitcoin, Ethereum, Tron, USDT, USDC, Monero, Litecoin and more). A match names the sanctioned entity and its SDN id. A miss is reported as 'not on the lists checked, as of this date' and is never a clearance - the answer carries that caveat in the payload. Deterministic: a cached copy of the published list, no model in the path.",
     tags: ["sanctions", "ofac", "compliance", "screening", "wallet", "aml"],
     discovery: {
-      inputSchema: { type: "object", properties: { address: { type: "string", description: "The blockchain address to screen" }, asset: { type: "string", description: "Optional asset hint (BTC, ETH, TRX...). Only affects case handling for chains whose addresses are case-sensitive" } }, required: ["address"] },
+      inputSchema: { type: "object", properties: { address: { type: "string", maxLength: 120, description: "The blockchain address to screen" }, asset: { type: "string", description: "Optional asset hint (BTC, ETH, TRX...). Only affects case handling for chains whose addresses are case-sensitive" } }, required: ["address"] },
       input: { address: "0x098B716B8Aaf21512996dC57EB0615e2383E2f96" },
       // The documented input is a REAL listed address (Lazarus Group), so the
       // documented output is a MATCH - and a match carries confirmBeforeActing,
@@ -310,7 +310,7 @@ export const SANCTIONS_TOOLS = [
     description: "Screen a person or company name against the OFAC SDN list. Returns exact and substring matches with the SDN entry id and type, so every hit can be checked against the published list itself. Matching is exact, substring, or all-tokens (every word of your query appears as a whole word in the entry, in any order - so 'Vladimir Putin' finds 'PUTIN, Vladimir Vladimirovich'). Never a fuzzy similarity score, because a confident near-miss on a common surname is a liability rather than an answer; each hit says which of the three it was. A miss is 'not on the lists checked, as of this date', never a clearance.",
     tags: ["sanctions", "ofac", "compliance", "screening", "kyc", "aml"],
     discovery: {
-      inputSchema: { type: "object", properties: { name: { type: "string", description: "Person or company name to screen" }, limit: { type: "number", description: "Max matches to return (default 25)" } }, required: ["name"] },
+      inputSchema: { type: "object", properties: { name: { type: "string", maxLength: 200, description: "Person or company name to screen" }, limit: { type: "number", description: "Max matches to return (default 25)" } }, required: ["name"] },
       input: { name: "Gazprom" },
       output: { type: "json", example: { query: "Gazprom", verdict: "match", exactCount: 0, containsCount: 40, allTokensCount: 0, matches: [{ id: "17016", name: "GAZPROMBANK JOINT STOCK COMPANY", type: "-0-", matchType: "contains" }], entriesOnList: 19430, listsChecked: [{ list: "OFAC SDN", authority: "US Treasury OFAC" }], listsFetchedAt: "2026-10-14T00:00:00.000Z", confirmBeforeActing: "a match is a string match against a published list, not a confirmed identification..." } },
     },

@@ -4364,7 +4364,7 @@ app.get("/.well-known/mta-sts.txt", (_req, res) => {
   res.set("Cache-Control", "public, max-age=3600").type("text/plain").send(policy);
 });
 app.get("/.well-known/security.txt", (_req, res) => {
-  const contact = (process.env.SECURITY_CONTACT_EMAIL || "").trim() || "mike@agent402.tools";
+  const contact = (process.env.SECURITY_CONTACT_EMAIL || "").trim() || "security@agent402.tools";
   const expires = new Date(Date.now() + 180 * 24 * 3600 * 1000).toISOString();
   const body = [
     `Contact: mailto:${contact}`,

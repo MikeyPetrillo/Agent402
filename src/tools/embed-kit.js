@@ -137,7 +137,7 @@ export const EMBED_TOOLS = [
       input: { text: "Agent402 is an open-source x402 tool server." },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Text to embed (max 32,000 chars)" },
+          text: { type: "string", maxLength: 32000, description: "Text to embed (max 32,000 chars)" },
         },
         required: ["text"],
       },
@@ -167,7 +167,7 @@ export const EMBED_TOOLS = [
       input: { text: "Agent402 is an open-source x402 tool server." },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Text to embed (max 32,000 chars)" },
+          text: { type: "string", maxLength: 32000, description: "Text to embed (max 32,000 chars)" },
         },
         required: ["text"],
       },

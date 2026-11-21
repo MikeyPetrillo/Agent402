@@ -459,10 +459,10 @@ export const X_DATA_TOOLS = [
       input: { query: "x402 -is:retweet", max_results: 10 },
       inputSchema: {
         properties: {
-          query: { type: "string", description: "X search query (max 512 chars). Supports X operators: from:user, #tag, lang:en, -is:retweet, has:links." },
+          query: { type: "string", maxLength: 512, description: "X search query (max 512 chars). Supports X operators: from:user, #tag, lang:en, -is:retweet, has:links." },
           max_results: { type: "number", description: "Tweets per page, up to 10 (default 10)." },
           sort_order: { type: "string", description: "recency (default) or relevancy." },
-          next_token: { type: "string", description: "Pagination token from a previous response." },
+          next_token: { type: "string", maxLength: 200, description: "Pagination token from a previous response." },
         },
         required: ["query"],
       },
@@ -535,7 +535,7 @@ export const X_DATA_TOOLS = [
       input: { username: "coinbase" },
       inputSchema: {
         properties: {
-          username: { type: "string", description: "X username, with or without the leading @ (1-15 chars)." },
+          username: { type: "string", maxLength: 15, description: "X username, with or without the leading @ (1-15 chars)." },
         },
         required: ["username"],
       },
@@ -563,12 +563,12 @@ export const X_DATA_TOOLS = [
       inputSchema: {
         properties: {
           id: { type: "string", description: "Numeric X user id. Provide id OR username." },
-          username: { type: "string", description: "X username (resolved to an id first). Provide id OR username." },
+          username: { type: "string", maxLength: 15, description: "X username (resolved to an id first). Provide id OR username." },
           max_results: { type: "number", description: "Tweets per page, 5-10 (default 10)." },
           exclude_retweets: { type: "boolean", description: "Drop retweets (default false)." },
           exclude_replies: { type: "boolean", description: "Drop replies (default false)." },
           since_id: { type: "string", description: "Only tweets with an id greater than this." },
-          pagination_token: { type: "string", description: "Pagination token from a previous response." },
+          pagination_token: { type: "string", maxLength: 200, description: "Pagination token from a previous response." },
         },
       },
       output: {
@@ -716,11 +716,11 @@ export const X_DATA_TOOLS = [
       input: { query: "x402 -is:retweet", granularity: "day" },
       inputSchema: {
         properties: {
-          query: { type: "string", description: "X search query (max 512 chars). Supports X operators: from:user, #tag, $cashtag, lang:en, -is:retweet." },
+          query: { type: "string", maxLength: 512, description: "X search query (max 512 chars). Supports X operators: from:user, #tag, $cashtag, lang:en, -is:retweet." },
           granularity: { type: "string", description: "Bucket size: day (default), hour or minute." },
           start_time: { type: "string", description: "Window start, ISO 8601 with a zone, within the last 7 days (default: 7 days ago)." },
           end_time: { type: "string", description: "Window end, ISO 8601 with a zone (default: now)." },
-          next_token: { type: "string", description: "Pagination token from a previous response." },
+          next_token: { type: "string", maxLength: 200, description: "Pagination token from a previous response." },
         },
         required: ["query"],
       },

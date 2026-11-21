@@ -20,7 +20,7 @@ keep it a place where people can do good work.
 
 ## Enforcement
 
-Report conduct problems to mike@agent402.tools. Reports are read by the
+Report conduct problems to help@agent402.tools. Reports are read by the
 maintainer, handled privately, and acted on: a warning, a temporary block, or
 a permanent block from the project, depending on the case. Retaliation against
 a reporter is itself a violation.

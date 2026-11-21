@@ -339,7 +339,7 @@ const encodingTools = [
       bodyType: "json",
       input: { token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZ2VudDQwMiIsIm5hbWUiOiJkZW1vIGFnZW50IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c" },
       inputSchema: {
-        properties: { token: { type: "string", description: "The JWT string" } },
+        properties: { token: { type: "string", maxLength: 16384, description: "The JWT string" } },
         required: ["token"],
       },
       output: { example: { header: { alg: "HS256" }, payload: { sub: "agent402", exp: 9999999999 }, expired: false } },
@@ -1035,7 +1035,7 @@ const textTools = [
       input: { text: "Héllo, Wörld! 2024" },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Text to slugify" },
+          text: { type: "string", maxLength: 10000, description: "Text to slugify" },
           separator: { type: "string", description: "Default -" },
         },
         required: ["text"],
@@ -1076,7 +1076,7 @@ const textTools = [
       input: { text: "hello world example", to: "camel" },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Input text" },
+          text: { type: "string", maxLength: 50000, description: "Input text" },
           to: { type: "string", description: "camel | pascal | snake | kebab | constant | title | lower | upper" },
         },
         required: ["text", "to"],
@@ -1233,9 +1233,9 @@ const textTools = [
       input: { pattern: "\\b(\\w+)@(\\w+\\.\\w+)\\b", flags: "g", text: "mail me at a@b.com" },
       inputSchema: {
         properties: {
-          pattern: { type: "string", description: "Regex pattern (JS syntax, max 200 chars)" },
+          pattern: { type: "string", maxLength: 200, description: "Regex pattern (JS syntax, max 200 chars)" },
           flags: { type: "string", description: "Regex flags, e.g. gi (default g)" },
-          text: { type: "string", description: "Text to search (max 10KB)" },
+          text: { type: "string", maxLength: 10000, description: "Text to search (max 10KB)" },
         },
         required: ["pattern", "text"],
       },
@@ -1793,7 +1793,7 @@ const validationTools = [
       bodyType: "json",
       input: { ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36" },
       inputSchema: {
-        properties: { ua: { type: "string", description: "User-Agent header value" } },
+        properties: { ua: { type: "string", maxLength: 2000, description: "User-Agent header value" } },
         required: ["ua"],
       },
       output: { example: { browser: "Chrome", version: "125.0", os: "Windows", device: "desktop", bot: false } },
@@ -2511,7 +2511,7 @@ const networkTools = [
       input: { text: "https://agent402.tools", size: "256" },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Content to encode (max 2KB)" },
+          text: { type: "string", maxLength: 2048, description: "Content to encode (max 2KB)" },
           size: { type: "string", description: "Image width px (128-1024, default 256)" },
         },
         required: ["text"],

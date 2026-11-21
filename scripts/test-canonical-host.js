@@ -92,7 +92,7 @@ try {
   const about = await get("/about?ref=x");
   ok(about.status === 301 && /\/company\?ref=x$/.test(String(about.location)), `/about 301s to /company with the query kept (got ${about.status} ${about.location})`);
   const press = await get("/press");
-  ok(press.status === 200 && /Havok Holdings LLC/.test(press.body) && /mailto:mike@agent402\.tools/.test(press.body) && /href="\/logo\.svg"/.test(press.body), "/press names the company, the press mailbox and the logo files");
+  ok(press.status === 200 && /Havok Holdings LLC/.test(press.body) && /mailto:help@agent402\.tools/.test(press.body) && /href="\/logo\.svg"/.test(press.body), "/press names the company, the press mailbox and the logo files");
 
   // The MCP server card: one document at the reserved path and the well-known alias.
   const card = await get("/mcp/server-card");

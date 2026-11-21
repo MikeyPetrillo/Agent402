@@ -80,7 +80,7 @@ const SECTIONS = [
       `A <code>429</code> or <code>503</code> answer pauses the crawl, the unpaid price checks and the MPP index's reads for that host until its <code>Retry-After</code>, or for ${esc(span(THROTTLE_DEFAULT_MS))} when it names no time, and never longer than ${esc(span(THROTTLE_MAX_MS))}. Your listing stays as it was while we wait.`,
       `To be read less often, email us the origin and we will move it to a slower cycle (${esc(slowOriginIntervalLabel())}) in both indexes; your listing and purchases for paying callers continue as before. If our crawler is causing you a problem, email us and we will stop it. A <code>Disallow</code> for ${esc(ROBOTS_TOKEN)} stops every read above except the manifest and the unpaid price check, and needs no message from us.`,
     ],
-    links: [["/robots.txt", "Our own robots.txt"], ["mailto:mike@agent402.tools", "mike@agent402.tools"]],
+    links: [["/robots.txt", "Our own robots.txt"], ["mailto:help@agent402.tools", "help@agent402.tools"]],
   },
   {
     h: "Tool fetches for callers",
@@ -99,7 +99,7 @@ const SECTIONS = [
   {
     h: "Getting removed",
     p: [
-      `Email <a href="mailto:mike@agent402.tools">mike@agent402.tools</a> from an address at the domain, or open an issue, and we will remove the origin from the index and stop crawling it. We do not require a reason and we do not argue about it.`,
+      `Email <a href="mailto:help@agent402.tools">help@agent402.tools</a> from an address at the domain, or open an issue, and we will remove the origin from the index and stop crawling it. We do not require a reason and we do not argue about it.`,
       `A robots.txt rule limits what the crawler reads from the next cycle on, but it does not remove a listing: the row stays with what we last read. To be removed, email us.`,
     ],
   },
@@ -137,8 +137,8 @@ export function catalogCrawlSection(budget) {
         ? `Unpaid requests to priced routes are budgeted per client address, whatever the User-Agent (an IPv6 /64 counts as one address; on the one address Cloudflare Workers share, each User-Agent gets its own budget under a ceiling for the address). Past ${esc(n.toLocaleString("en-US"))} in an hour, the answer is a 429 with a <code>Retry-After</code> header that counts down to the top of the hour. A request that carries a payment, a credits key or a proof-of-work solution is never counted, and neither are the three documents above, <code>/mcp</code> or any page. Every purchase opens with one bare request, so buying is exempt from the first settlement onward: once a client settles a payment, nothing it sends is counted for the rest of that hour.`
         : `This server sets no hourly budget on unpaid requests to priced routes.`,
       n > 0
-        ? `Named indexers, search engines and AI crawlers read against ${esc((n * NAMED_CLIENT_BUDGET_MULTIPLIER).toLocaleString("en-US"))} unpaid requests per address in an hour, on the same count as everything else from that address. If your index needs more than this, or we do not recognize it by name, email <a href="mailto:mike@agent402.tools">mike@agent402.tools</a> with the User-Agent it sends and the addresses it reads from.`
-        : `If your index needs anything from us, email <a href="mailto:mike@agent402.tools">mike@agent402.tools</a> with the User-Agent it sends.`,
+        ? `Named indexers, search engines and AI crawlers read against ${esc((n * NAMED_CLIENT_BUDGET_MULTIPLIER).toLocaleString("en-US"))} unpaid requests per address in an hour, on the same count as everything else from that address. If your index needs more than this, or we do not recognize it by name, email <a href="mailto:help@agent402.tools">help@agent402.tools</a> with the User-Agent it sends and the addresses it reads from.`
+        : `If your index needs anything from us, email <a href="mailto:help@agent402.tools">help@agent402.tools</a> with the User-Agent it sends.`,
     ],
     links: [["/.well-known/x402", "The x402 manifest"], ["/openapi.json", "The OpenAPI document"], ["/api/pricing", "The price list"]],
   };

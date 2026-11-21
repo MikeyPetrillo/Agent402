@@ -628,7 +628,7 @@ async function videosHandler(input, req) {
 const SHARED_TAGS = ["ai", "generation", "gateway", "openai-compatible"];
 const imageInputSchema = {
   properties: {
-    prompt: { type: "string", description: `Text description of the image to generate (up to ${IMAGE_MAX_PROMPT_CHARS.toLocaleString()} chars)` },
+    prompt: { type: "string", maxLength: IMAGE_MAX_PROMPT_CHARS, description: `Text description of the image to generate (up to ${IMAGE_MAX_PROMPT_CHARS.toLocaleString()} chars)` },
   },
   required: ["prompt"],
 };
@@ -686,7 +686,7 @@ export const IMAGES_FAST_TOOLS = [
       input: { prompt: "Turn the red square into a ripe red apple with a soft shadow", image: EDIT_EXAMPLE_IMAGE },
       inputSchema: {
         properties: {
-          prompt: { type: "string", description: `What to change (up to ${IMAGE_MAX_PROMPT_CHARS.toLocaleString()} chars)` },
+          prompt: { type: "string", maxLength: 4000, description: `What to change (up to ${IMAGE_MAX_PROMPT_CHARS.toLocaleString()} chars)` },
           image: {
             oneOf: [{ type: "string" }, { type: "array", items: { type: "string" }, minItems: 1, maxItems: IMAGE_EDIT_MAX_REFS }],
             description: `One to ${IMAGE_EDIT_MAX_REFS} reference images, each base64 or a data: URL (PNG or JPEG, at least ${IMAGE_EDIT_MIN_SIDE}x${IMAGE_EDIT_MIN_SIDE}, up to ${IMAGE_EDIT_MAX_REF_BYTES / 1048576} MB each). Image URLs are not fetched.`,

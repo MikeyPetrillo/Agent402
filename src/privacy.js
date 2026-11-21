@@ -484,7 +484,7 @@ in every alert). Where your browser reports a European time zone, the cookie wai
 elsewhere it is set until you say no, and the choice is yours to make either way. You have the right to ask for access to your data, to have it corrected or erased, to
 receive it in a portable form, to object to processing based on our legitimate interest, to withdraw
 consent, and to complain to your supervisory authority. To exercise a right, email
-<a href="mailto:mike@agent402.tools">mike@agent402.tools</a>; we answer within one month. The service is
+<a href="mailto:help@agent402.tools">help@agent402.tools</a>; we answer within one month. The service is
 operated from the United States, and the data described here is processed and stored there${directUpstreamWhere}.</p>
 
 <h2>Children</h2>
@@ -496,10 +496,10 @@ an email address or other information, write to the address below and we will de
 <p>Wallet addresses associated with <a href="/terms">terms</a> violations may be blocked and retained
 on a blocklist for as long as needed to enforce the block. We disclose information and preserve
 records in response to valid legal process, and report content where the law requires it. Requests
-and abuse reports: <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>.</p>
+and abuse reports: <a href="mailto:help@agent402.tools">help@agent402.tools</a>.</p>
 
 <h2>Operator &amp; contact</h2>
-<p>Agent402.Tools is operated by <strong>Cardhavok LLC</strong>, doing business as <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>,
+<p>Agent402.Tools is operated by <strong>Cardhavok LLC</strong>, doing business as <strong><a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a></strong>. Contact: <a href="mailto:help@agent402.tools">help@agent402.tools</a>,
 <a href="${repoUrl("issues")}" rel="noopener">GitHub issues</a>,
 or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.</p>
 </div>

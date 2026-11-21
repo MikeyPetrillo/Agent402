@@ -607,8 +607,8 @@ export const PREDICTION_MARKET_TOOLS = [
       inputSchema: {
         type: "object",
         properties: {
-          eventTicker: { type: "string", description: "Kalshi event ticker, e.g. KXBTC-26SEP1817. Either this or seriesTicker." },
-          seriesTicker: { type: "string", description: "Kalshi series ticker, e.g. KXBTC or KXCPI - the soonest open event of the series is resolved." },
+          eventTicker: { type: "string", maxLength: 61, description: "Kalshi event ticker, e.g. KXBTC-26SEP1817. Either this or seriesTicker." },
+          seriesTicker: { type: "string", maxLength: 61, description: "Kalshi series ticker, e.g. KXBTC or KXCPI - the soonest open event of the series is resolved." },
           range: { type: "string", description: "Chart range hint for types that support it: 15min, 1h, 3h, 1d, 1w, 1m, 1y, 5y, all." },
           limit: { type: "number", description: "Newest points to keep per series and per candlestick interval (default 200, max 1000)." },
         },
@@ -651,7 +651,7 @@ export const PREDICTION_MARKET_TOOLS = [
         type: "object",
         required: ["city"],
         properties: {
-          city: { type: "string", description: "Kalshi index city id, e.g. miami, nyc, chicago, sf-bay." },
+          city: { type: "string", maxLength: 41, description: "Kalshi index city id, e.g. miami, nyc, chicago, sf-bay." },
           lastSec: { type: "number", description: "Trailing window in seconds (default 3600, max 604800). Ignored when from/to are given." },
           from: { type: "number", description: "Window start, unix milliseconds (pair with to)." },
           to: { type: "number", description: "Window end, unix milliseconds (pair with from)." },

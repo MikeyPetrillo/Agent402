@@ -170,7 +170,7 @@ export const PAGE_CHANGE_TOOLS = [
       input: { url: "https://agent402.tools/guides/x402-in-5-minutes" },
       inputSchema: {
         properties: {
-          url: { type: "string", description: "Public http(s) URL of the page to read" },
+          url: { type: "string", maxLength: 2048, description: "Public http(s) URL of the page to read" },
           baseline: {
             type: "object",
             description: "What the previous call answered: fingerprint and/or text. With a fingerprint, changed is true or false; with a text, a line diff is included too.",
@@ -179,7 +179,7 @@ export const PAGE_CHANGE_TOOLS = [
               text: { type: "string", description: `The normalized text a previous call returned with includeText: true (up to ${MAX_TEXT_CHARS} characters)` },
             },
           },
-          selector: { type: "string", description: "Optional CSS selector; only the text inside the matching elements is fingerprinted (HTML pages only)" },
+          selector: { type: "string", maxLength: 300, description: "Optional CSS selector; only the text inside the matching elements is fingerprinted (HTML pages only)" },
           ignore: {
             type: "array",
             items: { type: "string" },

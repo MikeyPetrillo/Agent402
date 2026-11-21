@@ -252,7 +252,7 @@ Write a thorough, well-structured report of up to ${t.words} words with these se
 const SCHEMA = {
   type: "object",
   properties: {
-    manager: { type: "string", description: "Institutional manager: a fund/firm name (e.g. \"Berkshire Hathaway\"), a ticker, or a SEC CIK." },
+    manager: { type: "string", maxLength: 120, description: "Institutional manager: a fund/firm name (e.g. \"Berkshire Hathaway\"), a ticker, or a SEC CIK." },
     cik: { type: "string", description: "SEC CIK of the manager (alternative to manager/ticker)." },
     ticker: { type: "string", description: "US ticker of a publicly-traded manager (alternative to manager/cik)." },
     format: { type: "string", enum: ["markdown", "json"], description: "Response shape (default markdown report)." },

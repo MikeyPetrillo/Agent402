@@ -546,7 +546,8 @@ import { Fetch, evm, tempo } from "mppx/client";
 import { privateKeyToAccount } from "viem/accounts";
 
 const account = privateKeyToAccount(process.env.AGENT_KEY);
-const mppFetch = Fetch.from({ methods: [tempo.charge({ account }), evm.charge({ account })] });
+// The evm method signs for the tokens you list: USDC on Base and on Celo.
+const mppFetch = Fetch.from({ methods: [tempo.charge({ account }), evm.charge({ account, currencies: [evm.assets.base.USDC, evm.assets.celo.USDC] })] });
 
 const a = new Agent402({ fetch: mppFetch, maxPerCallUsd: 0.05 });
 const verdict = await a.call("sql-guard", { sql: "UPDATE users SET plan = 'pro' WHERE id = 42" });`,

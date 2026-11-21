@@ -208,7 +208,7 @@ const SCHEMA = {
   type: "object",
   required: ["query"],
   properties: {
-    query: { type: "string", description: "A drug, food, ingredient, brand or medical device to search FDA recalls for, e.g. \"losartan\", \"peanut butter\", \"insulin pump\"." },
+    query: { type: "string", maxLength: 80, description: "A drug, food, ingredient, brand or medical device to search FDA recalls for, e.g. \"losartan\", \"peanut butter\", \"insulin pump\"." },
     scope: { type: "string", enum: ["all", "drug", "food", "device"], description: "Which FDA enforcement feeds to search (default all)." },
   },
 };

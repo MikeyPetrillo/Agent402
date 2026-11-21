@@ -241,7 +241,7 @@ export const NETWORK_TOOLS = [
       inputSchema: {
         properties: {
           name: { type: "string", description: "Domain name, e.g. example.com" },
-          type: { type: "string", description: "Record type (default A)" },
+          type: { type: "string", maxLength: 4, description: "Record type (default A)" },
         },
         required: ["name"],
       },

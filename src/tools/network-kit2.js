@@ -557,7 +557,7 @@ export const NETWORK_TOOLS2 = [
       inputSchema: {
         type: "object",
         properties: {
-          domain: { type: "string", description: "Domain to search (also accepts host/hostname/url/email)" },
+          domain: { type: "string", maxLength: 253, description: "Domain to search (also accepts host/hostname/url/email)" },
           includeExpired: { type: "boolean", description: "Include expired certs (default false)" },
           limit: { type: "integer", description: "Max certs to return (1–500, default 50)" },
         },
@@ -683,7 +683,7 @@ export const NETWORK_TOOLS2 = [
         type: "object",
         properties: {
           ip: { type: "string", description: "IPv4 address to look up (mutually exclusive with host)" },
-          host: { type: "string", description: "Hostname to resolve first (also accepts hostname/domain/url/email)" },
+          host: { type: "string", maxLength: 253, description: "Hostname to resolve first (also accepts hostname/domain/url/email)" },
         },
       },
       input: { ip: "8.8.8.8" },

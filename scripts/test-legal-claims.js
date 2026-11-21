@@ -50,7 +50,7 @@ ok(/Nightly backups of the state database go to separate object storage/.test(se
   ok(legalName && rights.includes(`${legalName} , doing business as Havok Holdings LLC`), `the controller is the legal entity /company names (${legalName})`);
   for (const r of ["access", "corrected or erased", "portable form", "object to processing", "withdraw consent", "supervisory authority"]) ok(rights.includes(r), `/privacy lists the right to ${r}`);
   for (const basis of ["contract", "legitimate interest", "consent"]) ok(rights.includes(basis), `/privacy names the ${basis} legal basis`);
-  ok(/email mike@agent402\.tools/.test(rights) && /processed and stored there/.test(rights) && /United States/.test(rights), "/privacy says how to exercise a right and where data is processed");
+  ok(/email help@agent402\.tools/.test(rights) && /processed and stored there/.test(rights) && /United States/.test(rights), "/privacy says how to exercise a right and where data is processed");
 }
 
 // Google Analytics is described once, in the sentence that carries its details.

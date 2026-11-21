@@ -404,7 +404,7 @@ export const CRYPTO_TOOLS = [
       inputSchema: {
         properties: {
           coins: { type: "string", description: "Comma-separated symbols or ids (e.g. \"BTC,ETH\" or \"bitcoin,ethereum\"). Max 25." },
-          currency: { type: "string", description: "vs_currency (default: usd). Accepts fiat (usd, eur, gbp, jpy) or crypto (btc, eth)." },
+          currency: { type: "string", maxLength: 8, description: "vs_currency (default: usd). Accepts fiat (usd, eur, gbp, jpy) or crypto (btc, eth)." },
         },
         required: ["coins"],
       },
@@ -474,7 +474,7 @@ export const CRYPTO_TOOLS = [
       inputSchema: {
         properties: {
           limit: { type: "number", description: "Number of coins to return (1-100, default 10)" },
-          currency: { type: "string", description: "vs_currency (default: usd)" },
+          currency: { type: "string", maxLength: 8, description: "vs_currency (default: usd)" },
           minMarketCap: { type: "number", description: "Screen: market cap at least this" },
           minVolume24h: { type: "number", description: "Screen: 24h volume at least this" },
           minTurnoverPct: { type: "number", description: "Screen: 24h volume / market cap, percent" },
@@ -555,9 +555,9 @@ export const CRYPTO_TOOLS = [
       input: { coin: "BTC", days: "7", currency: "usd" },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Symbol (BTC) or id (bitcoin)" },
+          coin: { type: "string", maxLength: 64, description: "Symbol (BTC) or id (bitcoin)" },
           days: { type: "string", description: "1, 7, 14, 30, 90, 180, 365, or \"max\" (default 7)" },
-          currency: { type: "string", description: "vs_currency (default: usd)" },
+          currency: { type: "string", maxLength: 8, description: "vs_currency (default: usd)" },
         },
         required: ["coin"],
       },
@@ -657,7 +657,7 @@ export const CRYPTO_TOOLS = [
       input: { currency: "usd" },
       inputSchema: {
         properties: {
-          currency: { type: "string", description: "vs_currency for cap/volume (default: usd)" },
+          currency: { type: "string", maxLength: 8, description: "vs_currency for cap/volume (default: usd)" },
         },
       },
       output: {

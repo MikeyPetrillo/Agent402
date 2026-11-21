@@ -66,7 +66,7 @@ export const OFFICE_TOOLS = [
       inputSchema: {
         properties: {
           markdown: { type: "string", description: `Document body as markdown (GitHub flavor), up to ${D.markdownChars.toLocaleString("en-US")} characters` },
-          title: { type: "string", description: `Optional title, written as the document's Title paragraph and its title property (up to ${D.titleChars} characters)` },
+          title: { type: "string", maxLength: 500, description: `Optional title, written as the document's Title paragraph and its title property (up to ${D.titleChars} characters)` },
           filename: { type: "string", description: 'File name for the answer (default "document.docx")' },
         },
         required: ["markdown"],
@@ -102,8 +102,8 @@ export const OFFICE_TOOLS = [
             description: `1 to ${P.slides} slides: {"title"?,"bullets"?,"numbered"?,"table"?,"notes"?}; each needs a title, bullets or a table. bullets: strings or {"text","level":0-4}. table: {"header"?:[...],"rows":[[...]]} or an array of rows.`,
             items: { type: "object" },
           },
-          title: { type: "string", description: "Optional deck title: adds a title slide first and sets the file's title" },
-          subtitle: { type: "string", description: "Optional subtitle on the title slide" },
+          title: { type: "string", maxLength: 300, description: "Optional deck title: adds a title slide first and sets the file's title" },
+          subtitle: { type: "string", maxLength: 300, description: "Optional subtitle on the title slide" },
           filename: { type: "string", description: 'File name for the answer (default "presentation.pptx")' },
         },
         required: ["slides"],

@@ -173,8 +173,11 @@ Every paid route answers `402` with both an x402 offer and MPP challenges, so ei
 
 ```js
 import { Mppx, tempo, evm } from "mppx/client";
-const account = (await import("viem/accounts")).privateKeyToAccount(process.env.AGENT_KEY);
-const res = await Mppx.create({ methods: [tempo.charge({ account }), evm.charge({ account })] }).fetch("https://agent402.tools/api/uuid");
+import { privateKeyToAccount } from "viem/accounts";
+const account = privateKeyToAccount(process.env.AGENT_KEY);
+// The evm method signs for the tokens you list: USDC on Base and on Celo.
+const methods = [tempo.charge({ account }), evm.charge({ account, currencies: [evm.assets.base.USDC, evm.assets.celo.USDC] })];
+const res = await Mppx.create({ methods }).fetch("https://agent402.tools/api/uuid");
 ```
 
 **x402** (USDC on Base and other chains) with [`@x402/fetch`](https://www.npmjs.com/package/@x402/fetch):
@@ -737,7 +740,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
   earlier under AGPL-3.0 or MIT, whose authors keep their copyright (see [NOTICE](NOTICE)).
 - The server is AGPL-3.0-or-later and every published package is MIT (details under Legal
   below). For a commercial license to the code, write to
-  [mike@agent402.tools](mailto:mike@agent402.tools) or see
+  [help@agent402.tools](mailto:help@agent402.tools) or see
   [agent402.tools/company](https://agent402.tools/company).
 - Outside contributions carry a DCO sign-off on every commit and the contributor license
   agreement in [CLA.md](CLA.md), which covers new and earlier contributions; see
@@ -762,7 +765,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 
 ## Contact
 
-- **Email:** [mike@agent402.tools](mailto:mike@agent402.tools)
+- **Email:** [help@agent402.tools](mailto:help@agent402.tools)
 - **X / Twitter:** [@Agent402Tools](https://x.com/Agent402Tools)
 - **GitHub:** [MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402)
 

@@ -81,7 +81,7 @@ const MPP_CLIENT = `import { Fetch, evm, tempo } from "mppx/client";
 import { privateKeyToAccount } from "viem/accounts";
 
 const account = privateKeyToAccount(process.env.AGENT_KEY);
-const mppFetch = Fetch.from({ methods: [tempo.charge({ account }), evm.charge({ account })] });
+const mppFetch = Fetch.from({ methods: [tempo.charge({ account }), evm.charge({ account, currencies: [evm.assets.base.USDC, evm.assets.celo.USDC] })] });
 
 const res = await mppFetch("https://agent402.tools/api/hash", {
   method: "POST",

@@ -497,9 +497,9 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { platform: "ethereum", contracts: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", currency: "usd" },
       inputSchema: {
         properties: {
-          platform: { type: "string", description: "Asset platform id: ethereum, base, polygon-pos, arbitrum-one, optimistic-ethereum, binance-smart-chain, solana, avalanche, ... " },
+          platform: { type: "string", maxLength: 100, description: "Asset platform id: ethereum, base, polygon-pos, arbitrum-one, optimistic-ethereum, binance-smart-chain, solana, avalanche, ... " },
           contracts: { type: "string", description: "Comma-separated contract addresses (max 25). Also accepts an array." },
-          currency: { type: "string", description: "vs currency (default usd): fiat (usd, eur) or crypto (btc, eth)." },
+          currency: { type: "string", maxLength: 8, description: "vs currency (default usd): fiat (usd, eur) or crypto (btc, eth)." },
         },
         required: ["platform", "contracts"],
       },
@@ -558,8 +558,8 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { coin: "ethereum", currency: "usd" },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Coin id (bitcoin, ethereum, usd-coin, ...). Use coin-search to resolve a symbol." },
-          currency: { type: "string", description: "vs currency for the market block (default usd)." },
+          coin: { type: "string", maxLength: 100, description: "Coin id (bitcoin, ethereum, usd-coin, ...). Use coin-search to resolve a symbol." },
+          currency: { type: "string", maxLength: 8, description: "vs currency for the market block (default usd)." },
         },
         required: ["coin"],
       },
@@ -653,10 +653,10 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { coin: "bitcoin", daysAgo: 30, currency: "usd" },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Coin id (bitcoin, ethereum, ...)." },
+          coin: { type: "string", maxLength: 100, description: "Coin id (bitcoin, ethereum, ...)." },
           date: { type: "string", description: "Snapshot date YYYY-MM-DD (UTC), within the past 365 days. Alternative to daysAgo." },
           daysAgo: { type: "number", description: "Days before today, 1-365 (used when date is absent; default 30)." },
-          currency: { type: "string", description: "Currency to call out (default usd); all currencies are still returned under `allCurrencies`." },
+          currency: { type: "string", maxLength: 8, description: "Currency to call out (default usd); all currencies are still returned under `allCurrencies`." },
         },
         required: ["coin"],
       },
@@ -721,9 +721,9 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { coin: "bitcoin", days: 7, currency: "usd" },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Coin id (bitcoin, ethereum, ...)." },
+          coin: { type: "string", maxLength: 100, description: "Coin id (bitcoin, ethereum, ...)." },
           days: { type: "number", description: "1, 7, 14, 30, 90, 180 or 365 (default 7)." },
-          currency: { type: "string", description: "vs currency (default usd)." },
+          currency: { type: "string", maxLength: 8, description: "vs currency (default usd)." },
         },
         required: ["coin"],
       },
@@ -784,11 +784,11 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { coin: "ethereum", lookback: "3d" },
       inputSchema: {
         properties: {
-          coin: { type: "string", description: "Coin id (bitcoin, ethereum, ...)." },
+          coin: { type: "string", maxLength: 100, description: "Coin id (bitcoin, ethereum, ...)." },
           from: { type: "string", description: "Window start: unix seconds or ISO-8601 date. Default = to minus 24h." },
           to: { type: "string", description: "Window end: unix seconds or ISO-8601 date. Default = now." },
           lookback: { type: "string", description: "Alternative to from: a window ending at `to`, like \"6h\", \"3d\" or \"2w\"." },
-          currency: { type: "string", description: "vs currency (default usd)." },
+          currency: { type: "string", maxLength: 8, description: "vs currency (default usd)." },
         },
         required: ["coin"],
       },
@@ -940,7 +940,7 @@ export const CRYPTO_MARKETS_TOOLS = [
         properties: {
           limit: { type: "number", description: "List mode: 1-100 exchanges (default 25)." },
           page: { type: "number", description: "List mode: page number (default 1)." },
-          exchange: { type: "string", description: "Profile mode: one exchange id (binance, gdax, kraken, okex, bybit_spot, ...)." },
+          exchange: { type: "string", maxLength: 100, description: "Profile mode: one exchange id (binance, gdax, kraken, okex, bybit_spot, ...)." },
         },
       },
       output: {
@@ -1005,7 +1005,7 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { exchange: "binance", coins: "ethereum", limit: 5 },
       inputSchema: {
         properties: {
-          exchange: { type: "string", description: "Exchange id (binance, gdax, kraken, ...). See the exchanges tool." },
+          exchange: { type: "string", maxLength: 100, description: "Exchange id (binance, gdax, kraken, ...). See the exchanges tool." },
           coins: { type: "string", description: "Optional comma-separated coin ids to filter (max 10), e.g. \"bitcoin,ethereum\"." },
           page: { type: "number", description: "Page of 100 tickers upstream (default 1)." },
           limit: { type: "number", description: "Max tickers returned from that page, 1-100 (default 50)." },
@@ -1061,7 +1061,7 @@ export const CRYPTO_MARKETS_TOOLS = [
         properties: {
           currencies: { type: "string", description: "Optional comma-separated unit codes to keep (usd, eur, eth, xau, ...). Default: all." },
           type: { type: "string", description: "Optional filter: crypto, fiat or commodity." },
-          base: { type: "string", description: "Unit code every rate is quoted against (default usd): any code in the table, e.g. usd, eur, btc, eth, xau." },
+          base: { type: "string", maxLength: 100, description: "Unit code every rate is quoted against (default usd): any code in the table, e.g. usd, eur, btc, eth, xau." },
         },
       },
       output: {
@@ -1137,7 +1137,7 @@ export const CRYPTO_MARKETS_TOOLS = [
       input: { query: "usdc", limit: 5 },
       inputSchema: {
         properties: {
-          query: { type: "string", description: "Name, symbol or fragment, 1-64 chars (e.g. \"usdc\", \"render\", \"pepe\")." },
+          query: { type: "string", maxLength: 64, description: "Name, symbol or fragment, 1-64 chars (e.g. \"usdc\", \"render\", \"pepe\")." },
           limit: { type: "number", description: "Max results per group, 1-50 (default 10)." },
         },
         required: ["query"],
@@ -1306,7 +1306,7 @@ const RWA_TOOLS = [
       input: { type: "stock", order: "market_cap_desc", perPage: 10 },
       inputSchema: {
         properties: {
-          currency: { type: "string", description: "vs currency (default usd)." },
+          currency: { type: "string", maxLength: 8, description: "vs currency (default usd)." },
           type: { type: "string", description: "stock | etf | commodity (default: all)." },
           ids: { type: "string", description: "Comma-separated asset ids to fetch instead of a ranked page (max 50), e.g. gold,nvidia." },
           order: { type: "string", description: "market_cap_desc (default) | market_cap_asc | volume_desc | volume_asc." },
@@ -1351,8 +1351,8 @@ const RWA_TOOLS = [
       input: { id: "gold", currency: "usd" },
       inputSchema: {
         properties: {
-          id: { type: "string", description: "Asset id from rwa-list (gold, nvidia, tesla, ...)." },
-          currency: { type: "string", description: "vs currency for the market block (default usd)." },
+          id: { type: "string", maxLength: 100, description: "Asset id from rwa-list (gold, nvidia, tesla, ...)." },
+          currency: { type: "string", maxLength: 8, description: "vs currency for the market block (default usd)." },
         },
         required: ["id"],
       },
@@ -1419,7 +1419,7 @@ const RWA_TOOLS = [
     discovery: {
       input: { id: "coinbase-ecosystem" },
       inputSchema: {
-        properties: { id: { type: "string", description: "Issuer id from rwa-issuers (coinbase-ecosystem, ...)." } },
+        properties: { id: { type: "string", maxLength: 100, description: "Issuer id from rwa-issuers (coinbase-ecosystem, ...)." } },
         required: ["id"],
       },
       output: {

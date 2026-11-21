@@ -1264,7 +1264,7 @@ export const CDP_TOOLS = [
       input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base", amount: "10" },
       inputSchema: {
         properties: {
-          address: { type: "string", description: "Destination wallet address (EVM 0x… or Solana base58, matching the network)" },
+          address: { type: "string", maxLength: 64, description: "Destination wallet address (EVM 0x… or Solana base58, matching the network)" },
           network: { type: "string", description: "base (default) | ethereum | polygon | arbitrum | optimism | solana" },
           asset: { type: "string", description: "Ticker to purchase (default USDC)" },
           amount: { type: "string", description: "Crypto amount the wallet should receive (default 10)" },
@@ -1342,7 +1342,7 @@ export const CDP_TOOLS = [
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
       inputSchema: {
         properties: {
-          sql: { type: "string", description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated. A result the query service cannot send is served in part and says so: rows over its ${Math.round(SQL_ROW_LIMIT_BYTES / 1024)} KB per-row limit are omitted and counted (recovered "row-size", rowsOmitted, omittedReason, rowLimitBytes, maxRowBytes, note), and a result too large as a whole is re-run with LIMIT ${SQL_RECOVER_ROWS} (recovered "result-size", rowBytes, a note with the LIMIT that fits).` },
+          sql: { type: "string", maxLength: 60000, description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated. A result the query service cannot send is served in part and says so: rows over its ${Math.round(SQL_ROW_LIMIT_BYTES / 1024)} KB per-row limit are omitted and counted (recovered "row-size", rowsOmitted, omittedReason, rowLimitBytes, maxRowBytes, note), and a result too large as a whole is re-run with LIMIT ${SQL_RECOVER_ROWS} (recovered "result-size", rowBytes, a note with the LIMIT that fits).` },
           cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900). Cheaper + faster for repeated analytics." },
         },
         required: ["sql"],

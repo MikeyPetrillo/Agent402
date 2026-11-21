@@ -14,7 +14,7 @@ const SECTIONS = [
   {
     h: "Report a vulnerability",
     p: [
-      `Open a private advisory on GitHub or email <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>. We acknowledge within two business days, fix through the same CI pipeline every change goes through, and note the fix in the changelog once it has shipped.`,
+      `Open a private advisory on GitHub or email <a href="mailto:security@agent402.tools">security@agent402.tools</a>. We acknowledge within two business days, fix through the same CI pipeline every change goes through, and note the fix in the changelog once it has shipped.`,
       `Good-faith research inside the scope below will not be met with legal action. Scope: agent402.tools, the /mcp connector, the /v1 gateway, the x402 and MPP paywall on every paid route, the prepaid credits gate (for keys already issued), the card front door (/reports, /monitors, the Stripe webhook) and the published packages. Out of scope: the payment protocols themselves, third-party facilitators and chains, and volumetric denial of service.`,
     ],
     links: [[repoUrl("security/advisories/new"), "Private advisory"], ["/.well-known/security.txt", "security.txt"], [repoUrl("blob/main/SECURITY.md"), "SECURITY.md"]],

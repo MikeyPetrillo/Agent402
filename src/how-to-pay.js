@@ -92,7 +92,7 @@ export function howToPayPage(baseUrl, catalog = null, { networks = null } = {}) 
 import { privateKeyToAccount } from "viem/accounts";
 
 const account = privateKeyToAccount(process.env.AGENT_KEY);
-const mppx = Mppx.create({ methods: [tempo.charge({ account }), evm.charge({ account })] });
+const mppx = Mppx.create({ methods: [tempo.charge({ account }), evm.charge({ account, currencies: [evm.assets.base.USDC, evm.assets.celo.USDC] })] });
 
 // the first request returns 402, mppx pays and retries
 const res = await mppx.fetch("${baseUrl}/api/uuid");

@@ -520,8 +520,8 @@ export const MACRO_TOOLS = [
       input: { from: "USD", to: "EUR", date: "2024-01-02" },
       inputSchema: {
         properties: {
-          from: { type: "string", description: "3-letter source currency code, e.g. USD" },
-          to: { type: "string", description: "3-letter target currency code, e.g. EUR" },
+          from: { type: "string", maxLength: 3, description: "3-letter source currency code, e.g. USD" },
+          to: { type: "string", maxLength: 3, description: "3-letter target currency code, e.g. EUR" },
           date: { type: "string", description: "ISO date (YYYY-MM-DD)" },
         },
         required: ["from", "to", "date"],
@@ -560,8 +560,8 @@ export const MACRO_TOOLS = [
       input: { from: "USD", to: "EUR", startDate: "2024-01-02", endDate: "2024-01-31" },
       inputSchema: {
         properties: {
-          from: { type: "string", description: "3-letter source currency code" },
-          to: { type: "string", description: "3-letter target currency code" },
+          from: { type: "string", maxLength: 3, description: "3-letter source currency code" },
+          to: { type: "string", maxLength: 3, description: "3-letter target currency code" },
           startDate: { type: "string", description: "ISO start date (YYYY-MM-DD)" },
           endDate: { type: "string", description: "ISO end date (YYYY-MM-DD)" },
         },
@@ -654,8 +654,8 @@ export const MACRO_TOOLS = [
       input: { country: "US", indicator: "NY.GDP.MKTP.CD", startYear: 2018, endYear: 2022 },
       inputSchema: {
         properties: {
-          country: { type: "string", description: "ISO-2 or ISO-3 country code (e.g. US, USA, DE)" },
-          indicator: { type: "string", description: "World Bank indicator code, e.g. NY.GDP.MKTP.CD (nominal GDP USD)" },
+          country: { type: "string", maxLength: 3, description: "ISO-2 or ISO-3 country code (e.g. US, USA, DE)" },
+          indicator: { type: "string", maxLength: 40, description: "World Bank indicator code, e.g. NY.GDP.MKTP.CD (nominal GDP USD)" },
           startYear: { type: "number", description: "First year (default 2018)" },
           endYear: { type: "number", description: `Last year (default: the previous calendar year, ${worldBankDefaultEndYear()} when this catalog was built)` },
         },
@@ -979,12 +979,12 @@ MACRO_TOOLS.push(
       input: { seriesId: "GDPC1", startDate: "2018-01-01", endDate: "2022-12-31" },
       inputSchema: {
         properties: {
-          seriesId: { type: "string", description: "FRED series ID, e.g. GDPC1, CPIAUCSL, UNRATE, DFF" },
+          seriesId: { type: "string", maxLength: 40, description: "FRED series ID, e.g. GDPC1, CPIAUCSL, UNRATE, DFF" },
           startDate: { type: "string", description: "ISO start date (YYYY-MM-DD), optional" },
           endDate: { type: "string", description: "ISO end date (YYYY-MM-DD), optional" },
           limit: { type: "number", description: "Max observations, 1-100000 (default 1000)" },
           units: { type: "string", description: "Transformation: lin, chg, ch1, pch, pc1 (YoY %), pca, cca, log" },
-          frequency: { type: "string", description: "Aggregate to d/w/m/q/sa/a, etc. (optional)" },
+          frequency: { type: "string", maxLength: 1, description: "Aggregate to d/w/m/q/sa/a, etc. (optional)" },
         },
         required: ["seriesId"],
       },
@@ -1053,7 +1053,7 @@ MACRO_TOOLS.push(
     discovery: {
       input: { seriesId: "UNRATE" },
       inputSchema: {
-        properties: { seriesId: { type: "string", description: "FRED series ID, e.g. UNRATE" } },
+        properties: { seriesId: { type: "string", maxLength: 40, description: "FRED series ID, e.g. UNRATE" } },
         required: ["seriesId"],
       },
       output: { example: { id: "UNRATE", title: "Unemployment Rate", frequency: "Monthly", units: "Percent", observationStart: "1948-01-01", observationEnd: "2026-05-01", popularity: 94 } },

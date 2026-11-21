@@ -231,7 +231,7 @@ export const DUB_TOOLS = [
       input: { text: "Hello from Agent402! Every tool is paid per call.", targetLanguage: "es", voice: "nova", format: "mp3", json: true },
       inputSchema: {
         properties: {
-          text: { type: "string", description: `Text to translate and speak (max ${standardCap} chars; the cap also applies to the translation)` },
+          text: { type: "string", maxLength: 2000, description: `Text to translate and speak (max ${standardCap} chars; the cap also applies to the translation)` },
           targetLanguage: { type: "string", description: "Target language: a BCP-47 tag (es, pt-BR, zh-Hans, ja) or an English name (Spanish, Brazilian Portuguese)" },
           sourceLanguage: { type: "string", description: "Optional source language, same forms; detected when omitted" },
           voice: { type: "string", description: `Voice: ${[...VOICES].join(", ")} (default: alloy), or a named voice (${[...ELEVENLABS_VOICES].join(", ")})` },

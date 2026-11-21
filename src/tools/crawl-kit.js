@@ -695,10 +695,10 @@ export const CRAWL_TOOLS = [
       input: { url: "https://agent402.tools", limit: 50 },
       inputSchema: {
         properties: {
-          url: { type: "string", description: "Start URL (the site's homepage or any page on it)" },
+          url: { type: "string", maxLength: 2048, description: "Start URL (the site's homepage or any page on it)" },
           limit: { type: "integer", description: "Max URLs to return, 1-500 (default 100)" },
           includeSubdomains: { type: "boolean", description: "Also keep URLs on subdomains of the start site (default false; www and bare host always count as one site)" },
-          search: { type: "string", description: "Optional case-insensitive substring filter applied to the discovered URLs" },
+          search: { type: "string", maxLength: 200, description: "Optional case-insensitive substring filter applied to the discovered URLs" },
         },
         required: ["url"],
       },
@@ -735,7 +735,7 @@ export const CRAWL_TOOLS = [
       input: { url: "https://agent402.tools", limit: 3, maxDepth: 1 },
       inputSchema: {
         properties: {
-          url: { type: "string", description: "Start URL" },
+          url: { type: "string", maxLength: 2048, description: "Start URL" },
           limit: { type: "integer", description: "Max pages to fetch, 1-20 (default 10); failed fetches count toward it" },
           maxDepth: { type: "integer", description: "Link depth from the start URL, 0-2 (default 1)" },
           sameHost: { type: "boolean", description: "true (default): stay on the start host (www and bare host count as one); false: also follow subdomains of the start site" },

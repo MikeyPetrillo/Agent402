@@ -31,4 +31,4 @@ are independent: forking the code is welcome, adopting the identity is not.
 "forked from Agent402" attribution, and you are fully compliant - the
 AGPL-3.0 gives you every code right you need.
 
-Questions or permission requests: **mike@agent402.tools**.
+Questions or permission requests: **help@agent402.tools**.

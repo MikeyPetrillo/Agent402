@@ -3334,7 +3334,7 @@ export function registerWalletBlocklistHook(server) {
     return {
       abort: true,
       reason: "wallet_blocked",
-      message: "This wallet is blocked for terms-of-service violations (see https://agent402.tools/terms). Contact mike@agent402.tools.",
+      message: "This wallet is blocked for terms-of-service violations (see https://agent402.tools/terms). Contact help@agent402.tools.",
     };
   }, {
     reason: WALLET_CHECK_FAILED,

@@ -154,7 +154,7 @@ export function trustPage(baseUrl) {
     {
       h: "Security reports",
       p: [
-        `Report a vulnerability through a private advisory on GitHub or by email to ${link(`mailto:${COMPANY_MAILBOXES.operator}`, esc(COMPANY_MAILBOXES.operator))}. We acknowledge within two business days, fix through the same CI pipeline every change goes through, and note the fix in the ${link("/changelog", "changelog")} once it has shipped. Every heartbeat checks for reports waiting in triage and raises an alert past a set limit.`,
+        `Report a vulnerability through a private advisory on GitHub or by email to ${link(`mailto:${COMPANY_MAILBOXES.security}`, esc(COMPANY_MAILBOXES.security))}. We acknowledge within two business days, fix through the same CI pipeline every change goes through, and note the fix in the ${link("/changelog", "changelog")} once it has shipped. Every heartbeat checks for reports waiting in triage and raises an alert past a set limit.`,
       ],
       links: [["/security", "Security"], [repoUrl("security/advisories/new"), "Private advisory"], ["/.well-known/security.txt", "security.txt"]],
     },

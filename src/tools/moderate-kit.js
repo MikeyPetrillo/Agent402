@@ -93,7 +93,7 @@ export const MODERATE_TOOLS = [
       input: { text: "This is a perfectly normal sentence about cooking pasta." },
       inputSchema: {
         properties: {
-          text: { type: "string", description: "Text to check for policy violations (max 10,000 chars)" },
+          text: { type: "string", maxLength: 10000, description: "Text to check for policy violations (max 10,000 chars)" },
         },
         required: ["text"],
       },
