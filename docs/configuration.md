@@ -12,11 +12,11 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1085 variables in 111 groups.
+1092 variables in 112 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -150,7 +150,7 @@ may still clamp it, and the read site is the reference.
 | `BASE_NOTIFICATIONS_API_KEY` | Base notifications API key (a credential, set on the host); /health reports only whether it is set. |  | `src/server.js` |
 | `BASE_RPCS` | Base RPC endpoints. |  | `src/leaderboard.js` |
 | `BASE_SEPOLIA_DENIM_ACTIVATION_TIMESTAMP` | Base sepolia denim activation timestamp. |  | `src/chain-block-time.js` |
-| `BASE_URL` | Public origin of this deployment, used in links, examples, the canonical host and operator Origin checks. | `https://agent402.tools` | `src/answer-share.js`, `src/mpp-stripe.js`, `src/server.js` and 2 more |
+| `BASE_URL` | Public origin of this deployment, used in links, examples, the canonical host and operator Origin checks. | `https://agent402.tools` | `src/answer-share.js`, `src/mpp-stripe.js`, `src/price-webhooks.js` and 3 more |
 
 ## BAZAAR
 
@@ -833,8 +833,20 @@ may still clamp it, and the read site is the reference.
 | `POW_DB_PATH` | Proof-of-work database path. |  | `src/pow.js` |
 | `POW_DIFFICULTY` | Proof-of-work difficulty in leading zero bits (8 to 28). |  | `src/pow.js` |
 | `POW_PG_REFRESH_MS` | Proof-of-work Postgres refresh, in milliseconds. |  | `src/pow.js` |
-| `POW_SECRET` | Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process). | `traffic` | `src/discovery-refusals.js`, `src/first-call-allowance.js`, `src/hangup-forgiveness.js` and 9 more |
+| `POW_SECRET` | Stable secret for proof-of-work challenges so they survive restarts (unset: a random secret per process). | `traffic` | `src/discovery-refusals.js`, `src/first-call-allowance.js`, `src/hangup-forgiveness.js` and 10 more |
 | `POW_TTL_SECONDS` | Proof-of-work lifetime, in seconds. |  | `src/pow.js` |
+
+## PRICE
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `PRICE_MATCH_MAX_USD` | Price match maximum, in USD. | `25` | `src/leaderboard.js` |
+| `PRICE_WEBHOOKS_FILE` | File for price webhook registrations, the kept list prices and queued deliveries. | `/data/price-webhooks.json` | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_DELIVERIES` | Runtime switch for outbound price webhook deliveries (on; off: registrations and removals keep working and queued deliveries wait). |  | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_DELIVERY_INTERVAL_MS` | How often due price webhook deliveries are sent, in milliseconds. | `60000` | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_MAX` | Most price webhook registrations this server keeps. | `5000` | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_MAX_PER_HOST` | Most price webhook registrations one target host may hold. | `20` | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_SIGNING_KEY` | Key the price webhook secrets are derived from (unset: POW_SECRET; neither set: a registration answers 503 and nothing is stored or sent). |  | `src/price-webhooks.js` |
 
 ## PROGRAMMATIC
 
@@ -1590,6 +1602,7 @@ may still clamp it, and the read site is the reference.
 | `MONITOR_SCHEDULER` | off stops the scheduler that runs recurring monitors. |  | `src/server.js` |
 | `MPPSCAN_API_URL` | Mppscan API URL. | `https://www.mppscan.com/api/trpc/servers.list` | `src/mpp-index.js` |
 | `MPPSCAN_DISCOVERY_URL` | Mppscan discovery URL. | `https://www.mppscan.com/` | `src/mpp-index.js` |
+| `NAMED_AUDIO_MODELS` | Comma list of the named speech and transcription model ids to serve beside the default chains, or all (unset: none). Each also needs its cost row, inside the route's margin bound. |  | `src/speech-additions.js` |
 | `NETWORKS_VERIFY_AGE_MS` | Networks verify age, in milliseconds. |  | `src/crawl-cadence.js` |
 | `NEW_CATALOG_QUOTE_BURST` | New catalog quote burst. | `60` | `src/x402-index.js` |
 | `NEYNAR_API_KEY` | Neynar API key (a credential, set on the host). |  | `src/tools/farcaster-social-kit.js`, `src/tools/onchain-identity-kit.js` |
@@ -1612,7 +1625,6 @@ may still clamp it, and the read site is the reference.
 | `PDF_QUEUE_MAX` | PDF queue maximum. |  | `src/tools/pdf-offthread.js` |
 | `PDF_WORKERS_MAX` | PDF workers maximum. |  | `src/tools/pdf-offthread.js` |
 | `PORT` | TCP port the server listens on (0 asks the kernel for a free one; the bound port is printed in the listening line). | `3000` | `src/server.js` |
-| `PRICE_MATCH_MAX_USD` | Price match maximum, in USD. | `25` | `src/leaderboard.js` |
 | `QUOTE_DRIFT_FACTOR` | Quote drift factor. |  | `src/x402-index.js` |
 | `QUOTE_MAX_AGE_MS` | Quote maximum age, in milliseconds. |  | `src/crawl-cadence.js` |
 | `RAILS_TEST_GRADUATE` | Rails test graduate. |  | `src/rails.js` |

@@ -4,6 +4,7 @@ paths:
   - "src/gateway-*.js"
   - "src/model-catalog.js"
   - "src/upstream-costs.js"
+  - "src/speech-additions.js"
   - "src/handler-input.js"
   - "src/tools/*-report-kit.js"
   - "src/report-*.js"
@@ -275,3 +276,13 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   names, roles, security titles); the LinkedIn article quotes the research report and its source list. The IPO digest
   calls no model: each filer-written field reaches its markdown through `filerText` (one line, no link, tag or quote
   marker). `scripts/test-report-grounding.js` runs each with a planted directive.
+- **Named speech and transcription models** (`src/speech-additions.js`): newer models from providers already
+  sent to, reachable only by `model` on `POST /v1/audio/speech` (`speechAdditions()`, the whole chain behind
+  the named one) and on the URL transcribe routes (`sttAdditions(tier)`, `sttModelOf`; over the transcription
+  wire with no speaker-label fields, never beside `diarize`, never on the multipart wire). A model is served
+  and listed (`/v1/models`, the route's `model` schema property, the refusal's list) only while
+  `NAMED_AUDIO_MODELS` names it (a comma list of ids, or `all`; unset: none), its private row is present
+  (`speech.<id>`, `sttPerMinute.<id>`, all in `REQUIRED`) and the route's cap on it is inside
+  `ADDITION_MARGIN` of the price; no default chain holds one. A model is switched on only after a
+  supervised paid call proves it and measures what it bills (the listing's transcription unit differs by provider).
+  Suite: `scripts/test-speech-additions.js`.

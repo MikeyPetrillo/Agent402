@@ -143,18 +143,14 @@ jobs:
           DEPLOYED: ${{ steps.check.outputs.deployed }}
           WANT: ${{ steps.check.outputs.want }}
         run: |
-          TITLE="Status probe Worker is NOT the code on main"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          TITLE="Scheduled check needs review: status-probe-build"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATE" = "stale" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Cloudflare status Worker is serving build \`$DEPLOYED\`, which does not contain \`$WANT\` - the newest commit touching \`workers/status-probe/\`.
-
-          That Worker is the independent observer /status is built from, and it holds the probe credential. A stale one keeps reporting cheerfully, so this drift is silent by nature: it went unnoticed from 2026-07-29 to 2026-08-30.
-
-          Fix: \`gh workflow run deploy-status-probe.yml --ref main\`, or from a checkout with wrangler logged in, \`cd workers/status-probe && npx wrangler deploy\`. Then check why the push trigger did not fire - the \`paths:\` filter on this workflow is the usual suspect."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still stale at $(date -u +%FT%TZ): deployed $DEPLOYED, want $WANT."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATE" = "current" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Deployed Worker now contains the newest commit at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi

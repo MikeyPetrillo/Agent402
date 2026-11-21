@@ -104,7 +104,7 @@ ok(/secrets\.BURNER_KEY/.test(wf), "uses the same burner secret as the existing 
 
 // Nobody watches a weekly job, so it has to speak up.
 ok(/issues:\s*write/.test(wf), "may open an issue");
-ok(/Bazaar keep-alive FAILED/.test(wf), "pages on failure with a title that says what breaks");
+ok(/TITLE="Scheduled check needs review: listing-keep-alive"/.test(wf), "pages on failure under the check's neutral title");
 ok(/gh issue close/.test(wf), "and closes the issue when a later run succeeds");
 ok(/if:\s*always\(\)/.test(wf), "the report step runs even when the sweep failed - the failure is the point");
 

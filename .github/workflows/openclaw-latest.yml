@@ -83,19 +83,14 @@ jobs:
           PINNED: ${{ needs.latest.outputs.pinned }}
           LATEST: ${{ needs.latest.outputs.latest }}
         run: |
-          TITLE="agent402-openclaw FAILS on the newest OpenClaw"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          TITLE="Scheduled check needs review: provider-package-latest"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$RESULT" != "success" ]; then
-            BODY="openclaw/test-real-install.js failed against openclaw@${LATEST:-unknown} (the merge lane is pinned to ${PINNED:-unknown}, so this did NOT block any merge).
-
-          Users installing the plugin on the newest host are affected; CI is not. Fix the plugin, republish, then raise the pin in openclaw/test-real-install.js so the merge lane proves the new host too.
-
-          Re-run: \`gh workflow run openclaw-latest.yml --ref main\`"
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ) against openclaw@${LATEST:-unknown}."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Passing at $(date -u +%FT%TZ) against openclaw@${LATEST:-unknown}."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi

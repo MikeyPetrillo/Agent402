@@ -14,6 +14,7 @@ import { guideSlugs } from "./guides.js";
 import { skillSlugs, SKILL_PACKS, PACK_PRICES, PACK_PRICE_RANGE, skillPackOfToolSlug } from "./skills.js";
 import { BLOG_POSTS } from "./blog.js";
 import { integrationSlugs } from "./integration-pages.js";
+import { PLATFORM_INTEGRATIONS } from "./platform-integrations.js";
 import { LEARN, learnSlugs } from "./learn.js";
 import { RAILS, RAILS_OR, countWord } from "./rails.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
@@ -439,6 +440,7 @@ export function learnIntegrationUrls(baseUrl) {
     { loc: `${baseUrl}/learn`, priority: "0.8" },
     ...learnSlugs().map((s) => ({ loc: `${baseUrl}/learn/${s}`, priority: "0.8" })),
     ...integrationSlugs().map((s) => ({ loc: `${baseUrl}/integrations/${s}`, priority: "0.7" })),
+    ...PLATFORM_INTEGRATIONS.map((p) => ({ loc: `${baseUrl}/integrations/${p.slug}`, priority: "0.7" })),
   ];
 }
 export function sitemapLearn(baseUrl) {
@@ -687,6 +689,7 @@ ${flatTiersLine()}
   - ${connectorPayShort()}
   - Every host, verified config blocks (Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK): [/guides/agent-hosts](${baseUrl}/guides/agent-hosts). Shortlinks: agent402.sh/claude, /cursor, /vscode, /windsurf, /cline, /roo, /codex, /gemini. Install script: \`curl -fsSL agent402.sh/install | sh\`
 - [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp@0.14.1\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for a prepaid credits key${creditsKeyQualifier()}). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.14.1\`
+${PLATFORM_INTEGRATIONS.map((p) => `- [${p.name}](${baseUrl}/integrations/${p.slug}): ${p.llms}`).join("\n")}
 
 ## Framework adapters (zero-dependency npm)
 - [agent402-openai-tools](https://www.npmjs.com/package/agent402-openai-tools): OpenAI function-calling (chat.completions / Assistants / Responses)
@@ -874,6 +877,7 @@ export function llmsFullTxt(baseUrl, catalog) {
 - Audit report: \`POST /api/audit-report\`, paid from the wallet it covers, returns that wallet's paid calls over a window of up to a year (time, tool, route, amount, rail, network, settlement, request and response digests${receiptsServed() ? ", and each call's signed receipt" : ""}) with totals by tool and by day, as JSON or CSV${receiptsServed() ? `, plus a summary receipt over the report that \`POST ${RECEIPT_VERIFY_PATH}\` checks` : ""}.
 - Outside sellers: ${baseUrl}/api/index?seller=<host> gives a seller's crawl history, the live probe of its paywall and the router's verdict on paying it.
 - Seller reputation: ${baseUrl}/api/reputation?seller=<host> gives one outside seller's reputation as this server measured it over 30 days: manifest and 402 uptime, responsiveness, the live 402 price against the listed price, delivery (measured from purchases Agent402's router made for buyers), and age; each metric with its method, sample size and last measurement, scored only past its minimum sample (else \`not-enough-data\`). It counts no payments or buyers. A day on which our own crawl cycle failed broadly on our side is left out of the crawl and paywall metrics and named under \`measurementIssue\` ("measurement issue on our side"). A seller asks for a fresh measurement with \`POST /api/reputation/recheck?seller=<host>\` (free; one accepted request per seller every 6 hours, a repeat answers the one scheduled; 202 with \`crawlBy\` and \`recordBy\`); the record shows \`lastRecheckedAt\`. Corrections: help@agent402.tools.
+- Router benchmarks: ${baseUrl}/api/router-benchmarks gives the same 30-day measurements in aggregate: the share of the router's recorded purchases a seller answered 200 after payment, and the uptime, responsiveness and price-match scores of the sellers the router bought from beside the indexed sellers it did not buy from. No seller is named, and a statistic is published only when at least five sellers are scored on it.
 - Walkthrough: ${baseUrl}/trust#verify
 
 ## Learn (summaries)

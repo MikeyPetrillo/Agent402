@@ -125,7 +125,7 @@ jobs:
       - name: Open, update or close the one issue
         env:
           GH_TOKEN: ${{ github.token }}
-          TITLE: Bazaar MCP tool listings pass FAILED
+          TITLE: "Scheduled check needs review: mcp-listing-pass"
           PLAN: ${{ needs.plan.result }}
           BUY: ${{ needs.buy.result }}
           PLANNED: ${{ needs.plan.outputs.slugs }}

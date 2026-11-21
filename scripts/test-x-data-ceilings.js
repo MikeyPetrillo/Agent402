@@ -97,7 +97,7 @@ try {
   // --- the two observers page on over and capped ---------------------------
   const worker = readFileSync(new URL("../workers/status-probe/src/index.js", import.meta.url), "utf8");
   const yml = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
-  const TITLE = "X data daily spend OVER its ceiling";
+  const TITLE = "Scheduled check needs review: post-data-spend";
   ok(worker.includes(`title: "${TITLE}"`) && /xDataSpend\?\.status, \["over", "capped"\], \["ok", "off"\]/.test(worker), "the status Worker pages on over and capped and closes on ok or off");
   const step = yml.slice(yml.indexOf(".xDataSpend.status"));
   ok(yml.includes(`TITLE="${TITLE}"`) && /"\$STATUS" = "over" \] \|\| \[ "\$STATUS" = "capped"/.test(step.slice(0, 1200)), "heartbeat.yml pages on the same two words under the same title");

@@ -23,7 +23,7 @@ async function check(name, fn) {
   catch (e) { failures++; console.error(`FAIL - ${name}: ${e?.stack || e}`); }
 }
 
-const TITLE = "subscriptionRenewals: a monitor renewal has stayed unconfirmed for hours";
+const TITLE = "Scheduled check needs review: subscription-renewals";
 
 await check("gateway-status carries the word: the engine's read, full only for the operator, off without an engine, unknown when a configured engine failed", () => {
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
@@ -60,9 +60,8 @@ await check("heartbeat: unconfirmed opens one issue (word and operator endpoint 
   assert.equal(made.length, 1, JSON.stringify(calls));
   assert.equal(made[0][made[0].indexOf("--title") + 1], TITLE);
   const body = made[0][made[0].indexOf("--body") + 1];
-  assert.match(body, /subscriptionRenewals\.status=unconfirmed\./);
-  assert.match(body, /\/__operator\/monitors\.json/);
-  assert.doesNotMatch(body, /0x[0-9a-f]{6}|mpp_sub|\d{4}-\d\d-\d\d/i);
+  assert.match(body, /^A scheduled check reported a result that needs review\. Run: /);
+  assert.doesNotMatch(body, /subscriptionRenewals|unconfirmed|__operator|0x[0-9a-f]{6}|mpp_sub|\d{4}-\d\d-\d\d/i);
   calls = hb({ ...OK, subscriptionRenewals: { status: "unconfirmed" } }, TITLE);
   assert.equal(calls.filter((c) => c[1] === "create").length, 0);
   assert.ok(calls.some((c) => c[1] === "comment" && c[2] === "41"));

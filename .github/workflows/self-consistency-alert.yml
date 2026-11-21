@@ -94,22 +94,15 @@ jobs:
         env:
           DETAIL: ${{ steps.check.outputs.detail }}
         run: |
-          TITLE="Discovery self-consistency: live prod drifted from source"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          TITLE="Scheduled check needs review: discovery-consistency"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "${{ steps.check.outputs.status }}" = "down" ]; then
-            BODY="Live agent402.tools's agent-facing text (tools/list, about_agent402, get_payment_info, /llms.txt, /.well-known/x402) no longer matches what source says is registered: the same class of defect as #705, caught here before an outside agent reports it.
-
-          \`\`\`
-          $DETAIL
-          \`\`\`
-
-          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             if [ -n "$OPEN" ]; then
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still drifted at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
             exit 1
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: live prod matches source again at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi

@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
-      TITLE: Bazaar listing check
+      TITLE: "Scheduled check needs review: listing-rank"
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       BAZAAR_RANK_ACK: ${{ vars.BAZAAR_RANK_ACK }}
     steps:

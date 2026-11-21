@@ -34,6 +34,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { load as yamlLoad } from "js-yaml";
 import { urlMatches, isHost } from "./lib/url-host.js";
+import { OPEN_BODY_RE } from "./lib/monitor-issue-text.js";
 
 delete process.env.UPSTREAM_COSTS_JSON;
 delete process.env.UPSTREAM_COSTS_FILE;
@@ -207,8 +208,8 @@ D._setDirectBreakerNowForTest(null);
 
 // ---- pagers -------------------------------------------------------------------
 const WORDS = [
-  ["directUpstreamSpend: the direct upstream's daily spend is high", "directUpstreamSpend", "high", "/__operator/direct-upstream.json"],
-  ["directUpstreamBalance: the direct upstream's prepaid balance is exhausted", "directUpstreamBalance", "exhausted", "/__operator/direct-upstream.json"],
+  ["Scheduled check needs review: direct-upstream-spend", "directUpstreamSpend", "high", "/__operator/direct-upstream.json"],
+  ["Scheduled check needs review: direct-upstream-balance", "directUpstreamBalance", "exhausted", "/__operator/direct-upstream.json"],
 ];
 const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
 for (const [T, field, bad, endpointPath] of WORDS) {
@@ -245,7 +246,7 @@ printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\x1e' >> "$GH_LOG"
   for (const [T, field, bad] of WORDS) {
     let calls = hb({ [field]: { status: bad, spentUsd: 7.5 } });
     const made = calls.filter((c) => c[1] === "create" && arg(c, "--title") === T);
-    ok(made.length === 1 && arg(made[0], "--body") === ALARMS.find((x) => x.title === T).body({}), `heartbeat: ${field}=${bad} opens one issue under the Worker's title and body`);
+    ok(made.length === 1 && OPEN_BODY_RE.test(arg(made[0], "--body")), `heartbeat: ${field}=${bad} opens one issue under the Worker's title and body`);
     calls = hb({ [field]: { status: bad } }, T);
     ok(!calls.some((c) => c[1] === "create") && calls.some((c) => c[1] === "comment" && c[2] === "41"), `heartbeat: ${field}: an open issue is not duplicated`);
     for (const w of ["ok", "off"]) {

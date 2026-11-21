@@ -107,9 +107,8 @@ ok(/cannot resolve the Railway service to restart/.test(healer),
 {
   const hb = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
   ok(/\/api\/rails/.test(hb), "the heartbeat reads /api/rails");
-  ok(/Settlement rail DEGRADED/.test(hb), "a degraded rail opens a tracked issue");
-  ok(/gh issue close .* --comment "Recovered: every configured rail/.test(hb)
-     || /Recovered: every configured rail/.test(hb),
+  ok(/TITLE="Scheduled check needs review: rail-offers"/.test(hb), "a degraded rail opens a tracked issue");
+  ok(/elif \[ -n "\$OPEN" \]; then\n\s+gh issue close "\$OPEN" --repo "\$GITHUB_REPOSITORY" --comment "Closed by the scheduled check/.test(hb.slice(hb.indexOf("rail-offers"))),
     "the issue closes itself when every rail is offered again");
 
   // The trap this class of check keeps falling into: a failed curl looks like
@@ -128,8 +127,8 @@ ok(/cannot resolve the Railway service to restart/.test(healer),
   ok(railStep.length > 200, "the Rail check step was located for scoped assertions");
   ok(!/production DOWN/.test(railStep),
     "a degraded rail is reported as a notice, never escalated to a production-down page");
-  ok(/This is a notice, not an outage/.test(railStep),
-    "the issue text says plainly that revenue continues on the other rails");
+  ok(/--body "A scheduled check reported a result that needs review\. Run: /.test(railStep),
+    "the issue is the fixed text every scheduled check posts");
 }
 
 // --- Arc: only a recovery the boot check would accept restarts production ----

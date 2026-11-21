@@ -64,18 +64,17 @@ jobs:
         run: |
           CODE="${{ steps.vol.outputs.code }}"
           [ -n "$CODE" ] || CODE="timeout"
-          TITLE="Tempo MPP volume FAILING"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          TITLE="Scheduled check needs review: mpp-volume"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           # Public issue body: the script's own summary lines only (counts,
           # bucketed balance, a truncated last error) - never the raw log tail.
-          TAIL=$(grep -E '^(tempo-volume:|REFUSING|TEMPO VOLUME UNDER|10 failures)' /tmp/tempo-volume.log 2>/dev/null | tail -n 4 || true)
           if [ "$CODE" != "0" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$(printf 'The 2-hourly Tempo MPP volume run (scripts/tempo-volume.js, ~17 buys of /api/uuid over tempo/charge from the canary burner) did not reach its success bar (exit %s). Exit 1 = under 80%% settled; exit 2 = refused to start (burner below its floor balance on Tempo, or no tempo challenge on the live 402 - TEMPO_API_KEY unset on prod?).\n\n```\n%s\n```\n\nRun: %s/%s/actions/runs/%s\nA run that settles >= 80%% closes this.' "$CODE" "$TAIL" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$(printf 'Still failing at %s (exit %s)\n\n```\n%s\n```' "$(date -u +%FT%TZ)" "$CODE" "$TAIL")"
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
             exit 1
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: volume run settled >= 80% at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi

@@ -39,3 +39,15 @@ t node scripts/test-mpp-discovery-parity.js
 t node scripts/test-mpp-flagship.js
 # 30 concurrent buyers for 45 s against a FREE_MODE server on a free port, /health probed beside them
 t node scripts/test-load-concurrency.js
+# Runtime switches: provider, then environment, then the declared default; booleans and declared names only (offline)
+t node scripts/test-feature-flags.js
+# /integrations/agentcore: copy follows the MPP offer gate and the Tempo switch; route, index, sitemaps, llms.txt and page date (offline, port 0)
+t node scripts/test-agentcore-page.js
+# Every issue a scheduled check opens is the fixed neutral title and body, in every workflow and the status Worker (offline)
+t node scripts/test-monitor-issue-wording.js
+# Router benchmarks: aggregates over the reputation records, no seller named, nothing under five sellers, no purchase count (offline, port 0)
+t node scripts/test-router-benchmarks.js
+# Price webhooks: input rules, bounds, price comparison, signed delivery, retries, the fetch guard, the served tool and its removal route (offline, port 0)
+t node scripts/test-price-webhooks.js
+# Named speech and transcription models: served and listed only with a cost row inside the margin bound (offline, stubbed upstream)
+t node scripts/test-speech-additions.js

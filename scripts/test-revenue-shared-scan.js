@@ -187,7 +187,7 @@ ok(html.length > 1000 && /every 12 hours/.test(html) && /EVERY 12H/.test(html) &
 // The status Worker pages on the word too: stale pages, fresh and due clear, cold and absent do neither.
 {
   const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
-  const TITLE = "Live revenue read is stale";
+  const TITLE = "Scheduled check needs review: revenue-read";
   const j = (gw) => judge({ gateway: gw })[TITLE];
   ok(ALARMS.some((a) => a.title === TITLE) && j({ revenueLive: { status: "stale" } }) === "bad" && j({ revenueLive: { status: "fresh" } }) === "good" && j({ revenueLive: { status: "due" } }) === "good" && j({ revenueLive: { status: "cold" } }) === "quiet" && j({}) === "quiet", "status Worker: stale pages, fresh and due clear, cold and absent do neither");
 }

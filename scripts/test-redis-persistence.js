@@ -223,10 +223,10 @@ const INFO_REWRITE_ERR = INFO_ON.replace("aof_last_bgrewrite_status:ok", "aof_la
   ok(/\.redisPersistence\.status/.test(step) && /if \[ "\$WORD" = "off" \] \|\| \[ "\$WORD" = "degraded" \]; then sleep 30; WORD=\$\(read_rp\); fi/.test(step), "it reads redisPersistence.status and confirms off or degraded on a second reading 30 s later");
   ok(/off\|degraded\)\s+if \[ -z "\$OPEN" \]; then\s+gh issue create/.test(step) && /on\)\s+if \[ -n "\$OPEN" \]; then\s+gh issue close/.test(step), "off and degraded open one issue; on closes it; unknown does neither");
   const body = (step.match(/--body "([^"]+)"/) || [])[1] || "";
-  ok(/--appendonly yes --appendfsync everysec/.test(body) && /INFO persistence/.test(body) && /aof_last_write_status/.test(body) && /LEDGER_JOURNAL_REDIS/.test(body), "the body says what to check: the start command, INFO persistence, the journal switch");
-  ok(!/\$\{?[A-Z_]*(KEY|TOKEN|SECRET|URL)\b/.test(body) && !/\d+ ?(s|ms|minutes|USD|\$)/.test(body.replace("30 s apart", "")), "and carries no number or secret");
+  ok(body.startsWith("A scheduled check reported a result that needs review. Run: ") && !/appendonly|INFO persistence|LEDGER_JOURNAL_REDIS/.test(body), "the body is the fixed text: no command, setting or switch");
+  ok(!/\$\{?[A-Z_]*(KEY|TOKEN|SECRET)\b/.test(body) && !/\d+ ?(s|ms|minutes|USD|\$)/.test(body), "and carries no number or secret");
   const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
-  const T = "Redis append-only persistence is not on";
+  const T = "Scheduled check needs review: store-persistence";
   ok(step.includes(`TITLE="${T}"`), "the heartbeat's title is the Worker's");
   const alarm = ALARMS.find((x) => x.title === T);
   ok(Boolean(alarm), "the status Worker has the alarm");

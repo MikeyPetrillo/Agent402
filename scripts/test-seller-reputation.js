@@ -213,13 +213,14 @@ const unlabeled = (t) => String(t).split(LABEL).join("");
   ok(wiki.replace(/\s+/g, " ").includes(`labeled "${LABEL}" wherever it appears`), "the wiki method page states the label rule");
   const seo = readFileSync(new URL("../src/seo.js", import.meta.url), "utf8");
   ok(seo.includes(`delivery (${LABEL})`), "the llms.txt line labels delivery");
-  // Nothing that qualifies, ranks or pays a seller reads reputation.
+  // Nothing that qualifies, ranks or pays a seller reads reputation
+  // (src/router-benchmarks.js is a surface: the aggregate document).
   const { readdirSync } = await import("node:fs");
   const srcDir = new URL("../src/", import.meta.url);
   const importers = [];
   const walk = (dir, rel) => { for (const e of readdirSync(dir, { withFileTypes: true })) { if (e.isDirectory()) { if (e.name !== "generated") walk(new URL(`${e.name}/`, dir), `${rel}${e.name}/`); } else if (e.name.endsWith(".js") && /seller-reputation\.js["']/.test(readFileSync(new URL(e.name, dir), "utf8")) && e.name !== "seller-reputation.js") importers.push(`${rel}${e.name}`); } };
   walk(srcDir, "src/");
-  ok(JSON.stringify(importers.sort()) === JSON.stringify(["src/market-page.js", "src/server.js", "src/tempo-buyer.js", "src/x402-buyer.js", "src/x402-index.js"]), `only the surfaces and the two writers import it, no dispatch, floor or ranking module (${importers.join(", ")})`);
+  ok(JSON.stringify(importers.sort()) === JSON.stringify(["src/market-page.js", "src/router-benchmarks.js", "src/server.js", "src/tempo-buyer.js", "src/x402-buyer.js", "src/x402-index.js"]), `only the surfaces and the two writers import it, no dispatch, floor or ranking module (${importers.join(", ")})`);
   const buyerSrc = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/tempo-buyer.js", import.meta.url), "utf8");
   ok(!/import \{[^}]*(sellerReputation|sellerDeliveryRoutes|reputationOf)[^}]*\} from "\.\/seller-reputation\.js"/.test(buyerSrc), "the buyers only write outcomes, never read a score");
   const idx = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");

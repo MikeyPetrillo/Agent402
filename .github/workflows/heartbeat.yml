@@ -126,7 +126,7 @@ jobs:
         env:
           PAYWALL_UNKNOWN: ${{ steps.probe.outputs.paywall_unknown }}
         run: |
-          TITLE="Paywall not observed"
+          TITLE="Scheduled check needs review: paywall-read"
           [ "$PAYWALL_UNKNOWN" = "1" ] || { echo "paywall observed by this run"; exit 0; }
           # Only an issue with exactly this title, opened by the workflow bot
           # or the repository owner (the account the status Worker posts as),
@@ -134,10 +134,10 @@ jobs:
           # refused reads (a mismatched POW_SECRET) keeps one issue.
           OPEN=$(ALARM_NAME="$TITLE" ALARM_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ALARM_NAME) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ALARM_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           if [ -n "$OPEN" ]; then
-            gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still not observed by the heartbeat at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+            gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
             echo "already tracked in #$OPEN"; exit 0
           fi
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The GitHub heartbeat's paywall read was refused by the unpaid-quote budget twice (429, reason unpaid-quote-budget), so this run did not check that paid tools still answer 402. The read is signed with X-Heartbeat-Token and should never be counted: check that the POW_SECRET Actions secret is set and matches the server's. The status Worker closes this on its next observed paywall read."
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
 
       # Gateway credits: /v1 tiers settle the buyer's USDC before the handler
       # runs, so an empty OpenRouter balance turns every gateway call into
@@ -162,7 +162,7 @@ jobs:
         run: |
           RAILS=$(curl -s --max-time 15 "$PROD/api/rails" || echo '{}')
           DEGRADED=$(echo "$RAILS" | jq -r '.degraded // empty' 2>/dev/null || echo "")
-          TITLE="Settlement rail DEGRADED"
+          TITLE="Scheduled check needs review: rail-offers"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           # An unreadable surface is NOT evidence of health: say so and stop,
           # rather than closing a real issue on the back of a failed curl.
@@ -181,21 +181,12 @@ jobs:
           echo "rails: degraded=$DEGRADED batched-dropped=$BATCHED"
           if [ "$DEGRADED" -gt 0 ] || [ "$BATCHED" -gt 0 ]; then
             if [ -z "$OPEN" ]; then
-              echo "$RAILS" | jq -r '[(.rails[] | select(.offered==false) | "- **\(.network)** - \(.reason)"), (.gatewayBatched.dropped // [] | .[] | select(.reason != "not-in-offer" and .reason != "probe-skipped") | "- **Circle Gateway batched option on \(.network)** - not offered (\(.reason)); the plain accept there is unaffected, and the option returns at the next restart once the Gateway /supported read answers and lists it there")] | join("\n")' > /tmp/rail-body.md
-              {
-                echo ""
-                echo "Revenue is unaffected on the other rails: a rail nobody can settle is dropped deliberately so the rest keep earning. This is a notice, not an outage."
-                echo ""
-                echo "It closes itself when the rail returns - rail-selfheal.yml restarts the service once that rail's own facilitator answers again, and this check closes the issue on the next heartbeat."
-                echo ""
-                echo "Live state: $PROD/api/rails"
-              } >> /tmp/rail-body.md
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file /tmp/rail-body.md
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
               echo "already tracked in #$OPEN"
             fi
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every configured rail (and batched option) is being offered again at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       - name: Gateway credits check (alarm on low OpenRouter balance)
@@ -206,29 +197,29 @@ jobs:
           STATUS=$(echo "$BODY" | jq -r '.status // "unknown"' 2>/dev/null || echo unknown)
           UNKNOWN_MIN=$(echo "$BODY" | jq -r '.unknownForMinutes // 0' 2>/dev/null || echo 0)
           echo "gateway credits: $STATUS (credits leg: $(echo "$BODY" | jq -r '.credits // "-"' 2>/dev/null), key-limit leg: $(echo "$BODY" | jq -r '.keyLimit // "-"' 2>/dev/null), unknown for ${UNKNOWN_MIN}m)"
-          TITLE="Gateway credits LOW (OpenRouter)"
+          TITLE="Scheduled check needs review: gateway-credits"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The OpenRouter balance behind the /v1 gateway is below its configured low-water mark (OPENROUTER_LOW_CREDITS_USD) OR the production key's own monthly limit is nearly used (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is canceled, so x402 buyers are NOT charged but every /v1 sale is lost until it is topped up. Auto top-up is on for this account, so a low balance means a refill did not land (declined card, or auto top-up switched off): check https://openrouter.ai/settings/credits. Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402)."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
           # A balance we cannot READ is its own alarm once it persists: "unknown"
           # never paged, which is exactly how a dead alarm stays dead. 180 min =
           # several heartbeat runs, well past any OpenRouter blip (server caches
           # the read for 5 min and only goes unknown when BOTH legs are unreadable).
-          TITLE2="Gateway balance UNREADABLE (OpenRouter)"
+          TITLE2="Scheduled check needs review: gateway-credits-read"
           OPEN2=$(ISSUE_TITLE="$TITLE2" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE2\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "unknown" ] && [ "${UNKNOWN_MIN:-0}" -ge 180 ] 2>/dev/null; then
             if [ -z "$OPEN2" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "/api/gateway-status has reported status=unknown for ${UNKNOWN_MIN} minutes: neither OpenRouter /credits nor /key answered readably with the production key. The low-balance alarm is blind while this lasts. Check the key (https://openrouter.ai/settings/keys), OpenRouter status, and the server log for fetch errors."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
           elif [ "$STATUS" != "unknown" ] && [ -n "$OPEN2" ]; then
-            gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Balance readable again at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # (The direct facilitator /health XLM check that lived here duplicated the
@@ -270,21 +261,18 @@ jobs:
           echo "$OUT" | grep -E '^(FAIL|\?\?) |INVALID|UNREADABLE' || true
           echo "$OUT" | tail -40
           echo "$OUT" | grep '^WARN not-indexed ' | while IFS= read -r LINE; do echo "::warning::Bazaar: $LINE"; echo "- Bazaar: $LINE" >> "$GITHUB_STEP_SUMMARY"; done || true
-          HINT=""
-          if echo "$OUT" | grep -q '^NONJSON-INVALID '; then HINT=" If the failing route is a binary listing, X402_BINARY_LISTINGS=off on the service returns every listing to its earlier shape."; fi
-          TITLE="Bazaar listing validation FAILED"
+          TITLE="Scheduled check needs review: listing-validation"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
-          DETAIL=$(echo "$OUT" | grep -E '^(FAIL|\?\?) ' | head -20 || true)
           if [ "$CODE" = "1" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$(printf 'Coinbase CDP'"'"'s x402 validate endpoint reports at least one checked route INVALID - its 402 no longer passes the Bazaar crawler'"'"'s preflight (shape, PAYMENT-REQUIRED header, accepts, bazaar extension) or the index dropped it. Buyers discovering through the Bazaar / AgentCore will not see that route until it validates again.\n\n```\n%s\n```\n\nReproduce: `node scripts/bazaar-validate.js` (read-only, keyless). A green run closes this.%s' "$DETAIL" "$HINT")"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$(printf 'Still failing at %s\n\n```\n%s\n```' "$(date -u +%FT%TZ)" "$DETAIL")"
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$CODE" = "2" ]; then
             echo "::warning::CDP validate endpoint UNREADABLE for at least one checked route - not silently skipping; the listing check is blind this run"
           elif [ "$CODE" = "0" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every checked route validates again at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # The validator itself unreadable (exit 2) only warns on one run. Three
@@ -307,7 +295,7 @@ jobs:
           PREV_SINCE=$(jq -r '.since // 0' "$STREAK_FILE" 2>/dev/null || echo 0)
           case "$PREV_N" in ''|*[!0-9]*) PREV_N=0 ;; esac
           case "$PREV_SINCE" in ''|*[!0-9]*) PREV_SINCE=0 ;; esac
-          TITLE="Bazaar listing validator unreadable"
+          TITLE="Scheduled check needs review: listing-validation-read"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$CODE" in
             2)
@@ -318,14 +306,14 @@ jobs:
               echo "validator unreadable on $N run(s) in a row"
               if [ "$N" -ge 3 ] || { [ "$N" -ge 2 ] && [ $((NOW - SINCE)) -ge 43200 ]; }; then
                 if [ -z "$OPEN" ]; then
-                  gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Coinbase CDP's x402 validate endpoint could not be read on several heartbeat runs in a row, or for half a day or more, so the Bazaar listing check is blind: an INVALID route would not be seen. Nothing is known to be wrong with our listings. Read the validation step's log on the latest heartbeat run (its UNREADABLE rows name the routes and the answer CDP gave), and reproduce with scripts/bazaar-validate.js (read-only, keyless; exit 2 means unreadable). Auto-closes on the next heartbeat run whose validator answers." >/dev/null 2>&1 || echo "issue create failed"
+                  gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
                 fi
               fi
               ;;
             0|1)
               printf '{"streak":0,"since":0}\n' > "$STREAK_FILE"
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the validator answered again at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             *)
@@ -360,8 +348,8 @@ jobs:
           ADVISORY_TRIAGE_ACK: ${{ vars.ADVISORY_TRIAGE_ACK }}
           ADVISORY_TRIAGE_MAX_HOURS: ${{ vars.ADVISORY_TRIAGE_MAX_HOURS }}
         run: |
-          TITLE="Security advisory waiting in triage"
-          TITLE2="Security advisory check cannot read"
+          TITLE="Scheduled check needs review: security-advisory"
+          TITLE2="Scheduled check needs review: security-advisory-read"
           BODY_FILE="$RUNNER_TEMP/advisory-triage-body.md"
           rm -f "$BODY_FILE"
           CODE=0
@@ -374,16 +362,16 @@ jobs:
           OPEN=$(find_open "$TITLE")
           OPEN2=$(find_open "$TITLE2")
           if [ "$CODE" = "0" ]; then
-            [ -z "$OPEN" ] || gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: no security advisory is waiting in triage past the limit."
-            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Recovered: security advisories readable again."
+            [ -z "$OPEN" ] || gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           elif [ "$CODE" = "1" ] && [ -s "$BODY_FILE" ]; then
-            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Recovered: security advisories readable again."
+            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             # Open once; a repeat run posts nothing while the issue stays open.
-            [ -n "$OPEN" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file "$BODY_FILE"
+            [ -n "$OPEN" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
           else
             echo "::warning::security advisory triage check UNREADABLE (exit $CODE) - not silently passing"
             [ -s "$BODY_FILE" ] || printf 'The heartbeat could not run the security advisory triage check. The heartbeat job log names the error. Auto-closes on the next readable check.\n' > "$BODY_FILE"
-            [ -n "$OPEN2" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body-file "$BODY_FILE"
+            [ -n "$OPEN2" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
           fi
 
       # Canary burner balance watch: an empty burner once read as a settlement
@@ -412,16 +400,16 @@ jobs:
           BAL=$(curl -s --max-time 15 https://mainnet.base.org -H 'Content-Type: application/json'             -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_call\",\"params\":[{\"to\":\"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913\",\"data\":\"$DATA\"},\"latest\"]}"             | jq -re '.result' 2>/dev/null) || { echo "::warning::burner balance UNREADABLE — not silently skipping, investigate"; exit 0; }
           USD=$(node -e "console.log((parseInt('$BAL',16)/1e6).toFixed(4))")
           echo "canary burner Base USDC read"
-          TITLE="Canary burner LOW (Base)"
+          TITLE="Scheduled check needs review: canary-wallet"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           LOW=$(node -e "console.log($USD < $WARN_USD ? 1 : 0)")
           if [ "$LOW" = "1" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The paid canary's Base burner ($BURNER) is below its low-water mark: one full keep-alive pass above the ceiling plus a margin, never under the repo var CANARY_BURNER_LOW_USD. Top up before it runs dry: an empty burner now files as a funding issue rather than an outage, but a funded one is better."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
               LAST=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json createdAt,comments --jq '[.createdAt, (.comments[]?.createdAt)] | max // empty' 2>/dev/null)
               if [ -n "$LAST" ] && node -e "process.exit(Date.now() - Date.parse(process.argv[1]) >= 86400000 ? 0 : 1)" "$LAST"; then
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
               else
                 echo "burner still low; the open issue was noted within the last day"
               fi
@@ -429,7 +417,7 @@ jobs:
           elif [ -n "$OPEN" ] && [ "$FALLBACK" = "1" ]; then
             echo "burner above the stand-in mark only; the open issue stays open until the derived mark reads"
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # PayAI credit watch. PayAI bills settlements in credits weighted per
@@ -466,16 +454,16 @@ jobs:
             '[.days[] | select(.day >= $cut) | select(.chain=="avalanche" or .chain=="sei") | (.extTx + .intTx) * $w[.chain]] | add // 0 | . * 100 | round / 100') \
             || { echo "::warning::PayAI credit watch UNREADABLE - /api/revenue/daily missing or unparseable. NOT skipping silently: investigate."; exit 0; }
           echo "PayAI weighted credits since $CUT: $CREDITS (warn at $THRESH)"
-          TITLE="PayAI credit allowance HIGH"
+          TITLE="Scheduled check needs review: facilitator-allowance"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if awk -v c="$CREDITS" -v t="$THRESH" 'BEGIN { exit !(c >= t) }'; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Weighted PayAI credits spent on Avalanche + Sei settlements since $CUT reached the warn threshold (repo var PAYAI_QUOTA_WARN). Past the allowance the facilitator bills its prepaid credits when PAYAI_API_KEY_ID/SECRET are set (top up in its merchant console) and refuses settlement when they are not. Fallback hops onto PayAI are not counted here - this is a lower bound."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still high at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: weighted PayAI credits back below the threshold at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # CDP settlement metering watch. CDP's billing gate answers
@@ -497,16 +485,16 @@ jobs:
             exit 0
           fi
           echo "CDP-first-chain settles, rolling 30d: $COUNT (warn at $THRESH)"
-          TITLE="CDP settlement metering HIGH"
+          TITLE="Scheduled check needs review: facilitator-metering"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$COUNT" -ge "$THRESH" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Rolling 30-day settlements on CDP-first chains (Base/Solana/Polygon/Arbitrum): $COUNT. Check the CDP account has a working payment method: a billing lapse answers payment-method-required on /settle and takes the Base rail down. Threshold: repo var CDP_METERED_WARN."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still high: $COUNT settles at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: rolling 30-day count back to $COUNT at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # x402 spending-wallet check - same pattern as gateway credits above:
@@ -520,16 +508,16 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyer.status // "unknown"' 2>/dev/null || echo unknown)
           echo "upstream buyer wallet: $STATUS"
-          TITLE="Upstream buyer wallet LOW (x402)"
+          TITLE="Scheduled check needs review: buyer-wallet"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 upstream spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD). When it empties, route-execute external buys and seller-payability refuse (x402 buyers are not charged, but those paths go dark). attest signs from the same wallet but pays Base gas in ETH, which this alarm reads nothing about. Top up: send USDC on Base to the upstream buyer address."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # Algorand spending-wallet check — same pattern as the Base wallet above:
@@ -549,15 +537,15 @@ jobs:
           # and a pay-as-you-go host bills without earning.
           BODY=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
           STATUS=$(echo "$BODY" | jq -r '.upstreamBudgets.status // "unknown"' 2>/dev/null || echo unknown)
-          TITLE="Upstream call budget ELEVATED"
+          TITLE="Scheduled check needs review: upstream-call-budget"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "elevated" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.upstreamBudgets\` reports **elevated**: at least one upstream's daily call budget is reached. These are our outbound call counts against a daily budget, not a vendor balance; the per-upstream rows are on the operator view of the same endpoint. Check whether a loop, a new sweep or real demand is behind it, then either fix the cause or raise that upstream's budget variable. The counter is daily and resets on deploy, so the real figure is at or above what the operator view shows."
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
           elif [ -n "$EXISTING" ] && [ "$STATUS" = "ok" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "upstreamBudgets is ok; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       - name: Upstream hard ceiling reached
@@ -569,15 +557,15 @@ jobs:
           # to it are being refused (not charged on x402) until 00:00 UTC.
           BODY=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
           STATUS=$(echo "$BODY" | jq -r '.upstreamHardCaps.status // "unknown"' 2>/dev/null || echo unknown)
-          TITLE="Upstream hard ceiling REACHED"
+          TITLE="Scheduled check needs review: upstream-ceiling"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.upstreamHardCaps\` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (not charged on x402) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable."
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
           elif [ -n "$EXISTING" ] && [ "$STATUS" = "ok" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "upstreamHardCaps is ok; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # X data daily spend (src/tools/x-data-kit.js): over = past the alarm
@@ -591,15 +579,15 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.xDataSpend.status // "unknown"' 2>/dev/null || echo unknown)
           echo "x data spend: $STATUS"
-          TITLE="X data daily spend OVER its ceiling"
+          TITLE="Scheduled check needs review: post-data-spend"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.xDataSpend\` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed \`X_DATA_DAILY_MAX_USD\` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past \`X_DATA_DAILY_HARD_MAX_USD\` was refused 503 (not charged on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under \`X_DATA_DAILY_MAX_USD\`, otherwise the next UTC day."
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "xDataSpend is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # Our Circle Gateway balance (src/gateway-nanopayments.js): withdraw holds
@@ -615,15 +603,15 @@ jobs:
           ROW=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '(.gatewayBalance.status // "unknown") + " none"' 2>/dev/null || echo "unknown unknown")
           STATUS=${ROW%% *}; ALERT=${ROW##* }
           echo "gateway balance: $STATUS (alert $ALERT)"
-          TITLE="Gateway balance READY to withdraw"
+          TITLE="Scheduled check needs review: gateway-balance"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "withdraw" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports gatewayBalance.status=withdraw: the Circle Gateway balance that batched payments are credited to has reached GATEWAY_WITHDRAW_ALERT_USD. Nothing is refused for it; the balance stays off chain until it is moved. Read the figure on the operator view of /api/gateway-status, then move it on chain with node scripts/gateway-withdraw.js (human-run, a dry run unless --execute is passed). Auto-closes when the word reads ok or off." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "gatewayBalance is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # A top outside payer's verified paid calls are failing
@@ -638,15 +626,15 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.topBuyerFailures.status // "unknown"' 2>/dev/null || echo unknown)
           echo "top buyer failures: $STATUS"
-          TITLE="topBuyerFailures: a top paying buyer is getting failed answers"
+          TITLE="Scheduled check needs review: top-buyer-failures"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "alert" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports topBuyerFailures.status=alert: one of our top outside payers by paid spend over the last week has had TOP_BUYER_FAIL_MIN or more failed final answers (any status that is not a success, except a refusal of the caller's own input that the answer attributes to the caller or to no one) to verified paid requests inside TOP_BUYER_FAIL_WINDOW_MS. The payer's short id, its spend rank, the tools, statuses, times and the first characters of the error text we sent are on the operator view of /api/gateway-status (topBuyerFailures, operator token). Read them, fix the failing tool or path, and check whether what we told the buyer was true. Nothing is refused for it. Auto-closes when the word reads ok." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "topBuyerFailures is ok; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # A top outside payer got onchain-sql's busy refusal (onchainSqlBusy,
@@ -661,15 +649,15 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.onchainSqlBusy.status // "unknown"' 2>/dev/null || echo unknown)
           echo "onchain sql busy: $STATUS"
-          TITLE="onchainSqlBusy: a top paying buyer was told the query service is busy"
+          TITLE="Scheduled check needs review: query-service"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "alert" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports onchainSqlBusy.status=alert: one of our top outside payers by paid spend over the last week got the busy refusal of the onchain query tool (the server-wide limit on queries in flight, or the send rate the query service allows; refused before settlement, told to retry in a few seconds) inside TOP_BUYER_FAIL_HOLD_MS. One refusal raises it unless ONCHAIN_SQL_BUSY_MIN and ONCHAIN_SQL_BUSY_SPAN_MS are set to ask for more of them over a stretch. The payer's short id, its spend rank and the refusal times are on the operator view of /api/gateway-status (onchainSqlBusy, operator token); the daily busy counts by caller are on /__operator/tool-failures.json (onchainSqlQueries, operator token). Read them and decide whether the in-flight limit should rise. Nothing is refused for this alarm. Auto-closes when the word reads ok." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "onchainSqlBusy is ok; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # The shared limits store (src/shared-limits.js): status reads degraded for
@@ -685,15 +673,15 @@ jobs:
           ROW=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '(.sharedLimits.status // "unknown") + " " + (.sharedLimits.alert // "unknown")' 2>/dev/null || echo "unknown unknown")
           STATUS=${ROW%% *}; ALERT=${ROW##* }
           echo "shared limits: $STATUS (alert $ALERT)"
-          TITLE="Shared limits store DEGRADED (Redis)"
+          TITLE="Scheduled check needs review: shared-limits-store"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$ALERT" = "sustained" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports sharedLimits.alert=sustained: commands to the Redis behind the shared admission and money controls have failed or timed out for ten minutes or more without a break, or the client has not connected since boot. Every control keeps deciding on its own process's counters, so nothing is refused for it, but the limits are not shared across containers and start again on a restart. Check the Redis service and REDIS_URL on Railway and the server log for [shared-limits] lines; the operator view of /api/gateway-status carries the counts and the last error. Auto-closes when sharedLimits.status reads on or memory." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif { [ "$STATUS" = "on" ] || [ "$STATUS" = "memory" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "sharedLimits is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # Consumed marks the shared store missed (src/replay-guard.js): status
@@ -709,15 +697,15 @@ jobs:
           ROW=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '(.replayStore.status // "unknown") + " " + (.replayStore.alert // "unknown")' 2>/dev/null || echo "unknown unknown")
           STATUS=${ROW%% *}; ALERT=${ROW##* }
           echo "replay store: $STATUS (alert $ALERT)"
-          TITLE="Replay store marks PENDING (Redis)"
+          TITLE="Scheduled check needs review: replay-store-marks"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$ALERT" = "sustained" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports replayStore.alert=sustained: a settled payment's consumed mark has waited ten minutes or more to reach the shared store (Redis). This process refuses that payment from its own mark and the retry loop keeps writing it; until it lands, another container does not see the mark and a restart drops it. Check the Redis service and the server log for [replay-guard] lines; the operator view of /api/gateway-status carries the counts. Auto-closes when replayStore.status reads ok." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "replayStore is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # The route judgment's daily token ceiling (jevSpend, src/tool-judge.js):
@@ -732,15 +720,15 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.jevSpend.status // "unknown"' 2>/dev/null || echo unknown)
           echo "jevSpend: $STATUS"
-          TITLE="Route judgment token ceiling CAPPED for the day"
+          TITLE="Scheduled check needs review: route-judgment-budget"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports jevSpend.status=capped: the route judgment used its daily token ceiling (JEV_DAILY_MAX_TOKENS). Until the UTC day ends, route and route-execute rank without the judgment (the order before it): buyers are still served, with a weaker ranking. The day's tokens, the free share and the refusals are on the operator view of /api/gateway-status (jevSpend, operator token). Raise the ceiling on Railway or leave it. Auto-closes when the word reads ok." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif { [ "$STATUS" = "ok" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "jevSpend is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # The global unsettled external-spend ceiling (externalSpendGlobal,
@@ -756,15 +744,15 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.externalSpendGlobal.status // "unknown"' 2>/dev/null || echo unknown)
           echo "externalSpendGlobal: $STATUS"
-          TITLE="External spend global ceiling REFUSING"
+          TITLE="Scheduled check needs review: external-spend"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "refusing" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports externalSpendGlobal.status=refusing: the unsettled spend our route-execute wallets have put out to outside sellers, across every payer, reached the global ceiling, or a purchase was refused on it within the last minute. A route-execute purchase past the ceiling is refused before our wallet pays the seller (external routing reads as paused for every buyer) until earlier spends settle. Check the settle path for buyers whose payments are not landing (the operator views of /api/gateway-status and /__operator/refunds.json) and the [spend-guard] lines in the server log. Auto-closes when the word reads ok or off." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "externalSpendGlobal is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # Solana transaction-history reads (solanaHistory,
@@ -780,15 +768,15 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.solanaHistory.status // "unknown"' 2>/dev/null || echo unknown)
           echo "solanaHistory: $STATUS"
-          TITLE="Solana history reads FAILING on every lane"
+          TITLE="Scheduled check needs review: history-reads"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "failing" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports solanaHistory.status=failing: most recent Solana transaction-history reads failed on every lane, public and keyed. The revenue ledger and the Solana boards read through them and stop advancing until a lane answers. The per-lane counts, the reasons and the cache are on the operator view of /api/gateway-status (solanaHistory, operator token); check the keyed endpoint's variable on Railway. Auto-closes when the word reads publics or fallback." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif { [ "$STATUS" = "publics" ] || [ "$STATUS" = "fallback" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "solanaHistory is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # EVM log reads (evmLogs, src/evm-logs-rpc.js): failing pages (most
@@ -803,15 +791,15 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.evmLogs.status // "unknown"' 2>/dev/null || echo unknown)
           echo "evmLogs: $STATUS"
-          TITLE="EVM log reads FAILING on every lane"
+          TITLE="Scheduled check needs review: log-reads"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "failing" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports evmLogs.status=failing: most recent EVM log reads failed on every lane, public and configured. The revenue ledger's recent window, the Base board and the activity scans read through them and stop advancing until a lane answers. The per-caller counts are on the operator view of /api/gateway-status (evmLogs, operator token); check the configured RPC variables on Railway. Auto-closes when the word reads publics or fallback." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif { [ "$STATUS" = "publics" ] || [ "$STATUS" = "fallback" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "evmLogs is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # The primary speech link's breaker on /api/tts and /api/tts-hd
@@ -831,7 +819,7 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.speechUpstream.status // "unknown"' 2>/dev/null || echo unknown)
           echo "speechUpstream: $STATUS"
-          TITLE="Speech upstream breaker COOLING (backup voices serving)"
+          TITLE="Scheduled check needs review: speech-upstream"
           # The mark counts only on its own line after a blank line, where
           # the status Worker writes and reads it.
           MARK="First ok read at "
@@ -843,7 +831,7 @@ jobs:
             cooling)
               if [ -z "$EXISTING" ]; then
                 gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                  --body "/api/gateway-status reports speechUpstream.status=cooling: the primary speech link throttled or failed repeatedly, so its breaker is open and /api/tts and /api/tts-hd answer from the backup voices for the cool-down, which doubles on each trip up to its most. Buyers are still served. Check the [tts] lines in the server log and the upstream's status and credits. Auto-closes after two reads in a row of ok (a call served by the primary link) or probing (the cool-down ended: the next call tries the primary link, so the backups are no longer serving by default)." || true
+                  --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
               else
                 # A bad read after a first ok read starts the count again.
                 BODY_NOW=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
@@ -859,7 +847,7 @@ jobs:
                 BODY_NOW=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
                 case "$BODY_NOW" in
                   *"$NLMARK"*)
-                    gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "speechUpstream is ${STATUS}, the second clear read in a row; closing." || true
+                    gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
                     ;;
                   *)
                     gh issue edit "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW}"$'\n\n'"${MARK}$(date -u +%FT%TZ); closes on the next ok read." >/dev/null 2>&1 || true
@@ -883,15 +871,15 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.firstCallAllowance.status // "unknown"' 2>/dev/null || echo unknown)
           echo "firstCallAllowance: $STATUS"
-          TITLE="First-call allowance UNAVAILABLE (shared store)"
+          TITLE="Scheduled check needs review: first-call-allowance"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "unavailable" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports firstCallAllowance.status=unavailable: the first-call allowance could not read its day counters in the shared store (Redis), so no first call is granted. Buyers still meet the usual payment offer and nothing is refused for it, but the trial records nothing while it lasts. Check the Redis service and REDIS_URL on Railway, and the sharedLimits word; the last store error is on /__operator/refunds.json. Auto-closes when the word reads on or spent." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif { [ "$STATUS" = "on" ] || [ "$STATUS" = "spent" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "firstCallAllowance is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # x-search-recent's expanded-author reads today (xSearchAuthors,
@@ -906,15 +894,15 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.xSearchAuthors.status // "unknown"' 2>/dev/null || echo unknown)
           echo "xSearchAuthors: $STATUS"
-          TITLE="X search author reads OVER the daily alert"
+          TITLE="Scheduled check needs review: post-author-reads"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "alert" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports xSearchAuthors.status=alert: x-search-recent returned more expanded authors today than X_SEARCH_AUTHOR_DAILY_ALERT; X bills each expanded author as a user read. Every call is still served and nothing is refused. The day's count and the mark are on the operator view of /api/gateway-status (xSearchAuthors), the per-call histogram on /__operator/tool-failures.json; the daily X ceiling (X_DATA_DAILY_MAX_USD) still bounds the whole X spend. Auto-closes when the word reads ok (the next UTC day, or a raised mark)." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif { [ "$STATUS" = "ok" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "xSearchAuthors is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # The referral gate's settlements (referralSettlement, src/referral-gate.js):
@@ -931,12 +919,12 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.referralSettlement.status // "unknown"' 2>/dev/null || echo unknown)
           echo "referralSettlement: $STATUS"
-          TITLE="referralSettlement: referral settlements need attention"
+          TITLE="Scheduled check needs review: referral-settlement"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "attention" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports referralSettlement.status=attention: the referral copies of paid routes need an operator. The word reads attention while any of these holds: a settlement open past fifteen minutes (in doubt, charged and not yet delivered, or unconfirmed); a settlement kept for an operator (a settle success the chain contradicts, one whose receipt cannot be read, one whose receipt read in full does not prove the sale, or one the split contract routed to this merchant that the proof rule does not accept); a tool's sales arriving under the amount the commission map expects, or a tool stopped (its product id differs from the receipt's, or its sales arrive under its stop floor, or sales charged before its rate was proven hold its place); a tool listed for the referral copies that this server does not serve (refused at boot, for as long as it is listed), or one whose published example answer is over the answer bound (every request with no input is refused there, until a restart or an operator clears it); new payments held because contradicted successes came from several payers; unsettled runs from many payers, with payers that have no paid sale limited to a share of the run slots; many answers over the answer bound from one client address inside the unsettled-run window, each an unpaid tool run (an alarm only: nobody is refused for it, and it clears as those runs leave the window); the referral facilitator refused this server's own request in the last fifteen minutes; the facilitator left two or more calls in a row unanswered over ten minutes, or the chain head could not be read for five (both age out thirty minutes after the last such call); an intent to settle could not be stored, the settlement store is not taking writes, or intent writes to it failed or were late in the last five minutes; the settlement book is full; a settlement was retired at capacity or closed as unrecognized in the last day and has not been acknowledged; or records of refused settles dropped at capacity went without a verdict in the last day (given up, or pushed out), so a payment that landed for one of them would not have been found, and that has not been acknowledged. The reasons and the open settlements are on the operator view (/__operator/referral.json, operator token), where an entry is resolved by hand with a note, entries of one state are resolved together, and the retired, closed and dropped records are acknowledged. No payment on a referral copy is settled twice. While the book is full, the store is not taking writes, the chain head cannot be read, or this server's own request keeps being refused, paid calls on the referral copies are answered as unavailable before anything runs. Auto-closes when the word reads ok." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
             # One issue covers every reason, so a NEW reason arriving while it is
             # open is said on it. The operator view's tag is a digest of which
@@ -958,19 +946,19 @@ jobs:
                   if printf '%s' "$MARK" | grep -Eq '^[0-9a-f]{24}$'; then
                     SEEN=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body] | join(" ")' 2>/dev/null || echo "unreadable reasons mark $MARK")
                     if ! printf '%s' "$SEEN" | grep -q "reasons mark $MARK"; then
-                      gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "The reasons mark is now: reasons mark $MARK (read at $(date -u +%FT%TZ)). A mark that differs from the one in the comment before it means a reason was added or cleared. Read /__operator/referral.json." >/dev/null 2>&1 || true
+                      gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID reasons mark $MARK" >/dev/null 2>&1 || true
                     fi
                   fi
                 else
-                  SEEN=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body] | join(" ")' 2>/dev/null || echo "unreadable: the reasons on this issue can change while it is open")
-                  if ! printf '%s' "$SEEN" | grep -q "the reasons on this issue can change while it is open"; then
-                    gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "Note: the reasons on this issue can change while it is open (one may be added or cleared). Read /__operator/referral.json for the current ones." >/dev/null 2>&1 || true
+                  SEEN=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body] | join(" ")' 2>/dev/null || echo "unreadable state: unmarked")
+                  if ! printf '%s' "$SEEN" | grep -q "state: unmarked"; then
+                    gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID state: unmarked" >/dev/null 2>&1 || true
                   fi
                 fi
               fi
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "referralSettlement is ok; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # Balance reads behind the in-flight coverage check (coverageReads,
@@ -992,7 +980,7 @@ jobs:
           ROW=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '(.coverageReads.status // "unknown") + " " + (.coverageReads.alert // "unknown")' 2>/dev/null || echo "unknown unknown")
           STATUS=${ROW%% *}; ALERT=${ROW##* }
           echo "coverageReads: $STATUS (alert $ALERT)"
-          TITLE="Coverage balance reads DEGRADED (calls in flight)"
+          TITLE="Scheduled check needs review: coverage-balance-reads"
           # The mark counts only on its own line after a blank line, where
           # the status Worker writes and reads it.
           MARK="First ok read at "
@@ -1005,7 +993,7 @@ jobs:
           if [ "$ALERT" = "sustained" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports coverageReads.alert=sustained: in three or more separate minutes of the last ten, paid calls from three or more wallets were started or refused without a balance read made for them (the read failed or took too long), so the check that a wallet's paid calls in flight are covered together (src/inflight-cover.js) judged them on each wallet's last good read, or on the fixed allowance of calls at once for a wallet with no recent read. A call a kept read covers is still served. One wallet's unread balance, however many calls it sends, reads coverageReads.status=degraded and opens nothing. Check the RPC endpoints the balance reads use and the server log; the counts are on the operator view of /api/gateway-status (inflightCover). Auto-closes after two reads in a row whose coverageReads.alert reads ok (coverageReads.status may still read degraded then: one wallet keeps nothing open) or whose coverageReads.status reads off." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             else
               # A sustained read after a first clear read starts the count again.
               BODY_NOW=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
@@ -1019,7 +1007,7 @@ jobs:
             BODY_NOW=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
             case "$BODY_NOW" in
               *"$NLMARK"*)
-                gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "coverageReads alert is ${ALERT} (status ${STATUS}), the second clear read in a row; closing." || true
+                gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
                 ;;
               *)
                 gh issue edit "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW}"$'\n\n'"${MARK}$(date -u +%FT%TZ); closes on the next ok read." >/dev/null 2>&1 || true
@@ -1039,15 +1027,15 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.mppSubscriptions.status // "unknown"' 2>/dev/null || echo unknown)
           echo "mppSubscriptions: $STATUS"
-          TITLE="MPP subscription engine FAILED to start"
+          TITLE="Scheduled check needs review: subscription-engine"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "failed" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports mppSubscriptions.status=failed: MPP recurring subscriptions are configured but the engine did not build at boot (the installed mppx has no subscription method, or the build threw or refused), so the recurring-monitor routes are not mounted and renewals of existing subscriptions do not run. Read the [mpp-subs] init failed line in the boot log on Railway, then fix and redeploy. Auto-closes when the word reads on or off." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif { [ "$STATUS" = "on" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "mppSubscriptions is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # The weather kit's Open-Meteo reads (openMeteo, server.js): refused
@@ -1062,15 +1050,15 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.openMeteo.status // "unknown"' 2>/dev/null || echo unknown)
           echo "openMeteo: $STATUS"
-          TITLE="Open-Meteo keyed reads REFUSED"
+          TITLE="Scheduled check needs review: weather-keyed-reads"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "refused" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports openMeteo.status=refused: Open-Meteo refused the weather tools' keyed requests (two in a row, or one bad-request answer naming the API key) with no keyed success since (the key was not accepted, or does not cover that API), so those calls answer a temporary service error. Read the [open-meteo] keyed request refused line in the server log on Railway, then check OPEN_METEO_API_KEY and the Open-Meteo account. Auto-closes when the word reads ok or off." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "openMeteo is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # The MPP reconciler's own run word (mppReconcile.run,
@@ -1086,15 +1074,15 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.mppReconcile.run // "unknown"' 2>/dev/null || echo unknown)
           echo "mppReconcile.run: $STATUS"
-          TITLE="MPP daily reconciliation is NOT RUNNING"
+          TITLE="Scheduled check needs review: payment-reconciliation-run"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "stale" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports mppReconcile.run=stale: the daily MPP reconciliation (src/mpp-reconcile.js) has not finished a run inside its allowed gap, so MPP sales are not being checked against the chain and the mismatch alarms read unknown. Read /__operator/mpp-reconcile.json (operator token) and the [mpp-reconcile] lines in the server log on Railway. A run that failed is tried again on the hourly check and can be started from the operator endpoint. A run that never ended holds every later one, an operator's included (it joins the run in flight): restart the service. Auto-closes when the word reads ok or off." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "mppReconcile.run is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       # The router's per-minute holds for outside sellers
@@ -1110,15 +1098,15 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.routerSpendWindow.status // "unknown"' 2>/dev/null || echo unknown)
           echo "router spend window: $STATUS"
-          TITLE="Router spend per minute OVER its ceiling"
+          TITLE="Scheduled check needs review: router-spend"
           EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports routerSpendWindow.status=over or capped. On over, what the router's spending wallet held for outside sellers inside one minute passed SOR_SPEND_CAP_ATOMIC and every purchase was still made (each one is for a buyer who is paying for it). On capped, a purchase that would have passed SOR_SPEND_HARD_CAP_ATOMIC inside one minute was refused before anything was signed. Each word holds for an hour after the last such minute. Read the router's purchases and the spending wallets on the operator view: for steady buyer volume raise the two ceilings on Railway; purchases that no buyer payment settled stay bounded per payer and per chain per day by the external spend guard. Closes when the word reads ok or off." || true
+                --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." || true
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "routerSpendWindow is ${STATUS}; closing." || true
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
 
       - name: Algorand upstream buyer wallet check (alarm on low AVM spending balance)
@@ -1127,16 +1115,16 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyerAvm.status // "unknown"' 2>/dev/null || echo unknown)
           echo "algorand upstream buyer wallet: $STATUS"
-          TITLE="Algorand upstream buyer wallet LOW (x402)"
+          TITLE="Scheduled check needs review: algorand-buyer-wallet"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD), or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (x402 buyers are not charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # Solana (SVM) spending-wallet check - same pattern: this wallet pays
@@ -1148,16 +1136,16 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyerSvm.status // "unknown"' 2>/dev/null || echo unknown)
           echo "solana upstream buyer wallet: $STATUS"
-          TITLE="Solana upstream buyer wallet LOW (x402)"
+          TITLE="Scheduled check needs review: solana-buyer-wallet"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Solana x402 spending wallet (SOLANA_UPSTREAM_BUYER_KEY) behind the SOR's Solana external routing is below the low-water mark (SOLANA_UPSTREAM_BUYER_LOW_USD). When it empties, Solana external routing fails 502 (x402 buyers are not charged, but the path goes dark). Top up: send USDC on Solana to the SVM spending wallet address."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # EVM spending wallet on the other chains SOR_EVM_CHAINS enables - the
@@ -1175,32 +1163,32 @@ jobs:
           STATUS=$(echo "$BODY" | jq -r '.upstreamBuyerEvm.status // "unknown"' 2>/dev/null || echo unknown)
           LOW=$(echo "$BODY" | jq -r '[.upstreamBuyerEvm.chains // {} | to_entries[] | select(.value.status == "low") | .key] | join(", ")' 2>/dev/null || echo "")
           echo "evm chains upstream buyer wallet: $STATUS ${LOW:+(low: $LOW)}"
-          TITLE="EVM chains upstream buyer wallet LOW (x402)"
+          TITLE="Scheduled check needs review: evm-buyer-wallets"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD_<CHAIN>, else UPSTREAM_BUYER_LOW_USD) on: $LOW. External routing on that chain refuses 503 while it reads low (x402 buyers are not charged). Top up: send that chain's stablecoin to the spending wallet address on that chain."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ) on: $LOW."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ] || [ "$STATUS" = "unconfigured" ]; then
             if [ -n "$OPEN" ]; then
               if [ "$STATUS" = "ok" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every enabled chain back above the low-water mark at $(date -u +%FT%TZ)."
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
               else
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed: no enabled chain spends from this wallet now (upstreamBuyerEvm.status=$STATUS) at $(date -u +%FT%TZ)."
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
               fi
             fi
           fi
           UNKNOWN_MIN=$(echo "$BODY" | jq -r '.upstreamBuyerEvm.unknownForMinutes // 0' 2>/dev/null || echo 0)
-          TITLE2="EVM chains upstream buyer wallet UNREADABLE (x402)"
+          TITLE2="Scheduled check needs review: evm-buyer-wallets-read"
           OPEN2=$(ISSUE_TITLE="$TITLE2" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE2\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "unknown" ] && [ "${UNKNOWN_MIN:-0}" -ge 60 ] 2>/dev/null; then
             if [ -z "$OPEN2" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "/api/gateway-status has reported upstreamBuyerEvm.status=unknown for an hour or more: the spending wallet's balance could not be read on at least one chain SOR_EVM_CHAINS enables, so the low-balance alarm for that chain is blind. Check that chain's RPC (EVM_RPC_<chain id>) and the server log. Auto-closes on the next readable read."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
           elif [ -n "$OPEN2" ] && { [ "$STATUS" = "ok" ] || [ "$STATUS" = "low" ] || [ "$STATUS" = "off" ] || [ "$STATUS" = "unconfigured" ]; }; then
-            gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the balance reads again (upstreamBuyerEvm.status=$STATUS)."
+            gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # Tempo (MPP) spending-wallet check - same pattern: this wallet pays MPP
@@ -1212,16 +1200,16 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyerTempo.status // "unknown"' 2>/dev/null || echo unknown)
           echo "tempo upstream buyer wallet: $STATUS"
-          TITLE="Tempo upstream buyer wallet LOW (MPP)"
+          TITLE="Scheduled check needs review: tempo-buyer-wallet"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Tempo spending wallet (TEMPO_UPSTREAM_BUYER_KEY) behind the SOR's MPP external routing is below the low-water mark (TEMPO_UPSTREAM_BUYER_LOW_USD) in USDC.e on Tempo. When it empties, MPP external routing fails and the path goes dark (a pull buyer is not charged on Tempo; a push transfer sent before the call is recorded as owed and repaid). Top up: send USDC on Tempo (0x20C0...8b50) to the Tempo spending wallet address."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # The state database (src/state-db.js): the stores that left the /data
@@ -1241,16 +1229,16 @@ jobs:
           STATUS=$(read_sdb)
           if [ "$STATUS" = "degraded" ]; then sleep 30; STATUS=$(read_sdb); fi
           echo "state database: $STATUS"
-          TITLE="State database DEGRADED (Postgres)"
+          TITLE="Scheduled check needs review: state-database"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "degraded" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status.stateDb reports **degraded** on two readings 30 s apart: the Postgres behind STATE_DATABASE_URL refused, dropped or hung on a statement, its schema setup failed, or a moved store has not loaded since boot. The moved stores (subscriptions, alerts, monitor runs, listings, leaderboards, logs) cannot be written while it lasts; loops with external effects skip their ticks, internal loops on a container up for more than ten minutes keep running without their lease. Check the Postgres service on Railway and the boot log ([state-db] lines). Auto-closes when the status reads on."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATUS" = "on" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the state database reads on at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # The nightly offsite backup (src/backup.js): one word on
@@ -1271,19 +1259,19 @@ jobs:
           WORD=$(read_bk)
           case "$WORD" in held|failed|stale|unencrypted|unconfigured) sleep 30; WORD=$(read_bk) ;; esac
           echo "offsite backup: $WORD"
-          TITLE="Offsite backup is not current"
+          TITLE="Scheduled check needs review: offsite-backup"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             held|failed|stale|unencrypted|unconfigured)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports backup.status=$WORD on two readings 30 s apart. held: the last run left a state table, or the whole database snapshot, without an offsite copy (older days are kept, not pruned, while this lasts). failed: the last run threw (bucket unreachable, bill guard, unreadable data dir, or a BACKUP_ENCRYPTION_KEY that is set but does not parse). stale: no successful run in 26 h. unencrypted: BACKUP_ENCRYPTION_KEY is unset in production, so objects go up as plain gzip. unconfigured: the BACKUP_S3_* bucket variables are unset in production with a state database, so no backup runs at all. Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backup] log line; POST /__operator/backup/run retries. Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             ok)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the offsite backup reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -1301,16 +1289,16 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.stellarFacilitator.status // "unknown"' 2>/dev/null || echo unknown)
           echo "stellar facilitator fee account: $STATUS"
-          TITLE="Stellar facilitator fee account LOW (XLM)"
+          TITLE="Scheduled check needs review: stellar-fee-account"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The self-hosted Stellar facilitator's signing account is below its low-water mark (FACILITATOR_LOW_BALANCE_XLM on the agent402-facilitator service). That account pays the transaction fee on every Stellar settlement, so when it empties, Stellar settlements stop landing - x402 buyers are not charged, but the rail goes dark and the paid canary reports it as a rail failure rather than as an empty wallet. Top up: send XLM to the address on the facilitator's GET /health (signerAddress). Auto-closes when the balance recovers."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # Sanctions lists (OFAC SDN) behind sanctions-wallet, sanctions-name and the
@@ -1324,16 +1312,16 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.sanctions.status // "unknown"' 2>/dev/null || echo unknown)
           echo "sanctions lists: $STATUS"
-          TITLE="Sanctions lists STALE or UNLOADED (OFAC SDN)"
+          TITLE="Scheduled check needs review: screening-lists"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "stale" ] || [ "$STATUS" = "unloaded" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The OFAC SDN list behind sanctions-wallet, sanctions-name and the router's payout screen reads $STATUS on /api/gateway-status. stale: the 12-hourly refresh has failed for over a day and screening is answering from an old copy. unloaded: it never loaded after boot and every screening call is refused 503. The operator view of /api/gateway-status carries the last error; the source is OFAC's SDN.XML export, loaded by src/ofac-sdn.js for src/tools/sanctions-kit.js. Auto-closes when it reads ok."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $STATUS at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the list reads ok at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # The payment-party screen (src/sanctions-screen.js) of Tempo direct mode
@@ -1351,16 +1339,16 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.sanctionsScreen.status // "absent"' 2>/dev/null || echo unknown)
           echo "payment-party screen: $STATUS"
-          TITLE="Payment-party screen STALE or MISSING (OFAC SDN)"
+          TITLE="Scheduled check needs review: payment-party-screen"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "stale" ] || [ "$STATUS" = "missing" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The payment-party screen reads $STATUS on /api/gateway-status (sanctionsScreen.status). stale: no successful refresh in two refresh periods (12 h by default) and the screen is checking payments against the last good set. missing: no list is loaded, so Tempo direct mode offers no tempo challenge and x402 payments are served unscreened until one loads. The operator view of /api/gateway-status carries lastError and lastAttemptAt; the source is OFAC's SDN.XML export (src/ofac-sdn.js, read by src/sanctions-screen.js). Auto-closes when it reads fresh."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $STATUS at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATUS" = "fresh" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the screen reads fresh at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # Subscription gas sponsor - watches PATHUSD, not USDC.e. A sponsored
@@ -1377,16 +1365,16 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.subscriptionFeePayer.status // "unknown"' 2>/dev/null || echo unknown)
           echo "subscription gas sponsor: $STATUS"
-          TITLE="Subscription gas sponsor LOW (PathUSD)"
+          TITLE="Scheduled check needs review: subscription-gas-sponsor"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Tempo subscription gas sponsor (TEMPO_SUBSCRIPTION_FEE_PAYER_KEY) is low on PathUSD. Gas on this rail is paid in PathUSD, NOT the USDC.e the products are priced in, so topping up the wrong token will not fix it. While it is empty, activations fail 402 (nobody is charged) but renewals go past_due, which means existing subscribers are served for free until their grace window ends. Top up via the fund-tempo-fee-payer workflow with token=pathusd."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: PathUSD back above the low-water mark at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # Subscription gas sponsor ceiling (src/tempo-sponsor-ceiling.js): our own
@@ -1398,16 +1386,16 @@ jobs:
         run: |
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.subscriptionFeePayer.ceiling // "unknown"' 2>/dev/null || echo unknown)
           echo "subscription gas sponsor ceiling: $WORD"
-          TITLE="Subscription gas sponsor CEILING reached"
+          TITLE="Scheduled check needs review: subscription-gas-sponsor-limit"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$WORD" = "reached" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Tempo subscription gas sponsor reached its rolling 24 h ceiling (MPP_SUB_SPONSOR_DAILY_MAX_TX or MPP_SUB_SPONSOR_DAILY_MAX_USD, src/tempo-sponsor-ceiling.js): every sponsored send is refused before broadcast until the window rolls, so activations fail 402 (nobody charged) and RENEWALS go past_due, which means existing subscribers are served for free until their grace window ends. The server log names the knob that refused. Read the sponsored-send pattern before raising the knob on Railway; the issue closes when subscriptionFeePayer.ceiling reads ok."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still reached at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$WORD" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the sponsor window is back under its ceiling at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # Operator-token guessing: the per-IP limiter caps one source; this is the
@@ -1422,16 +1410,16 @@ jobs:
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.operatorAuth.status // "unknown"' 2>/dev/null || echo unknown)
           echo "operator auth: $STATUS"
-          TITLE="Operator token guessing ELEVATED"
+          TITLE="Scheduled check needs review: operator-auth"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "elevated" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports operatorAuth.status=elevated: wrong operator credentials in the last hour are at or above OPERATOR_AUTH_FAIL_ALERT (the operator view of the same route has the count). The per-IP limiter caps each source; this is the aggregate. If it persists, rotate AGENT402_OPERATOR_TOKEN on Railway and in Actions secrets. Auto-closes when the rate drops." >/dev/null 2>&1 || echo "issue create failed"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still elevated at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: wrong-credential rate back under the threshold at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
           fi
 
       # Server tweet queue (src/tweet-queue.js): one word on /api/gateway-status.
@@ -1444,19 +1432,19 @@ jobs:
         run: |
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.tweetQueue.status // "unknown"' 2>/dev/null || echo unknown)
           echo "tweet queue: $WORD"
-          TITLE="Tweet queue needs attention (server poster)"
+          TITLE="Scheduled check needs review: post-queue"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             halted|no_credentials|refused|in_doubt)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports tweetQueue.status=$WORD. in_doubt: a post may not have reached X and its one retry is used - read /__operator/tweet-queue.json for the ids, check X, re-queue a missing post under a new id and remove the old id from TWEET_QUEUE. refused: X answered 401/402/403 (credentials or API balance). no_credentials: an X_* key is missing on Railway. halted: TWEET_QUEUE is not a JSON array, the state file on /data cannot be read, or there is no volume. Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             ok|off)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: tweet queue reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -1470,19 +1458,19 @@ jobs:
         run: |
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.circlePending.status // "unknown"' 2>/dev/null || echo unknown)
           echo "circle pending: $WORD"
-          TITLE="Arc pending settlements need attention"
+          TITLE="Scheduled check needs review: arc-settlements"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports circlePending.status=$WORD. unresolved: an Arc settlement Circle reported as pending could not be resolved from its /status after repeated reads or within seven days; it is kept, never dropped. Look its paymentId up with Circle and on the Arc explorer, then book a refund if it settled. full: the pending book reached its bound and refused a new entry (the server log names it). Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             ok|off)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: circlePending reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -1498,19 +1486,19 @@ jobs:
         run: |
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.gatewayPending.status // "unknown"' 2>/dev/null || echo unknown)
           echo "gateway pending: $WORD"
-          TITLE="Gateway pending settlements need attention"
+          TITLE="Scheduled check needs review: gateway-settlements"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports gatewayPending.status=$WORD. unresolved: a batched payment Circle Gateway answered as pending is still waiting past its bound; the resolver reads it every ten minutes and keeps it until Gateway reports it settled or failed. Read it on /__operator/gateway-pending.json and look its nonce up in Gateway's transfer history. full: the pending book reached its bound and refused a new entry (the server log names it). A settled, unserved entry becomes an owed refund (refundsOwed). Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             ok|off)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: gatewayPending reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -1525,19 +1513,19 @@ jobs:
         run: |
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.lateSettlements.status // "unknown"' 2>/dev/null || echo unknown)
           echo "late settlements: $WORD"
-          TITLE="Late settlements need attention"
+          TITLE="Scheduled check needs review: late-settlements"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports lateSettlements.status=$WORD. unresolved: a failed settlement that named a transaction or an authorization, on an EVM chain, Solana or Algorand, could not be proven landed or absent within a day (or the reads kept failing) and is kept, never dropped; or a booking sits in the journal outside the book; or a booking could not be recorded anywhere in the last day. Unresolved entries are read on chain again every few hours and close themselves once the chain answers. Read them on /__operator/refunds.json (unconfirmedSettlements) and look each transaction up on the chain's explorer, then clear each one with POST /__operator/late-settlements: action resolve, the entry key, an outcome (booked_owed writes the refund debt, paid needs the refund transaction, dismissed when nothing moved to us) and a note saying what was checked. An unrecorded booking (the server log names it) is cleared with action acknowledge_unrecorded and a note. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok or near_capacity." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             ok|near_capacity)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: lateSettlements reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -1552,17 +1540,17 @@ jobs:
         run: |
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.revenueLive.status // "unknown"' 2>/dev/null || echo unknown)
           echo "revenue live: $WORD"
-          TITLE="Live revenue read is stale"
+          TITLE="Scheduled check needs review: revenue-read"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             stale)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports revenueLive.status=stale: the live revenue snapshot (/api/revenue asOf) is past its refresh period and grace, or misses a rail that is offered. Read /api/revenue freshness and the server log for the scan; a failed scan retries after a short backoff. Auto-closes when the word reads fresh or due." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               fi
               ;;
             fresh|due)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: revenueLive reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -1591,34 +1579,21 @@ jobs:
           case "$CARD" in none|pending|refused|unknown) ;; *) CARD="" ;; esac
           echo "refunds owed: $WORD (ledger ${LEDGER:-unread}, card ${CARD:-unread})"
           WF="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/refund.yml"
-          TITLE="Refunds owed to a buyer are waiting"
+          TITLE="Scheduled check needs review: refunds"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
-          LEDGER_TEXT="owed: a buyer's debt is in the refund ledger - read /__operator/refunds.json, then run the refund workflow ($WF): dry run first, then live (include_repeat_hangups for repeat hang-up debts, include_review_holds for rows a route marked held for review; void a debt that should not be paid, with a note)."
-          case "$LEDGER" in
-            ok) LEDGER_TEXT="The refund ledger owes nothing (ledger=ok)." ;;
-            unknown) LEDGER_TEXT="The refund ledger could not be read (ledger=unknown); read /__operator/refunds.json." ;;
-          esac
-          case "$CARD" in
-            pending) CARD_TEXT="Card reports (card=pending): every card report refund past the notice is one Stripe accepted and has not finished yet. The money is on its way back to the buyer and nothing is needed. The server reads these again every few minutes and records each refund once Stripe completes it; the issue closes then." ;;
-            refused) CARD_TEXT="Card reports (card=refused): a card report refund was refused by Stripe or could not be sent. The owed ones are listed on /__operator/human-checkout.json (refundOwed); an entry marked pending is still in progress at Stripe and needs nothing. Refund each of the others in the Stripe dashboard." ;;
-            none) CARD_TEXT="Card reports (card=none): no card report refund is owed." ;;
-            unknown) CARD_TEXT="Card reports (card=unknown): the owed card refund list could not be read; read /__operator/human-checkout.json." ;;
-            *) CARD_TEXT="A card report whose refund Stripe refused is listed on /__operator/human-checkout.json (refundOwed): refund it in the Stripe dashboard." ;;
-          esac
           case "$WORD" in
             owed|aging|stuck)
-              BODY="/api/gateway-status reports refundsOwed.status=$WORD at $(date -u +%FT%TZ). The counts are on /__operator/refunds.json, never in this public issue. $LEDGER_TEXT $CARD_TEXT aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48). stuck: a row has been in sending for over 30 minutes - check the refund wallet on chain, then mark it paid with the tx or release it back to owed. Auto-closes when nothing is owed."
               # A debt can stay owed for days (held for review), so an open
               # issue is updated in place rather than commented every run.
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY" >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$BODY" >/dev/null 2>&1 || true
+                echo "already tracked in #$OPEN"
               fi
               ;;
             ok)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: refunds owed reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -1636,18 +1611,18 @@ jobs:
           WORD=$(printf '%s' "$GW" | jq -r '.creditsRefunds.status // "unknown"' 2>/dev/null || echo unknown)
           case "$WORD" in owed|ok|unknown) ;; *) WORD=unknown ;; esac
           echo "credits refunds: $WORD"
-          TITLE="A refused credits purchase was not refunded"
+          TITLE="Scheduled check needs review: credits-refund"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             owed)
               BODY="/api/gateway-status reports creditsRefunds.status=owed at $(date -u +%FT%TZ): a credits purchase was refused (the daily purchase limit, or an EU or UK billing address without a VAT number), issued no key, and its automatic card refund failed. Read the session ids on /__operator/credits.json (refusalsToRefund), refund each payment in the Stripe dashboard, then POST /__operator/credits/refusal-refunded {\"session\":\"cs_...\"}. Auto-closes when nothing is owed."
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY" >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               fi
               ;;
             ok)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: credits refunds reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -1665,20 +1640,20 @@ jobs:
           WORD=$(printf '%s' "$GW" | jq -r '.cdnOrigin.status // "unknown"' 2>/dev/null || echo unknown)
           case "$WORD" in unauthenticated|ok|off|unknown) ;; *) WORD=unknown ;; esac
           echo "cdn origin: $WORD"
-          TITLE="CDN origin secret: edge traffic reached the origin unauthenticated"
+          TITLE="Scheduled check needs review: cdn-origin"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             unauthenticated)
               BODY="/api/gateway-status reports cdnOrigin.status=unauthenticated at $(date -u +%FT%TZ): requests from the CDN's address ranges reached the origin without a valid X-Origin-Auth inside the last hour. While that lasts each such request is keyed on the edge address, not its client, so the per-address limiters, budgets and attribution fold onto a few addresses. Check CDN_ORIGIN_SECRET on Railway against the header rule on the proxy (a rotation on one side only reads exactly like this); the operator view of /api/gateway-status carries the count and whether a secret is configured. Auto-closes when the word is ok."
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY" >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still unauthenticated at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             ok|off)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: cdnOrigin reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -1698,19 +1673,19 @@ jobs:
           WORD=$(read_od)
           if [ "$WORD" = "burst" ]; then sleep 30; WORD=$(read_od); fi
           echo "outbound destinations: $WORD"
-          TITLE="Outbound payments reached a burst of NEW destinations"
+          TITLE="Scheduled check needs review: outbound-payments"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             burst)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports outboundDestinations.status=burst on two readings 30 s apart: inside the last OUTBOUND_NEW_DEST_WINDOW_H hours (default 24) our spending wallets paid more recipients for the first time than OUTBOUND_NEW_DEST_BURST (default 10). A normal day reaches a few at most (a seller the router has just proven, a payability probe, the unproven lane). Read /__operator/outbound-destinations.json for the chain, recipient, origin and time of each first sighting, and match them against the proven-seller pool and the route-execute receipts of the same hours; a run of recipients no seller in the pool names is a wallet or a router being steered. The operator read of /api/gateway-status has the counts. Auto-closes when the word is ok or new." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             ok|new)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: outbound destinations read $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -1741,35 +1716,35 @@ jobs:
             OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
             if echo " $BAD " | grep -q " $WORD "; then
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports ${FIELD}.status=$WORD. The detail is on the operator endpoint, $ENDPOINT (operator token). Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
             elif echo " $GOOD " | grep -q " $WORD "; then
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: ${FIELD} reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
             fi
           }
-          TITLE="toolFailures: a tool is answering 5xx to buyers"
+          TITLE="Scheduled check needs review: tool-failures"
           check_word toolFailures "degraded failing" "ok"
-          TITLE="upstreamHealth: an upstream is timing out or failing"
+          TITLE="Scheduled check needs review: upstream-health"
           check_word upstreamHealth "degraded failing" "ok"
           # Our own limit passed on one upstream for several callers while
           # others answered (src/unanswered-rule.js): its own neutral title.
-          TITLE="upstreamHealth: an upstream did not answer within our limit"
+          TITLE="Scheduled check needs review: upstream-health (b)"
           check_word upstreamHealth "unanswered" "ok"
-          TITLE="facilitatorFunds: a facilitator refused settlement"
+          TITLE="Scheduled check needs review: facilitator-funds"
           check_word facilitatorFunds "refused demoted" "ok"
           # A settlement signer short of gas, before any refusal: its own title.
           # A balance our checker could not read reads unknown, which pages
           # under its own title (below) only once it has held for hours.
-          TITLE="facilitatorFunds: a facilitator's settlement gas is running low"
+          TITLE="Scheduled check needs review: facilitator-funds (b)"
           check_word facilitatorFunds "low" "ok"
           # A signer balance our checker could not read pages only once
           # unknown has held past FACILITATOR_UNREAD_PAGE_HOURS (alert=sustained,
           # src/tool-failure-monitor.js); a read balance (ok or low) closes it.
-          TITLE="facilitatorFunds: a settlement signer's balance could not be read for hours"
+          TITLE="Scheduled check needs review: facilitator-funds (c)"
           FA=$(echo "$GS" | jq -r '.facilitatorFunds.alert // "none"' 2>/dev/null || echo none)
           if [ "$FA" = "sustained" ]; then UNREAD_BAD="unknown"; else UNREAD_BAD="_not-sustained_"; fi
           check_word facilitatorFunds "$UNREAD_BAD" "ok low"
@@ -1777,50 +1752,50 @@ jobs:
           # closes on ok, low or unknown (the two titles above take over those
           # states, so it never stays open beside them). The bad list is a word
           # no status reads, so it never opens.
-          TITLE="facilitatorFunds: a facilitator's settlement gas is running low or could not be read"
+          TITLE="Scheduled check needs review: facilitator-funds (d)"
           check_word facilitatorFunds "_close-only_" "ok low unknown"
           # The settle breaker refused a buyer that had settled a call in its
           # window (src/gateway-settle-breaker.js): refusing pages, ok closes.
-          TITLE="buyerRefusals: a paying buyer was refused by the settle breaker"
+          TITLE="Scheduled check needs review: buyer-refusals"
           check_word buyerRefusals "refusing" "ok"
           # Distinct buyers whose /v1 payments verified and then failed to
           # settle reached the breaker's count inside one window
           # (src/gateway-settle-breaker.js): burst pages, ok closes. No request
           # is refused for it.
-          TITLE="settleFailures: a burst of buyers' payments verified and then failed to settle"
+          TITLE="Scheduled check needs review: settle-failures"
           check_word settleFailures "burst" "ok" "/api/gateway-status"
           # Report and media runs that spent upstream and then did not settle
           # reached the composite guard's count inside one window
           # (src/composite-spend-guard.js): burst pages, ok closes. No request
           # is refused for it.
-          TITLE="unsettledReports: a burst of report runs were served and then did not settle"
+          TITLE="Scheduled check needs review: unsettled-reports"
           check_word unsettledReports "burst" "ok" "/api/gateway-status"
           # Our own relayer settling Robinhood Chain sales in the listed
           # facilitator's place for longer than ROBINHOOD_RELAYER_FIRST_ALERT_HOURS
           # (src/robinhood-order.js): relayer pages, ok and off close.
-          TITLE="robinhoodSettler: our own relayer has been settling Robinhood sales for hours"
+          TITLE="Scheduled check needs review: robinhood-settler"
           check_word robinhoodSettler "relayer" "ok off"
           # A wallet-billed monitor renewal unconfirmed (its send's landing
           # undecided by the chain read) for longer than
           # MPP_SUB_UNCONFIRMED_ALERT_HOURS (src/mpp-subscriptions.js):
           # unconfirmed pages, ok and off close.
-          TITLE="subscriptionRenewals: a monitor renewal has stayed unconfirmed for hours"
+          TITLE="Scheduled check needs review: subscription-renewals"
           check_word subscriptionRenewals "unconfirmed" "ok off" "/__operator/monitors.json"
           # The direct upstream (src/gateway-direct-pricebook.js): degraded
           # pages (the reason code is on the operator read only); ok and off
           # close; starting does neither.
-          TITLE="directUpstream: the direct upstream is degraded"
+          TITLE="Scheduled check needs review: direct-upstream"
           check_word directUpstream "degraded" "ok off" "/__operator/direct-upstream.json"
           # The direct upstream's spend for the UTC day passed
           # DIRECT_UPSTREAM_DAILY_ALERT_USD (src/direct-upstream-spend.js): high
           # pages (an alarm only, every call is still served); ok and off close;
           # unknown (the shared day not read yet) does neither.
-          TITLE="directUpstreamSpend: the direct upstream's daily spend is high"
+          TITLE="Scheduled check needs review: direct-upstream-spend"
           check_word directUpstreamSpend "high" "ok off" "/__operator/direct-upstream.json"
           # Its latest answer was a 402 balance refusal (those calls were served
           # by OpenRouter): exhausted pages; ok and off close; starting (a new
           # process has seen neither outcome) does neither.
-          TITLE="directUpstreamBalance: the direct upstream's prepaid balance is exhausted"
+          TITLE="Scheduled check needs review: direct-upstream-balance"
           check_word directUpstreamBalance "exhausted" "ok off" "/__operator/direct-upstream.json"
 
       # Paid 200s whose body is empty or error-shaped (src/answer-shape.js,
@@ -1841,7 +1816,7 @@ jobs:
         run: |
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.containedTurns.status // "unknown"' 2>/dev/null || echo unknown)
           echo "containedTurns: $WORD"
-          TITLE="containedTurns: a scheduled turn is throwing every minute"
+          TITLE="Scheduled check needs review: contained-turns"
           # The mark counts only on its own line after a blank line, where
           # the status Worker writes and reads it.
           MARK="First ok read at "
@@ -1853,9 +1828,9 @@ jobs:
           case "$WORD" in
             repeating)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports containedTurns.status=repeating: a background turn (a drain slice, a rebuild step, a timer tick) has thrown in each of the last three or more consecutive minutes; the throw is caught and counted, so the process stays up and the work it guards is not being done. The names and counts are on the operator endpoint, /__operator/perf.json (containedTurns, operator token), and the server log carries one [contained-turn] line per name per minute. Auto-closes after two ok reads in a row." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still repeating at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
                 # A bad read after a first ok read starts the count again.
                 BODY_NOW=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
                 case "$BODY_NOW" in
@@ -1872,7 +1847,7 @@ jobs:
                 BODY_NOW=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
                 case "$BODY_NOW" in
                   *"$NLMARK"*)
-                    gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: containedTurns reads ok at $(date -u +%FT%TZ), the second ok read in a row." >/dev/null 2>&1 || true
+                    gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
                     ;;
                   *)
                     gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW}"$'\n\n'"${MARK}$(date -u +%FT%TZ); closes on the next ok read." >/dev/null 2>&1 || true
@@ -1894,7 +1869,7 @@ jobs:
         run: |
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.brokenListings.status // "unknown"' 2>/dev/null || echo unknown)
           echo "brokenListings: $WORD"
-          TITLE="brokenListings: seller listings are failing to read across many origins"
+          TITLE="Scheduled check needs review: seller-listings"
           # The mark counts only on its own line after a blank line, where
           # the status Worker writes and reads it.
           MARK="First ok read at "
@@ -1906,9 +1881,9 @@ jobs:
           case "$WORD" in
             widespread)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports brokenListings.status=widespread: inside the last 15 minutes the seller listings of many distinct origins (past a floor and a share of the indexed origins) threw while they were read and were dropped, which one seller's bad data does not do; a code bug in how listings are read is emptying external routing while the process stays up. The origins and counts are on the operator endpoint, /__operator/perf.json (brokenListings, operator token). Auto-closes after two ok reads in a row." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still widespread at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
                 # A bad read after a first ok read starts the count again.
                 BODY_NOW=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
                 case "$BODY_NOW" in
@@ -1925,7 +1900,7 @@ jobs:
                 BODY_NOW=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
                 case "$BODY_NOW" in
                   *"$NLMARK"*)
-                    gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: brokenListings reads ok at $(date -u +%FT%TZ), the second ok read in a row." >/dev/null 2>&1 || true
+                    gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
                     ;;
                   *)
                     gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW}"$'\n\n'"${MARK}$(date -u +%FT%TZ); closes on the next ok read." >/dev/null 2>&1 || true
@@ -1941,19 +1916,19 @@ jobs:
         run: |
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.toolAnswers.status // "unknown"' 2>/dev/null || echo unknown)
           echo "toolAnswers: $WORD"
-          TITLE="toolAnswers: a tool is answering empty or error-shaped 200s"
+          TITLE="Scheduled check needs review: tool-answers"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             degraded)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports toolAnswers.status=degraded. The detail is on the operator endpoint, /__operator/tool-failures.json (operator token). Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             ok)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: toolAnswers reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -1977,19 +1952,19 @@ jobs:
           WORD=$(read_dl)
           if [ "$WORD" = "stuck" ] || [ "$WORD" = "local" ]; then sleep 30; WORD=$(read_dl); fi
           echo "ledger dead-letter: $WORD"
-          TITLE="Ledger rows waiting on local disk (dead-letter stuck)"
+          TITLE="Scheduled check needs review: ledger-rows"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             stuck|local)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports ledgerDeadLetter.status=$WORD on two readings 30 s apart. local: the journals live in Redis but a money write sits on the container's local disk because Redis did not take it (check the Redis service). stuck: a money write (a sale, a refund debt, a card report's final record, a subscription record, a decide write or an outbound payment record) has waited on the container's local disk for the state database longer than LEDGER_DEAD_LETTER_STUCK_MINUTES (default 20). Each journal's replay retries on a timer; while it cannot land them they exist only on that container, so do not redeploy or restart it until they land. Check stateDb on the same endpoint, the Postgres service on Railway, and the [sales-ledger] / [refund-ledger] / [human-checkout] / [subscriptions] / [decide] / [outbound-ledger] log lines (a row the database refuses is named there). The operator read of /api/gateway-status has the counts per journal. Auto-closes when the word is none." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             none|off)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the ledger dead-letter reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -2010,19 +1985,19 @@ jobs:
           WORD=$(read_rp)
           if [ "$WORD" = "off" ] || [ "$WORD" = "degraded" ]; then sleep 30; WORD=$(read_rp); fi
           echo "redis persistence: $WORD"
-          TITLE="Redis append-only persistence is not on"
+          TITLE="Scheduled check needs review: store-persistence"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             off|degraded)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports redisPersistence.status=$WORD on two readings 30 s apart. off: the Redis behind REDIS_URL runs without append-only persistence (aof_enabled:0), so anything kept there dies with its process. degraded: append-only is on but the last AOF write or rewrite did not finish ok (aof_last_write_status / aof_last_bgrewrite_status), which usually means the disk behind it is full or unwritable. While either lasts the money journals stay on each container's local disk (LEDGER_JOURNAL_REDIS has no effect until it reads on) and an entry waiting there reads local on ledgerDeadLetter. Check the Redis service's start command on Railway (redis-server --appendonly yes --appendfsync everysec), run INFO persistence against it (aof_enabled, aof_last_write_status, aof_last_bgrewrite_status, rdb_last_bgsave_status) and its disk; the operator read of /api/gateway-status carries the same fields. The server log has one [ledger-journal] line naming why the journals are held and one more when Redis takes them again. Auto-closes when the word is on." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             on)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: redis persistence reads on at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -2038,19 +2013,19 @@ jobs:
         run: |
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.email.status // "unknown"' 2>/dev/null || echo unknown)
           echo "email: $WORD"
-          TITLE="Transactional email is not sending"
+          TITLE="Scheduled check needs review: transactional-email"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             exhausted|failing)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports email.status=$WORD. exhausted: the provider refused the last send for credits or quota - top up the email provider's prepaid credits. failing: another refusal; the provider's error code is on the operator read of /api/gateway-status and in the [email] log line. Report links, credits keys, alert confirmations and monitor emails do not reach buyers while this is open. Auto-closes when a send is delivered." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             ok)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: email reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -2072,19 +2047,19 @@ jobs:
             [ "${RUNNING:-0}" -gt 0 ] && WORD=pending
           fi
           echo "mcp pin: $WORD ($OUT)"
-          TITLE="Served agent402-mcp version is not on npm"
+          TITLE="Scheduled check needs review: served-package-version"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             missing)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The site or server.describe tells people to install an agent402-mcp version npm does not have, so a copied install fails with ETARGET: $OUT. Check the publish job of the last main deploy run (npm auth, MCP Registry refusal) and re-run it, or move the pins back to the published version. Reproduce: \`node scripts/mcp-pin-on-npm.js\`. Auto-closes when every served pin resolves." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still missing at $(date -u +%FT%TZ): $OUT" >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             ok)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every served agent402-mcp pin resolves on npm at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -2103,26 +2078,26 @@ jobs:
           WORD=$(read_uc)
           if [ "$WORD" = "missing" ] || [ "$WORD" = "partial" ]; then sleep 30; WORD=$(read_uc); fi
           echo "upstream costs: $WORD"
-          TITLE="Upstream cost table missing or incomplete in production"
+          TITLE="Scheduled check needs review: cost-table"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             partial)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports upstreamCosts.status=partial on two readings 30 s apart. The private cost table loaded but lacks a key a serving path reads (that path refuses with 503, nobody is charged) or has a model row that did not parse. The boot log line [upstream-costs] names what is missing. Update the UPSTREAM_COSTS_JSON variable on Railway (and the Actions secret). Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still partial at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             missing)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports upstreamCosts.status=missing on two readings 30 s apart. Production is running without the private cost table: the metered tier, embeddings, images, video, Exa and X reads refuse (503, nobody is charged) and the flat chat tiers price at their caps, so some large requests are refused. Set the UPSTREAM_COSTS_JSON variable on Railway (same value as the Actions secret) and check the boot log line [upstream-costs]. Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
               else
-                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still missing at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
             ok)
               if [ -n "$OPEN" ]; then
-                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the cost table reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
               fi
               ;;
           esac
@@ -2165,16 +2140,16 @@ jobs:
           echo "serving health: $STATUS ($SUMMARY)"
           echo "stall culprits: ${CULPRITS:-none named} cause: ${STALL_CAUSE:-none}"
           echo "slow paid calls: ${SLOW_SLUGS:-none}"
-          TITLE="Serving health DEGRADED"
+          TITLE="Scheduled check needs review: serving-health"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "degraded" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/__operator/serving-health.json reported degraded on two readings 30 s apart (reasons: ${REASONS:-none given}).${CULPRIT_NOTE} The figures and thresholds are in the operator response and this run's log. Check [loop-stats], [loop-lag], [stall-profile] and [paid-timing] lines in the Railway log. Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review." >/dev/null 2>&1 || echo "issue create failed"
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ) (reasons: ${REASONS:-none given}).${CULPRIT_NOTE}" >/dev/null 2>&1 || true
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null 2>&1 || true
           fi
 
       # Postgres reachability: two probes, `leads` (DATABASE_URL) and `analytics`
@@ -2210,16 +2185,16 @@ jobs:
             read -r LEADS ANALYTICS <<< "$(probe_db)"
           fi
           echo "postgres: leads=$LEADS analytics=$ANALYTICS"
-          TITLE="Postgres UNREACHABLE (leads/analytics)"
+          TITLE="Scheduled check needs review: analytics-store"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$LEADS" = "unreachable" ] || [ "$ANALYTICS" = "unreachable" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A Postgres database is unreachable from production (leads=$LEADS, analytics=$ANALYTICS, per /api/gateway-status). The app keeps serving - the tool-call analytics simply stop being recorded - so this does not show as an outage anywhere else. Check the Postgres services in the Railway project (a stopped container looks exactly like this; the platform's own image updates restart them). The app boot log carries a [leads-db]/[analytics-db] probe line naming the failing family/port."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still unreachable at $(date -u +%FT%TZ): leads=$LEADS analytics=$ANALYTICS."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$LEADS" != "unreachable" ] && [ "$ANALYTICS" != "unreachable" ] && [ "$LEADS" != "unknown" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: leads=$LEADS analytics=$ANALYTICS at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # Daily MPP reconciliation (src/mpp-reconcile.js): chain transfers to our
@@ -2239,7 +2214,7 @@ jobs:
           STATUS=$(read_rec)
           if [ "$STATUS" = "mismatch" ]; then echo "mpp reconcile: first read mismatch - re-reading in 30s before paging"; sleep 30; STATUS=$(read_rec); fi
           echo "mpp reconcile: $STATUS"
-          TITLE="MPP reconciliation MISMATCH"
+          TITLE="Scheduled check needs review: payment-reconciliation"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "mismatch" ]; then
             CATS=$(curl -s --max-time 20 "$PROD/api/gateway-status" | jq -r '[.mppReconcile.categories // {} | to_entries[] | select(.value=="mismatch") | .key] | join(", ")' 2>/dev/null || echo "")
@@ -2251,12 +2226,12 @@ jobs:
             fi
             BODY=$(printf 'The daily MPP reconciliation for %s found records that disagree (categories: %s). Each category is defined in src/mpp-reconcile.js: served_unpaid = booked as settled over Tempo with no transfer on chain; paid_unrecorded = a transfer to our recipient with no sales row; amount_mismatch / wrong_currency / duplicate_tx / missing_tx / evm_unverified / stripe_mismatch as named.\n\n%s\n\nFull detail: GET /__operator/mpp-reconcile.json (operator token). Re-run a day: POST /__operator/mpp-reconcile/run?day=YYYY-MM-DD. Closes when a reconciliation reads ok.' "$DAY" "${CATS:-see the operator route}" "${ROWS:-(counts need the operator token)}")
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still mismatched at $(date -u +%FT%TZ) (day $DAY; categories: ${CATS:-?})."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the MPP reconciliation reads ok at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # The rolling seven days (mppReconcile.window7d): the seven UTC days
@@ -2279,7 +2254,7 @@ jobs:
           WIN=${WIN:-unknown}; DAILY=${DAILY:-unknown}
           if [ "$WIN" = "mismatch" ] && [ "$DAILY" = "ok" ]; then echo "mpp reconcile window: first read mismatch - re-reading in 30s before paging"; sleep 30; read -r WIN DAILY DAY <<< "$(read_win)" || true; WIN=${WIN:-unknown}; DAILY=${DAILY:-unknown}; fi
           echo "mpp reconcile 7-day window: $WIN (latest day: $DAILY)"
-          TITLE="MPP reconciliation 7-day window MISMATCH"
+          TITLE="Scheduled check needs review: payment-reconciliation-window"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$WIN" = "mismatch" ] && [ "$DAILY" = "ok" ]; then
             if [ -z "$OPEN" ]; then
@@ -2289,11 +2264,11 @@ jobs:
                 ROWS=$(curl -s --max-time 20 -H "Authorization: Bearer $OP_TOKEN" "$PROD/__operator/mpp-reconcile.json" \
                   | jq -r '[.window.mismatches[]? | select(.category != "charged_failed") | "\((.at // "?")[0:10]) \(.category)"] | group_by(.) | map("- \(.[0]): \(length)") | .[]' 2>/dev/null || echo "")
               fi
-              BODY=$(printf '/api/gateway-status reports mppReconcile.window7d=mismatch while the latest day (%s) reads ok. The window is the seven UTC days ending at that day, reconciled as one range, so it holds a disagreement from any of them: usually a day whose own "MPP reconciliation MISMATCH" issue closed when the next day read clean, without the disagreement being resolved. One class only the window sees: one settlement booked on two rows more than an hour apart across a day boundary (duplicate_tx).\n\n%s\n\nRead /__operator/mpp-reconcile.json: window.mismatches lists each item with its time and category. Resolve or explain each one. Closes when the window reads ok, which also happens once the mismatched day leaves the seven-day window.' "$DAY" "${ROWS:-(the day and category of each item need the operator token)}")
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+              BODY=$(printf '/api/gateway-status reports mppReconcile.window7d=mismatch while the latest day (%s) reads ok. The window is the seven UTC days ending at that day, reconciled as one range, so it holds a disagreement from any of them: usually a day whose own "Scheduled check needs review: payment-reconciliation" issue closed when the next day read clean, without the disagreement being resolved. One class only the window sees: one settlement booked on two rows more than an hour apart across a day boundary (duplicate_tx).\n\n%s\n\nRead /__operator/mpp-reconcile.json: window.mismatches lists each item with its time and category. Resolve or explain each one. Closes when the window reads ok, which also happens once the mismatched day leaves the seven-day window.' "$DAY" "${ROWS:-(the day and category of each item need the operator token)}")
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
           elif [ "$WIN" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the 7-day MPP reconciliation window reads ok at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # A paid-but-failed MPP call: settle succeeded and the response was not a
@@ -2309,7 +2284,7 @@ jobs:
           CF=$(read_cf)
           if [ "$CF" = "charged_failed" ]; then echo "mpp charged-failed: first read positive - re-reading in 30s before paging"; sleep 30; CF=$(read_cf); fi
           echo "mpp charged-failed: $CF"
-          TITLE="MPP paid-but-failed call"
+          TITLE="Scheduled check needs review: payment-call-outcome"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$CF" = "charged_failed" ]; then
             ROWS=""
@@ -2319,12 +2294,12 @@ jobs:
             fi
             BODY=$(printf 'An MPP call (Tempo, Stripe SPT or the MPP evm wire) settled and was then answered with a non-200 in the last 24 hours, so the buyer paid and did not get their answer. The debt is on the refund ledger; see GET /__operator/refunds.json and the [mpp-tempo]/[mpp-stripe] CHARGED-BUT-NOT-SERVED log line for the cause.\n\n%s\n\nCloses when the 24-hour count is back to zero.' "${ROWS:-(counts need the operator token)}")
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still present at $(date -u +%FT%TZ). ${ROWS}"
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$CF" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: no charged-but-failed MPP call in the last 24 hours at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # The spending wallet should never go DOWN, so a fall is worth more than
@@ -2344,7 +2319,7 @@ jobs:
         run: |
           TREND=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyer.trend // "unknown"' 2>/dev/null || echo unknown)
           echo "upstream buyer trend: $TREND"
-          TITLE="Upstream buyer wallet is DRAINING (unexplained fall)"
+          TITLE="Scheduled check needs review: buyer-wallet-trend"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$TREND" = "draining" ]; then
             if [ -z "$OPEN" ]; then
@@ -2366,12 +2341,12 @@ jobs:
 
           Balances are deliberately not published on /api/gateway-status; read the wallet directly to see the number.
           EOF_BODY
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still falling at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$TREND" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the trend reads ok at $(date -u +%FT%TZ) (a new high-water mark, or an operator acknowledged the fall)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # Settlement freshness — the alarm that did not exist on 2026-08-07.
@@ -2408,42 +2383,36 @@ jobs:
           # An unreadable page is not evidence of a stale canary - it is
           # evidence we could not look. The prod-down alarm above owns that.
           [ "$STATE" = "unreadable" ] && exit 0
-          TITLE="Settlement stale - the paid canary is not buying"
+          TITLE="Scheduled check needs review: settlement-age"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATE" = "unknown" ]; then
             if [ -z "$OPEN" ]; then
               gh workflow run paid-canary.yml --repo "$GITHUB_REPOSITORY" --ref main \
                 && HEAL="A canary run has been dispatched automatically (a dispatch always buys - the freshness gate applies to scheduled runs only). If it settles, this issue closes itself on the next heartbeat." \
                 || HEAL="Automatic dispatch FAILED, so nothing is retrying on its own."
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "No canary has proven a real USDC purchase in ${AGEH}h, so /status reports the settlement component as \`unknown\` and the public page reads \"Degraded\".
-
-          This means the daily proof that BUYING works is not running. It does not by itself mean buying is broken - the 2026-08-02 case was a gate that skipped every scheduled attempt while the workflow reported success, which is why this alarm watches the observation rather than the workflow's own conclusion.
-
-          Check, in order: the recent runs of \`paid-canary.yml\` and whether the \`canary\` job was SKIPPED rather than run; then the gate step's log, which prints the observation age it read; then the burner balances.
-
-          $HEAL"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still stale at $(date -u +%FT%TZ) (${AGEH}h since the last proven purchase). The automatic dispatch did not resolve it, so this needs a human."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           elif [ "$STATE" = "operational" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: a canary proved a real purchase at $(date -u +%FT%TZ) (observation is ${AGEH}h old). /status is measuring settlement again."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       - name: Alert (open issue) or clear (close issue)
         run: |
-          OPEN=$(ISSUE_TITLE='Heartbeat: production DOWN' gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'in:title "Heartbeat: production DOWN"' --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          OPEN=$(ISSUE_TITLE='Scheduled check needs review: availability' gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'in:title "Scheduled check needs review: availability"' --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "${{ steps.probe.outputs.status }}" = "down" ]; then
             BODY="Heartbeat failed 3 consecutive probes (checks:${{ steps.probe.outputs.fails }}).
           Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
           Railway dashboard: https://railway.app (check the agent402 service). Re-deploy with a [deploy] commit or the deploy workflow_dispatch."
             if [ -n "$OPEN" ]; then
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still down at $(date -u +%FT%TZ).${{ steps.probe.outputs.fails }}"
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "Heartbeat: production DOWN" --body "$BODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "Scheduled check needs review: availability" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
             exit 1
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: all probes passing at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
 
       # GitHub delivers this workflow's "*/15" schedule roughly ONCE AN HOUR

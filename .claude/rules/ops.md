@@ -141,12 +141,12 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   The `backup` word reads `unencrypted` while `BACKUP_ENCRYPTION_KEY` is unset in production
   (`NODE_ENV` or the platform's environment name), and `unconfigured` while the `BACKUP_S3_*`
   bucket variables are unset in production with a state database (no backup runs at all); the
-  heartbeat and the status probe page on both under "Offsite backup is not current", closed on
+  heartbeat and the status probe page on both under "Scheduled check needs review: offsite-backup", closed on
   `ok`. Without a bucket, a FREE_MODE boot, a boot outside production and a boot with no state
   database read `off`, which never pages.
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is
   re-probed once before it is recorded. The heartbeat signs its paywall read with X-Heartbeat-Token,
-  so the unpaid budget never refuses it; the status Worker pages "Paywall not observed" after three
+  so the unpaid budget never refuses it; the status Worker pages "Scheduled check needs review: paywall-read" after three
   unobserved runs (the age of the newest paywall row on /api/status) and closes on its next observed
   read. Roll back the server before (or with) the status Worker, never the
   Worker alone: an older Worker reads the unpaid-quote budget's 429 as a paywall failure.
@@ -180,7 +180,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   counting, so `mppReconcile.status` reads unknown and its mismatch pagers are blind; ok and off
   close, off being `MPP_RECONCILE=off`; unknown, before a first run and from boot until the first
   check has finished, does neither; a run that never ends holds every later one, so the remedy is
-  a restart; one issue, "MPP daily reconciliation is NOT RUNNING"). `coverageReads` pages like `sharedLimits`, on its
+  a restart; one issue, "Scheduled check needs review: payment-reconciliation-run"). `coverageReads` pages like `sharedLimits`, on its
   second word only: `alert: sustained` (paid calls started or refused without a balance read made
   for them in 3 or more separate minutes of the last 10, for 3 or more accounts;
   `coverageReadsVerdict` in `src/inflight-cover.js`). `status` ok and off close; `status: degraded`
@@ -238,7 +238,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   payers, `off` in FREE_MODE. Publicly the word only; the operator view lists per alerting payer
   its short id (`shortPayer`), spend rank and failures (slug, status, time, error text), never a
   full address or a spend figure. The status Worker and `heartbeat.yml` page once on `alert`
-  ("topBuyerFailures: a top paying buyer is getting failed answers", fixed text) and close on `ok`.
+  ("Scheduled check needs review: top-buyer-failures", fixed text) and close on `ok`.
   An alarm only: nothing is refused for it (`scripts/test-top-buyer-failures.js`,
   `scripts/test-top-buyer-failures-redis.js`).
 - **Buyer scorecard:** `src/scorecard.js` serves `GET /api/scorecard` and `/scorecard` from
@@ -368,7 +368,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   keep serving and `xDataSpend` on `/api/gateway-status` reads `over`; `0` refuses every call
   (`off`). `X_DATA_DAILY_HARD_MAX_USD` (default 5 times the alarm ceiling; never under it) is
   where a read is refused 503 and the word reads `capped`. The status Worker and `heartbeat.yml`
-  page on `over` and `capped` under one issue ("X data daily spend OVER its ceiling") and close it
+  page on `over` and `capped` under one issue ("Scheduled check needs review: post-data-spend") and close it
   on `ok` or `off` (`scripts/test-x-data-ceilings.js`). The word is built from the larger of this
   process's day and the shared day counter the refusal reads (one read of at most `STATUS_READ_MS`
   per status answer, reused 5 s; a failed read leaves this process's own figure), so a new
@@ -393,7 +393,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   second word, `alert`, that reads `sustained` once the first has held ten minutes without a break
   (`SHARED_LIMITS_ALERT_AFTER_MS`, `REPLAY_STORE_ALERT_AFTER_MS`; kept in process memory, so a
   restart starts the count again). The status Worker and `heartbeat.yml` page on `sustained`
-  ("Shared limits store DEGRADED (Redis)", "Replay store marks PENDING (Redis)") and close when
+  ("Scheduled check needs review: shared-limits-store", "Scheduled check needs review: replay-store-marks") and close when
   the first word reads healthy (`on` or `memory`; `ok`); the alert word inside its grace period
   does neither. `gatewayBalance` reads `withdraw` from the read that reaches
   `GATEWAY_WITHDRAW_ALERT_USD` until the balance is moved, and pages at once ("Gateway balance
@@ -582,8 +582,8 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   bound and refuses a new booking past it ("NOT booked"), so before rolling back resolve entries
   until the whole book (open plus unresolved, `/__operator/refunds.json`) is under 2000. Such a
   build emits neither `lateSettlements` nor `subscriptionFeePayer.ceiling`; both read `unknown`,
-  which neither opens nor closes an issue, so close an open "Late settlements need attention" or
-  "Subscription gas sponsor CEILING reached" issue by hand after checking the log.
+  which neither opens nor closes an issue, so close an open "Scheduled check needs review: late-settlements" or
+  "Scheduled check needs review: subscription-gas-sponsor-limit" issue by hand after checking the log.
   A Gateway booking held outside its pending book is also written to the `gateway-pending-lost`
   state document (with a state database), read back by the next container; past 200 in memory the
   oldest is logged as an error naming it, the `gatewayPending` word pages for 24 hours, and it

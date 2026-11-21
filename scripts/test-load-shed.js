@@ -186,7 +186,7 @@ try {
   const bodies = [...step.matchAll(/--(?:body|comment) "([^"]*)"/g)].map((m) => m[1]);
   ok(bodies.length >= 3, `the step writes ${bodies.length} issue bodies (create, comment, close)`);
   ok(bodies.every((b) => !/\$\{?SUMMARY/.test(b)), "no issue body quotes the figures line");
-  ok(bodies.some((b) => /\$\{?REASONS/.test(b)), "the issue body carries the reason words");
+  ok(bodies.every((b) => !/\$\{?REASONS/.test(b)), "no issue body carries the reason words");
   ok(/echo "serving health: \$STATUS \(\$SUMMARY\)"/.test(step), "the figures still reach the run log");
   ok(/REASONS=.*\.reasons/.test(step) && !/REASONS=.*responses1h/.test(step), "the reasons variable reads the reason words and nothing counted");
   ok(!/REASONS=.*\.info/.test(step) && /STATUS=\$\(echo "\$J" \| jq -r '\.status/.test(step) && /if \[ "\$STATUS" = "degraded" \]/.test(step), "the alarm pages on .status alone; informational words never open an issue");
@@ -194,7 +194,7 @@ try {
   // A long stall's alarm names what it was running: route keys and job names
   // from .stallCulprits, never a figure, so the issue says where to look.
   ok(/CULPRITS=\$\(echo "\$J" \| jq -r '.*\.stallCulprits\.routes.*\.stallCulprits\.jobs/.test(step) && !/CULPRITS=.*(responses1h|recentStalls|\.ms\b|Ms\b)/.test(step), "the culprit variable reads the route and job names and nothing counted");
-  ok(bodies.filter((b) => /\$\{CULPRIT_NOTE\}/.test(b)).length === 2, "the opening issue and its still-degraded comment both name the culprits");
+  ok(bodies.every((b) => !/CULPRIT/.test(b)) && /echo "stall culprits: /.test(step), "no issue body names the culprits; they reach the run log");
   ok(/CULPRIT_NOTE=" Running during the long stalls: \$CULPRITS\."/.test(step), "the culprit note is a sentence of names");
 }
 

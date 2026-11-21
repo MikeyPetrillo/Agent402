@@ -281,71 +281,67 @@ jobs:
           RESULT: ${{ steps.canary.outputs.result }}
           RAILS: ${{ steps.canary.outputs.rails }}
         run: |
-          TITLE="Paid-path canary FAILED"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          TITLE="Scheduled check needs review: paid-canary"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           # Funding starvation gets its own issue and CLOSES the outage-class
           # one: "buying may be broken" must not stay open when the run proved
           # buying works and only our wallet is empty.
           if [ "$RESULT" = "underfunded" ]; then
-            FTITLE="Canary burner EMPTY (Base)"
-            FOPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FTITLE\"" --json number --jq '.[0].number // empty')
+            FTITLE="Scheduled check needs review: canary-wallet (b)"
+            FOPEN=$(ISSUE_TITLE="$FTITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FTITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
             if [ -z "$FOPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$FTITLE" --body "The paid canary's Base burner is out of USDC: the run settled real purchases on the funded rails and every Base failure was a clean 402 with the live balance below the cheapest leg, so this is FUNDING, not an outage. Top up the burner (see the run log for the address), then dispatch paid-canary.yml; a green run closes this. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$FTITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$FOPEN" --repo "$GITHUB_REPOSITORY" --body "Still empty at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              gh issue comment "$FOPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
-            [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Reclassified: the failure is canary-wallet funding, not a broken paid path: settlement was proven in the same run. Tracking in the funding issue."
+            [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             exit 0
           fi
           # Partial rail failure: buying is proven; do NOT keep/open the
-          # systemic "Paid-path canary FAILED" issue (that copy claims buying
+          # systemic "Scheduled check needs review: paid-canary" issue (that copy claims buying
           # may be broken). Page a rail-scoped issue instead (2026-08-10).
           if [ "$RESULT" = "partial-rail" ]; then
-            RTITLE="Paid canary rail FAILED"
-            ROPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$RTITLE\"" --json number --jq '.[0].number // empty')
+            RTITLE="Scheduled check needs review: paid-canary-rail"
+            ROPEN=$(ISSUE_TITLE="$RTITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$RTITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
             RAIL_LIST="${RAILS:-see run log}"
-            RBODY="The daily paid canary settled real USDC tool purchases, but one or more chain rail legs failed ($RAIL_LIST). This is a per-rail payment proof failure, not a buying outage: /status records settlement as proven with the failed rail named.
-
-          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
-          Check the named rail's burner balance/trustline and its facilitator; a fully green canary closes this."
             if [ -z "$ROPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$RTITLE" --body "$RBODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$RTITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$ROPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing ($RAIL_LIST) at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              gh issue comment "$ROPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
-            [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Reclassified: tools settled this run: failure is rail-scoped ($RAIL_LIST), not a broken paid path. Tracking in the rail issue."
+            [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             exit 1
           fi
           if [ "$RESULT" = "ok-low" ]; then
-            LTITLE="Canary burner LOW"
-            LOPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$LTITLE\"" --json number --jq '.[0].number // empty')
+            LTITLE="Scheduled check needs review: canary-wallet (c)"
+            LOPEN=$(ISSUE_TITLE="$LTITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$LTITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
             if [ -z "$LOPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$LTITLE" --body "The paid canary ran fully green but one or more burner balances are below their low-water marks - the run log names each low chain and balance (the CANARY BURNER LOW line). Top up before it empties - an empty wallet fails the whole run. A green run with a healthy balance closes this. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$LTITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             else
-              gh issue comment "$LOPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              gh issue comment "$LOPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             fi
           fi
           if [ "$RESULT" = "ok" ]; then
-            FTITLE="Canary burner EMPTY (Base)"
-            FOPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FTITLE\"" --json number --jq '.[0].number // empty')
-            [ -n "$FOPEN" ] && gh issue close "$FOPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: full canary green at $(date -u +%FT%TZ)."
-            LTITLE="Canary burner LOW"
-            LOPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$LTITLE\"" --json number --jq '.[0].number // empty')
-            [ -n "$LOPEN" ] && gh issue close "$LOPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: green run with a healthy balance at $(date -u +%FT%TZ)."
-            RTITLE="Paid canary rail FAILED"
-            ROPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$RTITLE\"" --json number --jq '.[0].number // empty')
-            [ -n "$ROPEN" ] && gh issue close "$ROPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: all rail legs settled at $(date -u +%FT%TZ)."
+            FTITLE="Scheduled check needs review: canary-wallet (b)"
+            FOPEN=$(ISSUE_TITLE="$FTITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$FTITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+            [ -n "$FOPEN" ] && gh issue close "$FOPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            LTITLE="Scheduled check needs review: canary-wallet (c)"
+            LOPEN=$(ISSUE_TITLE="$LTITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$LTITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+            [ -n "$LOPEN" ] && gh issue close "$LOPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            RTITLE="Scheduled check needs review: paid-canary-rail"
+            ROPEN=$(ISSUE_TITLE="$RTITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$RTITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+            [ -n "$ROPEN" ] && gh issue close "$ROPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
           if [ "$RESULT" = "fail" ]; then
             BODY="The daily paid-path canary could not complete a real USDC purchase from production: *buying may be broken* (paywall, facilitator, or settlement). The free/proof-of-work path is checked separately by the Heartbeat.
           Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
           If this is a funding issue, top up the test burner; otherwise check the x402 facilitator + the paywall on the Railway service."
             if [ -n "$OPEN" ]; then
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still needs review at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A scheduled check reported a result that needs review. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This issue closes when the check next passes, or by hand after review."
             fi
             exit 1
           elif [ "$RESULT" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: a real USDC purchase settled at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed by the scheduled check at $(date -u +%FT%TZ). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi

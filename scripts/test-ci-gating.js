@@ -282,7 +282,7 @@ for (const [name, j] of Object.entries(jobs)) {
   const lp = listing.jobs["listing-pass"] || {};
   ok(lp.outputs?.started === "${{ steps.started.outputs.started }}" && (lp.steps || [])[0]?.id === "started", "the listing pass marks itself started in its first step");
   ok((reporter?.steps || []).some((st) => st.env?.STARTED === "${{ needs.listing-pass.outputs.started }}") && /if \[ "\$STARTED" != "true" \]; then[\s\S]*?exit 0[\s\S]*?if \[ "\$PASS" != "success" \]/.test(report), "a pass that never started (approval not given) pages nothing");
-  ok(/TITLE="Listing pass FAILED"/.test(report) && /in:title/.test(report) && /gh issue comment .*Still failing/.test(report) && /gh issue close .*Recovered/.test(report), "it keeps one issue by title: open, Still failing, Recovered on the next green run");
+  ok(/TITLE="Scheduled check needs review: listing-pass"/.test(report) && /in:title/.test(report) && /gh issue comment .*Still needs review/.test(report) && /gh issue close .*Closed by the scheduled check/.test(report), "it keeps one issue by title: open, Still failing, Recovered on the next green run");
 
   // The one schedule starts the listing pass, behind the same approval.
   ok(listing.jobs["listing-pass"]?.environment === "spending", "the scheduled listing pass waits for the spending approval");

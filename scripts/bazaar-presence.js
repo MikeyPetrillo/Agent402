@@ -95,9 +95,9 @@ import { mcpListingRoutes, mcpToolOfResource, mcpListingKey, mcpListingSlugOf } 
 export const DEFAULT_MAX_ROUTES = 10;
 export const DEFAULT_MAX_SPEND_USD = 2;
 export const UNREADABLE_PAGE_AFTER = 3;
-export const ISSUE_TITLE = "Bazaar presence check";
+export const ISSUE_TITLE = "Scheduled check needs review: listing-presence";
 // The MCP tool listings page under their own issue, never the route issue.
-export const MCP_ISSUE_TITLE = "Bazaar MCP listing presence check";
+export const MCP_ISSUE_TITLE = "Scheduled check needs review: mcp-listing-presence";
 // One page of the listing or the catalog waits this long; the whole reading
 // (two or three passes) this long. The workflow's step and job timeouts are
 // set above both (scripts/test-bazaar-presence.js reads them).

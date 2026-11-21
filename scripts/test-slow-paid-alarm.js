@@ -212,7 +212,7 @@ ok(fn(S.slowPaidMsFromEnv) && S.slowPaidMsFromEnv("junk") === 20000, "an unreada
   ok(slugLine && !/(\.ms\b|Ms\b|worst|count|amount|price|payer|recentSlowPaid)/.test(slugLine), "the slug variable reads names and nothing counted");
   ok(/CULPRIT_NOTE="\$\{CULPRIT_NOTE\} Slow paid calls: \$SLOW_SLUGS\."/.test(step), "the issue note names the slow paid calls");
   const bodies = [...step.matchAll(/--(?:body|comment) "([^"]*)"/g)].map((m) => m[1]);
-  ok(bodies.filter((b) => /\$\{CULPRIT_NOTE\}/.test(b)).length === 2, "the opening issue and its still-degraded comment both carry the note");
+  ok(bodies.every((b) => !/CULPRIT|SLOW_SLUGS/.test(b)), "no issue body carries the note or a slug");
 }
 
 console.log(`test-slow-paid-alarm: ${pass} passed, ${fail} failed`);

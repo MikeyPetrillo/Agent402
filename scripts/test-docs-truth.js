@@ -147,6 +147,10 @@ const KNOWN_NON_CATALOG = new Set([
   "/api/reliability", "/api/rails", "/api/status", "/api/status/probe", "/api/leaderboard", "/api/analytics",
   // Free seller reputation (src/seller-reputation.js), outside CATALOG.
   "/api/reputation", "/api/reputation/recheck",
+  // Free router benchmarks (src/router-benchmarks.js), outside CATALOG.
+  "/api/router-benchmarks",
+  // Free removal of a price webhook (src/price-webhooks.js UNSUBSCRIBE_PATH), outside CATALOG.
+  "/api/price-webhook/unsubscribe",
   // Free signed-receipt check (src/receipt-signing.js RECEIPT_VERIFY_PATH), outside CATALOG.
   "/api/receipts/verify",
   "/api/cacheable", "/api/cache-stats", "/api/pow", "/api/pow/challenge", "/api/skill-packs.json",

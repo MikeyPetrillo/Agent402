@@ -290,6 +290,13 @@ Loaded when an index, discovery, router or buyer file is read.
   (`reputation.ourSideDays`; `scripts/test-crawl-our-side-verdict.js`). A new reader of "our side"
   that changes what every seller's record says takes this verdict, never the share.
   Reputation output and copy carry no judgment words (`scripts/test-reputation-wording.js`).
+- **Router benchmarks:** `src/router-benchmarks.js` serves `/api/router-benchmarks` (free): aggregates over the
+  reputation records this process holds (`reputationSnapshot()`), computed once per record version and kept ten
+  minutes. Two cohorts (sellers with a recorded router delivery in the window, indexed sellers with none), the
+  median and quartiles of their scores per metric, the pooled delivery share and the per-seller delivery
+  distribution. No seller is named, a statistic is published only when at least `MIN_COHORT_SELLERS` (5) sellers
+  are scored on it, and no field counts purchases, payments, buyers or settlements
+  (`scripts/test-router-benchmarks.js`). It reads reputation and changes no routing.
 - **Seller docs link:** `src/seller-docs-url.js`. A tool row on `/api/index?seller=<host>` carries
   `sellerDocsUrl` when the seller's own OpenAPI operation names `externalDocs.url`, kept only as an
   https link on the seller's exact host (under its own path for a seller listed with a path) and
