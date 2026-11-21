@@ -216,6 +216,13 @@ try {
     const p1 = await hc.readBackOwedRefunds();
     ok(p1.checked === 3 && p1.recorded === 0, `a fully refunded charge whose refund is pending is not recorded (${JSON.stringify(p1)})`);
     ok(ids(await hc.owedRefunds()).join() === "cs_pend_fail,cs_pend_mix,cs_pend_ok", "all three stay owed while a refund is pending");
+    // The owed list says which are pending at Stripe (the refundsOwed word's
+    // card=pending: nothing for the operator to do), on the record and its entry.
+    const pendOf = async () => Object.fromEntries((await hc.owedRefunds()).map((x) => [x.id, x.pending]));
+    ok(JSON.stringify(await pendOf()) === JSON.stringify({ cs_pend_fail: true, cs_pend_mix: true, cs_pend_ok: true }) && (await hc.fulfill("cs_pend_ok"))?.refundPending === true,
+      `a refund Stripe holds and has not finished marks the owed record pending (${JSON.stringify(await pendOf())})`);
+    ok(p1.marked === 3, `the read-back counts the records it marked (${JSON.stringify(p1)})`);
+    ok((await hc.readBackOwedRefunds()).marked === 0, "a second pass with nothing changed writes nothing");
     // Stripe settles them: one succeeds, one fails (the charge is no longer refunded).
     cases.cs_pend_ok.refunds[0].status = "succeeded";
     cases.cs_pend_fail.refunds[0].status = "failed";
@@ -227,6 +234,7 @@ try {
     ok(okRec?.refundId === "re_pend_ok" && okRec.refundOwed === false && /has been refunded/.test(okRec.error), `pending then succeeded is recorded as refunded (${okRec?.refundId})`);
     const failRec = await hc.fulfill("cs_pend_fail");
     ok(!failRec?.refundId && failRec?.refundOwed === true && /being processed/.test(failRec.error), "pending then failed stays owed and is never told it was refunded");
+    ok(failRec?.refundPending !== true && (await hc.owedRefunds()).find((x) => x.id === "cs_pend_fail")?.pending === false, "a pending refund that failed is no longer marked pending: the operator is told to act");
     const p3 = await hc.readBackOwedRefunds();
     ok(p3.recorded === 0 && ids(await hc.owedRefunds()).join() === "cs_pend_fail,cs_pend_mix", `a failed refund and a still-pending remainder stay owed on later passes (${ids(await hc.owedRefunds()).join()})`);
     ok(creates.length === 0, `the read-back never issues a refund (${creates.length} creates)`);
@@ -241,10 +249,39 @@ try {
     const hcP = mk(dirP);
     const polled = await hcP.fulfill("cs_poll_pend");
     ok(creates.includes("pi_poll_pend") && !polled?.refundId && polled?.refundOwed === true && /being processed/.test(polled.error), "a poll whose refund is created pending stays owed");
+    ok(polled?.refundPending === true && (await hcP.owedRefunds()).find((x) => x.id === "cs_poll_pend")?.pending === true, "and is marked pending at Stripe");
     clock += 60_000;
     pc.refunds[0].status = "succeeded"; // the key replays the pending answer; the list holds the truth
     const polled2 = await hcP.fulfill("cs_poll_pend");
     ok(polled2?.refundId === "re_poll_pend" && polled2.refundOwed === false, `the next poll reads the refund back once it succeeded (${polled2?.refundId})`);
+  }
+
+  // ---- a pending refund is read back within minutes ---------------------------
+  // Between full passes a short pass reads only the records marked pending,
+  // so a refund Stripe finishes leaves the owed list (and its page closes)
+  // soon after; a record not marked pending waits for the next full pass.
+  {
+    const dir = join(root, "pending-timer");
+    mkdirSync(dir, { recursive: true });
+    const rec = (pi) => ({ status: "error", refundId: null, refundOwed: true, refundAttempts: 6, lastRefundAttemptAt: 0, paymentIntent: pi, product: "research", at: iso(20 * 60_000), error: "We couldn't complete this report. Your refund is being processed." });
+    const pend = { pi: "pi_t_pend", createError: { code: "x", message: "down" }, refunds: [{ id: "re_t_pend", status: "pending", created: 2 }], fullyRefunded: true };
+    const plain = { pi: "pi_t_plain", createError: { code: "x", message: "down" }, refunds: [], fullyRefunded: false };
+    dashboard.set(pend.pi, pend); dashboard.set(plain.pi, plain);
+    writeFileSync(join(dir, "cs_t_pend.json"), JSON.stringify(rec(pend.pi)));
+    writeFileSync(join(dir, "cs_t_plain.json"), JSON.stringify(rec(plain.pi)));
+    const hcT = mk(dir);
+    hcT.start({ firstMs: 10, intervalMs: 3_600_000, pendingIntervalMs: 40 });
+    try {
+      for (let i = 0; i < 100 && (await hcT.owedRefunds()).find((x) => x.id === "cs_t_pend")?.pending !== true; i++) await wait(10);
+      ok((await hcT.owedRefunds()).find((x) => x.id === "cs_t_pend")?.pending === true, "setup: the first (full) pass marks the pending refund");
+      // Stripe finishes it; the plain one is refunded by hand at the same time.
+      pend.refunds[0].status = "succeeded";
+      plain.refunds = [{ id: "re_t_plain", status: "succeeded", created: 3 }]; plain.fullyRefunded = true;
+      for (let i = 0; i < 100 && ids(await hcT.owedRefunds()).includes("cs_t_pend"); i++) await wait(10);
+      ok(!ids(await hcT.owedRefunds()).includes("cs_t_pend"), "a short pass records the pending refund once Stripe finishes it, long before the next full pass");
+      await wait(150);
+      ok(ids(await hcT.owedRefunds()).includes("cs_t_plain"), "control: a record not marked pending waits for the next full pass");
+    } finally { hcT.stop(); }
   }
 } finally {
   rmSync(root, { recursive: true, force: true });

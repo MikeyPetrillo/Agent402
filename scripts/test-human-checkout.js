@@ -32,6 +32,7 @@ const sessions = {
   cs_g2: { id: "cs_g2", payment_status: "paid", payment_intent: "pi_g2", customer_details: { email: "griefer@example.com" }, metadata: { product: "research", input: "FAIL" } },
   cs_g3: { id: "cs_g3", payment_status: "paid", payment_intent: "pi_g3", customer_details: { email: "griefer@example.com" }, metadata: { product: "research", input: "FAIL" } },
   cs_g4: { id: "cs_g4", payment_status: "paid", payment_intent: "pi_g4", customer_details: { email: "griefer@example.com" }, metadata: { product: "dossier", input: "AAPL" } },
+  cs_g5: { id: "cs_g5", payment_status: "paid", payment_intent: "pi_g5", customer_details: { email: "griefer@example.com" }, metadata: { product: "dossier", input: "AAPL" } },
   cs_other: { id: "cs_other", payment_status: "paid", payment_intent: "pi_other", customer_details: { email: "someone-else@example.com" }, metadata: { product: "dossier", input: "AAPL" } },
   cs_sub: { id: "cs_sub", mode: "subscription", payment_status: "paid", metadata: { product: "domain-monitor", target: "x.com" } },
   cs_nometa: { id: "cs_nometa", payment_status: "paid", payment_intent: "pi_nometa", metadata: {} },
@@ -644,6 +645,11 @@ ok(hc.peek("cs_old")?.report === "# OLD" && !existsSync(legacyPath) && existsSyn
   // store's own enable (which lifts nothing a stronger cause holds).
   ok(/onDisputeClosed: \(paymentIntent, \{ won \}\) => \(won && _credits \? _credits\.enableByPaymentIntent\(paymentIntent, "disputed"\) : null\)/.test(serverSrc),
     "server.js wires the webhook's dispute-closed hook to the credits store's enable, gated on a win");
+  // A leased loop that is never started never runs: the server starts the
+  // owed card refund read-back (code, not a comment that names the call).
+  // Offline here, so a run without Postgres checks it too.
+  const serverCode = serverSrc.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+  ok(/^\s*_humanCheckout\.start\(\);/m.test(serverCode), "src/server.js starts the owed card refund read-back (_humanCheckout.start())");
 }
 
 // --- failure breaker: after three failed reports from one address, the next paid session is refunded with NO generation attempt
@@ -652,7 +658,14 @@ ok(hc.peek("cs_old")?.report === "# OLD" && !existsSync(legacyPath) && existsSyn
   for (const id of ["cs_g1", "cs_g2", "cs_g3"]) { await hc.fulfill(id); await settle(id); }
   const before = genCalls, refundsBefore = refunds.length;
   await hc.fulfill("cs_g4"); const g4 = await settle("cs_g4");
-  ok(g4?.status === "error" && genCalls === before && refunds.length === refundsBefore + 1 && /refunded without a new attempt/.test(g4.error || ""), "fourth paid session from the same address (case-insensitive) is refunded without calling generate");
+  ok(g4?.status === "error" && genCalls === before && refunds.length === refundsBefore + 1 && g4.refundId && /no new attempt was made/.test(g4.error || ""), "fourth paid session from the same address (case-insensitive) is refunded without calling generate");
+  // The buyer's text at the limit names the refund's real outcome once, at
+  // its end: refunded, or (when Stripe refuses it) being processed, never both.
+  ok(/Your payment has been refunded\.$/.test(g4.error || "") && !/being processed|was refunded/.test(g4.error || ""), `at the limit, a refund Stripe took reads refunded and nothing else (${g4.error})`);
+  refundFail = true;
+  await hc.fulfill("cs_g5"); const g5 = await settle("cs_g5");
+  refundFail = false;
+  ok(g5?.status === "error" && g5.refundOwed === true && !g5.refundId && /Your refund is being processed\.$/.test(g5.error || "") && !/refunded/.test(g5.error || ""), `at the limit, a refund Stripe refused reads being processed and never says it was refunded (${g5?.error})`);
   await hc.fulfill("cs_other"); const other = await settle("cs_other");
   ok(other?.status === "done" && genCalls === before + 1, "a different address is unaffected by the breaker");
 }

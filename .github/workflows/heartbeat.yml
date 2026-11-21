@@ -248,13 +248,25 @@ jobs:
       # a job-summary line on every run (no issue: the index lags the
       # validator); an INVALID non-JSON listing adds the listing switch to the
       # issue body.
+      # The streak of runs whose validator was unreadable, kept in the Actions
+      # cache between runs (the step after the validation reads and writes it).
+      - name: Restore the validator unreadable streak
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .bazaar-validate-streak
+          key: bazaar-validate-streak-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: bazaar-validate-streak-
       - name: Bazaar listing validation (checked routes vs CDP validate)
+        id: bazaar_validate
         if: always()
         continue-on-error: true
         run: |
           set +e
           OUT=$(TARGET_URL="$PROD" node scripts/bazaar-validate.js 2>&1); CODE=$?
           set -e
+          if [ -n "${GITHUB_OUTPUT:-}" ]; then echo "code=$CODE" >> "$GITHUB_OUTPUT"; fi
           echo "$OUT" | grep -E '^(FAIL|\?\?) |INVALID|UNREADABLE' || true
           echo "$OUT" | tail -40
           echo "$OUT" | grep '^WARN not-indexed ' | while IFS= read -r LINE; do echo "::warning::Bazaar: $LINE"; echo "- Bazaar: $LINE" >> "$GITHUB_STEP_SUMMARY"; done || true
@@ -274,6 +286,60 @@ jobs:
           elif [ "$CODE" = "0" ] && [ -n "$OPEN" ]; then
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every checked route validates again at $(date -u +%FT%TZ)."
           fi
+
+      # The validator itself unreadable (exit 2) only warns on one run. Three
+      # unreadable runs in a row, or two in a row half a day or more apart,
+      # open one issue: the listing check has been blind that long. The
+      # streak is kept in the Actions cache; the open issue holds the page and
+      # gets no comments; the next readable run (exit 0 or 1, whatever its
+      # verdict) closes it and starts the streak again. A validation step that
+      # did not finish leaves the streak as it was.
+      - name: Bazaar validator unreadable streak (page when the listing check stays blind)
+        if: always()
+        continue-on-error: true
+        env:
+          CODE: ${{ steps.bazaar_validate.outputs.code }}
+          STREAK_FILE: .bazaar-validate-streak/state.json
+        run: |
+          mkdir -p "$(dirname "$STREAK_FILE")"
+          NOW=$(date -u +%s)
+          PREV_N=$(jq -r '.streak // 0' "$STREAK_FILE" 2>/dev/null || echo 0)
+          PREV_SINCE=$(jq -r '.since // 0' "$STREAK_FILE" 2>/dev/null || echo 0)
+          case "$PREV_N" in ''|*[!0-9]*) PREV_N=0 ;; esac
+          case "$PREV_SINCE" in ''|*[!0-9]*) PREV_SINCE=0 ;; esac
+          TITLE="Bazaar listing validator unreadable"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          case "$CODE" in
+            2)
+              N=$((PREV_N + 1))
+              SINCE=$PREV_SINCE
+              if [ "$PREV_N" -eq 0 ] || [ "$SINCE" -eq 0 ]; then SINCE=$NOW; fi
+              printf '{"streak":%s,"since":%s}\n' "$N" "$SINCE" > "$STREAK_FILE"
+              echo "validator unreadable on $N run(s) in a row"
+              if [ "$N" -ge 3 ] || { [ "$N" -ge 2 ] && [ $((NOW - SINCE)) -ge 43200 ]; }; then
+                if [ -z "$OPEN" ]; then
+                  gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Coinbase CDP's x402 validate endpoint could not be read on several heartbeat runs in a row, or for half a day or more, so the Bazaar listing check is blind: an INVALID route would not be seen. Nothing is known to be wrong with our listings. Read the validation step's log on the latest heartbeat run (its UNREADABLE rows name the routes and the answer CDP gave), and reproduce with scripts/bazaar-validate.js (read-only, keyless; exit 2 means unreadable). Auto-closes on the next heartbeat run whose validator answers." >/dev/null 2>&1 || echo "issue create failed"
+                fi
+              fi
+              ;;
+            0|1)
+              printf '{"streak":0,"since":0}\n' > "$STREAK_FILE"
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the validator answered again at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            *)
+              echo "the validation step did not finish; the streak is left as it was"
+              [ -f "$STREAK_FILE" ] || printf '{"streak":0,"since":0}\n' > "$STREAK_FILE"
+              ;;
+          esac
+      - name: Save the validator unreadable streak
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .bazaar-validate-streak
+          key: bazaar-validate-streak-${{ github.run_id }}-${{ github.run_attempt }}
 
       # Security advisories waiting in triage: a private report waits on a
       # maintainer, and nothing else pages on one. The built-in token cannot
@@ -1516,13 +1582,32 @@ jobs:
           GW=$(curl -s --max-time 15 -H "X-Operator-Token: $OP_TOKEN" "$PROD/api/gateway-status" || echo '{}')
           WORD=$(printf '%s' "$GW" | jq -r '.refundsOwed.status // "unknown"' 2>/dev/null || echo unknown)
           case "$WORD" in owed|aging|stuck|ok|unknown) ;; *) WORD=unknown ;; esac
-          echo "refunds owed: $WORD"
+          # Where the debt is: the refund ledger and the card report refunds
+          # (pending: Stripe has every card refund in hand, nothing to do;
+          # refused: one needs a refund by hand). Words only, allowlisted.
+          LEDGER=$(printf '%s' "$GW" | jq -r '.refundsOwed.ledger // ""' 2>/dev/null || echo "")
+          case "$LEDGER" in ok|owed|aging|stuck|unknown) ;; *) LEDGER="" ;; esac
+          CARD=$(printf '%s' "$GW" | jq -r '.refundsOwed.card // ""' 2>/dev/null || echo "")
+          case "$CARD" in none|pending|refused|unknown) ;; *) CARD="" ;; esac
+          echo "refunds owed: $WORD (ledger ${LEDGER:-unread}, card ${CARD:-unread})"
           WF="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/refund.yml"
           TITLE="Refunds owed to a buyer are waiting"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          LEDGER_TEXT="owed: a buyer's debt is in the refund ledger - read /__operator/refunds.json, then run the refund workflow ($WF): dry run first, then live (include_repeat_hangups for repeat hang-up debts, include_review_holds for rows a route marked held for review; void a debt that should not be paid, with a note)."
+          case "$LEDGER" in
+            ok) LEDGER_TEXT="The refund ledger owes nothing (ledger=ok)." ;;
+            unknown) LEDGER_TEXT="The refund ledger could not be read (ledger=unknown); read /__operator/refunds.json." ;;
+          esac
+          case "$CARD" in
+            pending) CARD_TEXT="Card reports (card=pending): every card report refund past the notice is one Stripe accepted and has not finished yet. The money is on its way back to the buyer and nothing is needed. The server reads these again every few minutes and records each refund once Stripe completes it; the issue closes then." ;;
+            refused) CARD_TEXT="Card reports (card=refused): a card report refund was refused by Stripe or could not be sent. The owed ones are listed on /__operator/human-checkout.json (refundOwed); an entry marked pending is still in progress at Stripe and needs nothing. Refund each of the others in the Stripe dashboard." ;;
+            none) CARD_TEXT="Card reports (card=none): no card report refund is owed." ;;
+            unknown) CARD_TEXT="Card reports (card=unknown): the owed card refund list could not be read; read /__operator/human-checkout.json." ;;
+            *) CARD_TEXT="A card report whose refund Stripe refused is listed on /__operator/human-checkout.json (refundOwed): refund it in the Stripe dashboard." ;;
+          esac
           case "$WORD" in
             owed|aging|stuck)
-              BODY="/api/gateway-status reports refundsOwed.status=$WORD at $(date -u +%FT%TZ). The counts are on /__operator/refunds.json, never in this public issue. owed: a buyer's debt is in the refund ledger - read /__operator/refunds.json, then run the refund workflow ($WF): dry run first, then live (include_repeat_hangups for repeat hang-up debts, include_review_holds for rows a route marked held for review; void a debt that should not be paid, with a note). A card report whose refund Stripe refused is listed on /__operator/human-checkout.json (refundOwed): refund it in the Stripe dashboard. aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48). stuck: a row has been in sending for over 30 minutes - check the refund wallet on chain, then mark it paid with the tx or release it back to owed. Auto-closes when nothing is owed."
+              BODY="/api/gateway-status reports refundsOwed.status=$WORD at $(date -u +%FT%TZ). The counts are on /__operator/refunds.json, never in this public issue. $LEDGER_TEXT $CARD_TEXT aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48). stuck: a row has been in sending for over 30 minutes - check the refund wallet on chain, then mark it paid with the tx or release it back to owed. Auto-closes when nothing is owed."
               # A debt can stay owed for days (held for review), so an open
               # issue is updated in place rather than commented every run.
               if [ -z "$OPEN" ]; then

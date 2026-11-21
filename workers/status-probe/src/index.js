@@ -622,16 +622,7 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
       if (w === "owed" || w === "aging" || w === "stuck") return "bad";
       return w === "ok" ? "good" : "quiet";
     },
-    body: ({ gateway: b }) => {
-      const w = b.refundsOwed?.status === "stuck" ? "stuck" : b.refundsOwed?.status === "aging" ? "aging" : "owed";
-      return `/api/gateway-status reports refundsOwed.status=${w}.
-
-- owed: a buyer's debt is in the refund ledger (past REFUND_OWED_NOTICE_MINUTES, default 15). Read /__operator/refunds.json, then run the refund workflow (https://github.com/${ISSUES_REPO}/actions/workflows/refund.yml): dry run first, then live (include_repeat_hangups for repeat hang-up debts, include_review_holds for rows a route marked held for review). A debt that should not be paid is voided there with a note. A card report whose refund Stripe refused is listed on /__operator/human-checkout.json (refundOwed): refund it in the Stripe dashboard.
-- aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48).
-- stuck: a row has been in "sending" for over 30 minutes, so a refund run stopped between claiming it and recording the transfer. Check the refund wallet on chain for a transfer to that payer. If one landed, mark the row paid with that tx; if not, release it back to owed (POST /__operator/refunds/update {"action":"release","note":...}).
-
-Auto-closes when the word is ok.`;
-    },
+    body: ({ gateway: b }) => refundsOwedBody(b.refundsOwed),
   },
   {
     // The live revenue read (revenueLive on /api/gateway-status): stale means a
@@ -1286,6 +1277,46 @@ function wordVerdict(word, bad, good) {
 function coverageReadsAlarmVerdict(row) {
   if (row?.alert === "sustained") return "bad";
   return row?.alert === "ok" || row?.status === "ok" || row?.status === "off" ? "good" : "quiet";
+}
+
+// The refundsOwed page names where the debt is, so the advice fits it: the
+// refund ledger (ledger) and the card report refunds (card). A card refund
+// Stripe holds and has not finished (card=pending) needs nothing: the
+// server's read-back records it within minutes of Stripe finishing it, and
+// the page closes then. Only a refused one (card=refused) is refunded by hand.
+// A server that publishes neither word gets the combined text it always had.
+// Words only: every value is read through an allowlist.
+const REFUNDS_LEDGER_WORDS = new Set(["ok", "owed", "aging", "stuck", "unknown"]);
+const REFUNDS_CARD_WORDS = new Set(["none", "pending", "refused", "unknown"]);
+export function refundsOwedBody(row) {
+  const w = row?.status === "stuck" ? "stuck" : row?.status === "aging" ? "aging" : "owed";
+  const ledger = REFUNDS_LEDGER_WORDS.has(row?.ledger) ? row.ledger : null;
+  const card = REFUNDS_CARD_WORDS.has(row?.card) ? row.card : null;
+  const wf = `https://github.com/${ISSUES_REPO}/actions/workflows/refund.yml`;
+  const ledgerLines = `- owed: a buyer's debt is in the refund ledger (past REFUND_OWED_NOTICE_MINUTES, default 15). Read /__operator/refunds.json, then run the refund workflow (${wf}): dry run first, then live (include_repeat_hangups for repeat hang-up debts, include_review_holds for rows a route marked held for review). A debt that should not be paid is voided there with a note.`;
+  const tail = `- aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48).
+- stuck: a row has been in "sending" for over 30 minutes, so a refund run stopped between claiming it and recording the transfer. Check the refund wallet on chain for a transfer to that payer. If one landed, mark the row paid with that tx; if not, release it back to owed (POST /__operator/refunds/update {"action":"release","note":...}).
+
+Auto-closes when the word is ok.`;
+  if (!ledger || !card) {
+    return `/api/gateway-status reports refundsOwed.status=${w}.
+
+${ledgerLines} A card report whose refund Stripe refused is listed on /__operator/human-checkout.json (refundOwed): refund it in the Stripe dashboard.
+${tail}`;
+  }
+  const ledgerPart = ledger === "ok" ? "The refund ledger owes nothing (ledger=ok)." : ledger === "unknown" ? "The refund ledger could not be read (ledger=unknown); read /__operator/refunds.json." : `Refund ledger (ledger=${ledger}):\n${ledgerLines}`;
+  const cardPart = card === "pending"
+    ? "Card reports (card=pending): every card report refund past the notice is one Stripe accepted and has not finished yet. The money is on its way back to the buyer and nothing is needed. The server reads these again every few minutes and records each refund once Stripe completes it; the page closes then. If Stripe fails one, this word reads card=refused."
+    : card === "refused"
+      ? "Card reports (card=refused): a card report refund was refused by Stripe or could not be sent. The owed ones are listed on /__operator/human-checkout.json (refundOwed); an entry marked pending is still in progress at Stripe and needs nothing. Refund each of the others in the Stripe dashboard; the server records a dashboard refund on its next read-back."
+      : card === "unknown" ? "Card reports (card=unknown): the owed card refund list could not be read; read /__operator/human-checkout.json." : "Card reports (card=none): no card report refund is owed.";
+  return `/api/gateway-status reports refundsOwed.status=${w}.
+
+${ledgerPart}
+
+${cardPart}
+
+${tail}`;
 }
 
 function sustainedVerdict(row, good) {

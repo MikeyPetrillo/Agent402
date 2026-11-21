@@ -67,6 +67,8 @@ ok(opBody?.xSearchAuthors?.status === "ok" && typeof opBody?.xSearchAuthors?.aut
 ok(opBody?.subscriptionRenewals?.status === "off", `the operator view reads the same word without a subscription engine (${JSON.stringify(opBody?.subscriptionRenewals)})`);
 ok(pubBody?.directUpstream?.status === "off" && Object.keys(pubBody.directUpstream).join(",") === "status" && opBody?.directUpstream?.status === "off" && Object.keys(opBody.directUpstream).join(",") === "status", `directUpstream publishes its word only, on both views (${JSON.stringify(pubBody?.directUpstream)})`);
 for (const k of ["directUpstreamSpend", "directUpstreamBalance"]) ok(pubBody?.[k]?.status === "off" && Object.keys(pubBody[k]).join(",") === "status" && opBody?.[k]?.status === "off", `${k} publishes its word only (${JSON.stringify(pubBody?.[k])})`);
+// refundsOwed: the word and where the debt is (ledger, card), words only; the counts on the operator view.
+ok(Object.keys(pubBody?.refundsOwed || {}).join(",") === "status,ledger,card" && Object.values(pubBody.refundsOwed).every((v) => typeof v === "string" && /^[a-z]+$/.test(v)) && typeof opBody?.refundsOwed?.cardPendingCount === "number", `refundsOwed publishes three words only; the operator view counts (${JSON.stringify(pubBody?.refundsOwed)})`);
 
 // --- tool and upstream failure words: one word each publicly, rows for the operator ---
 for (const k of ["toolFailures", "upstreamHealth"]) {
