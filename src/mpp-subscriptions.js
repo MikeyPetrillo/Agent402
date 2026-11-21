@@ -409,6 +409,8 @@ export async function classifyRenewalEvidence({ receipt, tx, currency, payer, re
 // (the disk-fill guard, same posture as the memory namespace byte budget).
 // (OFFER_SWEEP_AFTER_MS and the sweep timer: src/mpp-subscription-retention.js.)
 export const MAX_OPEN_OFFERS = 500;
+/** How long the offer sweep runs before it gives the event loop a turn. */
+export const OFFER_SWEEP_SLICE_MS = 20;
 /** How long one container's pull of a subscription's due period holds the
  *  cross-container lease (renewed while it runs): longer than a sync send
  *  can take, short enough that a crashed holder frees it. */
@@ -1285,7 +1287,15 @@ export function createMppSubscriptions({
     const snap = kv._snapshot();
     const live = new Set(Object.entries(snap).filter(([k]) => k.startsWith("a402:sub:")).map(([, v]) => String(v.accessKeyAddress || "").toLowerCase()));
     let open = 0;
+    // The file store writes the whole document on every delete, and its
+    // awaits resolve without ever leaving the microtask queue: a walk over
+    // the cap's worth of expired offers held the event loop for over a
+    // second. The walk gives the loop a turn once a slice has run for
+    // OFFER_SWEEP_SLICE_MS. Every offer it reaches here is past its
+    // challenge's life, so nothing a request does in between can pay it.
+    let sliceAt = Date.now();
     for (const [key, marker] of Object.entries(snap)) {
+      if (Date.now() - sliceAt >= OFFER_SWEEP_SLICE_MS) { await new Promise((r) => setImmediate(r)); sliceAt = Date.now(); }
       // A destroyed key's marker only has to outlive a renewal in flight.
       if (key.startsWith(KEY_GONE_PREFIX)) {
         if (now() - (Date.parse(marker?.at || "") || 0) > KEY_GONE_KEEP_MS) await kv.delete(key);
@@ -1749,7 +1759,12 @@ export function createMppSubscriptions({
           // The rebuild reopened any debt it voided; one is booked here when
           // none was (the first attempt died before answering).
           log(`[mpp-subs] rebuilding a settled first payment failed: ${diagnoseError(err, 300)}`);
-          throw firstPaymentNotRecordedError(await oweFirstPayment({ product: b.product, payer, priceUsd: b.productDef.price / 100, tx: already.reference || null, lookupKey, why: "its record was not written" }));
+          const booked = await oweFirstPayment({ product: b.product, payer, priceUsd: b.productDef.price / 100, tx: already.reference || null, lookupKey, why: "its record was not written" });
+          // Another retry of this payment that rebuilt it while this one
+          // failed served the buyer: the debt just booked is voided.
+          const served = booked ? await voidIfServed(already.subscriptionId, already.reference || null, lookupKey) : null;
+          if (served) return { ...publicView(served), replay: true };
+          throw firstPaymentNotRecordedError(booked);
         }
         if (r.refused) {
           const e = new Error("A refund of this first subscription payment is already under way. Request a fresh challenge to subscribe again.");
@@ -1811,13 +1826,8 @@ export function createMppSubscriptions({
       // A retry of this credential that rebuilt the record between the read
       // above and the booking was served: the debt just booked is voided.
       if (booked && mppxRec) {
-        let served = null;
-        try { served = await findBySubscriptionId(mppxRec.subscriptionId); } catch { served = null; }
-        if (served) {
-          try { const L = await ledger(); for (const ev of firstPaymentEvidences(tx, lookupKey)) await L.voidForServe(ev, `${REBUILD_HELD_NOTE}; ${REBUILD_SERVED_NOTE}`); }
-          catch (ve) { log(`[mpp-subs] served by a concurrent retry; voiding its debt failed: ${String(ve?.message || ve).slice(0, 160)}`); }
-          return { ...publicView(served), replay: true };
-        }
+        const served = await voidIfServed(mppxRec.subscriptionId, tx, lookupKey);
+        if (served) return { ...publicView(served), replay: true };
       }
       throw firstPaymentNotRecordedError(booked);
     }
@@ -1936,6 +1946,27 @@ export function createMppSubscriptions({
     log(`[mpp-subs] first-payment debt ${owed ? "reopened" : "NOT reopened"} (${why}) evidence=${evidence.slice(0, 80)}`);
     return owed;
   }
+  /** Void every owed debt for a first payment whose subscription is ours
+   *  (served), with the note a finished rebuild leaves. Never throws. */
+  async function voidServedDebts(tx, lookupKey, why) {
+    try {
+      const L = await ledger();
+      for (const ev of firstPaymentEvidences(tx, lookupKey)) {
+        if (await L.voidForServe(ev, `${REBUILD_HELD_NOTE}; ${REBUILD_SERVED_NOTE}`)) log(`[mpp-subs] first-payment debt voided (${why}) evidence=${ev.slice(0, 80)}`);
+      }
+    } catch (e) { log(`[mpp-subs] voiding a served first payment's debt failed (${why}): ${String(e?.message || e).slice(0, 160)}`); }
+  }
+  /** After booking a first payment owed: when our record for it exists (a
+   *  concurrent retry rebuilt and served it), the debt is voided and that
+   *  record is returned; else null. */
+  async function voidIfServed(subscriptionId, tx, lookupKey) {
+    if (!subscriptionId) return null;
+    let served = null;
+    try { served = await findBySubscriptionId(subscriptionId); } catch { served = null; }
+    if (!served) return null;
+    await voidServedDebts(tx, lookupKey, "served by a concurrent retry");
+    return served;
+  }
   async function reopenFirstPaymentDebts(voided, why) {
     for (const ev of voided) { try { await reopenRebuildHeld(ev, why); } catch (e) { log(`[mpp-subs] reopen failed for ${ev.slice(0, 80)}: ${String(e?.message || e).slice(0, 160)}`); } }
   }
@@ -1971,6 +2002,12 @@ export function createMppSubscriptions({
       try { const row = await L.byEvidence(ev); if (isRebuildHeld(row)) await L.renoteVoid(ev, row.note, `${row.note}; ${REBUILD_SERVED_NOTE}`); }
       catch { /* the record exists, so the offer sweep never reaches this row */ }
     }
+    // A debt booked after the voids above and before the write (an
+    // activation of this payment whose own record write failed, booking
+    // while this rebuild wrote) is voided now that the record is ours: the
+    // buyer is served, never served and refunded. A booking that lands after
+    // this read finds the record and voids itself (voidIfServed).
+    if (w.won) await voidServedDebts(mppxRec.reference, lookupKey, "booked while its subscription was rebuilt");
     try { await dropOfferMarkers(b.accessKeyAddress); } catch { /* the offer sweep drops it */ }
     if (w.won) {
       bookCharge(w.value, w.value.lastChargedPeriod, w.value.lastChargeTx);
@@ -2432,9 +2469,13 @@ export function createMppSubscriptions({
       const p = MONITOR_PRODUCTS[rec.product];
       if (!p) continue;
       if (kind && p.kind !== kind) continue;
-      // Never list a subscription whose paid period has run out, even if the
-      // stored status still says active: refreshStatus is what flips it, and
-      // this must not hand the scheduler a sub to work on before then.
+      // Only an active record is listed. One whose paid period has run out
+      // while its stored status still reads active IS listed: renewals are
+      // pulled lazily, from the scheduler's stillActive gate (refreshStatus)
+      // before a paid run, and the scheduler only reaches a listed record, so
+      // leaving it out would leave its next period unpulled for good. A paid
+      // run is made only once that pull confirms (otherwise the gate answers
+      // past_due); the free checks run meanwhile.
       if (rec.status !== "active") continue;
       // Two cheap exclusions the stored status cannot express on its own,
       // because only refreshStatus rewrites it and a subscription with no paid

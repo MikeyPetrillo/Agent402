@@ -51,12 +51,8 @@ try {
     const src = readFileSync(new URL("../" + file, import.meta.url), "utf8");
     ok(src.includes(`"${name}"`), `${file} names its lease ${name}`);
   }
-  // A leased loop that is never started never runs: the server starts the
-  // owed card refund read-back (code, not a comment that names the call).
-  {
-    const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8").split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
-    ok(/^\s*_humanCheckout\.start\(\);/m.test(serverSrc), "src/server.js starts the owed card refund read-back (_humanCheckout.start())");
-  }
+  // That the server starts the owed card refund read-back is checked offline,
+  // in scripts/test-human-checkout.js, so a run without Postgres checks it too.
   // Fail-open (running without the lease when the database cannot answer) is
   // opt-in, and only loops whose effects stay inside our own state take it:
   // a loop that mails, posts, charges or reports never does.

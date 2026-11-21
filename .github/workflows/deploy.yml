@@ -3230,6 +3230,9 @@ jobs:
       - name: Chromium and the media binaries get an allowlisted environment, never a secret (real Chromium)
         run: node scripts/test-child-env.js
 
+      - name: Browser tools' published examples load this server's own pages, never production's (real Chromium, refusing proxy)
+        run: node scripts/test-own-examples-browser.js
+
       - name: CSP violations sitewide (real browser, every distinct page template + real interactions on click-gated pages - script-src has no 'unsafe-inline' since 2026-08-16)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-csp-violations.js
 

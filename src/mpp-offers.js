@@ -21,6 +21,7 @@
 import { tempoDiscoveryInfo, tempoOfferedFor, TEMPO_USDC_E_ADDRESS } from "./mpp-tempo.js";
 import { mppEvmDiscoveryRails } from "./mpp-shim.js";
 import { stripeDiscoveryInfo } from "./mpp-stripe.js";
+import { mppOfferGateClause, mppOfferGateSentence } from "./mpp-offer-gate.js";
 
 const PATH_USD_LC = "0x20c0000000000000000000000000000000000000";
 
@@ -75,6 +76,13 @@ export function mppMethodsSummary() {
     stripe: stripe ? { minUsd: stripe.minUsd } : null,
   };
 }
+
+/** The offer gate's clause and sentence (src/mpp-offer-gate.js: which
+ *  clients get the x402 offer alone, and how they get the challenges back)
+ *  when this instance sends MPP challenges at all; "" otherwise, so no
+ *  surface offers a way back to challenges it never sends. */
+export const mppOfferGateClauseIfOffered = (opts) => (mppMethodsSummary().enabled ? mppOfferGateClause(opts) : "");
+export const mppOfferGateSentenceIfOffered = (opts) => (mppMethodsSummary().enabled ? mppOfferGateSentence(opts) : "");
 
 const listOr = (xs) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} or ${xs.at(-1)}`);
 

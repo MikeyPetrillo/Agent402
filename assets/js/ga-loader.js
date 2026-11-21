@@ -14,7 +14,11 @@
   //
   // Internal traffic: opening any page with ?internal=1 marks this browser
   // (localStorage), and its events carry traffic_type=internal for GA's
-  // Internal Traffic filter; ?internal=0 clears it.
+  // Internal Traffic filter; ?internal=0 clears it. A browser driven by
+  // automation (navigator.webdriver: a headless test or a browser tool's own
+  // page load) is tagged the same way. The request still goes out, so a tool
+  // that measures the page sees the same load; the filter keeps it out of the
+  // visit counts.
   var el = document.getElementById("ga-config");
   if (!el) return;
   var cfg;
@@ -53,7 +57,9 @@
   q.forEach(function (v, k) { if (/^utm_[a-z_]+$/.test(k)) keep.append(k, v); });
   var qs = keep.toString();
   var config = { allow_google_signals: false, allow_ad_personalization_signals: false, page_location: location.origin + location.pathname + (qs ? "?" + qs : "") };
-  if (store.get("a402-internal") === "1") config.traffic_type = "internal";
+  var automated = false;
+  try { automated = navigator.webdriver === true; } catch (e) { /* no navigator */ }
+  if (automated || store.get("a402-internal") === "1") config.traffic_type = "internal";
   gtag("config", cfg.id, config);
 
   var s = document.createElement("script");

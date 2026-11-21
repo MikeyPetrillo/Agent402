@@ -47,7 +47,10 @@ let dropped = [];
 // so both count as gaps.
 const REQUIRED = [
   ["fees", "webSearchPerUse"], ["fees", "groundedPerCall"], ["fees", "rerankPerUnit"], ["meter", "markup"],
-  ["vendor", "x", "postRead"], ["vendor", "x", "userRead"], ["vendor", "decisions", "luna"], ["vendor", "decisions", "maxShare"],
+  ["vendor", "x", "postRead"], ["vendor", "x", "userRead"],
+  // X post counts and trends, USD per request (x-post-counts, x-trends).
+  ["vendor", "x", "countsRequest"], ["vendor", "x", "trendsRequest"],
+  ["vendor", "decisions", "luna"], ["vendor", "decisions", "maxShare"],
   ["vendor", "decisions", "decisionOne"], ["vendor", "decisions", "gemini"], ["vendor", "decisions", "jev"],
   // The direct image models (USD per 1M tokens: prompt for text input,
   // completion for image output), which the spend meter prices from each row.

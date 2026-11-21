@@ -83,6 +83,7 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
     return false;
   };
   // A balance read: answers what the account shows now, after st.readDelayMs.
+  const svmSources = new Map(); // a Solana signer -> the source token accounts made for it
   const readOf = async (id) => { st.reads++; const a = acct(id); const v = a.readable ? (a.shown ?? a.balance) : null; const d = typeof st.readDelayFor === "function" ? st.readDelayFor(id) : st.readDelayMs; if (d > 0) await sleep(d); return v; };
   const paymentOf = (fam, j) => {
     const inner = j?.paymentPayload?.payload || {};
@@ -114,6 +115,17 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
       return reply(200, { jsonrpc: "2.0", id: j.id ?? 1, result: path === "/rpc" ? "0x0" : null });
     }
     if (path === "/sol") {
+      // The wallet's token accounts of the mint: each source account made for
+      // that signer, with what it holds (any unreadable: the read fails).
+      if (j.method === "getTokenAccountsByOwner") {
+        const value = [];
+        for (const source of svmSources.get(String(j.params?.[0])) || []) {
+          const v = await readOf(`svm:${source}`);
+          if (v == null) return reply(500, {});
+          value.push({ pubkey: source, account: { data: { parsed: { info: { mint: j.params?.[1]?.mint, owner: j.params?.[0], tokenAmount: { amount: v.toString(), decimals: 6 } } } } } });
+        }
+        return reply(200, { jsonrpc: "2.0", id: 1, result: { context: { slot: 1 }, value } });
+      }
       if (j.method === "getTokenAccountBalance") {
         const v = await readOf(`svm:${j.params?.[0]}`);
         return v == null ? reply(500, {}) : reply(200, { jsonrpc: "2.0", id: 1, result: { context: { slot: 1 }, value: { amount: v.toString(), decimals: 6 } } });
@@ -266,7 +278,7 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
     if (wire === "evm" || wire === "mpp-evm") { const a = privateKeyToAccount(generatePrivateKey()); return { wire, id: `evm:${a.address.toLowerCase()}`, address: a.address }; }
     if (wire === "tempo" && accessKeyOf) { const a = TempoAccount.fromSecp256k1(generatePrivateKey(), { access: accessKeyOf.root }); if (!unregistered) chainKeys.add(`${accessKeyOf.address.toLowerCase()}:${a.accessKeyAddress.toLowerCase()}`); return { wire, id: accessKeyOf.id, address: accessKeyOf.address, account: a, keychain: true }; }
     if (wire === "tempo") { const k = generatePrivateKey(); const a = privateKeyToAccount(k); return { wire, id: `tempo:${a.address.toLowerCase()}`, address: a.address, account: a, root: TempoAccount.fromSecp256k1(k) }; }
-    if (wire === "svm") { const s = signer || await kit.generateKeyPairSigner(); const source = (await kit.generateKeyPairSigner()).address; return { wire, id: `svm:${source}`, address: s.address, signer: s, source }; }
+    if (wire === "svm") { const s = signer || await kit.generateKeyPairSigner(); const source = (await kit.generateKeyPairSigner()).address; if (!svmSources.has(s.address)) svmSources.set(s.address, new Set()); svmSources.get(s.address).add(source); return { wire, id: `svm:${source}`, address: s.address, signer: s, source }; }
     if (wire === "avm") { const a = algosdk.generateAccount(); return { wire, id: `avm:${a.addr.toString()}`, address: a.addr.toString(), account: a }; }
     if (wire === "stellar") { const g = sdk.Keypair.random().publicKey(); return { wire, id: `stellar:${g}`, address: g }; }
     throw new Error(`unknown wire ${wire}`);

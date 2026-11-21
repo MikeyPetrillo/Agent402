@@ -57,6 +57,13 @@ try {
   ok(up, "server booted");
   const off = up ? await (await fetch(`${B}/api/mpp/monitors`)).json() : {};
   ok(Array.isArray(off.products) && off.products.length > 0, "the subscription engine is mounted (else the route checks below would be vacuous)");
+  // /monitors offers the wallet path beside the card checkout while the
+  // engine is mounted: the subscribe route, and every product the offer lists.
+  const page = up ? await (await fetch(`${B}/monitors`)).text() : "";
+  const wallet = page.slice(page.indexOf('id="wallet"'), page.indexOf('id="manage"'));
+  ok(page.includes('id="wallet"') && wallet.includes(`${B}/api/mpp/monitors/subscribe`) && wallet.includes('href="/api/mpp/monitors"') && page.includes('href="#wallet"'),
+    "/monitors shows the wallet subscribe path (the subscribe route and the offer) and links it from the card checkout note");
+  ok((off.products || []).every((p) => wallet.includes(`<code>${p.product}</code>`)), `/monitors names every product the wallet offer lists (${(off.products || []).map((p) => p.product).join(", ")})`);
   const heads = (r, what) => {
     ok(r.headers.get("cache-control") === "no-store", `${what}: Cache-Control no-store`);
     ok(r.headers.get("referrer-policy") === "no-referrer", `${what}: Referrer-Policy no-referrer (${r.headers.get("referrer-policy")})`);

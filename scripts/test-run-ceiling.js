@@ -21,7 +21,7 @@ import dnsPromises from "node:dns/promises";
 import { stubGuardResolver, offlineGuardAnswer } from "./lib/guard-resolver-stub.js";
 
 const { withRunCeiling, ceilingLeftMs } = await import("../src/run-ceiling.js");
-const kits = await Promise.all(["kit.js", "gov-kit.js", "data-kit.js", "weather-kit.js", "weather-probability-kit.js", "weather-plan-kit.js", "macro-kit.js"].map((f) => import(`../src/tools/${f}`)));
+const kits = await Promise.all(["kit.js", "gov-kit.js", "data-kit.js", "weather-kit.js", "weather-probability-kit.js", "weather-plan-kit.js", "macro-kit.js", "network-kit.js"].map((f) => import(`../src/tools/${f}`)));
 const MARKED = kits.flatMap((m) => Object.values(m).filter(Array.isArray).flat()).filter((d) => d && d.endsAtCeiling === true && typeof d.handler === "function");
 
 let passed = 0, failed = 0;
@@ -61,12 +61,16 @@ tls.connect = (opts) => {
   return socket; // never connects: it ends only when it is destroyed
 };
 const R = dnsPromises.Resolver.prototype;
-const realReverse = R.reverse, realCancel = R.cancel;
+const realReverse = R.reverse, realResolve = R.resolve, realCancel = R.cancel;
 const pendingReverse = new WeakMap();
-R.reverse = function stubReverse(ip) {
-  const e = note("reverse", String(ip));
+// A query on a Resolver instance (ip-info's reverse lookup, dns's record
+// lookup) never answers here: it ends only when that instance is canceled.
+const stalledQuery = (kind) => function stubQuery(what) {
+  const e = note(kind, String(what));
   return new Promise((_res, rej) => { pendingReverse.set(this, () => { e.endedAt = Date.now() - world.t0; rej(Object.assign(new Error("cancelled"), { code: "ECANCELLED" })); }); });
 };
+R.reverse = stalledQuery("reverse");
+R.resolve = stalledQuery("resolve");
 R.cancel = function stubCancel() { const end = pendingReverse.get(this); if (end) { pendingReverse.delete(this); end(); } };
 
 /** Run one handler under a ceiling; what it started, when each ended, how it came back. */
@@ -84,7 +88,7 @@ async function drive(def, input, { ceilingMs, dnsMs, upstream }) {
 const describe = (r) => `ended ${r.endedMs} ms; ${r.started.map((e) => `${e.kind} ${e.what}@${e.at}${e.endedAt === null ? " NOT ENDED" : `-${e.endedAt}`}`).join(", ") || "nothing started"}; ${r.out.hung ? "NEVER CAME BACK" : r.out.error ? `error ${r.out.error.statusCode ?? r.out.error.message}` : `VALUE ${JSON.stringify(r.out.value).slice(0, 80)}`}`;
 
 try {
-  ok(MARKED.length === 41 && ceilingLeftMs() === Infinity, `41 tool definitions declare that their upstream work ends at a run's ceiling (${MARKED.length}), and this suite itself runs with none`);
+  ok(MARKED.length === 44 && ceilingLeftMs() === Infinity, `44 tool definitions declare that their upstream work ends at a run's ceiling (${MARKED.length}), and this suite itself runs with none`);
 
   // 1. A slow name lookup (longer than the ceiling) and an upstream that never answers.
   const CEILING = 300;
@@ -126,6 +130,14 @@ try {
   const ipRun = await drive(MARKED.find((d) => d.slug === "ip-info"), { ip: "8.8.8.8" }, { ceilingMs: CEILING, dnsMs: 0, upstream: "stall" });
   const rev = ipRun.started.find((e) => e.kind === "reverse");
   ok(rev && rev.endedAt !== null && rev.endedAt <= CEILING + 150 && ipRun.out.error?.statusCode === 504, `ip-info's reverse lookup is canceled at the ceiling and the run reads 504 (${describe(ipRun)})`);
+
+  // 5b. dns: the record lookup is canceled at the ceiling, and that is a 504, never "no records".
+  const dnsRun = await drive(MARKED.find((d) => d.slug === "dns"), { name: "example.com", type: "A" }, { ceilingMs: CEILING, dnsMs: 0, upstream: "stall" });
+  const q = dnsRun.started.find((e) => e.kind === "resolve");
+  ok(q && q.endedAt !== null && q.endedAt <= CEILING + 150 && dnsRun.out.error?.statusCode === 504 && dnsRun.out.error.ceilingCut === true, `dns's record lookup is canceled at the ceiling and the run reads 504 (${describe(dnsRun)})`);
+  Object.assign(world, { dnsMs: 0, upstream: "stall", t0: Date.now(), starts: [] });
+  const lateDns = await withRunCeiling(40, async () => { await wait(80); return MARKED.find((d) => d.slug === "dns").handler({ name: "example.com" }); }).then(() => null, (e) => e);
+  ok(lateDns?.statusCode === 504 && lateDns.ceilingCut === true && !world.starts.some((e) => e.kind === "resolve"), `a dns lookup asked for after the ceiling starts no query (${lateDns?.statusCode}; ${world.starts.length} started)`);
 
   // 6. A read the ceiling cut is never an answer: the handlers that turn a failed read into a result.
   const asAnswer = [];
@@ -216,6 +228,7 @@ try {
   globalThis.fetch = realFetch;
   tls.connect = realConnect;
   R.reverse = realReverse;
+  R.resolve = realResolve;
   R.cancel = realCancel;
 }
 

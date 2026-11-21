@@ -1,6 +1,6 @@
 // The machine-readable fields a tool error carries into its JSON answer,
 // shared by every writer of a catalog error so none drops one.
-import { coverReasonOf } from "./refusal-reason.js";
+import { coverReasonOf, spendRuleOf } from "./refusal-reason.js";
 const HINT_RE = /^[a-z][a-z0-9-]{0,39}$/;
 
 /**
@@ -17,7 +17,7 @@ const HINT_RE = /^[a-z][a-z0-9-]{0,39}$/;
  */
 export const PAYMENT_RETRY_VERBS_NOTE = "On a refused payment the body's retry field says what helps: same-payment means send the same payment again after Retry-After, with no new signature; watch-transaction (the body lists transactions) and check-wallet (it lists none) mean the settlement is not confirmed (reason settlement-unconfirmed) and the transfer may still land, so do not sign a new authorization for that call before the expiry the body names (authorizationValidBefore, lastValidRound or expirationLedger), or, when it names none, before the paying wallet shows whether the transfer landed, and read refundStatusUrl (a free refund lookup) when it is there; fresh-authorization means sign a new payment, and with reason settled-refund-owed the earlier transfer of that payment landed and is booked as owed to the paying wallet, repaid after on-chain proof (transactions names it, refundStatusUrl shows where the repayment stands), so that call was charged and not served; any other value (other-network, fund-wallet, rebuild-payment and the rest) names the change that helps.";
 
-/** { upstreamStatus?, attribution?, retryAfterSeconds?, hint?, charged?, upstreamMs?, reason?, retry?, refusedNetwork?, otherNetworksFrom?, fix? } from a thrown error. */
+/** { upstreamStatus?, attribution?, retryAfterSeconds?, hint?, charged?, upstreamMs?, reason?, rule?, retry?, refusedNetwork?, otherNetworksFrom?, fix? } from a thrown error. */
 export function toolErrorFields(err) {
   const upstreamStatus = Number.isInteger(err?.upstreamStatus) ? err.upstreamStatus : null;
   const attribution = typeof err?.attribution === "string" ? err.attribution : upstreamStatus ? "upstream" : null;
@@ -52,6 +52,9 @@ export function toolErrorFields(err) {
     // The in-flight coverage refusal's class (src/inflight-cover.js), as a
     // fixed reason code a caller can branch on.
     ...(coverReasonOf(err) ? { reason: coverReasonOf(err) } : {}),
+    // A spend ceiling of ours paused routing (src/external-spend-guard.js
+    // SPEND_RULES): the fixed reason and the rule that refused.
+    ...(spendRuleOf(err) ? { reason: "routing_paused", rule: spendRuleOf(err) } : {}),
     // One plain sentence or two on how to recover (bounded, printable text).
     ...(typeof err?.fix === "string" && FIX_RE.test(err.fix) ? { fix: err.fix } : {}),
   };

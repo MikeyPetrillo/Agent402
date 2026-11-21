@@ -96,6 +96,7 @@ export const EMPTY_RESULT_OK = new Map([
   // A wallet, address or transaction with nothing of that kind.
   ["eas-attestations", true],
   ["asset-transfers", true],
+  ["wallet-transfers-multichain", true],
   ["token-balances", true],
   ["wallet-balance", true],
   ["wallet-balances", true],

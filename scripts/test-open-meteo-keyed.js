@@ -16,6 +16,12 @@
 //   4. No error message, error field or console line carries the key or the
 //      keyed host name, and redactSecrets drops an apikey query value from any
 //      URL in text, configured or not.
+//   5. The read cache: a repeated forecast, archive or ensemble request is
+//      read upstream once inside its TTL and again after it, keyed on the
+//      exact request without the key; a failure or an error body is never
+//      kept; air quality is always read fresh; each caller gets its own
+//      object; the cache is bounded; each cached tool's listing says how old
+//      an answer can be. Sections 1 to 4 run with the cache off.
 //
 //   node scripts/test-open-meteo-keyed.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -35,7 +41,8 @@ for (const m of ["log", "info", "warn", "error", "debug"]) {
 
 const KEY = "omk" + "Zx7Qp2Lw9Rt4Vb8Nc3";
 delete process.env.OPEN_METEO_API_KEY;
-const { WEATHER_TOOLS, openMeteoRequest, openMeteoStatus, _resetOpenMeteoStatus } = await import("../src/tools/weather-kit.js");
+process.env.OPEN_METEO_READ_CACHE = "off"; // sections 1 to 4 count every fetch; section 5 turns it on
+const { WEATHER_TOOLS, openMeteoRequest, openMeteoStatus, _resetOpenMeteoStatus, _resetOpenMeteoCache, _openMeteoCacheStats, OPEN_METEO_CACHE_TTL_MS, OPEN_METEO_CACHE_MAX } = await import("../src/tools/weather-kit.js");
 const { redactSecrets } = await import("../src/tools/redact.js");
 
 const restoreResolver = stubGuardResolver((host, family) => (/(^|\.)open-meteo\.com$/.test(host) ? (family === 4 ? ["93.184.216.34"] : []) : undefined));
@@ -198,6 +205,33 @@ const word = () => openMeteoStatus().status;
   ok(word() === "refused", "the unkeyed success left the keyed word as it was");
   _resetOpenMeteoStatus();
 }
+// The word holds per API: a key that covers the forecast but not air quality
+// reads refused while air quality's last keyed outcome is a refusal, however
+// many forecast reads succeed after it (one shared outcome let any success
+// clear another API's refusal, so the word flapped between ok and refused).
+{
+  _resetOpenMeteoStatus();
+  const aq = async (status) => {
+    reply = () => (status === 200 ? new Response(JSON.stringify(BODY), { status: 200, headers: { "content-type": "application/json" } }) : new Response(JSON.stringify({ error: true, reason: "This API requires the API Professional or Enterprise plan" }), { status }));
+    try { await tool("weather-air-quality").handler({ lat: 3, lon: 4 }); } catch { /* the refusal is the point */ }
+  };
+  await succeed();
+  // 401 here, so the block below still sees its own first air-quality 403 log line.
+  await aq(401); await aq(401);
+  ok(word() === "refused", "per API: two air-quality refusals read refused");
+  await succeed();
+  ok(word() === "refused", "per API: a forecast success does not clear air quality's refusal");
+  await aq(401);
+  await succeed();
+  ok(word() === "refused", "per API: forecast successes between air-quality refusals leave the word refused");
+  await aq(200);
+  ok(word() === "ok", "per API: the refused API's own success reads ok again");
+  _resetOpenMeteoStatus();
+  await succeed();
+  await aq(401);
+  ok(word() === "ok", "per API: one air-quality refusal after a forecast success stays ok (its own run of one)");
+  _resetOpenMeteoStatus();
+}
 // The keyed host refusing an API the key does not cover: the body names the
 // plan; the buyer gets our 503 (never a 502), and the operator line its reason.
 {
@@ -252,6 +286,86 @@ for (const [txt, label] of [
 ok(redactSecrets("set the apikey field; ?apikey=short") === "set the apikey field; ?apikey=short", "redactSecrets leaves prose and a short value alone");
 process.env.OPEN_METEO_API_KEY = KEY;
 ok(!redactSecrets(`upstream said ${KEY}`).includes(KEY), "redactSecrets drops the configured key value anywhere");
+
+// --- 5. The read cache ---
+{
+  process.env.OPEN_METEO_READ_CACHE = "";
+  process.env.OPEN_METEO_API_KEY = KEY;
+  _resetOpenMeteoCache?.();
+  const okBody = () => new Response(JSON.stringify(BODY), { status: 200, headers: { "content-type": "application/json" } });
+  reply = okBody;
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  try {
+    fetched.length = 0;
+    const a = await tool("weather-current").handler({ lat: 10, lon: 20 });
+    const b = await tool("weather-current").handler({ lat: 10, lon: 20 });
+    ok(fetched.length === 1 && JSON.stringify(a.current) === JSON.stringify(b.current), `cache: the same forecast request inside its TTL is read upstream once (${fetched.length} fetches)`);
+    a.current.temperature = 999;
+    const c = await tool("weather-current").handler({ lat: 10, lon: 20 });
+    ok(c.current.temperature !== 999, "cache: each caller gets its own object (one answer's change never reaches the next)");
+    await tool("weather-current").handler({ lat: 10, lon: 20, units: "fahrenheit" });
+    await tool("weather-current").handler({ lat: 10.0001, lon: 20 });
+    ok(fetched.length === 3, `cache: another parameter or another point is another request (${fetched.length} fetches)`);
+    ok(_openMeteoCacheStats().keys.every((k) => !k.includes(KEY) && !k.includes("apikey")), "cache: no key holds the API key");
+    now += OPEN_METEO_CACHE_TTL_MS.forecast - 1000;
+    await tool("weather-current").handler({ lat: 10, lon: 20 });
+    ok(fetched.length === 3, "cache: one second before the forecast TTL ends, still kept");
+    now += 2000;
+    await tool("weather-current").handler({ lat: 10, lon: 20 });
+    ok(fetched.length === 4, "cache: past the forecast TTL, read upstream again");
+    ok(OPEN_METEO_CACHE_TTL_MS.forecast === 5 * 60_000 && OPEN_METEO_CACHE_TTL_MS.ensemble === 15 * 60_000 && OPEN_METEO_CACHE_TTL_MS.archive === 60 * 60_000, "cache: TTLs by API (forecast 5, ensemble 15, archive 60 minutes)");
+
+    fetched.length = 0;
+    const hist = tool("weather-history");
+    await hist.handler(hist.discovery.input);
+    now += 30 * 60_000;
+    await hist.handler(hist.discovery.input);
+    ok(fetched.length === 1, "cache: an archive read is kept for 30 minutes");
+
+    fetched.length = 0;
+    await tool("weather-air-quality").handler({ lat: 10, lon: 20 });
+    await tool("weather-air-quality").handler({ lat: 10, lon: 20 });
+    ok(fetched.length === 2, "cache: air quality is read fresh every time");
+
+    fetched.length = 0;
+    reply = () => new Response("{}", { status: 500 });
+    try { await tool("weather-daily").handler({ lat: 11, lon: 21 }); } catch { /* expected */ }
+    reply = okBody;
+    await tool("weather-daily").handler({ lat: 11, lon: 21 });
+    await tool("weather-daily").handler({ lat: 11, lon: 21 });
+    ok(fetched.length === 3, `cache: a failed read is never kept (two failed tries, one success, then a hit: ${fetched.length} fetches)`);
+    fetched.length = 0;
+    reply = () => new Response(JSON.stringify({ error: true, reason: "Cannot initialize model" }), { status: 200, headers: { "content-type": "application/json" } });
+    try { await tool("weather-daily").handler({ lat: 12, lon: 22 }); } catch { /* an error body is not an answer */ }
+    reply = okBody;
+    await tool("weather-daily").handler({ lat: 12, lon: 22 });
+    ok(fetched.length === 2, `cache: an error body that came back with a 200 is never kept (${fetched.length} fetches)`);
+
+    _resetOpenMeteoCache();
+    for (let k = 0; k < OPEN_METEO_CACHE_MAX + 5; k++) await tool("weather-current").handler({ lat: 1 + k / 10000, lon: 2 });
+    ok(_openMeteoCacheStats().entries === OPEN_METEO_CACHE_MAX, `cache: bounded at ${OPEN_METEO_CACHE_MAX} entries, oldest out first`);
+
+    process.env.OPEN_METEO_READ_CACHE = "off";
+    fetched.length = 0;
+    await tool("weather-current").handler({ lat: 1.0004, lon: 2 });
+    ok(fetched.length === 1, "cache: OPEN_METEO_READ_CACHE=off reads upstream even on a kept request");
+
+    for (const [slug, mins] of [["weather-current", 5], ["weather-daily", 5], ["weather-hourly", 5], ["weather-history", 60]]) {
+      ok(tool(slug).description.includes(`Cached for up to ${mins} minutes.`), `${slug}: the listing says answers are cached for up to ${mins} minutes`);
+    }
+    ok(!/cached/i.test(tool("weather-air-quality").description), "weather-air-quality: no cache sentence (read fresh)");
+    const { WEATHER_PLAN_TOOLS } = await import("../src/tools/weather-plan-kit.js");
+    const { WEATHER_PROBABILITY_TOOLS } = await import("../src/tools/weather-probability-kit.js");
+    for (const t of WEATHER_PLAN_TOOLS) ok(t.description.includes("Cached for up to 5 minutes."), `${t.slug}: the listing says answers are cached for up to 5 minutes`);
+    for (const t of WEATHER_PROBABILITY_TOOLS) ok(t.description.includes("Cached for up to 15 minutes."), `${t.slug}: the listing says answers are cached for up to 15 minutes`);
+  } finally {
+    Date.now = realNow;
+    process.env.OPEN_METEO_READ_CACHE = "off";
+    _resetOpenMeteoCache?.();
+  }
+}
 
 globalThis.fetch = realFetch;
 restoreResolver();

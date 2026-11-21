@@ -906,6 +906,64 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
 }
 
 
+// A PURCHASE NEEDS A MATCH, NOT ONLY VOLUME (routeMatchOrder): the resolver's
+// most-settled-first order no longer puts a weak match first, a candidate
+// under the floor is never bought, and none left is a judged_no_match 404.
+{
+  const { routeMatchOrder, judgeSellerOrder, ROUTE_MATCH_MIN_SCORE } = await import("../src/tools/route-execute.js");
+  const { refusalReason } = await import("../src/refusal-reason.js");
+  // Ordered as the resolver sorts them: most settled first.
+  const busy = { seller: "https://busy.example", slug: "api", description: "Hourly weather data, a forecast for any city or market", tags: [], settled: 9000 };
+  const fits = { seller: "https://fits.example", slug: "weather-forecast", description: "Hourly weather forecast by city", tags: ["weather"], settled: 60 };
+  const off = { seller: "https://off.example", slug: "translate", description: "Translate text", tags: [], settled: 50000 };
+  const o = routeMatchOrder("hourly weather forecast for a city", [off, busy, fits]);
+  ok(o.items[0] === fits, `the seller that does the task goes first, ahead of more settled weak matches (${o.items.map((r) => r.slug).join(",")})`);
+  ok(!o.items.includes(off) && o.dropped === 1, "a candidate under the floor is dropped, however much it has settled");
+  ok(o.items.includes(busy) && o.items.indexOf(busy) > o.items.indexOf(fits), "a weak match that meets the floor stays, as a fallback after the strong one");
+  ok(o.floor === ROUTE_MATCH_MIN_SCORE, `a task of four or more terms is held to ROUTE_MATCH_MIN_SCORE (${o.floor})`);
+  const one = routeMatchOrder("weather", [{ slug: "v1-data", description: "current weather by city", tags: [] }]);
+  ok(one.items.length === 1 && one.floor === 1, "a one-word task matched in the description meets the floor of one point per task term");
+  const two = routeMatchOrder("weather api", [{ slug: "api", description: "stock quotes", tags: [] }, { slug: "x", description: "Weather now", tags: [] }]);
+  ok(two.items.length === 1 && two.items[0].slug === "x", `filler ("api") scores nothing, so a slug of it alone is not a match (${two.items.map((r) => r.slug).join(",")})`);
+  // Lanes stay in order: proven before unproven, each banded on its own.
+  const pWeak = { slug: "data", description: "weather forecast", tags: [] };
+  const uStrong = { slug: "weather-forecast", description: "weather forecast", tags: [], unproven: true };
+  const lanes = routeMatchOrder("weather forecast", [pWeak, uStrong], { group: (r) => (r.unproven ? 1 : 0) });
+  ok(lanes.items[0] === pWeak && lanes.items[1] === uStrong, "an unproven candidate stays after every proven one");
+  // judgeSellerOrder (the resolver's step for every chain) refuses when none
+  // meets the floor, before any judge call; with the judge off it keeps the
+  // floored order.
+  const prevJudge = process.env.ROUTE_JUDGE; process.env.ROUTE_JUDGE = "off";
+  const none = await judgeSellerOrder("hourly weather forecast for a city", [off]);
+  ok(none.refused === true && none.items.length === 0 && none.selection?.reason === "below_match_floor", `no candidate over the floor is a refusal (${JSON.stringify(none.selection)})`);
+  const kept = await judgeSellerOrder("hourly weather forecast for a city", [off, busy, fits]);
+  ok(kept.refused === false && kept.items[0] === fits && !kept.items.includes(off), `the judge step reads the floored order (${kept.items.map((r) => r.slug).join(",")})`);
+  if (prevJudge === undefined) delete process.env.ROUTE_JUDGE; else process.env.ROUTE_JUDGE = prevJudge;
+  // route-execute: candidates floored out in the resolver are a 404 classed
+  // judged_no_match, nothing paid.
+  let paidCalls = 0;
+  const flooredTool = (drops, noMatch = null) => buildRouteExecuteTool({ getCatalog: () => CATALOG, tier: { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 },
+    payExternal: async () => { paidCalls++; throw new Error("never"); }, externalEnabled: () => true,
+    resolveExternal: async () => { const a = []; Object.defineProperty(a, "__gateDrops", { value: drops }); if (noMatch) Object.defineProperty(a, "__judgedNoMatch", { value: noMatch }); return a; } });
+  const run = async (t) => { try { await t.handler({ task: "hourly weather forecast", include: "external" }); return null; } catch (e) { return e; } };
+  const e1 = await run(flooredTool({ total: 2, byReason: { below_match_floor: 2 } }));
+  ok(e1?.statusCode === 404 && /none of them does that task \(matched too few of the task's words to buy\)/.test(e1.message) && refusalReason(e1.message, 404) === "judged_no_match", `floored out on an EVM chain: 404 judged_no_match (${e1?.statusCode} ${e1?.message})`);
+  const e2 = await run(flooredTool({ total: 1, byReason: { judged_no_match: 1 } }, { method: "lexical", reason: "below_match_floor" }));
+  ok(e2?.statusCode === 404 && /matched too few of the task's words to buy/.test(e2.message) && refusalReason(e2.message, 404) === "judged_no_match", `floored out in the judge step: the same refusal (${e2?.message})`);
+  const e3 = await run(flooredTool({ total: 1, byReason: { judged_no_match: 1 } }, { method: "judged" }));
+  ok(e3?.statusCode === 404 && /\(judged\)/.test(e3.message), "CONTROL: a judge's own refusal still reads judged");
+  ok(paidCalls === 0, "nothing was paid in any of them");
+  // The resolver's EVM lane applies the floor before its cut to five, and
+  // not to a pinned endpoint.
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const fn = src.slice(src.indexOf("async function resolveExternalSeller("), src.indexOf("// A chain no buyer here pays on resolves nothing."));
+  ok(/if \(!onlyUrl\) \{\s*const \{ routeMatchOrder \} = await import\("\.\/tools\/route-execute\.js"\);\s*const matched = routeMatchOrder\(task, candidates/.test(fn)
+    && fn.indexOf("routeMatchOrder(task, candidates") < fn.indexOf("candidates = candidates.slice(0, 5);")
+    && !/\.slice\(0, 5\);\s*\} else \{/.test(fn.slice(0, fn.indexOf("routeMatchOrder(task, candidates"))),
+    "the EVM resolver orders by the match floor before it cuts the list to five");
+}
+
 // contractFieldsMissing (#1918): only an input refusal (400/422) with a declared
 // body contract names fields; names outside the allowlist are never echoed.
 {

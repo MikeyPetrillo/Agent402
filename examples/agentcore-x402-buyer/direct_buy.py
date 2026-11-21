@@ -73,7 +73,11 @@ def main():
     print("   -> HTTP 402 Payment Required (as expected)")
 
     print("2) AgentCore Payments signs the x402 payment")
-    payment_required_request = {"statusCode": 402, "headers": headers, "body": body}
+    # The 402 also carries MPP challenges (WWW-Authenticate: Payment), and the
+    # payment service pays an MPP challenge whenever it is handed one. This
+    # sample pays over x402, so it hands over the x402 offer alone.
+    x402_headers = {k: v for k, v in headers.items() if k.lower() != "www-authenticate"}
+    payment_required_request = {"statusCode": 402, "headers": x402_headers, "body": body}
     proof = manager.generate_payment_header(
         user_id=USER_ID,
         payment_instrument_id=PAYMENT_INSTRUMENT_ID,

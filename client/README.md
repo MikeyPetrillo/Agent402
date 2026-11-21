@@ -174,9 +174,13 @@ What the server does with it depends on how the call was paid:
   fresh authorization, which the server deliberately treats as a new payment
   (a client-chosen id on an unverified payload is never a cross-authorization
   dedupe). So on the wallet path a retry after a lost response can settle twice;
-  the `Idempotency-Key` cannot prevent that on its own. If that matters for your
-  workload, use a credits key for the tools you retry, or keep the signed
-  request and resend it yourself. A resent signed request needs no key: the
+  the `Idempotency-Key` cannot prevent that on its own. With the `x402Client`
+  passed (the signing guard), the client resends for you: a paid request whose
+  connection failed before any answer is sent once more with the same signed
+  header, the same key and body, over the client's own fetch, so one
+  authorization settles at most once (`retryResets: false` turns this off).
+  Without it, if that matters for your workload, use a credits key for the tools
+  you retry, or keep the signed request and resend it yourself. A resent signed request needs no key: the
   server answers a request re-sent with the same signed EVM payment, to the same
   route with the same body, from its first answer inside the replay window,
   with no second settlement, and marks it `X-Replayed-Answer: 1` (identity-bound
@@ -185,7 +189,9 @@ What the server does with it depends on how the call was paid:
   credits, discovery) are resent once when the connection failed before the
   server answered, for example on a kept-alive socket the edge had already
   closed (`retryResets: false` turns this off). Your `payFetch` is not wrapped,
-  because a retry over a payment wrapper would sign a fresh authorization. To get
+  because a retry over a payment wrapper would sign a fresh authorization; with
+  the `x402Client` passed, the paid request is resent with the payment already
+  signed, as above. To get
   the same resend on the wallet path, put it under the wrapper:
   `wrapFetchWithPayment(resetRetryFetch(distrustFetch()), client)`. The resend
   carries the same signed header, and one authorization settles at most once.

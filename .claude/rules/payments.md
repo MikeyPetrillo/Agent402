@@ -370,6 +370,14 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `PAYER_SCREEN_RAILS` and to `x402ScreenKey`, in the change that offers it; the suite refuses a
   listed address at every listed field with an unlisted control. An EVM payment none of whose
   fields reads is served and counted (`servedUnscreened`, `unreadablePayer` on the operator view).
+- **A card capture with no answer:** `settleStripeCredential` (`src/mpp-stripe.js`) reads what the
+  capture sent and got back. Definitive (nothing sent, a 4xx from Stripe other than 408 or 409, a
+  PaymentIntent in a state that took no money): the card gate's 402 says the card was not charged. Anything else is
+  sent once more under the same idempotency key (each send is one HTTP attempt, no SDK retry): a
+  succeeded PaymentIntent is served as paid; an outcome still unknown answers 402 with
+  `STRIPE_UNCONFIRMED_TEXT` and is booked in the refund ledger after the answer is written
+  (`unconfirmedCaptureDebt`, wire `mpp-stripe`). The credential stays spent either way. A new
+  failure shape is unconfirmed unless it is proven to take no money.
 - **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
   in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
   route that outlives the claim's expiry cannot run twice on one payment. Every command the guard
@@ -725,6 +733,22 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   mirror keeps the full offer; each accept is copied unchanged. On by default;
   `PAYMENT_REQUIRED_COMPACT=off` (or `PAYMENT_REQUIRED_BODY=off`) turns it off, and every text
   surface that describes it reads the same switch (`paymentRequiredCompactEnabled`).
+- **MPP offers by client:** `src/mpp-offer-gate.js`. A request whose User-Agent starts with a prefix
+  in `MPP_OFFER_WITHHOLD_USER_AGENTS` (comma list, matched without regard to case; default
+  `python-httpx/`; `off` turns it off) gets a 402 with no `WWW-Authenticate: Payment` challenge
+  (evm, tempo or card); the PAYMENT-REQUIRED header and the body are unchanged, and that 402 varies
+  on `X-Payment-Offers` and `Accept-Payment`. `X-Payment-Offers: mpp` (or `all`, a comma list)
+  restores the challenges, and so does an `Accept-Payment` header with one well-formed
+  `method/intent` entry whose q is not 0 (MPP client libraries send it; a payment manager that
+  prefers MPP and stops on its failure sends neither);
+  a request that arrived with `Authorization: Payment` is never gated (the raw header list and
+  `req.mppCredential` are read, since the shim removes the header). The evm shim, the Tempo
+  appender and the card appender all ask `mppChallengesSuppressed` (`src/mpp-fallback.js`), which
+  answers the wrong-domain steering and this gate, each decided once per request. The `/mcp`
+  loopback sends no client User-Agent, so connector answers are not gated. Counts (withheld,
+  optedIn) per process on the operator view of `/api/gateway-status`
+  (`mppEvmDomainFallback.offerGate`); the public view is unchanged
+  (`scripts/test-mpp-offer-gate.js`).
 - **402 `payment` block:** `src/payment-guide.js`: a first-contact 402 body carries `payment`
   (this request's dollar price on the primary network through `priceForNetwork`, or on the first
   network offered when the route does not offer the primary; one sentence on paying; `noWallet`

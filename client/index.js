@@ -24,7 +24,7 @@ export { KNOWN_ASSETS, NETWORK_NAMES, knownAsset, acceptUsd, networkIdsOf, MAX_V
 import { distrustFetch } from "./tls-distrust.js";
 export { distrustFetch, distrustDispatcher, distrustCheckServerIdentity, DISTRUSTED_SPKI_SHA256 } from "./tls-distrust.js";
 export { resetRetryFetch, isConnectionReset } from "./reset-retry.js";
-import { resetRetryFetch } from "./reset-retry.js";
+import { resetRetryFetch, isConnectionReset } from "./reset-retry.js";
 import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS } from "./async-job.js";
 export { AsyncJobPendingError } from "./async-job.js";
 export { verifyReceipt, verifyStreamedReceipt, splitStreamedReceipt, receiptRequestDigest, RECEIPT_HEADER, RECEIPT_KEYS_PATH, RECEIPT_SSE_COMMENT } from "./receipt.js";
@@ -35,7 +35,7 @@ export { MAX_POW_DIFFICULTY, MAX_POW_TRIES_FACTOR, solvePowAsync } from "./pow-s
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.10.0";
+const VERSION = "0.10.1";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // A package built on this SDK (an adapter) names itself first: its own
 // product token, then this one. Anything that is not one well-formed token
@@ -227,7 +227,8 @@ export class Agent402 {
    * @param {boolean} [opts.tlsDistrust=true] send the default fetch through distrustFetch (refuses a TLS
    *                                         chain through a distrusted intermediate CA); false sends it as is
    * @param {boolean} [opts.retryResets=true] resend the SDK's own request once when its connection failed
-   *                                         before any answer (see resetRetryFetch); false sends each once
+   *                                         before any answer (see resetRetryFetch), and, with x402Client,
+   *                                         a paid request with the payment already signed; false sends each once
    * @param {number|string|null} [opts.maxPerCallUsd=5]  ceiling on a single paid call (USD); over → SpendingLimitError
    *                                         before paying. Default $5; 0, "off" or null turns it off; a
    *                                         malformed value keeps the default and warns
@@ -286,6 +287,7 @@ export class Agent402 {
     // answer (a closed keep-alive socket). A caller's payFetch is not wrapped:
     // retrying over a payment wrapper would sign a fresh authorization.
     if (retryResets !== false) fetchImpl = resetRetryFetch(fetchImpl);
+    this.retryResets = retryResets !== false;
     this.baseUrl = String(baseUrl).replace(/\/$/, "");
     this.payFetch = payFetch || null;
     this.timeoutMs = timeoutMs === null ? null : (numOrNull(timeoutMs) || DEFAULT_REQUEST_TIMEOUT_MS);
@@ -373,6 +375,9 @@ export class Agent402 {
       const ctx = this._signCtx.getStore();
       if (!ctx || ctx.signedUsd == null) return;
       ctx.sent.push({ usd: ctx.signedUsd, until: signedValidUntilMs(paymentPayload) });
+      // The payload the payment fetch sends next: a request whose connection
+      // fails before any answer is resent with this same signed payment.
+      ctx.lastPayload = paymentPayload;
     });
     this._guarded = true;
     return client;
@@ -744,11 +749,25 @@ export class Agent402 {
         // recorded as sent (ctx.sent). Without it the payment fetch is opaque:
         // any request it made may have carried a signature.
         const reservation = this._spendReserve(host, usd, slug, listUsd, { always: guarded, limits });
-        const ctx = { reservation, limits, signedUsd: null, refusal: null, sent: [] };
+        const ctx = { reservation, limits, signedUsd: null, refusal: null, sent: [], lastPayload: null };
         const sentPayment = () => !guarded || ctx.sent.length > 0;
         let settled = false;
         try {
-          const r = await collect(await this._signCtx.run(ctx, () => paidSend(asyncHeaders, this.payFetch)));
+          let answered;
+          try {
+            answered = await this._signCtx.run(ctx, () => paidSend(asyncHeaders, this.payFetch));
+          } catch (e) {
+            // With the signing guard the client knows the payment it signed,
+            // so a paid request whose connection failed before any answer is
+            // resent ONCE with that same signed header over the client's own
+            // fetch: one authorization settles at most once, and the server
+            // answers a re-sent signed payment from its first answer. A retry
+            // through the payment fetch would sign a fresh authorization.
+            const header = guarded && this.retryResets && isConnectionReset(e) ? paymentHeaderOf(ctx.lastPayload) : null;
+            if (!header) throw e;
+            answered = await paidSend({ ...asyncHeaders, ...header });
+          }
+          const r = await collect(answered);
           if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
           if (!sentPayment()) this._spendRelease(reservation);
           else this._spendHold(reservation, guarded ? ctx.sent : null, { settleLast: true });
@@ -1414,6 +1433,16 @@ export class RequestTimeoutError extends Error {
     this.slug = slug;
     this.paid = false;
   }
+}
+
+/** The x402 request header that carries `payload`, encoded as the x402 fetch
+ *  wrapper encodes it (base64 of its JSON), or null for no payload or an
+ *  unknown version. */
+function paymentHeaderOf(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const name = payload.x402Version === 2 ? "PAYMENT-SIGNATURE" : payload.x402Version === 1 ? "X-PAYMENT" : null;
+  if (!name) return null;
+  return { [name]: Buffer.from(JSON.stringify(payload), "utf8").toString("base64") };
 }
 
 /** An abort raised by a timeout signal, as RequestTimeoutError; anything else as it came. */

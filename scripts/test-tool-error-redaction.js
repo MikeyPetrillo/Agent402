@@ -10,7 +10,7 @@
 //   2. The caller path: a real FREE_MODE boot (port 0) with a secret and a
 //      database URL configured, and a tool (regex) whose error message quotes
 //      its input. The 400 body and every server log line carry neither value.
-//      A bespoke route (/api/dns, sendToolError) whose refusal text is a
+//      A bespoke route (/api/meta, sendToolError) whose refusal text is a
 //      configured value answers and logs it scrubbed, and so does an operator
 //      route (/__operator/well-known). The discovery, wish and memory catches,
 //      and every route block in server.js, are read from source.
@@ -41,8 +41,8 @@ const DB_URL = `postgres://agent:${DB_PASS}@db.internal.test:5432/state`;
 const REDIS_PASS = ["rd", "Canary", "Pass9"].join("");
 const REDIS_URL = `redis://default:${REDIS_PASS}@redis.internal.test:6379`;
 const FEED_KEY = ["feed", "Canary", "Key77"].join("");
-// /api/dns refuses a malformed name with exactly this text (src/tools/dns-name-filter.js).
-const ECHO_VALUE = "Invalid domain name";
+// /api/meta refuses a non-http URL with exactly this text (src/tools/extract.js).
+const ECHO_VALUE = "Only http(s) URLs are supported";
 // /__operator/well-known refuses an unknown content type with exactly this text
 // (src/well-known-store.js); the operator token is built at runtime.
 const OP_ECHO_VALUE = 'contentType must be "application/json" or "text/plain"';
@@ -303,11 +303,11 @@ try {
   ok(!body.includes(SECRET), "the answer carries no configured secret");
   ok(!body.includes(DB_PASS) && !body.includes(DB_URL), "the answer carries no database URL or its password");
   // A bespoke route's error (sendToolError): the refusal text is a configured value.
-  const dns = await fetch(`http://127.0.0.1:${port}/api/dns?name=${encodeURIComponent("bad!name.example.com")}`);
-  const dnsBody = await dns.text();
-  ok(dns.status === 400 && /"error":"\[redacted\]"/.test(dnsBody) && !dnsBody.includes(ECHO_VALUE), `a bespoke route's error answer (sendToolError) is scrubbed (${dns.status} ${dnsBody.slice(0, 80)})`);
+  const meta = await fetch(`http://127.0.0.1:${port}/api/meta?url=${encodeURIComponent("ftp://bad.example.com/")}`);
+  const metaBody = await meta.text();
+  ok(meta.status === 400 && /"error":"\[redacted\]"/.test(metaBody) && !metaBody.includes(ECHO_VALUE), `a bespoke route's error answer (sendToolError) is scrubbed (${meta.status} ${metaBody.slice(0, 80)})`);
   await new Promise((r) => setTimeout(r, 300));
-  ok(!log.split("\n").some((l) => l.includes("[tool-error]") && l.includes("slug=dns") && l.includes(ECHO_VALUE)), "...and its [tool-error] line too");
+  ok(!log.split("\n").some((l) => l.includes("[tool-error]") && l.includes("slug=meta") && l.includes(ECHO_VALUE)), "...and its [tool-error] line too");
   // An operator route's error answer (operator-only, still never a secret).
   const op = await fetch(`http://127.0.0.1:${port}/__operator/well-known`, {
     method: "POST",

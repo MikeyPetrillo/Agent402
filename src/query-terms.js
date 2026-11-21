@@ -138,6 +138,21 @@ export function queryTerms(q, { max = 32 } = {}) {
   return out;
 }
 
+// FILLER: words a buyer adds that say nothing about the task. "the", "a" and
+// "for" sit in almost every seller description, and "api" and "tool" in most
+// seller slugs and paths, so each scored (and "api" and "tool" selected rows)
+// for every listing alike: a high-volume seller whose slug reads "api" took
+// slug points for "weather api" whatever it sells. The scorers drop them;
+// the whole query still decides which compound slugs a query covers.
+export const FILLER_TERMS = Object.freeze(new Set(["the", "a", "an", "for", "tool", "tools", "api", "apis"]));
+/** Terms for scoring: the filler dropped, unless every term is filler (a
+ *  query "api" still asks for something). */
+export function withoutFiller(terms) {
+  const list = Array.isArray(terms) ? terms : [];
+  const kept = list.filter((t) => !FILLER_TERMS.has(t));
+  return kept.length ? kept : list;
+}
+
 /** The match predicate for one term against a lower-cased haystack string:
  *  substring for terms of three or more characters and for every CJK term;
  *  whole-token for a short Latin term (the 2026-08-28 "ip" rule). */

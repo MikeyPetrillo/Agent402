@@ -11,12 +11,18 @@
 //     signed by an access key, the account the key signs for, which is the
 //     account that pays), the challenge's currency and amount (src/mpp-tempo.js sets them on the
 //     request). A push credential is final before the handler and has none.
-//   - Solana: the SOURCE token account of the transfer (the balance that
-//     moves is that account's, whoever its authority is), the mint, and the
-//     accept's amount. When an account of the transfer sits in an address
-//     lookup table (the source cannot be read without an RPC), the payment is
-//     keyed on the WALLET instead: the transfer's authority, always a static
-//     key (`byOwner`), judged on what it holds of the accepted mint.
+//     A pull whose sender is not verified (a multisig envelope, another
+//     address in the fee-payer slot) names the account it draws on and, for
+//     a multisig envelope, a ledger of its own (`ledger`, see
+//     inspectTempoSender's booking), so it never shares the verified
+//     account's ledger.
+//   - Solana: the WALLET, the transfer's authority (always a static key), the
+//     mint, and the accept's amount, judged on all the wallet holds of the
+//     mint (`byOwner`), whether the transfer names its accounts in the static
+//     keys or through an address lookup table: one wallet paying in both
+//     shapes is one ledger. When the source token account is static and is
+//     not one of the wallet's own (a delegate's transfer), its balance is
+//     added to the wallet's.
 //   - Algorand: the sender of the signed payment transaction, the accept's
 //     asset id and amount.
 //   - Stellar: the `from` of the invoked transfer, the accept's asset
@@ -28,10 +34,10 @@
 // BALANCES. One bounded read each, null when it cannot be read (the caller
 // treats null as unknown, never as zero):
 //   - Tempo: balanceOf on the TIP-20 token through TEMPO_RPC_URL.
-//   - Solana: getTokenAccountBalance of the source account (SOLANA_RPCS);
-//     for a payment keyed on the wallet, the sum of the wallet's token
-//     accounts of the mint (getTokenAccountsByOwner with the mint; a wallet
-//     with none reads as unknown, never zero).
+//   - Solana: the sum of the wallet's token accounts of the mint
+//     (getTokenAccountsByOwner with the mint, SOLANA_RPCS; a wallet with none
+//     reads as unknown, never zero), plus a static source account that is not
+//     among them (getTokenAccountBalance, on the same RPC).
 //   - Algorand: the account's holding of the asset from algod
 //     (ALGORAND_ALGOD_BASES).
 //   - Circle Gateway batched: the signer's available Gateway balance on the
@@ -51,6 +57,7 @@ import { svmTransferAccounts, svmTransferAuthority, isSvmNetwork } from "./svm-p
 
 const UINT = /^\d{1,39}$/;
 const HEX_ADDR = /^0x[0-9a-fA-F]{40}$/;
+const TEMPO_LEDGER = /^(?:unverified|multisig:0x[0-9a-f]{64})$/;
 export const RAIL_READ_TIMEOUT_MS = 2_500;
 
 /** The verified Tempo pull payment on this request, or null. */
@@ -59,7 +66,9 @@ export function tempoCoverTermsOf(req) {
   if (!t || typeof t !== "object") return null;
   const payer = String(t.sender || ""), asset = String(t.currency || ""), amount = String(t.amountAtomic ?? "");
   if (!HEX_ADDR.test(payer) || !HEX_ADDR.test(asset) || !UINT.test(amount)) return null;
-  return { rail: "tempo", payer: payer.toLowerCase(), network: "tempo", asset: asset.toLowerCase(), atomic: BigInt(amount) };
+  const ledger = t.ledger == null ? null : String(t.ledger);
+  if (ledger !== null && !TEMPO_LEDGER.test(ledger)) return null;
+  return { rail: "tempo", payer: payer.toLowerCase(), network: "tempo", asset: asset.toLowerCase(), atomic: BigInt(amount), ...(ledger ? { ledger } : {}) };
 }
 
 /** The verified Solana, Algorand or Stellar payment on this request, or null. */
@@ -78,8 +87,11 @@ export async function nonEvmCoverTermsOf(req) {
     const t = svmTransferAccounts(tx);
     if (t) {
       if (t.mint !== asset) return null;
-      // `owner`: the wallet (the transfer's authority), which the paid record is kept under.
-      return { rail: "svm", payer: t.source, owner: t.authority, network, asset, atomic };
+      // Keyed on the wallet (the transfer's authority, which the paid record
+      // is kept under too), the same ledger a lookup-table payment of that
+      // wallet is kept in. `source`: the static source token account, added
+      // to the wallet's balance when it is not one of the wallet's own.
+      return { rail: "svm", byOwner: true, payer: t.authority, owner: t.authority, source: t.source, network, asset, atomic };
     }
     // An account of the transfer is a lookup-table entry: keyed on the wallet
     // (its authority, read from the static keys), whose balance is what it
@@ -134,20 +146,30 @@ async function tempoBalance({ payer, asset }, timeoutMs) {
   }, timeoutMs);
 }
 const SVM_OWNER_ACCOUNTS_MAX = 64;
-async function svmBalance({ payer, asset, byOwner }, timeoutMs) {
+async function svmBalance({ payer, asset, byOwner, source }, timeoutMs) {
   const { SOLANA_RPCS } = await import("./solana-history-rpc.js");
   if (byOwner === true) {
     return firstAnswer(SOLANA_RPCS, async (u, o) => {
       const r = await postRpc(u, "getTokenAccountsByOwner", [payer, { mint: asset }, { encoding: "jsonParsed" }], o);
       const list = r?.value;
-      if (!Array.isArray(list) || !list.length || list.length > SVM_OWNER_ACCOUNTS_MAX) return null;
-      let sum = 0n;
+      if (!Array.isArray(list) || list.length > SVM_OWNER_ACCOUNTS_MAX) return null;
+      let sum = 0n, sourceIn = false;
       for (const e of list) {
         const info = e?.account?.data?.parsed?.info;
         const amt = info?.tokenAmount?.amount;
         if (info?.mint !== asset || typeof amt !== "string" || !UINT.test(amt)) return null;
+        if (typeof source === "string" && e?.pubkey === source) sourceIn = true;
         sum += BigInt(amt);
       }
+      // A static source that is not the wallet's own (a delegate's
+      // transfer): what moves is that account's balance, so it is added.
+      if (typeof source === "string" && source && !sourceIn) {
+        const b = await postRpc(u, "getTokenAccountBalance", [source], o);
+        const amt = b?.value?.amount;
+        if (typeof amt !== "string" || !UINT.test(amt)) return null;
+        return sum + BigInt(amt);
+      }
+      if (!list.length) return null;
       return sum;
     }, timeoutMs);
   }

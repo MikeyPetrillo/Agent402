@@ -37,7 +37,7 @@ import { Account as TempoAccount, Abis, Addresses } from "viem/tempo";
 import { encodeFunctionResult, decodeFunctionData } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { P256, Secp256k1 } from "ox";
-import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization } from "ox/tempo";
+import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization, MultisigConfig } from "ox/tempo";
 import { getFreePorts } from "./lib/free-port.js";
 
 let pass = 0;
@@ -137,7 +137,7 @@ const env = {
 process.env.TEMPO_API_KEY = "test-tempo-key";
 process.env.TEMPO_RECIPIENT_ADDRESS = TREASURY;
 process.env.TEMPO_CURRENCY = CURRENCY;
-const { inspectTempoSender, tempoSenderOf, tempoAccessKeyActive, tempoAccessKeyState, createKeychainSenderVerifier, KEYCHAIN_UNAVAILABLE, TEMPO_SENDER_CHECK_RETRY_AFTER_S, createTempoGate, checkTempoCredentialBinding, TEMPO_SENDER_UNVERIFIED } = await import("../src/mpp-tempo.js");
+const { inspectTempoSender, tempoSenderOf, tempoAccessKeyActive, tempoAccessKeyState, createKeychainSenderVerifier, KEYCHAIN_UNAVAILABLE, TEMPO_SENDER_CHECK_RETRY_AFTER_S, createTempoGate, checkTempoCredentialBinding, TEMPO_SENDER_UNVERIFIED, TEMPO_KEYCHAIN_UNCONFIRMED } = await import("../src/mpp-tempo.js");
 const { gatewaySettleBreakerKey } = await import("../src/gateway-settle-breaker.js");
 
 // Signed transactions, one per shape.
@@ -151,6 +151,20 @@ const TX_ROOT_AS_KEYCHAIN = await signWith(TempoAccount.fromSecp256k1(rootKey, {
 // A native multisig envelope carries the account, its current config and the
 // owners' signatures; here the attacker names the victim's account.
 const TX_MULTISIG = oxSigned({ envelope: (primitive) => SignatureEnvelope.from({ account: victim, config: { version: 0n, threshold: 1, owners: [{ owner: attacker, weight: 1 }] }, signatures: [primitive] }) });
+// A genuine native multisig: two owners, threshold two, each approving the
+// multisig digest of the transaction for `account`.
+const msOwners = [generatePrivateKey(), generatePrivateKey()].map((k) => ({ k, a: lc(privateKeyToAccount(k).address) })).sort((x, y) => (x.a < y.a ? -1 : 1));
+const msAccount = lc(privateKeyToAccount(generatePrivateKey()).address);
+function oxMultisig({ account = msAccount, signers = msOwners.map((o) => o.k), threshold = 2 } = {}) {
+  const base = TxEnvelopeTempo.from(TX);
+  const config = { version: 0n, threshold, owners: msOwners.map((o) => ({ owner: o.a, weight: 1 })) };
+  const digest = MultisigConfig.getSignPayload({ account, config, payload: TxEnvelopeTempo.getSignPayload(base) });
+  const signatures = signers.map((k) => SignatureEnvelope.from(Secp256k1.sign({ payload: digest, privateKey: k })));
+  return TxEnvelopeTempo.serialize(base, { signature: SignatureEnvelope.from({ account, config, signatures }) });
+}
+const TX_MULTISIG_REAL = oxMultisig();
+const TX_MULTISIG_SHORT = oxMultisig({ signers: [msOwners[0].k] });
+const TX_MULTISIG_TWICE = oxMultisig({ signers: [msOwners[0].k, msOwners[0].k] });
 const TX_FEE_SLOT_VICTIM = oxSigned({ sender: victim });
 const TX_FEE_SLOT_SELF = oxSigned({ sender: attacker });
 const victimP256 = P256.getPublicKey({ privateKey: P256.randomPrivateKey() });
@@ -221,6 +235,16 @@ const TX_FIRST_USE_OX = await firstUse(oxAgent, oxKeyAuthorization({ address: ox
   ok(m.envelope === "multisig" && m.claimed === victim && m.verified === null && m.keychain === null, `A: a multisig envelope naming an account is never verified here (${m.reason})`);
   const fs = inspectTempoSender(credential(TX_FEE_SLOT_VICTIM));
   ok(fs.claimed === victim && fs.verified === null && fs.keychain === null, `A: an address placed in the fee-payer slot is not taken as the sender (${fs.reason})`);
+  // What an unverified sender is booked against by the coverage check (never a key for a per-buyer bound).
+  ok(m.booking?.account === victim && m.booking?.ledger === "unverified", `A: a multisig envelope whose approvals do not verify is booked against the account it names, in the unverified ledger (${JSON.stringify(m.booking)})`);
+  ok(fs.booking?.account === attacker && fs.booking?.ledger === null, `A: another address in the fee-payer slot is booked against the signer, whose balance the transaction draws on (${JSON.stringify(fs.booking)})`);
+  const mr = inspectTempoSender(credential(TX_MULTISIG_REAL));
+  ok(mr.envelope === "multisig" && mr.claimed === msAccount && mr.verified === null && mr.booking?.account === msAccount && mr.booking?.ledger === "unverified", `A: a multisig whose owner approvals reach its threshold is still not verified, and is booked in the named account's one unverified ledger, never one per config (${mr.booking?.ledger})`);
+  for (const [name, raw] of [["one approval of two", TX_MULTISIG_SHORT], ["one owner approving twice", TX_MULTISIG_TWICE]]) {
+    const x = inspectTempoSender(credential(raw));
+    ok(x.verified === null && x.booking?.account === msAccount && x.booking?.ledger === "unverified", `A: a multisig with ${name} is booked in the unverified ledger, not the config's (${x.booking?.ledger})`);
+  }
+  ok(inspectTempoSender(credential(TX_PLAIN)).booking === null, "A: control - a verified sender has no separate booking");
   const fsSelf = inspectTempoSender(credential(TX_FEE_SLOT_SELF));
   ok(fsSelf.claimed === attacker && fsSelf.verified === attacker, "A: control - the fee-payer slot naming the real signer is proven by the signature");
   const pf = inspectTempoSender(credential(TX_P256_FORGED));
@@ -340,6 +364,28 @@ const activeRec = (key, extra = {}) => ({ signatureType: 0, keyId: key, expiry: 
     const got = await queued;
     ok(got === lc(root.address) && qReads === 2 && Date.now() - t >= 90 && (await first) === victim, `B: past maxInFlight a new key waits for a free slot and is read once one frees (${got}, reads ${qReads}, waited ${Date.now() - t} ms)`);
   }
+  // The wait for a slot is a first-come queue with a cap: a freed slot goes to
+  // the oldest waiter alone, a key that arrives later queues behind it, and a
+  // key past the cap is unavailable at once, with no wait and no read.
+  {
+    const order = [], gates = new Map();
+    const acct = (n) => `0x${String(n).repeat(40).slice(0, 40)}`;
+    const [A, B, C, D, E, F] = [1, 2, 3, 4, 5, 6].map(acct);
+    const q = createKeychainSenderVerifier({ maxInFlight: 1, maxWaiters: 3, queueWaitMs: 5000, check: async ({ account }) => { order.push(account); await new Promise((r) => gates.set(account, r)); return "active"; } });
+    const read = (a) => q({ account: a, accessKey: agentKeyAddress });
+    const pA = read(A);
+    await sleep(0);
+    const pB = read(B), pC = read(C), pD = read(D);
+    const tE = Date.now();
+    const rE = await Promise.race([read(E), sleep(300).then(() => "still waiting")]);
+    ok(rE === KEYCHAIN_UNAVAILABLE && Date.now() - tE < 200 && !order.includes(E) && typeof q.readsQueued === "function" && q.readsQueued() === 3, `B: with three keys queued (the cap), a fourth is unavailable at once, no wait and no read (${rE}, ${Date.now() - tE} ms)`);
+    gates.get(A)(); await pA; await sleep(5);
+    ok(order.join() === [A, B].join() && q.readsQueued() === 2 && q.readsInFlight() === 1, `B: a freed slot goes to the oldest waiter alone; the others stay queued (${order.length} read, ${q.readsQueued?.()} queued)`);
+    const pF = read(F);
+    for (const [k, p] of [[B, pB], [C, pC], [D, pD]]) { await sleep(5); gates.get(k)(); await p; }
+    await sleep(5); gates.get(F)(); await pF;
+    ok(order.join() === [A, B, C, D, F].join() && (await pF) === F && q.readsQueued() === 0 && q.readsInFlight() === 0, `B: keys are read in the order they arrived, a later key behind every earlier one (${order.map((a) => a.slice(2, 3)).join("")})`);
+  }
   let throws = 0;
   const throwing = createKeychainSenderVerifier({ check: async () => { throws++; throw new Error("rpc down"); } });
   ok((await throwing({ account: root.address, accessKey: agentKeyAddress })) === KEYCHAIN_UNAVAILABLE, "B: a check that throws resolves to unavailable (not a no), never rejects");
@@ -407,7 +453,7 @@ async function listen(app) {
     pushSender: async () => null, // offline: never the real Tempo RPC
   }));
   app.use(paywallStub);
-  const handler = (req, res) => res.json({ pull: req.mppTempoPull?.sender ?? null, sender: req.mppTempoSender ?? null, key: gatewaySettleBreakerKey({ ...req, headers: {}, header: () => undefined, ip: "198.51.100.7", mppTempoSender: req.mppTempoSender }) });
+  const handler = (req, res) => res.json({ pull: req.mppTempoPull?.sender ?? null, pullLedger: req.mppTempoPull?.ledger ?? null, sender: req.mppTempoSender ?? null, key: gatewaySettleBreakerKey({ ...req, headers: {}, header: () => undefined, ip: "198.51.100.7", mppTempoSender: req.mppTempoSender }) });
   app.get("/spend", handler);
   app.get("/plain", handler);
   const { server, url } = await listen(app);
@@ -423,6 +469,7 @@ async function listen(app) {
     r = await get("/spend", raw);
     ok(r.status === 402 && seen.validate === v0 && r.body.type === `https://paymentauth.org/problems/${TEMPO_SENDER_UNVERIFIED.kind}` && r.body.details?.reason === "sender-unverified" && r.body.details?.charged === false,
       `C: ${name} is refused on a spending route BEFORE validate (status ${r.status}, validate +${seen.validate - v0}, ${r.body.details?.reason})`);
+    ok(r.body.detail === TEMPO_SENDER_UNVERIFIED.detail && /was not sent for validation and nothing was charged\./.test(r.body.detail), `C: ...in words that say it was not sent for validation, which it was not (${name})`);
   }
   ok(seen.keychain.some((kc) => kc.account === victim && kc.accessKey === attacker), "C: the forged keychain envelope was checked on chain for (named account, its own key) - which is what the chain answers no to");
   // A keychain credential whose access key the chain reports active.
@@ -462,21 +509,27 @@ async function listen(app) {
   r = await get("/spend", null, { push: true });
   ok(r.status === 200 && r.body.sender === null && seen.validate === v0 + 1, "C: a push credential is not subject to the sender check (its transfer settles before the handler)");
 
-  // Ordinary route: a multisig or fee-payer-slot sender is served, keyed on
-  // the client IP. A keychain envelope runs only once the chain read has
+  // Ordinary route: a multisig or fee-payer-slot sender is served, its
+  // per-buyer bounds keyed on the client IP, and its pull booked for the
+  // coverage check against the account it draws on: the signer for a
+  // fee-payer-slot sender, the named account in a ledger of its own for a
+  // multisig. A keychain envelope runs only once the chain read has
   // confirmed its key is the named account's (waited for, bounded); else it is
   // refused before the handler, uncharged, and books nothing against the
   // named account.
   keychainAnswer = async () => null;
-  for (const [name, raw] of [["a multisig envelope", TX_MULTISIG], ["a fee-payer-slot sender", TX_FEE_SLOT_VICTIM]]) {
+  for (const [name, raw, pull, pullLedger] of [["a multisig envelope", TX_MULTISIG, victim, "unverified"], ["a multisig whose approvals verify", TX_MULTISIG_REAL, msAccount, "unverified"], ["a fee-payer-slot sender", TX_FEE_SLOT_VICTIM, attacker, null]]) {
     r = await get("/plain", raw);
-    ok(r.status === 200 && r.body.sender === null && r.body.pull === null && r.body.key === "ip:198.51.100.7", `C: ${name} on an ordinary route is served, keyed on the client IP, booked against no account (${JSON.stringify(r.body)})`);
+    ok(r.status === 200 && r.body.sender === null && r.body.key === "ip:198.51.100.7" && r.body.pull === pull && r.body.pullLedger === pullLedger, `C: ${name} on an ordinary route is served, its bounds keyed on the client IP, its pull booked against ${pull === attacker ? "the signer" : "the named account"} (${JSON.stringify(r.body)})`);
   }
+  r = await get("/spend", TX_MULTISIG_REAL);
+  ok(r.status === 402 && r.body.details?.reason === "sender-unverified", "C: a multisig whose approvals verify is still refused on a route that spends before settlement (its config is not checked on chain)");
   // The chain read answers "not this account's key" before or after validation.
   for (const ms of [0, 100]) {
     validateDelayMs = ms;
     r = await get("/plain", TX_FORGED_KEYCHAIN);
     ok(r.status === 402 && r.body.details?.reason === "sender-unverified" && r.body.details?.charged === false, `C: a forged keychain envelope naming another account is refused on an ordinary route before the handler, uncharged (validate ${ms} ms; ${r.status}, ${r.body.details?.reason})`);
+    ok(typeof TEMPO_KEYCHAIN_UNCONFIRMED?.detail === "string" && r.body.detail === TEMPO_KEYCHAIN_UNCONFIRMED.detail && !/not sent for validation/.test(r.body.detail) && /was validated/.test(r.body.detail) && /nothing was charged\./.test(r.body.detail), `C: ...in words that say it was validated and then refused, never "not sent for validation" (${String(r.body.detail).slice(0, 60)}...)`);
   }
   keychainAnswer = async (kc) => (kc.account === lc(root.address) ? kc.account : null);
   validateDelayMs = 40;

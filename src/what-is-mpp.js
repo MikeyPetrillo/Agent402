@@ -12,6 +12,7 @@ import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, codeBlock, esc } from "./ledger-chrome.js";
 
 import { mppFlagshipRows, mppFlagshipSnippet, mppFlagshipOffersPhrase, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
+import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
 const STEPS = [
   ["01", "The client requests a paid resource", "A plain HTTP request, no credentials attached. The server answers 402 Payment Required with a WWW-Authenticate: Payment challenge naming the price, the asset, the chain, and a one-time challenge id."],
   ["02", "The client signs and retries", "It signs a payment authorization for exactly that amount with its own wallet key and repeats the identical request, carrying the signed credential in an Authorization: Payment header. The key never leaves the client."],
@@ -23,7 +24,9 @@ const FAQS = [
   { q: "What is the Machine Payments Protocol (MPP)?", a: "MPP is an open protocol, published as an IETF Internet-Draft, that lets software pay for web services per request using HTTP's standard authentication mechanism. A paid endpoint answers an unpaid request with status 402 and a WWW-Authenticate: Payment challenge naming a price; the client answers with a signed stablecoin payment in an Authorization: Payment header; the server verifies it, runs the request, settles the payment on-chain, and returns the result with a signed Payment-Receipt header. No account, API key, or subscription is involved." },
   { q: "How is MPP different from x402?", a: "They are two dialects of the same idea - pay-per-request over HTTP 402, settled in stablecoins. x402 (from Coinbase) carries payment terms in a PAYMENT-REQUIRED header and the payment in a PAYMENT-SIGNATURE header; MPP carries the same handshake through the web's standard auth headers (WWW-Authenticate / Authorization, the mechanism defined in RFC 9110), which makes it a natural fit for the IETF standards track. A server can speak both from the same URL at the same price, and dual-stack servers exist today." },
   { q: "Is MPP a finished standard?", a: "It is published as an IETF Internet-Draft and in active development - the Payment HTTP authentication scheme is documented at paymentauth.org with the reference implementation in the tempoxyz/mpp repository. Live services accept MPP payments on mainnet today, so the wire format is real and settling, but as with any draft-stage protocol, details can still evolve." },
-  { q: "Where can I see MPP working right now?", a: "Every paid endpoint on Agent402.Tools is dual-stack: the same 402 response carries both an x402 offer and a WWW-Authenticate: Payment challenge, a stock mppx client works unmodified (the wallet-identity routes, such as memory, and the long-running report routes take its evm method only), and settled responses return a Payment-Receipt naming the settlement transaction. A real purchase settles over the native MPP wire daily as part of the service's paid canary, so the claim is continuously re-proven, not a demo that worked once." },
+  // gated: the answer says what every 402 carries, so the offer gate's
+  // sentence (src/mpp-offer-gate.js) is added to it at render time.
+  { gated: true, q: "Where can I see MPP working right now?", a: "Every paid endpoint on Agent402.Tools is dual-stack: the same 402 response carries both an x402 offer and a WWW-Authenticate: Payment challenge, a stock mppx client works unmodified (the wallet-identity routes, such as memory, and the long-running report routes take its evm method only), and settled responses return a Payment-Receipt naming the settlement transaction. A real purchase settles over the native MPP wire daily as part of the service's paid canary, so the claim is continuously re-proven, not a demo that worked once." },
   { q: "How do I accept MPP payments on my own API?", a: "If you already speak x402, a translation layer can add MPP without touching settlement: answer 402s with an additional WWW-Authenticate: Payment challenge derived from your existing offer, and re-encode inbound Authorization: Payment credentials into your existing verification path. Agent402's implementation of exactly that pattern is open source (AGPL) in its server repository, and the mppx tooling in tempoxyz/mpp provides the client and codec primitives." },
 ];
 
@@ -64,6 +67,10 @@ function startHereSection(baseUrl, catalog) {
 export function whatIsMppPage(baseUrl, catalog = null) {
   const startHere = startHereSection(baseUrl, catalog);
   const canonical = `${baseUrl}/what-is-mpp`;
+  // Which clients get the x402 offer alone; "" when the gate is off or no MPP
+  // challenge is sent.
+  const offerGate = mppOfferGateSentenceIfOffered({ code: (x) => x });
+  const faqs = FAQS.map((f) => (f.gated && offerGate ? { ...f, a: `${f.a} ${offerGate}` } : f));
   const title = "What is MPP? The Machine Payments Protocol, explained";
   const description =
     "MPP (Machine Payments Protocol) is an open protocol, published as an IETF Internet-Draft, that carries pay-per-request payments through HTTP's native authentication headers: a 402 response challenges with WWW-Authenticate: Payment, the client pays via Authorization: Payment, and a signed Payment-Receipt confirms settlement. What it is, how a payment works, how it compares to x402, and where it is live today.";
@@ -74,7 +81,7 @@ export function whatIsMppPage(baseUrl, catalog = null) {
     { "@type": "ListItem", position: 2, name: "What is MPP", item: canonical },
   ] };
   const articleLd = { "@type": "Article", "@id": `${canonical}#article`, headline: title, description, publisher: { "@id": `${baseUrl}/#organization` }, author: { "@id": `${baseUrl}/#organization` }, mainEntityOfPage: canonical };
-  const faqLd = { "@type": "FAQPage", "@id": `${canonical}#faq`, mainEntity: FAQS.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
+  const faqLd = { "@type": "FAQPage", "@id": `${canonical}#faq`, mainEntity: faqs.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
 
   const extraCss = `
 .wm-scroll{overflow-x:auto}
@@ -91,7 +98,7 @@ table{border-collapse:collapse;width:100%}
     `<div style="padding:22px 24px;border-bottom:1px solid var(--hairline);"><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:9px;">${esc(n)}</div><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 8px;color:var(--ink);">${esc(t)}</h3><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">${esc(b)}</p></div>`
   ).join("");
 
-  const faqHtml = FAQS.map((f) =>
+  const faqHtml = faqs.map((f) =>
     `<article style="padding:26px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 12px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`
   ).join("");
 
@@ -146,7 +153,7 @@ Payment-Receipt: eyJtZXRob2QiOiJldm0i&hellip;
   <div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent-lit);margin-bottom:12px;">02 / IS IT REAL?</div>
     <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--on-panel);">Where MPP settles today.</h2>
-    <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--on-panel-muted);max-width:820px;margin:0 0 20px;">Every paid endpoint on <a href="/" style="color:var(--accent-lit);">Agent402.Tools</a> is dual-stack: the same 402 carries an x402 offer <em>and</em> an MPP challenge, and a stock <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--on-panel);">mppx</span> client works unmodified. A real purchase settles over the native MPP wire every day in the service's paid canary. Other x402 sellers advertise MPP as an alternate rail as well.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--on-panel-muted);max-width:820px;margin:0 0 20px;">Every paid endpoint on <a href="/" style="color:var(--accent-lit);">Agent402.Tools</a> is dual-stack: the same 402 carries an x402 offer <em>and</em> an MPP challenge, and a stock <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--on-panel);">mppx</span> client works unmodified.${offerGate ? ` ${esc(offerGate)}` : ""} A real purchase settles over the native MPP wire every day in the service's paid canary. Other x402 sellers advertise MPP as an alternate rail as well.</p>
     <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-faint);margin:0;">Reference tooling: <a href="https://github.com/tempoxyz/mpp" rel="noopener" style="color:var(--accent-lit);">tempoxyz/mpp</a> on GitHub. Spec: the Payment auth scheme at <a href="https://paymentauth.org" rel="noopener" style="color:var(--accent-lit);">paymentauth.org</a>.</p>
   </div>
 </section>

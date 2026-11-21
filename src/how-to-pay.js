@@ -17,6 +17,7 @@ import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { RAILS, railKey, x402EvmOnly, liveRails } from "./rails.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
+import { mppOfferGateSentence } from "./mpp-offer-gate.js";
 import { connectorWires } from "./connector-pay.js";
 import { mppFlagshipRows, mppFlagshipSnippet, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
 import { STRIPE_MIN_USD } from "./mpp-stripe.js";
@@ -225,7 +226,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6IjB4…
 ${section("mpp", `
   ${eyebrow("03 / MPP")}
   ${h2("MPP: the same handshake in HTTP auth headers.")}
-  ${p(`MPP, the ${link("/learn/mpp", "Machine Payments Protocol")}, carries the quote in ${code("WWW-Authenticate: Payment")} and the payment in ${code("Authorization: Payment")}, and the settled answer returns a ${code("Payment-Receipt")}. The same 402 carries both the x402 offer and the MPP challenges, so your client picks the dialect.`)}
+  ${p(`MPP, the ${link("/learn/mpp", "Machine Payments Protocol")}, carries the quote in ${code("WWW-Authenticate: Payment")} and the payment in ${code("Authorization: Payment")}, and the settled answer returns a ${code("Payment-Receipt")}. The same 402 carries both the x402 offer and the MPP challenges, so your client picks the dialect.${mpp.enabled && mppOfferGateSentence({ code }) ? ` ${mppOfferGateSentence({ code })}` : ""}`)}
   ${mppTable}
   ${mppOrder ? p(mppOrder) : ""}
   ${h3("What you need")}

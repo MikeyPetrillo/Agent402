@@ -71,7 +71,8 @@ try {
 
   seed({ cs_test_owed: { kind: "refund-owed", at: iso(20 * MIN), attempts: 6 } });
   const pub = await read(false);
-  ok(pub.status === "owed" && Object.keys(pub).length === 1, `a card refund owed past the notice window reads owed, one word publicly (${JSON.stringify(pub)})`);
+  ok(pub.status === "owed" && Object.keys(pub).sort().join() === "card,ledger,status" && Object.values(pub).every((v) => typeof v === "string" && !/\d/.test(v)), `a card refund owed past the notice window reads owed; publicly three words and no figure (${JSON.stringify(pub)})`);
+  ok(pub.ledger === "ok" && pub.card === "refused", `the words say the debt is a card refund that needs a hand, not the ledger (${JSON.stringify(pub)})`);
   const op = await read(true);
   ok(op.status === "owed" && op.cardOwedCount === 1 && op.cardAgingCount === 0, `the operator view counts it (${JSON.stringify(op)})`);
   // That record names no product, so its session read was started; Stripe
@@ -85,6 +86,20 @@ try {
   seed({ cs_test_owed: { kind: "refund-owed", at: iso(20 * MIN), attempts: 6 }, cs_test_old: { kind: "refund-owed", at: iso(50 * HOUR), attempts: 6 } });
   const aging = await read(true);
   ok(aging.status === "aging" && aging.cardOwedCount === 2 && aging.cardAgingCount === 1, `one owed past the alarm hours reads aging (${JSON.stringify(aging)})`);
+
+  // A card refund Stripe holds and has not finished is still owed (the money
+  // has not reached the buyer), but card=pending tells the pagers nothing is
+  // needed; one that is not pending beside it reads refused.
+  seed({ cs_test_pend: { kind: "refund-owed", at: iso(20 * MIN), attempts: 6, product: "research", pending: true } });
+  const pend = await read(false);
+  ok(pend.status === "owed" && pend.card === "pending" && pend.ledger === "ok", `a pending card refund reads owed with card=pending (${JSON.stringify(pend)})`);
+  const pendOp = await read(true);
+  ok(pendOp.card === "pending" && pendOp.cardOwedCount === 1 && pendOp.cardPendingCount === 1, `the operator view counts it as pending (${JSON.stringify(pendOp)})`);
+  seed({ cs_test_pend: { kind: "refund-owed", at: iso(20 * MIN), attempts: 6, product: "research", pending: true }, cs_test_refused: { kind: "refund-owed", at: iso(20 * MIN), attempts: 6, product: "research", pending: false } });
+  ok((await read(false)).card === "refused", "one refused beside a pending one reads card=refused");
+  seed({ cs_test_new: { kind: "refund-owed", at: iso(2 * MIN), attempts: 1, product: "research", pending: false } });
+  const fresh = await read(false);
+  ok(fresh.status === "ok" && fresh.card === "none", `inside the notice window nothing is owed yet: card=none (${JSON.stringify(fresh)})`);
 
   // The buyer's poll, through the real Stripe client: its refund call is held
   // open and never answered.

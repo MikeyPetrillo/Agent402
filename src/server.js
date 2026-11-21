@@ -622,7 +622,7 @@ import { networkFloorUsd } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential, configureTempoLateWatches } from "./mpp-tempo.js";
 import { createLateWatchLedger, startLateWatchSweep } from "./tempo-late-watches.js";
-import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
+import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader, unconfirmedCaptureDebt } from "./mpp-stripe.js";
 import { confirmTempoSettlement } from "./tempo-confirm.js";
 import { KIT } from "./tools/kit.js";
 import { redactSecrets } from "./tools/redact.js";
@@ -871,7 +871,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -1148,25 +1148,6 @@ const CATALOG = {
           twitter: { card: "summary_large_image" },
         },
       },
-    },
-  },
-  "GET /api/dns": {
-    name: "DNS lookup",
-    slug: "dns",
-    category: "network",
-    price: "$0.001",
-    description: "Resolve one common DNS record type for a domain: answers name, type and records[] as the resolver returns them. Types: A, AAAA (addresses as strings), MX ({exchange, priority} objects), TXT (each record an array of its strings), NS and CNAME (hostnames). For SPF, DMARC or a full mail-security read use spf-check, dmarc-check or email-deliverability.",
-    tags: ["dns", "domains", "networking"],
-    discovery: {
-      input: { name: "example.com", type: "A" },
-      inputSchema: {
-        properties: {
-          name: { type: "string", description: "Domain name, e.g. example.com" },
-          type: { type: "string", description: "Record type (default A)" },
-        },
-        required: ["name"],
-      },
-      output: { example: { name: "example.com", type: "A", records: ["93.184.215.14"] } },
     },
   },
   "POST /api/render": {
@@ -2072,8 +2053,19 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         return eligible;
       })
       // Proven first, most settled first; unproven after every proven one.
-      .sort((a, b) => ((a.unproven ? 1 : 0) - (b.unproven ? 1 : 0)) || (b.settled - a.settled))
-      .slice(0, 5);
+      .sort((a, b) => ((a.unproven ? 1 : 0) - (b.unproven ? 1 : 0)) || (b.settled - a.settled));
+    // Then the match floor (routeMatchOrder, src/tools/route-execute.js),
+    // BEFORE the cut to five: a candidate far below the best match follows
+    // every one that meets it, inside each lane, and one under the floor is
+    // dropped, so volume alone never puts a weak match first.
+    // A pinned endpoint (a decision's own step) was chosen already.
+    if (!onlyUrl) {
+      const { routeMatchOrder } = await import("./tools/route-execute.js");
+      const matched = routeMatchOrder(task, candidates, { group: (r) => (r.unproven ? 1 : 0) });
+      if (matched.dropped > 0) { gateDrops.total += matched.dropped; gateDrops.byReason.below_match_floor = (gateDrops.byReason.below_match_floor || 0) + matched.dropped; }
+      candidates = matched.items;
+    }
+    candidates = candidates.slice(0, 5);
   } else {
     // A chain no buyer here pays on resolves nothing.
     candidates = [];
@@ -4605,21 +4597,31 @@ app.get("/api/gateway-status", async (req, res) => {
     // (src/human-checkout.js owedRefunds, listed on
     // /__operator/human-checkout.json) is owed too, on the same notice and
     // aging; "unknown" when that list cannot be read.
-    // One word publicly, so the status Worker can page; counts for the operator.
+    // One word publicly, so the status Worker can page, and two words that
+    // say where it comes from, so the page gives the right advice: `ledger`
+    // (the refund ledger's own word) and `card` (none / pending: every card
+    // refund past the notice is one Stripe holds and has not finished, so
+    // nothing is needed / refused: at least one needs a refund by hand /
+    // unknown). Counts for the operator.
     refundsOwed: await (async () => {
       const notice = Number(process.env.REFUND_OWED_NOTICE_MINUTES);
       const noticeMinutes = Number.isFinite(notice) && notice >= 0 ? notice : 15;
       const owedHours = Number(process.env.REFUND_OWED_ALARM_HOURS) || 48;
       const r = refundAlarmStatus({ owedHours, noticeMinutes });
       const card = _humanCheckout ? await _humanCheckout.owedRefunds().catch(() => null) : [];
-      const ages = (card || []).map((x) => Date.now() - Date.parse(x.at)).filter((a) => Number.isFinite(a));
-      const cardOwed = ages.filter((a) => a >= noticeMinutes * 60_000).length;
-      const cardAging = ages.filter((a) => a >= owedHours * 3600_000).length;
+      const aged = (card || []).map((x) => ({ age: Date.now() - Date.parse(x.at), pending: x.pending === true })).filter((x) => Number.isFinite(x.age));
+      const noticed = aged.filter((x) => x.age >= noticeMinutes * 60_000);
+      const cardOwed = noticed.length;
+      const cardPending = noticed.filter((x) => x.pending).length;
+      const cardAging = aged.filter((x) => x.age >= owedHours * 3600_000).length;
       const status = r.status === "stuck" ? "stuck"
         : r.status === "aging" || cardAging ? "aging"
           : r.status === "owed" || cardOwed ? "owed"
             : card === null ? "unknown" : r.status;
-      return full ? { ...r, status, cardOwedCount: card === null ? null : cardOwed, cardAgingCount: card === null ? null : cardAging } : { status };
+      const cardWord = card === null ? "unknown" : !cardOwed ? "none" : cardPending === cardOwed ? "pending" : "refused";
+      return full
+        ? { ...r, status, ledger: r.status, card: cardWord, cardOwedCount: card === null ? null : cardOwed, cardPendingCount: card === null ? null : cardPending, cardAgingCount: card === null ? null : cardAging }
+        : { status, ledger: r.status, card: cardWord };
     })(),
     // Recipients our spending wallets paid for the first time
     // (src/outbound-destinations.js): ok / new (expected: a first buy from a
@@ -5402,7 +5404,7 @@ app.get("/monitors", (req, res) => {
   const product = String(req.query.product || "").slice(0, 64);
   const target = String(req.query.target || "").slice(0, 200);
   const prefill = product ? { product, target } : null;
-  res.set("Cache-Control", prefill ? "no-store" : "public, max-age=120").type("html").send(monitorsPage(BASE_URL, prefill));
+  res.set("Cache-Control", prefill ? "no-store" : "public, max-age=120").type("html").send(monitorsPage(BASE_URL, prefill, { wallet: Boolean(_mppSubs) }));
 });
 app.get("/monitors/thanks", (req, res) => res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(monitorThanksPage(String(req.query.session || ""), BASE_URL)));
 // Programmatic SEO landing pages for the SEC-filing products: one free,
@@ -5949,6 +5951,21 @@ app.get("/__operator/cohorts.json", (req, res) => {
   res.set("Cache-Control", "no-store");
   try {
     res.json(salesCohorts({ days: req.query.days, toolsPerDay: req.query.toolsPerDay, callsPerHour: req.query.callsPerHour }));
+  } catch (err) {
+    res.status(500).json({ error: redactSecrets(err?.message) });
+  }
+});
+
+// The returning-buyer baseline (operator only, counts only: no wallet,
+// address or hash in the answer): paid days per outside wallet over 30 and 60
+// days and the day-1 to day-2 return rate, per rail and by week, for every
+// outside wallet and without the sweep and burst cohort (returningBuyers in
+// sales-ledger.js).
+app.get("/__operator/returning-buyers.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "no-store");
+  try {
+    res.json(await returningBuyersAsync());
   } catch (err) {
     res.status(500).json({ error: redactSecrets(err?.message) });
   }
@@ -11974,6 +11991,18 @@ if (!FREE_MODE) {
       const priceUsd = cardPriceUsd(def, req);
       return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def), longRunning: isLongRunningSlug(def.slug), runSeconds: routeRunSeconds(def.slug) } : null;
     },
+    // A capture whose outcome Stripe did not confirm (src/mpp-stripe.js): the
+    // buyer was answered 402 and the card may have been charged. Booked in
+    // the refund ledger like any card charge that was not served, so the
+    // refundsOwed word reads owed until the row is refunded (Stripe shows the
+    // charge) or voided (it does not). Keyed on the PaymentIntent when Stripe
+    // named one, else on the request; the note names the challenge id the
+    // PaymentIntent carries in its metadata.
+    onUnconfirmed: (req, res, { reference, challengeId } = {}) => {
+      const def = CATALOG[`${req.method} ${req.path}`];
+      if (!def || res.statusCode < 400) return;
+      whenVerdict(recordRefundOwed(unconfirmedCaptureDebt({ slug: def.slug, priceUsd: cardPriceUsd(def, req) || 0, httpStatus: res.statusCode, synthetic: isSyntheticRequest(req), requestId: req.debtKey, reference, challengeId })), () => {});
+    },
   });
   if (stripeGate) {
     app.use(stripeGate);
@@ -13431,16 +13460,6 @@ app.get("/api/meta", withToolCallLog("meta", async (req, res) => {
   }
 }));
 
-app.get("/api/dns", withToolCallLog("dns", async (req, res) => {
-  const { name, type } = req.query;
-  if (!name) return res.status(400).json({ error: 'Missing "name" query parameter', ...errorCodeField(400) });
-  try {
-    res.json(await dnsLookup(name, type));
-  } catch (err) {
-    sendToolError(res, err, "dns");
-  }
-}));
-
 app.post("/api/render", withToolCallLog("render", async (req, res) => {
   // Bespoke route (outside the generic binder): record the same tool_call the
   // binder emits, so latency and errors exist for it (none did until 2026-09-22).
@@ -13503,13 +13522,12 @@ app.post("/api/pdf", withToolCallLog("pdf", async (req, res) => {
 // read as "call directly" before, and a plan whose only payable render was
 // ours had nothing to run (2026-10-01 prod check). The public routes above are
 // unchanged; core catalog entries are not mounted by the kit binder, and all
-// five stay wallet-only.
+// four stay wallet-only (dns is a kit tool, src/tools/network-kit.js).
 {
   const needUrl = (i) => { const u = String(i?.url || "").trim(); if (!u) throw Object.assign(new Error('"url" is required'), { statusCode: 400 }); return u; };
   const set = (route, fn) => { if (CATALOG[route] && typeof CATALOG[route].handler !== "function") CATALOG[route].handler = fn; };
   set("POST /api/extract", async (i) => extractArticle(needUrl(i)));
   set("GET /api/meta", async (i) => fetchPageMeta(needUrl(i)));
-  set("GET /api/dns", async (i) => { const name = String(i?.name || "").trim(); if (!name) throw Object.assign(new Error('"name" is required'), { statusCode: 400 }); return dnsLookup(name, i?.type); });
   set("POST /api/render", async (i) => renderPage(needUrl(i)));
   set("POST /api/pdf", async (i) => pdfToText(needUrl(i)));
 }

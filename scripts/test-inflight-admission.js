@@ -818,11 +818,11 @@ for (const readMs of [600, 450]) {
     _setPaidRecordForTest(() => true);
     const s = await admit(W(0xf2)); s.release.settling(); s.release.settled(); // a settlement leaves a good read behind
     await sleep(10);
-    _ageKeptReadsForTest(60_000); // past the ten-second cache, inside the window a kept read is judged on at once
+    _ageKeptReadsForTest(30_000); // past the ten-second cache, inside the window a kept read is judged on at once
     const r0 = reads, t0 = Date.now();
     const all = await Promise.all(Array.from({ length: 40 }, () => admit(W(0xf2))));
     const ms = Date.now() - t0;
-    ok(all.every((x) => x.release && coveredRunStateOf(x.req) === "covered") && ms < 150 && reads === r0 && inflightCoverStatus().admittedAtOnceOnKeptRead === 39 && coverageReadsWord() === "ok", `${label}: a funded wallet whose last good read is a minute old has 40 calls at once all admitted at once on it, no read made (${ms} ms, ${reads - r0} reads, ${inflightCoverStatus().admittedAtOnceOnKeptRead} at once; status ${coverageReadsWord()})`);
+    ok(all.every((x) => x.release && coveredRunStateOf(x.req) === "covered") && ms < 150 && reads === r0 && inflightCoverStatus().admittedAtOnceOnKeptRead === 39 && coverageReadsWord() === "ok", `${label}: a funded wallet whose last good read is 30 seconds old has 40 calls at once all admitted at once on it, no read made (${ms} ms, ${reads - r0} reads, ${inflightCoverStatus().admittedAtOnceOnKeptRead} at once; status ${coverageReadsWord()})`);
     for (const x of all) x.release();
   }
   // Never more than the kept read covers, less what is in flight: a kept read
@@ -833,7 +833,7 @@ for (const readMs of [600, 450]) {
   _setPaidRecordForTest(() => false);
   const s = await admit(W(0xf3)); s.release.settling(); s.release.settled(); // the read taken after it: five prices
   await sleep(10);
-  _ageKeptReadsForTest(60_000);
+  _ageKeptReadsForTest(30_000);
   const held = await admit(W(0xf3)); // one in flight
   const t1 = Date.now();
   const ten = await Promise.all(Array.from({ length: 10 }, () => admit(W(0xf3)).then((x) => ({ ...x, ms: Date.now() - t1 }))));
@@ -846,7 +846,7 @@ for (const readMs of [600, 450]) {
   _setBalanceReaderForTest(async () => { m++; return PRICE; });
   _setPaidRecordForTest(() => true);
   const one = await admit(W(0xf4)); const one2 = await admit(W(0xf4)); // read: one price; the second is refused
-  _ageKeptReadsForTest(60_000);
+  _ageKeptReadsForTest(30_000);
   const forty = await Promise.all(Array.from({ length: 40 }, () => admit(W(0xf4))));
   ok(one.release && one2.err?.coverRefusal === "short" && forty.every((x) => x.err?.coverRefusal === "short") && inflightCoverStatus().admittedAtOnceOnKeptRead === 0 && m === 2, `a one-price wallet with a run in flight: its kept read does not cover a second, so 40 more are judged on a new read and refused (${forty.filter((x) => x.release).length} admitted, ${m} reads)`);
   one.release();
@@ -962,6 +962,104 @@ for (const readMs of [600, 450]) {
   caps._resetHardCaps();
 }
 
+// ---- the at-once window is a minute: a wallet that moved funds out is read again after it ----
+{
+  fresh();
+  let reads = 0, balance = PRICE * 10n;
+  _setBalanceReaderForTest(async () => { reads++; return balance; });
+  _setPaidRecordForTest(() => true);
+  const s = await admit(W(0xd1)); s.release.settling(); s.release.settled(); // a settlement leaves a good read of ten prices
+  await sleep(10);
+  ok(reads === 1 && inflightCoverStatus().keptAtOnceMs === 60_000, `the settlement's background read is the wallet's kept read; the at-once window is a minute (${inflightCoverStatus().keptAtOnceMs} ms)`);
+  balance = PRICE; // the wallet moves all but one price out, elsewhere
+  _ageKeptReadsForTest(90_000); // a minute and a half later: past the window, well inside the old five minutes
+  const burst = await Promise.all(Array.from({ length: 6 }, () => admit(W(0xd1))));
+  ok(burst.filter((x) => x.release).length === 1 && burst.filter((x) => x.err?.coverRefusal === "short").length === 5 && inflightCoverStatus().admittedAtOnceOnKeptRead === 0 && reads === 2, `a wallet that withdrew after its kept read: past the window its burst is judged on a new read, one admitted and the rest refused, not five run unpaid on the old read (${burst.filter((x) => x.release).length} admitted, ${reads - 1} new read)`);
+  for (const x of burst) x.release?.();
+  // A settlement refreshes a read older than the window, so a paying wallet's read stays inside it.
+  fresh();
+  reads = 0; balance = PRICE * 10n;
+  _setBalanceReaderForTest(async () => { reads++; return balance; });
+  _setPaidRecordForTest(() => true);
+  const a = await admit(W(0xd2)); a.release.settling(); a.release.settled();
+  await sleep(10);
+  _ageKeptReadsForTest(61_000);
+  const b = await admit(W(0xd2)); b.release.settling(); b.release.settled();
+  await sleep(10);
+  ok(reads === 2 && inflightCoverStatus().backgroundReads === 2, `a settlement of a wallet whose read is older than the window takes a fresh read in the background (${reads} reads)`);
+  // INFLIGHT_COVER_KEPT_AT_ONCE_MS sets it, held between the read gap and five minutes.
+  process.env.INFLIGHT_COVER_KEPT_AT_ONCE_MS = "1";
+  const lo = inflightCoverStatus().keptAtOnceMs;
+  process.env.INFLIGHT_COVER_KEPT_AT_ONCE_MS = String(60 * 60_000);
+  const hi = inflightCoverStatus().keptAtOnceMs;
+  delete process.env.INFLIGHT_COVER_KEPT_AT_ONCE_MS;
+  ok(lo === inflightCoverStatus().readGapMs && hi === 5 * 60_000, `the window's setting is held between the read gap and five minutes (${lo}, ${hi})`);
+}
+
+// ---- past the day's read budget: Retry-After says when the wallet is read again, and the reads have a global cap ----
+{
+  const caps = await import("../src/upstream-hard-caps.js");
+  fresh(); caps._resetHardCaps();
+  process.env.INFLIGHT_COVER_READS_DAILY_MAX = "1";
+  process.env.AGENT402_BASE_RPC = "https://base-mainnet.g.alchemy.com/v2/test-key";
+  let reads = 0;
+  _setBalanceReaderForTest(async () => { reads++; return PRICE; });
+  _setPaidRecordForTest(() => true);
+  const s1 = await admit(W(0xd3)), s2 = await admit(W(0xd3)); // spends the day's one read
+  s1.release?.(); s2.release?.();
+  ok(caps.hardCapShareStatus()["cover-reads"].status === "spent" && reads === 1, "the day's read budget is spent");
+  const held = await admit(W(0xd4)); // one call in flight
+  const short = await admit(W(0xd4)); // the wallet's one read this minute past the budget: one price, short
+  ok(short.err?.coverRefusal === "short" && reads === 2 && short.err.retryAfter >= 55 && short.err.retryAfter <= 60, `past the budget, a call refused short on the wallet's one read this minute says to retry when the next read can be made, not in 30 s (Retry-After ${short.err?.retryAfter})`);
+  await sleep(1500);
+  const again = await admit(W(0xd4)); // inside the read gap: judged on the same record
+  ok(again.err?.coverRefusal === "short" && reads === 2 && again.err.retryAfter >= 53 && again.err.retryAfter <= 60 && inflightCoverStatus().refusedUntilBudgetRead >= 2, `...and a retry inside the read gap is told the same, not the gap's few seconds (Retry-After ${again.err?.retryAfter})`);
+  held.release?.();
+  // The global cap: at most INFLIGHT_COVER_PAST_BUDGET_READS_PER_MIN reads a minute for all wallets past the budget.
+  process.env.INFLIGHT_COVER_PAST_BUDGET_READS_PER_MIN = "3"; // one already made above
+  _setBalanceReaderForTest(async () => { reads++; return PRICE * 10n; });
+  const r0 = reads;
+  const runs = [];
+  for (const who of [W(0xd5), W(0xd6), W(0xd7)]) { const a = await admit(who), b = await admit(who); runs.push(a, b); }
+  ok(reads - r0 === 2 && inflightCoverStatus().readsPastBudgetCapped === 1 && runs.every((x) => x.release), `past the budget, three new wallets each needing a read: the cap of three a minute allows two more reads, and the third wallet is judged without one, on the allowance (${reads - r0} reads, ${inflightCoverStatus().readsPastBudgetCapped} capped)`);
+  for (const x of runs) x.release?.();
+  _ageKeptReadsForTest(61_000, { pastBudget: true });
+  const c = await admit(W(0xd8)), d = await admit(W(0xd8));
+  ok(reads - r0 === 3 && d.release, "a minute later the cap has room again");
+  c.release?.(); d.release?.();
+  delete process.env.INFLIGHT_COVER_PAST_BUDGET_READS_PER_MIN;
+  delete process.env.INFLIGHT_COVER_READS_DAILY_MAX;
+  delete process.env.AGENT402_BASE_RPC;
+  caps._resetHardCaps();
+}
+
+// ---- a Tempo pull whose sender is not verified is judged on the account it names, in a ledger of its own ----
+{
+  fresh();
+  const ACCT = W(0xd9), CUR = "0x20c000000000000000000000b9537d11c60e8b50";
+  const tempoReq = (ledger) => ({ tempoSettling: true, mppTempoPull: { sender: ACCT, currency: CUR, amountAtomic: String(PRICE), ...(ledger ? { ledger } : {}) }, header: () => undefined });
+  const admitT = async (ledger) => { const req = tempoReq(ledger); try { return { req, release: await admitCoveredRun(req) }; } catch (err) { return { req, err }; } };
+  let reads = 0;
+  _setBalanceReaderForTest(async (t) => { reads++; return t.payer === ACCT ? PRICE : 0n; });
+  _setPaidRecordForTest(() => true);
+  const v1 = await admitT(null), v2 = await admitT(null);
+  ok(v1.release && v2.err?.coverRefusal === "short", "control: the account's verified pulls, one price: one admitted, the next refused short");
+  const u1 = await admitT("unverified");
+  ok(u1.release, `a pull from an unverified sender naming the account sits in a ledger of its own: the account's own run in flight does not count against it (${u1.err?.coverRefusal || "admitted"})`);
+  const u2 = await admitT("unverified");
+  ok(u2.err?.coverRefusal === "short" && reads >= 2, `...and it is judged on the account's balance: a second one is refused short (${u2.err?.coverRefusal || "admitted"})`);
+  const m1 = await admitT(`multisig:0x${"ab".repeat(32)}`);
+  ok(m1.release && inflightCoverStatus().walletsInFlight === 3, "a multisig config's own ledger is apart from both");
+  for (const x of [v1, u1, m1]) x.release?.();
+  // Never the account's paid record: with reads down, the small allowance, not the paid one.
+  fresh();
+  _setBalanceReaderForTest(async () => { throw new Error("rpc down"); });
+  _setPaidRecordForTest(() => true);
+  const un = []; for (let i = 0; i < 8; i++) un.push(await admitT("unverified"));
+  ok(un.filter((x) => x.release).length === 4, `reads down, an unverified sender gets the allowance of a wallet with no paid record (${un.filter((x) => x.release).length} of 8)`);
+  for (const x of un) x.release?.();
+}
+
 // ---- a Solana payment whose transfer accounts sit in a lookup table is keyed on the wallet ----
 {
   const kit = await import("@solana/kit");
@@ -990,15 +1088,16 @@ for (const readMs of [600, 450]) {
   const alt = await coverTermsOfRequest(await solReq([src, USDC, payTo]));
   const stat = await coverTermsOfRequest(await solReq([]));
   ok(alt?.rail === "svm" && alt.byOwner === true && alt.payer === buyer.address && alt.owner === buyer.address && alt.asset === USDC && alt.atomic === PRICE, `source, mint and destination in a lookup table: the payment is keyed on the wallet, the transfer's authority (${alt?.payer === buyer.address ? "the wallet" : alt?.payer})`);
-  ok(stat?.rail === "svm" && stat.payer === src && stat.owner === buyer.address && !stat.byOwner, "control: all static, keyed on the source token account as before");
+  ok(stat?.rail === "svm" && stat.byOwner === true && stat.payer === buyer.address && stat.owner === buyer.address && stat.source === src && stat.asset === USDC, `all static: keyed on the wallet too, the same ledger as its lookup-table payments, the source kept for the balance read (${stat?.payer === buyer.address ? "the wallet" : stat?.payer})`);
   // The balance: the sum of the wallet's token accounts of the mint (the RPC stubbed, no network).
   const realFetch = globalThis.fetch;
   const asked = [];
-  let accounts = [PRICE, PRICE];
+  let accounts = [PRICE, PRICE], srcOwned = true, delegated = 0n;
   globalThis.fetch = async (url, init) => {
     const j = JSON.parse(init?.body || "{}");
     asked.push(j);
-    const result = j.method === "getTokenAccountsByOwner" ? { context: { slot: 1 }, value: accounts.map((a, i) => ({ pubkey: `acct${i}`, account: { data: { parsed: { info: { mint: j.params?.[1]?.mint, owner: j.params?.[0], tokenAmount: { amount: String(a), decimals: 6 } } } } } })) } : null;
+    const result = j.method === "getTokenAccountsByOwner" ? { context: { slot: 1 }, value: accounts.map((a, i) => ({ pubkey: i === 0 && srcOwned ? src : `acct${i}`, account: { data: { parsed: { info: { mint: j.params?.[1]?.mint, owner: j.params?.[0], tokenAmount: { amount: String(a), decimals: 6 } } } } } })) }
+      : j.method === "getTokenAccountBalance" ? { context: { slot: 1 }, value: { amount: String(delegated), decimals: 6 } } : null;
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), { status: 200, headers: { "content-type": "application/json" } });
   };
   try {
@@ -1013,6 +1112,20 @@ for (const readMs of [600, 450]) {
     for (let i = 0; i < 3; i++) { const req = await solReq([src, USDC, payTo]); try { runs.push({ release: await admitCoveredRun(req) }); } catch (err) { runs.push({ err }); } }
     ok(runs[0].release && runs[1].release && runs[2].err?.statusCode === 429 && runs[2].err.coverRefusal === "short" && inflightCoverStatus().walletsInFlight === 1, `three lookup-table payments from one wallet holding two prices: two admitted, the third refused as short (${runs.map((x) => (x.release ? "admitted" : x.err?.coverRefusal)).join(", ")})`);
     for (const x of runs) x.release?.();
+    // One wallet paying in both shapes is one ledger: a static and a
+    // lookup-table payment of the wallet are judged together on its two prices.
+    fresh();
+    _setPaidRecordForTest(() => true);
+    const mixed = [];
+    for (const inTable of [[], [src, USDC, payTo], [], [src, USDC, payTo]]) { const req = await solReq(inTable); try { mixed.push({ release: await admitCoveredRun(req) }); } catch (err) { mixed.push({ err }); } }
+    ok(mixed[0].release && mixed[1].release && mixed[2].err?.coverRefusal === "short" && mixed[3].err?.coverRefusal === "short" && inflightCoverStatus().walletsInFlight === 1, `a mixed burst of static and lookup-table payments from one wallet holding two prices: two admitted in one ledger, the rest refused as short (${mixed.map((x) => (x.release ? "admitted" : x.err?.coverRefusal)).join(", ")})`);
+    for (const x of mixed) x.release?.();
+    // A static transfer from a token account the wallet does not own (a
+    // delegate): that account's balance is added to the wallet's.
+    asked.length = 0; srcOwned = false; delegated = 5n * PRICE;
+    ok((await readRailBalance(stat)) === 7n * PRICE && asked.map((x) => x.method).join() === "getTokenAccountsByOwner,getTokenAccountBalance" && asked[1].params[0] === src, `a static source that is not among the wallet's accounts is read and added (${asked.map((x) => x.method).join()})`);
+    asked.length = 0; srcOwned = true;
+    ok((await readRailBalance(stat)) === 2n * PRICE && asked.length === 1, "control: a static source among the wallet's own accounts is counted once, with no second read");
   } finally { globalThis.fetch = realFetch; }
 }
 

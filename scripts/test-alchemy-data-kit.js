@@ -11,6 +11,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ALCHEMY_DATA_TOOLS, __test } from "../src/tools/alchemy-data-kit.js";
 import { urlMatches } from "./lib/url-host.js";
+import { hardCapStatus, _resetHardCaps } from "../src/upstream-hard-caps.js";
 
 const { takeAddress, takeTxHash, takeBlockTag, takeInt, takeCategories, takeAddressList, formatUnits,
   decodeTransferLogs, takeWindow, metadataCache, clearMetadataCache,
@@ -71,7 +72,7 @@ function rpcResponder(handlers) {
 // ----------------------------------------------------------------------------
 // Catalog envelope
 // ----------------------------------------------------------------------------
-const expectedSlugs = ["asset-transfers", "token-balances", "token-allowance", "tx-receipt", "block-receipts", "token-price-history"];
+const expectedSlugs = ["asset-transfers", "token-balances", "token-allowance", "tx-receipt", "block-receipts", "token-price-history", "wallet-transfers-multichain"];
 ok(ALCHEMY_DATA_TOOLS.length === expectedSlugs.length, `${expectedSlugs.length} tools exported (got ${ALCHEMY_DATA_TOOLS.length})`);
 for (const slug of expectedSlugs) ok(!!ALCHEMY_DATA_TOOLS.find((t) => t.slug === slug), `slug present: ${slug}`);
 ok(new Set(ALCHEMY_DATA_TOOLS.map((t) => t.slug)).size === ALCHEMY_DATA_TOOLS.length, "slugs unique");
@@ -79,7 +80,9 @@ for (const t of ALCHEMY_DATA_TOOLS) {
   ok(t.route === `POST /api/${t.slug}`, `${t.slug}: route matches slug`);
   ok(t.category === "crypto", `${t.slug}: category=crypto`);
   const usd = Number(String(t.price).replace("$", ""));
-  ok(usd >= 0.001 && usd <= 0.006, `${t.slug}: priced $0.001-$0.006 (${t.price})`);
+  // One multichain read covers up to five networks: priced under five asset-transfers calls.
+  if (t.slug === "wallet-transfers-multichain") ok(usd > 0.003 && usd < 5 * 0.003, `${t.slug}: priced under five asset-transfers calls (${t.price})`);
+  else ok(usd >= 0.001 && usd <= 0.006, `${t.slug}: priced $0.001-$0.006 (${t.price})`);
   ok(typeof t.handler === "function", `${t.slug}: has handler`);
   const d = t.discovery;
   ok(d && d.bodyType === "json" && d.input && d.inputSchema?.properties && d.output?.example, `${t.slug}: full discovery envelope`);
@@ -363,6 +366,71 @@ calls = [];
 }
 
 // ----------------------------------------------------------------------------
+// wallet-transfers-multichain: one Alchemy multichain read, up to 5 networks
+// ----------------------------------------------------------------------------
+{
+  const MC = "wallet-transfers-multichain";
+  calls = [];
+  await expectStatus(() => h(MC)({}), 400, "multichain: address required -> 400");
+  await expectStatus(() => h(MC)({ address: V, networks: ["ethereum", "base", "polygon", "arbitrum", "optimism", "bnb"] }), 400, "multichain: more than 5 networks -> 400");
+  await expectStatus(() => h(MC)({ address: V, networks: ["solana"] }), 400, "multichain: unsupported network -> 400");
+  await expectStatus(() => h(MC)({ address: V, direction: "sideways" }), 400, "multichain: bad direction -> 400");
+  await expectStatus(() => h(MC)({ address: V, maxCount: 101 }), 400, "multichain: maxCount over 100 -> 400");
+  await expectStatus(() => h(MC)({ address: V, fromTime: "last week" }), 400, "multichain: bad fromTime -> 400");
+  await expectStatus(() => h(MC)({ address: V, fromTime: "2026-02-01T00:00:00Z", toTime: "2026-01-01T00:00:00Z" }), 400, "multichain: toTime before fromTime -> 400");
+  await expectStatus(() => h(MC)({ address: V, contracts: [USDC], category: ["external"] }), 400, "multichain: contracts + external -> 400");
+  ok(calls.length === 0, "multichain validation: zero fetches");
+
+  const NFT = "0xed5af388653567af2f388e6224dc7c4b3241c544";
+  const mcFixture = {
+    transfers: [
+      { network: "base-mainnet", blockNum: "0x2160ec0", blockTimestamp: "2026-11-19T20:01:02Z", category: "erc20", hash: HASH, from: "0xa916b82ff122591cc88aac0d64ce30a8e3e16081", to: V.toLowerCase(), contractAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", uniqueId: `${HASH}:log:4`, fungible: { rawValue: "0x668a0", value: 0.42, decimals: 6, asset: "USDC" } },
+      { network: "eth-mainnet", blockNum: "0x184ea87", blockTimestamp: "2026-11-18T12:59:59Z", category: "erc721", hash: "0x" + "c".repeat(64), from: "0x" + "d".repeat(40), to: V.toLowerCase(), contractAddress: NFT, uniqueId: "x:log:1", nfts: { tokens: [{ tokenId: "0x7", amount: "0x1" }] } },
+      { network: "matic-mainnet", blockNum: "0x10", blockTimestamp: "2026-11-17T00:00:00Z", category: "external", hash: "0x" + "e".repeat(64), from: V.toLowerCase(), to: null, uniqueId: "y:external", fungible: { rawValue: "0xde0b6b3a7640000", value: 1, decimals: 18, asset: "POL" } },
+    ],
+    pageKey: "eyJvIjoxfQ",
+    error: { message: "partial", partialErrors: [{ network: "arb-mainnet", state: "timeout", message: "upstream slow" }, { network: "base-mainnet", state: "unsupported", message: "internal not on this network" }] },
+  };
+  let mcBody = null;
+  responder = (url, init, body) => { mcBody = body; return { json: mcFixture }; };
+  _resetHardCaps();
+  const r = await h(MC)({ address: V, networks: ["base", "ethereum", "polygon", "arbitrum"], direction: "in", maxCount: 10, fromTime: "2026-11-01T00:00:00Z" });
+  ok(calls.length === 1 && urlMatches(calls[0].url, "api.g.alchemy.com", "/data/v1/") && /\/transfers\/by-address$/.test(new URL(calls[0].url).pathname) && calls[0].method === "POST", "multichain: ONE POST to the data API's transfers/by-address");
+  ok(mcBody.address === V.toLowerCase() && JSON.stringify(mcBody.networks) === JSON.stringify(["base-mainnet", "eth-mainnet", "matic-mainnet", "arb-mainnet"]) && mcBody.direction === "to" && mcBody.maxCount === 10 && mcBody.order === "desc" && mcBody.excludeZeroValue === true && mcBody.fromTimestamp === "2026-11-01T00:00:00.000Z" && JSON.stringify(mcBody.category) === JSON.stringify(["external", "erc20", "erc721", "erc1155"]), `multichain: request body (networks mapped to Alchemy ids, in -> to) ${JSON.stringify(mcBody)}`);
+  const [t0, t1, t2] = r.transfers;
+  ok(t0.network === "base" && t0.blockNum === 0x2160ec0 && t0.timestamp === "2026-11-19T20:01:02Z" && t0.asset === "USDC" && t0.value === "0.42" && t0.rawValue === "420000" && t0.decimals === 6 && t0.contract === "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "multichain: fungible row (exact decimal string from the raw value)");
+  ok(t1.network === "ethereum" && t1.category === "erc721" && t1.contract === NFT && t1.tokens.length === 1 && t1.tokens[0].tokenId === "0x7" && t1.value === null, "multichain: NFT row carries its token ids");
+  ok(t2.network === "polygon" && t2.to === null && t2.value === "1" && t2.asset === "POL", "multichain: external row on polygon, contract creation to null");
+  ok(r.count === 3 && r.pageKey === "eyJvIjoxfQ" && r.source === "alchemy" && typeof r.fetchedAt === "string", "multichain: count, cursor, source");
+  const st = Object.fromEntries(r.networkStatus.map((n) => [n.network, n.state]));
+  ok(st.base === "unsupported" && st.arbitrum === "timeout" && st.ethereum === "ok" && st.polygon === "ok", `multichain: per-network status from partialErrors (${JSON.stringify(st)})`);
+  ok(r.scanned === 2 && r.scanCandidates === 4 && r.scanCoversAll === false && typeof r.scanNote === "string" && r.complete === false && r.truncated === true, "multichain: partial networks and the cursor are stated in fields (scan coverage, complete false)");
+  ok(!JSON.stringify(r).includes("upstream slow") && !JSON.stringify(r).includes("internal not on this network"), "multichain: upstream partial-error text is not relayed");
+  ok(hardCapStatus().upstreams["alchemy-multichain"]?.usedToday === 4, `multichain: one hard-cap unit per network read (${hardCapStatus().upstreams["alchemy-multichain"]?.usedToday})`);
+
+  responder = () => ({ json: { transfers: [], pageKey: null } });
+  const r2 = await h(MC)({ address: V });
+  ok(r2.complete === true && r2.scanCoversAll === true && r2.networks.length === 5 && r2.direction === "both" && r2.count === 0, "multichain: defaults (five networks, both directions); an empty full answer is complete");
+
+  // The hard cap counts network reads: past it, refused before any fetch, and a refusal takes nothing.
+  _resetHardCaps();
+  process.env.HARDCAP_ALCHEMY_MULTICHAIN_NETWORKS = "4";
+  calls = [];
+  await h(MC)({ address: V, networks: ["base", "ethereum", "polygon"] });
+  await expectStatus(() => h(MC)({ address: V, networks: ["base", "ethereum"] }), 503, "multichain: two more network reads past a ceiling of 4 -> 503");
+  ok(calls.length === 1 && hardCapStatus().upstreams["alchemy-multichain"].usedToday === 3, "multichain: the refused call made no fetch and kept no unit");
+  await h(MC)({ address: V, networks: ["base"] });
+  ok(hardCapStatus().upstreams["alchemy-multichain"].usedToday === 4, "multichain: one network read still fits");
+  // A 4xx refusal gives its units back.
+  _resetHardCaps();
+  responder = () => ({ status: 400, json: { error: { message: "bad" } } });
+  await expectStatus(() => h(MC)({ address: V, networks: ["base", "ethereum"] }), 502, "multichain: upstream 400 -> 502 (body not relayed)");
+  ok(hardCapStatus().upstreams["alchemy-multichain"].usedToday === 0, "multichain: a request the upstream refused gives its units back");
+  delete process.env.HARDCAP_ALCHEMY_MULTICHAIN_NETWORKS;
+  _resetHardCaps();
+}
+
+// ----------------------------------------------------------------------------
 // Upstream error classification - never relay the upstream body
 // ----------------------------------------------------------------------------
 const SECRET_BODY = "Invalid category: 'bogus'. Valid values are: {erc20, ...} key=test-key-0123456789abcdef";
@@ -409,6 +477,7 @@ if (process.env.ALCHEMY_LIVE_TEST === "1" && process.env.ALCHEMY_API_KEY) {
       if (t.slug === "token-allowance") ok(r.symbol === "USDC" && typeof r.allowance === "string" && typeof r.unlimited === "boolean", "LIVE token-allowance: shape");
       if (t.slug === "tx-receipt") ok(r.status === "success" && r.blockNumber === 25563191 && r.transfers.length === 1 && r.transfers[0].rawValue === "420000", "LIVE tx-receipt: the example USDC transfer decoded");
       if (t.slug === "block-receipts") ok(r.summary.txCount > 0 && r.receipts.length === 5 && r.block === 25563191, "LIVE block-receipts: summary + 5 rows");
+      if (t.slug === "wallet-transfers-multichain") ok(r.count > 0 && r.networkStatus.length === t.discovery.input.networks.length && r.transfers.every((x) => t.discovery.input.networks.includes(x.network)), "LIVE wallet-transfers-multichain: rows from the requested networks");
       if (t.slug === "token-price-history") ok(r.count >= 5 && r.last > 0.9 && r.last < 1.1, `LIVE token-price-history: USDC ~1.00 (${r.count} pts, last ${r.last})`);
     } catch (e) {
       fail++; console.error(`ASSERT FAIL - LIVE ${t.slug}: ${e.statusCode ?? ""} ${e.message}`);

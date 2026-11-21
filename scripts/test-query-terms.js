@@ -5,7 +5,7 @@
 // while its English twin ranked three sellers. Offline, synthetic catalog.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
-import { queryTerms, termMatcher, splitTokens, isCjkTerm, caseParts, caseRuns, CASE_SPLIT_MAX_CHARS } from "../src/query-terms.js";
+import { queryTerms, termMatcher, splitTokens, isCjkTerm, caseParts, caseRuns, CASE_SPLIT_MAX_CHARS, FILLER_TERMS, withoutFiller } from "../src/query-terms.js";
 const { routeQuery, _cacheForTests, allIndexedTools } = await import("../src/x402-index.js");
 const { findTools } = await import("../src/find.js");
 let pass = 0, fail = 0;
@@ -81,6 +81,25 @@ ok(termMatcher("中国")("verify a 中国供应商 (china supplier)") === true &
   const idx = allIndexedTools({ search: "供应商", excludeOrigin: "https://agent402.tools" });
   const idxRows = Array.isArray(idx) ? idx : (idx.tools || idx.results || idx.items || []);
   ok(idxRows.some((r) => r.slug === "china-supplier-evidence"), "the /api/index search accepts a CJK term too");
+  cache.clear();
+}
+
+// --- filler words score nothing ----------------------------------------------------
+ok(["the", "a", "an", "for", "tool", "api"].every((w) => FILLER_TERMS.has(w)), "the filler set holds the, a, an, for, tool and api");
+ok(withoutFiller(queryTerms("the weather api for a city")).join() === "weather,city", "withoutFiller drops filler from a query's terms");
+ok(withoutFiller(queryTerms("api")).join() === "api", "a query of filler alone keeps its words");
+{
+  const cache = _cacheForTests(); cache.clear();
+  const t = (seller, route, slug, description) => ({ seller, method: "GET", route, slug, name: slug, description, category: "data", tags: [], price: 0.01, networks: ["eip155:8453"] });
+  cache.set("https://busy.example", { manifest: { name: "busy", homepage: "https://busy.example" }, openapiSummary: null, tools: [t("https://busy.example", "/api", "api", "The quotes for a ticker.")], fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
+  cache.set("https://wx.example", { manifest: { name: "wx", homepage: "https://wx.example" }, openapiSummary: null, tools: [t("https://wx.example", "/weather", "weather", "Current conditions by city.")], fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
+  const ctx = { baseUrl: "https://agent402.tools", catalog: {}, prices: {}, network: "base", toolCount: 0, walletName: "w" };
+  const r = routeQuery({ query: "the weather api for a city", top: 5, include: "external", ...ctx });
+  ok(r.results[0]?.slug === "weather" && !r.results.some((x) => x.slug === "api"), `a seller matched only by filler ("api", "the", "for", "a") is not ranked (${r.results.map((x) => `${x.slug}:${x.score}`).join(",")})`);
+  const covered = routeQuery({ query: "weather api", top: 5, include: "external", ...ctx });
+  ok(covered.results[0]?.slug === "weather", "the task word still ranks its seller");
+  const alone = routeQuery({ query: "api", top: 5, include: "external", ...ctx });
+  ok(alone.results.some((x) => x.slug === "api"), "a query of filler alone still finds what it names");
   cache.clear();
 }
 

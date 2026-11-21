@@ -24,7 +24,7 @@
 // and gh; both observers carry the same title and body. Offline.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
-import { readFile, mkdtemp, writeFile, chmod, rm } from "node:fs/promises";
+import { readFile, mkdtemp, mkdir, writeFile, chmod, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -812,7 +812,187 @@ for (const [name, T, field, sameBody] of SPEND) {
   }
 }
 
+// ---- refundsOwed: the heartbeat's advice follows where the debt is ------------------
+// A card refund Stripe holds and has not finished (card=pending) needs
+// nothing; only a refused one (card=refused) is refunded in the dashboard; a
+// ledger that owes nothing (ledger=ok) is not sent to the refund workflow. A
+// server without the two words gets the combined text it always had. The
+// Worker's body follows the same words.
+{
+  const T = "Refunds owed to a buyer are waiting";
+  const step = steps.find((s) => String(s.name || "").startsWith("Refunds owed check"));
+  const worker = ALARMS.find((a) => a.title === T);
+  const DASH = /refund it in the Stripe dashboard|Refund each of the others in the Stripe dashboard/;
+  const NOTHING = /nothing is needed/;
+  const WORKFLOW = /run the refund workflow/;
+  await check(`heartbeat and Worker: "${T}" advise by where the debt is (ledger, card)`, async () => {
+    assert.ok(step && worker, "the heartbeat step and the Worker alarm exist");
+    const body = async (row) => {
+      const calls = await runStep(step, { refundsOwed: row });
+      assert.equal(calls.length, 1, JSON.stringify(calls));
+      assert.deepEqual([calls[0][1], argOf(calls[0], "--title")], ["create", T]);
+      return argOf(calls[0], "--body");
+    };
+    const pending = await body({ status: "owed", ledger: "ok", card: "pending" });
+    const wPending = worker.body({ gateway: { refundsOwed: { status: "owed", ledger: "ok", card: "pending" } } });
+    for (const [who, b] of [["heartbeat", pending], ["Worker", wPending]]) {
+      assert.match(b, NOTHING, `${who}: a pending card refund needs nothing`);
+      assert.doesNotMatch(b, DASH, `${who}: no dashboard refund for a pending card refund`);
+      assert.doesNotMatch(b, WORKFLOW, `${who}: a ledger that owes nothing is not sent to the refund workflow`);
+    }
+    const refused = await body({ status: "owed", ledger: "owed", card: "refused" });
+    const wRefused = worker.body({ gateway: { refundsOwed: { status: "owed", ledger: "owed", card: "refused" } } });
+    for (const [who, b] of [["heartbeat", refused], ["Worker", wRefused]]) {
+      assert.match(b, DASH, `${who}: a refused card refund is refunded in the dashboard`);
+      assert.match(b, WORKFLOW, `${who}: a ledger debt is sent to the refund workflow`);
+      assert.doesNotMatch(b, NOTHING, `${who}: refused is never "nothing is needed"`);
+    }
+    const old = await body({ status: "owed" });
+    const wOld = worker.body({ gateway: { refundsOwed: { status: "owed" } } });
+    for (const [who, b] of [["heartbeat", old], ["Worker", wOld]]) {
+      assert.match(b, WORKFLOW, `${who}: a server without the words keeps the combined text`);
+      assert.match(b, /refund it in the Stripe dashboard/, `${who}: combined text`);
+    }
+    // Words only: an unexpected value is never echoed.
+    const odd = await body({ status: "owed", ledger: "<b>1</b>", card: "$5 0xabc" });
+    const wOdd = worker.body({ gateway: { refundsOwed: { status: "owed", ledger: "<b>1</b>", card: "$5 0xabc" } } });
+    for (const b of [odd, wOdd]) assert.ok(!b.includes("<b>") && !b.includes("$5") && !b.includes("0xabc"), b);
+    assert.deepEqual(await runStep(step, { refundsOwed: { status: "ok", ledger: "ok", card: "none" } }), [], "ok opens nothing");
+  });
+}
+
+// ---- the listing validator unreadable on run after run pages once -----------------
+// One unreadable run warns only. Three in a row, or two in a row half a day
+// apart, open one issue; an open issue is never duplicated or commented on;
+// the next readable run (exit 0 or 1) closes it and starts the streak again;
+// a validation step that did not finish leaves the streak as it was.
+{
+  const T = "Bazaar listing validator unreadable";
+  const step = steps.find((s) => String(s.name || "").startsWith("Bazaar validator unreadable streak"));
+  const validate = steps.find((s) => s.id === "bazaar_validate");
+  const stateFile = path.join(dir, "validate-streak", "state.json");
+  const runStreak = async (code, issues = []) => {
+    const log = path.join(dir, "gh.log");
+    await writeFile(log, "");
+    const r = spawnSync("bash", ["-c", step.run], {
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", CODE: code, STREAK_FILE: stateFile, ISSUES_JSON: JSON.stringify(issues), GH_LOG: log },
+      encoding: "utf8",
+    });
+    assert.equal(r.status, 0, r.stderr);
+    return (await readFile(log, "utf8")).split("\x1e").filter((l) => l.trim()).map((l) => l.split("\x1f").filter((x) => x !== ""));
+  };
+  const streak = async () => JSON.parse(await readFile(stateFile, "utf8"));
+  await check(`heartbeat: "${T}" opens after three unreadable runs in a row, once, and a readable run closes it`, async () => {
+    assert.ok(step, "heartbeat.yml has the streak step");
+    assert.ok(validate && /echo "code=\$CODE" >> "\$GITHUB_OUTPUT"/.test(validate.run) && /steps\.bazaar_validate\.outputs\.code/.test(String(step.env?.CODE)), "the validation step hands its exit code to the streak step");
+    const at = (pred) => steps.findIndex(pred);
+    const restoreAt = at((s) => /cache\/restore@/.test(String(s.uses)) && s.with?.path === ".bazaar-validate-streak");
+    const saveAt = at((s) => /cache\/save@/.test(String(s.uses)) && s.with?.path === ".bazaar-validate-streak");
+    assert.ok(restoreAt >= 0 && restoreAt < at((s) => s === validate) && at((s) => s === step) < saveAt, `the streak is restored before and saved after (${restoreAt}, ${saveAt})`);
+    await rm(path.dirname(stateFile), { recursive: true, force: true });
+    assert.deepEqual(await runStreak("2"), [], "one unreadable run opens nothing");
+    assert.deepEqual(await runStreak("2"), [], "two (minutes apart) open nothing");
+    const third = await runStreak("2");
+    assert.equal(third.length, 1, JSON.stringify(third));
+    assert.deepEqual([third[0][1], argOf(third[0], "--title")], ["create", T]);
+    assert.doesNotMatch(argOf(third[0], "--body"), /\b\d+ (runs?|times|hours?)\b/, "the body carries no count");
+    assert.deepEqual(await runStreak("2", [{ number: 7, title: T }]), [], "an open issue is not duplicated or commented on");
+    assert.deepEqual(await runStreak("", [{ number: 7, title: T }]), [], "a step that did not finish touches nothing");
+    assert.equal((await streak()).streak, 4, "and leaves the streak as it was");
+    const closed = await runStreak("1", [{ number: 7, title: T }, { number: 3, title: `Other ${T}` }]);
+    assert.ok(closed.length === 1 && closed[0][1] === "close" && closed[0][2] === "7", `a readable run (even with an INVALID verdict) closes only its own issue: ${JSON.stringify(closed)}`);
+    assert.equal((await streak()).streak, 0, "and starts the streak again");
+    assert.deepEqual(await runStreak("2"), [], "after a readable run one unreadable run opens nothing");
+    assert.deepEqual(await runStreak("0"), [], "a readable run with nothing open does nothing");
+  });
+  await check(`heartbeat: "${T}" opens on two unreadable runs half a day apart`, async () => {
+    await mkdir(path.dirname(stateFile), { recursive: true });
+    await writeFile(stateFile, JSON.stringify({ streak: 1, since: Math.floor(Date.now() / 1000) - 13 * 3600 }));
+    const calls = await runStreak("2");
+    assert.ok(calls.length === 1 && calls[0][1] === "create", JSON.stringify(calls));
+    await writeFile(stateFile, JSON.stringify({ streak: 1, since: Math.floor(Date.now() / 1000) - 3600 }));
+    assert.deepEqual(await runStreak("2"), [], "two runs an hour apart open nothing");
+    await writeFile(stateFile, "not json");
+    assert.deepEqual(await runStreak("2"), [], "an unreadable saved streak starts again from one");
+    assert.equal((await streak()).streak, 1);
+  });
+}
+
 await rm(dir, { recursive: true, force: true });
+
+// ---- every word the builder can emit has a pager, or a reason ---------------------
+// The boot check below reads the words one boot publishes; a word behind a
+// switch that boot leaves off (`...(cond ? { word } : {})`) or on the
+// operator view only would pass it unread. This reads the words from the
+// gateway-status builder's own source: every key of its body, the keys of
+// each conditional spread, the tool failure monitor's words (its fallback
+// names them) and the top-level status the gateway spread carries. Each must
+// be read by a status Worker alarm's verdict or a heartbeat.yml step, or be
+// in NOT_PAGED with the reason it carries nothing to page on.
+{
+  const NOT_PAGED = {
+    loopLag: "a flag ({ watching }), not a status word; event-loop stalls page through the heartbeat's serving health check on the operator surface",
+    mppEvmDomainFallback: "a flag ({ enabled }), not a status word; its hold schedule stays on the operator view",
+    inflightCover: "operator view only: the in-flight coverage counts behind coverageReads, which pages",
+  };
+  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const start = server.indexOf('app.get("/api/gateway-status"');
+  const open = server.indexOf("  const body = {", start);
+  const close = server.indexOf("\n  };\n", open);
+  const lit = server.slice(server.indexOf("{", open) + 1, close);
+  // Comments and string contents blanked, offsets kept: the keys at the top
+  // level of the body are the identifiers in key position at depth zero.
+  const blank = (s) => {
+    let out = "", i = 0;
+    while (i < s.length) {
+      const c = s[i], n = s[i + 1];
+      if (c === "/" && n === "/") { const j = s.indexOf("\n", i); const e = j < 0 ? s.length : j; out += " ".repeat(e - i); i = e; continue; }
+      if (c === "/" && n === "*") { const e = s.indexOf("*/", i) + 2; out += " ".repeat(e - i); i = e; continue; }
+      if (c === '"' || c === "'" || c === "`") { let j = i + 1; while (j < s.length && s[j] !== c) j += s[j] === "\\" ? 2 : 1; out += c + " ".repeat(Math.max(0, j - i - 1)) + c; i = j + 1; continue; }
+      out += c; i++;
+    }
+    return out;
+  };
+  const b = blank(lit);
+  const words = new Set();
+  let depth = 0, keyPos = true, spreads = 0;
+  for (let i = 0; i < b.length; i++) {
+    const c = b[i];
+    if ("([{".includes(c)) { depth++; keyPos = false; continue; }
+    if (")]}".includes(c)) { depth--; continue; }
+    if (depth !== 0 || /\s/.test(c)) continue;
+    if (c === ",") { keyPos = true; continue; }
+    if (!keyPos) continue;
+    const m = /^(\.\.\.)?([A-Za-z_$][\w$]*)?/.exec(b.slice(i));
+    if (m[1]) spreads++;
+    if (!m[1] && m[2]) words.add(m[2]);
+    if (m[1] && m[2] === "gateway") words.add("status");
+    i += Math.max(0, m[0].length - 1);
+    keyPos = false;
+  }
+  const conditional = [...lit.matchAll(/\.\.\.\((?:(?!\.\.\.\()[^?])*\?\s*\{\s*(\w+):/g)].map((m) => m[1]);
+  for (const w of conditional) words.add(w);
+  const monitorLine = lit.split("\n").find((l) => /^\s*\.\.\.\(await toolFailureMonitor\(\)/.test(l)) || "";
+  const monitorWords = [...monitorLine.matchAll(/(\w+): \{ status: "unknown" \}/g)].map((m) => m[1]);
+  for (const w of monitorWords) words.add(w);
+  const verdicts = ALARMS.map((a) => String(a.verdict));
+  const readBy = (w) => {
+    const by = [];
+    if (verdicts.some((s) => new RegExp(`\\bb\\??\\.${w}\\b`).test(s))) by.push("worker");
+    if (new RegExp(`'\\.${w}\\??\\.[A-Za-z]|'\\.${w} //`).test(src)) by.push("heartbeat");
+    return by;
+  };
+  await check(`every word the gateway-status builder can emit is paged or excused with a reason (${words.size} words)`, () => {
+    assert.ok(words.size >= 60, `the builder's words were read (${words.size})`);
+    for (const w of ["status", "refundsOwed", "creditsRefunds", "sanctionsScreen", "referralSettlement", "firstCallAllowance", "inflightCover", "toolFailures", "buyerRefusals"]) assert.ok(words.has(w), `${w} is among them`);
+    assert.ok(conditional.length >= 4 && monitorWords.length >= 5 && spreads >= 6, `the conditional spreads and the monitor's words were read (${conditional.join(",")} | ${monitorWords.join(",")})`);
+    const unread = [...words].filter((w) => !readBy(w).length && !Object.hasOwn(NOT_PAGED, w));
+    assert.deepEqual(unread, [], `words neither the status Worker nor the heartbeat reads, and not excused: ${unread.join(", ")}`);
+    const stale = Object.keys(NOT_PAGED).filter((w) => !words.has(w) || readBy(w).length);
+    assert.deepEqual(stale, [], `NOT_PAGED entries that the builder no longer emits, or that a pager now reads: ${stale.join(", ")}`);
+    assert.ok(Object.values(NOT_PAGED).every((r) => typeof r === "string" && r.length > 20), "each excused word has its reason");
+  });
+}
 
 // ---- every status word has a pager ---------------------------------------------
 // A word on /api/gateway-status that no alarm reads pages nobody however it

@@ -208,7 +208,7 @@ import { evmDomainsOfAccepts, domainTruthFor } from "./evm-usdc-domain.js";
 import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAmountToDollars, tokenDecimalsOf } from "./price-usd.js";
 // Re-exported: the dataset snapshot, the server and the tests import it from here.
 export { priceToMicroUsd };
-import { queryTerms, isCjkTerm, splitTokens, caseRuns } from "./query-terms.js";
+import { queryTerms, withoutFiller, isCjkTerm, splitTokens, caseRuns } from "./query-terms.js";
 import { canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
 import { routeExecuteHint } from "./tools/route-execute.js";
 import { recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration, ensureSellerRegistrations } from "./stats.js";
@@ -307,7 +307,7 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
-import { sellerLoad, bodyHash, landingGate, RequestHeld, runAsRegistrant } from "./seller-load.js";
+import { sellerLoad, bodyHash, landingGate, RequestHeld, runAsRegistrant, revisitHintMsOf } from "./seller-load.js";
 // Reads made for a registration (anyone may register any origin, with no proof
 // of control) run inside this scope: they are counted on a day count of their
 // own (src/seller-load.js takeBudget `unscheduled`), never on the day the
@@ -324,6 +324,9 @@ export { sellerDocsUrlFor, SELLER_DOCS_URL_MAX, SELLER_DOCS_URL_LEGEND };
 import { timSortSteps } from "./timsort-steps.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
 import { contained } from "./contained-turn.js";
+import { noteTurn } from "./active-jobs.js";
+// A seller's host for a span name (bounded; the origin itself when it does not parse).
+const hostOfOriginForSpan = (origin) => { try { return new URL(origin).host.slice(0, 60); } catch { return String(origin || "").slice(0, 60); } };
 
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
@@ -5972,18 +5975,56 @@ async function probePaywall(tools, { redirectedTo = null, gated = false } = {}) 
     // says nothing about whether a well-formed call gets a 402. No verdict.
     if (PAYWALL_PROBE_SHAPE_STATUSES.has(res.status)) {
       await res.body?.cancel?.().catch?.(() => {});
-      return paywallUnknown(url, `our unpaid probe was not a well-formed request for this route (HTTP ${res.status} to ${method === "GET" ? "a request without parameters" : "an empty JSON body"}); no paywall verdict`, res.status);
+      return paywallUnknown(url, `our unpaid probe was not a well-formed request for this route (HTTP ${res.status} to ${method === "GET" ? "a request without parameters" : "an empty JSON body"}); no paywall verdict`, res.status, "probe_malformed");
     }
     // `url` is the URL that answered, which is the upgraded one after a 301/308.
     const ms = probeAnswerMs.get(res);
-    return { ok: res.status === 402, status: res.status, url, at: Date.now(), mpp, ...(Number.isFinite(ms) ? { ms } : {}) };
+    const reason = res.status === 402 ? null : paywallFailureReason(res.status);
+    return { ok: res.status === 402, status: res.status, url, at: Date.now(), mpp, ...(reason ? { reason } : {}), ...(Number.isFinite(ms) ? { ms } : {}) };
   } catch (e) {
     // Not sent (the host's load controls held it back): the stored verdict stands.
     if (e?.sellerLoadSkip) return PAYWALL_NOT_SENT;
     // No status was read: our time limit, a connection that did not finish,
     // our resolver. That is our probe not completing, not the route failing.
-    return paywallUnknown(e?.probedUrl || url, `our unpaid probe did not complete (${String(e?.message || e).slice(0, 100)}); no paywall verdict`, 0);
+    return paywallUnknown(e?.probedUrl || url, `our unpaid probe did not complete (${String(e?.message || e).slice(0, 100)}); no paywall verdict`, 0, "probe_incomplete");
   }
+}
+
+// WHY A PAYWALL PROBE DID NOT READ A 402, in a fixed vocabulary. A failed
+// verdict carried only its status, so a reader of ?seller= or the dossier had
+// to guess whether the route was free, asked for an account, moved or broke.
+// Every verdict other than a 402 carries one of these codes as `reason`; the
+// two probe_* codes are the no-verdict readings (ok null), never a failure.
+export const PAYWALL_REASONS = Object.freeze({
+  answered_free: "the paid route answered 2xx to an unpaid request, so it is not paywalled",
+  auth_required: "the paid route answered 401 or 403: it asks for an account credential, not a payment",
+  redirected: "the paid route answered a redirect instead of a 402",
+  client_error: "the paid route answered a 4xx other than 402",
+  server_error: "the paid route answered a 5xx",
+  probe_malformed: "our unpaid probe was not a well-formed request for this route; no verdict",
+  probe_incomplete: "our unpaid probe did not complete; no verdict",
+});
+/** The reason code for a non-402 HTTP status of a paywall probe, or null. */
+export function paywallFailureReason(status) {
+  const s = Number(status);
+  if (!Number.isInteger(s) || s === 402) return null;
+  if (s >= 200 && s < 300) return "answered_free";
+  if (s >= 300 && s < 400) return "redirected";
+  if (s === 401 || s === 403) return "auth_required";
+  if (s >= 400 && s < 500) return "client_error";
+  if (s >= 500 && s < 600) return "server_error";
+  return null;
+}
+/** A stored verdict as a reader sees it, with its reason code and the code's
+ *  sentence: one taken before reasons were recorded gets its code from its
+ *  own status and kind. */
+export function paywallWithReason(p) {
+  if (!p || typeof p !== "object" || p.ok === true) return p || null;
+  const reason = Object.hasOwn(PAYWALL_REASONS, p.reason) ? p.reason
+    : p.unknown === true || p.ok === null
+      ? (Number(p.status) > 0 ? "probe_malformed" : "probe_incomplete")
+      : (Number(p.status) > 0 ? paywallFailureReason(p.status) : "probe_incomplete");
+  return reason ? { ...p, reason, reasonNote: PAYWALL_REASONS[reason] } : p;
 }
 // probePaywall's answer when the probe was not sent (src/seller-load.js).
 const PAYWALL_NOT_SENT = Symbol("paywall-not-sent");
@@ -5998,8 +6039,8 @@ async function paywallForCrawl(prev, tools, { redirectedTo, force, pastDeadline,
 const PAYWALL_PROBE_SHAPE_STATUSES = new Set([400, 415, 422]);
 /** A paywall probe that read no verdict: `ok` is null, never a failure;
  *  paywallVerdictExpired re-probes it after the failure window. */
-function paywallUnknown(url, error, status) {
-  return { ok: null, unknown: true, status, url, at: Date.now(), error, mpp: false };
+function paywallUnknown(url, error, status, reason) {
+  return { ok: null, unknown: true, status, url, at: Date.now(), error, reason, mpp: false };
 }
 
 // BACK OFF FROM AN ORIGIN THAT KEEPS SAYING NO.
@@ -6892,6 +6933,11 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // a manifest, because their openapi covered 2 of the 9 routes the Bazaar
     // had settled. Openapi metadata still wins per-route; Bazaar rows without
     // an openapi match pass through.
+    // The merge passes below run in one synchronous stretch per seller; it is
+    // timed as a span for the [loop-lag] line (src/active-jobs.js noteTurn),
+    // named with the seller's host, so a stall at a repeatable position in a
+    // crawl names the document it was reading.
+    const manifestPassAt = Date.now(), manifestPassT0 = performance.now();
     tools = mergeOpenapiIntoBazaar(tools, bazaarToolsByOrigin.get(originUrl) || [], {
       allRoutes: openapiRoutes || [],
     });
@@ -6913,6 +6959,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // Which routes the seller's own documents name; the rest must prove
     // themselves live (see stampDeclared / needsLiveProof).
     stampDeclared(tools, [...normaliseManifestTools(manifest, originUrl), ...(openapiRoutes || []), ...(openapiTools || [])]);
+    noteTurn(`crawl-manifest-passes ${hostOfOriginForSpan(originUrl)}`, manifestPassAt, performance.now() - manifestPassT0);
     // Keep what earlier crawls already learned, THEN spend the probe budget on
     // routes we still know nothing about.
     tools = carryForwardLearnedQuotes(tools, prev);
@@ -6947,7 +6994,9 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     });
     // The revisit back-off (src/seller-load.js): the same manifest and OpenAPI
     // as the last read doubles the wait before the next crawl; a change resets it.
-    await sellerLoad.noteDiscoveryRead(originUrl, { manifestHash, openapiHash, advance: scheduled });
+    // The seller's own cadence hint (`revisitAfterSeconds` in its manifest)
+    // may lengthen that wait up to the cap, never shorten it.
+    await sellerLoad.noteDiscoveryRead(originUrl, { manifestHash, openapiHash, advance: scheduled, hintMs: revisitHintMsOf(manifest) });
   } catch (e) {
     // No /.well-known/x402 — two fallback surfaces, richest metadata wins:
     //
@@ -10320,7 +10369,8 @@ export function sellerDetail(originOrHost) {
       // Paywall liveness, measured separately from crawl health. `health` only
       // says the manifest parsed; a seller whose every paid route 500s scores a
       // perfect 1.0 on it. null = not probed yet (never assume healthy).
-      paywall: v.paywall || null,
+      // A verdict other than a 402 carries `reason` (PAYWALL_REASONS).
+      paywall: paywallWithReason(v.paywall),
       // What our own crawl and paid calls say about this seller over a rolling
       // window (src/seller-reputation.js): each metric with its method,
       // sample size and last measurement, scored only past its minimum
@@ -11457,6 +11507,8 @@ function routeIndexStartShadow() {
     // answering) and clears routeIdx.shadow, which gates every later rebuild:
     // left set, no rebuild would ever start again. contained() counts it.
     let stale = 0;
+    // The finish is unsliced: timed as its own span for the [loop-lag] line.
+    const finishAt = Date.now(), finishT0 = performance.now();
     try {
       if (shadowFinishFaultForTest) { const e = shadowFinishFaultForTest; shadowFinishFaultForTest = null; throw e; }
       // Entries the current index took from `pending` while the shadow was
@@ -11471,6 +11523,8 @@ function routeIndexStartShadow() {
     } catch (e) {
       if (routeIdx.shadow === shadow) routeIdx.shadow = null;
       throw e;
+    } finally {
+      noteTurn("route-index-shadow-finish", finishAt, performance.now() - finishT0);
     }
     routeIdx.postings = shadow.postings;
     routeIdx.indexed = shadow.indexed;
@@ -11766,8 +11820,11 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   const q = String(query || "").slice(0, 500);
   // Unicode-aware (src/query-terms.js): a CJK query used to tokenize to
   // nothing and answer zero rows (reported from outside 2026-09-10).
-  const terms = queryTerms(q, { max: 32 });
-  const termSet = new Set(terms);
+  // Scored without filler words (src/query-terms.js withoutFiller); the
+  // whole query's words still decide which compound slugs it covers.
+  const queryWords = queryTerms(q, { max: 32 });
+  const terms = withoutFiller(queryWords);
+  const termSet = new Set(queryWords);
   // The ceiling has to announce itself. ?top=100 returned 25 rows with
   // `count: 25` and nothing else, so a caller reads "25 matched" where the truth
   // is "25 is our maximum" - the same silence that let a seller read one page of

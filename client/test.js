@@ -874,17 +874,31 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   // dropped connection would, "ok" serves it; "unpaid500" answers the unpaid
   // request itself with 500 (no 402, so nothing is ever signed).
   const seller = () => {
-    const st = { mode: "500", amount: "10000", paidAmount: null, signed: [], validity: 300 };
+    const st = { mode: "500", amount: "10000", paidAmount: null, signed: [], sigs: [], idems: [], resent: [], validity: 300 };
     const answer402 = (amount = st.amount) => new Response("{}", { status: 402, headers: { "content-type": "application/json", "payment-required": offer(amount, st.validity) } });
     const inner = async (req) => {
       const sig = req.headers.get("payment-signature");
       if (!sig) return st.mode === "unpaid500" ? new Response(JSON.stringify({ error: "down" }), { status: 500 }) : answer402(st.paidAmount ?? st.amount);
       st.signed.push(JSON.parse(Buffer.from(sig, "base64").toString("utf8")).payload.authorization);
+      st.sigs.push(sig); st.idems.push(req.headers.get("idempotency-key"));
+      if (st.mode === "drop-once") { st.mode = "ok"; throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) }); }
       if (st.mode === "drop") throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) });
       if (st.mode === "ok") return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
       return new Response(JSON.stringify({ error: "internal error" }), { status: 500, headers: { "content-type": "application/json" } });
     };
-    return { st, inner, preflight: async () => (st.mode === "unpaid500" ? new Response("{}", { status: 500 }) : answer402()) };
+    // The client's own fetch: an unpaid preflight, or (guarded mode) the resend
+    // of a signed request whose connection failed. A resend is recorded with
+    // the exact header it carried and answered as the paid request would be;
+    // "drop-once" drops only the first signed request.
+    const preflight = async (url, init = {}) => {
+      const h = new Headers(init.headers || {});
+      const sig = h.get("payment-signature");
+      if (!sig) return st.mode === "unpaid500" ? new Response("{}", { status: 500 }) : answer402();
+      st.resent.push({ sig, idem: h.get("idempotency-key"), body: init.body });
+      if (st.mode === "drop") throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) });
+      return new Response(JSON.stringify({ ok: true, resent: true }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    return { st, inner, preflight };
   };
   // baseUrl "default" omits the option, so the client's built-in host is used.
   const build = ({ guard = true, baseUrl = "https://seller.example", ...caps } = {}) => {
@@ -916,12 +930,45 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(sum.dailyUsd === 0 && sum.calls === 0 && sum.heldUsd === 0.06 && sum.heldCalls === 6, `${label}: spendingSummary reports $0.06 held in six calls and nothing settled (${JSON.stringify(sum)})`);
   }
 
-  // A dropped connection after the header was sent is held the same way.
+  // A dropped connection after the header was sent is held the same way: with
+  // the signing guard the same signed header is resent (and dropped again here).
   {
     const { c, st } = build({ dailyLimitUsd: 1 });
     st.mode = "drop";
     const e = await callErr(c);
     ok(st.signed.length === 1 && e && e.paid === "unknown" && c.spendingSummary().heldUsd === 0.01, `a connection dropped after the signed header is held and says paid: "unknown" (${e?.message?.slice(0, 80)})`);
+    ok(st.resent.length >= 1 && st.resent.every((x) => x.sig === st.sigs[0]), `guarded: the dropped request was resent only with the header already signed (${st.resent.length} resends, ${st.signed.length} signed)`);
+  }
+
+  // The wallet path's lost-response retry, closed in guarded mode: a paid
+  // request whose connection failed before any answer is resent once with the
+  // SAME signed header, the same Idempotency-Key and body, over the client's
+  // own fetch. One authorization, one charge, and the call is delivered.
+  {
+    const { c, st } = build({ dailyLimitUsd: 1 });
+    st.mode = "drop-once";
+    const out = await c.call("thing", { q: 1 });
+    ok(out?.resent === true && st.signed.length === 1 && st.resent.length === 1 && st.resent[0].sig === st.sigs[0] && st.resent[0].idem === st.idems[0] && st.resent[0].body === JSON.stringify({ q: 1 }),
+      `guarded: a paid request dropped before any answer is resent once with the same signed header, key and body, and delivered (${st.signed.length} signed, ${st.resent.length} resent)`);
+    const sum = c.spendingSummary();
+    ok(sum.dailyUsd === 0.01 && sum.calls === 1 && sum.heldUsd === 0, `guarded: the resent call counts once, settled (${JSON.stringify(sum)})`);
+  }
+  {
+    // Controls: without the guard the client cannot see what was signed, and
+    // with retryResets: false the caller asked for one send; neither resends.
+    const blind = build({ guard: false, dailyLimitUsd: 1 });
+    blind.st.mode = "drop-once";
+    const e = await callErr(blind.c);
+    ok(e?.paid === "unknown" && blind.st.resent.length === 0 && blind.st.signed.length === 1, `no x402Client: nothing is resent (${blind.st.resent.length})`);
+    const off = build({ dailyLimitUsd: 1, retryResets: false });
+    off.st.mode = "drop-once";
+    const e2 = await callErr(off.c);
+    ok(e2?.paid === "unknown" && off.st.resent.length === 0, `retryResets: false: nothing is resent (${off.st.resent.length})`);
+    // A 500 is an answer, never resent.
+    const answered = build({ dailyLimitUsd: 1 });
+    answered.st.mode = "500";
+    await callErr(answered.c);
+    ok(answered.st.resent.length === 0, "an HTTP answer to the paid request is never resent");
   }
 
   // Refusals before any header was sent release at once.

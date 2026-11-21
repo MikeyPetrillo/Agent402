@@ -142,11 +142,15 @@ redis.call('PEXPIRE', KEYS[1], ARGV[2])
 return { 1, sum }`;
 const payerRefusal = (exposure, maxUnsettledUsd) => ({
   ok: false,
+  code: "payer_unsettled_ceiling",
   exposure,
   reason:
     `this wallet already has $${exposure.toFixed(3)} of upstream spend from earlier calls whose payment has not settled` +
     ` (ceiling $${maxUnsettledUsd}). It clears as soon as those settle.`,
 });
+// The refusal fields (rule code, hint, next step) live with the reason
+// vocabulary in src/refusal-reason.js, a module with no stores.
+export { SPEND_RULES, spendRefusalFields } from "./refusal-reason.js";
 /**
  * The payer half of a reservation on the shared store, before the chain
  * check. Null when there is nothing to reserve there (no shared store, no

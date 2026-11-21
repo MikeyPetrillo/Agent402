@@ -56,8 +56,8 @@ import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, unlinkS
 import { createHash } from "node:crypto";
 import { join, basename, dirname } from "node:path";
 import { sendReportReadyEmail } from "./email.js";
-import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady, leased } from "./state-db.js";
-import { READBACK_FIRST_MS, READBACK_INTERVAL_MS, READBACK_MAX_PER_PASS, READBACK_CALL_TIMEOUT_MS, READBACK_LEASE_TTL_MS } from "./card-refund-readback.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady, leased, stateStatementOutsideTx, withLease } from "./state-db.js";
+import { READBACK_FIRST_MS, READBACK_INTERVAL_MS, READBACK_PENDING_INTERVAL_MS, READBACK_MAX_PER_PASS, READBACK_CALL_TIMEOUT_MS, READBACK_LEASE_TTL_MS } from "./card-refund-readback.js";
 import { retryingLoad } from "./store-retry.js";
 import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 
@@ -326,6 +326,46 @@ const pgPutFinal = async (id, body, claimId = null) => (await stateQuery(
   [COLL, id, JSON.stringify(body), claimId == null ? null : String(claimId)],
 )).rowCount === 1;
 const pgIds = async () => (await stateQuery(`SELECT id FROM ${RT()} WHERE collection = $1`, [COLL])).rows.map((r) => r.id);
+// The error records behind the owed card refund list (errorRowsPg), read by
+// a public status surface: a partial index holds only this collection's
+// error rows, so the read never walks the whole table. The collection and
+// status are written into the statement, so the planner can match the
+// index's predicate.
+export const HUMAN_CHECKOUT_ERROR_ROWS_SQL = (t) =>
+  `SELECT id, body->>'at' AS at, body->'refundAttempts' AS attempts, body->>'product' AS product, body->>'refundId' AS refund_id, body->>'refundPending' AS refund_pending
+   FROM ${t} WHERE collection = 'human-checkout' AND (body->>'status') = 'error'`;
+export const HUMAN_CHECKOUT_INDEXES = Object.freeze([
+  { name: "human_checkout_error_rows_idx", expr: "(id)", where: "collection = 'human-checkout' AND (body->>'status') = 'error'" },
+]);
+// Built CONCURRENTLY (writes go on during the build), each statement on a
+// connection of its own outside any transaction, never in the boot's schema
+// setup; one container builds at a time (the lease), and an index a failed
+// build left INVALID is dropped and built again (the credits indexes' rule,
+// src/credits.js ensureCreditsIndexes). The store starts it in the
+// background a minute after its first load.
+export async function ensureHumanCheckoutIndexes({ log = console.log } = {}) {
+  if (!stateDbEnabled()) return { ran: false, reason: "no-db" };
+  const schema = stateDbSchema();
+  return withLease("human-checkout-indexes", { ttlMs: 120_000, log }, async () => {
+    const found = new Map((await stateQuery(
+      `SELECT c.relname AS name, i.indisvalid AS valid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = ANY($2)`,
+      [schema, HUMAN_CHECKOUT_INDEXES.map((x) => x.name)],
+    )).rows.map((r) => [r.name, r.valid === true]));
+    const built = [], rebuilt = [];
+    for (const ix of HUMAN_CHECKOUT_INDEXES) {
+      if (found.get(ix.name) === true) continue;
+      if (found.has(ix.name)) {
+        await stateStatementOutsideTx(`DROP INDEX CONCURRENTLY IF EXISTS ${schema}.${ix.name}`);
+        rebuilt.push(ix.name);
+      }
+      const t0 = Date.now();
+      await stateStatementOutsideTx(`CREATE INDEX CONCURRENTLY IF NOT EXISTS ${ix.name} ON ${schema}.records ${ix.expr} WHERE ${ix.where}`);
+      built.push(ix.name);
+      log(`[human-checkout] index ${ix.name} built concurrently in ${Date.now() - t0} ms${rebuilt.includes(ix.name) ? " (an invalid one was dropped first)" : ""}`);
+    }
+    return { built, rebuilt };
+  });
+}
 const pgClear = async () => { await stateQuery(`DELETE FROM ${RT()} WHERE collection = $1`, [COLL]); };
 // One key of an index row set or dropped in one statement (the row is created
 // when absent); resolves the index body.
@@ -410,7 +450,7 @@ if (USE_PG) {
  * @param {()=>number} [deps.now]
  * @param {(s:string)=>void} [deps.log]
  */
-export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, signDelivery = null, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log, owedResolveTimeoutMs = OWED_RESOLVE_TIMEOUT_MS, owedResolveRetryMs = OWED_RESOLVE_RETRY_MS, owedListWaitMs = OWED_LIST_WAIT_MS, owedRetryWaitMs = OWED_RETRY_WAIT_MS, owedRetryAbandonMs = OWED_RETRY_ABANDON_MS, sessionReadWaitMs = SESSION_READ_WAIT_MS, sessionReadAbandonMs = SESSION_READ_ABANDON_MS, readbackCallTimeoutMs = READBACK_CALL_TIMEOUT_MS }) {
+export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, signDelivery = null, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log, owedResolveTimeoutMs = OWED_RESOLVE_TIMEOUT_MS, owedResolveRetryMs = OWED_RESOLVE_RETRY_MS, owedListWaitMs = OWED_LIST_WAIT_MS, owedRetryWaitMs = OWED_RETRY_WAIT_MS, owedRetryAbandonMs = OWED_RETRY_ABANDON_MS, sessionReadWaitMs = SESSION_READ_WAIT_MS, sessionReadAbandonMs = SESSION_READ_ABANDON_MS, readbackCallTimeoutMs = READBACK_CALL_TIMEOUT_MS, indexDelayMs = 60_000 }) {
   const dir = storeDir || DEFAULT_DIR();
   try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort; writes will fail loudly below */ }
   const INFLIGHT = join(dir, "_inflight.json");   // sessionId -> claimedAt (ms)
@@ -501,6 +541,14 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   }, { log }) : null;
   const readyP = () => (loader ? loader.ready() : Promise.resolve());
   if (loader) { trackStoreReady(loader.eventually); readyP().catch(() => {}); }
+  // The owed list's partial index, in the background once the store has
+  // loaded (ensureHumanCheckoutIndexes).
+  if (loader && indexDelayMs !== null) {
+    Promise.resolve(loader.eventually).then(() => {
+      const t = setTimeout(() => { ensureHumanCheckoutIndexes({ log }).catch((e) => log(`[human-checkout] index build failed (the owed list reads without it): ${String(e?.message || e).slice(0, 160)}`)); }, Math.max(0, Number(indexDelayMs) || 0));
+      t.unref?.();
+    }, () => {});
+  }
 
   const readRec = USE_PG ? async (id) => { await readyP(); return pgGet(id); } : (id) => readJson(recPath(id));
   const writeRec = USE_PG
@@ -571,7 +619,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   async function afterFinal(id, rec) {
     try { await patchIndex(INFLIGHT, id, null); } catch { /* the boot sweep clears a finished claim */ }
     if (rec.status === "error") {
-      try { await patchIndex(ISSUES, id, rec.refundId ? null : { kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts }); }
+      try { await patchIndex(ISSUES, id, rec.refundId ? null : { kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts, pending: rec.refundPending === true }); }
       catch (e) { log(`[human-checkout] issues index for ${id} not updated: ${String(e?.message || e).slice(0, 120)}`); }
     }
   }
@@ -706,8 +754,12 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     return { id: session.id, url: session.url };
   }
 
-  // Refund the session's PaymentIntent. Returns the refund id, or null when it
-  // failed - the CALLER persists the owed state; nothing here is silent.
+  // Refund the session's PaymentIntent. Resolves { id, pending }: the refund
+  // id, or null when no refund has succeeded - the CALLER persists the owed
+  // state; nothing here is silent. `pending` is true when the payment has a
+  // refund Stripe has not finished yet (pending, or waiting on an action):
+  // money is on its way back, nothing for an operator to do yet.
+  const NO_REFUND = Object.freeze({ id: null, pending: false });
   async function refundSession(session) {
     try {
       const pi = session?.payment_intent;
@@ -719,20 +771,20 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         // one instead of failing or doubling.
         try {
           const r = await stripe.refunds.create({ payment_intent: piId }, { idempotencyKey: `agent402-refund-${piId}` });
-          if (r?.status === "succeeded" && typeof r.id === "string") return r.id;
+          if (r?.status === "succeeded" && typeof r.id === "string") return { id: r.id, pending: false };
           // A refund Stripe has not finished (pending, or one that failed) is
           // not recorded as made: the payment stays owed. The key replays this
           // same answer on a retry, so the refund's current state is read
           // back from the payment's refund list instead.
           log(`[human-checkout] refund not yet succeeded (${String(r?.status || "unknown").slice(0, 24)}): kept owed`);
-          return await existingRefundId(piId, null);
+          return await refundState(piId, null);
         } catch (e) {
           log(`[human-checkout] refund failed: ${String(e?.message || e).slice(0, 160)}`);
-          return await existingRefundId(piId, e);
+          return await refundState(piId, e);
         }
       }
     } catch (e) { log(`[human-checkout] refund failed: ${String(e?.message || e).slice(0, 160)}`); }
-    return null;
+    return NO_REFUND;
   }
   // A payment already refunded outside this code (an operator's refund in the
   // Stripe dashboard) makes refunds.create fail for good, and the key above
@@ -741,36 +793,46 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // so; any other refusal is checked on the charge). Only a succeeded refund
   // counts: while any refund of the payment is still pending (or waits on an
   // action) the payment stays owed, since Stripe can still fail it, and the
-  // read-back pass reads it again later. Null when there is none.
-  async function existingRefundId(piId, err) {
+  // read-back pass reads it again later. Resolves { id, pending }: id null
+  // when there is none; pending true while such a refund is open (the record
+  // says so, and the refundsOwed word tells the operator nothing is needed).
+  async function refundState(piId, err) {
     try {
       const listed = await stripe.refunds.list({ payment_intent: piId, limit: 100 });
       const rows = (listed?.data || []).filter((r) => r && typeof r.id === "string");
-      if (rows.some((r) => r.status === "pending" || r.status === "requires_action")) return null;
+      if (rows.some((r) => r.status === "pending" || r.status === "requires_action")) return { id: null, pending: true };
       const live = rows.filter((r) => r.status === "succeeded");
-      if (!live.length) return null;
+      if (!live.length) return NO_REFUND;
       let full = err?.code === "charge_already_refunded";
       if (!full) {
         const pi = await stripe.paymentIntents.retrieve(piId, { expand: ["latest_charge"] });
         full = pi?.latest_charge?.refunded === true;
       }
-      if (!full) return null;
+      if (!full) return NO_REFUND;
       const r = live.reduce((a, b) => ((b.created || 0) > (a.created || 0) ? b : a));
       log(`[human-checkout] refund already made for ${piId.slice(0, 12)}: recorded ${r.id}`);
-      return r.id;
-    } catch (e) { log(`[human-checkout] existing refund lookup failed: ${String(e?.message || e).slice(0, 160)}`); return null; }
+      return { id: r.id, pending: false };
+    } catch (e) { log(`[human-checkout] existing refund lookup failed: ${String(e?.message || e).slice(0, 160)}`); return NO_REFUND; }
   }
   // Persist an error outcome; an unrefunded one is OWED (indexed, retried).
   // `intent`: the record written BEFORE a refund is issued (database mode):
   // owed, no attempt counted, due at once.
-  async function recordError(id, session, refundId, message, { intent = false } = {}) {
+  // `pending`: Stripe holds a refund of the payment it has not finished; the
+  // owed record says so (refundPending), so the refundsOwed word can tell
+  // the operator nothing is needed yet.
+  // `readback`: the background read-back's own note of what Stripe holds now
+  // (no attempt counted, the retry spacing kept, no funnel event).
+  async function recordError(id, session, refundId, message, { intent = false, pending = false, readback = false } = {}) {
     let prev = {};
     try { prev = pendingFinals.get(id) || (await readRec(id)) || {}; } catch (e) { if (!USE_PG) throw e; }
-    if (!intent) import("./posthog.js").then(({ capturePostHogHumanFunnel }) => capturePostHogHumanFunnel({ step: "failed", product: prev.slug || null, reason: refundId ? "refunded" : "refund-owed" })).catch(() => {});
+    if (!intent && !readback) import("./posthog.js").then(({ capturePostHogHumanFunnel }) => capturePostHogHumanFunnel({ step: "failed", product: prev.slug || null, reason: refundId ? "refunded" : "refund-owed" })).catch(() => {});
     const rec = {
       status: "error", refundId,
       error: refundId ? `${message} Your payment has been refunded.` : `${message} Your refund is being processed.`,
-      refundOwed: !refundId, refundAttempts: (prev.refundAttempts || 0) + (intent ? 0 : 1), lastRefundAttemptAt: intent ? 0 : now(),
+      refundOwed: !refundId,
+      ...(!refundId && pending ? { refundPending: true } : {}),
+      refundAttempts: (prev.refundAttempts || 0) + (intent || readback ? 0 : 1),
+      lastRefundAttemptAt: intent ? 0 : readback ? (Number(prev.lastRefundAttemptAt) || 0) : now(),
       paymentIntent: typeof session?.payment_intent === "string" ? session.payment_intent : session?.payment_intent?.id || null,
       // The report product the session bought (kept across retries, whose
       // session stand-in carries none): what lets a later reader of this
@@ -790,7 +852,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     }
     await writeRec(id, rec);
     await patchIndex(INFLIGHT, id, null);
-    await patchIndex(ISSUES, id, refundId ? null : { kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts, product: rec.product });
+    await patchIndex(ISSUES, id, refundId ? null : { kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts, product: rec.product, pending: rec.refundPending === true });
     return rec;
   }
   // Whether a stored owed refund belongs to a report purchase, by the rule
@@ -847,14 +909,14 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // issued that no record names; while that record has not landed the
   // refund waits (an owed record's refund is retried on the next poll).
   async function refundAndRecord(id, session, message) {
-    if (!USE_PG) { const refundId = await refundSession(session); return recordError(id, session, refundId, message); }
+    if (!USE_PG) { const r = await refundSession(session); return recordError(id, session, r.id, message, { pending: r.pending }); }
     const owed = await recordError(id, session, null, message, { intent: true });
     if (pendingFinals.has(id)) return owed;
     // The pre-refund record did not land on the row (it already holds a
     // delivered report or a recorded refund): no refund is issued.
     if (heldAnswers.has(owed)) return owed;
-    const refundId = await refundSession(session);
-    return recordError(id, session, refundId, message);
+    const r = await refundSession(session);
+    return recordError(id, session, r.id, message, { pending: r.pending });
   }
   // An owed refund is retried on later polls (bounded, paced). The poll
   // waits owedRetryWaitMs for the retry and is then answered with the owed
@@ -879,7 +941,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     // is left as it is (and one whose session cannot be read waits).
     const isReport = await owedIsReport(id, rec);
     if (isReport !== true) { if (isReport === false) noteSkippedOwed(id); return rec; }
-    const refundId = await refundSession({ payment_intent: rec.paymentIntent });
+    const { id: refundId, pending } = await refundSession({ payment_intent: rec.paymentIntent });
     if (refundId) {
       if (owedRefunded.size >= OWED_RETRY_MAX_OPEN) owedRefunded.clear();
       owedRefunded.add(id);
@@ -890,7 +952,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       return rec;
     }
     const product = typeof rec.product === "string" ? rec.product : owedReport.get(id);
-    return recordError(id, { payment_intent: rec.paymentIntent, metadata: { product } }, refundId, rec.error.replace(/ Your refund is being processed\.$/, ""));
+    return recordError(id, { payment_intent: rec.paymentIntent, metadata: { product } }, refundId, rec.error.replace(/ Your refund is being processed\.$/, ""), { pending });
   }
   async function retryOwedRefund(id, rec) {
     if (!rec.refundOwed || rec.refundId) return rec;
@@ -914,15 +976,20 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // and only while the buyer polls, so a refund an operator makes by hand in
   // the Stripe dashboard afterwards would leave the record owed for good.
   // This pass (its own timer, under a lease, never on a status read) reads
-  // each owed record's payment back (existingRefundId: refunds.list and the
+  // each owed record's payment back (refundState: refunds.list and the
   // charge, never refunds.create) and records the refund when the charge is
   // fully refunded by refunds that succeeded. At most READBACK_MAX_PER_PASS records per pass, taken in
   // turn from a rotating start, each read waited for readbackCallTimeoutMs.
+  // A record whose refund Stripe has not finished is marked pending (and
+  // unmarked when that refund failed), so the refundsOwed word tells the
+  // operator whether anything is needed. `pendingOnly` reads only the records
+  // marked pending: the short pass that records a refund soon after Stripe
+  // finishes it, so the page it raised closes within minutes.
   let readbackStart = 0;
-  async function readBackOwedRefunds({ max = READBACK_MAX_PER_PASS } = {}) {
-    const owed = ((await listIssues()).refundOwed || []).filter((x) => SESSION_RE.test(String(x?.id))).sort((a, b) => (a.id < b.id ? -1 : 1));
-    let checked = 0, recorded = 0;
-    const from = owed.length ? readbackStart % owed.length : 0;
+  async function readBackOwedRefunds({ max = READBACK_MAX_PER_PASS, pendingOnly = false } = {}) {
+    const owed = ((await listIssues()).refundOwed || []).filter((x) => SESSION_RE.test(String(x?.id)) && (!pendingOnly || x.pending === true)).sort((a, b) => (a.id < b.id ? -1 : 1));
+    let checked = 0, recorded = 0, marked = 0;
+    const from = owed.length && !pendingOnly ? readbackStart % owed.length : 0;
     let i = 0;
     for (; i < owed.length && checked < max; i++) {
       const id = owed[(from + i) % owed.length].id;
@@ -933,27 +1000,45 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       checked++;
       let timer = null;
       const waited = new Promise((resolve) => { timer = setTimeout(() => resolve(null), readbackCallTimeoutMs); timer.unref?.(); });
-      let refundId = null;
-      try { refundId = await Promise.race([existingRefundId(rec.paymentIntent, null), waited]); } finally { clearTimeout(timer); }
-      // A poll's retry that started meanwhile records its own outcome.
-      if (!refundId || owedRetrying.has(id)) continue;
+      let state = null;
+      try { state = await Promise.race([refundState(rec.paymentIntent, null), waited]); } finally { clearTimeout(timer); }
+      // A poll's retry that started meanwhile records its own outcome; a
+      // read that did not answer changes nothing.
+      if (!state || owedRetrying.has(id)) continue;
       const product = typeof rec.product === "string" ? rec.product : owedReport.get(id);
-      await recordError(id, { payment_intent: rec.paymentIntent, metadata: { product } }, refundId, String(rec.error || "We couldn't complete this report.").replace(/ Your refund is being processed\.$/, ""));
+      const message = String(rec.error || "We couldn't complete this report.").replace(/ Your refund is being processed\.$/, "");
+      if (!state.id) {
+        if (state.pending === (rec.refundPending === true)) continue;
+        await recordError(id, { payment_intent: rec.paymentIntent, metadata: { product } }, null, message, { pending: state.pending, readback: true });
+        marked++;
+        continue;
+      }
+      await recordError(id, { payment_intent: rec.paymentIntent, metadata: { product } }, state.id, message);
       if (owedRefunded.size >= OWED_RETRY_MAX_OPEN) owedRefunded.clear();
       owedRefunded.add(id);
       recorded++;
     }
-    readbackStart = owed.length ? (from + i) % owed.length : 0;
-    if (recorded) log(`[human-checkout] owed refund read-back: ${recorded} of ${checked} checked recorded as refunded`);
-    return { checked, recorded };
+    if (!pendingOnly) readbackStart = owed.length ? (from + i) % owed.length : 0;
+    if (recorded || marked) log(`[human-checkout] owed refund read-back: ${recorded} of ${checked} checked recorded as refunded, ${marked} re-marked pending or not`);
+    return { checked, recorded, marked };
   }
-  const readBackLeased = leased("human-checkout-refund-readback", { ttlMs: READBACK_LEASE_TTL_MS, log }, () => readBackOwedRefunds());
+  const readBackLeased = leased("human-checkout-refund-readback", { ttlMs: READBACK_LEASE_TTL_MS, log }, (opts) => readBackOwedRefunds(opts));
   let readbackTimer = null, readbackFirst = null;
-  /** Start the owed-refund read-back's timers (unref'd; the first run is held back off the boot path). */
-  function start({ intervalMs = READBACK_INTERVAL_MS, firstMs = READBACK_FIRST_MS } = {}) {
+  /**
+   * Start the owed-refund read-back's timers (unref'd; the first run is held
+   * back off the boot path). The full pass runs every intervalMs; between
+   * full passes, every pendingIntervalMs, a pass reads only the records whose
+   * refund Stripe had not finished.
+   */
+  function start({ intervalMs = READBACK_INTERVAL_MS, firstMs = READBACK_FIRST_MS, pendingIntervalMs = READBACK_PENDING_INTERVAL_MS } = {}) {
     if (readbackTimer) return;
-    const run = () => { readBackLeased().catch((e) => log(`[human-checkout] owed refund read-back failed: ${String(e?.message || e).slice(0, 160)}`)); };
-    readbackTimer = setInterval(run, intervalMs); readbackTimer.unref?.();
+    let lastFullAt = 0;
+    const run = () => {
+      const full = Date.now() - lastFullAt >= intervalMs;
+      if (full) lastFullAt = Date.now();
+      readBackLeased({ pendingOnly: !full }).catch((e) => log(`[human-checkout] owed refund read-back failed: ${String(e?.message || e).slice(0, 160)}`));
+    };
+    readbackTimer = setInterval(run, Math.max(1, Math.min(intervalMs, pendingIntervalMs))); readbackTimer.unref?.();
     readbackFirst = setTimeout(run, firstMs); readbackFirst.unref?.();
   }
   function stop() {
@@ -1021,7 +1106,10 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         try {
           if (failures.length >= FAIL_MAX) {
             log(`[human-checkout] ${sessionId} (${p.slug}): buyer address has ${FAIL_MAX}+ failed reports in the window - refunded without a generation attempt`);
-            return await refundAndRecord(sessionId, session, "Recent reports for this email address could not be completed, so this purchase was refunded without a new attempt. Please try again tomorrow, or email us with the input you used.");
+            // The refund's own outcome ends the text (recordError): "Your
+            // payment has been refunded." once Stripe took it, "Your refund
+            // is being processed." while it is owed, never both.
+            return await refundAndRecord(sessionId, session, "Recent reports for this email address could not be completed, so no new attempt was made for this purchase. Please try again tomorrow, or email us with the input you used.");
           }
           // generate() may return a plain report string (legacy / tests) or a
           // bundle { report, title, sources, tables }. Normalize either way.
@@ -1074,10 +1162,10 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
             return rec;
           }
           await noteFailure(failKey);
-          const refundId = await refundSession(session);
+          const { id: refundId, pending } = await refundSession(session);
           const failEmail = session.customer_details?.email || session.customer_email;
           if (failEmail) { try { onFailed?.({ email: failEmail, product: p.slug, label: p.label, refunded: Boolean(refundId) }); } catch { /* never breaks the refund path */ } }
-          return await recordError(sessionId, session, refundId, "We couldn't complete this report.");
+          return await recordError(sessionId, session, refundId, "We couldn't complete this report.", { pending });
         }
       } finally { inFlight.delete(sessionId); releaseOwned(sessionId); }
     })();
@@ -1275,7 +1363,8 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // entry with no error record is kept (a debt is never left out for want of
   // an answer). The error records only: a few rows, read in one statement on
   // the database; on the files, the directory is re-read only when it changed.
-  const owedEntryOf = (rec) => ({ kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts, ...(typeof rec.product === "string" ? { product: rec.product } : {}) });
+  // `pending`: Stripe holds a refund of the payment it has not finished.
+  const owedEntryOf = (rec) => ({ kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts, ...(typeof rec.product === "string" ? { product: rec.product } : {}), pending: rec.refundPending === true });
   function mergeOwed(index, errors) {
     const out = {};
     for (const [id, rec] of errors) if (!rec.refundId) out[id] = { ...(index[id] || {}), ...owedEntryOf(rec) };
@@ -1295,9 +1384,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     const entry = { at: now(), gen: localWriteGen, p: null };
     entry.p = (async () => {
       await readyP();
-      const r = await stateQuery(
-        `SELECT id, body->>'at' AS at, body->'refundAttempts' AS attempts, body->>'product' AS product, body->>'refundId' AS refund_id
-         FROM ${RT()} WHERE collection = $1 AND body->>'status' = 'error'`, [COLL]);
+      const r = await stateQuery(HUMAN_CHECKOUT_ERROR_ROWS_SQL(RT()));
       return r.rows;
     })();
     entry.p.catch(() => { if (errorRowsCache === entry) errorRowsCache = null; });
@@ -1307,7 +1394,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   async function errorRecordsPg() {
     const rows = await errorRowsPg();
     const out = new Map();
-    for (const row of rows) if (SESSION_RE.test(row.id)) out.set(row.id, { at: row.at, refundAttempts: row.attempts, product: row.product, refundId: row.refund_id });
+    for (const row of rows) if (SESSION_RE.test(row.id)) out.set(row.id, { at: row.at, refundAttempts: row.attempts, product: row.product, refundId: row.refund_id, refundPending: row.refund_pending === "true" });
     // A final record still waiting here for its replay is this container's latest word on it.
     for (const [id, rec] of pendingFinals) if (rec?.status === "error") out.set(id, rec);
     return out;
@@ -1325,7 +1412,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         const was = scanned.files.get(f);
         if (was && was.mtimeMs === st.mtimeMs && was.size === st.size) continue;
         const body = readJson(join(dir, f));
-        scanned.files.set(f, { mtimeMs: st.mtimeMs, size: st.size, rec: body?.status === "error" ? { at: body.at, refundAttempts: body.refundAttempts, product: body.product, refundId: body.refundId || null } : null });
+        scanned.files.set(f, { mtimeMs: st.mtimeMs, size: st.size, rec: body?.status === "error" ? { at: body.at, refundAttempts: body.refundAttempts, product: body.product, refundId: body.refundId || null, refundPending: body.refundPending === true } : null });
       }
       for (const f of scanned.files.keys()) if (!seen.has(f)) scanned.files.delete(f);
       scanned.dirMtimeMs = dirMtimeMs;
@@ -1397,34 +1484,49 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // Buyer toggle: make a delivered report public (mint the public id once) or
   // private again (the id stays reserved and dead: a revoked link never
   // resolves, and a re-publish reuses it so old links work again).
+  // The public id is minted only where none is stored: on the database by
+  // one statement that sets the flag and adds an id only to a row with none
+  // (the row lock orders toggles), so toggles at once mint one id between
+  // them and all answer it; on the files by comparing with the record on disk at the
+  // moment of the write. The flag and date are merged into the stored row,
+  // never a whole record read earlier.
+  const mintPublicId = () => `rp_${randomBytes(12).toString("base64url")}`;
   function setPublic(sessionId, flag) {
     if (typeof sessionId !== "string" || !SESSION_RE.test(sessionId)) return USE_PG ? Promise.resolve({ status: "invalid" }) : { status: "invalid" };
     const want = flag === true;
-    const toggle = (rec) => {
-      if (want && !rec.publicId) rec.publicId = `rp_${randomBytes(12).toString("base64url")}`;
-      rec.public = want;
-      if (want) rec.publishedAt = new Date(now()).toISOString();
-      return { status: "done", public: want, publicId: want ? rec.publicId : null };
-    };
     if (USE_PG) {
       return (async () => {
-        const rec = await readRec(sessionId);
-        if (!rec || rec.status !== "done") return { status: rec?.status || "not_found" };
-        const out = toggle(rec);
-        await writeRec(sessionId, rec);
+        await readyP();
+        const patch = want ? { public: true, publishedAt: new Date(now()).toISOString() } : { public: false };
+        // One statement: the row lock orders toggles, and each sees the
+        // row as the one before it left it, so an id is minted only on a
+        // row that has none.
+        const r = await stateQuery(
+          `UPDATE ${RT()} SET body = body || $3::jsonb
+             || CASE WHEN $4::text IS NOT NULL AND body ->> 'publicId' IS NULL THEN jsonb_build_object('publicId', $4::text) ELSE '{}'::jsonb END,
+             updated_at = now()
+           WHERE collection = $1 AND id = $2 AND body ->> 'status' = 'done' RETURNING body`,
+          [COLL, sessionId, JSON.stringify(patch), want ? mintPublicId() : null]);
+        const rec = r.rows[0]?.body;
+        if (!rec) { const cur = await readRec(sessionId); return { status: cur?.status || "not_found" }; }
+        through(recPath(sessionId), rec);
         if (rec.publicId) {
           pub.idx = await patchIndex(PUBLIC_INDEX(dir), rec.publicId, want ? sessionId : null);
           if (want) pub.recs.set(sessionId, rec); else pub.recs.delete(sessionId);
         }
-        return out;
+        return { status: "done", public: want, publicId: want ? rec.publicId || null : null };
       })();
     }
     const rec = mem.get(sessionId) || readRec(sessionId);
     if (!rec || rec.status !== "done") return { status: rec?.status || "not_found" };
-    const out = toggle(rec);
+    const stored = readRec(sessionId);
+    if (stored?.publicId) rec.publicId = stored.publicId;
+    else if (want && !rec.publicId) rec.publicId = mintPublicId();
+    rec.public = want;
+    if (want) rec.publishedAt = new Date(now()).toISOString();
     writeRec(sessionId, rec);
     if (rec.publicId) patchIndex(PUBLIC_INDEX(dir), rec.publicId, want ? sessionId : null);
-    return out;
+    return { status: "done", public: want, publicId: want ? rec.publicId : null };
   }
 
   // Test/ops: number of records (excluding indexes).

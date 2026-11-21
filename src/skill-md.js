@@ -16,6 +16,7 @@ import { UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-door.js";
 import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
 import { isComputePayable, POW_DIFFICULTY, powCostPhrase } from "./pow.js";
 import { RAILS } from "./rails.js";
+import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
 // (isComputePayable + POW_DIFFICULTY both live in pow.js - same import seo.js uses)
 
@@ -32,6 +33,9 @@ export function skillMd(baseUrl, catalog) {
   const evmUsdc = RAILS.filter((r) => r.chainId && r.asset === "USDC").map((r) => r.name);
   const evmOther = RAILS.filter((r) => r.chainId && r.asset !== "USDC").map((r) => `${r.asset} on ${r.name}`);
   const nonEvm = RAILS.filter((r) => !r.chainId).map((r) => r.name);
+  // Which clients get the x402 offer alone (src/mpp-offer-gate.js); "" when
+  // the gate is off or no MPP challenge is sent.
+  const offerGate = mppOfferGateSentenceIfOffered();
   const orList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(", ")} or ${xs.at(-1)}` : xs.join(""));
   const x402Need = `An EVM private key whose address holds USDC on ${orList(evmUsdc)}${evmOther.length ? `, or ${evmOther.join(", ")}` : ""}${nonEvm.length ? `; or a ${orList(nonEvm)} key with USDC` : ""}`;
   // Prices quoted below are read from the catalog, never typed.
@@ -196,7 +200,7 @@ curl -s -X POST ${baseUrl}/api/hash -H 'content-type: application/json' -d '{"te
 \`\`\`
 
 You get HTTP 402 (nothing is charged) with a \`PAYMENT-REQUIRED\` header (x402 accepts) and a
-\`WWW-Authenticate: Payment\` header (MPP challenges). Your client pays and
+\`WWW-Authenticate: Payment\` header (MPP challenges).${offerGate ? ` ${offerGate}` : ""} Your client pays and
 retries; the retried call returns the JSON result with a \`PAYMENT-RESPONSE\`
 (x402) or \`Payment-Receipt\` (MPP) header. With the SDK or MCP server this is
 invisible - you just see the result. The free path for the same tool is the
@@ -282,7 +286,7 @@ of the response you hold, without trusting this document.
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | 402 after paying with PoW | You sent the \`challenge\` instead of the \`token\`, or reused a solution | Submit \`<token>:<nonce>\`; each challenge is single-use and slug-scoped |
-| "no supported rail" from an MPP client | Client parsed \`WWW-Authenticate\` only and bailed | Both headers are always present; check \`PAYMENT-REQUIRED\` too, or use an x402 client |
+| "no supported rail" from an MPP client | Client parsed \`WWW-Authenticate\` only and bailed | ${offerGate ? `\`PAYMENT-REQUIRED\` is always present: check it too, or use an x402 client. ${offerGate}` : "Both headers are always present; check `PAYMENT-REQUIRED` too, or use an x402 client"} |
 | 402 with \`success: false\` receipt | Facilitator rejected settlement (empty wallet, wrong chain, expired auth) | Fund the wallet / pick a chain from \`accepts\`; you were not charged on x402. ${UNCONFIRMED_RECEIPT_EXCEPTION} |
 | Tool not found by \`/api/find\` | Wording too broad | Rephrase with the concrete input/output; browse ${baseUrl}/api/pricing; or request it via \`/api/wish\` |
 | 413 on \`/api/memory*\` | Namespace quota (10k keys / 32MB) | Delete keys or use another wallet namespace |

@@ -23,6 +23,7 @@ import { isComputePayable } from "./pow.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { firstCallAllowanceConfig, allowanceRouteRefusal } from "./first-call-allowance.js";
 import { connectorWires, connectorPayText } from "./connector-pay.js";
+import { mppOfferGateSentence } from "./mpp-offer-gate.js";
 
 /** The first call. Live web search: the widest first job, a flat price with no
  *  model in its serving path, and the start of most research chains. */
@@ -101,7 +102,7 @@ export function paidWiresPhrase() {
 function switchKey() {
   const cfg = firstCallAllowanceConfig();
   const allowance = cfg.enabled ? `on:${cfg.maxMicro}:${[...cfg.slugs].join(",")}` : "off";
-  return `${allowance}|${paidWiresPhrase()}|${mppOfferShortProse()}|${connectorWires().phrase}`;
+  return `${allowance}|${paidWiresPhrase()}|${mppOfferShortProse()}|${connectorWires().phrase}|${mppOfferGateSentence()}`;
 }
 
 /** The free-tier count: catalog tools that take proof-of-work (src/free-tier.js
@@ -245,14 +246,14 @@ ${recoveryMarkdown(catalog, baseUrl)}
 
 ## Connect
 
-- **Plain HTTP:** call any route. An unpaid call answers HTTP 402 with the price and ${offers}; pay from your wallet and send the call again with the payment.
+- **Plain HTTP:** call any route. An unpaid call answers HTTP 402 with the price and ${offers}${mpp && mppOfferGateSentence() ? " (some clients get the x402 offer alone; see Pay)" : ""}; pay from your wallet and send the call again with the payment.
 - **MCP, hosted (streamable HTTP, nothing to install):** \`${baseUrl}/mcp\`. The proof-of-work tools run free there with no wallet. ${connectorPayText({ code: (s) => `\`${s}\`` })}
 - **MCP over stdio, with a wallet for paid tools:** \`npx -y agent402-mcp@${AGENT402_MCP_VERSION}\` with \`AGENT_KEY\` set to a new wallet holding a few dollars of USDC, never your main wallet.
 - **Buyer SDK:** \`npm install agent402-client\` resolves a task to a tool and calls it: proof-of-work is solved for you on the free tools, and paid tools use the payment-aware fetch you pass in.
 
 ## Pay
 
-- **x402:** ${RAILS_OR}. Gas is sponsored on the EVM chains, so a wallet needs only the stablecoin.${mpp ? `\n- **MPP:** ${mpp}, on the same 402.` : ""}
+- **x402:** ${RAILS_OR}. Gas is sponsored on the EVM chains, so a wallet needs only the stablecoin.${mpp ? `\n- **MPP:** ${mpp}, on the same 402.${mppOfferGateSentence() ? ` ${mppOfferGateSentence()}` : ""}` : ""}
 - **Proof-of-work:** ${powCount} pure-CPU tools take a sha256 puzzle instead of payment. Get one at \`GET ${baseUrl}/api/pow/challenge?slug=hash\` and send the solution as \`X-Pow-Solution\`.
 - **Prices:** most tools ${TYPICAL_PRICE_RANGE.text} per call; every price is in \`${baseUrl}/api/pricing\` and quoted in the 402 before you pay.
 

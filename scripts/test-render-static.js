@@ -130,6 +130,15 @@ function harness({ html = page("<article>text</article>"), words = 400, fetchErr
   ok(staticReadVerdict({ html: page(pad + '<div id="root"></div>'), article: art(5000) }).why === "spa-mount", "a mount after ordinary text inside the scanned prefix is still read");
   ok(staticReadVerdict({ html: page(`<div ${"data-x=1 ".repeat(100)}id="app"></div>`), article: art(5000) }).why === "spa-mount", "a mount with long attributes before its id is still read");
   ok(STATIC_SCAN_MAX_CHARS >= 256 * 1024, "the scanned prefix is at least 256 KB");
+  // Past the prefix nothing is read: a page over the bound whose only marker
+  // sits after it is decided on the prefix alone, and the same marker moved
+  // inside the prefix still decides.
+  const filler = "<p>" + "w ".repeat(1000) + "</p>";
+  const body = filler.repeat(Math.ceil((STATIC_SCAN_MAX_CHARS + 4096) / filler.length));
+  const late = page(body + '<div id="root"></div>');
+  ok(late.length > STATIC_SCAN_MAX_CHARS && late.indexOf('<div id="root">') > STATIC_SCAN_MAX_CHARS, `setup: a ${late.length}-character page with its mount past the ${STATIC_SCAN_MAX_CHARS}-character prefix`);
+  ok(staticReadVerdict({ html: late, article: art(5000) }).useStatic === true, "a mount past the scanned prefix is not read: the page is decided on the prefix");
+  ok(staticReadVerdict({ html: page('<div id="root"></div>' + body), article: art(5000) }).why === "spa-mount", "control: the same page with its mount inside the prefix reads spa-mount");
 }
 
 // ---- the read through the real fetch guard ------------------------------------

@@ -22,6 +22,7 @@ import { stripe as stripeMethods } from "mppx/server";
 import {
   stripeEnabled, mintStripeChallenge, checkStripeCredentialBinding,
   createStripeGate, createStripeChallengeAppender, validateStripeCredential, checkGrantedToken,
+  settleStripeCredential, unconfirmedCaptureDebt, STRIPE_UNCONFIRMED_TEXT,
 } from "../src/mpp-stripe.js";
 import { createReplayGuard } from "../src/replay-guard.js";
 import { fullAnswerMiddleware } from "../src/full-answer.js";
@@ -43,6 +44,20 @@ const testMethod = stripeMethods.charge({ client: new Stripe("sk_test_fakekey"),
 ok(stripeEnabled(), "stripeEnabled true with both env vars");
 ok(typeof mintStripeChallenge({ priceUsd: 0.50, realm: REALM }) === "string", "mint: $0.50 route yields a challenge");
 ok(mintStripeChallenge({ priceUsd: 0.25, realm: REALM }) === null, "mint: below the $0.50 card minimum mints nothing");
+// The amount on the wire: the request takes decimal dollars ("0.50") and
+// mppx's transform stores cents, so a $0.50 route's challenge carries "50".
+// Passing cents to the request (or dropping the decimal string) would carry
+// "5000": a 100x charge.
+{
+  const wire = (p) => Challenge.deserialize(mintStripeChallenge({ priceUsd: p, realm: REALM })).request;
+  const half = wire(0.50), five = wire(5.00), odd = wire(1.23);
+  ok(half.amount === "50" && five.amount === "500" && odd.amount === "123", `mint: the challenge carries the price in cents ($0.50 -> ${half.amount}, $5.00 -> ${five.amount}, $1.23 -> ${odd.amount})`);
+  ok(half.currency === "usd" && half.methodDetails?.networkId === PROFILE && JSON.stringify(half.methodDetails?.paymentMethodTypes) === '["card"]', "mint: currency usd, our profile and card in methodDetails");
+  // Our own minted challenge, paid back, binds on its route at 50 cents.
+  const minted = Credential.serialize({ challenge: Challenge.deserialize(mintStripeChallenge({ priceUsd: 0.50, realm: REALM })), payload: { type: "spt", spt: "spt_test_mint" } });
+  const mb = checkStripeCredentialBinding(minted, { secretKey: SECRET, realm: REALM, priceFor, method: "POST", path: "/paid" });
+  ok(mb.ok === true && mb.amountCents === 50, `mint: a credential over our own minted $0.50 challenge binds on the $0.50 route at 50 cents (${mb.reason || mb.amountCents})`);
+}
 
 function credFor({ priceUsd = 0.50, realm = REALM, secretKey = SECRET, networkId = PROFILE, spt = "spt_test_123" } = {}) {
   const challenge = Challenge.fromMethod(testMethod, {
@@ -315,9 +330,15 @@ for (const seam of [true, false]) {
     ok(f2.status === 200 && runs.get("spt_retry") === 2 && captures.get("spt_retry") === 1, `gate H: after a failed run the same token (and credential) runs once more and is captured once (${f2.status}, runs ${runs.get("spt_retry")}, captures ${captures.get("spt_retry")})`);
 
     declineNext = 1;
-    const d1 = await post(tokenCred("spt_decline"));
+    const declinedCred = tokenCred("spt_decline");
+    const d1 = await post(declinedCred);
     const d2 = await post(tokenCred("spt_decline"));
     ok(d1.status === 402 && d2.status === 200 && runs.get("spt_decline") === 2 && captures.get("spt_decline") === 1, `gate H: a capture that fails releases the token; the next credential with it runs and is captured (${d1.status}, ${d2.status})`);
+    // The credential whose capture failed stays spent: sent again it is
+    // refused before the handler, so the handler never reruns unpaid.
+    const d3 = await post(declinedCred);
+    ok(d3.status === 402 && /already used or is in flight/.test(d3.body?.detail || "") && runs.get("spt_decline") === 2 && captures.get("spt_decline") === 1, `gate H: the credential whose capture failed, sent again, is refused before the handler, nothing captured (${d3.status}, runs ${runs.get("spt_decline")}, captures ${captures.get("spt_decline")})`);
+    ok(/Nothing was charged/.test(d1.body?.detail || ""), `gate H: the failed capture tells the buyer nothing was charged (${String(d1.body?.detail || "").slice(0, 120)})`);
 
     const two = await Promise.all([post(tokenCred("spt_a")), post(tokenCred("spt_b"))]);
     ok(two.every((r) => r.status === 200) && runs.get("spt_a") === 1 && runs.get("spt_b") === 1 && captures.get("spt_a") === 1 && captures.get("spt_b") === 1, `gate H: two tokens at once run independently (${two.map((r) => r.status)})`);
@@ -382,6 +403,163 @@ for (const seam of [true, false]) {
   } finally {
     console.warn = w0; s.close(); _resetHangupForgiveness();
     if (savedKeyBudget === undefined) delete process.env.HANGUP_FORGIVE_KEY_USD; else process.env.HANGUP_FORGIVE_KEY_USD = savedKeyBudget;
+  }
+}
+
+// ---- J) the REAL capture against a stub Stripe: what each failure class does ----
+// The gate tests above inject `settle`; here settleStripeCredential itself runs
+// (mppx's stripe method over a stub client), so the classes are read from what
+// Stripe did, not from a stubbed verdict:
+//   - a decline (Stripe answered 402): definitive, "Nothing was charged";
+//   - no answer after Stripe made the charge: the second send under the same
+//     idempotency key reads it back, and the buyer is served and the sale stands;
+//   - no answer and nothing made: the second send makes the charge once;
+//   - no answer twice, or a 500 (Stripe repeats a stored 500 for the key): the
+//     outcome is not known, the buyer is told so and the charge is booked.
+{
+  const tmp = await import("node:fs").then((fs) => fs.mkdtempSync(`${process.env.TMPDIR || "/tmp"}/a402-stripe-unconfirmed-`.replace("//", "/")));
+  process.env.REFUND_DB_DIR = tmp;
+  const { recordRefundOwed, refundAlarmStatus, listRefunds } = await import("../src/refund-ledger.js");
+  const stripeErr = (message, type, statusCode) => Object.assign(new Error(message), { type, ...(statusCode ? { statusCode } : {}) });
+  const noAnswer = () => stripeErr("Request aborted due to timeout being reached (80000ms)", "StripeConnectionError");
+  // A Stripe that keeps its idempotency record: `plan(spt)` says, per send
+  // number for a key, whether the request reaches Stripe and whether the
+  // answer comes back.
+  function stubStripe(plan) {
+    const intents = new Map(); // idempotency key -> the PaymentIntent Stripe made
+    const sends = [];
+    let seq = 0;
+    return {
+      sends, intents,
+      paymentIntents: { create: async (params, options) => {
+        const key = options?.idempotencyKey;
+        const n = sends.filter((x) => x.key === key).length + 1;
+        sends.push({ key, params: JSON.stringify(params), options });
+        const step = plan(params.shared_payment_granted_token, n) || {};
+        if (step.error && !step.arrives) throw step.error;
+        const had = intents.get(key);
+        const pi = had || { id: `pi_stub_${++seq}`, status: step.status || "succeeded" };
+        if (!had) intents.set(key, pi);
+        if (step.error) throw step.error; // it arrived, the answer was lost
+        return { ...pi, lastResponse: { headers: had ? { "idempotent-replayed": "true" } : {} } };
+      } },
+    };
+  }
+  const plans = {
+    spt_decline: () => ({ error: stripeErr("Your card was declined.", "StripeCardError", 402) }),
+    spt_lost_answer: (n) => (n === 1 ? { arrives: true, error: noAnswer() } : {}),
+    spt_never_arrived: (n) => (n === 1 ? { error: noAnswer() } : {}),
+    spt_silent: () => ({ error: noAnswer() }),
+    spt_500: () => ({ error: stripeErr("An unknown error occurred", "StripeAPIError", 500) }),
+    spt_processing: () => ({ status: "processing" }),
+    // The first send never arrives; the SECOND send's PaymentIntent is not succeeded.
+    spt_second_processing: (n) => (n === 1 ? { error: noAnswer() } : { status: "processing" }),
+    spt_second_requires_capture: (n) => (n === 1 ? { error: noAnswer() } : { status: "requires_capture" }),
+    spt_second_requires_action: (n) => (n === 1 ? { error: noAnswer() } : { status: "requires_action" }),
+    spt_ok: () => ({}),
+  };
+  const stripe = stubStripe((spt, n) => plans[spt]?.(n));
+  let seq = 0;
+  const tokenCred = (spt) => Credential.serialize({ challenge: Challenge.fromMethod(testMethod, { realm: REALM, expires: new Date(Date.now() + 60_000 + (seq++)), request: { amount: "0.50", currency: "usd", decimals: 2, networkId: PROFILE, paymentMethodTypes: ["card"] }, secretKey: SECRET }), payload: { type: "spt", spt } });
+  const runs = new Map(), booked = [], finals = [];
+  const app = express();
+  app.use((req, res, next) => { res.on("finish", () => finals.push({ spt: (() => { try { return Credential.deserialize(req.headers.authorization).payload.spt; } catch { return null; } })(), status: res.statusCode, settled: req.stripeSettled === true })); next(); });
+  app.use(createStripeGate({ ...GATE, replayGuard: createReplayGuard(),
+    validate: async (auth) => ({ ok: true, validation: { spt: Credential.deserialize(auth).payload.spt } }),
+    settle: (auth) => settleStripeCredential(auth, { client: stripe, resendTimeoutMs: 500 }),
+    // What the server does with it (src/server.js onUnconfirmed): the row
+    // builder is shared, the ledger is the real one.
+    onUnconfirmed: (req, res, info) => { booked.push({ ...info, status: res.statusCode, headersSent: res.headersSent }); recordRefundOwed(unconfirmedCaptureDebt({ slug: "stub-route", priceUsd: 0.5, httpStatus: res.statusCode, requestId: `req-${booked.length}-abcdef`, ...info })); },
+  }));
+  app.post("/paid", (req, res) => { const spt = Credential.deserialize(req.headers.authorization).payload.spt; runs.set(spt, (runs.get(spt) || 0) + 1); res.status(200).json({ answer: spt }); });
+  const { s, url } = await listen(app);
+  const post = (auth) => fetch(`${url}/paid`, { method: "POST", headers: { Authorization: auth } }).then(async (r) => ({ status: r.status, receipt: r.headers.get("payment-receipt"), body: await r.json().catch(() => null) }));
+  const sendsFor = (spt) => stripe.sends.filter((x) => x.key.endsWith(`_${spt}`));
+  const w0 = console.warn, e0 = console.error, l0 = console.log; console.warn = () => {}; console.error = (...a) => { if (!/^\[mpp-stripe\]/.test(String(a[0]))) e0(...a); }; console.log = (...a) => { if (!/^\[mpp-stripe\]/.test(String(a[0]))) l0(...a); };
+  try {
+    // control: a clean capture is one send, served, with a receipt.
+    const c = await post(tokenCred("spt_ok"));
+    ok(c.status === 200 && !!c.receipt && sendsFor("spt_ok").length === 1 && sendsFor("spt_ok")[0].options.maxNetworkRetries === 0, `gate J: control: a clean capture is ONE send with no SDK retry, served with a receipt (${c.status}, sends ${sendsFor("spt_ok").length})`);
+
+    // (i) a decline is definitive.
+    const dc = tokenCred("spt_decline");
+    const d = await post(dc);
+    ok(d.status === 402 && /Nothing was charged/.test(d.body?.detail || "") && d.body?.details?.reason !== "capture-unconfirmed", `gate J(i): a decline answers 402 and says nothing was charged (${String(d.body?.detail).slice(0, 140)})`);
+    ok(sendsFor("spt_decline").length === 1 && booked.length === 0 && stripe.intents.size === 1, `gate J(i): a decline is not sent again and books nothing (sends ${sendsFor("spt_decline").length}, booked ${booked.length})`);
+    const d2 = await post(dc);
+    ok(d2.status === 402 && /already used or is in flight/.test(d2.body?.detail || "") && runs.get("spt_decline") === 1, "gate J(i): the declined credential stays spent: sent again it is refused before the handler");
+
+    // (ii) no answer after Stripe made the charge: read back, served, the sale stands.
+    const la = await post(tokenCred("spt_lost_answer"));
+    const laSends = sendsFor("spt_lost_answer");
+    ok(la.status === 200 && la.body?.answer === "spt_lost_answer" && runs.get("spt_lost_answer") === 1, `gate J(ii): a capture whose answer was lost after Stripe charged is served the buffered answer (${la.status}, ${String(la.body?.detail || "").slice(0, 100)})`);
+    ok(laSends.length === 2 && laSends[0].key === laSends[1].key && laSends[0].params === laSends[1].params && /^mpp_/.test(laSends[0].key), `gate J(ii): the second send repeats the same parameters under the same idempotency key (sends ${laSends.length})`);
+    const laPi = [...stripe.intents.entries()].find(([k]) => k.endsWith("_spt_lost_answer"))?.[1]?.id;
+    const laRef = la.receipt ? JSON.parse(Buffer.from(la.receipt, "base64url").toString("utf8")).reference : null;
+    ok(!!laPi && laRef === laPi && finals.find((f) => f.spt === "spt_lost_answer")?.settled === true && booked.length === 0, `gate J(ii): the receipt names the one PaymentIntent Stripe made, the request is marked settled for the sale, nothing is booked as owed (${laRef} vs ${laPi})`);
+
+    // (iii-a) no answer and nothing made: the second send makes the charge, once.
+    const na = await post(tokenCred("spt_never_arrived"));
+    ok(na.status === 200 && !!na.receipt && sendsFor("spt_never_arrived").length === 2 && [...stripe.intents.keys()].filter((k) => k.endsWith("_spt_never_arrived")).length === 1 && booked.length === 0, `gate J(iii): a send that never reached Stripe is sent once more, charged once and served (${na.status}, sends ${sendsFor("spt_never_arrived").length})`);
+
+    // (iii-b) no answer twice, nothing made: not known.
+    const sc = tokenCred("spt_silent");
+    const si = await post(sc);
+    ok(si.status === 402 && si.body?.detail === STRIPE_UNCONFIRMED_TEXT && !/nothing was charged/i.test(si.body?.detail || "") && si.body?.details?.reason === "capture-unconfirmed" && si.body?.details?.charged === "unconfirmed", `gate J(iii): no answer from Stripe on either send answers 402 without claiming nothing was charged (${String(si.body?.detail).slice(0, 140)})`);
+    ok(/not confirmed/.test(STRIPE_UNCONFIRMED_TEXT) && /recorded/.test(STRIPE_UNCONFIRMED_TEXT) && /refunded/.test(STRIPE_UNCONFIRMED_TEXT) && /fresh challenge/.test(STRIPE_UNCONFIRMED_TEXT), "gate J(iii): the text says the charge is not confirmed, that it is recorded, and what happens next");
+    const siChallenge = Credential.deserialize(sc).challenge.id;
+    ok(sendsFor("spt_silent").length === 2 && booked.length === 1 && booked[0].reference === null && booked[0].challengeId === siChallenge && booked[0].status === 402 && booked[0].headersSent === true && !si.receipt, `gate J(iii): it is booked once, after the 402 was written, keyed to the challenge (booked ${booked.length}, sends ${sendsFor("spt_silent").length})`);
+    ok(finals.find((f) => f.spt === "spt_silent")?.settled === false, "gate J(iii): an unconfirmed capture is never marked settled (no sale is booked)");
+    const si2 = await post(sc);
+    ok(si2.status === 402 && /already used or is in flight/.test(si2.body?.detail || "") && runs.get("spt_silent") === 1 && sendsFor("spt_silent").length === 2 && booked.length === 1, "gate J(iii): the unconfirmed credential stays spent: sent again it is refused before the handler, not sent to Stripe, not booked twice");
+
+    // (iv) a 500, repeated from Stripe's record on the second send: not known.
+    const f5 = await post(tokenCred("spt_500"));
+    ok(f5.status === 402 && f5.body?.detail === STRIPE_UNCONFIRMED_TEXT && sendsFor("spt_500").length === 2 && booked.length === 2, `gate J(iv): a 500 from Stripe is not read as a decline: 402 with the unconfirmed text, booked (${f5.status}, booked ${booked.length})`);
+
+    // a PaymentIntent Stripe is still processing: not known, and named.
+    const pr = await post(tokenCred("spt_processing"));
+    ok(pr.status === 402 && pr.body?.detail === STRIPE_UNCONFIRMED_TEXT && booked.length === 3 && /^pi_stub_/.test(booked[2].reference || "") && sendsFor("spt_processing").length === 1, `gate J: a PaymentIntent still processing is unconfirmed and booked under its id (${booked[2]?.reference})`);
+
+    // A second send that returns a PaymentIntent is served ONLY when it succeeded.
+    for (const [spt, n] of [["spt_second_processing", 4], ["spt_second_requires_capture", 5]]) {
+      const r = await post(tokenCred(spt));
+      ok(r.status === 402 && r.body?.detail === STRIPE_UNCONFIRMED_TEXT && !r.receipt && r.body?.answer === undefined && sendsFor(spt).length === 2 && booked.length === n && /^pi_stub_/.test(booked[n - 1]?.reference || "") && finals.find((f) => f.spt === spt)?.settled === false, `gate J: a second send whose PaymentIntent is ${spt.replace("spt_second_", "")} is not served: unconfirmed 402, booked under its id, never marked settled (${r.status}, booked ${booked.length})`);
+    }
+    {
+      const r = await post(tokenCred("spt_second_requires_action"));
+      ok(r.status === 402 && /Nothing was charged/.test(r.body?.detail || "") && r.body?.details?.reason !== "capture-unconfirmed" && !r.receipt && r.body?.answer === undefined && sendsFor("spt_second_requires_action").length === 2 && booked.length === 5 && finals.find((f) => f.spt === "spt_second_requires_action")?.settled === false, `gate J: a second send whose PaymentIntent requires action is definitive: not served, nothing charged, no row (${r.status}, booked ${booked.length})`);
+    }
+
+    // the ledger: each unconfirmed capture is a card debt the owed word reads.
+    const rows = listRefunds({ status: "owed" }).filter((r) => r.slug === "stub-route");
+    ok(rows.length === 5 && rows.every((r) => r.network === "stripe" && r.wire === "mpp-stripe" && r.httpStatus === 402 && r.priceUsd === 0.5 && /unconfirmed/.test(r.note || "")), `gate J: five unconfirmed captures are five owed card rows in the refund ledger (${rows.length})`);
+    ok(rows.some((r) => r.evidence === booked[2].reference) && rows.some((r) => (r.note || "").includes(`mpp_challenge_id=${siChallenge}`)), "gate J: a row is keyed on the PaymentIntent when Stripe named one, and its note names the challenge id otherwise");
+    ok(refundAlarmStatus({ noticeMinutes: 0 }).status === "owed", "gate J: the refund alarm (the refundsOwed word) reads owed");
+  } finally { console.warn = w0; console.error = e0; console.log = l0; s.close(); }
+
+  // settleStripeCredential's verdicts read directly.
+  const direct = async (plan) => settleStripeCredential(tokenCred("spt_direct"), { client: stubStripe(plan), resendTimeoutMs: 200 });
+  const expired = await settleStripeCredential(Credential.serialize({ challenge: Challenge.fromMethod(testMethod, { realm: REALM, expires: new Date(Date.now() - 1000), request: { amount: "0.50", currency: "usd", decimals: 2, networkId: PROFILE, paymentMethodTypes: ["card"] }, secretKey: SECRET }), payload: { type: "spt", spt: "spt_direct" } }), { client: stubStripe(() => ({})) });
+  ok(expired.ok === false && expired.unconfirmed !== true, "settle: a credential refused before anything is sent to Stripe is definitive");
+  const invalid = await direct(() => ({ error: stripeErr("No such token", "StripeInvalidRequestError", 400) }));
+  ok(invalid.ok === false && invalid.unconfirmed !== true, "settle: a 400 request error from Stripe is definitive");
+  const busy = await direct(() => ({ error: stripeErr("idempotency key in use", "StripeIdempotencyError", 409) }));
+  ok(busy.ok === false && busy.unconfirmed === true, "settle: a 409 (the key is still being processed) is not an answer about the charge");
+  const odd = await direct(() => ({ error: new TypeError("socket hang up") }));
+  ok(odd.ok === false && odd.unconfirmed === true, "settle: an unclassified failure is unconfirmed, never a decline");
+  const lateDecline = await direct((spt, n) => (n === 1 ? { error: noAnswer() } : { error: stripeErr("Your card was declined.", "StripeCardError", 402) }));
+  ok(lateDecline.ok === false && lateDecline.unconfirmed !== true, "settle: a decline read on the second send is definitive");
+  const action = await direct(() => ({ status: "requires_action" }));
+  ok(action.ok === false && action.unconfirmed !== true, "settle: a PaymentIntent that requires action took no money: definitive");
+  // A first send answered from Stripe's record belongs to an earlier request
+  // with this credential: refused, and never served a second time.
+  {
+    const st = stubStripe(() => ({}));
+    const cred = tokenCred("spt_twice");
+    const one = await settleStripeCredential(cred, { client: st });
+    const two = await settleStripeCredential(cred, { client: st });
+    ok(one.ok === true && two.ok === false && two.unconfirmed !== true && st.sends.length === 2 && st.intents.size === 1, "settle: a credential captured by an earlier request is refused on its first send, not served again");
   }
 }
 
@@ -473,6 +651,10 @@ for (const seam of [true, false]) {
   const at = server.indexOf("const stripeGate = createStripeGate({");
   const block = at >= 0 ? server.slice(at, server.indexOf("});", at)) : "";
   ok(/priceFor:/.test(block) && /longRunning: isLongRunningSlug\(def\.slug\)/.test(block), "server: the card gate's priceFor marks long-running routes");
+  // An unconfirmed capture is booked in the refund ledger by the server, from
+  // the shared row builder, only once the answer is a refusal.
+  const gateCall = at >= 0 ? server.slice(at, server.indexOf("if (stripeGate) {", at)) : "";
+  ok(/onUnconfirmed:/.test(gateCall) && /recordRefundOwed\(unconfirmedCaptureDebt\(/.test(gateCall) && /res\.statusCode < 400\) return/.test(gateCall), "server: the card gate books an unconfirmed capture in the refund ledger");
 }
 
 console.log(`\n${pass} passed, 0 failed`);

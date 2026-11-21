@@ -42,7 +42,7 @@ import { receiptHeader as tempoReceiptHeader, txFromReceiptHeader as tempoTxFrom
 import { tempo } from "mppx/server";
 import { mppxReplayStore } from "./mppx-store.js";
 import { mppChallengesSuppressed, clientFingerprint } from "./mpp-fallback.js";
-import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization } from "ox/tempo";
+import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization, MultisigConfig } from "ox/tempo";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { Abis, Addresses } from "viem/tempo";
 import { chargeCancelledForClientGone, markSettleSent, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
@@ -825,6 +825,23 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
 // A per-buyer bound keys on a sender only when it is VERIFIED here; otherwise
 // it keys on the client IP (the callers' own fallback), never on an
 // unverified sender.
+//
+// The in-flight coverage check (src/inflight-cover.js) still books such a
+// pull against an account, so its runs at once are bounded by a balance and
+// not only by the address it came from:
+//   - an address in the fee-payer slot that is not the signer: the SIGNER,
+//     whose balance is the one a Tempo transaction draws on (the chain reads
+//     the sender from the signature), in the signer's own ledger (only the
+//     holder of that key can book there);
+//   - a multisig envelope: the account it names, judged on that account's
+//     balance, in a ledger of its own apart from the account's verified
+//     runs, so a credential that only names an account never holds that
+//     account's own calls back. When the owners' approvals verify here
+//     (each a primitive signature over the multisig digest, by a distinct
+//     owner of the config the envelope carries, together reaching its
+//     threshold), the ledger is that config's (its commitment), which nobody
+//     without those owners' keys can book into; whether the config is the
+//     account's own is a chain read this gate does not make.
 // ---------------------------------------------------------------------------
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const lcAddress = (a) => (typeof a === "string" && ADDRESS_RE.test(a) ? a.toLowerCase() : null);
@@ -853,8 +870,37 @@ function inlineAuthorizationProves(ka, { account, accessKey, keyType, now }) {
   }
 }
 
+/** Do the owner approvals of a multisig envelope verify against the config
+ *  it carries? Each must be a primitive signature over the multisig digest of
+ *  `signPayload` (MultisigConfig.getSignPayload) by a distinct owner of that
+ *  config, and their weights together must reach its threshold. Returns the
+ *  config's commitment (lowercased) when they do, else null. Offline; never
+ *  throws. It does not prove the config is the account's own on chain. */
+function multisigApprovalsCommitment(sig, signPayload) {
+  try {
+    const cfg = sig?.config;
+    if (!cfg || !Array.isArray(cfg.owners) || !Array.isArray(sig.signatures) || !lcAddress(sig.account)) return null;
+    const weightOf = new Map(cfg.owners.map((o) => [lcAddress(o.owner), Number(o.weight)]));
+    const digest = MultisigConfig.getSignPayload({ account: sig.account, config: cfg, payload: signPayload });
+    const seen = new Set();
+    let total = 0;
+    for (const s of sig.signatures) {
+      if (!s || !PRIMITIVE_ENVELOPES.has(s.type)) return null;
+      const owner = lcAddress(SignatureEnvelope.extractAddress({ payload: digest, signature: s }));
+      if (!owner || seen.has(owner) || !weightOf.has(owner)) return null;
+      if (SignatureEnvelope.verify(s, { address: owner, payload: digest }) !== true) return null;
+      seen.add(owner);
+      total += weightOf.get(owner);
+    }
+    if (!(total >= Number(cfg.threshold)) || !(Number(cfg.threshold) >= 1)) return null;
+    return String(MultisigConfig.getCommitment(cfg)).toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 /** Who a pull credential says paid, and what its signature proves.
- *  Returns { claimed, verified, envelope, keychain, reason }:
+ *  Returns { claimed, verified, envelope, keychain, booking, reason }:
  *    claimed  - the sender the transaction names (NEVER a key for a bound);
  *    verified - the same address once the signature proves it, else null;
  *    keychain - { account, accessKey, inlineAuthorization } for a keychain
@@ -865,9 +911,17 @@ function inlineAuthorizationProves(ka, { account, accessKey, keyType, now }) {
  *               carries the account's own authorization of that key
  *               (inlineAuthorizationProves), which the read accepts only
  *               while the chain holds no record of the key. Else null.
+ *    booking  - for a sender that is NOT verified, what the in-flight
+ *               coverage check books the pull against (see the note above):
+ *               { account, ledger } where `account` is the balance it is
+ *               judged on and `ledger` is null (the account's own ledger: a
+ *               signer the signature proves, written into the fee-payer slot
+ *               as someone else) or "unverified" (a multisig envelope,
+ *               whether or not its owner approvals verify against the config
+ *               it carries). Never a key for a per-buyer bound. Else null.
  *  Offline and synchronous; never throws. Exported for tests. */
 export function inspectTempoSender(authorizationHeader, { now = Date.now() } = {}) {
-  const out = { claimed: null, verified: null, envelope: null, keychain: null, reason: "" };
+  const out = { claimed: null, verified: null, envelope: null, keychain: null, booking: null, reason: "" };
   let payload;
   try { payload = Credential.deserialize(authorizationHeader)?.payload; } catch { return { ...out, reason: "credential does not decode" }; }
   if (payload?.type !== "transaction" || typeof payload.signature !== "string") return { ...out, reason: "not a pull credential" };
@@ -887,6 +941,9 @@ export function inspectTempoSender(authorizationHeader, { now = Date.now() } = {
       // the recovered-signer compare is kept beside it as a belt.
       const signer = lcAddress(SignatureEnvelope.extractAddress({ payload: signPayload, signature: sig }));
       if (signer === out.claimed && SignatureEnvelope.verify(sig, { address: out.claimed, payload: signPayload })) return { ...out, verified: out.claimed, reason: "signature" };
+      // Another address in the fee-payer slot: the signature still proves who
+      // signed, and that is the account the transaction draws on.
+      if (signer && SignatureEnvelope.verify(sig, { address: signer, payload: signPayload })) return { ...out, booking: { account: signer, ledger: null }, reason: "the signature does not prove the named sender" };
       return { ...out, reason: "the signature does not prove the named sender" };
     }
     if (sig.type === "keychain") {
@@ -903,6 +960,15 @@ export function inspectTempoSender(authorizationHeader, { now = Date.now() } = {
       if (!tx.keyAuthorization) return { ...out, keychain: { account, accessKey, inlineAuthorization: false }, reason: "access key authorization not checked" };
       const inlineAuthorization = inlineAuthorizationProves(tx.keyAuthorization, { account, accessKey, keyType: inner.type, now });
       return { ...out, keychain: { account, accessKey, inlineAuthorization }, reason: inlineAuthorization ? "access key authorized in this transaction" : "the key authorization it carries does not prove the account" };
+    }
+    if (sig.type === "multisig") {
+      if (lcAddress(sig.account) !== out.claimed) return { ...out, reason: "the multisig account is not the named sender" };
+      const commitment = multisigApprovalsCommitment(sig, signPayload);
+      // One ledger per named account whatever the approvals say: they are
+      // checked only against the config the envelope carries, so a config
+      // made fresh for each request would otherwise open a fresh, empty
+      // ledger every time.
+      return { ...out, booking: { account: out.claimed, ledger: "unverified" }, reason: commitment ? "multisig envelope: the owner approvals verify; the account's config is not checked" : "multisig envelope: the owner approvals do not verify" };
     }
   } catch {
     return { ...out, reason: "the signature does not verify" };
@@ -990,15 +1056,44 @@ export const KEYCHAIN_UNAVAILABLE = "unavailable";
  *  read not at all, so the next request reads again. A remembered "absent" is
  *  not reused for a credential WITHOUT an inline authorization (the key may
  *  have been installed since), which reads again. At most `maxInFlight` reads
- *  run at once; a new key past that waits for a free slot up to `queueWaitMs`
- *  (default: the read timeout), and is unavailable if none frees in time.
+ *  run at once. A new key past that joins a first-come queue and waits for a
+ *  slot up to `queueWaitMs` (default: the read timeout); a slot that frees is
+ *  handed to the head of the queue alone (no other waiter wakes, and a key
+ *  that arrives later never takes it first). Unavailable if none frees in
+ *  time, and at once, with no wait, when `maxWaiters` keys already wait.
  *  Exported for tests. */
-export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlMs = 60_000, negativeTtlMs = 15_000, maxInFlight = 16, maxEntries = 5000, queueWaitMs = null } = {}) {
+export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlMs = 60_000, negativeTtlMs = 15_000, maxInFlight = 16, maxEntries = 5000, queueWaitMs = null, maxWaiters = 64 } = {}) {
   const cache = new Map(); // "account:key" -> { state, until }
-  const inFlight = new Map(); // "account:key" -> Promise<state>
-  let slotFreed = null; let wakeSlot = null;
-  const nextSlot = () => { if (!slotFreed) slotFreed = new Promise((r) => { wakeSlot = r; }); return slotFreed; };
-  const freeSlot = () => { if (wakeSlot) { const w = wakeSlot; slotFreed = null; wakeSlot = null; w(); } };
+  const inFlight = new Map(); // "account:key" -> Promise<state>, queued or reading
+  // THE READ SLOTS. `reading` counts reads under way; `queue` holds the keys
+  // waiting for one, oldest first. A read that ends hands its slot straight
+  // to the head of the queue (`reading` stays as it was), so a key that
+  // arrives meanwhile finds the queue non-empty and queues behind it.
+  let reading = 0;
+  const queue = [];
+  let waitsGivenUp = 0;
+  const acquireSlot = () => {
+    if (reading < maxInFlight && queue.length === 0) { reading++; return true; }
+    if (queue.length >= maxWaiters) return false;
+    const waitMs = Number.isFinite(queueWaitMs) && queueWaitMs >= 0 ? queueWaitMs : accessKeyTimeoutMs();
+    return new Promise((resolve) => {
+      const place = { done: false, timer: null };
+      place.grant = () => { place.done = true; clearTimeout(place.timer); resolve(true); };
+      place.timer = setTimeout(() => {
+        if (place.done) return;
+        place.done = true;
+        const at = queue.indexOf(place);
+        if (at >= 0) queue.splice(at, 1);
+        waitsGivenUp++;
+        resolve(false);
+      }, waitMs);
+      queue.push(place);
+    });
+  };
+  const releaseSlot = () => {
+    const next = queue.shift();
+    if (next) next.grant(); else reading--;
+  };
   const stateOf = (v) => (v === true || v === "active" ? "active" : typeof v === "string" ? v : "inactive");
   const verify = async function verifyKeychainSender(keychain, now = Date.now()) {
     const account = lcAddress(keychain?.account);
@@ -1009,20 +1104,17 @@ export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlM
     const k = `${account}:${accessKey}`;
     const hit = cache.get(k);
     if (hit && hit.until > now && (hit.state !== "absent" || inline)) return decide(hit.state);
+    // One read per account and key, whether it is queued or under way: a
+    // request for a key already waiting shares that place in the queue.
     let p = inFlight.get(k);
-    if (!p && inFlight.size >= maxInFlight) {
-      const deadline = Date.now() + (Number.isFinite(queueWaitMs) && queueWaitMs >= 0 ? queueWaitMs : accessKeyTimeoutMs());
-      while (inFlight.size >= maxInFlight && !inFlight.has(k)) {
-        const left = deadline - Date.now();
-        if (left <= 0) return KEYCHAIN_UNAVAILABLE;
-        let t = null;
-        await Promise.race([nextSlot(), new Promise((r) => { t = setTimeout(r, left); })]);
-        clearTimeout(t);
-      }
-      p = inFlight.get(k);
-    }
     if (!p) {
-      p = Promise.resolve().then(() => check({ account, accessKey })).then(stateOf, () => "unreadable");
+      const slot = acquireSlot();
+      // The queue is full: no wait, no read (a 503 with Retry-After at the gate).
+      if (slot === false) return KEYCHAIN_UNAVAILABLE;
+      p = (async () => {
+        if (slot !== true && !(await slot)) return "unreadable"; // no slot within the wait: not remembered
+        try { return stateOf(await check({ account, accessKey })); } catch { return "unreadable"; } finally { releaseSlot(); }
+      })();
       inFlight.set(k, p);
       p.then((state) => {
         inFlight.delete(k);
@@ -1031,13 +1123,15 @@ export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlM
           if (cache.size >= maxEntries) cache.delete(cache.keys().next().value);
           cache.set(k, { state, until: Date.now() + (state === "active" ? ttlMs : negativeTtlMs) });
         }
-        freeSlot();
       });
     }
     return decide(await p);
   };
   /** Reads under way now (one per account and key), for tests and status. */
-  verify.readsInFlight = () => inFlight.size;
+  verify.readsInFlight = () => reading;
+  /** Keys waiting for a read slot now, and how many waits ran out. */
+  verify.readsQueued = () => queue.length;
+  verify.waitsGivenUp = () => waitsGivenUp;
   return verify;
 }
 const verifyTempoKeychainSenderDefault = createKeychainSenderVerifier();
@@ -1077,6 +1171,16 @@ export const TEMPO_SENDER_UNVERIFIED = Object.freeze({
   kind: "verification-failed",
   detail: "This route accepts a Tempo pull credential only when its signature proves the paying account: signed by the account's own key, or by an access key that is active for that account on Tempo or that the transaction authorizes with the account's own key. This credential's signer could not be verified, so it was not sent for validation and nothing was charged.",
   hint: "Pay with a credential signed by the account's key, or by an access key that is active on chain or carries the account's authorization for it, or pay this route over another method offered in the WWW-Authenticate header.",
+});
+/** The same refusal on an ordinary route, where the credential WAS validated:
+ *  a pull signed by an access key runs only once the chain confirms that key
+ *  is the named account's, and it did not. Answered before any claim or
+ *  broadcast; nothing charged. Exported for tests. */
+export const TEMPO_KEYCHAIN_UNCONFIRMED = Object.freeze({
+  cls: TEMPO_SENDER_UNVERIFIED.cls,
+  kind: TEMPO_SENDER_UNVERIFIED.kind,
+  detail: "This credential was validated, but it is signed by an access key, and a Tempo pull credential signed by an access key runs only once Tempo confirms that key is active for the account it names, or the transaction carries the account's own authorization of it. Tempo did not confirm this key for that account, so no run was started, the transaction was not broadcast and nothing was charged.",
+  hint: "Pay with a credential signed by the account's own key, or by an access key that is active on chain or carries the account's authorization for it, or pay this route over another method offered in the WWW-Authenticate header.",
 });
 
 /** The answer when the chain read of an access key could not be made: a
@@ -1726,7 +1830,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         if (!lcAddress(proven)) {
           logTempoRefusal(req, { cls: TEMPO_SENDER_UNVERIFIED.cls, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `after validate: keychain envelope, ${senderInfo.reason || "no sender"}; the chain read did not vouch for the key` });
           noteTempoRefusal(req);
-          markMppProblem(req, res, mppProblem(TEMPO_SENDER_UNVERIFIED.kind, TEMPO_SENDER_UNVERIFIED.detail, { hint: TEMPO_SENDER_UNVERIFIED.hint, details: { reason: TEMPO_SENDER_UNVERIFIED.cls, charged: false } }));
+          markMppProblem(req, res, mppProblem(TEMPO_KEYCHAIN_UNCONFIRMED.kind, TEMPO_KEYCHAIN_UNCONFIRMED.detail, { hint: TEMPO_KEYCHAIN_UNCONFIRMED.hint, details: { reason: TEMPO_KEYCHAIN_UNCONFIRMED.cls, charged: false } }));
           return next();
         }
         keychainSender = proven;
@@ -1808,6 +1912,12 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       if (binding.payloadType === "transaction") presentChallengeWindow(req, binding.expiresAtMs);
       if (binding.payloadType === "transaction" && req.mppTempoSender) {
         req.mppTempoPull = { sender: req.mppTempoSender, currency: String(binding.challenge?.request?.currency || ""), amountAtomic: String(binding.amountAtomic) };
+      } else if (binding.payloadType === "transaction" && senderInfo?.booking && !senderInfo.keychain && lcAddress(senderInfo.booking.account)) {
+        // A sender that is not verified (a multisig envelope, another address
+        // in the fee-payer slot): its per-buyer bounds stay on the client IP,
+        // and the coverage check books the pull against the account it draws
+        // on (see inspectTempoSender's booking), in the ledger named there.
+        req.mppTempoPull = { sender: senderInfo.booking.account, ledger: senderInfo.booking.ledger || null, currency: String(binding.challenge?.request?.currency || ""), amountAtomic: String(binding.amountAtomic) };
       }
       // The tempo credential is the ONLY payment evidence on this request.
       // Drop any x402 payment header that rode alongside it: the dispatcher

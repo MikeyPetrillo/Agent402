@@ -2143,6 +2143,126 @@ export function salesCohorts({ days = COHORT_MAX_DAYS, toolsPerDay = COHORT_DEFA
   return value;
 }
 
+// ---------------------------------------------------------------------------
+// Returning buyers (operator only, counts only, computed on read): the
+// baseline any returning-buyer program is measured against. Outside wallets
+// only (internal = 0, our own wallets left out again by address), money rails
+// only. A paid day is a UTC day with at least one such sale from the wallet.
+//
+//   - per window (30 and 60 days): wallets with a paid day in it, how many
+//     paid days each had there (1, 2, 3-7, 8 or more), the one-day share and
+//     the median;
+//   - the day-1 to day-2 return rate: a wallet is new on its first paid day in
+//     the RETURNING_SCAN_DAYS scanned; a new wallet whose first day is in the
+//     window and whose RETURNING_FOLLOW_UP_DAYS have all ended is followed up,
+//     and it returned when it paid again on a later UTC day inside them. Per
+//     rail of its first sale, and by the UTC week (Monday) of its first day;
+//   - each figure for every outside wallet and again without the sweep and
+//     burst cohort (salesCohorts' rule, applied over the whole scan).
+export const RETURNING_SCAN_DAYS = 120;
+export const RETURNING_WINDOWS = Object.freeze([30, 60]);
+export const RETURNING_FOLLOW_UP_DAYS = 7;
+export const RETURNING_WEEKS = 8;
+const DAY_MS = 86_400_000;
+const qReturningPage = db.prepare(`
+  SELECT payer, ts, network, slug ${WINDOW_PAGE} AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL`);
+function* returningBuyersSteps({ now = Date.now(), toolsPerDay = COHORT_DEFAULTS.toolsPerDay, callsPerHour = COHORT_DEFAULTS.callsPerHour } = {}) {
+  const since = now - RETURNING_SCAN_DAYS * DAY_MS;
+  const today = Math.floor(now / DAY_MS);
+  // payer -> { days:Set, firstTs, firstNetwork, dayTools:Map<day,Set>, hourCalls:Map<hour,n>, swept }
+  const wallets = new Map();
+  yield* windowPages(since, (a, b) => {
+    for (const r of qReturningPage.all(a, b, since)) {
+      if (r.ts >= now + 1) continue;
+      const payer = String(r.payer);
+      if (BURNERS.has(payer) || BURNERS.has(payer.toLowerCase())) continue;
+      let w = wallets.get(payer);
+      if (!w) wallets.set(payer, (w = { days: new Set(), firstTs: Infinity, firstNetwork: null, dayTools: new Map(), hourCalls: new Map(), swept: false }));
+      const day = Math.floor(r.ts / DAY_MS);
+      w.days.add(day);
+      if (r.ts < w.firstTs) { w.firstTs = r.ts; w.firstNetwork = r.network; }
+      if (w.swept) continue;
+      let tools = w.dayTools.get(day);
+      if (!tools) w.dayTools.set(day, (tools = new Set()));
+      tools.add(r.slug);
+      const hour = Math.floor(r.ts / 3_600_000);
+      const calls = (w.hourCalls.get(hour) || 0) + 1;
+      w.hourCalls.set(hour, calls);
+      if (tools.size > toolsPerDay || calls > callsPerHour) { w.swept = true; w.dayTools = null; w.hourCalls = null; }
+    }
+  });
+  const empty = () => ({ wallets: 0, paidDays: { "1": 0, "2": 0, "3-7": 0, "8+": 0 }, oneDayShare: null, medianPaidDays: null, newWallets: 0, followedUp: 0, returned: 0, dayOneToDayTwoRate: null, byRail: {} });
+  const rate = (n, d) => (d ? +(n / d).toFixed(3) : null);
+  const windows = {};
+  for (const days of RETURNING_WINDOWS) {
+    const start = today - days + 1; // the window's first UTC day (today included)
+    const all = empty(), organic = empty();
+    const counts = { all: [], organic: [] };
+    for (const w of wallets.values()) {
+      const inWindow = [...w.days].filter((d) => d >= start).length;
+      const firstDay = Math.floor(w.firstTs / DAY_MS);
+      for (const [key, s] of [["all", all], ["organic", organic]]) {
+        if (key === "organic" && w.swept) continue;
+        if (inWindow > 0) {
+          s.wallets++;
+          counts[key].push(inWindow);
+          s.paidDays[inWindow === 1 ? "1" : inWindow === 2 ? "2" : inWindow <= 7 ? "3-7" : "8+"]++;
+        }
+        if (firstDay < start) continue;
+        s.newWallets++;
+        if (firstDay + RETURNING_FOLLOW_UP_DAYS >= today) continue;
+        const back = [...w.days].some((d) => d > firstDay && d <= firstDay + RETURNING_FOLLOW_UP_DAYS);
+        const rail = canonRail(w.firstNetwork);
+        const r = s.byRail[rail] || (s.byRail[rail] = { followedUp: 0, returned: 0, rate: null });
+        s.followedUp++; r.followedUp++;
+        if (back) { s.returned++; r.returned++; }
+      }
+    }
+    for (const [key, s] of [["all", all], ["organic", organic]]) {
+      const c = counts[key].sort((x, y) => x - y);
+      s.oneDayShare = rate(s.paidDays["1"], s.wallets);
+      s.medianPaidDays = c.length ? (c.length % 2 ? c[(c.length - 1) / 2] : (c[c.length / 2 - 1] + c[c.length / 2]) / 2) : null;
+      s.dayOneToDayTwoRate = rate(s.returned, s.followedUp);
+      for (const r of Object.values(s.byRail)) r.rate = rate(r.returned, r.followedUp);
+      s.byRail = Object.fromEntries(Object.entries(s.byRail).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+    }
+    windows[days] = { all, organic };
+  }
+  // Weekly cohorts of new wallets by the UTC week (Monday) of their first day;
+  // only weeks whose every member's follow-up has ended.
+  const weekOf = (day) => day - ((new Date(day * DAY_MS).getUTCDay() + 6) % 7);
+  const weeks = new Map();
+  for (const w of wallets.values()) {
+    const firstDay = Math.floor(w.firstTs / DAY_MS);
+    const wk = weekOf(firstDay);
+    if (wk + 6 + RETURNING_FOLLOW_UP_DAYS >= today) continue;
+    const back = [...w.days].some((d) => d > firstDay && d <= firstDay + RETURNING_FOLLOW_UP_DAYS);
+    const row = weeks.get(wk) || { all: { newWallets: 0, returned: 0 }, organic: { newWallets: 0, returned: 0 } };
+    weeks.set(wk, row);
+    row.all.newWallets++; if (back) row.all.returned++;
+    if (!w.swept) { row.organic.newWallets++; if (back) row.organic.returned++; }
+  }
+  // The scan's first weeks hold wallets that bought before it began, so only
+  // weeks that start a full 60 days into the scan are listed.
+  const firstListed = Math.floor(since / DAY_MS) + 60;
+  const weekly = [...weeks].filter(([wk]) => wk >= firstListed).sort(([a], [b]) => b - a).slice(0, RETURNING_WEEKS)
+    .map(([wk, row]) => ({
+      weekStart: new Date(wk * DAY_MS).toISOString().slice(0, 10),
+      all: { ...row.all, rate: rate(row.all.returned, row.all.newWallets) },
+      organic: { ...row.organic, rate: rate(row.organic.returned, row.organic.newWallets) },
+    }));
+  return {
+    generatedAt: new Date(now).toISOString(),
+    scanDays: RETURNING_SCAN_DAYS, followUpDays: RETURNING_FOLLOW_UP_DAYS,
+    organicExcludes: { toolsPerDayOver: toolsPerDay, callsPerHourOver: callsPerHour },
+    windows, weekly,
+  };
+}
+/** The returning-buyer baseline (above), spread over event-loop turns. */
+export function returningBuyersAsync(opts = {}) { return runStepsAsync(returningBuyersSteps(opts)); }
+/** The same, synchronously (tests). */
+export function returningBuyers(opts = {}) { return runSteps(returningBuyersSteps(opts)); }
+
 // Day-bucketed Tempo settlements (wire 'mpp-tempo', plus tempo/subscription charges), UTC, straight from
 // this table — NOT the on-chain wallet scan /api/revenue/daily reads. Tempo
 // is deliberately excluded from RAILS (not x402-settleable), so no scan

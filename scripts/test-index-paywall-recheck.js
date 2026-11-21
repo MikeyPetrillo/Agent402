@@ -34,7 +34,7 @@ delete process.env.X402_PAYWALL_FAILED_RECHECK_HOURS;
 }
 const { createServer } = await import("node:http");
 const {
-  paywallVerdictExpired, registerOrigin, sellerDetail,
+  paywallVerdictExpired, registerOrigin, sellerDetail, PAYWALL_REASONS, paywallWithReason,
   __setCrawlFetchForTest, __setProbeFetchForTest, __crawlSellerForTest, __testResetSubmitted, __resetRobotsCacheForTest,
   __resetForcedCrawlForTest, __resetPaywallProbeForTest, _cacheForTests,
 } = await import("../src/x402-index.js");
@@ -229,6 +229,37 @@ const age = (origin, ms) => { const v = _cacheForTests().get(origin); v.paywall 
   const vt = await crawl(t, { forcePaywall: true });
   ok(vt?.paywall?.ok === null && vt.paywall.unknown === true && vt.paywall.status === 0 && /did not complete/.test(vt.paywall.error || ""), `a probe of ours that timed out is no verdict (${JSON.stringify(vt?.paywall)})`);
   ok(paywallVerdictExpired({ ok: false, status: 0, at: Date.now(), url: `${t}/v1/quote`, error: "timeout" }, Date.now()) === true, "a stored status-0 failure (our probe, an earlier build) is re-probed at once");
+}
+
+// 7. EVERY VERDICT OTHER THAN A 402 SAYS WHY, in a fixed vocabulary, on the
+// stored verdict and on ?seller= (with the code's sentence); a 402 carries none.
+{
+  __setProbeFetchForTest((url, opts) => {
+    const u = new URL(url);
+    const target = new URL(loop);
+    target.pathname = `/${u.hostname}${u.pathname}`;
+    return fetch(target, { ...opts, redirect: "manual" });
+  });
+  const cases = [[200, "answered_free"], [204, "answered_free"], [302, "redirected"], [401, "auth_required"], [403, "auth_required"], [404, "client_error"], [429, "client_error"], [500, "server_error"], [503, "server_error"], [400, "probe_malformed"], [402, null]];
+  for (const [st, want] of cases) {
+    __resetPaywallProbeForTest({ cursor: 1 });
+    const o = seller(`reason${st}`);
+    mode.set(hostOf(o), st);
+    const v = await crawl(o, { forcePaywall: true });
+    ok(v?.paywall?.status === st && (v.paywall.reason ?? null) === want, `HTTP ${st} stores reason ${want} (${JSON.stringify(v?.paywall)})`);
+    const d = sellerDetail(hostOf(o))?.paywall;
+    ok((d?.reason ?? null) === want && (want ? d.reasonNote === PAYWALL_REASONS[want] : d.reasonNote === undefined), `?seller= reads reason ${want} with its sentence for HTTP ${st}`);
+  }
+  __setProbeFetchForTest(() => Promise.reject(Object.assign(new Error("connect ECONNRESET"), { code: "ECONNRESET" })));
+  __resetPaywallProbeForTest({ cursor: 1 });
+  const vi = await crawl(seller("reasonreset"), { forcePaywall: true });
+  ok(vi?.paywall?.ok === null && vi.paywall.reason === "probe_incomplete", `a probe that did not complete is probe_incomplete (${JSON.stringify(vi?.paywall)})`);
+  // A verdict stored before reasons were recorded is read with one.
+  ok(paywallWithReason({ ok: false, status: 503, url: "https://a.example.test/x", at: 1 })?.reason === "server_error", "a stored failure without a reason reads one from its status");
+  ok(paywallWithReason({ ok: false, status: 0, url: "https://a.example.test/x", at: 1 })?.reason === "probe_incomplete", "a stored status-0 failure reads probe_incomplete");
+  ok(paywallWithReason({ ok: null, unknown: true, status: 422, url: "https://a.example.test/x", at: 1 })?.reason === "probe_malformed", "a stored no-verdict with a status reads probe_malformed");
+  ok(paywallWithReason({ ok: true, status: 402, at: 1 })?.reason === undefined && paywallWithReason(null) === null, "a passing verdict and none carry no reason");
+  ok(Object.keys(PAYWALL_REASONS).length === 7 && Object.isFrozen(PAYWALL_REASONS), "the vocabulary is fixed");
 }
 
 server.close();

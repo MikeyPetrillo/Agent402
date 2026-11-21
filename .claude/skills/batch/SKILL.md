@@ -74,8 +74,13 @@ merge every piece branch, one at a time:
 - Write the `CHANGELOG.md` and `src/changelog.js` entries for the batch, then
   `node scripts/gen-page-dates.js --write`.
 
+Then, on the branch's final commit (after the changelog), run the guards a merge most often
+breaks: `scripts/test-commit-message-framing.js` (subjects, trailers), `scripts/test-ci-coverage.js`
+(every new suite in a lane) and `scripts/test-config-reference.js` (a later commit that reads a
+setting makes the generated reference stale).
+
 Result: one branch holds every piece; `git log --oneline main..HEAD` lists each piece's commits;
-both `node --check` runs exit 0; `scripts/test-page-dates.js` exits 0.
+both `node --check` runs exit 0; `scripts/test-page-dates.js` and the three guards above exit 0.
 
 ## 5. The gate
 On the merged diff (`git diff main...HEAD`), in parallel, each in its own fresh context:

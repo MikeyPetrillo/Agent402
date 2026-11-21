@@ -18,6 +18,8 @@ t node scripts/test-macro-kit.js
 t node scripts/test-mpp-shim.js
 # MPP evm EIP-712 domain fallback (a wrong-domain credential is refused locally, its 402 carries no challenge so the client takes x402, healthy clients untouched — boots a paid
 t node scripts/test-mpp-evm-domain.js
+# MPP offers by client: a python-httpx 402 carries no Payment challenge (x402 header and body unchanged), X-Payment-Offers: mpp restores them, an MPP credential is never gated, every other client's 402 unchanged on every route (boots a paid server three times, offline)
+t node scripts/test-mpp-offer-gate.js
 # Report products' free probe stage + the pure handler helpers it feeds
 t node scripts/test-report-probes.js
 # Checkout rate limit runs BEFORE the body parser (a malformed body used to 400 at the parser and be counted against nothing) — boots a server, offline

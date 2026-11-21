@@ -171,12 +171,12 @@ function makeEngine(opts = {}) {
         payer: { address: ctx.payer, chainId: TEMPO_MAINNET_CHAIN_ID },
         periodCount: String(PERIOD_COUNT), periodUnit: PERIOD_UNIT,
         recipient: RECIPIENT,
-        reference: "0xactivation",
+        reference: opts.noReference ? null : "0xactivation",
         subscriptionExpires: ctx.binding.challenge.request.subscriptionExpires,
         subscriptionId: `sub-${calls.activate}`,
         timestamp: new Date(clock).toISOString(),
       });
-      return { receipt: { method: "tempo", status: "success", reference: "0xactivation", timestamp: new Date(clock).toISOString() } };
+      return { receipt: opts.noReference ? null : { method: "tempo", status: "success", reference: "0xactivation", timestamp: new Date(clock).toISOString() } };
     },
     findRenewalOnChain: opts.chainReader ? undefined : async (args) => { calls.find = (calls.find || 0) + 1; return typeof findBehaviour === "function" ? findBehaviour(args) : findBehaviour; },
     chargePeriod: async (rec, { periodIndex }) => {
@@ -517,6 +517,12 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
 
   h.setCharge(() => new Error("insufficient funds"));
   advance(PERIOD);
+  // Past the paid period with the renewal not yet pulled, the subscription is
+  // still listed: renewals are pulled lazily from the scheduler's stillActive
+  // gate (refreshStatus) on a listed subscription, so leaving it out here
+  // would mean its next period is never pulled.
+  ok(engine.get(sub.subId).lastChargedPeriod === 0 && engine.listActive("fund").some((r) => r.subId === sub.subId) && calls.charge === 0,
+    "a subscription past its paid period, not yet refreshed, stays listed so the scheduler's gate pulls its renewal");
   const st = await engine.refreshStatus(sub.subId);
   ok(st === "past_due" && calls.charge === 1, "a period whose transfer does not confirm leaves the subscription past_due");
   const rec = engine.get(sub.subId);
@@ -1455,6 +1461,43 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   const o2 = await off.engine.mintOffer({ product: "domain-monitor", target: "off.example.com", email: "o@example.com" });
   const a2 = await off.engine.activateFromCredential((await signCredential(Challenge.deserialize(o2.header))).header);
   ok(a2.status === "active" && Array.isArray(a2.signedReceipts) && a2.signedReceipts.length === 0, "signing off: the subscription activates with no receipt");
+  // A period with no transaction named is never signed: the signer is not
+  // called and the record is kept as it was.
+  const noTxSigned = [];
+  const noTx = makeEngine({ name: "receipts-no-tx", noReference: true, signPeriod: (d) => { noTxSigned.push(d); return createSubscriptionReceipt({ iss: "https://agent402.tools", ...d }, keys.signer); } });
+  const o3 = await noTx.engine.mintOffer({ product: "domain-monitor", target: "notx.example.com", email: "n@example.com" });
+  const a3 = await noTx.engine.activateFromCredential((await signCredential(Challenge.deserialize(o3.header))).header);
+  ok(a3.status === "active" && noTx.engine.get(a3.subId).lastChargeTx === null, `setup: a first period settled with no transaction named (${a3.status}, tx ${noTx.engine.get(a3.subId).lastChargeTx})`);
+  ok(noTxSigned.length === 0 && (a3.signedReceipts || []).length === 0 && (noTx.engine.get(a3.subId).signedReceipts || []).length === 0, `a period with no transaction is not signed: the signer is never called (${noTxSigned.length} calls)`);
+}
+
+// ---------------------------------------------------------------------------
+// The offer sweep at the open-offer cap on the file store: every expired offer
+// and both of its key records are dropped, and the sweep gives the event loop
+// a turn as it goes instead of holding it for the whole walk.
+// ---------------------------------------------------------------------------
+{
+  const hex = (n) => Array.from({ length: n }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join("");
+  const seed = {};
+  for (let i = 0; i < MAX_OPEN_OFFERS; i++) {
+    const nonce = hex(24), addr = `0x${hex(40)}`;
+    const key = { accessKeyAddress: addr, keyType: "secp256k1", privateKey: `0x${hex(64)}` };
+    seed[`tempo:subscription:access-key:offer:${nonce}`] = key;
+    seed[`tempo:subscription:access-key:address:${addr}`] = key;
+    seed[`a402:offer:${nonce}`] = { at: clock - OFFER_SWEEP_AFTER_MS - 60_000, accessKeyAddress: addr, product: "domain-monitor", target: `t${i}.example.com`, email: null };
+  }
+  writeFileSync(join(tmp, "offer-loop.json"), JSON.stringify(seed));
+  const { engine } = makeEngine({ name: "offer-loop" });
+  let last = performance.now(), worst = 0, turns = 0;
+  const tick = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; turns++; }, 1);
+  const started = performance.now();
+  const open = await engine._sweepOffers();
+  const took = performance.now() - started;
+  worst = Math.max(worst, performance.now() - last);
+  clearInterval(tick);
+  const left = Object.keys(engine._store._snapshot()).length;
+  ok(open === 0 && left === 0, `the sweep at the cap drops all ${MAX_OPEN_OFFERS} expired offers and their key records (open ${open}, entries left ${left})`);
+  ok(worst < took / 3 && worst < 400, `the sweep yields as it goes: the longest event-loop turn was ${worst.toFixed(0)} ms over a ${took.toFixed(0)} ms sweep (${turns} timer turns)`);
 }
 
 rmSync(tmp, { recursive: true, force: true });

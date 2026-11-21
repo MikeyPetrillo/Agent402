@@ -15,6 +15,7 @@ import { REJECTION_REASONS } from "./payment-reject.js";
 import { COMPACT_REQUEST_EXAMPLE, paymentRequiredCompactEnabled } from "./payment-required-compact.js";
 
 import { repoUrl } from "./repo-link.js";
+import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
 // The cheapest real route we sell: pure CPU, a fraction of a cent, no upstream
 // to burn. A conformance probe should cost the buyer nothing to get wrong and
 // almost nothing to get right.
@@ -29,6 +30,8 @@ export function x402TestPage(baseUrl) {
 
   const mono = "font-family:var(--font-mono);font-size:var(--fs-sm);";
   const pre = (s) => codeBlock(s, { style: "margin:0 0 18px" });
+  // Which clients get the x402 offer alone (src/mpp-offer-gate.js).
+  const offerGate = mppOfferGateSentenceIfOffered({ code: (s) => `<code>${esc(s)}</code>` });
 
   const rows = REJECTION_REASONS.map((r) => `
     <tr>
@@ -51,7 +54,7 @@ export function x402TestPage(baseUrl) {
   <h2 style="font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 16px;color:var(--ink);">1. Get a challenge</h2>
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">Any paid route answers one. This is the cheapest: pure computation, no upstream.</p>
   ${pre(`curl -sD - -X POST ${baseUrl}${PROBE_PATH} \\\n  -H 'content-type: application/json' \\\n  -d '{"text":"hello"}'`)}
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">The terms are in the <code>PAYMENT-REQUIRED</code> response header as base64 JSON, which is where the x402 v2 spec puts them, and the JSON body carries the same object, so a client that reads either one finds the offer. The header is authoritative. MPP clients get <code>WWW-Authenticate: Payment</code> challenges on the same response.</p>
+  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">The terms are in the <code>PAYMENT-REQUIRED</code> response header as base64 JSON, which is where the x402 v2 spec puts them, and the JSON body carries the same object, so a client that reads either one finds the offer. The header is authoritative. MPP clients get <code>WWW-Authenticate: Payment</code> challenges on the same response.${offerGate ? ` ${offerGate}` : ""}</p>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:36px 30px 0;">
