@@ -247,6 +247,52 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
   }
 }
 
+// Several wallets paying from one address are one party at a full queue and
+// when a slot frees: a new payer from a new address takes that address's
+// newest queued place (each wallet there holds only one, so before this the
+// newcomer was answered busy), and the next freed slot decodes its file
+// ahead of the address's queue. A payer at that address takes no place from
+// the others there.
+{
+  const { measureAudio, MEASURE_QUEUE_PER_SLOT, __measurePoolForTest } = await import("../src/tools/media-kit.js");
+  const { admissionCallerOf } = await import("../src/dispatch-caller.js");
+  const hadSlots = process.env.AUDIO_DECODE_SLOTS;
+  process.env.AUDIO_DECODE_SLOTS = "1";
+  const held = [];
+  __setExecFileForTest((bin, args, opts, cb) => { held.push(cb); });
+  const done = (cb) => cb(null, "out_time_us=1000000\n");
+  const mp3 = Buffer.concat([Buffer.from("ID3\x04\0\0\0\0\0\0", "latin1"), Buffer.alloc(64)]);
+  const keep = setInterval(() => {}, 1_000);
+  const tick = () => new Promise((r) => setTimeout(r, 30));
+  const X = "198.51.100.150";
+  const walletAt = (n, ip = X) => admissionCallerOf({ ip, headers: {}, creditsKeyId: `w${n}` });
+  try {
+    const settled = new Map();
+    const track = (name, p) => { p.then((v) => settled.set(name, v)); return p; };
+    const runs = [];
+    for (let i = 0; i <= MEASURE_QUEUE_PER_SLOT; i++) runs.push(track(`w${i}`, measureAudio(mp3, { format: "mp3", who: walletAt(i) })));
+    await tick();
+    ok(__measurePoolForTest().active === 1 && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, `five wallets on one address hold the slot and every queued place, one each (setup, ${JSON.stringify(__measurePoolForTest())})`);
+    const fresh = track("fresh", measureAudio(mp3, { format: "mp3", who: walletAt(50, "198.51.100.151") }));
+    await tick();
+    ok(!settled.has("fresh") && settled.get(`w${MEASURE_QUEUE_PER_SLOT}`)?.busy === true && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, `a new payer from a new address takes that address's newest queued place (newcomer ${JSON.stringify(settled.get("fresh") ?? "queued")}; the address's newest ${JSON.stringify(settled.get(`w${MEASURE_QUEUE_PER_SLOT}`))})`);
+    const neighbor = await measureAudio(mp3, { format: "mp3", who: walletAt(60) });
+    ok(neighbor?.busy === true && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, "a payer whose address already holds places takes none from the others there");
+    done(held.shift());
+    await tick();
+    done(held.shift());
+    await tick();
+    ok(settled.get("fresh")?.seconds === 1 && !settled.has("w1"), `the next freed slot decodes the new payer's file ahead of the address's queue (${JSON.stringify([...settled.keys()])})`);
+    __setExecFileForTest((bin, args, opts, cb) => setImmediate(() => done(cb)));
+    while (held.length) done(held.shift());
+    await Promise.all([...runs, fresh]);
+    ok(__measurePoolForTest().active === 0 && __measurePoolForTest().waiting === 0 && __measurePoolForTest().callers === 0, `the pool drains (${JSON.stringify(__measurePoolForTest())})`);
+  } finally {
+    clearInterval(keep);
+    if (hadSlots === undefined) delete process.env.AUDIO_DECODE_SLOTS; else process.env.AUDIO_DECODE_SLOTS = hadSlots;
+  }
+}
+
 // The transcription routes hold their decode place for the request's caller:
 // the identity payer (never a typed x-payment, which nothing verified in
 // FREE_MODE), else the address with an IPv6 one folded to its /64; a step run
