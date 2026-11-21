@@ -29,6 +29,7 @@ paths:
   - "services/**"
   - "scripts/*-deploy-paths.js"
   - "scripts/backup-restore.js"
+  - "scripts/adopt-issue-titles.js"
   - ".github/workflows/**"
   - "workers/**"
 ---

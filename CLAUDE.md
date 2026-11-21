@@ -49,7 +49,9 @@ LLC: credit the entity, never a personal name.
   repaid only after on-chain proof (`src/payment-verify.js`).
 - `src/state-db.js`, `src/json-document.js`: the state database (Postgres) and the whole-file JSON
   store API; leases, store readiness and large rows in `.claude/rules/ops.md`.
-- `src/price-webhooks.js` (a signed POST when a watched list price changes; `.claude/rules/cdn.md`),
+- `src/price-webhooks.js` (a signed POST when a watched list price changes: a registrant holds at
+  most `PRICE_WEBHOOK_MAX_PER_PAYER`, a subscription lasts `PRICE_WEBHOOK_LIFETIME_DAYS` and is
+  kept only when its call settles; `.claude/rules/cdn.md`),
   `src/router-benchmarks.js` (`/api/router-benchmarks`, aggregates over the reputation records),
   `src/speech-additions.js` (named speech and transcription models, each gated on its cost row),
   `src/feature-flags.js` (runtime switches: a flag provider, then the variable, then the default).
@@ -59,10 +61,15 @@ LLC: credit the entity, never a personal name.
 - `src/sale-repeats.js` (one sale per Solana settlement signature: the rule the ledger's writer
   and readers share), `src/sale-source.js` (the listed `utm_source` a card sale keeps; no public
   reader selects it).
-- `src/caller-turns.js` (fair turns across callers on serial engines, the OCR engines;
+- `src/caller-turns.js` (fair turns across callers on serial engines, the OCR engines),
+  `src/caller-places.js` (a full queue's two bounds, shared with the audio decode pool: at the
+  first a caller that already holds a place is the one answered busy and a caller holding nothing
+  is queued over it; only at the hard bound, sized by memory, does a place change hands;
   `.claude/rules/media.md`), `src/board-refresh-slots.js` (the seller boards rebuild at fixed UTC
-  slots, one at a time; `.claude/rules/ops.md`), `src/judge-timing.js` (per-backend and per-walk
-  judgment times on `/__operator/judge-timing.json`; `.claude/rules/gateway.md`).
+  slots, each waiting while another runs; a rebuild held back by the heap retries hourly, and
+  `boardRefresh` on `/api/gateway-status` reads ok, held or stalled; `.claude/rules/ops.md`),
+  `src/judge-timing.js` (per-backend and per-walk judgment times on
+  `/__operator/judge-timing.json`; `.claude/rules/gateway.md`).
 - `src/brand-mark.js` (the vector brand mark: `/logo.svg`, the favicons, the nav mark, the social
   cards' tile), `src/ask402-links.js` (the guide site's addresses, so a page never types one),
   `src/platform-integrations.js` + `src/agentcore-page.js` (platform pages under
@@ -251,7 +258,11 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   (`scripts/lib/monitor-issue-text.js`). Which reading, route, model or upstream it was stays in
   the run log, or the status Worker's own log. `scripts/test-monitor-issue-wording.js` holds every
   workflow and the Worker to it and lists the exceptions (a check whose issue body is its saved
-  state, a buyer's own report), so a new check's issue uses the same text.
+  state, a buyer's own report), so a new check's issue uses the same text. A check's earlier
+  titles are in one list, `workers/status-probe/src/previous-issue-titles.js`: the Worker reads it,
+  and every job that looks an issue up first runs `scripts/adopt-issue-titles.js`, which gives an
+  open issue under an earlier title the current one (`scripts/test-issue-title-adoption.js`); a
+  renamed check adds its old title there.
 - Keep-alive knobs (repo variables): `BAZAAR_PRICE_CHANGE_MAX_USD` caps the deploy job's one buy
   of each route whose fixed price changed (default 5), and
   `BAZAAR_PRICE_CHANGE_MAX_ROUTES` its route count (default 25; raised for one repricing
@@ -342,6 +353,10 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   suite that reaches `src/` gets a stats store of its own from its first import (the offline pin,
   or `scripts/lib/own-stats.js` in a suite that runs on a real store); `scripts/test-stats-store-hygiene.js`
   fails a suite without one.
+- A suite that edits a module in a copy of the tree makes the copy with `copyModuleTree`
+  (`scripts/lib/tree-copy.js`): its `MODULE_TREE` lists every top-level path a `src/` module reads
+  by a relative URL. `scripts/test-module-tree-copy.js` fails a path read from `src/` that is not
+  on the list and a suite that copies `src/` on its own.
 
 ## x402 settlement ordering (CRITICAL)
 The installed `@x402/express` **runs the handler FIRST, then settles**, and only settles a

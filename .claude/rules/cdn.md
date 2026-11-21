@@ -48,7 +48,8 @@ Loaded when an edge, job or fetch-guard file is read.
   delivered to (`scripts/test-price-webhooks-paid.js`). **Lifetime:** `PRICE_WEBHOOK_LIFETIME_DAYS` (90); the same
   URL again from the same proven registrant renews it in place (same id and secret, no second place against the
   cap); a subscription stored with no expiry gets one lifetime from this build's first store write. **Store
-  bound:** expired ones go at every store write; from `PRICE_WEBHOOK_MAX` (5,000) a new registration first removes
+  bound:** expired ones go at every registration and each time the prices are recorded (a boot), and are
+  never delivered to in between; from `PRICE_WEBHOOK_MAX` (5,000) a new registration first removes
   the subscriptions whose last delivery was dropped after every attempt and is admitted all the same, up to twice
   that (a 503 with Retry-After); nothing a receiver still answers is removed for room. At boot the catalog's list
   prices are compared with the ones kept and the changes are stored once as a set that one queued delivery per
