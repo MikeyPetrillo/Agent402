@@ -13,22 +13,70 @@
 // signed with the subscription's secret:
 //   X-Agent402-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, `${t}.${body}`)>
 // The secret is derived from this server's signing key and the subscription
-// id (HMAC), so no secret is stored: the document holds the URL and the id.
+// id (HMAC), so no secret is stored: the document holds the URL, the id and a
+// keyed digest of the registrant (never the wallet or the address itself).
+//
+// WHO REGISTERS. The registrant is the party that paid for the registration
+// (src/tools/price-webhook-kit.js registrantOf: the signed payer, a credits
+// key, a Tempo sender, the signer of a Solana, Algorand or Stellar payment;
+// any other paid call is a registrant of its own; in FREE_MODE, where no
+// payment is verified and there is no payer, the client address). A
+// registrant holds at most PRICE_WEBHOOK_MAX_PER_PAYER subscriptions and its
+// own next one is refused (409) with nothing charged: the only registration
+// refused for what a party itself holds. Nothing is refused for the host a
+// URL names, so many buyers may point at one shared receiver.
+//
+// A REGISTRATION IS KEPT ONLY WHEN ITS CALL SETTLES. The handler stores it as
+// pending (never delivered to) and the dispatcher reports the final response
+// (src/tools/price-webhook-kit.js, `req.__onSettled`): on a final 200 the
+// subscription is confirmed, on anything else it is removed. One that is never
+// reported (the process ended in between) is removed PENDING_MS after it was
+// stored.
+//
+// LIFETIME. A subscription lasts PRICE_WEBHOOK_LIFETIME_DAYS (90) from its
+// registration, then it is removed. Registering the same URL again from the
+// same proven registrant renews it in place: the same id and secret, the
+// slugs as sent, a new lifetime from that call (kept, like a registration,
+// only when the call settles), and no second place against the registrant's
+// cap. A subscription stored by a build that kept no expiry gets one lifetime
+// from the first store write of this one.
+//
+// THE STORE'S BOUND. Expired subscriptions are removed whenever the store is
+// written. From PRICE_WEBHOOK_MAX on, a new registration first removes the
+// subscriptions whose last delivery was dropped after every attempt (the most
+// failures first, then the oldest) and is admitted all the same, up to twice
+// that number, the hard bound (a 503 with Retry-After, nothing charged).
+// Nothing a receiver still answers is ever removed for room.
 //
 // OUTBOUND RULES. Every delivery goes through the fetch guard
 // (src/tools/fetch-guard.js probePublicUrl): the host is resolved and refused
 // when it is private, the connection re-checks the address, and no redirect is
-// followed. A delivery gets a fixed timeout and at most RETRY_DELAYS_MS.length
-// + 1 attempts on a schedule; a 2xx ends it, a 410 removes the subscription,
-// any other answer (or none) is retried and then dropped. Registration refuses
-// a URL that is not https, carries credentials, or does not resolve to a
-// public address.
+// followed. Registration refuses a URL that is not https, carries
+// credentials, or does not resolve to a public address.
 //
-// BOUNDS. At most PRICE_WEBHOOK_MAX subscriptions, at most
-// PRICE_WEBHOOK_MAX_PER_HOST for one target host (the caller's cap: the host
-// is what a registrant controls), at most MAX_SLUGS slugs per subscription.
-// One queued delivery per subscription per boot, so the queue never outgrows
-// the subscriptions.
+// A DELIVERY TURN (deliverDue, once a minute) is fair across receivers:
+//   - one receiving host gets one request at a time (its due deliveries go in
+//     a row), hosts run DELIVERY_LANES at a time;
+//   - one attempt (resolve, connect, response headers) gets
+//     DELIVERY_TIMEOUT_MS; a host that does not answer in that time gets no
+//     more this turn, and a host that answers gets HOST_TURN_MS of the turn;
+//   - deliveries to subscriptions whose last attempt got a 2xx (or that have
+//     had none) go first, and among them one per registrant before anyone's
+//     second; a delivery that failed is retried on RETRY_DELAYS_MS (per
+//     subscription: one queued delivery each) and its subscription stands
+//     behind those until an attempt gets a 2xx. A 2xx ends it, a 410 removes the subscription, any other
+//     answer (or none) is retried and then dropped;
+//   - a turn starts no attempt after TURN_BUDGET_MS, and never runs beside
+//     itself: under the lease with a state database, and in this process
+//     always.
+// So a receiver that does not answer costs one lane DELIVERY_TIMEOUT_MS a
+// turn and never holds another receiver's delivery past the next turn.
+//
+// CHANGE SETS. The changes one boot found are stored once (`sets`) and each
+// queued delivery names the sets it carries; the payload's list is built from
+// them for the subscription's slugs when it is sent. One queued delivery per
+// subscription, so the queue never outgrows the subscriptions; at most
+// MAX_CHANGE_SETS sets are kept (past it the two oldest are folded into one).
 //
 // SWITCHES. No signing key (PRICE_WEBHOOK_SIGNING_KEY, else POW_SECRET): a
 // registration is refused with 503 and nothing is stored. PRICE_WEBHOOK_DELIVERIES off
@@ -54,17 +102,33 @@ export const DELIVERY_HEADER = "X-Agent402-Delivery";
 export const EVENT_PRICE_CHANGED = "price.changed";
 export const MAX_SLUGS = 50;
 export const MAX_URL_CHARS = 2048;
-export const DELIVERY_TIMEOUT_MS = 10_000;
+/** One attempt, whole: the host's lookup, the connection and the response headers. */
+export const DELIVERY_TIMEOUT_MS = 4_000;
 /** The wait before each further attempt; a delivery is dropped after the last. */
 export const RETRY_DELAYS_MS = Object.freeze([60_000, 10 * 60_000, 60 * 60_000, 6 * 60 * 60_000]);
+/** Receiving hosts in flight at once; each host gets one request at a time. */
+export const DELIVERY_LANES = 16;
+/** What one answering host gets of a turn before its remaining deliveries wait for the next. */
+export const HOST_TURN_MS = 2 * DELIVERY_TIMEOUT_MS;
+/** A turn starts no attempt this long after it began (the interval is a minute). */
+export const TURN_BUDGET_MS = 40_000;
+/** A registration whose call was never reported settled is removed after this long. */
+export const PENDING_MS = 10 * 60_000;
+/** Change sets kept at most; past it the two oldest are folded into one. */
+export const MAX_CHANGE_SETS = 16;
 export const DELIVERY_USER_AGENT = "agent402-price-webhook/1";
-const DELIVERIES_PER_TURN = 25;
+const DAY_MS = 86_400_000;
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
 const DOC_HOST_RE = /^(?:example\.(?:com|org|net)|(?:[a-z0-9-]+\.)*example)$/i;
+/** Registrant keys that name a party a payment proved (the rest: an address, one payment, no request). */
+const PROVEN_REGISTRANT_RE = /^(?:payer|credits|tempo|svm|avm|stellar):./;
 
 const envInt = (name, dflt, env = process.env) => { const n = Number(env[name]); return Number.isFinite(n) && n >= 1 ? Math.floor(n) : dflt; };
+/** Where room is first made (failing subscriptions go); the hard bound is twice this. */
 export const maxSubscriptions = (env = process.env) => envInt("PRICE_WEBHOOK_MAX", 5000, env);
-export const maxPerHost = (env = process.env) => envInt("PRICE_WEBHOOK_MAX_PER_HOST", 20, env);
+export const hardMaxSubscriptions = (env = process.env) => 2 * maxSubscriptions(env);
+export const maxPerRegistrant = (env = process.env) => envInt("PRICE_WEBHOOK_MAX_PER_PAYER", 25, env);
+export const lifetimeMs = (env = process.env) => envInt("PRICE_WEBHOOK_LIFETIME_DAYS", 90, env) * DAY_MS;
 export const deliveryIntervalMs = (env = process.env) => envInt("PRICE_WEBHOOK_DELIVERY_INTERVAL_MS", 60_000, env);
 /** This server's signing key for webhook secrets, or "" when none is set. */
 export const signingKeyOf = (env = process.env) => String(env.PRICE_WEBHOOK_SIGNING_KEY || env.POW_SECRET || "").trim();
@@ -76,6 +140,10 @@ function bad(message, statusCode = 400, extra = null) {
 /** The subscription's secret: derived, never stored. */
 export function secretFor(signingKey, id) {
   return `whsec_${createHmac("sha256", String(signingKey)).update(`price-webhook-secret|${id}`).digest("hex")}`;
+}
+/** What is stored for a registrant: a keyed digest, so the document names no wallet and no address. */
+export function ownerDigest(signingKey, registrant) {
+  return `o_${createHmac("sha256", String(signingKey)).update(`price-webhook-owner|${registrant}`).digest("hex").slice(0, 32)}`;
 }
 /** The signature header value for a body sent at `tSeconds`. */
 export function signatureFor(secret, tSeconds, body) {
@@ -121,8 +189,15 @@ export function parseSlugs(raw, known) {
   return out.sort();
 }
 
-const emptyBody = () => ({ v: 1, subs: {}, prices: null, queue: [] });
-const bodyOf = (b) => (b && typeof b === "object" && b.subs && typeof b.subs === "object" && Array.isArray(b.queue) ? b : emptyBody());
+const emptyBody = () => ({ v: 2, subs: {}, prices: null, sets: {}, queue: [] });
+function bodyOf(b) {
+  if (!(b && typeof b === "object" && b.subs && typeof b.subs === "object" && Array.isArray(b.queue))) return emptyBody();
+  if (!b.sets || typeof b.sets !== "object") b.sets = {};
+  return b;
+}
+/** When a subscription ends; one stored with no expiry has not ended. */
+const expOf = (sub) => (Number.isFinite(sub?.exp) ? sub.exp : Infinity);
+const liveAt = (sub, t) => Boolean(sub) && !sub.pending && expOf(sub) > t;
 
 /** The changes between two price maps: slugs present in both whose price differs. */
 export function priceChanges(before, after) {
@@ -133,6 +208,44 @@ export function priceChanges(before, after) {
     if (String(before[slug]) !== String(after[slug])) out.push({ slug, from: String(before[slug]), to: String(after[slug]) });
   }
   return out;
+}
+
+/** Lists of changes, oldest first, as one: a slug keeps its first `from` and
+ *  takes its latest `to`, and one that is back where it began is left out. */
+function foldChanges(lists) {
+  const bySlug = new Map();
+  for (const list of lists) {
+    for (const c of Array.isArray(list) ? list : []) {
+      const was = bySlug.get(c.slug);
+      bySlug.set(c.slug, { slug: c.slug, from: was ? was.from : c.from, to: c.to });
+    }
+  }
+  return [...bySlug.values()].filter((c) => c.from !== c.to).sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+}
+
+/** What a queued delivery announces to its subscription: the sets it names
+ *  (and a list an earlier build stored inline), folded, for the watched slugs.
+ *  `memo` (a Map) shares the fold between deliveries naming the same sets. */
+export function changesOf(body, item, sub, memo = null) {
+  const sets = Array.isArray(item?.sets) ? item.sets : [];
+  const inline = Array.isArray(item?.changes) && item.changes.length ? item.changes : null;
+  const memoKey = inline ? null : sets.join(",");
+  let all = memo && memoKey !== null ? memo.get(memoKey) : undefined;
+  if (!all) {
+    all = foldChanges([inline, ...sets.map((id) => body.sets?.[id]?.changes)]);
+    if (memo && memoKey !== null) memo.set(memoKey, all);
+  }
+  const watched = Array.isArray(sub?.slugs) ? new Set(sub.slugs) : null;
+  return watched ? all.filter((c) => watched.has(c.slug)) : all;
+}
+
+/** `promise`, or a rejection after `ms`; a result that arrives later is released. */
+function within(promise, ms) {
+  let timer = null;
+  const late = new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("no answer in time"), { timedOut: true })), ms); timer.unref?.(); });
+  const guarded = Promise.resolve(promise);
+  guarded.then((res) => { try { res?.body?.cancel?.()?.catch?.(() => {}); } catch { /* nothing to release */ } }, () => {});
+  return Promise.race([guarded, late]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -146,12 +259,16 @@ export function createPriceWebhooks({
   baseUrl = () => String(process.env.BASE_URL || "").replace(/\/$/, ""),
   checkUrl = (url) => assertPublicUrl(url),
   send = (url, init) => probePublicUrl(url, { ...init, timeoutMs: DELIVERY_TIMEOUT_MS, userAgent: DELIVERY_USER_AGENT }),
+  attemptTimeoutMs = DELIVERY_TIMEOUT_MS,
+  settleRetryDelaysMs = [1_000, 5_000, 30_000],
   deliveriesOn = () => flagEnabled("PRICE_WEBHOOK_DELIVERIES", { env }),
   log = console.warn,
 } = {}) {
   if (!doc) throw new Error("createPriceWebhooks needs a document");
   let processKey = null; // only for a documentation host's answer when no signing key is set
-  const counts = { delivered: 0, retried: 0, dropped: 0, removedOn410: 0 };
+  let turning = false; // a delivery turn is under way in this process
+  let saidFullAt = -Infinity; // when the hard bound was last logged (one line an hour)
+  const counts = { delivered: 0, retried: 0, dropped: 0, removedOn410: 0, expired: 0, unsettled: 0, removedForRoom: 0, refusedFull: 0, refusedOwn: 0 };
 
   const describe = (id, sub, key) => ({
     id,
@@ -161,35 +278,175 @@ export function createPriceWebhooks({
     signature: { header: SIGNATURE_HEADER, scheme: "t=<unix seconds>,v1=<hex HMAC-SHA256 of `${t}.${body}` with the secret>" },
     event: EVENT_PRICE_CHANGED,
     unsubscribe: { method: "POST", url: `${baseUrl()}${UNSUBSCRIBE_PATH}`, body: { id, secret: "<the secret above>" } },
+    expiresAt: new Date(sub.exp).toISOString(),
   });
 
-  /** Register a target. `known`: the catalog's slugs (a Set). */
-  async function register(input, { known = null } = {}) {
+  /** Drop the sets no queued delivery names; past the cap fold the two oldest
+   *  into one (a delivery that named only the newer then also lists the older
+   *  one's changes for its slugs). */
+  function tidySets(body) {
+    const named = new Set();
+    for (const q of body.queue) for (const id of Array.isArray(q.sets) ? q.sets : []) named.add(id);
+    for (const id of Object.keys(body.sets)) if (!named.has(id)) delete body.sets[id];
+    for (let ids = Object.keys(body.sets); ids.length > MAX_CHANGE_SETS; ids = Object.keys(body.sets)) {
+      ids.sort((a, b) => (Number(body.sets[a].at) || 0) - (Number(body.sets[b].at) || 0));
+      const [older, newer] = ids;
+      body.sets[newer] = { at: body.sets[newer].at, changes: foldChanges([body.sets[older].changes, body.sets[newer].changes]) };
+      delete body.sets[older];
+      for (const q of body.queue) {
+        if (!Array.isArray(q.sets) || !q.sets.includes(older)) continue;
+        q.sets = [...new Set(q.sets.map((id) => (id === older ? newer : id)))];
+      }
+    }
+  }
+
+  /** What every store write does first: remove what has ended (an expired
+   *  subscription, a registration or renewal never reported settled), give a
+   *  subscription stored with no expiry its lifetime, drop what they leave
+   *  behind. True when anything changed. */
+  function sweep(body, t, tally) {
+    let changed = false;
+    const life = lifetimeMs(env);
+    for (const [id, sub] of Object.entries(body.subs)) {
+      if (!sub || typeof sub !== "object") { delete body.subs[id]; changed = true; continue; }
+      if (!Number.isFinite(sub.exp)) { sub.exp = t + life; changed = true; }
+      if (sub.exp <= t) { delete body.subs[id]; tally.expired++; changed = true; continue; }
+      if (sub.pending && sub.pending <= t) { delete body.subs[id]; tally.unsettled++; changed = true; continue; }
+      if (sub.renew && !(sub.renew.until > t)) { delete sub.renew; changed = true; }
+    }
+    const before = body.queue.length;
+    body.queue = body.queue.filter((q) => body.subs[q.sub]);
+    if (body.queue.length !== before) changed = true;
+    const sets = Object.keys(body.sets).length;
+    tidySets(body);
+    return changed || Object.keys(body.sets).length !== sets;
+  }
+
+  /** Make room at the store's bound: the subscriptions whose last delivery was
+   *  dropped after every attempt go, the most failures first, then the oldest. */
+  function removeFailing(body, want, tally) {
+    if (want <= 0) return 0;
+    const failing = Object.entries(body.subs).filter(([, s]) => !s.pending && Number(s.fails) >= 1)
+      .sort(([, a], [, b]) => (Number(b.fails) - Number(a.fails)) || ((Number(a.at) || 0) - (Number(b.at) || 0)));
+    let gone = 0;
+    for (const [id] of failing) {
+      if (gone >= want) break;
+      delete body.subs[id];
+      gone++;
+    }
+    if (gone) { body.queue = body.queue.filter((q) => body.subs[q.sub]); tally.removedForRoom += gone; }
+    return gone;
+  }
+
+  /**
+   * Register a target and report its call's outcome later. `known`: the
+   * catalog's slugs (a Set). `registrant`: the key of the party that paid
+   * (null: no cap of its own). Resolves `{ answer, settle }`: the subscription
+   * is stored pending, and `settle(true)` keeps it, `settle(false)` removes it
+   * (a renewal: applies it, or leaves the subscription as it was).
+   */
+  async function registerPending(input, opts = {}) {
+    return store(input, { ...opts, deferred: true });
+  }
+  /** Register a target, kept at once (a call with no response to wait for). */
+  async function register(input, opts = {}) {
+    return (await store(input, { ...opts, deferred: false })).answer;
+  }
+
+  async function store(input, { known = null, registrant = null, deferred = false } = {}) {
     const key = signingKeyOf(env);
     const target = parseTarget(input?.url);
     const slugs = parseSlugs(input?.slugs, known);
-    const id = `pw_${randomBytes(16).toString("hex")}`;
     if (isDocumentationHost(target.host)) {
       // Nothing is kept for it, so with no signing key set the secret shown is
       // derived from a key of this process's own: the answer has every field.
-      return { ...describe(id, { url: target.url, slugs }, key || (processKey ||= randomBytes(32).toString("hex"))), registered: false, delivers: false, note: `${target.host} is a documentation host: the registration is answered as a real one would be, and nothing is stored or sent.` };
+      const id = `pw_${randomBytes(16).toString("hex")}`;
+      const answer = { ...describe(id, { url: target.url, slugs, exp: now() + lifetimeMs(env) }, key || (processKey ||= randomBytes(32).toString("hex"))), registered: false, delivers: false, note: `${target.host} is a documentation host: the registration is answered as a real one would be, and nothing is stored or sent.` };
+      return { answer, settle: async () => true };
     }
     if (!key) throw bad("Price webhooks are not configured on this server (no signing key), so nothing was registered.", 503);
     // The host is resolved and refused when it is not public (a 400 from the guard).
     await checkUrl(target.url);
-    let refusal = null;
+    const who = typeof registrant === "string" && registrant ? registrant : null;
+    const owner = who ? ownerDigest(key, who) : null;
+    const renewable = who !== null && PROVEN_REGISTRANT_RE.test(who);
+    const cap = maxPerRegistrant(env), soft = maxSubscriptions(env), hard = hardMaxSubscriptions(env), life = lifetimeMs(env);
+    let refusal = null, placed = null;
+    const tally = { expired: 0, unsettled: 0, removedForRoom: 0 };
     const r = await doc.update((b) => {
       const body = bodyOf(b);
-      refusal = null;
-      const subs = Object.values(body.subs);
-      if (subs.length >= maxSubscriptions(env)) { refusal = bad("This server holds as many price webhooks as it is set to; nothing was registered.", 503, { retryAfterSeconds: 3600 }); return SKIP_UPDATE; }
-      if (subs.filter((s) => s.host === target.host).length >= maxPerHost(env)) { refusal = bad(`${target.host} already has ${maxPerHost(env)} price webhooks registered, the most one host may hold. Remove one first (POST ${UNSUBSCRIBE_PATH}).`, 409); return SKIP_UPDATE; }
-      body.subs[id] = { url: target.url, host: target.host, slugs, at: now() };
+      refusal = null; placed = null;
+      tally.expired = tally.unsettled = tally.removedForRoom = 0;
+      const t = now();
+      const swept = sweep(body, t, tally);
+      const mine = owner ? Object.entries(body.subs).filter(([, s]) => s.owner === owner) : [];
+      // The same URL again from the same proven registrant renews it in place.
+      const same = renewable ? mine.find(([, s]) => s.url === target.url && !s.pending) : null;
+      if (same) {
+        const [id, sub] = same;
+        if (deferred) sub.renew = { exp: t + life, slugs, until: t + PENDING_MS };
+        else { sub.exp = t + life; sub.slugs = slugs; delete sub.renew; }
+        placed = { id, exp: t + life, renewed: true };
+        return body;
+      }
+      if (owner && mine.length >= cap) {
+        refusal = bad(`This registrant already holds ${cap} price webhooks, the most one may hold, so this one was not registered. Remove one first (POST ${UNSUBSCRIBE_PATH}, free), or register a URL it already holds to renew that one.`, 409, { own: true });
+        return swept ? body : SKIP_UPDATE;
+      }
+      let n = Object.keys(body.subs).length;
+      if (n >= soft) n -= removeFailing(body, n - soft + 1, tally);
+      if (n >= hard) {
+        refusal = bad("This server holds as many price webhooks as it can keep; nothing was registered. Retry later.", 503, { retryAfterSeconds: 3600, full: true });
+        return swept || tally.removedForRoom ? body : SKIP_UPDATE;
+      }
+      const id = `pw_${randomBytes(16).toString("hex")}`;
+      body.subs[id] = { url: target.url, host: target.host, slugs, at: t, exp: t + life, ...(owner ? { owner } : {}), ...(deferred ? { pending: t + PENDING_MS } : {}) };
+      placed = { id, exp: t + life, renewed: false };
       return body;
     }, { fallback: emptyBody() });
-    if (refusal) throw refusal;
-    if (!r?.ok) throw bad("The registration could not be stored; nothing was registered.", 503, { retryAfterSeconds: 30 });
-    return { ...describe(id, { url: target.url, slugs }, key), registered: true, delivers: true };
+    if (r?.ok) for (const k of Object.keys(tally)) counts[k] += tally[k];
+    if (refusal) {
+      if (refusal.own) counts.refusedOwn++;
+      else {
+        counts.refusedFull++;
+        if (now() - saidFullAt >= 3_600_000) { saidFullAt = now(); log(`[price-webhooks] the store is at its hard bound (${hard} subscriptions, none expired or failing): a registration was refused; PRICE_WEBHOOK_MAX raises it`); }
+      }
+      throw refusal;
+    }
+    if (!r?.ok || !placed) throw bad("The registration could not be stored; nothing was registered.", 503, { retryAfterSeconds: 30 });
+    const { id, exp, renewed } = placed;
+    const answer = { ...describe(id, { url: target.url, slugs, exp }, key), registered: true, delivers: true, ...(renewed ? { renewed: true } : {}) };
+    return { answer, settle: deferred ? (ok) => settleStored(id, renewed, ok === true) : async () => true };
+  }
+
+  /** The outcome of a pending registration's call: keep it or remove it (a
+   *  renewal: apply it or drop it). A store that does not answer is asked
+   *  again on `settleRetryDelaysMs`; past that the pending mark's own expiry
+   *  removes it. Resolves true when the store took it. Never throws. */
+  async function settleStored(id, renewed, ok) {
+    for (let attempt = 0; ; attempt++) {
+      let r = null;
+      try {
+        r = await doc.update((b) => {
+          const body = bodyOf(b);
+          const sub = body.subs[id];
+          if (!sub) return SKIP_UPDATE;
+          if (renewed) {
+            if (!sub.renew) return SKIP_UPDATE;
+            if (ok) { sub.exp = sub.renew.exp; sub.slugs = sub.renew.slugs; }
+            delete sub.renew;
+            return body;
+          }
+          if (!sub.pending) return SKIP_UPDATE;
+          if (ok) delete sub.pending;
+          else { delete body.subs[id]; body.queue = body.queue.filter((q) => q.sub !== id); }
+          return body;
+        }, { fallback: emptyBody() });
+      } catch { r = null; }
+      if (r?.ok) { if (!ok && !renewed) counts.unsettled++; return true; }
+      if (attempt >= settleRetryDelaysMs.length) { log(`[price-webhooks] a registration's outcome could not be stored; its pending mark ends it`); return false; }
+      await new Promise((resolve) => { const timer = setTimeout(resolve, settleRetryDelaysMs[attempt]); timer.unref?.(); });
+    }
   }
 
   /** Remove a subscription. The same answer for an unknown id and a wrong secret. */
@@ -206,6 +463,7 @@ export function createPriceWebhooks({
       if (!body.subs[id]) return SKIP_UPDATE;
       delete body.subs[id];
       body.queue = body.queue.filter((q) => q.sub !== id);
+      tidySets(body);
       removed = true;
       return body;
     }, { fallback: emptyBody() });
@@ -214,56 +472,66 @@ export function createPriceWebhooks({
   }
 
   /**
-   * Compare the catalog's prices ({ slug: price }) with the ones kept, queue
-   * one delivery per subscription that watches a changed slug, and keep the
-   * new prices. Resolves { first, changes, queued }.
+   * Compare the catalog's prices ({ slug: price }) with the ones kept, store
+   * the changes once as a set, name it on one queued delivery per subscription
+   * that watches a changed slug, and keep the new prices. Resolves
+   * { first, changes, queued }.
    */
   async function notePrices(prices) {
     const after = {};
     for (const [slug, price] of Object.entries(prices || {})) if (SLUG_RE.test(slug) && typeof price === "string" && price) after[slug] = price;
     let out = { first: false, changes: 0, queued: 0 };
+    const tally = { expired: 0, unsettled: 0, removedForRoom: 0 };
     const r = await doc.update((b) => {
       const body = bodyOf(b);
       out = { first: !body.prices, changes: 0, queued: 0 };
+      tally.expired = tally.unsettled = 0;
+      const at = now();
+      const swept = sweep(body, at, tally);
       const changes = priceChanges(body.prices, after);
       const same = body.prices && changes.length === 0 && Object.keys(body.prices).length === Object.keys(after).length && Object.keys(after).every((s) => Object.hasOwn(body.prices, s));
-      if (same) return SKIP_UPDATE;
+      if (same) return swept ? body : SKIP_UPDATE;
       out.changes = changes.length;
       if (changes.length) {
-        const at = now();
+        const setId = `pws_${randomBytes(8).toString("hex")}`;
+        body.sets[setId] = { at, changes };
+        const changed = new Set(changes.map((c) => c.slug));
+        const waitingBySub = new Map(body.queue.map((q) => [q.sub, q]));
         for (const [id, sub] of Object.entries(body.subs)) {
-          const mine = sub.slugs ? changes.filter((c) => sub.slugs.includes(c.slug)) : changes;
-          if (!mine.length) continue;
-          // One queued delivery per subscription: a later set of changes is added to the one waiting.
-          const waiting = body.queue.find((q) => q.sub === id);
+          if (sub.pending) continue; // a registration whose call has not settled is not delivered to
+          if (sub.slugs && !sub.slugs.some((s) => changed.has(s))) continue;
+          // One queued delivery per subscription: a later set joins the one waiting.
+          const waiting = waitingBySub.get(id);
           if (waiting) {
-            const bySlug = new Map(waiting.changes.map((c) => [c.slug, c]));
-            for (const c of mine) bySlug.set(c.slug, bySlug.has(c.slug) ? { slug: c.slug, from: bySlug.get(c.slug).from, to: c.to } : c);
-            waiting.changes = [...bySlug.values()].filter((c) => c.from !== c.to);
+            waiting.sets = [...(Array.isArray(waiting.sets) ? waiting.sets : []), setId];
             waiting.tries = 0; waiting.next = at;
           } else {
-            body.queue.push({ k: `pwd_${randomBytes(12).toString("hex")}`, sub: id, at, changes: mine, tries: 0, next: at });
+            body.queue.push({ k: `pwd_${randomBytes(12).toString("hex")}`, sub: id, at, sets: [setId], tries: 0, next: at });
           }
           out.queued++;
         }
-        body.queue = body.queue.filter((q) => q.changes.length > 0);
+        // A delivery with nothing left to announce (a price back where it began) is dropped.
+        const memo = new Map();
+        body.queue = body.queue.filter((q) => changesOf(body, q, body.subs[q.sub], memo).length > 0);
+        tidySets(body);
       }
       body.prices = after;
       return body;
     }, { fallback: emptyBody() });
     if (!r?.ok) { log("[price-webhooks] the price record could not be stored"); return { ...out, ok: false }; }
+    counts.expired += tally.expired; counts.unsettled += tally.unsettled;
     return { ...out, ok: true };
   }
 
   /** The request a delivery sends: { url, body, headers }. */
-  function buildDelivery(item, sub, key, at) {
+  function buildDelivery(item, sub, key, at, changes) {
     const payload = {
       type: EVENT_PRICE_CHANGED,
       id: item.sub,
       deliveryId: item.k,
       sentAt: new Date(at).toISOString(),
       attempt: (Number(item.tries) || 0) + 1,
-      changes: item.changes,
+      changes,
       pricing: `${baseUrl()}/api/pricing`,
       unsubscribe: { method: "POST", url: `${baseUrl()}${UNSUBSCRIBE_PATH}`, body: { id: item.sub, secret: "<your secret>" } },
     };
@@ -275,30 +543,86 @@ export function createPriceWebhooks({
     };
   }
 
-  /** Send what is due (at most DELIVERIES_PER_TURN). Never throws. */
+  /** The due deliveries in the order a turn takes them: those that have not
+   *  failed first, then the rest; inside each, one per registrant before
+   *  anyone's second, each registrant's own in the order they came due. */
+  function turnOrder(body, due) {
+    const rank = (failed) => {
+      const byOwner = new Map();
+      for (const q of due) {
+        const sub = body.subs[q.sub];
+        if ((Number(q.tries) > 0 || Number(sub.miss) > 0 || Number(sub.fails) > 0) !== failed) continue;
+        const owner = sub.owner || `sub:${q.sub}`;
+        if (!byOwner.has(owner)) byOwner.set(owner, []);
+        byOwner.get(owner).push(q);
+      }
+      const out = [];
+      for (let round = 0, more = true; more; round++) {
+        more = false;
+        for (const list of byOwner.values()) if (round < list.length) { out.push(list[round]); more = true; }
+      }
+      return out;
+    };
+    return [...rank(false), ...rank(true)];
+  }
+
+  /** Send what is due, fairly across receivers (see the header). Never throws,
+   *  and never runs beside itself in this process. */
   async function deliverDue() {
+    if (turning) return { skipped: "turn-running" };
+    turning = true;
+    try { return await turn(); } finally { turning = false; }
+  }
+
+  async function turn() {
     const key = signingKeyOf(env);
     if (!key) return { skipped: "no-signing-key" };
     if (!deliveriesOn()) return { skipped: "deliveries-off" };
     const read = await doc.read({ quiet: true });
     if (!read?.ok) return { skipped: "unread" };
     const body = bodyOf(read.body);
-    const at = now();
-    const due = body.queue.filter((q) => Number(q.next) <= at).slice(0, DELIVERIES_PER_TURN);
-    const outcomes = new Map(); // k -> "done" | "gone" | "retry"
-    for (const item of due) {
+    const began = now();
+    const due = body.queue.filter((q) => Number(q.next) <= began && liveAt(body.subs[q.sub], began));
+    // One job per receiving host, hosts in the order of their first delivery.
+    const jobs = new Map();
+    for (const q of turnOrder(body, due)) {
+      const host = body.subs[q.sub].host || body.subs[q.sub].url;
+      if (!jobs.has(host)) jobs.set(host, []);
+      jobs.get(host).push(q);
+    }
+    const outcomes = new Map(); // k -> { how: "done" | "gone" | "retry", sets: how many sets it carried }
+    const memo = new Map();
+    const attempt = async (item) => {
       const sub = body.subs[item.sub];
-      if (!sub) { outcomes.set(item.k, "done"); continue; }
-      const req = buildDelivery(item, sub, key, now());
+      const carried = Array.isArray(item.sets) ? item.sets.length : 0;
+      const changes = changesOf(body, item, sub, memo);
+      if (!changes.length) return { how: "done", sets: carried, silent: true };
+      const req = buildDelivery(item, sub, key, now(), changes);
       let status = 0;
       try {
-        const res = await send(req.url, { method: "POST", headers: req.headers, body: req.body });
+        const res = await within(Promise.resolve().then(() => send(req.url, { method: "POST", headers: req.headers, body: req.body })), attemptTimeoutMs);
         status = Number(res?.status) || 0;
-        try { await res?.body?.cancel?.(); } catch { /* nothing to release */ }
       } catch { status = 0; /* refused by the guard, timed out, or no answer */ }
-      outcomes.set(item.k, status >= 200 && status < 300 ? "done" : status === 410 ? "gone" : "retry");
-    }
-    if (!outcomes.size) return { sent: 0, left: body.queue.length };
+      return { how: status >= 200 && status < 300 ? "done" : status === 410 ? "gone" : "retry", sets: carried, answered: status > 0 };
+    };
+    const hosts = [...jobs.values()];
+    let next = 0;
+    const lane = async () => {
+      while (next < hosts.length) {
+        const items = hosts[next++];
+        const from = now();
+        for (const item of items) {
+          // Past the turn's budget, or this host's share of it: the rest wait for the next turn.
+          if (now() - began >= TURN_BUDGET_MS || now() - from >= HOST_TURN_MS) break;
+          const o = await attempt(item);
+          outcomes.set(item.k, o);
+          if (o.how === "retry" && !o.answered) break; // a host that does not answer gets no more this turn
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(DELIVERY_LANES, hosts.length) }, () => lane()));
+    const waiting = due.length - outcomes.size;
+    if (!outcomes.size) return { sent: 0, left: body.queue.length, waiting };
     const tally = { delivered: 0, retried: 0, dropped: 0, removedOn410: 0 };
     const r = await doc.update((b) => {
       const cur = bodyOf(b);
@@ -307,29 +631,46 @@ export function createPriceWebhooks({
       for (const q of cur.queue) {
         const o = outcomes.get(q.k);
         if (!o) { keep.push(q); continue; }
-        if (o === "done") { tally.delivered++; continue; }
-        if (o === "gone") { if (cur.subs[q.sub]) { delete cur.subs[q.sub]; tally.removedOn410++; } continue; }
+        const sub = cur.subs[q.sub];
+        if (o.how === "done") {
+          if (!o.silent) tally.delivered++;
+          if (sub) { delete sub.miss; delete sub.fails; }
+          // A set that joined while this one was on its way is still to be announced.
+          const later = Array.isArray(q.sets) ? q.sets.slice(o.sets) : [];
+          if (later.length) keep.push({ k: q.k, sub: q.sub, at: q.at, sets: later, tries: 0, next: Number(q.next) || now() });
+          continue;
+        }
+        if (o.how === "gone") { if (sub) { delete cur.subs[q.sub]; tally.removedOn410++; } continue; }
         const tries = (Number(q.tries) || 0) + 1;
-        if (tries > RETRY_DELAYS_MS.length) { tally.dropped++; continue; }
+        if (sub) sub.miss = (Number(sub.miss) || 0) + 1; // attempts in a row with no 2xx: it stands behind what has not failed
+        if (tries > RETRY_DELAYS_MS.length) { tally.dropped++; if (sub) sub.fails = (Number(sub.fails) || 0) + 1; continue; }
         tally.retried++;
         keep.push({ ...q, tries, next: now() + RETRY_DELAYS_MS[tries - 1] });
       }
       cur.queue = keep.filter((q) => cur.subs[q.sub]);
+      tidySets(cur);
       return cur;
     }, { fallback: emptyBody() });
     if (!r?.ok) return { skipped: "unsaved" };
     for (const k of Object.keys(tally)) counts[k] += tally[k];
-    return { sent: outcomes.size, ...tally, left: bodyOf(r.body).queue.length };
+    return { sent: [...outcomes.values()].filter((o) => !o.silent).length, ...tally, left: bodyOf(r.body).queue.length, waiting };
   }
 
   /** Counts only, for the operator view. */
   async function status() {
     const read = await doc.read({ quiet: true });
     const body = bodyOf(read?.ok ? read.body : null);
-    return { configured: Boolean(signingKeyOf(env)), deliveries: deliveriesOn() ? "on" : "off", subscriptions: Object.keys(body.subs).length, queued: body.queue.length, pricesKept: body.prices ? Object.keys(body.prices).length : 0, sinceBoot: { ...counts } };
+    const subs = Object.values(body.subs);
+    return {
+      configured: Boolean(signingKeyOf(env)), deliveries: deliveriesOn() ? "on" : "off",
+      subscriptions: subs.length, pending: subs.filter((s) => s.pending).length, failing: subs.filter((s) => Number(s.fails) >= 1).length,
+      bound: maxSubscriptions(env), hardBound: hardMaxSubscriptions(env),
+      queued: body.queue.length, changeSets: Object.keys(body.sets).length, pricesKept: body.prices ? Object.keys(body.prices).length : 0,
+      sinceBoot: { ...counts },
+    };
   }
 
-  return { register, unsubscribe, notePrices, deliverDue, status, buildDelivery };
+  return { register, registerPending, unsubscribe, notePrices, deliverDue, status, buildDelivery };
 }
 
 // ---------------------------------------------------------------- the default instance
@@ -345,7 +686,9 @@ export function priceWebhooks() {
  * Boot: record the catalog's prices (queueing deliveries for the changes) and
  * start the delivery turn. `prices` is a function returning { slug: price }.
  * Both run under a lease, so two replicas neither announce a change twice nor
- * send one delivery twice.
+ * send one delivery twice; without a state database the lease is a plain
+ * call, and the turn's own guard (deliverDue) keeps it from running beside
+ * itself.
  */
 export function startPriceWebhooks({ prices, intervalMs = deliveryIntervalMs() } = {}) {
   const pw = priceWebhooks();

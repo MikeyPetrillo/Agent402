@@ -119,7 +119,8 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
 // call is answered at once (busy: the caller's retryable 503) while the count
 // bound still has room, and the bytes leave the queue with each waiter.
 {
-  const { measureAudio, measureQueueMaxBytes, MEASURE_QUEUE_PER_SLOT, MEASURE_QUEUE_BYTES_CAP, __measurePoolForTest, __setMeasureQueueMaxBytesForTest } = await import("../src/tools/media-kit.js");
+  const { measureAudio, measureQueueMaxBytes, measureQueueHardMaxBytes, MEASURE_QUEUE_PER_SLOT, MEASURE_QUEUE_HARD_PER_SLOT, MEASURE_QUEUE_BYTES_CAP, __measurePoolForTest, __setMeasureQueueMaxBytesForTest } = await import("../src/tools/media-kit.js");
+  ok(MEASURE_QUEUE_HARD_PER_SLOT === 8 && measureQueueHardMaxBytes(2) === 300 * 1024 * 1024 && measureQueueHardMaxBytes(8) === 300 * 1024 * 1024 && measureQueueHardMaxBytes(1) === 150 * 1024 * 1024, `callers holding nothing are admitted over those bounds up to ${MEASURE_QUEUE_HARD_PER_SLOT} waiters a slot holding one and a half times the bytes, 300 MB at most`);
   ok(measureQueueMaxBytes(2) === MEASURE_QUEUE_BYTES_CAP && measureQueueMaxBytes(8) === MEASURE_QUEUE_BYTES_CAP && MEASURE_QUEUE_BYTES_CAP === 200 * 1024 * 1024 && measureQueueMaxBytes(1) === MEASURE_QUEUE_PER_SLOT * 25 * 1024 * 1024, `the byte bound is ${MEASURE_QUEUE_PER_SLOT} x slots x 25 MB, held to 200 MB`);
   const hadSlots = process.env.AUDIO_DECODE_SLOTS;
   process.env.AUDIO_DECODE_SLOTS = "1";
@@ -147,12 +148,14 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
 }
 
 // Admission is per caller: one caller's run of files holding the slot and
-// every queued place never refuses another caller's first file. The newcomer
-// takes the first caller's newest queued place (that waiter is answered busy),
-// the next slot that frees goes to the caller holding none, and a caller that
-// already holds a place takes none from anyone.
+// every queued place never refuses another caller's first file, and is never
+// answered busy for it short of the hard bound. The caller that holds places
+// is the one refused; a newcomer is queued over the bound and nothing gives
+// way; at the hard bound it takes the first caller's newest queued place
+// (that waiter is answered busy); the next slot that frees goes to a caller
+// holding none.
 {
-  const { measureAudio, MEASURE_QUEUE_PER_SLOT, __measurePoolForTest } = await import("../src/tools/media-kit.js");
+  const { measureAudio, MEASURE_QUEUE_PER_SLOT, MEASURE_QUEUE_HARD_PER_SLOT, __measurePoolForTest } = await import("../src/tools/media-kit.js");
   const { runAsCallerOf } = await import("../src/dispatch-caller.js");
   const hadSlots = process.env.AUDIO_DECODE_SLOTS;
   process.env.AUDIO_DECODE_SLOTS = "1";
@@ -171,20 +174,26 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
     await tick();
     ok(__measurePoolForTest().active === 1 && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, `one caller holds the slot and every queued place (setup, ${JSON.stringify(__measurePoolForTest())})`);
     const aMore = await measureAudio(mp3, { format: "mp3", who: A });
-    ok(aMore?.busy === true, "a caller already holding places is refused when the queue is full");
+    ok(aMore?.busy === true && aMore.own === true && /this caller's earlier files/.test(aMore.unavailable || ""), `a caller already holding places is the one refused when the queue is full, and is told its own files wait (${JSON.stringify(aMore)})`);
     const aStep = await runAsCallerOf({ ip: A.slice(3), headers: {} }, () => measureAudio(mp3, { format: "mp3" }));
     ok(aStep?.busy === true && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT && !settled.has(`a${MEASURE_QUEUE_PER_SLOT}`), "a step that caller dispatched is keyed on it, so it takes no place either");
     // A second caller's first file, dispatched as a step with no request.
     const bRun = track("b", runAsCallerOf({ ip: B.slice(3), headers: {} }, () => measureAudio(mp3, { format: "mp3" })));
     await tick();
-    ok(!settled.has("b") && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, `a second caller's first file is queued, not refused (${JSON.stringify(settled.get("b"))})`);
-    ok(settled.get(`a${MEASURE_QUEUE_PER_SLOT}`)?.busy === true, "the place it took was the first caller's newest queued one, answered busy");
-    // A third caller with none also finds a place; B, holding one, takes none.
+    ok(!settled.has("b") && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT + 1 && !settled.has(`a${MEASURE_QUEUE_PER_SLOT}`), `a second caller's first file is queued over the bound, and the first caller keeps every place (${JSON.stringify(__measurePoolForTest())})`);
+    // A third caller with none is queued too; B, holding one, is the one refused.
     const cRun = track("c", measureAudio(mp3, { format: "mp3", who: C }));
     await tick();
-    ok(!settled.has("c") && settled.get(`a${MEASURE_QUEUE_PER_SLOT - 1}`)?.busy === true, "a third caller's first file takes the first caller's next queued place");
+    ok(!settled.has("c") && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT + 2 && !settled.has(`a${MEASURE_QUEUE_PER_SLOT - 1}`), "a third caller's first file is queued too, nothing giving way");
     const bMore = await runAsCallerOf({ ip: B.slice(3), headers: {} }, () => measureAudio(mp3, { format: "mp3" }));
-    ok(bMore?.busy === true, "a step keyed on its dispatcher, which holds a place, takes none (keyed on the dispatcher, not the shared key)");
+    ok(bMore?.busy === true && bMore.own === true, "a step keyed on its dispatcher, which holds a place, is refused (keyed on the dispatcher, not the shared key)");
+    // More newcomers take the queue to its hard bound; the next one takes the
+    // first caller's newest queued place.
+    const others = [];
+    for (let i = 0; __measurePoolForTest().waiting < MEASURE_QUEUE_HARD_PER_SLOT; i++) others.push(track(`o${i}`, measureAudio(mp3, { format: "mp3", who: `ip:192.0.2.${i + 1}` })));
+    const dRun = track("d", measureAudio(mp3, { format: "mp3", who: "ip:192.0.2.100" }));
+    await tick();
+    ok(others.length === MEASURE_QUEUE_HARD_PER_SLOT - MEASURE_QUEUE_PER_SLOT - 2 && !settled.has("d") && settled.get(`a${MEASURE_QUEUE_PER_SLOT}`)?.busy === true && !settled.has(`a${MEASURE_QUEUE_PER_SLOT - 1}`) && __measurePoolForTest().waiting === MEASURE_QUEUE_HARD_PER_SLOT, `at the hard bound a newcomer takes the newest queued place of the caller holding the most, answered busy (${JSON.stringify(__measurePoolForTest())})`);
     // The slot that frees goes to a caller holding no slot, ahead of the first caller's queue.
     done(held.shift());
     await tick();
@@ -193,8 +202,8 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
     ok(settled.get("b")?.seconds === 1 && !settled.has("a1"), `the next freed slot decodes the second caller's file before the first caller's queue (${JSON.stringify([...settled.keys()])})`);
     __setExecFileForTest((bin, args, opts, cb) => setImmediate(() => done(cb)));
     while (held.length) done(held.shift());
-    await Promise.all([...aRuns, bRun, cRun]);
-    ok(settled.get("c")?.seconds === 1, "the third caller's file decodes too");
+    await Promise.all([...aRuns, bRun, cRun, dRun, ...others]);
+    ok(settled.get("c")?.seconds === 1 && settled.get("d")?.seconds === 1, "the other callers' files decode too");
     ok(__measurePoolForTest().active === 0 && __measurePoolForTest().waiting === 0 && __measurePoolForTest().callers === 0 && __measurePoolForTest().queuedBytes === 0, `the pool and its per-caller counts drain (${JSON.stringify(__measurePoolForTest())})`);
   } finally {
     clearInterval(keep);
@@ -203,8 +212,9 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
 }
 
 // A buyer that shares an address with a caller holding the slot and every
-// queued place under its own credential is a newcomer: it takes that caller's
-// newest queued place. An unproven, unsigned request shares no holding key.
+// queued place under its own credential is a newcomer: it is queued over the
+// bound and that caller keeps its places. An unproven, unsigned request
+// shares no holding key.
 {
   const { measureAudio, MEASURE_QUEUE_PER_SLOT, __measurePoolForTest } = await import("../src/tools/media-kit.js");
   const { admissionCallerOf } = await import("../src/dispatch-caller.js");
@@ -232,13 +242,13 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
     let got = null;
     const b = measureAudio(mp3, { format: "mp3", who: paid(2) }).then((v) => { got = v; return v; });
     await tick();
-    ok(got === null && a.settled.get(MEASURE_QUEUE_PER_SLOT)?.busy === true && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, `a buyer sharing an address with a caller that holds every place is queued in that caller's newest place (${JSON.stringify(got)})`);
+    ok(got === null && !a.settled.has(MEASURE_QUEUE_PER_SLOT) && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT + 1, `a buyer sharing an address with a caller that holds every place is queued over the bound, and that caller keeps its places (${JSON.stringify(got)}; ${JSON.stringify(__measurePoolForTest())})`);
     await drain([...a.runs, b]);
     const u = await fill(() => anon("203.0.113.80"));
     let got2 = null;
     const v = measureAudio(mp3, { format: "mp3", who: anon("203.0.113.81") }).then((x) => { got2 = x; return x; });
     await tick();
-    ok(got2 === null && u.settled.get(MEASURE_QUEUE_PER_SLOT)?.busy === true, `an unproven request is not refused because another holds every place (${JSON.stringify(got2)})`);
+    ok(got2 === null && !u.settled.has(MEASURE_QUEUE_PER_SLOT) && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT + 1, `an unproven request is not refused because another holds every place, and nothing gives way (${JSON.stringify(got2)})`);
     await drain([...u.runs, v]);
     ok(__measurePoolForTest().active === 0 && __measurePoolForTest().waiting === 0 && __measurePoolForTest().callers === 0, `the pool drains (${JSON.stringify(__measurePoolForTest())})`);
   } finally {
@@ -247,14 +257,14 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
   }
 }
 
-// Several wallets paying from one address are one party at a full queue and
-// when a slot frees: a new payer from a new address takes that address's
-// newest queued place (each wallet there holds only one, so before this the
-// newcomer was answered busy), and the next freed slot decodes its file
-// ahead of the address's queue. A payer at that address takes no place from
-// the others there.
+// Several wallets paying from one address fill the queue, one place each: a
+// new payer from a new address is queued over the bound and none of them is
+// answered busy, and so is another payer at that address (its own caller).
+// The party's further wallets take the queue to its hard bound: there a new
+// payer from a new address takes that address's newest queued place, and the
+// next freed slot decodes a newcomer's file ahead of the address's queue.
 {
-  const { measureAudio, MEASURE_QUEUE_PER_SLOT, __measurePoolForTest } = await import("../src/tools/media-kit.js");
+  const { measureAudio, MEASURE_QUEUE_PER_SLOT, MEASURE_QUEUE_HARD_PER_SLOT, __measurePoolForTest } = await import("../src/tools/media-kit.js");
   const { admissionCallerOf } = await import("../src/dispatch-caller.js");
   const hadSlots = process.env.AUDIO_DECODE_SLOTS;
   process.env.AUDIO_DECODE_SLOTS = "1";
@@ -275,9 +285,15 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
     ok(__measurePoolForTest().active === 1 && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, `five wallets on one address hold the slot and every queued place, one each (setup, ${JSON.stringify(__measurePoolForTest())})`);
     const fresh = track("fresh", measureAudio(mp3, { format: "mp3", who: walletAt(50, "198.51.100.151") }));
     await tick();
-    ok(!settled.has("fresh") && settled.get(`w${MEASURE_QUEUE_PER_SLOT}`)?.busy === true && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, `a new payer from a new address takes that address's newest queued place (newcomer ${JSON.stringify(settled.get("fresh") ?? "queued")}; the address's newest ${JSON.stringify(settled.get(`w${MEASURE_QUEUE_PER_SLOT}`))})`);
-    const neighbor = await measureAudio(mp3, { format: "mp3", who: walletAt(60) });
-    ok(neighbor?.busy === true && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, "a payer whose address already holds places takes none from the others there");
+    ok(!settled.has("fresh") && settled.size === 0 && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT + 1, `a new payer from a new address is queued over the bound and none of the address's wallets is answered busy (${JSON.stringify([...settled.keys()])}; ${JSON.stringify(__measurePoolForTest())})`);
+    const neighbor = track("neighbor", measureAudio(mp3, { format: "mp3", who: walletAt(60) }));
+    await tick();
+    ok(!settled.has("neighbor") && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT + 2, "a payer is not refused because others at its address hold places");
+    let newest = null;
+    for (let i = 61; __measurePoolForTest().waiting < MEASURE_QUEUE_HARD_PER_SLOT; i++) { newest = `w${i}`; runs.push(track(newest, measureAudio(mp3, { format: "mp3", who: walletAt(i) }))); }
+    const fresh2 = track("fresh2", measureAudio(mp3, { format: "mp3", who: walletAt(51, "198.51.100.152") }));
+    await tick();
+    ok(!settled.has("fresh2") && newest === "w62" && settled.get(newest)?.busy === true && settled.size === 1 && __measurePoolForTest().waiting === MEASURE_QUEUE_HARD_PER_SLOT, `at the hard bound, several wallets on one address cannot keep a newcomer out: a new payer from a new address takes that address's newest queued place (${JSON.stringify([...settled.keys()])}; ${JSON.stringify(__measurePoolForTest())})`);
     done(held.shift());
     await tick();
     done(held.shift());
@@ -285,7 +301,52 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
     ok(settled.get("fresh")?.seconds === 1 && !settled.has("w1"), `the next freed slot decodes the new payer's file ahead of the address's queue (${JSON.stringify([...settled.keys()])})`);
     __setExecFileForTest((bin, args, opts, cb) => setImmediate(() => done(cb)));
     while (held.length) done(held.shift());
-    await Promise.all([...runs, fresh]);
+    await Promise.all([...runs, fresh, neighbor, fresh2]);
+    ok(__measurePoolForTest().active === 0 && __measurePoolForTest().waiting === 0 && __measurePoolForTest().callers === 0, `the pool drains (${JSON.stringify(__measurePoolForTest())})`);
+  } finally {
+    clearInterval(keep);
+    if (hadSlots === undefined) delete process.env.AUDIO_DECODE_SLOTS; else process.env.AUDIO_DECODE_SLOTS = hadSlots;
+  }
+}
+
+// Two payers who share an address each hold one queued place in a full queue
+// of callers holding one each: a newcomer is queued over the bound and neither
+// of them is answered busy. (One of them was.) At the hard bound, with one
+// place each, nobody gives way: the caller arriving is the one answered busy
+// and the bound holds.
+{
+  const { measureAudio, MEASURE_QUEUE_PER_SLOT, MEASURE_QUEUE_HARD_PER_SLOT, __measurePoolForTest } = await import("../src/tools/media-kit.js");
+  const { admissionCallerOf } = await import("../src/dispatch-caller.js");
+  const hadSlots = process.env.AUDIO_DECODE_SLOTS;
+  process.env.AUDIO_DECODE_SLOTS = "1";
+  const held = [];
+  __setExecFileForTest((bin, args, opts, cb) => { held.push(cb); });
+  const done = (cb) => cb(null, "out_time_us=1000000\n");
+  const mp3 = Buffer.concat([Buffer.from("ID3\x04\0\0\0\0\0\0", "latin1"), Buffer.alloc(64)]);
+  const keep = setInterval(() => {}, 1_000);
+  const tick = () => new Promise((r) => setTimeout(r, 30));
+  const X = "198.51.100.160";
+  const buyer = (n, ip) => admissionCallerOf({ ip, headers: {}, creditsKeyId: `p${n}` });
+  try {
+    const settled = new Map();
+    const track = (name, p) => { p.then((v) => settled.set(name, v)); return p; };
+    const runs = [track("holder", measureAudio(mp3, { format: "mp3", who: buyer(0, "203.0.113.160") }))];
+    runs.push(track("pair1", measureAudio(mp3, { format: "mp3", who: buyer(1, X) })), track("pair2", measureAudio(mp3, { format: "mp3", who: buyer(2, X) })));
+    for (let i = 3; i <= MEASURE_QUEUE_PER_SLOT; i++) runs.push(track(`single${i}`, measureAudio(mp3, { format: "mp3", who: buyer(i, `203.0.113.${160 + i}`) })));
+    await tick();
+    ok(__measurePoolForTest().active === 1 && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, `two payers on one address and ${MEASURE_QUEUE_PER_SLOT - 2} others fill the queue (setup, ${JSON.stringify(__measurePoolForTest())})`);
+    runs.push(track("newcomer", measureAudio(mp3, { format: "mp3", who: buyer(20, "203.0.113.180") })));
+    await tick();
+    ok(settled.size === 0 && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT + 1, `two payers who share an address are not bumped by a newcomer: it is queued over the bound and every queued file keeps its place (${JSON.stringify([...settled.entries()])})`);
+    const drain = async () => { __setExecFileForTest((bin, args, opts, cb) => setImmediate(() => done(cb))); while (held.length) done(held.shift()); await Promise.all(runs); runs.length = 0; settled.clear(); __setExecFileForTest((bin, args, opts, cb) => { held.push(cb); }); };
+    await drain();
+    // One place each, up to the hard bound: the next caller is the one answered busy.
+    for (let i = 0; i <= MEASURE_QUEUE_HARD_PER_SLOT; i++) runs.push(track(`one${i}`, measureAudio(mp3, { format: "mp3", who: buyer(100 + i, `203.0.113.${i + 1}`) })));
+    await tick();
+    ok(__measurePoolForTest().active === 1 && __measurePoolForTest().waiting === MEASURE_QUEUE_HARD_PER_SLOT && settled.size === 0, `callers holding one place each are queued up to the hard bound (${JSON.stringify(__measurePoolForTest())})`);
+    const refused = await measureAudio(mp3, { format: "mp3", who: buyer(200, "203.0.113.250") });
+    ok(refused?.busy === true && refused.own !== true && /queue for one is full/.test(refused.unavailable || "") && settled.size === 0 && __measurePoolForTest().waiting === MEASURE_QUEUE_HARD_PER_SLOT, `the hard bound holds: with one place each nobody gives way, and the caller arriving is the one answered busy (${JSON.stringify(refused)})`);
+    await drain();
     ok(__measurePoolForTest().active === 0 && __measurePoolForTest().waiting === 0 && __measurePoolForTest().callers === 0, `the pool drains (${JSON.stringify(__measurePoolForTest())})`);
   } finally {
     clearInterval(keep);

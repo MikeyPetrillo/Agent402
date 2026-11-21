@@ -37,14 +37,30 @@ Loaded when an edge, job or fetch-guard file is read.
   `source-unreachable`, advising to check the URL or retry; the attribution vocabulary lives in `src/upstream-deadline.js`, where a named upstream whose host name does not resolve is `attribution: "unknown"`, `hint: "connect-failed"`, and only a lookup our resolver could not finish is `our-egress`. The MCP connector's loopback replay carries a
   per-process secret in its marker (`src/mcp-loopback.js`); an inbound marker is stripped by the
   first middleware, so only the real replay is exempt from the discovery limits.
-- **Price webhooks** (`src/price-webhooks.js`, `POST /api/price-webhook`): a registration keeps an https URL
-  and the slugs it watches; at boot the catalog's list prices are compared with the ones kept and each
-  subscription that watches a changed slug gets one queued delivery (`price-webhooks-note`, leased). The
-  delivery turn (`price-webhooks-deliver`, leased) sends each through `probePublicUrl` (the host checked,
-  the address re-checked at connect, no redirect followed) with a signature header keyed by a secret
-  derived from the signing key and the subscription id, so no secret is stored; a 2xx ends it, a 410
-  removes the subscription, anything else is retried on `RETRY_DELAYS_MS` and then dropped. Bounds:
-  `PRICE_WEBHOOK_MAX`, `PRICE_WEBHOOK_MAX_PER_HOST`, 50 slugs. A documentation host is answered in full and
+- **Price webhooks** (`src/price-webhooks.js`, `POST /api/price-webhook`): a registration keeps an https URL,
+  the slugs it watches, its expiry and a keyed digest of its registrant (no secret, wallet or address). **Who is
+  bounded:** the registrant (`registrantOf` in `src/tools/price-webhook-kit.js`: the signed payer, a credits key, a
+  Tempo sender, the signer of a Solana, Algorand or Stellar payment; any other paid call is a registrant of its own;
+  in FREE_MODE, where there is no payer, the client address) holds at most `PRICE_WEBHOOK_MAX_PER_PAYER` (25), and
+  its own next one is the 409; nothing is refused for the host a URL names. **Kept only when the call settles:**
+  the handler stores the subscription pending and a `req.__onSettled` hook confirms it on a final settled 200 and
+  removes it on anything else (`PENDING_MS`, ten minutes, ends one never reported); a pending one is never
+  delivered to (`scripts/test-price-webhooks-paid.js`). **Lifetime:** `PRICE_WEBHOOK_LIFETIME_DAYS` (90); the same
+  URL again from the same proven registrant renews it in place (same id and secret, no second place against the
+  cap); a subscription stored with no expiry gets one lifetime from this build's first store write. **Store
+  bound:** expired ones go at every store write; from `PRICE_WEBHOOK_MAX` (5,000) a new registration first removes
+  the subscriptions whose last delivery was dropped after every attempt and is admitted all the same, up to twice
+  that (a 503 with Retry-After); nothing a receiver still answers is removed for room. At boot the catalog's list
+  prices are compared with the ones kept and the changes are stored once as a set that one queued delivery per
+  watching subscription names (`price-webhooks-note`, leased; at most `MAX_CHANGE_SETS`). The delivery turn
+  (`price-webhooks-deliver`, leased, and guarded in the process so it never runs beside itself in file mode) sends
+  each through `probePublicUrl` (the host checked, the address re-checked at connect, no redirect followed) with a
+  signature header keyed by a secret derived from the signing key and the subscription id: one request at a time
+  to a receiving host, `DELIVERY_LANES` (16) hosts at once, `DELIVERY_TIMEOUT_MS` (4 s) for one whole attempt, a
+  host that does not answer gets no more that turn and one that answers gets `HOST_TURN_MS` (8 s) of it,
+  subscriptions whose last attempt got a 2xx first and one per registrant before anyone's second, no attempt
+  started after `TURN_BUDGET_MS` (40 s). A 2xx ends a delivery, a 410 removes the subscription, anything else is
+  retried on `RETRY_DELAYS_MS` (per subscription) and then dropped. A documentation host is answered in full and
   nothing is stored. The slug is in the lasting-effect list; removal is the free
   `POST /api/price-webhook/unsubscribe`. `PRICE_WEBHOOK_DELIVERIES` is a runtime switch
   (`src/feature-flags.js`: a flag provider when one is registered, else the variable, else the declared
