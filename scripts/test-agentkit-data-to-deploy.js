@@ -54,6 +54,17 @@ ok(!/\bon:\s*\n\s*(push|schedule|pull_request)/.test(wf), "the funded-key workfl
 const pkg = JSON.parse(read("package.json"));
 const pinned = JSON.parse(readFileSync(new URL("./agentkit-live/package.json", import.meta.url), "utf8"));
 for (const [name, v] of Object.entries(pinned.dependencies)) ok(pkg.dependencies[name] === v, `example pins ${name}@${v} like the proof tree`);
+// The proof tree buys through a current client: 0.8.23 is the floor (the
+// releases before it lack fixes the paid path relies on), and the lockfile
+// resolves exactly the version package.json pins.
+{
+  const at = (v) => String(v).split(".").map(Number);
+  const atLeast = (v, floor) => { const a = at(v), b = at(floor); for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return true; };
+  const clientPin = pinned.dependencies["agent402-client"];
+  const lock = JSON.parse(readFileSync(new URL("./agentkit-live/package-lock.json", import.meta.url), "utf8"));
+  ok(/^\d+\.\d+\.\d+$/.test(clientPin) && atLeast(clientPin, "0.8.23"), `the proof tree pins agent402-client exactly, at 0.8.23 or later (${clientPin})`);
+  ok(lock.packages?.["node_modules/agent402-client"]?.version === clientPin && lock.packages?.[""]?.dependencies?.["agent402-client"] === clientPin, `the proof tree's lockfile resolves the pinned client (${lock.packages?.["node_modules/agent402-client"]?.version})`);
+}
 
 // CI recompiles the artifact from source with the pinned solc and diffs it.
 const ci = expandedDeployWorkflow();

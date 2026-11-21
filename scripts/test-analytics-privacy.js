@@ -18,7 +18,7 @@ const { ledgerFooterCompact } = await import("../src/ledger-chrome.js");
 
 // A page with the shell's islands and footer; the loader runs after parsing,
 // as a deferred script does.
-function page({ url = "https://agent402.tools/monitors", gpc = false, tz = "America/New_York", stored = null } = {}) {
+function page({ url = "https://agent402.tools/monitors", gpc = false, tz = "America/New_York", stored = null, webdriver = false } = {}) {
   const html = `<!doctype html><html><head><script id="unused"></script></head><body>
 <script type="application/json" id="posthog-config">{"key":"phc_test","cfg":{"api_host":"https://agent402.tools/e"}}</script>
 <script type="application/json" id="ga-config">{"id":"G-TEST1234"}</script>
@@ -26,6 +26,7 @@ function page({ url = "https://agent402.tools/monitors", gpc = false, tz = "Amer
   const dom = new JSDOM(html, { url, runScripts: "outside-only" });
   const w = dom.window;
   if (gpc) Object.defineProperty(w.navigator, "globalPrivacyControl", { value: true, configurable: true });
+  Object.defineProperty(w.navigator, "webdriver", { value: webdriver, configurable: true });
   w.Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: tz }) }) };
   if (stored) w.localStorage.setItem("a402-analytics-consent", stored);
   return dom;
@@ -101,6 +102,24 @@ const scriptSrcs = (w) => [...w.document.querySelectorAll("script[src]")].map((s
   ok(!!posthogInit(dom.window), "control: no GPC, PostHog loads");
   await runGa(dom.window);
   ok(consentDefault(dom.window)?.analytics_storage === "denied" && !!stripOf(dom.window), "control: no GPC, a European time zone starts denied and sees the strip");
+}
+
+// --- Automated browsers are internal traffic ---------------------------------
+// A headless browser (navigator.webdriver) loading a page, such as a browser
+// tool's published example or a test run, is tagged for GA's Internal Traffic
+// filter; the tag request itself still goes out, so the load is unchanged.
+{
+  const gaConfig = (w) => [...(w.dataLayer || [])].map((a) => [...a]).find((a) => a[0] === "config")?.[2];
+  const bot = page({ webdriver: true });
+  await runGa(bot.window);
+  ok(gaConfig(bot.window)?.traffic_type === "internal", "an automated browser (navigator.webdriver) is tagged traffic_type=internal");
+  ok(scriptSrcs(bot.window).some((s) => /googletagmanager\.com\/gtag\/js\?id=G-TEST1234/.test(s)), "the automated browser still loads the tag (the page load a tool measures is unchanged)");
+  const human = page({ webdriver: false });
+  await runGa(human.window);
+  ok(gaConfig(human.window) && !("traffic_type" in gaConfig(human.window)), "control: a browser without navigator.webdriver carries no traffic_type");
+  const marked = page({ url: "https://agent402.tools/monitors?internal=1" });
+  await runGa(marked.window);
+  ok(gaConfig(marked.window)?.traffic_type === "internal", "control: ?internal=1 still tags the browser");
 }
 
 // --- Footer button reopens the strip, outside Europe too ---------------------

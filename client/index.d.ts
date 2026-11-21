@@ -55,7 +55,7 @@ export interface Agent402Options {
   userAgent?: string;
   /** Refuse a TLS chain through a distrusted intermediate CA (default true). */
   tlsDistrust?: boolean;
-  /** Resend the SDK's own request once on a connection reset (default true). */
+  /** Resend the SDK's own request once on a connection reset, and with x402Client a paid request with the payment already signed (default true). */
   retryResets?: boolean;
   /** Per-call ceiling in USD (default 5; 0, "off" or null turns it off; a malformed value keeps the default and warns). */
   maxPerCallUsd?: number | string | null;
