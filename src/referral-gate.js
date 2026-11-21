@@ -1688,6 +1688,14 @@ export function createReferralGate({
   // the 503 until the probe ends. A request the facilitator accepts ends the
   // hold (verifyAccepted, and a /settle answered for the payment); another
   // refusal of our signature starts the cool-down again.
+  // The hold stands only on refusals: with none for the cool-down plus the
+  // time one probe can take (OWN_HOLD_IDLE_MS, counted from the last
+  // refusal) it is over, whatever the probes did. A probe that ends with no
+  // verdict on our signature (the handler's deadline, a tool error, a buyer
+  // that hung up, a payment /verify refused) says nothing either way, so it
+  // neither ends the hold nor keeps it: who takes the probe slot never
+  // decides how long other buyers wait. A fault that is still there starts
+  // the hold again after `ownFaultMax` more refusals.
   // ---- the settlement store ------------------------------------------------------
   // The intent is written after the handler, so an intent the store does not
   // take means the next call's tool run would be given away too. THE RULE:
@@ -1782,19 +1790,29 @@ export function createReferralGate({
   }
 
   const OWN_PROBE_MS = config.verifyMs + config.deadlineMs + config.settleMs + 5_000;
+  // The longest the hold stands after the last refusal of our signature: its
+  // cool-down, then the time one probe has to bring a verdict.
+  const OWN_HOLD_IDLE_MS = config.ownFaultCooldownMs + OWN_PROBE_MS;
   const own = { streak: 0, blockedUntil: 0, lastAt: 0, probeUntil: 0, stage: null };
-  const noteOwnFault = (stage) => { own.streak++; own.lastAt = now(); own.probeUntil = 0; own.stage = stage; if (own.streak >= config.ownFaultMax) own.blockedUntil = now() + config.ownFaultCooldownMs; };
   const clearOwnFault = () => { own.streak = 0; own.blockedUntil = 0; own.probeUntil = 0; own.stage = null; };
+  /** Whether the hold is on at `t`. One with no refusal of our signature for OWN_HOLD_IDLE_MS is over: its streak is dropped here. */
+  const ownHeld = (t = now()) => {
+    if (own.streak < config.ownFaultMax) return false;
+    if (t - own.lastAt >= OWN_HOLD_IDLE_MS) { clearOwnFault(); return false; }
+    return true;
+  };
+  const noteOwnFault = (stage) => { const t = now(); ownHeld(t); own.streak++; own.lastAt = t; own.probeUntil = 0; own.stage = stage; if (own.streak >= config.ownFaultMax) own.blockedUntil = t + config.ownFaultCooldownMs; };
   // A verdict on a SIGNED /verify shows the signature is accepted there: it
   // ends a hold that /verify's own refusals started (a /settle refusal is
   // ended only by a /settle the facilitator answers for the payment).
   const verifyAccepted = () => { if (config.verifySigned && own.stage === "verify") clearOwnFault(); };
   /** Seconds a paid call must wait for the hold, or 0 when it may run (as the probe, when a hold is on). */
   const ownFaultWait = () => {
-    if (own.streak < config.ownFaultMax) return 0;
     const t = now();
+    if (!ownHeld(t)) return 0;
     if (t < own.blockedUntil) return Math.max(1, Math.ceil((own.blockedUntil - t) / 1000));
-    if (t < own.probeUntil) return Math.max(1, Math.ceil(Math.min(own.probeUntil - t, config.ownFaultCooldownMs) / 1000));
+    // (No longer than the hold itself can last.)
+    if (t < own.probeUntil) return Math.max(1, Math.ceil(Math.min(own.probeUntil - t, config.ownFaultCooldownMs, own.lastAt + OWN_HOLD_IDLE_MS - t) / 1000));
     own.probeUntil = t + OWN_PROBE_MS;
     return 0;
   };
@@ -1857,7 +1875,8 @@ export function createReferralGate({
     if (routeHeld(book.faults())) reasons.push(`settle successes the chain contradicted came from ${REFERRAL_CONTRADICTED_PAYERS} or more payers: new payments are held, one at a time probes`);
     for (const r of shortNow()) reasons.push(`${r.slug}: the split contract paid less than the commission map expects (expected at least ${r.expectedNow}, received ${r.received}, of a gross of ${r.gross}; ${r.count} sale(s)${slugHeld(r.slug) ? "; new calls on it are held" : ""})`);
     if (all.some((e) => e.routedToUs === true && (e.state === "in-doubt" || e.state === "intent"))) reasons.push("a payment the split contract routed to this merchant, which the proof rule does not accept, is open");
-    if (own.lastAt && t - own.lastAt < 15 * 60_000) reasons.push("the facilitator refused this server's own request");
+    // Named for as long as the hold is on (a cool-down can outlast the fifteen minutes), and for fifteen minutes after the last refusal.
+    { const held = ownHeld(t); if (held || (own.lastAt && t - own.lastAt < 15 * 60_000)) reasons.push(held ? "the facilitator refused this server's own request: paid calls are held, one at a time probes" : "the facilitator refused this server's own request"); }
     if ([reach.verify, reach.settle].some((r) => unreachable(r, t, 10 * 60_000))) reasons.push("the facilitator has not answered for 10 minutes");
     // The route is down while the chain head cannot be read: every paid call is refused before /verify.
     if (unreachable(reach.chain, t, CHAIN_DOWN_MS)) reasons.push("the chain head could not be read for 5 minutes: paid calls are refused before anything runs");
@@ -2769,7 +2788,7 @@ export function createReferralGate({
         counters.ownFaultHeld++;
         return refusePayment(res, "settlement_unavailable", { status: 503, retryable: true, retryAfter: holdSeconds });
       }
-      probing = own.streak >= config.ownFaultMax;
+      probing = ownHeld();
       // The route hold's one probe, and this slug's place in flight: taken
       // here, in one turn with the checks, and given back when the call ends.
       // (Read again only while the route was held at admission: the common call makes one pass.)
@@ -2997,7 +3016,7 @@ export function createReferralGate({
       if (slot) inflight--;
       if (newSlot) inflightNew--;
       // A probe that ended without a verdict on our signature: the next call probes.
-      if (probing && own.streak >= config.ownFaultMax && now() >= own.blockedUntil) own.probeUntil = 0;
+      if (probing && ownHeld() && now() >= own.blockedUntil) own.probeUntil = 0;
       laneLeave(laneKeys);
       if (routeProbe) routeProbeEnd(ranEntry?.contradicted === true || ranEntry?.unprovenSettle === true);
       if (ratePlace) rateLeave(def.slug, rateCharged);
@@ -3214,7 +3233,7 @@ export function createReferralGate({
 
   return {
     handler, sweepOnce, statusWord, resolveByHand, resolveManyByHand, acknowledge, reopenByHand, clearShortByHand, clearExampleByHand, exampleTooLarge: () => [...exampleTooLarge].map(([slug, r]) => ({ slug, ...r })), shortSales: () => shortNow(),
-    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, storeHold: { held: (relaxStoreHold(now()), storeHold.blockedUntil > 0), cooldownMs: storeHold.cooldownMs, level: storeHold.level, failuresInWindow: storeFailsIn(now()).length, lateInWindow: storeFailsIn(now()).filter((f) => f.late).length }, coldInflight: Object.fromEntries(rate.inflight), coldSold: Object.fromEntries(rate.sold), ownFaultStreak: own.streak, ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
+    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, storeHold: { held: (relaxStoreHold(now()), storeHold.blockedUntil > 0), cooldownMs: storeHold.cooldownMs, level: storeHold.level, failuresInWindow: storeFailsIn(now()).length, lateInWindow: storeFailsIn(now()).filter((f) => f.late).length }, coldInflight: Object.fromEntries(rate.inflight), coldSold: Object.fromEntries(rate.sold), ownFaultStreak: (ownHeld(), own.streak), ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
     slugs: () => [...defs.keys()],
   };
 }

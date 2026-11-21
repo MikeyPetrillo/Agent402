@@ -916,7 +916,7 @@ may still clamp it, and the read site is the reference.
 | `REFERRAL_MERCHANT_ID` | This merchant's id on that contract (a number): a payment counts only when routed to it. |  | `src/referral-gate.js` |
 | `REFERRAL_MIN_NET_BPS` | Default:<bps>,<slug>:<bps>: the least share of the price a sale must bring; under it counts toward the slug's stop (unset: 7000 for a model-backed tool, half the expected net for any other). |  | `src/referral-gate.js` |
 | `REFERRAL_OVERSIZE_ALERT` | Answers over REFERRAL_MAX_ANSWER_BYTES (413, each an unpaid tool run) from one client address in the unsettled-run window before the status word reads attention; an alarm only, nobody is refused for it. |  | `src/referral-gate.js` |
-| `REFERRAL_OWN_FAULT_COOLDOWN_MS` | For this long, answered 503 before the handler; then one call at a time probes. |  | `src/referral-gate.js` |
+| `REFERRAL_OWN_FAULT_COOLDOWN_MS` | For this long, answered 503 before the handler; then one call at a time probes, and the hold ends when no refusal has followed for this long plus the time one probe can take. |  | `src/referral-gate.js` |
 | `REFERRAL_OWN_FAULT_MAX` | Refusals of this server's own request in a row before calls are held... |  | `src/referral-gate.js` |
 | `REFERRAL_PARITY_GRANDFATHERED` | Comma list of slugs served although the public route gives them for less (default: none; each is named in a warning at every boot). |  | `src/referral-gate.js` |
 | `REFERRAL_PAYER_INFLIGHT_MAX` | One payer's paid calls in flight before a 429. |  | `src/referral-gate.js` |

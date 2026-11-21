@@ -58,7 +58,7 @@ ok(m.payment.dataHandling?.readsAnnotationFields === false && m.payment.dataHand
   // The settled replay mark's hold, from the guard's own constants: the hour,
   // or the authorization's validBefore plus the margin, bounded after the call.
   const rg = await import("../src/replay-guard.js");
-  const hold = `or until the authorization's own validBefore plus ${Math.round(rg.CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later (at most ${rg.settledValidityHoldText()} after the call)`;
+  const hold = `or until the authorization's own validBefore plus ${Math.round(rg.CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later (at most ${rg.settledMarkHoldText()} after the call)`;
   ok(reads.includes(hold), `dataHandling.readsOnly states the settled replay mark's validBefore hold and its bound (${hold})`);
   ok(/payer/.test(String(m.payment.dataHandling?.retains || "")), "dataHandling says the sales ledger keeps the payer of a sale");
   // An unconfirmed settlement's reads (src/payments.js markUnconfirmedStop,

@@ -41,7 +41,7 @@ import { carriesPaymentAttempt } from "../src/payment-attempt.js";
 import { stableStringify, promptCacheGetShared, promptCacheStore, EMBEDDINGS_PATH } from "../src/tools/llm-gateway-kit.js";
 import { ALLOWANCE_STATE } from "../src/allowance-state.js";
 import { identityPayerOf } from "../src/payer.js";
-import { createReplayGuard, paymentReplayKey, paymentReplayKeyAsync, consumedHoldFor, SETTLED_HOLD_MS, MAX_SETTLED_VALIDITY_HOLD_MS, CONSUMED_VALIDITY_MARGIN_MS } from "../src/replay-guard.js";
+import { createReplayGuard, paymentReplayKey, paymentReplayKeyAsync, consumedHoldFor, SETTLED_HOLD_MS, MAX_SETTLED_VALIDITY_HOLD_MS, MAX_SETTLED_MARK_HOLD_MS, CONSUMED_VALIDITY_MARGIN_MS } from "../src/replay-guard.js";
 import { __setTestClient } from "../src/shared-limit.js";
 
 let pass = 0, failed = 0;
@@ -422,7 +422,9 @@ try {
       });
     };
     const DAY_S = 24 * 3600;
-    for (const [label, days] of [["seven days", 7], ["a day", 1], ["two hours", 2 / 24]]) {
+    // (31 days and a year: past the bound the twin under the earlier key name
+    // is kept for; the mark itself still lasts to the authorization's expiry.)
+    for (const [label, days] of [["a year", 365], ["31 days", 31], ["seven days", 7], ["a day", 1], ["two hours", 2 / 24]]) {
       for (const store of ["local", "shared"]) {
         const fake = store === "shared" ? expiringRedis() : null;
         __setTestClient(fake);
@@ -452,7 +454,9 @@ try {
           const { 1: id, 2: legacy } = key.split(":");
           const ttls = [fake.ttl(`replay:c:n2:${id}`), fake.ttl(`replay:c:n:${legacy}`)];
           const want = 300 + CONSUMED_VALIDITY_MARGIN_MS / 1000;
-          ok(ttls.every((t) => t > 300 - 10 && t <= want + 2), `settled ${label} ago (shared): the mark and its legacy twin last to the authorization's expiry plus the margin, no longer (TTL ${ttls} s)`);
+          const twinKept = days * DAY_S * 1000 < MAX_SETTLED_VALIDITY_HOLD_MS;
+          ok(ttls[0] > 300 - 10 && ttls[0] <= want + 2, `settled ${label} ago (shared): the mark lasts to the authorization's expiry plus the margin, no longer (TTL ${ttls[0]} s)`);
+          ok(twinKept ? ttls[1] > 300 - 10 && ttls[1] <= want + 2 : ttls[1] === -2, `settled ${label} ago (shared): its twin under the earlier key name ${twinKept ? "lasts as long" : "ended at its own bound: one long-lived key"} (TTL ${ttls[1]} s)`);
         }
       }
     }
@@ -468,18 +472,29 @@ try {
       const ttl = fake.ttl(`replay:c:n2:${key.split(":")[1]}`);
       ok(ttl > SETTLED_HOLD_MS / 1000 - 5 && ttl <= SETTLED_HOLD_MS / 1000, `stock payment: its settled mark keeps the default hold (TTL ${ttl} s)`);
     }
-    // An authorization that names its own start further back than the guard
-    // keeps any settled mark may have settled and been let go: no scope.
+    // An authorization that has been valid for longer than the guard keeps
+    // any settled mark may have settled and been let go: no scope, whether it
+    // names its start or is signed valid from the epoch. The bound is longer
+    // than the time since the epoch, so the proof is read on a clock moved
+    // to where the bound falls.
     {
       __setTestClient(null);
       guard = createReplayGuard();
       const body = { ...BODY, input: `${BODY.input} aged` };
       storeFor(`evm:${alice.address.toLowerCase()}`, keyOfBody(body));
-      const boundSec = Math.floor(MAX_SETTLED_VALIDITY_HOLD_MS / 1000);
-      const aged = await signedHeader(alice, { validAfter: now() - boundSec - 60, validBefore: now() + 300 });
-      ok((await call({ "payment-signature": aged }, body)).status === 402, "aged window: a named start older than the settled bound, expiring like a stock payment, reads no scope");
-      const young = await signedHeader(alice, { validAfter: now() - boundSec + 3600, validBefore: now() + 300 });
-      ok((await call({ "payment-signature": young }, body)).cache === "hit", "aged window: a named start inside the settled bound, never settled, is a hit (the guard would still hold it had it settled)");
+      const twinSec = Math.floor(MAX_SETTLED_VALIDITY_HOLD_MS / 1000);
+      // A named start older than the twin's bound, never settled: the mark would still be held had it settled.
+      const named = await signedHeader(alice, { validAfter: now() - twinSec - 3600, validBefore: now() + 300 });
+      ok((await call({ "payment-signature": named }, body)).cache === "hit", "aged window: a named start 30 days and an hour back, never settled, is a hit (the guard would still hold it had it settled)");
+      const ageSec = Math.floor((MAX_SETTLED_MARK_HOLD_MS - CONSUMED_VALIDITY_MARGIN_MS) / 1000);
+      ok(ageSec > now(), `aged window: CONTROL: the epoch is inside the mark's hard bound today (${ageSec} s against ${now()} s since the epoch)`);
+      const me = alice.address.toLowerCase();
+      for (const [label, start] of [["valid from the epoch", 0], ["with a named start", 1_700_000_000]]) {
+        const at = start + ageSec; // the last second the guard is sure to hold a settled mark for it
+        const h = await signedHeader(alice, { validAfter: start, validBefore: at + 300 });
+        ok((await provenX402Signer(h, { payTo: PAY_TO, nowSec: at })) === me, `aged window: ${label}, read at the bound with 300 s left: its payer is proved (the guard still holds it if it settled)`);
+        ok((await provenX402Signer(h, { payTo: PAY_TO, nowSec: at + 1 })) === null, `aged window: ${label}, valid for a second longer than the guard keeps any settled mark: no scope`);
+      }
     }
     __setTestClient(null);
     guard = createReplayGuard();

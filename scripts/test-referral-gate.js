@@ -2400,6 +2400,89 @@ try {
   }
   fac.reset(); sales.length = 0;
   {
+    // The hold stands on refusals of our signature, never on who holds the
+    // probe slot. THE ATTACK: after the signer is fixed, a third party takes
+    // the one probe slot with a call that ends at the deadline (no /settle, no
+    // charge) and takes it again each time it frees, so no probe ever brings
+    // a verdict. The hold used to stand for as long as that went on.
+    const acceptSlow = (await send(R("slow"), { method: "GET" })).json?.accepts?.[0];
+    const payAt = async (base, slug, acc, text, account = newAccount(), ip = freshIp()) => send(`${base}/ref/${slug}`, { body: { text }, headers: { "payment-signature": (await signPayment(acc, { account, validBefore: String(Math.floor((Date.now() + skew.ms) / 1000) + 60) })).header, "x-test-ip": ip } });
+    const refuseOurs = () => ({ status: 401, body: { error: "merchant_signature" } });
+    const settleFine = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()) } });
+    // The longest a hold stands after the last refusal: its cool-down, then the time one probe can take.
+    const idleMs = (cfg) => cfg.ownFaultCooldownMs + cfg.verifyMs + cfg.deadlineMs + cfg.settleMs + 5_000;
+    fac.mode.settle = refuseOurs;
+    for (let i = 0; i < 3; i++) await payAt(app1.url, "echo", accept, `hold${i}`);
+    const lastRefusal = Date.now();
+    const started = app1.gate.stats().ownFaultStreak;
+    fac.mode.settle = settleFine; // the signer is fixed: from here every /settle would succeed
+    const settlesAtFix = settles();
+    await wait(1100); // the cool-down ends: one call at a time probes
+    const attacker = newAccount(), attackerIp = freshIp();
+    const slowBefore = runs.slow;
+    const held = [], attackerGot = [];
+    let served = null, servedAt = 0, settlesWhenServed = 0;
+    const giveUp = lastRefusal + idleMs(app1.config) + 6_000;
+    while (!served && Date.now() < giveUp) {
+      const probe = payAt(app1.url, "slow", acceptSlow, "probe", attacker, attackerIp);
+      await wait(150); // the third party's call holds the probe slot
+      const h = await payAt(app1.url, "echo", accept, "honest");
+      if (h.status === 200) { served = h; servedAt = Date.now(); settlesWhenServed = settles() - settlesAtFix; } else held.push(h);
+      attackerGot.push((await probe).status);
+    }
+    ok(started === 3 && held.length >= 3 && held.every((r) => r.status === 503 && r.json?.errorReason === "settlement_unavailable" && Number(r.headers.get("retry-after")) >= 1), `own-fault hold: three refusals of our signature at /settle start it, and while it is on a call beside the probe is answered 503 with Retry-After (${held.length} held: ${[...new Set(held.map((r) => `${r.status} ${r.json?.errorReason}`))].join(", ")})`);
+    ok(attackerGot.length >= 4 && attackerGot.every((x) => x === 504) && runs.slow - slowBefore === attackerGot.length && !sales.some((x) => String(x.payer).toLowerCase() === attacker.address.toLowerCase()), `own-fault hold: CONTROL: every one of the third party's calls took the probe slot, ran to the deadline and was never settled (${attackerGot.length} calls: ${[...new Set(attackerGot)].join(",")}; its tool ran ${runs.slow - slowBefore} times)`);
+    ok(served !== null && settlesWhenServed === 1 && app1.gate.stats().ownFaultStreak === 0, `own-fault hold: with the probe slot re-taken the whole time and no /settle verdict since the fix, the hold still ends and an honest buyer is served (${served ? `200 after ${held.length} held calls` : `never: ${held.length} calls answered 503 over ${Date.now() - lastRefusal} ms`}; /settle calls since the fix ${settlesWhenServed}; streak ${app1.gate.stats().ownFaultStreak})`);
+    // (Read from this side of the wire: the last refusal's answer arrived a few milliseconds after the gate noted it.)
+    ok(served !== null && servedAt - lastRefusal >= idleMs(app1.config) - 250 && servedAt - lastRefusal < idleMs(app1.config) + 3_000, `own-fault hold: it ends the cool-down plus one probe's time after the last refusal, not before (${servedAt - lastRefusal} ms; ${idleMs(app1.config)} ms)`);
+    const pair = await Promise.all([payAt(app1.url, "echo", accept, "pair-a"), payAt(app1.url, "echo", accept, "pair-b")]);
+    ok(pair.every((r) => r.status === 200), `own-fault hold: and calls run side by side again (${pair.map((r) => r.status).join(",")})`);
+    // A fault that is still there starts the hold again after the usual refusals.
+    fac.mode.settle = refuseOurs;
+    const ranBefore = runs.echo, heldBefore = app1.gate.stats().ownFaultHeld;
+    const again = [];
+    for (let i = 0; i < 4; i++) again.push(await payAt(app1.url, "echo", accept, `again${i}`));
+    const wordOn = app1.gate.statusWord();
+    ok(again.every((r) => r.status === 503 && r.json?.errorReason === "settlement_unavailable") && runs.echo === ranBefore + 3 && app1.gate.stats().ownFaultHeld === heldBefore + 1 && app1.gate.stats().ownFaultStreak === 3, `own-fault hold: a signer refused again starts the hold after three refusals: the fourth call is answered before the handler (${runs.echo - ranBefore} ran; streak ${app1.gate.stats().ownFaultStreak})`);
+    ok(wordOn.status === "attention" && wordOn.reasons.some((x) => /own request: paid calls are held/.test(x)), "own-fault hold: and the status word says paid calls are held");
+    fac.mode.settle = settleFine;
+    await wait(1100);
+    const healed = await payAt(app1.url, "echo", accept, "healed");
+    const wordOff = app1.gate.statusWord();
+    ok(healed.status === 200 && app1.gate.stats().ownFaultStreak === 0 && wordOff.reasons.some((x) => /own request$/.test(x)) && !wordOff.reasons.some((x) => /paid calls are held/.test(x)), `own-fault hold: a probe the facilitator settles ends it as before, and the word names the recent refusal without a hold (${healed.status})`);
+
+    // The status word names the hold for as long as it is on: a cool-down
+    // longer than the fifteen minutes a refusal is named for.
+    const appH = await mount({ REFERRAL_OWN_FAULT_COOLDOWN_MS: String(20 * 60_000) });
+    try {
+      const names = (re) => appH.gate.statusWord().reasons.some((x) => re.test(x));
+      fac.mode.settle = refuseOurs;
+      for (let i = 0; i < 3; i++) await payAt(appH.url, "echo", accept, `long${i}`);
+      fac.mode.settle = settleFine;
+      const atOnce = names(/own request: paid calls are held/);
+      skew.ms = 16 * 60_000;
+      const inCooldown = await payAt(appH.url, "echo", accept, "sixteen");
+      ok(atOnce && inCooldown.status === 503 && inCooldown.json?.errorReason === "settlement_unavailable" && appH.gate.statusWord().status === "attention" && names(/own request: paid calls are held/), `own-fault hold: sixteen minutes into a twenty-minute cool-down a paid call is still held, and the status word still names the hold (${inCooldown.status}; ${appH.gate.statusWord().reasons.filter((x) => /own request/.test(x)).join("; ") || "no reason named"})`);
+      // After the cool-down, five seconds into the probe time, with the slot
+      // taken: the wait named is no longer than the hold has left.
+      skew.ms = 20 * 60_000 + 5_000;
+      const left = Math.ceil((idleMs(appH.config) - 20 * 60_000 - 5_000) / 1000);
+      const probeH = payAt(appH.url, "slow", acceptSlow, "probe");
+      await wait(150);
+      const beside = await payAt(appH.url, "echo", accept, "beside");
+      const ra = Number(beside.headers.get("retry-after"));
+      await probeH;
+      ok(beside.status === 503 && ra >= 1 && ra <= left && left < Math.ceil((idleMs(appH.config) - 20 * 60_000) / 1000), `own-fault hold: a call held beside a probe is told to retry no later than the hold can last (Retry-After ${ra} s, ${left} s left)`);
+      skew.ms = idleMs(appH.config) + 1_000;
+      const probeLate = payAt(appH.url, "slow", acceptSlow, "probe");
+      await wait(150);
+      const after = await payAt(appH.url, "echo", accept, "after");
+      await probeLate;
+      ok(after.status === 200 && appH.gate.stats().ownFaultStreak === 0 && !names(/own request/), `own-fault hold: past the cool-down plus one probe's time with no new refusal the hold is over, the slot taken or not, and the word no longer names it (${after.status})`);
+    } finally { skew.ms = 0; await appH.close(); }
+  }
+  fac.reset(); sales.length = 0;
+  {
     // An open entry carries its answer through a restart: a book on a FILE, no database.
     const file = join(tmp, "restart-book.json");
     const answerDir = join(tmp, "restart-answers");

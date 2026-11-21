@@ -30,7 +30,7 @@ import { meteredSkip as countMeteredSkip } from "./metered-slugs.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { WINDOW_MS as LATE_SETTLE_WINDOW_MS, MAX_AGE_MS as LATE_SETTLE_MAX_AGE_MS } from "./late-settlements.js";
-import { settledHoldText, settledValidityHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
+import { settledHoldText, settledMarkHoldText, settledValidityHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 import { returningWalletEnabled, WALLET_HINT_HEADER } from "./returning-wallet.js";
 import { publicIndexManifest } from "./facilitator-public-index.js";
@@ -216,7 +216,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
           "the payment-identifier extension, when sent: an idempotency key bound to the credential, route and body",
           ...(returningWalletEnabled() ? [`the ${WALLET_HINT_HEADER} request header, when sent (an EVM address): read against the sales ledger to decide the quote of that request, and not stored`] : []),
           `the payment's nonce and network: as an idempotency key for a re-sent payment, held with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes`,
-          `a digest of the payment's network, signed payer and nonce: as a replay mark, kept about ${settledHoldText()} after a settled call, or until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later (at most ${settledValidityHoldText()} after the call); for a grant that was not settled (a forgiven hang-up${firstCallAllowanceEnabled() ? ", a served first-call allowance" : ""}), whose authorization is still live on chain, until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes, which can be long when the client signs a long validity window`,
+          `a digest of the payment's network, signed payer and nonce: as a replay mark, kept about ${settledHoldText()} after a settled call, or until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later (at most ${settledMarkHoldText()} after the call); for a grant that was not settled (a forgiven hang-up${firstCallAllowanceEnabled() ? ", a served first-call allowance" : ""}), whose authorization is still live on chain, until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes, which can be long when the client signs a long validity window`,
           "the paying wallet of a Solana payment (the transfer's authority) or its signers: to tell one paying wallet from another in failure telemetry, stored only as a keyed hash",
           "the source of a Tempo MPP credential (a did:pkh address): to classify the payer of a sale",
           "a Tempo pull credential answered 402 after its broadcast failed, with its route, amount and the payer it names: kept until the check for a late landing ends (minutes; at most 24 hours while the chain cannot be read), so a transfer that lands after the 402 is booked as owed",
