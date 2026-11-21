@@ -52,6 +52,13 @@ const NOT_ONE_FIELD = new Map([
 ]);
 // Fields whose handler answers the long value with a 5xx and no read: each
 // with why no cap of the field's is hidden behind that answer.
+// A tool that renders in a browser answers 503 once its input checks pass
+// when the host has no browser (some CI lanes install none). That answer
+// comes after the checks, so it hides no cap; it is accepted only with that
+// message, and the field's own cap (in UTF-8 bytes, answered 413 before any
+// browser starts) is stated in its description.
+const BROWSER_GATED = new Set(["html-frames.html"]);
+const browserMissing = (outcome) => /Browser unavailable/i.test(outcome);
 const ANSWERS_BEFORE_READING = new Map([
   ["v1-chat-ox.model", "the tier's one model was withdrawn upstream, so every call is answered 503 whatever it sends"],
 ]);
@@ -143,7 +150,7 @@ try {
   for (const { key, outcome } of silent) {
     if (readUpstream(outcome)) continue;
     silentSeen.add(key);
-    if (!ANSWERS_BEFORE_READING.has(key)) gated.push(`${key} (${outcome.slice(0, 70)})`);
+    if (!ANSWERS_BEFORE_READING.has(key) && !(BROWSER_GATED.has(key) && browserMissing(outcome))) gated.push(`${key} (${outcome.slice(0, 70)})`);
   }
   const staleSilent = [...ANSWERS_BEFORE_READING.keys()].filter((k) => !silentSeen.has(k));
   const staleWitness = [...LONGEST_FORM.keys()].filter((k) => !witnessSeen.has(k));

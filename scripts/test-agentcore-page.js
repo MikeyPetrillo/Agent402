@@ -9,6 +9,7 @@
 // integrations index, the sitemaps, /llms.txt and the page date.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { JSDOM } from "jsdom";
 import assert from "node:assert/strict";
 import { bootServer } from "./lib/boot-server.js";
 import { agentcorePage, pluginGetsX402Alone, AGENTCORE_SLUG, AGENTCORE_NAME } from "../src/agentcore-page.js";
@@ -27,8 +28,12 @@ const CATALOG = {
   "POST /api/hash": { slug: "hash", name: "Hash", price: "$0.001" },
 };
 // Visible text: scripts, styles, head and tags removed, entities decoded.
-const visible = (html) => html.replace(/<head[\s\S]*?<\/head>/i, "").replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "")
-  .replace(/<[^>]+>/g, " ").replace(/&#160;|&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ");
+const visible = (html) => {
+  // Parsed, never pattern-stripped: the page's own text as a browser lays it out.
+  const doc = new JSDOM(html).window.document;
+  for (const el of doc.querySelectorAll("head, script, style")) el.remove();
+  return (doc.body?.textContent || "").replace(/\s+/g, " ");
+};
 const main = (html) => { const v = visible(html); const a = v.indexOf("agent402 / integrations"); const b = v.indexOf("All integrations", a); return v.slice(a, b + "All integrations".length); };
 const render = (o) => main(agentcorePage(BASE, CATALOG, o));
 const OPT_IN = `${OFFER_REQUEST_HEADER}: mpp`;
@@ -73,7 +78,7 @@ for (const [label, env] of [["gate off", { MPP_OFFER_WITHHOLD_USER_AGENTS: "off"
   const oneLine = (x) => x.replace(/\\\s*\n\s*/g, " ").replace(/[ \t]+/g, " ");
   const readme = readFileSync(new URL("../examples/agentcore-gateway/README.md", import.meta.url), "utf8");
   const readmeCommands = oneLine(readme).split("\n").map((l) => l.trim()).filter((l) => l.startsWith("agentcore ")).map((l) => l.replaceAll("https://agent402.tools", BASE));
-  const pageCommands = [...html.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/g)].flatMap((m) => oneLine(m[1].replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')).split("\n").map((l) => l.trim())).filter((l) => l.startsWith("agentcore "));
+  const pageCommands = [...new JSDOM(html).window.document.querySelectorAll("pre")].flatMap((pre) => oneLine(pre.textContent).split("\n").map((l) => l.trim())).filter((l) => l.startsWith("agentcore "));
   const targets = pageCommands.filter((c) => c.startsWith("agentcore add gateway-target"));
   ok(targets.length === 2 && targets.every((c) => /--name \S+/.test(c) && /--outbound-auth NONE\b/.test(c) && /--gateway Agent402Gateway\b/.test(c)), `each gateway-target command names the target, its gateway and the outbound auth (${targets.join(" | ")})`);
   ok(readmeCommands.filter((c) => c.startsWith("agentcore add gateway-target")).length === 2 && pageCommands.length >= 5 && pageCommands.every((c) => readmeCommands.includes(c)), `every agentcore command on the page is the Gateway example's (${pageCommands.filter((c) => !readmeCommands.includes(c)).join(" | ") || "all found"})`);
