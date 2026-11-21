@@ -2,6 +2,7 @@
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
 import { siteOrgRef } from "./site-org.js";
+import { GUIDE_SITE_NAME, GUIDE_EXPLAINERS } from "./ask402-links.js";
 import { REPO_URL, repoUrl } from "./repo-link.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 // The renderer and its heading ids (GitHub-style slugs, so the dev shortlinks
@@ -184,7 +185,7 @@ Your client calls a paid endpoint and gets a \`402\` quote; it signs a USDC
 authorization from its own wallet and retries, and the server settles only when
 the response succeeds, so a failed x402 call is not charged (a payment that lands late is repaid after on-chain proof).
 The headers, step
-by step: [how x402 works](/learn/x402).
+by step: [how x402 works](/learn/x402). In plain English: [What is x402?](${GUIDE_EXPLAINERS.x402}) on ${GUIDE_SITE_NAME}.
 
 ## See a quote (free)
 
