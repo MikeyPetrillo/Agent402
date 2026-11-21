@@ -372,7 +372,7 @@ t node scripts/test-supply-chain-guards.js
 t node scripts/test-wallet-e2e.js
 # MCP Registry find-latest-version helper (used by the publish job to auto-deprecate a superseded version — offline)
 t node scripts/test-mcp-find-latest-version.js
-# Stripe Link canary reads every CLI answer shape and says why it stops (offline)
+# Stripe Link canary (run by hand from the operator's machine on the Link CLI's local session, scripts/link-canary-local.sh): reads every CLI answer shape, says why it stops, never hands a token to the CLI, and the wrapper's flags and refusals (offline)
 t node scripts/test-stripe-link-canary.js
 # FFmpeg video-decode lockout (R-06: every ffmpeg and ffprobe call passes an audio-only -codec_whitelist before -i, so the MagicYUV video decoder never opens; offline)
 t node scripts/test-ffmpeg-novideo.js
