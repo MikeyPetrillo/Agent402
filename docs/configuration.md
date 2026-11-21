@@ -571,9 +571,9 @@ may still clamp it, and the read site is the reference.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `INFLIGHT_COVER` | Inflight cover. |  | `src/inflight-cover-state.js` |
-| `INFLIGHT_COVER_KEPT_AT_ONCE_MS` | (no purpose line) |  | `src/inflight-cover.js` |
+| `INFLIGHT_COVER_KEPT_AT_ONCE_MS` | How long a wallet's last good balance read admits paid runs at once without a new read, in milliseconds (held between the read gap and five minutes). |  | `src/inflight-cover.js` |
 | `INFLIGHT_COVER_LIVE_TTL_MS` | Inflight cover live lifetime, in milliseconds. |  | `src/inflight-cover.js` |
-| `INFLIGHT_COVER_PAST_BUDGET_READS_PER_MIN` | (no purpose line) |  | `src/inflight-cover.js` |
+| `INFLIGHT_COVER_PAST_BUDGET_READS_PER_MIN` | Past the day's read budget, the most balance reads in any minute for all wallets together, per process (0 makes none). |  | `src/inflight-cover.js` |
 | `INFLIGHT_COVER_READS_DAILY_MAX` | Reads a day that reach the capped on-chain data host (unset: a fifth of HARDCAP_ALCHEMY_CALLS; never over half of it). |  | `src/upstream-hard-caps.js` |
 | `INFLIGHT_COVER_READ_GAP_MS` | A wallet's reads are at least this far apart; inside it its last read is judged as it is (1000 to 10000). |  | `src/inflight-cover.js` |
 | `INFLIGHT_COVER_SHARED_WINDOW_MS` | Inflight cover shared window, in milliseconds. |  | `src/inflight-cover.js` |
