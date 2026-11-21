@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (169 scripts, one process each)
+# @step 1: Offline suites (171 scripts, one process each)
 # Client route discovery and output validation (clean-room behavior test, offline)
 t node scripts/test-cleanroom-client-contract.js
 # Paid scan budget (a public route must not spend without limit)
@@ -139,6 +139,10 @@ t node scripts/test-flights-kit.js
 t node scripts/test-llm-gemini-kit.js
 # The CLASS of a 4xx in telemetry, and the promise no buyer text rides with it
 t node scripts/test-refusal-reason.js
+# A spend ceiling that pauses routing names its rule, reason and fix on every route that spends (offline)
+t node scripts/test-spend-refusal-rules.js
+# Returning-buyer baseline: paid days per outside wallet, day-1 to day-2 return, operator-only route (offline)
+t node scripts/test-returning-buyers.js
 # OpenAI's transcription wire: the hand-written multipart parser
 t node scripts/test-multipart.js
 # Cross-origin reads for the machine surfaces (browser-side x402 buyers)

@@ -503,7 +503,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           receipt: { slug: "weather", route: "POST https://seller.example/weather", underlyingPriceUsd: 0.002, paidUsd: EXEC_PRICE_USD, routingFeeUsd: Number((EXEC_PRICE_USD - 0.002).toFixed(6)), seller: "https://seller.example", external: true, settleTx: "0x…", settleNetwork: "eip155:8453", wire: "x402", resolvedBy: "task-external", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
           result: { forecast: ["…"], untrustedContent: true },
         } : {
-          receipt: { slug: "dns", route: "GET /api/dns", underlyingPriceUsd: 0.001, paidUsd: EXEC_PRICE_USD, routingFeeUsd: 0.009, seller: "internal", resolvedBy: "task", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
+          receipt: { "slug": "dns", route: "GET /api/dns", underlyingPriceUsd: 0.001, paidUsd: EXEC_PRICE_USD, routingFeeUsd: 0.009, seller: "internal", resolvedBy: "task", ts: "2026-07-10T00:00:00.000Z", callRef: "sha256:…  (recomputable: sha256 of {\"nonce\":<payment authorization nonce>,\"slug\":…,\"ts\":…} - null on nonce-less calls)" },
           result: { name: "example.com", type: "A", records: ["…"] },
         },
       },

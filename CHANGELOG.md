@@ -108,7 +108,7 @@ Tools:
 ### 2026-11-21 (weather answers cached)
 Tools:
 - Current, forecast, historical, plan and probability weather answers are
-  kept for a few minutes, and each listing says for how long;
+  kept for up to an hour, and each listing says for how long;
   `OPEN_METEO_READ_CACHE=off` reads every request upstream.
 - The daily, hourly, historical and probability weather listings lead with
   the words a buyer searches for.

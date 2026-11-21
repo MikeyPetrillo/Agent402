@@ -1435,7 +1435,6 @@ export class RequestTimeoutError extends Error {
   }
 }
 
-/** An abort raised by a timeout signal, as RequestTimeoutError; anything else as it came. */
 /** The x402 request header that carries `payload`, encoded as the x402 fetch
  *  wrapper encodes it (base64 of its JSON), or null for no payload or an
  *  unknown version. */
@@ -1446,6 +1445,7 @@ function paymentHeaderOf(payload) {
   return { [name]: Buffer.from(JSON.stringify(payload), "utf8").toString("base64") };
 }
 
+/** An abort raised by a timeout signal, as RequestTimeoutError; anything else as it came. */
 function asTimeoutError(e, timeoutMs, slug = null) {
   return e && (e.name === "TimeoutError" || (e.name === "AbortError" && e.cause?.name === "TimeoutError")) && timeoutMs != null
     ? new RequestTimeoutError(timeoutMs, slug, e) : e;
