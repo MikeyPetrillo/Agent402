@@ -32,6 +32,9 @@ paths:
   - "src/svm-funding-refusal.js"
   - "src/avm-*.js"
   - "src/first-call-allowance.js"
+  - "src/returning-wallet.js"
+  - "src/sale-repeats.js"
+  - "src/sale-source.js"
   - "src/push-refusal-body.js"
   - "src/unpaid-quote-budget.js"
   - "scripts/test-challenge-size.js"
@@ -549,6 +552,28 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `AVM_SPONSORSHIP_REFUSAL_HOLD_MS`; published on `/api/rails`, the only excuse the canaries
   accept for a missing sub-cent accept; `AVM_SUBCENT_GATE=off`).
 - **First-call allowance:** `src/first-call-allowance.js`, off unless `FIRST_CALL_ALLOWANCE=on`: a wallet with no paid sale gets one unsettled first call (x402 EVM exact, a flagship or `FIRST_CALL_ALLOWANCE_SLUGS` route at or under `FIRST_CALL_ALLOWANCE_MAX_USD`), inside `FIRST_CALL_ALLOWANCE_DAILY_USD` and `FIRST_CALL_ALLOWANCE_IP_PER_DAY` claimed on Redis before a balance read bounded by `FIRST_CALL_ALLOWANCE_BALANCE_MS` (default 1000); a call asking for a share link is never granted; the wallet key expires (`FIRST_CALL_ALLOWANCE_WALLET_TTL_DAYS`, default 400; a claim after 30 minutes), the state record does not; an onBeforeSettle `skip` leaves its 200 unsettled and unbooked; figures on `/__operator/refunds.json`, with `returnedPayers` (granted wallets with a later outside paid sale, and within 7 days; one batched ledger read per chunk, cached `FIRST_CALL_ALLOWANCE_RETURNED_CACHE_MS` (default 5 minutes), reported with the switch off). The `firstCallAllowance` word on `/api/gateway-status` (on, spent, unavailable) pages nothing: a store that does not answer grants nothing, so every call is paid as usual.
+- **Returning-wallet price:** `src/returning-wallet.js`, off unless `RETURNING_WALLET_PRICE=on`: a
+  request that names a wallet in `X-Agent402-Wallet` is quoted the route's x402 EVM `exact` accepts
+  under list (`RETURNING_WALLET_DISCOUNT_BPS`, default 1000, at most 5000) when that wallet has paid
+  on `RETURNING_WALLET_MIN_PAID_DAYS` (default 3) distinct days inside
+  `RETURNING_WALLET_WINDOW_DAYS` (default 30), read from the sales ledger (cached per wallet,
+  bounded per minute; past the bound an unknown wallet is quoted list, never refused). The hint only
+  changes a quote: on the paid request the price is decided again from the authorization's `from`,
+  any other payer is priced at list (a 402, nothing charged), and a refusing onBeforeSettle hook
+  (`HOOK_NAMES.returningWallet`) aborts a discounted settle whose proven payer is not the quoted
+  wallet. Never discounted (`returningWalletRouteRefusal`): a route priced per request, a metered
+  or model-backed route, a route with lasting effect or one that spends this host's wallet, a slug
+  in `REFERRAL_SLUGS` (the public route never undercuts its referral copy), our own wallets. Every
+  other accept and every published price stay at list; an eligible route's 402 body carries
+  `returningWalletPrice`, and `/llms.txt` and the route's OpenAPI operation name the header only
+  while the switch is on. Figures: `/__operator/returning-wallets.json`. Suites:
+  `scripts/test-returning-wallet.js`, `scripts/test-returning-wallet-paid.js`.
+- **Sale source:** `src/sale-source.js`: a card checkout request carries the page's `utm_source`;
+  only a name in `KNOWN_SALE_SOURCES` is kept, in the checkout session's metadata and in the sale's
+  `source` column (file and database), and anything else is dropped at every step.
+  `/__operator/sales.json` counts card sales by source (`cardBySource`); no public reader selects
+  the column and nothing is written to browser storage (`/privacy` states what is kept). Suite:
+  `scripts/test-sale-source.js`.
 - **Rails dropped at boot, re-read:** the boot guard offers only networks a facilitator's
   `/supported` read confirms (`src/boot-supported-read.js`): up to three tries (6 s each, at 0,
   8 and 22 s; tries 2 and 3 are new requests, and any request still out counts; a third only

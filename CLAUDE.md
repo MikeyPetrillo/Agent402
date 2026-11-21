@@ -53,6 +53,24 @@ LLC: credit the entity, never a personal name.
   `src/router-benchmarks.js` (`/api/router-benchmarks`, aggregates over the reputation records),
   `src/speech-additions.js` (named speech and transcription models, each gated on its cost row),
   `src/feature-flags.js` (runtime switches: a flag provider, then the variable, then the default).
+- `src/returning-wallet.js` (a lower x402 EVM `exact` quote for the wallet a request names in
+  `X-Agent402-Wallet`, off unless `RETURNING_WALLET_PRICE=on`; the price is decided again from the
+  payment's signer; `.claude/rules/payments.md`).
+- `src/sale-repeats.js` (one sale per Solana settlement signature: the rule the ledger's writer
+  and readers share), `src/sale-source.js` (the listed `utm_source` a card sale keeps; no public
+  reader selects it).
+- `src/caller-turns.js` (fair turns across callers on serial engines, the OCR engines;
+  `.claude/rules/media.md`), `src/board-refresh-slots.js` (the seller boards rebuild at fixed UTC
+  slots, one at a time; `.claude/rules/ops.md`), `src/judge-timing.js` (per-backend and per-walk
+  judgment times on `/__operator/judge-timing.json`; `.claude/rules/gateway.md`).
+- `src/brand-mark.js` (the vector brand mark: `/logo.svg`, the favicons, the nav mark, the social
+  cards' tile), `src/ask402-links.js` (the guide site's addresses, so a page never types one),
+  `src/platform-integrations.js` + `src/agentcore-page.js` (platform pages under
+  `/integrations/<slug>`: one list feeds the integrations index, the sitemap and `/llms.txt`).
+- `src/tools/dns-name-filter.js` (`canonicalDnsName`, `assertQueryableName`: a caller-chosen name
+  is judged and queried in one canonical form), `src/tools/mailbox-provider.js` (email-validate's
+  `mailboxProvider`, from the MX hosts already read), `src/tools/price-webhook-kit.js` (the
+  `price-webhook` catalog entry).
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
 - `src/solana-history-rpc.js` (Solana transaction reads: public lane first, keyed lane behind it),
   `src/solana-activity-store.js` (the activity scans' state across restarts),

@@ -3,6 +3,8 @@ paths:
   - "src/tools/pdf*.js"
   - "src/tools/office-*.js"
   - "src/tools/ocr-kit.js"
+  - "src/caller-turns.js"
+  - "src/caller-places.js"
   - "src/tools/media-kit.js"
   - "src/tools/render.js"
   - "src/tools/render-static.js"

@@ -180,7 +180,13 @@ Loaded when an index, discovery, router or buyer file is read.
   seller refused by it gets the same pre-commit 409 and the router moves on. A payTo listed in
   `src/shared-paytos.js` is not a per-seller key: a seller paid at one is capped on its origin alone
   (`configureUnprovenSharedPayTos`, wired in server.js). Solana's tier (`SOR_SVM_UNPROVEN_MAX_USD`,
-  `src/solana-buyer.js`) is separate.
+  `src/solana-buyer.js`) is separate. Another EVM buyer chain is tried under the lane only while
+  `SOR_EVM_UNPROVEN_CHAINS` lists it (comma separated names or CAIP-2 ids; unset = Base only),
+  under one ceiling of its own (`SOR_EVM_UNPROVEN_MAX_USD`, default $0.01; `0` or `off` switches
+  every listed chain off; Base's ceiling never widens it) and the same per-seller and lane windows
+  as Base, so a seller's day and the lane's day are one day across chains.
+  `unprovenLaneAtLivePayTo` (`src/dispatch-eligibility.js`) reads the lane's verdict at the
+  address the live 402 names on the paying chain. Suite: `scripts/test-evm-unproven-chains.js`.
 - **External spend guard:** `src/external-spend-guard.js` (per payer and per chain wallet).
 - **Per-minute spend ceilings:** `SOR_SPEND_CAP_ATOMIC` (atomic USDC, default 2000000) is the
   alarm on what `payX402` holds for outside sellers in one minute, summed across buyers
@@ -213,7 +219,8 @@ Loaded when an index, discovery, router or buyer file is read.
   RPC), its own rolling 24 h ceiling (`SOR_WALLET_DAILY_MAX_USD_<CHAIN>`, default $25), and a
   low-balance refusal on its own reading of the same address (`UPSTREAM_BUYER_LOW_USD_<CHAIN>`,
   else `UPSTREAM_BUYER_LOW_USD`), one word per chain under `upstreamBuyerEvm` on
-  `/api/gateway-status` ("off" with none enabled). The unproven tier stays Base only. Off Base no
+  `/api/gateway-status` ("off" with none enabled). The unproven tier is Base only unless
+  `SOR_EVM_UNPROVEN_CHAINS` lists a chain (above). Off Base no
   buyer payment settles back into the spending wallet, so each chain's balance is funded by hand.
 - **Spending wallet trend:** `upstreamBuyer.trend` on `/api/gateway-status` reads `draining` after
   `UPSTREAM_BUYER_DROP_READS` (default 3) consecutive reads more than `UPSTREAM_BUYER_DROP_TOLERANCE_USD`

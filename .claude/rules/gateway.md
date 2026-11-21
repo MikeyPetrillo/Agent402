@@ -5,6 +5,7 @@ paths:
   - "src/model-catalog.js"
   - "src/upstream-costs.js"
   - "src/speech-additions.js"
+  - "src/judge-timing.js"
   - "src/handler-input.js"
   - "src/tools/*-report-kit.js"
   - "src/report-*.js"
@@ -87,6 +88,12 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   `agent402_reasoning_adjusted {field, requested, used, reason}` on the answer, the same JSON in
   `X-Agent402-Reasoning-Adjusted` on a stream. It adds no refusal. Suite:
   `scripts/test-llm-answer-fit.js`.
+- **Judge timing** (`src/judge-timing.js`): every backend read of a judgment (`noteJudgeBackend`,
+  with how it ended: ok, failed or unconfirmed) and every walk (`noteJudgeWalk`: its whole time, the
+  backends it tried, whether the first one answered) is timed in this process: the newest
+  `JUDGE_TIMING_SAMPLES` (500) durations per backend and per walk, and counters; no payer, input
+  or answer. `/__operator/judge-timing.json` reads p50 and p95; once an hour, while calls arrive,
+  the same figures go to the log. Suite: `scripts/test-judge-timing.js`.
 - **Judgment over OpenRouter** (`src/decision-one.js`): Decision-1, Gemini Decision-1 and the
   pinned Jev version (`jevOpenRouterModel`) on OpenRouter's Decisions endpoint, each on while
   `OPENROUTER_API_KEY` is set and its own switch is not `off`: `DECISION_ONE`, `GEMINI_DECISION`,
