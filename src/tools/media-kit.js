@@ -432,40 +432,57 @@ let queueBytesOverride = null;
 export function measureQueueMaxBytes(size = measurePoolSize()) {
   return queueBytesOverride ?? Math.min(MEASURE_QUEUE_BYTES_CAP, MEASURE_QUEUE_PER_SLOT * size * MEASURE_QUEUE_BYTES_PER_WAITER);
 }
+/** The hard bounds, for callers holding nothing (src/caller-places.js): at
+ *  the bounds above a caller that already holds a slot or a place is the one
+ *  answered busy, and a caller holding nothing is admitted over them, nobody
+ *  giving way, up to MEASURE_QUEUE_HARD_PER_SLOT waiters per slot holding at
+ *  most one and a half times the byte bound (300 MB at most): the most the
+ *  waiting calls hold in memory. Only there does a place change hands. */
+export const MEASURE_QUEUE_HARD_PER_SLOT = 2 * MEASURE_QUEUE_PER_SLOT;
+export function measureQueueHardMaxBytes(size = measurePoolSize()) {
+  return Math.floor(1.5 * measureQueueMaxBytes(size));
+}
 let measureQueuedBytes = 0;
 // Admission is per caller (`who`: src/dispatch-caller.js admissionCallerOf,
 // every key the request carries: the signed payer, a credits key, a Tempo
 // sender and the client address with an IPv6 one folded to its /64, each
 // counted, src/caller-places.js; for a step an in-process executor runs,
 // the caller that dispatched it). Each caller's slots and queued places are
-// counted (src/caller-places.js): when the queue is full, a caller holding
-// nothing takes the newest queued places of callers holding more than one
-// (by the holder's own key, then, for a new payer from a new address, by any
-// key that holds several: wallets paying from one address; each answered
-// busy, the caller's retryable 503) until its call fits, and a slot that
-// frees goes to the waiter with the fewest places under any of its keys
-// (first come among equals). So one caller's run of files, from one wallet
-// or from several behind one address, cannot hold every slot and place while
-// another caller's first file is refused or waits behind them all. A decode
-// holds its slot for a bounded time (MEASURE_MIN_DECODE_MS, up to
-// MEASURE_MAX_DECODE_MS with a deadline), whatever its outcome.
+// counted (src/caller-places.js `admit`): when the queue is full, a caller
+// that already holds a slot or a place is the one answered busy (its own
+// excess, the caller's retryable 503), and a caller holding nothing is
+// queued over the bound, nobody giving way, up to the hard bound. Only there
+// does it take a queued place: the newest of the party holding the most (by
+// the holder's own key, then by an address several wallets pay from; each
+// answered busy), never from a caller holding one place while another party
+// holds several. A slot that frees goes to the waiter with the fewest places
+// under any of its keys (first come among equals). So one caller's run of
+// files, from one wallet or from several behind one address, cannot hold
+// every slot and place while another caller's first file is refused or waits
+// behind them all, and no caller is answered busy because of what another
+// sent short of the hard bound. A decode holds its slot for a bounded time
+// (MEASURE_MIN_DECODE_MS, up to MEASURE_MAX_DECODE_MS with a deadline),
+// whatever its outcome.
 const measurePlaces = createCallerPlaces();
-// Resolves true with a slot held, "full" when the queue is full (by count or
-// by the bytes its waiters hold) or its place was taken by a caller holding
-// none, or false when none came free within `waitMs`.
+// Resolves true with a slot held, "own" when the queue is full and the
+// caller already holds a slot or a place, "full" when the queue is at its
+// hard bound (by count or by the bytes its waiters hold) or its place was
+// taken by a caller holding none, or false when none came free within
+// `waitMs`.
 const measureAcquire = (waitMs, bytes = 0, who = IN_PROCESS_CALLER) => {
   const size = measurePoolSize();
   if (measureActive < size) { measureActive++; measurePlaces.hold(who); return Promise.resolve(true); }
   if (!(waitMs > 0)) return Promise.resolve(false);
-  const fits = (taken = []) => {
+  const fitsWithin = (perSlot, maxBytes) => (taken = []) => {
     let freed = 0;
     for (const i of taken) freed += measureWaiters[i].bytes;
-    return measureWaiters.length - taken.length < MEASURE_QUEUE_PER_SLOT * size && measureQueuedBytes - freed + bytes <= measureQueueMaxBytes(size);
+    return measureWaiters.length - taken.length < perSlot * size && measureQueuedBytes - freed + bytes <= maxBytes;
   };
+  const fits = fitsWithin(MEASURE_QUEUE_PER_SLOT, measureQueueMaxBytes(size));
   if (!fits()) {
-    const taken = measurePlaces.victims(measureWaiters, who, fits);
-    if (!taken) return Promise.resolve("full");
-    for (const i of taken.sort((a, b) => b - a)) measureWaiters.splice(i, 1)[0].evict();
+    const admitted = measurePlaces.admit(measureWaiters, who, { fits, fitsHard: fitsWithin(MEASURE_QUEUE_HARD_PER_SLOT, measureQueueHardMaxBytes(size)) });
+    if (admitted.refused) return Promise.resolve(admitted.refused);
+    for (const i of admitted.taken.sort((a, b) => b - a)) measureWaiters.splice(i, 1)[0].evict();
   }
   measureQueuedBytes += bytes;
   measurePlaces.hold(who);
@@ -588,6 +605,7 @@ async function decodeInMeasurePool(buffer, prefix, outArgs, done, { format = nul
   // A budgeted caller waits while its deadline still leaves a whole minimum decode.
   const waitMs = budgeted ? deadlineAt - Date.now() - MEASURE_MIN_DECODE_MS : MEASURE_WAIT_MS;
   const slot = await measureAcquire(waitMs, buffer?.length ?? 0, caller);
+  if (slot === "own") return { unavailable: "every decoder slot is busy and the queue for one is full, with this caller's earlier files already in it; send this one once one of them is answered", busy: true, own: true };
   if (slot === "full") return { unavailable: "every decoder slot is busy and the queue for one is full", busy: true };
   if (slot !== true) return { unavailable: budgeted ? "no decoder slot came free in the time this call has left" : "no decoder slot came free in time", busy: true };
   const decodeMs = budgeted ? Math.max(MEASURE_MIN_DECODE_MS, Math.min(MEASURE_MAX_DECODE_MS, deadlineAt - Date.now())) : MEASURE_MIN_DECODE_MS;

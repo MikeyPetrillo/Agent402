@@ -43,10 +43,16 @@ Loaded when a media, document or worker-pool tool file is read.
   call's time), then a 503 with Retry-After,
   and keeps its place for the retry (a ticket, two minutes, renewed by each retry); no call that
   arrives later is read ahead of it. The line holds `OCR_QUEUE_MAX` (64) images, `OCR_LARGE_QUEUE_MAX` (8) of them
-  large, and `OCR_QUEUE_MAX_BYTES` (96 MB): when full, a caller holding nothing takes a place
-  from a caller holding several (its own key, then an address holding several), then from
-  whatever stands behind it; a caller that holds places is the one refused
-  (`src/caller-places.js`). A request that names no caller (unsigned, behind a CDN edge with no
+  large, and `OCR_QUEUE_MAX_BYTES` (96 MB). At that bound a caller that already holds a place is
+  the one refused (a 503 that says its own images wait), and a caller holding nothing is admitted
+  over it, nobody giving way, up to the hard bound: `OCR_QUEUE_HARD_MAX` (128) images,
+  `OCR_LARGE_QUEUE_HARD_MAX` (16) large, `OCR_QUEUE_HARD_MAX_BYTES` (144 MB, the most the waiting
+  images hold in memory). Only at the hard bound does a caller holding nothing take a place: the
+  newest of the party holding the most (the caller whose own key holds the most, then the address
+  holding the most, while one holds several; never from a caller holding one place while another
+  party holds several), then whatever stands behind its kept place; with one place each nobody
+  gives way and the caller arriving is refused (`src/caller-places.js` `admit`). A buyer is never
+  answered busy for sharing an address with other buyers short of the hard bound. A request that names no caller (unsigned, behind a CDN edge with no
   proof of its client: `ANONYMOUS_CALLER`, `src/dispatch-caller.js`) shares one key. On the
   free tier the caller is the client address. Suite: `scripts/test-ocr-crash.js`. PDF transforms
   (`src/tools/pdf-ops.js`) run in a fresh worker thread per call (`pdf-offthread.js`,
@@ -130,7 +136,12 @@ Loaded when a media, document or worker-pool tool file is read.
   file's headers declare and the length its audio measures. `measureAudio` (`src/tools/media-kit.js`) decodes the first
   audio stream to nowhere with ffmpeg (audio-only whitelist) and answers `{ seconds }`, `{ undecodable }` or
   `{ unavailable }`. Its pool holds one decode per CPU the process may use (`os.availableParallelism()`, held to 2..8;
-  `AUDIO_DECODE_SLOTS`, 1 to 64, overrides it). A transcription call passes `deadlineAt` (`decodeDeadlineAt` in
+  `AUDIO_DECODE_SLOTS`, 1 to 64, overrides it). Its queue follows the OCR line's two-bound rule (`src/caller-places.js`):
+  `MEASURE_QUEUE_PER_SLOT` (4) waiters a slot holding at most 200 MB, where a caller that already holds a slot or a place
+  is the one answered busy and a caller holding nothing is queued over the bound; the hard bound is
+  `MEASURE_QUEUE_HARD_PER_SLOT` (8) a slot and one and a half times the bytes (300 MB at most), and only there does the
+  newest place of the party holding the most go to a newcomer (`scripts/test-media-input-args.js`).
+  A transcription call passes `deadlineAt` (`decodeDeadlineAt` in
   `src/tools/stt-kit.js`: the route's payment-window budget, the CDN answer window and the payment authorization,
   whichever ends first, less the upstream's whole cap, 60 s or 120 s diarized): it waits for a slot while that still
   leaves a 10 s decode, and its decode may run to it (at most 60 s). A caller without one waits 5 s and decodes for 10 s.

@@ -25,10 +25,15 @@
 //     while others wait, and a caller that has used an engine in that time
 //     gives way once another caller's image has waited a turn; an
 //     abandoned or failing image frees its turn at once; the line is bounded
-//     and the caller that holds places is the one answered busy. The first
-//     block there is the reproduction: one party's three wallets on three
-//     addresses keep a slow large image in the engine and two more waiting,
-//     and another payer's large image is still read.
+//     twice: at its bound the caller that holds places is the one answered
+//     busy and a caller holding nothing is admitted over it, and only at the
+//     hard bound does a place change hands, from the party holding the most.
+//     The first block there is the reproduction: one party's three wallets on
+//     three addresses keep a slow large image in the engine and two more
+//     waiting, and another payer's large image is still read. The second is
+//     the full line: two payers who share an address are not answered busy
+//     when a newcomer arrives, and one party's wallets on one address cannot
+//     keep a newcomer out at the hard bound.
 //
 // Needs the language data (scripts/fetch-tessdata.js); under CI a missing
 // engine fails, elsewhere it skips the engine-backed assertions.
@@ -37,7 +42,7 @@ import { Jimp } from "jimp";
 import { withPushExceptionText } from "../src/prepayment-refusal.js";
 import { PUSH_EXCEPTION } from "../src/tempo-push-debts.js";
 import { deflateSync, crc32 } from "node:zlib";
-import { OCR_TOOLS, OCR_MAX_PIXELS, OCR_MAX_SIDE, OCR_LARGE_PIXELS, OCR_LARGE_QUEUE_MAX, OCR_LARGE_WAIT_MS, OCR_LARGE_RETIRE_WAIT_MS, OCR_TURN_MS, OCR_RUN_MAX_MS, OCR_QUEUE_MAX, OCR_QUEUE_MAX_BYTES, OCR_UNPAID_WEIGHT, OCR_FRESH_WINDOW_MS, OCR_WORKER_MAX, __ocrLargeTest, ocrDownscaleSide, imageFormatOf, checkImageHeader, tessdataInstalled, __ocrTest } from "../src/tools/ocr-kit.js";
+import { OCR_TOOLS, OCR_MAX_PIXELS, OCR_MAX_SIDE, OCR_LARGE_PIXELS, OCR_LARGE_QUEUE_MAX, OCR_LARGE_QUEUE_HARD_MAX, OCR_QUEUE_HARD_MAX, OCR_QUEUE_HARD_MAX_BYTES, OCR_LARGE_WAIT_MS, OCR_LARGE_RETIRE_WAIT_MS, OCR_TURN_MS, OCR_RUN_MAX_MS, OCR_QUEUE_MAX, OCR_QUEUE_MAX_BYTES, OCR_UNPAID_WEIGHT, OCR_FRESH_WINDOW_MS, OCR_WORKER_MAX, __ocrLargeTest, ocrDownscaleSide, imageFormatOf, checkImageHeader, tessdataInstalled, __ocrTest } from "../src/tools/ocr-kit.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -332,6 +337,55 @@ async function call(input) {
     restore();
   }
 
+  // --- the reproduction at a full line (paid mode, through the handler) ---
+  // (a) Two payers who share an address each have a large image waiting in a
+  // full line of callers holding one place each, and a new payer's image
+  // arrives: every image is read. (One of the two was answered 503 before.)
+  // (b) One party's wallets on one address hold the engine and the line up to
+  // its hard bound, and a new payer's image is still read.
+  {
+    L.reset();
+    const restore = L.limits({ turnMs: 150, waitMs: 8_000, runMaxMs: 5_000, retireMs: 20 });
+    const SLOW = 4200, QUICK = 4100;
+    const widthOf = (buf) => buf.readUInt32BE(16);
+    const engine = (slowMs) => ({
+      recognize: (buf) => new Promise((r) => setTimeout(() => r({ data: { text: widthOf(buf) === SLOW ? "slow" : "read", lines: [] } }), widthOf(buf) === SLOW ? slowMs : 5)),
+      terminate: async () => {},
+    });
+    const slow = pngHeadB64(SLOW, SLOW), quick = pngHeadB64(QUICK, QUICK);
+    const send = (image, req) => ocr.handler({ image, lang: "tur" }, req).then(() => 200, (e) => e.statusCode);
+    {
+      __ocrTest.inject("tur", engine(300));
+      const X = "198.51.100.60";
+      const first = send(slow, paidReq(wallet(0xc0), "203.0.113.60"));
+      await sleep(60);
+      const pair = [send(quick, paidReq(wallet(0xc1), X)), send(quick, paidReq(wallet(0xc2), X))];
+      const others = Array.from({ length: OCR_LARGE_QUEUE_MAX - 2 }, (_, i) => send(quick, paidReq(wallet(0xd0 + i), `203.0.113.${61 + i}`)));
+      await sleep(60);
+      const full = L.state().waiting;
+      const newcomer = send(quick, paidReq(wallet(0xc3), "203.0.113.90"));
+      const all = await Promise.all([first, ...pair, ...others, newcomer]);
+      ok(full === OCR_LARGE_QUEUE_MAX && all.every((st) => st === 200), `two payers who share an address wait in a full line with ${OCR_LARGE_QUEUE_MAX - 2} others and a new payer's image arrives: every image is read, nobody is answered busy (${full} waiting; ${all.join(",")})`);
+      ok(!L.state().busy && L.state().callers === 0, "every place is free afterwards");
+    }
+    {
+      L.reset();
+      __ocrTest.inject("tur", engine(250));
+      const P = "198.51.100.61";
+      const party = Array.from({ length: 1 + OCR_LARGE_QUEUE_HARD_MAX }, (_, i) => send(slow, paidReq(wallet(0xe00 + i), P)));
+      await sleep(80);
+      const full = L.state().waiting;
+      const honest = send(quick, paidReq(wallet(0xf00), "198.51.100.201"));
+      await sleep(30);
+      const after = L.state().waiting;
+      const [h, ...got] = await Promise.all([honest, ...party]);
+      ok(full === OCR_LARGE_QUEUE_HARD_MAX && after === OCR_LARGE_QUEUE_HARD_MAX && h === 200, `one party's ${1 + OCR_LARGE_QUEUE_HARD_MAX} wallets on one address hold the engine and the line to its hard bound, and a new payer's image is still read (${full} waiting, ${after} after it joined; answered ${h})`);
+      ok(got.filter((st) => st === 503).length === 1 && got.at(-1) === 503 && got.filter((st) => st === 200).length === OCR_LARGE_QUEUE_HARD_MAX, `...in the place of the party's newest waiting image, the only one answered busy (${got.join(",")})`);
+      ok(!L.state().busy && L.state().callers === 0, "every place is free afterwards");
+    }
+    restore();
+  }
+
   // --- one image over 16 MP in an engine at a time (one caller alone) ---
   {
     L.reset();
@@ -363,10 +417,11 @@ async function call(input) {
     const late = await L.acquire(80).then(() => null, (e) => e);
     ok(late?.statusCode === 503 && Date.now() - t0 >= 70 && L.state().waiting === 0, `a waiter past its wait is a 503 and leaves the line (after ${Date.now() - t0} ms)`);
     // Through the handler, a large image refused for want of a place says
-    // nothing was charged on a route call only. Every waiting place here is
-    // the only one its caller holds, so nobody gives way.
+    // nothing was charged on a route call only. The line is at its hard
+    // bound and every waiting place here is the only one its caller holds,
+    // so nobody gives way.
     {
-      const fill = Array.from({ length: OCR_LARGE_QUEUE_MAX }, (_, i) => got(L.acquire(5_000, `ip:192.0.2.${i + 1}`)));
+      const fill = Array.from({ length: OCR_LARGE_QUEUE_HARD_MAX }, (_, i) => got(L.acquire(5_000, `ip:192.0.2.${i + 1}`)));
       const image = pngHeadB64(5000, 4000);
       const busyRoute = await ocr.handler({ image }, { headers: {}, ip: "192.0.2.200" }).then(() => null, (e) => e);
       ok(busyRoute?.statusCode === 503 && busyRoute.hint === "large-image-busy" && /Nothing was charged\./.test(busyRoute.message), `on a route call the busy 503 says nothing was charged (${busyRoute?.statusCode})`);
@@ -498,72 +553,123 @@ async function call(input) {
     }
   }
 
-  // --- a full line: who gives way ---
+  // --- a full line: over its bound first, then who gives way ---
   {
     L.reset();
-    const fillWith = (who) => Array.from({ length: OCR_LARGE_QUEUE_MAX }, (_, i) => got(L.acquire(5_000, who(i))));
+    const SOFT = OCR_LARGE_QUEUE_MAX, HARD = OCR_LARGE_QUEUE_HARD_MAX, OVER = HARD - SOFT;
+    ok(SOFT === 8 && HARD === 16 && OCR_QUEUE_MAX === 64 && OCR_QUEUE_HARD_MAX === 128, `the line holds ${SOFT} large images (${OCR_QUEUE_MAX} in all), and callers holding nothing are admitted past that up to ${HARD} (${OCR_QUEUE_HARD_MAX} in all)`);
+    const fillWith = (who, n = SOFT) => Array.from({ length: n }, (_, i) => got(L.acquire(5_000, who(i))));
     const refusedNow = async (p) => { const r = await settledWithin(got(p), 150, "queued"); return r === "queued" ? { queued: p } : r; };
-    // One caller holds the engine and every waiting place: a newcomer takes
-    // its newest place, a second newcomer its next, and the caller itself is
-    // the one answered busy.
+    const waitingStill = async (list) => (await Promise.all(list.map((p) => settledWithin(p, 60, "waiting")))).every((r) => r === "waiting");
+    // `n` more callers, each new and holding one place: they take the line toward its hard bound.
+    let crowdN = 0;
+    const crowd = (n) => Array.from({ length: n }, () => got(L.acquire(5_000, `ip:192.0.2.${++crowdN}`)));
+    const ownExcess = (e) => e?.statusCode === 503 && /already has an image of yours/.test(e.message || "");
+    // One caller holds the engine and every waiting place. A newcomer is
+    // admitted over the bound and nobody gives way; the caller that holds
+    // places is the one refused, and told why. Only at the hard bound does a
+    // newcomer take a place: the newest of the caller holding the most.
     {
       const A = "payer:0x00000000000000000000000000000000000000aa";
       const hold = await L.acquire(50, A);
       const line = fillWith(() => A);
-      const b = L.acquire(5_000, "ip:203.0.113.7");
-      const shed = await settledWithin(line[OCR_LARGE_QUEUE_MAX - 1], 200);
-      ok(shed?.statusCode === 503 && !/charged/i.test(shed.message) && L.state().waiting === OCR_LARGE_QUEUE_MAX, `a caller with nothing in the line takes the newest waiting place of a caller holding several (that one answered ${shed?.statusCode ?? shed})`);
-      const c = L.acquire(5_000, "ip:203.0.113.8");
-      const shed2 = await settledWithin(line[OCR_LARGE_QUEUE_MAX - 2], 200);
-      ok(shed2?.statusCode === 503, `a second newcomer takes the next (${shed2?.statusCode ?? shed2})`);
+      const b = got(L.acquire(5_000, "ip:203.0.113.7"));
+      ok(await waitingStill(line) && L.state().waiting === SOFT + 1, `a caller with nothing in a full line is admitted over its bound, and the caller holding every place keeps them (${L.state().waiting} waiting)`);
       const more = await L.acquire(5_000, A).then(() => null, (e) => e);
-      ok(more?.statusCode === 503, `the caller that holds places is the one refused when the line is full (${more?.statusCode})`);
+      ok(ownExcess(more) && !/charged/i.test(more.message) && L.state().waiting === SOFT + 1, `the caller that holds places is the one refused when the line is full, and is told it is its own images that wait (${more?.statusCode}: ${String(more?.message).slice(0, 90)})`);
+      const rest = crowd(OVER - 1);
+      await sleep(5);
+      ok(L.state().waiting === HARD && await waitingStill(line), `newcomers are admitted up to the hard bound with nobody giving way (${L.state().waiting} waiting)`);
+      const c = got(L.acquire(5_000, "ip:203.0.113.8"));
+      const shed = await settledWithin(line[SOFT - 1], 200, "waiting");
+      ok(shed?.statusCode === 503 && !/charged/i.test(shed.message) && L.state().waiting === HARD, `at the hard bound a newcomer takes the newest waiting place of the caller holding the most (that one answered ${shed?.statusCode ?? shed}; ${L.state().waiting} waiting)`);
+      const d = got(L.acquire(5_000, "ip:203.0.113.9"));
+      const shed2 = await settledWithin(line[SOFT - 2], 200, "waiting");
+      ok(shed2?.statusCode === 503 && L.state().waiting === HARD, `a second newcomer takes the next (${shed2?.statusCode ?? shed2})`);
       hold();
       const rb = await b;
       ok(L.state().holder === "ip:203.0.113.7", "the first newcomer's image is read next: it arrived before the holder's image ended");
-      rb(); (await c)();
-      await releaseAll(line);
+      rb();
+      await drain([c, d, ...rest, ...line]);
       ok(!L.state().busy && L.state().callers === 0, "every place is released");
     }
-    // Several wallets on ONE address, one place each: a caller that holds
-    // nothing under any key takes the newest of that address's places. (This
-    // party held the engine and the whole line before.)
+    // Several wallets on ONE address, one place each, fill the line: a new
+    // payer is admitted over the bound and none of them gives way. The party
+    // keeps adding wallets up to the hard bound: there, a new payer from a
+    // new address takes that address's newest place. (This party held the
+    // engine and the whole line before.)
     {
+      L.reset();
       const X = "198.51.100.120";
       const hold = await L.acquire(50, payer(100, X));
       const line = fillWith((i) => payer(101 + i, X));
       const fresh = await refusedNow(L.acquire(5_000, payer(200, "198.51.100.121")));
-      const shed = await settledWithin(line[OCR_LARGE_QUEUE_MAX - 1], 200);
-      ok(fresh.queued && shed?.statusCode === 503 && L.state().waiting === OCR_LARGE_QUEUE_MAX, `several wallets on one address are one party at a full line: a new payer from a new address takes that address's newest place (newcomer ${fresh.queued ? "queued" : fresh.statusCode}; the address's newest ${shed?.statusCode ?? shed})`);
-      // A payer whose address already holds places takes none from the others there.
+      ok(fresh.queued && await waitingStill(line) && L.state().waiting === SOFT + 1, `several wallets on one address fill the line: a new payer from a new address is admitted over its bound and none of them gives way (newcomer ${fresh.queued ? "queued" : fresh.statusCode}; ${L.state().waiting} waiting)`);
+      // A payer at that address is its own caller: it is admitted too.
       const neighbor = await refusedNow(L.acquire(5_000, payer(300, X)));
-      ok(neighbor?.statusCode === 503, `a payer whose address already holds places takes none from the others there (${neighbor?.statusCode ?? "queued"})`);
+      ok(neighbor.queued && L.state().waiting === SOFT + 2, `a payer is not refused because others at its address hold places (${neighbor.queued ? "queued" : neighbor.statusCode})`);
+      const wallets = Array.from({ length: OVER - 2 }, (_, i) => got(L.acquire(5_000, payer(310 + i, X))));
+      await sleep(5);
+      ok(L.state().waiting === HARD, `the party's further wallets take the line to its hard bound (${L.state().waiting} waiting)`);
+      const late = await refusedNow(L.acquire(5_000, payer(201, "198.51.100.122")));
+      const shed = await settledWithin(wallets[OVER - 3], 200, "waiting");
+      ok(late.queued && shed?.statusCode === 503 && L.state().waiting === HARD && await waitingStill([fresh.queued.then((r) => r, (e) => e)]), `several wallets on one address at the hard bound cannot keep a newcomer out: a new payer from a new address takes that address's newest place (newcomer ${late.queued ? "queued" : late.statusCode}; the address's newest ${shed?.statusCode ?? shed}; ${L.state().waiting} waiting)`);
+      // One more wallet of the party's takes only a place of its own address.
+      const again = await refusedNow(L.acquire(5_000, payer(320, X)));
+      const shed2 = await settledWithin(wallets[OVER - 4], 200, "waiting");
+      ok(again.queued && shed2?.statusCode === 503 && L.state().waiting === HARD, `a further wallet of that party takes its own address's newest place, nobody else's (${shed2?.statusCode ?? shed2})`);
       hold();
-      (await fresh.queued)();
-      await releaseAll(line);
+      await drain([fresh.queued, neighbor.queued, late.queued, again.queued, ...wallets, ...line]);
       ok(!L.state().busy && L.state().callers === 0, "every place is released");
     }
-    // Every waiting place its caller's only one, under every key, and ahead
-    // of the newcomer: nobody gives way and it is answered busy. It keeps its
-    // place in line: on its retry it takes the place of a call that came
-    // after it, and is read before it.
+    // Two payers behind one address, one waiting place each, in a full line
+    // of callers holding one place each: a newcomer from a new address is
+    // admitted, and neither of them is answered busy. (One of them was.)
+    {
+      L.reset();
+      const X = "198.51.100.140";
+      const hold = await L.acquire(50, payer(700, "203.0.113.150"));
+      const pair = [got(L.acquire(5_000, payer(701, X))), got(L.acquire(5_000, payer(702, X)))];
+      const singles = Array.from({ length: SOFT - 2 }, (_, i) => got(L.acquire(5_000, payer(710 + i, `203.0.113.${151 + i}`))));
+      await sleep(5);
+      ok(L.state().waiting === SOFT, `two payers on one address and ${SOFT - 2} others fill the line (${L.state().waiting} waiting)`);
+      const nu = await refusedNow(L.acquire(5_000, payer(720, "203.0.113.170")));
+      ok(nu.queued && await waitingStill([...pair, ...singles]) && L.state().waiting === SOFT + 1, `two payers who share an address are not bumped by a newcomer: it is admitted over the bound and every waiting image keeps its place (newcomer ${nu.queued ? "queued" : nu.statusCode}; ${L.state().waiting} waiting)`);
+      // At the hard bound, a party holding several gives way before them: a
+      // third address with three wallets stands in the line too.
+      const Y = "198.51.100.141";
+      const trio = [0, 1, 2].map((i) => got(L.acquire(5_000, payer(730 + i, Y))));
+      const rest = crowd(OVER - 4);
+      await sleep(5);
+      ok(L.state().waiting === HARD, `the line reaches its hard bound (${L.state().waiting} waiting)`);
+      const n2 = await refusedNow(L.acquire(5_000, payer(721, "203.0.113.171")));
+      const shedTrio = await settledWithin(trio[2], 200, "waiting");
+      ok(n2.queued && shedTrio?.statusCode === 503 && await waitingStill(pair), `at the hard bound the place comes from the address holding the most, not from the two who share one (the three-wallet address's newest ${shedTrio?.statusCode ?? shedTrio})`);
+      hold();
+      await drain([nu.queued, n2.queued, ...pair, ...singles, ...trio, ...rest]);
+      ok(!L.state().busy && L.state().callers === 0, "every place is released");
+    }
+    // The hard bound holds. Every waiting place its caller's only one, under
+    // every key, and ahead of the newcomer: nobody gives way and it is
+    // answered busy. It keeps its place in line: on its retry it takes the
+    // place of a call that came after it, and is read before it.
     {
       L.reset();
       const hold = await L.acquire(50, payer(400, "203.0.113.100"));
-      const line = fillWith((i) => payer(401 + i, `203.0.113.${101 + i}`));
+      const line = fillWith((i) => payer(401 + i, `203.0.113.${101 + i}`), HARD);
       const late = payer(500, "203.0.113.200");
       const refused = await L.acquire(5_000, late).then(() => null, (e) => e);
-      ok(refused?.statusCode === 503 && refused.retryAfter === 60 && L.state().waiting === OCR_LARGE_QUEUE_MAX, `a newcomer is refused only when every waiting place is its caller's only one under every key and stands ahead of it (got ${refused?.statusCode})`);
+      ok(refused?.statusCode === 503 && refused.retryAfter === 60 && !ownExcess(refused) && L.state().waiting === HARD, `the hard bound holds: a newcomer is refused only when the line is at it and every waiting place is its caller's only one under every key and stands ahead of it (got ${refused?.statusCode}; ${L.state().waiting} waiting)`);
       const again = await L.acquire(5_000, late).then(() => null, (e) => e);
-      ok(again?.statusCode === 503 && L.state().waiting === OCR_LARGE_QUEUE_MAX, `...and again while they all still wait (got ${again?.statusCode})`);
+      ok(again?.statusCode === 503 && L.state().waiting === HARD && await waitingStill(line), `...and again while they all still wait (got ${again?.statusCode})`);
       hold();
       const head = await line[0]; // the first in line is in the engine; its place in line frees
       const after = got(L.acquire(5_000, payer(501, "203.0.113.201")));
       await sleep(5);
-      ok(L.state().waiting === OCR_LARGE_QUEUE_MAX, "a caller that came later takes the free place: the line is full again");
+      ok(L.state().waiting === HARD, "a caller that came later takes the free place: the line is at its hard bound again");
       const back = L.acquire(5_000, late);
       const bumped = await settledWithin(after, 200, "still queued");
-      ok(bumped?.statusCode === 503 && L.state().waiting === OCR_LARGE_QUEUE_MAX, `the caller refused earlier comes back and takes the place of the one that came after it (that one answered ${bumped?.statusCode ?? bumped})`);
+      ok(bumped?.statusCode === 503 && L.state().waiting === HARD, `the caller refused earlier comes back and takes the place of the one that came after it (that one answered ${bumped?.statusCode ?? bumped})`);
       head();
       await releaseAll(line.slice(1));
       const rBack = await settledWithin(got(back), 500);
@@ -581,22 +687,24 @@ async function call(input) {
       ok(order.join() === "gave up its place,newer", `a call that gave up its place stands, on its retry, where it stood (${order.join()})`);
       ok(!L.state().busy && L.state().callers === 0, "every place is released");
     }
-    // The line is bounded by the bytes its waiting images hold too.
+    // The line is bounded by the bytes its waiting images hold too, the same
+    // way: over the bound for a caller holding nothing, up to the hard bound.
     {
       L.reset();
-      ok(OCR_QUEUE_MAX === 64 && OCR_QUEUE_MAX_BYTES === 96 * 1024 * 1024, "at most 64 images wait in all, holding at most 96 MB between them");
+      ok(OCR_QUEUE_MAX_BYTES === 96 * 1024 * 1024 && OCR_QUEUE_HARD_MAX_BYTES === 144 * 1024 * 1024, "the waiting images hold at most 96 MB between them, and at most 144 MB with the callers admitted over that");
       const A = "ip:203.0.113.30";
       const hold = await L.acquire(50, A);
       const big = 40 * 1024 * 1024;
       const a1 = got(L.acquire(5_000, A, big)), a2 = got(L.acquire(5_000, A, big));
       const a3 = await L.acquire(5_000, A, big).then(() => null, (e) => e);
-      ok(a3?.statusCode === 503 && L.state().queuedBytes === 2 * big, `a third 40 MB image from the caller holding the other two is refused (${a3?.statusCode}; ${L.state().queuedBytes / 1048576} MB waiting)`);
-      const b = L.acquire(5_000, "ip:203.0.113.31", big);
-      const shed = await settledWithin(a2, 200);
-      ok(shed?.statusCode === 503 && L.state().queuedBytes === 2 * big, `another caller's image takes the newest of them (${shed?.statusCode ?? shed})`);
+      ok(ownExcess(a3) && L.state().queuedBytes === 2 * big, `a third 40 MB image from the caller holding the other two is refused (${a3?.statusCode}; ${L.state().queuedBytes / 1048576} MB waiting)`);
+      const b = got(L.acquire(5_000, "ip:203.0.113.31", big));
+      ok(await waitingStill([a1, a2, b]) && L.state().queuedBytes === 3 * big, `another caller's image is admitted over the byte bound and nothing gives way (${L.state().queuedBytes / 1048576} MB waiting)`);
+      const c = got(L.acquire(5_000, "ip:203.0.113.32", big));
+      const shed = await settledWithin(a2, 200, "waiting");
+      ok(shed?.statusCode === 503 && L.state().queuedBytes === 3 * big, `past the hard byte bound the next caller's image takes the newest of the caller holding two (${shed?.statusCode ?? shed}; ${L.state().queuedBytes / 1048576} MB waiting)`);
       hold();
-      (await b)();
-      await releaseAll([a1]);
+      await drain([a1, b, c]);
       ok(!L.state().busy && L.state().callers === 0 && L.state().queuedBytes === 0, "the bytes leave the line with their images");
     }
     // Shared egress: buyers behind one address (a NAT, a hosted agent
@@ -607,69 +715,147 @@ async function call(input) {
       const paid = (n, ip = X) => ({ ip, headers: {}, creditsKeyId: `k${n}` });
       ok(JSON.stringify(callerKeysOf(paid(1))) === JSON.stringify(["credits:k1", `ip:${X}`]), `a request's caller keys are its credential and its address (${JSON.stringify(callerKeysOf(paid(1)))})`);
       ok(JSON.stringify(admissionCallerOf(paid(1))) === JSON.stringify(callerKeysOf(paid(1))), "admission holds a place under every one of them");
-      // One credential is one caller from several addresses: its newest place
-      // is taken by a newcomer.
+      // One credential is one caller from several addresses: it is the one
+      // refused at a full line, and at the hard bound its newest place is the
+      // one a newcomer takes.
       L.reset();
       const r1 = await L.acquire(50, admissionCallerOf(paid(5, "198.51.100.10")));
       const line = fillWith((i) => admissionCallerOf(paid(5, `198.51.100.${11 + i}`)));
-      const nu = L.acquire(5_000, admissionCallerOf(paid(6, "198.51.100.40")));
-      const shed5 = await settledWithin(line[OCR_LARGE_QUEUE_MAX - 1], 200, "still queued");
-      ok(shed5?.statusCode === 503 && !/charged/i.test(shed5.message), `one credential used from several addresses is one caller: its newest place is taken (${shed5?.statusCode ?? shed5})`);
-      r1(); await drain([nu, ...line]);
+      const own5 = await L.acquire(5_000, admissionCallerOf(paid(5, "198.51.100.30"))).then(() => null, (e) => e);
+      ok(ownExcess(own5), `one credential used from several addresses is one caller: at a full line its next image, from yet another address, is the one refused (${own5?.statusCode})`);
+      const nu = got(L.acquire(5_000, admissionCallerOf(paid(6, "198.51.100.40"))));
+      const more5 = crowd(OVER - 1);
+      await sleep(5);
+      const nu2 = got(L.acquire(5_000, admissionCallerOf(paid(7, "198.51.100.41"))));
+      const shed5 = await settledWithin(line[SOFT - 1], 200, "still queued");
+      ok(shed5?.statusCode === 503 && !/charged/i.test(shed5.message) && L.state().waiting === HARD, `...and at the hard bound its newest place is taken (${shed5?.statusCode ?? shed5})`);
+      r1(); await drain([nu, nu2, ...more5, ...line]);
       // Unsigned callers are told apart by address alone.
       const u0 = await L.acquire(50, admissionCallerOf({ ip: "203.0.113.50", headers: {} }));
       const uLine = fillWith(() => admissionCallerOf({ ip: "203.0.113.51", headers: {} }));
-      const un = L.acquire(5_000, admissionCallerOf({ ip: "203.0.113.52", headers: {} }));
-      const shedU = await settledWithin(uLine[OCR_LARGE_QUEUE_MAX - 1], 200, "still queued");
-      ok(shedU?.statusCode === 503, `an unsigned address's newest waiting place is taken (${shedU?.statusCode ?? shedU})`);
-      u0(); await drain([un, ...uLine]);
+      const un = got(L.acquire(5_000, admissionCallerOf({ ip: "203.0.113.52", headers: {} })));
+      ok(await waitingStill([...uLine, un]) && L.state().waiting === SOFT + 1, `an unsigned caller from another address is admitted over the bound while one address holds every place (${L.state().waiting} waiting)`);
+      const moreU = crowd(OVER - 1);
+      await sleep(5);
+      const un2 = got(L.acquire(5_000, admissionCallerOf({ ip: "203.0.113.53", headers: {} })));
+      const shedU = await settledWithin(uLine[SOFT - 1], 200, "still queued");
+      ok(shedU?.statusCode === 503, `at the hard bound an unsigned address's newest waiting place is taken (${shedU?.statusCode ?? shedU})`);
+      u0(); await drain([un, un2, ...moreU, ...uLine]);
       // A buyer that shares an address with a caller holding every place
       // under its own credential is a newcomer like any other, and holding a
-      // place, its next call takes none.
+      // place, its next call is the one refused.
       const S = "198.51.100.120";
       const h0 = await L.acquire(50, admissionCallerOf(paid(8, S)));
       const hLine = fillWith(() => admissionCallerOf(paid(8, S)));
-      const nb = L.acquire(5_000, admissionCallerOf(paid(9, S)));
-      const shedH = await settledWithin(hLine[OCR_LARGE_QUEUE_MAX - 1], 200, "still queued");
-      const nbNow = await settledWithin(got(nb), 50, "queued");
-      ok(shedH?.statusCode === 503 && nbNow === "queued", `a buyer sharing an address with a caller that holds every place takes that caller's newest waiting place (holder's newest: ${shedH?.statusCode ?? shedH}; newcomer: ${nbNow?.statusCode ?? nbNow})`);
+      const nb = got(L.acquire(5_000, admissionCallerOf(paid(9, S))));
+      ok(await waitingStill([...hLine, nb]) && L.state().waiting === SOFT + 1, `a buyer sharing an address with a caller that holds every place is admitted over the bound, and that caller keeps its places (${L.state().waiting} waiting)`);
       const nb2 = await L.acquire(5_000, admissionCallerOf(paid(9, S))).then(() => null, (e) => e);
-      ok(nb2?.statusCode === 503, `...and holding a place, its next call takes none (got ${nb2?.statusCode})`);
+      ok(ownExcess(nb2), `...and holding a place, its next call is the one refused (got ${nb2?.statusCode})`);
       h0(); await drain([nb, ...hLine]);
       ok(!L.state().busy && L.state().callers === 0, "every place is released after the shared-address cases");
       // A CDN request with no proof of its client's address and no signed
       // key names no caller. Such requests share no holding key: each is a
       // newcomer, so one of them holding every place does not lock out the
-      // rest, and a keyed newcomer still takes its newest waiting place.
+      // rest, and at the hard bound a keyed newcomer takes their newest
+      // waiting place.
       const { ANONYMOUS_CALLER } = await import("../src/dispatch-caller.js");
       const anon = (edge) => ({ ip: edge, headers: {}, cdnUnproven: true });
       ok(typeof ANONYMOUS_CALLER === "string" && JSON.stringify(admissionCallerOf(anon("203.0.113.70"))) === JSON.stringify([ANONYMOUS_CALLER]) && JSON.stringify(admissionCallerOf(undefined)) !== JSON.stringify([ANONYMOUS_CALLER]), `an unproven, unsigned request is admitted as an anonymous caller, apart from request-less work (${JSON.stringify(admissionCallerOf(anon("203.0.113.70")))})`);
       const a0 = await L.acquire(50, admissionCallerOf(anon("203.0.113.70")));
       const aLine = fillWith(() => admissionCallerOf(anon("203.0.113.70")));
-      const an = L.acquire(5_000, admissionCallerOf(anon("203.0.113.71")));
-      const shedA = await settledWithin(aLine[OCR_LARGE_QUEUE_MAX - 1], 200, "still queued");
-      const anNow = await settledWithin(got(an), 50, "queued");
-      ok(shedA?.statusCode === 503 && anNow === "queued", `another unproven request is not refused because one of them holds every place (the newest: ${shedA?.statusCode ?? shedA}; newcomer: ${anNow?.statusCode ?? anNow})`);
-      const keyed = L.acquire(5_000, admissionCallerOf(paid(10, "198.51.100.130")));
-      const shedK = await settledWithin(got(an), 200, "still queued");
-      ok(shedK?.statusCode === 503, `a keyed newcomer takes the anonymous callers' newest waiting place (${shedK?.statusCode ?? shedK})`);
-      a0(); await drain([keyed, an, ...aLine]);
+      const an = got(L.acquire(5_000, admissionCallerOf(anon("203.0.113.71"))));
+      ok(await waitingStill([...aLine, an]) && L.state().waiting === SOFT + 1, `another unproven request is not refused because one of them holds every place (${L.state().waiting} waiting)`);
+      const aMore = fillWith(() => admissionCallerOf(anon("203.0.113.72")), OVER - 1);
+      await sleep(5);
+      ok(L.state().waiting === HARD, `unproven requests are admitted up to the hard bound (${L.state().waiting} waiting)`);
+      const keyed = got(L.acquire(5_000, admissionCallerOf(paid(10, "198.51.100.130"))));
+      const shedK = await settledWithin(aMore[OVER - 2], 200, "still queued");
+      ok(shedK?.statusCode === 503 && L.state().waiting === HARD, `at the hard bound a keyed newcomer takes the anonymous callers' newest waiting place (${shedK?.statusCode ?? shedK})`);
+      a0(); await drain([keyed, an, ...aMore, ...aLine]);
       ok(!L.state().busy && L.state().callers === 0, "every place is released after the anonymous cases");
     }
     // Request-less places fill the engine and the line: they are counted, so
-    // a named newcomer still takes the newest waiting one.
+    // they are the ones refused there, a named newcomer is admitted, and at
+    // the hard bound it takes the newest waiting one.
     {
       const relU = await L.acquire(50);
       const line = fillWith(() => null);
-      const n1 = L.acquire(5_000, "ip:203.0.113.7");
-      const shedU = await settledWithin(line[OCR_LARGE_QUEUE_MAX - 1], 300, "still queued");
-      ok(shedU?.statusCode === 503 && L.state().waiting === OCR_LARGE_QUEUE_MAX, `a named newcomer takes the newest waiting place of request-less calls holding the engine and the line (that one answered ${shedU?.statusCode || shedU})`);
+      const more = await L.acquire(5_000).then(() => null, (e) => e);
+      ok(more?.statusCode === 503 && L.state().waiting === SOFT, `request-less calls holding the engine and the line are the ones refused when it is full (${more?.statusCode})`);
+      const n1 = got(L.acquire(5_000, "ip:203.0.113.7"));
+      const rest = crowd(OVER - 1);
+      await sleep(5);
+      const n2 = got(L.acquire(5_000, "ip:203.0.113.8"));
+      const shedU = await settledWithin(line[SOFT - 1], 300, "still queued");
+      ok(shedU?.statusCode === 503 && L.state().waiting === HARD, `at the hard bound a named newcomer takes the newest waiting place of request-less calls holding the engine and the line (that one answered ${shedU?.statusCode || shedU})`);
       relU();
       const rn1 = await n1;
-      ok(typeof rn1 === "function", "and its image is read in turn");
+      ok(typeof rn1 === "function", "and the first newcomer's image is read in turn");
       rn1();
-      await releaseAll(line);
+      await drain([n2, ...rest, ...line]);
       ok(!L.state().busy && L.state().callers === 0, "every request-less place is released");
+    }
+  }
+
+  // --- the places rule on its own (src/caller-places.js) ---
+  {
+    const { createCallerPlaces } = await import("../src/caller-places.js");
+    const { ANONYMOUS_CALLER } = await import("../src/dispatch-caller.js");
+    // A room of `soft` waiting places, `hard` with the callers admitted over it.
+    const room = (soft, hard) => {
+      const places = createCallerPlaces();
+      const waiters = [];
+      const fitsAt = (max) => (taken = []) => waiters.length - taken.length < max;
+      const arrive = (who) => {
+        const a = places.admit(waiters, who, { fits: fitsAt(soft), fitsHard: fitsAt(hard) });
+        if (a.refused) return a.refused;
+        const gone = a.taken.map((i) => waiters[i]);
+        for (const g of gone) { waiters.splice(waiters.indexOf(g), 1); places.free(g.who); }
+        places.hold(who);
+        waiters.push({ who });
+        return gone.length ? `took ${gone.map((g) => g.who[0]).join("+")}` : a.over ? "over" : "in";
+      };
+      return { arrive, waiting: () => waiters.length, owners: () => waiters.map((w) => w.who[0]) };
+    };
+    const w = (name, ip) => [`payer:${name}`, `ip:${ip}`];
+    {
+      const r = room(4, 6);
+      const got1 = ["a", "b", "c", "d"].map((n) => r.arrive(w(n, n)));
+      ok(got1.join() === "in,in,in,in" && r.arrive(w("a", "a")) === "own", `inside the bound every call is admitted; at it, a caller that holds a place is refused its own next one (${got1.join()})`);
+      ok(r.arrive(w("e", "e")) === "over" && r.arrive(w("f", "f")) === "over" && r.waiting() === 6, "a caller holding nothing is admitted over the bound, up to the hard bound");
+      ok(r.arrive(w("g", "g")) === "full" && r.waiting() === 6, "at the hard bound, with one place each, nobody gives way: the newcomer is refused and the bound holds");
+    }
+    {
+      // By own key first, the caller holding the most; then the address holding the most.
+      const r = room(8, 8);
+      for (const who of [w("a", "1"), w("a", "1"), w("a", "1"), w("b", "2"), w("b", "2"), w("p1", "9"), w("p2", "9"), w("s", "3")]) r.arrive(who);
+      ok(r.waiting() === 8, "setup: one caller holds three places, one holds two, two share an address, one holds one");
+      const order = [1, 2, 3, 4, 5].map((n) => r.arrive(w(`n${n}`, `n${n}`)));
+      ok(order.slice(0, 3).join() === "took payer:a,took payer:b,took payer:a", `a place comes from the caller holding the most under its own key, while one holds several (${order.slice(0, 3).join()})`);
+      ok(order[3] === "took payer:p2", `then from the address holding the most: the newest of the two who share one, once nobody else holds more than a single place (${order[3]})`);
+      ok(order[4] === "full" && r.waiting() === 8, `and never from a caller holding a single place when nobody holds several (${order[4]})`);
+    }
+    {
+      // Never from the two who share an address while another party holds more.
+      const r = room(8, 8);
+      for (const who of [w("p1", "9"), w("p2", "9"), w("x1", "7"), w("x2", "7"), w("x3", "7"), w("s1", "3"), w("s2", "4"), w("s3", "5")]) r.arrive(who);
+      const first = r.arrive(w("n1", "n1"));
+      ok(first === "took payer:x3" && r.owners().includes("payer:p1") && r.owners().includes("payer:p2"), `a party holding two places gives nothing up while another holds three (${first})`);
+      // A party split over two addresses with as many places each is still a party holding the most.
+      const split = room(8, 8);
+      for (const who of [w("x1", "7"), w("x2", "7"), w("x3", "7"), w("x4", "7"), w("y1", "8"), w("y2", "8"), w("y3", "8"), w("y4", "8")]) split.arrive(who);
+      const tie = split.arrive(w("n1", "n1"));
+      ok(tie === "took payer:y4" && split.waiting() === 8, `two addresses holding as many places each cannot keep a newcomer out: the newest place among them gives way (${tie})`);
+      // A newcomer at the address holding the most takes that address's own newest place.
+      const mate = split.arrive(w("x5", "7"));
+      ok(mate === "took payer:x4", `a newcomer at the address holding the most takes a place of that address, nobody else's (${mate})`);
+    }
+    {
+      // A request that names no caller is always a newcomer; a run of them gives way first.
+      const r = room(2, 4);
+      const got2 = [0, 1, 2, 3].map(() => r.arrive([ANONYMOUS_CALLER]));
+      ok(got2.join() === "in,in,over,over", `requests that name no caller are admitted up to the hard bound (${got2.join()})`);
+      ok(r.arrive(w("k", "k")) === `took ${ANONYMOUS_CALLER}` && r.waiting() === 4, "and a keyed newcomer takes the newest of them there");
     }
   }
 

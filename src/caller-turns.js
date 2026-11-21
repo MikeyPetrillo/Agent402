@@ -27,18 +27,23 @@
 // new callers can keep it waiting: what is ahead of it is what was there
 // when it came.
 //
-// A FULL ROOM never turns away a caller that holds nothing while a waiting
-// place can be given up:
-//   - one of a caller holding several (src/caller-places.js `victims`: first
-//     by the holder's own key, then by any key it shares, so several wallets
-//     on one address give way too);
+// A FULL ROOM has two bounds (src/caller-places.js `admit`). At the first
+// (`maxWaiters`, `maxWaitersOf`, `maxBytes`) a caller that already holds a
+// place is the one refused ("own": its own excess), and a caller that holds
+// nothing is admitted over it, nobody giving way, up to the hard bound
+// (`hardWaiters`, `hardWaitersOf`, `hardBytes`: what the waiting calls may
+// hold in memory at most). Only at the hard bound does a caller that holds
+// nothing take a waiting place:
+//   - one of the party holding the most (`victims`: the caller whose own key
+//     holds the most, then the address holding the most, while one holds
+//     several; never from a caller holding one place while another party
+//     holds several);
 //   - failing that, the place that stands last in line, when it stands behind
 //     the caller arriving (a call whose caller's earlier time puts it later,
 //     or one that came after the arriving caller's kept place).
-// That place is answered busy and the newcomer waits in it. A caller that
-// already holds places is the one refused. A newcomer is refused only when
-// every waiting place is the only one its caller holds under every key and
-// stands ahead of it.
+// That place is answered busy and the newcomer waits in it. A newcomer is
+// refused ("full") only at the hard bound, when every waiting place is the
+// only one its caller holds under every key and stands ahead of it.
 //
 // A PLACE IN LINE IS KEPT. A call that waited out its time, found the room
 // full or gave up its place leaves a ticket under its own key for `ticketMs`
@@ -79,9 +84,10 @@ import { IN_PROCESS_CALLER, ANONYMOUS_CALLER } from "./dispatch-caller.js";
 
 const SHARED_KEYS = new Set([IN_PROCESS_CALLER, ANONYMOUS_CALLER]);
 
-/** Why a call got no turn: "full" (the room is full and nobody gives way),
- *  "wait" (its wait ran out), "gave-way" (its place went to a caller holding
- *  nothing) or "left" (its own caller cancelled it). */
+/** Why a call got no turn: "own" (the room is full and its caller already
+ *  holds a place), "full" (the room is at its hard bound and nobody gives
+ *  way), "wait" (its wait ran out), "gave-way" (its place went to a caller
+ *  holding nothing) or "left" (its own caller cancelled it). */
 export class TurnRefused extends Error {
   constructor(why) { super(`no turn: ${why}`); this.name = "TurnRefused"; this.why = why; }
 }
@@ -91,6 +97,9 @@ export function createCallerTurns({
   maxWaiters = 64,
   maxWaitersOf = () => Infinity,
   maxBytes = Infinity,
+  hardWaiters = 2 * maxWaiters,
+  hardWaitersOf = (lane) => 2 * maxWaitersOf(lane),
+  hardBytes = 1.5 * maxBytes,
   unpaidWeight = 4,
   ticketMs = 2 * 60_000,
   ticketsMax = 1024,
@@ -254,14 +263,20 @@ export function createCallerTurns({
     const promise = new Promise((resolve, reject) => {
       if (canStart(lane)) { places.hold(keys); resolve(start(w)); return; }
       if (!(waitMs > 0)) { leaveTicket(w); reject(new TurnRefused("wait")); return; }
-      const fits = (taken = []) => {
+      const fitsWithin = (max, maxOf, maxHeld) => (taken = []) => {
         let freed = 0, inLane = 0;
         for (const i of taken) { freed += waiters[i].bytes; if (waiters[i].lane === lane) inLane++; }
-        return waiters.length - taken.length < maxWaiters && laneCount(lane) - inLane < maxWaitersOf(lane) && queuedBytes - freed + w.bytes <= maxBytes;
+        return waiters.length - taken.length < max && laneCount(lane) - inLane < maxOf(lane) && queuedBytes - freed + w.bytes <= maxHeld;
       };
+      const fits = fitsWithin(maxWaiters, maxWaitersOf, maxBytes);
       if (!fits()) {
-        const taken = places.victims(waiters, keys, fits) || lastBehind(w, fits);
-        if (!taken) { leaveTicket(w); reject(new TurnRefused("full")); return; }
+        // Past the first bound: the caller's own excess is refused, a caller
+        // holding nothing is admitted up to the hard bound, and only there
+        // does a place change hands.
+        const fitsHard = fitsWithin(Math.max(hardWaiters, maxWaiters), (l) => Math.max(hardWaitersOf(l), maxWaitersOf(l)), Math.max(hardBytes, maxBytes));
+        const admitted = places.admit(waiters, keys, { fits, fitsHard });
+        const taken = admitted.taken || (admitted.refused === "full" ? lastBehind(w, fitsHard) : null);
+        if (!taken) { leaveTicket(w); reject(new TurnRefused(admitted.refused === "own" ? "own" : "full")); return; }
         for (const v of taken.map((i) => waiters[i])) {
           remove(v);
           places.free(v.keys);

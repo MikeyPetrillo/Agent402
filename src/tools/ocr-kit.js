@@ -489,12 +489,17 @@ export const DECODE_FAILURE = /attempting to read image|pixRead|Aborted\(|ERR_OU
 // time keeps its place in line for its retry (a ticket, two minutes, renewed
 // by each retry), and no call that arrives later is ever read ahead of it.
 //
-// The line is bounded for memory: OCR_QUEUE_MAX images wait in all
-// (OCR_LARGE_QUEUE_MAX of them large), holding at most OCR_QUEUE_MAX_BYTES
-// between them. When it is full, a caller holding nothing takes the newest
-// waiting place of a caller that holds several (by its own key, then by a
-// key it shares: several wallets on one address); a caller that already
-// holds places is the one answered busy (src/caller-places.js).
+// The line is bounded for memory, twice (src/caller-places.js). OCR_QUEUE_MAX
+// images wait in all (OCR_LARGE_QUEUE_MAX of them large), holding at most
+// OCR_QUEUE_MAX_BYTES between them: at that bound a caller that already holds
+// a place is the one answered busy (its own images wait), and a caller that
+// holds nothing is admitted over it, nobody giving way, up to the hard bound:
+// OCR_QUEUE_HARD_MAX images (OCR_LARGE_QUEUE_HARD_MAX large) holding at most
+// OCR_QUEUE_HARD_MAX_BYTES, the most the waiting images hold in memory. Only
+// there does a caller holding nothing take a waiting place, the newest of the
+// party holding the most (a caller's own key, then an address several wallets
+// pay from), never from a caller holding one place while another party holds
+// several.
 export const OCR_LARGE_PIXELS = 16_000_000;
 const envMs = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n >= 1_000 ? n : dflt; };
 export const OCR_TURN_MS = envMs("OCR_TURN_MS", 30_000);
@@ -506,6 +511,9 @@ export const OCR_FRESH_WINDOW_MS = 10 * 60_000;
 export const OCR_LARGE_QUEUE_MAX = 8;
 export const OCR_QUEUE_MAX = 64;
 export const OCR_QUEUE_MAX_BYTES = 96 * 1024 * 1024;
+export const OCR_LARGE_QUEUE_HARD_MAX = 2 * OCR_LARGE_QUEUE_MAX;
+export const OCR_QUEUE_HARD_MAX = 2 * OCR_QUEUE_MAX;
+export const OCR_QUEUE_HARD_MAX_BYTES = 144 * 1024 * 1024;
 /** Engine time that ended without an answer counts this many times (src/caller-turns.js). */
 export const OCR_UNPAID_WEIGHT = 4;
 /** A call waits in line only while its connection still leaves this long to read it. */
@@ -518,6 +526,9 @@ const turns = createCallerTurns({
   maxWaiters: OCR_QUEUE_MAX,
   maxWaitersOf: (lane) => (lane === LARGE_LANE ? OCR_LARGE_QUEUE_MAX : OCR_QUEUE_MAX),
   maxBytes: OCR_QUEUE_MAX_BYTES,
+  hardWaiters: OCR_QUEUE_HARD_MAX,
+  hardWaitersOf: (lane) => (lane === LARGE_LANE ? OCR_LARGE_QUEUE_HARD_MAX : OCR_QUEUE_HARD_MAX),
+  hardBytes: OCR_QUEUE_HARD_MAX_BYTES,
   unpaidWeight: OCR_UNPAID_WEIGHT,
   freshWindowMs: OCR_FRESH_WINDOW_MS,
 });
@@ -533,6 +544,15 @@ function laneBusyError() {
   return Object.assign(
     bad("image-ocr has other images in this language waiting ahead of this one; retry in a few seconds.", 503),
     { retryAfter: 10, shed: true, hint: "ocr-busy", chargeClaim: true },
+  );
+}
+
+/** The line is full and this caller already has an image in an engine or
+ *  waiting: its own next image is the one refused. */
+function ownImagesWaitError(large) {
+  return Object.assign(
+    bad("image-ocr already has an image of yours in an engine or waiting, and its line is full; send this one once that one is answered.", 503),
+    { retryAfter: large ? 60 : 10, shed: true, hint: large ? "large-image-busy" : "ocr-busy", chargeClaim: true },
   );
 }
 
@@ -584,7 +604,7 @@ export const __ocrLargeTest = {
   /** Take a turn on the large lane; resolves to its release function. */
   acquire(waitMs = limits.waitMs, who = null, bytes = 0) {
     const pending = turns.acquire(LARGE_LANE, who, { waitMs, bytes });
-    const out = pending.then((turn) => Object.assign((how) => turn.release(how), { turn }), (e) => { throw e instanceof TurnRefused && e.why !== "left" ? largeBusyError() : e; });
+    const out = pending.then((turn) => Object.assign((how) => turn.release(how), { turn }), (e) => { throw e instanceof TurnRefused && e.why !== "left" ? (e.why === "own" ? ownImagesWaitError(true) : largeBusyError()) : e; });
     out.cancel = () => pending.cancel();
     return out;
   },
@@ -637,7 +657,7 @@ async function doRecognize(buf, lang, fmt, pixels = 0, who = null, req = null, h
   let turn;
   try { turn = await pending; } catch (e) {
     unwatch();
-    if (e instanceof TurnRefused) throw e.why === "left" ? clientGone() : busy();
+    if (e instanceof TurnRefused) throw e.why === "left" ? clientGone() : e.why === "own" ? ownImagesWaitError(large) : busy();
     throw e;
   }
   let entry = null, cut = null, timer = null, failed = false, unpaid = false;
