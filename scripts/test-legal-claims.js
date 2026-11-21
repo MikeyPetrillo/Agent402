@@ -249,11 +249,11 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
   const hold = settledHoldText(), bound = settledMarkHoldText();
   ok(SETTLED_HOLD_MS > 0 && MAX_SETTLED_MARK_HOLD_MS > SETTLED_HOLD_MS && margin > 0 && /^(an? |\d)/.test(hold) && /^(a |\d)/.test(bound), `control: the hold reads ${hold}, the margin ${margin} minutes, the bound ${bound}`);
   const sentence = `kept about ${hold} after a settled call, or until the authorization's own validBefore plus ${margin} minutes when that is later`;
-  ok(privacy.includes(`replay mark (${sentence}, at most ${bound} after the call`), `/privacy states the settled replay hold (${hold}, validBefore plus ${margin} minutes, at most ${bound})`);
+  ok(privacy.includes(`replay mark (${sentence}; for a grant`) && !/at most \d+ years/.test(privacy), `/privacy states the settled replay hold (${hold}, or validBefore plus ${margin} minutes), with no figure for the internal clamp`);
   ok(privacy.includes(`on chain, until the authorization's own validBefore plus ${margin} minutes`), `/privacy states the unsettled grant's hold to validBefore plus ${margin} minutes`);
   const dh = serviceManifest({ baseUrl: "https://agent402.tools", network: "base", networks: ["base"], wallet: "0x0000000000000000000000000000000000000001", catalog: {}, toolCount: 0, powSlugs: new Set(), powDifficulty: 20, prices: {} })?.payment?.dataHandling || {};
   const reads = (dh.readsOnly || []).join(" | ");
-  ok(reads.includes(`as a replay mark, ${sentence} (at most ${bound} after the call)`), `/.well-known/x402 dataHandling states the same settled hold`);
+  ok(reads.includes(`as a replay mark, ${sentence}; for a grant`) && !/at most \d+ years/.test(reads), `/.well-known/x402 dataHandling states the same settled hold`);
   ok(reads.includes(`on chain, until the authorization's own validBefore plus ${margin} minutes`), `/.well-known/x402 dataHandling states the unsettled grant's hold`);
 }
 
