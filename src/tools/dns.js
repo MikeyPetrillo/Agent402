@@ -2,7 +2,8 @@ import { Resolver } from "node:dns/promises";
 import { assertQueryableName } from "./dns-name-filter.js";
 import { atCeiling, assertBeforeCeiling, ceilingPassed, ceilingCutError } from "../run-ceiling.js";
 
-const SUPPORTED = ["A", "AAAA", "MX", "TXT", "NS", "CNAME"];
+/** The record types the DNS lookup answers; its published schema lists them. */
+export const SUPPORTED = Object.freeze(["A", "AAAA", "MX", "TXT", "NS", "CNAME"]);
 const RESOLVER_OPTS = { timeout: 5000, tries: 2 };
 
 export async function dnsLookup(name, type = "A") {

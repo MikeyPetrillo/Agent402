@@ -13,11 +13,21 @@
 //     run out at the same N (a file name's limit counts its extension; an
 //     image's bytes are not letters), or nothing is established.
 //
-// Everything runs offline: fetch and the address guard's lookups fail at
+// Everything runs offline: fetch, every name lookup and every socket fail at
 // once, so a handler that passes its own checks ends on a failed read. A
-// handler that answers the long value with a 5xx (its key is not set here, or
-// it reads upstream before it checks its input) gives no verdict.
+// handler that answers the long value with a 5xx gives no verdict, and the
+// measurement says which kind: it READ UPSTREAM with the long value (no cap
+// stands before the read), or it answered before reading anything (a switch
+// or a key gate in front of its checks, which hides whatever cap is behind
+// it). The second kind is a finding, so the suite runs every handler
+// configured: pinConfiguration() gives the process the example cost table and
+// a placeholder for each key a kit gates on, whatever the caller exported.
 import { readdirSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { generateKeyPairSync } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import dnsPromises from "node:dns/promises";
+import net from "node:net";
 import { stubGuardResolver } from "./guard-resolver-stub.js";
 
 export const LONG = 100_000;
@@ -35,12 +45,56 @@ export async function kitTools() {
   return tools;
 }
 
+// Keys and switches a kit reads before it reads its input. Each gets a
+// placeholder (nothing leaves the process, so none is ever presented).
+const PLACEHOLDER_KEYS = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "BRAVE_API_KEY", "BRAVE_ANSWERS_API_KEY", "APOLLO_API_KEY", "ALCHEMY_API_KEY", "FRED_API_KEY", "FRED_API_KEY_V2", "NEYNAR_API_KEY", "TYPESAFE_API_KEY", "X_BEARER_TOKEN"];
+// Switches that put a tool on, and the day's spend alarms set out of reach:
+// the measurement's own calls book estimates in this process, and a day
+// ceiling met halfway through would answer the rest before their checks.
+const SWITCHES_ON = { KALSHI_TOOLS: "on", X_DATA_DAILY_MAX_USD: "1000000" };
+
+/**
+ * One configuration for the measurement, whatever the caller's shell or the
+ * CI job exports: the example cost table (placeholder numbers), a placeholder
+ * for every key a kit gates on, and a signing key made here for the one kit
+ * that parses its key. Call it before the first src/ import: the cost table
+ * and several keys are read once.
+ */
+export function pinConfiguration() {
+  delete process.env.UPSTREAM_COSTS_JSON;
+  process.env.UPSTREAM_COSTS_FILE = fileURLToPath(new URL("../../docs/example-upstream-costs.json", import.meta.url));
+  for (const k of PLACEHOLDER_KEYS) process.env[k] = "offline-placeholder";
+  for (const [k, v] of Object.entries(SWITCHES_ON)) process.env[k] = v;
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  process.env.CDP_API_KEY_ID = "offline-placeholder";
+  process.env.CDP_API_KEY_SECRET = privateKey.export({ type: "sec1", format: "pem" });
+}
+
+// The call in progress, so a read that leaves the process is booked to the
+// call that made it (a read a handler leaves running lands on its own call).
+const inCall = new AsyncLocalStorage();
+const upstreamOutcomes = new Set();
+const noteEgress = () => { const c = inCall.getStore(); if (c) c.egress = true; };
+/** Whether `outcome` was ever the answer of a call that tried to read
+ *  upstream in this run: a breaker or a cached failed lookup answers later
+ *  calls with the same words and no new read. */
+export const readUpstream = (outcome) => upstreamOutcomes.has(outcome);
+
 /** Put the process offline. Returns a function that undoes it. */
 export function goOffline() {
+  const offline = () => Object.assign(new Error("offline"), { code: "ENOTFOUND" });
   const realFetch = globalThis.fetch;
-  globalThis.fetch = async () => { throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("offline"), { code: "ENOTFOUND" }) }); };
-  const undoDns = stubGuardResolver(() => Promise.reject(Object.assign(new Error("offline"), { code: "ENOTFOUND" })));
-  return () => { globalThis.fetch = realFetch; undoDns(); };
+  globalThis.fetch = async () => { noteEgress(); throw Object.assign(new TypeError("fetch failed"), { cause: offline() }); };
+  const undoGuard = stubGuardResolver(() => { noteEgress(); return Promise.reject(offline()); });
+  // Every other question a resolver can be asked (the DNS tools ask MX, TXT,
+  // NS and the rest), and any socket a client library opens itself.
+  const R = dnsPromises.Resolver.prototype, realR = {};
+  for (const fn of Object.getOwnPropertyNames(R)) if (/^(resolve(?!4$|6$)\w*|reverse)$/.test(fn) && typeof R[fn] === "function") { realR[fn] = R[fn]; R[fn] = function offlineResolve() { noteEgress(); return Promise.reject(offline()); }; }
+  const realLookup = dnsPromises.lookup;
+  dnsPromises.lookup = function offlineLookup() { noteEgress(); return Promise.reject(offline()); };
+  const realConnect = net.Socket.prototype.connect;
+  net.Socket.prototype.connect = function offlineConnect() { noteEgress(); process.nextTick(() => this.destroy(offline())); return this; };
+  return () => { globalThis.fetch = realFetch; undoGuard(); Object.assign(R, realR); dnsPromises.lookup = realLookup; net.Socket.prototype.connect = realConnect; };
 }
 
 /** The top-level input fields of a tool that take a string. */
@@ -56,12 +110,16 @@ export async function outcomeOf(tool, field, value, alone = false) {
   const input = { ...(alone ? {} : structuredClone(tool.discovery?.input || tool.discovery?.example || {})), [field]: value };
   let timer;
   const late = new Promise((r) => { timer = setTimeout(r, CALL_MS, "timeout"); });
+  const call = { egress: false };
+  let out;
   try {
-    return await Promise.race([
+    out = await inCall.run(call, () => Promise.race([
       Promise.resolve().then(() => tool.handler(input, { headers: {}, query: {}, body: input })).then(() => "ok", (e) => `${Number.isInteger(e?.statusCode) ? e.statusCode : "error"}:${String(e?.message || "").replace(/\d[\d,_.]*/g, "#").slice(0, 200)}`),
       late,
-    ]);
-  } catch (e) { return `error:${String(e?.message || "").slice(0, 80)}`; } finally { clearTimeout(timer); }
+    ]));
+  } catch (e) { out = `error:${String(e?.message || "").slice(0, 80)}`; } finally { clearTimeout(timer); }
+  if (call.egress || out === "timeout") upstreamOutcomes.add(out);
+  return out;
 }
 const is4xx = (o) => /^4\d\d:/.test(o);
 const letters = (n) => "a".repeat(n);
@@ -93,7 +151,7 @@ export async function measuredCap(tool, field) {
 }
 async function measure(tool, field, alone) {
   const long = await outcomeOf(tool, field, letters(LONG), alone);
-  if (!is4xx(long)) return { cap: /^(5\d\d|error|timeout)/.test(long) ? undefined : null, why: `a ${LONG}-letter value answers ${long.slice(0, 60)}` };
+  if (!is4xx(long)) return { cap: /^(5\d\d|error|timeout)/.test(long) ? undefined : null, why: `a ${LONG}-letter value answers ${long.slice(0, 60)}`, outcome: long };
   // Some shorter value must be answered differently, or the refusal is about
   // the value's form, not its length.
   let passes = 0;
@@ -117,18 +175,68 @@ async function measure(tool, field, alone) {
   return { cap, long };
 }
 
-/** Whether a declared cap is the handler's: `cap` letters are not answered
- *  as a very long value is, `cap + 1` are (beside the example's other fields,
- *  or with the field alone when the example makes the handler pass it by). */
-export async function declaredCapHolds(tool, field, cap) {
+// Values past a cap that are not a run of one letter: a leading sign a
+// handler strips (@name, $TICKER, #tag) and a second part after a separator
+// (en-gb, name.eth). A cap that holds for letters and lets one of these
+// through is shorter than a value the handler takes.
+const SIGNS = ["@", "$", "#"];
+const SEPARATORS = ["-", "_", ".", "/", ":", " ", ","];
+const longerForms = (cap) => [...SIGNS.map((s) => s + letters(cap)), ...SEPARATORS.flatMap((s) => [letters(cap) + s + "aa", letters(cap) + s + letters(cap)])];
+const OTHER_LETTERS = ["q", "z", "x", "k"];
+/** Values exactly `n` long: a run of letters, a sign and letters, two parts and a separator. */
+const formsAt = (n) => [letters(n), ...(n > 1 ? SIGNS.map((s) => s + letters(n - 1)) : []), ...(n > 2 ? SEPARATORS.map((s) => letters(Math.ceil((n - 1) / 2)) + s + letters(Math.floor((n - 1) / 2))) : [])];
+const short = (v) => JSON.stringify(v.length > 40 ? `${v.slice(0, 12)}...${v.slice(-12)}` : v);
+
+/** Whether a declared cap is the handler's: some value `cap` long is taken
+ *  (a run of letters, or another form: "@" and a name, two parts and a
+ *  hyphen; `witness` is the suite's own value for a form made of neither),
+ *  every value `cap + 1` long is refused as a very long value is, no longer
+ *  value of another form is taken, and the handler does not tell one letter's
+ *  run from another's at the cap (a handler that takes "a" and refuses "z" is
+ *  matching a set of words: that is an `enum`, not a length; `words` names
+ *  the letters it refused). Measured beside the example's other fields, or
+ *  with the field alone when the example makes the handler pass it by. */
+export async function declaredCapHolds(tool, field, cap, { witness = null } = {}) {
   let last = null;
   for (const alone of [false, true]) {
     const long = await outcomeOf(tool, field, letters(Math.max(LONG, cap * 2 + 2)), alone);
     if (!is4xx(long)) { last = last || { verdict: /^(5\d\d|error|timeout)/.test(long) ? "no verdict" : "not refused", long }; continue; }
-    const at = await outcomeOf(tool, field, letters(cap), alone), over = await outcomeOf(tool, field, letters(cap + 1), alone);
-    const verdict = at !== long && over === long ? "holds" : at === long ? "refused at the cap" : "accepted past the cap";
-    if (verdict === "holds") return { verdict, long, alone };
-    last = { verdict, long, at, over };
+    const run = (await outcomeOf(tool, field, letters(cap), alone)) !== long;
+    let taken = run ? letters(cap) : null;
+    for (const v of taken ? [] : [...(witness && witness.length === cap ? [witness] : []), ...formsAt(cap)]) if (!is4xx(await outcomeOf(tool, field, v, alone))) { taken = v; break; }
+    if (!taken) { last = { verdict: "refused at the cap", long }; continue; }
+    let over = null;
+    for (const v of formsAt(cap + 1)) { const o = await outcomeOf(tool, field, v, alone); if (v === letters(cap + 1) ? o !== long : !is4xx(o)) { over = v; break; } }
+    if (over) { last = { verdict: over === letters(cap + 1) ? "accepted past the cap" : `a longer value is taken: ${over.length} characters, ${short(over)}`, long }; continue; }
+    for (const v of longerForms(cap)) {
+      if (!is4xx(await outcomeOf(tool, field, v, alone))) return { verdict: `a longer value is taken: ${v.length} characters, ${short(v)}`, long, alone };
+    }
+    const words = [];
+    if (run) for (const l of OTHER_LETTERS) if ((await outcomeOf(tool, field, l.repeat(cap), alone)) === long) words.push(l);
+    return { verdict: "holds", long, alone, words, taken };
   }
   return last;
+}
+
+/** How the handler answers each member of a published `enum`, against a
+ *  value that is no member: the members it refuses the same way (the value
+ *  sent is folded out of the words, so a message that quotes it reads alike).
+ *  null when the handler does not refuse a non-member for being one. */
+export async function refusedMembers(tool, field, members) {
+  const NOT_A_MEMBER = "zq-not-a-member-qz";
+  const fold = (o, v) => o.split(v).join("<v>").split(v.toLowerCase()).join("<v>").split(v.toUpperCase()).join("<v>");
+  for (const alone of [false, true]) {
+    const stranger = await outcomeOf(tool, field, NOT_A_MEMBER, alone);
+    if (!is4xx(stranger)) continue;
+    // The refusal must be about this field: the same answer with the field
+    // left out is about something else the input lacks.
+    const input = alone ? {} : structuredClone(tool.discovery?.input || tool.discovery?.example || {});
+    delete input[field];
+    const without = await outcomeOf({ ...tool, handler: tool.handler, discovery: { input } }, "__absent__", undefined, false);
+    if (without === stranger) continue;
+    const refused = [];
+    for (const m of members) if (fold(await outcomeOf(tool, field, m, alone), m) === fold(stranger, NOT_A_MEMBER)) refused.push(m);
+    return refused;
+  }
+  return null;
 }

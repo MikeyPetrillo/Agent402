@@ -856,7 +856,7 @@ async function fredGetJsonOnce(url, extraHeaders = {}, timeoutMs = 15_000) {
 const FRED_UNITS = new Set(["lin", "chg", "ch1", "pch", "pc1", "pca", "cca", "log"]);
 // Likewise for frequency aggregation (daily series rolled up to weekly,
 // monthly, quarterly, etc.).
-const FRED_FREQ = new Set(["d", "w", "bw", "m", "q", "sa", "a", "wef", "weth", "wew", "wetu", "wem", "wesu", "wesa", "bwew", "bwem"]);
+export const FRED_FREQ = new Set(["d", "w", "bw", "m", "q", "sa", "a", "wef", "weth", "wew", "wetu", "wem", "wesu", "wesa", "bwew", "bwem"]);
 
 async function fredObservations({ seriesId, startDate, endDate, limit, units, frequency, latest = false }) {
   const key = requireFredKey();
@@ -983,8 +983,8 @@ MACRO_TOOLS.push(
           startDate: { type: "string", description: "ISO start date (YYYY-MM-DD), optional" },
           endDate: { type: "string", description: "ISO end date (YYYY-MM-DD), optional" },
           limit: { type: "number", description: "Max observations, 1-100000 (default 1000)" },
-          units: { type: "string", description: "Transformation: lin, chg, ch1, pch, pc1 (YoY %), pca, cca, log" },
-          frequency: { type: "string", maxLength: 1, description: "Aggregate to d/w/m/q/sa/a, etc. (optional)" },
+          units: { type: "string", enum: [...FRED_UNITS], description: "Transformation: lin, chg, ch1, pch, pc1 (YoY %), pca, cca, log" },
+          frequency: { type: "string", enum: [...FRED_FREQ], description: "Aggregate to a lower frequency: d, w, bw, m, q, sa, a, or a FRED week-ending code such as wef (optional)" },
         },
         required: ["seriesId"],
       },

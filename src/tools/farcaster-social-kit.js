@@ -58,6 +58,9 @@ const HASH_RE = /^0x[0-9a-fA-F]{40}$/;
 // fnames are 1-16 lowercase letters/digits/hyphens (no leading hyphen);
 // ENS names (dwr.eth, base.base.eth) are also valid Farcaster usernames.
 const USERNAME_RE = /^(?:[a-z0-9][a-z0-9-]{0,15}|[a-z0-9][a-z0-9-]{0,62}(?:\.[a-z0-9][a-z0-9-]{0,62})?\.eth)$/;
+// The longest value USERNAME_RE takes behind an optional @: two labels of 63,
+// the dot between them and ".eth".
+const USERNAME_MAX_CHARS = 1 + 63 + 1 + 63 + 4;
 const CHANNEL_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const CURSOR_RE = /^[A-Za-z0-9_=%+/.-]{1,512}$/;
 const CAST_URL_HOSTS = new Set(["warpcast.com", "www.warpcast.com", "farcaster.xyz", "www.farcaster.xyz"]);
@@ -655,7 +658,7 @@ export const FARCASTER_SOCIAL_TOOLS = [
         type: "object",
         properties: {
           fid: { type: "integer", description: "Farcaster ID (one of fid/username required)." },
-          username: { type: "string", maxLength: 16, description: "Farcaster username, optional leading @ (one of fid/username required; costs one extra upstream lookup)." },
+          username: { type: "string", maxLength: USERNAME_MAX_CHARS, description: "Farcaster username or ENS name (name.eth), optional leading @ (one of fid/username required; costs one extra upstream lookup)." },
           includeReplies: { type: "boolean", description: "Include the user's replies (default false)." },
           channel: { type: "string", maxLength: 64, description: "Only casts in this channel id." },
           limit: { type: "integer", minimum: 1, maximum: 100, description: "Results per page (default 25)." },

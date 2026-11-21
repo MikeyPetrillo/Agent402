@@ -538,7 +538,7 @@ export const JUDGE_TOOLS = [{
       type: "object",
       required: ["state", "questions"],
       properties: {
-        state: { type: ["string", "object", "array"], description: `The content to judge. Up to ${LIMITS.stateChars} characters.` },
+        state: { type: ["string", "object", "array"], maxLength: LIMITS.stateChars, description: `The content to judge. Up to ${LIMITS.stateChars} characters.` },
         model: { type: "string", enum: [...MODELS], description: "Which model answers first; the others are fallbacks. jev-latest is the Jev version we have tested (the answer names it); jev-preview is the newer Jev release, which its maker labels a preview. The Decision-1 models are model-backed judgments, not deterministic. Defaults to jev-latest." },
         questions: { type: "object", description: "Your own ids mapped to question objects. Each has type (choice/score/noul), instructions, and criteria for choice/score." },
       },
@@ -590,7 +590,7 @@ export const JUDGE_TOOLS = [{
       required: ["input", "questions"],
       properties: {
         model: { type: "string", enum: [LUNA], description: `Defaults to ${LUNA}.` },
-        input: { type: ["string", "array"], description: `The content to evaluate: a string, or user messages with input_text parts. Up to ${LIMITS.stateChars} characters.` },
+        input: { type: ["string", "array"], maxLength: LIMITS.stateChars, description: `The content to evaluate: a string, or user messages with input_text parts. Up to ${LIMITS.stateChars} characters.` },
         questions: { type: "array", description: "Each has type (predicate/choice/score), a unique name and instructions; choice adds choices [{value, description}], score adds levels [{label, description}] lowest first." },
       },
     },
