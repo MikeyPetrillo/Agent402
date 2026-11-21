@@ -544,10 +544,13 @@ export const JUDGE_TOOLS = [{
       },
     },
     input: {
-      state: "The export button crashes the settings page in Safari. It works in Chrome, but a few of our customers only use Safari.",
+      // Kept short: the 402's listing carries this example beside the input's
+      // enums and bounds inside one byte budget (fitChallenge, src/payments.js),
+      // and past it the model enum is the first thing the listing loses.
+      state: "The export button crashes the settings page in Safari. It works in Chrome, but some customers only use Safari.",
       questions: {
         severity: { type: "score", instructions: "How severe is the reported issue?", criteria: ["Cosmetic; no impact to functionality", "Broken or degraded feature, but a workaround exists", "Blocking issue; no workaround exists"] },
-        is_reproducible: { type: "noul", instructions: "Does this report describe steps that would let an engineer reproduce the problem?" },
+        is_reproducible: { type: "noul", instructions: "Does this report give steps to reproduce the problem?" },
       },
     },
     // The live answer shape (read from a real call 2026-09-24): score

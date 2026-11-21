@@ -152,6 +152,14 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   The `brokenListings` word reads `widespread` while the distinct origins whose listings broke in a rolling
   15 minutes reach both 20 and 5% of the indexed origins (one seller's bad data never does; a code bug that
   breaks every listing does), paged the same way; both issues close only on the second ok read in a row.
+- **Issue titles a check had before:** the scheduled checks look their issue up by exact title. The
+  titles a check carried before a rename are in one list, `workers/status-probe/src/previous-issue-titles.js`
+  (the status Worker bundles it). The Worker reads it when it lists the open issues, and every workflow
+  job that looks an issue up first runs `node scripts/adopt-issue-titles.js` (`if: always()`,
+  `continue-on-error`): an open issue under a previous title, filed by the Actions bot or the
+  repository owner, is retitled to the check's current title, or closed when the current one is open.
+  A check renamed again gains its old title there; a new check gets an entry with an empty list
+  (`scripts/test-issue-title-adoption.js`).
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
   The `backup` word reads `unencrypted` while `BACKUP_ENCRYPTION_KEY` is unset in production
   (`NODE_ENV` or the platform's environment name), and `unconfigured` while the `BACKUP_S3_*`

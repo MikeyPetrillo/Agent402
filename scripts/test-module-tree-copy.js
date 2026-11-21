@@ -11,6 +11,7 @@
 //   - a copy made by the helper imports the brand mark, and one with assets/
 //     left out fails at import with an error that names the file,
 //   - the helper refuses, by name, a tree that lacks a listed path.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
