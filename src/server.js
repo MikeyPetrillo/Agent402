@@ -880,6 +880,7 @@ import { hostFigures, hostFiguresFromPayments, hostIndexEntry, isSelfSellerQuery
 import { standingCountsExcludingHost } from "./standing.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
+import { routerBenchmarks, ROUTER_BENCHMARKS_PATH } from "./router-benchmarks.js";
 import { agentcorePage, AGENTCORE_SLUG } from "./agentcore-page.js";
 import { creditsSalesEnabled, creditsTopupFields, creditsBalanceMaxCents, creditsTermsVersion } from "./credits-sales.js";
 
@@ -9843,6 +9844,15 @@ function reputationKeyOf(raw) {
   const qBare = q.replace(/^https?:\/\//, "");
   return reputationKeys.bare.get(qBare) || (qBare.includes("/") ? null : reputationKeys.byHost.get(qBare) || null);
 }
+// Router benchmarks (src/router-benchmarks.js): aggregates over the reputation
+// records this process holds; computed once per record version, no seller named.
+app.get(ROUTER_BENCHMARKS_PATH, async (_req, res) => {
+  try {
+    res.set("Cache-Control", "public, max-age=300").json(await routerBenchmarks());
+  } catch {
+    res.status(503).set("Retry-After", "30").set("Cache-Control", "no-store").json({ error: "the benchmark could not be computed on this server right now - retry in 30s", retryAfterSeconds: 30 });
+  }
+});
 app.get("/api/reputation", (req, res) => {
   const raw = typeof req.query.seller === "string" ? req.query.seller.trim() : "";
   if (!raw) return res.status(400).json({ error: "name one seller: ?seller=<host or origin>", example: `${BASE_URL}/api/reputation?seller=seller.example` });

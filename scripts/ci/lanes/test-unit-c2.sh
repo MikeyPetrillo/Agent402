@@ -45,3 +45,5 @@ t node scripts/test-feature-flags.js
 t node scripts/test-agentcore-page.js
 # Every issue a scheduled check opens is the fixed neutral title and body, in every workflow and the status Worker (offline)
 t node scripts/test-monitor-issue-wording.js
+# Router benchmarks: aggregates over the reputation records, no seller named, nothing under five sellers, no purchase count (offline, port 0)
+t node scripts/test-router-benchmarks.js

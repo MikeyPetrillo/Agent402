@@ -1177,6 +1177,19 @@ export function openapiSpec(baseUrl, catalog) {
       },
     },
   };
+  paths["/api/router-benchmarks"] = {
+    get: {
+      operationId: "getRouterBenchmarks",
+      security: [],
+      summary: "Router benchmarks: measured outcomes across outside sellers, in aggregate",
+      description: "Free. Aggregates over the 30-day reputation records this server holds: the share of the router's recorded purchases an outside seller answered 200 after taking the payment, and the measured uptime, 402 responsiveness and price-match scores of the sellers the router bought from beside the indexed sellers it did not buy from. No seller is named; a statistic is published only when at least five sellers are scored on it and otherwise reads not-enough-data; no field counts payments, purchases, buyers or settlements. One seller's own record is on /api/reputation?seller=.",
+      tags: ["transparency"],
+      responses: {
+        200: { description: "The benchmark document.", content: { "application/json": { schema: { type: "object", required: ["benchmark", "recordState", "windowDays", "delivery", "cohorts", "comparison", "legend"], properties: { benchmark: { type: "string" }, recordState: { type: "string", enum: ["ready", "loading", "not-measured-here"] }, windowDays: { type: "integer" }, minCohortSellers: { type: "integer" }, delivery: { type: "object" }, cohorts: { type: "object" }, comparison: { type: "object" }, legend: { type: "string" } } } } } },
+        503: { description: "The benchmark could not be computed right now; retry after Retry-After seconds." },
+      },
+    },
+  };
   paths["/api/reputation/recheck"] = {
     post: {
       operationId: "recheckSellerReputation",
