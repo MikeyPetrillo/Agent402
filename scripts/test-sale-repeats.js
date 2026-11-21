@@ -54,7 +54,7 @@ if (process.argv[2] === "seed") {
   const afterRepeat = L.salesSummary({ detailed: true }).totals.external.sales;
   sale({ slug: "web-search", network: "solana", payer: SOL_A, tx: SIG(6), priceUsd: 0.02 });
   const afterNew = L.salesSummary({ detailed: true }).totals.external.sales;
-  console.log(JSON.stringify({ before, afterRepeat, afterNew, stats: L.saleRepeatStats() }));
+  console.log(JSON.stringify({ before, afterRepeat, afterNew, stats: L.saleRepeatStats(), plan: L.settlementBookedPlan?.() ?? null }));
   process.exit(0);
 }
 
@@ -121,6 +121,10 @@ try {
   ok(w.afterRepeat === w.before, `a second sale for one Solana settlement is not written, whatever tool or payer it names (${w.before} -> ${w.afterRepeat})`);
   ok(w.afterNew === w.before + 1, `a sale under a signature of its own is written (${w.afterRepeat} -> ${w.afterNew})`);
   ok(w.stats.refusedSinceBoot === 2 && w.stats.repeatRows === 0, `the two refusals are counted and no repeat row is on the books (${JSON.stringify(w.stats)})`);
+  // The check runs on the loop once per Solana sale: it finds the settlement
+  // by its id, never by walking the rail's rows (42 to 48 ms a sale measured
+  // on 300,000 rows through the (rail, ts) index; microseconds through tx).
+  ok(Array.isArray(w.plan) && w.plan.length === 1 && /\bidx_sales_tx\b/.test(w.plan[0]) && /^SEARCH\b/.test(w.plan[0]) && !/idx_sales_rail_ts|^SCAN\b/.test(w.plan[0]), `the writer's settlement check reads the settlement-id index and nothing else (${JSON.stringify(w.plan)})`);
   ok(/a sale was not written/.test(seeded.stderr) && !seeded.stderr.includes(SIG(1)) && !seeded.stderr.includes(SOL_A), "the refusal is logged with the tool and network, never the signature or the payer");
   {
     const db = new Database(clean, { readonly: true });
