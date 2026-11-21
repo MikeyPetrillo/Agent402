@@ -47,6 +47,15 @@ const MAX_BODY_BYTES = 12_000;
 // header (which scripts/test-challenge-size.js caps against production) plus
 // our own fields, and those are capped here.
 const MAX_OWN_FIELD_BYTES = 2_048;
+// The switch-on pass (RETURNING_WALLET_PRICE=on in this suite's environment,
+// run as a lane step of its own): every eligible route's 402 body then also
+// carries `returningWalletPrice` (src/returning-wallet.js), and every bound
+// above must hold with it. Each request names a wallet that has never paid, so
+// the body measured is the widest the offer takes on an unpaid request (the
+// offer plus the reason the quote did not change).
+const RETURNING_WALLET_ON = String(process.env.RETURNING_WALLET_PRICE ?? "").trim().toLowerCase() === "on";
+const UNUSED_WALLET = "0x" + "5a".repeat(20);
+const MIN_OFFER_ROUTES = 300;
 const MIN_ROUTES = 560;
 const CONCURRENCY = 12;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -131,7 +140,7 @@ try {
       try {
         const res = await fetch(base + endpoint.path, {
           method,
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", ...(RETURNING_WALLET_ON ? { "X-Agent402-Wallet": UNUSED_WALLET } : {}) },
           body: /^(POST|PUT|PATCH)$/.test(method) ? "{}" : undefined,
           signal: AbortSignal.timeout(20_000),
         });
@@ -156,6 +165,8 @@ try {
   let largestHeader = { route: "", bytes: 0 };
   let largestBody = { route: "", bytes: 0 };
   let largestOwn = { route: "", bytes: 0 };
+  const ownSizes = [];
+  const offer = { routes: 0, widest: 0 };
   let speechChecked = false;
   // path -> listing mimeType, for every tool whose example answers raw bytes.
   const binaryListings = new Map();
@@ -201,6 +212,17 @@ try {
       const own = Object.fromEntries(Object.entries(body).filter(([k]) => !(k in paymentRequired)));
       const ownBytes = Buffer.byteLength(JSON.stringify(own));
       if (ownBytes > largestOwn.bytes) largestOwn = { route, bytes: ownBytes };
+      ownSizes.push({ route, bytes: ownBytes });
+      // The returning-wallet offer: on eligible routes while the switch is on
+      // (in fields, with the reason this unused wallet is quoted list), and on
+      // no route while it is off.
+      if (own.returningWalletPrice !== undefined) {
+        const field = own.returningWalletPrice;
+        offer.routes++;
+        offer.widest = Math.max(offer.widest, Buffer.byteLength(JSON.stringify(field)));
+        if (!RETURNING_WALLET_ON) fail(route, "402 body carries returningWalletPrice with the switch off");
+        else if (field?.header !== "X-Agent402-Wallet" || field.applied !== false || field.why !== "unqualified" || field.note !== undefined) fail(route, `returningWalletPrice for a wallet that never paid reads ${JSON.stringify(field).slice(0, 200)}`);
+      }
       if (ownBytes > MAX_OWN_FIELD_BYTES) fail(route, `402 body's own fields (${Object.keys(own).join(",")}) take ${ownBytes} bytes, over ${MAX_OWN_FIELD_BYTES}`);
       const headerJsonBytes = Buffer.from(encoded, "base64").length;
       if (bodyBytes > headerJsonBytes + ownBytes) fail(route, `402 body is ${bodyBytes} bytes, more than the decoded header (${headerJsonBytes}) plus its own fields (${ownBytes})`);
@@ -474,6 +496,11 @@ try {
   }
   console.log(`largest 402 header: ${largestHeader.route} at ${largestHeader.bytes} chars`);
   console.log(`largest 402 body: ${largestBody.route} at ${largestBody.bytes} bytes; largest own fields: ${largestOwn.route} at ${largestOwn.bytes} bytes`);
+  console.log(`own fields nearest the ${MAX_OWN_FIELD_BYTES}-byte bound: ${ownSizes.sort((a, b) => b.bytes - a.bytes).slice(0, 3).map((r) => `${r.route} ${r.bytes} (${MAX_OWN_FIELD_BYTES - r.bytes} to spare)`).join(", ")}`);
+  if (RETURNING_WALLET_ON) {
+    if (offer.routes < MIN_OFFER_ROUTES) fail("returning-wallet price", `switch on: only ${offer.routes} routes carry returningWalletPrice, fewer than ${MIN_OFFER_ROUTES}`);
+    console.log(`returning-wallet price on: ${offer.routes} routes carry the offer, widest ${offer.widest} bytes`);
+  }
   for (const f of failures.slice(0, 40)) console.error(`FAIL - ${f}`);
   if (failures.length > 40) console.error(`... ${failures.length - 40} more failure(s)`);
   console.log(`${failures.length ? "FAILED" : "OK"}: ${endpoints.length - failures.length}/${endpoints.length} route checks green`);

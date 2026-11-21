@@ -44,7 +44,7 @@ import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, t
 import { lateSettleHolder, OWED_ELSEWHERE, ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere, releasingClaimsOnRefusal, settledRefundOwedResult, txServedElsewhere } from "./settlement-claims.js";
 import { randomUUID } from "node:crypto";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
-import { returningWalletEnabled, returningWalletRouteRefusal, returningWalletQuote, returningWalletSettleDecision, RETURNING_WALLET_MISMATCH } from "./returning-wallet.js";
+import { returningWalletEnabled, returningWalletRouteRefusal, returningWalletQuote, returningWalletSettleDecision, noteReturningWalletAccept, RETURNING_WALLET_MISMATCH } from "./returning-wallet.js";
 import { registerLateSettleHook } from "./late-settlements.js";
 import { RAW_SETTLE_RECEIPT } from "./settle-fault.js";
 import { chargeCancelledForClientGone, registerSettleSentHook, settleSentWhileConnected, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
@@ -719,12 +719,18 @@ export function acceptsForItem(item, rails) {
   const priceOf = (caip2, { exactEvm = false } = {}) => {
     if (!quoteFn && !(loyal && exactEvm)) return priceForNetwork(item.price, caip2);
     if (!quoteFn) return async (ctx) => {
-      let price = item.price;
+      const listQuote = priceForNetwork(item.price, caip2);
       try {
-        const q = returningWalletQuote(ctx?.adapter?.req, item);
-        if (q?.applied === true && typeof q.price === "string") price = q.price;
-      } catch { price = item.price; }
-      return priceForNetwork(price, caip2);
+        const req = ctx?.adapter?.req;
+        const q = returningWalletQuote(req, item);
+        if (q?.applied !== true || typeof q.price !== "string") return listQuote;
+        // The chain's premium and floor apply to the discounted price as to
+        // any other; a chain at its floor quotes the list amount, and the 402
+        // says which chains did (returningWalletPrice.atListOn).
+        const quote = priceForNetwork(q.price, caip2);
+        noteReturningWalletAccept(req, caip2, quote !== listQuote);
+        return quote;
+      } catch { return listQuote; }
     };
     return async (ctx) => {
       let usd = null;

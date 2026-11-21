@@ -93,6 +93,9 @@ for (const code of ["ENOTFOUND", "ENODATA"]) {
   const html = String(typeof privacyPage === "function" ? privacyPage("https://example.test") : "");
   const para = (html.match(/<li>[^<]*<code>asn-info<\/code>[\s\S]*?<\/li>/) || [""])[0];
   ok(para.length > 0 && CYMRU_FALLBACK.every((ip) => para.includes(ip)) && /Team Cymru/.test(para) && /IP address/.test(para), `/privacy says where an asn-info lookup goes, naming each public resolver (${para.slice(0, 80)})`);
+  // The resolver asks its servers in list order, the next only when the one before does not answer: the page says that, in that order.
+  const at = CYMRU_FALLBACK.map((ip) => para.indexOf(ip));
+  ok(at.every((i, n) => i > 0 && (n === 0 || i > at[n - 1])) && /first, then/.test(para) && /each only if the one before it does not answer/.test(para.replace(/\s+/g, " ")) && !/sent once\s+through the public resolvers/.test(para), "/privacy names the resolvers in the order they are asked, each only if the one before does not answer");
 }
 ok(JSON.stringify([...CYMRU_FALLBACK]) === JSON.stringify(["8.8.8.8", "9.9.9.9", "1.1.1.1"]), "the default fallback is the three public resolvers");
 console.log(`\n${pass} passed, ${fail} failed`);

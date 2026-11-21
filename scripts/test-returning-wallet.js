@@ -6,7 +6,10 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { randomBytes } from "node:crypto";
 
-for (const k of Object.keys(process.env)) if (/^(RETURNING_WALLET_|REFERRAL_SLUGS)/.test(k)) delete process.env[k];
+for (const k of Object.keys(process.env)) if (/^(RETURNING_WALLET_|REFERRAL_SLUGS|NETWORK_PRICE_FLOORS|NETWORK_PREMIUMS|ROBINHOOD_MIN_PRICE_USD)/.test(k)) delete process.env[k];
+// One chain with a price floor above the test route's list price (read once, when payments loads).
+const FLOORED = "eip155:4663";
+process.env.NETWORK_PRICE_FLOORS = `${FLOORED}=0.004`;
 const R = await import("../src/returning-wallet.js");
 
 let pass = 0, fail = 0;
@@ -39,7 +42,7 @@ ok(R.returningWalletRouteRefusal(DEF, { REFERRAL_SLUGS: " base64 , hash " }) ===
 ok(R.returningWalletRouteRefusal({ slug: "x", price: "free" }, {}) === "no price" && R.returningWalletRouteRefusal(null, {}) === "no route", "a route with no readable price is not");
 
 // --- the hint ------------------------------------------------------------------------
-const reqOf = (hint, payment = null) => ({ headers: { ...(hint != null ? { "x-agent402-wallet": hint } : {}), ...(payment ? { "payment-signature": payment } : {}) }, header(n) { return this.headers[String(n).toLowerCase()]; } });
+const reqOf = (hint, payment = null, ip = undefined) => ({ ip, headers: { ...(hint != null ? { "x-agent402-wallet": hint } : {}), ...(payment ? { "payment-signature": payment } : {}) }, header(n) { return this.headers[String(n).toLowerCase()]; } });
 ok(R.walletHintOf(reqOf(W1.toUpperCase().replace("0X", "0x"))) === W1 && R.walletHintOf(reqOf(` ${W1} `)) === W1, "a hint is an EVM address, read in lowercase");
 ok(R.walletHintOf(reqOf("0x1234")) === null && R.walletHintOf(reqOf("")) === null && R.walletHintOf(reqOf(null)) === null && R.walletHintOf({ headers: { "x-agent402-wallet": [W1, W2] } }) === null, "anything else is no hint");
 
@@ -121,17 +124,96 @@ R.__resetReturningWallet();
 }
 
 // --- the offer on the 402 ------------------------------------------------------------------
+const offerBytes = (o) => Buffer.byteLength(JSON.stringify(o));
 {
-  R.configureReturningWallet({ paidDays: (w) => days.get(w) ?? 0, isOurs: () => false });
+  R.configureReturningWallet({ paidDays: (w) => days.get(w) ?? 0, isOurs: (w) => w === OURS });
   R.__resetReturningWallet();
   const o = R.returningWalletOffer(DEF);
-  ok(o && o.header === "X-Agent402-Wallet" && o.discountPercent === 10 && o.minPaidDays === 3 && o.windowDays === 30 && o.applied === false && /signed from that wallet/.test(o.note), `the offer names the header and the terms from the settings (${JSON.stringify({ ...o, note: undefined })})`);
+  ok(o && o.header === "X-Agent402-Wallet" && o.discountPercent === 10 && o.minPaidDays === 3 && o.windowDays === 30 && o.applied === false && o.why === undefined && o.note === undefined, `the offer names the header and the terms from the settings, in fields (${JSON.stringify(o)})`);
   ok(R.returningWalletOffer({ slug: "search", price: "$0.01" }) === null, "an ineligible route states no offer");
   const req = reqOf(W1);
   R.returningWalletQuote(req, DEF);
   ok(R.returningWalletOffer(DEF, req).applied === true, "and says when this request's quote carries the discount");
+  // A named wallet whose quote did not change is told why, in one word.
+  const whyOf = (r, def = DEF) => { R.returningWalletQuote(r, def); return R.returningWalletOffer(def, r); };
+  const under = whyOf(reqOf(W2)), ours = whyOf(reqOf(OURS));
+  ok(under.applied === false && under.why === "unqualified", `a wallet under the bar reads ${under.why}`);
+  ok(ours.applied === false && ours.why === "unqualified" && JSON.stringify(ours) === JSON.stringify(under), "one of our own wallets reads the same as any wallet under the bar");
+  ok(whyOf(reqOf(W1, payment(W2))).why === "other_payer" && whyOf(reqOf(W1, payment(W1, { scheme: "upto" }))).why === "other_rail", "a payment from another wallet, or of another shape, is named");
+  ok(whyOf(reqOf(W1), { slug: "hash", price: "$0.000005" }).why === "min_price", "a price with no room under it is named");
+  ok(whyOf(reqOf(null)).why === undefined && whyOf(reqOf("nope")).why === undefined, "a request that names no wallet gets the offer and no reason");
+  // The field stays small in every shape, at the widest settings.
+  Object.assign(process.env, { RETURNING_WALLET_DISCOUNT_BPS: "1255", RETURNING_WALLET_MIN_PAID_DAYS: "365", RETURNING_WALLET_WINDOW_DAYS: "365" });
+  days.set(W1, 365);
+  const shapes = [R.returningWalletOffer(DEF), whyOf(reqOf(W2)), whyOf(reqOf(W1, payment(W2))), whyOf(reqOf(W1, payment(W1, { scheme: "upto" }))), whyOf(reqOf(W1))];
+  for (let n = 1; n <= 14; n++) {
+    const r = reqOf(W1);
+    R.returningWalletQuote(r, DEF);
+    R.noteReturningWalletAccept?.(r, "eip155:8453", true);
+    for (let i = 0; i < n; i++) R.noteReturningWalletAccept?.(r, `eip155:${4663 + i * 1_000_003}`, false);
+    const o2 = R.returningWalletOffer(DEF, r);
+    shapes.push(o2);
+    if (n === 14) ok(o2.applied === true && Array.isArray(o2.atListOn) && o2.atListOn.length >= 1 && o2.atListOn.length + (o2.atListMore || 0) === 14, `many floored chains: the first are named and the rest counted (${JSON.stringify(o2)})`);
+  }
+  const widest = Math.max(...shapes.map(offerBytes));
+  ok(Number.isInteger(R.OFFER_MAX_BYTES) && R.OFFER_MAX_BYTES <= 126 && widest <= R.OFFER_MAX_BYTES, `every shape of the field fits ${R.OFFER_MAX_BYTES} bytes (widest ${widest})`);
+  for (const k of ["RETURNING_WALLET_DISCOUNT_BPS", "RETURNING_WALLET_MIN_PAID_DAYS", "RETURNING_WALLET_WINDOW_DAYS"]) delete process.env[k];
+  days.set(W1, 3);
+  // The prose surfaces say what the gate does.
+  const prose = R.returningWalletSentence() + " " + R.returningWalletHeaderParam(DEF).description;
+  ok(!/any other payer is quoted list/.test(prose) && /from any other wallet is answered 402 at the list price, and nothing is charged/.test(R.returningWalletSentence()), "the prose says a lower payment from another wallet is answered 402 at list, not that another payer is never charged");
+  ok(/premium and price floor still apply/.test(R.returningWalletSentence()) && /premium and price floor still apply/.test(R.returningWalletHeaderParam(DEF).description) && !/\bunder list on\b/.test(prose), "and that a chain's premium and price floor still apply");
+  ok(!/\u2014/.test(prose), "no em dash in the prose");
   delete process.env.RETURNING_WALLET_PRICE;
-  ok(R.returningWalletOffer(DEF) === null, "switch off: no offer");
+  ok(R.returningWalletOffer(DEF) === null && R.returningWalletSentence() === "" && R.returningWalletHeaderParam(DEF) === null, "switch off: no offer, no sentence, no header parameter");
+}
+
+// --- one client address cannot spend everyone's reads -----------------------------------------
+{
+  process.env.RETURNING_WALLET_PRICE = "on";
+  let n = 0;
+  R.configureReturningWallet({ paidDays: (w) => { n++; return days.get(w) ?? 0; }, isOurs: () => false });
+  R.__resetReturningWallet();
+  const t0 = Date.parse("2026-11-21T12:10:00Z");
+  const unused = (i) => "0x" + (0xf00000 + i).toString(16).padStart(40, "0");
+  // The probe's shape: 600 unpaid requests inside one minute, each naming an unused wallet, from one address.
+  let held = 0;
+  for (let i = 0; i < 600; i++) {
+    const r = reqOf(unused(i), null, "203.0.113.7");
+    const q = R.returningWalletQuote(r, DEF, { now: t0 + i * 99 });
+    if (q.why === "not read") held++;
+  }
+  ok(R.LOOKUPS_PER_ADDRESS_PER_MINUTE >= 1 && R.LOOKUPS_PER_ADDRESS_PER_MINUTE < R.LOOKUPS_PER_MINUTE && n === R.LOOKUPS_PER_ADDRESS_PER_MINUTE && held === 600 - n, `one address reads the ledger ${R.LOOKUPS_PER_ADDRESS_PER_MINUTE} times a minute, then is quoted list (${n} reads, ${held} held)`);
+  const heldReq = reqOf(unused(9999), null, "203.0.113.7");
+  R.returningWalletQuote(heldReq, DEF, { now: t0 + 59_500 });
+  ok(R.returningWalletOffer(DEF, heldReq).why === "lookup_busy" && R.returningWalletOffer(DEF, heldReq).applied === false, "its 402 says the wallet was not read this minute");
+  const other = R.returningWalletQuote(reqOf(W1, null, "198.51.100.9"), DEF, { now: t0 + 59_900 });
+  ok(other.applied === true && other.price === "$0.0009", `a qualifying wallet from another address is still quoted its price in that minute (${JSON.stringify({ applied: other.applied, why: other.why })})`);
+  ok(R.returningWalletStatus().counts.lookupsHeldAddress === held + 1 && R.returningWalletStatus().counts.lookupsHeld === 0, "the operator view counts reads held for one address apart from the service-wide bound");
+  ok(R.returningWalletQuote(reqOf(unused(10_000), null, "203.0.113.7"), DEF, { now: t0 + 60_000 }).why === "not qualified", "the next minute that address is read again");
+  // An IPv6 caller is one address across its /64.
+  R.__resetReturningWallet(); n = 0;
+  for (let i = 0; i < R.LOOKUPS_PER_ADDRESS_PER_MINUTE + 5; i++) R.returningWalletQuote(reqOf(unused(20_000 + i), null, `2001:db8:1:2::${(i + 1).toString(16)}`), DEF, { now: t0 });
+  ok(n === R.LOOKUPS_PER_ADDRESS_PER_MINUTE, `addresses inside one IPv6 /64 share one share (${n})`);
+  // The service-wide ceiling still holds across many addresses.
+  R.__resetReturningWallet(); n = 0;
+  for (let i = 0; i < R.LOOKUPS_PER_MINUTE + 40; i++) R.returningWalletQuote(reqOf(unused(30_000 + i), null, `198.18.${i >> 8}.${i & 255}`), DEF, { now: t0 });
+  ok(n === R.LOOKUPS_PER_MINUTE && R.returningWalletStatus().counts.lookupsHeld === 40, `many addresses together stop at the service-wide bound (${n})`);
+  // A cached wallet costs no read, so a returning buyer behind a busy address keeps its price.
+  R.__resetReturningWallet(); n = 0;
+  R.returningWalletQuote(reqOf(W1, null, "203.0.113.7"), DEF, { now: t0 });
+  for (let i = 0; i < 100; i++) R.returningWalletQuote(reqOf(unused(40_000 + i), null, "203.0.113.7"), DEF, { now: t0 + 1 });
+  ok(R.returningWalletQuote(reqOf(W1, null, "203.0.113.7"), DEF, { now: t0 + 2 }).applied === true, "a wallet already read keeps its price from an address that has used its share");
+  // What is kept: the wallet and its count, for the cache window, then dropped.
+  R.__resetReturningWallet();
+  R.returningWalletQuote(reqOf(W1, null, "203.0.113.7"), DEF, { now: t0 });
+  R.returningWalletQuote(reqOf(W2, null, "203.0.113.8"), DEF, { now: t0 + 5 * 60_000 });
+  ok(R.returningWalletStatus().cachedWallets === 2, "CONTROL two wallets are held inside the window");
+  R.sweepReturningWallet?.(t0 + R.CACHE_MS + 1);
+  ok(R.returningWalletStatus().cachedWallets === 1, `a wallet is dropped from memory once its ${R.CACHE_MS / 60_000} minutes are over (${R.returningWalletStatus().cachedWallets} held)`);
+  R.sweepReturningWallet?.(t0 + 5 * 60_000 + R.CACHE_MS + 1);
+  ok(R.returningWalletStatus().cachedWallets === 0, "and so is the next");
+  delete process.env.RETURNING_WALLET_PRICE;
 }
 
 // --- the accepts: only the EVM exact accept is priced per request ----------------------------
@@ -149,6 +231,30 @@ R.__resetReturningWallet();
   ok(await priceAt(reqOf(W1, payment(W2))) === "$0.001" && await priceAt(reqOf(W1, payment(W1))) === "$0.0009", "and on a paid request it follows the payment's signer");
   const notEligible = acceptsForItem({ slug: "search", price: "$0.01" }, rails);
   ok(notEligible.every((a) => typeof a.price === "string"), "an ineligible route's accepts stay fixed with the switch on");
+
+  // A chain at its price floor quotes the same amount with or without the discount: the 402 says so.
+  const { priceForNetwork } = await import("../src/payments.js");
+  const exactOn = (accepts, net) => accepts.find((a) => a.network === net && a.scheme === "exact" && !a.extra);
+  const two = acceptsForItem(DEF, { ...rails, evmCaip2: ["eip155:8453", FLOORED] });
+  const mixed = reqOf(W1);
+  const onBase = await exactOn(two, "eip155:8453").price({ adapter: { req: mixed } });
+  const onFloor = await exactOn(two, FLOORED).price({ adapter: { req: mixed } });
+  ok(priceForNetwork(DEF.price, FLOORED) === "$0.004" && onFloor === "$0.004" && onBase === "$0.0009", `CONTROL the floored chain quotes its floor to a qualifying wallet, the other chain the lower price (${onFloor} / ${onBase})`);
+  const mixedOffer = R.returningWalletOffer(DEF, mixed);
+  ok(mixedOffer.applied === true && JSON.stringify(mixedOffer.atListOn) === JSON.stringify([FLOORED]) && mixedOffer.atListMore === undefined, `the 402 names the chain whose quote did not change (${JSON.stringify(mixedOffer)})`);
+  await exactOn(two, FLOORED).price({ adapter: { req: mixed } });
+  ok(R.returningWalletOffer(DEF, mixed).atListOn.length === 1, "a price asked twice for one chain is named once");
+  const onlyFloor = acceptsForItem(DEF, { ...rails, evmCaip2: [FLOORED] });
+  const floored = reqOf(W1);
+  await exactOn(onlyFloor, FLOORED).price({ adapter: { req: floored } });
+  const flooredOffer = R.returningWalletOffer(DEF, floored);
+  ok(flooredOffer.applied === false && flooredOffer.why === "price_floor" && flooredOffer.minPaidDays === 3, `where every quote sits at a floor the 402 does not say the discount was applied (${JSON.stringify(flooredOffer)})`);
+  const listReq = reqOf(W2);
+  await exactOn(two, FLOORED).price({ adapter: { req: listReq } });
+  ok(R.returningWalletOffer(DEF, listReq).why === "unqualified", "CONTROL a wallet under the bar reads its own reason on a floored chain");
+  // The payment itself on the floored chain: same amount, and it settles for the hinted wallet only.
+  const paidFloor = reqOf(W1, payment(W1, { network: FLOORED }));
+  ok(await exactOn(two, FLOORED).price({ adapter: { req: paidFloor } }) === "$0.004" && R.returningWalletSettleDecision({ transportContext: { request: { adapter: { req: paidFloor } } }, paymentPayload: { payload: { authorization: { from: W1 } } } }) === undefined, "the hinted wallet's payment on the floored chain is priced at the floor and settles");
   delete process.env.RETURNING_WALLET_PRICE;
 }
 

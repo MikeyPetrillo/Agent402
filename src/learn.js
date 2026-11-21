@@ -188,7 +188,7 @@ export const LEARN = [
         P(`On this server the tool runs before settlement, and settlement completes only for a successful response. An error, a timeout or an upstream failure cancels the payment, so nothing moves. You can check it from the response you hold: no ${C("PAYMENT-RESPONSE")} header means you were not charged on x402. ${LATE_SETTLE_EXCEPTION} Send an ${C("Idempotency-Key")} header and a retry of a call that was already served and paid replays the first answer.`),
       ]],
     ],
-    links: [["/what-is-x402", "What is x402? (the full explainer)"], ["/x402-test", "Test your x402 client against a real 402"], ["/guides/x402-in-5-minutes", "x402 in 5 minutes"], ["/integrations/client", "agent402-client"], ["/tools/hash", "hash, the tool in the example"]],
+    links: [["/what-is-x402", "x402 and MPP on Agent402"], ["/x402-test", "Test your x402 client against a real 402"], ["/guides/x402-in-5-minutes", "x402 in 5 minutes"], ["/integrations/client", "agent402-client"], ["/tools/hash", "hash, the tool in the example"]],
   },
   {
     slug: "http-402",
@@ -252,7 +252,7 @@ export const LEARN = [
         P(`A refused credential is answered with a 402, fresh challenges and an ${C("application/problem+json")} body in the RFC 9457 shape: a ${C("type")} URL naming the reason (for example verification-failed or payment-insufficient), a title and a ${C("detail")} sentence. No payment is claimed, and the client can retry with the new challenge.`),
       ]],
     ],
-    links: [["/what-is-mpp", "What is MPP? (the full explainer)"], ["/guides/x402-and-mpp", "x402 and MPP on one route"], ["/mpp-marketplace", "Sellers on the MPP wire"], ["/integrations/client", "agent402-client over MPP"], ["/learn/mcp-payments", "MPP over MCP"]],
+    links: [["/what-is-mpp", "MPP on Agent402"], ["/guides/x402-and-mpp", "x402 and MPP on one route"], ["/mpp-marketplace", "Sellers on the MPP wire"], ["/integrations/client", "agent402-client over MPP"], ["/learn/mcp-payments", "MPP over MCP"]],
   },
   {
     slug: "agent-payments",

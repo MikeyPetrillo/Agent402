@@ -93,7 +93,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > card over MPP (Stripe `stripe/charge`, offered on routes priced $0.50 and up
 > when the operator configures it). The
 > [MPP marketplace](https://agent402.tools/mpp-marketplace) lists every MPP
-> seller we can verify live. Details: [What is MPP](https://agent402.tools/what-is-mpp)
+> seller we can verify live. Details: [MPP on Agent402](https://agent402.tools/what-is-mpp)
 > · [live MPP settlements](https://agent402.tools/revenue).
 
 

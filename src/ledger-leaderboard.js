@@ -326,7 +326,7 @@ ${solanaSectionHtml(solana)}
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:64ch;">Serve x402 challenges, register your origin, and the crawler picks you up on the next pass. Listing is free and nothing is deducted from your price.</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
           <a class="btn btn-primary on-panel ml-cta" href="/sell">List your API - free →</a>
-          <a class="btn btn-secondary on-panel ml-cta" href="/what-is-x402">What is x402?</a>
+          <a class="btn btn-secondary on-panel ml-cta" href="/what-is-x402">x402 and MPP on Agent402</a>
         </div>
       </div>
     </div>

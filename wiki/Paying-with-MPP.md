@@ -71,4 +71,4 @@ If you already speak x402, MPP can be added without touching settlement: emit an
 
 - [[Paying with x402]] - the other wire on the same 402
 - [[Paying with Compute]] - the free proof-of-work tier
-- [What is MPP](https://agent402.tools/what-is-mpp) - the longer explainer
+- [MPP on Agent402](https://agent402.tools/what-is-mpp) - how an MPP payment works here

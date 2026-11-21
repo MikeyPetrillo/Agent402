@@ -409,4 +409,99 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   ok((mcpSrc.match(/most tools \$\{TYPICAL_PRICE_RANGE\.text\} per call/g) || []).length === 2, "the connector's instructions and payment.info both read the band from the constant");
 }
 
+// --- the route-execute tier ladder, wherever a surface types it -------------
+// README.md, the wiki, the docs and package READMEs and the stdio package's
+// tool description each type the ladder (a tier's price beside its name, its
+// route or its cap). Markdown cannot derive, and no guard read these: a tier
+// repriced in src/tools/route-execute.js left every one of them stale with
+// every suite green. Each typed tier price, and each cap typed beside one,
+// must equal the catalog definition's (the same definition the server lists).
+{
+  const { EXEC_TIERS, buildRouteExecuteTool } = await import("../src/tools/route-execute.js");
+  const { readFileSync } = await import("node:fs");
+  const { execFileSync } = await import("node:child_process");
+  const root = new URL("..", import.meta.url);
+  const defs = EXEC_TIERS.map((tier) => buildRouteExecuteTool({ getCatalog: () => ({}), tier }));
+  // "execute", "execute-plus", ...: the last segment of the tier's route.
+  const byName = new Map(defs.map((d) => [d.route.split("/").pop(), { price: Number(String(d.price).slice(1)), cap: Number(d.underlyingMaxUsd), route: d.route }]));
+  const byPrice = new Map([...byName].map(([name, t]) => [t.price, { name, ...t }]));
+  ok(defs.length >= 5 && [...byName.values()].every((t) => t.price > 0 && t.cap > 0 && t.price > t.cap) && byPrice.size === byName.size, `the catalog defines ${defs.length} route-execute tiers, each with a price above its cap`);
+
+  const NAME = "(execute(?:-(?:plus|mid|max|pro))?)";
+  const USD = "\\$(\\d+(?:\\.\\d+)?)";
+  const NAMED = [
+    // `POST /api/route/execute-mid` ($0.12)   `execute-mid` $0.12   `POST /api/route/execute-mid` | $0.12
+    [new RegExp("(?:/api/route/|`)" + NAME + "`\\s*(?:\\(|\\|\\s*)?" + USD, "g"), (m) => ({ tier: m[1], price: m[2] })],
+    // | ≤ $0.10 | $0.12 | `POST /api/route/execute-mid` |
+    [new RegExp("≤\\s*" + USD + "\\s*\\|\\s*" + USD + "\\s*\\|\\s*`POST /api/route/" + NAME + "`", "g"), (m) => ({ tier: m[3], cap: m[1], price: m[2] })],
+    // `POST /api/route/execute-mid` | $0.12 | ≤ $0.10
+    [new RegExp("/api/route/" + NAME + "`\\s*\\|\\s*" + USD + "\\s*\\|\\s*≤\\s*" + USD, "g"), (m) => ({ tier: m[1], price: m[2], cap: m[3] })],
+    // `POST /api/route/execute-mid` ($0.12) | ...: underlying tools priced up to $0.10
+    [new RegExp("/api/route/" + NAME + "` \\(" + USD + "\\) \\|[^|\\n]*?underlying tools priced up to " + USD, "g"), (m) => ({ tier: m[1], price: m[2], cap: m[3] })],
+    // the routing tiers top out at $3.30 (`route-execute-pro`)
+    [new RegExp(USD + " \\(`route-" + NAME + "`\\)", "g"), (m) => ({ tier: m[2], price: m[1] })],
+  ];
+  // "the $0.12 tier", "the $0.01 fee tier": a tier named by its price, with its cap before it
+  // ("≤ 0.10` → ", "up to 0.10 ", "Default 0.005 (") or after it ("(seller up to $0.50)").
+  const BY_PRICE = new RegExp("the " + USD + "(?: fee)? tier(?: \\((?:underlying|seller) up to " + USD + "\\))?", "g");
+  const CAP_BEFORE = /(?:≤|up to|Default)\s*(\d+(?:\.\d+)?)`?[^$\d]{0,20}$/;
+  /** Every tier figure a text types: { quotes, wrong[] }. */
+  const tierProse = (text) => {
+    let quotes = 0;
+    const wrong = [];
+    const names = new Set();
+    for (const [re, read] of NAMED) for (const m of text.matchAll(re)) {
+      const q = read(m), want = byName.get(q.tier);
+      quotes++; names.add(q.tier);
+      if (Number(q.price) !== want.price) wrong.push(`${q.tier} is typed at $${q.price}, the catalog lists ${want.route} at $${want.price}`);
+      if (q.cap !== undefined && Number(q.cap) !== want.cap) wrong.push(`${q.tier} is typed with a cap of $${q.cap}, the catalog's is $${want.cap}`);
+    }
+    for (const m of text.matchAll(BY_PRICE)) {
+      quotes++;
+      const want = byPrice.get(Number(m[1]));
+      if (!want) { wrong.push(`"${m[0]}" names a tier price the catalog does not list (${[...byPrice.keys()].map((n) => `$${n}`).join(", ")})`); continue; }
+      names.add(want.name);
+      const before = CAP_BEFORE.exec(text.slice(Math.max(0, m.index - 48), m.index));
+      for (const cap of [m[2], before?.[1]]) if (cap !== undefined && Number(cap) !== want.cap) wrong.push(`"${m[0]}" is typed beside a cap of ${cap}, the catalog's cap for the $${want.price} tier is ${want.cap}`);
+    }
+    return { quotes, wrong: [...new Set(wrong)], names };
+  };
+  // Controls: each typed form is read, a wrong figure is reported, the right one passes.
+  const mid = byName.get("execute-mid"), plus = byName.get("execute-plus");
+  const fmt = (n) => (Number.isInteger(n * 100) ? n.toFixed(2) : String(n));
+  const right = [
+    `\`POST /api/route/execute\` ($${fmt(byName.get("execute").price)}; \`execute-plus\` $${fmt(plus.price)}, \`execute-mid\` $${fmt(mid.price)})`,
+    `| ≤ $${fmt(mid.cap)} | $${fmt(mid.price)} | \`POST /api/route/execute-mid\` |`,
+    `| \`POST /api/route/execute-mid\` | $${fmt(mid.price)} | ≤ $${fmt(mid.cap)} |`,
+    `| \`POST /api/route/execute-mid\` ($${fmt(mid.price)}) | Same contract: underlying tools priced up to $${fmt(mid.cap)}. |`,
+    `above ${fmt(plus.cap)} and up to ${fmt(mid.cap)} the $${fmt(mid.price)} tier; above ${fmt(mid.cap)} the $${fmt(byName.get("execute-max").price)} tier (seller up to $${fmt(byName.get("execute-max").cap)})`,
+  ];
+  for (const line of right) { const r = tierProse(line); ok(r.quotes >= 1 && r.wrong.length === 0, `control: the catalog's own figures pass (${line.slice(0, 60)}...)${r.wrong.length ? ` - ${r.wrong.join(" | ")}` : ""}`); }
+  const off = fmt(mid.price + 0.01), offCap = fmt(mid.cap + 0.01);
+  const wrongLines = [
+    `\`execute-mid\` $${off}`, `\`POST /api/route/execute-mid\` ($${off})`, `| ≤ $${fmt(mid.cap)} | $${off} | \`POST /api/route/execute-mid\` |`, `| ≤ $${offCap} | $${fmt(mid.price)} | \`POST /api/route/execute-mid\` |`,
+    `| \`POST /api/route/execute-mid\` | $${off} | ≤ $${fmt(mid.cap)} |`, `up to ${fmt(mid.cap)} the $${off} tier`, `top out at $${off} (\`route-execute-mid\`)`, `up to ${offCap} the $${fmt(mid.price)} tier`, `the $${fmt(byName.get("execute-max").price)} tier (seller up to $${offCap})`,
+  ];
+  for (const line of wrongLines) ok(tierProse(line).wrong.length >= 1, `control: a wrong tier figure is reported (${line})`);
+
+  // Every tracked markdown surface (release notes aside: they record the prices of their day) and the stdio package.
+  const NOT_TIER_SURFACES = [/(^|\/)CHANGELOG\.md$/, /^CLAUDE\.md$/, /^\.claude\//, /^scripts\//];
+  const surfaces = execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+    .split("\0").filter((f) => f && (/\.md$/.test(f) || f === "mcp/index.js") && !NOT_TIER_SURFACES.some((re) => re.test(f)));
+  let quotes = 0;
+  const stale = [], seen = new Set(), quoting = [];
+  for (const f of surfaces) {
+    let text = "";
+    try { text = readFileSync(new URL(f, root), "utf8"); } catch { continue; }
+    const r = tierProse(text);
+    quotes += r.quotes;
+    if (r.quotes) quoting.push(f);
+    for (const n of r.names) seen.add(n);
+    for (const w of r.wrong) stale.push(`${f}: ${w}`);
+  }
+  for (const f of ["README.md", "wiki/LLM-Gateway.md", "wiki/x402-Index-and-Router.md", "wiki/MCP-Connector.md", "mcp/README.md", "docs/base-mcp-plugin.md", "mcp/index.js"]) ok(quoting.includes(f), `${f} types the tier ladder and is read`);
+  ok(quotes >= 30 && [...byName.keys()].every((n) => seen.has(n)), `${quotes} typed tier figures on ${quoting.length} surfaces, every tier among them - if this drops the check below is vacuous`);
+  ok(stale.length === 0, `every typed route-execute tier price and cap equals the catalog's${stale.length ? ` - ${stale.join(" | ")}` : ""}`);
+}
+
 console.log(`\n${pass} passed, 0 failed`);

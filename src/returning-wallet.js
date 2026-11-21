@@ -6,7 +6,11 @@
 // RETURNING_WALLET_WINDOW_DAYS, default 30), the 402 of that same call quotes
 // the route's x402 EVM `exact` accepts at a discount
 // (RETURNING_WALLET_DISCOUNT_BPS, default 1000 = 10%). Every other accept, and
-// every surface that publishes a price, stays at list.
+// every surface that publishes a price, stays at list. The discount is taken
+// from the route's LIST price; a chain's premium is added and its price floor
+// applied afterwards, as for any quote, so a chain at its floor quotes the
+// same amount either way and the 402 names it (`atListOn`) instead of saying
+// the discount was applied there.
 //
 // THE HINT IS A CLAIM. It only ever changes a QUOTE. On the paid request the
 // price is decided again, from the payment itself: the discount stands only
@@ -29,12 +33,18 @@
 // never undercuts it), and our own wallets.
 //
 // The paid-days read is the sales ledger's, handed in by the server
-// (configureReturningWallet), cached per wallet for CACHE_MS, and bounded per
-// minute: past the bound an unknown wallet is quoted list, never refused.
+// (configureReturningWallet), cached per wallet for CACHE_MS and then dropped
+// from memory (nothing here is written to a store), and bounded per minute
+// twice: one client address (an IPv6 one folded to its /64) causes at most
+// LOOKUPS_PER_ADDRESS_PER_MINUTE fresh reads, and all callers together
+// LOOKUPS_PER_MINUTE. Past either bound an unknown wallet is quoted list,
+// never refused, and a wallet already read keeps its quote: one caller naming
+// unused wallets spends its own share, not everyone's.
 import { METERED_SLUGS } from "./metered-slugs.js";
 import { hasLastingEffect } from "./lasting-effect-slugs.js";
 import { payerFromRequest, paymentHeaderOf, paymentSchemeOf } from "./payer.js";
 import { decodePaymentHeader } from "./payment-header.js";
+import { limiterKey } from "./rate-limit.js";
 
 export const WALLET_HINT_HEADER = "X-Agent402-Wallet";
 export const RETURNING_WALLET_DEFAULTS = Object.freeze({ discountBps: 1000, minPaidDays: 3, windowDays: 30 });
@@ -42,8 +52,14 @@ export const RETURNING_WALLET_DEFAULTS = Object.freeze({ discountBps: 1000, minP
 export const RETURNING_WALLET_MAX_BPS = 5000;
 export const CACHE_MS = 10 * 60_000;
 export const CACHE_MAX = 5000;
-/** Fresh (uncached) ledger reads per minute; past it an unknown wallet is quoted list. */
+/** Fresh (uncached) ledger reads per minute, all callers together; past it an unknown wallet is quoted list. */
 export const LOOKUPS_PER_MINUTE = 600;
+/** Fresh ledger reads one client address may cause per minute (its share of the bound above). */
+export const LOOKUPS_PER_ADDRESS_PER_MINUTE = 30;
+/** Most client addresses counted apart in one minute; the rest share one count. */
+const ADDRESS_KEYS_MAX = 5000;
+/** The most bytes the 402's `returningWalletPrice` value takes, in any shape and at any setting. */
+export const OFFER_MAX_BYTES = 126;
 export const RETURNING_WALLET_MISMATCH = "returning_wallet_mismatch";
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -116,36 +132,63 @@ export function configureReturningWallet({ paidDays = null, isOurs = null } = {}
   paidDaysOf = typeof paidDays === "function" ? paidDays : null;
   isOursFn = typeof isOurs === "function" ? isOurs : () => false;
 }
-const cache = new Map(); // wallet -> { at, days }
-let minute = 0, lookups = 0;
-const counters = { hinted: 0, quotedDiscount: 0, paidDiscount: 0, paidOtherWallet: 0, notQualified: 0, lookupsHeld: 0, settleRefused: 0 };
+const cache = new Map(); // wallet -> { at, days, window }, oldest read first
+const byAddress = new Map(); // client address -> fresh reads this minute
+let minute = 0, lookups = 0, sweeper = null;
+const counters = { hinted: 0, quotedDiscount: 0, paidDiscount: 0, paidOtherWallet: 0, notQualified: 0, lookupsHeld: 0, lookupsHeldAddress: 0, settleRefused: 0 };
 
-/** Distinct paid days of a wallet inside the window, or null when it cannot be read now. */
-function paidDays(wallet, cfg, now) {
+/** Drop every wallet whose cache window is over (the map is in read order). */
+export function sweepReturningWallet(now = Date.now()) {
+  for (const [wallet, hit] of cache) {
+    if (now - hit.at < CACHE_MS) break;
+    cache.delete(wallet);
+  }
+}
+const HELD = Symbol("held");
+/**
+ * Distinct paid days of a wallet inside the window; HELD when a bound holds
+ * the read this minute, null when it cannot be read. `client` is the caller's
+ * address key (null for a call that has none: the service-wide bound alone).
+ */
+function paidDays(wallet, cfg, now, client = null) {
   const hit = cache.get(wallet);
   if (hit && now - hit.at < CACHE_MS && hit.window === cfg.windowDays) return hit.days;
   if (typeof paidDaysOf !== "function") return null;
   const m = Math.floor(now / 60_000);
-  if (m !== minute) { minute = m; lookups = 0; }
-  if (lookups >= LOOKUPS_PER_MINUTE) { counters.lookupsHeld++; return null; }
+  if (m !== minute) { minute = m; lookups = 0; byAddress.clear(); }
+  const key = client === null ? null : byAddress.has(client) || byAddress.size < ADDRESS_KEYS_MAX ? client : "*";
+  if (key !== null && (byAddress.get(key) || 0) >= LOOKUPS_PER_ADDRESS_PER_MINUTE) { counters.lookupsHeldAddress++; return HELD; }
+  if (lookups >= LOOKUPS_PER_MINUTE) { counters.lookupsHeld++; return HELD; }
   lookups++;
+  if (key !== null) byAddress.set(key, (byAddress.get(key) || 0) + 1);
   let days = null;
   try { days = Number(paidDaysOf(wallet, now - cfg.windowDays * 86_400_000)); } catch { days = null; }
   if (!Number.isFinite(days) || days < 0) return null;
+  sweepReturningWallet(now);
+  cache.delete(wallet);
   if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
   cache.set(wallet, { at: now, days, window: cfg.windowDays });
+  // A wallet nobody names again still leaves memory when its window is over.
+  if (!sweeper) { sweeper = setInterval(() => sweepReturningWallet(), 30_000); sweeper.unref?.(); }
   return days;
 }
-/** Does this wallet qualify now? Our own wallets never do. */
-export function walletQualifies(wallet, { cfg = returningWalletConfig(), now = Date.now() } = {}) {
-  if (!ADDR.test(String(wallet || ""))) return false;
+/** "yes", "no", or "held" (a bound holds the read this minute). Our own wallets are "no". */
+function qualification(wallet, { cfg, now, client = null }) {
+  if (!ADDR.test(String(wallet || ""))) return "no";
   const w = String(wallet).toLowerCase();
   let ours = false;
   try { ours = isOursFn(w) === true; } catch { ours = true; }
-  if (ours) return false;
-  const days = paidDays(w, cfg, now);
-  return days !== null && days >= cfg.minPaidDays;
+  if (ours) return "no";
+  const days = paidDays(w, cfg, now, client);
+  if (days === HELD) return "held";
+  return days !== null && days >= cfg.minPaidDays ? "yes" : "no";
 }
+/** Does this wallet qualify now? Our own wallets never do. */
+export function walletQualifies(wallet, { cfg = returningWalletConfig(), now = Date.now(), client = null } = {}) {
+  return qualification(wallet, { cfg, now, client }) === "yes";
+}
+/** The address key a request's fresh reads are counted under (an IPv6 address folded to its /64). */
+const clientKeyOf = (req) => limiterKey(req?.ip || req?.socket?.remoteAddress || "-");
 
 /** The signed payer of a plain x402 EVM exact payment on this request, `false`
  *  when the request carries a payment of another shape, null when it carries none. */
@@ -189,7 +232,9 @@ function decide(req, def, now) {
   const signed = signedExactPayer(req);
   if (signed === false) return { applied: false, wallet: hint, why: "another payment shape" };
   if (signed !== null && signed !== hint) { counters.paidOtherWallet++; return { applied: false, wallet: hint, why: "paid from another wallet" }; }
-  if (!walletQualifies(hint, { cfg, now })) { counters.notQualified++; return { applied: false, wallet: hint, why: "not qualified" }; }
+  const qualifies = qualification(hint, { cfg, now, client: clientKeyOf(req) });
+  if (qualifies === "held") return { applied: false, wallet: hint, why: "not read" };
+  if (qualifies !== "yes") { counters.notQualified++; return { applied: false, wallet: hint, why: "not qualified" }; }
   const price = discountedPrice(def.price, cfg.discountBps);
   if (price === def.price) return { applied: false, wallet: hint, why: "no room" };
   if (signed === null) counters.quotedDiscount++; else counters.paidDiscount++;
@@ -197,6 +242,16 @@ function decide(req, def, now) {
 }
 /** The decision already made for this request, or null. */
 export function returningWalletOf(req) { return (req && typeof req === "object" && quotes.get(req)) || null; }
+/**
+ * The gate's note for one EVM exact accept of a discounted request: did the
+ * quote on this network come out under its list quote? (A chain at its price
+ * floor quotes the same amount.) Kept on the request's decision for the 402.
+ */
+export function noteReturningWalletAccept(req, network, lowered) {
+  const q = returningWalletOf(req);
+  if (!q || q.applied !== true || typeof network !== "string") return;
+  (q.accepts ??= new Map()).set(network, lowered === true);
+}
 
 /**
  * Before a settle: a discounted request settles only for the wallet the
@@ -212,29 +267,68 @@ export function returningWalletSettleDecision(ctx) {
   return { abort: true, reason: RETURNING_WALLET_MISMATCH };
 }
 
-/** What the 402 of an eligible route says about the offer (null while off). */
+/** Why a named wallet's quote did not change, as the 402 says it (one word). */
+const PUBLIC_WHY = Object.freeze({
+  "not qualified": "unqualified", // under the paid-days bar (or not a wallet the offer is for)
+  "not read": "lookup_busy", // the read is held this minute: quoted list, ask again shortly
+  "paid from another wallet": "other_payer",
+  "another payment shape": "other_rail", // not an x402 exact EIP-3009 payment on an EVM chain
+  "no room": "min_price", // a list price too small to lower
+});
+/**
+ * What the 402 of an eligible route says about the offer (null while off), in
+ * fields and at most OFFER_MAX_BYTES: the header, the percentage and the bar;
+ * `applied` true only when this request's quote is lower on at least one
+ * accept; `why` when a named wallet's quote did not change; `atListOn` for
+ * the chains whose price floor held the quote at list (the first that fit,
+ * the rest counted in `atListMore`). The rule in prose is on /llms-full.txt
+ * and in the route's OpenAPI operation.
+ */
 export function returningWalletOffer(def, req = null) {
   const cfg = returningWalletConfig();
   if (!cfg.enabled || returningWalletRouteRefusal(def)) return null;
   const q = req ? returningWalletOf(req) : null;
+  const terms = { header: WALLET_HINT_HEADER, discountPercent: cfg.discountBps / 100 };
+  const notApplied = (why) => ({ ...terms, minPaidDays: cfg.minPaidDays, windowDays: cfg.windowDays, applied: false, ...(why ? { why } : {}) });
+  if (q?.applied !== true) return notApplied(PUBLIC_WHY[q?.why] || null);
+  const noted = [...(q.accepts || [])];
+  const atList = noted.filter(([, lowered]) => !lowered).map(([network]) => network);
+  if (noted.length && atList.length === noted.length) return notApplied("price_floor");
+  const out = { ...terms, applied: true };
+  if (!atList.length) return out;
+  out.atListOn = [];
+  for (const network of atList) {
+    const left = atList.length - out.atListOn.length - 1;
+    const next = { ...out, atListOn: [...out.atListOn, network], ...(left > 0 ? { atListMore: left } : {}) };
+    if (out.atListOn.length && JSON.stringify(next).length > OFFER_MAX_BYTES) break;
+    out.atListOn.push(network);
+  }
+  if (atList.length > out.atListOn.length) out.atListMore = atList.length - out.atListOn.length;
+  return out;
+}
+
+/**
+ * What the hint header is read for and what is kept of it, in the words
+ * /privacy and the service manifest's data handling both print (one source,
+ * so the two cannot disagree): the named wallet and its count of paid days
+ * sit in this process's cache for CACHE_MS, are dropped by the sweep, and
+ * are never written to a store.
+ */
+export function returningWalletDataHandling() {
   return {
-    header: WALLET_HINT_HEADER,
-    discountPercent: cfg.discountBps / 100,
-    minPaidDays: cfg.minPaidDays,
-    windowDays: cfg.windowDays,
-    applied: q?.applied === true,
-    note: `Send your wallet address in ${WALLET_HINT_HEADER}. A wallet that has paid here on ${cfg.minPaidDays} or more days in the last ${cfg.windowDays} is quoted ${cfg.discountBps / 100}% under list on this route's x402 exact accepts on EVM chains; the payment must be signed from that wallet, and any other payer is quoted list and not charged.`,
+    read: "read against the sales ledger to decide that request's quote",
+    kept: `the address and its count of paid days are held in memory for about ${Math.round(CACHE_MS / 60_000)} minutes and never written to a store`,
   };
 }
 
 /** Operator figures: this process's counts and the settings in force. */
 export function returningWalletStatus() {
   const cfg = returningWalletConfig();
-  return { ...cfg, header: WALLET_HINT_HEADER, counts: { ...counters }, cachedWallets: cache.size };
+  return { ...cfg, header: WALLET_HINT_HEADER, lookupsPerMinute: LOOKUPS_PER_MINUTE, lookupsPerAddressPerMinute: LOOKUPS_PER_ADDRESS_PER_MINUTE, counts: { ...counters }, cachedWallets: cache.size };
 }
 /** Test seam. */
 export function __resetReturningWallet() {
-  cache.clear(); minute = 0; lookups = 0;
+  cache.clear(); byAddress.clear(); minute = 0; lookups = 0;
   for (const k of Object.keys(counters)) counters[k] = 0;
 }
 
@@ -262,11 +356,15 @@ export function returningWalletOfferMiddleware(defOf) {
   };
 }
 
-/** One sentence for prose surfaces (llms.txt), or "" while the switch is off. */
+/** The rule's two clauses every prose surface shares, from the settings in force. */
+const quotedClause = (cfg, route) => `quoted ${cfg.discountBps / 100}% under ${route} list price on its x402 exact accepts on EVM chains; a chain's premium and price floor still apply, so a chain at its floor can quote the same amount`;
+const SIGNER_CLAUSE = "a payment of the lower amount from any other wallet is answered 402 at the list price, and nothing is charged";
+
+/** The rule in prose for /llms-full.txt, or "" while the switch is off. */
 export function returningWalletSentence() {
   const cfg = returningWalletConfig();
   if (!cfg.enabled) return "";
-  return `Returning wallets pay less: send your wallet address in the \`${WALLET_HINT_HEADER}\` request header, and when that wallet has paid here on ${cfg.minPaidDays} or more days in the last ${cfg.windowDays}, the 402 of that same call quotes ${cfg.discountBps / 100}% under list on the x402 exact accepts of EVM chains (most deterministic tools; metered, model-backed and routing routes stay at list, and each eligible route's 402 states the offer in \`returningWalletPrice\`). The payment must be signed from that wallet: any other payer is quoted list and is not charged.`;
+  return `Returning wallets pay less: send your wallet address in the \`${WALLET_HINT_HEADER}\` request header, and when that wallet has paid here on ${cfg.minPaidDays} or more days in the last ${cfg.windowDays}, that same call is ${quotedClause(cfg, "the route's")}. An eligible route's 402 carries \`returningWalletPrice\`: the header, the percentage and the bar, \`applied\` (true when this request's quote is lower), \`why\` when a named wallet's quote is not (\`unqualified\`: under the bar; \`lookup_busy\`: not read this minute, ask again; \`other_payer\`: the payment is signed by another wallet; \`other_rail\`: the payment is not an x402 exact EIP-3009 authorization on an EVM chain; \`min_price\`: the price has no room under it; \`price_floor\`: every chain quoted sits at its floor) and \`atListOn\` (the chains a price floor held at list). A route whose 402 does not carry it stays at list, for example a route priced per request, a metered or model-backed route, a routing tier or a route whose effect outlives the answer. Send the header again with the payment, signed from that wallet: ${SIGNER_CLAUSE}.`;
 }
 /** The header parameter an eligible route's OpenAPI operation declares, or null. */
 export function returningWalletHeaderParam(def) {
@@ -276,7 +374,7 @@ export function returningWalletHeaderParam(def) {
     name: WALLET_HINT_HEADER,
     in: "header",
     required: false,
-    description: `Your EVM wallet address. A wallet that has paid here on ${cfg.minPaidDays} or more days in the last ${cfg.windowDays} is quoted ${cfg.discountBps / 100}% under list on this route's x402 exact accepts on EVM chains; the payment must then be signed from that wallet.`,
+    description: `Your EVM wallet address. A wallet that has paid here on ${cfg.minPaidDays} or more days in the last ${cfg.windowDays} is ${quotedClause(cfg, "this route's")}. Send it again with the payment, signed from that wallet: ${SIGNER_CLAUSE}.`,
     schema: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
   };
 }

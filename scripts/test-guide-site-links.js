@@ -134,5 +134,31 @@ for (const [path, html] of Object.entries({ ...PAGES, "/what-is-x402": whatIsX40
   ok(five.length === 1 && five[0].getAttribute("href") === X && /In plain language: What is x402\? on ask402\.ai\.$/.test(text(five[0].closest("p"))), `the five-minute guide links the guide's x402 explainer where it sums up the protocol (${five.map((a) => text(a.closest("p")).slice(-60)).join(" | ")})`);
 }
 
+// --- a link to one of this site's explainers is anchored for what the page is ---
+// The pages are titled for how the protocol runs here; the general question
+// ("What is x402?", "What is MPP?") is the guide's. A link from this site's own
+// pages, the README or the wiki that still asks the general question as its
+// anchor promises the guide's page and lands on this one.
+{
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const root = new URL("..", import.meta.url);
+  const STALE = [
+    /href="(?:https:\/\/agent402\.tools)?\/what-is-(?:x402|mpp)(?:#[^"]*)?"[^>]*>(?:\s*<[^>]+>)*\s*what is (?:x402|mpp)\b[^<]*/gi, // <a href="/what-is-x402">What is x402?</a>, a nav row's first span
+    /\[\s*"\/what-is-(?:x402|mpp)"\s*,\s*"what is [^"]*"\s*\]/gi, // ["/what-is-x402", "What is x402?"]
+    /mmLink\(\s*"\/what-is-(?:x402|mpp)"\s*,\s*"what is [^"]*"/gi, // the mobile menu
+    /\[what is (?:x402|mpp)\??\]\(https:\/\/agent402\.tools\/what-is-(?:x402|mpp)\)/gi, // markdown
+  ];
+  const scan = (text) => STALE.flatMap((re) => [...text.matchAll(re)].map((m) => m[0].replace(/\s+/g, " ").slice(0, 110)));
+  const controls = ['<a href="/what-is-x402" style="color:var(--ink);">What is x402?</a>', '<a href="/what-is-x402" class="mlnav-row"><span style="font-weight:700;">what is x402</span>', '["/what-is-mpp", "What is MPP? (the full explainer)"]', 'mmLink("/what-is-x402", "what is x402 / MPP", false)', "[What is MPP](https://agent402.tools/what-is-mpp)"];
+  ok(controls.every((c) => scan(c).length === 1), "control: each stale anchor form is reported");
+  ok(scan('<a href="/what-is-x402">x402 and MPP on Agent402</a> ["/what-is-mpp", "MPP on Agent402"] <a href="/what-is-x402#compare">the comparison table</a> { q: "What is x402?", a: "..." }').length === 0, "control: an anchor for what the page is, and the FAQ's own question, pass");
+  const files = [...readdirSync(new URL("src/", root)).filter((f) => f.endsWith(".js")).map((f) => `src/${f}`), "README.md", ...readdirSync(new URL("wiki/", root)).filter((f) => f.endsWith(".md")).map((f) => `wiki/${f}`)];
+  const stale = files.flatMap((f) => scan(readFileSync(new URL(f, root), "utf8")).map((hit) => `${f}: ${hit}`));
+  ok(files.length > 100 && stale.length === 0, `no link to /what-is-x402 or /what-is-mpp asks the general question as its anchor${stale.length ? ` - ${stale.join(" | ")}` : ""}`);
+  // The anchors in use name the page.
+  const nav = readFileSync(new URL("src/ledger-chrome.js", root), "utf8");
+  ok(nav.includes('mmLink("/what-is-x402", "x402 and MPP on Agent402"') && /href="\/what-is-x402" class="mlnav-row"><span[^>]*>x402 and MPP<\/span><span class="mlnav-faint">on Agent402<\/span>/.test(nav), "the menus name the page for what it is");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
