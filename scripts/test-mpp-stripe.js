@@ -452,6 +452,10 @@ for (const seam of [true, false]) {
     spt_silent: () => ({ error: noAnswer() }),
     spt_500: () => ({ error: stripeErr("An unknown error occurred", "StripeAPIError", 500) }),
     spt_processing: () => ({ status: "processing" }),
+    // The first send never arrives; the SECOND send's PaymentIntent is not succeeded.
+    spt_second_processing: (n) => (n === 1 ? { error: noAnswer() } : { status: "processing" }),
+    spt_second_requires_capture: (n) => (n === 1 ? { error: noAnswer() } : { status: "requires_capture" }),
+    spt_second_requires_action: (n) => (n === 1 ? { error: noAnswer() } : { status: "requires_action" }),
     spt_ok: () => ({}),
   };
   const stripe = stubStripe((spt, n) => plans[spt]?.(n));
@@ -517,9 +521,19 @@ for (const seam of [true, false]) {
     const pr = await post(tokenCred("spt_processing"));
     ok(pr.status === 402 && pr.body?.detail === STRIPE_UNCONFIRMED_TEXT && booked.length === 3 && /^pi_stub_/.test(booked[2].reference || "") && sendsFor("spt_processing").length === 1, `gate J: a PaymentIntent still processing is unconfirmed and booked under its id (${booked[2]?.reference})`);
 
+    // A second send that returns a PaymentIntent is served ONLY when it succeeded.
+    for (const [spt, n] of [["spt_second_processing", 4], ["spt_second_requires_capture", 5]]) {
+      const r = await post(tokenCred(spt));
+      ok(r.status === 402 && r.body?.detail === STRIPE_UNCONFIRMED_TEXT && !r.receipt && r.body?.answer === undefined && sendsFor(spt).length === 2 && booked.length === n && /^pi_stub_/.test(booked[n - 1]?.reference || "") && finals.find((f) => f.spt === spt)?.settled === false, `gate J: a second send whose PaymentIntent is ${spt.replace("spt_second_", "")} is not served: unconfirmed 402, booked under its id, never marked settled (${r.status}, booked ${booked.length})`);
+    }
+    {
+      const r = await post(tokenCred("spt_second_requires_action"));
+      ok(r.status === 402 && /Nothing was charged/.test(r.body?.detail || "") && r.body?.details?.reason !== "capture-unconfirmed" && !r.receipt && r.body?.answer === undefined && sendsFor("spt_second_requires_action").length === 2 && booked.length === 5 && finals.find((f) => f.spt === "spt_second_requires_action")?.settled === false, `gate J: a second send whose PaymentIntent requires action is definitive: not served, nothing charged, no row (${r.status}, booked ${booked.length})`);
+    }
+
     // the ledger: each unconfirmed capture is a card debt the owed word reads.
     const rows = listRefunds({ status: "owed" }).filter((r) => r.slug === "stub-route");
-    ok(rows.length === 3 && rows.every((r) => r.network === "stripe" && r.wire === "mpp-stripe" && r.httpStatus === 402 && r.priceUsd === 0.5 && /unconfirmed/.test(r.note || "")), `gate J: three unconfirmed captures are three owed card rows in the refund ledger (${rows.length})`);
+    ok(rows.length === 5 && rows.every((r) => r.network === "stripe" && r.wire === "mpp-stripe" && r.httpStatus === 402 && r.priceUsd === 0.5 && /unconfirmed/.test(r.note || "")), `gate J: five unconfirmed captures are five owed card rows in the refund ledger (${rows.length})`);
     ok(rows.some((r) => r.evidence === booked[2].reference) && rows.some((r) => (r.note || "").includes(`mpp_challenge_id=${siChallenge}`)), "gate J: a row is keyed on the PaymentIntent when Stripe named one, and its note names the challenge id otherwise");
     ok(refundAlarmStatus({ noticeMinutes: 0 }).status === "owed", "gate J: the refund alarm (the refundsOwed word) reads owed");
   } finally { console.warn = w0; console.error = e0; console.log = l0; s.close(); }
