@@ -6,6 +6,7 @@
 //   THIRD_PARTY_NAMES_FILE=/path/to/names.txt node scripts/gen-third-party-hashes.js
 import { readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { OWN_NAMES } from "./lib/own-names.js";
 const h = (s) => createHash("sha256").update(s).digest("hex").slice(0, 20);
 // Hosts this repo legitimately names: our own, upstreams, rails, registries.
 const ALLOW = new Set(["agent402.tools", "www.agent402.tools", "example.com", "google.com", "www.google.com", "httpbin.org", "api.exa.ai",
@@ -22,7 +23,7 @@ for (const base of ["https://api.cdp.coinbase.com/platform/v2/x402/discovery/res
     if (off >= (j.pagination?.total || 0)) break;
   }
 }
-const names = process.env.THIRD_PARTY_NAMES_FILE ? readFileSync(process.env.THIRD_PARTY_NAMES_FILE, "utf8").split("\n").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
+const names = process.env.THIRD_PARTY_NAMES_FILE ? readFileSync(process.env.THIRD_PARTY_NAMES_FILE, "utf8").split("\n").map((s) => s.trim().toLowerCase()).filter((s) => s && !OWN_NAMES.includes(s)) : [];
 if (!names.length) { console.error("THIRD_PARTY_NAMES_FILE is required (the names list stays private)"); process.exit(2); }
 const out = {
   _note: "sha256 (first 20 hex) of lowercased third-party seller hosts (from public discovery catalogs) and counterparty names. Hashed so this file does not itself name them. Regenerate with scripts/gen-third-party-hashes.js.",

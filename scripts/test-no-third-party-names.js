@@ -18,6 +18,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { vendorHits, compileAllow, loadVendorData } from "./lib/vendor-names.js";
+import { OWN_NAMES } from "./lib/own-names.js";
 
 const ROOT = new URL("..", import.meta.url);
 const data = JSON.parse(readFileSync(new URL("./data/third-party-hashes.json", import.meta.url), "utf8"));
@@ -59,6 +60,12 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
   ok(findHits("x.js", 'origin: "https://seller.example"', H, N).length === 0, "control: a placeholder host passes");
   ok(findHits("README.md", "[![zz](https://zzseller.invalid/b.svg)](https://zzseller.invalid/s)", H, N).length === 0, "a README line that is one badge linking to its record service passes");
   ok(findHits("README.md", "Bought from Zzcounterparty: [![zz](https://zzseller.invalid/b.svg)](https://zzseller.invalid/s)", H, N).length === 1 && findHits("docs/x.md", "[![zz](https://zzseller.invalid/b.svg)](https://zzseller.invalid/s)", H, N).length === 1, "a badge line with prose, or outside README.md, is still caught");
+  // A site the maintainer operates is first-party: the list never carries it.
+  for (const own of OWN_NAMES) {
+    ok(!NAMES.has(h(own)) && !HOSTS.has(h(own)), `the list does not carry our own name ${own}`);
+    ok(findHits("x.md", `Read the guide at https://www.${own}.ai/x402 or ${own}.tools`).length === 0, `a line naming our own site ${own} passes`);
+  }
+  ok(/filter\(\(s\) => s && !OWN_NAMES\.includes\(s\)\)/.test(readFileSync(new URL("./gen-third-party-hashes.js", import.meta.url), "utf8")), "the generator drops our own names from a names file");
   ok(data.hosts.length > 100 && data.names.length > 10, `the hash list is populated (${data.hosts.length} hosts, ${data.names.length} names)`);
 }
 
