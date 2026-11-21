@@ -283,7 +283,18 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   never booked, read or credited, so one balance backs one ledger; when such a pull settles, the
   named account's records are told as of a settlement another container made (the last good read
   is forgotten). A new sender shape the gate cannot prove gets the same mark, never a ledger keyed
-  on anything the credential carries. A run leaves on its settle success (x402 afterSettle, the fallback chain, the Tempo
+  on anything the credential carries. **A multisig account proven by settlement** is the exception:
+  when a pull whose owner approvals verify against the config it carries (`booking.commitment`)
+  settles, the gate records the pair (account, config commitment) from its settled path
+  (`noteTempoMultisigSettled` in `src/rail-cover.js`; nothing in a request writes it), and a later
+  pull naming that account under the same commitment, with approvals that verify, gets a verified
+  sender's terms: the account's ledger, balance and paid record, no fixed number at once
+  (per-buyer bounds stay on the client IP). The pair is a flag in the shared-limits store
+  (`tempo-multisig-proof`, read by every container and after a restart; with no shared store it is
+  the process's own), lasts `MULTISIG_PROOF_MS` (30 days) past the last settled pull, is written
+  through at most once a day, and is withdrawn when a pull under it is not settled for a cause
+  that is not ours (`tempoRefusalFault` other than `not-buyer`); a store that does not answer
+  leaves the pairs this process has read. A run leaves on its settle success (x402 afterSettle, the fallback chain, the Tempo
   gate), which is also the payer's paid record, or when its response ends.
   `INFLIGHT_COVER=composite`: the check covers the report and media routes only, and the settle
   breaker counts no runs in flight; `INFLIGHT_COVER=off`: the check is off everywhere. Not behind

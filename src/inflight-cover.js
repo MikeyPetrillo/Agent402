@@ -46,6 +46,12 @@
 //     the chain took it from that account, and the account's own records are
 //     told the way they are of a settlement another container made (the last
 //     good read is forgotten; the next judgment reads again).
+//     A MULTISIG ACCOUNT PROVEN BY SETTLEMENT is not unproven: once a pull
+//     under a config has settled through the Tempo gate, a later pull naming
+//     the account under the same config commitment, with approvals that
+//     verify, arrives here with a verified sender's terms (src/rail-cover.js
+//     tempoCoverTermsOf): the account's ledger, its balance, its paid record,
+//     no fixed number at once.
 //   - The first run in flight needs no read: verify already proved the
 //     balance covers it (unless a run of the wallet settled after the request
 //     arrived: verify may predate that payment, so the run is judged). A later one reads balanceOf once, cached for a few
@@ -1000,7 +1006,7 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
         if (cur.count < unreadMax()) { how = "unread"; break; }
         stats.refused++;
         stats.refusedUnread++;
-        const e = new Error(`This payment's sender could not be confirmed before the call runs (a multisig envelope names its account without proving it), so calls paid this way run ${unreadMax()} at a time from one client address, and ${cur.count} are in progress. Your input is fine: retry the same call after Retry-After, once one of them has settled. A payment signed by the account's own key, or by an access key the chain lists for it, is not held to this. You have not been charged.`);
+        const e = new Error(`This payment's sender could not be confirmed before the call runs (a multisig envelope names its account without proving it), so calls paid this way run ${unreadMax()} at a time from one client address, and ${cur.count} are in progress. Your input is fine: retry the same call after Retry-After, once one of them has settled. A payment signed by the account's own key, or by an access key the chain lists for it, is not held to this, and neither is a multisig account once a payment of its own has settled here. You have not been charged.`);
         e.statusCode = 429;
         e.coverRefusal = "unread";
         e.attribution = "ours";

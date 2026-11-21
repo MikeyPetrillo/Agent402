@@ -15,7 +15,11 @@
 //     which the signature proves. A multisig envelope proves no account (the
 //     gate marks it `ledger`, see inspectTempoSender's booking): its terms
 //     carry `unproven`, the client address it came from, and the coverage
-//     check books it there, on no account's ledger and on no balance.
+//     check books it there, on no account's ledger and on no balance. The
+//     exception is a multisig account PROVEN BY SETTLEMENT (below): a pull
+//     whose owner approvals verify against a config the chain has already
+//     accepted for that account, in a payment this server settled, is the
+//     account's own, and its terms are a verified sender's.
 //   - Solana: the WALLET, the transfer's authority (always a static key), the
 //     mint, and the accept's amount, judged on all the wallet holds of the
 //     mint (`byOwner`), whether the transfer names its accounts in the static
@@ -55,6 +59,7 @@ import { decodePaymentHeader } from "./payment-header.js";
 import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
 import { svmTransferAccounts, svmTransferAuthority, isSvmNetwork } from "./svm-payer.js";
 import { limiterKey } from "./rate-limit.js";
+import { shared, sharedWrite } from "./shared-limits.js";
 
 const UINT = /^\d{1,39}$/;
 const HEX_ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -67,18 +72,94 @@ function clientAddressKey(req) {
   return `ip:${ip ? limiterKey(String(ip).trim()) : "?"}`;
 }
 
+// A MULTISIG ACCOUNT PROVEN BY SETTLEMENT. Whether a multisig envelope's
+// config is the named account's cannot be read here, but the chain says so
+// when it takes a payment: a pull from `account` whose approvals verify
+// against the config with commitment `commitment`, which THIS SERVER settled,
+// proves that config signs for that account. The Tempo gate records the pair
+// from its settled path (noteTempoMultisigSettled; nothing in a request can
+// write it), and a later pull naming the same account under the same
+// commitment, with approvals that verify, is that account's own.
+//   - Kept in the shared store the coverage check uses (src/shared-limits.js:
+//     a flag per pair), so another container and a restarted one read it;
+//     with no shared store it is this process's, and a restart returns the
+//     account to the client-address allowance until its next pull settles.
+//   - Bounded: a pair exists only for a payment that settled, lasts
+//     MULTISIG_PROOF_MS past the last one (written through at most once a
+//     day per pair), and this process remembers at most PROOFS_MAX of them,
+//     which it reads only when the store does not answer.
+//   - Withdrawn (withdrawTempoMultisigProof) when a pull under the pair is
+//     not settled for a cause that is not this server's: a config the chain
+//     no longer takes for the account stops being its own here.
+const PROOF_NAME = "tempo-multisig-proof";
+export const MULTISIG_PROOF_MS = 30 * 24 * 60 * 60_000;
+const PROOF_REFRESH_MS = 24 * 60 * 60_000;
+const PROOFS_MAX = 10_000;
+const COMMITMENT = /^0x[0-9a-f]{64}$/;
+const proofs = new Map(); // "account:commitment" -> until; least recently set first
+const proofKey = (account, commitment) => {
+  const a = String(account || "").toLowerCase(), c = String(commitment || "").toLowerCase();
+  return HEX_ADDR.test(a) && COMMITMENT.test(c) ? `${a}:${c}` : null;
+};
+function rememberProof(k, until) {
+  proofs.delete(k);
+  proofs.set(k, until);
+  while (proofs.size > PROOFS_MAX) proofs.delete(proofs.keys().next().value);
+}
+/** A pull from `account` under the config `commitment` SETTLED through this
+ *  server. Called by the Tempo gate's settled path only. */
+export function noteTempoMultisigSettled(account, commitment, now = Date.now()) {
+  const k = proofKey(account, commitment);
+  if (!k) return false;
+  const had = proofs.get(k) || 0;
+  rememberProof(k, now + MULTISIG_PROOF_MS);
+  if (had - now < MULTISIG_PROOF_MS - PROOF_REFRESH_MS) void sharedWrite(PROOF_NAME, shared.flagSet(PROOF_NAME, k, now + MULTISIG_PROOF_MS, { now }));
+  return true;
+}
+/** The chain did not take a pull under this pair: it is no longer proven. */
+export function withdrawTempoMultisigProof(account, commitment, now = Date.now()) {
+  const k = proofKey(account, commitment);
+  if (!k) return false;
+  proofs.delete(k);
+  void sharedWrite(PROOF_NAME, shared.flagSet(PROOF_NAME, k, 0, { now }));
+  return true;
+}
+/** Has a pull from `account` under `commitment` settled through this server
+ *  (here or on another container) within MULTISIG_PROOF_MS? The store
+ *  answers; this process's own memory only when it does not. Never throws. */
+export async function tempoMultisigProven(account, commitment, now = Date.now()) {
+  const k = proofKey(account, commitment);
+  if (!k) return false;
+  let r = null;
+  try { r = await shared.flagGet(PROOF_NAME, k, { now }); } catch { r = null; }
+  if (r?.ok) {
+    if (r.until > now) { rememberProof(k, r.until); return true; }
+    proofs.delete(k);
+    return false;
+  }
+  return (proofs.get(k) || 0) > now;
+}
+/** Test-only: this process forgets the pairs it remembers (a restart). */
+export function _resetTempoMultisigProofsForTest() { proofs.clear(); }
+
 /** The Tempo pull payment on this request, or null. One whose sender the gate
  *  did not prove (any `ledger` mark) carries `unproven`: the client address,
- *  the only thing about its sender this server knows. */
-export function tempoCoverTermsOf(req) {
+ *  the only thing about its sender this server knows. The exception: a
+ *  multisig pull whose approvals verify against a config (`commitment`, set
+ *  by the gate only then) that a settled payment has proven for the account
+ *  it names; its terms are the account's own. */
+export async function tempoCoverTermsOf(req) {
   const t = req && typeof req === "object" && req.tempoSettling === true ? req.mppTempoPull : null;
   if (!t || typeof t !== "object") return null;
   const payer = String(t.sender || ""), asset = String(t.currency || ""), amount = String(t.amountAtomic ?? "");
   if (!HEX_ADDR.test(asset) || !UINT.test(amount)) return null;
   const terms = { rail: "tempo", payer: HEX_ADDR.test(payer) ? payer.toLowerCase() : null, network: "tempo", asset: asset.toLowerCase(), atomic: BigInt(amount) };
-  // Unproven: `payer` is only the account the credential names (none when it
-  // names none), never a key.
-  if (t.ledger != null) return { ...terms, unproven: clientAddressKey(req) };
+  if (t.ledger != null) {
+    if (terms.payer && t.commitment != null && await tempoMultisigProven(terms.payer, t.commitment)) return terms;
+    // Unproven: `payer` is only the account the credential names (none when
+    // it names none), never a key.
+    return { ...terms, unproven: clientAddressKey(req) };
+  }
   return terms.payer ? terms : null;
 }
 

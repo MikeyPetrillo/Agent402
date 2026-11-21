@@ -8,11 +8,13 @@ carries its own version on npm.
 
 ### 2026-11-21 (multisig Tempo payments and DNS names)
 Payments:
-- A Tempo pull credential in a multisig envelope runs four calls at once per
-  client address (`INFLIGHT_COVER_UNREAD_MAX` sets the number), whichever
-  account it names; a call past that answers 429 with `Retry-After: 5` and
-  nothing is charged. Such a credential is no longer counted against the
-  balance of the account it names.
+- A Tempo pull credential in a multisig envelope is counted against its
+  account's balance, with no fixed number of calls at once, once a payment
+  from that account under the same multisig config has settled here.
+- Until then, and under any other config, calls paid that way run four at
+  once per client address (`INFLIGHT_COVER_UNREAD_MAX` sets the number),
+  whichever account each names; a call past that answers 429 with
+  `Retry-After: 5` and nothing is charged.
 - Calls an account pays for with its own key, or with an access key Tempo
   confirms for it, are counted against that account's balance alone.
 Tools:

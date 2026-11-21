@@ -57,6 +57,7 @@ import { Secp256k1 } from "ox";
 import { lateWatchKey } from "./tempo-late-watches.js";
 import { SETTLE_FAULT, tempoRefusalFault } from "./settle-fault.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
+import { noteTempoMultisigSettled, withdrawTempoMultisigProof } from "./rail-cover.js";
 import { challengeLifeShortfall, challengeLifeReason, presentChallengeWindow } from "./challenge-life.js";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
@@ -840,6 +841,14 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
 //     this way. Not the account it names (anyone can name an account, so
 //     that account's ledger and balance are never touched by it), and not
 //     the config or key it carries (a caller can make a new one per request).
+//   - a multisig account PROVEN BY SETTLEMENT: once a pull whose approvals
+//     verify against a config has settled through this gate, the chain has
+//     said that config signs for that account, and the gate records the pair
+//     (account, config commitment) from its settled path. A later pull naming
+//     the account under the same commitment, with approvals that verify, is
+//     booked as the account's own: its ledger, its balance, no fixed number
+//     at once (src/rail-cover.js). Per-buyer bounds stay on the client IP.
+//     A pull under a recorded pair that the chain does not take withdraws it.
 // ---------------------------------------------------------------------------
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const lcAddress = (a) => (typeof a === "string" && ADDRESS_RE.test(a) ? a.toLowerCase() : null);
@@ -917,9 +926,12 @@ function multisigApprovalsCommitment(sig, signPayload) {
  *               "unverified": a multisig envelope, whether or not its owner
  *               approvals verify against the config it carries; `account` is
  *               only the account it names, and the pull is booked on the
- *               client address, on no account. Never a key for a per-buyer
- *               bound. Else null (the gate books that on the client address
- *               too).
+ *               client address, on no account, unless a settled payment has
+ *               proven `commitment` for that account (src/rail-cover.js).
+ *               `commitment` is the config's commitment when the owner
+ *               approvals verify against it, else null. Never a key for a
+ *               per-buyer bound. Else null (the gate books that on the
+ *               client address too).
  *  Offline and synchronous; never throws. Exported for tests. */
 export function inspectTempoSender(authorizationHeader, { now = Date.now() } = {}) {
   const out = { claimed: null, verified: null, envelope: null, keychain: null, booking: null, reason: "" };
@@ -969,7 +981,7 @@ export function inspectTempoSender(authorizationHeader, { now = Date.now() } = {
       // the config the envelope carries, which anyone can write for any
       // account, new for each request. The account is named here, never
       // booked (the gate books the pull on the client address).
-      return { ...out, booking: { account: out.claimed, ledger: "unverified" }, reason: commitment ? "multisig envelope: the owner approvals verify; the account's config is not checked" : "multisig envelope: the owner approvals do not verify" };
+      return { ...out, booking: { account: out.claimed, ledger: "unverified", commitment }, reason: commitment ? "multisig envelope: the owner approvals verify; the account's config is not checked" : "multisig envelope: the owner approvals do not verify" };
     }
   } catch {
     return { ...out, reason: "the signature does not verify" };
@@ -1759,6 +1771,9 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
     const isPull = binding.payloadType === "transaction";
     const senderInfo = isPull ? inspectTempoSender(auth) : null;
     const signedSender = senderInfo?.verified || null;
+    // A multisig pull whose owner approvals verify against the config it
+    // carries: the (account, commitment) pair its settlement would prove.
+    const multisigPair = isPull && senderInfo?.booking?.commitment && lcAddress(senderInfo.booking.account) ? { account: senderInfo.booking.account, commitment: senderInfo.booking.commitment } : null;
     let keychainSender = null;
     let keychainRead = null;
     if (isPull && !signedSender && senderInfo.keychain && typeof verifyKeychainSender === "function") {
@@ -1924,7 +1939,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         // account's records learn of a payment the chain did take from it.
         const b = senderInfo?.booking;
         const proven = b && b.ledger == null ? lcAddress(b.account) : null;
-        req.mppTempoPull = { sender: proven || lcAddress(b?.account) || senderInfo?.claimed || null, ledger: proven ? null : "unverified", currency: String(binding.challenge?.request?.currency || ""), amountAtomic: String(binding.amountAtomic) };
+        req.mppTempoPull = { sender: proven || lcAddress(b?.account) || senderInfo?.claimed || null, ledger: proven ? null : "unverified", commitment: proven ? null : b?.commitment || null, currency: String(binding.challenge?.request?.currency || ""), amountAtomic: String(binding.amountAtomic) };
       }
       // The tempo credential is the ONLY payment evidence on this request.
       // Drop any x402 payment header that rode alongside it: the dispatcher
@@ -2242,6 +2257,9 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         const bcls = b.cls || "unknown";
         // What this refusal proves, for the settle breaker (src/settle-fault.js).
         req[SETTLE_FAULT] = tempoRefusalFault(bcls);
+        // A multisig pull the chain did not take, for a cause that is not
+        // ours: its config is no longer taken as proven for the account.
+        if (multisigPair && req[SETTLE_FAULT] !== "not-buyer") withdrawTempoMultisigProof(multisigPair.account, multisigPair.commitment);
         logTempoRefusal(req, { cls: `broadcast:${bcls}`, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, handler: tHandled - tValidated, broadcast: tBroadcast - tHandled, total: Date.now() - tStart }, requestId: b.requestId });
         bufferedCalls = [];
         restore();
@@ -2285,6 +2303,10 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // The payment is off the sender's balance: its run leaves the in-flight
       // coverage ledger now, not when a slow body ends.
       try { markCoveredRunSettled(req); } catch { /* the response-end release still applies */ }
+      // The chain took a multisig pull whose approvals verify against the
+      // config it carries: that config signs for that account (the proof a
+      // later pull under the same pair is booked on, src/rail-cover.js).
+      if (multisigPair) noteTempoMultisigSettled(multisigPair.account, multisigPair.commitment);
       restore();
       if (receiptHeader) res.setHeader("Payment-Receipt", receiptHeader);
       settleReplay();

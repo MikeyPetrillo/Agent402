@@ -27,7 +27,8 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports
 import { admitCoveredRun, KEPT_AT_ONCE_MS, coverageReadsWord, coverageReadsVerdict, _ageUnreadDecisionsForTest, _ageKeptReadsForTest, coverTermsOfRequest, coveredRunStateOf, inflightCoverStatus, CHAIN_BY_CAIP2, _setBalanceReaderForTest, _resetInflightCoverForTest } from "../src/inflight-cover.js";
 import { hasPaidRecord, notePaidSettlement, setPaidRecordLedger, _setPaidRecordForTest, _resetPaidRecordForTest } from "../src/paid-record.js";
-import { readRailBalance, _setGatewayBalanceClientForTest } from "../src/rail-cover.js";
+import { readRailBalance, _setGatewayBalanceClientForTest, noteTempoMultisigSettled, withdrawTempoMultisigProof, tempoMultisigProven, MULTISIG_PROOF_MS, _resetTempoMultisigProofsForTest } from "../src/rail-cover.js";
+import { shared } from "../src/shared-limits.js";
 import { RAILS, GATED_RAILS } from "../src/rails.js";
 import { toolErrorFields, notCallersInput } from "../src/tool-error-fields.js";
 
@@ -1153,6 +1154,105 @@ for (const readMs of [600, 450]) {
   _setBalanceReaderForTest(reader);
   for (const x of [await un(), await un()]) endUnpaid(x);
   ok(coverageReadsWord() === "ok", `an unproven pull does not move the balance-read status word (${coverageReadsWord()})`);
+}
+
+// ---- a multisig account proven by settlement: a config the chain has taken for the account, in a payment this server settled ----
+{
+  const ACCT = W(0xda), OTHER = W(0xdb), CUR = "0x20c000000000000000000000b9537d11c60e8b50";
+  const C1 = `0x${"c1".repeat(32)}`, C2 = `0x${"c2".repeat(32)}`;
+  const X = "198.51.100.7", Y = "203.0.113.9";
+  // What the gate writes for a multisig pull: the mark, and the config's
+  // commitment when (and only when) the owner approvals verify against it.
+  const msReq = ({ sender = ACCT, commitment = C1, ip = Y } = {}) => ({ tempoSettling: true, ip, mppTempoPull: { sender, ledger: "unverified", commitment, currency: CUR, amountAtomic: String(PRICE) }, header: () => undefined });
+  const admitM = async (o) => { const req = msReq(o); try { return { req, release: await admitCoveredRun(req) }; } catch (err) { return { req, err }; } };
+  const endUnpaid = (x) => { if (x.release) { x.req.res = { statusCode: 402 }; x.release(); } };
+  // The shared store's flags, modeled here (they outlive this process's memory).
+  const realSet = shared.flagSet, realGet = shared.flagGet;
+  const store = new Map();
+  let storeUp = true, storeReads = 0;
+  shared.flagSet = async (n, k, until, { now = Date.now() } = {}) => { if (!storeUp) return { ok: false }; if (Number(until) > now) store.set(`${n}:${k}`, Number(until)); else store.delete(`${n}:${k}`); return { ok: true }; };
+  shared.flagGet = async (n, k, { now = Date.now() } = {}) => { storeReads++; if (!storeUp) return { ok: false }; const u = store.get(`${n}:${k}`) || 0; return { ok: true, until: u > now ? u : 0 }; };
+  const restart = () => { fresh(); _resetTempoMultisigProofsForTest(); };
+  let reads = 0;
+  const reader = async () => { reads++; return 20n * PRICE; };
+  try {
+    restart(); store.clear();
+    _setBalanceReaderForTest(reader);
+    // Before any payment of the account's has settled: unproven, on the address.
+    let t = await coverTermsOfRequest(msReq());
+    ok(t?.unproven === `ip:${Y}` && t.payer === ACCT, `a multisig account's first pull is unproven and booked on its client address (${t?.unproven})`);
+    const first = []; for (let i = 0; i < 6; i++) first.push(await admitM());
+    ok(first.filter((x) => x.release).length === 4 && first.slice(4).every((x) => x.err?.coverRefusal === "unread"), `...bounded there: four at once (${first.filter((x) => x.release).length} of 6)`);
+    // Nothing in a request proves it: not the commitment it carries, and not
+    // the coverage check's own release. Only the gate's settled path does.
+    first[0].release.settled();
+    t = await coverTermsOfRequest(msReq());
+    ok(t?.unproven === `ip:${Y}` && store.size === 0 && (await tempoMultisigProven(ACCT, C1)) === false, "a pull that names a commitment, and one the coverage check releases, records no proof by itself");
+    for (const x of first) endUnpaid(x);
+    // The gate's settled path: the chain took a pull from the account under C1.
+    ok(noteTempoMultisigSettled(ACCT, C1) === true && noteTempoMultisigSettled(ACCT, "0x12") === false && noteTempoMultisigSettled("nobody", C1) === false, "the settled path records the pair (account, commitment); a malformed pair is not recorded");
+    await sleep(5);
+    ok(store.size === 1 && [...store.keys()][0].endsWith(`${ACCT}:${C1}`), `the proof is one flag in the shared store, keyed on the account and the commitment (${[...store.keys()].join(",")})`);
+    t = await coverTermsOfRequest(msReq());
+    ok(t && t.unproven === undefined && t.payer === ACCT, "a later pull naming the account under the same commitment is the account's own");
+    reads = 0;
+    const burst = []; for (let i = 0; i < 21; i++) burst.push(await admitM());
+    ok(burst.filter((x) => x.release).length === 20 && burst[20].err?.coverRefusal === "short" && burst.slice(0, 20).every((x) => coveredRunStateOf(x.req) === "covered") && reads >= 1, `its next 20 pulls at once are admitted on its balance (20 prices), not held to four; the 21st is refused short (${burst.filter((x) => x.release).length} admitted, ${burst[20].err?.coverRefusal})`);
+    // One ledger with the account's verified pulls: the same balance, counted once.
+    const verified = await (async () => { const req = { tempoSettling: true, ip: Y, mppTempoPull: { sender: ACCT, currency: CUR, amountAtomic: String(PRICE) }, header: () => undefined }; try { return { req, release: await admitCoveredRun(req) }; } catch (err) { return { req, err }; } })();
+    ok(verified.err?.coverRefusal === "short" && inflightCoverStatus().walletsInFlight === 1, `the account's verified pulls and its proven multisig pulls share one ledger and one balance (${verified.err?.coverRefusal || "admitted"}, ledgers ${inflightCoverStatus().walletsInFlight})`);
+    burst[0].release.settled();
+    ok(hasPaidRecord(ACCT) === true, "a proven multisig pull that settles is the account's paid record");
+    for (const x of burst) endUnpaid(x);
+    // Another config naming the account, the same config naming another
+    // account, and a pull whose approvals did not verify (no commitment).
+    for (const [name, o, where] of [["another config naming the account, from another address", { commitment: C2, ip: X }, X], ["the same commitment naming another account", { sender: OTHER }, Y], ["a pull whose approvals did not verify (the gate names no commitment)", { commitment: null }, Y]]) {
+      t = await coverTermsOfRequest(msReq(o));
+      ok(t?.unproven === `ip:${where}`, `${name} stays unproven on its client address (${t?.unproven})`);
+    }
+    const forged = []; for (let i = 0; i < 6; i++) forged.push(await admitM({ commitment: C2, ip: X }));
+    const own = []; for (let i = 0; i < 20; i++) own.push(await admitM());
+    ok(forged.filter((x) => x.release).length === 4 && own.every((x) => x.release && coveredRunStateOf(x.req) === "covered"), `pulls under another config naming the account are bounded on their own address (${forged.filter((x) => x.release).length} of 6) and change nothing for the account (${own.filter((x) => x.release).length} of 20 admitted)`);
+    for (const x of [...forged, ...own]) endUnpaid(x);
+    // A restart, and another container: the store answers.
+    restart();
+    _setBalanceReaderForTest(reader);
+    t = await coverTermsOfRequest(msReq());
+    ok(t && t.unproven === undefined, "after a restart (this process's memory gone) the proof is read from the shared store");
+    const again = []; for (let i = 0; i < 20; i++) again.push(await admitM());
+    ok(again.every((x) => x.release), `...and the account's 20 pulls at once are admitted on its balance (${again.filter((x) => x.release).length} of 20)`);
+    for (const x of again) endUnpaid(x);
+    // The store does not answer: what this process remembers stands in.
+    storeUp = false;
+    t = await coverTermsOfRequest(msReq());
+    ok(t && t.unproven === undefined, "a store that does not answer: the pair this process read before still stands");
+    ok((await tempoMultisigProven(ACCT, C1, Date.now() + MULTISIG_PROOF_MS + 60_000)) === false, "...only for as long as the proof itself lasts");
+    restart();
+    t = await coverTermsOfRequest(msReq());
+    ok(t?.unproven === `ip:${Y}`, "...and a process that never read it falls back to the client address (never to the account's ledger)");
+    storeUp = true;
+    // It lapses, and it is withdrawn when the chain stops taking the config.
+    ok((await tempoMultisigProven(ACCT, C1)) === true && (await tempoMultisigProven(ACCT, C1, Date.now() + MULTISIG_PROOF_MS + 60_000)) === false, "the proof lasts a fixed time past the last settled payment");
+    ok(withdrawTempoMultisigProof(ACCT, C1) === true, "withdrawn");
+    await sleep(5);
+    t = await coverTermsOfRequest(msReq());
+    ok(store.size === 0 && t?.unproven === `ip:${Y}`, "a withdrawn pair is unproven again, here and in the store");
+    // Another container withdrew it: the store's answer stands over what
+    // this process remembers.
+    noteTempoMultisigSettled(ACCT, C1);
+    await sleep(5);
+    ok((await tempoMultisigProven(ACCT, C1)) === true, "control: recorded again");
+    store.clear();
+    t = await coverTermsOfRequest(msReq());
+    ok(t?.unproven === `ip:${Y}` && (await tempoMultisigProven(ACCT, C1)) === false, "a pair another container withdrew is unproven here too, whatever this process remembered");
+    // Written through at most once a day per pair, however many payments settle.
+    store.clear(); restart();
+    let writes = 0; const set0 = shared.flagSet; shared.flagSet = async (...a) => { writes++; return set0(...a); };
+    for (let i = 0; i < 50; i++) noteTempoMultisigSettled(ACCT, C1);
+    await sleep(5);
+    ok(writes === 1, `fifty settlements of one pair write the store once (${writes})`);
+    shared.flagSet = set0;
+  } finally { shared.flagSet = realSet; shared.flagGet = realGet; _resetTempoMultisigProofsForTest(); }
 }
 
 // ---- a Solana payment whose transfer accounts sit in a lookup table is keyed on the wallet ----
