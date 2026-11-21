@@ -861,6 +861,9 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
 /** True when CDP credentials are configured (cdpSql/cdpFetch can run). Cheap
  *  pre-check so hot paths can fall back without triggering cdpFetch's 503 throw. */
 export function cdpConfigured() { const c = cdpCredentialsFor(SQL_QUERY_PATH); return !!(c.apiKeyId && c.apiKeySecret); }
+/** How often, and how far apart (times the attempt), one of this server's own reads is tried when buyers' queries hold the send slots. */
+const OWN_SQL_ATTEMPTS = 3;
+const OWN_SQL_RETRY_WAIT_MS = 2_000;
 
 /** Run a read-only ClickHouse SELECT over Coinbase's indexed, decoded chain data
  *  (base.events, base.transactions, …) and return the result rows as an array.
@@ -868,12 +871,24 @@ export function cdpConfigured() { const c = cdpCredentialsFor(SQL_QUERY_PATH); r
  *  and surfaces CDP's own 4xx on a bad query — callers in latency-sensitive paths
  *  should cdpConfigured()-gate and/or catch to fall back. `cacheSeconds` (≤900)
  *  sets CDP's server-side result cache. */
-export async function cdpSql(sql, { cacheSeconds } = {}) {
+export async function cdpSql(sql, { cacheSeconds, retryWaitMs = OWN_SQL_RETRY_WAIT_MS } = {}) {
   const body = { sql: String(sql) };
   if (Number.isFinite(cacheSeconds) && cacheSeconds > 0) {
     body.cache = { maxAgeMs: Math.min(Math.floor(cacheSeconds), 900) * 1000 };
   }
-  const res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true });
+  // One of this server's own reads (the revenue page, src/revenue-live.js):
+  // like ownSqlQuery it takes a send slot only when no other query is
+  // waiting for one, so it never moves a buyer's query later. Refused that
+  // way it is tried again a little later, a bounded number of times; the
+  // caller reads the last refusal as any other failure.
+  let res;
+  for (let attempt = 1; ; attempt++) {
+    try { res = await cdpFetch("POST", SQL_QUERY_PATH, body, { idempotent: true, queries: newQueryBudget({ own: true }) }); break; }
+    catch (e) {
+      if (!(e?.statusCode === 429 && e.retryAfter && attempt < OWN_SQL_ATTEMPTS && retryWaitMs > 0)) throw e;
+      await new Promise((r) => setTimeout(r, retryWaitMs * attempt));
+    }
+  }
   const rows = res?.result ?? res?.rows ?? res?.data ?? res;
   return Array.isArray(rows) ? rows : [];
 }

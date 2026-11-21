@@ -395,7 +395,7 @@ export const LLM_GEMINI_TOOLS = Object.entries(GEMINI_PATH_BY_TIER).map(([tierSl
     slug: `${tierSlug}-gemini`,
     category: "llm",
     price: tier.metered ? `$${tier.price.toFixed(3)}` : `$${tier.price.toFixed(3)}`,
-    ...(tier.metered ? { quote: (body) => meteredGeminiQuoteUsd(body).usd } : {}),
+    ...(tier.metered ? { quote: (body) => meteredGeminiQuoteUsd(body).usd, fromInput: { contents: [{ role: "user", parts: [{ text: "hi" }] }], generationConfig: { maxOutputTokens: 1 } } } : {}),
     // Price by model on a flat route: the same model this wire hands the chat
     // handler (modelOf), so the gate's price and the served tier agree.
     ...(isFlatTier(tierSlug) ? { tierQuote: (body) => flatTierQuoteUsd(tierSlug, modelOf(body, tierSlug)) } : {}),

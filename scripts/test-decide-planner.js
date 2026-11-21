@@ -122,6 +122,15 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   const { producesField } = await import("../services/decide/planner.js");
   const row = localToolRow({ route: "GET /api/ens", slug: "ens", name: "ENS", price: "$0.001", description: "x", discovery: { inputSchema: { properties: { name: { type: "string" } }, required: ["name"] }, output: { example: { name: "a.eth", address: "0x0", found: true } } } }, { now: NOW });
   ok(row.outputFields.join() === "name,address,found", "a first-party row carries its answer's field names, never values");
+  // A tool whose answer is bytes lists a string sample naming them (image
+  // resize, convert and thumbnail, the QR code, the screenshot). Its row says
+  // it has no answer shape and no fields, so no later step is written against
+  // a field of raw bytes, and it ranks on its inputs exactly as before.
+  const { IMAGE_TOOLS } = await import("../src/tools/image-kit.js");
+  const binary = IMAGE_TOOLS.filter((t) => typeof t.discovery?.output?.example === "string");
+  const rows = binary.map((t) => localToolRow(t));
+  ok(binary.length === 3 && rows.every((r) => r.hasOutputSchema === false && r.outputFields.length === 0 && r.schemaQuality === 1 && !producesField(r, "address")), `a bytes tool's row carries no answer shape and keeps its input score (${binary.map((t) => t.slug).join(", ")}: ${rows.map((r) => r.hasOutputSchema).join(", ")})`);
+  ok(row.hasOutputSchema === true && localToolRow({ route: "GET /api/n", slug: "n", name: "N", price: "$0.001", description: "x", discovery: {} }).hasOutputSchema === false, "a row with an object sample has an answer shape; one with no sample does not");
   ok(producesField(row, "address") && producesField(row, "wallet_address") && producesField(row, "owner") && !producesField(row, "symbol"), "an address-shaped parameter matches an address field; an unrelated one does not");
 
   const idx = new ToolIndex();

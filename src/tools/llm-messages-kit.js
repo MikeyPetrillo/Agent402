@@ -767,7 +767,7 @@ export const LLM_MESSAGES_TOOLS = Object.entries(MESSAGES_PATH_BY_TIER).map(([ti
   category: "llm",
   price: priceString(tierSlug),
   // payments.js: a `quote` makes the x402 price a per-request function of the body.
-  ...(tierSlug === "v1-chat-metered" ? { quote: (body) => meteredMessagesQuoteUsd(body).usd } : {}),
+  ...(tierSlug === "v1-chat-metered" ? { quote: (body) => meteredMessagesQuoteUsd(body).usd, fromInput: { messages: [{ role: "user", content: "hi" }], max_tokens: 1 } } : {}),
   // Price by model on a flat route (see LLM_GATEWAY_TOOLS in the gateway kit).
   ...(isFlatTier(tierSlug) ? { tierQuote: (body) => flatTierQuoteUsd(tierSlug, body?.model) } : {}),
   description: describe(tierSlug),

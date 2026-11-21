@@ -99,9 +99,16 @@ const authOf = (payload) => {
   return a;
 };
 
-/** The block whose timestamp is at or just before `tMs`, estimated from the
- *  head and a block `probe` blocks back (an over-estimate of the range is
- *  safe: the lookup only widens). */
+/** The most block reads one lookback may spend proving its start block. */
+export const BLOCK_NEAR_MAX_PROOF_READS = 40;
+/** A block whose timestamp is at or before `tMs`, to start a log search from.
+ *  Estimated from the head and a block `probe` blocks back, then PROVEN: the
+ *  estimate's own timestamp is read, and while it is after `tMs` (block times
+ *  are uneven: a fast stretch after a slow one makes the head's pace
+ *  overstate the distance) the start moves back in doubling steps until a
+ *  block at or before `tMs` is found, or the chain's first block. One extra
+ *  read when the estimate holds; a start too far back only widens the search.
+ *  A block whose timestamp cannot be read ends the proof at that block. */
 export async function blockNear(call, tMs, probe = 1000) {
   const head = Number(BigInt(await call("eth_blockNumber", [])));
   const hb = await call("eth_getBlockByNumber", [toHex(head), false]);
@@ -109,8 +116,17 @@ export async function blockNear(call, tMs, probe = 1000) {
   const pb = await call("eth_getBlockByNumber", [toHex(back), false]);
   const ht = Number(BigInt(hb?.timestamp ?? "0x0")), pt = Number(BigInt(pb?.timestamp ?? "0x0"));
   const perBlock = head > back && ht > pt ? (ht - pt) / (head - back) : 1;
-  const behindS = Math.max(0, ht - Math.floor(tMs / 1000));
-  return { head, from: Math.max(0, head - Math.ceil(behindS / perBlock) - 10) };
+  const t = Math.floor(tMs / 1000);
+  const behindS = Math.max(0, ht - t);
+  let from = Math.max(0, head - Math.ceil(behindS / perBlock) - 10);
+  let step = Math.max(64, head - from);
+  for (let reads = 0; from > 0 && reads < BLOCK_NEAR_MAX_PROOF_READS; reads++) {
+    const blk = await call("eth_getBlockByNumber", [toHex(from), false]);
+    if (blk?.timestamp == null || Number(BigInt(blk.timestamp)) <= t) break;
+    from = Math.max(0, from - step);
+    step *= 2;
+  }
+  return { head, from };
 }
 
 /**

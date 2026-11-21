@@ -62,6 +62,7 @@ import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
 import { renderArticle, screenshotPage, rasterizeSvg, withHtmlFramesFailureBound } from "./tools/render.js";
+import { LOGO_SVG, FAVICON_SVG, FAVICON_VERSION, brandMarkTile } from "./brand-mark.js";
 import { renderWithStaticRead } from "./tools/render-static.js";
 import { mountAnswerShares, removeShare } from "./answer-share.js";
 import { workerEnabled, runOnWorker, assertWorkerConfig, setWorkerOutcomeObserver } from "./worker-client.js";
@@ -552,7 +553,7 @@ import { proofPage } from "./proof.js";
 import { glossaryPage } from "./glossary.js";
 import { x402101Page } from "./x402-101.js";
 import { aifiCardSvg } from "./aifi-card.js";
-import { sectionCardSvg, ogSectionIds } from "./og-cards.js";
+import { sectionCardSvg, ogSectionIds, toolCardSvg } from "./og-cards.js";
 import { robotsTxt, sitemapXml, llmsTxt, llmsFullTxt, sitemapIndex, sitemapPages, sitemapTools, sitemapGuides, sitemapSkills, sitemapReports, sitemapCategories, sitemapLearn } from "./seo.js";
 import { clampedTitles, META_TITLE_MAX } from "./seo-meta.js";
 import { integrationPage } from "./integration-pages.js";
@@ -874,7 +875,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, payerPaidDays, externalReturnRateAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
+import { topExternalPayersAsync, payerPaidDays, externalReturnRateAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow, saleRepeatStats } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -2689,6 +2690,22 @@ for (const def of Object.values(CATALOG)) {
   // is the ceiling only for the tools that do not.
   if (typeof def.quote === "function") def.quoteRange = { minUsd: floor, maxUsd: Number.isFinite(def.quoteMaxUsd) && def.quoteMaxUsd >= floor ? def.quoteMaxUsd : METERED_MAX_QUOTE_USD };
   else if (typeof def.tierQuote === "function") def.quoteRange = { minUsd: floor, maxUsd: Math.max(floor, FLAT_TIER_MAX_USD) };
+}
+// A quoted tool may declare `fromInput`: a small valid body its 402 quotes at
+// or under the list price. /api/pricing publishes it, and the Bazaar
+// keep-alive pays with it, since a quoted route's published example can ask
+// more than the list price and the keep-alive never pays over list. A body
+// that does not quote inside the list price is dropped here, so a published
+// one always does (scripts/test-quoted-from-price.js reads the live 402s).
+for (const def of Object.values(CATALOG)) {
+  if (def.fromInput === undefined) continue;
+  const list = Number(String(def.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+  let q = NaN;
+  try { q = typeof def.quote === "function" && def.fromInput && typeof def.fromInput === "object" ? Number(def.quote(def.fromInput)) : NaN; } catch { q = NaN; }
+  if (!(Number.isFinite(q) && q > 0 && q <= list + 1e-9)) {
+    console.warn(`[catalog] ${def.slug}: fromInput dropped (its quote is not inside the list price)`);
+    delete def.fromInput;
+  }
 }
 // The attest tool refuses to attest a sale of an identity-bound route (a
 // memory read or a usage report is the buyer's own business, and an
@@ -5972,7 +5989,10 @@ app.get("/__operator/sales.json", async (req, res) => {
     try { mppAgentsThisWeek = mppAgentsThisWeekCount(); } catch { /* count is optional */ }
     // The detailed summary walks the whole window: read across turns, never in line.
     const summary = await salesSummaryAsync({ detailed: true });
-    res.json({ ...summary, mppAgentsThisWeek, feedback: { byTool: feedbackByTool({ days: 90 }), bad: badFeedback({ days: 30 }) } });
+    // settlementRepeats: rows on the books that repeat an earlier row's
+    // settlement (left out of every figure above) and the repeats the writer
+    // refused since boot (src/sale-repeats.js). Operator only.
+    res.json({ ...summary, mppAgentsThisWeek, settlementRepeats: saleRepeatStats(), feedback: { byTool: feedbackByTool({ days: 90 }), bad: badFeedback({ days: 30 }) } });
   } catch (err) {
     res.status(500).json({ error: redactSecrets(err?.message) });
   }
@@ -10504,28 +10524,27 @@ const BRAND_FONT_STYLE = `<style>
 // design-tokens: off-start (rasterized logo, favicon and social-card SVG: no CSS engine)
 const BRAND = { paper: "#0B0C0E", card: "#141619", panel: "#141619", panel2: "#1C2024", ink: "#E9EAEC", muted: "#B3B9C0", faint: "#868D95", hairline: "#2C3136", accent: "#9EF0B0", amber: "#F0B35E", milledA: "#F6F7F8", milledB: "#C9CED3", mono: "'Geist Mono',Menlo,Consolas,monospace", display: "'Geist',system-ui,sans-serif" };
 // design-tokens: off-end
-const BRAND_DEFS = `<defs><linearGradient id="milled" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.milledA}"/><stop offset="1" stop-color="${BRAND.milledB}"/></linearGradient><linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.panel2}"/><stop offset="1" stop-color="${BRAND.paper}"/></linearGradient></defs>`;
+const BRAND_DEFS = `<defs><linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${BRAND.panel2}"/><stop offset="1" stop-color="${BRAND.paper}"/></linearGradient></defs>`;
 
-// Brand mark — the milled square: a light brushed-aluminum rounded square on
-// the obsidian ground with "402" in dark mono, matching the nav/footer mark.
-// The PNG is rasterized once via the existing headless Chromium and cached for
-// the process lifetime (marketplaces and link previews often refuse SVG).
-const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">${BRAND_FONT_STYLE}${BRAND_DEFS}<rect width="512" height="512" rx="96" fill="${BRAND.paper}"/><rect x="106" y="106" width="300" height="300" rx="72" fill="url(#milled)"/><text x="256" y="301" font-size="118" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} text-anchor="middle" letter-spacing="-6" fill="${BRAND.paper}">402</text></svg>`;
+// Brand mark: the vector logo and the favicon crop (src/brand-mark.js, from
+// assets/brand/logo.svg), the same art as the PNG below.
 app.get("/logo.svg", (_req, res) => res.type("image/svg+xml").set("Cache-Control", "public, max-age=86400").send(LOGO_SVG));
 
-// Favicon-scale mark: the logo's 150px glyphs cover ~40% of the canvas, which
-// reads as a plain black square in a 16px browser tab. This variant fills the
-// frame ("402" at 82% width, the brand period as a corner dot) so the mark
-// survives tab scale. Marketplaces/link previews keep the roomier LOGO_SVG.
-const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">${BRAND_FONT_STYLE}${BRAND_DEFS}<rect width="512" height="512" rx="112" fill="${BRAND.paper}"/><rect x="40" y="40" width="432" height="432" rx="104" fill="url(#milled)"/><text x="256" y="322" font-size="196" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} text-anchor="middle" letter-spacing="-12" fill="${BRAND.paper}">402</text></svg>`;
-
+// The PNG logo is the brand mark (black ground, "402", red dot), 512 by 512,
+// a committed file (assets/brand/logo.png, the same art as
+// docs/logo-current.png): the apple-touch-icon, the schema.org logo, the MCP
+// and A2A icons and the press kit read it. A change of art bumps the ?v= on
+// the apple-touch-icon link (src/ledger-chrome.js) and LOGO_PNG_VERSION. Only
+// that versioned URL is immutable: the bare one (schema.org, MCP, A2A) keeps a
+// day's cache, so a new mark reaches those readers.
+const LOGO_PNG_VERSION = "3";
 let logoPngCache = null;
-app.get("/logo.png", async (_req, res) => {
+app.get("/logo.png", (req, res) => {
   try {
-    logoPngCache ??= await rasterizeSvg(LOGO_SVG, 512);
-    res.type("image/png").set("Cache-Control", "public, max-age=31536000, immutable").send(logoPngCache);
+    logoPngCache ??= readFileSync(new URL("../assets/brand/logo.png", import.meta.url));
+    res.type("image/png").set("Cache-Control", req.query?.v === LOGO_PNG_VERSION ? "public, max-age=31536000, immutable" : "public, max-age=86400").send(logoPngCache);
   } catch {
-    // No Chromium on this instance — the SVG is always available.
+    // The file is part of the image; the SVG stands in if it is ever missing.
     res.redirect(302, "/logo.svg");
   }
 });
@@ -10533,14 +10552,17 @@ app.get("/logo.png", async (_req, res) => {
 // Anthropic directory) resolve our 402 mark instead of a generic globe. The SVG
 // is always available; the .ico serves the rasterized PNG (favicon clients
 // accept PNG bytes) and falls back to the SVG if Chromium is unavailable.
-app.get("/favicon.svg", (_req, res) =>
-  res.type("image/svg+xml").set("Cache-Control", "public, max-age=31536000, immutable").send(FAVICON_SVG)
+// Only the URL the page head links (?v=FAVICON_VERSION) is immutable; a bare
+// one (the x402 listing icon, outside fetchers) keeps a day's cache.
+const faviconCache = (req) => (req.query?.v === FAVICON_VERSION ? "public, max-age=31536000, immutable" : "public, max-age=86400");
+app.get("/favicon.svg", (req, res) =>
+  res.type("image/svg+xml").set("Cache-Control", faviconCache(req)).send(FAVICON_SVG)
 );
 let faviconPngCache = null;
-const sendFaviconPng = async (_req, res) => {
+const sendFaviconPng = async (req, res) => {
   try {
     faviconPngCache ??= await rasterizeSvg(FAVICON_SVG, 512);
-    res.type("image/png").set("Cache-Control", "public, max-age=31536000, immutable").send(faviconPngCache);
+    res.type("image/png").set("Cache-Control", faviconCache(req)).send(faviconPngCache);
   } catch {
     res.redirect(302, "/favicon.svg");
   }
@@ -10563,8 +10585,8 @@ const cardSvg = (width = 1200, height = 630) => {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${BRAND_FONT_STYLE}${BRAND_DEFS}
   <rect width="${width}" height="${height}" fill="${BRAND.paper}"/>
   <g transform="translate(${tx},${ty}) scale(${s})">
-  <!-- nav row: milled mark + wordmark -->
-  <rect x="72" y="64" width="44" height="44" rx="12" fill="url(#milled)"/>
+  <!-- nav row: the brand mark + wordmark -->
+  ${brandMarkTile(72, 64, 44, { stroke: BRAND.hairline })}
   <text x="132" y="96" font-size="30" font-weight="600" font-family=${display} letter-spacing="-0.5" fill="${BRAND.ink}">Agent402</text>
   <text x="1128" y="95" font-size="20" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">agent402.tools</text>
   <!-- headline -->
@@ -10607,7 +10629,7 @@ const xHeaderSvg = (width = 1500, height = 500) => {
     <stop offset="1" stop-color="${BRAND.milledA}" stop-opacity="0.13"/>
   </linearGradient></defs>
   <rect x="760" y="0" width="740" height="500" fill="url(#xfade)"/>
-  <rect x="88" y="66" width="62" height="62" rx="16" fill="url(#milled)"/>
+  ${brandMarkTile(88, 66, 62, { stroke: BRAND.hairline })}
   <text x="170" y="115" font-size="50" font-weight="600" font-family=${display} letter-spacing="-1" fill="${BRAND.ink}">Agent402</text>
   <text x="88" y="238" font-size="80" font-weight="600" font-family=${display} letter-spacing="-3" fill="${BRAND.ink}">The web, priced per call.</text>
   <text x="88" y="292" font-size="30" font-family=${display} fill="${BRAND.muted}">${n.toLocaleString("en-US")} tools an agent can pay for and use, in one call.</text>
@@ -10941,12 +10963,7 @@ app.get("/tools/:slug/card.png", async (req, res) => {
   const tools = toolList(CATALOG);
   const tool = tools.find((t) => t.slug === req.params.slug);
   if (!tool) return res.status(404).json({ error: "not found" });
-  const catLabel = CATEGORIES[tool.category]?.label ?? tool.category;
-  const svgEsc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const nameT = tool.name.length > 36 ? tool.name.slice(0, 34) + "\u2026" : tool.name;
-  const descT = tool.description.length > 74 ? tool.description.slice(0, 72) + "\u2026" : tool.description;
-  const free = POW_SLUGS.has(tool.slug) ? "FREE w/ PoW \u00b7 " : "";
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630">${BRAND_FONT_STYLE}${BRAND_DEFS}<rect width="1200" height="630" fill="${BRAND.paper}"/><g><rect x="36" y="36" width="1128" height="558" rx="20" fill="${BRAND.card}" stroke="${BRAND.hairline}" stroke-width="2"/><rect x="84" y="88" width="56" height="56" rx="14" fill="url(#milled)"/><text x="112" y="128" font-size="24" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} text-anchor="middle" letter-spacing="-1" fill="${BRAND.paper}">402</text><text x="162" y="118" font-size="26" font-weight="600" font-family=${JSON.stringify(BRAND.display)} fill="${BRAND.ink}">Agent402</text><text x="170" y="146" font-size="20" font-family=${JSON.stringify(BRAND.mono)} fill="${BRAND.muted}">${svgEsc(catLabel)}</text><line x1="84" y1="172" x2="1116" y2="172" stroke="${BRAND.hairline}" stroke-width="2"/><text x="84" y="308" font-size="58" font-weight="600" font-family=${JSON.stringify(BRAND.display)} letter-spacing="-2" fill="${BRAND.ink}">${svgEsc(nameT)}</text><text x="84" y="372" font-size="22" font-family=${JSON.stringify(BRAND.mono)} fill="${BRAND.muted}">${svgEsc(descT)}</text><line x1="84" y1="440" x2="1116" y2="440" stroke="${BRAND.hairline}" stroke-width="2"/><text x="84" y="496" font-size="29" font-weight="700" font-family=${JSON.stringify(BRAND.mono)} fill="${BRAND.accent}">${svgEsc(free)}${svgEsc(tool.price)} per call \u00b7 ${svgEsc(tool.method)} ${svgEsc(tool.path)}</text><text x="84" y="550" font-size="23" font-family=${JSON.stringify(BRAND.mono)} fill="${BRAND.muted}">Pay in USDC on Base via x402 - no API key, no signup</text></g></svg>`;
+  const svg = toolCardSvg({ name: tool.name, description: tool.description, price: tool.price, method: tool.method, path: tool.path, categoryLabel: CATEGORIES[tool.category]?.label ?? tool.category, free: POW_SLUGS.has(tool.slug) }, { BRAND, BRAND_DEFS, BRAND_FONT_STYLE });
   try {
     if (!toolCardCache.has(tool.slug)) toolCardCache.set(tool.slug, await rasterizeSvg(svg, { width: 1200, height: 630 }));
     res.set("Cache-Control", "public, max-age=86400").type("image/png").send(toolCardCache.get(tool.slug));
@@ -11345,7 +11362,7 @@ app.get("/api/pricing", (_req, res) => {
     openapi: `${BASE_URL}/openapi.json`,
     categories: Object.fromEntries(Object.entries(CATEGORIES).map(([k, v]) => [k, v.label])),
     endpoints: Object.entries(CATALOG).map(([route, def]) => {
-      const { name, price, description, category, slug, tierQuote, quote, quoteRange, quoteFormula } = def;
+      const { name, price, description, category, slug, tierQuote, quote, quoteRange, quoteFormula, fromInput } = def;
       const [method, path] = route.split(" ");
       return {
         method,
@@ -11369,7 +11386,8 @@ app.get("/api/pricing", (_req, res) => {
         // Said on the row so a consumer that budgets per route never takes the
         // floor for the price: the live 402 for a given body lands anywhere in
         // the range. Absent on fixed-price routes, whose 402 is the list price.
-        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd }, ...(quoteFormula ? { quoteFormula } : {}) } : {}),
+        // fromInput, when the tool declares one: a body quoted at or under `price`.
+        ...(typeof quote === "function" && quoteRange ? { quoted: true, fromUsd: quoteRange.minUsd, quoteRange: { minUsd: quoteRange.minUsd, maxUsd: quoteRange.maxUsd }, ...(quoteFormula ? { quoteFormula } : {}), ...(fromInput ? { fromInput } : {}) } : {}),
         // Published per row because the doc's own description says these are
         // marked: a consumer that wants only deterministic code should be able
         // to FILTER for it rather than take a sentence's word for it.

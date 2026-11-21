@@ -1,3 +1,4 @@
+import { usdToBaseUnits } from "./base-units.js";
 import { handlerInputOf } from "./handler-input.js";
 import { boundedResponseSchemaFor, boundedSchema } from "./openapi-schema.js";
 import { paymentMiddlewareFromHTTPServer, x402HTTPResourceServer } from "@x402/express";
@@ -588,7 +589,7 @@ export function parseNetworkPremiums(raw = process.env.NETWORK_PRICE_PREMIUMS ||
       console.warn(`[payments] NETWORK_PRICE_PREMIUMS entry ignored (malformed or negative): "${pair}"`);
       continue;
     }
-    out.set(net, Math.round(usd * 1e6)); // micro-dollars
+    out.set(net, Number(usdToBaseUnits(usd, 6))); // micro-dollars, scaled as a minted amount is
   }
   return out;
 }
@@ -641,7 +642,7 @@ export function priceWithPremium(price, network, premiums = NETWORK_PREMIUMS) {
   if (!extra) return price;
   const m = /^\$(\d+(?:\.\d+)?)$/.exec(String(price));
   if (!m) return price;
-  const micro = Math.round(Number(m[1]) * 1e6) + extra;
+  const micro = Number(usdToBaseUnits(m[1], 6)) + extra;
   return "$" + (micro / 1e6).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
 }
 
@@ -3921,6 +3922,23 @@ export async function noteSvmRequote(ctx, split = activeSvmSplit) {
   } catch { return null; }
 }
 
+/**
+ * A Solana settle refused because the transaction's recent blockhash is no
+ * longer valid (the call ran past its life): the buyer's 402 names the class
+ * and says to build on a fresh blockhash (src/verify-hint.js). Reads a thrown
+ * failure (`ctx.error`) and a graceful failed receipt (`ctx.result`). True
+ * when a hint was left. Never throws.
+ */
+export async function noteSvmStaleBlockhash(ctx) {
+  try {
+    const network = ctx?.requirements?.network;
+    const said = [ctx?.error?.errorReason, ctx?.error?.errorMessage, ctx?.error?.message, ctx?.result?.errorReason, ctx?.result?.errorMessage].filter((v) => typeof v === "string").join(" ");
+    const { isSvmStaleBlockhash, svmStaleBlockhashHint, rememberHint } = await import("./verify-hint.js");
+    if (!ctx?.paymentPayload || !isSvmStaleBlockhash(network, said)) return false;
+    return Boolean(rememberHint(ctx.paymentPayload, svmStaleBlockhashHint()));
+  } catch { return false; }
+}
+
 /** The facilitator a settle or verify on `network` went to, as logs and
  *  telemetry name it: the error's own label, the Solana split's listed
  *  facilitator for a request routed there, else the network's first-tried
@@ -4131,11 +4149,12 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
   // without this hook the server log says NOTHING (the 2026-07-16 Robinhood
   // rejection left zero trace). afterSettle runs on graceful failures too, so
   // it closes the gap.
-  server.onAfterSettle((ctx) => {
+  server.onAfterSettle(async (ctx) => {
     const result = ctx?.result;
     if (!result || result.success !== false) return;
     const via = settleFacilitatorOf(ctx);
     noteSettleFacilitator(ctx, via);
+    await noteSvmStaleBlockhash(ctx); // before the 402 is written, so it carries the hint
     console.warn(
       `[payments] facilitator settle REJECTED by ${via} on ${ctx?.requirements?.network} ` +
         `${ctx?.requirements?.scheme}: ${result.errorReason || result.errorMessage || "no reason given"}`
@@ -4157,6 +4176,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     noteSettleFacilitator(ctx, via);
     // A Solana settle refused before broadcast (no transaction named): the
     // next quote for this request avoids that facilitator (the split).
+    await noteSvmStaleBlockhash(ctx);
     if (isPreBroadcastSettleRejection(ctx?.error)) await noteSvmRequote(ctx);
     // A Circle Gateway batched payment never reaches the chain recovery, the
     // settle fallback, the outage read or our relayer: a GatewayWalletBatched

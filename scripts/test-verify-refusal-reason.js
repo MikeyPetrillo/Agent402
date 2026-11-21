@@ -236,5 +236,38 @@ const USDC_SOL = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   _testResetForTest();
 }
 
+// ---- a Solana payment whose recent blockhash is no longer valid ---------------------------
+// A Solana transaction lands only while its recent blockhash is valid (about
+// 60 to 90 seconds). A payment checked or settled after that is refused with
+// the cluster's own words; the 402 names the class, says nothing was charged
+// and says what a new attempt needs: a transaction built on a fresh blockhash.
+{
+  const { REJECTION_REASONS } = await import("../src/payment-reject.js");
+  const { noteSvmStaleBlockhash } = await import("../src/payments.js");
+  const { hintForCredential, credentialKeyOf } = await import("../src/verify-hint.js");
+  const WORDS = ["transaction_simulation_failed: BlockhashNotFound", "Transaction simulation failed: Blockhash not found", "settle_exact_svm_block_height_exceeded", "TransactionExpiredBlockheightExceededError: block height exceeded", "invalid_exact_svm_payload_transaction_simulation_failed", "blockhash_not_found"];
+  const hits = WORDS.map((reason) => hintFor({ reason, network: SOL, priceUsd: 0.01 }));
+  ok(hits.slice(0, 4).every((h) => h.reason === "blockhash-expired" && h.retry === "fresh-authorization") && hits[5].reason === "blockhash-expired", `the cluster's words for a stale blockhash are named blockhash-expired (${hits.map((h) => h.reason || "none").join(", ")})`);
+  ok(hits[4].reason !== "blockhash-expired", "a simulation failure that names no blockhash is not");
+  const h = hits[0];
+  ok(/fresh blockhash/.test(h.hint) && /Nothing was charged/.test(h.hint) && /Solana/.test(h.hint) && !/[\u2014\u2013]/.test(h.hint), `the hint says what a new attempt needs (${h.hint})`);
+  ok(hintFor({ reason: "note: BlockhashNotFound", detail: "BlockhashNotFound", network: "eip155:8453", priceUsd: 0.01 }).reason !== "blockhash-expired", "the same words on an EVM payment are not read as a blockhash");
+  ok(hintFor({ reason: "transaction_simulation_failed: InstructionError:[2 map[Custom:1]]", network: SOL, priceUsd: 0.01 }).reason === "insufficient-funds", "a funding refusal on Solana keeps its own class");
+  ok(REJECTION_REASONS.some((r) => r.reason === "blockhash-expired" && /blockhash/.test(r.means) && /Nothing was charged/.test(r.means)), "the class is in the published refusal table");
+  // A settle refused for the same cause (the handler ran past the blockhash's
+  // life): the settle hooks remember the hint under the payment's credential.
+  _testResetForTest();
+  const payload = { x402Version: 2, accepted: { network: SOL, scheme: "exact" }, payload: { transaction: Buffer.from("a signed transaction").toString("base64") } };
+  const noted = await noteSvmStaleBlockhash({ paymentPayload: payload, requirements: { network: SOL }, error: { errorReason: "transaction_failed", message: "Transaction simulation failed: Blockhash not found" } });
+  const kept = hintForCredential(credentialKeyOf(payload));
+  ok(noted === true && kept && kept.reasonClass === "blockhash-expired" && /fresh blockhash/.test(kept.hint), "a settle refused for a stale blockhash leaves the same hint for the buyer's 402");
+  _testResetForTest();
+  const evm = { x402Version: 2, accepted: { network: "eip155:8453", scheme: "exact" }, payload: { authorization: { from: "0x" + "1".repeat(40), nonce: "0x" + "2".repeat(64) }, signature: "0x" + "3".repeat(130) } };
+  ok(await noteSvmStaleBlockhash({ paymentPayload: evm, requirements: { network: "eip155:8453" }, error: { message: "Blockhash not found" } }) === false && !hintForCredential(credentialKeyOf(evm)), "an EVM settle failure is not read");
+  ok(await noteSvmStaleBlockhash({ paymentPayload: payload, requirements: { network: SOL }, result: { success: false, errorReason: "insufficient_funds" } }) === false && await noteSvmStaleBlockhash(null) === false, "another Solana refusal, or no context at all, notes nothing and never throws");
+  ok(await noteSvmStaleBlockhash({ paymentPayload: payload, requirements: { network: SOL }, result: { success: false, errorReason: "blockhash_not_found" } }) === true, "a graceful settle refusal (a failed receipt) is read too");
+  _testResetForTest();
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${pass} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

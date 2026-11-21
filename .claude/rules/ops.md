@@ -429,6 +429,11 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
 - **Robots:** `src/seo.js`; the private disallow list is repeated in every named-crawler group.
 - **X posting:** `announce.yml` / `scripts/tweet.js` (workflow dispatch only) and
   `src/tweet-queue.js`; both sign through `src/x-oauth.js`. Tweet copy is never committed.
+- **Stripe card canary:** no workflow. A Link refresh token is single use and a CI job cannot
+  write the rotated one back, so the supervised card buy runs from the operator's machine on the
+  Link CLI's local session: `scripts/link-canary-local.sh` (flags `--probe-only`, `--route`,
+  `--spend-request-id`; needs `STRIPE_PROFILE_ID` and `POW_SECRET`, refuses under CI) runs
+  `scripts/stripe-link-canary.mjs`, which hands the CLI no token (`scripts/test-stripe-link-canary.js`).
 - **Referral settlement book:** `src/referral-book.js` keeps the referral gate's unfinished
   settlements in the `referral-settlements` state document, stored as a head row (the small
   sections) and one `records` row per open entry, booked-payment mark and dropped record

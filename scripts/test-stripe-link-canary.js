@@ -14,7 +14,13 @@
 //   - an error the CLI marks as not retryable ends the wait at once;
 //   - a preset spend request goes straight to pay once it reads approved,
 //     with no create call;
-//   - a denied request fails and never pays.
+//   - a denied request fails and never pays;
+//   - the CLI runs on its own local session: no Link token is required, none
+//     is handed to the CLI even when the caller's environment holds one, and
+//     a machine with no signed-in session fails before any spend request;
+//   - the operator's wrapper (scripts/link-canary-local.sh) reads its flags,
+//     refuses an unknown one, under CI and without STRIPE_PROFILE_ID or
+//     POW_SECRET, and its probe-only run asks nothing of the wallet.
 //   node scripts/test-stripe-link-canary.js
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -24,6 +30,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const CANARY = fileURLToPath(new URL("./stripe-link-canary.mjs", import.meta.url));
+const WRAPPER = fileURLToPath(new URL("./link-canary-local.sh", import.meta.url));
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
@@ -55,7 +62,10 @@ const sc = JSON.parse(readFileSync(join(here, "scenario.json"), "utf8"));
 const args = process.argv.slice(2).filter((a) => a !== "-y" && !a.startsWith("@stripe/link-cli@"));
 const cmd = args.slice(0, 2).join(" ");
 appendFileSync(join(here, "calls.log"), cmd + "\\n");
+const leaked = Object.keys(process.env).filter((k) => /^LINK_(ACCESS|REFRESH)_TOKEN$|^POW_SECRET$/.test(k));
+if (leaked.length) appendFileSync(join(here, "calls.log"), "ENV " + leaked.join(",") + "\\n");
 const out = (o) => { process.stdout.write(o.stdout); process.exit(o.code || 0); };
+if (cmd === "auth status") out(sc.auth);
 if (cmd === "spend-request create") out(sc.create);
 if (cmd === "spend-request retrieve") {
   const n = readFileSync(join(here, "calls.log"), "utf8").split("\\n").filter((l) => l === "spend-request retrieve").length;
@@ -72,15 +82,20 @@ const sr = (status, extra = {}) => ({ id: SR, object: "spend_request", status, a
 const arr = (o) => JSON.stringify([o]);
 const PAID = { stdout: arr({ status: 200, headers: { "payment-receipt": "rcpt" }, body: JSON.stringify({ choices: [{ message: { content: "settled" } }] }) }), code: 0 };
 const CREATED = { stdout: arr(sr("pending_approval", { approval_url: "https://app.link.com/approve/x" })), code: 0 };
+const SIGNED_IN = { stdout: JSON.stringify({ authenticated: true, scope: "payment_methods.agentic" }), code: 0 };
 
-async function runCanary(scenario, env = {}) {
-  writeFileSync(join(dir, "scenario.json"), JSON.stringify({ target: TARGET, pay: PAID, create: CREATED, ...scenario }));
+async function runCanary(scenario, env = {}, { cmd = process.execPath, args = [CANARY] } = {}) {
+  writeFileSync(join(dir, "scenario.json"), JSON.stringify({ target: TARGET, pay: PAID, create: CREATED, auth: SIGNED_IN, ...scenario }));
   writeFileSync(join(dir, "calls.log"), "");
   const t0 = Date.now();
-  const child = spawn(process.execPath, [CANARY], {
-    env: { PATH: `${dir}:${process.env.PATH}`, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR || "/tmp", TARGET_URL: TARGET,
-      LINK_ACCESS_TOKEN: "stub-access", LINK_REFRESH_TOKEN: "stub-refresh", STRIPE_PROFILE_ID: "profile_stub", POW_SECRET: "stub-pow-secret",
-      STRIPE_CANARY_APPROVAL_WAIT_S: "30", STRIPE_CANARY_POLL_S: "0.05", STRIPE_CANARY_LEDGER_POLL_MS: "20", ...env },
+  // No Link token: the canary runs on the CLI's local session. A key set to
+  // undefined below is left out of the child's environment.
+  const childEnv = { PATH: `${dir}:${process.env.PATH}`, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR || "/tmp", TARGET_URL: TARGET,
+    STRIPE_PROFILE_ID: "profile_stub", POW_SECRET: "stub-pow-secret",
+    STRIPE_CANARY_APPROVAL_WAIT_S: "30", STRIPE_CANARY_POLL_S: "0.05", STRIPE_CANARY_LEDGER_POLL_MS: "20", ...env };
+  for (const k of Object.keys(childEnv)) if (childEnv[k] === undefined) delete childEnv[k];
+  const child = spawn(cmd, args, {
+    env: childEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
   let out = "";
@@ -90,6 +105,8 @@ async function runCanary(scenario, env = {}) {
   return { code, out, calls, ms: Date.now() - t0 };
 }
 const pays = (r) => r.calls.filter((c) => c === "mpp pay").length;
+const envLeaks = (r) => r.calls.filter((c) => c.startsWith("ENV "));
+const NO_CI = { CI: undefined, GITHUB_ACTIONS: undefined };
 
 try {
   // 1. The CLI's array answer: pending, then approved.
@@ -137,6 +154,40 @@ try {
   {
     const r = await runCanary({ retrieve: [{ stdout: arr(sr("denied")), code: 0 }] });
     ok(r.code !== 0 && pays(r) === 0 && /denied/.test(r.out), `a denied request fails with its status and never pays (exit ${r.code})`);
+  }
+  // 8. The local session: no token in the environment is needed, and one that
+  //    is there never reaches the CLI (nor does POW_SECRET).
+  {
+    const r = await runCanary({ retrieve: [{ stdout: arr(sr("approved")), code: 0 }] }, { LINK_ACCESS_TOKEN: "stub-access", LINK_REFRESH_TOKEN: "stub-refresh" });
+    ok(r.code === 0 && pays(r) === 1 && r.calls[0] === "auth status", `the canary reads the CLI's session first and pays with no token of its own (calls: ${r.calls.join(", ")})`);
+    ok(envLeaks(r).length === 0, `no Link token and no POW_SECRET reaches the CLI, even when the caller's environment holds them (${envLeaks(r).join("; ") || "none"})`);
+    ok(/LINK_ACCESS_TOKEN is set and ignored/.test(r.out), "a token in the environment is named as ignored");
+  }
+  // 9. No signed-in session: fails before any spend request, names the login.
+  {
+    const r = await runCanary({ auth: { stdout: JSON.stringify({ authenticated: false }), code: 0 }, retrieve: [{ stdout: arr(sr("approved")), code: 0 }] });
+    ok(r.code !== 0 && r.calls.join() === "auth status" && pays(r) === 0, `with no signed-in session nothing is created or paid (calls: ${r.calls.join(", ")})`);
+    ok(/auth login/.test(r.out), "the failure says to sign in with the Link CLI");
+  }
+  // 10. The operator's wrapper.
+  {
+    const wrap = (argv, env = {}, scenario = { retrieve: [{ stdout: arr(sr("approved")), code: 0 }] }) => runCanary(scenario, { ...NO_CI, ...env }, { cmd: "bash", args: [WRAPPER, ...argv] });
+    const preset = await wrap(["--spend-request-id", SR], { LINK_ACCESS_TOKEN: "stub-access" });
+    ok(preset.code === 0 && pays(preset) === 1 && !preset.calls.includes("spend-request create") && envLeaks(preset).length === 0, `the wrapper runs the canary on the local session, its preset spend request paid, no token passed on (exit ${preset.code}, calls: ${preset.calls.join(", ")})\n${preset.code ? preset.out : ""}`);
+    const probe = await wrap(["--probe-only"], { STRIPE_PROFILE_ID: undefined, POW_SECRET: undefined });
+    ok(probe.code === 0 && probe.calls.length === 0 && /probe-only run, nothing bought/.test(probe.out), `--probe-only needs no session or profile and asks nothing of the wallet (exit ${probe.code}, calls: ${probe.calls.join(", ")})`);
+    const route = await wrap(["--route", "@evil.example/x", "--probe-only"]);
+    ok(route.code !== 0 && /must be a bare path/.test(route.out), "--route is passed through, and a route that is not a bare path is refused");
+    const unknown = await wrap(["--bogus"]);
+    ok(unknown.code === 2 && unknown.calls.length === 0 && /unknown option/.test(unknown.out), "an unknown option exits 2 with the usage");
+    const noValue = await wrap(["--route"]);
+    ok(noValue.code === 2 && /needs a path/.test(noValue.out), "an option missing its value exits 2");
+    const noProfile = await wrap([], { STRIPE_PROFILE_ID: undefined });
+    ok(noProfile.code === 2 && noProfile.calls.length === 0 && /STRIPE_PROFILE_ID/.test(noProfile.out), "a buy without STRIPE_PROFILE_ID is refused before the CLI runs");
+    const noPow = await wrap([], { POW_SECRET: undefined });
+    ok(noPow.code === 2 && noPow.calls.length === 0 && /POW_SECRET/.test(noPow.out), "a buy without POW_SECRET (booked as outside demand) is refused before the CLI runs");
+    const ci = await wrap(["--probe-only"], { CI: "true" });
+    ok(ci.code === 2 && ci.calls.length === 0 && /refusing under CI/.test(ci.out), "the wrapper refuses to run under CI");
   }
 } finally {
   target.close();

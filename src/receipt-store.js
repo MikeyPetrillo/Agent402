@@ -108,7 +108,7 @@ function pgTable() {
 }
 
 const counters = { stored: 0, skipped: 0, failed: 0, dropped: 0 };
-/** Counts for the operator view (never a payer, never a receipt). */
+/** Counts for the operator view (never a payer, never a receipt). `skipped` counts every issued receipt the store does not keep (a rail no audit report reads, a payer that is not an EVM wallet), on the serving path too. */
 export function receiptStoreCounts() { return { backend: receiptStoreBackend, pending: pending.length, ...counters }; }
 
 const cap = (v) => (v == null || v === "" ? null : String(v).slice(0, TEXT_MAX));
@@ -209,7 +209,7 @@ export function storeIssuedReceipt(jws, record) {
  */
 export function keepReceiptOnFinalOk(jws, record, _req, res, keep = storeIssuedReceipt) {
   try {
-    if (!issuedReceiptRow(jws, record)) return;
+    if (!issuedReceiptRow(jws, record)) { counters.skipped++; return; }
     const bound = res.getMaxListeners?.();
     if (Number.isFinite(bound) && bound > 0) res.setMaxListeners(bound + 1);
     res.once("finish", () => { try { if (res.statusCode === 200) keep(jws, record); } catch { /* bookkeeping only */ } });

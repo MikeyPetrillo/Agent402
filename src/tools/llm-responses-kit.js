@@ -629,7 +629,7 @@ export const LLM_RESPONSES_TOOLS = Object.entries(RESPONSES_PATH_BY_TIER).map(([
   price: priceString(tierSlug),
   description: describe(tierSlug),
   tags: tierSlug === "v1-chat-metered" ? ["llm", "ai", "inference", "openai-compatible", "responses-api", "agents-sdk", "codex", "gateway", "metered", "pay-per-token"] : ["llm", "ai", "inference", "openai-compatible", "responses-api", "agents-sdk", "gateway"],
-  ...(tierSlug === "v1-chat-metered" ? { quote: (body) => meteredResponsesQuoteUsd(body).usd } : {}),
+  ...(tierSlug === "v1-chat-metered" ? { quote: (body) => meteredResponsesQuoteUsd(body).usd, fromInput: { input: "hi", max_output_tokens: 16 } } : {}),
   // Price by model on a flat route (see LLM_GATEWAY_TOOLS in the gateway kit).
   ...(isFlatTier(tierSlug) ? { tierQuote: (body) => flatTierQuoteUsd(tierSlug, body?.model) } : {}),
   discovery: {

@@ -15,8 +15,7 @@
 // Locks both halves: the unparseable-body path is now counted, and one request
 // still consumes exactly one token (the in-route checks must not double-count).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { getFreePort } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0;
 let proc = null;
@@ -24,12 +23,10 @@ const fail = (m) => { console.error("FAIL:", m); proc?.kill("SIGKILL"); process.
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const PORT = await getFreePort();
-const B = `http://127.0.0.1:${PORT}`;
-proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" },
-  stdio: "ignore",
-});
+// Port 0, read back from the listening line (scripts/lib/boot-server.js); its own stores.
+const srv = await bootServer({ stores: "checkout-limiter", env: { FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" } });
+proc = srv.child;
+const B = srv.url;
 
 const post = (path, body, raw = false) =>
   fetch(`${B}${path}`, {
@@ -39,7 +36,6 @@ const post = (path, body, raw = false) =>
   }).then((r) => r.status).catch(() => 0);
 
 try {
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
 
   // --- the path that used to bypass the limiter entirely ---
   const unparseable = [];
@@ -67,11 +63,17 @@ try {
   ok(!/if \(checkoutLimiter\.check\(clientIp\(req\)\)\.limited\) return res\.status\(429\)[\s\S]{0,40}\n\s*const product/.test(src),
     "no unguarded in-route check remains on a covered path");
 
-  // --- the list actually covers every Stripe-session endpoint ---
-  const paths = (src.match(/const CHECKOUT_RATE_PATHS = \[(.*?)\]/s) || [])[1] || "";
+  // --- the guard covers every Stripe-session endpoint, read from the server's answers ---
+  // This address has spent its allowance on /api/buy above. The allowance is
+  // one per address across the covered paths, so each of them now refuses an
+  // unparseable body with 429 before any parser reads it; a POST route the
+  // guard does not cover still gets its own answer.
   for (const p of ["/api/buy", "/api/subscribe", "/api/credits/checkout", "/api/mpp/monitors/subscribe"]) {
-    ok(paths.includes(`"${p}"`), `${p} is covered by the pre-parser rate check`);
+    const status = await post(p, "{not json", true);
+    ok(status === 429, `${p} is covered by the pre-parser rate check (${status})`);
   }
+  const uncovered = await post("/api/alerts", "{not json", true);
+  ok(uncovered !== 429 && uncovered >= 400 && uncovered < 500, `control: a POST route outside the guard is not refused by it (${uncovered})`);
 
   // --- a GET is not consumed by the POST-only guard ---
   const before = await fetch(`${B}/reports`).then((r) => r.status).catch(() => 0);

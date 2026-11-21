@@ -10,6 +10,9 @@
 // decide is the case that drifted: its list price is the default depth, and
 // the quick depth costs less. A quoted route with no cheapest body listed
 // below fails, so a new one is added here with its floor.
+// The keep-alive body: a quoted row's `fromInput`, when published, is quoted at
+// or under the list price by the live 402 (the Bazaar keep-alive pays with it
+// and never over list); a quoted route without one is named in NO_FROM_INPUT.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -18,6 +21,7 @@ import { join } from "node:path";
 import { bootServer } from "./lib/boot-server.js";
 import { DEPTHS, priceForDepth } from "../src/decide/config.js";
 import { fromPriceLabel, fromUsdOf } from "../src/quoted-from.js";
+import { exemptKind } from "./lib/keepalive-plan.js";
 
 let B = "";
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
@@ -123,6 +127,28 @@ try {
     if (FLOOR_NEEDS_A_DECISION.has(row.slug)) ok(quotes.length > 0 && least >= row.fromUsd && row.fromUsd === Number(row.price.slice(1)), `${row.slug}: no 402 quotes under the from price, which is its list price (${quotes.join(", ")} vs ${row.fromUsd})`);
     else ok(quotes.length > 0 && least === row.fromUsd, `${row.slug}: the 402's smallest quote is the from price (${quotes.join(", ")} vs ${row.fromUsd})`);
     ok(quotes.every((q) => q <= row.quoteRange.maxUsd + 1e-9), `${row.slug}: no quote passes the published ceiling`);
+  }
+
+  // fromInput: every published one is quoted inside the list price.
+  // tts: any text quotes over its floor (the floor is the empty text, which is
+  // refused); decide-execute reaches its floor only with a paid decision.
+  const NO_FROM_INPUT = new Set(["tts", "tts-hd", "decide-execute"]);
+  for (const row of quoted) {
+    const list = Number(String(row.price).replace(/[^0-9.]/g, ""));
+    if (NO_FROM_INPUT.has(row.slug)) { ok(row.fromInput === undefined && exemptKind(row) !== null, `${row.slug}: no fromInput, so no keep-alive pass buys it`); continue; }
+    ok(row.fromInput && typeof row.fromInput === "object", `${row.slug}: publishes a fromInput (add one, or name it in NO_FROM_INPUT)`);
+    if (!row.fromInput) continue;
+    const q = await quote402(row.path, row.fromInput);
+    ok(q.status === 402 && q.usd !== null && q.usd <= list + 1e-9, `${row.slug}: its fromInput is quoted at or under the list price (${q.usd} vs ${list})`);
+    ok(exemptKind(row) === null || exemptKind(row) === "lasting-effect", `${row.slug}: with a fromInput the keep-alive passes may buy it (${exemptKind(row)})`);
+  }
+  // The case that failed: each bundle's published example quotes over its list price.
+  for (const slug of ["weather-risk-brief", "filings-brief", "token-diligence"]) {
+    const row = quoted.find((e) => e.slug === slug);
+    const op = openapi.paths?.[row?.path]?.post;
+    const example = op?.requestBody?.content?.["application/json"]?.example;
+    const q = example ? await quote402(row.path, example) : { usd: null };
+    ok(row?.fromInput && q.usd > Number(row.price.slice(1)), `${slug}: the example quotes over list (${q.usd} vs ${row?.price}), so the keep-alive pays with its fromInput`);
   }
 
   // decide: the floor comes from the depth prices its quote function reads.

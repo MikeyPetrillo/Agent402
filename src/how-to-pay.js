@@ -13,6 +13,7 @@
 // MPP evm method, a Tempo charge, a card and credits all settle only after a
 // final 200; a Tempo push transfer is on chain before the call, so an answer
 // that never arrives is booked as owed.
+import { usdToBaseUnits } from "./base-units.js";
 import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { RAILS, railKey, x402EvmOnly, liveRails } from "./rails.js";
@@ -75,7 +76,7 @@ export function howToPayPage(baseUrl, catalog = null, { networks = null } = {}) 
 
   const probe = defOf(catalog, "hash");
   const probePrice = probe ? probe.price : null;
-  const probeAmount = probe ? String(Math.round(priceUsd(probe.price) * 1e6)) : "<amount>";
+  const probeAmount = probe ? String(usdToBaseUnits(priceUsd(probe.price), 6)) : "<amount>";
   const extract = defOf(catalog, "extract");
   const priceTag = (d, slug) => (d ? esc(d.price) : `the price on ${link("/api/pricing", "/api/pricing")} for ${code(slug)}`);
 

@@ -309,6 +309,8 @@ t node scripts/test-code-run-caps.js
 t node scripts/test-safe-regex.js
 # Sales ledger unit tests (named sales, internal/external classification, revenue math — offline)
 t node scripts/test-sales-ledger.js
+# One settlement, one sale: the writer does not write a second sale for a Solana signature, every counting reader reads a file with repeat rows as the file without them, the operator script's dry run changes nothing (offline)
+t node scripts/test-sale-repeats.js
 # Referral sales in the sales figures: once, outside, under the slug, at the gross (never the net, never named); the on-chain buyer behind the split contract; the operator reconciliation against a seeded book
 t node scripts/test-referral-counting.js
 # Weekly outside MPP agents: counts only, internal excluded, new vs returning over all history, operator-only route
@@ -386,7 +388,7 @@ t node scripts/test-supply-chain-guards.js
 t node scripts/test-wallet-e2e.js
 # MCP Registry find-latest-version helper (used by the publish job to auto-deprecate a superseded version — offline)
 t node scripts/test-mcp-find-latest-version.js
-# Stripe Link canary reads every CLI answer shape and says why it stops (offline)
+# Stripe Link canary (run by hand from the operator's machine on the Link CLI's local session, scripts/link-canary-local.sh): reads every CLI answer shape, says why it stops, never hands a token to the CLI, and the wrapper's flags and refusals (offline)
 t node scripts/test-stripe-link-canary.js
 # FFmpeg video-decode lockout (R-06: every ffmpeg and ffprobe call passes an audio-only -codec_whitelist before -i, so the MagicYUV video decoder never opens; offline)
 t node scripts/test-ffmpeg-novideo.js

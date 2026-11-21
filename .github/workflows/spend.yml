@@ -18,7 +18,7 @@ run-name: "Spend: ${{ inputs.job || 'listing-pass (weekly)' }}"
 # left blank. An input a job does not name is ignored by that job.
 #
 # The scheduled canaries and monitors (paid-canary, algorand-rail-canary,
-# facilitator-mainnet-canary, tempo-*, stripe-link-canary, heartbeat), deploy,
+# facilitator-mainnet-canary, tempo-*, heartbeat), deploy,
 # refunds and wallet funding keep their own workflows.
 on:
   # The weekly listing pass (keeps our routes listed where buyers discover

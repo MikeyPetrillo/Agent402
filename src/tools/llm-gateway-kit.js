@@ -5085,6 +5085,8 @@ export const LLM_GATEWAY_TOOLS = [
     price: `$${METER_MIN_SETTLE_USD}`,
     // payments.js: a `quote` makes the x402 price a per-request function of the body.
     quote: (body) => meteredQuoteUsd(body).usd,
+    // A one-token call, quoted at the list price; the keep-alive buys it.
+    fromInput: { messages: [{ role: "user", content: "hi" }], max_tokens: 1 },
     description:
       `OpenAI-compatible chat completions priced per request from the request itself. The 402 quotes the input, estimated from its tokens with headroom, plus your max_tokens, from $${METER_MIN_SETTLE_USD} up to a $${METERED_MAX_QUOTE_USD} per-call cap. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto and settle actual usage. Set max_tokens to what you need: it is what you pay for.${METERED_DEFAULT_NOTE ? ` ${METERED_DEFAULT_NOTE}` : ""}`,
     tags: [...["llm", "ai", "inference", "chat", "gateway", "openai-compatible"], "metered", "pay-per-token"],
