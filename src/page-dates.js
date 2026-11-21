@@ -48,6 +48,7 @@ export const PAGE_SOURCES = {
   "/leaderboard": ["src/ledger-leaderboard.js"],
   "/tollbooth": ["src/tollbooth-landing.js"],
   "/integrations": ["src/ledger-integrations.js"],
+  "/integrations/agentcore": ["src/agentcore-page.js"],
   "/pricing": ["src/ledger-pricing.js"],
   "/changelog": ["src/changelog.js"],
   "/quickstart": ["src/quickstart.js"],

@@ -41,3 +41,5 @@ t node scripts/test-mpp-flagship.js
 t node scripts/test-load-concurrency.js
 # Runtime switches: provider, then environment, then the declared default; booleans and declared names only (offline)
 t node scripts/test-feature-flags.js
+# /integrations/agentcore: copy follows the MPP offer gate and the Tempo switch; route, index, sitemaps, llms.txt and page date (offline, port 0)
+t node scripts/test-agentcore-page.js
