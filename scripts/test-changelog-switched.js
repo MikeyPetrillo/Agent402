@@ -137,6 +137,30 @@ const mdItemAt = (needle) => {
   delete process.env.NAMED_AUDIO_MODELS;
 }
 
+// Tempo fee sponsorship (TEMPO_GAS_SPONSORSHIP=on with the sponsor key,
+// src/tempo-charge-sponsor.js): every item that names the switch sits in one
+// entry that reads it, and neither surface shows that entry while it is off.
+{
+  const title = "Tempo network fees paid by the server";
+  const e = CHANGELOG_ENTRIES.find((x) => x.title === title);
+  ok(e && typeof e.shownWhen === "function", `the "${title}" entry carries a switch (shownWhen)`);
+  const naming = CHANGELOG_ENTRIES.filter((x) => x.items.some((i) => i.includes("TEMPO_GAS_SPONSOR")));
+  ok(naming.length === 1 && naming[0] === e && e.items.every((i) => i.includes("TEMPO_GAS_SPONSORSHIP=on")) && mdItemAt("TEMPO_GAS_SPONSORSHIP").includes("TEMPO_GAS_SPONSORSHIP=on"), "every item that names TEMPO_GAS_SPONSORSHIP sits in that entry and names the switch, on the page and in CHANGELOG.md");
+  const saved = { sw: process.env.TEMPO_GAS_SPONSORSHIP, key: process.env.TEMPO_SUBSCRIPTION_FEE_PAYER_KEY };
+  for (const v of [undefined, "", "off", "yes"]) {
+    if (v === undefined) delete process.env.TEMPO_GAS_SPONSORSHIP; else process.env.TEMPO_GAS_SPONSORSHIP = v;
+    ok(!render().includes(title), `TEMPO_GAS_SPONSORSHIP=${v === undefined ? "(unset)" : JSON.stringify(v)}: /changelog and /changelog.xml do not show the sponsorship entry`);
+  }
+  process.env.TEMPO_GAS_SPONSORSHIP = "on";
+  delete process.env.TEMPO_SUBSCRIPTION_FEE_PAYER_KEY;
+  ok(!render().includes(title), "TEMPO_GAS_SPONSORSHIP=on with no sponsor key: the entry is not shown");
+  for (const [k, v] of [["TEMPO_GAS_SPONSORSHIP", saved.sw], ["TEMPO_SUBSCRIPTION_FEE_PAYER_KEY", saved.key]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  // The spend floor for a paid day is a returning-wallet setting: its entry reads that switch.
+  const floor = CHANGELOG_ENTRIES.find((x) => x.items.some((i) => i.includes("RETURNING_WALLET_MIN_DAY_SPEND_USD")));
+  const { returningWalletEnabled } = await import("../src/returning-wallet.js");
+  ok(floor && floor.shownWhen === returningWalletEnabled && !render().includes(floor.title), "the paid-day spend floor entry reads RETURNING_WALLET_PRICE and is hidden while it is off");
+}
+
 // Control: an entry with no switch is always shown.
 ok(CHANGELOG_ENTRIES.some((e) => !e.shownWhen) && changelogPage("https://example.test").includes(CHANGELOG_ENTRIES.find((e) => !e.shownWhen).title.replace(/&/g, "&amp;").replace(/'/g, "&#39;").slice(0, 20)), "control: an entry without a switch renders");
 

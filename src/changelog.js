@@ -10,6 +10,7 @@ import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, TRANSCRIBE_LONG_RUN_
 import { speechAdditions } from "./tools/llm-gateway-kit.js";
 import { returningWalletEnabled, WALLET_HINT_HEADER, WALLET_PROOF_HEADER } from "./returning-wallet.js";
 import { BOARD_REFRESH_MS } from "./refresh-cadence.js";
+import { tempoGasSponsorConfig, chargeSponsorAccount } from "./tempo-charge-sponsor.js";
 import { lifetimeMs as priceWebhookLifetimeMs, maxPerRegistrant as priceWebhookMaxPerRegistrant } from "./price-webhooks.js";
 import { REVISIT_CAP_MS, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, revisitIntervalMs, probeShareLabel } from "./seller-load.js";
 
@@ -26,6 +27,10 @@ const mppOfferGateShown = () => mppMethodsSummary().enabled && mppOfferGateEnabl
 export const namedSpeechShown = () => process.env.OPENROUTER_TTS_ENABLED === "true" && speechAdditions().length > 0;
 export const namedTranscriptionShown = () => Object.keys(STT_TIERS).some((slug) => (slug !== "transcribe-long" || sttLongEnabled()) && sttAdditions(slug).length > 0);
 
+// The Tempo fee sponsorship entry: shown while this server offers Tempo and
+// sponsors its fee (src/tempo-charge-sponsor.js: the switch and the key).
+const tempoGasSponsorShown = () => mppMethodsSummary().enabled && tempoGasSponsorConfig().enabled && chargeSponsorAccount() !== null;
+
 // The price webhook figures an entry prints, as this server is set (src/price-webhooks.js).
 const WEBHOOK_LIFETIME_DAYS = Math.round(priceWebhookLifetimeMs() / 86_400_000);
 const WEBHOOK_PER_WALLET = priceWebhookMaxPerRegistrant();
@@ -34,6 +39,46 @@ const WEBHOOK_PER_WALLET = priceWebhookMaxPerRegistrant();
 // the feed show it only while that function reads true (CHANGELOG.md scopes
 // the same item to a server that sets the switch).
 const ENTRIES = [
+  {
+    date: "2026-11-22",
+    title: "Model calls paid before they run, settle deadlines and card captures",
+    items: [
+      "Payments: Some model calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.",
+      "Payments: On Base, Polygon, Arbitrum, Optimism, Avalanche, Celo, Monad and Sei, a USDC payment whose transfer is already on chain is served as soon as the chain shows it, without waiting for the facilitator's answer.",
+      "Payments: A settlement that does not confirm within its network's limit (60 seconds; 20 seconds on Celo) is answered as unconfirmed rather than held, and a transfer that lands afterwards is booked as owed and refunded.",
+      "Payments: Sending the same payment again for the same call after its transfer lands returns the call's answer, and any refund booked for it is canceled.",
+      "Payments: A card payment whose capture Stripe answers from an earlier request's record is reported as not confirmed and reviewed, never as uncharged.",
+      "Payments: Card captures that Stripe has not confirmed are read back automatically and closed once Stripe settles them.",
+      "Tools: When the access-key check, Office, image, HTML or PDF queues are full of one caller's work, a call from someone else still gets a place.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Price webhook notices, the seller manifest and a retirement",
+    items: [
+      "Tools: Price webhooks now announce a watched tool that is retired or no longer served, once, with `to: null` and a status, and a new registration is always accepted.",
+      "Tools: market (GET /api/market/tick) joins the routes that are retired and answer 410; market names crypto-price as the replacement.",
+      "Surfaces: /sell documents the manifest shape the index reads and the same-origin rule.",
+      "Surfaces: The index also reads a manifest's items array.",
+      "Surfaces: Every /tools page now carries a sitemap lastmod.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Tempo network fees paid by the server",
+    shownWhen: tempoGasSponsorShown,
+    items: [
+      "Payments: On a server that sets `TEMPO_GAS_SPONSORSHIP=on`, Tempo buyers can have their network fee paid by Agent402 on a challenge that offers it; past a limit the challenge is the ordinary one and the buyer pays its own fee.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "A spend floor for a returning wallet's paid day",
+    shownWhen: returningWalletEnabled,
+    items: [
+      "Pricing: On a server that sets `RETURNING_WALLET_PRICE=on`, a returning-wallet paid day counts only when the wallet spent at least the per-day floor (`RETURNING_WALLET_MIN_DAY_SPEND_USD`) that UTC day.",
+    ],
+  },
   {
     date: "2026-11-21",
     title: "A mid router tier, price webhooks and router benchmarks",

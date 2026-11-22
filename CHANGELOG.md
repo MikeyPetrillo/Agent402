@@ -4,6 +4,53 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## v2.12.0 - 2026-11-22
+
+### 2026-11-22 (model calls paid before they run, settle deadlines and card captures)
+Payments:
+- Some model calls are paid before they run; a failed one can be retried
+  free with the same payment, or is refunded.
+- On Base, Polygon, Arbitrum, Optimism, Avalanche, Celo, Monad and Sei, a
+  USDC payment whose transfer is already on chain is served as soon as the
+  chain shows it, without waiting for the facilitator's answer.
+- A settlement that does not confirm within its network's limit (60 seconds;
+  20 seconds on Celo) is answered as unconfirmed rather than held, and a
+  transfer that lands afterwards is booked as owed and refunded.
+- Sending the same payment again for the same call after its transfer lands
+  returns the call's answer, and any refund booked for it is canceled.
+- A card payment whose capture Stripe answers from an earlier request's
+  record is reported as not confirmed and reviewed, never as uncharged.
+- Card captures that Stripe has not confirmed are read back automatically
+  and closed once Stripe settles them.
+Tools:
+- When the access-key check, Office, image, HTML or PDF queues are full of
+  one caller's work, a call from someone else still gets a place.
+
+### 2026-11-22 (price webhook notices, the seller manifest and a retirement)
+Tools:
+- Price webhooks now announce a watched tool that is retired or no longer
+  served, once, with `to: null` and a status, and a new registration is
+  always accepted.
+- market (GET /api/market/tick) joins the routes that are retired and answer
+  410; market names crypto-price as the replacement.
+Surfaces:
+- /sell documents the manifest shape the index reads and the same-origin
+  rule.
+- The index also reads a manifest's items array.
+- Every /tools page now carries a sitemap lastmod.
+
+### 2026-11-22 (Tempo network fees paid by the server)
+Payments:
+- On a server that sets `TEMPO_GAS_SPONSORSHIP=on`, Tempo buyers can have
+  their network fee paid by Agent402 on a challenge that offers it; past a
+  limit the challenge is the ordinary one and the buyer pays its own fee.
+
+### 2026-11-22 (a spend floor for a returning wallet's paid day)
+Pricing:
+- On a server that sets `RETURNING_WALLET_PRICE=on`, a returning-wallet paid
+  day counts only when the wallet spent at least the per-day floor
+  (`RETURNING_WALLET_MIN_DAY_SPEND_USD`) that UTC day.
+
 ## v2.11.0 - 2026-11-21
 
 ### 2026-11-21 (a mid router tier, price webhooks and router benchmarks)
