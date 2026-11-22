@@ -3,6 +3,11 @@
 # Dispatch-only and DRY BY DEFAULT: a run with live=false (the default) prints
 # the plan — who is owed, what would be sent, what is held and why — and moves
 # no money. A live run requires explicitly setting live=true at dispatch.
+# This log is public, so the plan names rows (id, network, payer tag, route,
+# reason) and withholds amounts and totals. The reviewer reads the amounts
+# from the same dry run in an operator terminal (`node scripts/refund-run.js`
+# with AGENT402_OPERATOR_TOKEN; dry by default) or from
+# GET /__operator/refunds.json?status=owed, then picks rows with only_rows.
 #
 # The ledger lives on production (src/refund-ledger.js, written the moment a
 # settle receipt with success:true goes out on a non-200 response). This
@@ -73,6 +78,13 @@ concurrency:
 
 permissions:
   contents: read
+
+# The log, step summaries and artifacts of a run on this repository are
+# public: under PUBLIC_LOG the scripts print dollar figures as words and
+# leave aggregate money keys out of the files they write
+# (scripts/lib/public-log.js).
+env:
+  PUBLIC_LOG: "1"
 
 jobs:
   refund:

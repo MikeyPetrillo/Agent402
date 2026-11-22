@@ -42,25 +42,32 @@ const LIVE = JSON.stringify({ rates: [
   { network: "eip155:1329", scheme: "exact", transferMethod: "permit2", credits: "9.00" },
 ] });
 
-function runStep({ pricing, daily, fb = fallback }) {
+function runStep({ pricing, daily, fb = fallback, thresh = "800" }) {
   writeFileSync(join(dir, "pricing.json"), pricing);
   writeFileSync(join(dir, "daily.json"), daily);
   writeFileSync(join(dir, "curl"), `#!/bin/bash\nfor a in "$@"; do case "$a" in *payai.network/pricing*) cat "${dir}/pricing.json"; exit 0;; *revenue/daily*) cat "${dir}/daily.json"; exit 0;; esac; done\nexit 7\n`);
   writeFileSync(join(dir, "gh"), `#!/bin/bash\necho "gh $*" >> "${dir}/gh.log"\n`);
   chmodSync(join(dir, "curl"), 0o755); chmodSync(join(dir, "gh"), 0o755);
   const r = spawnSync("bash", ["-eo", "pipefail", "-c", run], {
-    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://prod.invalid", THRESH: "800", GH_TOKEN: "x", GITHUB_REPOSITORY: "o/r", PAYAI_FALLBACK_WEIGHTS: fb },
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://prod.invalid", THRESH: String(thresh), GH_TOKEN: "x", GITHUB_REPOSITORY: "o/r", PAYAI_FALLBACK_WEIGHTS: fb },
     encoding: "utf8",
   });
   return r;
 }
-const credits = (out) => Number((out.match(/weighted credits since \S+: ([\d.]+)/) || [])[1]);
+// The log is public, so the step prints where the count stands against the
+// warn mark, never the count. The count is read back by moving the mark: at
+// the count it reads "at or over", a hundredth above it reads "under".
+const creditsAre = (args, want) => {
+  const at = runStep({ ...args, thresh: want }), above = runStep({ ...args, thresh: Math.round((want + 0.01) * 100) / 100 });
+  return /weighted credits since \S+: at or over the warn mark/.test(at.stdout) && /weighted credits since \S+: under the warn mark/.test(above.stdout)
+    && !new RegExp(`\\b${String(want).replace(".", "\\.")}\\b`).test(at.stdout.replace(/^.*weights \(\w+\): read.*$/m, ""));
+};
 
 {
   const r = runStep({ pricing: LIVE, daily: DAYS });
   ok(r.status === 0, `live table: step exits 0 (${r.stderr})`);
   ok(/weights \(live\)/.test(r.stdout), "live table: the live weights are used");
-  ok(credits(r.stdout) === 30, `live table: 10 Sei x 1.00 + 100 Avalanche x 0.20 = 30 (got ${credits(r.stdout)})`);
+  ok(creditsAre({ pricing: LIVE, daily: DAYS }, 30), "live table: 10 Sei x 1.00 + 100 Avalanche x 0.20 = 30, and the log prints where it stands, not the count");
 }
 {
   const r = runStep({ pricing: "<html>down</html>", daily: DAYS });
@@ -68,7 +75,7 @@ const credits = (out) => Number((out.match(/weighted credits since \S+: ([\d.]+)
   ok(/weights \(fallback\)/.test(r.stdout) && /::warning::PayAI live pricing table unreadable/.test(r.stdout), "unreadable table: says it fell back to the repo variable, loudly");
   const w = JSON.parse(fallback);
   const want = Math.round((10 * w.sei + 100 * w.avalanche) * 100) / 100;
-  ok(credits(r.stdout) === want, `unreadable table: the fallback constant weighs the count (${want})`);
+  ok(creditsAre({ pricing: "<html>down</html>", daily: DAYS }, want), `unreadable table: the fallback constant weighs the count (${want})`);
 }
 {
   const r = runStep({ pricing: JSON.stringify({ rates: [{ network: "eip155:43114", scheme: "exact", credits: "0.2" }] }), daily: DAYS });

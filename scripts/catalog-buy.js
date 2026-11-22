@@ -97,6 +97,9 @@ import { captureRecord, CAPTURE_MAX_BYTES } from "./catalog-buy-capture.js";
 import { slowPreferOf, paidCallHonoringSlowRoutes, redactJobLinks } from "./lib/slow-route-buy.js";
 import { DEFAULT_ASYNC_TIMEOUT_MS } from "../client/async-job.js";
 import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { installPublicLog, forPublicFile, forPublicText } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 export const BASE_CAIP2 = "eip155:8453";
 export const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -651,7 +654,7 @@ async function main() {
   if (summary.plan.skipped.length) console.log(`skipped by CATALOG_BUY_SKIP: ${summary.plan.skipped.map((r) => r.slug).join(", ")}`);
 
   if (out) {
-    writeFileSync(out, JSON.stringify({ target, tier: summary.plan.tier, sliceIndex: summary.plan.sliceIndex, dry, startedAt: new Date().toISOString(), plannedUsd: summary.plan.plannedUsd, chargedUsd: summary.spentUsd, funded: summary.balanceUsd == null ? null : !summary.unfunded, unfunded: summary.unfunded, results: summary.results }, null, 2));
+    writeFileSync(out, JSON.stringify(forPublicFile({ target, tier: summary.plan.tier, sliceIndex: summary.plan.sliceIndex, dry, startedAt: new Date().toISOString(), plannedUsd: summary.plan.plannedUsd, chargedUsd: summary.spentUsd, funded: summary.balanceUsd == null ? null : !summary.unfunded, unfunded: summary.unfunded, results: summary.results }), null, 2));
     console.log(`wrote ${out}`);
   }
   if (outputsOut) {
@@ -677,7 +680,7 @@ async function main() {
     writeFileSync(outputsOut, JSON.stringify({ version: 1, target, tier: summary.plan.tier, capturedAt: new Date().toISOString(), maxBytesPerTool: CAPTURE_MAX_BYTES, captures: summary.captures }, null, 2));
     console.log(`wrote ${outputsOut} (${summary.captures.length} graded, ${kept} answers kept)`);
   }
-  if (process.env.GITHUB_STEP_SUMMARY) { try { appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdownSummary(summary)}\n`); } catch { /* local run */ } }
+  if (process.env.GITHUB_STEP_SUMMARY) { try { appendFileSync(process.env.GITHUB_STEP_SUMMARY, forPublicText(`${markdownSummary(summary)}\n`)); } catch { /* local run */ } }
   if (process.env.GITHUB_OUTPUT) {
     const result = resultWordFor(summary);
     const named = failed.slice(0, 60).map((r) => `${r.slug} (${r.grade})`).join(", ") + (failed.length > 60 ? `, and ${failed.length - 60} more` : "");

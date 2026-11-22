@@ -81,11 +81,12 @@ jobs:
             if [[ "$CUTOFF" < "$FLOOR" ]]; then CUTOFF="$FLOOR"; fi
           fi
           echo "window starts $CUTOFF"
-          # Charged failures in the window, summarized as "slug(httpStatus)xN".
+          # Charged failures in the window, summarized as "slug(httpStatus)"
+          # (no per-route count: this log is public).
           SUMMARY="$(echo "$RESP" | jq -r --arg cut "$CUTOFF" '
             [.chargedFailures[] | select(.at > $cut and .status != 402)]
             | group_by(.slug + ":" + (.status|tostring))
-            | map("\(.[0].slug)(\(.[0].status))x\(length)")
+            | map("\(.[0].slug)(\(.[0].status))")
             | join(", ")')"
           if [ -z "$SUMMARY" ]; then
             echo "no charged failures since $CUTOFF"

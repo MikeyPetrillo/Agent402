@@ -47,6 +47,9 @@
 import { readFileSync, existsSync, writeFileSync, renameSync } from "node:fs";
 import { createHmac } from "node:crypto";
 import { assertOwnPaidTarget, guardCappedSigning } from "./lib/buyer-guard.js";
+import { installPublicLog, forPublicFile } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, ""), "mint-bazaar-rows");
 const LIVE = process.argv.includes("--live");
@@ -222,7 +225,7 @@ async function main() {
   const records = [];
   const writeRecords = () => {
     if (!OUT) return;
-    writeFileSync(`${OUT}.tmp`, JSON.stringify({ target: TARGET, registry: "bazaar", chain: "base", startedAt, measuredAt: new Date().toISOString(), records }, null, 2));
+    writeFileSync(`${OUT}.tmp`, JSON.stringify(forPublicFile({ target: TARGET, registry: "bazaar", chain: "base", startedAt, measuredAt: new Date().toISOString(), records }), null, 2));
     renameSync(`${OUT}.tmp`, OUT);
   };
 

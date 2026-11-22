@@ -16,6 +16,9 @@ import { createWalletClient, createPublicClient, http, encodeFunctionData, isAdd
 import { privateKeyToAccount } from "viem/accounts";
 import { tempo } from "viem/tempo/chains";
 import { prepareTransactionRequest, signTransaction, sendRawTransaction, waitForTransactionReceipt } from "viem/actions";
+import { installPublicLog, figure } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) money figures print as words.
+installPublicLog();
 
 const RPC = process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz";
 // Tempo ships two TIP-20 stablecoins and they are NOT interchangeable here.
@@ -59,7 +62,7 @@ const ERC20 = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "a", type: "address" }], outputs: [{ type: "uint256" }] },
 ];
 const bal = (a) => pub.readContract({ address: TOKEN, abi: ERC20, functionName: "balanceOf", args: [a] });
-const usd = (u) => (Number(u) / 1e6).toFixed(6);
+const usd = (u) => figure((Number(u) / 1e6).toFixed(6));
 
 const units = BigInt(Math.round(amountUsd * 1e6));
 const before = await bal(account.address);

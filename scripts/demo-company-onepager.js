@@ -16,6 +16,9 @@
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { Agent402 } from "../client/index.js";
 import { assertOwnPaidTarget, guardCappedSigning, capFromEnv } from "./lib/buyer-guard.js";
+import { installPublicLog } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const TARGET = process.env.TARGET_URL || "https://agent402.tools";
 // With AGENT_KEY the demo pays only our own service, and each signature is

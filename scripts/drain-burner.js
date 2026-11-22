@@ -28,6 +28,9 @@ import { readFileSync } from "node:fs";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { assertOwnPaidTarget, capFromEnv, guardCappedSigning } from "./lib/buyer-guard.js";
+import { installPublicLog } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "drain-burner");
 const KEY_FILE = process.env.KEY_FILE || "/tmp/agent-key";

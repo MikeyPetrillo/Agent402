@@ -10,6 +10,9 @@ import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { assertOwnPaidTarget, guardCappedSigning, capFromEnv } from "./lib/buyer-guard.js";
+import { installPublicLog } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const TARGET = assertOwnPaidTarget(process.env.TARGET_URL || "https://agent402.tools", "agent-e2e");
 // Per-accept ceiling on what one signature may pay (AGENT_E2E_MAX_USD): above

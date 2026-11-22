@@ -32,6 +32,9 @@ const EXPECT_TEXT = process.env.EXPECT_TEXT || "results";
 import { assertOwnPaidTarget, capFromEnv, guardCappedSigning } from "./lib/buyer-guard.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { createHmac } from "node:crypto";
+import { installPublicLog, figure } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) money figures print as words.
+installPublicLog();
 const raw = (process.env.SOLANA_BURNER_KEY || "").trim();
 if (!raw) { console.error("need SOLANA_BURNER_KEY"); process.exit(2); }
 
@@ -53,7 +56,7 @@ const bytes = raw.startsWith("[") ? Uint8Array.from(JSON.parse(raw)) : new Uint8
 const signer = await kit.createKeyPairSignerFromBytes(bytes);
 console.log(`buyer (burner): ${signer.address}`);
 const before = await usdcOf(SPENDER);
-console.log(`spending wallet ${SPENDER} USDC before: ${before}`);
+console.log(`spending wallet ${SPENDER} USDC before: ${before == null ? "unreadable" : "read"}`);
 
 // The canary's Request-based wrapper, verbatim in shape: the payment wrapper
 // hands headers as a Headers INSTANCE, and spreading one as {...headers}
@@ -108,8 +111,8 @@ if (r.settleTx) {
     if (tx && !tx.meta?.err) {
       const at = (list, owner) => Number((list || []).find((b) => b?.mint === USDC_MINT && b?.owner === owner)?.uiTokenAmount?.amount || 0) / 1e6;
       const debit = at(tx.meta?.preTokenBalances, SPENDER) - at(tx.meta?.postTokenBalances, SPENDER);
-      if (debit >= owed - 1e-6 && debit > 0) proof = `tx ${r.settleTx} debits the spending wallet ${debit.toFixed(6)} USDC at slot ${tx.slot}`;
-      else { console.error(`settle tx found but the spending wallet's USDC delta is ${debit.toFixed(6)} (owed ${owed})`); break; }
+      if (debit >= owed - 1e-6 && debit > 0) proof = `tx ${r.settleTx} debits the spending wallet at least what was owed, at slot ${tx.slot}`;
+      else { console.error("settle tx found but the spending wallet's USDC fell by less than was owed"); break; }
     } else if (tx?.meta?.err) { console.error("settle tx FAILED on chain:", JSON.stringify(tx.meta.err)); break; }
     else await new Promise((res) => setTimeout(res, 3000));
   }
@@ -117,10 +120,11 @@ if (r.settleTx) {
 for (let i = 0; i < 15 && !proof; i++) {
   await new Promise((res) => setTimeout(res, 3000));
   after = await usdcOf(SPENDER);
-  if (before != null && after != null && before - after >= owed - 1e-6 && before - after > 0) proof = `balance fell ${(before - after).toFixed(6)} USDC`;
+  if (before != null && after != null && before - after >= owed - 1e-6 && before - after > 0) proof = "the spending wallet's USDC fell by at least what was owed";
 }
 if (after == null) after = await usdcOf(SPENDER);
-console.log(`spending wallet USDC after: ${after} (delta ${before != null && after != null ? (after - before).toFixed(6) : "?"}); proof: ${proof || "none"}; receipt:`, JSON.stringify(r).slice(0, 400));
+// The wallet's balance and its change are not printed: this log is public.
+console.log(`spending wallet USDC after: ${after == null ? "unreadable" : "read"}; proof: ${proof || "none"}; receipt:`, JSON.stringify(r).slice(0, 400));
 const ok = paid.status === 200 && r.external === true && String(r.settleNetwork || "") === "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
   && out.result && payloadOk && Boolean(proof);
 if (ok) console.log(`PROVEN: Solana buyer -> route-execute -> external Solana seller ${r.seller} paid from the spending wallet (seller $${r.underlyingPriceUsd}${r.settleTx ? `, tx https://solscan.io/tx/${r.settleTx}` : ""}); payload delivered (${resultText.length} chars)`);

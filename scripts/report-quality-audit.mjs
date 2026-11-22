@@ -34,6 +34,9 @@
 import { writeFileSync } from "node:fs";
 import { RESEARCH_TIERS } from "../src/tools/research-deep-kit.js";
 import { REPORT_TIERS } from "../src/report-tiers.js";
+import { installPublicLog, forPublicFile } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const TARGET = (process.env.TARGET_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
 const args = process.argv.slice(2);
@@ -143,7 +146,7 @@ for (const s of subjects) {
 const thin = results.filter((r) => r.verdict === "thin");
 const broken = results.filter((r) => r.verdict === "unreachable" || r.verdict === "rejected");
 console.log(`\n=== ${results.length} graded · ${results.filter((r) => r.verdict === "ok").length} ok · ${thin.length} thin · ${results.filter((r) => r.verdict === "refused").length} refused · ${broken.length} broken ===`);
-if (OUT) { writeFileSync(OUT, JSON.stringify({ at: new Date().toISOString(), target: TARGET, results }, null, 2)); console.log(`wrote ${OUT}`); }
+if (OUT) { writeFileSync(OUT, JSON.stringify(forPublicFile({ at: new Date().toISOString(), target: TARGET, results }), null, 2)); console.log(`wrote ${OUT}`); }
 // A THIN report is the thing this exists to catch, so it fails the run. A
 // REFUSED one is the pipeline behaving correctly and does not.
 process.exit(thin.length || broken.length ? 1 : 0);

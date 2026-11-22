@@ -251,6 +251,8 @@ t node scripts/test-child-json.js
 t node scripts/test-no-em-dash-shipped.js
 # A public issue body carries reasons and ids, never a dollar figure (workflow bodies + the quoted runner log lines - offline)
 t node scripts/test-public-issue-figures.js
+# No scheduled job prints a sales or payer count, a balance, a spend figure or a strategy sentence in its public log or issue (offline)
+t node scripts/test-public-log-figures.js
 # Dev-branch sync moves the branch only when merging it would change nothing on main (throwaway git repos - offline)
 t node scripts/test-sync-dev-branch.js
 # Free tier is an allowlist: a tool on no list is wallet-only by default (offline)

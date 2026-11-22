@@ -115,6 +115,6 @@ const secs = ((Date.now() - t0) / 1000).toFixed(0);
 const rate = ok / COUNT;
 console.log(`\ntempo-volume: ${ok}/${COUNT} settled at list price in ${secs}s (${fail} failed${lastErr ? `, last: ${lastErr}` : ""})${refs.length ? `\n  sample txs: ${refs.map((r) => `https://explore.tempo.xyz/tx/${r}`).join(" ")}` : ""}`);
 const after = await erc20(USDCE);
-if (after !== null && usdce !== null) console.log(`  USDC.e spent this run ~$${(usdce - after).toFixed(3)}; burner now ${bucket(after)}`);
+if (after !== null) console.log(`  burner now ${bucket(after)}`);
 if (rate < MIN_SUCCESS) { console.error(`TEMPO VOLUME UNDER ${Math.round(MIN_SUCCESS * 100)}% (${ok}/${COUNT})`); process.exit(1); }
 process.exit(0);

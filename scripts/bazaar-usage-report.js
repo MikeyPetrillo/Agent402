@@ -1,91 +1,47 @@
 #!/usr/bin/env node
-// Which Bazaar listings produced an OUTSIDE buyer, and which are pure cost.
+// Monthly read of the Bazaar discovery listing for this host's routes.
 //
-// The keep-alive buys advertisement, not demand. CDP publishes per-resource
-// quality {l30DaysTotalCalls, l30DaysUniquePayers, lastCalledAt}, and the only
-// field that separates a customer from ourselves is the payer COUNT: our burner
-// settles every swept route, so it is one payer and it also refreshes
-// lastCalledAt. Measured 2026-08-31: 442 of 452 listings were "called in the
-// last 7 days" while 371 had exactly one payer. Call counts flatter; payers do
-// not.
+// The run log is public, so this prints a bare status only: the listing was
+// read, or it could not be read (exit 1, which the workflow files under its
+// neutral issue text). No figure from the listing is printed.
 //
-// Emits markdown on stdout. Read-only, keyless, spends nothing.
+// Read-only, keyless, spends nothing.
+import { pathToFileURL } from "node:url";
+
 const HOST = process.env.HOST || "agent402.tools";
 const API = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
 
-async function listings() {
+/** Walks the listing by limit/offset; returns this host's rows. Throws when a page cannot be read. */
+export async function listings({ fetchImpl = fetch, host = HOST } = {}) {
   const out = [];
   let offset = 0;
   for (let p = 0; p < 30; p++) {
-    const r = await fetch(`${API}?limit=1000&offset=${offset}`).catch(() => null);
-    if (!r || !r.ok) throw new Error(`discovery HTTP ${r ? r.status : "unreachable"}`);
+    const r = await fetchImpl(`${API}?limit=1000&offset=${offset}`).catch(() => null);
+    if (!r || !r.ok) throw new Error("listing unreadable");
     const d = await r.json();
     const items = d.items || d.resources || [];
     if (!items.length) break;
-    out.push(...items.filter((i) => String(i.resource || "").includes(HOST)));
+    out.push(...items.filter((i) => {
+      try { return new URL(String(i.resource || "")).hostname === host; } catch { return false; }
+    }));
     if (items.length < 1000) break;
     offset += items.length;
   }
   return out;
 }
 
-const path = (i) => { try { return new URL(i.resource).pathname; } catch { return i.resource; } };
-const payers = (i) => i.quality?.l30DaysUniquePayers || 0;
-const calls = (i) => i.quality?.l30DaysTotalCalls || 0;
-const ageDays = (i) => {
-  const t = Date.parse(i.quality?.lastCalledAt || "");
-  return Number.isFinite(t) ? (Date.now() - t) / 86400000 : Infinity;
-};
-
-const group = (rows, label) => {
-  const outside = rows.filter((i) => payers(i) >= 2);
-  const oursOnly = rows.filter((i) => payers(i) === 1);
-  const dead = rows.filter((i) => payers(i) === 0);
-  const lines = [`### ${label}`, "", `- listed: **${rows.length}**`,
-    `- with an OUTSIDE buyer (>=2 payers): **${outside.length}**`,
-    `- only our burner (1 payer): ${oursOnly.length}`,
-    `- no payer at all: ${dead.length}`];
-  if (outside.length) {
-    lines.push("", "| route | payers | calls |", "|---|---|---|");
-    for (const i of outside.sort((a, b) => payers(b) - payers(a)).slice(0, 15)) {
-      lines.push(`| \`${path(i)}\` | ${payers(i)} | ${calls(i)} |`);
-    }
+/** The one line this check prints, and its exit code. */
+export async function run({ fetchImpl = fetch, log = console.log } = {}) {
+  try {
+    await listings({ fetchImpl });
+  } catch {
+    log("listing usage report: could not read the listing");
+    return 1;
   }
-  return lines.join("\n");
-};
+  log("listing usage report: ran");
+  return 0;
+}
 
-(async () => {
-  const all = await listings();
-  const packs = all.filter((i) => /\/skill\//.test(path(i)));
-  const rest = all.filter((i) => !/\/skill\//.test(path(i)));
-  const atRisk = all.filter((i) => ageDays(i) >= 25);
-
-  const packOutside = packs.filter((i) => payers(i) >= 2).length;
-  const verdict = packs.length === 0
-    ? "The packs are NOT listed - either the sweep never ran or they have been culled. Re-sweep before drawing any conclusion from this report."
-    : packOutside > 0
-      ? `**${packOutside} pack(s) found an outside buyer.** The listing is doing something; keeping the packs swept is worth its ~$4-9 a pass.`
-      : "**No pack has an outside buyer.** The listing is pure cost so far - the honest options are to stop sweeping them and let them be culled, or give it one more cycle before deciding.";
-
-  console.log(`# Bazaar usage report
-
-Listings for ${HOST}: **${all.length}**. A listing is advertisement, so the
-question is not how many calls it saw but whether anyone besides us paid for it.
-Our own burner settles every swept route, which makes it one unique payer and
-also refreshes lastCalledAt - so **>=2 payers** is the only honest signal here.
-
-## Skill packs (the open decision)
-
-${verdict}
-
-${group(packs, "Packs")}
-
-${group(rest, "Everything else")}
-
-## About to be culled
-
-${atRisk.length ? `${atRisk.length} listing(s) have gone 25+ days without any settlement and are inside the 30-day cull window:\n\n${atRisk.slice(0, 20).map((i) => `- \`${path(i)}\` (${ageDays(i).toFixed(0)}d)`).join("\n")}` : "Nothing is inside the 30-day cull window."}
-
----
-Generated by \`scripts/bazaar-usage-report.js\`. Read-only; spends nothing.`);
-})().catch((e) => { console.error(`usage report failed: ${e.message}`); process.exit(1); });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  run().then((code) => process.exit(code), () => { console.log("listing usage report: could not read the listing"); process.exit(1); });
+}

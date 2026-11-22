@@ -27,6 +27,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { privateKeyToAccount } from "viem/accounts";
 import { readOutputContract, verdictFor, acceptFilterFor, VERDICTS } from "./seller-verify-core.mjs";
+import { installPublicLog, forPublicFile } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
 const LIVE = String(process.env.SWEEP_LIVE || "").toLowerCase() === "true";
@@ -138,9 +141,9 @@ let spent = 0;
 const persist = () => {
   const tally = {};
   for (const r of rows) tally[r.verdict] = (tally[r.verdict] || 0) + 1;
-  writeFileSync(OUT, JSON.stringify({ at: new Date().toISOString(), live: LIVE, offset: OFFSET,
+  writeFileSync(OUT, JSON.stringify(forPublicFile({ at: new Date().toISOString(), live: LIVE, offset: OFFSET,
     capUsd: MAX_USD, totalCapUsd: TOTAL_USD, spentUsd: Number(spent.toFixed(6)),
-    swept: rows.length, complete: rows.length >= candidates.length, verdicts: VERDICTS, tally, rows }, null, 2));
+    swept: rows.length, complete: rows.length >= candidates.length, verdicts: VERDICTS, tally, rows }), null, 2));
 };
 for (const c of candidates) {
   const url = c.origin.replace(/\/+$/, "") + c.route;
