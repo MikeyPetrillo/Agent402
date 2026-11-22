@@ -39,6 +39,10 @@ try {
     const top = j.results?.[0];
     const floor = Number.isFinite(j.weakScore) ? j.weakScore : FIND_WEAK_SCORE;
     ok(r.status === 200 && tops.includes(top?.slug), `"${c.q}" ranks ${tops.join(" or ")} first (got ${(j.results || []).map((x) => x.slug).join(",") || "none"})`);
+    if (c.lead) {
+      const second = j.results?.[1]?.score ?? 0;
+      ok((top?.score ?? 0) >= c.lead * second, `"${c.q}" leads the runner-up by ${c.lead} times at least (${Math.round(top?.score ?? 0)} vs ${Math.round(second)})`);
+    }
     // A multi-step task answered by a plan sketch is not recorded as a miss
     // (computeFind returns the sketch first), the same reading here.
     const miss = !j.plan && (!j.count || (top?.score ?? 0) < floor || j.rarestTermCovered === false);

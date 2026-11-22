@@ -62,10 +62,21 @@ export function applySynonyms(terms) {
 // does not do the job, however strongly the rest of the query names it: "sum
 // the totals of a csv" reaches csv-to-json on "csv" and "parse", and csv-to-json
 // sums nothing (the demand board's real gaps, 2026-11-22). /api/find keeps
-// such a query a miss, so the need is still recorded. Words only; each one is
-// an operation in every phrasing that uses it.
-export const FIND_OPERATION_WORDS = Object.freeze(new Set([
-  "sum", "sums", "total", "totals", "aggregate", "distinct",
-  "signature", "signatures", "position", "validity", "adjusted",
-  "headers", "clean",
-]));
+// such a query a miss, so the need is still recorded. Each word lists the
+// words a tool that does the operation writes instead ("clean html" is what
+// html-strip does, "total word count" what count does, "the sun's position"
+// what sun-times gives as elevation and azimuth): the word vetoes only when
+// the top hit mentions none of them.
+export const FIND_OPERATION_SAME = Object.freeze(new Map([
+  ["sum", ["sums"]], ["sums", ["sum"]],
+  ["total", ["totals", "sum", "count", "calc", "calculate"]], ["totals", ["total", "sum", "count", "calc", "calculate"]],
+  ["aggregate", ["aggregation"]],
+  ["distinct", ["unique"]],
+  ["signature", ["signatures"]], ["signatures", ["signature"]],
+  ["position", ["elevation", "azimuth", "coordinates", "location"]],
+  ["validity", ["valid", "validate", "validation"]],
+  ["adjusted", ["adjustment"]],
+  ["headers", ["header"]],
+  ["clean", ["strip", "sanitize", "scrub"]],
+].map(([w, same]) => [w, Object.freeze(same)])));
+export const FIND_OPERATION_WORDS = Object.freeze(new Set(FIND_OPERATION_SAME.keys()));

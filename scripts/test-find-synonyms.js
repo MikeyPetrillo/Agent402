@@ -78,6 +78,20 @@ ok(Object.isFrozen(FIND_OPERATION_WORDS) && FIND_OPERATION_WORDS.has("sum"), "th
   const served = findTools(O, "parse csv and sum a column", {});
   ok(served.results[0]?.slug === "csv-sum" && served.rarestTermCovered !== false, `a hit that names the operation is served (top ${served.results[0]?.slug}, covered ${served.rarestTermCovered})`);
 }
+// An operation word is covered by the word a tool doing it writes instead:
+// "clean html" is what an HTML stripper does, and it is served.
+{
+  const H = {
+    "POST /api/html-strip": { name: "HTML strip to text", slug: "html-strip", category: "text", price: "$0.001", description: "Strip all HTML tags and return plain text.", tags: ["html", "strip", "text"], discovery: { example: {} } },
+    "POST /api/json-clean": { name: "JSON clean", slug: "json-clean", category: "data", price: "$0.001", description: "Clean a JSON document.", tags: ["json", "clean"], discovery: { example: {} } },
+    "POST /api/csv-clean": { name: "CSV clean", slug: "csv-clean", category: "data", price: "$0.001", description: "Clean a CSV file.", tags: ["csv", "clean"], discovery: { example: {} } },
+  };
+  const r = findTools(H, "clean html tags to text", {});
+  ok(r.results[0]?.slug === "html-strip" && r.rarestTermCovered !== false, `"clean html tags to text" is served by a stripper (covered ${r.rarestTermCovered})`);
+  const log = { "POST /api/dedupe-lines": { name: "Dedupe lines", slug: "dedupe-lines", category: "text", price: "$0.001", description: "Remove duplicate lines.", tags: ["dedupe", "lines", "text"], discovery: { example: {} } } };
+  const g = findTools(log, "clean up a log file and drop junk lines", {});
+  ok(g.rarestTermCovered === false, `"clean up a log file" stays a miss on a tool that only removes duplicates (covered ${g.rarestTermCovered})`);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

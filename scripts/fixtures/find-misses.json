@@ -1,5 +1,5 @@
 {
-  "_readme": "Find-miss shapes from the demand board, in neutral rewordings (never the recorded text), each with the slug (or any of the slugs) that must rank first; every row must also read as served. Add a row whenever a find-miss names a capability we sell. Run by scripts/test-find-misses-corpus.js. `gaps` are real capability gaps phrased the same way: a nearby tool may rank first, but none of them does the operation, so each must stay a miss (the need is recorded).",
+  "_readme": "Find-miss shapes from the demand board, in neutral rewordings (never the recorded text), each with the slug (or any of the slugs) that must rank first; every row must also read as served. Add a row whenever a find-miss names a capability we sell. Run by scripts/test-find-misses-corpus.js. `gaps` are real capability gaps phrased the same way: a nearby tool may rank first, but none of them does the operation, so each must stay a miss (the need is recorded). An optional `lead` is the least ratio of the first row's score to the second's: a tool that must win clearly, not by a hair.",
   "cases": [
     {
       "q": "scheduling across regions with time zone timing",
@@ -273,6 +273,31 @@
     {
       "q": "parse csv columns and extract the data",
       "top": "csv-to-json"
+    },
+    {
+      "q": "clean html to text",
+      "top": "html-strip"
+    },
+    {
+      "q": "total word count of text",
+      "top": "count"
+    },
+    {
+      "q": "calculate the total of an invoice",
+      "top": "calc"
+    },
+    {
+      "q": "position of the sun",
+      "top": "sun-times"
+    },
+    {
+      "q": "what is my ip",
+      "top": "ip-info"
+    },
+    {
+      "q": "what is the price of ethereum",
+      "top": "crypto-price",
+      "lead": 1.2
     }
   ],
   "gaps": [

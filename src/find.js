@@ -7,7 +7,7 @@
 import { partialFields, clampFields } from "./partial-answer.js";
 import { toolList } from "./pages.js";
 import { queryTerms, singularCandidates, versionTerms } from "./query-terms.js";
-import { applySynonyms, FIND_OPERATION_WORDS } from "./find-synonyms.js";
+import { applySynonyms, FIND_OPERATION_WORDS, FIND_OPERATION_SAME } from "./find-synonyms.js";
 import { withoutAttributions } from "./data-attribution.js";
 import { rankSkillPacks } from "./skills.js";
 import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
@@ -139,14 +139,53 @@ const DELEGATION_VERBS = new Set(["buy", "purchase", "pay", "order", "hire", "re
 const THIRD_PARTY_MARKERS = new Set(["external", "another", "other", "others", "someone", "somebody", "seller", "sellers", "vendor", "third", "party", "third-party", "behalf", "elsewhere", "ecosystem", "marketplace"]);
 
 /**
+ * The front-door term a query's OPENING asks for, or null: "search for X" /
+ * "look up X" is a web search for X, and a question about how or why the
+ * world works ("how does X work", "what is X", "explain X") is the cited
+ * answer's job. Weaker than the phrase rules in applyFrontDoorTerms: "what
+ * is my ip" and "search for a domain name availability" open the same way
+ * and name a tool that answers them, so findTools adds this term only when
+ * no tool answers the rest of the query strongly.
+ * @param {string[]} terms  the query's terms so far (a term already there is not added again)
+ * @param {string} q
+ * @returns {{ term: string, rest: string, words: string[] }|null} the term, the query after its
+ *   opening, and the opening's own words
+ */
+export function openingDoorTerm(terms, q) {
+  const ql = String(q || "").toLowerCase();
+  let m;
+  if (!terms.includes("web-search") && !terms.includes("breaking-news")
+    && (m = /^\s*(?:search|look\s+up|lookup)\s+(?:for|the\s+web|web|online|about)\b/.exec(ql))) return openingOf("web-search", ql, m[0]);
+  if (!terms.includes("answer") && (m = /^\s*(?:how\s+(?:does|do|did|can|is|are)|what\s+(?:is|are|was|were)|why\s+(?:does|do|did|is|are)|explain)\s+(?=\S)/.exec(ql))) return openingOf("answer", ql, m[0]);
+  return null;
+}
+
+const openingOf = (term, ql, opening) => ({ term, rest: ql.slice(opening.length), words: opening.split(/[^a-z0-9]+/).filter(Boolean) });
+
+// A tool answers the rest of an opening query strongly when, ranked on the
+// words after the opening, it is not itself the front-door tool and it leads
+// at OPENING_STRONG_SCORE or more, covering their rarest word and ahead of
+// the next tool by OPENING_LEAD ("my ip"), or at OPENING_CLEAR_SCORE or more
+// ("a domain name availability"). A world question whose words a tool only
+// grazes ("how do solar panels work" against sun-times) or that several
+// tools share alike ("what is x402") stays the cited answer's.
+const OPENING_STRONG_SCORE = 12;
+const OPENING_LEAD = 1.2;
+const OPENING_CLEAR_SCORE = 30;
+
+/**
  * Append curated front-door tags for web-search / answer / news phrasing.
  * Shared by /api/find and the hosted MCP search_tools lexical scorer so both
  * surfaces agree on the default job. Mutates `terms` in place; safe no-op when
  * the query is not front-door shaped.
  * @param {string[]} terms
  * @param {string} q
+ * @param {{ opening?: boolean }} [opts]  opening: false leaves out the
+ *   question and "search for" openings (openingDoorTerm), which findTools
+ *   adds only when no tool answers the rest of the query strongly
+ * @returns {{ term: string, rest: string, words: string[] }|null} the opening (openingDoorTerm), its term added or not
  */
-export function applyFrontDoorTerms(terms, q) {
+export function applyFrontDoorTerms(terms, q, { opening = true } = {}) {
   const ql = String(q || "").toLowerCase();
   // Web search: "search the web", "google X", "look up online", "web search for"
   if (!terms.includes("web-search") && (
@@ -162,23 +201,15 @@ export function applyFrontDoorTerms(terms, q) {
   )) {
     terms.push("answer");
   }
-  // A query that OPENS with a search verb ("search for X", "look up X") is a
-  // web search for X, whatever X is.
-  if (!terms.includes("web-search") && !terms.includes("breaking-news")
-    && /^\s*(?:search|look\s+up|lookup)\s+(?:for|the\s+web|web|online|about)\b/.test(ql)) {
-    terms.push("web-search");
-  }
-  // A question about how or why the world works ("how does X work", "what is
-  // X", "explain X") is the cited-answer tool's job.
-  if (!terms.includes("answer") && /^\s*(?:how\s+(?:does|do|did|can|is|are)|what\s+(?:is|are|was|were)|why\s+(?:does|do|did|is|are)|explain)\s+\S/.test(ql)) {
-    terms.push("answer");
-  }
+  const openingDoor = openingDoorTerm(terms, q);
+  if (opening && openingDoor) terms.push(openingDoor.term);
   // News: "latest news", "breaking news", "headlines about"
   if (!terms.includes("breaking-news") && (
     /\b(latest\s+news|breaking\s+news|news\s+(about|on|for|headlines)|headlines\s+(about|on|for)|current\s+events)\b/.test(ql)
   )) {
     terms.push("breaking-news");
   }
+  return openingDoor;
 }
 
 /**
@@ -285,7 +316,7 @@ function directionOf(t, pairs, entry) {
 export const FIND_TOP_MAX = 25;
 export const FIND_TOP_DEFAULT = 5;
 
-export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}) {
+export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, opening = true } = {}) {
   // Cap the query length so a pathological input can't drive unbounded work.
   const q = String(query || "").slice(0, 500);
   // Strip stopwords + 1-char tokens — they match thousands of tools and add noise
@@ -325,7 +356,27 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   // ("search" inside "search tools catalog", bare "question") do not hijack
   // unrelated tasks. Tags appended are curated on search / answer / search-news.
   const frontDoor = new Set(terms);
-  applyFrontDoorTerms(terms, q);
+  const openingDoor = applyFrontDoorTerms(terms, q, { opening: false });
+  // The opening's term ("what is X", "search for X") joins only when no other
+  // tool answers the rest strongly: ranked once without it, a tool that leads
+  // on the remaining words keeps its place ("what is my ip" is ip-info's).
+  if (opening && openingDoor) {
+    const openingTerm = openingDoor.term;
+    const plain = findTools(catalog, openingDoor.rest, { k: 2, opening: false });
+    const lead = plain.results?.[0];
+    const leadDef = lead && Object.values(catalog).find((t) => t && t.slug === lead.slug);
+    const isDoor = !!leadDef && (leadDef.slug === openingTerm || (leadDef.tags || []).some((tg) => String(tg).toLowerCase() === openingTerm));
+    const runnerUp = plain.results?.[1]?.score || 0;
+    const strong = !!lead && !isDoor && (lead.score >= OPENING_CLEAR_SCORE
+      || (plain.rarestTermCovered !== false && lead.score >= OPENING_STRONG_SCORE && lead.score >= OPENING_LEAD * runnerUp));
+    if (!strong) terms.push(openingTerm);
+    else {
+      // The tool is ranked on the rest: the opening's own words ("search",
+      // "what") no longer lift the front-door tool over it.
+      const restWords = new Set(openingDoor.rest.split(/[^a-z0-9]+/));
+      for (let i = terms.length - 1; i >= 0; i--) if (openingDoor.words.includes(terms[i]) && !restWords.has(terms[i])) terms.splice(i, 1);
+    }
+  }
   // The front-door terms this query added (web-search, answer, breaking-news).
   const doorTerms = terms.filter((t) => !frontDoor.has(t));
   // Synonyms (src/find-synonyms.js): the catalog's word for the buyer's.
@@ -611,7 +662,9 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   // The buyer's own words: a synonym's catalog word or a front-door term
   // stands in for words already in the query and never decides on its own.
   const own = terms.filter((t) => !synFrom.has(t) && !doorTerms.includes(t));
-  const defining = own.filter((t) => !isValueTerm(t) && !(currencyIntent && FIAT_CODES.has(t)));
+  // The words of a question or search opening ("what is", "search for") ask
+  // how, never what: they never define the task either.
+  const defining = own.filter((t) => !isValueTerm(t) && !(currencyIntent && FIAT_CODES.has(t)) && !(openingDoor && openingDoor.words.includes(t)));
   if (results.length && defining.length) {
     rarestTerm = defining.reduce((a, b) => (idf.get(b) > idf.get(a) ? b : a));
     const top = all.find((e) => e.t.slug === results[0].slug);
@@ -681,9 +734,10 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     // "how does X work"): the rest of the query is the topic, a value the
     // tool takes, so its words never decide whether the query was served.
     if (!rarestTermCovered && top && doorTerms.some((d) => top.tagSet.has(d) || top.slug === d)) rarestTermCovered = true;
-    // An operation the top hit never mentions (src/find-synonyms.js) keeps the
-    // query a miss, whichever rule above read it as served.
-    if (rarestTermCovered && own.some((t) => FIND_OPERATION_WORDS.has(t) && !covers(t))) rarestTermCovered = false;
+    // An operation the top hit never mentions, in its own word or one a tool
+    // doing it writes instead (src/find-synonyms.js), keeps the query a miss,
+    // whichever rule above read it as served.
+    if (rarestTermCovered && own.some((t) => FIND_OPERATION_WORDS.has(t) && !covers(t) && !FIND_OPERATION_SAME.get(t).some(coversWord))) rarestTermCovered = false;
   }
 
   // A stated direction that only a reversed tool matches. When some tool's

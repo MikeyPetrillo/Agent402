@@ -58,6 +58,13 @@ const TOP1 = [
   ["token balance",                 "wallet-balance"],
   ["ens lookup",                    "ens-resolve"],
   ["lookup whois for a domain",    "whois"],
+  // A question or "search for" opening goes to the web tools only when no
+  // tool answers the rest strongly (2026-11-22): these name a tool.
+  ["search for a domain name availability", "domain-audit"],
+  ["what is my ip",                 "ip-info"],
+  // ...and a question several tools only share a word of stays the answer's.
+  ["what is x402",                  "answer"],
+  ["how do solar panels work",      "answer"],
   ["geocode a city",                "place-lookup"],
   ["validate an email address",    "email-validate"],
   ["stock price for AAPL",         "stock-quote"],
