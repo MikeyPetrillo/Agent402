@@ -72,7 +72,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-21.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-22.</p>
 </section>
 
 <section>

@@ -27,7 +27,9 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   `fetchOpenRouter` and `fetchDirectUpstream` await it, each attempt loop awaits it after the
   link's own checks and the key check (`assertOpenRouterConfigured`), and the embeddings, rerank
   and speech handlers await it before their own fetch. A new upstream call goes behind one, after
-  every check that can refuse the buyer's input.
+  every check that can refuse the buyer's input. Each paid answer notes its upstream cost on the
+  run's scope (`noteRunUpstreamUsd`, from `stripBilling` and a discarded answer), which the
+  settle-first budget meter reads only if the run ends unsettled.
   Every metered route (chat, Messages, Responses, generateContent) refuses a model id missing from the upstream's live model list with a 400
   before any payment gate (`meteredPrePaymentRefusal` in `src/gateway-prepayment.js`, one check over a
   row per wire: where the model id is, how the input is counted, the wire's own error object;

@@ -47,8 +47,9 @@ LLC: credit the entity, never a personal name.
   `REFERRAL_PAYOUT_ADDRESS`; `.claude/rules/payments.md`).
 - `src/refund-ledger.js` + `scripts/refund-run.js`: charged-but-failed is recorded as a debt and
   repaid only after on-chain proof (`src/payment-verify.js`).
-- `src/settle-first.js`, `src/settle-first-body.js`: the runs whose payment settles before their
-  upstream work (the settle point, the per-request state, the owed class and the failure wording).
+- `src/settle-first.js`, `src/settle-first-body.js`, `src/settle-first-meter.js`,
+  `src/settle-first-copy.js`: the runs whose payment settles before their upstream work (the settle
+  point, the budget meter, the per-request state, the owed class, the failure body and the copy).
 - `src/state-db.js`, `src/json-document.js`: the state database (Postgres) and the whole-file JSON
   store API; leases, store readiness and large rows in `.claude/rules/ops.md`.
 - `src/price-webhooks.js` (a signed POST when a watched list price changes: a registrant holds at
@@ -371,24 +372,36 @@ payment flow. Anything that caches, credits or bills on handler status before se
 unsafe: key it off the FINAL response (`res.on("finish")` with `res.statusCode === 200`). The
 idempotency cache, credits debit and refund ledger all follow this rule.
 (`node_modules/@x402/express/dist/esm/index.mjs`.)
-**One exception, settle first** (`src/settle-first.js`; `GATEWAY_SETTLE_FIRST=off` removes it): on
-the model and image routes in `SETTLE_FIRST_SLUGS` (server.js), an x402 `exact` payment is settled
-BEFORE the handler's upstream work when the settle breaker names its buyer
-(`gatewaySettleFirstDue`): a wallet with no settled call in the window and no paid sale on the books
-(the sales ledger; a ledger that cannot answer reads as no sale), or a wallet (per network) or one
-authorization holding `GATEWAY_SETTLE_FIRST_UNSETTLED_MAX` (2) runs there that did not settle,
-whatever the cause, with no settled call since. Nobody is refused by it and the amount is the one
-signed. The settlement is made at the run's settle point (`settleBeforeUpstream`, awaited by
-`fetchOpenRouter` and each kit's upstream call), after the handler's own checks (the breaker
-consult, input, model and size refusals, a cache hit), so on x402 a buyer's mistake is settled by
-nobody; a payment that does not settle there is answered the paywall's own 402 and nothing runs.
-After it, a 4xx/5xx IS charged: the receipt (`success: true`) rides the final response, so the
-charged-failure and hang-up recorders book it owed with the note class `settle-first-failed`, the
-failure body says the payment is owed back (`src/settle-first-body.js`), and no hang-up ticket
-forgives it. Never settled first: `upto`, a payment channel, a Circle Gateway batched payment,
-Tempo, card, credits, a first-call allowance grant. A new paid upstream call on a listed route goes
-behind a settle point, and a route joins the list only with a test that reads its settle call before
-its upstream call (`scripts/test-settle-first.js`).
+**One exception, settle first** (`src/settle-first.js`; `GATEWAY_SETTLE_FIRST=off` removes it).
+Normal operation is unchanged: every buyer is served first and charged only on success. On the
+model and image routes in `SETTLE_FIRST_SLUGS` (server.js), an x402 `exact` payment is settled
+BEFORE the handler's upstream work when `gatewaySettleFirstPlan` names its buyer: per wallet,
+always, a wallet (per network) or one authorization holding `GATEWAY_SETTLE_FIRST_UNSETTLED_MAX`
+(2) /v1 runs that did not settle, whatever the cause, with no settled call since; and, only while
+the BUDGET MODE is on (`src/settle-first-meter.js`), a wallet with no settled call in the window
+and no paid sale on the books. The budget mode is on while the rolling 24-hour upstream cost of /v1
+runs that ended unsettled (the upstream's own figure or the cost table's rate for the run, else its
+quote), plus the price at risk of never-settled wallets' runs served first and still in flight, is
+at or over `GATEWAY_SETTLE_FIRST_BUDGET_USD` (5), or the meter cannot be read, or
+`GATEWAY_SETTLE_FIRST=always`; it is one figure across replicas and restarts (Redis tally
+`sfm-cost`, window `sfm-risk`), and no figure is ever public. Nobody is refused by it and the amount
+is the one signed. The settlement is made at the run's settle point (`settleBeforeUpstream`, awaited
+by `fetchOpenRouter` and each kit's upstream call), after the handler's own checks, so a buyer's
+mistake is settled by nobody; a payment that does not settle there is answered the paywall's own
+402 and nothing runs. After it, a 4xx/5xx IS charged: the receipt rides the final response, the
+charged-failure and hang-up recorders book it owed with the note class `settle-first-failed`, and
+the failure body says `charged: true`, `retry: "same-payment"`, the `transaction` and
+`refundStatusUrl` (`src/settle-first-body.js`). The same payment sent again to the same route and
+body (a credit kept by `src/idempotency.js`) is run with no settlement: its debt is held void
+before the run (`voidOwedForServe`), kept void when served, owed again otherwise; a hold whose run
+never ended is reopened by the held-claim sweep. The class alone is repaid automatically by
+`refund-settle-first.yml` (off until `REFUND_AUTO_SETTLE_FIRST=on`; the proof-checked
+`scripts/refund-run.js` with `REFUND_ONLY_CLASS`). An `upto` or Circle Gateway batched payment the
+plan names is answered the route's own 402 with the exact accepts first, uncharged (option A).
+Never settled first: Tempo, card, credits, a first-call allowance grant. A new paid upstream call on
+a listed route goes behind a settle point, and a route joins the list only with a test that reads
+its settle call before its upstream call (`scripts/test-settle-first.js`). Public copy that says a
+failed call is not charged carries the shared sentence (`src/settle-first-copy.js`).
 A buyer whose connection closes before the first response byte is not settled while the
 run holds a hang-up forgiveness ticket (`src/hangup-forgiveness.js`: reserved when the
 handler starts, priced at the charge, against a per-wallet, per-IP and service-wide budget
