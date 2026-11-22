@@ -322,6 +322,8 @@ t node scripts/test-weather-null-precip.js
 t node scripts/test-weather-probability.js
 # Weather calculators against published values: sun times, heat index and wind chill, EPA AQI breakpoints, degree days, WMO codes (offline, no fetch)
 t node scripts/test-weather-calc-kit.js
+# Parse kit: number-words, encoding-detect, log-timestamps, csv-aggregate, json-lint; time-convert zones; csv-to-json delimiters (offline)
+t node scripts/test-parse-kit.js
 # IPO filings list each accession once across pages (offline)
 t node scripts/test-ipo-dedupe.js
 # 13F amendments apply oldest first (offline)
