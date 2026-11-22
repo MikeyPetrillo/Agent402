@@ -381,6 +381,18 @@ for (const f of tmpFiles) {
   ok(board.distinctClusters === 2 && board.liveClusters === 1, "the total still counts everything - hiding is a view, never a deletion");
   ok(board.totalWishes === 9, "and every signal is still counted, including the hidden cluster's");
   ok(getWishesAggregate({ detailed: false }).distinctClusters === 2, "the public beacon's totals are unchanged by the view filter");
+  // The operator widens the window to review older clusters (2026-11-22),
+  // bounded to the retention window; anything else reads as the default.
+  const wide = getWishesAggregate({ detailed: true, staleDays: String(WISH_STALE_DAYS + 10) });
+  ok(wide.clusters.some((r) => r.text === "ancient heavy demand") && wide.staleHidden === 0 && wide.staleDays === WISH_STALE_DAYS + 10, `?staleDays widens the window and says so (staleDays ${wide.staleDays}, hidden ${wide.staleHidden})`);
+  for (const bad of ["0", "-3", "1.5", "abc", "100000", ""]) {
+    const b = getWishesAggregate({ detailed: true, staleDays: bad });
+    ok(b.staleDays === WISH_STALE_DAYS && b.staleHidden === 1, `staleDays "${bad}" reads as the default window`);
+  }
+  const page2 = getWishesAggregate({ detailed: true, staleDays: String(WISH_STALE_DAYS + 10), limit: 1, offset: "1" });
+  const page1 = getWishesAggregate({ detailed: true, staleDays: String(WISH_STALE_DAYS + 10), limit: 1 });
+  ok(page1.clusters.length === 1 && page1.offset === 0 && page1.nextOffset === 1 && page2.clusters.length === 1 && page2.nextOffset === null && page1.clusters[0].text !== page2.clusters[0].text, "offset pages through the window and nextOffset says where the next page starts");
+  ok(getWishesAggregate({ detailed: false, staleDays: "365" }).clusters === undefined, "the public beacon never lists clusters, whatever the window");
 }
 
 // The operator board annotates up to 500 clusters, one catalog search each.

@@ -7014,7 +7014,9 @@ app.get("/__operator/discovery-gap.json", async (req, res) => {
 app.get("/__operator/wishes.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store");
-  const agg = getWishesAggregate({ limit: req.query?.limit, detailed: true });
+  // ?staleDays=N widens the window (1 to the retention days) and ?offset=N
+  // pages through it, so clusters older than the default window can be read.
+  const agg = getWishesAggregate({ limit: req.query?.limit, detailed: true, staleDays: req.query?.staleDays, offset: req.query?.offset });
   await annotateServedAsync(agg.clusters, wishServedScore, WISH_SERVED_MIN_SCORE);
   res.json(await withRerank(req, await withIntent(req, agg)));
 });
