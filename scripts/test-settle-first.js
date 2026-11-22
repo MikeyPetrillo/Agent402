@@ -409,9 +409,79 @@ if (ONLY.includes("1")) {
     await ok(job.includes(body.SETTLED_FIRST_FAILURE_NOTE) && !/Tempo/.test(job) && !/Nothing was charged/.test(job) && pushJob.includes(PUSH_FAILURE_NOTE) && /Nothing was charged\./.test(plain),
       `a failed job's summary says the payment settled before the run is owed back; a Tempo push failure and an uncharged failure keep their words (${job})`);
   }
+  // ---- the scheduled refund repays this class only (scripts/refund-run.js) ----
+  {
+    const rr = await import("./refund-run.js");
+    const { readFileSync } = await import("node:fs");
+    const NOW = Date.parse("2026-11-21T12:00:00Z");
+    const H = 3600_000;
+    let id = 0;
+    const row = (o) => ({ id: ++id, status: "owed", network: "eip155:8453", payer: "0x" + String(id).padStart(40, "a"), priceUsd: 0.02, slug: "v1-chat", httpStatus: 502, createdAt: NOW - 2 * H, evidence: "0x" + String(id).padStart(64, "0"), note: "settle-first-failed: answer http 502", ...o });
+    const rows = [
+      row({}),                                                                   // repaid
+      row({ note: null }),                                                       // another class: a plain charged failure
+      row({ note: "held for review: the answer was partly sent" }),             // another class
+      row({ httpStatus: 499, note: "settle-first-failed: answer not delivered" }), // an answer kept for the same payment
+      row({ createdAt: NOW - 10 * 60_000 }),                                     // too young
+      row({ status: "void", note: "settle-first-failed: answer http 502; served on the resend of the same payment" }), // served on its resend
+      row({ status: "sending" }),                                                // already being sent
+      row({ priceUsd: 0.5 }),                                                    // over the per-refund cap
+      ...[1, 2, 3, 4].map(() => row({ payer: "0x" + "b2".repeat(20) })),         // a wallet owed four of them
+    ];
+    const opts = { senders: { evm: true }, onlyClass: rr.parseOnlyClass("settle-first-failed"), minAgeMs: 60 * 60_000, maxClassRowsPerPayer: 3, now: NOW, maxEachUsd: 0.25, maxTotalUsd: 2, maxPerPayerUsd: 0.5 };
+    const plan = rr.planRefunds(rows, opts);
+    const sent = plan.send.map((r) => r.id);
+    await ok(sent.length === 1 && sent[0] === rows[0].id && (plan.held[rr.CLASS_FILTER_HOLD] || []).length === 2 && (plan.held[rr.CLASS_UNDELIVERED_HOLD] || []).length === 1 && (plan.held[rr.CLASS_TOO_YOUNG_HOLD] || []).length === 1 && (plan.held[rr.CLASS_PAYER_ROWS_HOLD] || []).length === 4 && plan.send.every((r) => r.priceUsd <= 0.25),
+      `the class run repays only an owed settle-first-failed row of a failed answer, old enough, within the caps (sent ${JSON.stringify(sent)}; held: ${Object.entries(plan.held).map(([k, v]) => `${v.length} ${k.split(" ").slice(0, 4).join(" ")}`).join("; ")})`);
+    const human = rr.planRefunds(rows, { senders: { evm: true }, now: NOW, maxEachUsd: 0.25, maxTotalUsd: 2, maxPerPayerUsd: 0.5 });
+    await ok(human.send.length > plan.send.length && !human.held[rr.CLASS_FILTER_HOLD], `the human-run dispatch (no class named) plans every class as before (${human.send.length} rows)`);
+    let threw = null;
+    try { rr.parseOnlyClass("settle-first"); } catch (e) { threw = e; }
+    await ok(rr.parseOnlyClass("") === null && /refusing to run/.test(threw?.message || ""), "REFUND_ONLY_CLASS names one class exactly, or the run refuses");
+    // A live class run proves the original charge before it claims, and claims before it sends.
+    const order = [];
+    const res = await rr.executeRefunds(plan.send, {
+      verifyInbound: async () => { order.push("prove"); return { verified: true }; },
+      claim: async () => { order.push("claim"); return true; },
+      send: async () => { order.push("send"); return "0x" + "ee".repeat(32); },
+      markPaid: async () => { order.push("paid"); },
+      pause: async () => {},
+      log: { log: () => {}, warn: () => {}, error: () => {} },
+    });
+    const unproven = await rr.executeRefunds(plan.send, {
+      verifyInbound: async () => ({ verified: false, reason: "no transfer" }),
+      claim: async () => { order.push("claim-unproven"); return true; },
+      send: async () => { order.push("send-unproven"); return "x"; },
+      markPaid: async () => {},
+      pause: async () => {},
+      log: { log: () => {}, warn: () => {}, error: () => {} },
+    });
+    await ok(order.join(",") === "prove,claim,send,paid" && res.ok === 1 && unproven.ok === 0 && unproven.unverified === 1,
+      `the scheduled run's rows go through the same pipeline: proven on chain, claimed, sent, marked paid; a charge not proven is never claimed or sent (${order.join(",")})`);
+    // The schedule itself: off until the owner's switch, this class only, the caps at or under refund.yml's.
+    const wf = readFileSync(new URL("../.github/workflows/refund-settle-first.yml", import.meta.url), "utf8");
+    const human2 = readFileSync(new URL("../.github/workflows/refund.yml", import.meta.url), "utf8");
+    const num = (k) => Number((new RegExp(`${k}: "([0-9.]+)"`).exec(wf) || [])[1]);
+    const dflt = (k) => Number((new RegExp(`${k}:[\\s\\S]*?default: "([0-9.]+)"`).exec(human2) || [])[1]);
+    await ok(/if: \$\{\{ vars\.REFUND_AUTO_SETTLE_FIRST == 'on' \}\}/.test(wf) && /REFUND_ONLY_CLASS: settle-first-failed\n/.test(wf) && /environment: refund-auto\n/.test(wf) && /group: refund-run\n/.test(wf)
+      && num("REFUND_MAX_TOTAL_USD") <= dflt("max_total_usd") && num("REFUND_MAX_EACH_USD") <= dflt("max_each_usd") && num("REFUND_MAX_PER_PAYER_USD") <= dflt("max_per_payer_usd")
+      && wf.indexOf('REFUND_LIVE: "false"') > 0 && wf.indexOf('REFUND_LIVE: "false"') < wf.indexOf('REFUND_LIVE: "true"') && !/REFUND_INCLUDE_[A-Z_]+: "true"/.test(wf),
+      "the scheduled run is off until REFUND_AUTO_SETTLE_FIRST is on, names this class only, shares refund.yml's concurrency group, runs dry before live, and its caps are at or under refund.yml's defaults");
+  }
+
   // ---- which payments can settle first (src/payments.js) -----------------------
   {
-    const { settleFirstNetworkFor, SETTLE_FIRST_NAMESPACES } = await import("../src/payments.js");
+    const { settleFirstNetworkFor, SETTLE_FIRST_NAMESPACES, settleFirstPaymentKindFor } = await import("../src/payments.js");
+    const gw = { requirements: { scheme: "exact", network: "eip155:8453", extra: { name: "GatewayWalletBatched", version: "1" } }, paymentPayload: { accepted: { scheme: "exact", network: "eip155:8453", extra: { name: "GatewayWalletBatched", version: "1" } } } };
+    const kinds = [
+      settleFirstPaymentKindFor({ requirements: { scheme: "exact", network: "eip155:8453" }, paymentPayload: {} }),
+      settleFirstPaymentKindFor({ requirements: { scheme: "upto", network: "eip155:8453" }, paymentPayload: {} }),
+      settleFirstPaymentKindFor(gw),
+      settleFirstPaymentKindFor({ requirements: { scheme: "batch-settlement", network: "eip155:8453" }, paymentPayload: {} }),
+      settleFirstPaymentKindFor(null),
+    ];
+    await ok(JSON.stringify(kinds) === JSON.stringify(["exact", "upto", "gateway", null, null]),
+      `option A reads the payment's kind: an exact payment can settle first; an upto and a Circle Gateway batched payment are asked for an exact one while settle first applies; anything else is left as it was (${JSON.stringify(kinds)})`);
     const exact = (network, extra = {}) => ({ requirements: { scheme: "exact", network, ...extra }, paymentPayload: { accepted: { scheme: "exact", network } } });
     const yes = ["eip155:8453", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k", "stellar:pubnet"].map((n) => settleFirstNetworkFor(exact(n)));
     const no = [

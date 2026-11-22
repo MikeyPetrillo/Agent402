@@ -3295,8 +3295,11 @@ export function settleFirstNetworkFor(v) {
  */
 export function settleFirstPaymentKindOf(req) {
   if (!settleFirstImpl) return null;
-  const v = verifiedPaymentOf(req);
-  if (!v || !v.requirements) return null;
+  return settleFirstPaymentKindFor(verifiedPaymentOf(req));
+}
+/** The same rule over a verified payment's own fields, with no request. */
+export function settleFirstPaymentKindFor(v) {
+  if (!v || typeof v !== "object" || !v.requirements) return null;
   if (isGatewayBatchedPayment(v.paymentPayload) || isGatewayBatchedPayment(v.requirements)) return "gateway";
   const scheme = String(v.requirements.scheme || "").toLowerCase();
   if (scheme === "upto") return "upto";
