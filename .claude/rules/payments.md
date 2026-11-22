@@ -849,6 +849,21 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   (`scripts/test-next-step.js`).
 - **Funnel discovery window:** `FUNNEL_FOUND_WINDOW_MS` (default 21600000, 6 hours; at least 1 minute) is how long the funnel links a caller's last discovery read to its later paid-route calls (`src/funnel-sources.js`).
 - **Funnel discovery cap:** `FUNNEL_FOUND_CAP` (default 50000; at least 100) is the most callers that trail holds, in memory per replica, keyed on a per-process hash of the address.
+- **Tempo gas sponsorship (per call):** `src/tempo-charge-sponsor.js`, off unless
+  `TEMPO_GAS_SPONSORSHIP=on`. Decided when the 402's tempo challenge is minted (a sponsored
+  challenge carries `methodDetails.feePayer: true`), never at settlement: a sponsored credential
+  cannot settle unsponsored, so every limit only makes the NEXT challenge the ordinary one (the
+  buyer pays its own fee), never a refusal. The payer is the subscription gas sponsor
+  (`TEMPO_SUBSCRIPTION_FEE_PAYER_KEY`, fees in PathUSD); a sponsored credential is screened and
+  settled by this server (`sponsorMethod` in `src/mpp-tempo.js`, over `TEMPO_RPC_URL`) in either
+  relay mode. Paused under `TEMPO_GAS_SPONSOR_RESERVE_USD` (subscriptions keep that share, and
+  the sponsor's low word reads low under it while on), while the subscription ceiling reads
+  reached, past the 24 h caps (service-wide and per payer's client), with no screen list, or
+  while signing is halted. A sponsored pull from a sender the gate cannot prove is declined before
+  any claim (`fee-sponsor-declined`, 402) and that client is not sponsored for a day. Each send is
+  booked by its fee bound; the co-signed transaction id is kept for the chain-truth confirm
+  (in memory: a restart inside a pull's validity loses it). Operator view
+  `/__operator/tempo-gas-sponsorship.json`.
 - **Tempo push refusals:** `src/push-refusal-body.js`: for a push credential the Tempo gate
   restates a 4xx JSON body's not-charged sentence and sets `charged`, `transferClaimed`, `refundOwed`.
 - **Algorand network id:** `src/avm-network.js`: the CAIP-2 (32-character) id is what every 402

@@ -111,6 +111,7 @@ import { appendPeriodReceipt } from "./receipt-signing.js";
 import { usdToBaseUnits, usdToTokenDecimalString } from "./base-units.js";
 import { redactSecrets } from "./tools/redact.js";
 import { withSponsorCeiling, sponsorCeilingWord } from "./tempo-sponsor-ceiling.js";
+import { chargeSponsorReserveUsd, chargeSponsorshipWord } from "./tempo-charge-sponsor.js";
 import { screenAddresses, screenFunding, maskAddress, TEMPO_SCREEN_REFUSED_DETAIL } from "./sanctions-screen.js";
 
 // Tempo mainnet. Same constant mpp-tempo.js pins; a subscription authorization
@@ -521,11 +522,21 @@ export function subscriptionFeePayerPolicy() {
  *
  * Unreadable is "unknown", never "ok" - the same rule the gateway balance
  * follows, because a balance we cannot read is its own alarm.
+ *
+ * The same wallet sponsors per-call Tempo fees while TEMPO_GAS_SPONSORSHIP is
+ * on (src/tempo-charge-sponsor.js). Subscriptions keep priority: charge
+ * sponsorship stops while the balance is under TEMPO_GAS_SPONSOR_RESERVE_USD,
+ * and while it is on this word reads "low" under that reserve too (whichever
+ * is higher), so the wallet is refilled before the subscription share is
+ * reached. `chargeSponsorship` is that rail's word: off, on or paused.
  */
 export async function subscriptionFeePayerStatus() {
   const acct = subscriptionFeePayer();
   if (!acct) return { status: "unconfigured" };
-  const low = Number(process.env.TEMPO_SUBSCRIPTION_FEE_PAYER_LOW_USD ?? 0.25);
+  const lowSetting = Number(process.env.TEMPO_SUBSCRIPTION_FEE_PAYER_LOW_USD ?? 0.25);
+  const reserve = chargeSponsorReserveUsd();
+  const low = reserve === null ? lowSetting : Math.max(lowSetting, reserve);
+  const charge = { chargeSponsorship: chargeSponsorshipWord() };
   const rpcUrl = (process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz").trim();
   try {
     const data = "0x70a08231" + acct.address.toLowerCase().slice(2).padStart(64, "0");
@@ -541,12 +552,12 @@ export async function subscriptionFeePayerStatus() {
       const j = await res.json();
       hex = j?.result;
     } finally { clearTimeout(t); }
-    if (typeof hex !== "string" || !hex.startsWith("0x")) return { status: "unknown", ceiling: await sponsorCeilingWord(), asset: "PathUSD", chain: `eip155:${TEMPO_MAINNET_CHAIN_ID}` };
+    if (typeof hex !== "string" || !hex.startsWith("0x")) return { status: "unknown", ceiling: await sponsorCeilingWord(), asset: "PathUSD", chain: `eip155:${TEMPO_MAINNET_CHAIN_ID}`, ...charge };
     const usd = Number(BigInt(hex)) / 1e6;
     // Bucketed, never the number: this rides a PUBLIC surface.
-    return { status: usd < low ? "low" : "ok", ceiling: await sponsorCeilingWord(), asset: "PathUSD", chain: `eip155:${TEMPO_MAINNET_CHAIN_ID}` };
+    return { status: usd < low ? "low" : "ok", ceiling: await sponsorCeilingWord(), asset: "PathUSD", chain: `eip155:${TEMPO_MAINNET_CHAIN_ID}`, ...charge };
   } catch {
-    return { status: "unknown", ceiling: await sponsorCeilingWord(), asset: "PathUSD", chain: `eip155:${TEMPO_MAINNET_CHAIN_ID}` };
+    return { status: "unknown", ceiling: await sponsorCeilingWord(), asset: "PathUSD", chain: `eip155:${TEMPO_MAINNET_CHAIN_ID}`, ...charge };
   }
 }
 

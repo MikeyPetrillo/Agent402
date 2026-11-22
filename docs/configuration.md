@@ -12,7 +12,7 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1096 variables in 113 groups.
+1101 variables in 113 groups.
 
 ## Contents
 
@@ -1343,6 +1343,11 @@ may still clamp it, and the read site is the reference.
 | `TEMPO_DATA_API_KEY` | Tempo data API key (a credential, set on the host). |  | `src/sanctions-screen.js`, `src/tempo-transfers.js` |
 | `TEMPO_DECIMALS` | Tempo decimals. |  | `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
 | `TEMPO_EARLY_CONFIRM` | Tempo early confirm. |  | `src/server.js` |
+| `TEMPO_GAS_SPONSORSHIP` | Set to on to pay the Tempo network fee of per-call tempo/charge payments with TEMPO_SUBSCRIPTION_FEE_PAYER_KEY (off by default). Decided per challenge: past a limit, or while the payment-party screen has no list, the challenge is the ordinary one and the buyer pays its own fee; a sponsored payment is settled by this server over TEMPO_RPC_URL. |  | `src/tempo-charge-sponsor.js` |
+| `TEMPO_GAS_SPONSOR_DAILY_MAX_USD` | Rolling 24-hour cap, in USD, on the fee bounds of sponsored per-call Tempo payments, all payers together (default 5). |  | `src/tempo-charge-sponsor.js` |
+| `TEMPO_GAS_SPONSOR_MAX_FEE_USD` | Most one sponsored per-call Tempo transaction may cost the sponsor in fees, in USD (default 0.01; at most 1). |  | `src/tempo-charge-sponsor.js` |
+| `TEMPO_GAS_SPONSOR_PAYER_DAILY_MAX_USD` | Rolling 24-hour cap, in USD, on one payer's sponsored per-call Tempo fee bounds (default 1); past it that payer's client is offered the ordinary challenge. |  | `src/tempo-charge-sponsor.js` |
+| `TEMPO_GAS_SPONSOR_RESERVE_USD` | PathUSD balance, in USD, the gas sponsor keeps for subscription activations and renewals: under it per-call sponsorship pauses and, while TEMPO_GAS_SPONSORSHIP is on, the sponsor's low-balance word reads low (default 2). |  | `src/tempo-charge-sponsor.js` |
 | `TEMPO_LATE_CONFIRM_DELAYS_MS` | Tempo late confirm delays, in milliseconds. |  | `src/mpp-tempo.js` |
 | `TEMPO_LATE_CONFIRM_MAX_WATCHES` | Tempo late confirm maximum watches. |  | `src/mpp-tempo.js` |
 | `TEMPO_LATE_WATCH_FILE` | Tempo late watch file path. |  | `src/tempo-late-watches.js` |
@@ -1351,8 +1356,8 @@ may still clamp it, and the read site is the reference.
 | `TEMPO_RELAY` | Tempo relay. |  | `src/mpp-tempo.js` |
 | `TEMPO_RELAY_VALIDATE_ATTEMPTS` | Tempo relay validate attempts. |  | `src/mpp-tempo.js` |
 | `TEMPO_RELAY_VALIDATE_TIMEOUT_MS` | Tempo relay validate timeout, in milliseconds. |  | `src/mpp-tempo.js` |
-| `TEMPO_RPC_URL` | Tempo RPC endpoint URL. | `https://rpc.tempo.xyz` | `src/inflight-cover.js`, `src/mpp-subscriptions.js`, `src/mpp-tempo.js` and 3 more |
-| `TEMPO_SUBSCRIPTION_FEE_PAYER_KEY` | Tempo subscription fee payer key (a credential, set on the host). |  | `src/mpp-subscriptions.js` |
+| `TEMPO_RPC_URL` | Tempo RPC endpoint URL. | `https://rpc.tempo.xyz` | `src/inflight-cover.js`, `src/mpp-subscriptions.js`, `src/mpp-tempo.js` and 4 more |
+| `TEMPO_SUBSCRIPTION_FEE_PAYER_KEY` | Tempo subscription fee payer key (a credential, set on the host). |  | `src/mpp-subscriptions.js`, `src/tempo-charge-sponsor.js` |
 | `TEMPO_SUBSCRIPTION_FEE_PAYER_LOW_USD` | Tempo subscription fee payer low, in USD. | `0.25` | `src/mpp-subscriptions.js` |
 | `TEMPO_SUBSCRIPTION_RPC_TIMEOUT_MS` | Tempo subscription RPC endpoint timeout, in milliseconds. |  | `src/mpp-subscriptions.js` |
 | `TEMPO_SUBSCRIPTION_VALID_FOR_S` | Tempo subscription valid for, in seconds. |  | `src/mpp-subscriptions.js` |

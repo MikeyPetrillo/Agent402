@@ -623,6 +623,7 @@ import { isSettlementUnconfirmedReceipt } from "./payment-reject.js";
 import { networkFloorUsd } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential, configureTempoLateWatches } from "./mpp-tempo.js";
+import { tempoGasSponsorshipReport } from "./tempo-charge-sponsor.js";
 import { createLateWatchLedger, startLateWatchSweep } from "./tempo-late-watches.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader, unconfirmedCaptureDebt } from "./mpp-stripe.js";
 import { confirmTempoSettlement } from "./tempo-confirm.js";
@@ -3453,6 +3454,13 @@ app.get("/__operator/returning-wallets.json", async (req, res) => {
   let returnRate = null;
   try { await salesLedgerReady(); returnRate = await externalReturnRateAsync({ days: 60, minPaidDays: cfg.minPaidDays }); } catch (e) { returnRate = { error: redactSecrets(String(e?.message || e)).slice(0, 120) }; }
   res.set("Cache-Control", "private, no-store").json({ ...cfg, returnRate });
+});
+// Tempo gas sponsorship for per-call payments (src/tempo-charge-sponsor.js):
+// the settings, why it is paused, the 24 h sum of sponsored fee bounds, counts
+// and the latest bookings (payer addresses shortened).
+app.get("/__operator/tempo-gas-sponsorship.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store").json(await tempoGasSponsorshipReport());
 });
 // Judge timing (src/judge-timing.js): p50 and p95 per backend read and per
 // whole walk, outcomes, and how often a fallback answered. This process's own

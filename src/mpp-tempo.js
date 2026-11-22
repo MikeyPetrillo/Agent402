@@ -59,6 +59,8 @@ import { SETTLE_FAULT, tempoRefusalFault } from "./settle-fault.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 import { noteTempoMultisigSettled, withdrawTempoMultisigProof } from "./rail-cover.js";
 import { challengeLifeShortfall, challengeLifeReason, presentChallengeWindow } from "./challenge-life.js";
+import { chargeSponsorAccount, chargeSponsorPolicy, isSponsoredChallengeRequest, sponsorChargeFor, runWithSponsorContext, runSponsoredBroadcast, withholdSponsorshipForCurrentClient, withSponsorBooking, PATH_USD_ADDRESS as SPONSOR_FEE_TOKEN } from "./tempo-charge-sponsor.js";
+import { signingHalted } from "./signing-halt.js";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
 
@@ -455,6 +457,15 @@ export const TEMPO_REFUSAL_CLASSES = Object.freeze({
     detail: "This server screens the addresses of a Tempo per-call payment against the OFAC SDN list before accepting it, and the list is not loaded right now, so the credential was not checked and nothing was charged.",
     hint: "Retry shortly, or pay over another method offered in the WWW-Authenticate header (x402 USDC or MPP evm/charge).",
   },
+  // A fee-sponsored challenge's credential this server will not co-sign: a
+  // sender the gate cannot prove (src/tempo-charge-sponsor.js), or outbound
+  // signing halted. Before any claim or handler; the fresh challenge in the
+  // same 402 has the buyer pay its own network fee.
+  "fee-sponsor-declined": {
+    kind: "verification-failed", status: 402,
+    detail: "This server did not pay the Tempo network fee for this credential (the transaction's sender is not one its signature proves, or fee sponsorship is paused), so nothing was charged.",
+    hint: "Pay the fresh tempo challenge in this 402: it has your wallet pay its own network fee.",
+  },
   "policy-denied": {
     kind: "verification-failed", status: 402,
     detail: "The Tempo relay declined this payment under its own policy.",
@@ -599,12 +610,53 @@ function tempoMethod() {
   return cachedMethod;
 }
 
+// The fee-sponsored method group (src/tempo-charge-sponsor.js): the same
+// currencies and recipient, settled by this server itself over TEMPO_RPC_URL
+// whatever TEMPO_RELAY says (a relay cannot co-sign with our key), with the
+// subscription gas sponsor as fee payer, fees in PathUSD, mppx's per-transaction
+// fee-payer policy, and every raw send booked before it leaves. Null while no
+// sponsor key parses. Memoized like tempoMethod.
+let cachedSponsorMethod = null;
+let cachedSponsorKey = "";
+function sponsorMethod() {
+  const acct = chargeSponsorAccount();
+  if (!acct) return null;
+  const policy = chargeSponsorPolicy();
+  const rpcUrl = String(process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz").trim();
+  const key = `${acct.address}|${envRecipient()}|${envCurrencies().join(",")}|${envDecimals()}|${rpcUrl}|${policy.maxTotalFee}`;
+  if (cachedSponsorMethod && cachedSponsorKey === key) return cachedSponsorMethod;
+  let client = null;
+  cachedSponsorMethod = tempo.charge({
+    currencies: envCurrencies(),
+    decimals: envDecimals(),
+    recipient: envRecipient(),
+    store: mppxReplayStore(),
+    feePayer: acct,
+    feePayerPolicy: policy,
+    feeToken: SPONSOR_FEE_TOKEN,
+    sponsorBudget: false,
+    getClient: async () => {
+      if (client) return client;
+      const { createClient, http } = await import("viem");
+      const { tempo: tempoChain } = await import("viem/tempo/chains");
+      client = createClient({ chain: { ...tempoChain, experimental_preconfirmationTime: 500 }, transport: withSponsorBooking(http(rpcUrl, { timeout: 30_000 })) });
+      return client;
+    },
+  });
+  cachedSponsorKey = key;
+  return cachedSponsorMethod;
+}
+/** Is this credential for a fee-sponsored challenge? (The HMAC binding is checked by the gate.) */
+export function isSponsoredTempoCredential(authorizationHeader) {
+  try { return isSponsoredChallengeRequest(Credential.deserialize(authorizationHeader)?.challenge?.request); } catch { return false; }
+}
+
 /** Mint an HMAC-bound `method: "tempo"` MPP challenge for a route's USD
  *  price. Returns null when the feature is disabled or a route has no
  *  parseable price — callers must never advertise a challenge nobody can
  *  actually settle. `secretKey` is the same MPP_SECRET_KEY the "evm" side
  *  already uses (one HMAC secret, not a second one to provision). */
-export function mintTempoChallenge({ priceUsd, description, realm, secretKey, timeoutSeconds = 300 }) {
+export function mintTempoChallenge({ priceUsd, description, realm, secretKey, timeoutSeconds = 300, sponsored = false }) {
   if (!tempoEnabled()) return null;
   // No secret, no challenge: an HMAC over an empty key is a challenge anyone
   // can mint, and the inbound gate (checkTempoCredentialBinding) would then
@@ -628,7 +680,10 @@ export function mintTempoChallenge({ priceUsd, description, realm, secretKey, ti
   // add are supplied here: chainId (fixed — Tempo mainnet 4217, mppx's
   // `defaults.chainId.mainnet`); there is no local feePayer, so none is set
   // and the buyer pays their own fee, exactly as the hook would resolve it.
-  const group = tempoMethod();
+  // A sponsored challenge (src/tempo-charge-sponsor.js decides, per request)
+  // asks for a fee-sponsored transaction: this server co-signs as fee payer.
+  const sponsorGroup = sponsored ? sponsorMethod() : null;
+  const group = sponsorGroup || tempoMethod();
   const challenges = envCurrencies().map((currency, i) => Challenge.fromMethod(group[i] || group[0], {
     realm,
     expires: new Date(Date.now() + timeoutSeconds * 1000),
@@ -638,6 +693,7 @@ export function mintTempoChallenge({ priceUsd, description, realm, secretKey, ti
       currency,
       decimals,
       recipient: envRecipient(),
+      ...(sponsorGroup ? { feePayer: true } : {}),
       ...(description ? { description: String(description).slice(0, 200) } : {}),
     },
     secretKey,
@@ -1311,8 +1367,25 @@ async function screenTempoFunding(authorizationHeader, phase, extra = []) {
  *  route binding is checkTempoCredentialBinding above - this only asks the
  *  relay whether the signed transaction is valid FOR THE CHALLENGE IT CARRIES,
  *  which is necessary but never sufficient. Never broadcasts, never moves money. */
+// A sponsored pull is settled by this server (sponsorMethod), so it is screened
+// as direct mode screens, and it runs only for a sender the gate can prove: a
+// sender only the chain could vouch for after the fact (a multisig envelope,
+// any shape inspectTempoSender cannot prove) is declined before anything is
+// claimed, nothing charged, and that client's next challenges are not sponsored.
+function sponsoredSenderProven(authorizationHeader) {
+  const s = inspectTempoSender(authorizationHeader);
+  return Boolean(s.verified || s.keychain || (s.booking && s.booking.ledger == null && s.booking.account));
+}
+const SPONSOR_DECLINED = (why) => ({ ok: false, cls: "fee-sponsor-declined", error: `fee sponsorship declined: ${why}`, reason: "fee sponsorship declined", requestId: null, relayMessage: null });
 export async function validateTempoCredential(authorizationHeader) {
-  const direct = tempoSettlementMode() === "direct";
+  const sponsored = isSponsoredTempoCredential(authorizationHeader);
+  if (sponsored) {
+    const pull = (() => { try { return Credential.deserialize(authorizationHeader)?.payload?.type === "transaction"; } catch { return false; } })();
+    if (pull && !sponsoredSenderProven(authorizationHeader)) { withholdSponsorshipForCurrentClient(); return SPONSOR_DECLINED("sender not proven"); }
+    if (pull && signingHalted()) return SPONSOR_DECLINED("outbound signing is halted");
+    if (pull && !sponsorMethod()) return SPONSOR_DECLINED("no sponsor key");
+  }
+  const direct = sponsored || tempoSettlementMode() === "direct";
   if (direct) {
     const refused = screenTempoParties(authorizationHeader, "before validate") || await screenTempoFunding(authorizationHeader, "before validate");
     if (refused) return refused;
@@ -1322,7 +1395,7 @@ export async function validateTempoCredential(authorizationHeader) {
     if (refused) return refused;
   }
   try {
-    const [validation] = await withRelayTrace(() => Method.validateCredential(tempoMethod(), authorizationHeader));
+    const [validation] = await withRelayTrace(() => Method.validateCredential((sponsored && sponsorMethod()) || tempoMethod(), authorizationHeader));
     // The sender mppx itself settled on (a push transfer's on-chain sender,
     // a pull transaction's signer, and since mppx 0.13.5 the payer its
     // matched transfers debited): screened too, before anything is claimed
@@ -1442,13 +1515,19 @@ export function pushFinalizeAmbiguous(f) {
  *  this after a successful (<400) handler response; see the server wiring
  *  in server.js for the buffer-then-decide discipline this depends on. */
 export async function broadcastTempoCredential(authorizationHeader) {
+  const sponsored = isSponsoredTempoCredential(authorizationHeader);
   // Again at the broadcast: the list may have refreshed since validation.
-  if (tempoSettlementMode() === "direct") {
+  if (sponsored || tempoSettlementMode() === "direct") {
     const refused = screenTempoParties(authorizationHeader, "before broadcast");
     if (refused) return refused;
   }
+  const sponsor = sponsored ? sponsorMethod() : null;
+  if (sponsored && (!sponsor || signingHalted())) return SPONSOR_DECLINED(sponsor ? "outbound signing is halted" : "no sponsor key");
   try {
-    const [receipt] = await withRelayTrace(() => Method.broadcastCredential(tempoMethod(), authorizationHeader));
+    const challengeId = sponsor ? (() => { try { return Credential.deserialize(authorizationHeader)?.challenge?.id || null; } catch { return null; } })() : null;
+    const [receipt] = await withRelayTrace(() => (sponsor
+      ? runSponsoredBroadcast(challengeId, () => Method.broadcastCredential(sponsor, authorizationHeader))
+      : Method.broadcastCredential(tempoMethod(), authorizationHeader)));
     return { ok: true, receipt };
   } catch (e) {
     const trace = e?.__relayTrace || {};
@@ -1472,6 +1551,8 @@ export async function __testRelayFetch(url, init) {
   catch (error) { return { error, trace }; }
 }
 export function __testResetMethodCache() {
+  cachedSponsorMethod = null;
+  cachedSponsorKey = "";
   cachedMethod = null;
   cachedKey = "";
 }
@@ -1551,6 +1632,7 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
               description: item.description,
               realm,
               secretKey,
+              sponsored: sponsorChargeFor(req),
             });
             if (header) {
               const existing = res.getHeader("WWW-Authenticate");
@@ -1563,7 +1645,9 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
       }
       return origWriteHead.apply(this, args);
     };
-    next();
+    // The rest of the request runs with its client in reach of a sponsored
+    // send's booking (src/tempo-charge-sponsor.js).
+    runWithSponsorContext(req, next);
   };
 }
 

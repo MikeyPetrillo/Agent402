@@ -261,6 +261,8 @@ t node scripts/test-mpp-subscription-screen.js
 t node scripts/test-mpp-subscription-activation-owed.js
 # Subscription gas sponsor: a rolling 24 h count and fee ceiling refuses a sponsored send past it before the RPC (offline, stub RPC)
 t node scripts/test-tempo-sponsor-ceiling.js
+# Tempo gas sponsorship for per-call payments: decided per challenge, every limit yields the ordinary challenge, unproven senders declined, sends booked (offline, stub RPC)
+t node scripts/test-tempo-gas-sponsorship.js
 # Tempo buyer: a minted credential must move exactly the capped quote to the checked recipient, refused before it is sent; our paying scripts sign tempo/charge under the per-call
 t node scripts/test-tempo-credential-check.js
 
