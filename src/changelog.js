@@ -63,6 +63,7 @@ const ENTRIES = [
       "Tools: market (GET /api/market/tick) joins the routes that are retired and answer 410; market names crypto-price as the replacement.",
       "Surfaces: /sell documents the manifest shape the index reads and the same-origin rule.",
       "Surfaces: The index also reads a manifest's items array.",
+      "Surfaces: Tool search finds the right tool for plurals, version numbers, common synonyms and question-shaped requests, and splits two-part tasks into a plan.",
       "Surfaces: Every /tools page now carries a sitemap lastmod.",
       "Surfaces: Chain pages' activity charts and the revenue view now resume from their stored scan state after a restart, reading only new blocks.",
     ],
