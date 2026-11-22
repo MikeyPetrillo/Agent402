@@ -22,7 +22,7 @@ process.env.CDP_API_KEY_SECRET = privateKey.export({ type: "pkcs8", format: "pem
 delete process.env.CDP_SQL_API_KEY_ID;
 delete process.env.CDP_SQL_API_KEY_SECRET;
 const cdp = await import("../src/tools/cdp-kit.js");
-const { CDP_TOOLS, dayWindowPlan, _setSlowQueryGatewayMsForTest, _setQueryHealthForTest, _resetSqlPacerForTest, SQL_MAX_ROWS, SQL_WINDOW_MAX_DAYS, QUERY_HEALTH_SQL } = cdp;
+const { CDP_TOOLS, dayWindowPlan, _setSlowQueryGatewayMsForTest, _setQueryHealthForTest, _resetSqlPacerForTest, SQL_MAX_ROWS, SQL_WINDOW_MAX_DAYS, SQL_WINDOW_MAX_QUERIES, QUERY_HEALTH_SQL } = cdp;
 
 let passed = 0, failed = 0;
 const ok = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -67,6 +67,18 @@ globalThis.fetch = async (url, init = {}) => {
 };
 const reset = () => { sent = []; rowsPerDay = 3; dayDelayMs = 5; failDay = null; wholeAnswers = false; };
 const days = (n) => `SELECT tx_id, block_time FROM solana.instructions WHERE block_time > now() - INTERVAL ${n} DAY AND executing_account = 'x'`;
+// Day queries one windowed call can send after its whole-range send.
+const D = SQL_WINDOW_MAX_QUERIES - 1;
+// A range just over a day that crosses one UTC midnight: two days, so it fits
+// the limit (waits out the first two minutes after midnight, where no such
+// range in whole minutes exists).
+async function twoDayRange() {
+  for (;;) {
+    const now = Date.now(), m = Math.floor((now % DAY) / 60_000);
+    if (m >= 2) return `SELECT tx_id, block_time FROM solana.instructions WHERE block_time > now() - INTERVAL ${1440 + Math.floor(m / 2)} MINUTE AND executing_account = 'x'`;
+    await new Promise((r) => setTimeout(r, 5_000));
+  }
+}
 const sortedAsc = (rows) => rows.every((r, i) => i === 0 || rows[i - 1].block_time <= r.block_time);
 const sortedDesc = (rows) => rows.every((r, i) => i === 0 || rows[i - 1].block_time >= r.block_time);
 
@@ -102,19 +114,39 @@ try {
     ok(dayWindowPlan("SELECT count_of_x FROM solana.instructions WHERE block_time > now() - INTERVAL 7 DAY", at) !== null && dayWindowPlan("SELECT tx_id FROM solana.instructions WHERE block_time > now() - INTERVAL 7 DAY AND tx_signer = 'group by sum('", at) !== null, "a column named like an aggregate, or the words inside a string, do not block the split");
   }
 
-  // ---- a long-range select that times out whole is answered by day windows ----
+  // ---- the windowed call's query limit ----
+  ok(D >= 1, `a windowed call has room for at least one day query (limit ${SQL_WINDOW_MAX_QUERIES})`);
+  // ---- a range that fits the limit is answered whole from its days ----
   {
     reset();
-    const r = await sql(days(7));
-    ok(Array.isArray(r.rows) && r.rows.length === 8 * 3 && sortedAsc(r.rows), `the 7-day select is answered from its days, oldest first, in order (${r.rows?.length} rows)`);
-    ok(r.complete === true && r.truncated === false && r.matched === r.returned && r.windowed?.by === "day" && r.windowed.days === 8 && r.windowed.daysRead === 8, `complete, with the days read in fields (${JSON.stringify(r.windowed)})`);
-    ok(sent.length === 1 + 8 && !/toDateTime/.test(sent[0]), `one whole-range query, then one per day (${sent.length} queries)`);
+    const q = await twoDayRange();
+    ok(D >= 2 && dayWindowPlan(q).spans.length === 2, "the two-day range splits into two UTC days");
+    const r = await sql(q);
+    ok(Array.isArray(r.rows) && r.rows.length === 2 * 3 && sortedAsc(r.rows), `the two-day select is answered from its days, oldest first, in order (${r.rows?.length} rows)`);
+    ok(r.complete === true && r.truncated === false && r.matched === r.returned && r.windowed?.by === "day" && r.windowed.days === 2 && r.windowed.daysRead === 2, `complete, with the days read in fields (${JSON.stringify(r.windowed)})`);
+    ok(sent.length === 1 + 2 && !/toDateTime/.test(sent[0]), `one whole-range query, then one per day (${sent.length} queries)`);
     ok(/one day at a time/.test(r.note), "the note says it was read one day at a time");
   }
   {
     reset();
-    const r = await sql(`${days(5)} ORDER BY block_time DESC`);
-    ok(r.rows.length === 6 * 3 && sortedDesc(r.rows) && r.windowed.order === "desc", `ORDER BY block_time DESC reads newest first and merges in order (${r.rows.length})`);
+    const q = await twoDayRange();
+    const r = await sql(`${q} ORDER BY block_time DESC`);
+    ok(r.rows.length === 2 * 3 && sortedDesc(r.rows) && r.windowed.order === "desc" && r.complete === true, `ORDER BY block_time DESC reads newest first and merges in order (${r.rows.length})`);
+  }
+  // ---- a range past the limit reads the first days and marks the rest ----
+  for (const n of [7, SQL_WINDOW_MAX_DAYS]) {
+    reset();
+    const p = dayWindowPlan(days(n), Date.now());
+    const r = await sql(days(n));
+    ok(sent.length <= SQL_WINDOW_MAX_QUERIES && sent.length === 1 + D, `${n} days: the call sends ${sent.length} queries, at most ${SQL_WINDOW_MAX_QUERIES}`);
+    ok(r.rows.length === D * 3 && sortedAsc(r.rows) && r.complete === false && r.truncated === true && r.matchedIsLowerBound === true, `${n} days: the rows of the first ${D} days, partial in fields (${r.rows.length})`);
+    ok(r.windowed.daysRead === D && r.windowed.days === p.spans.length && r.windowed.stoppedBy === "query-limit" && r.windowed.coveredTo === new Date(p.spans[D].from).toISOString(), `${n} days: the fields name the query limit and what was covered (${JSON.stringify(r.windowed)})`);
+    ok(new RegExp(`limit of ${SQL_WINDOW_MAX_QUERIES} queries`).test(r.note) && /for the rest/.test(r.note), `${n} days: the note names the limit and how to read the rest`);
+  }
+  {
+    reset();
+    const r = await sql(`${days(7)} ORDER BY block_time DESC`);
+    ok(r.rows.length === D * 3 && sortedDesc(r.rows) && r.windowed.order === "desc" && r.windowed.stoppedBy === "query-limit" && sent.length === 1 + D, `DESC past the limit reads the newest ${D} days (${r.rows.length})`);
   }
   // ---- the buyer's LIMIT and the row cap stop the walk ----
   {
@@ -124,9 +156,9 @@ try {
   }
   {
     reset();
-    rowsPerDay = 300;
+    rowsPerDay = SQL_MAX_ROWS;
     const r = await sql(days(7));
-    ok(r.rows.length === SQL_MAX_ROWS && r.truncated === true && r.complete === false && r.matchedIsLowerBound === true && sent.length === 1 + 4, `past the row cap the first ${SQL_MAX_ROWS} are served, marked truncated (${r.rows.length}, ${sent.length} queries)`);
+    ok(r.rows.length === SQL_MAX_ROWS && r.truncated === true && r.complete === false && r.matchedIsLowerBound === true && sent.length === 1 + 2, `past the row cap the first ${SQL_MAX_ROWS} are served, marked truncated (${r.rows.length}, ${sent.length} queries)`);
     ok(/more than 1000 rows matched/.test(r.note), "the note names the cap");
   }
   // ---- partial answers say so in fields ----
@@ -134,35 +166,37 @@ try {
     reset();
     const at = Date.now();
     const p = dayWindowPlan(days(7), at);
-    failDay = new Date(p.spans[3].from).toISOString().slice(0, 10);
+    failDay = new Date(p.spans[1].from).toISOString().slice(0, 10);
     const r = await sql(days(7));
-    ok(r.rows.length === 3 * 3 && r.complete === false && r.truncated === true && r.matchedIsLowerBound === true, `a day past the window ends the walk with the rows read so far, partial in fields (${r.rows.length})`);
-    ok(r.windowed.daysRead === 3 && r.windowed.stoppedBy === "day-past-window" && r.windowed.coveredTo === new Date(p.spans[3].from).toISOString(), `the fields name what was covered (${JSON.stringify(r.windowed)})`);
+    ok(r.rows.length === 3 && r.complete === false && r.truncated === true && r.matchedIsLowerBound === true, `a day past the window ends the walk with the rows read so far, partial in fields (${r.rows.length})`);
+    ok(r.windowed.daysRead === 1 && r.windowed.stoppedBy === "day-past-window" && r.windowed.coveredTo === new Date(p.spans[1].from).toISOString(), `the fields name what was covered (${JSON.stringify(r.windowed)})`);
     ok(/for the rest/.test(r.note), "the note says how to read the rest");
   }
   {
     reset();
-    dayDelayMs = 400;
+    dayDelayMs = 1200;
     process.env.UPSTREAM_HANDLER_BUDGET_MS = "5000";
     const r = await sql(days(7));
     delete process.env.UPSTREAM_HANDLER_BUDGET_MS;
-    ok(r.complete === false && r.windowed.stoppedBy === "time" && r.windowed.daysRead >= 1 && r.windowed.daysRead < 8, `the walk stops inside the call's time budget, partial in fields (${r.windowed?.daysRead} days)`);
+    ok(r.complete === false && r.windowed.stoppedBy === "time" && r.windowed.daysRead >= 1 && r.windowed.daysRead < D, `the walk stops inside the call's time budget, partial in fields (${r.windowed?.daysRead} days)`);
   }
   // ---- uncharged as before when nothing is delivered ----
   {
     reset();
     const at = Date.now();
-    const p = dayWindowPlan(days(7), at);
     failDay = new Date(at - 7 * DAY).toISOString().slice(0, 10); // the first (open-below) day
-    void p;
     const e = await sql(days(7)).catch((x) => x);
     ok(e?.statusCode === 422 && e?.hint === "narrow-query" && e?.charged === false, `no day answering: the same uncharged narrow-query 422 (${e?.statusCode})`);
   }
   {
     reset();
     rowsPerDay = 0;
-    const r = await sql(days(3));
-    ok(Array.isArray(r.rows) && r.rows.length === 0 && r.complete === true && r.windowed.daysRead === 4, "every day read and none matched: a complete answer with no rows");
+    const r = await sql(await twoDayRange());
+    ok(Array.isArray(r.rows) && r.rows.length === 0 && r.complete === true && r.windowed.daysRead === 2, "every day read and none matched: a complete answer with no rows");
+    reset();
+    rowsPerDay = 0;
+    const e = await sql(days(7)).catch((x) => x);
+    ok(e?.statusCode === 422 && e?.charged === false && sent.length === 1 + D, `no rows in the days the limit allows: the uncharged 422, not an empty answer that reads complete (${e?.statusCode}, ${sent.length} queries)`);
   }
   // ---- aggregates and other queries are passed through unchanged ----
   {

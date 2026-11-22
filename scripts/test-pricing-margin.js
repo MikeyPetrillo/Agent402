@@ -430,7 +430,7 @@ console.log("\n# onchain-sql: the call's query budget vs price");
 // MARGIN. Every other tool keeps MARGIN.
 const SQL_WORST_CASE_BOUND = 0.87;
 {
-  const { CDP_TOOLS, SQL_QUERY_BUDGET } = await import("../src/tools/cdp-kit.js");
+  const { CDP_TOOLS, SQL_QUERY_BUDGET, SQL_WINDOW_MAX_QUERIES } = await import("../src/tools/cdp-kit.js");
   const { PACK_PRICES, SKILL_PACKS } = await import("../src/skills.js");
   const { vendorRate } = await import("../src/upstream-costs.js");
   const rate = vendorRate("cdp", "sqlQuery");
@@ -448,6 +448,12 @@ const SQL_WORST_CASE_BOUND = 0.87;
     ok(SQL_QUERY_BUDGET >= 3 && Number.isFinite(sqlPrice) && sqlPrice > 0, `onchain-sql: a list price and a query budget of ${SQL_QUERY_BUDGET} to price against`);
     ok(cost <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12, `onchain-sql: ${SQL_QUERY_BUDGET} queries at the table rate plus a settlement keep at least 13% of the list price: ${cost <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12 ? "PASS" : "FAIL"}`);
     table.push({ tier: "onchain-sql", price: sqlPrice, worst: cost, model: `${SQL_QUERY_BUDGET} queries (query service)` });
+    // A call read one day at a time sends at most SQL_WINDOW_MAX_QUERIES
+    // queries in all (the whole-range send and its days), held to the same bound.
+    const windowed = SQL_WINDOW_MAX_QUERIES * rate + (Number.isFinite(settle) ? settle : 0);
+    ok(Number.isInteger(SQL_WINDOW_MAX_QUERIES) && SQL_WINDOW_MAX_QUERIES >= 2, `onchain-sql: a windowed call has a whole number of queries, room for at least one day (${SQL_WINDOW_MAX_QUERIES})`);
+    ok(windowed <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12, `onchain-sql: a day-windowed call's ${SQL_WINDOW_MAX_QUERIES} queries at the table rate plus a settlement keep at least 13% of the list price: ${windowed <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12 ? "PASS" : "FAIL"}`);
+    table.push({ tier: "onchain-sql (day windows)", price: sqlPrice, worst: windowed, model: `${SQL_WINDOW_MAX_QUERIES} queries (whole range and its days)` });
     // The only other route that sends a buyer's query to the query service is
     // the onchain-analyst pack (skill-runner.js runs onchain-sql once); the
     // schema step reads the schema endpoint, which is not a query.
