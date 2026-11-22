@@ -1231,6 +1231,19 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     const off = run("off"), on = run("auto");
     ok(off?.on === false && off.mark === false && on?.on === true && on.mark === true,
       `GATEWAY_SETTLE_FIRST=off prints no settle-first sentence on a served surface, and the default prints it (off: ${JSON.stringify(off)}, on: ${JSON.stringify(on)})`);
+    // With the sentence gone, the text around it closes up: no double space
+    // and no trailing space where it stood.
+    const spacing = `
+      const { refundClauses } = await import(${JSON.stringify(join(root, "src/refund-terms.js"))});
+      const { failedCallFootnote } = await import(${JSON.stringify(join(root, "src/settlement-footnote.js"))});
+      const { refundTermsFullDocument } = await import(${JSON.stringify(join(root, "src/refund-terms-doc.js"))});
+      const texts = { ...Object.fromEntries(refundClauses().map((c) => ["clause " + c.id, c.text])), "footnote": failedCallFootnote({ rails: ["x402"], tempoPush: true }), "footnote, no push": failedCallFootnote({ rails: ["x402"] }), "refund terms legend": refundTermsFullDocument("").legend.chargedOnErrorAnswer };
+      console.log(JSON.stringify(Object.entries(texts).filter(([, t]) => typeof t === "string" && (/ {2}/.test(t) || /\\s$/.test(t) || /^\\s/.test(t))).map(([k]) => k)));`;
+    const spaced = (v) => { try { return childJson(execFileSync(process.execPath, ["--input-type=module", "-e", spacing], { env: { ...process.env, GATEWAY_SETTLE_FIRST: v, REDIS_URL: "", STATE_DATABASE_URL: "" }, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })); } catch { return null; } };
+    for (const v of ["off", "auto"]) {
+      const bad = spaced(v);
+      ok(Array.isArray(bad) && bad.length === 0, `GATEWAY_SETTLE_FIRST=${v}: the refund clauses, the failed-call footnote and the refund terms legend carry no double, leading or trailing space (${bad === null ? "probe failed" : bad.join(", ") || "none"})`);
+    }
     const { settleFirstEnabled } = await import("../src/gateway-settle-breaker.js");
     const { settleFirstCopyOn } = fam;
     ok(typeof settleFirstCopyOn === "function" && ["off", " OFF ", "", "auto", "always", "on"].every((v) => settleFirstCopyOn({ GATEWAY_SETTLE_FIRST: v }) === settleFirstEnabled({ GATEWAY_SETTLE_FIRST: v })),

@@ -76,7 +76,7 @@ export function refundTermsFullDocument(baseUrl = "", { freeMode = false, rails 
     governs: "The terms of service govern; this document states the same rules as data, computed from the serving code.",
     conformance: `${baseUrl}${CONFORMANCE_PATH}`,
     legend: {
-      chargedOnErrorAnswer: `false: an answer of 400 or above is not charged on this rail (x402, MPP evm, a Tempo pull, a card capture, credits). ${SETTLE_FIRST_SENTENCE} true: the payment is taken before the route runs (a Tempo push transfer, a card checkout), so a failed call is repaid as refundOnChargedFailure says; null: nothing is charged on this rail`,
+      chargedOnErrorAnswer: `false: an answer of 400 or above is not charged on this rail (x402, MPP evm, a Tempo pull, a card capture, credits).${SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE}` : ""} true: the payment is taken before the route runs (a Tempo push transfer, a card checkout), so a failed call is repaid as refundOnChargedFailure says; null: nothing is charged on this rail`,
       offered: "true while this server accepts payment on the rail",
     },
     rules: {

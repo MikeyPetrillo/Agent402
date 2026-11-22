@@ -40,7 +40,7 @@ export function refundClauses({ gatewayBatched = false } = {}) {
     {
       id: "settle-after-success",
       section: "Payments",
-      text: `An x402 payment on our own routes settles only after your call returns a successful response; if the call returns an error, the payment is not settled and you are not charged. ${SETTLE_FIRST_SENTENCE}`,
+      text: `An x402 payment on our own routes settles only after your call returns a successful response; if the call returns an error, the payment is not settled and you are not charged.${SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE}` : ""}`,
       appliesTo: ["x402"],
       chargedOnError: false,
       owed: false,
@@ -98,7 +98,7 @@ export function refundClauses({ gatewayBatched = false } = {}) {
     {
       id: "ordinary-failure",
       section: "Refunds on-chain",
-      text: `Because an x402 payment settles only after a call succeeds, the ordinary failure case costs nothing and needs no refund. ${SETTLE_FIRST_SENTENCE}`.trim(),
+      text: `Because an x402 payment settles only after a call succeeds, the ordinary failure case costs nothing and needs no refund.${SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE}` : ""}`,
       owed: false,
     },
     {
