@@ -62,7 +62,7 @@
     "src/tools/bundle-kit.js": "2026-11-22",
     "src/tools/calendar-kit.js": "2026-11-09",
     "src/tools/captcha-kit.js": "2026-10-14",
-    "src/tools/cdp-kit.js": "2026-11-21",
+    "src/tools/cdp-kit.js": "2026-11-22",
     "src/tools/chain-kit.js": "2026-11-19",
     "src/tools/chain-rpc-kit.js": "2026-09-22",
     "src/tools/child-env.js": "2026-11-10",
