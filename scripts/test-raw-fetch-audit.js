@@ -156,7 +156,7 @@ const DEFAULTS = {
   "src/robinhood-outage.js": { n: 1, cls: "fixed", note: "the configured eip155:4663 RPC, through rpc() with its timeout" },
   "src/sanctions-screen.js": { n: 2, cls: "fixed" },
   "src/search-data.js": { n: 1, cls: "fixed" },
-  "src/settle-onchain-proof.js": { n: 1, cls: "fixed" },
+  "src/settle-onchain-proof.js": { n: 2, cls: "fixed", note: "the configured chain RPC (evmRpcFor), through rpc() with its timeout: the transfer proof and the head read (readChainHead)" },
   "src/solana-buyer.js": { n: 4, cls: "fixed" },
   "src/stellar-confirm.js": { n: 2, cls: "fixed" },
   "src/stellar-facilitator-status.js": { n: 1, cls: "fixed" },
