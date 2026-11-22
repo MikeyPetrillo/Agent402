@@ -11,6 +11,7 @@ import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { bootServer } from "./boot-server.js";
+import { disableVendorSpendControls } from "../../src/x402-spend-controls.js";
 
 export const BASE = "eip155:8453";
 export const CELO = "eip155:42220";
@@ -129,7 +130,7 @@ export async function startSettleDeadlineHarness({ env = {}, stores = "settle-de
   };
   const pay = async (network) => {
     const account = privateKeyToAccount(generatePrivateKey());
-    const payments = new x402Client();
+    const payments = disableVendorSpendControls(new x402Client());
     registerExactEvmScheme(payments, { signer: account });
     const r = await fetch(`${B}${PATH}`, { method: "POST", headers: { "content-type": "application/json" }, body });
     await r.arrayBuffer();

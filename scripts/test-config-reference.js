@@ -13,6 +13,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { scanSource, scanTree, envNames, stripComments } from "./lib/env-reads.js";
 import { buildReference, CONFIG_PATH, DOC_PATH, defaultOf, isCostShapedName, WITHHELD_DEFAULT_TEXT } from "./gen-config-reference.js";
 
@@ -65,7 +66,7 @@ ok(dollars.length === 0, `no purpose line carries a dollar figure or an em dash$
   for (const n of withheld) { const v = await figureOf(n); if (v !== null && Number(v) !== 0) figures.push([n, v]); }
   ok(figures.length === withheld.length, `every withheld default has a figure read from the code (${figures.length} of ${withheld.length})`);
   const walkMd = (d) => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walkMd(join(d, e.name)) : /\.(md|json|txt)$/.test(e.name) ? [join(d, e.name)] : []));
-  const ROOT_DIR = new URL("..", import.meta.url).pathname;
+  const ROOT_DIR = fileURLToPath(new URL("..", import.meta.url));
   const surfaces = [...walkMd(join(ROOT_DIR, "wiki")), ...walkMd(join(ROOT_DIR, "docs")), join(ROOT_DIR, "CHANGELOG.md"), join(ROOT_DIR, "src", "changelog.js")];
   // The figure as a number token within 240 characters after a mention of the name.
   const figureNear = (body, n, v) => {

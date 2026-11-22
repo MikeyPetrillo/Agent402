@@ -1,6 +1,6 @@
 // One paid call that honors the server's slow-route contract, for the repo
-// scripts that buy catalog routes (base-list-sweep, catalog-buy,
-// cross-chain-matrix, the decide checks).
+// scripts that buy catalog routes (base-list-sweep, catalog-buy, the decide
+// checks).
 //
 // A slow route (its /api/pricing row, or its 402 body, carries an `async`
 // block: src/slow-routes.js asyncAdvice) refuses a paid call that waits on the

@@ -13,6 +13,7 @@
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { childJson } from "./lib/child-json.js";
 
 if (!String(process.env.REDIS_URL || "").trim()) {
   const msg = "test-settle-first-meter-redis: no REDIS_URL; start a local redis and export REDIS_URL=redis://127.0.0.1:6379";
@@ -88,7 +89,7 @@ ok(!aLater.on && !cLater.on, `24 hours on, the cost has rolled out of the window
     process.exit(0);
   `], { env: { ...process.env, REDIS_URL: "redis://127.0.0.1:1", SHARED_LIMITS_PREFIX: `${process.env.SHARED_LIMITS_PREFIX}-dead` }, encoding: "utf8", timeout: 30_000 });
   let v = null;
-  try { v = JSON.parse(String(child.stdout || "").trim().split("\n").pop()); } catch { v = null; }
+  try { v = childJson(child.stdout || ""); } catch { v = null; }
   ok(v?.on === true && v.why === "meter-unread", `a Redis that does not answer: the meter cannot be read and the mode reads on (${JSON.stringify(v)})`);
 }
 
