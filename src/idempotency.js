@@ -88,8 +88,11 @@ export function unconfirmedKeyOf(req, cred) {
 // not delivered, is owed back (the refund ledger, class settle-first-failed).
 // The failure says the same payment may be sent again (`retry:
 // "same-payment"`): a CREDIT is kept here under the payment's identity (as
-// for an unconfirmed answer, above) AND the route and body it paid for, bound
-// to the payer's signature digest, for CREDIT_TTL_MS. The same request sent
+// for an unconfirmed answer, above) AND the route it paid for, bound to the
+// payer's signature digest, for CREDIT_TTL_MS; the digest of the body it paid
+// for is kept INSIDE the record, so a request carrying a payment header has
+// its body hashed only when a credit is stored for that payment (a large body
+// with a payment that holds none is never read here). The same request sent
 // again with that payment is run once more WITHOUT any settlement (the
 // payment is already taken): the server voids the debt before the run
 // (onSettledFirstResend: a hold the refund run cannot claim past), restores
@@ -98,7 +101,24 @@ export function unconfirmedKeyOf(req, cred) {
 // while one runs is told to wait (409). A served credit is spent here.
 const CREDIT = "__a402SettledFirstCredit";
 export const CREDIT_TTL_MS = 24 * 3600_000;
-/** The key a settle-first credit is kept under for this request's payment, route and body. */
+/** A digest of this request's JSON body, worked out once per request (the
+ *  explicit or implicit idempotency key, the call digest of a kept answer and
+ *  a settle-first credit all bind to it). Throws as JSON.stringify does. */
+const bodyDigests = new WeakMap();
+function bodyDigestOf(req) {
+  const memo = bodyDigests.get(req);
+  if (memo && memo.body === req.body) return memo.digest;
+  const digest = createHash("sha256").update(JSON.stringify(req.body)).digest("hex");
+  bodyDigests.set(req, { body: req.body, digest });
+  return digest;
+}
+/** The body a settle-first credit is bound to: kept in the credit's record
+ *  and compared with a resend's ("-" for none, "?" for one that cannot be read). */
+export function settledFirstCreditBodyOf(req) {
+  try { return req.body && typeof req.body === "object" && Object.keys(req.body).length ? bodyDigestOf(req) : "-"; } catch { return "?"; }
+}
+/** The key a settle-first credit is kept under for this request's payment and
+ *  route (its body is bound inside the record: settledFirstCreditBodyOf). */
 export function settledFirstCreditKeyOf(req, cred) {
   let id = null;
   try {
@@ -110,12 +130,10 @@ export function settledFirstCreditKeyOf(req, cred) {
       if (typeof k === "string" && !k.startsWith("c:")) id = `replay\n${k.split(":").slice(0, 2).join(":")}`;
     }
   } catch { id = null; }
-  let bodyHash = "-";
-  try { bodyHash = req.body && typeof req.body === "object" && Object.keys(req.body).length ? createHash("sha256").update(JSON.stringify(req.body)).digest("hex") : "-"; } catch { bodyHash = "?"; }
   const url = String(req.originalUrl || req.url || "");
   const qs = url.includes("?") ? `\n?${url.slice(url.indexOf("?") + 1)}` : "";
   const wire = isX402McpRequest(req) ? "x402-mcp " : "";
-  return createHash("sha256").update(`settled-first-credit\n${id || `cred\n${textOf(cred)}`}\n${wire}${req.method} ${req.path}${qs}\n${bodyHash}`).digest("hex");
+  return createHash("sha256").update(`settled-first-credit-v2\n${id || `cred\n${textOf(cred)}`}\n${wire}${req.method} ${req.path}${qs}`).digest("hex");
 }
 
 /** What binds a stored unconfirmed answer to the payer's own signature. The
@@ -316,9 +334,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     // Bind to the exact route AND the request body, so the same key+credential
     // can't be used to retrieve a cached response from a different payload or
     // different endpoint. Body is hashed (not stored) so the key stays compact.
-    const bodyHash = req.body && Object.keys(req.body).length
-      ? createHash("sha256").update(JSON.stringify(req.body)).digest("hex")
-      : "-";
+    const bodyHash = req.body && Object.keys(req.body).length ? bodyDigestOf(req) : "-";
     // A GET tool takes its input on the query string: bound too (as sent), so
     // a repeat with another input is a different call. Added only when there
     // is one, so a query-less key hashes exactly as before.
@@ -334,7 +350,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
   // route answer is served only to the same call: the unconfirmed 402 is the
   // payment's whatever the call, the route's answer is that call's alone.
   const callDigestOf = (req) => {
-    const bodyHash = req.body && typeof req.body === "object" && Object.keys(req.body).length ? createHash("sha256").update(JSON.stringify(req.body)).digest("hex") : "-";
+    const bodyHash = req.body && typeof req.body === "object" && Object.keys(req.body).length ? bodyDigestOf(req) : "-";
     const url = String(req.originalUrl || req.url || "");
     const qs = url.includes("?") ? `\n?${url.slice(url.indexOf("?") + 1)}` : "";
     const wire = isX402McpRequest(req) ? "x402-mcp " : "";
@@ -413,8 +429,10 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
   };
   // Keep a credit for this request's payment when its run settled first and
   // then failed or was not delivered (settledFirstCredit says so).
-  const keepSettledFirstCredit = (req, res, cKey, sig) => {
-    if (typeof sig !== "string" || !sig) return;
+  // `occupied`: an unspent credit for this payment and route under another
+  // body is stored at cKey, and is never replaced.
+  const keepSettledFirstCredit = (req, res, cKey, sig, occupied) => {
+    if (typeof sig !== "string" || !sig || occupied) return;
     let done = false;
     onResponseEnd(req, res, (info) => {
       if (done) return;
@@ -424,7 +442,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
         if (!(status >= 400)) return;
         const c = settledFirstCredit(req, status);
         if (!c || typeof c.tx !== "string" || !c.tx) return;
-        const rec = { [CREDIT]: 1, sig, tx: c.tx, network: c.network ?? null, wire: c.wire ?? null, note: typeof c.note === "string" ? c.note : null, receipt: typeof c.receipt === "string" ? c.receipt : null, at: Date.now() };
+        const rec = { [CREDIT]: 1, sig, body: settledFirstCreditBodyOf(req), tx: c.tx, network: c.network ?? null, wire: c.wire ?? null, note: typeof c.note === "string" ? c.note : null, receipt: typeof c.receipt === "string" ? c.receipt : null, at: Date.now() };
         const bytes = Buffer.byteLength(JSON.stringify(rec), "utf8");
         if (bytes > IDEM_MAX_BODY_BYTES) return;
         store.set(cKey, rec, bytes, { ttlMs: CREDIT_TTL_MS }).catch(() => {});
@@ -490,12 +508,14 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     if (uKey && !uStored) keepUnconfirmed(req, res, uKey, uSig);
     // A credit for this payment, route and body (above), when no answer is
     // stored for it: the payment's failed settle-first run is run again.
-    const credit = cHit && typeof cHit === "object" && cHit[CREDIT] === 1 && !cHit.spent && typeof cHit.tx === "string" && cHit.tx ? cHit : null;
+    // The body is read only now, when a credit is stored for this payment.
+    const live = cHit && typeof cHit === "object" && cHit[CREDIT] === 1 && !cHit.spent && typeof cHit.tx === "string" && cHit.tx ? cHit : null;
+    const credit = live && typeof live.body === "string" && live.body === settledFirstCreditBodyOf(req) ? live : null;
     if (credit && (hit0 === null || hit0 === undefined) && typeof uSig === "string" && uSig && credit.sig === uSig && typeof onSettledFirstResend === "function") {
       // Answered here (a wait, a refund, a pending ledger), or marked and run
       // on: its answer is kept below like any paid call's.
       if (await startSettledFirstCredit(req, res, cKey, credit)) return;
-    } else if (cKey) keepSettledFirstCredit(req, res, cKey, uSig);
+    } else if (cKey) keepSettledFirstCredit(req, res, cKey, uSig, Boolean(live && !credit));
     if (!bound) return next();
     const { key, kind, implicit } = bound;
     let hit = hit0;

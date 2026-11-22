@@ -231,6 +231,65 @@ const realNow = Date.now;
   } finally { await new Promise((r) => srv.close(r)); }
 }
 
+// ---- settle-first credit: the body is read only when a credit is stored ------
+// A request carrying a payment header has its body hashed here only when a
+// credit for that payment is stored (or an idempotency key binds it, once):
+// a large body whose payment holds no credit is never serialized before the
+// paywall. The credit still binds the body it paid for: the same payment
+// under another body is not run on it and never replaces it.
+{
+  const local = createLocalIdempotencyStore({ maxEntries: 100 });
+  const counts = { stringify: 0, resends: 0, runs: 0 };
+  const TX = `0x${randomBytes(32).toString("hex")}`;
+  const app = express();
+  app.use(express.json({ limit: "20mb" }));
+  app.use((req, _res, next) => {
+    if (req.body && typeof req.body === "object") {
+      const plain = { ...req.body };
+      Object.defineProperty(req.body, "toJSON", { enumerable: false, value: () => { counts.stringify++; return plain; } });
+    }
+    next();
+  });
+  app.use(createIdempotency({
+    isCatalogRoute: () => true, store: local,
+    settledFirstCredit: (req) => (req.header("x-test-settled") === "1" ? { tx: TX, network: NET, note: "settle-first-failed" } : null),
+    onSettledFirstResend: async () => { counts.resends++; return { serve: true }; },
+  }));
+  app.post("/v1/images/edits", (req, res) => {
+    counts.runs++;
+    if (req.header("x-test-fail") === "1") return res.status(502).json({ error: "upstream_failed" });
+    res.json({ ok: true });
+  });
+  const srv = await new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const send = async (header, body, extra = {}) => {
+    const r = await fetch(`${base}/v1/images/edits`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": header, ...extra }, body: JSON.stringify(body) });
+    await r.text();
+    return r.status;
+  };
+  try {
+    const big = { image: "A".repeat(8 * 1024 * 1024), prompt: "x" };
+    const other = enc(payloadOf({ nonce: newNonce(), validBefore: 9_999_999_999 }));
+    counts.stringify = 0;
+    await send(other, big);
+    ok(counts.stringify === 0, `a large body whose payment holds no credit is never serialized here (serialized ${counts.stringify}x)`);
+    counts.stringify = 0;
+    await send(enc(payloadOf({ nonce: newNonce(), validBefore: 9_999_999_999 })), big, { "idempotency-key": "k-big" });
+    ok(counts.stringify === 1, `an idempotency key reads the body once (serialized ${counts.stringify}x)`);
+
+    const header = enc(payloadOf({ nonce: newNonce(), validBefore: 9_999_999_999 }));
+    ok(await send(header, { q: "a" }, { "x-test-settled": "1", "x-test-fail": "1" }) === 502, "a settled-first run fails");
+    await settle();
+    const runs0 = counts.runs;
+    ok(await send(header, { q: "b" }, { "x-test-settled": "1", "x-test-fail": "1" }) === 502 && counts.resends === 0 && counts.runs === runs0 + 1,
+      "the same payment under another body is not run on the credit");
+    await settle();
+    ok(await send(header, { q: "a" }) === 200 && counts.resends === 1, "the same payment and body is run again on its credit (another body's failure did not replace it)");
+    await settle();
+    ok(await send(header, { q: "a" }) === 200 && counts.resends === 1, "a spent credit is not run on again");
+  } finally { await new Promise((r) => srv.close(r)); local.stop?.(); }
+}
+
 // ---- shared, real Redis ------------------------------------------------------
 const url = String(process.env.REDIS_URL || "").trim();
 if (!url) {
