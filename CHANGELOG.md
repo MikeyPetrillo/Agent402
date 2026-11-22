@@ -50,6 +50,23 @@ Tools:
 - onchain-sql: a long-range plain row select on `solana.instructions` that
   runs past the query service's time window is now read one day at a time,
   with partial answers marked in fields.
+- onchain-sql: a call read one day at a time sends at most 3 queries in
+  all, the whole-range send included; a range with more days answers the
+  first ones, and its fields name the limit and where to continue.
+
+### 2026-11-22 (seller-trust wallets)
+Router:
+- seller-trust's `routerGate` names the wallet its settled calls were
+  measured at (`measuredAtWallet`), the Base payTo the seller's 402 named at
+  our last crawl (`livePayTo`) with that wallet's own counted calls, and a
+  `walletNote` when the two differ, since the router counts history only at
+  the payTo the live 402 names.
+
+### 2026-11-22 (regex time limit)
+Tools:
+- The regex tool's 750 ms limit covers the pattern's own run, so a busy
+  server no longer times out an ordinary pattern; a catastrophic pattern is
+  still stopped and not charged.
 
 ## v2.12.1 - 2026-11-22
 

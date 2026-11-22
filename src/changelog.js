@@ -8,6 +8,7 @@ import { walletSignInEnabled } from "./wallet-sign-in.js";
 import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel as span, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
 import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, TRANSCRIBE_LONG_RUN_SECONDS, sttLongEnabled, sttAdditions } from "./tools/stt-kit.js";
 import { speechAdditions } from "./tools/llm-gateway-kit.js";
+import { SQL_WINDOW_MAX_QUERIES } from "./tools/cdp-kit.js";
 import { returningWalletEnabled, WALLET_HINT_HEADER, WALLET_PROOF_HEADER } from "./returning-wallet.js";
 import { BOARD_REFRESH_MS } from "./refresh-cadence.js";
 import { tempoGasSponsorConfig, chargeSponsorAccount } from "./tempo-charge-sponsor.js";
@@ -97,6 +98,21 @@ const ENTRIES = [
     title: "onchain-sql day reads",
     items: [
       "Tools: onchain-sql: a long-range plain row select on `solana.instructions` that runs past the query service's time window is now read one day at a time, with partial answers marked in fields.",
+      `Tools: onchain-sql: a call read one day at a time sends at most ${SQL_WINDOW_MAX_QUERIES} queries in all, the whole-range send included; a range with more days answers the first ones, and its fields name the limit and where to continue.`,
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Seller-trust wallets",
+    items: [
+      "Router: seller-trust's `routerGate` names the wallet its settled calls were measured at (`measuredAtWallet`), the Base payTo the seller's 402 named at our last crawl (`livePayTo`) with that wallet's own counted calls, and a `walletNote` when the two differ, since the router counts history only at the payTo the live 402 names.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Regex time limit",
+    items: [
+      "Tools: The regex tool's 750 ms limit covers the pattern's own run, so a busy server no longer times out an ordinary pattern; a catastrophic pattern is still stopped and not charged.",
     ],
   },
   {
