@@ -14,7 +14,7 @@ final 200. A 4xx or 5xx is never settled, an x402 buyer who hangs up before the
 answer is not charged on x402 while the run holds a hang-up forgiveness ticket,
 and nothing is debited before the handler has answered. (A Tempo push transfer
 is the one exception: it is on chain before the call runs, so a failed call on
-it is recorded as owed and repaid.)
+it is recorded as owed and repaid.) When this server is protecting itself from unpaid runs, a model or image call from a new wallet, or from a wallet whose recent payments did not settle, may be settled before it runs; if it fails, sending the same payment again runs it at no further charge, or the amount is refunded.
 
 ## What is offered
 

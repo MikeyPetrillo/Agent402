@@ -54,6 +54,7 @@
 import { hangupForgiven } from "./hangup-forgiveness.js";
 import { refusingHook, HOOK_NAMES, SETTLE_MARK_FAILED } from "./x402-hook-guard.js";
 import { allowanceServed } from "./allowance-state.js";
+import { settledFirstOf } from "./settle-first.js";
 
 export const CLIENT_GONE_TEXT = "The connection closed before the response was ready, so the payment was not settled and nothing was charged.";
 
@@ -89,6 +90,10 @@ export function clientGoneBeforeFirstByte(req) {
  * owed, so a hang-up is never a free run once the budget is spent.
  */
 export function chargeCancelledForClientGone(req) {
+  // A payment settled before the run's upstream work (src/settle-first.js)
+  // is taken already: no ticket cancels it, and the answer its buyer never
+  // received is booked as owed (server.js recordHangupDebt).
+  if (settledFirstOf(req)) return false;
   if (clientGoneBeforeFirstByte(req)) return hangupForgiven(req);
   return false;
 }

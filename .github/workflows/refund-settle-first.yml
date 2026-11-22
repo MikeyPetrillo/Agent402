@@ -1,0 +1,87 @@
+# Scheduled refund run for ONE class of debt: settle-first-failed.
+#
+# A payment settled before its run (src/settle-first.js: only while the
+# server protects itself from unpaid runs) whose run then failed is owed back.
+# The buyer may send the same payment again, which runs the call at no further
+# charge and voids the debt; a debt still owed after REFUND_MIN_AGE_MINUTES is
+# repaid here, through the same proof-checked pipeline as refund.yml
+# (scripts/refund-run.js): the original charge is proven on chain before any
+# send, each row is claimed before it is broadcast (so no row is ever sent
+# twice), and the caps below are at or under refund.yml's defaults. Every row
+# of any other class is held and stays owed for the human-run refund.yml.
+#
+# OFF until the owner turns it on: every job is skipped unless the repository
+# variable REFUND_AUTO_SETTLE_FIRST is "on". It runs in the environment
+# refund-auto, which must exist with no required reviewer (a schedule cannot
+# click an approval) and a deployment branch rule of main only, and must be
+# able to read the same refund keys refund.yml reads (REFUND_EVM_KEY or
+# BURNER_KEY, and the other rails' keys) plus AGENT402_OPERATOR_TOKEN.
+#
+# Each run is a dry run first (the plan, printed, nothing sent), then the live
+# run with the same filters. refund.yml's own dispatch is unchanged.
+name: Refund run (settle-first class)
+on:
+  schedule:
+    - cron: "37 * * * *"
+  workflow_dispatch:
+
+# Shares refund.yml's group: never two refund runs at once, repo-wide.
+concurrency:
+  group: refund-run
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  refund-settle-first:
+    if: ${{ vars.REFUND_AUTO_SETTLE_FIRST == 'on' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: refund-auto
+    env:
+      AGENT402_OPERATOR_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+      # The one class this run repays; scripts/refund-run.js refuses any other value.
+      REFUND_ONLY_CLASS: settle-first-failed
+      # The same payment sent again voids the debt; wait an hour for it.
+      REFUND_MIN_AGE_MINUTES: "60"
+      # A wallet owed more than three of these is read by a person first.
+      REFUND_MAX_CLASS_ROWS_PER_PAYER: "3"
+      # At or under refund.yml's defaults, and each refund is the row's own
+      # amount (the amount the payment took), never more.
+      REFUND_MAX_TOTAL_USD: "2"
+      REFUND_MAX_EACH_USD: "0.25"
+      REFUND_MAX_PER_PAYER_USD: "0.5"
+      REFUND_INCLUDE_SYNTHETIC: "false"
+      REFUND_INCLUDE_LASTING_HANGUPS: "false"
+      REFUND_INCLUDE_REPEAT_HANGUPS: "false"
+      REFUND_INCLUDE_REVIEW_HOLDS: "false"
+      REFUND_TIME_BUDGET_SECONDS: "480"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install deps (senders only load for chains that have rows)
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @stellar/stellar-sdk@16.0.1 viem@2.52.2 algosdk@3.5.0
+      - name: Dry run (the plan; nothing is sent)
+        env:
+          REFUND_LIVE: "false"
+        run: node scripts/refund-run.js
+      - name: Live run (the same filters)
+        env:
+          REFUND_LIVE: "true"
+          REFUND_EVM_KEY: ${{ secrets.REFUND_EVM_KEY != '' && secrets.REFUND_EVM_KEY || secrets.BURNER_KEY }}
+          REFUND_STELLAR_SECRET: ${{ secrets.REFUND_STELLAR_SECRET != '' && secrets.REFUND_STELLAR_SECRET || secrets.STELLAR_BURNER_SECRET }}
+          REFUND_ALGORAND_MNEMONIC: ${{ secrets.REFUND_ALGORAND_MNEMONIC != '' && secrets.REFUND_ALGORAND_MNEMONIC || secrets.ALGORAND_BURNER_MNEMONIC }}
+          REFUND_TEMPO_KEY: ${{ secrets.REFUND_TEMPO_KEY != '' && secrets.REFUND_TEMPO_KEY || secrets.BURNER_KEY }}
+          REFUND_SOLANA_KEY: ${{ secrets.REFUND_SOLANA_KEY != '' && secrets.REFUND_SOLANA_KEY || secrets.SOLANA_BURNER_KEY }}
+          SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
+          REFUND_RPC_42220: ${{ secrets.REFUND_RPC_42220 }}
+          X402_UPSTREAM_BUYER_ADDRESS: ${{ vars.X402_UPSTREAM_BUYER_ADDRESS }}
+          ALGORAND_UPSTREAM_BUYER_ADDRESS: ${{ vars.ALGORAND_UPSTREAM_BUYER_ADDRESS }}
+          REFERRAL_PAY_TO: ${{ vars.REFERRAL_PAY_TO }}
+          REFERRAL_MERCHANT_ID: ${{ vars.REFERRAL_MERCHANT_ID }}
+          REFERRAL_PAYOUT_ADDRESS: ${{ vars.REFERRAL_PAYOUT_ADDRESS }}
+          REFERRAL_ROUTED_TOPIC: ${{ vars.REFERRAL_ROUTED_TOPIC }}
+        run: node scripts/refund-run.js

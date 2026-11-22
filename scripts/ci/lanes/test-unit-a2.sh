@@ -86,6 +86,8 @@ t node scripts/test-hangup-settlement.js
 t node scripts/test-hangup-claim-wait.js
 # The settle-failure breaker writes through to the shared store: a trip on one process pauses the other.
 t node scripts/test-gateway-settle-breaker.js
+# The settle-first budget meter is one figure across containers, read back after a restart; a store that does not answer reads the mode on (REAL redis)
+t node scripts/test-settle-first-meter-redis.js
 # A burst alarm tripped on one container reads burst on another through the shared flag (settle breaker and report guard).
 t node scripts/test-alarm-flag-shared-redis.js
 # Two servers on one live Redis run one payment sent to both at once exactly once (the outage cases also run offline).

@@ -573,6 +573,8 @@ try {
     const i0 = counts.images;
     const got = [];
     for (let i = 0; i < 5; i++) got.push(await pay({ signer, path: IMG, body: imgBody() }));
+    // (Under the settle-first budget a new wallet is served first, as
+    // before: each payment's run happens, then its settle ends unconfirmed.)
     ok(got.every((g) => g.status === 402 && g.body?.reason === "settlement-unconfirmed" && g.receipt?.errorReason === "settlement_unconfirmed") && counts.images - i0 === 5,
       `a composite route, one wallet, five unconfirmed settles: each ran and was answered unconfirmed, none refused (${got.map((g) => `${g.status}/${g.body?.reason || g.text.slice(0, 60)}`).join(" ")}; ${counts.images - i0} runs)`);
     st.fallback = "ok";

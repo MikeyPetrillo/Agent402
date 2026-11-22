@@ -161,6 +161,49 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   run stays as an outcome and never erases failures; a payer is blocked at
   `COMPOSITE_GUARD_MAX_FAILS` only while failures are more than `COMPOSITE_GUARD_MIN_FAIL_SHARE`
   (default 0.5) of its outcomes, and at `COMPOSITE_GUARD_HARD_MAX` (default 10) whatever it settled.
+- **Settle first (the one exception to handler-first):** `src/settle-first.js`;
+  `GATEWAY_SETTLE_FIRST=off` settles every run after its handler, `always` forces the budget mode
+  on, anything else is automatic. Normal operation is unchanged. On the routes in
+  `SETTLE_FIRST_SLUGS` (server.js: every `/v1` chat, Messages, Responses and generateContent tier
+  and the metered tier, embeddings, rerank, speech, `/v1/images/generations` and the fast, pro and
+  edit image tiers; not video), `settleFirstPlanFor` asks `gatewaySettleFirstPlan` (the settle
+  breaker) for a verified x402 payment (`settleFirstPaymentKindOf`: never Tempo, card, credits,
+  proof-of-work, a trial, a first-call allowance grant, or the resend of a payment already settled
+  first). **Who, always:** `unsettled-runs`, a wallet (per network) holding
+  `GATEWAY_SETTLE_FIRST_UNSETTLED_MAX` (default 2) `/v1` runs that did not settle, whatever the fault
+  class, with no settled call since; `authorization`, one signed authorization holding as many.
+  **Who, only in the budget mode:** `never-settled` (no settled call in the window and no paid sale
+  on the books, `payerHasPaidSale`) and `history-unread` (the ledger did not answer).
+  **The budget mode** (`src/settle-first-meter.js`): on while the rolling 24-hour upstream cost of
+  `/v1` runs that ended unsettled (the breaker's `setUnsettledRunListener`; priced at the cost the
+  run noted on its scope, `noteRunUpstreamUsd` from `stripBilling`, else the run's quote; a payment
+  refused at its settle point, an option-A answer or a resend ran nothing unpaid) plus the price at
+  risk of never-settled wallets' runs served first and still in flight (`admitServedFirst`, decided
+  and reserved in one synchronous step) is at or over `GATEWAY_SETTLE_FIRST_BUDGET_USD` (default 5),
+  or while the meter cannot be read (a configured Redis that does not answer, or has not answered
+  yet: on, since that answer refuses nobody). Shared through Redis (tally `sfm-cost`, one hash per
+  clock hour of per-minute micro-dollars, 26 hours of life; window `sfm-risk`), read at most every
+  `REFRESH_MS` and only for a never-settled wallet's run; a restart reads it back. Figures are on
+  the operator view (`settleFailures.settleFirst.meter`) only; the log says "on" or "off".
+  **Option A:** an `upto` or Circle Gateway batched payment the plan names is answered the route's
+  own 402 (`exactPaymentRequiredAnswer`: the vendor's unpaid 402 with every plain exact accept
+  first, `error: exact_payment_required`), uncharged, counted by nobody (`markExactRequired`); the
+  verify hint leaves its body alone. **When:** at the run's settle point, `settleBeforeUpstream`,
+  after the handler's own checks. **How:** `settleVerifiedPaymentFirst` (payments.js) calls the
+  vendor's `processSettlement` once with the payment an afterVerify hook kept; the vendor's call
+  after the handler is answered with that settlement (`installSettleFirst`). The 402, its accepts
+  and the Bazaar metadata are untouched outside option A. **After the settlement** a 4xx/5xx is
+  booked owed (note class `settle-first-failed`) and its body restated (`src/settle-first-body.js`:
+  `charged`, `refundOwed`, `retry: "same-payment"`, `transaction`, `refundStatusUrl`). **The same
+  payment sent again** (`src/idempotency.js` credit, keyed on the payment's identity, route and
+  body, bound to the payer's signature, 24 hours): the server holds the debt void
+  (`voidOwedForServe`, note `resend of the same payment: running [attempt <8 hex>]`), marks the
+  request (`settledFirstResendOf`: the paywall, the cover admission and the hang-up ticket skip it),
+  runs it, and keeps the row void with the served note on a final 200 or reopens it under its class
+  otherwise; the held-claim sweep (src/tempo-push-debts.js) reopens a hold whose run never ended.
+  **Refunds:** `refund-settle-first.yml` repays this class alone (`REFUND_ONLY_CLASS`), off until
+  `REFUND_AUTO_SETTLE_FIRST=on`. Suites: `scripts/test-settle-first.js`,
+  `scripts/test-settle-first-meter-redis.js`.
 - **Runs in flight are covered together:** `src/inflight-cover.js` (`admitCoveredRun`), called
   through `admitPaidRun` (server.js) before the breaker consult on EVERY mount of a paid handler that
   is not proof-of-work payable: the kit dispatcher, and `withToolCallLog` for the six bespoke content

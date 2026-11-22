@@ -706,6 +706,10 @@ const bootServer = () => spawn(process.execPath, ["--import", "./scripts/lib/ope
     FLIGHT_SELLERS_JSON: JSON.stringify({ search: [{ url: "https://fares.example.invalid/s?d={from}", method: "GET", format: "fare-search-v1", maxUsd: 0.02, payTo: "0x" + "a1".repeat(20) }], status: [{ url: "https://track.example.invalid/f/{flight}", method: "GET", format: "flight-track-v1", maxUsd: 0.01, payTo: "0x" + "b2".repeat(20) }] }),
     GATEWAY_SETTLE_BREAKER_MAX: "3", GATEWAY_SETTLE_BREAKER_WINDOW_MS: "600000", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "3",
     COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "3",
+    // The scenarios below read runs settled AFTER their handler; the count
+    // that moves a wallet with unsettled runs to settle first
+    // (scripts/test-settle-first.js reads that rule) is raised out of their way.
+    GATEWAY_SETTLE_FIRST_UNSETTLED_MAX: "99",
     HANGUP_FORGIVE: "", HANGUP_FORGIVE_KEY_USD: "0.1", HANGUP_FORGIVE_GLOBAL_USD: "0.4", HANGUP_FORGIVE_WINDOW_MS: "86400000",
     HANGUP_FORGIVE_FILE: HANGUP_FILE, HANGUP_FORGIVE_SALT: "hangup-test-salt",
     // The leaderboard's boot scan (20 s after boot) blocked the loop for 2.6
@@ -806,6 +810,21 @@ try {
   }
   const [{ privateKeyToAccount, generatePrivateKey }, { x402Client }, { registerExactEvmScheme }, { wrapFetchWithPayment }] =
     await Promise.all([import("viem/accounts"), import("@x402/core/client"), import("@x402/evm/exact/client"), import("@x402/fetch")]);
+
+  // The model and image scenarios below are about runs settled after their
+  // handler, which is how a wallet with a paid sale on the books is served
+  // there (a wallet with none has its payment settled before the upstream
+  // call, so nothing is left to forgive: scripts/test-settle-first.js reads
+  // that). So each of those wallets buys one cheap call first. The call is on
+  // a pure-CPU route: no forgiveness ticket is abandoned by it and the settle
+  // breaker does not consult it, so no budget or count below moves.
+  {
+    const scenarioWallets = [0xb4, 0xb5, 0xc1, 0xd1, 0xe1, 0xf1, 0xf2, 0xf3, 0x61c, 0x71, 0x72, 0x73, 0x81, 0x91].map(wallet);
+    const seeded = [];
+    for (const [i, w] of scenarioWallets.entries()) seeded.push((await pay({ path: "/api/uuid", method: "GET", body: undefined }, w, `10.0.250.${i + 1}`)).status);
+    ok(seeded.every((st) => st === 200), `each model and image scenario wallet has one settled call on the books before its scenario (${seeded.join(",")})`);
+    await sleep(300);
+  }
 
   // a. Control: a connected buyer (a real x402 client) settles, nothing owed.
   {

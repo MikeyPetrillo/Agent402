@@ -39,7 +39,7 @@ export function refundClauses({ gatewayBatched = false } = {}) {
     {
       id: "settle-after-success",
       section: "Payments",
-      text: "An x402 payment on our own routes settles only after your call returns a successful response; if the call returns an error, the payment is not settled and you are not charged.",
+      text: "An x402 payment on our own routes settles only after your call returns a successful response; if the call returns an error, the payment is not settled and you are not charged. When this server is protecting itself from unpaid runs, a model or image call from a new wallet, or from a wallet whose recent payments did not settle, may be settled before it runs; if it fails, sending the same payment again runs it at no further charge, or the amount is refunded.",
       appliesTo: ["x402"],
       chargedOnError: false,
       owed: false,

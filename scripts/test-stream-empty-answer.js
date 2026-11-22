@@ -319,6 +319,7 @@ ok(!chatDeltaHasAnswer({ role: "assistant", content: "", reasoning: "x", reasoni
 {
   const { bootPaidWires, WIRES } = await import("./lib/paid-wires-rig.js");
   rig = await bootPaidWires({ label: "stream-empty-answer" });
+  const HISTORY = { method: "POST", path: "/api/sql-guard", body: { sql: "select 1" } };
   const ROUTES = [
     ["chat", { method: "POST", path: "/v1/chat/completions", body: { model: "openai/gpt-5-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 64, stream: true, model_fallback: false } }, EMPTY_LENGTH, WITH_CONTENT, '"content":" answer"'],
     ["messages", { method: "POST", path: "/v1/messages", body: { model: "openai/gpt-5-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 64, stream: true, model_fallback: false } }, MSG.empty, MSG.content, "The answer"],
@@ -328,6 +329,15 @@ ok(!chatDeltaHasAnswer({ role: "assistant", content: "", reasoning: "x", reasoni
     for (const [route, ROUTE, emptyFrames, contentFrames, mark] of ROUTES) {
       for (const wire of WIRES) {
         const w = await rig.wallet(wire);
+        // The wallet has a paid sale on the books (one settled call on a
+        // route with no model upstream), so its model call is settled after
+        // the handler, which is the order these two checks read. A wallet
+        // with none has that payment settled before the model call, and an
+        // empty answer after it is booked as owed: scripts/test-settle-first.js.
+        rig.fund(w, 10n ** 12n);
+        const known = await rig.pay(w, HISTORY);
+        await sleep(150);
+        const o0 = { ...rig.outcomesOf(w) }; // a copy: the rig's tally object is updated in place
         const price = await rig.priceOf(w, ROUTE);
         rig.fund(w, price * 10n);
         const before = rig.accounts.get(w.id)?.balance;
@@ -335,11 +345,11 @@ ok(!chatDeltaHasAnswer({ role: "assistant", content: "", reasoning: "x", reasoni
         const c0 = rig.st.completions;
         const empty = await rig.pay(w, ROUTE);
         const o1 = rig.outcomesOf(w);
-        ok(empty.status === 502 && rig.st.completions > c0 && !empty.text.includes("data:") && o1.attempts === 0 && rig.accounts.get(w.id)?.balance === before, `${route} on ${wire}: an empty streamed answer is answered ${empty.status}, never settled (settle ${JSON.stringify(o1)})`);
+        ok(known.status === 200 && empty.status === 502 && rig.st.completions > c0 && !empty.text.includes("data:") && o1.attempts === o0.attempts && rig.accounts.get(w.id)?.balance === before, `${route} on ${wire}: an empty streamed answer is answered ${empty.status}, never settled (settle ${JSON.stringify(o1)})`);
         rig.st.llmStreamFrames = () => contentFrames;
         const good = await rig.pay(w, ROUTE);
         const o2 = rig.outcomesOf(w);
-        ok(good.status === 200 && good.text.includes(mark) && o2.settled === 1 && rig.accounts.get(w.id)?.balance === before - price, `${route} on ${wire}: a streamed answer with content is 200 and settled once (settle ${JSON.stringify(o2)})`);
+        ok(good.status === 200 && good.text.includes(mark) && o2.settled === o0.settled + 1 && rig.accounts.get(w.id)?.balance === before - price, `${route} on ${wire}: a streamed answer with content is 200 and settled once (settle ${JSON.stringify(o2)})`);
       }
     }
   } catch (e) { ok(false, `paid wires: ${e?.stack || e}`); for (const l of rig.log().split("\n").filter(Boolean).slice(-20)) console.error("  server:", l.slice(0, 300)); }

@@ -311,7 +311,9 @@ function getPayFetch() {
     });
     // Registered after the guard's check of the signed amount, so it runs only
     // for a payload about to be sent: from here the payment is outstanding.
-    client.onAfterPaymentCreation(async ({ paymentPayload } = {}) => { const e = signCtx.getStore(); if (e && e.signed) { e.sent = true; e.until = signedValidUntilMs(paymentPayload); } });
+    // The payload is kept, so a payment the seller took before a run that
+    // failed can be sent once more as it was (never signed again).
+    client.onAfterPaymentCreation(async ({ paymentPayload } = {}) => { const e = signCtx.getStore(); if (e && e.signed) { e.sent = true; e.until = signedValidUntilMs(paymentPayload); e.payload = paymentPayload || null; } });
     if (AGENT_KEY) {
       const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
       const { privateKeyToAccount } = await import("viem/accounts");
@@ -462,6 +464,23 @@ async function quotedUsd(url, init, listUsd) {
 // an agent cannot act on in text. Keep the refusal's own fields (error,
 // reason, hint, retry) and say where the offer is; any other body is returned
 // as it came.
+/** True when a failed paid answer says its payment was settled before the
+ *  call ran (charged: true, retry: "same-payment"). Read from a copy. */
+async function settledFirstFailure(res) {
+  try {
+    const body = typeof res?.clone === "function" ? await res.clone().json() : null;
+    return !!body && typeof body === "object" && body.charged === true && body.retry === "same-payment";
+  } catch { return false; }
+}
+/** The payment header that carries `payload` as it was signed, or null. */
+async function paymentHeaderFor(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  try {
+    const { encodePaymentSignatureHeader } = await import("@x402/core/http");
+    return { "PAYMENT-SIGNATURE": encodePaymentSignatureHeader(payload) };
+  } catch { return null; }
+}
+
 function failureText(status, text) {
   let doc;
   try { doc = JSON.parse(text); } catch { return text; }
@@ -579,10 +598,11 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     const payFetch = await getPayFetch();
     // Held until the call settles or fails; the guard replaces `usd` with the
     // amount it lets the wallet sign.
-    const entry = { usd: price, signed: false, sent: false, refusal: null };
+    const entry = { usd: price, signed: false, sent: false, refusal: null, payload: null };
     pendingSpend.add(entry);
+    let hintHeaders = {};
     try {
-      const hintHeaders = await walletHintHeaders(tool);
+      hintHeaders = await walletHintHeaders(tool);
       const first = await signCtx.run(entry, () => payFetch(url, { ...paidInit, headers: { ...init.headers, ...asyncHeaders, ...hintHeaders } }));
       if (isRedirect(first)) {
         pendingSpend.delete(entry);
@@ -603,10 +623,27 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
       throw e;
     }
     pendingSpend.delete(entry);
+    // A payment the seller settled BEFORE the call ran, whose run then
+    // failed (the body says charged: true and retry: "same-payment"): the
+    // same payment is sent once more, as it was signed, and the seller runs
+    // it at no further charge. Its amount counts once, as spent.
+    let takenFirst = false, resent = false;
+    if (entry.sent && res.status >= 400 && await settledFirstFailure(res)) {
+      takenFirst = true;
+      const header = await paymentHeaderFor(entry.payload);
+      if (header) {
+        resent = true;
+        try { res = await collect(await ownFetch(url, { ...paidInit, headers: { ...init.headers, ...asyncHeaders, ...hintHeaders, ...header } })); }
+        catch (e) { spentUsd += entry.usd; if (e instanceof AsyncJobPendingError) return pendingJobResult(tool, e); throw e; }
+      }
+    }
     // A sent payment is spent when the server confirms settlement (payment
     // receipt header) or answers 2xx; any other answer leaves the signed
     // authorization with the seller, so it is held, never released.
-    if (entry.sent) {
+    if (entry.sent && takenFirst) {
+      spentUsd += entry.usd;
+      if (!res.ok) heldNote = ` The payment of $${entry.usd} was taken before the call ran, so it counts as spent against AGENT402_BUDGET and is owed back, refunded after on-chain proof${resent ? "; the same payment, sent once more, failed too" : "; sending the same payment again runs the call at no further charge"}.`;
+    } else if (entry.sent) {
       if (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok) spentUsd += entry.usd;
       else if (res.status >= 400 && url.origin === DEFAULT_ORIGIN) {
         // The default host did not settle it: held until it expires unused.

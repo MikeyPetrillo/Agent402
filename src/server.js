@@ -80,7 +80,13 @@ import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
 import { evmLogsStatus } from "./evm-logs-rpc.js";
 import { compositeGuardBlocked, compositeGuardAlarmStatus, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
-import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus, setGatewaySettleBreakerSalesLedger } from "./gateway-settle-breaker.js";
+import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus, setGatewaySettleBreakerSalesLedger, gatewaySettleFirstPlan, noteSettleFirst, setUnsettledRunListener } from "./gateway-settle-breaker.js";
+import { armSettleFirst, disarmSettleFirst, settleFirstStarted, markSettledFirst, settledFirstOf, setSettleFirstAmbient, settleFirstRefusal, isSettleFirstRefusal, settleFirstRefusalOf, settleFirstFailedNote, markExactRequired, settledFirstResendOf, markSettledFirstResend, isSettleFirstFailedRefund, SETTLE_FIRST_RESEND_HOLD } from "./settle-first.js";
+import { RETRY_SAME_PAYMENT } from "./payment-reject.js";
+import { admitServedFirst, noteUnsettledRunCost, runUpstreamUsdOf, bindRunScope } from "./settle-first-meter.js";
+import { installSettledFirstBody } from "./settle-first-body.js";
+import { settleFirstPaymentKindOf, settleVerifiedPaymentFirst, exactPaymentRequiredAnswer } from "./payments.js";
+import { allowanceOf } from "./allowance-state.js";
 // Single-upstream-call routes that run long (40 s+): EVM exact only, like the
 // composites (settle-after on SVM/AVM/Tempo is work done, never charged), but
 // not composite-spend-guarded (one bounded upstream price).
@@ -395,12 +401,16 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
   // stopped waiting): the refund planner holds a budget denial (a repeat
   // hang-up) for review instead of repaying it as an ordinary debt
   // (src/hangup-forgiveness.js hangupDebtReason).
+  // A charge settled before the run (src/settle-first.js) whose answer never
+  // reached the buyer: the row carries that class, like one whose run failed.
+  const settledFirstNote = settledFirstOf(req) ? { note: settleFirstFailedNote(499) } : null;
+  if (settledFirstNote) noteSettleFirst("owed");
   const denied = hangupTicketDenial(req);
   const hangupReason = hangupDebtReason(req, reason);
   // The same push transfer was refused on input earlier and booked as owed
   // under its hash; INSERT OR IGNORE kept that 400 row. It is a disconnect
   // now: promote it, or the hang-up holds never see it.
-  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason, requestId: req.debtKey }), (made) => {
+  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason, requestId: req.debtKey, ...settledFirstNote }), (made) => {
     if (!made && req.tempoSettled && tempoPushHashOf(req) === row.tx) void tempoPushDebts?.hungUp(row.tx, hangupReason);
   });
   // How long the buyer waited and which phase it left in: the figure that
@@ -12318,8 +12328,86 @@ app.use(createIdempotency({
     if (v?.serve === true) console.log(`[settle-deadlines] the same payment sent again after a cut: its transfer landed (tx=${v.tx}); served the kept answer (${req.method} ${req.path})`);
     return v;
   },
+  // A payment settled before its run whose run then failed (src/settle-first.js):
+  // what the credit for sending the same payment again holds.
+  settledFirstCredit: (req, status) => settledFirstCreditFor(req, status),
+  onSettledFirstResend: (req, credit) => settledFirstResend(req, credit),
 }));
 markGateMounted("idempotency");
+
+/** The credit a failed settle-first run leaves for the same payment sent
+ *  again (src/idempotency.js), or null. A resend that failed again keeps the
+ *  credit it ran under. */
+function settledFirstCreditFor(req, status) {
+  const again = settledFirstResendOf(req);
+  if (again) return { tx: again.tx, network: again.network, wire: again.wire, note: again.note, receipt: again.receipt };
+  const sf = settledFirstOf(req);
+  const tx = typeof sf?.result?.transaction === "string" ? sf.result.transaction : null;
+  if (!tx) return null;
+  let receipt = null;
+  try { const h = req.res?.getHeader?.("PAYMENT-RESPONSE"); receipt = typeof h === "string" ? h : null; } catch { receipt = null; }
+  return { tx, network: sf.requirements?.network || sf.result?.network || null, wire: x402WireOf(req), note: settleFirstFailedNote(status), receipt };
+}
+/**
+ * The same payment sent again after its settle-first run failed: its debt is
+ * voided BEFORE the run (a hold, voidOwedForServe, that the refund run's claim
+ * cannot pass), the request is marked as paid (settledFirstResendOf: no gate
+ * asks for a settlement), and when the response ends the hold becomes the
+ * served note (a final 200) or the debt is owed again under its own class
+ * (anything else). A row the refund run has claimed or paid is not voided,
+ * and then nothing runs: the payment was refunded.
+ */
+async function settledFirstResend(req, credit) {
+  const attempt = randomBytes(4).toString("hex");
+  // The hold appends to the row's note (voidOwedForServe), so the note the
+  // undo and the served note match is the row's own, then the hold.
+  let prior = null;
+  try { prior = refundByEvidence(credit.tx); } catch { prior = null; }
+  const priorNote = prior?.status === "owed" && typeof prior.note === "string" && prior.note ? prior.note : (typeof credit.note === "string" ? credit.note : "");
+  const hold = `${SETTLE_FIRST_RESEND_HOLD} [attempt ${attempt}]`;
+  const held = priorNote ? `${priorNote}; ${hold}` : hold;
+  let voided = false;
+  try { voided = (await voidOwedForServe(credit.tx, hold)) === true; } catch { voided = false; }
+  if (!voided) {
+    let row = null;
+    try { row = await refundByEvidenceFresh(credit.tx); } catch { row = null; }
+    if (!row || row.status === "owed") {
+      return { serve: false, status: 503, retryAfter: 10, body: { error: "resend_pending", charged: false, retry: RETRY_SAME_PAYMENT, hint: "The charge this payment made is not confirmed on the books yet. Nothing more is charged. Retry shortly with the same payment." } };
+    }
+    if (row.status === "void") {
+      return { serve: false, status: 409, retryAfter: 2, body: { error: "idempotent_request_in_flight", charged: false, hint: "A call carrying this same payment is running, or was already served. Nothing more is charged." } };
+    }
+    return { serve: false, status: 402, body: {
+      error: "payment_refunded",
+      hint: "The payment this request carries was refunded (or is being refunded) because the call it paid for failed, so it no longer pays for a request. Request the resource again with a fresh payment.",
+      refund: { status: row.status, lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(credit.tx)}` },
+    } };
+  }
+  const note = isSettleFirstFailedRefund({ note: priorNote }) ? priorNote : typeof credit.note === "string" && isSettleFirstFailedRefund({ note: credit.note }) ? credit.note : settleFirstFailedNote(502);
+  markSettledFirstResend(req, { tx: credit.tx, network: credit.network ?? null, wire: credit.wire ?? null, held, note, receipt: typeof credit.receipt === "string" ? credit.receipt : null });
+  noteSettleFirst("resent");
+  const res = req.res;
+  // The charge's receipt rides a 2xx answer (the sale is booked under its
+  // transaction); a failure says the payment is still owed back.
+  if (typeof credit.receipt === "string" && credit.receipt) {
+    const writeHead = res.writeHead;
+    res.writeHead = function resendWriteHead(statusCode, ...rest) {
+      try { if (Number(statusCode) < 400 && !res.getHeader("PAYMENT-RESPONSE")) res.setHeader("PAYMENT-RESPONSE", credit.receipt); } catch { /* the answer goes out without it */ }
+      return writeHead.call(this, statusCode, ...rest);
+    };
+  }
+  installSettledFirstBody(req, res, { transaction: credit.tx, origin: BASE_URL });
+  onResponseEnd(req, res, (info) => {
+    const served = info?.via !== "undelivered" && res.statusCode === 200;
+    const done = served
+      ? renoteVoidRefund(credit.tx, held, `${note}; ${RESEND_SERVED_NOTE}`)
+      : reopenHeldClaim(credit.tx, { held, httpStatus: info?.via === "undelivered" ? 499 : (res.statusCode >= 400 ? res.statusCode : 502), note });
+    Promise.resolve(done).then((ok) => {
+      if (!ok) console.warn(`[settle-first] resend of a settled-first payment ended (${served ? "served" : `http ${res.statusCode}`}) and its debt note did not change (tx=${String(credit.tx).slice(0, 12)})`);
+    }, () => {});
+  });
+  return { serve: true };
+}
 
 // x402 paywall for the catalog routes
 if (FREE_MODE) {
@@ -12684,6 +12772,10 @@ if (FREE_MODE) {
     // request by the gate that verified it, never inherited (a polluted
     // Object.prototype once made every request look settled).
     if (ownTrue(req, "tempoSettling") || ownTrue(req, "stripeSettling") || ownTrue(req, "creditsSettling")) return next();
+    // The same payment sent again after its settle-first run failed: the
+    // payment is already taken (src/settle-first.js), so nothing here asks
+    // for it again (src/idempotency.js ran the credit and the server marked it).
+    if (settledFirstResendOf(req)) return next();
     // Retired converters aren't catalog routes, so POW_ROUTES can't know them —
     // which briefly made them the only paid paths on the site with NO free
     // tier, while unit-convert (the identical work, same engine, same table)
@@ -13220,6 +13312,11 @@ app.use((req, res, next) => {
           // it is a RESPONSE header written only by @x402/express, never
           // echoed from a request - so success:true is trustworthy; the gap
           // was trusting the ABSENCE of a field.
+          // A charge settled before the run (src/settle-first.js) whose
+          // run then failed: the same row, under its own class (the note),
+          // so a refund run can select exactly these.
+          const settledFirst = !!settledFirstOf(req);
+          if (settledFirst && receiptProvesCharge(receipt)) noteSettleFirst("owed");
           if (receiptProvesCharge(receipt)) recordRefundOwed({
             slug: def.slug,
             network,
@@ -13231,6 +13328,7 @@ app.use((req, res, next) => {
             wire: x402WireOf(req),
             // The request it was charged on: the debt key when the receipt names no tx.
             requestId: req.debtKey,
+            ...(settledFirst ? { note: settleFirstFailedNote(res.statusCode) } : {}),
           });
           // Mirror to PostHog with payer attribution so a spike is alertable in
           // near-real-time and traceable to a wallet (the local table keeps only
@@ -13339,7 +13437,7 @@ if (!FREE_MODE) {
     // seller's public reputation only when the call is not ours (a heartbeat
     // probe, a canary, our own wallets): src/seller-reputation.js reads this.
     { const scope = currentRequestScope(); if (scope && typeof scope.isOurs !== "function") scope.isOurs = () => callIsOurs(req); }
-    if (req.tempoSettled) return next();
+    if (req.tempoSettled || settledFirstResendOf(req)) return next();
     // Synchronous without a shared store; a promise with one (the shared
     // budget read). A reservation that throws must still let the call run:
     // the ticket stays denied and the charge stands, as it did before the rule.
@@ -13598,10 +13696,156 @@ function withToolCallLog(slugOf, handler) {
  */
 async function admitPaidRun(req, res, def) {
   if (FREE_MODE || !def || isComputePayable(def) || !ownTrue(req, "__a402Dispatched")) return null;
-  const release = await admitCoveredRun(req, { expensive: EXPENSIVE_COMPOSITE_SLUGS.has(def.slug), arrivedAt: req.__a402ArrivedAt });
+  // The resend of a payment already settled first takes no new money: no cover.
+  const release = settledFirstResendOf(req) ? null : await admitCoveredRun(req, { expensive: EXPENSIVE_COMPOSITE_SLUGS.has(def.slug), arrivedAt: req.__a402ArrivedAt });
   if (release && !onResponseEnd(req, res, release)) release();
   await gatewaySettleBreakerCheck(req, { global: false });
   return release;
+}
+
+// ---- Settle first (src/settle-first.js) --------------------------------------
+// The routes whose runs may settle before their upstream work: the /v1 model
+// routes (the chat, Messages, Responses and generateContent wires on every
+// tier and the metered tier, embeddings, rerank, images and speech) and the
+// image tiers that share the images handler. Each reaches its paid upstream
+// through a settle point (fetchOpenRouter, or the kit's own upstream call)
+// placed after its own checks; a route joins this list only with a test
+// that reads its settle call before its upstream call
+// (scripts/test-settle-first.js). Not the video route: its job is parked and
+// resumed across calls.
+// Also dub (translate-and-speak): its first paid upstream call is the chat
+// gateway's translation, behind the same settle point, after dub's own checks.
+const SETTLE_FIRST_SLUGS = new Set([...GATEWAY_TOOLS_ENABLED, ...IMAGES_FAST_TOOLS.filter((t) => t.slug !== "v1-videos"), ...DUB_TOOLS].map((t) => t.slug));
+/**
+ * Arm this run to settle its payment before its upstream work, or null (it
+ * settles after the handler, as every run does in normal operation). Armed
+ * only when all hold: the route is one of SETTLE_FIRST_SLUGS; the payment is
+ * an x402 `exact` payment this server verified on this request
+ * (settleFirstPaymentKindOf "exact": never a Tempo, card or credits call,
+ * proof-of-work or a trial); it holds no first-call allowance grant (that
+ * call is not settled at all, under its own caps); it is not the resend of a
+ * payment already settled first (that one is paid); and the settle breaker
+ * names the buyer (gatewaySettleFirstPlan: per wallet, a wallet or
+ * authorization holding /v1 runs that did not settle; while the budget mode
+ * is on, src/settle-first-meter.js, a wallet that has never settled).
+ *
+ * A wallet that has never settled and is served first (the budget mode off)
+ * puts the run's price at risk until the run ends (reserveAtRisk): the meter
+ * counts it, so runs started together cannot all slip under the budget.
+ *
+ * OPTION A. An `upto` or Circle Gateway batched payment cannot settle first.
+ * When the breaker names its buyer the run is not started: the answer is the
+ * route's own 402 with the exact accepts first (exactPaymentRequiredAnswer),
+ * nothing is charged and the breaker counts nothing. Outside that, such a
+ * payment is served as it always was.
+ *
+ * Refuses nothing else: an armed run whose payment settles is served.
+ * Called after every admission that can refuse the call uncharged.
+ */
+async function settleFirstPlanFor(req, res, def) {
+  if (FREE_MODE || !def || !SETTLE_FIRST_SLUGS.has(def.slug) || !ownTrue(req, "__a402Dispatched")) return null;
+  if (settledFirstResendOf(req)) return null;
+  if (allowanceOf(req)?.state === "claimed" || allowanceServed(req)) return null;
+  const kind = settleFirstPaymentKindOf(req);
+  if (!kind) return null;
+  let plan = null;
+  try { plan = await gatewaySettleFirstPlan(req); } catch { plan = null; }
+  let due = plan?.due || null;
+  if (!due && plan?.neverSettled) {
+    // Decided again with the figures as they stand now, and reserved in the
+    // same step, so runs admitted together each see the ones before them.
+    let usd = 0;
+    try { usd = quotedPriceUsd(def, req); } catch { usd = 0; }
+    const a = admitServedFirst(usd);
+    if (a.on) due = { reason: "never-settled", mode: a.why };
+    else { if (!onResponseEnd(req, res, a.release)) a.release(); return null; }
+  }
+  if (!due) return null;
+  if (kind !== "exact") {
+    const answer = await exactPaymentRequiredAnswer(req, { body: exactPaymentRequiredBody(def, kind) });
+    if (answer) {
+      markExactRequired(req, kind);
+      noteSettleFirst("exact-required", { reason: due.reason });
+      throw settleFirstRefusal(answer, "An exact payment is required for this call.");
+    }
+    return null;
+  }
+  noteSettleFirst("armed", { reason: due.reason });
+  const state = armSettleFirst(req, { reason: due.reason, run: () => settlePaymentBeforeRun(req, res, def, due.reason) });
+  // The upstream helpers that take no request read it from the request's
+  // own scope (src/request-timing.js), set here for an armed run only.
+  if (state) { const scope = currentRequestScope(); if (scope) scope.settleFirstRequest = req; }
+  return state;
+}
+/** The body of option A's 402: what to send instead, and that nothing was charged. */
+function exactPaymentRequiredBody(def, kind) {
+  return {
+    error: "exact_payment_required",
+    reason: "exact_payment_required",
+    tool: def.slug,
+    charged: false,
+    retry: "exact-payment",
+    hint: `Send this call with an exact payment: sign one of the exact accepts listed first in this 402 (PAYMENT-REQUIRED). An ${kind === "upto" ? "upto" : "Circle Gateway batched"} payment is not accepted from this wallet on this route until one of its payments settles. Nothing was charged.`,
+  };
+}
+// The ambient request of a settle point: the armed request of the scope the
+// call runs in, or null.
+setSettleFirstAmbient(() => currentRequestScope()?.settleFirstRequest || null);
+// The settle-first budget meter (src/settle-first-meter.js): every /v1 run
+// served and not paid adds its upstream cost (the upstream's own figure, or
+// the cost table's, noted on the run's scope), or its quoted price when the
+// run noted none. A payment refused at its settle point, or one that was
+// already taken (settled first, or the resend of one), ran nothing unpaid.
+setUnsettledRunListener((req) => {
+  if (settleFirstRefusalOf(req) || settledFirstOf(req) || settledFirstResendOf(req)) return;
+  let usd = runUpstreamUsdOf(req);
+  if (!(usd > 0)) {
+    const def = CATALOG[`${req.method} ${req.path}`];
+    try { usd = def ? quotedPriceUsd(def, req) : 0; } catch { usd = 0; }
+  }
+  noteUnsettledRunCost(usd);
+});
+/**
+ * The settle point's work for an armed run. Resolves once the payment
+ * settled: its receipt (PAYMENT-RESPONSE, success: true) is on the response
+ * from then on, whatever the final status, so a run that then fails is
+ * booked as owed by the charged-failure recorder and one whose buyer left by
+ * the hang-up recorder, both under the class settle-first-failed; and a
+ * failure body says the payment is owed back instead of "not charged". Throws
+ * the refusal when the payment did not settle (nothing charged, no upstream
+ * call), and a client-gone 499 for a buyer who already left (nothing charged).
+ */
+async function settlePaymentBeforeRun(req, res, def, reason) {
+  const gone = clientGoneBeforeFirstByte(req);
+  if (gone) throw clientGoneError("The connection closed before the call started; nothing ran and nothing was charged.");
+  const t0 = Date.now();
+  const out = await settleVerifiedPaymentFirst(req);
+  // Nothing to settle with (the verified payment was not kept): the run
+  // goes on and is settled after its handler, as before.
+  if (!out.settled && !out.response) return;
+  if (!out.settled) {
+    noteSettleFirst("refused", { req, reason, slug: def.slug, ms: Date.now() - t0 });
+    throw settleFirstRefusal(out.response);
+  }
+  // Recorded first: from here the paywall's settle after the handler is
+  // answered with this settlement and never asks the facilitator again.
+  markSettledFirst(req, { result: out.result, requirements: out.requirements, paymentPayload: out.paymentPayload, at: Date.now() });
+  for (const [k, v] of Object.entries(out.headers)) res.setHeader(k, v);
+  installSettledFirstBody(req, res, { transaction: typeof out.result?.transaction === "string" ? out.result.transaction : null, origin: BASE_URL });
+  noteSettleFirst("settled", { req, reason, slug: def.slug, ms: Date.now() - t0 });
+}
+/** Answer a payment that did not settle at its settle point with the
+ *  paywall's own settle-failure answer (as @x402/express writes it after a
+ *  handler: the headers, the status, the body). Returns the status sent. */
+function sendSettleFirstRefusal(res, refusal) {
+  const r = refusal?.response || { status: 402, headers: {}, body: { error: "settlement_failed" } };
+  for (const [k, v] of Object.entries(r.headers || {})) res.setHeader(k, v);
+  const status = Number(r.status) || 402;
+  res.status(status);
+  const type = String(r.headers?.["Content-Type"] ?? r.headers?.["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+  if (r.isHtml || (type === "text/plain" && typeof r.body === "string")) res.send(r.body ?? "");
+  else res.json(r.body ?? {});
+  return status;
 }
 
 function sendToolError(res, err, slug) {
@@ -13821,6 +14065,8 @@ for (const tool of ALL_KIT) {
 
   app[lowerMethod](path, async (req, res) => {
     const startedAt = Date.now();
+    // The run's upstream cost is noted on its scope (src/settle-first-meter.js).
+    bindRunScope(req);
     // Unspoofable: requires a valid HMAC-signed X-Heartbeat-Token. CI canaries,
     // heartbeat probes, and operator smoke tests carry it; real callers don't.
     // Threaded into analytics + PostHog so test traffic never inflates
@@ -13840,6 +14086,9 @@ for (const tool of ALL_KIT) {
     // before the first byte and its charge is cancelled, so its per-request
     // upstream calls stop.
     let clientGoneCtl = null;
+    // Set when this run's payment settles before its upstream work
+    // (src/settle-first.js, settleFirstPlanFor below).
+    let settleFirst = null;
     try {
       // The SAME object the quote was priced from (src/handler-input.js):
       // query merged, MCP-style {params|input|args} envelopes unwrapped once,
@@ -13985,6 +14234,13 @@ for (const tool of ALL_KIT) {
       // Before the client-gone belt, because the balance read can wait.
       const coverRelease = await admitPaidRun(req, res, tool);
 
+      // SETTLE FIRST (src/settle-first.js). After the admission above, so a
+      // call refused there is never charged, and before the client-gone belt,
+      // because the read behind it can wait. An armed run settles its payment
+      // at its settle point, the moment the handler is about to make its
+      // first paid upstream call, after the handler's own checks.
+      settleFirst = await settleFirstPlanFor(req, res, tool);
+
       // The buyer's connection is already gone (it closed while the payment
       // was being verified): nothing could be delivered, so nothing runs and
       // nothing is charged - a 499 cancels settlement on every rail.
@@ -14010,6 +14266,9 @@ for (const tool of ALL_KIT) {
         ? await runInAbortableScope(() => runAsCallerOf(req, () => tool.handler(input, req)), { signal: clientGoneCtl.signal })
         : await runAsCallerOf(req, () => tool.handler(input, req));
       coverRelease?.settling?.();
+      // A handler that answered although its payment did not settle at the
+      // settle point (it caught the refusal) is answered as that refusal.
+      if (settleFirst && !settledFirstOf(req)) { const refused = settleFirstRefusalOf(req); if (refused) throw refused; }
 
       // A handler that spent real money upstream (external route-execute) leaves
       // a handle on the request. Resolve it against the FINAL response, not the
@@ -14063,6 +14322,8 @@ for (const tool of ALL_KIT) {
       // SSE escape hatch (LLM gateway streaming): the handler returns a
       // writer instead of a body and takes over the response. Runs after the
       // paywall settled; never cached (idempotency hooks res.json only).
+      // (A stream's upstream call is made inside the writer: an armed run's
+      // settle point is reached there.)
       if (result && typeof result.__sse === "function") { await result.__sse(res); return; }
 
       // Cache successful, non-error JSON responses — but ONLY after settlement.
@@ -14095,6 +14356,15 @@ for (const tool of ALL_KIT) {
     } catch (err) {
       errored = true;
       status = err.statusCode || 500;
+      // This run's payment did not settle at its settle point
+      // (src/settle-first.js): no upstream call was made and nothing was
+      // charged. The answer is the paywall's own settle-failure answer (the
+      // 402 and its receipt), whatever error the handler made of it.
+      const unsettled = isSettleFirstRefusal(err) ? err : (settleFirst && !settledFirstOf(req) ? settleFirstRefusalOf(req) : null);
+      if (unsettled && !res.headersSent) {
+        try { status = sendSettleFirstRefusal(res, unsettled); } catch { /* the response is already ending */ }
+        return;
+      }
       // A model provider refused the buyer's request (upstreamRejected, set by
       // throwUpstreamError) and no failover model took it: the request is the
       // problem, so the buyer reads 400, not a 502 that says we are down.
@@ -14191,6 +14461,9 @@ for (const tool of ALL_KIT) {
         res.status(status).json({ error: errorMessage, tool: tool.slug, ...provenance });
       }
     } finally {
+      // The handler ended: this request starts no settlement from here on,
+      // whatever still holds its scope (src/settle-first.js).
+      if (settleFirst) { disarmSettleFirst(req); if (!settleFirstStarted(req)) noteSettleFirst("not-reached"); }
       const latencyMs = Date.now() - startedAt;
       // Fire-and-forget. Analytics outages must NEVER affect agents.
       recordToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic, probe }).catch(() => {});

@@ -1106,6 +1106,51 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "control: the unscoped sentence is matched and is not taken as carrying the clause");
 }
 
+// "A failed call is not charged" has one more exception: while this server
+// protects itself from unpaid runs, a model or image call from a new wallet
+// (or one whose recent payments did not settle) may be settled before it runs
+// (src/settle-first.js). Every copy surface that says a failed call, an
+// error answer or a 4xx/5xx is not charged (or is not settled) carries the
+// shared sentence (src/settle-first-copy.js) beside the claim: by
+// interpolation in a module, word for word in markdown. A refusal of the
+// payment itself ("refusals are free") happens before any settlement and is
+// not this claim.
+{
+  const fam = await import("../src/settle-first-copy.js");
+  const GENERAL = /\bfailed x402 (?:call|run|request)s? (?:is|are) not charged|\b(?:response|answer)s? of 400 or above (?:is|are) not (?:settled|charged)|\bfailed run is not charged|\berror status cancels\b|\b4xx\b[^.;|]{0,20}\b5xx\b[^.;|]{0,40}\b(?:cancels settlement|not charged|never settled)|\bonly (?:for a response )?under 400 \| not charged|\bany status of 400 or above is not charged|\ba 4xx or 5xx\b[^.;]{0,80}?\b(?:cancels settlement|is not charged|is never charged)|\ban? (?:error|failed) (?:answer|call|response)s? (?:is|are) not (?:charged|settled)|\b(?:calls?|requests?) (?:that|which) fails? (?:is|are) not charged|\bsettles? only after\b[^.;]{0,80}\bsuccess|\bnot settled and you are not charged|\bnever pays? for a failed\b|\bfailed calls? (?:is|are) (?:never|not) charged|\berrors? (?:is|are) (?:never|not) charged/gi;
+  const EXTRA = new Set(["src/settlement-footnote.js", "src/refund-terms.js", "src/refund-terms-doc.js", "src/conformance.js", "src/mcp-http.js", "mcp/index.js", "src/agentcore-page.js"]);
+  const carries = (near) => near.includes(fam.SETTLE_FIRST_MARK) || /\$\{(?:SETTLE_FIRST_|FAILED_CALL_SENTENCE)/.test(near);
+  const scanned = files.filter((f) => (COPY_SURFACES.test(f) || EXTRA.has(f)) && /\.(?:md|js)$/.test(f) && !/^(?:scripts|tollbooth|adapters|openclaw|workers|services|facilitator|\.github|\.claude|examples)\//.test(f) && !/CHANGELOG/.test(f) && f !== "src/changelog.js" && f !== "CLAUDE.md");
+  let claims = 0;
+  const bare = [], drift = [];
+  for (const rel of scanned) {
+    const text = read(rel);
+    if (!text) continue;
+    for (const m of text.matchAll(GENERAL)) {
+      const line = text.slice(text.lastIndexOf("\n", m.index) + 1, m.index);
+      if (/^\s*(?:\/\/|\/?\*)/.test(line)) continue;
+      if (/\b[Rr]efusals? (?:are|is) free\b/.test(text.slice(Math.max(0, m.index - 120), m.index))) continue;
+      claims++;
+      if (!carries(text.slice(Math.max(0, m.index - 800), m.index + 1500))) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
+    }
+    // Word for word: every copy of the family's words is one of its sentences.
+    if (rel !== "src/settle-first-copy.js") {
+      const flat = text.replace(/\s*\n\s*/g, " ");
+      for (const m of flat.matchAll(new RegExp(fam.SETTLE_FIRST_MARK, "g"))) {
+        const around = flat.slice(Math.max(0, m.index - 40), m.index + 400);
+        if (![fam.SETTLE_FIRST_SENTENCE, fam.SETTLE_FIRST_EXCEPTION, fam.SETTLE_FIRST_SENTENCE_LOWER].some((x) => around.includes(x.slice(x.indexOf(fam.SETTLE_FIRST_MARK), x.indexOf(fam.SETTLE_FIRST_MARK) + 300)))) drift.push(rel);
+      }
+    }
+  }
+  ok(fam.FAILED_CALL_SENTENCE.startsWith("A paid call over x402 that fails is not charged, except when this server is protecting itself from unpaid runs") && /sending the same payment again runs it at no further charge/.test(fam.SETTLE_FIRST_SENTENCE) && /or the amount is refunded/.test(fam.SETTLE_FIRST_SENTENCE) && fam.SETTLE_FIRST_SENTENCE.includes(fam.SETTLE_FIRST_MARK),
+    "the shared sentence says when, whose call, that it may be settled before it runs, and what a failure gets: the same payment again, or a refund");
+  ok(claims >= 40, `the failed-call not-charged claim is found where it is made (${claims} places)`);
+  ok(bare.length === 0, `every failed-call not-charged claim carries the settle-first sentence${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
+  ok(drift.length === 0, `every copy of the settle-first words is one of the shared sentences, word for word${drift.length ? ` (drifted: ${[...new Set(drift)].join(", ")})` : ""}`);
+  ok([..."A failed x402 call is not charged.".matchAll(GENERAL)].length === 1 && !carries("A failed x402 call is not charged. Retry later."),
+    "control: the bare claim is matched and is not taken as carrying the sentence");
+}
+
 // The retry verbs a refused payment names (src/tool-error-fields.js
 // PAYMENT_RETRY_VERBS_NOTE) reach every surface an agent reads them on: the
 // served 402 description in /openapi.json, /llms-full.txt, the front door's

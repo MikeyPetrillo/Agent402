@@ -158,7 +158,7 @@ export function indexToolsPage(baseUrl, data, categories, params = {}) {
 <div class="ix-note">
   <h2>What each badge means</h2>
   <ul>
-    <li><span class="ix-badge ours">OURS</span> <b>We build, host and stand behind these.</b> They are priced by us and covered by the paywall guarantees on <a href="/tools">our tools</a>. Most of our tools are tested against their own published example on every release; model-backed and search tools have their inputs checked separately. On the x402 and prepaid-credit paths, a call that answers an error is not charged. ${fmtNum(data.ours)} of the ${fmtNum(data.total)} rows here.</li>
+    <li><span class="ix-badge ours">OURS</span> <b>We build, host and stand behind these.</b> They are priced by us and covered by the paywall guarantees on <a href="/tools">our tools</a>. Most of our tools are tested against their own published example on every release; model-backed and search tools have their inputs checked separately. On the x402 and prepaid-credit paths, a call that answers an error is not charged. When this server is protecting itself from unpaid runs, a model or image call from a new wallet, or from a wallet whose recent payments did not settle, may be settled before it runs; if it fails, sending the same payment again runs it at no further charge, or the amount is refunded. ${fmtNum(data.ours)} of the ${fmtNum(data.total)} rows here.</li>
     <li><span class="ix-badge third">3rd party</span> <b>Someone else's endpoint. We do not operate, host, or test it.</b> Everything below applies only to these rows:</li>
   </ul>
   <ul>

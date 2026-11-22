@@ -13,6 +13,7 @@
 // MPP evm method, a Tempo charge, a card and credits all settle only after a
 // final 200; a Tempo push transfer is on chain before the call, so an answer
 // that never arrives is booked as owed.
+import { SETTLE_FIRST_SENTENCE, SETTLE_FIRST_SENTENCE_LOWER } from "./settle-first-copy.js";
 import { usdToBaseUnits } from "./base-units.js";
 import { siteOrgLd } from "./site-org.js";
 import { GUIDE_SITE, GUIDE_SITE_NAME, guideLink } from "./ask402-links.js";
@@ -109,7 +110,7 @@ console.log(res.status, res.headers.get("payment-receipt"), await res.json());`;
   const howToLd = { "@type": "HowTo", "@id": `${canonical}#howto`, name: "Pay for one Agent402 call", description, step: [
     { "@type": "HowToStep", name: "Ask", text: "Send the request with no payment. The answer is 402 Payment Required with the price and every way to pay it." },
     { "@type": "HowToStep", name: "Pay", text: "Sign the payment with your wallet key (or present a credits key, or a solved proof-of-work puzzle) and repeat the identical request with the credential in a header." },
-    { "@type": "HowToStep", name: "Read the receipt", text: "A 200 carries the result and a receipt header naming the settlement; a 4xx or 5xx on x402, MPP evm, Tempo charge, card and credits is not charged." },
+    { "@type": "HowToStep", name: "Read the receipt", text: "A 200 carries the result and a receipt header naming the settlement; a 4xx or 5xx on x402, MPP evm, Tempo charge, card and credits is not charged. When this server is protecting itself from unpaid runs, a model or image call from a new wallet, or from a wallet whose recent payments did not settle, may be settled before it runs; if it fails, sending the same payment again runs it at no further charge, or the amount is refunded." },
   ] };
 
   const extraCss = `
@@ -174,7 +175,7 @@ ${section("rule", `
   ${eyebrow("01 / THE RULE")}
   ${h2("One handshake, and one rule about money.")}
   ${p(`The handshake is two requests. The first carries no payment and gets a 402 with the terms. The second is the identical request plus one header holding the payment, and it gets the answer plus a receipt header. Nothing on the way asks for an account, a key or a person.`)}
-  ${p(`The rule is the order of operations: <strong style="color:var(--ink);font-weight:700;">the handler runs first, and the payment settles only after a response below 400 is ready</strong> (a Tempo push transfer is the exception, below). On x402, on MPP's evm method, on a Tempo charge, on a card and on credits, a 4xx or 5xx cancels settlement and nothing is charged; a 200 is charged only if its settlement then succeeds, and if it does not, the answer is withheld and you get a 402 instead of a result you paid for.`)}
+  ${p(`The rule is the order of operations: <strong style="color:var(--ink);font-weight:700;">the handler runs first, and the payment settles only after a response below 400 is ready</strong> (a Tempo push transfer is the exception, below). On x402, on MPP's evm method, on a Tempo charge, on a card and on credits, a 4xx or 5xx cancels settlement and nothing is charged (${SETTLE_FIRST_SENTENCE_LOWER}); a 200 is charged only if its settlement then succeeds, and if it does not, the answer is withheld and you get a 402 instead of a result you paid for.`)}
   ${p(`One exception is stated wherever it applies below: a Tempo <em>push</em> transfer is already on chain before the request arrives, so on that path an undelivered answer is a debt to you, recorded in the refund ledger and repaid after on-chain proof. ${link("/proof", "/proof")} shows settled receipts next to their quotes.`)}
 `)}
 
@@ -239,7 +240,7 @@ ${section("mpp", `
 Payment-Receipt: eyJtZXRob2QiOiJ0ZW1wbyIsInJlZmVyZW5jZSI6IjB4…
 # base64url JSON: {"method":"tempo","reference":"0x…","status":"success","timestamp":"2026-…"}`)}
   ${p(`${code("reference")} is the settlement transaction on the method's chain (for the ${code("evm")} method it is the same transaction an x402 receipt would carry). Tempo settlements are listed with their explorer links on ${link("/revenue", "/revenue")}.`)}
-  ${p(`<strong style="color:var(--ink);font-weight:700;">Charge and push.</strong> A Tempo <em>charge</em> credential is broadcast by this server only after the handler answers below 400, so a 4xx or 5xx on a Tempo charge is not charged. A Tempo <em>push</em> credential is a transfer your client already sent; the server finalizes it before the handler runs, and if the answer then fails or never reaches you, the amount is booked as owed to your wallet in the refund ledger.`)}
+  ${p(`<strong style="color:var(--ink);font-weight:700;">Charge and push.</strong> A Tempo <em>charge</em> credential is broadcast by this server only after the handler answers below 400, so a 4xx or 5xx on a Tempo charge is not charged (${SETTLE_FIRST_SENTENCE_LOWER}). A Tempo <em>push</em> credential is a transfer your client already sent; the server finalizes it before the handler runs, and if the answer then fails or never reaches you, the amount is booked as owed to your wallet in the refund ledger.`)}
   ${cardHtml}
 `, true)}
 

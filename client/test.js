@@ -884,8 +884,13 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       if (st.mode === "drop-once") { st.mode = "ok"; throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) }); }
       if (st.mode === "drop") throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) });
       if (st.mode === "ok") return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      if (st.mode === "charged") return chargedAnswer();
       return new Response(JSON.stringify({ error: "internal error" }), { status: 500, headers: { "content-type": "application/json" } });
     };
+    // A payment settled before the call ran, whose run failed (the seller's
+    // settle-first failure body).
+    const CHARGED_TX = "0x" + "ab".repeat(32);
+    const chargedAnswer = () => new Response(JSON.stringify({ error: "Upstream error (HTTP 500)", charged: true, refundOwed: true, retry: "same-payment", transaction: CHARGED_TX, refundStatusUrl: `https://seller.example/api/refunds?tx=${CHARGED_TX}` }), { status: 502, headers: { "content-type": "application/json" } });
     // The client's own fetch: an unpaid preflight, or (guarded mode) the resend
     // of a signed request whose connection failed. A resend is recorded with
     // the exact header it carried and answered as the paid request would be;
@@ -896,6 +901,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       if (!sig) return st.mode === "unpaid500" ? new Response("{}", { status: 500 }) : answer402();
       st.resent.push({ sig, idem: h.get("idempotency-key"), body: init.body });
       if (st.mode === "drop") throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) });
+      if (st.resendCharged) return chargedAnswer();
       return new Response(JSON.stringify({ ok: true, resent: true }), { status: 200, headers: { "content-type": "application/json" } });
     };
     return { st, inner, preflight };
@@ -969,6 +975,34 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     answered.st.mode = "500";
     await callErr(answered.c);
     ok(answered.st.resent.length === 0, "an HTTP answer to the paid request is never resent");
+  }
+
+  // A payment the seller settled before the call ran, whose run failed
+  // (charged: true, retry: "same-payment"): the same signed payment is sent
+  // once more, and its amount counts once, as settled spend.
+  {
+    const { c, st } = build({ dailyLimitUsd: 1 });
+    st.mode = "charged";
+    const out = await c.call("thing", { q: 2 });
+    const sum = c.spendingSummary();
+    ok(out?.resent === true && st.signed.length === 1 && st.resent.length === 1 && st.resent[0].sig === st.sigs[0] && st.resent[0].body === JSON.stringify({ q: 2 }) && sum.dailyUsd === 0.01 && sum.calls === 1 && sum.heldUsd === 0,
+      `guarded: a charged failure is resent once with the same signed payment and delivered; it counts once, settled (${JSON.stringify(sum)})`);
+    const twice = build({ dailyLimitUsd: 1 });
+    twice.st.mode = "charged"; twice.st.resendCharged = true;
+    const e = await callErr(twice.c);
+    const sum2 = twice.c.spendingSummary();
+    ok(e?.paid === true && e.charged === true && e.refundOwed === true && e.resent === true && e.transaction === "0x" + "ab".repeat(32) && /refunds\?tx=/.test(e.refundStatusUrl || "") && twice.st.resent.length === 1 && twice.st.signed.length === 1 && sum2.dailyUsd === 0.01 && sum2.heldUsd === 0,
+      `guarded: when the resend fails too, the error says paid and charged (owed back), it is not resent again, and the amount counts once as spent (${e?.message?.slice(0, 120)}; ${JSON.stringify(sum2)})`);
+    const blind = build({ guard: false, dailyLimitUsd: 1 });
+    blind.st.mode = "charged";
+    const e3 = await callErr(blind.c);
+    const sum3 = blind.c.spendingSummary();
+    ok(e3?.paid === true && e3.charged === true && e3.resent === false && /send the same payment again/.test(e3.message) && blind.st.resent.length === 0 && sum3.dailyUsd === 0.01 && sum3.heldUsd === 0,
+      `no x402Client: the client cannot resend the payment it did not see; the error says so, and the amount counts as spent, not held (${JSON.stringify(sum3)})`);
+    const plain = build({ dailyLimitUsd: 1 });
+    plain.st.mode = "500";
+    const e4 = await callErr(plain.c);
+    ok(e4?.paid === "unknown" && plain.st.resent.length === 0 && plain.c.spendingSummary().heldUsd === 0.01, "control: a failure that does not say charged is not resent and stays held, as before");
   }
 
   // Refusals before any header was sent release at once.

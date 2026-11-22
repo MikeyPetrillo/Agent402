@@ -1,6 +1,7 @@
 // Server-rendered technical guides — the prose layer for organic search.
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
+import { SETTLE_FIRST_SENTENCE, SETTLE_FIRST_SENTENCE_LOWER } from "./settle-first-copy.js";
 import { usdToBaseUnits } from "./base-units.js";
 import { siteOrgRef } from "./site-org.js";
 import { GUIDE_SITE_NAME, GUIDE_EXPLAINERS } from "./ask402-links.js";
@@ -185,6 +186,7 @@ live service ([agent402.tools](https://agent402.tools)) you can pay right now.
 Your client calls a paid endpoint and gets a \`402\` quote; it signs a USDC
 authorization from its own wallet and retries, and the server settles only when
 the response succeeds, so a failed x402 call is not charged (a payment that lands late is repaid after on-chain proof).
+${SETTLE_FIRST_SENTENCE}
 The headers, step
 by step: [how x402 works](/learn/x402). In plain language: [What is x402?](${GUIDE_EXPLAINERS.x402}) on ${GUIDE_SITE_NAME}.
 
@@ -408,7 +410,7 @@ How to plan a burst around them:
 ## Retries that never pay twice
 
 On x402 a response of 400 or above is not settled, so a retry after one costs
-nothing extra. For a call that may have succeeded (a timeout, a dropped
+nothing extra. ${SETTLE_FIRST_SENTENCE} For a call that may have succeeded (a timeout, a dropped
 connection), use the replay rules:
 
 - **Send an \`Idempotency-Key\`.** The same key with the same credential (the
@@ -447,7 +449,7 @@ answers 202 at once with a \`Location\` job link. Poll \`GET /api/jobs/{id}\`
 \`failed\`; \`state\`, \`stage\`, \`progress\` and \`etaSeconds\` say where it is. The
 payment settles only when the result is ready, except a Tempo transfer sent
 before the call, which is repaid after on-chain proof if the run fails;
-on x402 a failed run is not charged. A row whose block carries \`preferWait\` also takes
+on x402 a failed run is not charged. ${SETTLE_FIRST_SENTENCE} A row whose block carries \`preferWait\` also takes
 \`Prefer: wait=<maxSeconds>\` to wait on the connection, and a paid call there
 with neither header is answered 400 before any payment.
 
@@ -522,6 +524,8 @@ and refuse to send a payload signed past it.
 | MPP \`evm\` charge | the same x402 settlement underneath | not charged |
 | MPP Tempo pull (a signed transaction the relay broadcasts) | broadcast after the tool answers, only for a response under 400 | not charged |
 | MPP Tempo push (a transfer you already sent) | final before the call runs | booked as a refund owed to the paying wallet, repaid after on-chain proof |
+
+${SETTLE_FIRST_SENTENCE}
 
 On the EVM chains and Tempo pull, a settlement whose outcome is not known when
 the call is answered is read on chain again; one that lands after a failed
@@ -942,6 +946,8 @@ stage here takes every offered chain, over x402 or MPP.
 | MPP \`evm\` charge | the same x402 settlement underneath | not charged |
 | MPP Tempo pull (a signed transaction) | broadcast after the tool answers, only for a response under 400 | not charged on Tempo pull: the transaction is never broadcast |
 | MPP Tempo push (a transfer already sent) | final before the call runs | the transfer is booked as a refund owed to the paying wallet, repaid after on-chain proof |
+
+${SETTLE_FIRST_SENTENCE}
 
 Tempo is offered on every stage except ${PIPELINE_TOKEN}. A
 pull credential (\`payload\` type \`transaction\`) is a signed transaction
@@ -1806,7 +1812,7 @@ maxPerCallUsd: 0.05, dailyLimitUsd: 2 })\` from
 ## What you get back
 
 A \`200\` with JSON and a \`PAYMENT-RESPONSE\` header (the settle receipt).
-A \`4xx\`/\`5xx\` is not charged on x402: settlement runs after the handler and only
+A \`4xx\`/\`5xx\` is not charged on x402 (${SETTLE_FIRST_SENTENCE_LOWER}): settlement runs after the handler and only
 for a successful response, and you can verify that from the headers you hold
 (no \`PAYMENT-RESPONSE\` = nothing settled). One exception: a transfer that
 lands after a timed-out settle, a disconnect during settle, or a settle the
@@ -2631,7 +2637,7 @@ receipt shape:
 Why pay here, in one section with the proof links:
 [agent402.tools/docs#why](https://agent402.tools/docs#why). The short version: usage is
 priced under a ceiling you see before you pay, a failed x402 call is not charged and the
-receipt shows it (a payment that lands late is repaid after on-chain proof), a keyed retry never pays twice, and uptime and transactions are published from
+receipt shows it (${SETTLE_FIRST_SENTENCE_LOWER}) (a payment that lands late is repaid after on-chain proof), a keyed retry never pays twice, and uptime and transactions are published from
 outside production.
 `,
   },

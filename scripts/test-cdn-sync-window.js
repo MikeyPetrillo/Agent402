@@ -356,7 +356,16 @@ try {
   }
 
   // 5. LLM gateway: a slow upstream through the CDN ends inside the bound.
+  // (Both wallets have a paid sale on the books, so the model call is settled
+  // after its handler, the order "not charged" below reads; a wallet with
+  // none has its payment settled before the model call, and a failure after
+  // it is booked as owed: scripts/test-settle-first.js.)
   {
+    for (const [n, ip] of [[6, "203.0.113.30"], [7, "203.0.113.31"]]) {
+      const known = await post(IMG, { "x-forwarded-for": ip }, wallet(n));
+      ok(known.status === 200, `wallet ${n} has one settled call on the books (${known.status})`);
+    }
+    await sleep(300);
     up.chatDelayMs = 12_000;
     const s = fac.settle;
     const t0 = Date.now();

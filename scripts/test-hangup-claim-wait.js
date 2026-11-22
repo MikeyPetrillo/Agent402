@@ -81,9 +81,23 @@ try {
     await ok((await owedRows()).length === 0 && b.abandonedInWindow === 0 && b.inflightUsd === 0, `a. nothing owed, no budget spent (${JSON.stringify({ abandoned: b.abandonedInWindow, inflight: b.inflightUsd })})`);
   }
 
+  // b and c read a run settled AFTER its handler, which is how a wallet with
+  // a paid sale on the books is served on a model route (a wallet with none
+  // has its payment settled before the model call, so its close meets no
+  // claim wait after the handler: scripts/test-settle-first.js). Each wallet
+  // below buys one call on a route with no model upstream first; `settledAt`
+  // is its settle count after that call.
+  const knownWallet = async () => {
+    const w = await rig.wallet("evm");
+    const r = await rig.pay(w, { method: "POST", path: "/api/sql-guard", body: { sql: "select 1" } });
+    await sleep(200);
+    return { w, ok: r.status === 200, settledAt: rig.outcomesOf(w).settled, attemptsAt: rig.outcomesOf(w).attempts };
+  };
+
   // b. The close lands while the authorization claim waits on the store.
   {
-    const w = await rig.wallet("evm");
+    const { w, ok: known, settledAt } = await knownWallet();
+    await ok(known, "b. the wallet has one settled call on the books");
     const seen0 = rig.st.completions;
     rig.st.llmDelayMs = 400;
     const headers = await rig.credentialFor(w, CHAT);
@@ -98,7 +112,7 @@ try {
     ac.abort();
     const res = await sent;
     await ok(String(res.status).startsWith("error:"), `b. the buyer left before any answer (${res.status})`);
-    await ok(await until(() => rig.outcomesOf(w).settled === 1), `b. the settle went on after the store answered: charged once (${JSON.stringify(rig.outcomesOf(w))})`);
+    await ok(await until(() => rig.outcomesOf(w).settled === settledAt + 1), `b. the settle went on after the store answered: charged once (${JSON.stringify(rig.outcomesOf(w))})`);
     const owed = await until(async () => { const rows = await owedRows(); return rows.length === 1 ? rows : null; });
     await ok(Array.isArray(owed) && owed.length === 1, `b. the undelivered charge is booked as owed, once (${JSON.stringify((owed || []).map((r) => ({ slug: r.slug, status: r.status })))})`);
     const b = await until(async () => { const x = await budget(); return x.inflightUsd === 0 ? x : null; });
@@ -108,7 +122,8 @@ try {
   // c. Control: a close while the handler runs, with no store wait.
   {
     await sleep(2000); // the pause above has ended
-    const w = await rig.wallet("evm");
+    const { w, ok: known, attemptsAt } = await knownWallet();
+    await ok(known, "c. the wallet has one settled call on the books");
     const seen0 = rig.st.completions;
     rig.st.llmDelayMs = 1200;
     const headers = await rig.credentialFor(w, CHAT);
@@ -121,7 +136,7 @@ try {
     const b = await until(async () => { const x = await budget(); return x.abandonedInWindow === 1 && x.inflightUsd === 0 ? x : null; });
     await ok(b && b.abandonedInWindow === 1, `c. a close before the settle is a withheld charge: recorded as abandoned (${JSON.stringify(b)})`);
     await sleep(1500);
-    await ok(rig.outcomesOf(w).attempts === 0 && (await owedRows()).length === 1, `c. nothing settles and nothing more is owed (${JSON.stringify(rig.outcomesOf(w))})`);
+    await ok(rig.outcomesOf(w).attempts === attemptsAt && (await owedRows()).length === 1, `c. nothing settles and nothing more is owed (${JSON.stringify(rig.outcomesOf(w))})`);
   }
 } catch (e) {
   await fail(`unexpected error: ${e?.stack || e}`);

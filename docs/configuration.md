@@ -502,6 +502,9 @@ may still clamp it, and the read site is the reference.
 | `GATEWAY_SETTLE_BREAKER_OVERRUN_ALARM` | Gateway settle breaker overrun alarm. |  | `src/gateway-settle-breaker.js` |
 | `GATEWAY_SETTLE_BREAKER_UNKNOWN_MAX` | Gateway settle breaker unknown maximum. |  | `src/gateway-settle-breaker.js` |
 | `GATEWAY_SETTLE_BREAKER_WINDOW_MS` | Gateway settle breaker window, in milliseconds. |  | `src/gateway-settle-breaker.js` |
+| `GATEWAY_SETTLE_FIRST` | Automatic by default; `off` settles every paid call after its handler; `always` keeps the budget mode on. A call on a model route from a wallet holding calls that did not settle has its payment settled before the upstream work; so does one from a wallet with no paid sale on the books while the budget mode is on (src/settle-first.js, src/settle-first-meter.js). |  | `src/gateway-settle-breaker.js`, `src/settle-first-meter.js` |
+| `GATEWAY_SETTLE_FIRST_BUDGET_USD` | The settle-first budget, USD (default 5): the budget mode is on while the rolling 24-hour upstream cost of model runs that ended unsettled, plus what runs served first to wallets that never settled have at risk, is at or over it, or while the meter cannot be read (src/settle-first-meter.js). |  | `src/settle-first-meter.js` |
+| `GATEWAY_SETTLE_FIRST_UNSETTLED_MAX` | Calls on the model routes that did not settle (default 2, at least 1) a wallet, or one signed authorization, may hold with no settled call since before its next calls settle before the upstream work. |  | `src/gateway-settle-breaker.js` |
 | `GATEWAY_WITHDRAW_ALERT_USD` | Gateway withdraw alert, in USD. |  | `src/gateway-nanopayments.js` |
 
 ## HANGUP

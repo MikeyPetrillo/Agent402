@@ -37,7 +37,7 @@ import {
   substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor,
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, fitBudgetBelowCap, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
-  fetchOpenRouter, upstreamHttpError, refuseUnlistedMeteredModel, isInputTooLarge, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
+  fetchOpenRouter, assertOpenRouterConfigured, upstreamHttpError, refuseUnlistedMeteredModel, isInputTooLarge, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, bufferedAttemptMs, readUpstreamBody,
   createAnswerWatch, EMPTY_REFUSAL_MESSAGE,
@@ -48,6 +48,7 @@ import {
 } from "./llm-gateway-kit.js";
 import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
+import { settleBeforeUpstream } from "../settle-first.js";
 
 const OPENROUTER_MESSAGES_URL = "https://openrouter.ai/api/v1/messages";
 const MAX_STOP_SEQUENCES = 8;
@@ -616,6 +617,11 @@ export function makeMessagesHandler(routeTier) {
               if (model === emptyModel) continue;
               let outbound;
               try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
+              // The settle point (src/settle-first.js): this link is about to be
+              // called, so a run the server armed settles its payment here, once
+              // (after the key check the call would fail on).
+              assertOpenRouterConfigured();
+              await settleBeforeUpstream(req);
               const timeoutMs = paymentWindowTimeoutMs(req, STREAM_TIMEOUT_MS);
               const attemptStarted = Date.now();
               // No envelope on a stream: the disclosure rides in a header.
@@ -648,6 +654,11 @@ export function makeMessagesHandler(routeTier) {
       if (model === refusedModel) continue;
       let outbound;
       try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
+      // The settle point (src/settle-first.js): this link is about to be
+      // called, so a run the server armed settles its payment here, once
+      // (after the key check the call would fail on).
+      assertOpenRouterConfigured();
+      await settleBeforeUpstream(req);
       // This attempt's own deadline, sized to the output cap it was sent with.
       const ownMs = bufferedAttemptMs(outbound.max_tokens, tier, req);
       const timeoutMs = paymentWindowTimeoutMs(req, ownMs);

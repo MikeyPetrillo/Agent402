@@ -102,6 +102,24 @@
 // of them for one key inside the window raise the burst alarm, on the /v1
 // tiers and the catalog consult alike: reported only, nobody is refused.
 //
+// SETTLE FIRST. The counts above stop a key after runs that were served and
+// not paid; they cannot stop the first such run of a wallet nobody has seen,
+// and a caller who rotates wallets has one per wallet with no end. So on the
+// routes the server arms (src/settle-first.js, the /v1 model routes) this
+// module also says which runs have their payment settled BEFORE the upstream
+// work (gatewaySettleFirstDue): a run of a wallet with no settled call in the
+// window and no paid sale on the books (the sales ledger, the same read THE
+// SERVICE-WIDE BOUND makes; a ledger that cannot answer reads as no sale
+// here, since the answer only moves the settlement earlier and refuses
+// nobody), and a run of a wallet (per network) or of one signed
+// authorization that holds SETTLE_FIRST_UNSETTLED_MAX /v1 runs that did not
+// settle, whatever the cause (a verdict, an unknown cause, ours), with no
+// settled call since. A settled call (a final 200) clears the wallet's
+// count; an authorization's count ends with its window. Nobody is refused by
+// it: the buyer-verdict refusals above are unchanged, and a run that settles
+// first is served. Counted in this process and, with a Redis, in the shared
+// windows gwb-uns and gwb-uns-auth. GATEWAY_SETTLE_FIRST=off reads no run as due.
+//
 // The listener rides onSettleOutcome (src/hangup-settlement.js), which reports
 // the final outcome whether or not the buyer stayed connected: a settlement
 // sent while the buyer was connected that fails after the buyer left counts
@@ -177,6 +195,8 @@ import { hasPaidRecord, notePaidSettlement } from "./paid-record.js";
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { positiveNum as num } from "./env-num.js";
 import { limiterKey } from "./rate-limit.js";
+import { settleFirstBudgetMode, settleFirstMeterStatus } from "./settle-first-meter.js";
+import { exactRequiredOf } from "./settle-first.js";
 
 /** Settle failures a wallet may accumulate inside the window before it is refused. */
 export const MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_MAX, 3);
@@ -224,11 +244,21 @@ export const MULTI_NETWORK_MIN = Math.max(2, Math.floor(num(process.env.GATEWAY_
 export const OVERRUN_ALARM_FAILS = Math.max(1, Math.floor(num(process.env.GATEWAY_SETTLE_BREAKER_OVERRUN_ALARM, MAX_FAILS)));
 /** The Retry-After of a refusal for runs in flight: they end in seconds. */
 const INFLIGHT_RETRY_MS = 5_000;
+/** /v1 runs that did not settle (any cause) a wallet (per network), or one
+ *  signed authorization, may hold with no settled call since before its next
+ *  runs settle first (SETTLE FIRST). At least 1. */
+export const SETTLE_FIRST_UNSETTLED_MAX = Math.max(1, Math.floor(num(process.env.GATEWAY_SETTLE_FIRST_UNSETTLED_MAX, 2)));
+/** GATEWAY_SETTLE_FIRST=off: no run settles first (every run is settled after its handler). */
+export function settleFirstEnabled(env = process.env) { return String(env.GATEWAY_SETTLE_FIRST || "").trim().toLowerCase() !== "off"; }
 
 // key -> runs in flight that settle after the handler and are not known to
 // be covered (RUNS IN FLIGHT). This process only.
 const inflight = new Map();
 const INFLIGHT_COUNTED = "__a402BreakerInflightCounted";
+// The function that gives back a request's counted place in flight (own,
+// non-enumerable): a run whose payment settled before its upstream work
+// (SETTLE FIRST) is no longer a run taken after the handler.
+const INFLIGHT_LEAVE = "__a402BreakerInflightLeave";
 // key -> number[]: verdict failures recorded past the key's refusing count,
 // and until when a key's run of them has raised the alarm.
 const overrunFails = new Map();
@@ -253,6 +283,16 @@ const unprovenAlarmed = new Map(); // key -> until when its run has raised the a
 // authorization key -> number[]: served runs under that one signed
 // authorization whose settle failed for the buyer's reason (shared window gwb-auth).
 const authFails = new Map();
+// key -> number[]: /v1 runs under the key that did not settle, whatever the
+// cause, since its last settled call (SETTLE FIRST; shared window gwb-uns),
+// and the same per signed authorization (gwb-uns-auth).
+const unsettledRuns = new Map();
+const unsettledAuthRuns = new Map();
+// SETTLE FIRST, counted for the operator view: runs armed by reason, payments
+// settled before the run, payments that did not settle (no run), charges
+// settled before a run that then failed or was not delivered (booked owed),
+// and armed runs that ended without reaching the settle point.
+const settleFirstCounts = { armed: Object.create(null), settled: 0, refused: 0, owed: 0, notReached: 0, exactRequired: 0, resent: 0 };
 let unprovenTrips = 0;
 // buyer -> the time of its latest settle failure inside the window: the burst
 // alarm counts distinct buyers (see GLOBAL_MAX_FAILS), so a count key's
@@ -284,7 +324,10 @@ let multiNetworkTrips = 0;
 // entry), gwb-nets (per payer, one entry per network its count reads
 // refusing on), gwb-auth (per signed EVM authorization, one entry per
 // served run under it that did not settle), gwb-wide-buyers (one entry per
-// distinct buyer whose /v1 failure was read against it), the flag gwb-alarm
+// distinct buyer whose /v1 failure was read against it), gwb-uns (per key,
+// one entry per /v1 run that did not settle, whatever the cause, cleared by
+// a settled call) and gwb-uns-auth (the same per signed EVM authorization;
+// both are SETTLE FIRST's counts and refuse nothing), the flag gwb-alarm
 // (read by the status word only) and the flag gwb-wide (THE SERVICE-WIDE
 // BOUND, read by the /v1 consult; an earlier build neither writes nor reads
 // it, so a deploy overlap refuses nobody for it). A window add returns the shared count, so
@@ -320,8 +363,12 @@ function write(p) {
   w.finally(() => pendingWrites.delete(w));
   return w;
 }
-function sharedRecordFailure(key, now, { global, withdrawn, walletCount = true, unknown = false, blocklisted = false, authKey = null, wide = false }) {
+function sharedRecordFailure(key, now, { global, withdrawn, walletCount = true, unknown = false, blocklisted = false, authKey = null, wide = false, unsettled = false, unsettledAuthKey = null }) {
   const member = `${PROC}:${++sharedSeq}`;
+  // SETTLE FIRST: one entry per /v1 run under the key (and under its
+  // authorization) that did not settle, whatever the cause.
+  if (unsettled) void write(shared.windowAdd("gwb-uns", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
+  if (unsettledAuthKey) void write(shared.windowAdd("gwb-uns-auth", sharedKey(unsettledAuthKey), { windowMs: WINDOW_MS, member, now }));
   if (wide) {
     void write(shared.windowAdd("gwb-wide-buyers", "all", { windowMs: WINDOW_MS, member: sharedKey(buyerOf(key)), now })).then((r) => {
       if (!r?.ok || r.count < GLOBAL_MAX_FAILS) return;
@@ -368,8 +415,11 @@ async function sharedNoteNetworkAtLimit(key, nFails, now) {
   raiseMultiNetworkAlarm(now, r.count, { acrossReplicas: true });
   return r;
 }
-function sharedRecordSuccess(key, now) {
+function sharedRecordSuccess(key, now, authKey = null) {
   void write(shared.windowAdd("gwb-ok", sharedKey(key), { windowMs: WINDOW_MS, member: `${PROC}:${++sharedSeq}`, now }));
+  // A settled call ends the key's run of unsettled /v1 runs (SETTLE FIRST).
+  void write(shared.windowClear("gwb-uns", sharedKey(key)));
+  if (authKey) void write(shared.windowClear("gwb-uns-auth", sharedKey(authKey)));
 }
 /** The per-key state with the shared windows folded in: each count is the
  *  larger of the store's and this process's own (a write of this process
@@ -773,6 +823,7 @@ function countInFlight(req, key) {
     const n = (inflight.get(key) || 0) - 1;
     if (n > 0) inflight.set(key, n); else inflight.delete(key);
   };
+  try { Object.defineProperty(req, INFLIGHT_LEAVE, { value: leave, enumerable: false, configurable: true }); } catch { /* it leaves when its response ends */ }
   if (!onResponseEnd(req, req.res, leave)) leave();
 }
 /** The key's state with its runs in flight read in (RUNS IN FLIGHT): a call
@@ -829,7 +880,16 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
   // and the bound never holds one (burstAwareVerdicts), so it never raises it.
   const wide = !!global && !!key && !withdrawn && walletCount && isBuyer && !!payerOfKey(key);
   if (wide) noteWideFailure(key, now);
-  if (SHARED) sharedRecordFailure(key, now, { global, withdrawn, walletCount: walletCount && isBuyer, unknown, blocklisted: blocklisted && isBuyer, authKey: authCounted ? authKey : null, wide });
+  // SETTLE FIRST: a /v1 run under a wallet's key that did not settle counts
+  // toward settling its next runs first, WHATEVER the cause (a verdict, an
+  // unknown cause, ours): the cause decides who is refused (above and below),
+  // never whether the run was paid. Not a payment still settling
+  // (walletCount:false), a withdrawn refusal (keyless) or a key that names
+  // no wallet. Refuses nobody.
+  const unsettled = !!global && !!key && !withdrawn && walletCount && !!payerOfKey(key);
+  const unsettledAuthKey = unsettled && typeof authKey === "string" && authKey ? authKey : null;
+  if (unsettled) noteUnsettledRun(key, unsettledAuthKey, now);
+  if (SHARED) sharedRecordFailure(key, now, { global, withdrawn, walletCount: walletCount && isBuyer, unknown, blocklisted: blocklisted && isBuyer, authKey: authCounted ? authKey : null, wide, unsettled, unsettledAuthKey });
   if (!isBuyer && key) noteUnprovenFailure(key, now);
   if (unknown) {
     const u = inWindow(unknownFails.get(key) || [], now);
@@ -882,14 +942,179 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
 
 /** A settled 200 is an outcome in the window: enough of them keep a key's
  *  failures under the share that refuses it. */
-export function recordGatewaySettleSuccess(key, now = Date.now()) {
+export function recordGatewaySettleSuccess(key, now = Date.now(), { authKey = null } = {}) {
   if (!key) return;
   // A settled call is this wallet's paid record (src/paid-record.js).
   try { const p = payerOfKey(key); if (p) notePaidSettlement(p, now); } catch { /* bookkeeping only */ }
   const ok = inWindow(oks.get(key) || [], now);
   ok.push(now);
   oks.set(key, ok.length > MAX_OKS_KEPT ? ok.slice(-MAX_OKS_KEPT) : ok);
-  if (SHARED) sharedRecordSuccess(key, now);
+  // A settled call ends the key's run of unsettled /v1 runs (SETTLE FIRST),
+  // and the authorization that settled is spent.
+  unsettledRuns.delete(key);
+  if (typeof authKey === "string" && authKey) unsettledAuthRuns.delete(authKey);
+  if (SHARED) sharedRecordSuccess(key, now, typeof authKey === "string" && authKey ? authKey : null);
+}
+
+/** One more /v1 run under `key` (and its authorization) that did not settle. */
+function noteUnsettledRun(key, authKey, now) {
+  const push = (map, k) => {
+    const arr = inWindow(map.get(k) || [], now);
+    arr.push(now);
+    if (arr.length > MAX_OKS_KEPT) arr.splice(0, arr.length - MAX_OKS_KEPT);
+    map.delete(k);
+    map.set(k, arr);
+    if (map.size > AUTH_KEYS_MAX) { for (const [x, t] of map) if (!inWindow(t, now).length) map.delete(x); }
+    while (map.size > AUTH_KEYS_MAX) map.delete(map.keys().next().value);
+  };
+  push(unsettledRuns, key);
+  if (authKey) push(unsettledAuthRuns, authKey);
+}
+/** A key's unsettled /v1 runs since its last settled call, in the window (this process). */
+function unsettledCount(map, k, now) {
+  if (!k) return 0;
+  const arr = inWindow(map.get(k) || [], now);
+  if (arr.length) map.set(k, arr); else map.delete(k);
+  return arr.length;
+}
+/** Does the sales ledger hold a paid sale for this key's wallet? "paid",
+ *  "never", or "unread" (no ledger registered, its first load not landed, or
+ *  a read that threw). SETTLE FIRST reads "unread" as no sale: the answer
+ *  only moves a settlement earlier, so a ledger that cannot answer never
+ *  leaves a run unpaid, and nobody is refused for it. THE SERVICE-WIDE
+ *  BOUND keeps its own read (everPaid), which errs the other way because
+ *  its answer refuses. */
+function paidHistory(key) {
+  const p = payerOfKey(key);
+  if (!p) return "unread";
+  const reader = paidSaleReader || registeredReader;
+  const loaded = ledgerLoaded || registeredLoaded;
+  if (!reader || !loaded) return "unread";
+  try { if (!loaded()) return "unread"; return reader(p) ? "paid" : "never"; } catch { return "unread"; }
+}
+/**
+ * SETTLE FIRST. Is this run's payment to be settled before its upstream work?
+ * Null when it is settled after the handler, as every run is in normal
+ * operation; else `{ reason, mode }`. Per wallet, always: "unsettled-runs"
+ * (the wallet holds SETTLE_FIRST_UNSETTLED_MAX /v1 runs on this network that
+ * did not settle, whatever the cause, with no settled call since) and
+ * "authorization" (this signed authorization holds as many). Only while the
+ * budget mode is on (src/settle-first-meter.js: the rolling 24-hour upstream
+ * cost of /v1 runs that ended unsettled, plus what is at risk in flight, has
+ * crossed GATEWAY_SETTLE_FIRST_BUDGET_USD; or the meter cannot be read; or
+ * GATEWAY_SETTLE_FIRST=always): "never-settled" (no settled call in the
+ * window and no paid sale on the books) and "history-unread" (the same, the
+ * ledger not answering). `mode` is the meter's word for a budget-mode reason,
+ * null for a per-wallet one. Only a key that names a wallet is ever due.
+ * Refuses nothing and counts nothing: the caller decides whether the route
+ * and the payment can settle first.
+ * Synchronous without a shared store; a promise with one, so `await` covers both.
+ */
+export function gatewaySettleFirstDue(req, { now = Date.now() } = {}) {
+  return thenOf(gatewaySettleFirstPlan(req, { now }), (p) => p.due);
+}
+/**
+ * The same decision with what the caller needs beside it: `{ due, neverSettled }`.
+ * `neverSettled` is true for a wallet with no settled history (whether or not
+ * the budget mode is on): a run of such a wallet that is served first puts
+ * its price at risk until it ends (reserveAtRisk), which the meter counts.
+ */
+export function gatewaySettleFirstPlan(req, { now = Date.now() } = {}) {
+  if (!settleFirstEnabled() || inOtherLane(req)) return NO_PLAN;
+  if (signerReadPending(req)) return resolveGatewaySettleBreakerSigner(req).then(() => settleFirstPlanOf(req, now));
+  return settleFirstPlanOf(req, now);
+}
+const NO_PLAN = Object.freeze({ due: null, neverSettled: false });
+const thenOf = (v, f) => (v && typeof v.then === "function" ? v.then(f) : f(v));
+function settleFirstPlanOf(req, now) {
+  const key = gatewaySettleBreakerCountKey(req);
+  if (!key || !payerOfKey(key)) return NO_PLAN;
+  const authKey = gatewaySettleBreakerAuthKey(req);
+  if (!SHARED) return withBudgetMode(settleFirstVerdict(key, authKey, now, null), now);
+  return (async () => {
+    let view = null;
+    try {
+      const r = await shared.windowReadMany([
+        { name: "gwb-uns", key: sharedKey(key), windowMs: WINDOW_MS },
+        { name: "gwb-ok", key: sharedKey(key), windowMs: WINDOW_MS },
+        ...(authKey ? [{ name: "gwb-uns-auth", key: sharedKey(authKey), windowMs: WINDOW_MS }] : []),
+      ], { now });
+      if (r.ok) view = { unsettled: r.results[0].count, oks: r.results[1].count, auth: r.results[2]?.count || 0 };
+      else noteSharedLimitsDegraded(CONTROL, r);
+    } catch { view = null; }
+    return withBudgetMode(settleFirstVerdict(key, authKey, now, view), now);
+  })();
+}
+/** A per-wallet reason stands as it is; a never-settled one only while the
+ *  budget mode is on. */
+function withBudgetMode(v, now) {
+  if (!v) return NO_PLAN;
+  if (!v.budget) return { due: { reason: v.reason, mode: null }, neverSettled: false };
+  let m;
+  try { m = settleFirstBudgetMode({ now }); } catch { m = { on: true, why: "meter-unread" }; }
+  const apply = (mm) => ({ due: mm?.on ? { reason: v.reason, mode: mm.why } : null, neverSettled: true });
+  return m && typeof m.then === "function" ? m.then(apply, () => apply({ on: true, why: "meter-unread" })) : apply(m);
+}
+/** The verdict from this process's counts with the shared ones folded in
+ *  (each the larger of the two; a store that does not answer leaves this
+ *  process's own). A never-settled verdict carries `budget: true`: it
+ *  applies only while the budget mode is on. */
+function settleFirstVerdict(key, authKey, now, view) {
+  if (Math.max(unsettledCount(unsettledRuns, key, now), view?.unsettled || 0) >= SETTLE_FIRST_UNSETTLED_MAX) return { reason: "unsettled-runs" };
+  if (authKey && Math.max(unsettledCount(unsettledAuthRuns, authKey, now), view?.auth || 0) >= SETTLE_FIRST_UNSETTLED_MAX) return { reason: "authorization" };
+  // A settled call inside the window is settled history, before the sale
+  // row lands on the books.
+  if (Math.max(inWindow(oks.get(key) || [], now).length, view?.oks || 0) > 0) return null;
+  const history = paidHistory(key);
+  if (history === "paid") return null;
+  return { reason: history === "never" ? "never-settled" : "history-unread", budget: true };
+}
+
+// SETTLE FIRST, said: one line per settled-first payment and per payment that
+// did not settle, at most SETTLE_FIRST_LOG_PER_MIN a minute; the rest are
+// counted in one summary line when the minute turns. The payer by its first
+// characters only.
+const SETTLE_FIRST_LOG_PER_MIN = 20;
+let settleFirstLogMinute = -1, settleFirstLogged = 0, settleFirstUnlogged = 0;
+function settleFirstLog(line, now) {
+  const minute = Math.floor(now / 60_000);
+  if (minute !== settleFirstLogMinute) {
+    if (settleFirstUnlogged > 0) console.log(`[settle-first] ${settleFirstUnlogged} more run(s) in the last minute, not printed one by one`);
+    settleFirstLogMinute = minute; settleFirstLogged = 0; settleFirstUnlogged = 0;
+  }
+  if (settleFirstLogged >= SETTLE_FIRST_LOG_PER_MIN) { settleFirstUnlogged++; return; }
+  settleFirstLogged++;
+  console.log(line);
+}
+/**
+ * Count one SETTLE FIRST event for the operator view, and print its line:
+ * "armed" (a run whose payment settles first, by `reason`), "settled" (the
+ * payment settled before the run), "refused" (it did not settle; no run),
+ * "owed" (a charge settled before a run that then failed or was not
+ * delivered) and "not-reached" (an armed run that ended before its settle
+ * point: a refusal of the buyer's input, or an answer that needed no
+ * upstream call). On "settled" the run's place among the key's runs in
+ * flight (RUNS IN FLIGHT) is given back: its payment is taken.
+ */
+export function noteSettleFirst(event, { req = null, reason = null, slug = null, ms = null, now = Date.now() } = {}) {
+  try {
+    if (event === "armed") { const r = String(reason || "other"); settleFirstCounts.armed[r] = (settleFirstCounts.armed[r] || 0) + 1; return; }
+    if (event === "not-reached") { settleFirstCounts.notReached++; return; }
+    if (event === "owed") { settleFirstCounts.owed++; return; }
+    // An upto or Gateway batched payment asked for an exact one (option A),
+    // and a failed settle-first run's payment sent again and run.
+    if (event === "exact-required") { settleFirstCounts.exactRequired++; return; }
+    if (event === "resent") { settleFirstCounts.resent++; return; }
+    if (event !== "settled" && event !== "refused") return;
+    if (event === "settled") {
+      settleFirstCounts.settled++;
+      const leave = req && typeof req === "object" && Object.hasOwn(req, INFLIGHT_LEAVE) ? req[INFLIGHT_LEAVE] : null;
+      if (typeof leave === "function") leave();
+    } else settleFirstCounts.refused++;
+    const key = req ? gatewaySettleBreakerCountKey(req) : null;
+    const payer = key ? String(payerOfKey(key) || "").slice(0, 6) : "";
+    settleFirstLog(`[settle-first] ${slug || "?"}: payment ${event === "settled" ? "settled before the run" : "did not settle, so the call was not run"}${Number.isFinite(ms) ? ` in ${Math.round(ms)} ms` : ""} (reason=${reason || "?"}${key && networkOf(key) ? ` net=${networkOf(key)}` : ""}${payer ? ` payer=${payer}` : ""})`, now);
+  } catch { /* counting only */ }
 }
 
 function decodeReceipt(res) {
@@ -909,6 +1134,12 @@ function decodeReceipt(res) {
  *  arrives second; when the second could not re-arm, no /v1 settle failure
  *  ever reached the alarm's count. Never the other way round: a later
  *  global:false consult does not downgrade. */
+// The server's reader of a /v1 run that ended unsettled (it prices the run
+// and adds it to the settle-first budget meter).
+let unsettledRunListener = null;
+/** Register `fn(req)`, called once per /v1 run whose settlement failed. */
+export function setUnsettledRunListener(fn) { unsettledRunListener = typeof fn === "function" ? fn : null; }
+
 export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
   if (!req || typeof req !== "object") return false;
   if (req.__gatewaySettleBreakerArmed) {
@@ -925,6 +1156,10 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
   onSettleOutcome(req, res, () => {
     const global = state.global;
     try {
+      // A run asked for an exact payment in place of the one it sent
+      // (src/settle-first.js exactRequiredOf): nothing ran and nothing was
+      // offered for settlement; neither counted nor cleared.
+      if (exactRequiredOf(req)) return;
       const st = res.statusCode;
       const receipt = decodeReceipt(res);
       // The Algorand facilitator refused a SUB-CENT settle for our spent
@@ -967,7 +1202,10 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
           : marked === "buyer" || marked === "not-buyer" ? marked : "unknown";
         const blocklisted = receipt?.success === false && isBlocklistSettleVerdict({ receipt, raw: req[RAW_SETTLE_RECEIPT] || null });
         recordGatewaySettleFailure(key, Date.now(), { global, fault, blocklisted, authKey });
-      } else if (st === 200) recordGatewaySettleSuccess(key);
+        // A /v1 run served and not paid, whatever the cause: its upstream
+        // cost feeds the settle-first budget meter (src/settle-first-meter.js).
+        if (global && typeof unsettledRunListener === "function") { try { unsettledRunListener(req); } catch { /* metering only */ } }
+      } else if (st === 200) recordGatewaySettleSuccess(key, Date.now(), { authKey });
       // Anything else (a 4xx/5xx the handler threw) was never settled and is
       // not this wallet's doing: neither counted nor cleared.
     } catch { /* never break a response */ }
@@ -1113,6 +1351,11 @@ export function gatewaySettleBreakerStatus(now = Date.now()) {
     globalAlarm: g.alarm, globalAlarmUntil: g.alarm ? new Date(g.until).toISOString() : null, globalTrips,
     // THE SERVICE-WIDE BOUND on this process: whether it is up, and how often it was raised.
     wideBound: wideBoundUntil(now) > 0, wideTrips,
+    // SETTLE FIRST on this process: runs armed by reason, payments settled
+    // before the run, payments that did not settle (no run), charges settled
+    // before a run that failed or was not delivered (booked owed), armed runs
+    // that ended before their settle point, and the keys holding unsettled runs.
+    settleFirst: { enabled: settleFirstEnabled(), meter: settleFirstMeterStatus({ now }), armed: { ...settleFirstCounts.armed }, settled: settleFirstCounts.settled, refused: settleFirstCounts.refused, owed: settleFirstCounts.owed, notReached: settleFirstCounts.notReached, exactRequired: settleFirstCounts.exactRequired, resent: settleFirstCounts.resent, keysWithUnsettledRuns: [...unsettledRuns.keys()].filter((k) => unsettledCount(unsettledRuns, k, now) > 0).length, unsettledMax: SETTLE_FIRST_UNSETTLED_MAX },
     maxFails: MAX_FAILS, unknownMaxFails: UNKNOWN_MAX_FAILS, burstMaxFails: BURST_MAX_FAILS, authMaxFails: AUTH_MAX_FAILS, minFailShare: MIN_FAIL_SHARE, hardMaxFails: HARD_MAX_FAILS, windowMs: WINDOW_MS, globalMaxFails: GLOBAL_MAX_FAILS,
   };
 }
@@ -1127,7 +1370,7 @@ export async function gatewaySettleFailuresStatus({ full = false, now = Date.now
   const status = g.alarm ? "burst" : "ok";
   if (!full) return { status };
   const s = gatewaySettleBreakerStatus(now);
-  return { status, until: g.alarm ? new Date(g.until).toISOString() : null, buyersInWindow: s.globalFailsInWindow, threshold: GLOBAL_MAX_FAILS, windowMinutes: WINDOW_MS / 60_000, trips: s.globalTrips, blockedKeys: s.blockedKeys, trackedKeys: s.trackedKeys, multiNetworkThreshold: MULTI_NETWORK_MIN, multiNetworkTrips: s.multiNetworkTrips, payersWithNetworkAtLimit: s.payersWithNetworkAtLimit, unprovenTrips: s.unprovenTrips, overrunTrips: s.overrunTrips, runsInFlightCounted: s.runsInFlightCounted, wideBound: s.wideBound, wideTrips: s.wideTrips, burstMaxFails: BURST_MAX_FAILS };
+  return { status, until: g.alarm ? new Date(g.until).toISOString() : null, buyersInWindow: s.globalFailsInWindow, threshold: GLOBAL_MAX_FAILS, windowMinutes: WINDOW_MS / 60_000, trips: s.globalTrips, blockedKeys: s.blockedKeys, trackedKeys: s.trackedKeys, multiNetworkThreshold: MULTI_NETWORK_MIN, multiNetworkTrips: s.multiNetworkTrips, payersWithNetworkAtLimit: s.payersWithNetworkAtLimit, unprovenTrips: s.unprovenTrips, overrunTrips: s.overrunTrips, runsInFlightCounted: s.runsInFlightCounted, wideBound: s.wideBound, wideTrips: s.wideTrips, burstMaxFails: BURST_MAX_FAILS, settleFirst: s.settleFirst };
 }
 
 /** Test-only. With a shared store it returns a promise that settles once
@@ -1136,7 +1379,10 @@ export async function gatewaySettleFailuresStatus({ full = false, now = Date.now
 export function _gatewaySettleBreakerReset() {
   const keys = new Set([...fails.keys(), ...oks.keys(), ...unknownFails.keys()]);
   const authKeys = [...authFails.keys()];
+  const unsettledKeys = [...unsettledRuns.keys()], unsettledAuthKeys = [...unsettledAuthRuns.keys()];
   authFails.clear();
+  unsettledRuns.clear(); unsettledAuthRuns.clear();
+  settleFirstCounts.armed = Object.create(null); settleFirstCounts.settled = 0; settleFirstCounts.refused = 0; settleFirstCounts.owed = 0; settleFirstCounts.notReached = 0; settleFirstCounts.exactRequired = 0; settleFirstCounts.resent = 0;
   fails.clear(); unknownFails.clear(); blocklistFails.clear(); unprovenFails.clear(); unprovenAlarmed.clear(); unprovenTrips = 0; oks.clear(); globalFailKeys = new Map(); globalAlarmUntil = 0; globalTrips = 0;
   wideFailKeys = new Map(); wideUntil = 0; wideTrips = 0;
   networksAtLimit.clear(); multiNetworkTrips = 0;
@@ -1147,6 +1393,8 @@ export function _gatewaySettleBreakerReset() {
     await Promise.allSettled([
       ...[...keys].flatMap((k) => ["gwb-fail", "gwb-ok", "gwb-unk", "gwb-blk"].map((name) => shared.windowClear(name, sharedKey(k)))),
       ...authKeys.map((k) => shared.windowClear("gwb-auth", sharedKey(k))),
+      ...unsettledKeys.map((k) => shared.windowClear("gwb-uns", sharedKey(k))),
+      ...unsettledAuthKeys.map((k) => shared.windowClear("gwb-uns-auth", sharedKey(k))),
       ...[...new Set([...keys].filter((k) => networkOf(k)).map((k) => sharedKey(buyerOf(k))))].map((payer) => shared.windowClear("gwb-nets", payer)),
       shared.flagSet("gwb-alarm", "all", 0), shared.windowClear("gwb-global", "all"),
       shared.flagSet("gwb-wide", "all", 0), shared.windowClear("gwb-wide-buyers", "all"),

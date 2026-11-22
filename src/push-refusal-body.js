@@ -26,8 +26,8 @@
 import { PUSH_EXCEPTION, OWED_REPAID } from "./tempo-push-debts.js";
 
 /** The sentence a push payer reads in place of "not charged". */
-const NOTE_BODY = "The Tempo transfer this credential names was claimed before the call ran, so this failure is recorded as a refund owed to the sending wallet; a retry is a new payment";
-export const PUSH_FAILURE_NOTE = `${NOTE_BODY}.`;
+const PUSH_NOTE_BODY = "The Tempo transfer this credential names was claimed before the call ran, so this failure is recorded as a refund owed to the sending wallet; a retry is a new payment";
+export const PUSH_FAILURE_NOTE = `${PUSH_NOTE_BODY}.`;
 /** The same for a transfer the gate refused WITHOUT claiming it and booked as
  *  owed (a route with no Tempo offer, a refused finalize): the refusal nests
  *  `refundOwed` under `details` (src/mpp-tempo.js). */
@@ -41,12 +41,13 @@ export const PUSH_UNCLAIMED_NOTE = "The Tempo transfer this credential names was
 const STANDALONE = /(?:Nothing (?:was|is|has been) (?:spent and nothing is )?charged(?: for this (?:request|call)| to you| yet)?|You (?:were|are) not charged|Not charged)((?: (?:on|over) (?:x402|evm|the evm (?:path|method)))?)(?=[.;!]|\s*$|\s*[-(])([.;!]?)/g;
 // The same claim inside a sentence ("so nothing was charged", "is not
 // charged", "- not charged; retry shortly"). Replaced in place.
-const CLAUSE = [
-  [/\bnothing (?:was|is|has been) charged\b/gi, `the transfer you sent is ${OWED_REPAID}`],
+const clausesFor = (owed) => [
+  [/\bnothing (?:was|is|has been) charged\b/gi, owed],
   [/\b(is|are|was|were|be) (?:not|never) charged\b/gi, "$1 owed a refund"],
   [/\b(?:not|never) charged\b/gi, "a refund is owed"],
   [/\bno charge\b/gi, "a refund owed"],
 ];
+const PUSH_OWED = `the transfer you sent is ${OWED_REPAID}`;
 // A sentence already scoped to another rail stays as written.
 const SCOPED = /\b(?:on|over) (?:x402|evm|card|credits)\b/i;
 
@@ -55,29 +56,43 @@ const WITH_EXCEPTION = `Nothing was charged${PUSH_EXCEPTION}`;
 
 /** The text with every "not charged" claim restated for a push payer.
  *  Unchanged text is returned as is. */
-export function rewriteNotChargedForPush(text) {
+export function rewriteNotChargedForPush(text) { return rewriteNotCharged(text); }
+
+/**
+ * The text with every "not charged" claim restated for a payer whose payment
+ * was taken before the call: a whole sentence becomes `noteBody`, a clause
+ * inside a sentence becomes `owed`. The defaults are the Tempo push words,
+ * for which a sentence scoped to another rail ("not charged on x402") stays
+ * as written; a payment settled before its run on x402
+ * (src/settle-first-body.js) passes its own words and `scopedStays`, the
+ * rails whose scoped sentences still hold for it. Unchanged text is returned
+ * as is.
+ */
+export function rewriteNotCharged(text, { noteBody = PUSH_NOTE_BODY, owed = PUSH_OWED, scopedStays = SCOPED, keepScopedStandalone = true } = {}) {
   if (typeof text !== "string" || !/charged?\b/i.test(text)) return text;
+  const clauses = clausesFor(owed);
+  const failureNote = `${noteBody}.`;
   // The binder's exception form is the standalone sentence again here, so it
   // is replaced whole and never rewritten as a clause.
   let out = text.split(WITH_EXCEPTION).join("Nothing was charged");
-  out = out.replace(STANDALONE, (m, scope, term) => (scope ? m : `${NOTE_BODY}${term}`));
+  out = out.replace(STANDALONE, (m, scope, term) => (scope && keepScopedStandalone ? m : `${noteBody}${term}`));
   // Clause forms are rewritten sentence by sentence, so a scoped sentence
   // ("not charged on x402") is left alone while an unscoped one changes.
   out = out.split(/(?<=[.;!?])\s+/).map((sentence) => {
-    // A sentence that already states the push case (the note, or the
+    // A sentence that already states the case (the note, or the
     // exception clause after any other wording) stays as written.
-    if (SCOPED.test(sentence) || sentence.includes(PUSH_FAILURE_NOTE) || sentence.includes(PUSH_EXCEPTION)) return sentence;
+    if (scopedStays.test(sentence) || sentence.includes(failureNote) || sentence.includes(PUSH_EXCEPTION)) return sentence;
     let s = sentence;
-    for (const [re, to] of CLAUSE) s = s.replace(re, to);
+    for (const [re, to] of clauses) s = s.replace(re, to);
     // A clause restated at the head of a sentence keeps the capital.
     if (s !== sentence && /^[A-Z]/.test(sentence) && /^[a-z]/.test(s)) s = s[0].toUpperCase() + s.slice(1);
     return s;
   }).join(" ");
   // A message that made the claim twice states the note once: a later copy
   // is dropped with its terminator.
-  const parts = out.split(NOTE_BODY);
+  const parts = out.split(noteBody);
   if (parts.length > 2) {
-    out = `${parts[0]}${NOTE_BODY}${parts[1]}`;
+    out = `${parts[0]}${noteBody}${parts[1]}`;
     for (const rest of parts.slice(2)) out = `${out.trimEnd()}${".;!".includes(rest[0] || " ") ? rest.slice(1) : rest}`;
   }
   return out;
