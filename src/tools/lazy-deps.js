@@ -7,8 +7,8 @@
 // the first caller pays the load, every later caller gets the same module. A
 // load that fails is not cached, so the next call tries again instead of
 // failing forever. scripts/test-lazy-deps.js keeps these packages out of the
-// boot graph; warmLazyDeps() loads them after listen so the first buyer of each
-// tool does not pay the import.
+// boot graph; warmLazyDeps() loads the main thread's ones (MAIN_THREAD_PACKAGES)
+// after listen so the first buyer of each tool does not pay the import.
 
 /** A cached dynamic import: `load` runs once; a rejection clears the cache. */
 export function lazyImport(load) {
@@ -36,13 +36,22 @@ export const LAZY_PACKAGES = [
   "write-excel-file", "docx", "pptxgenjs",
 ];
 
-const WARMERS = [loadJsdom, loadReadability, loadTurndown, loadPdfParse, loadPdfLib, loadZxing, loadJsQR, loadJimp, loadMusicMetadata, loadTesseract];
+/** The packages a tool loads on the server's MAIN thread: pdf-parse (pdf.js),
+ *  music-metadata (stt-kit.js) and tesseract.js (ocr-kit.js, which starts its
+ *  own workers). Every other package above is loaded only inside a worker pool
+ *  (html-worker.js: jsdom, Readability, turndown; image-worker.js: jimp and the
+ *  barcode decoders; pdf-worker.js: pdf-lib), each worker loading its own copy
+ *  at start, so importing one on the main thread would be a synchronous turn
+ *  of the loop (jsdom alone: about 200 ms on a laptop) bought for nothing.
+ *  scripts/test-lazy-deps.js checks both halves on a booted server. */
+export const MAIN_THREAD_PACKAGES = ["pdf-parse", "music-metadata", "tesseract.js"];
+const WARMERS = [loadPdfParse, loadMusicMetadata, loadTesseract];
 
-/** Load every lazy package in the background, one at a time with a pause
- *  between them (`gapMs`, LAZY_DEPS_WARM_GAP_MS, default 1 s): each import is
- *  synchronous CPU for the loop, so the pause keeps the loads from forming one
- *  burst while requests are being served. Called after listen; a failure is
- *  logged and left for the first real caller to retry. */
+/** Load the main thread's lazy packages in the background, one at a time
+ *  with a pause between them (`gapMs`, LAZY_DEPS_WARM_GAP_MS, default 1 s):
+ *  each import is synchronous CPU for the loop, so the pause keeps the loads
+ *  from forming one burst while requests are being served. Called after
+ *  listen; a failure is logged and left for the first real caller to retry. */
 export async function warmLazyDeps({ log = console.error, gapMs = Number(process.env.LAZY_DEPS_WARM_GAP_MS ?? 1000) } = {}) {
   const t0 = Date.now();
   let loaded = 0;

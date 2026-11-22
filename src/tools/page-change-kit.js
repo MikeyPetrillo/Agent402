@@ -12,7 +12,6 @@
 // never in src/free-tier.js. Covered by scripts/test-page-change-kit.js.
 import { safeFetch } from "./fetch-guard.js";
 import { runHtml } from "./html-pool.js";
-import { loadJsdom } from "./lazy-deps.js";
 import { markUntrusted } from "./provenance.js";
 import { partialFields } from "../partial-answer.js";
 import { normalizeText, fingerprintOf, lineDiff, parseIgnore, MAX_TEXT_CHARS, MAX_IGNORE } from "./page-change-text.js";
@@ -65,9 +64,9 @@ async function takeSelector(raw) {
   const s = raw.trim();
   if (!s) return null;
   if (s.length > MAX_SELECTOR_CHARS) throw bad(`"selector" is capped at ${MAX_SELECTOR_CHARS} characters`);
-  const JSDOM = await loadJsdom();
-  try { new JSDOM("<!doctype html><html><body></body></html>").window.document.querySelector(s); }
-  catch (e) { throw bad(`invalid CSS selector "${s}": ${e.message}`); }
+  // Checked in the HTML worker (checkSelector in ./xml-dom-ops.js), so the
+  // main thread never imports jsdom.
+  await runHtml("selector", { selector: s }, 0);
   return s;
 }
 

@@ -4,6 +4,7 @@
 import { articleFromHtml, pageMetaFromHtml, pageContentFromHtml, markdownFromHtml } from "./html-parse-ops.js";
 import { visibleTextFromHtml } from "./page-change-text.js";
 import { emailHtmlReport } from "./email-guard-html.js";
+import { feedFromXml, xmlToJsonText, checkSelector } from "./xml-dom-ops.js";
 
 let toolHandlers = null;
 
@@ -15,6 +16,9 @@ export async function runOp(op, p = {}) {
     case "markdown": return markdownFromHtml(p.text, p.mode);
     case "visibleText": return visibleTextFromHtml(p.html, p.url, p.selector);
     case "emailHtml": return emailHtmlReport(p.html);
+    case "feed": return feedFromXml(p.text, p.finalUrl, p.limit);
+    case "xmlToJson": return xmlToJsonText(p.text);
+    case "selector": return checkSelector(p.selector);
     case "tool": {
       // The html-kit tools' own handlers (the catalog entries wrap them in runHtml).
       toolHandlers ||= (await import("./html-kit.js")).HTML_TOOL_HANDLERS;
