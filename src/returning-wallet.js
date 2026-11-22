@@ -12,7 +12,20 @@
 // same amount either way and the 402 names it (`atListOn`) instead of saying
 // the discount was applied there.
 //
-// THE HINT IS A CLAIM. It only ever changes a QUOTE. On the paid request the
+// THE HINT IS PROVEN BEFORE IT IS READ. A request's hint is read against the
+// ledger only when the same request proves control of that wallet in the
+// X-Agent402-Wallet-Proof header: `<unix seconds>.<signature>`, the wallet's
+// EIP-191 (personal_sign) signature over walletProofMessage (five lines that
+// name this server's host name, the route as METHOD and path, the wallet in
+// lowercase and the same seconds), within PROOF_SKEW_SECONDS of this server's
+// clock either way. A proof is good for one request that carries no payment
+// and one that carries a payment (the quote and its signed retry, which
+// resends the same headers); any other use is refused. A request without a
+// valid proof is quoted list and its 402 reads `why: "unproven"` whatever the
+// wallet's history, so the answer about a wallet nobody proved is the same
+// for every wallet, and the ledger is not read for it.
+//
+// THE HINT IS STILL A CLAIM. It only ever changes a QUOTE. On the paid request the
 // price is decided again, from the payment itself: the discount stands only
 // when the EIP-3009 authorization the request carries is signed FROM the
 // hinted wallet (and that wallet still qualifies). Any other payer is priced
@@ -45,8 +58,15 @@ import { hasLastingEffect } from "./lasting-effect-slugs.js";
 import { payerFromRequest, paymentHeaderOf, paymentSchemeOf } from "./payer.js";
 import { decodePaymentHeader } from "./payment-header.js";
 import { limiterKey } from "./rate-limit.js";
+import { recoverMessageAddress } from "viem";
 
 export const WALLET_HINT_HEADER = "X-Agent402-Wallet";
+/** The request header that proves control of the hinted wallet (see the head of this file). */
+export const WALLET_PROOF_HEADER = "X-Agent402-Wallet-Proof";
+/** How far a proof's time may sit from this server's clock, either way. */
+export const PROOF_SKEW_SECONDS = 300;
+/** Most proofs whose uses are kept at once; past it a new proof is refused (quoted list) until old ones expire. */
+export const PROOF_SEEN_MAX = 20_000;
 export const RETURNING_WALLET_DEFAULTS = Object.freeze({ discountBps: 1000, minPaidDays: 3, windowDays: 30 });
 /** The largest discount a setting can name (a malformed or larger value reads as the default). */
 export const RETURNING_WALLET_MAX_BPS = 5000;
@@ -117,6 +137,18 @@ export function discountedPrice(price, bps) {
   return "$" + (off / 1e6).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+/**
+ * The text a wallet signs (EIP-191 personal_sign) to prove the hint: `host` is
+ * this server's host name (from BASE_URL), `route` the route as METHOD and
+ * path ("POST /api/hash"), `wallet` the address in lowercase, `time` unix
+ * seconds (the same number the header carries).
+ */
+export function walletProofMessage({ host, route, wallet, time }) {
+  return `Agent402 returning-wallet price\nhost: ${String(host).toLowerCase()}\nroute: ${route}\nwallet: ${String(wallet).toLowerCase()}\ntime: ${time}`;
+}
+/** The header value for a proof: `<unix seconds>.<signature>`. */
+export function walletProofHeader(time, signature) { return `${time}.${signature}`; }
+
 /** The wallet a request names in its hint header (lowercased), or null. */
 export function walletHintOf(req) {
   const raw = req?.headers?.[WALLET_HINT_HEADER.toLowerCase()];
@@ -127,15 +159,18 @@ export function walletHintOf(req) {
 // ---- the paid-days read (the server's sales ledger), cached and bounded ----
 let paidDaysOf = null;
 let isOursFn = () => false;
-/** Hand in the ledger read (wallet, sinceMs) => distinct paid days, and the own-wallet check. */
-export function configureReturningWallet({ paidDays = null, isOurs = null } = {}) {
+let serverHost = null;
+/** Hand in the ledger read (wallet, sinceMs) => distinct paid days, the own-wallet
+ *  check, and this server's host name (a proof names it; with none set no proof holds). */
+export function configureReturningWallet({ paidDays = null, isOurs = null, host = null } = {}) {
   paidDaysOf = typeof paidDays === "function" ? paidDays : null;
   isOursFn = typeof isOurs === "function" ? isOurs : () => false;
+  serverHost = typeof host === "string" && host.trim() ? host.trim().toLowerCase() : null;
 }
 const cache = new Map(); // wallet -> { at, days, window }, oldest read first
 const byAddress = new Map(); // client address -> fresh reads this minute
 let minute = 0, lookups = 0, sweeper = null;
-const counters = { hinted: 0, quotedDiscount: 0, paidDiscount: 0, paidOtherWallet: 0, notQualified: 0, lookupsHeld: 0, lookupsHeldAddress: 0, settleRefused: 0 };
+const counters = { hinted: 0, unproven: 0, quotedDiscount: 0, paidDiscount: 0, paidOtherWallet: 0, notQualified: 0, lookupsHeld: 0, lookupsHeldAddress: 0, settleRefused: 0 };
 
 /** Drop every wallet whose cache window is over (the map is in read order). */
 export function sweepReturningWallet(now = Date.now()) {
@@ -205,6 +240,64 @@ function signedExactPayer(req) {
   return payer && ADDR.test(payer) ? payer.toLowerCase() : false;
 }
 
+// ---- the proof: checked once per request, each proof used at most twice ----
+const PROOF = /^(\d{1,12})\.(0x[0-9a-fA-F]{130})$/;
+const proving = new WeakMap(); // request -> the check in flight or done
+const proven = new WeakMap(); // request -> { wallet, route } once its proof holds
+const seenProofs = new Map(); // signature -> { unpaid, paid, expires }, oldest first
+/** The route a proof names for this catalog entry: "METHOD /path". */
+const routeOf = (def) => {
+  const m = /^([A-Z]+)\s+(\/\S*)$/.exec(String(def?.route ?? "").trim());
+  return m ? `${m[1]} ${m[2]}` : null;
+};
+/** Record one use of a proof; false when that use is spent or no room is left. */
+function useProof(signature, paid, expires, now) {
+  const key = signature.toLowerCase();
+  let e = seenProofs.get(key);
+  if (!e) {
+    if (seenProofs.size >= PROOF_SEEN_MAX) for (const [k, v] of seenProofs) { if (v.expires > now) break; seenProofs.delete(k); }
+    if (seenProofs.size >= PROOF_SEEN_MAX) return false;
+    e = { unpaid: false, paid: false, expires };
+    seenProofs.set(key, e);
+  }
+  const slot = paid ? "paid" : "unpaid";
+  if (e[slot]) return false;
+  e[slot] = true;
+  return true;
+}
+/** The proof header's parts ({ time, signature }), or null when it is not that shape. */
+export function walletProofShape(raw) {
+  const m = typeof raw === "string" ? PROOF.exec(raw.trim()) : null;
+  return m ? { time: m[1], signature: m[2] } : null;
+}
+async function checkProof(req, def, now) {
+  const cfg = returningWalletConfig();
+  if (!cfg.enabled || returningWalletRouteRefusal(def)) return;
+  const hint = walletHintOf(req);
+  const route = routeOf(def);
+  const shape = walletProofShape(req?.headers?.[WALLET_PROOF_HEADER.toLowerCase()]);
+  if (!hint || !route || !serverHost || !shape) return;
+  const m = [null, shape.time, shape.signature];
+  const time = Number(m[1]);
+  if (!(Math.abs(now / 1000 - time) <= PROOF_SKEW_SECONDS)) return;
+  let signer = null;
+  try { signer = await recoverMessageAddress({ message: walletProofMessage({ host: serverHost, route, wallet: hint, time: m[1] }), signature: m[2] }); } catch { signer = null; }
+  if (typeof signer !== "string" || signer.toLowerCase() !== hint) return;
+  if (!useProof(m[2], paymentHeaderOf(req) != null, (time + PROOF_SKEW_SECONDS) * 1000, now)) return;
+  proven.set(req, { wallet: hint, route });
+}
+/**
+ * Check the request's wallet proof for this route (once per request; every
+ * accept of one request shares it). Run before returningWalletQuote: a
+ * decision made without it treats the hint as unproven.
+ */
+export function proveReturningWallet(req, def, { now = Date.now() } = {}) {
+  if (!req || typeof req !== "object") return Promise.resolve();
+  let p = proving.get(req);
+  if (!p) { p = checkProof(req, def, now).catch(() => {}); proving.set(req, p); }
+  return p;
+}
+
 const quotes = new WeakMap(); // request -> the decision, made once per request
 /**
  * The decision for one request on one route, made once and kept on the
@@ -232,6 +325,9 @@ function decide(req, def, now) {
   const signed = signedExactPayer(req);
   if (signed === false) return { applied: false, wallet: hint, why: "another payment shape" };
   if (signed !== null && signed !== hint) { counters.paidOtherWallet++; return { applied: false, wallet: hint, why: "paid from another wallet" }; }
+  // Nothing about a wallet the request has not proven is read or said.
+  const proof = proven.get(req);
+  if (!proof || proof.wallet !== hint || proof.route !== routeOf(def)) { counters.unproven++; return { applied: false, wallet: hint, why: "unproven" }; }
   const qualifies = qualification(hint, { cfg, now, client: clientKeyOf(req) });
   if (qualifies === "held") return { applied: false, wallet: hint, why: "not read" };
   if (qualifies !== "yes") { counters.notQualified++; return { applied: false, wallet: hint, why: "not qualified" }; }
@@ -269,6 +365,7 @@ export function returningWalletSettleDecision(ctx) {
 
 /** Why a named wallet's quote did not change, as the 402 says it (one word). */
 const PUBLIC_WHY = Object.freeze({
+  "unproven": "unproven", // no valid proof of the wallet on this request: quoted list, nothing read
   "not qualified": "unqualified", // under the paid-days bar (or not a wallet the offer is for)
   "not read": "lookup_busy", // the read is held this minute: quoted list, ask again shortly
   "paid from another wallet": "other_payer",
@@ -316,19 +413,19 @@ export function returningWalletOffer(def, req = null) {
  */
 export function returningWalletDataHandling() {
   return {
-    read: "read against the sales ledger to decide that request's quote",
-    kept: `the address and its count of paid days are held in memory for about ${Math.round(CACHE_MS / 60_000)} minutes and never written to a store`,
+    read: `read against the sales ledger to decide that request's quote, only when the same request proves control of that wallet with a signature in the ${WALLET_PROOF_HEADER} header`,
+    kept: `the address and its count of paid days are held in memory for about ${Math.round(CACHE_MS / 60_000)} minutes, and a used proof's signature until its ${Math.round(PROOF_SKEW_SECONDS / 60)}-minute window has passed, and neither is written to a store`,
   };
 }
 
 /** Operator figures: this process's counts and the settings in force. */
 export function returningWalletStatus() {
   const cfg = returningWalletConfig();
-  return { ...cfg, header: WALLET_HINT_HEADER, lookupsPerMinute: LOOKUPS_PER_MINUTE, lookupsPerAddressPerMinute: LOOKUPS_PER_ADDRESS_PER_MINUTE, counts: { ...counters }, cachedWallets: cache.size };
+  return { ...cfg, header: WALLET_HINT_HEADER, proofHeader: WALLET_PROOF_HEADER, proofsKept: seenProofs.size, lookupsPerMinute: LOOKUPS_PER_MINUTE, lookupsPerAddressPerMinute: LOOKUPS_PER_ADDRESS_PER_MINUTE, counts: { ...counters }, cachedWallets: cache.size };
 }
 /** Test seam. */
 export function __resetReturningWallet() {
-  cache.clear(); byAddress.clear(); minute = 0; lookups = 0;
+  cache.clear(); byAddress.clear(); seenProofs.clear(); minute = 0; lookups = 0;
   for (const k of Object.keys(counters)) counters[k] = 0;
 }
 
@@ -359,22 +456,30 @@ export function returningWalletOfferMiddleware(defOf) {
 /** The rule's two clauses every prose surface shares, from the settings in force. */
 const quotedClause = (cfg, route) => `quoted ${cfg.discountBps / 100}% under ${route} list price on its x402 exact accepts on EVM chains; a chain's premium and price floor still apply, so a chain at its floor can quote the same amount`;
 const SIGNER_CLAUSE = "a payment of the lower amount from any other wallet is answered 402 at the list price, and nothing is charged";
+/** How a request proves the wallet, in the words every prose surface shares. */
+const proofClause = () => `prove that wallet in the \`${WALLET_PROOF_HEADER}\` header as \`<unix seconds>.<signature>\`: the wallet's EIP-191 (personal_sign) signature over five lines separated by single line feeds (none after the last): \`Agent402 returning-wallet price\`, \`host: <this server's host name>\`, \`route: <METHOD> <path>\`, \`wallet: <the address in lowercase>\` and \`time: <the same seconds>\`, within ${PROOF_SKEW_SECONDS / 60} minutes of the server's clock. One proof serves one request without a payment and one with a payment (the quote and its signed retry); a request without a valid proof is quoted list and its 402 says nothing about the wallet (\`why\`: \`unproven\`)`;
 
 /** The rule in prose for /llms-full.txt, or "" while the switch is off. */
 export function returningWalletSentence() {
   const cfg = returningWalletConfig();
   if (!cfg.enabled) return "";
-  return `Returning wallets pay less: send your wallet address in the \`${WALLET_HINT_HEADER}\` request header, and when that wallet has paid here on ${cfg.minPaidDays} or more days in the last ${cfg.windowDays}, that same call is ${quotedClause(cfg, "the route's")}. An eligible route's 402 carries \`returningWalletPrice\`: the header, the percentage and the bar, \`applied\` (true when this request's quote is lower), \`why\` when a named wallet's quote is not (\`unqualified\`: under the bar; \`lookup_busy\`: not read this minute, ask again; \`other_payer\`: the payment is signed by another wallet; \`other_rail\`: the payment is not an x402 exact EIP-3009 authorization on an EVM chain; \`min_price\`: the price has no room under it; \`price_floor\`: every chain quoted sits at its floor) and \`atListOn\` (the chains a price floor held at list). A route whose 402 does not carry it stays at list, for example a route priced per request, a metered or model-backed route, a routing tier or a route whose effect outlives the answer. Send the header again with the payment, signed from that wallet: ${SIGNER_CLAUSE}.`;
+  return `Returning wallets pay less: send your wallet address in the \`${WALLET_HINT_HEADER}\` request header and ${proofClause()}. When that wallet has paid here on ${cfg.minPaidDays} or more days in the last ${cfg.windowDays}, that same call is ${quotedClause(cfg, "the route's")}. An eligible route's 402 carries \`returningWalletPrice\`: the header, the percentage and the bar, \`applied\` (true when this request's quote is lower), \`why\` when a named wallet's quote is not (\`unproven\`: no valid proof; \`unqualified\`: under the bar; \`lookup_busy\`: not read this minute, ask again; \`other_payer\`: the payment is signed by another wallet; \`other_rail\`: the payment is not an x402 exact EIP-3009 authorization on an EVM chain; \`min_price\`: the price has no room under it; \`price_floor\`: every chain quoted sits at its floor) and \`atListOn\` (the chains a price floor held at list). A route whose 402 does not carry it stays at list, for example a route priced per request, a metered or model-backed route, a routing tier or a route whose effect outlives the answer. Send both headers again with the payment, signed from that wallet: ${SIGNER_CLAUSE}.`;
 }
-/** The header parameter an eligible route's OpenAPI operation declares, or null. */
-export function returningWalletHeaderParam(def) {
+/** The header parameters an eligible route's OpenAPI operation declares (the hint and its proof), or []. */
+export function returningWalletHeaderParams(def) {
   const cfg = returningWalletConfig();
-  if (!cfg.enabled || returningWalletRouteRefusal(def)) return null;
-  return {
+  if (!cfg.enabled || returningWalletRouteRefusal(def)) return [];
+  return [{
     name: WALLET_HINT_HEADER,
     in: "header",
     required: false,
-    description: `Your EVM wallet address. A wallet that has paid here on ${cfg.minPaidDays} or more days in the last ${cfg.windowDays} is ${quotedClause(cfg, "this route's")}. Send it again with the payment, signed from that wallet: ${SIGNER_CLAUSE}.`,
+    description: `Your EVM wallet address, read only with a valid ${WALLET_PROOF_HEADER}. A wallet that has paid here on ${cfg.minPaidDays} or more days in the last ${cfg.windowDays} is ${quotedClause(cfg, "this route's")}. Send both headers again with the payment, signed from that wallet: ${SIGNER_CLAUSE}.`,
     schema: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
-  };
+  }, {
+    name: WALLET_PROOF_HEADER,
+    in: "header",
+    required: false,
+    description: `With ${WALLET_HINT_HEADER}: ${proofClause()}.`,
+    schema: { type: "string", pattern: "^[0-9]{1,12}\\.0x[0-9a-fA-F]{130}$" },
+  }];
 }

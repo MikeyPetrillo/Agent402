@@ -56,8 +56,9 @@ LLC: credit the entity, never a personal name.
   `src/speech-additions.js` (named speech and transcription models, each gated on its cost row),
   `src/feature-flags.js` (runtime switches: a flag provider, then the variable, then the default).
 - `src/returning-wallet.js` (a lower x402 EVM `exact` quote for the wallet a request names in
-  `X-Agent402-Wallet`, off unless `RETURNING_WALLET_PRICE=on`; the price is decided again from the
-  payment's signer; `.claude/rules/payments.md`).
+  `X-Agent402-Wallet` and proves in `X-Agent402-Wallet-Proof`, off unless `RETURNING_WALLET_PRICE=on`;
+  an unproven hint is never read; the price is decided again from the payment's signer;
+  `.claude/rules/payments.md`).
 - `src/sale-repeats.js` (one sale per Solana settlement signature: the rule the ledger's writer
   and readers share), `src/sale-source.js` (the listed `utm_source` a card sale keeps; no public
   reader selects it).

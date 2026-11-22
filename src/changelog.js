@@ -8,7 +8,7 @@ import { walletSignInEnabled } from "./wallet-sign-in.js";
 import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel as span, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
 import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES, TRANSCRIBE_LONG_RUN_SECONDS, sttLongEnabled, sttAdditions } from "./tools/stt-kit.js";
 import { speechAdditions } from "./tools/llm-gateway-kit.js";
-import { returningWalletEnabled, WALLET_HINT_HEADER } from "./returning-wallet.js";
+import { returningWalletEnabled, WALLET_HINT_HEADER, WALLET_PROOF_HEADER } from "./returning-wallet.js";
 import { BOARD_REFRESH_MS } from "./refresh-cadence.js";
 import { lifetimeMs as priceWebhookLifetimeMs, maxPerRegistrant as priceWebhookMaxPerRegistrant } from "./price-webhooks.js";
 import { REVISIT_CAP_MS, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, revisitIntervalMs, probeShareLabel } from "./seller-load.js";
@@ -120,13 +120,14 @@ const ENTRIES = [
     title: "A lower price for a returning wallet",
     shownWhen: returningWalletEnabled,
     items: [
-      `Payments: On a server that sets \`RETURNING_WALLET_PRICE=on\`, a buyer that names its wallet in the \`${WALLET_HINT_HEADER}\` request header gets that call's 402 with the route's x402 \`exact\` offer on EVM chains at a lower price, once the wallet has paid on enough distinct days (\`RETURNING_WALLET_MIN_PAID_DAYS\` inside \`RETURNING_WALLET_WINDOW_DAYS\`; \`RETURNING_WALLET_DISCOUNT_BPS\` sets the discount). Every other offer, and every surface that publishes a price, stays at list.`,
+      `Payments: On a server that sets \`RETURNING_WALLET_PRICE=on\`, a buyer that names its wallet in the \`${WALLET_HINT_HEADER}\` request header, and proves it holds that wallet in \`${WALLET_PROOF_HEADER}\`, gets that call's 402 with the route's x402 \`exact\` offer on EVM chains at a lower price, once the wallet has paid on enough distinct days (\`RETURNING_WALLET_MIN_PAID_DAYS\` inside \`RETURNING_WALLET_WINDOW_DAYS\`; \`RETURNING_WALLET_DISCOUNT_BPS\` sets the discount). Every other offer, and every surface that publishes a price, stays at list.`,
       "Payments: The discount is taken from the route's list price; a chain's premium and price floor still apply, so a chain at its floor quotes the same amount, and the 402 names that chain instead of saying the discount was applied there.",
+      "Payments: The proof is the wallet's EIP-191 signature over this server's host name, the route, the wallet and a time within five minutes of the server's clock; one proof serves the quote and its signed retry. A wallet named without a valid proof is quoted list, its history is not read, and the 402 says nothing about it.",
       "Payments: The lower price holds only for a payment signed by the named wallet: a payment of the lower amount from any other wallet is answered 402 with the list price, and nothing is charged.",
       "Payments: The ledger reads behind a quote are bounded per client address and across all callers; past a bound a wallet not read yet is quoted list, never refused, and a wallet already read keeps its price.",
       "Payments: Routes priced per request, metered and model-backed routes, and routes whose effect outlives the answer or that spend this server's own wallet are always quoted at list.",
-      `Surfaces: With the switch on, /llms-full.txt states the rule, an eligible route's 402 body states the offer in \`returningWalletPrice\`, and its operation in /openapi.json lists the \`${WALLET_HINT_HEADER}\` header.`,
-      `Privacy: With the switch on, /privacy and the service manifest's data handling say what the \`${WALLET_HINT_HEADER}\` header is read for and how long the named wallet is held in memory.`,
+      `Surfaces: With the switch on, /llms-full.txt states the rule, an eligible route's 402 body states the offer in \`returningWalletPrice\`, and its operation in /openapi.json lists the \`${WALLET_HINT_HEADER}\` and \`${WALLET_PROOF_HEADER}\` headers. agent402-client (given a \`walletSigner\`) and agent402-mcp (with \`AGENT_KEY\`) send both on a paid call.`,
+      `Privacy: With the switch on, /privacy and the service manifest's data handling say what the \`${WALLET_HINT_HEADER}\` header is read for, that it is read only with a valid proof, and how long the named wallet and a used proof are held in memory.`,
     ],
   },
   {

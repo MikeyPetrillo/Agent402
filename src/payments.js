@@ -44,7 +44,7 @@ import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, t
 import { lateSettleHolder, OWED_ELSEWHERE, ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere, releasingClaimsOnRefusal, settledRefundOwedResult, txServedElsewhere } from "./settlement-claims.js";
 import { randomUUID } from "node:crypto";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
-import { returningWalletEnabled, returningWalletRouteRefusal, returningWalletQuote, returningWalletSettleDecision, noteReturningWalletAccept, RETURNING_WALLET_MISMATCH } from "./returning-wallet.js";
+import { returningWalletEnabled, returningWalletRouteRefusal, returningWalletQuote, proveReturningWallet, returningWalletSettleDecision, noteReturningWalletAccept, RETURNING_WALLET_MISMATCH } from "./returning-wallet.js";
 import { registerLateSettleHook } from "./late-settlements.js";
 import { RAW_SETTLE_RECEIPT } from "./settle-fault.js";
 import { chargeCancelledForClientGone, registerSettleSentHook, settleSentWhileConnected, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
@@ -712,7 +712,8 @@ export function acceptsForItem(item, rails) {
   // THE RETURNING-WALLET PRICE (src/returning-wallet.js; off unless its
   // switch is on). On an eligible flat route the x402 EVM `exact` accept is
   // priced per request: list, or the discount when the request's wallet hint
-  // names a qualifying wallet and, on the paid request, the payment is signed
+  // names a qualifying wallet the request proves it holds (its
+  // X-Agent402-Wallet-Proof) and, on the paid request, the payment is signed
   // from that wallet. Decided once per request; every other accept stays a
   // fixed list price, and with the switch off every accept does.
   const loyal = !quoteFn && returningWalletEnabled() && returningWalletRouteRefusal(item) === null;
@@ -722,6 +723,8 @@ export function acceptsForItem(item, rails) {
       const listQuote = priceForNetwork(item.price, caip2);
       try {
         const req = ctx?.adapter?.req;
+        // The hint is read only once the request proves that wallet.
+        await proveReturningWallet(req, item);
         const q = returningWalletQuote(req, item);
         if (q?.applied !== true || typeof q.price !== "string") return listQuote;
         // The chain's premium and floor apply to the discounted price as to

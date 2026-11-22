@@ -121,6 +121,8 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
   const sources = await import("../src/funnel-sources.js");
   // Read only for a gated User-Agent (python-httpx/ by default), which the boots below never send.
   const offerGate = await import("../src/mpp-offer-gate.js");
+  // Read only with RETURNING_WALLET_PRICE=on (off on the boots below).
+  const returningWallet = await import("../src/returning-wallet.js");
   const readers = {
     "mpp-offer-gate requestOptsIntoMppOffers (x-payment-offers)": (v) => offerGate.requestOptsIntoMppOffers({ headers: { "x-payment-offers": v } }),
     "mpp-offer-gate requestOptsIntoMppOffers (accept-payment)": (v) => offerGate.requestOptsIntoMppOffers({ headers: { "accept-payment": v } }),
@@ -143,6 +145,8 @@ const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer",
     "web-bot-auth check (all three)": (v) => webBotAuth.createWebBotAuth({ fetchDirectory: async () => null, note: () => {} }).check({ headers: { "signature-input": v, signature: v, "signature-agent": v } }),
     "wallet-sign-in sessionOf (x-wallet-session)": (v) => walletSvc.sessionOf(v),
     "wallet-sign-in sessionHeaderShape (x-wallet-session)": (v) => walletSignIn.sessionHeaderShape(v),
+    "returning-wallet walletHintOf (x-agent402-wallet)": (v) => returningWallet.walletHintOf({ headers: { "x-agent402-wallet": v } }),
+    "returning-wallet walletProofShape (x-agent402-wallet-proof)": (v) => returningWallet.walletProofShape(v),
   };
   for (const [name, fn] of Object.entries(traffic)) {
     // Every exported reader of the traffic classifier that takes one string.

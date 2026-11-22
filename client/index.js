@@ -133,6 +133,16 @@ const GATEWAY_DOCS_URL = "https://github.com/MikeyPetrillo/Agent402/wiki/Circle-
 const EVM_ADDR = /^0x[0-9a-fA-F]{40}$/;
 /** The request header a paid call names its wallet in. */
 export const WALLET_HINT_HEADER = "X-Agent402-Wallet";
+/** The request header that proves the named wallet: `<unix seconds>.<signature>`. */
+export const WALLET_PROOF_HEADER = "X-Agent402-Wallet-Proof";
+/**
+ * The text the wallet signs (EIP-191 personal_sign) for a proof: the server's
+ * host name, the route as METHOD and path, the wallet in lowercase and the
+ * unix seconds the header carries, one per line.
+ */
+export function walletProofMessage({ host, route, wallet, time }) {
+  return `Agent402 returning-wallet price\nhost: ${String(host).toLowerCase()}\nroute: ${route}\nwallet: ${String(wallet).toLowerCase()}\ntime: ${time}`;
+}
 // The GatewayWallet contract each chain's batched accept must name as its
 // verifyingContract (Circle's published addresses: one address on every
 // mainnet Gateway serves, another on every testnet). A batched accept naming
@@ -273,16 +283,21 @@ export class Agent402 {
     maxPerCallUsd = undefined, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null, payNetworks = null,
     maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null,
     respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null, gateway = null, userAgent = null, retryResets = true,
-    timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, walletAddress = null } = {}) {
+    timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, walletSigner = null } = {}) {
     this.userAgent = userAgentOf(userAgent);
     this.respondAsync = respondAsync;
     this.gateway = normalizeGateway(gateway);
     // The EVM wallet this client pays from, named on paid calls (the
-    // X-Agent402-Wallet header) so a seller that prices a returning wallet
-    // lower can quote it on that call. A caller's payFetch hides its signer,
-    // so the address is given here; a Gateway signer's address is used when
-    // none is. Never sent on a free read; a malformed value is ignored.
-    this.walletAddress = EVM_ADDR.test(String(walletAddress || "")) ? String(walletAddress) : (this.gateway?.signer && EVM_ADDR.test(String(this.gateway.signer.address || "")) ? String(this.gateway.signer.address) : null);
+    // X-Agent402-Wallet header) with a fresh proof that it holds that wallet
+    // (X-Agent402-Wallet-Proof, signed for this host and route), so a seller
+    // that prices a returning wallet lower can quote it on that call. A
+    // caller's payFetch hides its signer, so the signer is given here (a viem
+    // account: an address and signMessage); a Gateway signer is used when none
+    // is and it can sign a message. Never sent on a free read; a signer
+    // without an address or signMessage is ignored.
+    const canProve = (s) => !!s && typeof s.signMessage === "function" && EVM_ADDR.test(String(s.address || ""));
+    this.walletSigner = canProve(walletSigner) ? walletSigner : (canProve(this.gateway?.signer) ? this.gateway.signer : null);
+    this.walletAddress = this.walletSigner ? String(this.walletSigner.address) : null;
     this.asyncTimeoutMs = numOrNull(asyncTimeoutMs) ?? DEFAULT_ASYNC_TIMEOUT_MS;
     this.onProgress = typeof onProgress === "function" ? onProgress : null;
     this.creditsKey = typeof creditsKey === "string" && /^a402_[A-Za-z0-9_-]{32,64}$/.test(creditsKey) ? creditsKey : null;
@@ -605,6 +620,18 @@ export class Agent402 {
    * @param {typeof fetch} [opts.fetchImpl]  plain fetch (defaults to global fetch through distrustFetch)
    * @returns {Promise<{builderCode:string, walletAddress:string}>}
    */
+  /** The wallet hint and its proof for one request to `tool` on this host ({} when it cannot sign). */
+  async _walletProofHeaders(tool) {
+    try {
+      const time = String(Math.floor(Date.now() / 1000));
+      const host = new URL(this.baseUrl).hostname;
+      const route = `${String(tool.method || "POST").toUpperCase()} ${tool.path}`;
+      const signature = await this.walletSigner.signMessage({ message: walletProofMessage({ host, route, wallet: this.walletAddress, time }) });
+      if (!/^0x[0-9a-fA-F]{130}$/.test(String(signature))) return {};
+      return { [WALLET_HINT_HEADER]: this.walletAddress, [WALLET_PROOF_HEADER]: `${time}.${signature}` };
+    } catch { return {}; }
+  }
+
   static async registerBuilderCode(walletAddress, { fetchImpl = distrustFetch() } = {}) {
     if (!walletAddress || typeof walletAddress !== "string") throw new Error("walletAddress is required");
     const r = await fetchImpl("https://api.base.dev/v1/agents/builder-codes", {
@@ -691,9 +718,11 @@ export class Agent402 {
       // UA set here too (not only in the this.f wrapper) so the x402 payFetch
       // path - the one that settles real payments - always carries it.
       const headers = { "User-Agent": this.userAgent, "Idempotency-Key": idem, ...extraHeaders };
-      // The wallet hint rides every request of a call that can only be paid
-      // for (a wallet-only tool's first request, and the paid send).
-      if (this.walletAddress && (paid || tool.computePayable === false)) headers[WALLET_HINT_HEADER] = this.walletAddress;
+      // The wallet hint and a fresh proof ride every request of a call that
+      // can only be paid for (a wallet-only tool's first request, and the paid
+      // send, whose signed retry resends them). A signer that cannot sign
+      // sends neither.
+      if (this.walletSigner && (paid || tool.computePayable === false)) Object.assign(headers, await this._walletProofHeaders(tool));
       let url = `${this.baseUrl}${tool.path}`;
       // A request that can carry a payment never follows a redirect: followed,
       // it would answer a 402 from another origin with a signature to that

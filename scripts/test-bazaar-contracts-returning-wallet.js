@@ -5,9 +5,9 @@
 // also carries `returningWalletPrice`, and that field once pushed three
 // routes' own fields past the sweep's byte bound while every lane was green:
 // no lane ran the sweep with the switch on. This is that pass. The sweep
-// itself names an unused wallet on every request while the switch is on, so
-// the body it measures is the widest the offer takes on an unpaid request,
-// and it fails when fewer routes carry the offer than it expects.
+// itself names and proves an unused wallet on every request while the switch
+// is on, so the body it measures is the widest the offer takes on an unpaid
+// request, and it fails when fewer routes carry the offer than it expects.
 //
 //   node scripts/test-bazaar-contracts-returning-wallet.js
 import { spawn } from "node:child_process";

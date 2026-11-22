@@ -553,7 +553,11 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   accept for a missing sub-cent accept; `AVM_SUBCENT_GATE=off`).
 - **First-call allowance:** `src/first-call-allowance.js`, off unless `FIRST_CALL_ALLOWANCE=on`: a wallet with no paid sale gets one unsettled first call (x402 EVM exact, a flagship or `FIRST_CALL_ALLOWANCE_SLUGS` route at or under `FIRST_CALL_ALLOWANCE_MAX_USD`), inside `FIRST_CALL_ALLOWANCE_DAILY_USD` and `FIRST_CALL_ALLOWANCE_IP_PER_DAY` claimed on Redis before a balance read bounded by `FIRST_CALL_ALLOWANCE_BALANCE_MS` (default 1000); a call asking for a share link is never granted; the wallet key expires (`FIRST_CALL_ALLOWANCE_WALLET_TTL_DAYS`, default 400; a claim after 30 minutes), the state record does not; an onBeforeSettle `skip` leaves its 200 unsettled and unbooked; figures on `/__operator/refunds.json`, with `returnedPayers` (granted wallets with a later outside paid sale, and within 7 days; one batched ledger read per chunk, cached `FIRST_CALL_ALLOWANCE_RETURNED_CACHE_MS` (default 5 minutes), reported with the switch off). The `firstCallAllowance` word on `/api/gateway-status` (on, spent, unavailable) pages nothing: a store that does not answer grants nothing, so every call is paid as usual.
 - **Returning-wallet price:** `src/returning-wallet.js`, off unless `RETURNING_WALLET_PRICE=on`: a
-  request that names a wallet in `X-Agent402-Wallet` is quoted the route's x402 EVM `exact` accepts
+  request that names a wallet in `X-Agent402-Wallet` and proves it in `X-Agent402-Wallet-Proof`
+  (`<unix seconds>.<signature>`, the wallet's EIP-191 signature over `walletProofMessage`: BASE_URL's
+  host name, the route, the wallet, the seconds; `PROOF_SKEW_SECONDS` either way; one use without a
+  payment and one with, kept in memory up to `PROOF_SEEN_MAX`; checked by `proveReturningWallet`
+  before the gate prices the accept) is quoted the route's x402 EVM `exact` accepts
   under list (`RETURNING_WALLET_DISCOUNT_BPS`, default 1000, at most 5000) when that wallet has paid
   on `RETURNING_WALLET_MIN_PAID_DAYS` (default 3) distinct days inside
   `RETURNING_WALLET_WINDOW_DAYS` (default 30), read from the sales ledger (cached per wallet for
@@ -573,7 +577,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `returningWalletPrice` (fields only, at most `OFFER_MAX_BYTES`; `why` is one word when a named
   wallet's quote did not change), and `/llms-full.txt` and the route's OpenAPI operation state the
   rule in prose, only while the switch is on; the Bazaar contract sweep runs a second pass with
-  the switch on (lane test-unit-b4). `/privacy` and the manifest's data handling print one shared
+  the switch on (lane test-unit-b4). A hint with no valid proof is never read against the ledger and
+  reads `why: "unproven"` whatever the wallet's history, so its 402 is the same for every wallet;
+  agent402-client (`walletSigner`) and agent402-mcp (`AGENT_KEY`) sign a fresh proof per paid call. `/privacy` and the manifest's data handling print one shared
   text (`returningWalletDataHandling`). Figures: `/__operator/returning-wallets.json`. Suites:
   `scripts/test-returning-wallet.js`, `scripts/test-returning-wallet-paid.js`.
 - **Sale source:** `src/sale-source.js`: a card checkout request carries the page's `utm_source`;

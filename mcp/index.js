@@ -333,21 +333,34 @@ function getPayFetch() {
 }
 
 // The EVM wallet AGENT_KEY pays from, named on every paid call in the
-// X-Agent402-Wallet header so a server that prices a returning wallet lower
-// can quote it on that call. Null without an EVM key or when the key is
+// X-Agent402-Wallet header with a fresh proof that this key holds it
+// (X-Agent402-Wallet-Proof: unix seconds and the key's EIP-191 signature over
+// the server's host name, the route, the wallet and those seconds), so a
+// server that prices a returning wallet lower can quote it on that call. The
+// signed retry resends both. Null without an EVM key or when the key is
 // malformed (the paid path reports that itself); never sent on a free call.
 let walletHintPromise = null;
 function walletHint() {
   walletHintPromise ??= (async () => {
     if (!AGENT_KEY) return null;
-    try { const { privateKeyToAccount } = await import("viem/accounts"); return evmAccount(privateKeyToAccount).address; } catch { return null; }
+    try { const { privateKeyToAccount } = await import("viem/accounts"); return evmAccount(privateKeyToAccount); } catch { return null; }
   })();
   return walletHintPromise;
 }
-/** The headers a paid call adds for its wallet hint ({} when there is none). */
-async function walletHintHeaders() {
-  const address = await walletHint();
-  return address ? { "X-Agent402-Wallet": address } : {};
+/** The text the wallet signs for one host and route at `time` (unix seconds). */
+function walletProofMessage({ host, route, wallet, time }) {
+  return `Agent402 returning-wallet price\nhost: ${String(host).toLowerCase()}\nroute: ${route}\nwallet: ${String(wallet).toLowerCase()}\ntime: ${time}`;
+}
+/** The headers a paid call to `tool` adds for its wallet hint and proof ({} when there is none). */
+async function walletHintHeaders(tool) {
+  const account = await walletHint();
+  if (!account) return {};
+  try {
+    const time = String(Math.floor(Date.now() / 1000));
+    const route = `${String(tool.method || "POST").toUpperCase()} ${tool.path}`;
+    const signature = await account.signMessage({ message: walletProofMessage({ host: new URL(BASE).hostname, route, wallet: account.address, time }) });
+    return { "X-Agent402-Wallet": account.address, "X-Agent402-Wallet-Proof": `${time}.${signature}` };
+  } catch { return {}; }
 }
 
 /** The viem account for AGENT_KEY, or walletKeyError. */
@@ -569,7 +582,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     const entry = { usd: price, signed: false, sent: false, refusal: null };
     pendingSpend.add(entry);
     try {
-      const hintHeaders = await walletHintHeaders();
+      const hintHeaders = await walletHintHeaders(tool);
       const first = await signCtx.run(entry, () => payFetch(url, { ...paidInit, headers: { ...init.headers, ...asyncHeaders, ...hintHeaders } }));
       if (isRedirect(first)) {
         pendingSpend.delete(entry);

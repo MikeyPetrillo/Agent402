@@ -206,7 +206,8 @@ Operations:
 ### 2026-11-21 (a lower price for a returning wallet)
 Payments:
 - On a server that sets `RETURNING_WALLET_PRICE=on`, a buyer that names its
-  wallet in the `X-Agent402-Wallet` request header gets that call's 402 with
+  wallet in the `X-Agent402-Wallet` request header, and proves it holds that
+  wallet in `X-Agent402-Wallet-Proof`, gets that call's 402 with
   the route's x402 `exact` offer on EVM chains at a lower price, once the
   wallet has paid on enough distinct days (`RETURNING_WALLET_MIN_PAID_DAYS`
   inside `RETURNING_WALLET_WINDOW_DAYS`; `RETURNING_WALLET_DISCOUNT_BPS`
@@ -216,6 +217,11 @@ Payments:
   price floor still apply, so a chain at its floor quotes the same amount,
   and the 402 names that chain instead of saying the discount was applied
   there.
+- The proof is the wallet's EIP-191 signature over this server's host name,
+  the route, the wallet and a time within five minutes of the server's clock;
+  one proof serves the quote and its signed retry. A wallet named without a
+  valid proof is quoted list, its history is not read, and the 402 says
+  nothing about it.
 - The lower price holds only for a payment signed by the named wallet: a
   payment of the lower amount from any other wallet is answered 402 with the
   list price, and nothing is charged.
@@ -228,11 +234,14 @@ Payments:
 Surfaces:
 - With the switch on, /llms-full.txt states the rule, an eligible route's
   402 body states the offer in `returningWalletPrice`, and its operation in
-  /openapi.json lists the `X-Agent402-Wallet` header.
+  /openapi.json lists the `X-Agent402-Wallet` and `X-Agent402-Wallet-Proof`
+  headers. agent402-client (given a `walletSigner`) and agent402-mcp (with
+  `AGENT_KEY`) send both on a paid call.
 Privacy:
 - With the switch on, /privacy and the service manifest's data handling say
-  what the `X-Agent402-Wallet` header is read for and how long the named
-  wallet is held in memory.
+  what the `X-Agent402-Wallet` header is read for, that it is read only with
+  a valid proof, and how long the named wallet and a used proof are held in
+  memory.
 
 ### 2026-11-21 (named speech models)
 Gateway:

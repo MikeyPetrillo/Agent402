@@ -50,11 +50,21 @@ const MAX_OWN_FIELD_BYTES = 2_048;
 // The switch-on pass (RETURNING_WALLET_PRICE=on in this suite's environment,
 // run as a lane step of its own): every eligible route's 402 body then also
 // carries `returningWalletPrice` (src/returning-wallet.js), and every bound
-// above must hold with it. Each request names a wallet that has never paid, so
+// above must hold with it. Each request names, and proves (a signature of its
+// own per route, X-Agent402-Wallet-Proof), a wallet that has never paid, so
 // the body measured is the widest the offer takes on an unpaid request (the
 // offer plus the reason the quote did not change).
 const RETURNING_WALLET_ON = String(process.env.RETURNING_WALLET_PRICE ?? "").trim().toLowerCase() === "on";
-const UNUSED_WALLET = "0x" + "5a".repeat(20);
+const { privateKeyToAccount } = await import("viem/accounts");
+const UNUSED_ACCOUNT = privateKeyToAccount("0x" + "5a".repeat(32));
+const UNUSED_WALLET = UNUSED_ACCOUNT.address.toLowerCase();
+/** The hint and its proof for one route of the server at `origin` (the host name a proof names is BASE_URL's). */
+async function unusedWalletHeaders(origin, route) {
+  const host = new URL(process.env.BASE_URL || origin).hostname.toLowerCase();
+  const time = Math.floor(Date.now() / 1000);
+  const message = `Agent402 returning-wallet price\nhost: ${host}\nroute: ${route}\nwallet: ${UNUSED_WALLET}\ntime: ${time}`;
+  return { "X-Agent402-Wallet": UNUSED_WALLET, "X-Agent402-Wallet-Proof": `${time}.${await UNUSED_ACCOUNT.signMessage({ message })}` };
+}
 const MIN_OFFER_ROUTES = 300;
 const MIN_ROUTES = 560;
 const CONCURRENCY = 12;
@@ -140,7 +150,7 @@ try {
       try {
         const res = await fetch(base + endpoint.path, {
           method,
-          headers: { "content-type": "application/json", ...(RETURNING_WALLET_ON ? { "X-Agent402-Wallet": UNUSED_WALLET } : {}) },
+          headers: { "content-type": "application/json", ...(RETURNING_WALLET_ON ? await unusedWalletHeaders(base, route) : {}) },
           body: /^(POST|PUT|PATCH)$/.test(method) ? "{}" : undefined,
           signal: AbortSignal.timeout(20_000),
         });

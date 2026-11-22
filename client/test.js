@@ -1631,36 +1631,53 @@ const fakeRouter = () => {
   ok(new Agent402({ fetchImpl: grab, userAgent: "two tokens/1" }).userAgent === expectedUa && new Agent402({ fetchImpl: grab, userAgent: 7 }).userAgent === expectedUa, "a malformed userAgent is ignored");
 }
 
-// Offline: the wallet hint. A client told which wallet it pays from names it
-// in X-Agent402-Wallet on the paid call (the request a 402 answers and the
-// signed retry follow), so a seller that prices a returning wallet lower can
-// quote it on that call. Never on a free read, never without an address, and
-// never a malformed one.
+// Offline: the wallet hint. A client given the signer of the wallet it pays
+// from names it in X-Agent402-Wallet on the paid call (the request a 402
+// answers and the signed retry follow), with a fresh X-Agent402-Wallet-Proof
+// that this wallet signed for that host and route, so a seller that prices a
+// returning wallet lower can quote it on that call. Never on a free read,
+// never without a signer that can sign, and never a bare address.
 {
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const { recoverMessageAddress } = await import("viem");
+  const { walletProofMessage, WALLET_PROOF_HEADER } = await import("./index.js");
   const seen = [];
-  const grab = async (url, init) => { seen.push({ url: String(url), hint: init?.headers?.["X-Agent402-Wallet"] ?? null }); return { ok: true, status: 200, json: async () => ({ endpoints: [] }), headers: new Headers() }; };
-  const W = "0x" + "Ab".repeat(20);
+  const grab = async (url, init) => { seen.push({ url: String(url), hint: init?.headers?.["X-Agent402-Wallet"] ?? null, proof: init?.headers?.[WALLET_PROOF_HEADER] ?? null }); return { ok: true, status: 200, json: async () => ({ endpoints: [] }), headers: new Headers() }; };
+  const account = privateKeyToAccount("0x" + "4d".repeat(32));
+  const W = account.address;
   const cheap = () => new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.01" }]]);
-  const c = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: grab, fetchImpl: grab, walletAddress: W });
+  const c = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: grab, fetchImpl: grab, walletSigner: account });
   await c._loadCatalog();
-  ok(seen.length >= 1 && seen.every((x) => x.hint === null), "a free read (the catalog) carries no wallet hint");
+  ok(seen.length >= 1 && seen.every((x) => x.hint === null && x.proof === null), "a free read (the catalog) carries no wallet hint and no proof");
   seen.length = 0;
   c._catalog = cheap();
+  const t0 = Math.floor(Date.now() / 1000);
   await c.call("cheap");
-  ok(seen.length >= 1 && seen.every((x) => x.hint === W) && c.walletAddress === W, `every request of the paid call names the wallet (${JSON.stringify(seen)})`);
+  ok(seen.length >= 1 && seen.every((x) => x.hint === W) && c.walletAddress === W, `every request of the paid call names the wallet (${JSON.stringify(seen.map((x) => x.hint))})`);
+  const signedBy = async (x) => {
+    const m = /^(\d+)\.(0x[0-9a-fA-F]{130})$/.exec(String(x.proof));
+    if (!m) return null;
+    const message = walletProofMessage({ host: "seller.example", route: "POST /api/cheap", wallet: W, time: m[1] });
+    return { time: Number(m[1]), by: await recoverMessageAddress({ message, signature: m[2] }) };
+  };
+  const proofs = await Promise.all(seen.map(signedBy));
+  ok(proofs.length >= 1 && proofs.every((p) => p && p.by === W && Math.abs(p.time - t0) <= 5), `and carries a proof that wallet signed for this host and route, at the current time (${JSON.stringify(proofs)})`);
+  ok(walletProofMessage({ host: "Seller.Example", route: "POST /api/cheap", wallet: W, time: 7 }) === `Agent402 returning-wallet price\nhost: seller.example\nroute: POST /api/cheap\nwallet: ${W.toLowerCase()}\ntime: 7`, "the signed text is the five lines the server checks");
   seen.length = 0;
   const none = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: grab, fetchImpl: grab });
   none._catalog = cheap();
   await none.call("cheap");
-  ok(seen.length >= 1 && seen.every((x) => x.hint === null) && none.walletAddress === null, "with no address the paid call carries no hint");
+  ok(seen.length >= 1 && seen.every((x) => x.hint === null && x.proof === null) && none.walletAddress === null, "with no signer the paid call carries no hint");
   seen.length = 0;
-  const free = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: grab, fetchImpl: grab, walletAddress: W });
+  const free = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: grab, fetchImpl: grab, walletSigner: account });
   free._catalog = new Map([["hashy", { method: "POST", path: "/api/hashy", computePayable: true, price: "$0.001" }]]);
   await free.call("hashy").catch(() => {});
-  ok(seen.length >= 1 && seen[0].hint === null, "a tool with a free tier is first asked without the hint");
-  for (const bad of ["0x1234", "nope", 7, "", null]) ok(new Agent402({ fetchImpl: grab, walletAddress: bad }).walletAddress === null, `a malformed walletAddress is ignored (${JSON.stringify(bad)})`);
-  const viaGateway = new Agent402({ fetchImpl: grab, gateway: { signer: { address: W, signTypedData: async () => "0x" } } });
-  ok(viaGateway.walletAddress === W, "a Gateway signer's address is the wallet when none is named");
+  ok(seen.length >= 1 && seen[0].hint === null && seen[0].proof === null, "a tool with a free tier is first asked without the hint");
+  for (const bad of [W, { address: W }, { address: "0x1234", signMessage: async () => "0x" }, "nope", 7, null]) ok(new Agent402({ fetchImpl: grab, walletSigner: bad }).walletAddress === null, `a signer that cannot sign a message is ignored (${JSON.stringify(bad)})`);
+  const viaGateway = new Agent402({ fetchImpl: grab, gateway: { signer: account } });
+  ok(viaGateway.walletAddress === W, "a Gateway signer that can sign a message is the wallet when none is named");
+  const typedOnly = new Agent402({ fetchImpl: grab, gateway: { signer: { address: W, signTypedData: async () => "0x" } } });
+  ok(typedOnly.walletAddress === null, "a Gateway signer that cannot sign a message names no wallet");
 }
 
 // Offline: a slow route (async.recommended on its /api/pricing row) is sent

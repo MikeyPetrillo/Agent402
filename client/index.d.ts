@@ -53,8 +53,8 @@ export interface Agent402Options {
   fetchImpl?: FetchLike;
   /** A calling package's own product token ("name/version"). */
   userAgent?: string;
-  /** The EVM wallet this client pays from, sent as X-Agent402-Wallet on paid calls so a seller can quote a returning wallet its price on that call. A Gateway signer's address is used when omitted. */
-  walletAddress?: string;
+  /** The signer of the EVM wallet this client pays from (a viem account: address and signMessage). Its address is sent as X-Agent402-Wallet on paid calls, with a fresh X-Agent402-Wallet-Proof signed for that host and route, so a seller can quote a returning wallet its price on that call. A Gateway signer that can sign a message is used when omitted. */
+  walletSigner?: { address: string; signMessage(args: { message: string }): Promise<string> };
   /** Refuse a TLS chain through a distrusted intermediate CA (default true). */
   tlsDistrust?: boolean;
   /** Resend the SDK's own request once on a connection reset, and with x402Client a paid request with the payment already signed (default true). */
@@ -233,6 +233,10 @@ export class AsyncJobPendingError extends Error {
 
 /** The request header a paid call names its wallet in. */
 export const WALLET_HINT_HEADER: "X-Agent402-Wallet";
+/** The request header that proves the named wallet: `<unix seconds>.<signature>`. */
+export const WALLET_PROOF_HEADER: "X-Agent402-Wallet-Proof";
+/** The text a wallet signs (EIP-191) to prove it for one host and route at `time` (unix seconds). */
+export function walletProofMessage(args: { host: string; route: string; wallet: string; time: string | number }): string;
 export const DEFAULT_BASE_URL: string;
 /** The per-call ceiling a client gets when maxPerCallUsd is not set (USD). */
 export const DEFAULT_MAX_PER_CALL_USD: number;

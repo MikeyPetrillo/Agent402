@@ -995,7 +995,7 @@ may still clamp it, and the read site is the reference.
 | --- | --- | --- | --- |
 | `RETURNING_WALLET_DISCOUNT_BPS` | Returning-wallet discount in basis points (default 1000; at most 5000). |  | `src/returning-wallet.js` |
 | `RETURNING_WALLET_MIN_PAID_DAYS` | Distinct paid days a wallet needs inside the window for the returning-wallet price (default 3). |  | `src/returning-wallet.js` |
-| `RETURNING_WALLET_PRICE` | Set to on to quote a qualifying wallet named in the X-Agent402-Wallet header a lower price on eligible routes' x402 EVM exact accepts (off by default). |  | `src/returning-wallet.js` |
+| `RETURNING_WALLET_PRICE` | Set to on to quote a qualifying wallet named in the X-Agent402-Wallet header, and proven in X-Agent402-Wallet-Proof, a lower price on eligible routes' x402 EVM exact accepts (off by default; a proof names the host name of BASE_URL). |  | `src/returning-wallet.js` |
 | `RETURNING_WALLET_WINDOW_DAYS` | Window, in days, the returning-wallet price counts paid days over (default 30). |  | `src/returning-wallet.js` |
 
 ## REVENUE
