@@ -47,7 +47,6 @@ import path from "node:path";
 import { METERED_SLUGS } from "./test-non-metered-examples.js";
 import { getFreePort } from "./lib/free-port.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/rugcheck-switch.js";
-import { MARKET_TICK_SLUG, marketTickEnabled } from "../src/market-tick-switch.js";
 import { STOCK_SLUGS, stockDataEnabled } from "../src/tools/stock-provider.js";
 import { STOCK_CORE_PACK_SLUGS } from "../src/skills.js";
 import { KALSHI_SLUGS, kalshiToolsEnabled } from "../src/kalshi-switch.js";
@@ -311,12 +310,6 @@ async function main() {
           // The Kalshi tools are listed only with KALSHI_TOOLS=on (src/kalshi-switch.js).
           if (KALSHI_SLUGS.has(c.slug) && !kalshiToolsEnabled()) {
             results.push({ ...c, kind: "skipped", note: "KALSHI_TOOLS is off on this boot (tool not listed)" });
-            counts.skipped++;
-            continue;
-          }
-          // Same rule for the market tick read (src/market-tick-switch.js).
-          if (c.slug === MARKET_TICK_SLUG && !marketTickEnabled()) {
-            results.push({ ...c, kind: "skipped", note: "MARKET_TICK is off on this boot (tool not listed)" });
             counts.skipped++;
             continue;
           }

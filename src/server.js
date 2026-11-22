@@ -774,10 +774,6 @@ const SOLANA_INTEL_TOOLS = solanaIntelToolsEnabled();
 // The token brief's safety and holder facts are RugCheck reads, so it is
 // listed under the same switch.
 const TOKEN_BRIEF_TOOLS = rugcheckEnabled() ? TOKEN_BRIEF_TOOLS_ALL : [];
-// Listed only with MARKET_TICK=on (src/market-tick-switch.js): a cached read of
-// the figures crypto-price and stock-quote already serve, no source of its own.
-import { marketTickToolsEnabled } from "./tools/market-tick-kit.js";
-const MARKET_TICK_TOOLS = marketTickToolsEnabled();
 import { SANCTIONS_TOOLS, startSanctionsRefresh, startSanctionsPayoutStore, sanctionsStatus, sanctionsHealth } from "./tools/sanctions-kit.js";
 import { IMAGES_FAST_TOOLS } from "./tools/llm-images-fast-kit.js";
 import { ALCHEMY_DATA_TOOLS } from "./tools/alchemy-data-kit.js";
@@ -877,7 +873,6 @@ import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
 import { topExternalPayersAsync, payerPaidDays, externalReturnRateAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow, saleRepeatStats } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
-import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
 import { hostFigures, hostFiguresFromPayments, hostIndexEntry, isSelfSellerQuery, railsWithOutsideSettlements } from "./host-entry.js";
@@ -902,7 +897,7 @@ const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePr
 // status probe's mark) or a payer that is one of our wallets. Stats only.
 const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -7465,18 +7460,6 @@ app.get("/__operator/refunds.json", async (req, res) => {
 // stays up - a stalled value IS the churn signal). last_settled_seen: last
 // cycle its leaderboard row showed a real settled payment (conversion, not
 // just liveness) - null means it has never been observed settling.
-// Stripe SHADOW ledger reconciliation (src/stripe-shadow-ledger.js). READ-ONLY
-// mirror of on-chain settlements into Stripe PaymentIntents; NOT a source of
-// truth and never read by /revenue. Both sides are reported so a human can sit
-// on it for a week before anyone trusts it: our own settlement count/USD, the
-// PaymentIntents Stripe actually accepted, and every skip/failure reason.
-// Reasons are codes only - a Stripe error message is an upstream body and is
-// never stored or relayed. Off unless STRIPE_SHADOW_LEDGER=on.
-app.get("/__operator/shadow-ledger.json", (req, res) => {
-  if (!operatorAuthed(req)) return operatorNotFound(req, res);
-  if (operatorHeavyLimited(req, res)) return;
-  res.set("Cache-Control", "no-store").json(shadowLedgerReport({ limit: Math.min(500, parseInt(req.query.limit, 10) || 50) }));
-});
 // Successions, and the lever to undo one. Retirement hides a seller from every
 // ranked listing and from the paid routing pool, so "wrong once, wrong forever"
 // is not an acceptable failure mode: the seller's own undo is removing their
@@ -13052,15 +13035,6 @@ app.use((req, res, next) => {
           // A Tempo push transfer booked as owed when its first request was
           // refused on input is now claimed and served: void that debt.
           if (req.tempoSettled) tempoPushDebts?.served(req, res);
-          // Stripe SHADOW ledger - a read-only mirror of this on-chain settlement
-          // into Stripe, so card and crypto revenue can eventually be read from
-          // one set of books. LAST on purpose: it runs after the response is
-          // gone and after our own books are written, it is a synchronous void
-          // enqueue that cannot throw, and every network call happens later on
-          // an unref'd timer. OFF unless STRIPE_SHADOW_LEDGER=on. Nothing here
-          // can change what the buyer was charged, what was served, or what
-          // /revenue reports - see src/stripe-shadow-ledger.js.
-          recordShadowSettlement({ slug: def.slug, priceUsd, rail, network, tx: settleTx, synthetic });
         });
       } else if (outcome.via === "undelivered") {
         // A non-200 ended on a socket the buyer closed before the first byte:
@@ -14406,18 +14380,6 @@ if (startSellerReputation({
 // thread so a burst of them never holds this one. ROUTER_WORKERS=0 keeps them
 // here; until a worker is loaded (or when none is) queries run here anyway.
 startRouterPool();
-
-// Stripe SHADOW ledger drain (src/stripe-shadow-ledger.js). Arms the unref'd
-// timer that posts queued on-chain settlements to Stripe as PaymentIntents in
-// transaction_verification mode. Started at boot rather than lazily so a queue
-// left pending by a restart drains even if no new sale arrives. Inert unless
-// STRIPE_SHADOW_LEDGER=on AND STRIPE_SECRET_KEY is set - and inert means no
-// database file, no timer, no fetch. It is a MIRROR: nothing it does can
-// affect a charge, a response, or /revenue.
-if (shadowLedgerEnabled()) {
-  startShadowLedger();
-  console.log("[stripe-shadow] read-only settlement mirror armed (shadow only, not a source of truth)");
-}
 
 // MPP Index crawler: an independent seller directory for the MPP protocol,
 // parallel to the x402 crawler above but a different seller population.

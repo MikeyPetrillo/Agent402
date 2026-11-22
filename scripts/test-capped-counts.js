@@ -36,7 +36,7 @@ const files = walk("src").filter((p) => p.endsWith(".js"));
 //
 // A guard that inspects one spelling certifies one spelling. Every quote
 // style counts, `hdb`/`adb`-style handles count, and an object-property
-// statement (`{ due: db.prepare(...) }`, stripe-shadow-ledger) counts, because
+// statement (`{ due: db.prepare(...) }`) counts, because
 // a caller reaches it as `q.due.all(...)` and `\b` matches after the dot.
 const limited = new Map();
 const PREPARE = /(?:const\s+|\b)(\w+)\s*[:=]\s*\w*[dD][bB]?\w*\.prepare\(\s*(`[\s\S]*?`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g;
@@ -50,9 +50,15 @@ ok(limited.size > 0, `found LIMITed prepared statements to check (${limited.size
 // The eight the old backtick-only scan could not see must be in the set now,
 // or the widening is decorative. Named individually so a rename fails loudly
 // rather than silently shrinking the guard's reach.
-for (const name of ["getChargedFailures", "getRecent", "getRecentAll", "selectByStatus", "selectAll", "due", "recent", "rows"]) {
+for (const name of ["getChargedFailures", "getRecent", "getRecentAll", "selectByStatus", "selectAll", "rows"]) {
   if (name === "rows") continue; // x402-economy inlines its prepare; covered by the chain scan below
   ok(limited.has(name), `plain-quoted LIMITed statement ${name} is in the scan`);
+}
+// The object-property spelling, read from a fixture (no shipped file uses it today).
+{
+  const fixture = `const q = {\n  due: db.prepare("SELECT * FROM t WHERE s='p' ORDER BY a ASC LIMIT ?"),\n  recent: hdb.prepare('SELECT a FROM t ORDER BY a DESC LIMIT ?'),\n};`;
+  const names = [...fixture.matchAll(PREPARE)].filter((m) => /\bLIMIT\b/i.test(m[2])).map((m) => m[1]);
+  ok(names.includes("due") && names.includes("recent"), `an object-property LIMITed statement is in the scan (${names.join(", ")})`);
 }
 
 // Any `.length` taken on one of those results, directly or through a local

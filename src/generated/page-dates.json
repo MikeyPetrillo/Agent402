@@ -151,7 +151,6 @@
     "src/tools/markdown-pool.js": "2026-11-10",
     "src/tools/markdown-render.js": "2026-11-09",
     "src/tools/markdown-worker.js": "2026-11-10",
-    "src/tools/market-tick-kit.js": "2026-11-16",
     "src/tools/mcp-package-kit.js": "2026-11-21",
     "src/tools/media-kit.js": "2026-11-21",
     "src/tools/memory.js": "2026-11-13",

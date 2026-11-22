@@ -89,7 +89,7 @@ catch (e) { ok(e.statusCode === 503, `switched off, an in-process call (a compos
 undo();
 delete process.env.STUB_STOCK_KEY;
 
-// --- dependents: packs, retirements, market tick -----------------------------
+// --- dependents: packs and retirements ---------------------------------------
 const { STOCK_PACK_SLUGS, STOCK_CORE_PACK_SLUGS, STOCK_TRIMMED_PACK_SLUGS, ALL_SKILL_PACKS, SKILL_PACKS, PACK_PRICES, PACK_PRICE_TABLE, PACK_PRICES_WITHOUT_STOCK, packWithoutStock } = await import("../src/skills.js");
 const running = ALL_SKILL_PACKS.filter((p) => p.toolSlugs.some((s) => SP.STOCK_SLUGS.has(s))).map((p) => p.slug).sort();
 ok(running.length >= 1 && JSON.stringify([...STOCK_PACK_SLUGS].sort()) === JSON.stringify(running), `every pack that runs a stock tool is classified (${running.join(", ")})`);
@@ -124,8 +124,6 @@ ok(ALL_SKILL_PACKS.every((p) => !STOCK_TRIMMED_PACK_SLUGS.has(p.slug) || packWit
       `${slug} with no provider: fred-series serves the series and every step answers (${r.summary})`);
   }
 }
-const { marketTickEnabled } = await import("../src/market-tick-switch.js");
-ok(marketTickEnabled({ MARKET_TICK: "on" }) === false && marketTickEnabled({ MARKET_TICK: "on", STOCK_DATA_PROVIDER: "databento", DATABENTO_API_KEY: "k" }) === true, "the market tick (equity leg is stock-quote) needs a provider too");
 const { RETIRED_TOOLS } = await import("../src/retired-tools.js");
 ok(Object.values(RETIRED_TOOLS).every((e) => !e.replacement || (!SP.STOCK_SLUGS.has(e.replacement) && !STOCK_CORE_PACK_SLUGS.has(String(e.replacement).replace(/^skill-/, "")))), "no retirement points at a stock tool or pack while none is listed");
 const { selfcheckSlugs } = await import("../src/selfcheck.js");

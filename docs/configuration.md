@@ -12,11 +12,11 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1095 variables in 113 groups.
+1084 variables in 112 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -650,14 +650,6 @@ may still clamp it, and the read site is the reference.
 | `LOOP_LAG_COUNT_MS` | Loop lag count, in milliseconds. |  | `src/loop-lag.js` |
 | `LOOP_LAG_TICK_MS` | Loop lag tick, in milliseconds. |  | `src/loop-lag.js` |
 | `LOOP_LAG_WARN_MS` | Loop lag warn, in milliseconds. |  | `src/loop-lag.js` |
-
-## MARKET
-
-| Variable | Purpose | Default | Read in |
-| --- | --- | --- | --- |
-| `MARKET_SCAN_BUDGET_MS` | Market scan budget, in milliseconds. |  | `src/revenue-live.js` |
-| `MARKET_TICK` | Market tick. |  | `src/market-tick-switch.js` |
-| `MARKET_TICK_CACHE_MS` | Market tick cache, in milliseconds. |  | `src/tools/market-tick-kit.js` |
 
 ## MEMORY
 
@@ -1310,16 +1302,7 @@ may still clamp it, and the read site is the reference.
 | --- | --- | --- | --- |
 | `STRIPE_AUTOMATIC_TAX` | Stripe automatic tax. |  | `src/human-checkout.js`, `src/stripe-subscriptions.js` |
 | `STRIPE_PROFILE_ID` | Stripe profile id. |  | `src/mpp-stripe.js` |
-| `STRIPE_SECRET_KEY` | Turns on card checkout, monitors and the card wire (a credential, set on the host). |  | `src/human-checkout.js`, `src/mpp-stripe.js`, `src/server.js` and 2 more |
-| `STRIPE_SHADOW_API_BASE` | Stripe shadow API base. | `https://api.stripe.com` | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_API_VERSION` | Stripe shadow API version. | `2026-05-27.preview` | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_BACKOFF_MS` | Stripe shadow backoff, in milliseconds. |  | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_BATCH` | Stripe shadow batch. |  | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_INTERVAL_MS` | Stripe shadow interval, in milliseconds. |  | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_LEDGER` | Stripe shadow ledger. |  | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_MAX_ATTEMPTS` | Stripe shadow maximum attempts. |  | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_SENDING_STALE_MS` | Stripe shadow sending stale, in milliseconds. |  | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_TIMEOUT_MS` | Stripe shadow timeout, in milliseconds. |  | `src/stripe-shadow-ledger.js` |
+| `STRIPE_SECRET_KEY` | Turns on card checkout, monitors and the card wire (a credential, set on the host). |  | `src/human-checkout.js`, `src/mpp-stripe.js`, `src/server.js` and 1 more |
 | `STRIPE_WEBHOOK_SECRET` | Verifies Stripe webhook signatures (a credential, set on the host). |  | `src/stripe-subscriptions.js` |
 
 ## SVM
@@ -1602,6 +1585,7 @@ may still clamp it, and the read site is the reference.
 | `LLM_ATTEMPT_MAX_MS` | Model attempt maximum, in milliseconds. |  | `src/tools/llm-gateway-kit.js` |
 | `LLM_MAX_TIMED_OUT_ATTEMPTS` | Model maximum timed out attempts. | `2` | `src/tools/llm-gateway-kit.js` |
 | `LOAD_SHED` | off disables load shedding of free routes under event-loop pressure. |  | `src/load-shed.js` |
+| `MARKET_SCAN_BUDGET_MS` | Market scan budget, in milliseconds. |  | `src/revenue-live.js` |
 | `MAX_CALL_USD` | Maximum call, in USD. | `0.75` | `src/leaderboard.js`, `src/revenue-live.js` |
 | `MAX_WALLETS_SCAN` | Maximum wallets scan. | `0` | `src/leaderboard.js` |
 | `MCP_LOOPBACK_TEST_SECRET` | MCP loopback test secret (a credential, set on the host). |  | `src/mcp-loopback.js` |

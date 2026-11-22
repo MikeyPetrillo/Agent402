@@ -351,6 +351,14 @@ try {
     ok(r.status === 410 && b.slug === slug && b.retiredAt === "2026-09-22" && (repl ? b.replacement?.slug === repl : b.replacement === null),
       `POST /api/${slug} is 410 naming ${repl || "no replacement"} (got ${r.status} ${JSON.stringify(b.replacement)})`);
   }
+  {
+    // The market tick read (published as GET /api/market/tick) is retired:
+    // its path answers 410 naming crypto-price, never the generic 404.
+    const r = await fetch(`${base}/api/market/tick?symbols=BTC`);
+    const b = await r.json();
+    ok(r.status === 410 && b.slug === "market" && b.retiredAt === "2026-11-22" && b.replacement?.slug === "crypto-price" && /retired on 2026-11-22/.test(b.hint),
+      `GET /api/market/tick is 410 naming crypto-price (got ${r.status} ${JSON.stringify(b.replacement)})`);
+  }
   const none = await fetch(`${base}/api/stock-dividends`);
   const nb = await none.json();
   ok(none.status === 410 && nb.replacement === null && /no direct replacement/.test(nb.hint), "a retirement with no replacement says so instead of inventing one");

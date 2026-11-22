@@ -1,6 +1,6 @@
 // A write that fails is kept and retried, never dropped after the in-memory
 // view was updated: the status history, the economy history, the shared PoW
-// replay table, the Stripe shadow queue and the wish log each record while
+// replay table and the wish log each record while
 // their table is unreachable (renamed away), then the table comes back and
 // the next flush lands every row exactly once. Requires STATE_DATABASE_URL
 // (CI fails without it).
@@ -58,16 +58,6 @@ try {
   await back("pow_used");
   await pw.powReplayFlush();
   ok((await count("pow_used", "challenge = $1", [ch.challenge])) === 1, "pow: the accepted challenge reached the shared table on the next flush");
-
-  // ---- Stripe shadow queue --------------------------------------------------
-  const sh = await import("../src/stripe-shadow-ledger.js");
-  const shadow = sh.createShadowLedger({ env: { ...process.env, STRIPE_SHADOW_LEDGER: "on", STRIPE_SECRET_KEY: "sk_test_x", STRIPE_SHADOW_INTERVAL_MS: "0" }, dbFile: join(DIR, "shadow.db"), log: () => {} });
-  await shadow.ready();
-  await away("stripe_shadow");
-  mute(); shadow.record({ slug: "t", priceUsd: 0.01, rail: "usdc", network: "base", tx: "0x" + "3".repeat(64) }); await shadow.flush(); unmute();
-  await back("stripe_shadow");
-  await shadow.flush();
-  ok((await count("stripe_shadow")) === 1, "shadow: the enqueue that failed landed on the next flush");
 
   // ---- wish log -------------------------------------------------------------
   const wi = await import("../src/wish.js");

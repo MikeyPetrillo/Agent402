@@ -22,8 +22,6 @@ t node scripts/test-solana-intel-kit.js
 # computed crypto answers and the lending-rate contract reads (offline, stubbed)
 t node scripts/test-crypto-screens-kit.js
 t node scripts/test-lending-rates-kit.js
-# market tick: stubbed sources, the per-symbol cache, partial marking, and the MARKET_TICK switch (offline)
-t node scripts/test-market-tick.js
 t node scripts/test-cve-kit.js
 # mcp-package kit (offline, stub registry on port 0)
 t node scripts/test-mcp-package-kit.js

@@ -135,7 +135,6 @@ t node scripts/test-x402-economy-pg.js
 t node scripts/test-audit-report-pg.js
 t node scripts/test-pow-pg.js
 t node scripts/test-memory-pg.js
-t node scripts/test-stripe-shadow-ledger-pg.js
 t node scripts/test-traffic-classifier-pg.js
 t node scripts/test-tweet-queue-pg.js
 t node scripts/test-x402-index-pg.js
@@ -258,7 +257,6 @@ t node scripts/test-backup-stage-concurrent-pg.js
 t node scripts/test-state-roundtrip-pg.js
 t node scripts/test-state-migration-verify-pg.js
 t node scripts/test-state-ledger-checksum-pg.js
-t node scripts/test-state-cutover-check-pg.js
 t node scripts/test-state-export-pg.js
 # The server through a Postgres outage and back, a burst, a clean drain; two processes on one schema.
 t node scripts/test-state-db-resilience.js

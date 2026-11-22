@@ -47,7 +47,6 @@
     "test-listing-inputs.js",
     "test-load-concurrency.js",
     "test-load-shed.js",
-    "test-market-tick.js",
     "test-mcp-mpp.js",
     "test-mcp-protocol-input-bound.js",
     "test-memory-stores.js",
