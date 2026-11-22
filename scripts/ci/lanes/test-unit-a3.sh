@@ -15,6 +15,8 @@ t node scripts/test-find-ranking.js
 t node scripts/test-find-direction.js
 # /api/find: past find-misses a catalog tool answers rank it first and read as served (scripts/fixtures/find-misses.json)
 t node scripts/test-find-misses-corpus.js
+# /api/find and catalog.find: a search with the operator token records no find-miss; Vary and no-store on the header (booted)
+t node scripts/test-find-operator-quiet.js
 # /openapi.json coverage (every CATALOG tool has a path + operationId + x-price)
 t node scripts/test-openapi-coverage.js
 # /openapi.json schemas: every operation's request and answer schema present, compiling under 2020-12, examples valid, GET tools declare every input (boots free-mode)

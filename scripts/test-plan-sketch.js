@@ -104,8 +104,8 @@ const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8"
 const mcp = readFileSync(new URL("../src/mcp-http.js", import.meta.url), "utf8");
 const findFn = server.slice(server.indexOf("const computeFind = async"), server.indexOf("const findCachePath"));
 ok(/const plan = planSketchFor\(q\);[\s\S]{0,80}result\.plan = plan/.test(findFn), "/api/find attaches the sketch");
-ok(!/\breq\?\.ip\b/.test(findFn) && /computeFind = async \(q, k, meter = null, ip = null\)/.test(findFn), "the /api/find miss path reads the IP it is handed, not an out-of-scope req");
-ok((server.match(/computeFind\(q, k, meter, req\.ip\)/g) || []).length === 2, "both /api/find routes hand computeFind the caller IP");
+ok(!/\breq\?\.ip\b/.test(findFn) && /computeFind = async \(q, k, meter = null, ip = null, \{ quiet = false \} = \{\}\)/.test(findFn), "the /api/find miss path reads the IP it is handed, not an out-of-scope req");
+ok((server.match(/computeFind\(q, k, meter, req\.ip, \{ quiet \}\)/g) || []).length === 2, "both /api/find routes hand computeFind the caller IP");
 ok(/const plan = q \? planSketchFor\(q\) : null;\s*if \(plan\) out\.plan = plan;/.test(server), "/api/route attaches the sketch");
 ok(/buildPlanSketch\(taskStr,/.test(mcp) && /\.\.\.\(plan \? \{ plan \} : \{\}\)/.test(mcp), "the connector's catalog.find attaches the sketch");
 ok(!/multiStep/.test(server), "the fixed multiStep pointer is gone (decide is named inside a sketch instead)");
