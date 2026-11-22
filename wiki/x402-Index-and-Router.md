@@ -67,6 +67,22 @@ when present, runs every request through the SSRF guard (`safeFetch`), caps
 response sizes, and records the outcome in a **rolling 5-entry history** per
 seller.
 
+**What the manifest carries.** A JSON object with a `resources` array (`tools`,
+`endpoints`, `services`, `items` and `resourceCatalog` are read the same way).
+Each entry is a route URL, or an object with `resource` (or `url`, `endpoint`,
+`path`), an optional `method` and `description`, and an `accepts` list in the
+shape the route's 402 returns (`scheme`, `network`, `amount` in base units,
+`asset`, `payTo`). A one-route manifest may put `resource` and `accepts` at the
+top level; `x402Version` is optional. With no manifest the crawler reads
+`/openapi.json`, then `/agents.json`, then priced Markdown link entries in
+`/llms.txt`. The example on [/sell](https://agent402.tools/sell#manifest) is
+parsed by the crawler's own reader in `scripts/test-sell-page.js`.
+
+**Same origin only.** Only routes on the registered origin are listed: an entry
+naming another host is skipped, so one site cannot list another's endpoints. A
+paid API on a different host from the seller's website registers that host as
+its own seller and serves its manifest there.
+
 ## Health-aware routing
 
 A buyer routed to a dead seller wastes money. The router takes that seriously:
