@@ -2,7 +2,7 @@
 // and the holidays kit, read from the Nager.Date v4 community API
 // (https://nagerholidays.com/api/v4, spec /openapi/community-v4.json; v3 at
 // date.nager.at reaches end of life 2027-01-31). Terms
-// (https://date.nager.at/Legal/TermsOfService): commercial use of the web API
+// (https://nagerholidays.com/legal/termsofservice): commercial use of the web API
 // requires an active sponsorship, which this service holds; the terms forbid
 // operating a holiday portal or republishing the dataset, so nothing here
 // stores a list beyond a short in-memory cache or serves browsable pages: each
@@ -22,7 +22,12 @@
 import { safeFetch } from "./fetch-guard.js";
 import { ceilingPassed } from "../run-ceiling.js";
 
+// The source's address lives here alone: a move edits HOLIDAY_API (and V3_API
+// below until v3's end of life) and the host list beside them, which every
+// tool that reads the source declares as its upstreamHosts
+// (scripts/test-holidays-kit.js holds the list to the two addresses).
 export const HOLIDAY_API = "https://nagerholidays.com/api/v4";
+export const HOLIDAY_HOSTS = Object.freeze(["nagerholidays.com", "date.nager.at"]);
 export const HOLIDAY_TYPES = Object.freeze(["Public", "Bank", "School", "Authorities", "Optional", "Observance"]);
 // Accepted input years (the published public-holidays contract); the source
 // itself serves a rolling window inside it and its refusal is passed on as a 400.

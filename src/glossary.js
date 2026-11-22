@@ -15,6 +15,7 @@ import { resolveRailCountTokens } from "./rails.js";
 import { powCostPhrase } from "./pow.js";
 import { LEARN_BY_GLOSSARY_ID, learnBySlug } from "./learn.js";
 import { CARD_ART_VERSION } from "./brand-mark.js";
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 
 // { id, name, alt?: [names], def, see: [[href, label]] } - keep `def` a single
 // plain-text paragraph: it is rendered verbatim AND emitted as the DefinedTerm
@@ -51,7 +52,7 @@ export const GLOSSARY = [
     def: "The proof that a specific payment bought a specific answer: on x402 the settled response carries a PAYMENT-RESPONSE header with the on-chain transaction; on MPP a signed Payment-Receipt header. Agent402 mirrors both on dual-stack routes and links every revenue figure to its receipt on chain.",
     see: [["/revenue", "receipts on /revenue"]] },
   { id: "settlement", name: "Settlement", alt: ["settle", "settled"],
-    def: "The moment a payment authorization becomes an on-chain transfer. Settlement is what turns a signed promise into money in the seller's wallet; a payment can verify (the signature is good, the funds exist) and still fail to settle. Agent402 settles AFTER the tool runs and only on a successful response, so a failed x402 call is not charged; it publishes settlement counts by rail and wire, and ledgers the rare charged-but-failed case as a debt repaid after on-chain proof.",
+    def: `The moment a payment authorization becomes an on-chain transfer. Settlement is what turns a signed promise into money in the seller's wallet; a payment can verify (the signature is good, the funds exist) and still fail to settle. Agent402 settles AFTER the tool runs and only on a successful response, so a failed x402 call is not charged; it publishes settlement counts by rail and wire, and ledgers the rare charged-but-failed case as a debt repaid after on-chain proof. ${SETTLE_FIRST_SENTENCE}`,
     see: [["/revenue", "settlements by rail and wire"], ["/status", "settlement freshness on /status"]] },
   { id: "non-custodial-wallet", name: "Non-custodial wallet (wallet as identity)", alt: ["payer", "wallet-as-identity"],
     def: "The agent's own key pair holding stablecoins. In agentic finance the payment IS the identity: there is no account to create, and the payer address on a settled payment is what a seller keys memory, usage history and quotas to. Keys never leave the client - the wallet signs an authorization and the facilitator broadcasts it.",

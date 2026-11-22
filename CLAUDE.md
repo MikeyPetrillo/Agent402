@@ -47,6 +47,9 @@ LLC: credit the entity, never a personal name.
   `REFERRAL_PAYOUT_ADDRESS`; `.claude/rules/payments.md`).
 - `src/refund-ledger.js` + `scripts/refund-run.js`: charged-but-failed is recorded as a debt and
   repaid only after on-chain proof (`src/payment-verify.js`).
+- `src/settle-first.js`, `src/settle-first-body.js`, `src/settle-first-meter.js`,
+  `src/settle-first-copy.js`: the runs whose payment settles before their upstream work (the settle
+  point, the budget meter, the per-request state, the owed class, the failure body and the copy).
 - `src/state-db.js`, `src/json-document.js`: the state database (Postgres) and the whole-file JSON
   store API; leases, store readiness and large rows in `.claude/rules/ops.md`.
 - `src/price-webhooks.js` (a signed POST when a watched list price changes: a registrant holds at
@@ -363,11 +366,45 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
 The installed `@x402/express` **runs the handler FIRST, then settles**, and only settles a
 `<400` response. For any handler `statusCode >= 400` it cancels settlement, so the buyer is
 **not charged**; if settlement of a `<400` response fails, it discards the buffered body and
-returns a 402. So a 4xx/5xx is never charged, and a 200 is charged only if settlement then
-succeeds. We never declare the opt-in upfront payment flow. Anything that caches, credits or
-bills on handler status before settlement is unsafe: key it off the FINAL response
-(`res.on("finish")` with `res.statusCode === 200`). The idempotency cache, credits debit and
-refund ledger all follow this rule. (`node_modules/@x402/express/dist/esm/index.mjs`.)
+returns a 402. So a 4xx/5xx is never charged (one exception below), and a 200 is charged only
+if settlement then succeeds. We never declare the opt-in upfront payment flow: no 402 names a
+payment flow. Anything that caches, credits or bills on handler status before settlement is
+unsafe: key it off the FINAL response (`res.on("finish")` with `res.statusCode === 200`). The
+idempotency cache, credits debit and refund ledger all follow this rule.
+(`node_modules/@x402/express/dist/esm/index.mjs`.)
+**One exception, settle first** (`src/settle-first.js`; `GATEWAY_SETTLE_FIRST=off` removes it).
+Normal operation is unchanged: every buyer is served first and charged only on success. On the
+routes in `SETTLE_FIRST_SLUGS` (server.js: the `/v1` model and image routes, dub, web search and
+answer, image generation, speech, transcription, judgment and code runs), an x402 `exact` payment is settled
+BEFORE the handler's upstream work when `gatewaySettleFirstPlan` names its buyer: per wallet,
+always, a wallet (per network) or one authorization holding `GATEWAY_SETTLE_FIRST_UNSETTLED_MAX`
+(2) /v1 runs that did not settle, whatever the cause, with no settled call since; and, only while
+the BUDGET MODE is on (`src/settle-first-meter.js`), a wallet with no settled call in the window
+and no paid sale on the books. The budget mode is on while the rolling 24-hour upstream cost of /v1
+runs that ended unsettled (the upstream's own figure or the cost table's rate for the run, else its
+quote), plus the price at risk of never-settled wallets' runs served first and still in flight, is
+at or over `GATEWAY_SETTLE_FIRST_BUDGET_USD` (5), or the meter cannot be read, or
+`GATEWAY_SETTLE_FIRST=always`; it is one figure across replicas and restarts (Redis tally
+`sfm-cost`, window `sfm-risk`), and no figure is ever public. Nobody is refused by it and the amount
+is the one signed. The settlement is made at the run's settle point (`settleBeforeUpstream`, awaited
+by `fetchOpenRouter` and each kit's upstream call), after the handler's own checks, so a buyer's
+mistake is settled by nobody; a payment that does not settle there is answered the paywall's own
+402 and nothing runs. After it, a 4xx/5xx IS charged: the receipt rides the final response, the
+charged-failure and hang-up recorders book it owed with the note class `settle-first-failed`, and
+the failure body says `charged: true`, `retry: "same-payment"`, the `transaction` and
+`refundStatusUrl` (`src/settle-first-body.js`). The same payment sent again to the same route and
+body (a credit kept by `src/idempotency.js`) is run with no settlement: its debt is held void
+before the run (`voidOwedForServe`), kept void when served, owed again otherwise; a hold whose run
+never ended is reopened by the held-claim sweep. At most two resends per payment
+(`SETTLE_FIRST_MAX_RESENDS`), each one not served counted like an unsettled run; a third is
+answered 402 `resend_limit_reached` with the refund status: nothing runs and nothing more is charged
+(`charged: true`, `refundOwed: true`: the one charge is owed back). A row of the class still owed is repaid by the
+human-run `refund.yml`, like every other owed row; nothing repays it on a schedule. An `upto` or Circle Gateway batched payment the
+plan names is answered the route's own 402 with the exact accepts first, uncharged (option A).
+Never settled first: Tempo, card, credits, a first-call allowance grant. A new paid upstream call on
+a listed route goes behind a settle point, and a route joins the list only with a test that reads
+its settle call before its upstream call (`scripts/test-settle-first.js`). Public copy that says a
+failed call is not charged carries the shared sentence (`src/settle-first-copy.js`).
 A buyer whose connection closes before the first response byte is not settled while the
 run holds a hang-up forgiveness ticket (`src/hangup-forgiveness.js`: reserved when the
 handler starts, priced at the charge, against a per-wallet, per-IP and service-wide budget

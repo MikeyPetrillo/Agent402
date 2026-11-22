@@ -55,13 +55,37 @@ for (const s of SWITCHED) {
 {
   const { mppSubscriptionsEnabled } = await import("../src/mpp-subscriptions.js");
   const { walletSignInEnabled } = await import("../src/wallet-sign-in.js");
-  for (const [title, fn] of [["x402 by default for python-httpx clients", null], ["Wallet subscriptions for monitors", mppSubscriptionsEnabled], ["Wallet sign-in", walletSignInEnabled]]) {
+  for (const [title, fn] of [["x402 by default for python-httpx clients", null], ["Wallet subscriptions for monitors", mppSubscriptionsEnabled], ["Wallet subscription renewals retried", mppSubscriptionsEnabled], ["Wallet sign-in", walletSignInEnabled]]) {
     const e = CHANGELOG_ENTRIES.find((x) => x.title === title);
     ok(e && typeof e.shownWhen === "function" && (fn === null || e.shownWhen === fn), `the "${title}" entry is shown only while its switch reads on (shownWhen)`);
   }
 }
 
 const render = () => `${changelogPage("https://example.test")}\n${changelogRss("https://example.test")}`;
+
+// Calls paid before they run (settle-first, on unless GATEWAY_SETTLE_FIRST=off,
+// src/settle-first-copy.js settleFirstCopyOn): every item that names it or its
+// resend bound sits in an entry that reads the switch, neither surface names
+// either with the switch off, both do with it on, and each CHANGELOG.md item
+// is scoped to a server that leaves the switch on.
+{
+  const { settleFirstCopyOn, SETTLE_FIRST_MARK } = await import("../src/settle-first-copy.js");
+  const RESEND = "sent again at most twice";
+  const naming = CHANGELOG_ENTRIES.filter((x) => x.items.some((i) => i.includes(SETTLE_FIRST_MARK) || i.includes(RESEND)));
+  ok(naming.length > 0 && naming.every((x) => x.shownWhen === settleFirstCopyOn), `every entry that says calls are ${SETTLE_FIRST_MARK} or names the resend bound is shown only while settle-first is on (shownWhen)`);
+  const was = process.env.GATEWAY_SETTLE_FIRST;
+  process.env.GATEWAY_SETTLE_FIRST = "off";
+  const off = render();
+  ok(!off.includes(SETTLE_FIRST_MARK) && !off.includes(RESEND), "GATEWAY_SETTLE_FIRST=off: /changelog and /changelog.xml name neither the settle-first rule nor its resend bound");
+  delete process.env.GATEWAY_SETTLE_FIRST;
+  const on = render();
+  ok(on.includes(SETTLE_FIRST_MARK) && on.includes(RESEND), "settle-first on (the default): both surfaces name the rule and the bound");
+  if (was === undefined) delete process.env.GATEWAY_SETTLE_FIRST; else process.env.GATEWAY_SETTLE_FIRST = was;
+  const mdItems = md.split(/\n(?:- |#)/).map((i) => i.split("\n\n")[0].replace(/\s+/g, " ").trim()).filter((i) => !i.startsWith("#") && (i.includes(SETTLE_FIRST_MARK) || i.includes(RESEND)));
+  const unscoped = mdItems.filter((i) => !i.startsWith("On a server that does not set `GATEWAY_SETTLE_FIRST=off`,"));
+  ok(mdItems.length >= 2 && unscoped.length === 0, `each CHANGELOG.md item about it opens "On a server that does not set \`GATEWAY_SETTLE_FIRST=off\`" (${unscoped.map((i) => JSON.stringify(i.slice(0, 60))).join(", ") || mdItems.length + " items"})`);
+}
+
 const mdItemAt = (needle) => {
   const at = md.indexOf(needle);
   return at >= 0 ? md.slice(md.lastIndexOf("\n- ", at), md.indexOf("\n- ", at + 1)).replace(/\s+/g, " ") : "";
@@ -135,6 +159,30 @@ const mdItemAt = (needle) => {
   delete process.env.OPENROUTER_TTS_ENABLED;
   state({ speech: false, stt: true }, "the speech route not served");
   delete process.env.NAMED_AUDIO_MODELS;
+}
+
+// Tempo fee sponsorship (TEMPO_GAS_SPONSORSHIP=on with the sponsor key,
+// src/tempo-charge-sponsor.js): every item that names the switch sits in one
+// entry that reads it, and neither surface shows that entry while it is off.
+{
+  const title = "Tempo network fees paid by the server";
+  const e = CHANGELOG_ENTRIES.find((x) => x.title === title);
+  ok(e && typeof e.shownWhen === "function", `the "${title}" entry carries a switch (shownWhen)`);
+  const naming = CHANGELOG_ENTRIES.filter((x) => x.items.some((i) => i.includes("TEMPO_GAS_SPONSOR")));
+  ok(naming.length === 1 && naming[0] === e && e.items.every((i) => i.includes("TEMPO_GAS_SPONSORSHIP=on")) && mdItemAt("TEMPO_GAS_SPONSORSHIP").includes("TEMPO_GAS_SPONSORSHIP=on"), "every item that names TEMPO_GAS_SPONSORSHIP sits in that entry and names the switch, on the page and in CHANGELOG.md");
+  const saved = { sw: process.env.TEMPO_GAS_SPONSORSHIP, key: process.env.TEMPO_SUBSCRIPTION_FEE_PAYER_KEY };
+  for (const v of [undefined, "", "off", "yes"]) {
+    if (v === undefined) delete process.env.TEMPO_GAS_SPONSORSHIP; else process.env.TEMPO_GAS_SPONSORSHIP = v;
+    ok(!render().includes(title), `TEMPO_GAS_SPONSORSHIP=${v === undefined ? "(unset)" : JSON.stringify(v)}: /changelog and /changelog.xml do not show the sponsorship entry`);
+  }
+  process.env.TEMPO_GAS_SPONSORSHIP = "on";
+  delete process.env.TEMPO_SUBSCRIPTION_FEE_PAYER_KEY;
+  ok(!render().includes(title), "TEMPO_GAS_SPONSORSHIP=on with no sponsor key: the entry is not shown");
+  for (const [k, v] of [["TEMPO_GAS_SPONSORSHIP", saved.sw], ["TEMPO_SUBSCRIPTION_FEE_PAYER_KEY", saved.key]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  // The spend floor for a paid day is a returning-wallet setting: its entry reads that switch.
+  const floor = CHANGELOG_ENTRIES.find((x) => x.items.some((i) => i.includes("RETURNING_WALLET_MIN_DAY_SPEND_USD")));
+  const { returningWalletEnabled } = await import("../src/returning-wallet.js");
+  ok(floor && floor.shownWhen === returningWalletEnabled && !render().includes(floor.title), "the paid-day spend floor entry reads RETURNING_WALLET_PRICE and is hidden while it is off");
 }
 
 // Control: an entry with no switch is always shown.

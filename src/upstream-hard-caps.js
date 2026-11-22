@@ -33,6 +33,7 @@
 // falls back to the default, never to disabled.
 
 import { createSharedDailySpend } from "./shared-limits.js";
+import { useHeldUnit } from "./settle-first.js";
 
 // `match` is a host suffix the fetch hook checks; null means the kit counts
 // its own units (E2B: one unit per sandbox started, whatever hosts it uses).
@@ -158,10 +159,33 @@ export function takeHardCap(name, now = Date.now()) {
   if (!c) return true;
   const cap = hardCapOf(c);
   if (cap === null) return true;
+  // A unit the call's settle point already took for it (hardCapHold): used,
+  // not taken again.
+  if (useHeldUnit(name)) return true;
   const s = rowOf(c, now);
   if (seenToday(s) >= cap) { s.refused++; return false; }
   s.local++; s.unflushed++;
   return true;
+}
+
+/** What a settle point takes ahead of its payment (src/settle-first.js
+ *  settleBeforeUpstreamHolding): one unit of `name`, given back when the
+ *  payment does not settle or the unit goes unused; past the ceiling, the
+ *  refusal before any payment. */
+export function hardCapHold(name) {
+  return { name, take: () => takeHardCap(name), release: (takenAt) => releaseHardCap(name, takenAt), refusal: hardCapError };
+}
+
+/** True when `name`'s ceiling is already reached today (nothing is taken or
+ *  counted): a check made before a payment is settled ahead of the call. */
+export function hardCapReached(name, now = Date.now()) {
+  try {
+    const c = byName.get(name);
+    if (!c) return false;
+    const cap = hardCapOf(c);
+    if (cap === null) return false;
+    return seenToday(rowOf(c, now)) >= cap;
+  } catch { return false; }
 }
 
 // Failures that happen before a request is written: name resolution, and a

@@ -10,6 +10,7 @@
 // transfers are public on-chain data — this page just saves the tab-cycling.
 import { tempoSelfRecipient } from "./mpp-tempo.js";
 import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
 import { blocksForSeconds, blockTimeChanges, refreshBlockMs } from "./chain-block-time.js";
@@ -311,6 +312,7 @@ onGatedRailOffered(activateGatedEvm);
 // read by signature) public-first with the keyed lane behind it.
 import { SOLANA_RPCS, solanaHistoryRead } from "./solana-history-rpc.js";
 import { SOLANA_ACTIVITY_STATE_VERSION, SOLANA_ACTIVITY_MAX_ENTRIES } from "./solana-activity-store.js";
+import { setEvmActivityUidBlocks } from "./evm-activity-store.js";
 import { REVENUE_SNAPSHOT_TTL_MS, revenueSnapshotCadence, revenueLedgerCadence } from "./refresh-cadence.js";
 import { registerMemoryStore } from "./memory-stores.js";
 export { SOLANA_RPCS };
@@ -473,78 +475,179 @@ function laneName(entry) {
 // verified 2026-07-08) with a minimum of 4. A failed chunk is a partial
 // window, never an error: the balance (a cheap head read) stays up and the
 // card says the scan was partial instead of parroting vendor text.
-export async function recentInbound(c, wallet, latest) {
-  // Per-chain chunk cap: default 9,000 (the Alchemy bound above); chains whose
-  // RPCs enforce tighter getLogs ranges declare chunkBlocks (Sei: 1,900).
+//
+// RESUME. A scan keeps what it read: the newest block it covered (`head`),
+// the lowest block down to which it read every block (`lo`) and every
+// transfer in [lo, head] (at most WINDOW_STATE_ROWS, lo raised to match). The
+// next scan of the same wallet and token, in this process or after a restart
+// (the state is a stored document, see windowScanStore below), reads only the
+// blocks after `head` plus a reorg overlap (WINDOW_REORG_SECONDS of blocks,
+// re-read and replacing what was kept there), drops what the window has slid
+// past, and reads further down only while fewer than 8 transfers are known
+// and the window reaches lower. The eight it reports are the newest eight in
+// the window either way, so a resumed scan answers what a full scan answers.
+// Anything that does not fit (another wallet or token, a head behind the
+// stored one, a gap wider than the window, a head read that failed) is a full
+// scan, as before.
+export const WINDOW_REORG_SECONDS = 600;
+const WINDOW_STATE_VERSION = 1;
+const WINDOW_STATE_ROWS = 32;
+const RECENT_ROWS = 8;
+// The same order a full scan reports: newest block first, then log index.
+const byChainDesc = (a, b) => b.block - a.block || a.logIndex - b.logIndex;
+const rowFromLog = (l) => ({
+  block: parseInt(l.blockNumber, 16), logIndex: parseInt(l.logIndex ?? "0x0", 16) || 0,
+  usd: Number(BigInt(l.data && l.data !== "0x" ? l.data : "0x0")) / 1e6,
+  from: l.topics?.[1] ? ("0x" + l.topics[1].slice(-40)).toLowerCase() : null,
+  hash: l.transactionHash,
+});
+/** The window a scan of `latest` covers: its chunks and its lowest block. */
+export function recentWindowPlan(c, latest) {
   const LOG_CHUNKS = Math.max(4, Math.ceil(c.span / (c.chunkBlocks || 9000)));
   const chunk = Math.ceil(c.span / LOG_CHUNKS);
-  const deadline = Date.now() + 12_000;
-  const logs = [];
-  let missed = 0;
-  let attempted = 0;
   const floor = Number.isFinite(c.fromBlock) ? c.fromBlock : 0;
-  let windows = LOG_CHUNKS; // the windows at or above the floor
-  for (let i = 0; i < LOG_CHUNKS && logs.length < 8 && Date.now() < deadline; i++) {
-    const to = latest - i * chunk;
-    // Nothing below the chain's floor can hold a transfer to this wallet.
-    if (to <= 0 || to < floor) { windows = i; break; }
-    attempted++;
-    const from = Math.max(0, floor, to - chunk + 1);
-    // One retry per failed chunk (budget permitting): the newest chunk holds
-    // the most recent settles, and a single transient RPC failure there made
-    // the card show "no inbound transfers" for a full snapshot TTL even
-    // though the canary had just settled (observed 2026-07-08 on Polygon).
+  let windows = 0;
+  for (let i = 0; i < LOG_CHUNKS; i++) { const to = latest - i * chunk; if (to <= 0 || to < floor) break; windows++; }
+  return { LOG_CHUNKS, chunk, floor, windows, lowest: Math.max(0, floor, latest - LOG_CHUNKS * chunk + 1) };
+}
+/** Whether a stored window state can seed a scan of this wallet and token at `latest`. */
+export function windowStateUsable(st, c, wallet, latest) {
+  return !!(st && st.v === WINDOW_STATE_VERSION && st.wallet === String(wallet || "").toLowerCase()
+    && st.token === String(c.token).toLowerCase() && Number.isFinite(st.head) && Number.isFinite(st.lo)
+    && st.lo <= st.head + 1 && st.head <= latest && Array.isArray(st.rows)
+    && st.rows.every((r) => r && Number.isFinite(r.block) && r.block >= st.lo && r.block <= st.head && Number.isFinite(r.usd)));
+}
+const windowCounters = { scans: 0, full: 0, resumed: 0, calls: 0, unusable: 0 };
+export function recentWindowStatus() { return { ...windowCounters }; }
+
+export async function recentInbound(c, wallet, latest, { prior = null, chainKey = null } = {}) {
+  // Per-chain chunk cap: default 9,000 (the Alchemy bound above); chains whose
+  // RPCs enforce tighter getLogs ranges declare chunkBlocks (Sei: 1,900).
+  const plan = recentWindowPlan(c, latest);
+  const { chunk, lowest, windows } = plan;
+  const deadline = Date.now() + 12_000;
+  windowCounters.scans++;
+  // One retry per failed chunk (budget permitting): the newest chunk holds
+  // the most recent settles, and a single transient RPC failure there made
+  // the card show "no inbound transfers" for a full snapshot TTL even
+  // though the canary had just settled (observed 2026-07-08 on Polygon).
+  const readChunk = async (from, to) => {
     const attemptChunk = () => rpcCall(c.rpcs, "eth_getLogs", [{
       address: c.token,
       topics: [TRANSFER_TOPIC, null, pad(wallet)],
       fromBlock: "0x" + from.toString(16),
       toBlock: "0x" + to.toString(16),
     }], 4000);
+    windowCounters.calls++;
+    let part;
     try {
-      let part;
-      try {
-        part = await attemptChunk();
-      } catch (e1) {
-        if (Date.now() + 4500 > deadline) throw e1; // no budget left for a retry
-        if (isRateLimitError(e1)) throw e1; // a retry now only extends the limit
-        part = await attemptChunk();
-      }
-      if (Array.isArray(part)) logs.push(...part);
-    } catch (e) {
-      missed++;
-      // A rate-limited RPC answers the rest of this scan the same way: stop
-      // here (the windows not read are counted below).
-      if (isRateLimitError(e)) {
-        if (!loggedChunkFailure.has(c.label)) {
-          loggedChunkFailure.add(c.label);
-          console.warn(`[revenue] ${c.label} getLogs rate-limited; window scan stopped: ${pubErr(e, 160)}`);
-        }
-        break;
-      }
-      // One line per rail per process: the scan's missed counter destroyed
-      // the evidence of WHY chunks fail (2026-07-28: Sei read 28/28
-      // unavailable through a relay that answered prod's egress in 39ms,
-      // and nothing said what the actual per-chunk error was).
+      part = await attemptChunk();
+    } catch (e1) {
+      if (Date.now() + 4500 > deadline) throw e1; // no budget left for a retry
+      if (isRateLimitError(e1)) throw e1; // a retry now only extends the limit
+      windowCounters.calls++;
+      part = await attemptChunk();
+    }
+    return Array.isArray(part) ? part.map(rowFromLog) : [];
+  };
+  const noteFailure = (e) => {
+    // A rate-limited RPC answers the rest of this scan the same way: the
+    // caller stops (the windows not read are counted).
+    if (isRateLimitError(e)) {
       if (!loggedChunkFailure.has(c.label)) {
         loggedChunkFailure.add(c.label);
-        console.warn(`[revenue] ${c.label} getLogs chunk failed: ${pubErr(e, 160)}`);
+        console.warn(`[revenue] ${c.label} getLogs rate-limited; window scan stopped: ${pubErr(e, 160)}`);
+      }
+      return true;
+    }
+    // One line per rail per process: the scan's missed counter destroyed
+    // the evidence of WHY chunks fail (2026-07-28: Sei read 28/28
+    // unavailable through a relay that answered prod's egress in 39ms,
+    // and nothing said what the actual per-chunk error was).
+    if (!loggedChunkFailure.has(c.label)) {
+      loggedChunkFailure.add(c.label);
+      console.warn(`[revenue] ${c.label} getLogs chunk failed: ${pubErr(e, 160)}`);
+    }
+    return false;
+  };
+
+  let rows = null, coveredLo = latest + 1, missed = 0, attempted = 0;
+  const priorOk = windowStateUsable(prior, c, wallet, latest);
+  if (prior && !priorOk) windowCounters.unusable++;
+  const overlap = Math.max(1, chainKey ? blocksForSeconds(chainKey, WINDOW_REORG_SECONDS) : Math.ceil(c.span / 100));
+  const resumeFrom = priorOk ? Math.max(lowest, prior.head - overlap + 1) : null;
+  if (priorOk && prior.head >= lowest - 1 && latest - resumeFrom + 1 <= chunk * plan.LOG_CHUNKS) {
+    // The blocks after the stored head (and the overlap), newest first.
+    try {
+      const fresh = [];
+      let freshLo = latest + 1;
+      for (let to = latest; to >= resumeFrom; to -= chunk) {
+        // Eight found before the stored head is reached: these blocks alone
+        // are the answer, as in a full scan, and cost no more than one.
+        if (fresh.length >= RECENT_ROWS) break;
+        freshLo = Math.max(resumeFrom, to - chunk + 1);
+        fresh.push(...await readChunk(freshLo, to));
+      }
+      if (freshLo > resumeFrom) { rows = fresh; coveredLo = freshLo; }
+      else {
+        rows = [...fresh, ...prior.rows.filter((r) => r.block < resumeFrom && r.block >= lowest).map((r) => ({ ...r }))];
+        coveredLo = Math.max(lowest, Math.min(prior.lo, resumeFrom));
+      }
+      windowCounters.resumed++;
+    } catch (e) {
+      noteFailure(e);
+      rows = null; // a full scan below, as before
+    }
+    // Fewer than eight known and the window reaches lower: read on down, as
+    // a full scan would have.
+    if (rows) {
+      for (let to = coveredLo - 1; rows.length < RECENT_ROWS && to >= lowest && Date.now() < deadline; to -= chunk) {
+        const from = Math.max(lowest, to - chunk + 1);
+        try { rows.push(...await readChunk(from, to)); coveredLo = from; }
+        catch (e) { missed++; noteFailure(e); break; }
       }
     }
   }
-  const recent = logs
-    .map((l) => {
-      const usd = Number(BigInt(l.data && l.data !== "0x" ? l.data : "0x0")) / 1e6;
-      const from = l.topics?.[1] ? ("0x" + l.topics[1].slice(-40)).toLowerCase() : null;
-      return {
-        usd, from,
-        tx: c.tx(l.transactionHash),
-        block: parseInt(l.blockNumber, 16),
-        external: isExternalPayment({ payer: from, usd }, { ourWallets: OUR_EVM_WALLETS, maxUsd: MAX_CALL_USD }),
-        internal: from != null && OUR_EVM_WALLETS.has(from),
-      };
-    })
-    .sort((a, b) => b.block - a.block)
-    .slice(0, 8);
+  if (!rows) {
+    windowCounters.full++;
+    rows = [];
+    coveredLo = latest + 1;
+    let contiguous = true;
+    for (let i = 0; i < plan.LOG_CHUNKS && rows.length < RECENT_ROWS && Date.now() < deadline; i++) {
+      const to = latest - i * chunk;
+      // Nothing below the chain's floor can hold a transfer to this wallet.
+      if (to <= 0 || to < plan.floor) break;
+      attempted++;
+      const from = Math.max(0, plan.floor, to - chunk + 1);
+      try {
+        rows.push(...await readChunk(from, to));
+        if (contiguous) coveredLo = from;
+      } catch (e) {
+        missed++;
+        contiguous = false;
+        if (noteFailure(e)) break;
+      }
+    }
+    // Windows never attempted (deadline exit or early stop with zero finds)
+    // count as missed when the scan found NOTHING - a budget cutoff must not
+    // read as a clean empty. Early stop after real finds stays a success.
+    if (rows.length === 0 && attempted < windows) missed += windows - attempted;
+  }
+  rows.sort(byChainDesc);
+  // Timestamps the kept state already holds are reused.
+  const knownWhen = new Map((priorOk ? prior.rows : []).filter((r) => r.when).map((r) => [`${r.hash}:${r.logIndex}`, r.when]));
+  const recent = rows.slice(0, RECENT_ROWS).map((r) => {
+    const out = {
+      usd: r.usd, from: r.from,
+      tx: c.tx(r.hash),
+      block: r.block,
+      external: isExternalPayment({ payer: r.from, usd: r.usd }, { ourWallets: OUR_EVM_WALLETS, maxUsd: MAX_CALL_USD }),
+      internal: r.from != null && OUR_EVM_WALLETS.has(r.from),
+    };
+    const when = knownWhen.get(`${r.hash}:${r.logIndex}`);
+    if (when) out.when = when;
+    return out;
+  });
   // Best-effort block timestamps — one RPC call per transfer (8 max). Bounded by
   // a total deadline: rpcCall walks a fallback RPC list sequentially, so on a
   // throttled rail 8 transfers x N-RPC retries could run for minutes and hang the
@@ -552,20 +655,75 @@ export async function recentInbound(c, wallet, latest) {
   // Same deadline discipline as the getLogs loop above; timestamps are optional.
   const tsDeadline = Date.now() + 8_000;
   for (const t of recent) {
+    if (t.when) continue;
     if (Date.now() > tsDeadline) break;
     try {
       const blk = await rpcCall(c.rpcs, "eth_getBlockByNumber", ["0x" + t.block.toString(16), false], 3000);
       if (blk?.timestamp) t.when = new Date(parseInt(blk.timestamp, 16) * 1000).toISOString();
     } catch { /* timestamp is nice-to-have, not required */ }
   }
-  // Windows never attempted (deadline exit or early stop with zero finds)
-  // count as missed when the scan found NOTHING - a budget cutoff must not
-  // read as a clean empty. Early stop after real finds stays a success.
-  if (logs.length === 0 && attempted < windows) missed += windows - attempted;
-  return { recent, missed, chunks: windows };
+  // What the next scan resumes from: every transfer in [lo, head], the
+  // newest WINDOW_STATE_ROWS of them (lo raised past a block it cut into).
+  let state = null;
+  if (coveredLo <= latest) {
+    let kept = rows.filter((r) => r.block >= coveredLo);
+    let lo = coveredLo;
+    if (kept.length > WINDOW_STATE_ROWS) {
+      const cut = kept[WINDOW_STATE_ROWS].block;
+      kept = kept.filter((r) => r.block > cut);
+      lo = cut + 1;
+    }
+    const whenOf = new Map(recent.filter((t) => t.when).map((t, i) => [i, t.when]));
+    const top = rows.slice(0, RECENT_ROWS);
+    kept = kept.map((r) => { const i = top.indexOf(r); return i >= 0 && whenOf.has(i) ? { ...r, when: whenOf.get(i) } : r; });
+    state = { v: WINDOW_STATE_VERSION, wallet: String(wallet).toLowerCase(), token: String(c.token).toLowerCase(), head: latest, lo, rows: kept };
+  }
+  return { recent, missed, chunks: windows, state };
 }
 
 const loggedChunkFailure = new Set();
+
+// The window scans' state across restarts: one document (the state database,
+// or the file REVENUE_WINDOW_SCAN_FILE without one) holding each rail's
+// state from recentInbound, read once per process before the first scan that
+// needs it and written after each refresh that changed it. A store that
+// cannot be read, or a body this build does not read, is no state: every
+// rail reads its whole window, as before (logged once).
+const WINDOW_SCAN_FILE = process.env.REVENUE_WINDOW_SCAN_FILE || join(existsSync("/data") ? "/data" : tmpdir(), "revenue-window-scan.json");
+const windowScanDoc = createJsonDocument({ name: "revenue-window-scan", file: WINDOW_SCAN_FILE, log: () => {}, importFromFile: false, writeThroughFiles: false });
+let windowScans = null;
+let windowScansLoad = null;
+let windowScansDirty = false;
+const windowScanLogged = new Set();
+function windowScanNote(key, line) { if (!windowScanLogged.has(key)) { windowScanLogged.add(key); console.warn(line); } }
+const WINDOW_SCAN_LOAD_MS = 3_000;
+async function loadWindowScans() {
+  if (windowScans) return windowScans;
+  windowScansLoad ||= (async () => {
+    let body = null, timer;
+    try {
+      body = await Promise.race([windowScanDoc.load(null), new Promise((r) => { timer = setTimeout(() => r(undefined), WINDOW_SCAN_LOAD_MS); timer.unref?.(); })]);
+    } catch { body = undefined; } finally { clearTimeout(timer); }
+    const m = new Map();
+    if (body === undefined) windowScanNote("load", "[revenue] window scan state not read in time; this refresh reads each rail's whole window");
+    else if (body != null) {
+      if (body && typeof body === "object" && body.v === WINDOW_STATE_VERSION && body.chains && typeof body.chains === "object" && !Array.isArray(body.chains)) {
+        for (const [k, st] of Object.entries(body.chains)) m.set(k, st);
+      } else windowScanNote("body", "[revenue] window scan state unreadable; this refresh reads each rail's whole window");
+    }
+    windowScans = m;
+    return m;
+  })();
+  return windowScansLoad;
+}
+function saveWindowScans() {
+  if (!windowScans || !windowScansDirty) return;
+  windowScansDirty = false;
+  try { void Promise.resolve(windowScanDoc.save({ v: WINDOW_STATE_VERSION, chains: Object.fromEntries(windowScans) })).catch(() => {}); } catch { /* the next refresh writes again */ }
+}
+/** Tests: forget the in-memory window state (the next scan reads the store). */
+export function _forgetWindowScansForTest() { windowScans = null; windowScansLoad = null; windowScansDirty = false; windowScanLogged.clear(); }
+
 async function evmRail(name, wallet) {
   const c = EVM[name];
   const out = { rail: c.label, asset: c.asset, wallet: wallet || null, explorer: wallet ? c.explorer(wallet) : null, balance: null, recent: [], error: null, scanNote: null };
@@ -610,7 +768,12 @@ async function evmRail(name, wallet) {
     let recent = ledgerRows.map((t) => ({ ...t, tx: t.txHash ? c.tx(t.txHash) : null }));
     let missed = 0, chunks = 0, viaLedger = recent.length > 0;
     if (!viaLedger) {
-      ({ recent, missed, chunks } = await recentInbound(c, wallet, latest));
+      const states = await loadWindowScans();
+      const prior = states.get(name) || null;
+      const r = await recentInbound(c, wallet, latest, { prior, chainKey: name });
+      ({ recent, missed, chunks } = r);
+      if (prior && !windowStateUsable(prior, c, wallet, latest)) windowScanNote(`chain:${name}`, `[revenue] ${c.label} stored window state does not fit this scan; read the whole window`);
+      if (r.state) { states.set(name, r.state); windowScansDirty = true; }
     }
     out.recent = recent;
     out.recentSource = viaLedger ? "ledger" : "chain-scan";
@@ -1292,7 +1455,10 @@ export async function evmActivity(chainKey, wallet, { days = 30, maxPages = SCAN
       if (!covered) farBlock = oldestOf(merged);
     } else {
       activityCounters.resumed++;
-      const startBlock = Math.max(0, prior.newestBlock - resumeOverlapBlocks(chainKey));
+      // A state read back from the store keeps row ids only down to
+      // `uidFloor`; the head read starts no lower, so no row is met twice
+      // without its id.
+      const startBlock = Math.max(0, prior.newestBlock - resumeOverlapBlocks(chainKey), Number.isFinite(prior.uidFloor) ? prior.uidFloor : 0);
       const head = await walk({ fromBlock: startBlock, stopBelow: startBlock, pages: maxPages });
       if (head.more) {
         // The head itself did not catch up with the prior's newest block, so
@@ -1355,6 +1521,9 @@ export async function evmActivity(chainKey, wallet, { days = 30, maxPages = SCAN
   });
   return out;
 }
+
+// A stored state (src/evm-activity-store.js) keeps row ids four overlaps deep.
+setEvmActivityUidBlocks((chain) => (EVM[chain] ? 4 * resumeOverlapBlocks(chain) : 0));
 
 // Base USDC (native Circle) contract.
 const BASE_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
@@ -2034,6 +2203,7 @@ async function refreshSnapshot({ walletAddress, solanaWallet }) {
     }
   }
   persistLastGood(rails);
+  saveWindowScans();
   const totalUsd = rails.reduce((s, r) => s + (Number.isFinite(r.balance) ? r.balance : 0), 0);
   const windowExternalUsd = rails.reduce((s, r) => s + (Number.isFinite(r.externalUsd) ? r.externalUsd : 0), 0);
   cached = {

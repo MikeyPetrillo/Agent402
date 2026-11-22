@@ -9,11 +9,13 @@ name: Brave reconciliation
 # every Brave call where it leaves the process, and stats.js persists it in
 # day buckets (daily_upstream_calls) that survive redeploys.
 #
-# On the 1st of each month this reads the prior month's series from the
-# operator endpoint and opens an issue with our number, so the operator can
-# line it up against the Brave dashboard's usage for the same date range.
-# It is a reconciliation prompt, not an alarm - it always files, and the
-# issue is closed by a human once the two numbers are compared.
+# On the 1st of each month this checks that the prior month's series is
+# readable on the operator endpoint and opens an issue, so the operator reads
+# our number there (/__operator/stats) and lines it up against the Brave
+# dashboard's usage for the same date range. The number itself is never
+# printed or filed: this log and the issue are public. It is a reconciliation
+# prompt, not an alarm - it always files, and the issue is closed by a human
+# once the two numbers are compared.
 on:
   schedule:
     - cron: "23 8 1 * *"
@@ -54,14 +56,10 @@ jobs:
             || { echo "::error::upstreamCalls.brave.daily missing from operator stats"; exit 1; }
           MONTH="$(date -u -d "$(date -u +%Y-%m-01) -1 month" +%Y-%m)"
           DAYS_IN_MONTH="$(date -u -d "$(date -u +%Y-%m-01) -1 day" +%d)"
-          TOTAL="$(jq -r --arg m "$MONTH" '[.upstreamCalls.brave.daily[] | select(.day | startswith($m)) | .n] | add // 0' /tmp/opstats.json)"
-          BYCALLER="$(jq -r --arg m "$MONTH" '
-            [.upstreamCalls.brave.daily[] | select(.day | startswith($m))]
-            | group_by(.caller) | map("\(.[0].caller): \(map(.n) | add)") | join(", ")' /tmp/opstats.json)"
           DAYS_WITH_DATA="$(jq -r --arg m "$MONTH" '[.upstreamCalls.brave.daily[] | select(.day | startswith($m)) | .day] | unique | length' /tmp/opstats.json)"
-          echo "month=$MONTH total=$TOTAL daysWithData=$DAYS_WITH_DATA/$DAYS_IN_MONTH byCaller=[$BYCALLER]"
-          { echo "month=$MONTH"; echo "total=$TOTAL"; echo "bycaller=$BYCALLER";
-            echo "dayswithdata=$DAYS_WITH_DATA"; echo "daysinmonth=$DAYS_IN_MONTH"; } >> "$GITHUB_OUTPUT"
+          # The totals are read on /__operator/stats, not printed: this log is public.
+          echo "month=$MONTH daysWithData=$DAYS_WITH_DATA/$DAYS_IN_MONTH"
+          echo "month=$MONTH" >> "$GITHUB_OUTPUT"
       # Only the two files the next step runs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         continue-on-error: true
@@ -83,16 +81,10 @@ jobs:
         run: node scripts/adopt-issue-titles.js
 
       - name: File the reconciliation issue
-        # Values are our own server's numeric/day/caller-slug data, not
-        # attacker-facing free text, but routed through env: anyway (not
-        # spliced via ${{ }} into the script) to match the repo-wide
-        # convention and stay safe if that assumption ever changes upstream.
+        # The month is routed through env: (not spliced via ${{ }} into the
+        # script) to match the repo-wide convention.
         env:
           MONTH: ${{ steps.series.outputs.month }}
-          TOTAL: ${{ steps.series.outputs.total }}
-          BYCALLER: ${{ steps.series.outputs.bycaller }}
-          DAYS_WITH_DATA: ${{ steps.series.outputs.dayswithdata }}
-          DAYS_IN_MONTH: ${{ steps.series.outputs.daysinmonth }}
         run: |
           TITLE="Scheduled check needs review: search-call-reconciliation ($MONTH)"
           EXISTS=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')

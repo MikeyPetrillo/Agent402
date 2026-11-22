@@ -13,6 +13,7 @@
 // MPP evm method, a Tempo charge, a card and credits all settle only after a
 // final 200; a Tempo push transfer is on chain before the call, so an answer
 // that never arrives is booked as owed.
+import { FAILED_CALL_SENTENCE, SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { usdToBaseUnits } from "./base-units.js";
 import { siteOrgLd } from "./site-org.js";
 import { GUIDE_SITE, GUIDE_SITE_NAME, guideLink } from "./ask402-links.js";
@@ -109,7 +110,7 @@ console.log(res.status, res.headers.get("payment-receipt"), await res.json());`;
   const howToLd = { "@type": "HowTo", "@id": `${canonical}#howto`, name: "Pay for one Agent402 call", description, step: [
     { "@type": "HowToStep", name: "Ask", text: "Send the request with no payment. The answer is 402 Payment Required with the price and every way to pay it." },
     { "@type": "HowToStep", name: "Pay", text: "Sign the payment with your wallet key (or present a credits key, or a solved proof-of-work puzzle) and repeat the identical request with the credential in a header." },
-    { "@type": "HowToStep", name: "Read the receipt", text: "A 200 carries the result and a receipt header naming the settlement; a 4xx or 5xx on x402, MPP evm, Tempo charge, card and credits is not charged." },
+    { "@type": "HowToStep", name: "Read the receipt", text: `A 200 carries the result and a receipt header naming the settlement; a 4xx or 5xx on x402, MPP evm, Tempo charge, card and credits is not charged. ${SETTLE_FIRST_SENTENCE}` },
   ] };
 
   const extraCss = `
@@ -174,7 +175,7 @@ ${section("rule", `
   ${eyebrow("01 / THE RULE")}
   ${h2("One handshake, and one rule about money.")}
   ${p(`The handshake is two requests. The first carries no payment and gets a 402 with the terms. The second is the identical request plus one header holding the payment, and it gets the answer plus a receipt header. Nothing on the way asks for an account, a key or a person.`)}
-  ${p(`The rule is the order of operations: <strong style="color:var(--ink);font-weight:700;">the handler runs first, and the payment settles only after a response below 400 is ready</strong> (a Tempo push transfer is the exception, below). On x402, on MPP's evm method, on a Tempo charge, on a card and on credits, a 4xx or 5xx cancels settlement and nothing is charged; a 200 is charged only if its settlement then succeeds, and if it does not, the answer is withheld and you get a 402 instead of a result you paid for.`)}
+  ${p(`The rule is the order of operations: <strong style="color:var(--ink);font-weight:700;">the handler runs first, and the payment settles only after a response below 400 is ready</strong> (a Tempo push transfer is the exception, below). On x402, on MPP's evm method, on a Tempo charge, on a card and on credits, a 4xx or 5xx cancels settlement and nothing is charged; a 200 is charged only if its settlement then succeeds, and if it does not, the answer is withheld and you get a 402 instead of a result you paid for. ${FAILED_CALL_SENTENCE}`)}
   ${p(`One exception is stated wherever it applies below: a Tempo <em>push</em> transfer is already on chain before the request arrives, so on that path an undelivered answer is a debt to you, recorded in the refund ledger and repaid after on-chain proof. ${link("/proof", "/proof")} shows settled receipts next to their quotes.`)}
 `)}
 
@@ -239,7 +240,7 @@ ${section("mpp", `
 Payment-Receipt: eyJtZXRob2QiOiJ0ZW1wbyIsInJlZmVyZW5jZSI6IjB4…
 # base64url JSON: {"method":"tempo","reference":"0x…","status":"success","timestamp":"2026-…"}`)}
   ${p(`${code("reference")} is the settlement transaction on the method's chain (for the ${code("evm")} method it is the same transaction an x402 receipt would carry). Tempo settlements are listed with their explorer links on ${link("/revenue", "/revenue")}.`)}
-  ${p(`<strong style="color:var(--ink);font-weight:700;">Charge and push.</strong> A Tempo <em>charge</em> credential is broadcast by this server only after the handler answers below 400, so a 4xx or 5xx on a Tempo charge is not charged. A Tempo <em>push</em> credential is a transfer your client already sent; the server finalizes it before the handler runs, and if the answer then fails or never reaches you, the amount is booked as owed to your wallet in the refund ledger.`)}
+  ${p(`<strong style="color:var(--ink);font-weight:700;">Charge and push.</strong> A Tempo <em>charge</em> credential is broadcast by this server only after the handler answers below 400, so a 4xx or 5xx on a Tempo charge is not charged. ${SETTLE_FIRST_SENTENCE} A Tempo <em>push</em> credential is a transfer your client already sent; the server finalizes it before the handler runs, and if the answer then fails or never reaches you, the amount is booked as owed to your wallet in the refund ledger.`)}
   ${cardHtml}
 `, true)}
 
@@ -294,10 +295,10 @@ claude mcp add --transport http agent402 ${baseUrl}/mcp
 
 # npm server with a funded EVM key: every paid tool over x402
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.14.1
+claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.15.0
 
 # a credits key${creditsKeyQualifier()} works there too
-claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@0.14.1`)}
+claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@0.15.0`)}
   ${p(`Every host's verified config block is in the ${link("/guides/agent-hosts", "agent-hosts guide")}; ${link("/quickstart", "/quickstart")} has the same first call for curl, JavaScript and the model gateway.`)}
 `)}
 
@@ -314,6 +315,7 @@ ${section("failed", `
     row([tdMono("credits"), td("The hold is released; the balance is unchanged."), td("Not debited."), td("The hold is released while the budget holds; past it, the debit is booked as owed.")]),
     row([tdMono("proof-of-work"), td("The solution is spent; fetch a new challenge."), td("Not applicable: nothing settles."), td("Fetch a new challenge.")]),
   ].join(""))}
+  ${FAILED_CALL_SENTENCE ? p(FAILED_CALL_SENTENCE) : ""}
   ${p(`<strong style="color:var(--ink);font-weight:700;">The hang-up budget is bounded on purpose.</strong> A buyer whose connection closes before the first response byte is not settled while the service holds a forgiveness ticket for that request, priced at the charge, against a per-wallet, per-IP and service-wide budget that a paid success never refills. It never refuses service: once it is spent, the call settles as usual and the charge is booked as owed, repaid after on-chain proof. Routes whose effect outlives the answer (memory writes, attestations, purchases from outside sellers) never take a ticket.`)}
   ${p(`<strong style="color:var(--ink);font-weight:700;">Retries.</strong> Send an ${code("Idempotency-Key")} header (or the x402 ${code("payment-identifier")} extension) and a repeat of the same credential, route and body within ${idemMinutes} minutes replays the settled 200 (answers up to ${esc(IDEM_MAX_BODY_LABEL)}) without a second settlement. On the x402 wallet path the key is bound to the exact signed authorization: a fresh signature is a fresh payment, so keep the signed request and resend it yourself, or use a credits key for the calls you retry. A request re-sent with the same signed EVM payment and no key is replayed the same way inside that window (${code("X-Replayed-Answer: 1")}); routes with a lasting effect and streamed calls are the exception.`)}
   ${p(`<strong style="color:var(--ink);font-weight:700;">Refunds.</strong> A charged-but-undelivered call is recorded as a debt with its settlement transaction as evidence and repaid from a separate, capped job after review; the server never holds a spending key. A refused payment is free to get wrong: ${link("/x402-test", "/x402-test")} decodes each refusal.`)}

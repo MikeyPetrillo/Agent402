@@ -71,6 +71,8 @@ Generation priced per picture or per clip rather than per token, on the OpenAI w
 | `POST /v1/images/generations` | $0.08 | The flagship image route |
 | `POST /v1/videos/generations` | $0.20 | One silent 4-second 720p clip, MP4 inline base64, 16:9 or 9:16. A failed or timed-out generation is not charged on x402; a wallet payer collects a timed-out clip by sending the same request again unchanged within the window the 504 names |
 
+Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
+
 ## Health and safety data (openFDA)
 
 - `GET /api/drug-label` ($0.004): a drug's FDA label by `name` or NDC.

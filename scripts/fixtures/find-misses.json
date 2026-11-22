@@ -1,0 +1,317 @@
+{
+  "_readme": "Find-miss shapes from the demand board, in neutral rewordings (never the recorded text), each with the slug (or any of the slugs) that must rank first; every row must also read as served. Add a row whenever a find-miss names a capability we sell. Run by scripts/test-find-misses-corpus.js. `gaps` are real capability gaps phrased the same way: a nearby tool may rank first, but none of them does the operation, so each must stay a miss (the need is recorded). An optional `lead` is the least ratio of the first row's score to the second's: a tool that must win clearly, not by a hair.",
+  "cases": [
+    {
+      "q": "scheduling across regions with time zone timing",
+      "top": [
+        "skill-timezone-planner",
+        "timezone-convert"
+      ]
+    },
+    {
+      "q": "cryptographic hash of identifier ref-77-abc with hex and base64 output",
+      "top": "hash"
+    },
+    {
+      "q": "find public holidays in japan for june 2026",
+      "top": "public-holidays"
+    },
+    {
+      "q": "convert march 3 2026 9:00 am eastern to london and tokyo time",
+      "top": [
+        "timezone-convert",
+        "time-convert"
+      ]
+    },
+    {
+      "q": "validate a json payload and generate its md5 hash",
+      "top": [
+        "hash",
+        "json-format"
+      ]
+    },
+    {
+      "q": "compare the claims in a jwt with a json config and list mismatches",
+      "top": [
+        "jwt-decode",
+        "json-diff"
+      ]
+    },
+    {
+      "q": "verify json manifest digests and compare their versions",
+      "top": [
+        "checksum",
+        "json-diff",
+        "hash"
+      ]
+    },
+    {
+      "q": "make uuids using version 7",
+      "top": "uuid"
+    },
+    {
+      "q": "unix timestamp 1761000000 to several timezones",
+      "top": [
+        "time-convert",
+        "timezone-convert"
+      ]
+    },
+    {
+      "q": "convert between timezones or work out the time difference across timezones",
+      "top": [
+        "timezone-convert",
+        "time-convert"
+      ]
+    },
+    {
+      "q": "generate uuids for a token id field, sortable lexicographically",
+      "top": "uuid"
+    },
+    {
+      "q": "unix timestamp into several timezones such as utc, paris, sydney",
+      "top": [
+        "time-convert",
+        "timezone-convert"
+      ]
+    },
+    {
+      "q": "several checksums at once: md5 sha1 sha256 sha512 crc32",
+      "top": "checksum"
+    },
+    {
+      "q": "create time ordered uuids",
+      "top": "uuid"
+    },
+    {
+      "q": "unix timestamp to timezones like europe/oslo and asia/dubai",
+      "top": [
+        "time-convert",
+        "timezone-convert"
+      ]
+    },
+    {
+      "q": "how do solar panels work",
+      "top": "answer"
+    },
+    {
+      "q": "unix timestamp to a datetime in several timezones",
+      "top": [
+        "time-convert",
+        "timezone-convert"
+      ]
+    },
+    {
+      "q": "normalize timestamps given in mixed formats including unix epoch and other timezones",
+      "top": [
+        "date-format",
+        "time-convert",
+        "timezone-convert",
+        "epoch-convert"
+      ],
+      "_why": "each of these converts part of the ask; the row guards that it reads as served"
+    },
+    {
+      "q": "hash a string with several algorithms, output as hex and base64",
+      "top": [
+        "checksum",
+        "hash"
+      ]
+    },
+    {
+      "q": "read csv data and count its rows and columns",
+      "top": "csv-lint"
+    },
+    {
+      "q": "check json syntax and locate errors",
+      "top": "json-format"
+    },
+    {
+      "q": "payment batch schedule across tokyo timezones",
+      "top": [
+        "skill-timezone-planner",
+        "time-convert",
+        "timezone-convert"
+      ]
+    },
+    {
+      "q": "parse and validate a json configuration file",
+      "top": [
+        "json-format",
+        "json-validate"
+      ]
+    },
+    {
+      "q": "time difference in days hours minutes from a unix timestamp",
+      "top": "date-diff"
+    },
+    {
+      "q": "difference between two unix timestamps, with seconds converted to days",
+      "top": "date-diff"
+    },
+    {
+      "q": "duration between two dates from timestamps",
+      "top": "date-diff"
+    },
+    {
+      "q": "convert between different measurement units",
+      "top": "unit-convert"
+    },
+    {
+      "q": "calculator for math: add and multiply",
+      "top": "calc"
+    },
+    {
+      "q": "convert weights and verify them against a 3 stone threshold",
+      "top": "unit-convert"
+    },
+    {
+      "q": "convert a time between time zones from tokyo to other cities",
+      "top": [
+        "timezone-convert",
+        "time-convert"
+      ]
+    },
+    {
+      "q": "briefing document summary for a meeting",
+      "top": "skill-document-brief"
+    },
+    {
+      "q": "calculator: add, subtract, multiply, divide",
+      "top": "calc"
+    },
+    {
+      "q": "base64 decode a string into plaintext",
+      "top": "base64"
+    },
+    {
+      "q": "turn a base64 string into plaintext",
+      "top": "base64"
+    },
+    {
+      "q": "search the web for a festival that moved from asia to europe",
+      "top": "search"
+    },
+    {
+      "q": "search the web for recent news on solar power",
+      "top": "search-news"
+    },
+    {
+      "q": "search for specifications of a vintage sports car model",
+      "top": "search"
+    },
+    {
+      "q": "search for 1970s sports car technology specs and features",
+      "top": "search"
+    },
+    {
+      "q": "statistics on numerical data: mean, range, anomalies and outliers",
+      "top": [
+        "outliers",
+        "stats-summary"
+      ]
+    },
+    {
+      "q": "least common multiple of three numbers to find synchronized cycles",
+      "top": "gcd-lcm"
+    },
+    {
+      "q": "hash text for integrity verification",
+      "top": "hash"
+    },
+    {
+      "q": "sha-256 hash of json for integrity checks",
+      "top": "hash"
+    },
+    {
+      "q": "decode base64 encoded text into readable text",
+      "top": "base64"
+    },
+    {
+      "q": "parse csv using a pipe delimiter",
+      "top": [
+        "csv-to-json",
+        "csv-lint"
+      ]
+    },
+    {
+      "q": "decode a base64 encoded string to reveal its json",
+      "top": "base64"
+    },
+    {
+      "q": "compute sha256 of a payload string for integrity verification",
+      "top": [
+        "hash",
+        "checksum"
+      ]
+    },
+    {
+      "q": "convert units in a chain and reconcile odd labels",
+      "top": "unit-convert"
+    },
+    {
+      "q": "decode base64 or hex or an encrypted code",
+      "top": [
+        "base64",
+        "hex"
+      ]
+    },
+    {
+      "q": "parse a csv time log for a compliance report",
+      "top": "csv-to-json"
+    },
+    {
+      "q": "decode a base32 or base58 encoded string",
+      "top": [
+        "base32",
+        "base58"
+      ]
+    },
+    {
+      "q": "decode a base64 encoded string scanned from a qr code",
+      "top": "base64"
+    },
+    {
+      "q": "parse csv columns and extract the data",
+      "top": "csv-to-json"
+    },
+    {
+      "q": "clean html to text",
+      "top": "html-strip"
+    },
+    {
+      "q": "total word count of text",
+      "top": "count"
+    },
+    {
+      "q": "calculate the total of an invoice",
+      "top": "calc"
+    },
+    {
+      "q": "position of the sun",
+      "top": "sun-times"
+    },
+    {
+      "q": "what is my ip",
+      "top": "ip-info"
+    },
+    {
+      "q": "what is the price of ethereum",
+      "top": "crypto-price",
+      "lead": 1.2
+    },
+    {
+      "q": "search for a domain name availability",
+      "top": "search"
+    }
+  ],
+  "gaps": [
+    "add up the sum total of a csv column",
+    "verify a time zone identifier for validity",
+    "verify the signature on a signed receipt",
+    "parse csv and count distinct values in a column",
+    "split adjusted daily share prices for a year",
+    "parse json and report the error position",
+    "map csv headers onto an import schema",
+    "clean up a log file and drop junk lines"
+  ]
+}

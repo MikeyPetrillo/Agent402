@@ -460,7 +460,7 @@ for (const t of tools) {
   const usd = Number(accepts[0].amount ?? accepts[0].maxAmountRequired) / 1e6;
   if (report.spentUsd + usd > MAX_USD) {
     capped = true;
-    report.skipped.push({ key, slug: t.slug, reason: `total cap $${MAX_USD} reached (spent $${report.spentUsd.toFixed(4)})` });
+    report.skipped.push({ key, slug: t.slug, reason: `total cap $${MAX_USD} reached` });
     continue;
   }
 
@@ -728,7 +728,7 @@ if (report.blocked.length) console.log(`blocked by OUR OWN settle breaker (nothi
 if (report.aborted) console.log(`ABORTED: ${report.aborted.unmeasured} tools never tested (${report.aborted.why})`);
 if (report.unfunded.length) console.log(`SWEEP WALLET UNFUNDED at ${report.unfunded[0].key}: the wallet holds less USDC than the price (funding, not a rail verdict)`);
 console.log(`no AVM accept: ${report.noAvm.length} (${report.noAvm.length - unexpectedNoAvm.length} expected: identity-bound, long-running, or sub-cent while the facilitator's sub-cent allowance is spent (${report.noAvm.filter((n) => n.why).length}); ${unexpectedNoAvm.length} unexpected) · skipped: ${report.skipped.length}`);
-console.log(`spent (recycles to our own payTo): $${report.spentUsd.toFixed(4)}${capped ? "  [TOTAL CAP REACHED]" : ""}`);
+if (capped) console.log("[TOTAL CAP REACHED]");
 
 if (report.railFail.length) {
   console.log(`\nRAIL FAILURES (Algorand settlement refused after a genuine, slow attempt):`);
@@ -791,7 +791,8 @@ if (report.buyerNetwork.length) {
 }
 // The classes that fail the run, by name, for the alert's text.
 report.failedClasses = failedClasses(report, unexpectedNoAvm);
-if (OUT) { writeFileSync(OUT, JSON.stringify(report, null, 2)); console.log(`\nwrote ${OUT}`); }
+// The report is kept as a run artifact, which is public: the run's spend total stays out of it.
+if (OUT) { const { spentUsd: _spent, ...kept } = report; writeFileSync(OUT, JSON.stringify(kept, null, 2)); console.log(`\nwrote ${OUT}`); }
 
 // Rail failures and tool failures are both real defects. Unexpected missing
 // accepts mean the rail silently stopped being offered, which is the exact

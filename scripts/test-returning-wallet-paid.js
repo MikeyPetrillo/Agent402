@@ -130,7 +130,7 @@ async function pay(B, route, accept, from, who) {
 }
 const waitFor = async (fn, ms = 15_000) => { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) return null; await sleep(150); } };
 
-const W1 = wallet(0xa1), W2 = wallet(0xa2), W3 = wallet(0xa3), W4 = wallet(0xa4), W5 = wallet(0xa5);
+const W1 = wallet(0xa1), W2 = wallet(0xa2), W3 = wallet(0xa3), W4 = wallet(0xa4), W5 = wallet(0xa5), W7 = wallet(0xa7);
 const operator = (B) => fetch(`${B}/__operator/returning-wallets.json`, { headers: { "X-Operator-Token": OP_TOKEN, Authorization: `Bearer ${OP_TOKEN}` } }).then((r) => r.json());
 let off = null, on = null, floor = null;
 try {
@@ -152,7 +152,8 @@ try {
   await off.stop(); off = null;
 
   // ---------------- switch on: one paid day qualifies ----------------
-  on = await boot("returning-wallet-on", { RETURNING_WALLET_PRICE: "on", RETURNING_WALLET_MIN_PAID_DAYS: "1", REFERRAL_SLUGS: "base64" });
+  // A day counts at $0.0015 spent: two $0.001 calls reach it, one does not.
+  on = await boot("returning-wallet-on", { RETURNING_WALLET_PRICE: "on", RETURNING_WALLET_MIN_PAID_DAYS: "1", RETURNING_WALLET_MIN_DAY_SPEND_USD: "0.0015", REFERRAL_SLUGS: "base64" });
   const B = on.url;
   {
     const fresh = await quote(B, "hash", await proven(0xa1));
@@ -161,13 +162,23 @@ try {
     const none = await quote(B, "hash", null);
     ok(none.accept?.amount === "1000" && none.json?.returningWalletPrice?.applied === false, "no hint: list");
     ok((await quote(B, "hash", "0x1234")).accept?.amount === "1000" && (await quote(B, "hash", "not-a-wallet")).accept?.amount === "1000", "a malformed hint: list");
+    // W7 buys once: its day stays under the per-day spend floor.
+    const once = await pay(B, "hash", none.accept, W7, null);
+    ok(once.status === 200 && settlesSeen.at(-1)?.from === W7, `one purchase from another wallet (${once.status})`);
     // W3 buys once at list with no hint (so no quote for it is cached yet).
     const first = await pay(B, "hash", none.accept, W3, null);
     ok(first.status === 200 && settlesSeen.at(-1)?.from === W3 && settlesSeen.at(-1)?.value === "1000", `a first purchase settles at list (${first.status})`);
+    const second = await pay(B, "hash", none.accept, W3, null);
+    ok(second.status === 200, `a second purchase the same day settles at list (${second.status})`);
   }
   // The sale lands in the ledger on the response's finish; then W3 qualifies.
   const quoted = await waitFor(async () => { const who = await proven(0xa3); const q = await quote(B, "hash", who); return q.accept?.amount === "900" ? { ...q, who } : null; });
-  ok(!!quoted && quoted.json?.returningWalletPrice?.applied === true, `a wallet with a paid day is quoted 10% under list on the call that carries its hint and proof (${quoted?.accept?.amount})`);
+  ok(!!quoted && quoted.json?.returningWalletPrice?.applied === true, `a wallet with a paid day at the per-day spend floor is quoted 10% under list on the call that carries its hint and proof (${quoted?.accept?.amount})`);
+  {
+    // Its sale was written before W3's: W7's single day is under the floor.
+    const under = await quote(B, "hash", await proven(0xa7));
+    ok(under.accept?.amount === "1000" && under.json?.returningWalletPrice?.why === "unqualified", `a wallet whose only paid day is under the per-day spend floor is quoted list (${under.accept?.amount}, ${under.json?.returningWalletPrice?.why})`);
+  }
   {
     const v0 = verifies.length, s0 = settlesSeen.length;
     // The signed retry resends the same two headers.
@@ -231,7 +242,7 @@ try {
     ok(op.enabled === true && op.counts?.paidDiscount === 1 && op.counts?.paidOtherWallet >= 1 && op.returnRate?.payers >= 2, `the operator view counts the discounted payment, the other-wallet attempt and the payers (${JSON.stringify({ counts: op.counts, payers: op.returnRate?.payers })})`);
     // The surfaces that describe paying state the offer while it is on.
     const llms = await fetch(`${B}/llms-full.txt`).then((r) => r.text());
-    ok(/Returning wallets pay less: send your wallet address in the `X-Agent402-Wallet` request header/.test(llms) && /on 1 or more days in the last 30/.test(llms) && /quoted 10% under the route's list price on its x402 exact accepts on EVM chains; a chain's premium and price floor still apply/.test(llms), "llms-full.txt states the offer with the settings in force");
+    ok(/Returning wallets pay less: send your wallet address in the `X-Agent402-Wallet` request header/.test(llms) && /at least \$0\.0015 on each of 1 or more UTC days in the last 30/.test(llms) && /quoted 10% under the route's list price on its x402 exact accepts on EVM chains; a chain's premium and price floor still apply/.test(llms), "llms-full.txt states the offer with the settings in force");
     ok(/a payment of the lower amount from any other wallet is answered 402 at the list price, and nothing is charged/.test(llms) && !/any other payer is quoted list/.test(llms), "and says what the gate does with another wallet's payment of the lower amount");
     ok(llms.includes("prove that wallet in the `X-Agent402-Wallet-Proof` header as `<unix seconds>.<signature>`: the wallet's EIP-191 (personal_sign) signature over five lines separated by single line feeds (none after the last): `Agent402 returning-wallet price`, `host: <this server's host name>`, `route: <METHOD> <path>`, `wallet: <the address in lowercase>` and `time: <the same seconds>`, within 5 minutes of the server's clock"), "and how a request proves the wallet, in the exact words of the message it signs");
     const short = await fetch(`${B}/llms.txt`).then((r) => r.text());
@@ -263,12 +274,17 @@ try {
   }
   // ---------------- one address cannot spend everyone's ledger reads ----------------
   {
-    // W5 buys once at list with no hint, so its paid day is on the ledger and nothing about it is cached.
+    // W5 buys twice at list with no hint (its day reaches the per-day spend
+    // floor), so its paid day is on the ledger and nothing about it is cached.
+    // W8 buys after it: once W8 is counted, W5's sales are written too.
     const before = (await operator(B)).returnRate?.payers ?? 0;
     const list = await quote(B, "hash", null);
     const first = await pay(B, "hash", list.accept, W5, null);
-    ok(first.status === 200, `CONTROL a wallet buys once at list (${first.status})`);
-    await waitFor(async () => ((await operator(B)).returnRate?.payers ?? 0) > before);
+    const again = await pay(B, "hash", list.accept, W5, null);
+    ok(first.status === 200 && again.status === 200, `CONTROL a wallet buys twice at list (${first.status}, ${again.status})`);
+    const after = await pay(B, "hash", list.accept, wallet(0xa8), null);
+    ok(after.status === 200, `CONTROL another wallet buys after it (${after.status})`);
+    await waitFor(async () => ((await operator(B)).returnRate?.payers ?? 0) >= before + 2);
     // The probe: 600 unpaid requests inside a minute from one address, each naming an unused wallet.
     const PROBER = "203.0.113.7", BUYER = "198.51.100.9";
     const held0 = (await operator(B)).counts;
@@ -294,7 +310,7 @@ try {
   await on.stop(); on = null;
 
   // ---------------- a chain at its price floor ----------------
-  floor = await boot("returning-wallet-floor", { RETURNING_WALLET_PRICE: "on", RETURNING_WALLET_MIN_PAID_DAYS: "1", NETWORK_PRICE_FLOORS: "eip155:8453=0.001" });
+  floor = await boot("returning-wallet-floor", { RETURNING_WALLET_PRICE: "on", RETURNING_WALLET_MIN_PAID_DAYS: "1", RETURNING_WALLET_MIN_DAY_SPEND_USD: "0", NETWORK_PRICE_FLOORS: "eip155:8453=0.001" });
   {
     const F = floor.url;
     const before = (await operator(F)).returnRate?.payers ?? 0;

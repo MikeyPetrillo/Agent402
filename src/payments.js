@@ -1,11 +1,13 @@
 import { usdToBaseUnits } from "./base-units.js";
 import { handlerInputOf } from "./handler-input.js";
 import { boundedResponseSchemaFor, boundedSchema } from "./openapi-schema.js";
+import { encodePaymentRequiredHeader, decodePaymentRequiredHeader } from "@x402/core/http";
 import { paymentMiddlewareFromHTTPServer, x402HTTPResourceServer } from "@x402/express";
 import { registerPhaseTimingHooks } from "./paid-phase-timing.js";
 import { createGuardedInit, withGuardedInit } from "./x402-boot-init.js";
 import { scheduleBazaarRouteCheck, withBazaarHidden } from "./bazaar-route-check.js";
-import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
+import { HTTPFacilitatorClient, x402ResourceServer, FacilitatorResponseError } from "@x402/core/server";
+import { settledFirstOf } from "./settle-first.js";
 import { installAcceptOutputSchema, withOutputSchemaOnFirstAccept, outputSchemaFromExtensions, acceptOutputSchemaEnabled } from "./accept-output-schema.js";
 import { avmSubcentGateEnabled, installAvmSubcentGate, noteAvmSettleRefusal, startAvmSponsorshipRefresher, REFRESH_MS as AVM_SPONSORSHIP_REFRESH_MS } from "./avm-sponsorship.js";
 import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal, unconfirmedSettleRefusal, unconfirmedSettleReceipt, railTxOf } from "./payment-reject.js";
@@ -55,7 +57,8 @@ import { gatedRailWasOffered, recordGatedRailOffered } from "./gated-rail-histor
 import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
 import { hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
-import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from "./settle-demotion.js";
+import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf, noteSettleAsked } from "./settle-demotion.js";
+import { withSettleDeadline, noteSettleContext, settleDeadlineStopOf, noteCappedRequest } from "./settle-deadlines.js";
 import { createRobinhoodOrder, stateDbOrderStore, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
 import { isPaymentVerdictReason, isUsedAuthorizationReason } from "./settle-verdict.js";
@@ -2655,7 +2658,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     });
     DEMOTION_NETWORKS.add(CELO_CAIP2);
   }
-  registerFacilitatorFailureHooks(server, payAiClient, solvadorClient, {
+  const settleFallbackOverrides = {
     [ARC_CAIP2]: [],
     // With a second Solana facilitator, no Solana settle fallback: the
     // transaction names one facilitator's fee payer, and no other can co-sign it.
@@ -2672,7 +2675,22 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // Base and Polygon: the chain they always had, then the issuer's
     // facilitator last, once its /supported listed the network.
     ...(circleEvm ? lastResortFallbackOverrides({ networks: circleEvmWanted, payAiClient, solvadorClient, last: { name: CIRCLE_EVM_LABEL, client: circleEvm }, confirmed: circleEvmConfirmed }) : {}),
-  }, { outageFor: (network) => (network === ROBINHOOD_CAIP2 ? robinhoodOutage : null) });
+  };
+  // Per-network settle deadlines on every routing client (src/settle-deadlines.js):
+  // the chain check, the slow-primary switch (to the same fallbacks the
+  // settle-fallback chain asks, only under its opt-in) and the hard cap.
+  // Outermost, so the cap covers the settle demotion's alternates too.
+  {
+    const switchOn = /^(1|true|yes|on)$/i.test((process.env.PAYMENT_SETTLE_FALLBACK || "").trim());
+    facilitatorClients.forEach((c, i) => withSettleDeadline(c, {
+      labelOf: (n) => (facilitatorLabelOfs[i] ? facilitatorLabelOfs[i](n) : facilitatorLabels[i]) || `#${i}`,
+      alternatesFor: (n) => (switchOn ? fallbackCandidatesFor(n, payAiClient, solvadorClient, settleFallbackOverrides) : []),
+      isPreBroadcast: isPreBroadcastSettleRejection,
+      exclude: (p, r) => isGatewayBatchedPayment(p) || isGatewayBatchedPayment(r),
+      noteAsked: noteSettleAsked,
+    }));
+  }
+  registerFacilitatorFailureHooks(server, payAiClient, solvadorClient, settleFallbackOverrides, { outageFor: (network) => (network === ROBINHOOD_CAIP2 ? robinhoodOutage : null) });
   // Contract wallets on Arc (ARC_CONTRACT_WALLETS=on) pay only routes whose
   // effect is not keyed on the payer. An identity-bound route (memory, attest,
   // feedback, my-usage, receipts) keys the caller on authorization.from; for a
@@ -2704,6 +2722,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // wallet the discount was given to: checked with the other hooks that can
   // abort a settle, before the authorization claim.
   registerReturningWalletSettleHook(server);
+  // The verified payment, kept on its request for the settle point of a run
+  // that settles before its upstream work (src/settle-first.js).
+  registerVerifiedPaymentStash(server);
   registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
@@ -2731,6 +2752,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // only failures nothing settled.
   registerLateSettleHook(server, lateSettleBook);
   startLateSettleReconcile();
+  // The settle deadlines' chain check reads the payment's settle context
+  // (src/settle-deadlines.js). A note only: it never ends the chain.
+  server.onBeforeSettle(passingHook(HOOK_NAMES.settleDeadline, (ctx) => { noteSettleContext(ctx); }));
   // Per-phase timing (src/paid-phase-timing.js). Registered last: a hook
   // that aborts settlement first leaves no settle mark, which is the truth.
   registerPhaseTimingHooks(server);
@@ -3008,6 +3032,15 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     };
   }
 
+  // Every HTTP resource server over the core server above is built here, and
+  // each carries the settle-once echo: the core's verified-payment stash lets
+  // a run settle before its upstream work (src/settle-first.js), so the
+  // settlement each server's middleware calls after the handler must answer
+  // that settle, not settle the same payment again. Installed before the
+  // vendor middleware is built, since it calls processSettlement per request.
+  // (scripts/test-settle-once-servers.js fails a server built any other way.)
+  const httpServerOverCore = (routeConfigs) => installSettleOnceEcho(new x402HTTPResourceServer(server, routeConfigs));
+
   // The hosted connector's x402 twins (src/mcp-x402-routes.js): keyed by the
   // HTTP route they stand beside, quoting that route's own accepts builder
   // (the same price on every chain, rebuilt with it when a rail is restored)
@@ -3035,7 +3068,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       extensions: ext,
     };
   }
-  const mcpHttpServer = Object.keys(mcpRouteConfigs).length ? new x402HTTPResourceServer(server, mcpRouteConfigs) : null;
+  const mcpHttpServer = Object.keys(mcpRouteConfigs).length ? httpServerOverCore(mcpRouteConfigs) : null;
   const mcpVendorMw = mcpHttpServer ? withBazaarHidden(mcpRouteConfigs, () => paymentMiddlewareFromHTTPServer(mcpHttpServer, undefined, undefined, false)) : null;
   // A flagged request this server does not price runs the HTTP route's own
   // paywall: never passed on unpaid.
@@ -3072,7 +3105,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   //
   // The vendor's per-route bazaar check (an Ajv compile per route, one
   // synchronous loop) is moved off the boot path: see src/bazaar-route-check.js.
-  const httpServer = new x402HTTPResourceServer(server, routes);
+  const httpServer = httpServerOverCore(routes);
+  installSettleFirst(httpServer);
   const vendorMw = withBazaarHidden(routes, () => paymentMiddlewareFromHTTPServer(httpServer, undefined, undefined, false));
   scheduleBazaarRouteCheck(routes);
   if (mcpHttpServer) scheduleBazaarRouteCheck(mcpRouteConfigs);
@@ -3203,6 +3237,192 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     console.log(`[payments] rail re-read: ${candidates.join(", ")} dropped on a failed /supported read; ${failedReads.map((f) => f.label).join(", ")} read again in ${Math.round(recheck.firstMs / 1000)} s, then on a backoff up to ${Math.round(recheck.maxMs / 1000)} s`);
   }
   return withMcpTwins(withGuardedInit(vendorMw, init, httpServer), mcpVendorMw && withGuardedInit(mcpVendorMw, init, mcpHttpServer));
+}
+
+// ---- Settle first (src/settle-first.js) --------------------------------------
+//
+// @x402/express settles a verified payment after its handler answered. For a
+// run the server arms (the settle breaker names the buyers, server.js the
+// routes), the SAME settlement is made earlier, at the run's settle point,
+// through the same resource server: every settle hook registered above runs
+// once (the blocklist, the client-gone check, the authorization claim, the
+// settle-sent mark, the fallback chain, the late-settlement book, the
+// coverage release), with the payment and the requirement exactly as verify
+// matched them. Nothing about the 402, the offer or the accepted requirement
+// changes: the opt-in upfront flow is NOT declared on the wire, and a payment
+// is settled for the amount it was signed for, once.
+//
+// Two pieces:
+//   - the verified payment is kept on its request by an afterVerify hook
+//     (the vendor holds it in a closure this module cannot read);
+//   - httpServer.processSettlement, which the vendor calls after a handler
+//     answered under 400, answers a request already settled here with that
+//     settlement (its PAYMENT-RESPONSE headers), the way the vendor answers
+//     its own before-handler settlement, and settles nothing a second time.
+//     scripts/test-settle-first.js pins that one settle call is made.
+// A handler answer of 400 or above after such a settlement is not settled by
+// the vendor either way; the receipt the server put on the response at the
+// settlement stays on it, and the charge is booked as owed (server.js).
+const VERIFIED_PAYMENT = Symbol("a402.verifiedPayment");
+/** Keep a payment that verified on its request (own, non-enumerable), for the
+ *  settle point. Same request path as the client-gone hook
+ *  (transportContext.request.adapter.req): if a vendor bump moves it, nothing
+ *  is kept and every run settles after its handler, as before. */
+export function registerVerifiedPaymentStash(server) {
+  server.onAfterVerify((ctx) => {
+    try {
+      if (ctx?.result?.isValid !== true || !ctx.paymentPayload || !ctx.requirements) return;
+      const req = ctx?.transportContext?.request?.adapter?.req;
+      if (!req || typeof req !== "object") return;
+      Object.defineProperty(req, VERIFIED_PAYMENT, {
+        value: { paymentPayload: ctx.paymentPayload, requirements: ctx.requirements, declaredExtensions: ctx.declaredExtensions, request: ctx.transportContext.request },
+        enumerable: false, configurable: true,
+      });
+    } catch { /* nothing kept: the run settles after its handler */ }
+  });
+  return server;
+}
+function verifiedPaymentOf(req) {
+  const v = req && typeof req === "object" && Object.hasOwn(req, VERIFIED_PAYMENT) ? req[VERIFIED_PAYMENT] : null;
+  return v && typeof v === "object" ? v : null;
+}
+/** The namespaces of the networks a payment may settle first on: the x402
+ *  `exact` rails, where the settled amount is the signed amount. */
+export const SETTLE_FIRST_NAMESPACES = Object.freeze(["eip155", "solana", "algorand", "stellar"]);
+/**
+ * Can this request's payment be settled before its handler's upstream work?
+ * Only an x402 payment this server verified on this request, on the `exact`
+ * scheme (the settled amount is the amount signed, so settling earlier takes
+ * exactly what settling later would): never `upto` or a payment channel
+ * (their amount is named after the handler), never a Circle Gateway batched
+ * payment (settled off chain by its own client and book), and never while
+ * the settle function below is not installed. Returns the matched network
+ * (CAIP-2) or null.
+ */
+export function settleFirstNetworkOf(req) {
+  if (!settleFirstImpl) return null;
+  return settleFirstNetworkFor(verifiedPaymentOf(req));
+}
+/** The same rule over a verified payment's own fields (`requirements`,
+ *  `paymentPayload`), with no request: the matched network, or null. */
+export function settleFirstNetworkFor(v) {
+  if (!v || typeof v !== "object" || !v.requirements) return null;
+  if (String(v.requirements.scheme || "").toLowerCase() !== "exact") return null;
+  if (isGatewayBatchedPayment(v.paymentPayload) || isGatewayBatchedPayment(v.requirements)) return null;
+  const network = String(v.requirements.network || "");
+  return SETTLE_FIRST_NAMESPACES.includes(network.split(":")[0]) ? network : null;
+}
+/**
+ * What kind of verified payment this request carries, for settle first:
+ * "exact" (it can settle first: settleFirstNetworkOf), "upto" or "gateway"
+ * (it cannot: option A asks such a wallet for an exact payment while settle
+ * first applies to it), or null (nothing verified here, or another kind,
+ * which is left as it was).
+ */
+export function settleFirstPaymentKindOf(req) {
+  if (!settleFirstImpl) return null;
+  return settleFirstPaymentKindFor(verifiedPaymentOf(req));
+}
+/** The same rule over a verified payment's own fields, with no request. */
+export function settleFirstPaymentKindFor(v) {
+  if (!v || typeof v !== "object" || !v.requirements) return null;
+  if (isGatewayBatchedPayment(v.paymentPayload) || isGatewayBatchedPayment(v.requirements)) return "gateway";
+  const scheme = String(v.requirements.scheme || "").toLowerCase();
+  if (scheme === "upto") return "upto";
+  return settleFirstNetworkFor(v) ? "exact" : null;
+}
+let exactOfferImpl = null;
+/**
+ * The route's own 402, as an unpaid request for it is answered (the vendor
+ * builds it: the same accepts, extensions and Bazaar metadata), with every
+ * plain `exact` accept moved to the front, `error` set to `errorCode`, and
+ * the body `body`. For a request whose wallet must pay its run with an exact
+ * payment (option A). Resolves { status, headers, body } or null when it
+ * cannot be built (then the caller lets the run go on as before).
+ */
+export async function exactPaymentRequiredAnswer(req, { errorCode = "exact_payment_required", body = null } = {}) {
+  if (!exactOfferImpl) return null;
+  try { return await exactOfferImpl(req, { errorCode, body }); } catch { return null; }
+}
+let settleFirstImpl = null;
+/**
+ * Settle this request's verified payment now, before its handler's upstream
+ * work. Resolves `{ settled: true, result, requirements, paymentPayload,
+ * headers }` (headers: the PAYMENT-RESPONSE receipt to put on the response),
+ * or `{ settled: false, response }` with the settle-failure answer the vendor
+ * would have sent after the handler (status, headers, body). Never throws.
+ */
+export async function settleVerifiedPaymentFirst(req) {
+  if (!settleFirstImpl) return { settled: false, response: null };
+  return settleFirstImpl(req);
+}
+const SETTLE_ONCE_ECHO = Symbol("agent402.settleOnceEcho");
+/** Whether an HTTP resource server answers a settled-first payment's
+ *  after-handler settlement from its settle point (installSettleOnceEcho). */
+export function hasSettleOnceEcho(httpServer) {
+  return !!httpServer && httpServer[SETTLE_ONCE_ECHO] === true;
+}
+/**
+ * The after-handler settlement of a payment this request already settled at
+ * its settle point answers that settlement (the vendor's own shape for a
+ * completed before-handler settlement) and never calls the facilitator again.
+ * Returns the server.
+ */
+export function installSettleOnceEcho(httpServer) {
+  if (hasSettleOnceEcho(httpServer)) return httpServer;
+  const settleNow = httpServer.processSettlement.bind(httpServer);
+  httpServer.processSettlement = async function settleOnceProcessSettlement(paymentPayload, requirements, declaredExtensions, transportContext, settlementOverrides, beforeHandlerSettlement, phase) {
+    const early = phase === "before-handler" ? null : settledFirstOf(transportContext?.request?.adapter?.req);
+    if (early && early.paymentPayload === paymentPayload && early.result?.success === true) {
+      return { ...early.result, success: true, headers: httpServer.createSettlementHeaders(early.result), requirements: early.requirements };
+    }
+    return settleNow(paymentPayload, requirements, declaredExtensions, transportContext, settlementOverrides, beforeHandlerSettlement, phase);
+  };
+  Object.defineProperty(httpServer, SETTLE_ONCE_ECHO, { value: true });
+  return httpServer;
+}
+function installSettleFirst(httpServer) {
+  // The settle point itself calls the facilitator: the unwrapped settlement.
+  const settleNow = Object.getPrototypeOf(httpServer).processSettlement.bind(httpServer);
+  exactOfferImpl = async (req, { errorCode, body }) => {
+    const v = verifiedPaymentOf(req);
+    const ctx = v?.request;
+    if (!ctx || !ctx.adapter) return null;
+    // The request as an unpaid one: no payment header, read as an API caller.
+    const adapter = Object.create(ctx.adapter);
+    adapter.getHeader = (name) => {
+      const n = String(name || "").toLowerCase();
+      return n === "payment-signature" || n === "x-payment" ? undefined : ctx.adapter.getHeader(name);
+    };
+    adapter.getAcceptHeader = () => "application/json";
+    const out = await httpServer.processHTTPRequest({ ...ctx, adapter });
+    const r = out?.type === "payment-error" ? out.response : null;
+    const name = r?.headers ? Object.keys(r.headers).find((k) => k.toLowerCase() === "payment-required") : null;
+    if (!r || !name) return null;
+    const offer = decodePaymentRequiredHeader(r.headers[name]);
+    const accepts = Array.isArray(offer?.accepts) ? offer.accepts : [];
+    const plainExact = (a) => String(a?.scheme || "").toLowerCase() === "exact" && !isGatewayBatchedPayment(a);
+    if (!accepts.some(plainExact)) return null;
+    const ordered = [...accepts.filter(plainExact), ...accepts.filter((a) => !plainExact(a))];
+    const headers = { ...r.headers, [name]: encodePaymentRequiredHeader({ ...offer, error: errorCode, accepts: ordered }) };
+    return { status: 402, headers, body: body && typeof body === "object" ? body : { error: errorCode } };
+  };
+  settleFirstImpl = async (req) => {
+    const v = verifiedPaymentOf(req);
+    if (!v) return { settled: false, response: null };
+    let out;
+    try {
+      out = await settleNow(v.paymentPayload, v.requirements, v.declaredExtensions, { request: v.request }, undefined, undefined, "before-handler");
+    } catch (error) {
+      // The vendor's own two answers for a settle that threw.
+      if (error instanceof FacilitatorResponseError) return { settled: false, response: { status: 502, headers: {}, body: { error: error.message } } };
+      console.error(error);
+      return { settled: false, response: { status: 402, headers: {}, body: { error: "settlement_failed" } } };
+    }
+    if (!out || out.success !== true) return { settled: false, response: out?.response || { status: 402, headers: {}, body: { error: "settlement_failed" } } };
+    const { headers, requirements, ...result } = out;
+    return { settled: true, result, requirements, paymentPayload: v.paymentPayload, headers: headers || {} };
+  };
 }
 
 /**
@@ -4231,6 +4451,19 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       `[payments] facilitator SETTLE failed${ctx?.error?.__a402Facilitator ? "" : ` at ${via}`} on ${ctx?.requirements?.network} ` +
         `${ctx?.requirements?.scheme}: ${failure}`
     );
+    // Ended by the settle deadlines (src/settle-deadlines.js): nothing
+    // answered by the network's cap, or a fallback asked first while the
+    // primary was slow failed without proving nothing was sent. The transfer
+    // may still land, so no other settle is tried: the answer is an
+    // unconfirmed stop, the authorization is booked for the late-settlement
+    // read (owed once if it lands), and the request keeps what a resend of
+    // the same payment is answered from (src/idempotency.js).
+    const deadlineStop = settleDeadlineStopOf(ctx?.error);
+    if (deadlineStop) {
+      await markUnconfirmedStop(ctx, ctx.error, deadlineStop.via);
+      noteCappedRequest(ctx?.transportContext?.request?.adapter?.req, ctx);
+      return;
+    }
     // "Already on-chain": the facilitator's own transfer may have landed, or
     // the payload is a replay of one that settled another call. Only chain
     // proof that the transfer is THIS request's recovers it
@@ -4301,7 +4534,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     const facilitatorRetry = ownRefusedFirst ? facilitatorRetryOf(ctx?.paymentPayload) : null;
     const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient, fallbackOverrides)
       .flatMap((c) => (ownFirst && c.own ? (facilitatorRetry ? [{ name: facilitatorRetry.name, client: { settle: facilitatorRetry.settle }, revertRetry: true }] : []) : [c]))
-      .filter(({ name }) => !demotionAttempt?.asked.has(name));
+      .filter(({ name }) => !(demotionAttempt || settleAttemptOf(ctx?.paymentPayload, ctx?.requirements?.network))?.asked.has(name));
     for (const { name, client, revertRetry, own } of candidates) {
       if (passedOn && (revertRetry !== true || own)) continue;
       if (revertOnly && revertRetry !== true) continue;

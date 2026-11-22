@@ -11,10 +11,16 @@
 //   files        module path -> the date of the newest commit touching it
 //                (a file with uncommitted changes dates today, since the
 //                commit that carries it lands today)
-//   toolSources  tool slug -> the kit file that defines it, from the literal
-//                `slug: "..."` in src/tools/*.js; a slug built from a
-//                template, or defined in two kits, is left out and its page
-//                carries no lastmod
+//   toolSources  tool slug -> the file that defines it: a literal
+//                `slug: "..."` in src/tools/*.js, a `slug: NAME` whose NAME is
+//                a constant holding one literal, or a catalog entry written
+//                inline in src/server.js (`"GET /api/x": { ... slug: "x" }`,
+//                read only for slugs no kit defines); a slug defined in two
+//                kits is left out and its page carries no lastmod
+//   toolPatterns template slug -> the kit that builds it, for a
+//                `slug: \`${tier}-gemini\`` (stored as "*-gemini"); a page
+//                whose slug no exact entry names is dated by the one pattern
+//                it matches
 //   packSources  skill pack slug -> the pack module (src/skills.js), from the
 //                literal `slug: "..."` there
 // A tool's page is /tools/<slug> and a pack's is /skills/<slug>, so the two
@@ -35,6 +41,17 @@ import { pageSourceFiles } from "../src/page-dates.js";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "src", "generated", "page-dates.json");
 const SLUG_RE = /\bslug:\s*(?:"([a-z0-9][a-z0-9-]*)"|'([a-z0-9][a-z0-9-]*)'|`([a-z0-9][a-z0-9-]*)`)/g;
+// `slug: NAME` where NAME is an upper-case constant (resolved through CONST_RE).
+const SLUG_CONST_RE = /\bslug:\s*([A-Z][A-Z0-9_]*)\s*[,}\n]/g;
+// A constant holding one literal slug, in any module under src/.
+const CONST_RE = /\bconst\s+([A-Z][A-Z0-9_]*)\s*=\s*(?:"([a-z0-9][a-z0-9-]*)"|'([a-z0-9][a-z0-9-]*)')\s*;/g;
+// `slug: \`prefix-${x}-suffix\`` with one placeholder: a slug built from a template.
+const SLUG_TEMPLATE_RE = /\bslug:\s*`([a-z0-9-]*)\$\{[^}`]+\}([a-z0-9-]*)`/g;
+// An inline catalog entry in the server module: the route key, then the
+// entry's own fields up to its slug with no nested object between them.
+const INLINE_ENTRY_RE = /"(?:GET|POST|PUT|PATCH|DELETE) \/[^"\n]+":\s*\{[^{}]*?\bslug:\s*"([a-z0-9][a-z0-9-]*)"/g;
+/** The module whose inline catalog entries define tools no kit defines. */
+export const CATALOG_FILE = "src/server.js";
 
 const git = (...args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const today = () => new Date().toISOString().slice(0, 10);
@@ -64,7 +81,25 @@ function kitFiles() {
 }
 /** Every file a tool or pack page is dated by. */
 function toolFiles() {
-  return [...kitFiles(), PACK_FILE].sort();
+  return [...kitFiles(), PACK_FILE, CATALOG_FILE].sort();
+}
+
+/** NAME -> literal for every upper-case constant under src/ that holds one
+ *  slug-shaped literal; a name given two different values is left out. */
+function slugConstants() {
+  const seen = new Map();
+  const dirs = ["src", "src/tools"];
+  for (const dir of dirs) {
+    for (const f of readdirSync(join(ROOT, dir)).filter((n) => n.endsWith(".js"))) {
+      const text = readFileSync(join(ROOT, dir, f), "utf8");
+      for (const m of text.matchAll(CONST_RE)) {
+        const v = m[2] || m[3];
+        if (!seen.has(m[1])) seen.set(m[1], new Set());
+        seen.get(m[1]).add(v);
+      }
+    }
+  }
+  return new Map([...seen].filter(([, vals]) => vals.size === 1).map(([k, vals]) => [k, [...vals][0]]));
 }
 
 /** The literal slugs a file's text defines or names. */
@@ -78,18 +113,35 @@ function literalSlugs(text) {
  *  ambiguous, it is left out. packSources: slug -> the pack module, for every
  *  literal slug there. The pack module is not a kit, so a pack's name is never
  *  a candidate for a tool's slug. */
-export function scanToolSources(files = kitFiles(), packFile = PACK_FILE) {
+export function scanToolSources(files = kitFiles(), packFile = PACK_FILE, catalogFile = CATALOG_FILE) {
   const owners = new Map();
   const texts = new Map();
+  const constants = slugConstants();
+  const patternOwners = new Map();
   for (const file of files) {
-    if (file === packFile) continue;
+    if (file === packFile || file === catalogFile) continue;
     const text = readFileSync(join(ROOT, file), "utf8");
     texts.set(file, text);
-    for (const slug of literalSlugs(text)) {
+    const named = [...literalSlugs(text), ...[...text.matchAll(SLUG_CONST_RE)].map((m) => constants.get(m[1])).filter(Boolean)];
+    for (const slug of named) {
       if (!owners.has(slug)) owners.set(slug, new Set());
       owners.get(slug).add(file);
     }
+    for (const m of text.matchAll(SLUG_TEMPLATE_RE)) {
+      if (!m[1] && !m[2]) continue; // a bare `${x}` says nothing about the slug
+      const pattern = `${m[1]}*${m[2]}`;
+      if (!patternOwners.has(pattern)) patternOwners.set(pattern, new Set());
+      patternOwners.get(pattern).add(file);
+    }
   }
+  // Inline entries in the catalog module, for the slugs no kit defines.
+  const inline = new Set();
+  if (catalogFile && existsSync(join(ROOT, catalogFile))) {
+    for (const m of readFileSync(join(ROOT, catalogFile), "utf8").matchAll(INLINE_ENTRY_RE)) inline.add(m[1]);
+  }
+  for (const slug of inline) if (!owners.has(slug)) owners.set(slug, new Set([catalogFile]));
+  const toolPatterns = {};
+  for (const [pattern, set] of [...patternOwners].sort(([a], [b]) => a.localeCompare(b))) if (set.size === 1) toolPatterns[pattern] = [...set][0];
   const packSources = {};
   if (packFile && existsSync(join(ROOT, packFile))) {
     for (const slug of [...new Set(literalSlugs(readFileSync(join(ROOT, packFile), "utf8")))].sort()) packSources[slug] = packFile;
@@ -106,7 +158,7 @@ export function scanToolSources(files = kitFiles(), packFile = PACK_FILE) {
     if (candidates.length === 1) out[slug] = candidates[0];
     else ambiguous.push(`${slug} (${candidates.join(", ")})`);
   }
-  return { toolSources: out, packSources, ambiguous };
+  return { toolSources: out, packSources, toolPatterns, ambiguous };
 }
 
 export function buildTable() {
@@ -121,8 +173,8 @@ export function buildTable() {
     try { date = git("log", "-1", "--no-merges", "--format=%cs", "--", file); } catch { date = ""; }
     files[file] = date || today();
   }
-  const { toolSources, packSources, ambiguous } = scanToolSources();
-  return { table: { files, toolSources, packSources }, missing, ambiguous };
+  const { toolSources, packSources, toolPatterns, ambiguous } = scanToolSources();
+  return { table: { files, toolSources, toolPatterns, packSources }, missing, ambiguous };
 }
 
 export function readTable() {
@@ -144,6 +196,9 @@ export function diffTables(stored, fresh) {
   const st = (stored && stored.toolSources) || {}, ft = fresh.toolSources;
   for (const [slug, file] of Object.entries(ft)) if (st[slug] !== file) out.push(`toolSources: ${slug} -> ${file} (stored ${st[slug] || "nothing"})`);
   for (const slug of Object.keys(st)) if (!(slug in ft)) out.push(`toolSources: ${slug} no longer defined by a literal slug in a kit`);
+  const sq = (stored && stored.toolPatterns) || {}, fq = fresh.toolPatterns || {};
+  for (const [pattern, file] of Object.entries(fq)) if (sq[pattern] !== file) out.push(`toolPatterns: ${pattern} -> ${file} (stored ${sq[pattern] || "nothing"})`);
+  for (const pattern of Object.keys(sq)) if (!(pattern in fq)) out.push(`toolPatterns: ${pattern} no longer built from a template in a kit`);
   const sp = (stored && stored.packSources) || {}, fp = fresh.packSources || {};
   for (const [slug, file] of Object.entries(fp)) if (sp[slug] !== file) out.push(`packSources: ${slug} -> ${file} (stored ${sp[slug] || "nothing"})`);
   for (const slug of Object.keys(sp)) if (!(slug in fp)) out.push(`packSources: ${slug} no longer defined by a literal slug in the pack module`);
@@ -155,6 +210,7 @@ function serialize(table) {
     note: "Generated by scripts/gen-page-dates.js; src/page-dates.js reads it for sitemap lastmod. Regenerate with --write after editing a page module or a tool kit.",
     files: table.files,
     toolSources: table.toolSources,
+    toolPatterns: table.toolPatterns,
     packSources: table.packSources,
   }, null, 2) + "\n";
 }
@@ -169,7 +225,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const { table, missing, ambiguous } = buildTable();
   if (missing.length) { console.error(`gen-page-dates: page sources not on disk: ${missing.join(", ")}`); process.exit(1); }
   if (ambiguous.length) console.log(`tool slugs defined in more than one kit (no lastmod): ${ambiguous.join("; ")}`);
-  console.log(`${Object.keys(table.files).length} files dated, ${Object.keys(table.toolSources).length} tool slugs and ${Object.keys(table.packSources).length} pack slugs mapped`);
+  console.log(`${Object.keys(table.files).length} files dated, ${Object.keys(table.toolSources).length} tool slugs, ${Object.keys(table.toolPatterns).length} slug patterns and ${Object.keys(table.packSources).length} pack slugs mapped`);
   if (write) {
     mkdirSync(dirname(OUT), { recursive: true });
     writeFileSync(OUT, serialize(table));

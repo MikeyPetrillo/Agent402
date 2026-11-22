@@ -11,7 +11,8 @@ import { redactSecrets } from "./redact.js";
 import { callerKeyOf, currentDispatchCaller } from "../dispatch-caller.js";
 import { isRouteCall } from "../not-charged.js";
 import { perReplica } from "../rate-limit.js";
-import { takeHardCap, hardCapError, releaseHardCap, neverReachedUpstream, upstreamRefusedBeforeWork } from "../upstream-hard-caps.js";
+import { takeHardCap, hardCapError, releaseHardCap, neverReachedUpstream, upstreamRefusedBeforeWork, hardCapHold } from "../upstream-hard-caps.js";
+import { settleBeforeUpstreamHolding } from "../settle-first.js";
 
 let Sandbox;
 
@@ -113,7 +114,13 @@ async function runInSandbox(code, language, tierSlug) {
   // F12: global concurrency gate — refuse BEFORE creating a sandbox so a burst
   // can't run us (and the E2B account) out of capacity.
   if (e2bInFlight >= E2B_MAX_CONCURRENT) throw bad("code execution is at capacity - retry shortly", 503);
-  // The daily sandbox ceiling (src/upstream-hard-caps.js), shared across replicas.
+  // THE SETTLE POINT (src/settle-first.js): after the input checks, the
+  // per-caller and global capacity checks and a unit of the daily ceiling
+  // taken (held for this run), before a sandbox is created. A run the server
+  // did not arm: nothing.
+  await settleBeforeUpstreamHolding(hardCapHold("e2b"));
+  // The daily sandbox ceiling (src/upstream-hard-caps.js), shared across
+  // replicas: an armed run uses the unit its settle point holds.
   if (!takeHardCap("e2b")) throw hardCapError();
   const capTakenAt = Date.now();
   e2bInFlight++;

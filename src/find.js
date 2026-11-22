@@ -6,7 +6,8 @@
 // connector's search_tools weighting.
 import { partialFields, clampFields } from "./partial-answer.js";
 import { toolList } from "./pages.js";
-import { queryTerms } from "./query-terms.js";
+import { queryTerms, singularCandidates, versionTerms } from "./query-terms.js";
+import { applySynonyms, FIND_OPERATION_WORDS, FIND_OPERATION_SAME } from "./find-synonyms.js";
 import { withoutAttributions } from "./data-attribution.js";
 import { rankSkillPacks } from "./skills.js";
 import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
@@ -28,9 +29,15 @@ const TIMEZONE_WORDS = (() => {
   } catch { /* older runtimes: no zone list, nothing excluded */ }
   return set;
 })();
+// A month or a weekday names WHEN, never what: "public holidays in june"
+// asks for the holidays tool, and no tool describes June.
+const CALENDAR_WORDS = new Set([
+  "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",
+  "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+]);
 export function isValueTerm(term) {
   const t = String(term || "");
-  return /\d/.test(t) || t.length >= 16 || TIMEZONE_WORDS.has(t);
+  return /\d/.test(t) || t.length >= 16 || TIMEZONE_WORDS.has(t) || CALENDAR_WORDS.has(t);
 }
 
 const STOPWORDS = new Set([
@@ -132,14 +139,54 @@ const DELEGATION_VERBS = new Set(["buy", "purchase", "pay", "order", "hire", "re
 const THIRD_PARTY_MARKERS = new Set(["external", "another", "other", "others", "someone", "somebody", "seller", "sellers", "vendor", "third", "party", "third-party", "behalf", "elsewhere", "ecosystem", "marketplace"]);
 
 /**
+ * The front-door term a query's OPENING asks for, or null: "search for X" /
+ * "look up X" is a web search for X, and a question about how or why the
+ * world works ("how does X work", "what is X", "explain X") is the cited
+ * answer's job. Weaker than the phrase rules in applyFrontDoorTerms: "what
+ * is my ip" and "what is the price of ethereum" open the same way and name a
+ * tool that answers them, so findTools adds this term only when no tool
+ * answers the rest of the query strongly.
+ * @param {string[]} terms  the query's terms so far (a term already there is not added again)
+ * @param {string} q
+ * @returns {{ term: string, rest: string, words: string[] }|null} the term, the query after its
+ *   opening, and the opening's own words
+ */
+export function openingDoorTerm(terms, q) {
+  const ql = String(q || "").toLowerCase();
+  let m;
+  if (!terms.includes("web-search") && !terms.includes("breaking-news")
+    && (m = /^\s*(?:search|look\s+up|lookup)\s+(?:for|the\s+web|web|online|about)\b/.exec(ql))) return openingOf("web-search", ql, m[0]);
+  if (!terms.includes("answer") && (m = /^\s*(?:how\s+(?:does|do|did|can|is|are)|what\s+(?:is|are|was|were)|why\s+(?:does|do|did|is|are)|explain)\s+(?=\S)/.exec(ql))) return openingOf("answer", ql, m[0]);
+  return null;
+}
+
+const openingOf = (term, ql, opening) => ({ term, rest: ql.slice(opening.length), words: opening.split(/[^a-z0-9]+/).filter(Boolean) });
+
+// A tool answers the rest of an opening query strongly when, ranked on the
+// words after the opening, it is not itself the front-door tool, it covers
+// their rarest word, and it leads at OPENING_CLEAR_SCORE or more, or at
+// OPENING_STRONG_SCORE or more ahead of the next tool by OPENING_LEAD ("my
+// ip"). A query whose defining word no tool covers ("a domain name
+// availability"), a world question whose words a tool only grazes ("how do
+// solar panels work" against sun-times) or one that several tools share
+// alike ("what is x402") stays the web tool's.
+const OPENING_STRONG_SCORE = 12;
+const OPENING_LEAD = 1.2;
+const OPENING_CLEAR_SCORE = 30;
+
+/**
  * Append curated front-door tags for web-search / answer / news phrasing.
  * Shared by /api/find and the hosted MCP search_tools lexical scorer so both
  * surfaces agree on the default job. Mutates `terms` in place; safe no-op when
  * the query is not front-door shaped.
  * @param {string[]} terms
  * @param {string} q
+ * @param {{ opening?: boolean }} [opts]  opening: false leaves out the
+ *   question and "search for" openings (openingDoorTerm), which findTools
+ *   adds only when no tool answers the rest of the query strongly
+ * @returns {{ term: string, rest: string, words: string[] }|null} the opening (openingDoorTerm), its term added or not
  */
-export function applyFrontDoorTerms(terms, q) {
+export function applyFrontDoorTerms(terms, q, { opening = true } = {}) {
   const ql = String(q || "").toLowerCase();
   // Web search: "search the web", "google X", "look up online", "web search for"
   if (!terms.includes("web-search") && (
@@ -155,12 +202,15 @@ export function applyFrontDoorTerms(terms, q) {
   )) {
     terms.push("answer");
   }
+  const openingDoor = openingDoorTerm(terms, q);
+  if (opening && openingDoor) terms.push(openingDoor.term);
   // News: "latest news", "breaking news", "headlines about"
   if (!terms.includes("breaking-news") && (
     /\b(latest\s+news|breaking\s+news|news\s+(about|on|for|headlines)|headlines\s+(about|on|for)|current\s+events)\b/.test(ql)
   )) {
     terms.push("breaking-news");
   }
+  return openingDoor;
 }
 
 /**
@@ -267,7 +317,7 @@ function directionOf(t, pairs, entry) {
 export const FIND_TOP_MAX = 25;
 export const FIND_TOP_DEFAULT = 5;
 
-export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}) {
+export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, opening = true } = {}) {
   // Cap the query length so a pathological input can't drive unbounded work.
   const q = String(query || "").slice(0, 500);
   // Strip stopwords + 1-char tokens — they match thousands of tools and add noise
@@ -306,7 +356,34 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   // the flagship web tools first. Phrase-gated like "layer 2" so ordinary words
   // ("search" inside "search tools catalog", bare "question") do not hijack
   // unrelated tasks. Tags appended are curated on search / answer / search-news.
-  applyFrontDoorTerms(terms, q);
+  const frontDoor = new Set(terms);
+  const openingDoor = applyFrontDoorTerms(terms, q, { opening: false });
+  // The opening's term ("what is X", "search for X") joins only when no other
+  // tool answers the rest strongly: ranked once without it, a tool that leads
+  // on the remaining words keeps its place ("what is my ip" is ip-info's).
+  if (opening && openingDoor) {
+    const openingTerm = openingDoor.term;
+    const plain = findTools(catalog, openingDoor.rest, { k: 2, opening: false });
+    const lead = plain.results?.[0];
+    const leadDef = lead && Object.values(catalog).find((t) => t && t.slug === lead.slug);
+    const isDoor = !!leadDef && (leadDef.slug === openingTerm || (leadDef.tags || []).some((tg) => String(tg).toLowerCase() === openingTerm));
+    const runnerUp = plain.results?.[1]?.score || 0;
+    const strong = !!lead && !isDoor && plain.rarestTermCovered !== false
+      && (lead.score >= OPENING_CLEAR_SCORE || (lead.score >= OPENING_STRONG_SCORE && lead.score >= OPENING_LEAD * runnerUp));
+    if (!strong) terms.push(openingTerm);
+    else {
+      // The tool is ranked on the rest: the opening's own words ("search",
+      // "what") no longer lift the front-door tool over it.
+      const restWords = new Set(openingDoor.rest.split(/[^a-z0-9]+/));
+      for (let i = terms.length - 1; i >= 0; i--) if (openingDoor.words.includes(terms[i]) && !restWords.has(terms[i])) terms.splice(i, 1);
+    }
+  }
+  // The front-door terms this query added (web-search, answer, breaking-news).
+  const doorTerms = terms.filter((t) => !frontDoor.has(t));
+  // Synonyms (src/find-synonyms.js): the catalog's word for the buyer's.
+  const synFrom = applySynonyms(terms);
+  const standsFor = new Map(); // a query word -> the catalog words added for it
+  for (const [added, words] of synFrom) for (const w of words) standsFor.set(w, [...(standsFor.get(w) || []), added]);
   // The default is FIVE and the ceiling is 25, and `count` below reports what
   // this answer carries - so a caller reading `count: 5` for a broad query was
   // being told five tools match when five is simply what we return. Publish the
@@ -370,6 +447,33 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     hay: `${t.name} ${withoutAttributions(t.description)} ${t.category} ${(t.tags || []).join(" ")} ${(t.aliases || []).join(" ")}`.toLowerCase(),
   }));
   const N = all.length || 1;
+  // A spelled-out version ("version 7") also reads as the short form a tool
+  // names ("v7", as in the alias uuid-v7): the lone digit was dropped above.
+  for (const v of versionTerms(q)) if (!terms.includes(v) && terms.length < 32) terms.push(v);
+  // A plural also reads as the singular the catalog NAMES a tool by ("uuids"
+  // -> "uuid", "ids" -> "id"): a word that is no slug word, tag or alias word
+  // of any tool, while its singular is one. Description text is still read
+  // for the word as written, so "ids" keeps its own weight rather than taking
+  // the weight of "id" inside "valid". A plural the catalog itself uses as a
+  // name ("news", "units") stays as written. The singular counts in two places
+  // only, both of which name ONE tool: it completes an alias ("time ordered
+  // ids" -> time-ordered-id) or it is a tool's whole slug ("uuids" -> uuid).
+  // A slug word or a tag is shared across tools, so it is not read. A word's
+  // -s form is as often a verb ("validates", "transcribes"), so a singular the
+  // catalog also writes as a verb ("validating", "transcribed") is not read
+  // either: read as names they lifted json-format and transcribe over the
+  // tool a pasted description was about. Nor is a word the catalog writes in
+  // more tools than its singular ("https" against "http"): that is a word of
+  // its own, not a plural.
+  // The catalog's word lists are built only for a query that has a plural.
+  const nameForm = new Map();
+  const plurals = terms.filter((t) => singularCandidates(t).length);
+  const ix = plurals.length ? pluralIndex(all) : null;
+  for (const term of plurals) {
+    if (ix.names.has(term)) continue;
+    const one = singularCandidates(term).find((c) => ix.names.has(c));
+    if (one && !verbForms(one, ix.written) && (ix.written.get(term) || 0) < (ix.written.get(one) || 0)) nameForm.set(term, one);
+  }
   // ONE-LETTER TYPOS. A word no tool mentions anywhere ("danctions") used to
   // score nothing and answer an empty list, which a caller reads as "no tool
   // does this". When a word of six or more letters matches nothing, it is
@@ -379,7 +483,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   const corrected = {};
   for (let i = 0; i < terms.length; i++) {
     const term = terms[i];
-    if (term.length < 6 || !/^[a-z]+$/.test(term)) continue;
+    if (term.length < 6 || !/^[a-z]+$/.test(term) || nameForm.has(term)) continue;
     if (all.some((e) => e.slug.includes(term) || e.hay.includes(term))) continue;
     const fix = closestCatalogWord(term, catalogVocabulary(all));
     if (fix) { corrected[term] = fix; terms[i] = fix; }
@@ -387,14 +491,17 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   const idf = new Map();
   for (const term of terms) {
     let df = 0;
-    for (const e of all) if (e.slug.includes(term) || e.hay.includes(term)) df++;
+    const form = nameForm.get(term);
+    for (const e of all) if (e.slug.includes(term) || e.hay.includes(term) || (form && formNames(e, form))) df++;
     // log((N+1)/(df+1)): ~5.6 for a term unique to one tool, ~1.0 for one that
     // matches 200. Floored so a ubiquitous term still nudges rather than
     // flipping sign or vanishing entirely.
     idf.set(term, Math.max(0.25, Math.log((N + 1) / (df + 1))));
   }
 
+  const writtenSet = new Set(terms);
   const termSet = new Set(terms);
+  for (const form of nameForm.values()) termSet.add(form);
   // Empty for a query that names no direction, so the passes below cost nothing.
   const pairs = conversionPairs(q, terms);
   const wayOf = new Map(); // slug -> { way, from, to }, only for tools that state one of the pairs
@@ -405,7 +512,17 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     // history" hits the alias website-history, but "chat" alone does not hit
     // chat-completions-nano-tier. Word-by-word credit let generic aliases
     // outrank a tool's own name.
-    const aliasHitWords = new Set(aliasWords.filter((ws) => ws.every((w) => termSet.has(w))).flat());
+    const aliasHitWords = new Set(aliasWords.filter((ws) => ws.every((w) => writtenSet.has(w))).flat());
+    // An alias the query completes only through a plural's singular: each of
+    // its words scores like a tag (formPart), never like the written alias.
+    // The singular must also name this tool on its own (a slug word or a
+    // tag): "time ordered ids" completes uuid's time-ordered-id and "id" is
+    // a uuid tag, while "unix timestamps" completing epoch-convert's
+    // unix-timestamp does not lift it over date-diff for "difference between
+    // two unix timestamps".
+    const aliasFormWords = nameForm.size
+      ? new Set(aliasWords.filter((ws) => ws.every((w) => writtenSet.has(w) || (termSet.has(w) && (e.segs.has(w) || tagSet.has(w))))).flat())
+      : aliasHitWords;
     // Slugs are hyphenated words, so a WHOLE segment matching a query term is a
     // real signal while an incidental substring is usually an accident:
     // "check" sits inside "checksum", "data" inside "wikidata-entity", "detect"
@@ -426,9 +543,16 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
       // tool's own exact name, and never ADDED to a slug hit (max, not sum).
       // At +1 in the haystack an alias moved nothing: "md5" ranked `hash`
       // below `checksum` although hash carries the alias (2026-09-25).
+      const form = nameForm.get(term);
       const slugPart = slug === term ? 10 : segs.has(term) ? 6 : slug.includes(term) ? 2 : 0;
       const aliasPart = aliasHitWords.has(term) ? 6 : 0;
-      s += Math.max(slugPart, aliasPart);
+      // A plural read as its singular names a tool one step below the word
+      // as written: a singular that IS the slug scores like a slug word (6,
+      // "uuids" for uuid); an alias it completes scores like a tag (3) for
+      // each of the alias's words ("time ordered ids" on time-ordered-id). The
+      // buyer did not write that name, so it never outweighs a word they did.
+      const formPart = form && slug === form ? 6 : aliasFormWords.has(form || term) ? 3 : 0;
+      s += Math.max(slugPart, aliasPart, formPart);
       if (name.includes(term)) s += 2;
       // A curated tag is a stronger signal than a stray hit in the description.
       if (tagSet.has(term)) s += 3;
@@ -536,13 +660,20 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   // or a time-zone city ("auckland"). No tool describes those, so each made a
   // correct top hit read as a miss and filed a wish (replayed from the demand
   // board 2026-10-06). They still count toward ranking; they just never decide.
-  const defining = terms.filter((t) => !isValueTerm(t) && !(currencyIntent && FIAT_CODES.has(t)));
+  // The buyer's own words: a synonym's catalog word or a front-door term
+  // stands in for words already in the query and never decides on its own.
+  const own = terms.filter((t) => !synFrom.has(t) && !doorTerms.includes(t));
+  // The words of a question or search opening ("what is", "search for") ask
+  // how, never what: they never define the task either.
+  const defining = own.filter((t) => !isValueTerm(t) && !(currencyIntent && FIAT_CODES.has(t)) && !(openingDoor && openingDoor.words.includes(t)));
   if (results.length && defining.length) {
     rarestTerm = defining.reduce((a, b) => (idf.get(b) > idf.get(a) ? b : a));
     const top = all.find((e) => e.t.slug === results[0].slug);
     // Check the FULL catalog record, tags included: the API response omits
     // `tags`, so a tool whose match lives in a tag would read as a miss there.
-    const covers = (term) => !!top && (top.slug.includes(term) || top.hay.includes(term) || top.tagSet.has(term));
+    const coversWord = (term) => !!top && (top.slug.includes(term) || top.hay.includes(term) || top.tagSet.has(term) || (nameForm.has(term) && formNames(top, nameForm.get(term))));
+    // A word a synonym stands in for is covered when its catalog word is.
+    const covers = (term) => coversWord(term) || (standsFor.get(term) || []).some(coversWord);
     rarestTermCovered = covers(rarestTerm);
     // An uncovered rarest term is often an incidental word that no tool
     // mentions ("claims" in "decode jwt token and extract claims", "statute" in
@@ -550,24 +681,64 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     // every such query was told to file a wish and recorded as a miss - 346 of
     // the 359 live clusters on the demand board read that way on 2026-09-25.
     // So the rarest term decides only when the top hit carries little of the
-    // query's weight: to count as served it must cover at least two terms, at
-    // least half the query's idf weight, and at least one term in its own slug
+    // query's weight: to count as served it must cover at least two terms,
+    // enough of the query's idf weight (below), and at least one term in its own slug
     // or name (a description-only overlap is how "excel data jobs" reached an
     // unemployment tool). "call my mother" (covers "call" only) and "order me
     // a pizza" stay misses.
     if (!rarestTermCovered && top) {
-      let coveredW = 0, totalW = 0, coveredN = 0, named = false;
-      for (const term of terms) {
+      let coveredW = 0, totalW = 0, coveredN = 0, namedN = 0, named = false;
+      for (const term of own) {
         const w = idf.get(term) || 0;
         totalW += w;
         if (covers(term)) {
           coveredW += w; coveredN++;
-          if (top.slug.includes(term) || top.name.includes(term)) named = true;
+          // In its slug or name (a plural by its singular), or in an alias the query writes out whole
+          // ("least common multiple" names gcd-lcm by least-common-multiple).
+          const nw = nameForm.get(term) || term;
+          if (top.slug.includes(nw) || top.name.includes(nw) || top.aliasWords.some((ws) => ws.includes(term) && ws.every((w) => writtenSet.has(w)))) named = true;
+          // A covered term that is a complete name of the tool: its whole slug or a whole alias.
+          if (completeName(top, term) || (nameForm.has(term) && completeName(top, nameForm.get(term)))) namedN++;
         }
       }
       coverageShare = totalW > 0 ? coveredW / totalW : 0;
-      if (coveredN >= 2 && coverageShare >= 0.5 && named) rarestTermCovered = true;
+      // A longer task spreads its weight over incidental words the catalog
+      // writes rarely ("integrity", "synchronized", "various"), so the share
+      // the top hit covers falls as the query grows while the hit stays the
+      // tool (the wish board, 2026-11-22: hash, gcd-lcm and epoch-convert ranked
+      // first and were filed as misses). Three covered terms carry the same
+      // proof as two at half the weight; two that are each a complete name of
+      // the tool (its slug or a whole alias: "md5" and "hash" for hash) need
+      // 0.4 of it.
+      if (named && ((coveredN >= 2 && coverageShare >= 0.5) || (namedN >= 2 && coverageShare >= 0.4) || (coveredN >= 3 && coverageShare >= 0.25))) rarestTermCovered = true;
+      // A strong top hit the query names: it scores 40 or more and two query
+      // words of three letters or more name it (slug, name, tag or alias), or
+      // one does and it leads the runner-up by 1.2 times. An incidental word no tool
+      // writes ("plaintext", "integrity", "compliance") then carries the most
+      // weight and must not turn the tool the query named into a miss.
+      // "call my mother" (9) and "book a flight" (one name word) stay misses.
+      const s1 = results[0].score, s2 = scored[1]?.[0] || 0;
+      if (!rarestTermCovered && s1 >= 40) {
+        let names = 0;
+        for (const term of own) {
+          if (term.length < 3 || !covers(term)) continue;
+          const w = nameForm.get(term) || term;
+          if (top.slug.includes(w) || top.name.includes(w) || top.tagSet.has(w) || top.aliasWords.some((ws) => ws.includes(w))) names++;
+        }
+        // A money word the hit does not cover still defines the task outside
+        // a conversion ("tip calculator dollars"), as it does above.
+        const moneyLeft = own.some((t) => FIAT_CODES.has(t) && !covers(t));
+        if (!moneyLeft && (names >= 2 || (names >= 1 && s1 >= 1.2 * s2))) rarestTermCovered = true;
+      }
     }
+    // A web search, a cited answer or the news, asked as such ("search for X",
+    // "how does X work"): the rest of the query is the topic, a value the
+    // tool takes, so its words never decide whether the query was served.
+    if (!rarestTermCovered && top && doorTerms.some((d) => top.tagSet.has(d) || top.slug === d)) rarestTermCovered = true;
+    // An operation the top hit never mentions, in its own word or one a tool
+    // doing it writes instead (src/find-synonyms.js), keeps the query a miss,
+    // whichever rule above read it as served.
+    if (rarestTermCovered && own.some((t) => FIND_OPERATION_WORDS.has(t) && !covers(t) && !FIND_OPERATION_SAME.get(t).some(coversWord))) rarestTermCovered = false;
   }
 
   // A stated direction that only a reversed tool matches. When some tool's
@@ -611,6 +782,43 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     ...(Object.keys(corrected).length ? { corrected } : {}),
     ...(direction ? { direction } : {}),
   };
+}
+
+// What the plural reading needs from the catalog, built once per catalog
+// list (keyed on its slugs, as catalogVocabulary is): the words tools are
+// NAMED by (slug words, tags, alias words; description text is not a name),
+// and in how many tools' own text each word stands as a whole word.
+const pluralCache = new Map();
+function pluralIndex(all) {
+  const key = all.length ? all.map((e) => e.slug).join(",") : "";
+  if (key && pluralCache.has(key)) return pluralCache.get(key);
+  const names = new Set(), written = new Map();
+  for (const e of all) {
+    for (const w of e.segs) names.add(w);
+    for (const tg of e.tagSet) names.add(tg);
+    for (const ws of e.aliasWords) for (const w of ws) names.add(w);
+    for (const w of new Set(`${e.slug} ${e.hay}`.split(/[^\p{L}\p{N}]+/u))) if (w) written.set(w, (written.get(w) || 0) + 1);
+  }
+  const ix = { names, written };
+  if (key) {
+    if (pluralCache.size >= 4) pluralCache.delete(pluralCache.keys().next().value);
+    pluralCache.set(key, ix);
+  }
+  return ix;
+}
+// A word the catalog also writes as a verb ("transcribing", "validated"): its
+// -s form in a query is as likely the verb ("transcribes") as a plural.
+function verbForms(w, written) {
+  const stem = w.endsWith("e") ? w.slice(0, -1) : w;
+  return written.has(`${stem}ing`) || written.has(`${w}ing`) || written.has(`${stem}ed`) || written.has(`${w}ed`);
+}
+// Is the word a complete name of the tool: its whole slug or a whole alias?
+function completeName(e, w) {
+  return e.slug === w || (Array.isArray(e.t.aliases) && e.t.aliases.some((a) => String(a).toLowerCase() === w));
+}
+// Does a plural's singular name this one tool: its whole slug or an alias word?
+function formNames(e, w) {
+  return e.slug === w || e.aliasWords.some((ws) => ws.includes(w));
 }
 
 // Every word the catalog uses, with how many tools use it. Built once per

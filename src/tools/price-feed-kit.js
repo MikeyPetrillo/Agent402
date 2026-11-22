@@ -13,6 +13,7 @@
 import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
+import { markResaleBarred, MARKET_DATA_RESALE_REASON } from "../resale-terms.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { knownIdsGate } from "./crypto-markets-kit.js";
 import { applyPriceCheck } from "./crypto-kit.js";
@@ -177,6 +178,8 @@ export const PRICE_FEED_TOOLS = [
 // COINGECKO_ATTRIBUTION in coingecko-rate.js), in the description and as the
 // `credit` field of every answer.
 for (const t of PRICE_FEED_TOOLS) if (t.slug === "price-coingecko") creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
+// Resale terms (src/resale-terms.js): the source's price as it came.
+markResaleBarred(PRICE_FEED_TOOLS, ["price-coingecko"], MARKET_DATA_RESALE_REASON);
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 // A call that ends in an error counts its CoinGecko reads on the unsettled

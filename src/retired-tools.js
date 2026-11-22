@@ -36,6 +36,10 @@ export const RETIRED_TOOLS = Object.freeze({
   // stated narrower range). A tool that answers a neighboring question is not
   // one: that route retires with no pointer.
   //
+  // 2026-11-22: the market tick read (GET /api/market/tick, published under the
+  // segment "market"). It had no source of its own: each coin figure was
+  // crypto-price's answer, which reads up to 25 coins in one call.
+  market: { retiredAt: "2026-11-22", replacement: "crypto-price" },
   // 2026-11-17: the three open-map geocoding tools. geocode took a street
   // address; place-lookup finds places (cities, towns, regions), and answers
   // a street address found: false, so it is not a replacement. Nothing live

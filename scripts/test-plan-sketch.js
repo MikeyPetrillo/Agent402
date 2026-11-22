@@ -1,8 +1,9 @@
 // Free multi-step plan sketch (src/plan-sketch.js). Offline.
 //
 // What is pinned:
-//  - only explicit sequence words split a task; a bare "and" never does, so a
-//    single-tool query never turns into a plan;
+//  - only explicit sequence words split a task, and an "and" only between two
+//    verb-led steps that each carry an object, so a single-tool query never
+//    turns into a plan;
 //  - each step is ranked by the ranker handed in, with a strong/weak verdict,
 //    fallbacks and a price total that counts free steps as zero;
 //  - the sketch never reaches the network: the module imports nothing, and a
@@ -33,8 +34,38 @@ const split = [
   ["convert 5 miles to km, then format as json, finally hash it", 3],
 ];
 for (const [q, n] of split) ok(splitSteps(q).length === n, `"${q}" splits into ${n} steps (got ${JSON.stringify(splitSteps(q))})`);
-for (const q of ["search the web for x402 adoption", "bitcoin and ethereum price", "what happened then", "a then b", "", "hash and encode"]) {
+// Two task verbs, each with its object, joined by "and" are two steps
+// (2026-11-22, demand board shape); any other "and" is one step.
+for (const [q, n] of [["validate the json and generate an md5 hash", 2], ["parse the csv, and count the rows", 2], ["decode the token and verify the signature and compare the claims", 3]]) ok(splitSteps(q).length === n, `"${q}" splits into ${n} steps (got ${JSON.stringify(splitSteps(q))})`);
+for (const q of ["search the web for x402 adoption", "bitcoin and ethereum price", "what happened then", "a then b", "", "hash and encode", "count rows and columns", "hash and encode the text", "the price of gold and silver"]) {
   ok(splitSteps(q).length === 0, `"${q}" stays a single step`);
+}
+// Each side of an "and" is a task phrase: a task verb, an object, and no
+// sequence word or "step 1:" label inside it, so marker fragments a split on
+// the markers left behind never pair up into steps.
+// An "and" inside a side is part of it, a sequence word only opens one, and
+// a closing "please" is not part of the step.
+for (const [q, want] of [
+  ["count its rows and columns and sort them", ["count its rows and columns", "sort them"]],
+  ["parse the csv and count rows and columns", ["parse the csv", "count rows and columns"]],
+  ["get the first page and summarize it", ["get the first page", "summarize it"]],
+  ["translate the text and summarize it please", ["translate the text", "summarize it"]],
+  ["get price step 1: and   first and get price authen", []],
+]) ok(JSON.stringify(splitSteps(q)) === JSON.stringify(want), `"${q}" splits into ${JSON.stringify(want)} (got ${JSON.stringify(splitSteps(q))})`);
+for (const q of ["get price step 1: and   first and get price authen", "get price and get price   get price also    get price get price next, \n 1.", "get the price and first", "get price: and get price", "get first and get price"]) {
+  ok(splitSteps(q).length === 0, `"${q.replace(/\n/g, "\\n")}" stays a single step (got ${JSON.stringify(splitSteps(q))})`);
+}
+// The "and" split reads each character a bounded number of times: a run of
+// whitespace (the pattern it replaced backtracked on one, 20 ms and more per
+// task on every uncached find) splits in well under a millisecond.
+{
+  const slow = [];
+  for (const [name, q] of [["spaces", "a" + " ".repeat(498) + "b"], ["tabs", "a" + "\t".repeat(498) + "b"], ["spaces before and", "get x" + " ".repeat(480) + " and"], ["comma runs", "get x" + " ,".repeat(240) + " and get y"], ["ands", "get x" + " and ".repeat(98)]]) {
+    let best = Infinity;
+    for (let i = 0; i < 5; i++) { const t = performance.now(); splitSteps(q); best = Math.min(best, performance.now() - t); }
+    if (best > 3) slow.push(`${name}: ${best.toFixed(1)}ms`);
+  }
+  ok(slow.length === 0, `a 500-character whitespace run splits inside 3ms (${slow.join(", ") || "all"})`);
 }
 
 // ---- building against the real catalog kits
@@ -100,8 +131,8 @@ const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8"
 const mcp = readFileSync(new URL("../src/mcp-http.js", import.meta.url), "utf8");
 const findFn = server.slice(server.indexOf("const computeFind = async"), server.indexOf("const findCachePath"));
 ok(/const plan = planSketchFor\(q\);[\s\S]{0,80}result\.plan = plan/.test(findFn), "/api/find attaches the sketch");
-ok(!/\breq\?\.ip\b/.test(findFn) && /computeFind = async \(q, k, meter = null, ip = null\)/.test(findFn), "the /api/find miss path reads the IP it is handed, not an out-of-scope req");
-ok((server.match(/computeFind\(q, k, meter, req\.ip\)/g) || []).length === 2, "both /api/find routes hand computeFind the caller IP");
+ok(!/\breq\?\.ip\b/.test(findFn) && /computeFind = async \(q, k, meter = null, ip = null, \{ quiet = false \} = \{\}\)/.test(findFn), "the /api/find miss path reads the IP it is handed, not an out-of-scope req");
+ok((server.match(/computeFind\(q, k, meter, req\.ip, \{ quiet \}\)/g) || []).length === 2, "both /api/find routes hand computeFind the caller IP");
 ok(/const plan = q \? planSketchFor\(q\) : null;\s*if \(plan\) out\.plan = plan;/.test(server), "/api/route attaches the sketch");
 ok(/buildPlanSketch\(taskStr,/.test(mcp) && /\.\.\.\(plan \? \{ plan \} : \{\}\)/.test(mcp), "the connector's catalog.find attaches the sketch");
 ok(!/multiStep/.test(server), "the fixed multiStep pointer is gone (decide is named inside a sketch instead)");

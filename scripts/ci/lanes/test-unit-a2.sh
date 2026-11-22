@@ -86,6 +86,8 @@ t node scripts/test-hangup-settlement.js
 t node scripts/test-hangup-claim-wait.js
 # The settle-failure breaker writes through to the shared store: a trip on one process pauses the other.
 t node scripts/test-gateway-settle-breaker.js
+# The settle-first budget meter is one figure across containers, read back after a restart; a store that does not answer reads the mode on (REAL redis)
+t node scripts/test-settle-first-meter-redis.js
 # A burst alarm tripped on one container reads burst on another through the shared flag (settle breaker and report guard).
 t node scripts/test-alarm-flag-shared-redis.js
 # Two servers on one live Redis run one payment sent to both at once exactly once (the outage cases also run offline).
@@ -101,6 +103,8 @@ t node scripts/test-state-db.js
 t node scripts/test-stores-pg.js
 # The Solana activity scans' stored state: one row a wallet, written in chunks under a lease, read one wallet at a time, bounded.
 t node scripts/test-solana-activity-store-pg.js
+# Two boots on one state database against a stub chain set: the second reads every EVM scan's state back from Postgres instead of chain history.
+t node scripts/test-evm-boot-resume-pg.js
 # The sanctions lists' stored copies on the database: the row from pieces, the write-through off the loop on a stalled disk, saves in order.
 t node scripts/test-sanctions-store-pg.js
 # The boot step drops the retired tollbooth_leads table, logs only its count, never recreates it.
@@ -135,7 +139,6 @@ t node scripts/test-x402-economy-pg.js
 t node scripts/test-audit-report-pg.js
 t node scripts/test-pow-pg.js
 t node scripts/test-memory-pg.js
-t node scripts/test-stripe-shadow-ledger-pg.js
 t node scripts/test-traffic-classifier-pg.js
 t node scripts/test-tweet-queue-pg.js
 t node scripts/test-x402-index-pg.js
@@ -171,6 +174,8 @@ t node scripts/test-revenue-ledger-enable-pg.js
 t node scripts/test-refund-ledger-pg.js
 # A resend's void lands now or not at all: a debt whose buyer never retries stays owed after a store outage (real Postgres behind a relay)
 t node scripts/test-resend-void-pg.js
+# A payment cut at its settle deadline, landed and booked owed, then sent again: served the kept answer with its debt void and its evidence marked, the sale booked once on its real rail and wire, one served call; another call keeps the 402 (REAL postgres; redis when set)
+t node scripts/test-settle-deadlines-pg.js
 t node scripts/test-sales-ledger-pg.js
 # A receipt check on one container finds a sale another just recorded.
 t node scripts/test-sale-lookup-crosscontainer-pg.js
@@ -258,7 +263,6 @@ t node scripts/test-backup-stage-concurrent-pg.js
 t node scripts/test-state-roundtrip-pg.js
 t node scripts/test-state-migration-verify-pg.js
 t node scripts/test-state-ledger-checksum-pg.js
-t node scripts/test-state-cutover-check-pg.js
 t node scripts/test-state-export-pg.js
 # The server through a Postgres outage and back, a burst, a clean drain; two processes on one schema.
 t node scripts/test-state-db-resilience.js
@@ -362,3 +366,5 @@ t node scripts/test-capped-body-reads.js
 t node scripts/test-hidden-content.js
 # HTML parsing runs in the worker pool: the main thread stays available during a slow parse, a parse past the limit is stopped with a 503 and the pool recovers, a full queue is a
 t node scripts/test-html-pool.js
+# Worker pool queues shared fairly by caller (Office, image, HTML, PDF: own excess refused, a newcomer admitted over the bound - offline, stand-in worker)
+t node scripts/test-pool-fairness.js

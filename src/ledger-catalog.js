@@ -4,6 +4,7 @@
 // pays-with column, free-tier + paid-tools explainer, closing CTA.
 
 import { siteOrgLd } from "./site-org.js";
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { ledgerShell, ledgerFooterCompact, esc, fmtNum, codeBlock } from "./ledger-chrome.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, powCostPhrase } from "./pow.js";
@@ -162,7 +163,7 @@ table{border-collapse:collapse;width:100%}
     <div style="padding:28px;background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">PAID TOOLS</div>
       <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Prices</h2>
-      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Anything that costs us money to run - live search, browser rendering, inference, stored memory - is priced per call and states its price in the 402 challenge. A failed x402 call is not charged (a payment that lands late is repaid after on-chain proof), and there is no key to leak.</p>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Anything that costs us money to run - live search, browser rendering, inference, stored memory - is priced per call and states its price in the 402 challenge. A failed x402 call is not charged (a payment that lands late is repaid after on-chain proof), and there is no key to leak. ${SETTLE_FIRST_SENTENCE}</p>
       ${codeBlock(`<span style="color:var(--on-panel-faint);"># price, asset and rail, before paying
 </span>curl -i "https://agent402.tools/api/search?q=x402+adoption"`, { name: "the price check", html: true, wrap: true, size: "xs", style: "margin:0 0 16px" })}
       <a href="/pricing" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">the full price list →</a>

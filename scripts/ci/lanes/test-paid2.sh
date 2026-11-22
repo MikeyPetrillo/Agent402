@@ -31,6 +31,10 @@ t node scripts/test-paytime-bounds.js
 t node scripts/test-inflight-burst.js
 # The admission's rules: a balance that covers a wallet's calls in flight starts every one, a balance that cannot be read is judged on the wallet's last good read or the allowance of calls at once, Gateway batched terms (offline)
 t node scripts/test-inflight-admission.js
+# Settle first: on the model and image routes a wallet with no paid sale on the books, and a wallet or authorization holding runs that did not settle, has its payment settled before the upstream call; the order of the settle call and the upstream call read on every x402 exact wire, every refusal of the buyer's input before any settle, every failure after it booked owed in its class, a hang-up, a replay, a restart on the sales ledger, and the same calls with the switch off (boots paid servers against chain-like stubs - offline)
+t node scripts/test-settle-first.js
+# Settle first on the catalog routes with an upstream cost (search and answer, image generation, speech, transcription, judgment, code runs): the settle call before the upstream call, a buyer's mistake and a reached daily ceiling refused before any settle, a failure after it owed in its class and run free on the same payment, the switch off unchanged, and those routes feeding the same budget meter and per-wallet count (boots paid servers against stub upstreams - offline)
+t node scripts/test-settle-first-routes.js
 # A header a handler set for its answer is not sent on a refusal: dub on Tempo pull, MPP evm and x402 (boots a paid server - offline)
 t node scripts/test-answer-headers.js
 # Price webhooks on a paid server: a registration whose settlement is refused leaves nothing stored, the registrant is the payer on Base, Tempo and Solana, its own excess is the 409, the same URL again renews in place (boots a paid server - offline)

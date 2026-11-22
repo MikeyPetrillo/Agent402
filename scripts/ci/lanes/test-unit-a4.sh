@@ -72,6 +72,8 @@ t node scripts/test-settle-preference.js
 t node scripts/test-svm-facilitator-split.js
 # Tool resolver (/api/find ranking, guards)
 t node scripts/test-find.js
+# /api/find synonym table: every rule names a catalog word and ranks its tool (offline)
+t node scripts/test-find-synonyms.js
 # Reader searches find the article extractor through its aliases, on the real catalog (booted free-mode server)
 t node scripts/test-find-reader-aliases.js
 # Discovery gate: every compute under a deadline, slot released, self-healing in-flight count, perf fields (booted, offline)
@@ -115,6 +117,8 @@ t node scripts/test-tempo-paging-oracle.js
 t node scripts/test-settle-fallback.js
 # A settle chain a fallback ends unconfirmed: 402 settlement-unconfirmed with no offer, the authorization booked (per-payer bound journaled), never counted against the wallet, the same payment answered again with no run (paid-mode boot vs stub facilitators - offline)
 t node scripts/test-settle-fallback-unconfirmed.js
+# Per-network settle deadlines: Base's 30 s settle that succeeds is served (cap 60 s); a landed transfer read on chain is served before the facilitator answers; a 30 s Celo settle is cut at its cap, booked and owed once, and on file stores its resend keeps the 402; a slow primary switches to the fallback and recovers (paid-mode boot vs stub facilitators and chain - offline)
+t node scripts/test-settle-deadlines.js
 # A listed Robinhood settle fallback is tried only after its /supported confirms eip155:4663 (paid-mode boot vs stub facilitators - offline)
 t node scripts/test-rh-fallback-confirm.js
 # Robinhood boot order: the first listed facilitator whose /supported confirms eip155:4663 settles first; a 200 refusal in words with no verdict goes to the next listed, a verdict
@@ -139,6 +143,8 @@ t node scripts/test-pending-settle.js
 t node scripts/test-own-relayer.js
 # Referral copies of paid routes (/ref/<slug>): the 402 shape, amount parity with the direct route, one run per authorization, handler-first settlement on a signed facilitator request, net booking (local stub facilitator, keys made in the test).
 t node scripts/test-referral-gate.js
+# The AWS Marketplace front door (/aws/<slug>): one aws:base offer, a signed quote that an altered price breaks, one sale per payment id, replayed or expired tokens refused unbooked, off answers as an unknown path, direct 402s byte-identical (stub payment-service keys, keys made in the test).
+t node scripts/test-aws-marketplace-gate.js
 # The referral book's sweep: refused share and spread, dropped records read in turn and given up only on answered reads, charged reads inside the chain budget, one sweep at a time, a failed batch written again change by change (offline).
 t node scripts/test-referral-book-sweep.js
 # A run's ceiling: every tool marked endsAtCeiling ends its upstream work at it, starts none after it, and never answers from a cut read
@@ -261,6 +267,8 @@ t node scripts/test-mpp-subscription-screen.js
 t node scripts/test-mpp-subscription-activation-owed.js
 # Subscription gas sponsor: a rolling 24 h count and fee ceiling refuses a sponsored send past it before the RPC (offline, stub RPC)
 t node scripts/test-tempo-sponsor-ceiling.js
+# Tempo gas sponsorship for per-call payments: decided per challenge, every limit yields the ordinary challenge, unproven senders declined, sends booked (offline, stub RPC)
+t node scripts/test-tempo-gas-sponsorship.js
 # Tempo buyer: a minted credential must move exactly the capped quote to the checked recipient, refused before it is sent; our paying scripts sign tempo/charge under the per-call
 t node scripts/test-tempo-credential-check.js
 

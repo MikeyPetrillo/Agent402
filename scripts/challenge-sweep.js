@@ -23,6 +23,9 @@ import { writeFileSync } from "node:fs";
 import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
 import { assertOwnPaidTarget, guardCappedSigning } from "./lib/buyer-guard.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../src/avm-network.js";
+import { installPublicLog, forPublicFile } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "challenge-sweep");
 const readOpenapi = openapiReader(TARGET);
@@ -199,4 +202,4 @@ console.log(`\n=== sweep done ===`);
 console.log(`registered: ${report.registered.length} · skipped: ${report.skipped.length} · noAlgorand: ${report.noAlgorand.length} · failed: ${report.failed.length}`);
 console.log(`spent (self-recycled): $${report.spentUsd.toFixed(4)}`);
 if (report.failed.length) console.log(`failures (retry later):`, report.failed.slice(0, 10).map((f) => `${f.key} (${f.reason})`).join("\n  "));
-if (OUT) { writeFileSync(OUT, JSON.stringify(report, null, 2)); console.log(`wrote ${OUT}`); }
+if (OUT) { writeFileSync(OUT, JSON.stringify(forPublicFile(report), null, 2)); console.log(`wrote ${OUT}`); }

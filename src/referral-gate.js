@@ -99,6 +99,7 @@ import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { DEFAULT_KEY_BUDGET_USD, DEFAULT_GLOBAL_BUDGET_USD } from "./hangup-forgiveness.js";
 import { SWEEP_CHAIN_BUDGET_MS, SWEEP_UNCONFIRMED_BUDGET_SHARE } from "./referral-book.js";
 import { cdnSyncLeftMs } from "./cdn-sync-window.js";
+import { resaleBarredReason, refAnswerOf } from "./resale-terms.js";
 
 export const REFERRAL_NETWORK = "eip155:8453";
 export const REFERRAL_CHAIN_ID = 8453;
@@ -621,8 +622,9 @@ export const referralDeliveredBytesOf = (bytes, wrap, empty = false) => (wrap ? 
 /** The bytes a published example answer would take as a delivered answer, or
  *  0 when the definition publishes none. */
 export function exampleAnswerBytes(def) {
-  const ex = def?.discovery?.output?.example;
+  let ex = def?.discovery?.output?.example;
   if (ex === undefined || ex === null) return 0;
+  try { ex = refAnswerOf(def, ex); } catch { return 0; }
   try {
     const text = JSON.stringify(ex);
     if (typeof text !== "string") return 0;
@@ -731,6 +733,10 @@ export function namesOwnHost(def, hosts = []) {
 export function referralIneligibility(def, { identityBound = false, lastingEffect = false, paysThirdParty = false, longRunning = false, compute = false, clamped = false, ownTimeoutMs = null, deadlineMs = REFERRAL_DEFAULTS.deadlineMs, priceForNetwork = (p) => p, ownHosts = [], cheaperDirect = null, parityGrandfathered = REFERRAL_PARITY_GRANDFATHERED, maxAnswerBytes = REFERRAL_DELIVERABLE_BYTES } = {}) {
   if (!def || typeof def !== "object") return "not in the catalog";
   if (typeof def.handler !== "function") return "in the catalog but has no handler";
+  // A raw pass-through of a source whose terms bar resale through a third
+  // party is never sold here (src/resale-terms.js).
+  const resaleBarred = resaleBarredReason(def);
+  if (resaleBarred) return resaleBarred;
   if (identityBound) return "identity-bound route";
   if (lastingEffect) return "its effect outlives the answer";
   if (paysThirdParty) return "pays an outside seller";
@@ -2922,7 +2928,17 @@ export function createReferralGate({
       }
       // The answer is serialized BEFORE the settlement, so a value that
       // cannot be sent is found while nothing has been charged.
-      const answer = withIgnoredParams(result, req);
+      // The tool's own /ref answer (src/resale-terms.js refAnswerOf), declared
+      // beside its handler: applied here only, never on the public route.
+      let shaped;
+      try { shaped = refAnswerOf(def, result); } catch { shaped = undefined; }
+      if (shaped === undefined && result !== undefined) {
+        hold(false);
+        settledHooks(false);
+        counters.handlerErrors++;
+        return res.status(500).json({ error: "This tool's answer could not be prepared for this route, so this server did not settle the payment.", tool: def.slug });
+      }
+      const answer = withIgnoredParams(shaped, req);
       const wrap = !answer || typeof answer !== "object" || Array.isArray(answer) || Object.hasOwn(answer, "transaction");
       let text;
       try { text = JSON.stringify(answer === undefined ? null : answer); if (typeof text !== "string") throw new Error("not JSON"); }

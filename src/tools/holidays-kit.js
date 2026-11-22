@@ -14,9 +14,10 @@
 // tools answer one question per call and serve no browsable listing.
 import { markEndsAtCeiling } from "../run-ceiling.js";
 import { attribute } from "../data-attribution.js";
+import { markResaleBarred, HOLIDAY_PORTAL_RESALE_REASON } from "../resale-terms.js";
 import {
   bad, parseCountry, parseYear, parseSubdivision, parseTypes, parseIsoDate, parseWeekend,
-  holidaysForYear, nextHolidays, appliesIn, hasAnyType, regionCalendar, yearsFor,
+  holidaysForYear, nextHolidays, appliesIn, hasAnyType, regionCalendar, yearsFor, HOLIDAY_HOSTS,
   toDay, fromDay, weekdayOf, DAY_NAMES, OBSERVANCE,
 } from "./holiday-source.js";
 import { parseExchange, exchangeStatus, daySchedule } from "./exchange-calendars.js";
@@ -140,21 +141,21 @@ const RAIL_ALIASES = { ach: "ach", fedach: "ach", fedwire: "fedwire", wire: "fed
 // its hosts in upstreamHosts; the pages a rule cites are not hosts it reads.
 export const HOLIDAY_TOOLS = [
   typeFilterTool({
-    slug: "bank-holidays", upstreamHosts: ["nagerholidays.com", "date.nager.at"], name: "Bank holidays", type: "Bank",
+    slug: "bank-holidays", upstreamHosts: HOLIDAY_HOSTS, name: "Bank holidays", type: "Bank",
     description: "Bank holidays for a country and year (optionally one region): the days the holiday dataset tags as bank holidays, with nationwide flag and the regions each applies to. About a dozen countries tag bank holidays separately; others answer an empty list with a note. ?country=US&year=2026.",
     tags: ["holidays", "bank-holidays", "banking", "calendar", "country", "time"],
     exampleInput: { country: "US", year: 2026 },
     example: { country: "US", year: 2026, subdivision: null, type: "Bank", count: 11, holidays: [{ date: "2026-01-01", name: "New Year's Day", nationalHoliday: true, subdivisionCodes: null, holidayTypes: ["Public", "Bank"] }] },
   }),
   typeFilterTool({
-    slug: "school-holidays", upstreamHosts: ["nagerholidays.com", "date.nager.at"], name: "School holidays", type: "School",
+    slug: "school-holidays", upstreamHosts: HOLIDAY_HOSTS, name: "School holidays", type: "School",
     description: "School holiday days for a country and year (optionally one region): the single days the holiday dataset tags as school holidays (not term breaks), with the regions each applies to. About ten countries tag them; others answer an empty list with a note. ?country=AT&year=2026.",
     tags: ["holidays", "school-holidays", "education", "calendar", "country", "time"],
     exampleInput: { country: "AT", year: 2026 },
     example: { country: "AT", year: 2026, subdivision: null, type: "School", count: 5, holidays: [{ date: "2026-03-19", name: "Saint Joseph's Day", nationalHoliday: false, subdivisionCodes: ["AT-2", "AT-6", "AT-7", "AT-8"], holidayTypes: ["School"] }] },
   }),
   {
-    route: "GET /api/next-holidays", name: "Next holidays", slug: "next-holidays", upstreamHosts: ["nagerholidays.com", "date.nager.at"], category: "time", price: "$0.001",
+    route: "GET /api/next-holidays", name: "Next holidays", slug: "next-holidays", upstreamHosts: HOLIDAY_HOSTS, category: "time", price: "$0.001",
     description: "Upcoming holidays in a country over the next 365 days, soonest first, optionally narrowed to one region and to holiday types (Public, Bank, School, Authorities, Optional, Observance), with days until each. ?country=DE&subdivision=DE-BY.",
     tags: ["holidays", "upcoming", "next-holiday", "calendar", "country", "time"],
     discovery: {
@@ -187,7 +188,7 @@ export const HOLIDAY_TOOLS = [
     },
   },
   {
-    route: "GET /api/long-weekends", name: "Long weekends", slug: "long-weekends", upstreamHosts: ["nagerholidays.com", "date.nager.at"], category: "time", price: "$0.001",
+    route: "GET /api/long-weekends", name: "Long weekends", slug: "long-weekends", upstreamHosts: HOLIDAY_HOSTS, category: "time", price: "$0.001",
     description: "Long weekends in a country's year, computed from its public holidays: every run of 3 or more consecutive days off that includes a holiday, plus bridge days (one working day that, taken off, joins a holiday to a weekend) with the run length it makes. Region-aware. ?country=DE&year=2026.",
     tags: ["holidays", "long-weekend", "bridge-day", "vacation", "calendar", "time"],
     discovery: {
@@ -240,7 +241,7 @@ export const HOLIDAY_TOOLS = [
     },
   },
   {
-    route: "GET /api/country-business-days", name: "Business days by country", slug: "country-business-days", upstreamHosts: ["nagerholidays.com", "date.nager.at"], category: "time", price: "$0.002",
+    route: "GET /api/country-business-days", name: "Business days by country", slug: "country-business-days", upstreamHosts: HOLIDAY_HOSTS, category: "time", price: "$0.002",
     description: "Holiday-aware business days for a country or region: check whether a date is a business day, add or subtract N business days, or count business days between two dates. Uses the country's public (or bank) holidays, a published observance rule where one exists (US federal, UK substitute days, Japan substitute holidays), and a weekend you can override. ?country=US&op=add&date=2026-07-02&days=1.",
     tags: ["business-days", "working-days", "holidays", "settlement", "calendar", "time"],
     discovery: {
@@ -314,7 +315,7 @@ export const HOLIDAY_TOOLS = [
     },
   },
   {
-    route: "GET /api/business-day-planner", name: "Cross-border business-day planner", slug: "business-day-planner", upstreamHosts: ["nagerholidays.com", "date.nager.at"], category: "time", price: "$0.003",
+    route: "GET /api/business-day-planner", name: "Cross-border business-day planner", slug: "business-day-planner", upstreamHosts: HOLIDAY_HOSTS, category: "time", price: "$0.003",
     description: "First dates on or after a start date that are business days in every listed country or region at once (up to 6, e.g. US,GB-ENG,DE-BY,JP), for cross-border scheduling, settlements and meetings, with which region is closed on each skipped day. ?regions=US,GB-ENG,DE-BY&start=2026-12-25.",
     tags: ["business-days", "cross-border", "scheduling", "holidays", "planner", "time"],
     discovery: {
@@ -359,7 +360,7 @@ export const HOLIDAY_TOOLS = [
     },
   },
   {
-    route: "GET /api/settlement-calendar", name: "Payment settlement calendar", slug: "settlement-calendar", upstreamHosts: ["nagerholidays.com", "date.nager.at"], category: "time", price: "$0.002",
+    route: "GET /api/settlement-calendar", name: "Payment settlement calendar", slug: "settlement-calendar", upstreamHosts: HOLIDAY_HOSTS, category: "time", price: "$0.002",
     description: "Expected settlement date for a payment sent on a given date over ACH, Fedwire, SEPA Credit Transfer, SEPA Instant or CHAPS, from each rail's published operating days and the bank holidays that close it, with the rule and its official source in the answer. ?rail=ach&date=2026-12-24.",
     tags: ["settlement", "payments", "ach", "fedwire", "sepa", "chaps", "business-days", "finance"],
     discovery: {
@@ -444,4 +445,6 @@ for (const t of HOLIDAY_TOOLS) if (t.slug !== "market-calendar") attribute(t, "n
 // Every upstream wait of these handlers is a safeFetch (holiday-source.js), which
 // ends at a run's ceiling; market-calendar has none. A handler that gains
 // another kind of wait leaves this list.
+// Resale terms (src/resale-terms.js): a whole year's list is not resold through a third party.
+markResaleBarred(HOLIDAY_TOOLS, ["bank-holidays", "school-holidays"], HOLIDAY_PORTAL_RESALE_REASON);
 markEndsAtCeiling(HOLIDAY_TOOLS, ["bank-holidays", "school-holidays", "next-holidays", "long-weekends", "country-business-days", "business-day-planner", "settlement-calendar", "market-calendar"]);

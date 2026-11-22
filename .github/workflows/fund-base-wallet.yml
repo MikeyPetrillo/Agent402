@@ -28,6 +28,11 @@ concurrency:
   group: fund-base-wallet
   cancel-in-progress: false
 
+# The log and artifacts of a run on this repository are public: scripts
+# print money figures as words (scripts/lib/public-log.js).
+env:
+  PUBLIC_LOG: "1"
+
 jobs:
   fund:
     # Money moves out of a spending wallet on dispatch: the `spending` GitHub

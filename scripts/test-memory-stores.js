@@ -150,5 +150,27 @@ try {
   rmSync(dir, { recursive: true, force: true });
 }
 
+// --- 6. the registry rows store, with one seller listing tens of thousands of
+// rows beside ~1,500 small ones (the production shape: one registry-only
+// seller lists 77k routes). An even sample of 48 origins almost never lands
+// on the one large seller, so a sampled figure read the store at the small
+// sellers' size whatever the large one held; the figure must track the heap.
+{
+  const idx = await import("../src/x402-index.js");
+  const row = (o, j) => ({ seller: o, method: "POST", methodInferred: true, route: `/v1/price/${j}`, slug: `v1-price-${j}`, name: `/v1/price/${j}`, description: j % 3 ? "" : `machine generated permutation ${j}`, category: "other", tags: [], price: 0.001, networks: ["base"], payTo: "0x00000000000000000000000000000000000000a1", provenance: "bazaar", quality: null });
+  const read = () => ms.memoryStoreFigures({ budgetMs: 1000 }).stores["x402-index.bazaarTools"];
+  const before = heapNow();
+  const origins = [];
+  for (let i = 0; i < 1476; i++) { const o = `https://small${i}.example`; origins.push(o); idx.__testSetBazaarTools(o, Array.from({ length: 10 }, (_, j) => row(o, j))); }
+  const big = "https://large-registry.example";
+  origins.push(big);
+  idx.__testSetBazaarTools(big, Array.from({ length: 77_000 }, (_, j) => row(big, j)));
+  const heldMb = (heapNow() - before) / 1048576;
+  const f = read();
+  ok(f && f.sampledMb >= heldMb * 0.5 && f.sampledMb <= heldMb * 2, `registry rows: the store reads ${f?.sampledMb} MB for ${heldMb.toFixed(1)} MB held (within 2x), one origin of 77,000 rows beside 1,476 of 10`);
+  ok(f && f.detail?.registryRows === 1476 * 10 + 77_000 && f.detail?.largestOriginRows === 77_000, `registry rows: the store counts every row and names the largest origin's (${JSON.stringify(f?.detail)})`);
+  for (const o of origins) idx.__testSetBazaarTools(o, null);
+}
+
 console.log(`\ntest-memory-stores: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

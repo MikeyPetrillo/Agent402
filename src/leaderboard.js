@@ -1221,7 +1221,7 @@ export async function runLeaderboard(overrides = {}) {
     // a time as the fold reads them.
     foldTransfers(byWallet, (function* () { for (const t of r.transfers) yield transferForFold(t); })(), opts.maxCallUsd, OUR_EVM_WALLETS, opts.priceMatchMaxUsd);
     transferCount = r.transfers.length;
-    logCacheScan = { mode: r.mode, calls: r.calls, failedCalls: r.failedCalls, newWallets: r.newWallets };
+    logCacheScan = { mode: r.mode, calls: r.calls, failedCalls: r.failedCalls, newWallets: r.newWallets, ...(r.remainderCalls ? { remainderCalls: r.remainderCalls } : {}), ...(r.heldFrom != null ? { heldFrom: r.heldFrom } : {}) };
     onProgress(`      log cache: ${r.mode} scan, ${r.calls} eth_getLogs call(s) (a full read would be ${walletChunks.length * blockChunks.length})${r.newWallets ? `, ${r.newWallets} new wallet(s) read over the window` : ""}`);
   } else {
     for (const [from, to] of blockChunks) {

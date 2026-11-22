@@ -16,6 +16,9 @@
 import { guardCappedSigning } from "./lib/buyer-guard.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { writeFileSync } from "node:fs";
+import { installPublicLog, forPublicFile } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
 const args = process.argv.slice(2);
@@ -174,6 +177,6 @@ console.log(`→ HTTP 200 · settled${receipt?.transaction ? ` · tx ${receipt.t
 console.log("\n--- result JSON ---");
 console.log(JSON.stringify(result, null, 2));
 if (OUT) {
-  writeFileSync(OUT, JSON.stringify({ tool: PATH, method: METHOD, chain: CHAIN, quote, receipt, result }, null, 2));
+  writeFileSync(OUT, JSON.stringify(forPublicFile({ tool: PATH, method: METHOD, chain: CHAIN, quote, receipt, result }), null, 2));
   console.log(`\nwrote ${OUT}`);
 }

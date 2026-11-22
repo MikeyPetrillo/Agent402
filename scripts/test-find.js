@@ -320,7 +320,7 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
 // and were still filed as misses, because the rarest term was the VALUE.
 {
   const { isValueTerm } = await import("../src/find.js");
-  for (const t of ["1767200000", "400x400", "jmsu6ubfru4s2gm", "auckland", "pacific", "c2l0zs10cmfja2vyltiwmjy6"]) ok(isValueTerm(t), `"${t}" is a value, not a defining word`);
+  for (const t of ["1767200000", "400x400", "jmsu6ubfru4s2gm", "auckland", "pacific", "c2l0zs10cmfja2vyltiwmjy6", "june", "march", "friday"]) ok(isValueTerm(t), `"${t}" is a value, not a defining word`);
   for (const t of ["pizza", "language", "mother", "timezone", "fleet"]) ok(!isValueTerm(t), `"${t}" can still define a task`);
   const { KIT } = await import("../src/tools/kit.js");
   const { STATS_TOOLS } = await import("../src/tools/stats-kit.js");
@@ -421,6 +421,63 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   // A curated alias scores like a word of the slug (2026-09-25): at +1 in the
   // haystack "md5" ranked hash below hex/checksum although hash carries it.
   ok(first("compute md5 hex digest of a string") === "hash", `"compute md5 hex digest of a string" -> hash (got ${first("compute md5 hex digest of a string")})`);
+}
+{
+  // A plural query word reads as the singular the catalog names (2026-11-22):
+  // "uuids" was no slug, tag or alias word of uuid, so the shared verb
+  // "generate" carried a *-generate tool to the top. A plural the catalog
+  // itself uses as a word stays as written, and a spelled-out version
+  // ("version 7") also reads as its short form ("v7").
+  const cat = {
+    "GET /api/uuid": { name: "Unique ID generator", slug: "uuid", aliases: ["time-ordered-id", "uuid-v7"], category: "identifiers", price: "$0.001", description: "Generate random or time-ordered identifiers.", tags: ["uuid", "id"], discovery: { example: {} } },
+    "POST /api/captcha-generate": { name: "Captcha generate", slug: "captcha-generate", category: "api", price: "$0.001", description: "Mint a captcha challenge.", tags: ["captcha"], discovery: { example: {} } },
+    "GET /api/time": { name: "Time", slug: "time", category: "time", price: "$0.001", description: "The current time in a zone.", tags: ["time", "clock"], discovery: { example: {} } },
+    "GET /api/news": { name: "News", slug: "news", category: "web", price: "$0.001", description: "Headlines.", tags: ["news"], discovery: { example: {} } },
+    "GET /api/new-pairs": { name: "New pairs", slug: "new-pairs", category: "crypto", price: "$0.001", description: "Newly listed trading pairs.", tags: ["new"], discovery: { example: {} } },
+    // "time" is a common word in the real catalog, as it is here.
+    "GET /api/time-convert": { name: "Time convert", slug: "time-convert", category: "time", price: "$0.001", description: "Convert a time between zones.", tags: ["time"], discovery: { example: {} } },
+    "GET /api/relative-time": { name: "Relative time", slug: "relative-time", category: "time", price: "$0.001", description: "A time as words.", tags: ["time"], discovery: { example: {} } },
+    "GET /api/date-diff": { name: "Date difference", slug: "date-diff", category: "time", price: "$0.001", description: "Time between two dates.", tags: ["date", "time"], discovery: { example: {} } },
+  };
+  const top = (q) => findTools(cat, q, {}).results?.[0]?.slug;
+  ok(top("generate uuids") === "uuid", `"generate uuids" -> uuid (got ${top("generate uuids")})`);
+  ok(top("make some version 7 uuids") === "uuid", `"make some version 7 uuids" -> uuid (got ${top("make some version 7 uuids")})`);
+  ok(top("time ordered ids") === "uuid", `"time ordered ids" -> uuid (got ${top("time ordered ids")})`);
+  ok(top("news") === "news", `a plural the catalog names stays as written: "news" -> news (got ${top("news")})`);
+  const r2 = findTools(cat, "generate uuids", {});
+  ok(r2.rarestTermCovered === true, `"generate uuids" reads as served (rarest ${r2.rarestTerm})`);
+}
+{
+  // The singular is not read where it would mislead: a verb's -s form the
+  // catalog also writes as a verb, and a word the catalog writes more often
+  // than its singular ("https" against "http").
+  const V = {
+    "POST /api/transcribe": { name: "Transcribe", slug: "transcribe", category: "media", price: "$0.01", description: "Transcribing audio to text.", tags: ["audio"], discovery: { example: {} } },
+    "POST /api/transcribe-pro": { name: "Transcribe pro", slug: "transcribe-pro", category: "media", price: "$0.02", description: "Pro tier for long recordings; transcribes a file.", tags: ["audio"], discovery: { example: {} } },
+    "GET /api/http": { name: "HTTP check", slug: "http", category: "web", price: "$0.001", description: "Check an http endpoint.", tags: ["http"], discovery: { example: {} } },
+    "GET /api/a": { name: "Fetch", slug: "fetch-page", category: "web", price: "$0.001", description: "Fetch https pages.", tags: ["web"], discovery: { example: {} } },
+    "GET /api/b": { name: "Quote", slug: "quote", category: "web", price: "$0.001", description: "Read https payment requirements.", tags: ["web"], discovery: { example: {} } },
+  };
+  const vt = (q) => findTools(V, q, {}).results?.[0]?.slug;
+  ok(vt("transcribes recordings") === "transcribe-pro", `a verb's -s form does not read as a slug (got ${vt("transcribes recordings")})`);
+  ok(vt("https") !== "http", `"https" is not read as a plural of http (got ${vt("https")})`);
+  // A spelled-out version reaches the tool that names the short form.
+  const W = {
+    "GET /api/ids": { name: "Ids", slug: "id-maker", aliases: ["v7"], category: "identifiers", price: "$0.001", description: "Identifiers of any version.", tags: ["id"], discovery: { example: {} } },
+    "GET /api/vc": { name: "Version control", slug: "version-control", category: "dev", price: "$0.001", description: "Version history of a repository.", tags: ["git"], discovery: { example: {} } },
+  };
+  for (const [i, w] of ["alpha", "beta", "gamma", "delta", "omega", "sigma"].entries()) W[`GET /api/f${i}`] = { name: w, slug: w, category: "misc", price: "$0.001", description: `The ${w} tool.`, tags: [w], discovery: { example: {} } };
+  const wt = (q) => findTools(W, q, {}).results?.[0]?.slug;
+  ok(wt("version 7") === "id-maker", `"version 7" reads as v7 (got ${wt("version 7")})`);
+  const { singularCandidates, versionTerms } = await import("../src/query-terms.js");
+  ok(JSON.stringify(singularCandidates("uuids")) === '["uuid"]', `uuids -> uuid (got ${JSON.stringify(singularCandidates("uuids"))})`);
+  ok(singularCandidates("anomalies").includes("anomaly"), "anomalies -> anomaly");
+  ok(singularCandidates("hashes").includes("hash"), "hashes -> hash");
+  ok(singularCandidates("address").length === 0 && singularCandidates("status").length === 0 && singularCandidates("analysis").length === 0, "ss/us/is endings are not plurals");
+  ok(singularCandidates("ids").includes("id"), "ids -> id");
+  ok(JSON.stringify(versionTerms("make some version 7 uuids")) === '["v7"]', `"version 7" -> v7 (got ${JSON.stringify(versionTerms("make some version 7 uuids"))})`);
+  ok(JSON.stringify(versionTerms("uuid ver. 4 and v 6")) === '["v4","v6"]', `"ver. 4", "v 6" -> v4, v6 (got ${JSON.stringify(versionTerms("uuid ver. 4 and v 6"))})`);
+  ok(versionTerms("version control history").length === 0, "a version word without a number adds nothing");
 }
 {
   // A multi-word alias counts only when EVERY word is in the query: one generic

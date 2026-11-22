@@ -724,7 +724,7 @@ await check("paid server WITH the key: the primary reverts, our relayer settles 
   assert.equal(r.ownSends, 1, r.log.slice(-1500));
   assert.equal(r.status, 200, r.log.slice(-1500));
   // No floor by default: the buyer signs the route's list price on Robinhood
-  // ($0.005, at or above the relayer's $0.004 minimum) and the sale books it.
+  // ($0.005, at or above the relayer's default minimum) and the sale books it.
   assert.ok(r.sale, "the sale is booked");
   assert.equal(r.signedUsd, 0.005, "the signed amount is the list price (no floor)");
   assert.equal(r.sale.priceUsd, r.signedUsd, `booked ${r.sale.priceUsd}, signed ${r.signedUsd}`);

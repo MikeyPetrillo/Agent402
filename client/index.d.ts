@@ -192,6 +192,21 @@ export class SpendingLimitError extends Error {
   paid?: false | "unknown";
   [key: string]: unknown;
 }
+/** The fields a call() error carries when the seller settled the payment
+ *  before the call ran and the run failed: the amount counts as spent, the
+ *  same payment was sent once more when this client could see it (`resent`),
+ *  and the charge is owed back, refunded after on-chain proof. */
+export interface ChargedCallFailure extends Error {
+  status: number;
+  slug: string;
+  paid: true;
+  charged: true;
+  refundOwed: boolean;
+  retry: "same-payment";
+  resent: boolean;
+  transaction?: string;
+  refundStatusUrl?: string;
+}
 export class PaymentRedirectError extends Error {
   slug: string;
   status: number | null;

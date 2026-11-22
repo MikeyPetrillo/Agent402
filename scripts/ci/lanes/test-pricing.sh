@@ -161,6 +161,12 @@ t node scripts/test-solana-history-rpc.js
 t node scripts/test-solana-activity-resume.js
 # Two boots on one store: the second serves a wallet's chart from its stored scan state with no transaction read
 t node scripts/test-solana-activity-restart.js
+# The revenue view's window scans resume from their stored state: the same answer as a full scan after the head moves, the window slides, a reorganized tail, a lost range; untrusted states read in full (offline stub RPC)
+t node scripts/test-revenue-window-resume.js
+# The EVM activity charts' scan state survives a restart: one page instead of the window, the same chart as a cold scan, far end continued, bounds, /privacy (offline stub RPC)
+t node scripts/test-evm-activity-store.js
+# Two boots on one store against a stub chain set: the second resumes the charts, the window scans, the ledger and the board instead of reading chain history again (calls counted by caller)
+t node scripts/test-evm-boot-resume.js
 # Base board keeps its read log window: identical board to a full read across head advances, new/returning wallets, failed reads, restart, store mismatch, row cap, switch (offline stub RPC)
 t node scripts/test-leaderboard-log-cache.js
 # Base board log cache at the row cap: kept rows folded by index (identical order to a full read), only changed segments re-hashed and saved, no stale digest after any invalidation,

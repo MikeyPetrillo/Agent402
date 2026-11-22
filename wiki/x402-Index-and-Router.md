@@ -50,7 +50,7 @@ settlement: an under-budget attempt costs nothing.
 
 With `include: "external"`, route-execute goes beyond this host's catalog: it resolves the best **external** seller for the task - an x402 seller from the open index, or an **MPP seller on Tempo** from the live-verified [MPP marketplace](https://agent402.tools/mpp-marketplace) - pays them from Agent402's own spending wallet over the seller's wire (x402 or MPP), and relays the result. One payment from you, one request, cross-vendor and cross-protocol settlement underneath.
 
-The reliability filter is the point. The open ecosystem is full of endpoints that answer a 402 but never deliver a paid result, so route-execute ranks sellers with **proven settled volume** first (on Base: on-chain completed deliveries on the [[x402-Leaderboard]]; on Algorand: verification counts from the Algorand facilitator; on Tempo/MPP: recent inbound USDC.e transfers to the seller's own recipient, read on-chain) and then probes the candidate for a live 402 before committing. A Base or Solana seller with no history yet is tried only after every proven candidate, under a small per-call ceiling (on Base, also a rolling daily cap per seller), and flagged unproven on the receipt. External settlement is **chain-matched**: pay on Base and the router pays a Base seller from its Base spending wallet; pay on Solana and it pays a Solana seller from its SVM wallet; pay on Algorand and it pays an Algorand seller from its AVM wallet; pay over MPP on Tempo and it pays a Tempo/MPP seller from its Tempo wallet - the chain you fund is the chain it spends. (An operator can additionally let Base buyers fall through to Tempo/MPP sellers.) A payment on a chain without a spending wallet gets an honest 409 naming the supported chains, and on x402 a 4xx/5xx cancels your settlement, so you are not charged for a failure. Relayed bodies are marked `untrustedContent` (the seller's output, not ours). Default remains local-only: external routing is an explicit opt-in.
+The reliability filter is the point. The open ecosystem is full of endpoints that answer a 402 but never deliver a paid result, so route-execute ranks sellers with **proven settled volume** first (on Base: on-chain completed deliveries on the [[x402-Leaderboard]]; on Algorand: verification counts from the Algorand facilitator; on Tempo/MPP: recent inbound USDC.e transfers to the seller's own recipient, read on-chain) and then probes the candidate for a live 402 before committing. A Base or Solana seller with no history yet is tried only after every proven candidate, under a small per-call ceiling (on Base, also a rolling daily cap per seller), and flagged unproven on the receipt. External settlement is **chain-matched**: pay on Base and the router pays a Base seller from its Base spending wallet; pay on Solana and it pays a Solana seller from its SVM wallet; pay on Algorand and it pays an Algorand seller from its AVM wallet; pay over MPP on Tempo and it pays a Tempo/MPP seller from its Tempo wallet - the chain you fund is the chain it spends. (An operator can additionally let Base buyers fall through to Tempo/MPP sellers.) A payment on a chain without a spending wallet gets an honest 409 naming the supported chains, and on x402 a 4xx/5xx cancels your settlement, so you are not charged for a failure. Relayed bodies are marked `untrustedContent` (the seller's output, not ours). Default remains local-only: external routing is an explicit opt-in. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
 
 The full walkthrough - tiers, selection mechanics, chain matching, and a real production receipt with both on-chain settlement transactions - is the [Smart Order Router guide](https://agent402.tools/guides/smart-order-router).
 
@@ -66,6 +66,22 @@ Each crawl fetches `<origin>/.well-known/x402` plus the seller's `openapi.json`
 when present, runs every request through the SSRF guard (`safeFetch`), caps
 response sizes, and records the outcome in a **rolling 5-entry history** per
 seller.
+
+**What the manifest carries.** A JSON object with a `resources` array (`tools`,
+`endpoints`, `services`, `items` and `resourceCatalog` are read the same way).
+Each entry is a route URL, or an object with `resource` (or `url`, `endpoint`,
+`path`), an optional `method` and `description`, and an `accepts` list in the
+shape the route's 402 returns (`scheme`, `network`, `amount` in base units,
+`asset`, `payTo`). A one-route manifest may put `resource` and `accepts` at the
+top level; `x402Version` is optional. With no manifest the crawler reads
+`/openapi.json`, then `/agents.json`, then priced Markdown link entries in
+`/llms.txt`. The example on [/sell](https://agent402.tools/sell#manifest) is
+parsed by the crawler's own reader in `scripts/test-sell-page.js`.
+
+**Same origin only.** Only routes on the registered origin are listed: an entry
+naming another host is skipped, so one site cannot list another's endpoints. A
+paid API on a different host from the seller's website registers that host as
+its own seller and serves its manifest there.
 
 ## Health-aware routing
 

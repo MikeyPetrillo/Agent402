@@ -10,13 +10,14 @@ Scope: the server that runs as node src/server.js (every file under src/). The f
 Every value is set on the host, never in the repository. "Default" is the plain literal the code falls back to at
 its first read site when there is one, else the value `docs/configuration.json` `defaults` gives for a fallback that is a
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
-may still clamp it, and the read site is the reference.
+may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
+holds it.
 
-1095 variables in 113 groups.
+1112 variables in 113 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MARKET](#market) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [AWS](#aws) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -107,9 +108,9 @@ may still clamp it, and the read site is the reference.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
-| `ATTEST_ETH_USD` | Attest ETH, in USD. | `5000` | `src/tools/attest-kit.js` |
-| `ATTEST_MAX_GAS_USD` | Attest maximum gas, in USD. | `0.035` | `src/tools/attest-kit.js` |
-| `ATTEST_SCHEMA_MAX_GAS_USD` | Attest schema maximum gas, in USD. | `0.05` | `src/tools/attest-kit.js` |
+| `ATTEST_ETH_USD` | Attest ETH, in USD. | not listed | `src/tools/attest-kit.js` |
+| `ATTEST_MAX_GAS_USD` | Attest maximum gas, in USD. | not listed | `src/tools/attest-kit.js` |
+| `ATTEST_SCHEMA_MAX_GAS_USD` | Attest schema maximum gas, in USD. | not listed | `src/tools/attest-kit.js` |
 
 ## AVM
 
@@ -120,6 +121,19 @@ may still clamp it, and the read site is the reference.
 | `AVM_SPONSORSHIP_STALE_MS` | Avm sponsorship stale, in milliseconds. |  | `src/avm-sponsorship.js` |
 | `AVM_SUBCENT_GATE` | Avm subcent gate. |  | `src/avm-sponsorship.js` |
 | `AVM_SUBCENT_SHARED_SYNC_MS` | Avm subcent shared sync, in milliseconds. |  | `src/avm-sponsorship.js` |
+
+## AWS
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `AWS_MARKETPLACE_JWKS_EXTRA` | JSON public key (or list) published beside the quote key, for a key rotation. |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_PAYMENT_JWKS_URL` | Base URL of the payment service's signing keys (an https AWS host, or loopback for a local test); unset reads AWS's own. |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_PRODUCT_ID` | The AWS Marketplace product id (prod-...) every quote names; the gate stays off without it. |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_QUOTE_KEY` | Private key (PEM, or base64 of the PEM) that signs the quotes of the AWS Marketplace front door under /aws; its presence turns the gate on (a credential, set on the host). |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_QUOTE_KEY_ID` | Key id (kid) of that quote key, as published at /aws/.well-known/jwks.json. |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_QUOTE_SECONDS` | How long a quote stays payable, in seconds (30 to 3600). |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_RETRY_MAX` | Further attempts one payment buys after a run that ended without an answer (0 to 5). |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_SLUGS` | Comma list of catalog slugs sold under /aws/<slug>; the first also answers at /aws (default: the first listing in the gate). |  | `src/aws-marketplace-gate.js` |
 
 ## BACKUP
 
@@ -296,7 +310,7 @@ may still clamp it, and the read site is the reference.
 | `DATABENTO_BACKGROUND_DAILY_MAX_CALLS` | Databento background daily maximum calls. |  | `src/tools/databento.js` |
 | `DATABENTO_COST_TIMEOUT_MS` | Databento cost timeout, in milliseconds. | `5000` | `src/tools/databento.js` |
 | `DATABENTO_DATA_TIMEOUT_MS` | Databento data timeout, in milliseconds. | `12000` | `src/tools/databento.js` |
-| `DATABENTO_MAX_QUERY_USD` | Databento maximum query, in USD. | `0.0002` | `src/tools/databento.js` |
+| `DATABENTO_MAX_QUERY_USD` | Databento maximum query, in USD. | not listed | `src/tools/databento.js` |
 | `DATABENTO_PRIMARY_SKIP_MS` | Databento primary skip, in milliseconds. |  | `src/tools/databento.js` |
 | `DATABENTO_QUOTE_STALE_MAX_MS` | Databento quote stale maximum, in milliseconds. | `24` | `src/tools/databento.js` |
 | `DATABENTO_RANGE_MAX_AGE_MS` | Databento range maximum age, in milliseconds. | `60` | `src/tools/databento.js` |
@@ -393,6 +407,11 @@ may still clamp it, and the read site is the reference.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `EVM_ACTIVITY_FAR_PAGES` | EVM activity far pages. |  | `src/revenue-live.js` |
+| `EVM_ACTIVITY_FILE` | File holding the EVM activity scans' state without a state database (default /data/evm-activity.json, the temp directory without a volume). |  | `src/evm-activity-store.js` |
+| `EVM_ACTIVITY_STORE` | off keeps the EVM activity scans' state in memory only (a restart reads each viewed wallet's window again). Unset = stored. |  | `src/evm-activity-store.js` |
+| `EVM_ACTIVITY_STORE_FLUSH_MS` | How often waiting EVM activity scan states are written to the store, a bounded number a tick, in milliseconds. Unset = 60000. |  | `src/evm-activity-store.js` |
+| `EVM_ACTIVITY_STORE_MAX_ROWS` | Rows one stored EVM activity scan state may hold; a busier wallet's state is not kept and that wallet reads its window again after a restart. Unset = 20000, at most 60000. |  | `src/evm-activity-store.js` |
+| `EVM_ACTIVITY_STORE_MAX_WALLETS` | Chain and wallet pairs whose EVM activity scan state is kept; the least recently written are dropped first. Unset = 500, at most 5000. |  | `src/evm-activity-store.js` |
 | `EVM_LOGS_ALCHEMY_FIRST` | EVM logs alchemy first. |  | `src/evm-logs-rpc.js` |
 | `EVM_RPC_8453` | EVM RPC endpoint 8453. |  | `src/referral-chain.js` |
 | `EVM_VALIDITY_FLOOR` | EVM validity floor. |  | `src/evm-validity.js` |
@@ -489,6 +508,9 @@ may still clamp it, and the read site is the reference.
 | `GATEWAY_SETTLE_BREAKER_OVERRUN_ALARM` | Gateway settle breaker overrun alarm. |  | `src/gateway-settle-breaker.js` |
 | `GATEWAY_SETTLE_BREAKER_UNKNOWN_MAX` | Gateway settle breaker unknown maximum. |  | `src/gateway-settle-breaker.js` |
 | `GATEWAY_SETTLE_BREAKER_WINDOW_MS` | Gateway settle breaker window, in milliseconds. |  | `src/gateway-settle-breaker.js` |
+| `GATEWAY_SETTLE_FIRST` | Automatic by default; `off` settles every paid call after its handler; `always` keeps the budget mode on. A call on a model route from a wallet holding calls that did not settle has its payment settled before the upstream work; so does one from a wallet with no paid sale on the books while the budget mode is on (src/settle-first.js, src/settle-first-meter.js). |  | `src/gateway-settle-breaker.js`, `src/settle-first-copy.js`, `src/settle-first-meter.js` |
+| `GATEWAY_SETTLE_FIRST_BUDGET_USD` | The settle-first budget, USD (default 5): the budget mode is on while the rolling 24-hour upstream cost of model runs that ended unsettled, plus what runs served first to wallets that never settled have at risk, is at or over it, or while the meter cannot be read (src/settle-first-meter.js). |  | `src/settle-first-meter.js` |
+| `GATEWAY_SETTLE_FIRST_UNSETTLED_MAX` | Calls on the model routes that did not settle (default 2, at least 1) a wallet, or one signed authorization, may hold with no settled call since before its next calls settle before the upstream work. |  | `src/gateway-settle-breaker.js` |
 | `GATEWAY_WITHDRAW_ALERT_USD` | Gateway withdraw alert, in USD. |  | `src/gateway-nanopayments.js` |
 
 ## HANGUP
@@ -622,7 +644,7 @@ may still clamp it, and the read site is the reference.
 | `LEADERBOARD_HISTORY_FILE` | Leaderboard history file path. | `/data/leaderboard-history.json` | `src/leaderboard.js` |
 | `LEADERBOARD_LOG_CACHE` | Leaderboard log cache. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_DIR` | Leaderboard log cache directory. |  | `src/leaderboard.js` |
-| `LEADERBOARD_LOG_CACHE_MAX_ROWS` | Leaderboard log cache maximum rows. |  | `src/leaderboard-log-cache.js` |
+| `LEADERBOARD_LOG_CACHE_MAX_ROWS` | Rows the Base board's log cache keeps in the heap between scans (default 2000000, under 100 MB at 45 to 50 bytes a row); past it the oldest segments are dropped and each scan reads the window's unkept oldest blocks from the chain, never a full re-read. A higher cap reads fewer blocks a scan and holds more heap. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_REORG_BLOCKS` | Leaderboard log cache reorg blocks. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_SEGMENT_BLOCKS` | Leaderboard log cache segment blocks. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_REFRESH_MS` | Leaderboard refresh, in milliseconds. |  | `src/leaderboard.js`, `src/refresh-cadence.js` |
@@ -650,14 +672,6 @@ may still clamp it, and the read site is the reference.
 | `LOOP_LAG_COUNT_MS` | Loop lag count, in milliseconds. |  | `src/loop-lag.js` |
 | `LOOP_LAG_TICK_MS` | Loop lag tick, in milliseconds. |  | `src/loop-lag.js` |
 | `LOOP_LAG_WARN_MS` | Loop lag warn, in milliseconds. |  | `src/loop-lag.js` |
-
-## MARKET
-
-| Variable | Purpose | Default | Read in |
-| --- | --- | --- | --- |
-| `MARKET_SCAN_BUDGET_MS` | Market scan budget, in milliseconds. |  | `src/revenue-live.js` |
-| `MARKET_TICK` | Market tick. |  | `src/market-tick-switch.js` |
-| `MARKET_TICK_CACHE_MS` | Market tick cache, in milliseconds. |  | `src/tools/market-tick-kit.js` |
 
 ## MEMORY
 
@@ -854,7 +868,7 @@ may still clamp it, and the read site is the reference.
 | `PRICE_WEBHOOK_DELIVERIES` | Runtime switch for outbound price webhook deliveries (on; off: registrations and removals keep working and queued deliveries wait). |  | `src/price-webhooks.js` |
 | `PRICE_WEBHOOK_DELIVERY_INTERVAL_MS` | How often due price webhook deliveries are sent, in milliseconds. | `60000` | `src/price-webhooks.js` |
 | `PRICE_WEBHOOK_LIFETIME_DAYS` | How long a price webhook registration lasts, in days; registering the same URL again from the same payer renews it. | `90` | `src/changelog.js`, `src/price-webhooks.js` |
-| `PRICE_WEBHOOK_MAX` | Number of price webhook registrations from which a new one first removes those whose deliveries fail; twice this number is the most the server keeps. | `5000` | `src/price-webhooks.js` |
+| `PRICE_WEBHOOK_MAX` | Number of price webhook registrations from which a new one first removes those whose deliveries fail (default 6000); twice this number is the most the server keeps (about 32 MB in memory at the largest registration allowed). There a new one removes only failing subscriptions, never a working one, and when none is failing it is refused with 503 and Retry-After before its payment is settled. | `6000` | `src/price-webhooks.js` |
 | `PRICE_WEBHOOK_MAX_PER_PAYER` | Most price webhook registrations one registrant (the payer; in FREE_MODE the client address) may hold. | `25` | `src/changelog.js`, `src/price-webhooks.js` |
 | `PRICE_WEBHOOK_SIGNING_KEY` | Key the price webhook secrets and registrant digests are derived from (unset: POW_SECRET; neither set: a registration answers 503 and nothing is stored or sent). Never change it, or POW_SECRET while it is the fallback, once subscriptions exist: every secret and digest changes with it. |  | `src/changelog.js`, `src/price-webhooks.js` |
 
@@ -994,7 +1008,8 @@ may still clamp it, and the read site is the reference.
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
 | `RETURNING_WALLET_DISCOUNT_BPS` | Returning-wallet discount in basis points (default 1000; at most 5000). |  | `src/returning-wallet.js` |
-| `RETURNING_WALLET_MIN_PAID_DAYS` | Distinct paid days a wallet needs inside the window for the returning-wallet price (default 3). |  | `src/returning-wallet.js` |
+| `RETURNING_WALLET_MIN_DAY_SPEND_USD` | Dollars a wallet must spend on one UTC day for that day to count toward the returning-wallet bar (default 0.05; 0 counts every paid day; at most 100). |  | `src/changelog.js`, `src/returning-wallet.js` |
+| `RETURNING_WALLET_MIN_PAID_DAYS` | Distinct paid days a wallet needs inside the window for the returning-wallet price (default 3; a day counts only at RETURNING_WALLET_MIN_DAY_SPEND_USD or more). |  | `src/returning-wallet.js` |
 | `RETURNING_WALLET_PRICE` | Set to on to quote a qualifying wallet named in the X-Agent402-Wallet header, and proven in X-Agent402-Wallet-Proof, a lower price on eligible routes' x402 EVM exact accepts (off by default; a proof names the host name of BASE_URL). |  | `src/returning-wallet.js` |
 | `RETURNING_WALLET_WINDOW_DAYS` | Window, in days, the returning-wallet price counts paid days over (default 30). |  | `src/returning-wallet.js` |
 
@@ -1011,6 +1026,7 @@ may still clamp it, and the read site is the reference.
 | `REVENUE_SNAPSHOT_TTL_MS` | Revenue snapshot lifetime, in milliseconds. |  | `src/refresh-cadence.js` |
 | `REVENUE_TEST_GATED_EVM` | Revenue test gated EVM. |  | `src/revenue-live.js` |
 | `REVENUE_WARMUP` | Revenue warmup. |  | `src/revenue-live.js` |
+| `REVENUE_WINDOW_SCAN_FILE` | File holding the live revenue view's window scan state (each rail's scanned head and the transfers it holds) without a state database (default /data/revenue-window-scan.json, the temp directory without a volume). |  | `src/revenue-live.js` |
 
 ## ROBINHOOD
 
@@ -1026,7 +1042,7 @@ may still clamp it, and the read site is the reference.
 | `ROBINHOOD_RELAYER_KEY` | Robinhood relayer key (a credential, set on the host). |  | `src/changelog.js`, `src/payments.js` |
 | `ROBINHOOD_RELAYER_LOCK_WAIT_MS` | Robinhood relayer lock wait, in milliseconds. |  | `src/robinhood-relayer.js` |
 | `ROBINHOOD_RELAYER_MAX_GWEI` | Robinhood relayer maximum gwei. |  | `src/robinhood-relayer.js` |
-| `ROBINHOOD_RELAYER_MIN_PRICE_USD` | Least sale price, in USD, the own Robinhood relayer settles (0: any). | `0.004` | `src/changelog.js`, `src/network-floors.js` |
+| `ROBINHOOD_RELAYER_MIN_PRICE_USD` | Least sale price, in USD, the own Robinhood relayer settles (0: any). | not listed | `src/changelog.js`, `src/network-floors.js` |
 | `ROBINHOOD_RELAYER_RECEIPT_MS` | Robinhood relayer receipt, in milliseconds. |  | `src/robinhood-relayer.js` |
 | `ROBINHOOD_SKIP_DRY_BELOW_SETTLEMENTS` | Robinhood skip dry below settlements. |  | `src/robinhood-order.js` |
 | `ROBINHOOD_USDG_ADDRESS` | Robinhood usdg address. | `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` | `src/payments.js` |
@@ -1120,9 +1136,13 @@ may still clamp it, and the read site is the reference.
 
 | Variable | Purpose | Default | Read in |
 | --- | --- | --- | --- |
+| `SETTLE_CHAIN_CHECK_MAX_PER_NETWORK` | Chain reads the settle deadlines' chain check runs at once on one network (default 4, at most 64; src/settle-deadlines.js). The head is read once a check interval for every settle watching a network, and each settle's checks back off after a miss up to 8 s; a settle with no free slot is decided by its facilitator's answer or the cap. |  | `src/settle-deadlines.js` |
 | `SETTLE_CLAIM_DEADLINE_MS` | Settle claim deadline, in milliseconds. |  | `src/settlement-claims.js` |
+| `SETTLE_DEADLINES` | Per-network settle deadlines for x402 EIP-3009 exact payments (src/settle-deadlines.js). Unset: the default table, sized from each chain's block time (chain check from max(2 s, 2 blocks), every max(1 s, 1 block); slow over max(6 s, 4 blocks); cap max(60 s, 10 blocks), Celo max(20 s, 10 blocks); the slow-primary switch on Celo only). off: no deadlines (the library's own request timeout only). Otherwise a JSON object keyed by network name or CAIP-2 whose value is off or an object overriding checkAfterMs, checkEveryMs, slowMs, capMs (milliseconds) and switch (true or false). |  | `src/settle-deadlines.js` |
 | `SETTLE_DEMOTE_AFTER` | Settle demote after. |  | `src/settle-demotion.js` |
 | `SETTLE_DEMOTE_COOLDOWN_MS` | Settle demote cooldown, in milliseconds. |  | `src/settle-demotion.js` |
+| `SETTLE_SLOW_AFTER` | Slow settles in a row (each over its network's slowMs, or cut at the cap) that mark a facilitator slow on that network. Default 2. |  | `src/settle-deadlines.js` |
+| `SETTLE_SLOW_COOLDOWN_MS` | How long a facilitator marked slow on a network is asked after its fallbacks there (where the network's row switches), in milliseconds. Default 600000 (10 minutes); after it, one settle at or under slowMs clears the mark. |  | `src/settle-deadlines.js` |
 
 ## SHARED
 
@@ -1310,16 +1330,7 @@ may still clamp it, and the read site is the reference.
 | --- | --- | --- | --- |
 | `STRIPE_AUTOMATIC_TAX` | Stripe automatic tax. |  | `src/human-checkout.js`, `src/stripe-subscriptions.js` |
 | `STRIPE_PROFILE_ID` | Stripe profile id. |  | `src/mpp-stripe.js` |
-| `STRIPE_SECRET_KEY` | Turns on card checkout, monitors and the card wire (a credential, set on the host). |  | `src/human-checkout.js`, `src/mpp-stripe.js`, `src/server.js` and 2 more |
-| `STRIPE_SHADOW_API_BASE` | Stripe shadow API base. | `https://api.stripe.com` | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_API_VERSION` | Stripe shadow API version. | `2026-05-27.preview` | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_BACKOFF_MS` | Stripe shadow backoff, in milliseconds. |  | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_BATCH` | Stripe shadow batch. |  | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_INTERVAL_MS` | Stripe shadow interval, in milliseconds. |  | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_LEDGER` | Stripe shadow ledger. |  | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_MAX_ATTEMPTS` | Stripe shadow maximum attempts. |  | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_SENDING_STALE_MS` | Stripe shadow sending stale, in milliseconds. |  | `src/stripe-shadow-ledger.js` |
-| `STRIPE_SHADOW_TIMEOUT_MS` | Stripe shadow timeout, in milliseconds. |  | `src/stripe-shadow-ledger.js` |
+| `STRIPE_SECRET_KEY` | Turns on card checkout, monitors and the card wire (a credential, set on the host). |  | `src/human-checkout.js`, `src/mpp-stripe.js`, `src/server.js` and 1 more |
 | `STRIPE_WEBHOOK_SECRET` | Verifies Stripe webhook signatures (a credential, set on the host). |  | `src/stripe-subscriptions.js` |
 
 ## SVM
@@ -1342,6 +1353,11 @@ may still clamp it, and the read site is the reference.
 | `TEMPO_DATA_API_KEY` | Tempo data API key (a credential, set on the host). |  | `src/sanctions-screen.js`, `src/tempo-transfers.js` |
 | `TEMPO_DECIMALS` | Tempo decimals. |  | `src/mpp-subscriptions.js`, `src/mpp-tempo.js` |
 | `TEMPO_EARLY_CONFIRM` | Tempo early confirm. |  | `src/server.js` |
+| `TEMPO_GAS_SPONSORSHIP` | Set to on to pay the Tempo network fee of per-call tempo/charge payments with TEMPO_SUBSCRIPTION_FEE_PAYER_KEY (off by default). Decided per challenge: past a limit, or while the payment-party screen has no list, the challenge is the ordinary one and the buyer pays its own fee; a sponsored payment is settled by this server over TEMPO_RPC_URL. |  | `src/tempo-charge-sponsor.js` |
+| `TEMPO_GAS_SPONSOR_DAILY_MAX_USD` | Rolling 24-hour cap, in USD, on the fee bounds of sponsored per-call Tempo payments, all payers together (default 5). |  | `src/tempo-charge-sponsor.js` |
+| `TEMPO_GAS_SPONSOR_MAX_FEE_USD` | Most one sponsored per-call Tempo transaction may cost the sponsor in fees, in USD (default 0.01; at most 1). |  | `src/tempo-charge-sponsor.js` |
+| `TEMPO_GAS_SPONSOR_PAYER_DAILY_MAX_USD` | Rolling 24-hour cap, in USD, on one payer's sponsored per-call Tempo fee bounds (default 1); past it that payer's client is offered the ordinary challenge. |  | `src/tempo-charge-sponsor.js` |
+| `TEMPO_GAS_SPONSOR_RESERVE_USD` | PathUSD balance, in USD, the gas sponsor keeps for subscription activations and renewals: under it per-call sponsorship pauses and, while TEMPO_GAS_SPONSORSHIP is on, the sponsor's low-balance word reads low (default 2). |  | `src/tempo-charge-sponsor.js` |
 | `TEMPO_LATE_CONFIRM_DELAYS_MS` | Tempo late confirm delays, in milliseconds. |  | `src/mpp-tempo.js` |
 | `TEMPO_LATE_CONFIRM_MAX_WATCHES` | Tempo late confirm maximum watches. |  | `src/mpp-tempo.js` |
 | `TEMPO_LATE_WATCH_FILE` | Tempo late watch file path. |  | `src/tempo-late-watches.js` |
@@ -1350,8 +1366,8 @@ may still clamp it, and the read site is the reference.
 | `TEMPO_RELAY` | Tempo relay. |  | `src/mpp-tempo.js` |
 | `TEMPO_RELAY_VALIDATE_ATTEMPTS` | Tempo relay validate attempts. |  | `src/mpp-tempo.js` |
 | `TEMPO_RELAY_VALIDATE_TIMEOUT_MS` | Tempo relay validate timeout, in milliseconds. |  | `src/mpp-tempo.js` |
-| `TEMPO_RPC_URL` | Tempo RPC endpoint URL. | `https://rpc.tempo.xyz` | `src/inflight-cover.js`, `src/mpp-subscriptions.js`, `src/mpp-tempo.js` and 3 more |
-| `TEMPO_SUBSCRIPTION_FEE_PAYER_KEY` | Tempo subscription fee payer key (a credential, set on the host). |  | `src/mpp-subscriptions.js` |
+| `TEMPO_RPC_URL` | Tempo RPC endpoint URL. | `https://rpc.tempo.xyz` | `src/inflight-cover.js`, `src/mpp-subscriptions.js`, `src/mpp-tempo.js` and 4 more |
+| `TEMPO_SUBSCRIPTION_FEE_PAYER_KEY` | Tempo subscription fee payer key (a credential, set on the host). |  | `src/mpp-subscriptions.js`, `src/tempo-charge-sponsor.js` |
 | `TEMPO_SUBSCRIPTION_FEE_PAYER_LOW_USD` | Tempo subscription fee payer low, in USD. | `0.25` | `src/mpp-subscriptions.js` |
 | `TEMPO_SUBSCRIPTION_RPC_TIMEOUT_MS` | Tempo subscription RPC endpoint timeout, in milliseconds. |  | `src/mpp-subscriptions.js` |
 | `TEMPO_SUBSCRIPTION_VALID_FOR_S` | Tempo subscription valid for, in seconds. |  | `src/mpp-subscriptions.js` |
@@ -1565,6 +1581,7 @@ may still clamp it, and the read site is the reference.
 | `EDGAR_FETCH_TIMEOUT_MS` | Edgar fetch timeout, in milliseconds. | `12000` | `src/tools/edgar-13f-datasets.js`, `src/tools/edgar-kit.js` |
 | `EDGAR_USER_AGENT` | Edgar user agent. |  | `src/tools/edgar-kit.js` |
 | `ERC8004_AGENT_ID` | ERC-8004 agent id this server publishes in its agent card. |  | `src/tools/a2a-card.js` |
+| `FEATURE_FLAGS_RAILWAY_TOKEN` | A Railway project token (a credential, set on the host); set, runtime switches read Railway feature flags first (src/feature-flags-railway.js). |  | `src/feature-flags-railway.js` |
 | `FLIGHT_SELLERS_JSON` | Flight sellers JSON. |  | `src/server.js` |
 | `FOLLOWUPS` | off stops the follow-up loop. |  | `src/server.js` |
 | `FRED_API_KEY` | Fred API key (a credential, set on the host). |  | `src/selfcheck.js`, `src/tools/macro-kit.js` |
@@ -1602,6 +1619,7 @@ may still clamp it, and the read site is the reference.
 | `LLM_ATTEMPT_MAX_MS` | Model attempt maximum, in milliseconds. |  | `src/tools/llm-gateway-kit.js` |
 | `LLM_MAX_TIMED_OUT_ATTEMPTS` | Model maximum timed out attempts. | `2` | `src/tools/llm-gateway-kit.js` |
 | `LOAD_SHED` | off disables load shedding of free routes under event-loop pressure. |  | `src/load-shed.js` |
+| `MARKET_SCAN_BUDGET_MS` | Market scan budget, in milliseconds. |  | `src/revenue-live.js` |
 | `MAX_CALL_USD` | Maximum call, in USD. | `0.75` | `src/leaderboard.js`, `src/revenue-live.js` |
 | `MAX_WALLETS_SCAN` | Maximum wallets scan. | `0` | `src/leaderboard.js` |
 | `MCP_LOOPBACK_TEST_SECRET` | MCP loopback test secret (a credential, set on the host). |  | `src/mcp-loopback.js` |

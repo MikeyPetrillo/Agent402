@@ -1,8 +1,8 @@
-// Child of scripts/state-cutover-check.js: import the money ledgers in the
+// Child of scripts/test-state-export-pg.js: import the money ledgers in the
 // mode the environment selects, wait for their first load, and print one
-// JSON line of exact figures. The parent hands each mode its own copy of the
-// files, so nothing a boot writes reaches the originals. CUTOVER_KEEP_SCHEMA=1
-// leaves the database half's schema for the parent's row-level checksum.
+// JSON line of exact figures, so the file-mode export and the database can be
+// compared figure for figure. CUTOVER_KEEP_SCHEMA=1 leaves the database
+// half's schema in place.
 const mode = process.env.CUTOVER_MODE || "file";
 const withDecide = process.argv[2] === "with-decide";
 const out = { mode };

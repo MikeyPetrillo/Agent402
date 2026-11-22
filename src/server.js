@@ -80,7 +80,13 @@ import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
 import { evmLogsStatus } from "./evm-logs-rpc.js";
 import { compositeGuardBlocked, compositeGuardAlarmStatus, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
-import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus, setGatewaySettleBreakerSalesLedger } from "./gateway-settle-breaker.js";
+import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus, setGatewaySettleBreakerSalesLedger, gatewaySettleFirstPlan, noteSettleFirst, setUnsettledRunListener, setSettleFirstRouteReader } from "./gateway-settle-breaker.js";
+import { armSettleFirst, disarmSettleFirst, settleFirstStarted, markSettledFirst, settledFirstOf, setSettleFirstAmbient, settleFirstRefusal, isSettleFirstRefusal, settleFirstRefusalOf, settleFirstFailedNote, markExactRequired, settledFirstResendOf, markSettledFirstResend, isSettleFirstFailedRefund, SETTLE_FIRST_RESEND_HOLD, resendSpentBody } from "./settle-first.js";
+import { RETRY_SAME_PAYMENT } from "./payment-reject.js";
+import { admitServedFirst, noteUnsettledRunCost, runUpstreamUsdOf, bindRunScope } from "./settle-first-meter.js";
+import { installSettledFirstBody } from "./settle-first-body.js";
+import { settleFirstPaymentKindOf, settleVerifiedPaymentFirst, exactPaymentRequiredAnswer } from "./payments.js";
+import { allowanceOf } from "./allowance-state.js";
 // Single-upstream-call routes that run long (40 s+): EVM exact only, like the
 // composites (settle-after on SVM/AVM/Tempo is work done, never charged), but
 // not composite-spend-guarded (one bounded upstream price).
@@ -395,12 +401,16 @@ function recordHangupDebt(req, res, { reason = null } = {}) {
   // stopped waiting): the refund planner holds a budget denial (a repeat
   // hang-up) for review instead of repaying it as an ordinary debt
   // (src/hangup-forgiveness.js hangupDebtReason).
+  // A charge settled before the run (src/settle-first.js) whose answer never
+  // reached the buyer: the row carries that class, like one whose run failed.
+  const settledFirstNote = settledFirstOf(req) ? { note: settleFirstFailedNote(499) } : null;
+  if (settledFirstNote) noteSettleFirst("owed");
   const denied = hangupTicketDenial(req);
   const hangupReason = hangupDebtReason(req, reason);
   // The same push transfer was refused on input earlier and booked as owed
   // under its hash; INSERT OR IGNORE kept that 400 row. It is a disconnect
   // now: promote it, or the hang-up holds never see it.
-  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason, requestId: req.debtKey }), (made) => {
+  const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason, requestId: req.debtKey, ...settledFirstNote }), (made) => {
     if (!made && req.tempoSettled && tempoPushHashOf(req) === row.tx) void tempoPushDebts?.hungUp(row.tx, hangupReason);
   });
   // How long the buyer waited and which phase it left in: the figure that
@@ -623,6 +633,7 @@ import { isSettlementUnconfirmedReceipt } from "./payment-reject.js";
 import { networkFloorUsd } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential, configureTempoLateWatches } from "./mpp-tempo.js";
+import { tempoGasSponsorshipReport } from "./tempo-charge-sponsor.js";
 import { createLateWatchLedger, startLateWatchSweep } from "./tempo-late-watches.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader, unconfirmedCaptureDebt } from "./mpp-stripe.js";
 import { confirmTempoSettlement } from "./tempo-confirm.js";
@@ -774,12 +785,9 @@ const SOLANA_INTEL_TOOLS = solanaIntelToolsEnabled();
 // The token brief's safety and holder facts are RugCheck reads, so it is
 // listed under the same switch.
 const TOKEN_BRIEF_TOOLS = rugcheckEnabled() ? TOKEN_BRIEF_TOOLS_ALL : [];
-// Listed only with MARKET_TICK=on (src/market-tick-switch.js): a cached read of
-// the figures crypto-price and stock-quote already serve, no source of its own.
-import { marketTickToolsEnabled } from "./tools/market-tick-kit.js";
-const MARKET_TICK_TOOLS = marketTickToolsEnabled();
 import { SANCTIONS_TOOLS, startSanctionsRefresh, startSanctionsPayoutStore, sanctionsStatus, sanctionsHealth } from "./tools/sanctions-kit.js";
 import { IMAGES_FAST_TOOLS } from "./tools/llm-images-fast-kit.js";
+import { SETTLE_FIRST_CATALOG_TOOLS, settleFirstSlugs } from "./settle-first-tools.js";
 import { ALCHEMY_DATA_TOOLS } from "./tools/alchemy-data-kit.js";
 import { FARCASTER_SOCIAL_TOOLS, farcasterSocialEnabled } from "./tools/farcaster-social-kit.js";
 // Listed only when a Neynar/Warpcast key is present (same rule as the X data kit).
@@ -809,6 +817,7 @@ import { AUDIT_TOOLS, setAuditReportContext } from "./tools/audit-report-kit.js"
 import { keepReceiptOnFinalOk, startReceiptStoreSweep, receiptStoreCounts } from "./receipt-store.js";
 import { FEEDBACK_TOOLS } from "./tools/feedback-kit.js";
 import { PRICE_WEBHOOK_TOOLS, setPriceWebhookCatalog } from "./tools/price-webhook-kit.js";
+import { startRailwayFlags } from "./feature-flags-railway.js";
 import { priceWebhooks, startPriceWebhooks, signingKeyOf as priceWebhookSigningKey, UNSUBSCRIBE_PATH as PRICE_WEBHOOK_UNSUBSCRIBE_PATH } from "./price-webhooks.js";
 import { CHAIN_RPC_TOOLS } from "./tools/chain-rpc-kit.js";
 import { chainNamespaceMiddleware, chainNamespaceMap, chainVerbAliasesByRoute } from "./chain-namespace.js";
@@ -837,7 +846,7 @@ import { ledgerHomePage, socialCardText } from "./ledger-home.js";
 import { proofCell, homeProofFigures } from "./home-proof.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
-import { revenueSnapshot, revenueLiveStatus, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, solanaActivityView, solanaActivityStatus, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
+import { revenueSnapshot, revenueLiveStatus, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, solanaActivityView, solanaActivityStatus, robinhoodActivity, baseActivityViaSql, evmActivityStatus, recentWindowStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPageAsync, marketPanelHtml, catalogPayableOn } from "./market-page.js";
@@ -863,6 +872,7 @@ import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { flushSqlQueryStats, sqlQueryStatsReport, noteSqlBusy } from "./sql-query-stats.js";
 import { loadSolanaActivityState, noteSolanaActivityState, flushSolanaActivityStore, solanaActivityStoreStatus } from "./solana-activity-store.js";
+import { loadEvmActivityState, noteEvmActivityState, flushEvmActivityStore, evmActivityStoreStatus } from "./evm-activity-store.js";
 import { flushXSearchStats, xSearchStatsReport, xSearchAuthorsStatus } from "./x-search-stats.js";
 import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
@@ -877,7 +887,6 @@ import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
 import { topExternalPayersAsync, payerPaidDays, externalReturnRateAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow, saleRepeatStats } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
-import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
 import { hostFigures, hostFiguresFromPayments, hostIndexEntry, isSelfSellerQuery, railsWithOutsideSettlements } from "./host-entry.js";
@@ -902,7 +911,7 @@ const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePr
 // status probe's mark) or a payer that is one of our wallets. Stats only.
 const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...HOLIDAY_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...WEATHER_PROBABILITY_TOOLS, ...WEATHER_PLAN_TOOLS, ...WEATHER_CALC_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...AUDIT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...CRYPTO_SCREENS_TOOLS, ...LENDING_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...PRICE_WEBHOOK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS, ...BUNDLE_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -1045,6 +1054,9 @@ import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllo
 import { hangupForgiven, hangupTicketDenial, hangupTicketAbandoned, hangupDebtReason, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
 import { referralConfig, referralConfigProblem, referralTimingWarnings, referralRoutes, referralSlugOfPath, createReferralGate, referralRefundWriter } from "./referral-gate.js";
 import { createReferralSettler } from "./referral-settle.js";
+import { awsMarketplaceConfig, awsMarketplaceConfigProblem, awsRoutes, awsSlugOfPath, createAwsPaymentClaims, createAwsMarketplaceGate, AWS_JWKS_PATH } from "./aws-marketplace-gate.js";
+import { getSharedRedisClient } from "./shared-limit.js";
+import { boundedRedisClient } from "./bounded-redis.js";
 import { createReferralChainReader } from "./referral-chain.js";
 import { createReferralBook, startReferralBookSweep, referralBookFile } from "./referral-book.js";
 import { createReferralAnswerStore, ANSWER_DIR_NAME as REFERRAL_ANSWER_DIR_NAME } from "./referral-answers.js";
@@ -1055,8 +1067,8 @@ import { withBudgetCeiling } from "./upstream-deadline.js";
 import { settleBreakerOtherLane } from "./gateway-settle-breaker.js";
 import { PAID_QUOTE_TRUST_MINUTES } from "./paid-quote-trust.js";
 import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedOnResend, noteResendAnswerSent, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
-import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush, recordReferralAnswer, referralAnswersByDay } from "./stats.js";
+import { refundLedgerBackend, recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedOnResend, noteResendAnswerSent, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
+import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, CAIP2_NAMES, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush, recordReferralAnswer, referralAnswersByDay } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
 import { publicIndexBootWarnings } from "./facilitator-public-index.js";
@@ -2791,6 +2803,33 @@ function referralDefOfPath(path) {
   const slug = referralSlugOfPath(path);
   return slug ? REFERRAL_ROUTES.defs.get(slug) || null : null;
 }
+// The AWS Marketplace front door under /aws/<slug> (src/aws-marketplace-gate.js):
+// a standalone gate whose 402 offers only the AWS Billing x402 offer
+// (`exact` on aws:base). Paid mode only, and only with the quote-signing key,
+// its key id and the product id set; otherwise nothing is built and /aws
+// answers as any unknown path. Each listed slug passes the boot checks here
+// or is left out with one log line.
+let AWS_CONFIG = null;
+try { AWS_CONFIG = FREE_MODE ? null : awsMarketplaceConfig(process.env, { baseUrl: BASE_URL }); } catch { AWS_CONFIG = null; }
+if (!FREE_MODE && !AWS_CONFIG) { const why = awsMarketplaceConfigProblem(process.env); if (why) console.warn(`WARNING: AWS Marketplace gate is off: ${why}`); }
+const AWS_ROUTES = AWS_CONFIG ? awsRoutes(AWS_CONFIG, CATALOG, (def) => ({
+  identityBound: isIdentityBoundRoute(def),
+  lastingEffect: defHasLastingEffect(def),
+  paysThirdParty: paysThirdParty(def),
+  longRunning: isLongRunningSlug(def.slug),
+  modelBacked: isModelBacked(def),
+  chatTier: isChatTierDef(def),
+}), { ownHosts: REFERRAL_OWN_HOSTS }) : null;
+if (AWS_ROUTES) {
+  for (const r of AWS_ROUTES.refused) console.warn(`[aws-marketplace] ${r.slug} is not served under /aws: ${r.reason}`);
+  console.log(`AWS Marketplace gate enabled for ${AWS_ROUTES.defs.size} route(s): ${[...AWS_ROUTES.defs.keys()].join(", ") || "none"}`);
+}
+/** The catalog definition an /aws path serves, or null (gate off, or a path it does not serve). */
+function awsDefOfPath(path) {
+  if (!AWS_ROUTES || !AWS_ROUTES.defs.size) return null;
+  const slug = awsSlugOfPath(path, AWS_ROUTES.defs);
+  return slug ? AWS_ROUTES.defs.get(slug) || null : null;
+}
 /** The /ref twins of the given direct-route paths (a prefix match with `prefix: true`). */
 function referralTwinsOf(match) {
   if (!REFERRAL_ROUTES) return [];
@@ -3145,6 +3184,8 @@ app.use((req, res, next) => {
   if (cp.startsWith("/v1/") || cp === "/v1" || cp.startsWith("/v1beta/") || cp.startsWith("/api/chain/") || cp === "/mcp" || cp.startsWith("/mcp/") || Object.prototype.hasOwnProperty.call(CATALOG, `GET ${cp}`) || Object.prototype.hasOwnProperty.call(CATALOG, `POST ${cp}`)) return next();
   // A referral copy of a priced route is the same purchase under another path.
   if (referralDefOfPath(cp)) return next();
+  // So is a tool sold through the AWS Marketplace front door.
+  if (awsDefOfPath(path)) return next();
   noteShed(why);
   // A search turned away here is counted with the discovery rules' own
   // refusals (src/discovery-refusals.js), under the rule "load-gate".
@@ -3427,7 +3468,7 @@ startSharedLimitsProbe();
 // The returning-wallet price reads a wallet's paid days from the sales ledger
 // (the mirror, in database mode) and never discounts one of our own wallets;
 // a wallet proof names this server's host name (BASE_URL's).
-configureReturningWallet({ paidDays: (wallet, sinceMs) => payerPaidDays(wallet, sinceMs), isOurs: (w) => isOwnWallet(w), host: (() => { try { return new URL(BASE_URL).hostname; } catch { return null; } })() });
+configureReturningWallet({ paidDays: (wallet, sinceMs, minDayUsd) => payerPaidDays(wallet, sinceMs, minDayUsd), isOurs: (w) => isOwnWallet(w), host: (() => { try { return new URL(BASE_URL).hostname; } catch { return null; } })() });
 if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerReady(); return topExternalPayersAsync(o); }, isOwn: (p) => isOwnWallet(p), firstMs: Math.min(5_000, topRefreshMs()) });
 // Per-tool and per-upstream failure detail (src/tool-failure-monitor.js):
 // slugs, classes, last messages, upstream outcomes, facilitator refusals.
@@ -3453,6 +3494,13 @@ app.get("/__operator/returning-wallets.json", async (req, res) => {
   let returnRate = null;
   try { await salesLedgerReady(); returnRate = await externalReturnRateAsync({ days: 60, minPaidDays: cfg.minPaidDays }); } catch (e) { returnRate = { error: redactSecrets(String(e?.message || e)).slice(0, 120) }; }
   res.set("Cache-Control", "private, no-store").json({ ...cfg, returnRate });
+});
+// Tempo gas sponsorship for per-call payments (src/tempo-charge-sponsor.js):
+// the settings, why it is paused, the 24 h sum of sponsored fee bounds, counts
+// and the latest bookings (payer addresses shortened).
+app.get("/__operator/tempo-gas-sponsorship.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store").json(await tempoGasSponsorshipReport());
 });
 // Judge timing (src/judge-timing.js): p50 and p95 per backend read and per
 // whole walk, outcomes, and how often a fallback answered. This process's own
@@ -3901,11 +3949,11 @@ const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
   paidTrust: QUOTE_TRUST,
   budget: UNPAID_QUOTE_BUDGET,
   // A /ref/<slug> copy is priced like the route it copies (either verb).
-  isPriced: (method, path) => Boolean(CATALOG[`${method} ${path}`]) || Boolean(referralDefOfPath(path)),
+  isPriced: (method, path) => Boolean(CATALOG[`${method} ${path}`]) || Boolean(referralDefOfPath(path)) || Boolean(awsDefOfPath(path)),
   // A /ref copy is on no discovery document, and its paid-client allowance
   // is the paid-quote trust window a settled call opens: its 429 says so,
   // and names no page of this site (a referred buyer is not pointed at it).
-  hintFor: (req, { rule, paidCeiling }) => (referralDefOfPath(req.path)
+  hintFor: (req, { rule, paidCeiling }) => (referralDefOfPath(req.path) || awsDefOfPath(req.path)
     ? `${rule} A request carrying a payment is never counted, and an address that settled a paid call in the last ${PAID_QUOTE_TRUST_MINUTES} minutes reads against ${paidCeiling} per hour.`
     : null),
   isSynthetic: isSyntheticRequest,
@@ -4543,7 +4591,7 @@ app.get("/api/gateway-status", async (req, res) => {
     // EVM log reads: which lane serves the revenue ledger's recent getLogs,
     // how the Base board read its window, and the activity scans. One word
     // publicly; per-caller counts for the operator.
-    evmLogs: (() => { try { return evmLogsStatus({ full, extra: full ? { leaderboardLogCache: leaderboardLogCacheStatus(), activityScan: evmActivityStatus() } : null }); } catch { return { status: "unknown" }; } })(),
+    evmLogs: (() => { try { return evmLogsStatus({ full, extra: full ? { leaderboardLogCache: leaderboardLogCacheStatus(), activityScan: evmActivityStatus(), activityStore: evmActivityStoreStatus(), windowScan: recentWindowStatus() } : null }); } catch { return { status: "unknown" }; } })(),
     stellarFacilitator, databases, operatorAuth: operatorAuthStatus(full),
     // OFAC SDN list behind sanctions-wallet / sanctions-name and the router's
     // payout screen: one word publicly, counts and the last error for the operator.
@@ -6967,7 +7015,9 @@ app.get("/__operator/discovery-gap.json", async (req, res) => {
 app.get("/__operator/wishes.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store");
-  const agg = getWishesAggregate({ limit: req.query?.limit, detailed: true });
+  // ?staleDays=N widens the window (1 to the retention days) and ?offset=N
+  // pages through it, so clusters older than the default window can be read.
+  const agg = getWishesAggregate({ limit: req.query?.limit, detailed: true, staleDays: req.query?.staleDays, offset: req.query?.offset });
   await annotateServedAsync(agg.clusters, wishServedScore, WISH_SERVED_MIN_SCORE);
   res.json(await withRerank(req, await withIntent(req, agg)));
 });
@@ -7465,18 +7515,6 @@ app.get("/__operator/refunds.json", async (req, res) => {
 // stays up - a stalled value IS the churn signal). last_settled_seen: last
 // cycle its leaderboard row showed a real settled payment (conversion, not
 // just liveness) - null means it has never been observed settling.
-// Stripe SHADOW ledger reconciliation (src/stripe-shadow-ledger.js). READ-ONLY
-// mirror of on-chain settlements into Stripe PaymentIntents; NOT a source of
-// truth and never read by /revenue. Both sides are reported so a human can sit
-// on it for a week before anyone trusts it: our own settlement count/USD, the
-// PaymentIntents Stripe actually accepted, and every skip/failure reason.
-// Reasons are codes only - a Stripe error message is an upstream body and is
-// never stored or relayed. Off unless STRIPE_SHADOW_LEDGER=on.
-app.get("/__operator/shadow-ledger.json", (req, res) => {
-  if (!operatorAuthed(req)) return operatorNotFound(req, res);
-  if (operatorHeavyLimited(req, res)) return;
-  res.set("Cache-Control", "no-store").json(shadowLedgerReport({ limit: Math.min(500, parseInt(req.query.limit, 10) || 50) }));
-});
 // Successions, and the lever to undo one. Retirement hides a seller from every
 // ranked listing and from the paid routing pool, so "wrong once, wrong forever"
 // is not an acceptable failure mode: the seller's own undo is removing their
@@ -8291,7 +8329,7 @@ const planSketchFor = (q) => {
     });
   } catch { return null; } // a sketch is an extra; find and route answer regardless
 };
-const computeFind = async (q, k, meter = null, ip = null) => {
+const computeFind = async (q, k, meter = null, ip = null, { quiet = false } = {}) => {
   const result = findTools(CATALOG, q, { k, baseUrl: BASE_URL, powSlugs: POW_SLUGS });
   // The seller bridge: a query that looks like an indexed seller's NAME gets
   // pointed at that seller - /api/find is catalog-only, and a cluster of
@@ -8332,7 +8370,7 @@ const computeFind = async (q, k, meter = null, ip = null) => {
     // miss; a step with no strong match is recorded as its own need.
     for (const st of plan.steps) {
       if (st.match === "strong") continue;
-      try { recordWish({ need: st.task, source: "find-miss", ip: ip || "?" }); } catch { /* best-effort */ }
+      if (!quiet) try { recordWish({ need: st.task, source: "find-miss", ip: ip || "?" }); } catch { /* best-effort */ }
     }
     return result;
   }
@@ -8361,7 +8399,8 @@ const computeFind = async (q, k, meter = null, ip = null) => {
         ? "none of these results does this task; POST /api/wish with what you needed"
         : "POST /api/wish with what you needed";
       const qStr = String(q ?? "").trim();
-      if (qStr) {
+      // An operator's own search (a valid X-Operator-Token) is not demand.
+      if (qStr && !quiet) {
         try { recordWish({ need: qStr, source: "find-miss", ip: ip || "?" }); } catch { /* best-effort; never break /api/find */ }
       }
     }
@@ -8708,6 +8747,10 @@ const withRouteAnswerNote = (req, res, source) => {
   const orig = res.json.bind(res);
   res.json = (body) => { try { if (res.statusCode === 200) noteRouteAnswer(clientIp(req), body, Date.now(), { source, synthetic: isSyntheticRequest(req) }); } catch { /* telemetry never breaks a search */ } return orig(body); };
 };
+// The operator's own searches (a valid X-Operator-Token, the header only on
+// this public surface) record no find-miss: re-running the demand board's
+// queries must not add to it. The answer body is unchanged; operatorView keys
+// every answer on the header and makes the operator's private, no-store.
 app.get("/api/find", (req, res) => {
   withRouteAnswerNote(req, res, "find");
   const q = readableAsText(req.query.q ?? req.query.task ?? req.query.query);
@@ -8716,13 +8759,15 @@ app.get("/api/find", (req, res) => {
   // default and told `count: 5`. Same defect as the index listing taking only
   // `limit` while a consumer guessed `perPage` (2026-09-22).
   const k = req.query.k ?? req.query.top;
-  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip), "_find", req, res);
+  const quiet = operatorView(req, res);
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip, { quiet }), "_find", req, res);
 });
 app.post("/api/find", (req, res) => {
   withRouteAnswerNote(req, res, "find");
   const q = readableAsText(req.body?.q ?? req.body?.task ?? req.body?.query);
   const k = req.body?.k ?? req.body?.top;
-  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip), "_find", req, res);
+  const quiet = operatorView(req, res);
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip, { quiet }), "_find", req, res);
 });
 
 // Agent wish loop: free, pre-paywall, like /api/find. When an agent needs a
@@ -9222,6 +9267,19 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
       } catch { /* a wallet the store cannot answer for is a cold wallet */ } finally { clearTimeout(timer); }
     })();
   }
+  // An EVM wallet this process has not seen: its stored scan state
+  // (src/evm-activity-store.js, the same bounded read) seeds the first scan,
+  // which reads only the blocks after it, so a restart does not read the
+  // wallet's window again; the first view is that resumed scan's answer.
+  if (chainKey !== "solana" && chainKey !== "robinhood" && !entry.storeRead) {
+    entry.storeRead = (async () => {
+      let timer;
+      try {
+        const st = await Promise.race([loadEvmActivityState(chainKey, wallet), new Promise((r) => { timer = setTimeout(() => r(null), SOLANA_ACTIVITY_STORE_READ_MS); timer.unref?.(); })]);
+        if (st && !entry.scanState) entry.scanState = st;
+      } catch { /* a wallet the store cannot answer for is a cold wallet */ } finally { clearTimeout(timer); }
+    })();
+  }
   if (entry.storeRead && entry.storeRead !== true) { await entry.storeRead; entry.storeRead = true; }
   const stale = Date.now() - entry.at >= CHAIN_ACTIVITY_TTL_MS;
   if (stale && !entry.inFlight) {
@@ -9242,6 +9300,7 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
             entry.scanState = a.__scanState;
             // Written by the store's own timer, never on this path.
             if (chainKey === "solana") noteSolanaActivityState(wallet, a.__scanState);
+            else noteEvmActivityState(chainKey, wallet, a.__scanState);
           }
         }
         // else: keep the prior good value (stale-serve) or stay null
@@ -11155,6 +11214,8 @@ app.get("/analytics", async (req, res) => {
 let loopbackPort = PORT;
 const mcpMountOpts = {
   baseUrl: BASE_URL,
+  // The operator's own find_tool searches (X-Operator-Token) record no find-miss.
+  quietMiss: (req) => operatorElevated(req),
   isComputePayable,
   // Native MPP on /mcp (2026-08-19): paid tools are payable on the connector
   // with an MPP credential in _meta; the call is replayed to our own paid
@@ -11748,6 +11809,51 @@ if (REFERRAL_GATE) {
   // Open settlements are read against the chain at boot and every minute, under a lease.
   void startReferralBookSweep({ sweepOnce: () => REFERRAL_GATE.sweepOnce(), intervalMs: Math.max(1000, Number(process.env.REFERRAL_SWEEP_MS) || 60_000) });
 }
+// The AWS Marketplace gate (src/aws-marketplace-gate.js), mounted beside the
+// referral gate and ahead of every payment gate: its own paywall for /aws and
+// /aws/<slug>, offering only the AWS Billing x402 offer. A served call is
+// booked once on the private rail "aws", which no public reader or figure
+// counts; the paid-quote trust a settled call earns is earned here too.
+// Built asynchronously (it imports the seller SDK); until it is ready, or if
+// it could not be built, /aws answers as an unknown path.
+let AWS_GATE = null;
+if (AWS_ROUTES && AWS_ROUTES.defs.size) {
+  const awsGateReady = createAwsMarketplaceGate({
+    config: AWS_CONFIG,
+    defs: AWS_ROUTES.defs,
+    claims: createAwsPaymentClaims({ getClient: async () => boundedRedisClient(await getSharedRedisClient()) }),
+    recordSale,
+    preValidate: (def, req) => preValidateInput(def, req),
+    handlerInputOf,
+    runAsCaller: runAsCallerOf,
+    isSynthetic: isSyntheticRequest,
+    redact: redactSecrets,
+    ownHosts: REFERRAL_OWN_HOSTS,
+    onServed: (req) => { try { QUOTE_TRUST.mark(quoteClientKeyOf(req)); } catch { /* trust is best effort */ } },
+    onToolError: (slug, status, err) => logToolError(slug, status, redactSecrets(String(err?.message || "")), undefined, false),
+  }).then((g) => { AWS_GATE = g; console.log(`AWS Marketplace gate ready: ${g.slugs().join(", ")}`); return g; })
+    .catch((err) => { console.warn(`WARNING: AWS Marketplace gate is off: it could not be built (${redactSecrets(String(err?.message || err)).slice(0, 120)})`); return null; });
+  addApiHeaderPrefix("/aws");
+  const awsRoute = async (req, res, next) => {
+    const gate = AWS_GATE || await awsGateReady;
+    if (!gate) return next();
+    noteFunnelOnFinish(req, res);
+    return gate.handler(req, res, next);
+  };
+  app.get(AWS_JWKS_PATH, async (req, res, next) => {
+    const gate = AWS_GATE || await awsGateReady;
+    if (!gate) return next();
+    res.set("Cache-Control", "public, max-age=300").json(gate.jwks);
+  });
+  app.all(["/aws", "/aws/:slug"], awsRoute);
+}
+// The AWS Marketplace gate's counters and the paid runs that ended without an answer (operator only).
+app.get("/__operator/aws.json", (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store").json(AWS_GATE
+    ? { enabled: true, routes: AWS_GATE.slugs(), endpointSlug: AWS_GATE.endpointSlug, notServed: AWS_ROUTES.refused, sinceBoot: AWS_GATE.stats(), chargedWithoutAnswer: AWS_GATE.failed() }
+    : { enabled: false, ...(AWS_ROUTES ? { notServed: AWS_ROUTES.refused } : {}) });
+});
 // The referral gate's counters and its open settlements (operator only).
 app.get("/__operator/referral.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
@@ -12094,6 +12200,19 @@ if (!FREE_MODE) {
     app.use(stripeGate);
     markGateMounted("stripe");
     console.log("Stripe MPP settlement enabled (stripe/charge cards via Shared Payment Tokens)");
+    // Each unconfirmed capture's PaymentIntent is read back from Stripe and
+    // its row closed when Stripe settles it (src/stripe-unconfirmed-readback.js:
+    // leased, bounded, read-only on Stripe).
+    void (async () => {
+      const [{ createUnconfirmedCardReadback, startUnconfirmedCardReadback }, refunds, sales] = await Promise.all([import("./stripe-unconfirmed-readback.js"), import("./refund-ledger.js"), import("./sales-ledger.js")]);
+      startUnconfirmedCardReadback(createUnconfirmedCardReadback({
+        client: newStripeClient(process.env.STRIPE_SECRET_KEY),
+        listOwed: () => refunds.listRefunds({ status: "owed", limit: 1000 }),
+        voidRow: (row, note) => refunds.markRefundVoid(row.id, note),
+        renoteRow: (row, from, to) => renoteOwedRefund(row.evidence, from, to),
+        saleStands: async (pi) => !!(await sales.saleByTxFresh(pi)),
+      }));
+    })().catch((e) => console.warn(`[mpp-stripe] unconfirmed capture read-back did not start: ${String(e?.message || e).slice(0, 120)}`));
   }
   // Prepaid credits gate: `Authorization: Bearer a402_…` on a priced catalog
   // route authorizes against the key's balance BEFORE the handler and debits
@@ -12205,8 +12324,128 @@ app.use(createIdempotency({
       refund: { status: ["owed", "sending", "paid"].includes(row.status) ? row.status : "owed", lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(charged.tx)}` },
     } };
   },
+  // The same payment sent again after its settle was cut at the network's
+  // deadline (src/settle-deadlines.js cappedResendVerdict): served the kept
+  // answer once the chain proves its transfer landed, its debt voided first.
+  onCappedResend: async (req, { payment }) => {
+    const def = CATALOG[`${req.method} ${req.path}`];
+    if (!def) return null;
+    const [{ cappedResendVerdict, bookCappedServe }, { proveAuthorizationSettled }, claims, { saleByTxFresh }] = await Promise.all([
+      import("./settle-deadlines.js"), import("./settle-onchain-proof.js"), import("./settlement-claims.js"), import("./sales-ledger.js"),
+    ]);
+    const v = await cappedResendVerdict(payment, {
+      prove: proveAuthorizationSettled,
+      claimTx: (network, tx, holder) => claims.claimSettlementKey(claims.txClaimKey(network, tx), holder),
+      isLateHolder: claims.isLateSettleHolder,
+      rowOf: (tx) => refundByEvidenceFresh(tx),
+      replayVerdict: (tx) => chargedReplayVerdict(tx, { voidOnClaim: (t) => voidOwedOnResend(t, RESEND_SERVED_NOTE), rowOf: (t) => refundByEvidenceFresh(t) }),
+      // Only on the state database (src/refund-ledger.js): its void marks the
+      // evidence before a later owed insert can land.
+      ledgerShared: refundLedgerBackend === "pg",
+      book: ({ tx, network, payer, priceUsd }) => bookCappedServe({
+        slug: def.slug, tx, network, payer, priceUsd, wire: x402WireOf(req),
+        synthetic: isSyntheticRequest(req), internal: isSyntheticRequest(req) || isOwnWallet(payer), ownWallet: isOwnWallet(payer),
+        clientUa: String(req.headers["user-agent"] || "").trim().split(/\s+/)[0].slice(0, 40) || null,
+      }, {
+        saleExists: async (t) => !!(await saleByTxFresh(t).catch(() => null)),
+        networkName: (n) => CAIP2_NAMES[n] || n,
+        recordSale, recordServedCall, capturePostHogSettlement,
+      }),
+      refundLookup: (tx) => `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(tx)}`,
+    });
+    if (v?.serve === true) console.log(`[settle-deadlines] the same payment sent again after a cut: its transfer landed (tx=${v.tx}); served the kept answer (${req.method} ${req.path})`);
+    return v;
+  },
+  // A payment settled before its run whose run then failed (src/settle-first.js):
+  // what the credit for sending the same payment again holds.
+  settledFirstCredit: (req, status) => settledFirstCreditFor(req, status),
+  onSettledFirstResend: (req, credit) => settledFirstResend(req, credit),
+  settledFirstResendSpent: (req, credit) => settledFirstResendSpentAnswer(credit),
 }));
 markGateMounted("idempotency");
+
+/** The credit a failed settle-first run leaves for the same payment sent
+ *  again (src/idempotency.js), or null. A resend that failed again keeps the
+ *  credit it ran under. */
+function settledFirstCreditFor(req, status) {
+  const again = settledFirstResendOf(req);
+  if (again) return { tx: again.tx, network: again.network, wire: again.wire, note: again.note, receipt: again.receipt };
+  const sf = settledFirstOf(req);
+  const tx = typeof sf?.result?.transaction === "string" ? sf.result.transaction : null;
+  if (!tx) return null;
+  let receipt = null;
+  try { const h = req.res?.getHeader?.("PAYMENT-RESPONSE"); receipt = typeof h === "string" ? h : null; } catch { receipt = null; }
+  return { tx, network: sf.requirements?.network || sf.result?.network || null, wire: x402WireOf(req), note: settleFirstFailedNote(status), receipt };
+}
+/** The answer to a resend past THE RESEND BOUND (src/settle-first.js): nothing
+ *  runs and nothing MORE is charged. The payment was taken once (charged:
+ *  true, as every settled-first answer says); its debt stays owed and is
+ *  repaid (refundOwed until the refund is paid; src/settle-first.js resendSpentBody). */
+async function settledFirstResendSpentAnswer(credit) {
+  let row = null;
+  try { row = await refundByEvidenceFresh(credit.tx); } catch { row = null; }
+  return { status: 402, body: resendSpentBody({ status: row?.status, tx: credit.tx, baseUrl: BASE_URL }) };
+}
+/**
+ * The same payment sent again after its settle-first run failed: its debt is
+ * voided BEFORE the run (a hold, voidOwedForServe, that the refund run's claim
+ * cannot pass), the request is marked as paid (settledFirstResendOf: no gate
+ * asks for a settlement), and when the response ends the hold becomes the
+ * served note (a final 200) or the debt is owed again under its own class
+ * (anything else). A row the refund run has claimed or paid is not voided,
+ * and then nothing runs: the payment was refunded.
+ */
+async function settledFirstResend(req, credit) {
+  const attempt = randomBytes(4).toString("hex");
+  // The hold appends to the row's note (voidOwedForServe), so the note the
+  // undo and the served note match is the row's own, then the hold.
+  let prior = null;
+  try { prior = refundByEvidence(credit.tx); } catch { prior = null; }
+  const priorNote = prior?.status === "owed" && typeof prior.note === "string" && prior.note ? prior.note : (typeof credit.note === "string" ? credit.note : "");
+  const hold = `${SETTLE_FIRST_RESEND_HOLD} [attempt ${attempt}]`;
+  const held = priorNote ? `${priorNote}; ${hold}` : hold;
+  let voided = false;
+  try { voided = (await voidOwedForServe(credit.tx, hold)) === true; } catch { voided = false; }
+  if (!voided) {
+    let row = null;
+    try { row = await refundByEvidenceFresh(credit.tx); } catch { row = null; }
+    if (!row || row.status === "owed") {
+      return { serve: false, status: 503, retryAfter: 10, body: { error: "resend_pending", charged: true, retry: RETRY_SAME_PAYMENT, hint: "The charge this payment made is not confirmed on the books yet. Nothing more is charged. Retry shortly with the same payment." } };
+    }
+    if (row.status === "void") {
+      return { serve: false, status: 409, retryAfter: 2, body: { error: "idempotent_request_in_flight", charged: true, hint: "A call carrying this same payment is running, or was already served. Nothing more is charged." } };
+    }
+    return { serve: false, status: 402, body: {
+      error: "payment_refunded",
+      hint: "The payment this request carries was refunded (or is being refunded) because the call it paid for failed, so it no longer pays for a request. Request the resource again with a fresh payment.",
+      refund: { status: row.status, lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(credit.tx)}` },
+    } };
+  }
+  const note = isSettleFirstFailedRefund({ note: priorNote }) ? priorNote : typeof credit.note === "string" && isSettleFirstFailedRefund({ note: credit.note }) ? credit.note : settleFirstFailedNote(502);
+  markSettledFirstResend(req, { tx: credit.tx, network: credit.network ?? null, wire: credit.wire ?? null, held, note, receipt: typeof credit.receipt === "string" ? credit.receipt : null });
+  noteSettleFirst("resent");
+  const res = req.res;
+  // The charge's receipt rides a 2xx answer (the sale is booked under its
+  // transaction); a failure says the payment is still owed back.
+  if (typeof credit.receipt === "string" && credit.receipt) {
+    const writeHead = res.writeHead;
+    res.writeHead = function resendWriteHead(statusCode, ...rest) {
+      try { if (Number(statusCode) < 400 && !res.getHeader("PAYMENT-RESPONSE")) res.setHeader("PAYMENT-RESPONSE", credit.receipt); } catch { /* the answer goes out without it */ }
+      return writeHead.call(this, statusCode, ...rest);
+    };
+  }
+  installSettledFirstBody(req, res, { transaction: credit.tx, origin: BASE_URL });
+  onResponseEnd(req, res, (info) => {
+    const served = info?.via !== "undelivered" && res.statusCode === 200;
+    const done = served
+      ? renoteVoidRefund(credit.tx, held, `${note}; ${RESEND_SERVED_NOTE}`)
+      : reopenHeldClaim(credit.tx, { held, httpStatus: info?.via === "undelivered" ? 499 : (res.statusCode >= 400 ? res.statusCode : 502), note });
+    Promise.resolve(done).then((ok) => {
+      if (!ok) console.warn(`[settle-first] resend of a settled-first payment ended (${served ? "served" : `http ${res.statusCode}`}) and its debt note did not change (tx=${String(credit.tx).slice(0, 12)})`);
+    }, () => {});
+  });
+  return { serve: true };
+}
 
 // x402 paywall for the catalog routes
 if (FREE_MODE) {
@@ -12571,6 +12810,10 @@ if (FREE_MODE) {
     // request by the gate that verified it, never inherited (a polluted
     // Object.prototype once made every request look settled).
     if (ownTrue(req, "tempoSettling") || ownTrue(req, "stripeSettling") || ownTrue(req, "creditsSettling")) return next();
+    // The same payment sent again after its settle-first run failed: the
+    // payment is already taken (src/settle-first.js), so nothing here asks
+    // for it again (src/idempotency.js ran the credit and the server marked it).
+    if (settledFirstResendOf(req)) return next();
     // Retired converters aren't catalog routes, so POW_ROUTES can't know them —
     // which briefly made them the only paid paths on the site with NO free
     // tier, while unit-convert (the identical work, same engine, same table)
@@ -13052,15 +13295,6 @@ app.use((req, res, next) => {
           // A Tempo push transfer booked as owed when its first request was
           // refused on input is now claimed and served: void that debt.
           if (req.tempoSettled) tempoPushDebts?.served(req, res);
-          // Stripe SHADOW ledger - a read-only mirror of this on-chain settlement
-          // into Stripe, so card and crypto revenue can eventually be read from
-          // one set of books. LAST on purpose: it runs after the response is
-          // gone and after our own books are written, it is a synchronous void
-          // enqueue that cannot throw, and every network call happens later on
-          // an unref'd timer. OFF unless STRIPE_SHADOW_LEDGER=on. Nothing here
-          // can change what the buyer was charged, what was served, or what
-          // /revenue reports - see src/stripe-shadow-ledger.js.
-          recordShadowSettlement({ slug: def.slug, priceUsd, rail, network, tx: settleTx, synthetic });
         });
       } else if (outcome.via === "undelivered") {
         // A non-200 ended on a socket the buyer closed before the first byte:
@@ -13116,6 +13350,11 @@ app.use((req, res, next) => {
           // it is a RESPONSE header written only by @x402/express, never
           // echoed from a request - so success:true is trustworthy; the gap
           // was trusting the ABSENCE of a field.
+          // A charge settled before the run (src/settle-first.js) whose
+          // run then failed: the same row, under its own class (the note),
+          // so a refund run can select exactly these.
+          const settledFirst = !!settledFirstOf(req);
+          if (settledFirst && receiptProvesCharge(receipt)) noteSettleFirst("owed");
           if (receiptProvesCharge(receipt)) recordRefundOwed({
             slug: def.slug,
             network,
@@ -13127,6 +13366,7 @@ app.use((req, res, next) => {
             wire: x402WireOf(req),
             // The request it was charged on: the debt key when the receipt names no tx.
             requestId: req.debtKey,
+            ...(settledFirst ? { note: settleFirstFailedNote(res.statusCode) } : {}),
           });
           // Mirror to PostHog with payer attribution so a spike is alertable in
           // near-real-time and traceable to a wallet (the local table keeps only
@@ -13235,7 +13475,7 @@ if (!FREE_MODE) {
     // seller's public reputation only when the call is not ours (a heartbeat
     // probe, a canary, our own wallets): src/seller-reputation.js reads this.
     { const scope = currentRequestScope(); if (scope && typeof scope.isOurs !== "function") scope.isOurs = () => callIsOurs(req); }
-    if (req.tempoSettled) return next();
+    if (req.tempoSettled || settledFirstResendOf(req)) return next();
     // Synchronous without a shared store; a promise with one (the shared
     // budget read). A reservation that throws must still let the call run:
     // the ticket stays denied and the charge stands, as it did before the rule.
@@ -13494,10 +13734,167 @@ function withToolCallLog(slugOf, handler) {
  */
 async function admitPaidRun(req, res, def) {
   if (FREE_MODE || !def || isComputePayable(def) || !ownTrue(req, "__a402Dispatched")) return null;
-  const release = await admitCoveredRun(req, { expensive: EXPENSIVE_COMPOSITE_SLUGS.has(def.slug), arrivedAt: req.__a402ArrivedAt });
+  // The resend of a payment already settled first takes no new money: no cover.
+  const release = settledFirstResendOf(req) ? null : await admitCoveredRun(req, { expensive: EXPENSIVE_COMPOSITE_SLUGS.has(def.slug), arrivedAt: req.__a402ArrivedAt });
   if (release && !onResponseEnd(req, res, release)) release();
   await gatewaySettleBreakerCheck(req, { global: false });
   return release;
+}
+
+// ---- Settle first (src/settle-first.js) --------------------------------------
+// The routes whose runs may settle before their upstream work: the /v1 model
+// routes (the chat, Messages, Responses and generateContent wires on every
+// tier and the metered tier, embeddings, rerank, images and speech) and the
+// image tiers that share the images handler. Each reaches its paid upstream
+// through a settle point (fetchOpenRouter, or the kit's own upstream call)
+// placed after its own checks; a route joins this list only with a test
+// that reads its settle call before its upstream call
+// (scripts/test-settle-first.js). Not the video route: its job is parked and
+// resumed across calls.
+// Also dub (translate-and-speak): its first paid upstream call is the chat
+// gateway's translation, behind the same settle point, after dub's own checks.
+// And the catalog routes with a real upstream cost, each with its settle point
+// after its own input checks and before its first paid call: web search and
+// answer (src/tools/search.js), image generation (image-gen-kit), speech
+// (tts-kit), transcription (stt-kit), judgment (judge-kit) and code runs
+// (code-run-kit). Their unsettled runs count toward the wallet's settle-first
+// count and the budget meter like a /v1 run's (setSettleFirstRouteReader).
+// The lists live in src/settle-first-tools.js, which the copy guard reads too.
+const SETTLE_FIRST_CATALOG_SLUGS = new Set(SETTLE_FIRST_CATALOG_TOOLS.map((t) => t.slug));
+const SETTLE_FIRST_SLUGS = settleFirstSlugs(GATEWAY_TOOLS_ENABLED);
+setSettleFirstRouteReader((req) => SETTLE_FIRST_CATALOG_SLUGS.has(CATALOG[`${req.method} ${req.path}`]?.slug));
+/**
+ * Arm this run to settle its payment before its upstream work, or null (it
+ * settles after the handler, as every run does in normal operation). Armed
+ * only when all hold: the route is one of SETTLE_FIRST_SLUGS; the payment is
+ * an x402 `exact` payment this server verified on this request
+ * (settleFirstPaymentKindOf "exact": never a Tempo, card or credits call,
+ * proof-of-work or a trial); it holds no first-call allowance grant (that
+ * call is not settled at all, under its own caps); it is not the resend of a
+ * payment already settled first (that one is paid); and the settle breaker
+ * names the buyer (gatewaySettleFirstPlan: per wallet, a wallet or
+ * authorization holding /v1 runs that did not settle; while the budget mode
+ * is on, src/settle-first-meter.js, a wallet that has never settled).
+ *
+ * A wallet that has never settled and is served first (the budget mode off)
+ * puts the run's price at risk until the run ends (reserveAtRisk): the meter
+ * counts it, so runs started together cannot all slip under the budget.
+ *
+ * OPTION A. An `upto` or Circle Gateway batched payment cannot settle first.
+ * When the breaker names its buyer the run is not started: the answer is the
+ * route's own 402 with the exact accepts first (exactPaymentRequiredAnswer),
+ * nothing is charged and the breaker counts nothing. Outside that, such a
+ * payment is served as it always was.
+ *
+ * Refuses nothing else: an armed run whose payment settles is served.
+ * Called after every admission that can refuse the call uncharged.
+ */
+async function settleFirstPlanFor(req, res, def) {
+  if (FREE_MODE || !def || !SETTLE_FIRST_SLUGS.has(def.slug) || !ownTrue(req, "__a402Dispatched")) return null;
+  if (settledFirstResendOf(req)) return null;
+  if (allowanceOf(req)?.state === "claimed" || allowanceServed(req)) return null;
+  const kind = settleFirstPaymentKindOf(req);
+  if (!kind) return null;
+  let plan = null;
+  try { plan = await gatewaySettleFirstPlan(req); } catch { plan = null; }
+  let due = plan?.due || null;
+  if (!due && plan?.neverSettled) {
+    // Decided again with the figures as they stand now, and reserved in the
+    // same step, so runs admitted together each see the ones before them.
+    let usd = 0;
+    try { usd = quotedPriceUsd(def, req); } catch { usd = 0; }
+    const a = admitServedFirst(usd);
+    if (a.on) due = { reason: "never-settled", mode: a.why };
+    else { if (!onResponseEnd(req, res, a.release)) a.release(); return null; }
+  }
+  if (!due) return null;
+  if (kind !== "exact") {
+    const answer = await exactPaymentRequiredAnswer(req, { body: exactPaymentRequiredBody(def, kind) });
+    if (answer) {
+      markExactRequired(req, kind);
+      noteSettleFirst("exact-required", { reason: due.reason });
+      throw settleFirstRefusal(answer, "An exact payment is required for this call.");
+    }
+    return null;
+  }
+  noteSettleFirst("armed", { reason: due.reason });
+  const state = armSettleFirst(req, { reason: due.reason, run: () => settlePaymentBeforeRun(req, res, def, due.reason) });
+  // The upstream helpers that take no request read it from the request's
+  // own scope (src/request-timing.js), set here for an armed run only.
+  if (state) { const scope = currentRequestScope(); if (scope) scope.settleFirstRequest = req; }
+  return state;
+}
+/** The body of option A's 402: what to send instead, and that nothing was charged. */
+function exactPaymentRequiredBody(def, kind) {
+  return {
+    error: "exact_payment_required",
+    reason: "exact_payment_required",
+    tool: def.slug,
+    charged: false,
+    retry: "exact-payment",
+    hint: `Send this call with an exact payment: sign one of the exact accepts listed first in this 402 (PAYMENT-REQUIRED). An ${kind === "upto" ? "upto" : "Circle Gateway batched"} payment is not accepted from this wallet on this route until one of its payments settles. Nothing was charged.`,
+  };
+}
+// The ambient request of a settle point: the armed request of the scope the
+// call runs in, or null.
+setSettleFirstAmbient(() => currentRequestScope()?.settleFirstRequest || null);
+// The settle-first budget meter (src/settle-first-meter.js): every /v1 run
+// served and not paid adds its upstream cost (the upstream's own figure, or
+// the cost table's, noted on the run's scope), or its quoted price when the
+// run noted none. A payment refused at its settle point, or one settled first,
+// ran nothing unpaid. The resend of a payment settled first that was not
+// served (src/settle-first.js THE RESEND BOUND) ran with no new payment and is
+// metered like any unsettled run.
+setUnsettledRunListener((req) => {
+  if (settleFirstRefusalOf(req) || settledFirstOf(req)) return;
+  let usd = runUpstreamUsdOf(req);
+  if (!(usd > 0)) {
+    const def = CATALOG[`${req.method} ${req.path}`];
+    try { usd = def ? quotedPriceUsd(def, req) : 0; } catch { usd = 0; }
+  }
+  noteUnsettledRunCost(usd);
+});
+/**
+ * The settle point's work for an armed run. Resolves once the payment
+ * settled: its receipt (PAYMENT-RESPONSE, success: true) is on the response
+ * from then on, whatever the final status, so a run that then fails is
+ * booked as owed by the charged-failure recorder and one whose buyer left by
+ * the hang-up recorder, both under the class settle-first-failed; and a
+ * failure body says the payment is owed back instead of "not charged". Throws
+ * the refusal when the payment did not settle (nothing charged, no upstream
+ * call), and a client-gone 499 for a buyer who already left (nothing charged).
+ */
+async function settlePaymentBeforeRun(req, res, def, reason) {
+  const gone = clientGoneBeforeFirstByte(req);
+  if (gone) throw clientGoneError("The connection closed before the call started; nothing ran and nothing was charged.");
+  const t0 = Date.now();
+  const out = await settleVerifiedPaymentFirst(req);
+  // Nothing to settle with (the verified payment was not kept): the run
+  // goes on and is settled after its handler, as before.
+  if (!out.settled && !out.response) return;
+  if (!out.settled) {
+    noteSettleFirst("refused", { req, reason, slug: def.slug, ms: Date.now() - t0 });
+    throw settleFirstRefusal(out.response);
+  }
+  // Recorded first: from here the paywall's settle after the handler is
+  // answered with this settlement and never asks the facilitator again.
+  markSettledFirst(req, { result: out.result, requirements: out.requirements, paymentPayload: out.paymentPayload, at: Date.now() });
+  for (const [k, v] of Object.entries(out.headers)) res.setHeader(k, v);
+  installSettledFirstBody(req, res, { transaction: typeof out.result?.transaction === "string" ? out.result.transaction : null, origin: BASE_URL });
+  noteSettleFirst("settled", { req, reason, slug: def.slug, ms: Date.now() - t0 });
+}
+/** Answer a payment that did not settle at its settle point with the
+ *  paywall's own settle-failure answer (as @x402/express writes it after a
+ *  handler: the headers, the status, the body). Returns the status sent. */
+function sendSettleFirstRefusal(res, refusal) {
+  const r = refusal?.response || { status: 402, headers: {}, body: { error: "settlement_failed" } };
+  for (const [k, v] of Object.entries(r.headers || {})) res.setHeader(k, v);
+  const status = Number(r.status) || 402;
+  res.status(status);
+  const type = String(r.headers?.["Content-Type"] ?? r.headers?.["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+  if (r.isHtml || (type === "text/plain" && typeof r.body === "string")) res.send(r.body ?? "");
+  else res.json(r.body ?? {});
+  return status;
 }
 
 function sendToolError(res, err, slug) {
@@ -13717,6 +14114,8 @@ for (const tool of ALL_KIT) {
 
   app[lowerMethod](path, async (req, res) => {
     const startedAt = Date.now();
+    // The run's upstream cost is noted on its scope (src/settle-first-meter.js).
+    bindRunScope(req);
     // Unspoofable: requires a valid HMAC-signed X-Heartbeat-Token. CI canaries,
     // heartbeat probes, and operator smoke tests carry it; real callers don't.
     // Threaded into analytics + PostHog so test traffic never inflates
@@ -13736,6 +14135,9 @@ for (const tool of ALL_KIT) {
     // before the first byte and its charge is cancelled, so its per-request
     // upstream calls stop.
     let clientGoneCtl = null;
+    // Set when this run's payment settles before its upstream work
+    // (src/settle-first.js, settleFirstPlanFor below).
+    let settleFirst = null;
     try {
       // The SAME object the quote was priced from (src/handler-input.js):
       // query merged, MCP-style {params|input|args} envelopes unwrapped once,
@@ -13881,6 +14283,13 @@ for (const tool of ALL_KIT) {
       // Before the client-gone belt, because the balance read can wait.
       const coverRelease = await admitPaidRun(req, res, tool);
 
+      // SETTLE FIRST (src/settle-first.js). After the admission above, so a
+      // call refused there is never charged, and before the client-gone belt,
+      // because the read behind it can wait. An armed run settles its payment
+      // at its settle point, the moment the handler is about to make its
+      // first paid upstream call, after the handler's own checks.
+      settleFirst = await settleFirstPlanFor(req, res, tool);
+
       // The buyer's connection is already gone (it closed while the payment
       // was being verified): nothing could be delivered, so nothing runs and
       // nothing is charged - a 499 cancels settlement on every rail.
@@ -13906,6 +14315,9 @@ for (const tool of ALL_KIT) {
         ? await runInAbortableScope(() => runAsCallerOf(req, () => tool.handler(input, req)), { signal: clientGoneCtl.signal })
         : await runAsCallerOf(req, () => tool.handler(input, req));
       coverRelease?.settling?.();
+      // A handler that answered although its payment did not settle at the
+      // settle point (it caught the refusal) is answered as that refusal.
+      if (settleFirst && !settledFirstOf(req)) { const refused = settleFirstRefusalOf(req); if (refused) throw refused; }
 
       // A handler that spent real money upstream (external route-execute) leaves
       // a handle on the request. Resolve it against the FINAL response, not the
@@ -13959,6 +14371,8 @@ for (const tool of ALL_KIT) {
       // SSE escape hatch (LLM gateway streaming): the handler returns a
       // writer instead of a body and takes over the response. Runs after the
       // paywall settled; never cached (idempotency hooks res.json only).
+      // (A stream's upstream call is made inside the writer: an armed run's
+      // settle point is reached there.)
       if (result && typeof result.__sse === "function") { await result.__sse(res); return; }
 
       // Cache successful, non-error JSON responses — but ONLY after settlement.
@@ -13991,6 +14405,15 @@ for (const tool of ALL_KIT) {
     } catch (err) {
       errored = true;
       status = err.statusCode || 500;
+      // This run's payment did not settle at its settle point
+      // (src/settle-first.js): no upstream call was made and nothing was
+      // charged. The answer is the paywall's own settle-failure answer (the
+      // 402 and its receipt), whatever error the handler made of it.
+      const unsettled = isSettleFirstRefusal(err) ? err : (settleFirst && !settledFirstOf(req) ? settleFirstRefusalOf(req) : null);
+      if (unsettled && !res.headersSent) {
+        try { status = sendSettleFirstRefusal(res, unsettled); } catch { /* the response is already ending */ }
+        return;
+      }
       // A model provider refused the buyer's request (upstreamRejected, set by
       // throwUpstreamError) and no failover model took it: the request is the
       // problem, so the buyer reads 400, not a 502 that says we are down.
@@ -14087,6 +14510,9 @@ for (const tool of ALL_KIT) {
         res.status(status).json({ error: errorMessage, tool: tool.slug, ...provenance });
       }
     } finally {
+      // The handler ended: this request starts no settlement from here on,
+      // whatever still holds its scope (src/settle-first.js).
+      if (settleFirst) { disarmSettleFirst(req); if (!settleFirstStarted(req)) noteSettleFirst("not-reached"); }
       const latencyMs = Date.now() - startedAt;
       // Fire-and-forget. Analytics outages must NEVER affect agents.
       recordToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic, probe }).catch(() => {});
@@ -14379,6 +14805,10 @@ if (!x402Crawl.on) {
     })().catch((e) => console.warn(`[index] boot warm failed (the first reader builds it): ${String(e?.message || e).slice(0, 120)}`));
   } });
 }
+// Runtime switches (src/feature-flags.js) read Railway's feature flags once
+// FEATURE_FLAGS_RAILWAY_TOKEN is set (src/feature-flags-railway.js); until the
+// first sync, and with it unset, they read the environment and their defaults.
+void startRailwayFlags();
 // Price webhooks (src/price-webhooks.js): with a signing key set, record the
 // catalog's list prices (queueing one delivery per subscription that watches a
 // changed price) and start the delivery turn. Leased, so one replica does each.
@@ -14406,18 +14836,6 @@ if (startSellerReputation({
 // thread so a burst of them never holds this one. ROUTER_WORKERS=0 keeps them
 // here; until a worker is loaded (or when none is) queries run here anyway.
 startRouterPool();
-
-// Stripe SHADOW ledger drain (src/stripe-shadow-ledger.js). Arms the unref'd
-// timer that posts queued on-chain settlements to Stripe as PaymentIntents in
-// transaction_verification mode. Started at boot rather than lazily so a queue
-// left pending by a restart drains even if no new sale arrives. Inert unless
-// STRIPE_SHADOW_LEDGER=on AND STRIPE_SECRET_KEY is set - and inert means no
-// database file, no timer, no fetch. It is a MIRROR: nothing it does can
-// affect a charge, a response, or /revenue.
-if (shadowLedgerEnabled()) {
-  startShadowLedger();
-  console.log("[stripe-shadow] read-only settlement mirror armed (shadow only, not a source of truth)");
-}
 
 // MPP Index crawler: an independent seller directory for the MPP protocol,
 // parallel to the x402 crawler above but a different seller population.
@@ -14635,7 +15053,7 @@ let drainDeadlineMs = DRAIN_DEADLINE_MS;
 // reads held; the flush round below waits on that write with the others.
 let boardSaveAtDrain = false;
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals(), flushSolanaActivityStore({ max: 100 }), flushUpstreamCallDays()]).then(() => flushJsonDocuments({ timeoutMs }))]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals(), flushSolanaActivityStore({ max: 100 }), flushEvmActivityStore({ max: 100 }), flushUpstreamCallDays()]).then(() => flushJsonDocuments({ timeoutMs }))]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });

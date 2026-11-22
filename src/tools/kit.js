@@ -15,7 +15,6 @@ import { assertQueryableName, canonicalDnsName } from "./dns-name-filter.js";
 import { Worker } from "node:worker_threads";
 import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
-import { loadJsdom } from "./lazy-deps.js";
 import { hiddenMode, HIDDEN_INPUT_SCHEMA, HIDDEN_OUTPUT_EXAMPLE } from "./hidden-content.js";
 import { runHtml } from "./html-pool.js";
 import { countSentenceEnds } from "./sentence-ends.js";
@@ -589,27 +588,6 @@ function parseCsv(text, delimiter = ",") {
   return rows;
 }
 
-function xmlNodeToJson(node) {
-  const children = [...node.children];
-  const attrs = {};
-  for (const a of node.attributes ?? []) attrs[a.name] = a.value;
-  const base = Object.keys(attrs).length ? { _attrs: attrs } : {};
-  if (!children.length) {
-    const text = node.textContent.trim();
-    return Object.keys(base).length ? { ...base, _text: text } : text;
-  }
-  const out = { ...base };
-  for (const child of children) {
-    const val = xmlNodeToJson(child);
-    if (out[child.tagName] === undefined) out[child.tagName] = val;
-    else {
-      if (!Array.isArray(out[child.tagName])) out[child.tagName] = [out[child.tagName]];
-      out[child.tagName].push(val);
-    }
-  }
-  return out;
-}
-
 function deepDiff(a, b, path = "", out = []) {
   if (out.length >= 1000) return out;
   if (a === b) return out;
@@ -839,21 +817,9 @@ const dataTools = [
     },
     handler: async (input) => {
       const text = capText(need(input, "xml"), 100_000, "xml");
-      // Guard against deeply-nested XML: JSDOM's parse is superlinear in depth and
-      // can block the event loop for tens of seconds. Reject pathological nesting
-      // cheaply (single O(n) scan) before handing it to the parser.
-      let depth = 0, maxDepth = 0;
-      for (const m of text.matchAll(/<(\/)?[A-Za-z!?][^>]*?(\/)?>/g)) {
-        if (m[1]) depth = Math.max(0, depth - 1);
-        else if (!m[2] && !m[0].startsWith("<!") && !m[0].startsWith("<?")) { depth++; if (depth > maxDepth) maxDepth = depth; }
-      }
-      if (maxDepth > 256) throw bad("XML nesting too deep (max 256 levels)");
-      const JSDOM = await loadJsdom();
-      const dom = new JSDOM("");
-      const doc = new dom.window.DOMParser().parseFromString(text, "text/xml");
-      if (doc.querySelector("parsererror")) throw bad("XML parse error");
-      const root = doc.documentElement;
-      return { json: { [root.tagName]: xmlNodeToJson(root) } };
+      // The nesting guard, the parse and the walk run in the HTML worker
+      // (xmlToJsonText in ./xml-dom-ops.js), so the main thread never imports jsdom.
+      return JSON.parse(await runHtml("xmlToJson", { text }, Buffer.byteLength(text)));
     },
   },
   {

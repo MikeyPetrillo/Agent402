@@ -137,7 +137,7 @@ const env = {
 process.env.TEMPO_API_KEY = "test-tempo-key";
 process.env.TEMPO_RECIPIENT_ADDRESS = TREASURY;
 process.env.TEMPO_CURRENCY = CURRENCY;
-const { inspectTempoSender, tempoSenderOf, tempoAccessKeyActive, tempoAccessKeyState, createKeychainSenderVerifier, KEYCHAIN_UNAVAILABLE, TEMPO_SENDER_CHECK_RETRY_AFTER_S, createTempoGate, checkTempoCredentialBinding, TEMPO_SENDER_UNVERIFIED, TEMPO_KEYCHAIN_UNCONFIRMED } = await import("../src/mpp-tempo.js");
+const { inspectTempoSender, tempoSenderOf, tempoAccessKeyActive, tempoAccessKeyState, createKeychainSenderVerifier, keychainCallerOf, KEYCHAIN_UNAVAILABLE, TEMPO_SENDER_CHECK_RETRY_AFTER_S, createTempoGate, checkTempoCredentialBinding, TEMPO_SENDER_UNVERIFIED, TEMPO_KEYCHAIN_UNCONFIRMED } = await import("../src/mpp-tempo.js");
 const { gatewaySettleBreakerKey } = await import("../src/gateway-settle-breaker.js");
 
 // Signed transactions, one per shape.
@@ -386,6 +386,48 @@ const activeRec = (key, extra = {}) => ({ signatureType: 0, keyId: key, expiry: 
     await sleep(5); gates.get(F)(); await pF;
     ok(order.join() === [A, B, C, D, F].join() && (await pF) === F && q.readsQueued() === 0 && q.readsInFlight() === 0, `B: keys are read in the order they arrived, a later key behind every earlier one (${order.map((a) => a.slice(2, 3)).join("")})`);
   }
+  // The queue is shared fairly by client address: one address holding every
+  // place cannot keep another address's buyer out.
+  {
+    const gates = [], order = [];
+    const acct = (n) => `0x${n.toString(16).padStart(40, "0")}`;
+    const q = createKeychainSenderVerifier({ maxInFlight: 1, maxWaiters: 64, queueWaitMs: 10_000, check: async ({ account }) => { order.push(account); await new Promise((r) => gates.push(r)); return "active"; } });
+    const read = (n, who) => q({ account: acct(n), accessKey: agentKeyAddress }, { who });
+    const A = "ip:203.0.113.7", B = "ip:198.51.100.9";
+    // 80 distinct unconfirmed keys from one address: one read, 64 waiting, the rest refused at once.
+    const flood = [];
+    for (let i = 1; i <= 80; i++) flood.push(read(i, A));
+    await sleep(0);
+    const settledEarly = await Promise.race([Promise.all(flood.slice(65)), sleep(200).then(() => null)]);
+    ok(q.readsInFlight() === 1 && q.readsQueued() === 64 && Array.isArray(settledEarly) && settledEarly.every((x) => x === KEYCHAIN_UNAVAILABLE), `B: one address alone uses the whole queue: 1 read, 64 waiting, its 15 past that unavailable at once (${q.readsInFlight()}, ${q.readsQueued()})`);
+    // A real buyer from another address gets a place, not an immediate 503.
+    const tB = Date.now();
+    const buyer = read(1000, B);
+    const early = await Promise.race([buyer, sleep(150).then(() => "waiting")]);
+    ok(early === "waiting" && q.readsQueued() === 65, `B: with the queue full of one address's keys, a buyer from another address is queued over the bound, not refused (${early}, ${Date.now() - tB} ms, ${q.readsQueued()} waiting)`);
+    // The freed slot goes to the address holding the fewest places: the buyer is read next.
+    gates.shift()();
+    await sleep(5);
+    ok(order[1] === acct(1000), `B: the next freed slot goes to the other address's buyer, ahead of the flood's 64 (${order.length} read, second ${order[1]?.slice(-4)})`);
+    gates.shift()();
+    ok((await buyer) === acct(1000), "B: ...and the buyer's key is read and admitted");
+    // Newcomers from distinct addresses fill to the hard bound (twice 64); past it
+    // a newcomer takes the newest place of the address holding the most.
+    const others = [];
+    for (let i = 0; i < 65; i++) others.push(read(2000 + i, `ip:192.0.2.${i}`));
+    await sleep(0);
+    ok(q.readsQueued() === 2 * 64, `B: newcomers from distinct addresses are admitted over the bound up to the hard bound (${q.readsQueued()} waiting)`);
+    const before = q.placesGivenUp();
+    const late = read(3000, "ip:192.0.2.250");
+    const evicted = await Promise.race([flood[64], sleep(200).then(() => "still waiting")]);
+    ok(evicted === KEYCHAIN_UNAVAILABLE && q.placesGivenUp() === before + 1 && q.readsQueued() === 2 * 64, `B: at the hard bound a newcomer takes the newest place of the address holding the most, which is unavailable (${evicted}, ${q.placesGivenUp() - before} given up)`);
+    // The flood's own next key is still refused at once.
+    ok((await Promise.race([read(4000, A), sleep(200).then(() => "waiting")])) === KEYCHAIN_UNAVAILABLE, "B: the flooding address's own next key is unavailable at once");
+    // Drain everything.
+    for (let i = 0; i < 400 && (q.readsInFlight() || q.readsQueued()); i++) { while (gates.length) gates.shift()(); await sleep(1); }
+    await Promise.all([...flood, ...others, late]);
+    ok(q.readsInFlight() === 0 && q.readsQueued() === 0 && q.callersHolding() === 0, `B: every read and place is released once the reads end (${q.callersHolding()} addresses still counted)`);
+  }
   let throws = 0;
   const throwing = createKeychainSenderVerifier({ check: async () => { throws++; throw new Error("rpc down"); } });
   ok((await throwing({ account: root.address, accessKey: agentKeyAddress })) === KEYCHAIN_UNAVAILABLE, "B: a check that throws resolves to unavailable (not a no), never rejects");
@@ -449,7 +491,7 @@ async function listen(app) {
     secretKey: SECRET, realm: REALM, priceFor,
     validate: async () => { seen.validate++; if (validateDelayMs) await sleep(validateDelayMs); return { ok: true, validation: {} }; },
     broadcast: async () => { if (broadcastDelayMs) await sleep(broadcastDelayMs); return { ok: true, receipt: { method: "tempo", status: "success", reference: "0x0t", timestamp: new Date().toISOString() } }; },
-    verifyKeychainSender: async (kc) => { seen.keychain.push(kc); return keychainAnswer(kc); },
+    verifyKeychainSender: async (kc, o) => { seen.keychain.push(kc); seen.keychainWho = o?.who; return keychainAnswer(kc, o); },
     pushSender: async () => null, // offline: never the real Tempo RPC
   }));
   app.use(paywallStub);
@@ -477,6 +519,7 @@ async function listen(app) {
   v0 = seen.validate;
   r = await get("/spend", TX_AGENT);
   ok(r.status === 200 && r.body.sender === lc(root.address) && r.body.key === `tempo:${lc(root.address)}` && seen.validate === v0 + 1, `C: an access-key credential the chain vouches for reaches a spending route, keyed on the account (${JSON.stringify(r.body)})`);
+  ok(seen.keychainWho === "ip:127.0.0.1" && keychainCallerOf({ ip: "2001:db8:1:2:3:4:5:6" }) === keychainCallerOf({ ip: "2001:db8:1:2:ffff::1" }) && keychainCallerOf({ ip: "203.0.113.5", cdnUnproven: true }) === "anonymous" && keychainCallerOf({}) === "anonymous", `C: the gate counts the key read's place under the client address (an IPv6 one by its /64; a CDN edge address names no one) (${seen.keychainWho})`);
   // A forged p256 access-key signature is refused even though the chain would
   // vouch for the key it names: the signature is checked before the chain is asked.
   keychainAnswer = async (kc) => (kc.account === lc(root.address) ? kc.account : null);

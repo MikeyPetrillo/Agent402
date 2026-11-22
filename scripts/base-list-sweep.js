@@ -40,6 +40,9 @@ import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.
 import { assertOwnPaidTarget, guardCappedSigning } from "./lib/buyer-guard.js";
 import { createHmac } from "node:crypto";
 import { slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
+import { installPublicLog, forPublicFile } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "base-list-sweep");
 const readOpenapi = openapiReader(TARGET);
@@ -264,4 +267,4 @@ console.log(`\n=== base list sweep done ===`);
 console.log(`bought: ${report.bought.length} · skipped: ${report.skipped.length} · failed: ${report.failed.length}`);
 console.log(`spent (recycles to our own payTo): $${report.spentUsd.toFixed(4)}`);
 if (report.failed.length) console.log(`failures:\n  ${report.failed.map((f) => `${f.entry} (${f.reason})`).join("\n  ")}`);
-if (OUT) { writeFileSync(OUT, JSON.stringify(report, null, 2)); console.log(`wrote ${OUT}`); }
+if (OUT) { writeFileSync(OUT, JSON.stringify(forPublicFile(report), null, 2)); console.log(`wrote ${OUT}`); }

@@ -58,6 +58,12 @@ const TOP1 = [
   ["token balance",                 "wallet-balance"],
   ["ens lookup",                    "ens-resolve"],
   ["lookup whois for a domain",    "whois"],
+  // A question or "search for" opening goes to the web tools only when no
+  // tool answers the rest strongly (2026-11-22): this one names a tool.
+  ["what is my ip",                 "ip-info"],
+  // ...and a question several tools only share a word of stays the answer's.
+  ["what is x402",                  "answer"],
+  ["how do solar panels work",      "answer"],
   ["geocode a city",                "place-lookup"],
   ["validate an email address",    "email-validate"],
   ["stock price for AAPL",         "stock-quote"],
@@ -98,6 +104,15 @@ const TOP1 = [
   ["contact sheet",                 "html-frames"],
   ["motion design frame check",     "html-frames"],
   ["freeze frames of my animation", "html-frames"],
+  // A plural or a spelled-out version (2026-11-22): "uuids" matched no slug,
+  // tag or alias word of uuid, so "generate" carried captcha-generate to the
+  // top. A plural reads as the singular the catalog names, and "version 7"
+  // reads as "v7". The demand board's shapes live in find-misses.json.
+  ["make some version 7 uuids",     "uuid"],
+  ["generate uuids",                "uuid"],
+  ["uuid v7",                       "uuid"],
+  ["uuid version 7",                "uuid"],
+  ["time ordered ids",              "uuid"],
 ];
 
 const TOPN = [

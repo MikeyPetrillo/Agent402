@@ -11,6 +11,7 @@
 // Counts are derived from the live catalog (runtime surfaces stay exact); the
 // prose claim is the evergreen "500+". No secrets, no strategy - this is a
 // public instruction sheet an agent will read verbatim.
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { REPO_URL } from "./repo-link.js";
 import { UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-door.js";
 import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
@@ -119,9 +120,9 @@ Run these in order. Do not skip steps.
 
 \`\`\`bash
 # free tier (proof-of-work tools only)
-claude mcp add agent402 -- npx -y agent402-mcp@0.14.1
+claude mcp add agent402 -- npx -y agent402-mcp@0.15.0
 # full catalog: add a wallet (EVM key with USDC) via env
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.14.1
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.15.0
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -129,7 +130,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.14.1
 Generic MCP host config:
 
 \`\`\`json
-{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.14.1"],
+{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.15.0"],
   "env": { "AGENT_KEY": "0x...", "AGENT402_MAX_PER_CALL": "0.05", "AGENT402_BUDGET": "1.00" } } } }
 \`\`\`
 
@@ -267,7 +268,7 @@ ${meteredCurl(baseUrl)}
 
 On x402 a failed call is not charged by construction: settlement happens AFTER the
 handler and only for a sub-400 response. You can verify that from the headers
-of the response you hold, without trusting this document.
+of the response you hold, without trusting this document. ${SETTLE_FIRST_SENTENCE}
 
 ### Rules
 

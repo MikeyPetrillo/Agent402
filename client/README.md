@@ -473,10 +473,15 @@ the authorization could still redeem it, so the caps count it until it can no
 longer settle. When the authorization expires unused, the held amount is
 released and was never charged. On the built-in default host
 (`https://agent402.tools`, matched by exact origin), an error status (400 or
-above) is never settled, so a hold for one ends at the authorization's
+above) is not settled, so a hold for one ends at the authorization's
 `validBefore` plus 10 minutes, with no 24-hour floor, or 15 minutes after the
 answer when the client cannot read `validBefore` (no `x402Client`). Every other
-`baseUrl` keeps the rule above.
+`baseUrl` keeps the rule above. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. A failure whose body says
+`charged: true` and `retry: "same-payment"` is that case: with `x402Client` the
+client sends the same signed payment once more and counts the amount once as
+settled spend, never held; an error that remains has `paid: true`,
+`charged: true`, `resent`, and the `transaction` and `refundStatusUrl` the body
+names.
 
 **Caps are enforced on the payment that is signed.** Pass the `x402Client` your
 `fetch` wraps (or call `a.guardX402Client(client)`) and the client registers a

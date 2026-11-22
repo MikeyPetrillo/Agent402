@@ -11,6 +11,7 @@ import { isX402McpRequest } from "./mcp-x402-routes.js";
 import { MAX_SETTLED_VALIDITY_HOLD_MS, paymentReplayKey } from "./replay-guard.js";
 import { decodePaymentHeader } from "./payment-header.js";
 import { base64BytesOf } from "./base64-bytes.js";
+import { SETTLE_FIRST_MAX_RESENDS } from "./settle-first.js";
 
 // A stored answer is the body as served, or, when it was charged but never
 // delivered (the buyer left while the payment settled), the body under this
@@ -39,7 +40,17 @@ const unwrapStored = (hit) => (hit && typeof hit === "object" && !Array.isArray(
 // authorization can no longer move money, and a new one is safe) plus a
 // minute, at least a minute, at most MAX_SETTLED_VALIDITY_HOLD_MS (30 days);
 // a payment that names no validBefore (Solana, Stellar, Algorand), a day.
+//
+// A payment cut at its network's settle deadline (src/settle-deadlines.js)
+// also keeps the route's own answer beside it, when that answer replays (the
+// server's implicitReplay rule: no lasting effect, no identity binding, not
+// streamed) and fits. The same payment sent again is then asked of
+// onCappedResend first: once the chain proves its transfer landed it is
+// served that answer (its debt, if one was booked, voided first); until then,
+// and whenever the check cannot say, the kept 402.
 const UNCONFIRMED = "__a402Unconfirmed";
+// What the settle deadlines leave on a request they cut (src/settle-deadlines.js CAPPED).
+const CAPPED = Symbol.for("agent402.settleCapped");
 const UNCONFIRMED_MIN_MS = 60_000;
 const UNCONFIRMED_NO_EXPIRY_MS = 24 * 3600_000;
 // A header field read as text: a string as is, a number as its digits,
@@ -73,6 +84,59 @@ export function unconfirmedKeyOf(req, cred) {
   } catch { id = null; }
   return createHash("sha256").update(`unconfirmed-settle\n${id || `cred\n${textOf(cred)}`}`).digest("hex");
 }
+// THE SAME PAYMENT AFTER A FAILED SETTLE-FIRST RUN. A payment settled before
+// its run (src/settle-first.js) whose run then failed, or whose answer was
+// not delivered, is owed back (the refund ledger, class settle-first-failed).
+// The failure says the same payment may be sent again (`retry:
+// "same-payment"`): a CREDIT is kept here under the payment's identity (as
+// for an unconfirmed answer, above) AND the route it paid for, bound to the
+// payer's signature digest, for CREDIT_TTL_MS; the digest of the body it paid
+// for is kept INSIDE the record, so a request carrying a payment header has
+// its body hashed only when a credit is stored for that payment (a large body
+// with a payment that holds none is never read here). The same request sent
+// again with that payment is run once more WITHOUT any settlement (the
+// payment is already taken): the server voids the debt before the run
+// (onSettledFirstResend: a hold the refund run cannot claim past), restores
+// it if the run fails again, and keeps it void when the answer is served, so
+// a buyer is served once and never both served and refunded. A copy sent
+// while one runs is told to wait (409). A served credit is spent here.
+const CREDIT = "__a402SettledFirstCredit";
+export const CREDIT_TTL_MS = 24 * 3600_000;
+/** A digest of this request's JSON body, worked out once per request (the
+ *  explicit or implicit idempotency key, the call digest of a kept answer and
+ *  a settle-first credit all bind to it). Throws as JSON.stringify does. */
+const bodyDigests = new WeakMap();
+function bodyDigestOf(req) {
+  const memo = bodyDigests.get(req);
+  if (memo && memo.body === req.body) return memo.digest;
+  const digest = createHash("sha256").update(JSON.stringify(req.body)).digest("hex");
+  bodyDigests.set(req, { body: req.body, digest });
+  return digest;
+}
+/** The body a settle-first credit is bound to: kept in the credit's record
+ *  and compared with a resend's ("-" for none, "?" for one that cannot be read). */
+export function settledFirstCreditBodyOf(req) {
+  try { return req.body && typeof req.body === "object" && Object.keys(req.body).length ? bodyDigestOf(req) : "-"; } catch { return "?"; }
+}
+/** The key a settle-first credit is kept under for this request's payment and
+ *  route (its body is bound inside the record: settledFirstCreditBodyOf). */
+export function settledFirstCreditKeyOf(req, cred) {
+  let id = null;
+  try {
+    const n = paymentNonceIdentityOf(req);
+    if (n && typeof n.network === "string" && typeof n.from === "string" && typeof n.nonce === "string") id = `nonce\n${n.network}\n${n.from}\n${n.nonce}`;
+    else {
+      let k = null;
+      try { k = paymentReplayKey(req); } catch { k = null; }
+      if (typeof k === "string" && !k.startsWith("c:")) id = `replay\n${k.split(":").slice(0, 2).join(":")}`;
+    }
+  } catch { id = null; }
+  const url = String(req.originalUrl || req.url || "");
+  const qs = url.includes("?") ? `\n?${url.slice(url.indexOf("?") + 1)}` : "";
+  const wire = isX402McpRequest(req) ? "x402-mcp " : "";
+  return createHash("sha256").update(`settled-first-credit-v2\n${id || `cred\n${textOf(cred)}`}\n${wire}${req.method} ${req.path}${qs}`).digest("hex");
+}
+
 /** What binds a stored unconfirmed answer to the payer's own signature. The
  *  key above is the payment's identity, which anyone can name without the
  *  payer's key (a header with no valid signature naming its network, payer
@@ -186,7 +250,18 @@ export async function chargedReplayVerdict(tx, { voidOnClaim, rowOf }) {
  *  Resolving { serve: false, status, body, retryAfter? } answers that instead
  *  of the stored body (the charge was refunded, or its debt's void has not
  *  landed yet); any other result serves it. */
-export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore(), implicitReplay = null, onReplay = null }) {
+/** settledFirstCredit(req, status): what a credit for this request's payment
+ *  holds ({ tx, network, wire, note, receipt }) when its payment was settled
+ *  before its run and the run ended with `status` (>= 400, or 499 for an
+ *  answer not delivered); else null. onSettledFirstResend(req, credit):
+ *  awaited when the same payment is sent again; resolves { serve: true } to
+ *  run it (the server marked the request), or { serve: false, status, body,
+ *  retryAfter? } to answer that instead. Both from the server. The credit
+ *  passed carries `resends`: how many times the payment already ran again.
+ *  settledFirstResendSpent(req, credit): the answer ({ status, body }) to a
+ *  resend past SETTLE_FIRST_MAX_RESENDS (src/settle-first.js THE RESEND
+ *  BOUND): nothing runs and nothing is charged. */
+export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore(), implicitReplay = null, onReplay = null, onCappedResend = null, settledFirstCredit = null, onSettledFirstResend = null, settledFirstResendSpent = null }) {
   // Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
   // `Idempotency-Key`, a successful gated call is cached keyed by that key + the
   // gate credential it presented (the x402 payment authorization or the
@@ -264,9 +339,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     // Bind to the exact route AND the request body, so the same key+credential
     // can't be used to retrieve a cached response from a different payload or
     // different endpoint. Body is hashed (not stored) so the key stays compact.
-    const bodyHash = req.body && Object.keys(req.body).length
-      ? createHash("sha256").update(JSON.stringify(req.body)).digest("hex")
-      : "-";
+    const bodyHash = req.body && Object.keys(req.body).length ? bodyDigestOf(req) : "-";
     // A GET tool takes its input on the query string: bound too (as sent), so
     // a repeat with another input is a different call. Added only when there
     // is one, so a query-less key hashes exactly as before.
@@ -278,6 +351,16 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     const wire = isX402McpRequest(req) ? "x402-mcp " : "";
     return { key: createHash("sha256").update(`${wire}${req.method} ${req.path}${qs}\n${idem}\n${cred}\n${bodyHash}`).digest("hex"), kind, implicit };
   };
+  // The call a request makes (its wire, route, query and body), so a kept
+  // route answer is served only to the same call: the unconfirmed 402 is the
+  // payment's whatever the call, the route's answer is that call's alone.
+  const callDigestOf = (req) => {
+    const bodyHash = req.body && typeof req.body === "object" && Object.keys(req.body).length ? bodyDigestOf(req) : "-";
+    const url = String(req.originalUrl || req.url || "");
+    const qs = url.includes("?") ? `\n?${url.slice(url.indexOf("?") + 1)}` : "";
+    const wire = isX402McpRequest(req) ? "x402-mcp " : "";
+    return createHash("sha256").update(`${wire}${req.method} ${req.path}${qs}\n${bodyHash}`).digest("hex");
+  };
   // The unconfirmed answer of a payment, back for the same payment (above).
   const replayUnconfirmed = (req, res, rec) => {
     // Every 402 is no-store already (src/paid-no-store.js).
@@ -287,9 +370,40 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     res.status(402).type("application/json");
     return res.send(JSON.stringify(rec.body));
   };
+  // The same payment sent again after a settle-deadline cut, with the
+  // route's answer kept: served once the transfer is proven (onCappedResend),
+  // else the kept 402.
+  const replayCapped = async (req, res, rec) => {
+    let v = null;
+    try { v = await onCappedResend(req, { payment: rec.capped.payment }); } catch { v = null; }
+    if (v && typeof v === "object" && v.serve === true) {
+      if (typeof v.receipt === "string" && v.receipt) res.setHeader("PAYMENT-RESPONSE", v.receipt);
+      res.setHeader("X-Idempotent-Replay", "true");
+      res.setHeader("X-Replayed-Answer", "1");
+      return res.status(200).json(rec.capped.answer);
+    }
+    if (v && typeof v === "object" && v.serve === false) {
+      if (Number(v.retryAfter) > 0) res.setHeader("Retry-After", String(Math.ceil(Number(v.retryAfter))));
+      return res.status(Number(v.status) || 402).json(v.body && typeof v.body === "object" ? v.body : { error: "replay_refused" });
+    }
+    return replayUnconfirmed(req, res, rec);
+  };
   // Keep this request's unconfirmed answer (set on the request by the
   // paywall when it sent one) for the same payment sent again.
   const keepUnconfirmed = (req, res, uKey, sig) => {
+    // The route's own answer, for a payment the settle deadlines cut: the
+    // first JSON body the handler sent as a 200 (the paywall's 402 that
+    // replaces it is written with its own status).
+    let answer;
+    let replays = false;
+    try { replays = typeof onCappedResend === "function" && typeof implicitReplay === "function" && implicitReplay(req) === true; } catch { replays = false; }
+    if (replays && typeof res.json === "function") {
+      const prior = res.json;
+      res.json = function cappedAnswerJson(body) {
+        if (answer === undefined && res.statusCode === 200 && body !== undefined) answer = body;
+        return prior.call(this, body);
+      };
+    }
     let done = false;
     const keep = () => {
       if (done) return;
@@ -301,32 +415,133 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       const a = req.__a402UnconfirmedAnswer;
       if (res.statusCode !== 402 || !a || typeof a !== "object" || !a.body || typeof a.body !== "object") return;
       if (typeof sig !== "string" || !sig) return;
-      const rec = { [UNCONFIRMED]: 1, body: a.body, receipt: typeof a.receipt === "string" ? a.receipt : null, sig };
+      let rec = { [UNCONFIRMED]: 1, body: a.body, receipt: typeof a.receipt === "string" ? a.receipt : null, sig };
+      const capped = req[CAPPED];
       let bytes = 0;
-      try { bytes = Buffer.byteLength(JSON.stringify(rec), "utf8"); } catch { bytes = 0; }
+      if (replays && answer !== undefined && capped && typeof capped === "object") {
+        let call = null;
+        try { call = callDigestOf(req); } catch { call = null; }
+        const withAnswer = call ? { ...rec, capped: { answer, payment: capped, call } } : rec;
+        try { bytes = Buffer.byteLength(JSON.stringify(withAnswer), "utf8"); } catch { bytes = 0; }
+        if (bytes && bytes <= IDEM_MAX_BODY_BYTES) rec = withAnswer;
+      }
+      if (rec.capped === undefined) { try { bytes = Buffer.byteLength(JSON.stringify(rec), "utf8"); } catch { bytes = 0; } }
       if (!bytes || bytes > IDEM_MAX_BODY_BYTES) return;
       store.set(uKey, rec, bytes, { ttlMs: unconfirmedReplayMs(a.validBefore) }).catch(() => {});
     };
     res.once("finish", keep);
     res.once("close", keep);
   };
+  // Keep a credit for this request's payment when its run settled first and
+  // then failed or was not delivered (settledFirstCredit says so).
+  // `occupied`: an unspent credit for this payment and route under another
+  // body is stored at cKey, and is never replaced.
+  const keepSettledFirstCredit = (req, res, cKey, sig, occupied) => {
+    if (typeof sig !== "string" || !sig || occupied) return;
+    let done = false;
+    onResponseEnd(req, res, (info) => {
+      if (done) return;
+      done = true;
+      try {
+        const status = info?.via === "undelivered" ? 499 : res.statusCode;
+        if (!(status >= 400)) return;
+        const c = settledFirstCredit(req, status);
+        if (!c || typeof c.tx !== "string" || !c.tx) return;
+        const rec = { [CREDIT]: 1, sig, body: settledFirstCreditBodyOf(req), tx: c.tx, network: c.network ?? null, wire: c.wire ?? null, note: typeof c.note === "string" ? c.note : null, receipt: typeof c.receipt === "string" ? c.receipt : null, at: Date.now() };
+        const bytes = Buffer.byteLength(JSON.stringify(rec), "utf8");
+        if (bytes > IDEM_MAX_BODY_BYTES) return;
+        store.set(cKey, rec, bytes, { ttlMs: CREDIT_TTL_MS }).catch(() => {});
+      } catch { /* no credit kept: the debt stays owed and is refunded */ }
+    });
+  };
+  // Run the same payment's request again under its credit. True when the
+  // request was answered here; false when it was marked to run.
+  const startSettledFirstCredit = async (req, res, cKey, credit) => {
+    let claimed = false;
+    try { claimed = await store.claim(cKey); } catch { claimed = false; }
+    if (!claimed) {
+      res.setHeader("Retry-After", "2");
+      res.status(409).json({ error: "idempotent_request_in_flight", charged: true, hint: "A call carrying this same payment is still running. Retry shortly with the same payment; nothing more is charged." });
+      return true;
+    }
+    // THE RESEND BOUND (src/settle-first.js): the count is written before
+    // the run, under the claim, so a run that never ends still counts; a
+    // resend that does not run (the server answered it) gives it back.
+    const resends = Number.isInteger(credit.resends) && credit.resends > 0 ? credit.resends : 0;
+    if (resends >= SETTLE_FIRST_MAX_RESENDS) {
+      let spent = null;
+      try { spent = typeof settledFirstResendSpent === "function" ? await settledFirstResendSpent(req, { ...credit, resends }) : null; } catch { spent = null; }
+      store.release(cKey).catch(() => {});
+      res.status(Number(spent?.status) || 402).json(spent?.body && typeof spent.body === "object" ? spent.body : { error: "resend_limit_reached", charged: true, refundOwed: true, resends: { max: SETTLE_FIRST_MAX_RESENDS } });
+      return true;
+    }
+    // The record keeps every field the lookup reads (the body it is bound to
+    // included), so a counted credit is still found on the next resend.
+    const recOf = (n) => ({ [CREDIT]: 1, sig: credit.sig, body: credit.body, tx: credit.tx, network: credit.network ?? null, wire: credit.wire ?? null, note: typeof credit.note === "string" ? credit.note : null, receipt: typeof credit.receipt === "string" ? credit.receipt : null, at: Number(credit.at) || Date.now(), resends: n });
+    const keepCount = async (n) => { const rec = recOf(n); await store.set(cKey, rec, Buffer.byteLength(JSON.stringify(rec), "utf8"), { ttlMs: CREDIT_TTL_MS }); };
+    try { await keepCount(resends + 1); } catch {
+      store.release(cKey).catch(() => {});
+      res.setHeader("Retry-After", "10");
+      res.status(503).json({ error: "resend_pending", charged: true, hint: "The payment this request carries could not be read against its charge just now. Nothing more is charged. Retry shortly with the same payment." });
+      return true;
+    }
+    let verdict;
+    try { verdict = await onSettledFirstResend(req, { ...credit, resends }); } catch { verdict = { serve: false, status: 503, retryAfter: 10, body: { error: "resend_pending", charged: true, hint: "The payment this request carries could not be read against its charge just now. Nothing more is charged. Retry shortly with the same payment." } }; }
+    if (!verdict || verdict.serve !== true) {
+      keepCount(resends).catch(() => {}).then(() => store.release(cKey)).catch(() => {});
+      if (Number(verdict?.retryAfter) > 0) res.setHeader("Retry-After", String(Math.ceil(Number(verdict.retryAfter))));
+      res.status(Number(verdict?.status) || 402).json(verdict?.body && typeof verdict.body === "object" ? verdict.body : { error: "resend_refused" });
+      return true;
+    }
+    let ended = false;
+    onResponseEnd(req, res, (info) => {
+      if (ended) return;
+      ended = true;
+      const served = info?.via !== "undelivered" && res.statusCode === 200;
+      // Served: the credit is spent (the answer itself is kept under the
+      // payment's idempotency key where one applies).
+      const after = served
+        ? Promise.resolve().then(() => store.set(cKey, { [CREDIT]: 1, spent: true, sig: credit.sig, tx: credit.tx }, 200, { ttlMs: CREDIT_TTL_MS })).catch(() => {})
+        : Promise.resolve();
+      after.then(() => store.release(cKey)).catch(() => {});
+    });
+    return false;
+  };
   return async (req, res, next) => {
     if (!isCatalogRoute(req)) return next();
     const cred = freeMode ? null : paymentHeaderOf(req);
     const uKey = cred ? unconfirmedKeyOf(req, cred) : null;
+    const cKey = cred && typeof settledFirstCredit === "function" ? settledFirstCreditKeyOf(req, cred) : null;
     const bound = idemHashKey(req);
     if (!bound && !uKey) return next();
-    const [uHit, hit0] = await Promise.all([
+    const [uHit, hit0, cHit] = await Promise.all([
       uKey ? Promise.resolve().then(() => store.get(uKey)).catch(() => null) : null,
       bound ? Promise.resolve().then(() => store.get(bound.key)).catch(() => null) : null,
+      cKey ? Promise.resolve().then(() => store.get(cKey)).catch(() => null) : null,
     ]);
     const uSig = uKey ? unconfirmedSignatureOf(req, cred) : null;
     const uStored = Boolean(uHit && typeof uHit === "object" && uHit[UNCONFIRMED] === 1 && uHit.body && typeof uHit.body === "object");
     // Only the payer's own signature gets its answer back; any other header
     // naming the same payment takes the normal path (verify refuses it), and
     // never replaces the payer's stored answer.
-    if (uStored && typeof uSig === "string" && uSig && uHit.sig === uSig) return replayUnconfirmed(req, res, uHit);
+    if (uStored && typeof uSig === "string" && uSig && uHit.sig === uSig) {
+      const capped = uHit.capped;
+      let sameCall = false;
+      try { sameCall = !!capped && typeof capped === "object" && typeof capped.call === "string" && capped.call === callDigestOf(req); } catch { sameCall = false; }
+      if (typeof onCappedResend === "function" && sameCall && capped.answer !== undefined && capped.payment && typeof capped.payment === "object") return replayCapped(req, res, uHit);
+      return replayUnconfirmed(req, res, uHit);
+    }
     if (uKey && !uStored) keepUnconfirmed(req, res, uKey, uSig);
+    // A credit for this payment, route and body (above), when no answer is
+    // stored for it: the payment's failed settle-first run is run again.
+    // The body is read only now, when a credit is stored for this payment.
+    const live = cHit && typeof cHit === "object" && cHit[CREDIT] === 1 && !cHit.spent && typeof cHit.tx === "string" && cHit.tx ? cHit : null;
+    const credit = live && typeof live.body === "string" && live.body === settledFirstCreditBodyOf(req) ? live : null;
+    if (credit && (hit0 === null || hit0 === undefined) && typeof uSig === "string" && uSig && credit.sig === uSig && typeof onSettledFirstResend === "function") {
+      // Answered here (a wait, a refund, a pending ledger), or marked and run
+      // on: its answer is kept below like any paid call's.
+      if (await startSettledFirstCredit(req, res, cKey, credit)) return;
+    } else if (cKey) keepSettledFirstCredit(req, res, cKey, uSig, Boolean(live && !credit));
     if (!bound) return next();
     const { key, kind, implicit } = bound;
     let hit = hit0;

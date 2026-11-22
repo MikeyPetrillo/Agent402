@@ -50,6 +50,9 @@ const readBody = (req) => new Promise((r) => { let b = ""; req.on("data", (c) =>
 const decode = (h) => JSON.parse(Buffer.from(String(h), "base64").toString("utf8"));
 
 export async function bootPaidWires({ label = "paid-wires", env = {}, operatorToken = "paid-wires-operator-token-0123456789abcdef" } = {}) {
+  // `env` may be a function of the stubs' base URL, for a setting that names it.
+  let envF = null;
+  const envNow = () => (typeof env === "function" ? (envF ? env(envF) : {}) : env);
   const secret = "paid-wires-secret-" + randomBytes(6).toString("hex");
   const feePayer = await kit.generateKeyPairSigner();
   const solPayTo = await kit.generateKeyPairSigner();
@@ -67,6 +70,12 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
   // (st.keyReadDelayFor(pair), when set, per pair).
   const chainKeys = new Set();
   const st = { keyReadDelayMs: 0, keyReadDelayFor: null, keyReads: 0, verifyDelayMs: 0, settleDelayMs: 250, readDelayMs: 0, readDelayFor: null, llmDelayMs: 0, llmStatus: 0, images: 0, captures: 0, expired: 0, stripeCapture: "decline", verifies: 0, settleAttempts: 0, settled: 0, refused: 0, completions: 0, reads: 0, byAccount: new Map() };
+  // What reached the stubs, in order: { t: "settle", id } when a settle call
+  // arrives and { t: "upstream", path } when a model call does, so a test
+  // can read which came first. st.settleAnswer (when set) answers a settle
+  // call itself: ({ fam, id, payer, network }) => { status, body } or null.
+  st.events = [];
+  st.settleAnswer = null;
   const tally = (id, k) => { const t = st.byAccount.get(id) || { attempts: 0, settled: 0, refused: 0 }; t[k]++; st.byAccount.set(id, t); };
   // The most settle calls one account had under way at once (each is a
   // handler that has just answered), outside the tallies.
@@ -88,6 +97,8 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
   const paymentOf = (fam, j) => {
     const inner = j?.paymentPayload?.payload || {};
     if (inner.authorization) return { id: `evm:${String(inner.authorization.from).toLowerCase()}`, amount: BigInt(inner.authorization.value) };
+    // An upto (Permit2) payment draws what the settle names, at most what was permitted.
+    if (inner.permit2Authorization) return { id: `evm:${String(inner.permit2Authorization.from).toLowerCase()}`, amount: BigInt(j?.paymentRequirements?.amount || inner.permit2Authorization.permitted?.amount || 0) };
     const blob = inner.transaction || (Array.isArray(inner.paymentGroup) ? inner.paymentGroup[0] : null);
     return payments.get(blob) || null;
   };
@@ -162,8 +173,22 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
       }
       return reply(404, { error: { type: "invalid_request_error", message: "no such route on the stub" } });
     }
+    // other upstreams (UPSTREAM_STUB_HOSTS): recorded like a model call, and
+    // answered by st.upHook({ host, path, j, req, res, reply }) when a test
+    // sets one, else a 404.
+    if (path.startsWith("/up/")) {
+      const rest = path.slice(4), slash = rest.indexOf("/");
+      const host = slash < 0 ? rest : rest.slice(0, slash), sub = slash < 0 ? "/" : rest.slice(slash);
+      st.events.push({ t: "upstream", path: `${host}${sub}`, at: Date.now() });
+      if (typeof st.upHook === "function" && await st.upHook({ host, path: sub, j, req, res, reply })) return;
+      return reply(404, { error: "no such route on the stub" });
+    }
     // the model upstream
     if (path.startsWith("/llm")) {
+      if (req.method === "POST") st.events.push({ t: "upstream", path, at: Date.now() });
+      // st.llmHook (when set) may answer a model call itself:
+      // async ({ path, j, req, res, reply }) => true when it did.
+      if (typeof st.llmHook === "function" && await st.llmHook({ path, j, req, res, reply })) return;
       // A streamed Messages or Responses call: st.llmStreamFrames(j, wire).
       if (req.method === "POST" && /\/api\/v1\/(messages|responses)$/.test(path) && j.stream === true && typeof st.llmStreamFrames === "function") {
         st.completions++;
@@ -182,7 +207,8 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
           return res.end();
         }
         const content = typeof st.llmContent === "function" ? st.llmContent(j) : "stub answer";
-        return reply(200, { id: "gen-" + st.completions, object: "chat.completion", created: Math.floor(Date.now() / 1000), model: j.model || "x", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, cost: 0.000001 } });
+        // st.llmCost: the upstream charge the answer reports (usage.cost).
+        return reply(200, { id: "gen-" + st.completions, object: "chat.completion", created: Math.floor(Date.now() / 1000), model: j.model || "x", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, cost: Number.isFinite(st.llmCost) ? st.llmCost : 0.000001 } });
       }
       if (req.method === "GET" && path.endsWith("/endpoints") && path.includes("/images/models/")) return reply(200, { data: { endpoints: [] } });
       // st.imageB64 (when set): the image the stub answers, e.g. a large one.
@@ -195,7 +221,8 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
     if (!m) return reply(404, {});
     const [, fam, kind] = m;
     if (kind === "supported") {
-      if (fam === "evm") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: BASE }, { x402Version: 2, scheme: "exact", network: SOL, extra: { feePayer: feePayer.address } }], extensions: [], signers: {} });
+      // With X402_UPTO_NETWORKS set for the server, the Base facilitator advertises upto too.
+      if (fam === "evm") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: BASE }, ...(envNow().X402_UPTO_NETWORKS ? [{ x402Version: 2, scheme: "upto", network: BASE }] : []), { x402Version: 2, scheme: "exact", network: SOL, extra: { feePayer: feePayer.address } }], extensions: [], signers: {} });
       if (fam === "stellar") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: "stellar:pubnet", extra: { areFeesSponsored: true } }], extensions: [], signers: {} });
       return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: ALGORAND_MAINNET_CAIP2 }], extensions: [], signers: {} });
     }
@@ -204,6 +231,11 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
     const network = j?.paymentRequirements?.network || j?.paymentPayload?.accepted?.network || BASE;
     if (kind === "verify") { st.verifies++; if (st.verifyDelayMs) await sleep(st.verifyDelayMs); return reply(200, { isValid: true, payer }); }
     if (!p) return reply(200, { success: false, errorReason: "invalid_payload", transaction: "", network, payer });
+    st.events.push({ t: "settle", id: p.id, at: Date.now() });
+    if (typeof st.settleAnswer === "function") {
+      const a = st.settleAnswer({ fam, id: p.id, payer, network });
+      if (a) { st.settleAttempts++; tally(p.id, "attempts"); return reply(a.status, a.body); }
+    }
     // A payment past its own life (a Solana blockhash) cannot be settled.
     if (p.lifeMs && Date.now() - p.signedAt > p.lifeMs) { st.expired++; tally(p.id, "attempts"); tally(p.id, "refused"); return reply(200, { success: false, errorReason: "transaction_expired_blockhash_not_found", transaction: "", network, payer }); }
     if (await takeFrom(p.id, p.amount)) return reply(200, { success: true, transaction: fam === "evm" && network === BASE ? "0x" + randomBytes(32).toString("hex") : randomBytes(32).toString("hex"), network, payer });
@@ -211,6 +243,7 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
   });
   await new Promise((r) => stub.listen(0, "127.0.0.1", r));
   const F = `http://127.0.0.1:${stub.address().port}`;
+  envF = F;
   const srv = await bootServer({
     stores: label,
     args: ["--import", "./scripts/lib/paid-wires-preload.js"],
@@ -228,12 +261,12 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
       TEMPO_API_BASE_URL: `${F}/relay`, TEMPO_RPC_URL: `${F}/tempo-rpc`, TEMPO_LATE_CONFIRM_DELAYS_MS: "300,600", SLOW_SYNC_WINDOW_SECONDS: "off",
       STRIPE_SECRET_KEY: "", CIRCLE_FACILITATOR_API_KEY: "", ROBINHOOD_RELAYER_KEY: "", FIRST_CALL_ALLOWANCE: "", GATEWAY_NANOPAYMENTS: "",
       REDIS_URL: "", TARGET_URL: "", AGENT402_OPERATOR_TOKEN: operatorToken,
-      OPENROUTER_API_KEY: "sk-or-paid-wires-never-used", OPENROUTER_STUB_URL: `${F}/llm`, STRIPE_STUB_URL: `${F}/stripe`, OPENAI_API_KEY: "", BRAVE_API_KEY: "", EXA_API_KEY: "", X_BEARER_TOKEN: "",
+      OPENROUTER_API_KEY: "sk-or-paid-wires-never-used", OPENROUTER_STUB_URL: `${F}/llm`, OPENAI_STUB_URL: `${F}/llm`, UPSTREAM_STUB_URL: F, STRIPE_STUB_URL: `${F}/stripe`, OPENAI_API_KEY: "", BRAVE_API_KEY: "", EXA_API_KEY: "", X_BEARER_TOKEN: "",
       UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_FILE: fileURLToPath(new URL("../../docs/example-upstream-costs.json", import.meta.url)),
       STATS_ALLOW_EPHEMERAL: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
       RECEIPT_SIGNING_KEY: "", RECEIPT_SIGNING_KEY_ID: "", RECEIPT_RETIRED_KEYS: "",
       MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", REVENUE_WARMUP: "off", REVENUE_LEDGER: "off",
-      ...env,
+      ...envNow(),
     },
   });
   const url = srv.url;
@@ -294,9 +327,15 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
     return BigInt(acceptOn(o, (n) => n.startsWith("stellar:")).amount);
   }
   /** The request headers of one new, distinct payment from `w` for `route`. */
-  async function credentialFor(w, route, { ttlMs = null, validForSeconds = null } = {}) {
+  async function credentialFor(w, route, { ttlMs = null, validForSeconds = null, scheme = "exact" } = {}) {
     const o = await offerOf(route);
     const x402 = (accept, payload) => ({ "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, resource: o.offer.resource, accepted: accept, payload })).toString("base64") });
+    // An upto (Permit2) payment from an EVM wallet, on the Base upto accept.
+    if (w.wire === "evm" && scheme === "upto") {
+      const a = (o.offer?.accepts || []).find((x) => x.scheme === "upto" && x.network === BASE);
+      if (!a) throw new Error("rig: the route offers no upto accept on Base");
+      return x402(a, { signature: "0x" + "11".repeat(65), permit2Authorization: { from: w.address, permitted: { token: a.asset, amount: a.amount }, spender: "0x" + "22".repeat(20), nonce: BigInt("0x" + randomBytes(16).toString("hex")).toString(), deadline: "9999999999", witness: { to: a.payTo, validAfter: "0", extra: "0x" } } });
+    }
     if (w.wire === "evm") {
       const a = acceptOn(o, (n) => n === BASE);
       return x402(a, { signature: "0x" + "11".repeat(65), authorization: { from: w.address, to: a.payTo, value: a.amount, validAfter: "0", validBefore: validForSeconds == null ? "9999999999" : String(Math.floor(Date.now() / 1000) + validForSeconds), nonce: "0x" + randomBytes(32).toString("hex") } });

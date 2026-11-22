@@ -18,6 +18,7 @@ paths:
   - "src/circle-*.js"
   - "src/robinhood-*.js"
   - "src/referral-*.js"
+  - "src/aws-marketplace-gate.js"
   - "src/run-ceiling.js"
   - "src/tools/fetch-guard.js"
   - "src/tools/kit.js"
@@ -160,6 +161,63 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   run stays as an outcome and never erases failures; a payer is blocked at
   `COMPOSITE_GUARD_MAX_FAILS` only while failures are more than `COMPOSITE_GUARD_MIN_FAIL_SHARE`
   (default 0.5) of its outcomes, and at `COMPOSITE_GUARD_HARD_MAX` (default 10) whatever it settled.
+- **Settle first (the one exception to handler-first):** `src/settle-first.js`;
+  `GATEWAY_SETTLE_FIRST=off` settles every run after its handler, `always` forces the budget mode
+  on, anything else is automatic. Normal operation is unchanged. On the routes in
+  `SETTLE_FIRST_SLUGS` (server.js: every `/v1` chat, Messages, Responses and generateContent tier
+  and the metered tier, embeddings, rerank, speech, `/v1/images/generations` and the fast, pro and
+  edit image tiers, and dub; not video; plus `SETTLE_FIRST_CATALOG_SLUGS`: web search and answer,
+  image generation, speech, transcription, judgment and code runs, each settling after its own
+  input checks and before its first paid upstream call), `settleFirstPlanFor` asks `gatewaySettleFirstPlan` (the settle
+  breaker) for a verified x402 payment (`settleFirstPaymentKindOf`: never Tempo, card, credits,
+  proof-of-work, a trial, a first-call allowance grant, or the resend of a payment already settled
+  first). **Who, always:** `unsettled-runs`, a wallet (per network) holding
+  `GATEWAY_SETTLE_FIRST_UNSETTLED_MAX` (default 2) `/v1` runs that did not settle, whatever the fault
+  class, with no settled call since; `authorization`, one signed authorization holding as many.
+  **Who, only in the budget mode:** `never-settled` (no settled call in the window and no paid sale
+  on the books, `payerHasPaidSale`) and `history-unread` (the ledger did not answer).
+  **The budget mode** (`src/settle-first-meter.js`): on while the rolling 24-hour upstream cost of
+  `/v1` runs that ended unsettled (the breaker's `setUnsettledRunListener`; priced at the cost the
+  run noted on its scope, `noteRunUpstreamUsd` from `stripBilling`, else the run's quote; a payment
+  refused at its settle point, an option-A answer or a resend ran nothing unpaid) plus the price at
+  risk of never-settled wallets' runs served first and still in flight (`admitServedFirst`, decided
+  and reserved in one synchronous step) is at or over `GATEWAY_SETTLE_FIRST_BUDGET_USD` (default 5),
+  or while the meter cannot be read (a configured Redis that does not answer, or has not answered
+  yet: on, since that answer refuses nobody). Shared through Redis (tally `sfm-cost`, one hash per
+  clock hour of per-minute micro-dollars, 26 hours of life; window `sfm-risk`), read at most every
+  `REFRESH_MS` and only for a never-settled wallet's run; a restart reads it back. Figures are on
+  the operator view (`settleFailures.settleFirst.meter`) only; the log says "on" or "off".
+  **Option A:** an `upto` or Circle Gateway batched payment the plan names is answered the route's
+  own 402 (`exactPaymentRequiredAnswer`: the vendor's unpaid 402 with every plain exact accept
+  first, `error: exact_payment_required`), uncharged, counted by nobody (`markExactRequired`); the
+  verify hint leaves its body alone. **When:** at the run's settle point, `settleBeforeUpstream`,
+  after the handler's own checks. **How:** `settleVerifiedPaymentFirst` (payments.js) calls the
+  vendor's `processSettlement` once with the payment an afterVerify hook kept; the vendor's call
+  after the handler is answered with that settlement (`installSettleFirst`). The 402, its accepts
+  and the Bazaar metadata are untouched outside option A. **After the settlement** a 4xx/5xx is
+  booked owed (note class `settle-first-failed`) and its body restated (`src/settle-first-body.js`:
+  `charged`, `refundOwed`, `retry: "same-payment"`, `transaction`, `refundStatusUrl`). **The same
+  payment sent again** (`src/idempotency.js` credit, keyed on the payment's identity and route,
+  the body's digest kept in the record and compared only when a credit is stored, so a large body
+  with no credit is never hashed before the paywall; bound to the payer's signature, 24 hours;
+  an unspent credit is never replaced by another body's): the server holds the debt void
+  (`voidOwedForServe`, note `resend of the same payment: running [attempt <8 hex>]`), marks the
+  request (`settledFirstResendOf`: the paywall, the cover admission and the hang-up ticket skip it),
+  runs it, and keeps the row void with the served note on a final 200 or reopens it under its class
+  otherwise; the held-claim sweep (src/tempo-push-debts.js) reopens a hold whose run never ended.
+  **The resend bound** (`SETTLE_FIRST_MAX_RESENDS`, 2): one payment runs again at most twice; the
+  credit keeps the count, written before each run under its claim. A resend that is not served is
+  counted like a run that did not settle (the wallet's settle-first count and the budget meter;
+  never the wallet's refusing count or the alarms); a further resend runs nothing, is charged
+  nothing more, and is answered 402 `resend_limit_reached` (`charged: true`, `refundOwed: true`
+  until the refund is paid) with the debt's refund status and lookup.
+  **A daily usage ceiling at a settle point** is TAKEN, not read (`settleBeforeUpstreamHolding`,
+  `hardCapHold`): the unit is held for the run's call (`takeHardCap` uses it), given back when the
+  payment does not settle or the run ends unused, so runs settling together never pass a ceiling
+  that then refuses a charged call.
+  **Refunds:** an owed row of this class is repaid by the human-run `refund.yml` like every other
+  owed row; nothing repays it on a schedule. Suites: `scripts/test-settle-first.js`,
+  `scripts/test-settle-first-meter-redis.js`.
 - **Runs in flight are covered together:** `src/inflight-cover.js` (`admitCoveredRun`), called
   through `admitPaidRun` (server.js) before the breaker consult on EVERY mount of a paid handler that
   is not proof-of-work payable: the kit dispatcher, and `withToolCallLog` for the six bespoke content
@@ -418,7 +476,14 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   succeeded PaymentIntent is served as paid; an outcome still unknown answers 402 with
   `STRIPE_UNCONFIRMED_TEXT` and is booked in the refund ledger after the answer is written
   (`unconfirmedCaptureDebt`, wire `mpp-stripe`). The credential stays spent either way. A new
-  failure shape is unconfirmed unless it is proven to take no money.
+  failure shape is unconfirmed unless it is proven to take no money; so is a FIRST send Stripe
+  answers from an earlier request's idempotency record (`replayed`), booked under that
+  PaymentIntent. The first send waits `STRIPE_CAPTURE_TIMEOUT_MS` (20 s), the second
+  `STRIPE_RESEND_TIMEOUT_MS` (10 s), inside the CDN's 100 s window; Stripe's error text is logged
+  through `scrubStripeErrorText` (no idempotency key, no payment token). The leased pass
+  `stripe-unconfirmed-readback` (`src/stripe-unconfirmed-readback.js`, read-only on Stripe) reads
+  each unconfirmed row's PaymentIntent back: canceled or failed voids it, succeeded with a sale
+  booked under it voids it, succeeded without one keeps it owed noted "confirmed charged".
 - **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
   in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
   route that outlives the claim's expiry cannot run twice on one payment. Every command the guard
@@ -470,8 +535,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   eip155:4663 included (it quotes the list price like every chain); `ROBINHOOD_MIN_PRICE_USD`
   sets one there (unset or "0": none) and `NETWORK_PRICE_FLOORS` on any chain. A floor is static
   so the paid retry re-derives the same amount. Our own relayer pays the gas of what it settles,
-  so it takes a sale only when its amount is at least `ROBINHOOD_RELAYER_MIN_PRICE_USD` (default
-  0.004; "0" any price; `covers()` in `src/robinhood-relayer.js`): under it the relayer refuses
+  so it takes a sale only when its amount is at least `ROBINHOOD_RELAYER_MIN_PRICE_USD` (its
+  default is in the code; "0" any price; `covers()` in `src/robinhood-relayer.js`): under it the relayer refuses
   with nothing sent (`own_relayer_below_minimum`), the gas order asks the facilitator instead of
   it, and the outage read books the authorization without submitting, so a refusal from the
   listed facilitators stands as the buyer's 402 and the x402 payment is not settled
@@ -560,7 +625,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   before the gate prices the accept) is quoted the route's x402 EVM `exact` accepts
   under list (`RETURNING_WALLET_DISCOUNT_BPS`, default 1000, at most 5000) when that wallet has paid
   on `RETURNING_WALLET_MIN_PAID_DAYS` (default 3) distinct days inside
-  `RETURNING_WALLET_WINDOW_DAYS` (default 30), read from the sales ledger (cached per wallet for
+  `RETURNING_WALLET_WINDOW_DAYS` (default 30), a day counting only when the wallet spent at least
+  `RETURNING_WALLET_MIN_DAY_SPEND_USD` (default 0.05, 0 counts every paid day, a value over 100 reads as the default) on it,
+  read from the sales ledger (cached per wallet for
   ten minutes, then dropped from memory, never stored; fresh reads bounded per minute per client
   address, `LOOKUPS_PER_ADDRESS_PER_MINUTE`, and across all callers, `LOOKUPS_PER_MINUTE`; past a
   bound an unknown wallet is quoted list, never refused, and a cached wallet keeps its quote). The
@@ -786,6 +853,42 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   ones, and the retry-verbs note (src/tool-error-fields.js, on the 402 description, /llms-full.txt and
   /agents.md), the client README and the wiki name the reason. Late-book keys fold case only on an
   EVM chain (`latePayerKey`, `txKeyOf`): a base58 or base32 address or id is kept exactly.
+- **Per-network settle deadlines** (`src/settle-deadlines.js`, wrapped around every routing
+  facilitator client after the settle demotion, so outermost): only an EIP-3009 `exact` payment on a
+  network in its table (Base, Polygon, Arbitrum, Optimism, Avalanche, Celo, Monad, Sei; never
+  Robinhood, Ink, Arc, non-EVM, Permit2 or Gateway batched) with an RPC the late book reads, and
+  only the first settle call for a payload (the fallback chain's own calls pass through). Rows come
+  from the chain's block time (`src/chain-block-time.js`): chain check from max(2 s, 2 blocks),
+  every max(1 s, 1 block); slow over max(6 s, 4 blocks); cap max(60 s, 10 blocks), so a settle
+  that succeeds today is never cut and the route's own time still fits the CDN's 100 s first-byte
+  window; Celo's cap max(20 s, 10 blocks) and `switch` on Celo only. `SETTLE_DEADLINES` (off, or JSON per network) overrides. The chain check
+  (`proveAuthorizationSettled`, then `recoverAlreadyOnChain` with that proof) serves a transfer
+  proven to be this payment's before the facilitator answers; while it is claiming, no other outcome
+  decides, so a claimed transfer is always the one served. Its reads are bounded per network
+  whatever the number of hung settles: one shared head read per check interval (handed to each
+  log read), at most `SETTLE_CHAIN_CHECK_MAX_PER_NETWORK` (default 4) log reads at once, each
+  settle backing off after a miss (checkEveryMs, doubling to 8 s), no log read while the head
+  cannot be read, and the wait cleared when the settle answers. The slow record is per (network,
+  facilitator label), per process: `SETTLE_SLOW_AFTER` (default 2) slow settles in a row (over
+  slowMs, or cut) mark it slow for `SETTLE_SLOW_COOLDOWN_MS` (default 600000); on a switching row
+  with `PAYMENT_SETTLE_FALLBACK` on, the next settle asks that network's fallback candidates first
+  (noted with `noteSettleAsked`, so neither the demotion nor the failure chain asks one twice);
+  a pre-broadcast refusal hands on, anything else from a fallback ends the settle unconfirmed. One
+  settle at or under slowMs clears the mark. The cap throws a 504 SettleError (errorReason
+  `timeout`) tagged for `settleDeadlineStopOf`; the settle-failure hook answers any such stop with
+  `markUnconfirmedStop` before every other branch (no fallback chain: the transfer may land), so
+  the authorization is booked and owed once if it lands. The request keeps the cut payment
+  (`noteCappedRequest`), and the idempotency store keeps the route's 200 answer beside the
+  unconfirmed 402 when the route replays implicitly and it fits; the same payment for the same call
+  (route, query and body digest) sent again is asked of `cappedResendVerdict` (server.js
+  `onCappedResend`), only when the refund ledger is the state database (its void marks the evidence
+  before a later owed insert; on file stores the kept 402 stands): landed and proven (mined after first seen), the transaction is claimed under the
+  payment's own holder (`settle-cap:...`) and the answer served with its receipt, booked once per transfer (`bookCappedServe`: the sale on
+  its real rail and wire, MPP when it came through the shim, the served-call counter and the
+  payment_settled event); held by
+  the late book, its debt row is voided first (`chargedReplayVerdict` over `voidOwedOnResend`; no row
+  yet keeps the 402; a debt being repaid refuses as refunded). Anything else keeps the 402
+  (`scripts/test-settle-deadlines.js`, `scripts/test-settle-deadlines-pg.js`).
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read. The key is the client
@@ -849,6 +952,23 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   (`scripts/test-next-step.js`).
 - **Funnel discovery window:** `FUNNEL_FOUND_WINDOW_MS` (default 21600000, 6 hours; at least 1 minute) is how long the funnel links a caller's last discovery read to its later paid-route calls (`src/funnel-sources.js`).
 - **Funnel discovery cap:** `FUNNEL_FOUND_CAP` (default 50000; at least 100) is the most callers that trail holds, in memory per replica, keyed on a per-process hash of the address.
+- **Tempo gas sponsorship (per call):** `src/tempo-charge-sponsor.js`, off unless
+  `TEMPO_GAS_SPONSORSHIP=on`. Decided when the 402's tempo challenge is minted (a sponsored
+  challenge carries `methodDetails.feePayer: true`), never at settlement: a sponsored credential
+  cannot settle unsponsored, so every limit only makes the NEXT challenge the ordinary one (the
+  buyer pays its own fee), never a refusal. The payer is the subscription gas sponsor
+  (`TEMPO_SUBSCRIPTION_FEE_PAYER_KEY`, fees in PathUSD); a sponsored credential is screened and
+  settled by this server (`sponsorMethod` in `src/mpp-tempo.js`, over `TEMPO_RPC_URL`) in either
+  relay mode. Paused under `TEMPO_GAS_SPONSOR_RESERVE_USD` (subscriptions keep that share, and
+  the sponsor's low word reads low under it while on), while the subscription ceiling reads
+  reached, past the 24 h caps (service-wide `TEMPO_GAS_SPONSOR_DAILY_MAX_USD`, default 5, and per
+  payer's client `TEMPO_GAS_SPONSOR_PAYER_DAILY_MAX_USD`, default 1, both counted in fee bounds; one
+  transaction's fee is bounded by `TEMPO_GAS_SPONSOR_MAX_FEE_USD`, default 0.01, at most 1), with no screen list, or
+  while signing is halted. A sponsored pull from a sender the gate cannot prove is declined before
+  any claim (`fee-sponsor-declined`, 402) and that client is not sponsored for a day. Each send is
+  booked by its fee bound; the co-signed transaction id is kept for the chain-truth confirm
+  (in memory: a restart inside a pull's validity loses it). Operator view
+  `/__operator/tempo-gas-sponsorship.json`.
 - **Tempo push refusals:** `src/push-refusal-body.js`: for a push credential the Tempo gate
   restates a 4xx JSON body's not-charged sentence and sets `charged`, `transferClaimed`, `refundOwed`.
 - **Algorand network id:** `src/avm-network.js`: the CAIP-2 (32-character) id is what every 402
@@ -867,6 +987,7 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   window, on this process only (`src/paid-quote-trust.js` `creditMetered`).
 - **Listing content type:** a tool def's `mimeType` (`src/tool-media-type.js`) is the type its x402 listing, `/openapi.json` and `/api/pricing` state. `X402_BINARY_LISTINGS` (default on: unset or any value but `off`): a binary route's x402 listing carries its content type, output type `binary` and a string sample naming its bytes; `off` returns every 402 header, body and discovery extension to the earlier shape (`application/json`, output type `json`, the tool's `legacyListingExample`). `/openapi.json`, `/api/pricing` and the tool pages do not read it. It is read once when the payment middleware is built, so a flip takes effect on restart. `scripts/bazaar-validate.js` with no arguments checks the flagship set plus every `/api/pricing` row whose `mimeType` is not JSON (at most 12 more) and ends at `BAZAAR_VALIDATE_DEADLINE_MS` (default 8 minutes), reporting what it did not reach as unreadable.
 - **Referral copies (`/ref/<slug>`, off by default):** `src/referral-gate.js` (the gate), `src/referral-settle.js` (the facilitator client), `src/referral-chain.js` (chain reads), `src/referral-proof.js` (the receipt rule, import-free), `src/referral-book.js` (the durable book), `src/referral-answers.js` (owed answers at rest), `src/referral-run.js` (the run scope). Paid mode only, and only with every REQUIRED setting present and usable: `REFERRAL_PAY_TO` (the referral network's split contract), `REFERRAL_MERCHANT_ID` (this merchant's id on that contract, a decimal number), `REFERRAL_PAYOUT_ADDRESS` (the wallet the contract pays this merchant's amount to; not the pay-to contract), `REFERRAL_FACILITATOR_URL` (https), `REFERRAL_SIGNER_KEY` (32-byte key that signs facilitator requests; an unusable one leaves the gate off, never fails the boot; the router worker's environment drops it), `REFERRAL_SLUGS`, `REFERRAL_SETUP_URL` and `REFERRAL_COMMISSION_BPS` (`default:<bps>,<slug>:<bps>`; no built-in rate; every slug must be named or covered by `default`; read for the least a payout must carry for the proof, and to book a success whose receipt cannot be read yet). Optional, with defaults: `REFERRAL_ROUTED_TOPIC` (topic0 of the split contract's routed-payment event; the documented one), `REFERRAL_FEE_BPS` (0), `REFERRAL_DEADLINE_MS` (25000, handler budget), `REFERRAL_SETTLE_MS` (60000, the `/settle` call waits for the receipt and the facilitator answers it within 55 s, `REFERRAL_SETTLE_ANSWER_MS`; a value under 55 s is a boot warning, `referralTimingWarnings`, since a settle answered after it is read from the chain instead), `REFERRAL_VERIFY_MS` (10000), `REFERRAL_SETTLE_RESERVE_MS` (10000), `REFERRAL_MAX_VALIDITY_MS` (900000), `REFERRAL_VERIFY_SIGNED` (on; `off` sends `/verify` unsigned), `REFERRAL_RECEIPT_WAIT_MS` (4000) and `REFERRAL_UNCONFIRMED_MAX` (5), `REFERRAL_UNRECOGNIZED_READS` (5, full readings of a receipt the proof rule does not recognize before an expired entry is closed to the operator record), `REFERRAL_SEND_IDLE_MS` (15000) and `REFERRAL_SEND_MAX_MS` (120000, the bounds on one answer's send), `REFERRAL_SHORT_NET_MAX` (3; 0 never stops a slug), `REFERRAL_MAX_ANSWER_BYTES` (64000, the most bytes of one answer the network passes on to a buyer; 1024 to 8 MB, anything else reads as the default), `REFERRAL_OVERSIZE_ALERT` (30, answers over that bound from one client address in the unsettled-run window before the word reads attention; an alarm only), `REFERRAL_MIN_NET_BPS` (none; `default:<bps>,<slug>:<bps>`, a slug's stop floor as a share of the price) and `REFERRAL_PRODUCT_IDS` (none; `<slug>:<0x 32-byte id>`), both optional and both leaving the gate off when malformed, `REFERRAL_UNSETTLED_MAX` (3), `REFERRAL_UNSETTLED_HARD_MAX` (40) and `REFERRAL_UNSETTLED_GLOBAL_MAX` (12) per `REFERRAL_UNSETTLED_WINDOW_MS` (900000), `REFERRAL_PAYER_INFLIGHT_MAX` (8), `REFERRAL_MAX_INFLIGHT` (24), `REFERRAL_OWN_FAULT_MAX` (3) and `REFERRAL_OWN_FAULT_COOLDOWN_MS` (60000), `REFERRAL_HANGUP_KEY_USD` and `REFERRAL_HANGUP_GLOBAL_USD` (the direct routes' sizes) per `REFERRAL_HANGUP_WINDOW_MS` (one day), `REFERRAL_SWEEP_MS` (60000), `REFERRAL_BOOK_FILE`, `REFERRAL_ANSWER_DIR`. Invariant: deadline + settle reserve + verify wait fit the 60 s the 402 asks a buyer to sign for (a configuration past it leaves the gate off; the defaults, 45 s, also fit the 55 s the facilitator's settle answers within); the settle call may run past `validBefore`, since it waits on a transaction submitted inside it. With the settings absent nothing is mounted: `/ref` answers exactly as any unknown path (status, body, headers) and `/api/gateway-status` carries no referral word; FREE_MODE never builds the gate. Every dependency the server passes the gate is required: one missing leaves the gate off.
+- **AWS Marketplace front door (`/aws/<slug>`, off by default):** `src/aws-marketplace-gate.js`, on the AWS Marketplace seller SDK (`@aws/fiat-extension-for-x402`, pinned, imported only when the gate is built). Buyers pay through Amazon Bedrock AgentCore payments with the AWS Billing connector, in USD on their AWS bill. Each route's 402 carries one offer, x402 `exact` on `aws:base` in `iso4217:USD`, with a quote signed by our key (issuer `BASE_URL` + `/aws`, the endpoint URL registered for the listing; `/aws` itself answers the first listed tool's 402); the public key is at `/aws/.well-known/jwks.json` (the listing's JWKS URL). Paid mode only, and only with `AWS_MARKETPLACE_QUOTE_KEY` (PEM or base64 of it; its presence is the switch), `AWS_MARKETPLACE_QUOTE_KEY_ID` and `AWS_MARKETPLACE_PRODUCT_ID` (`prod-...`); optional `AWS_MARKETPLACE_SLUGS` (default the first listing in the gate; boot refuses identity-bound, lasting-effect, outside-seller, long-running, model-backed, per-request-priced, byte-answer and own-host-example slugs with one line each), `AWS_MARKETPLACE_QUOTE_SECONDS` (300), `AWS_MARKETPLACE_RETRY_MAX` (2), `AWS_MARKETPLACE_PAYMENT_JWKS_URL` (an AWS https host or loopback only) and `AWS_MARKETPLACE_JWKS_EXTRA` (a next key published ahead of a rotation; verifiers cache keys an hour). AWS captures the payment when it issues the token, before our handler: so an input refused before the run never gets a quote (unpaid) or leaves the payment unused (paid); the verified `payment_id` (never the payload's) is claimed once in Redis (this process's memory if Redis does not answer: fail open, the buyer has paid) after every SDK check including DPoP (proof ids in the same store); a run that does not end in a delivered 200 gives the payment back up to `AWS_MARKETPLACE_RETRY_MAX` more attempts in its validity, and the attempt that spends it is listed on `/__operator/aws.json` (`chargedWithoutAnswer`; a billing adjustment is the owner's, by invoice, through AWS Marketplace; `refund-run.js` never pays these). A served 200 is booked once on the private rail `aws` (`src/paid-rails.js` `UNCOUNTED_PRIVATE_RAILS`: no public reader returns it and no public figure counts it), transaction the payment id, no payer (the AWS buyer id is not stored). Nothing an `/aws` answer adds points at this server's other surfaces (refusals drop `howToCall` and any string naming this host). With the switch off nothing is built or mounted and `/aws` answers as an unknown path; the direct routes' 402s are byte-identical either way (`scripts/test-aws-marketplace-gate.js`). No reconciliation reader yet: the SDK offers none; AWS's seller reports and data feeds carry the `agentic_commerce_default` usage in dollars.
   **Surface.** A standalone gate mounted before every payment gate (GET, HEAD, POST; the canonical spelling `/ref/<slug>` only: any other, a trailing slash included, is a JSON 404, never a redirect): no catalog entry, no rail, no discovery surface, `X-Robots-Tag: noindex`; while mounted, `/ref` is a JSON API path with the API routes' CORS. Its 402 (JSON body only) has one accept: exact, Base USDC, `payTo` the split contract, `extra.authorizationType` `ReceiveWithAuthorization`, and the amount the direct route's Base accept carries for the same request (`quotedPriceUsd` through `priceForNetwork`; never higher), with the referrer token echoed in `extensions` byte for byte (a token over 8192 characters or not printable ASCII is not echoed). **An empty request** (no query, and no body or a JSON body of exactly `{}`) runs the tool's published example (`def.discovery.input`): the 402 quotes that example and the paid call runs exactly it; any other body (text, a form, a JSON array) is served as the direct route serves it. **A buyer's own request** (the network forwards a method, a raw body with its content type and a query) is read by the one input construction the direct route uses (`handlerInputOf`: query and JSON body merged, the body winning, envelopes unwrapped; a body that is not JSON is not read, on either route), priced by the same quote and run on that input; the suite pays each shape on both routes and compares the answers. An input with a required field missing is refused by the direct routes' pre-payment check (`preValidateInput`) before the authorization is claimed; an input the HANDLER refuses (a 4xx of the caller's own, not one attributed upstream) is answered with the tool's `expected`, `required` and `example`, as the direct route's is, never the ready-to-run call. An unpaid body the direct route refuses before payment is refused the same way. A refusal's ready-to-run call is dropped, and the chat tiers' hints that name a route are left out at their source inside a referral run (`routeHint` / `inReferralRun`); a new hint in an admitted tool's answers goes through `routeHint`. The load-shed list, the unpaid-quote budget (its 429 has `/ref` text of its own), the metered quote limiter, the refused-credential limiter and the body parsers read the `/ref` twins.
   **A paid call, in order.** Local checks, before anything leaves this server: `to`, the exact value, the payer's own ECDSA signature over the ReceiveWithAuthorization (v 27/28 or 0/1, or compact; a contract wallet's signature is not taken); an answer already kept for this payment (below); then validity for the whole run (deadline + reserve + verify) and no further ahead than `REFERRAL_MAX_VALIDITY_MS`; the direct route's payer screen (same 403; a screen that throws answers 503, fails closed); a full book (503 here, before anything runs); the drain check; the input pre-validation; the bounds on calls waiting for `/verify` (route-wide 4 x `REFERRAL_MAX_INFLIGHT`, per payer `REFERRAL_PAYER_INFLIGHT_MAX`, per address 4 x that); the unsettled-run lane (below); the claim in the gate's own replay guard; the own-fault hold (below); **the chain head, read and kept before `/verify`** (no head readable: 503, nothing runs); the facilitator's `/verify`, always, sent the payment REBUILT from the fields this server validated (`normalizedPayment`: the quoted requirement as `accepted`, the checked signature and six authorization fields, the two attribution strings; never the buyer's object passed through). A verdict on the payment is the documented `isValid: false` or a JSON 400 (the buyer's refused credential: 402, counted by the credential limiter); an intermediary's 403 or 429, a page that is not JSON or a 5xx is a 503 counted against nobody. A run slot (`REFERRAL_MAX_INFLIGHT`) is taken only once the payment has verified. Only then the handler, chat bodies forced non-streaming before the quote, under the deadline, presented to it as the end of its payment window (`presentRunWindow`) and as a ceiling on its handler budget (`withBudgetCeiling`), so upstream work is cut off at the deadline. Boot serves a slug only when the deadline can end its upstream work (a pure-CPU tool, a chat tier, a handler under `underBudget`, or a definition marked `endsAtCeiling`, `src/run-ceiling.js`: its reads carry fixed timeouts of their own, each cut short by the run's ceiling, with no lookup, request, retry or connection started after it; a handler that gains another kind of wait leaves that list, and `scripts/test-run-ceiling.js` drives every marked tool to hold it) or its own upstream timeout fits, and logs why for each. A handler that comes back only after its ceiling is answered 504 and never settled, whatever it returned; also left out: missing, no handler, identity-bound, lasting-effect, third-party-paying, long-running, binary, and a tool whose published example answer (`discovery.output.example`, measured as delivered) is over `REFERRAL_MAX_ANSWER_BYTES`.
   **The claim.** Released only while nothing ran (an input or verify refusal, a store that did not answer). Once the handler has started the authorization is spent for running purposes whatever follows: held to `validBefore`.

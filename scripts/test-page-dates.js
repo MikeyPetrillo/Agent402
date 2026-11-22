@@ -49,7 +49,7 @@ if (!isShallow() && stored) {
   ok(toolSources["market-brief"] === "src/tools/research-deep-kit.js", `the tool market-brief maps to its kit (${toolSources["market-brief"]})`);
   ok(packSources && packSources["market-brief"] === "src/skills.js", `the pack market-brief maps to the pack module (${packSources?.["market-brief"]})`);
   ok(!ambiguous.some((a) => a.startsWith("market-brief ")), "a pack of the same name does not make the tool's slug ambiguous");
-  ok(Object.values(toolSources).every((f) => f.startsWith("src/tools/")), "every tool slug maps to a kit under src/tools/, never to the pack module");
+  ok(Object.values(toolSources).every((f) => f.startsWith("src/tools/") || f === "src/server.js"), "every tool slug maps to a kit under src/tools/ or the server module, never to the pack module");
   ok(packSources && Object.keys(packSources).length >= 50 && Object.values(packSources).every((f) => f === "src/skills.js"), `pack slugs map to the pack module (${Object.keys(packSources || {}).length})`);
   const shared = Object.keys(packSources || {}).filter((s) => s in toolSources);
   ok(shared.includes("market-brief") && shared.every((s) => toolSources[s] !== packSources[s]), `every name a tool and a pack share keeps both sources (${shared.join(", ")})`);
@@ -64,6 +64,46 @@ if (!isShallow() && stored) {
   ok(pageLastmod("/tools/same") === "2026-02-01" && pageLastmod("/skills/same") === "2026-05-01", `seam: one name, the tool page dated by its kit and the pack page by its module (${pageLastmod("/tools/same")}, ${pageLastmod("/skills/same")})`);
   ok(pageLastmod("/skills/unlisted") === "2026-06-01", "seam: a pack page the table does not list is dated by the module that renders every pack page");
   ok(pageLastmod("/tools/unlisted") === null, "seam: a pack's name alone never dates a tool page");
+  _setPageDatesTable(null);
+}
+
+// --- every way a tool is defined dates its page ----------------------------------
+// A tool page carries the date of the file that defines it, however the slug
+// is written there: an entry inline in the server module (screenshot, pdf, the
+// memory family), a template that builds the slug per tier (the Messages,
+// Gemini and Responses wires), or a constant that holds the literal.
+{
+  const { toolSources, toolPatterns } = scanToolSources();
+  for (const slug of ["screenshot", "pdf", "memory-write", "memory-read", "memory-log", "memory-forget"]) {
+    ok(toolSources[slug] === "src/server.js" && ISO.test(pageLastmod(`/tools/${slug}`) || ""), `/tools/${slug} is dated by the server module that defines it inline (${toolSources[slug]}, ${pageLastmod(`/tools/${slug}`)})`);
+  }
+  ok(toolSources["price-webhook"] === "src/tools/price-webhook-kit.js", `price-webhook (slug: PRICE_WEBHOOK_SLUG) maps to its kit (${toolSources["price-webhook"]})`);
+  ok(toolSources["audit-report"] === "src/tools/audit-report-kit.js", `audit-report (slug: AUDIT_SLUG) maps to its kit (${toolSources["audit-report"]})`);
+  // A retired tool's kit is gone, and its slug dates no page.
+  ok(!("market-tick" in toolSources), `a retired tool keeps no source (${toolSources["market-tick"]})`);
+  ok(toolPatterns["*-messages"] === "src/tools/llm-messages-kit.js" && toolPatterns["*-gemini"] === "src/tools/llm-gemini-kit.js" && toolPatterns["*-responses"] === "src/tools/llm-responses-kit.js", "the per-tier wire slugs are built by their kits' templates");
+  for (const [slug, kit] of [["v1-chat-nano-messages", "llm-messages-kit.js"], ["v1-chat-metered-gemini", "llm-gemini-kit.js"], ["v1-chat-pro-responses", "llm-responses-kit.js"]]) {
+    ok(toolLastmod(slug) === filesLastmod([`src/tools/${kit}`]) && ISO.test(toolLastmod(slug) || ""), `/tools/${slug} is dated by ${kit} (${toolLastmod(slug)})`);
+  }
+  ok(toolSources.hash === "src/tools/kit.js", "a slug a kit defines keeps its kit, never the server module that also names it");
+  // The kits listed only with a key or switch are not in a keyless boot's
+  // sitemap (scripts/test-sitemap-coverage.js reads that one); their pages
+  // are dated all the same.
+  const { envGatedTools } = await import("./published-slugs.js");
+  const { skillPackOfToolSlug } = await import("../src/skills.js");
+  const undated = (await envGatedTools()).filter((t) => !skillPackOfToolSlug(t.slug)).map((t) => t.slug).filter((slug) => !toolLastmod(slug));
+  ok(undated.length === 0, `every key-gated tool page carries a lastmod${undated.length ? `; undated: ${undated.join(", ")}` : ""}`);
+  // The seam: an exact entry wins over a pattern, two patterns that match one
+  // slug date nothing, and a pattern needs a non-empty middle.
+  _setPageDatesTable({
+    files: { "src/tools/a.js": "2026-01-01", "src/tools/b.js": "2026-02-01", "src/tools/c.js": "2026-03-01" },
+    toolSources: { "x-wire": "src/tools/c.js" },
+    toolPatterns: { "*-wire": "src/tools/a.js", "y-*": "src/tools/b.js" },
+  });
+  ok(toolLastmod("x-wire") === "2026-03-01", "seam: an exact slug entry wins over a pattern");
+  ok(toolLastmod("z-wire") === "2026-01-01", "seam: a slug no entry names is dated by the one pattern it matches");
+  ok(toolLastmod("y-wire") === null, "seam: a slug two patterns match is not dated");
+  ok(toolLastmod("-wire") === null, "seam: a pattern's placeholder is never empty");
   _setPageDatesTable(null);
 }
 

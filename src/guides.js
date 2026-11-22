@@ -1,6 +1,7 @@
 // Server-rendered technical guides — the prose layer for organic search.
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { usdToBaseUnits } from "./base-units.js";
 import { siteOrgRef } from "./site-org.js";
 import { GUIDE_SITE_NAME, GUIDE_EXPLAINERS } from "./ask402-links.js";
@@ -185,6 +186,7 @@ live service ([agent402.tools](https://agent402.tools)) you can pay right now.
 Your client calls a paid endpoint and gets a \`402\` quote; it signs a USDC
 authorization from its own wallet and retries, and the server settles only when
 the response succeeds, so a failed x402 call is not charged (a payment that lands late is repaid after on-chain proof).
+${SETTLE_FIRST_SENTENCE}
 The headers, step
 by step: [how x402 works](/learn/x402). In plain language: [What is x402?](${GUIDE_EXPLAINERS.x402}) on ${GUIDE_SITE_NAME}.
 
@@ -304,7 +306,7 @@ const res = await fetch("https://agent402.tools/api/hash", {
 
 Or skip all of this: paste \`https://agent402.tools/mcp\` into Claude as a
 custom connector and the free tier just works, or run
-\`npx -y agent402-mcp@0.14.1\` with an \`AGENT_KEY\` for the full catalog with spend
+\`npx -y agent402-mcp@0.15.0\` with an \`AGENT_KEY\` for the full catalog with spend
 caps enforced before any payment is signed.
 
 ## Why this matters
@@ -408,7 +410,7 @@ How to plan a burst around them:
 ## Retries that never pay twice
 
 On x402 a response of 400 or above is not settled, so a retry after one costs
-nothing extra. For a call that may have succeeded (a timeout, a dropped
+nothing extra. ${SETTLE_FIRST_SENTENCE} For a call that may have succeeded (a timeout, a dropped
 connection), use the replay rules:
 
 - **Send an \`Idempotency-Key\`.** The same key with the same credential (the
@@ -447,7 +449,7 @@ answers 202 at once with a \`Location\` job link. Poll \`GET /api/jobs/{id}\`
 \`failed\`; \`state\`, \`stage\`, \`progress\` and \`etaSeconds\` say where it is. The
 payment settles only when the result is ready, except a Tempo transfer sent
 before the call, which is repaid after on-chain proof if the run fails;
-on x402 a failed run is not charged. A row whose block carries \`preferWait\` also takes
+on x402 a failed run is not charged. ${SETTLE_FIRST_SENTENCE} A row whose block carries \`preferWait\` also takes
 \`Prefer: wait=<maxSeconds>\` to wait on the connection, and a paid call there
 with neither header is answered 400 before any payment.
 
@@ -523,6 +525,8 @@ and refuse to send a payload signed past it.
 | MPP Tempo pull (a signed transaction the relay broadcasts) | broadcast after the tool answers, only for a response under 400 | not charged |
 | MPP Tempo push (a transfer you already sent) | final before the call runs | booked as a refund owed to the paying wallet, repaid after on-chain proof |
 
+${SETTLE_FIRST_SENTENCE}
+
 On the EVM chains and Tempo pull, a settlement whose outcome is not known when
 the call is answered is read on chain again; one that lands after a failed
 answer is booked as a refund owed and repaid after on-chain proof.
@@ -583,6 +587,8 @@ curl -s https://agent402.tools/v1/models \\
 | 502, 503, 504 with \`attribution: "ours"\` | our side; \`hint\` is \`"our-deadline"\`, \`"budget-spent"\`, \`"our-egress"\`, \`"our-key"\`, \`"our-allowance"\`, \`"our-pacing"\`, \`"internal"\` or \`"smaller-input"\` (below) | retry the same call, or send a shorter input when the hint says so; not charged on x402 |
 | 502, 503 with \`attribution: "unknown"\` and \`hint: "connect-failed"\` | the connection to a source failed before any answer (refused, reset or unreachable), and nothing shows which side failed | retry the same call later; not charged on x402 |
 | 504 with \`hint: "source-timeout"\` or \`"source-unreachable"\` | a URL you supplied did not answer within our limit, or could not be connected to (\`attribution: "unknown"\`) | check that the URL is correct and publicly reachable, or retry; not charged on x402 |
+
+${SETTLE_FIRST_SENTENCE}
 
 A 429 for a wallet whose balance does not cover its paid calls in flight
 carries \`attribution: "ours"\`, a \`hint\` (\`cover-short\`, \`cover-settling\`,
@@ -942,6 +948,8 @@ stage here takes every offered chain, over x402 or MPP.
 | MPP \`evm\` charge | the same x402 settlement underneath | not charged |
 | MPP Tempo pull (a signed transaction) | broadcast after the tool answers, only for a response under 400 | not charged on Tempo pull: the transaction is never broadcast |
 | MPP Tempo push (a transfer already sent) | final before the call runs | the transfer is booked as a refund owed to the paying wallet, repaid after on-chain proof |
+
+${SETTLE_FIRST_SENTENCE}
 
 Tempo is offered on every stage except ${PIPELINE_TOKEN}. A
 pull credential (\`payload\` type \`transaction\`) is a signed transaction
@@ -1503,7 +1511,7 @@ provenance stays explicit.
 
 - **Failures are not charged on x402.** Any 4xx/5xx - no match, over-cap, seller
   down - cancels your settlement, and a Tempo transfer sent before the call is
-  recorded as owed and repaid after on-chain proof. So is a payment that settles after your connection closed.
+  recorded as owed and repaid after on-chain proof. So is a payment that settles after your connection closed. ${SETTLE_FIRST_SENTENCE}
 - **Spend is bounded on our side** by per-window budgets and per-quote caps,
   so the router cannot be drained into misbehavior.
 - **Receipts are recomputable.** Paid EVM calls carry a \`callRef\` derived
@@ -1808,7 +1816,7 @@ maxPerCallUsd: 0.05, dailyLimitUsd: 2 })\` from
 A \`200\` with JSON and a \`PAYMENT-RESPONSE\` header (the settle receipt).
 A \`4xx\`/\`5xx\` is not charged on x402: settlement runs after the handler and only
 for a successful response, and you can verify that from the headers you hold
-(no \`PAYMENT-RESPONSE\` = nothing settled). One exception: a transfer that
+(no \`PAYMENT-RESPONSE\` = nothing settled). ${SETTLE_FIRST_SENTENCE} One exception: a transfer that
 lands after a timed-out settle, a disconnect during settle, or a settle the
 facilitator answered as pending whose receipt was not read in time, is booked
 as a refund owed and repaid after on-chain proof. Prefer MPP? The same 402 also
@@ -2030,7 +2038,7 @@ claude mcp add --transport http agent402 https://agent402.tools/mcp
 Paid tools from a wallet, through the stdio server:
 
 \`\`\`bash
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.14.1
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.15.0
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -2042,7 +2050,7 @@ Or in \`.mcp.json\` at the project root:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.14.1"],
+      "args": ["-y", "agent402-mcp@0.15.0"],
       "env": { "AGENT_KEY": "\${AGENT_KEY}" }
     }
   }
@@ -2065,7 +2073,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.14.1"],
+      "args": ["-y", "agent402-mcp@0.15.0"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }
@@ -2294,7 +2302,7 @@ prompted input (VS Code stores it, the file never carries it):
     "agent402": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.14.1"],
+      "args": ["-y", "agent402-mcp@0.15.0"],
       "env": { "AGENT_KEY": "\${input:agent402-key}" }
     }
   }
@@ -2320,7 +2328,7 @@ interpolation is Windsurf's own):
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.14.1"],
+      "args": ["-y", "agent402-mcp@0.15.0"],
       "env": { "AGENT_KEY": "\${env:AGENT_KEY}" }
     }
   }
@@ -2347,7 +2355,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.14.1"],
+      "args": ["-y", "agent402-mcp@0.15.0"],
       "env": { "AGENT_KEY": "0x..." },
       "disabled": false,
       "autoApprove": []
@@ -2385,7 +2393,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.14.1"],
+      "args": ["-y", "agent402-mcp@0.15.0"],
       "env": { "AGENT_KEY": "0x..." },
       "alwaysAllow": [],
       "disabled": false
@@ -2409,7 +2417,7 @@ Or in \`~/.codex/config.toml\`, paid tools from a wallet through the stdio serve
 \`\`\`toml
 [mcp_servers.agent402]
 command = "npx"
-args = ["-y", "agent402-mcp@0.14.1"]
+args = ["-y", "agent402-mcp@0.15.0"]
 env = { AGENT_KEY = "0x..." }
 \`\`\`
 
@@ -2453,7 +2461,7 @@ Or in \`~/.gemini/settings.json\` (\`httpUrl\` is the Streamable HTTP key;
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.14.1"],
+      "args": ["-y", "agent402-mcp@0.15.0"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }
@@ -2632,7 +2640,7 @@ Why pay here, in one section with the proof links:
 [agent402.tools/docs#why](https://agent402.tools/docs#why). The short version: usage is
 priced under a ceiling you see before you pay, a failed x402 call is not charged and the
 receipt shows it (a payment that lands late is repaid after on-chain proof), a keyed retry never pays twice, and uptime and transactions are published from
-outside production.
+outside production. ${SETTLE_FIRST_SENTENCE}
 `,
   },
 ];

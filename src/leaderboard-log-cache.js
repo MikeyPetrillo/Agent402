@@ -26,6 +26,19 @@
 //     wallet that left and came back) are dropped before its new rows go in.
 //   * Rows older than the window are not folded; a segment wholly older is
 //     deleted.
+//   * Past maxRows (LEADERBOARD_LOG_CACHE_MAX_ROWS, default 2,000,000) the
+//     oldest segments are dropped and `heldFrom` names the first block still
+//     kept. The kept rows stay in the heap between scans: about 45 to 50
+//     bytes of live heap a row (read after a full GC; a scan's own garbage
+//     comes on top until it is collected) and about 70 bytes stored, so the
+//     default holds under 100 MB (about 96 MB measured live). Against a
+//     2.15M-row window (7 days of 200 ms blocks, a 7,077-call full read) a
+//     scan at the default reads about 550 calls (the head plus the unheld
+//     oldest blocks), against about 2,200 at 1,500,000 rows (about 75 MB)
+//     and 3,800 at 1,000,000: the cap is sized for the upstream read bill. Each scan then also reads [window start, heldFrom) from the chain
+//     for the covered wallets and folds it unkept (kept again once there is
+//     room). The cache is never reset for size, so a busy window costs the
+//     head plus that remainder per scan, not a full read.
 //   * State survives a restart in the same store the board's other documents
 //     use (json-document: the state database, or files on the volume). The
 //     meta document is written last and names each segment's row count and
@@ -59,6 +72,11 @@ export const LOG_CACHE_DEFAULTS = Object.freeze({
   saveTimeoutMs: 20_000,
 });
 const VERSION = 1;
+// The meta of a cache that holds only its newest rows (heldFrom set) is
+// version 2, so a build that does not know heldFrom discards it (a full read)
+// instead of folding a window with its oldest blocks missing. A cache that
+// holds the whole window still writes version 1, byte for byte as before.
+const META_HELD = 2;
 
 /** Off only when LEADERBOARD_LOG_CACHE=off (read at call time). */
 export function logCacheEnabled(env = process.env) {
@@ -221,13 +239,17 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
   // This scan's reorg margin in blocks: a pinned count, else the margin's
   // seconds at the chain's block time now.
   const marginBlocks = () => (Number.isFinite(reorgMarginBlocks) ? reorgMarginBlocks : blocksForSeconds(chain, reorgMarginSeconds));
-  let state = null;          // { cursor, covered: Map(wallet -> fromBlock), segs: Map(start -> seg) }
+  let state = null;          // { cursor, covered: Map(wallet -> fromBlock), segs: Map(start -> seg), heldFrom }
   let loaded = false;
   const deleted = new Set(); // segment keys to delete on the next persist
-  const stats = { scans: 0, fullScans: 0, incrementalScans: 0, headCalls: 0, backfillCalls: 0, failedCalls: 0, resets: 0, overCap: 0, lastRows: 0, lastCursor: null, lastReason: null, persistFailures: 0 };
+  const stats = { scans: 0, fullScans: 0, incrementalScans: 0, headCalls: 0, backfillCalls: 0, remainderCalls: 0, failedCalls: 0, resets: 0, overCap: 0, trims: 0, lastRows: 0, lastCursor: null, lastReason: null, persistFailures: 0 };
   const segStartOf = (block) => Math.floor(block / segmentBlocks) * segmentBlocks;
 
-  const empty = () => ({ cursor: null, covered: new Map(), segs: new Map() });
+  // heldFrom: null when the kept rows cover the window from its start; else
+  // the first block (a segment start) the kept rows cover. Blocks between the
+  // window's start and heldFrom are read from the chain on each scan and
+  // folded, never kept, while the window holds more rows than maxRows.
+  const empty = () => ({ cursor: null, covered: new Map(), segs: new Map(), heldFrom: null });
   function reset(reason) {
     if (state) for (const k of state.segs.keys()) deleted.add(k);
     state = empty();
@@ -242,7 +264,7 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
     try { meta = await store.read("meta"); } catch { meta = { ok: false }; }
     if (!meta.ok || !meta.body) { if (!meta.ok) stats.lastReason = "meta unreadable"; return; }
     const m = meta.body;
-    if (m.v !== VERSION || String(m.token || "").toLowerCase() !== String(token).toLowerCase() || m.segmentBlocks !== segmentBlocks || !Number.isFinite(m.cursor)) { reset("meta from another configuration"); return; }
+    if ((m.v !== VERSION && m.v !== META_HELD) || (m.v === META_HELD && !Number.isFinite(m.heldFrom)) || String(m.token || "").toLowerCase() !== String(token).toLowerCase() || m.segmentBlocks !== segmentBlocks || !Number.isFinite(m.cursor)) { reset("meta from another configuration"); return; }
     const segs = new Map();
     for (const [key, want] of Object.entries(m.segs || {})) {
       let r;
@@ -253,7 +275,9 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
       s.digest = want.digest;
       segs.set(s.start, s);
     }
-    state = { cursor: m.cursor, covered: new Map(Object.entries(m.covered || {}).map(([w, b]) => [I(w), Number(b)])), segs };
+    const heldFrom = m.v === META_HELD ? m.heldFrom : null;
+    if (heldFrom != null && [...segs.keys()].some((k) => k < heldFrom)) { reset("a segment below the held range"); for (const k of Object.keys(m.segs || {})) deleted.add(k); return; }
+    state = { cursor: m.cursor, covered: new Map(Object.entries(m.covered || {}).map(([w, b]) => [I(w), Number(b)])), segs, heldFrom };
   }
 
   async function persist() {
@@ -279,7 +303,9 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
     deleted.clear();
     // The meta goes last, and only when every segment it names landed.
     if (!okAll) { stats.persistFailures++; return false; }
-    const meta = { v: VERSION, token: String(token).toLowerCase(), segmentBlocks, cursor: state.cursor, covered: Object.fromEntries(state.covered), segs: metaSegs };
+    const meta = state.heldFrom == null
+      ? { v: VERSION, token: String(token).toLowerCase(), segmentBlocks, cursor: state.cursor, covered: Object.fromEntries(state.covered), segs: metaSegs }
+      : { v: META_HELD, token: String(token).toLowerCase(), segmentBlocks, cursor: state.cursor, covered: Object.fromEntries(state.covered), segs: metaSegs, heldFrom: state.heldFrom };
     const ok = await store.save("meta", meta).catch(() => false);
     if (!ok) stats.persistFailures++;
     return ok;
@@ -299,8 +325,29 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
       touch(s);
     }
   }
+  const dropSeg = (k) => { state.segs.delete(k); deleted.add(k); };
+  // Rows older than the window are not kept: a segment wholly older goes (the
+  // one the window starts in stays whole until the window passes it, so a
+  // scan never rewrites it only to drop a few rows).
   function prune(start) {
-    for (const k of [...state.segs.keys()]) if (k + segmentBlocks - 1 < start) { state.segs.delete(k); deleted.add(k); }
+    for (const k of [...state.segs.keys()]) if (k + segmentBlocks - 1 < start) dropSeg(k);
+    if (state.heldFrom != null && state.heldFrom <= start) state.heldFrom = null;
+  }
+  // Past maxRows the oldest segments go and heldFrom rises past them: the
+  // cache keeps its newest rows, and a scan reads the rest of the window from
+  // the chain. Never a reset: the next scan is still incremental.
+  function trim() {
+    if (state.heldFrom != null) for (const k of [...state.segs.keys()]) if (k < state.heldFrom) dropSeg(k);
+    let n = totalRows();
+    if (n <= maxRows) return;
+    stats.overCap++; stats.trims++;
+    for (const k of [...state.segs.keys()].sort((a, b) => a - b)) {
+      if (n <= maxRows) break;
+      n -= segRows(state.segs.get(k));
+      dropSeg(k);
+      state.heldFrom = Math.max(state.heldFrom ?? -Infinity, k + segmentBlocks);
+    }
+    stats.lastReason = `over ${maxRows} rows: kept the newest from block ${state.heldFrom}`;
   }
   const totalRows = () => { let n = 0; for (const s of state.segs.values()) n += segRows(s); return n; };
 
@@ -333,7 +380,7 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
       for (let a = from; a <= to; a += chunkBlocks) {
         const b = Math.min(a + chunkBlocks - 1, to);
         for (const [gi, g] of groups.entries()) {
-          calls++; if (kind === "head") stats.headCalls++; else stats.backfillCalls++;
+          calls++; if (kind === "head") stats.headCalls++; else if (kind === "remainder") stats.remainderCalls++; else stats.backfillCalls++;
           try { out.push(...await readLogs(a, b, g.map(pad))); }
           catch (e) {
             failed = true; failedCalls++; stats.failedCalls++; failedGroups.add(gi);
@@ -347,6 +394,14 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
 
     // 1. Wallets read for the first time: the window up to the cursor.
     const back = fresh.length && cursor >= start ? await readRange(start, cursor, fresh, "backfill") : { out: [], failed: false, failedGroups: new Set(), groups: [] };
+    // 1b. The rest of the wallets: the blocks of the window the cache does not
+    //     hold (below heldFrom), when it holds only its newest rows.
+    const heldFrom = cold ? null : state.heldFrom;
+    const remHi = heldFrom == null ? -Infinity : Math.min(heldFrom - 1, cursor);
+    const kept = ws.filter((w) => !freshSet.has(w));
+    const callsBeforeRem = calls;
+    const rem = !cold && remHi >= start && kept.length ? await readRange(start, remHi, kept, "remainder") : { out: [], failed: false };
+    const remCalls = calls - callsBeforeRem;
     // 2. Every wallet: the blocks after the cursor.
     const head = cursor < latest ? await readRange(cursor + 1, latest, ws, "head") : { out: [], failed: false };
 
@@ -373,6 +428,7 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
       part.extra.push(t);
     };
     for (const t of back.out) if (t.block >= start && t.block <= cursor) extraPart(t);
+    for (const t of rem.out) if (t.block >= start && t.block <= remHi && foldable.has(t.wallet)) extraPart(t);
     for (const t of head.out) if (t.block > cursor && t.block <= latest) extraPart(t);
     const rows = new TransferView([...parts.values()].sort((x, y) => x.start - y.start).map(orderPart));
 
@@ -407,22 +463,28 @@ export function createLogWindowCache({ store, token, segmentBlocks = LOG_CACHE_D
         state.cursor = settled;
       }
     }
+    // The remainder read in full is kept too when the cache has room for it.
+    if (!cold && rem.out.length + totalRows() <= maxRows && !rem.failed && remHi >= start && remHi === heldFrom - 1) {
+      for (const t of rem.out) if (t.block >= start && t.block <= remHi && state.covered.get(t.wallet) <= start) addRow(t);
+      state.heldFrom = null;
+    }
     // Wallets no longer listed stop being covered (their rows age out).
     for (const w of [...state.covered.keys()]) if (!wsSet.has(w)) state.covered.delete(w);
     prune(start);
+    trim();
     const n = totalRows();
     stats.lastRows = n; stats.lastCursor = state.cursor;
     if (cold) stats.fullScans++; else stats.incrementalScans++;
-    if (n > maxRows) { stats.overCap++; reset(`over ${maxRows} rows`); }
     return {
       transfers: rows, calls, failedCalls, failedFromByWallet,
       mode: cold ? "full" : "incremental", newWallets: cold ? 0 : fresh.length,
+      remainderCalls: remCalls, heldFrom: state.heldFrom,
     };
   }
 
   return {
     scan, load, persist,
-    stats: () => ({ ...stats, cursor: state?.cursor ?? null, rows: state ? totalRows() : 0, segments: state ? state.segs.size : 0, coveredWallets: state ? state.covered.size : 0 }),
+    stats: () => ({ ...stats, cursor: state?.cursor ?? null, heldFrom: state?.heldFrom ?? null, rows: state ? totalRows() : 0, segments: state ? state.segs.size : 0, coveredWallets: state ? state.covered.size : 0 }),
     /** Tests: drop the in-memory copy so the next scan loads from the store. */
     _forget() { state = null; loaded = false; deleted.clear(); },
   };

@@ -59,6 +59,11 @@ import { SETTLE_FAULT, tempoRefusalFault } from "./settle-fault.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 import { noteTempoMultisigSettled, withdrawTempoMultisigProof } from "./rail-cover.js";
 import { challengeLifeShortfall, challengeLifeReason, presentChallengeWindow } from "./challenge-life.js";
+import { createCallerPlaces } from "./caller-places.js";
+import { IN_PROCESS_CALLER, ANONYMOUS_CALLER } from "./dispatch-caller.js";
+import { limiterKey } from "./rate-limit.js";
+import { chargeSponsorAccount, chargeSponsorPolicy, isSponsoredChallengeRequest, sponsorChargeFor, runWithSponsorContext, runSponsoredBroadcast, withholdSponsorshipForCurrentClient, withSponsorBooking, PATH_USD_ADDRESS as SPONSOR_FEE_TOKEN } from "./tempo-charge-sponsor.js";
+import { signingHalted } from "./signing-halt.js";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
 
@@ -455,6 +460,15 @@ export const TEMPO_REFUSAL_CLASSES = Object.freeze({
     detail: "This server screens the addresses of a Tempo per-call payment against the OFAC SDN list before accepting it, and the list is not loaded right now, so the credential was not checked and nothing was charged.",
     hint: "Retry shortly, or pay over another method offered in the WWW-Authenticate header (x402 USDC or MPP evm/charge).",
   },
+  // A fee-sponsored challenge's credential this server will not co-sign: a
+  // sender the gate cannot prove (src/tempo-charge-sponsor.js), or outbound
+  // signing halted. Before any claim or handler; the fresh challenge in the
+  // same 402 has the buyer pay its own network fee.
+  "fee-sponsor-declined": {
+    kind: "verification-failed", status: 402,
+    detail: "This server did not pay the Tempo network fee for this credential (the transaction's sender is not one its signature proves, or fee sponsorship is paused), so nothing was charged.",
+    hint: "Pay the fresh tempo challenge in this 402: it has your wallet pay its own network fee.",
+  },
   "policy-denied": {
     kind: "verification-failed", status: 402,
     detail: "The Tempo relay declined this payment under its own policy.",
@@ -599,12 +613,53 @@ function tempoMethod() {
   return cachedMethod;
 }
 
+// The fee-sponsored method group (src/tempo-charge-sponsor.js): the same
+// currencies and recipient, settled by this server itself over TEMPO_RPC_URL
+// whatever TEMPO_RELAY says (a relay cannot co-sign with our key), with the
+// subscription gas sponsor as fee payer, fees in PathUSD, mppx's per-transaction
+// fee-payer policy, and every raw send booked before it leaves. Null while no
+// sponsor key parses. Memoized like tempoMethod.
+let cachedSponsorMethod = null;
+let cachedSponsorKey = "";
+function sponsorMethod() {
+  const acct = chargeSponsorAccount();
+  if (!acct) return null;
+  const policy = chargeSponsorPolicy();
+  const rpcUrl = String(process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz").trim();
+  const key = `${acct.address}|${envRecipient()}|${envCurrencies().join(",")}|${envDecimals()}|${rpcUrl}|${policy.maxTotalFee}`;
+  if (cachedSponsorMethod && cachedSponsorKey === key) return cachedSponsorMethod;
+  let client = null;
+  cachedSponsorMethod = tempo.charge({
+    currencies: envCurrencies(),
+    decimals: envDecimals(),
+    recipient: envRecipient(),
+    store: mppxReplayStore(),
+    feePayer: acct,
+    feePayerPolicy: policy,
+    feeToken: SPONSOR_FEE_TOKEN,
+    sponsorBudget: false,
+    getClient: async () => {
+      if (client) return client;
+      const { createClient, http } = await import("viem");
+      const { tempo: tempoChain } = await import("viem/tempo/chains");
+      client = createClient({ chain: { ...tempoChain, experimental_preconfirmationTime: 500 }, transport: withSponsorBooking(http(rpcUrl, { timeout: 30_000 })) });
+      return client;
+    },
+  });
+  cachedSponsorKey = key;
+  return cachedSponsorMethod;
+}
+/** Is this credential for a fee-sponsored challenge? (The HMAC binding is checked by the gate.) */
+export function isSponsoredTempoCredential(authorizationHeader) {
+  try { return isSponsoredChallengeRequest(Credential.deserialize(authorizationHeader)?.challenge?.request); } catch { return false; }
+}
+
 /** Mint an HMAC-bound `method: "tempo"` MPP challenge for a route's USD
  *  price. Returns null when the feature is disabled or a route has no
  *  parseable price — callers must never advertise a challenge nobody can
  *  actually settle. `secretKey` is the same MPP_SECRET_KEY the "evm" side
  *  already uses (one HMAC secret, not a second one to provision). */
-export function mintTempoChallenge({ priceUsd, description, realm, secretKey, timeoutSeconds = 300 }) {
+export function mintTempoChallenge({ priceUsd, description, realm, secretKey, timeoutSeconds = 300, sponsored = false }) {
   if (!tempoEnabled()) return null;
   // No secret, no challenge: an HMAC over an empty key is a challenge anyone
   // can mint, and the inbound gate (checkTempoCredentialBinding) would then
@@ -628,7 +683,10 @@ export function mintTempoChallenge({ priceUsd, description, realm, secretKey, ti
   // add are supplied here: chainId (fixed — Tempo mainnet 4217, mppx's
   // `defaults.chainId.mainnet`); there is no local feePayer, so none is set
   // and the buyer pays their own fee, exactly as the hook would resolve it.
-  const group = tempoMethod();
+  // A sponsored challenge (src/tempo-charge-sponsor.js decides, per request)
+  // asks for a fee-sponsored transaction: this server co-signs as fee payer.
+  const sponsorGroup = sponsored ? sponsorMethod() : null;
+  const group = sponsorGroup || tempoMethod();
   const challenges = envCurrencies().map((currency, i) => Challenge.fromMethod(group[i] || group[0], {
     realm,
     expires: new Date(Date.now() + timeoutSeconds * 1000),
@@ -638,6 +696,7 @@ export function mintTempoChallenge({ priceUsd, description, realm, secretKey, ti
       currency,
       decimals,
       recipient: envRecipient(),
+      ...(sponsorGroup ? { feePayer: true } : {}),
       ...(description ? { description: String(description).slice(0, 200) } : {}),
     },
     secretKey,
@@ -1069,46 +1128,83 @@ export const KEYCHAIN_UNAVAILABLE = "unavailable";
  *  read not at all, so the next request reads again. A remembered "absent" is
  *  not reused for a credential WITHOUT an inline authorization (the key may
  *  have been installed since), which reads again. At most `maxInFlight` reads
- *  run at once. A new key past that joins a first-come queue and waits for a
- *  slot up to `queueWaitMs` (default: the read timeout); a slot that frees is
- *  handed to the head of the queue alone (no other waiter wakes, and a key
- *  that arrives later never takes it first). Unavailable if none frees in
- *  time, and at once, with no wait, when `maxWaiters` keys already wait.
+ *  run at once. A new key past that joins a queue and waits for a slot up to
+ *  `queueWaitMs` (default: the read timeout); a slot that frees is handed to
+ *  one waiter alone (no other waiter wakes): the one whose client address
+ *  holds the fewest reads and places, first come among equals, so a single
+ *  address's keys are read in the order they came. Unavailable if none frees
+ *  in time.
+ *
+ *  THE QUEUE IS SHARED FAIRLY BY CLIENT ADDRESS (`who`, the second argument:
+ *  `{ who }`, the address key the gate passes, an IPv6 one folded to its /64;
+ *  src/caller-places.js). Up to `maxWaiters` keys wait. Past that, a key from
+ *  an address that already holds a read or a place is unavailable at once,
+ *  with no wait (its own excess), and a key from an address holding nothing
+ *  is queued over the bound, nobody giving way, up to `hardWaiters` (twice
+ *  `maxWaiters` by default; a waiter holds a timer and a few small objects,
+ *  so that bound is a few hundred kilobytes at most). Only there does a
+ *  newcomer take a place: the newest of the address holding the most, while
+ *  one holds more than one (that waiter's read is unavailable). So the queue
+ *  is full of one address's keys only while nobody else waits, and a key from
+ *  another address gets a place unless `hardWaiters` addresses each already
+ *  hold one. A call that names no address (`who` absent: a direct call, not
+ *  the gate) counts under one shared key, as one caller.
  *  Exported for tests. */
-export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlMs = 60_000, negativeTtlMs = 15_000, maxInFlight = 16, maxEntries = 5000, queueWaitMs = null, maxWaiters = 64 } = {}) {
+export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlMs = 60_000, negativeTtlMs = 15_000, maxInFlight = 16, maxEntries = 5000, queueWaitMs = null, maxWaiters = 64, hardWaiters = 2 * maxWaiters } = {}) {
   const cache = new Map(); // "account:key" -> { state, until }
   const inFlight = new Map(); // "account:key" -> Promise<state>, queued or reading
   // THE READ SLOTS. `reading` counts reads under way; `queue` holds the keys
   // waiting for one, oldest first. A read that ends hands its slot straight
-  // to the head of the queue (`reading` stays as it was), so a key that
-  // arrives meanwhile finds the queue non-empty and queues behind it.
+  // to a waiter (`reading` stays as it was), so a key that arrives meanwhile
+  // finds the queue non-empty and queues. Each read and each waiting place is
+  // counted under its client address (`places`), which decides who is
+  // admitted past `maxWaiters` and who is handed a freed slot.
   let reading = 0;
   const queue = [];
-  let waitsGivenUp = 0;
-  const acquireSlot = () => {
-    if (reading < maxInFlight && queue.length === 0) { reading++; return true; }
-    if (queue.length >= maxWaiters) return false;
+  const places = createCallerPlaces();
+  let waitsGivenUp = 0, placesGivenUp = 0;
+  const acquireSlot = (who) => {
+    if (reading < maxInFlight && queue.length === 0) { reading++; places.hold(who); return true; }
+    const fitsWithin = (max) => (taken = []) => queue.length - taken.length < max;
+    const fits = fitsWithin(maxWaiters);
+    if (!fits()) {
+      const admitted = places.admit(queue, who, { fits, fitsHard: fitsWithin(Math.max(hardWaiters, maxWaiters)) });
+      if (admitted.refused) return false;
+      for (const i of admitted.taken.sort((a, b) => b - a)) queue.splice(i, 1)[0].evict();
+    }
     const waitMs = Number.isFinite(queueWaitMs) && queueWaitMs >= 0 ? queueWaitMs : accessKeyTimeoutMs();
+    places.hold(who);
     return new Promise((resolve) => {
-      const place = { done: false, timer: null };
+      const place = { who, done: false, timer: null };
       place.grant = () => { place.done = true; clearTimeout(place.timer); resolve(true); };
+      // Its place went to a newcomer from another address: unavailable now.
+      place.evict = () => { place.done = true; clearTimeout(place.timer); places.free(who); placesGivenUp++; resolve(false); };
       place.timer = setTimeout(() => {
         if (place.done) return;
         place.done = true;
         const at = queue.indexOf(place);
         if (at >= 0) queue.splice(at, 1);
+        places.free(who);
         waitsGivenUp++;
         resolve(false);
       }, waitMs);
       queue.push(place);
     });
   };
-  const releaseSlot = () => {
-    const next = queue.shift();
-    if (next) next.grant(); else reading--;
+  const releaseSlot = (who) => {
+    places.free(who);
+    let at = -1, least = Infinity;
+    for (let i = 0; i < queue.length; i++) {
+      const n = places.most(queue[i].who);
+      if (n < least) { least = n; at = i; }
+    }
+    if (at >= 0) queue.splice(at, 1)[0].grant(); else reading--;
   };
   const stateOf = (v) => (v === true || v === "active" ? "active" : typeof v === "string" ? v : "inactive");
-  const verify = async function verifyKeychainSender(keychain, now = Date.now()) {
+  const verify = async function verifyKeychainSender(keychain, opts = {}) {
+    // The second argument: `{ who, now }` (a bare number is `now`, as before).
+    const { who: whoIn = null, now = Date.now() } = typeof opts === "number" ? { now: opts } : (opts || {});
+    const who = typeof whoIn === "string" && whoIn ? whoIn : IN_PROCESS_CALLER;
     const account = lcAddress(keychain?.account);
     const accessKey = lcAddress(keychain?.accessKey);
     if (!account || !accessKey) return null;
@@ -1121,12 +1217,12 @@ export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlM
     // request for a key already waiting shares that place in the queue.
     let p = inFlight.get(k);
     if (!p) {
-      const slot = acquireSlot();
-      // The queue is full: no wait, no read (a 503 with Retry-After at the gate).
+      const slot = acquireSlot(who);
+      // The queue is full for this caller: no wait, no read (a 503 with Retry-After at the gate).
       if (slot === false) return KEYCHAIN_UNAVAILABLE;
       p = (async () => {
-        if (slot !== true && !(await slot)) return "unreadable"; // no slot within the wait: not remembered
-        try { return stateOf(await check({ account, accessKey })); } catch { return "unreadable"; } finally { releaseSlot(); }
+        if (slot !== true && !(await slot)) return "unreadable"; // no slot within the wait, or its place given up: not remembered
+        try { return stateOf(await check({ account, accessKey })); } catch { return "unreadable"; } finally { releaseSlot(who); }
       })();
       inFlight.set(k, p);
       p.then((state) => {
@@ -1145,12 +1241,27 @@ export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlM
   /** Keys waiting for a read slot now, and how many waits ran out. */
   verify.readsQueued = () => queue.length;
   verify.waitsGivenUp = () => waitsGivenUp;
+  /** Waiting places handed to a newcomer from another address. */
+  verify.placesGivenUp = () => placesGivenUp;
+  /** Addresses holding a read or a place now (0 when the queue is idle). */
+  verify.callersHolding = () => places.callers();
   return verify;
 }
 const verifyTempoKeychainSenderDefault = createKeychainSenderVerifier();
-/** The production keychain check (TEMPO_RPC_URL, cached). */
-export function verifyTempoKeychainSender(keychain) {
-  return verifyTempoKeychainSenderDefault(keychain);
+/** The production keychain check (TEMPO_RPC_URL, cached). `opts.who`: the
+ *  client address key the read's place in the queue is counted under. */
+export function verifyTempoKeychainSender(keychain, opts) {
+  return verifyTempoKeychainSenderDefault(keychain, opts);
+}
+
+/** The key a keychain read's place is counted under (createKeychainSenderVerifier):
+ *  the request's client address, an IPv6 one folded to its /64 as every
+ *  per-address bound folds it; a request whose address is the CDN edge's
+ *  (no proof of its client) names no one and is always a newcomer. Only the
+ *  address: no header a caller writes chooses it. */
+export function keychainCallerOf(req) {
+  if (req && typeof req === "object" && req.ip && req.cdnUnproven !== true) return `ip:${limiterKey(String(req.ip))}`;
+  return ANONYMOUS_CALLER;
 }
 
 /** Reason class + buyer words for a binding refusal (checked before any relay
@@ -1311,8 +1422,25 @@ async function screenTempoFunding(authorizationHeader, phase, extra = []) {
  *  route binding is checkTempoCredentialBinding above - this only asks the
  *  relay whether the signed transaction is valid FOR THE CHALLENGE IT CARRIES,
  *  which is necessary but never sufficient. Never broadcasts, never moves money. */
+// A sponsored pull is settled by this server (sponsorMethod), so it is screened
+// as direct mode screens, and it runs only for a sender the gate can prove: a
+// sender only the chain could vouch for after the fact (a multisig envelope,
+// any shape inspectTempoSender cannot prove) is declined before anything is
+// claimed, nothing charged, and that client's next challenges are not sponsored.
+function sponsoredSenderProven(authorizationHeader) {
+  const s = inspectTempoSender(authorizationHeader);
+  return Boolean(s.verified || s.keychain || (s.booking && s.booking.ledger == null && s.booking.account));
+}
+const SPONSOR_DECLINED = (why) => ({ ok: false, cls: "fee-sponsor-declined", error: `fee sponsorship declined: ${why}`, reason: "fee sponsorship declined", requestId: null, relayMessage: null });
 export async function validateTempoCredential(authorizationHeader) {
-  const direct = tempoSettlementMode() === "direct";
+  const sponsored = isSponsoredTempoCredential(authorizationHeader);
+  if (sponsored) {
+    const pull = (() => { try { return Credential.deserialize(authorizationHeader)?.payload?.type === "transaction"; } catch { return false; } })();
+    if (pull && !sponsoredSenderProven(authorizationHeader)) { withholdSponsorshipForCurrentClient(); return SPONSOR_DECLINED("sender not proven"); }
+    if (pull && signingHalted()) return SPONSOR_DECLINED("outbound signing is halted");
+    if (pull && !sponsorMethod()) return SPONSOR_DECLINED("no sponsor key");
+  }
+  const direct = sponsored || tempoSettlementMode() === "direct";
   if (direct) {
     const refused = screenTempoParties(authorizationHeader, "before validate") || await screenTempoFunding(authorizationHeader, "before validate");
     if (refused) return refused;
@@ -1322,7 +1450,7 @@ export async function validateTempoCredential(authorizationHeader) {
     if (refused) return refused;
   }
   try {
-    const [validation] = await withRelayTrace(() => Method.validateCredential(tempoMethod(), authorizationHeader));
+    const [validation] = await withRelayTrace(() => Method.validateCredential((sponsored && sponsorMethod()) || tempoMethod(), authorizationHeader));
     // The sender mppx itself settled on (a push transfer's on-chain sender,
     // a pull transaction's signer, and since mppx 0.13.5 the payer its
     // matched transfers debited): screened too, before anything is claimed
@@ -1442,13 +1570,19 @@ export function pushFinalizeAmbiguous(f) {
  *  this after a successful (<400) handler response; see the server wiring
  *  in server.js for the buffer-then-decide discipline this depends on. */
 export async function broadcastTempoCredential(authorizationHeader) {
+  const sponsored = isSponsoredTempoCredential(authorizationHeader);
   // Again at the broadcast: the list may have refreshed since validation.
-  if (tempoSettlementMode() === "direct") {
+  if (sponsored || tempoSettlementMode() === "direct") {
     const refused = screenTempoParties(authorizationHeader, "before broadcast");
     if (refused) return refused;
   }
+  const sponsor = sponsored ? sponsorMethod() : null;
+  if (sponsored && (!sponsor || signingHalted())) return SPONSOR_DECLINED(sponsor ? "outbound signing is halted" : "no sponsor key");
   try {
-    const [receipt] = await withRelayTrace(() => Method.broadcastCredential(tempoMethod(), authorizationHeader));
+    const challengeId = sponsor ? (() => { try { return Credential.deserialize(authorizationHeader)?.challenge?.id || null; } catch { return null; } })() : null;
+    const [receipt] = await withRelayTrace(() => (sponsor
+      ? runSponsoredBroadcast(challengeId, () => Method.broadcastCredential(sponsor, authorizationHeader))
+      : Method.broadcastCredential(tempoMethod(), authorizationHeader)));
     return { ok: true, receipt };
   } catch (e) {
     const trace = e?.__relayTrace || {};
@@ -1472,6 +1606,8 @@ export async function __testRelayFetch(url, init) {
   catch (error) { return { error, trace }; }
 }
 export function __testResetMethodCache() {
+  cachedSponsorMethod = null;
+  cachedSponsorKey = "";
   cachedMethod = null;
   cachedKey = "";
 }
@@ -1551,6 +1687,7 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
               description: item.description,
               realm,
               secretKey,
+              sponsored: sponsorChargeFor(req),
             });
             if (header) {
               const existing = res.getHeader("WWW-Authenticate");
@@ -1563,7 +1700,9 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
       }
       return origWriteHead.apply(this, args);
     };
-    next();
+    // The rest of the request runs with its client in reach of a sponsored
+    // send's booking (src/tempo-charge-sponsor.js).
+    runWithSponsorContext(req, next);
   };
 }
 
@@ -1782,7 +1921,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // (KEYCHAIN_UNAVAILABLE), never as a verdict on the key.
       let timer = null;
       const late = new Promise((resolve) => { timer = setTimeout(() => resolve(KEYCHAIN_UNAVAILABLE), accessKeyTimeoutMs()); timer.unref?.(); });
-      keychainRead = Promise.race([Promise.resolve().then(() => verifyKeychainSender(senderInfo.keychain)).then((a) => (a === KEYCHAIN_UNAVAILABLE ? a : lcAddress(a)), () => KEYCHAIN_UNAVAILABLE), late]).finally(() => clearTimeout(timer));
+      keychainRead = Promise.race([Promise.resolve().then(() => verifyKeychainSender(senderInfo.keychain, { who: keychainCallerOf(req) })).then((a) => (a === KEYCHAIN_UNAVAILABLE ? a : lcAddress(a)), () => KEYCHAIN_UNAVAILABLE), late]).finally(() => clearTimeout(timer));
       keychainRead.then((a) => { if (lcAddress(a)) keychainSender = a; });
     }
     const SENDER_REFUSED = Symbol("sender-refused");

@@ -29,13 +29,17 @@ import { join } from "node:path";
 import { bootServer } from "./lib/boot-server.js";
 import { createJsonDocument } from "../src/json-document.js";
 import {
-  createPriceWebhooks, parseTarget, parseSlugs, priceChanges, changesOf, secretFor, ownerDigest, signatureFor, verifySignature, isDocumentationHost,
+  createPriceWebhooks, parseTarget, parseSlugs, priceChanges, removalChanges, changesOf, REMOVAL_GUARD_MIN, REMOVAL_GUARD_SHARE, secretFor, ownerDigest, signatureFor, verifySignature, isDocumentationHost,
   RETRY_DELAYS_MS, MAX_SLUGS, MAX_URL_CHARS, SIGNATURE_HEADER, EVENT_HEADER, DELIVERY_HEADER, EVENT_PRICE_CHANGED, UNSUBSCRIBE_PATH, PRICE_WEBHOOK_SLUG,
-  DELIVERY_TIMEOUT_MS, DELIVERY_LANES, HOST_TURN_MS, TURN_BUDGET_MS, PENDING_MS, MAX_CHANGE_SETS, lifetimeMs, maxPerRegistrant, maxSubscriptions, hardMaxSubscriptions,
+  DELIVERY_TIMEOUT_MS, DELIVERY_LANES, HOST_TURN_MS, TURN_BUDGET_MS, PENDING_MS, MAX_CHANGE_SETS, lifetimeMs, maxPerRegistrant, maxSubscriptions, hardMaxSubscriptions, FULL_RETRY_AFTER_SECONDS,
 } from "../src/price-webhooks.js";
 import { hasLastingEffect } from "../src/lasting-effect-slugs.js";
 import { PRICE_WEBHOOK_TOOLS, registrantOf, makePriceWebhookHandler } from "../src/tools/price-webhook-kit.js";
 import { runAsCallerOf } from "../src/dispatch-caller.js";
+import { toolErrorFields } from "../src/tool-error-fields.js";
+import { errorCodeField } from "../src/stable-error-code.js";
+import { pushRefusalBody, PUSH_FAILURE_NOTE } from "../src/push-refusal-body.js";
+import { OWED_REPAID } from "../src/tempo-push-debts.js";
 
 let pass = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); pass++; };
@@ -51,7 +55,7 @@ const KEY = "a-signing-key-for-the-test";
 const KNOWN = new Set(["search", "answer", "hash", "uuid"]);
 let fileN = 0;
 // A store on a file of its own, with a clock, a sender and a URL check the test holds.
-function rig({ env = { PRICE_WEBHOOK_SIGNING_KEY: KEY }, responder = () => ({ status: 200 }), checkUrl = async () => {}, deliveriesOn = () => true, attemptTimeoutMs = undefined } = {}) {
+function rig({ env = { PRICE_WEBHOOK_SIGNING_KEY: KEY }, responder = () => ({ status: 200 }), checkUrl = async () => {}, deliveriesOn = () => true, attemptTimeoutMs = undefined, retiredOf = undefined } = {}) {
   const file = join(dir, `store-${++fileN}.json`);
   const clock = { t: Date.UTC(2026, 10, 21, 12) };
   const sent = [];
@@ -61,7 +65,7 @@ function rig({ env = { PRICE_WEBHOOK_SIGNING_KEY: KEY }, responder = () => ({ st
     now: () => clock.t, env, baseUrl: () => "https://tools.test",
     checkUrl: async (u) => { checked.push(u); return checkUrl(u); },
     send: async (url, init) => { sent.push({ url, ...init }); const r = await responder(url, init, sent.length); if (r instanceof Error) throw r; return r; },
-    deliveriesOn, log: () => {}, settleRetryDelaysMs: [], ...(attemptTimeoutMs ? { attemptTimeoutMs } : {}),
+    deliveriesOn, log: () => {}, settleRetryDelaysMs: [], ...(attemptTimeoutMs ? { attemptTimeoutMs } : {}), ...(retiredOf ? { retiredOf } : {}),
   });
   const stored = () => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; } };
   /** What a stored queued delivery announces to its subscription. */
@@ -146,7 +150,7 @@ try {
   }
   {
     // Who is bounded: the registrant, never the host a URL names.
-    ok(maxPerRegistrant({}) === 25 && maxSubscriptions({}) === 5000 && hardMaxSubscriptions({}) === 10000 && lifetimeMs({}) === 90 * DAY, "defaults: 25 subscriptions a registrant, room made from 5,000 on, 10,000 at most, 90 days each");
+    ok(maxPerRegistrant({}) === 25 && maxSubscriptions({}) === 6000 && hardMaxSubscriptions({}) === 12000 && lifetimeMs({}) === 90 * DAY, "defaults: 25 subscriptions a registrant, room made from 6,000 on, 12,000 at most, 90 days each");
     const r = rig({ env: { PRICE_WEBHOOK_SIGNING_KEY: KEY, PRICE_WEBHOOK_MAX_PER_PAYER: "2", PRICE_WEBHOOK_MAX_PER_HOST: "2" } });
     const A = "payer:0x00000000000000000000000000000000000000aa", B = "payer:0x00000000000000000000000000000000000000bb", C = "svm:7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
     // Many buyers point at one shared receiver host: none is refused for it.
@@ -195,9 +199,17 @@ try {
     ok((await ex.pw.status()).sinceBoot.expired === 0 && (await ex.change("search")) && (await ex.pw.status()).sinceBoot.expired === 1 && Object.keys(ex.stored().subs).length === 0 && ex.stored().queue.length === 0, "and the next store write removes it with its delivery");
   }
   {
-    // The store's own bound: failing subscriptions make room, then twice the bound, then a 503.
-    const r = rig({ env: { PRICE_WEBHOOK_SIGNING_KEY: KEY, PRICE_WEBHOOK_MAX: "3", PRICE_WEBHOOK_MAX_PER_PAYER: "1" }, responder: (url) => ({ status: url.includes("dead") ? 500 : 200 }) });
-    const reg = (n, host = `h${n}.buyer.test`) => r.pw.register({ url: `https://${host}/h` }, { known: KNOWN, registrant: `payer:0x${String(n).padStart(40, "0")}` });
+    // The store's own bound: failing subscriptions make room; a working one is
+    // never removed for room. At twice the bound, the hard bound, with nothing
+    // failing left, a new registration is refused 503 with Retry-After,
+    // uncharged, and nothing is removed or stored for it.
+    let flaky = true; // h2 fails its first attempt once, then answers
+    const r = rig({ env: { PRICE_WEBHOOK_SIGNING_KEY: KEY, PRICE_WEBHOOK_MAX: "3", PRICE_WEBHOOK_MAX_PER_PAYER: "1" }, responder: (url) => {
+      if (url.includes("dead")) return { status: 500 };
+      if (url.includes("//h2.") && flaky) { flaky = false; return { status: 500 }; }
+      return { status: 200 };
+    } });
+    const reg = (n, host = `h${n}.buyer.test`) => { r.clock.t += 60_000; return r.pw.register({ url: `https://${host}/h` }, { known: KNOWN, registrant: `payer:0x${String(n).padStart(40, "0")}` }); };
     const dead = await reg(1, "dead.buyer.test");
     const live = [await reg(2), await reg(3)];
     // The dead receiver's delivery is tried to the end and dropped.
@@ -207,14 +219,70 @@ try {
     const fourth = await reg(4);
     const after = r.stored();
     ok(fourth.registered === true && !after.subs[dead.id] && live.every((x) => after.subs[x.id]) && Object.keys(after.subs).length === 3, "at the bound a new registrant is admitted and the subscription whose deliveries fail is the one removed");
-    // With nothing failing, new registrants are admitted past the bound and nothing is removed.
+    // With nothing failing, new registrants are admitted past the bound up to the hard bound and nothing is removed.
     const more = [await reg(5), await reg(6), await reg(7)];
     ok(more.every((x) => x.registered) && Object.keys(r.stored().subs).length === 6 && live.every((x) => r.stored().subs[x.id]), "with nothing failing a new registrant is admitted past the bound, and nothing a receiver answers is removed for room");
-    await refuses(() => reg(8), 503, /as many price webhooks as it can keep/, "at twice the bound, the hard bound, a registration is a 503");
-    let err = null; try { await reg(9); } catch (e) { err = e; }
-    ok(err?.retryAfterSeconds === 3600 && Object.keys(r.stored().subs).length === 6, "with a Retry-After, and the store holds what it held");
+    // Every receiver answers 2xx (h2 on its retry): all six are working.
+    flaky = true;
+    await r.change("search");
+    await r.pw.deliverDue();
+    r.clock.t += RETRY_DELAYS_MS[0];
+    await r.pw.deliverDue();
+    ok([...live, fourth, ...more].every((x) => r.stored().subs[x.id].ok > 0 && !r.stored().subs[x.id].miss && !r.stored().subs[x.id].fails) && r.stored().queue.length === 0, "setup: every receiver answered 2xx, so the store at its hard bound holds only working subscriptions");
+    const before = JSON.stringify(r.stored().subs);
+    let full = null;
+    try { await reg(8); } catch (e) { full = e; }
+    ok(full && full.statusCode === 503 && full.retryAfter === FULL_RETRY_AFTER_SECONDS && full.charged === false && /nothing was charged/.test(full.message) && /retry later/.test(full.message), `at the hard bound with every subscription working, a new registration is refused 503 with Retry-After and charged: false (${full ? `${full.statusCode} ${full.message}` : "admitted"})`);
+    ok(JSON.stringify(r.stored().subs) === before, "and no working subscription is removed, and nothing is stored for the refused one");
+    // The description states exactly this: a working subscription is never
+    // removed for room, and the full-store 503 comes before any settlement, so
+    // it is not charged on the rails that settle after the handler (x402, MPP
+    // evm, card, credits); it names no unscoped "not charged".
+    {
+      const d = PRICE_WEBHOOK_TOOLS[0].description;
+      ok(d.includes("subscriptions whose deliveries keep failing are removed; a working subscription never is."), "the description says a working subscription is never removed for room, the behavior above");
+      ok(d.includes("a new registration is refused with 503 and Retry-After before any settlement, so it is not charged on x402, MPP evm, card or credits.") && (d.match(/not charged/g) || []).length === 1, "the description scopes the full-store 503's not-charged claim to the rails that settle after the handler, once");
+    }
+    // A Tempo push payer's transfer was final before the call ran: the push
+    // gate's rewrite of this 503 (src/push-refusal-body.js) answers
+    // charged: true with the refund owed, and keeps no "nothing was charged".
+    {
+      const body = JSON.stringify({ error: full.message, tool: PRICE_WEBHOOK_SLUG, ...toolErrorFields(full), ...errorCodeField(503) });
+      ok(JSON.parse(body).charged === false, "control: the 503 as served to the other rails says charged: false");
+      const pushed = JSON.parse(pushRefusalBody(body));
+      ok(pushed.charged === true && pushed.refundOwed === true && pushed.transferClaimed === true && pushed.payment === PUSH_FAILURE_NOTE, `a Tempo push payer's 503 says charged: true and the refund is owed (${JSON.stringify({ charged: pushed.charged, refundOwed: pushed.refundOwed })})`);
+      ok(!/nothing was charged|not charged/i.test(pushed.error) && pushed.error.includes(OWED_REPAID) && /retry later/.test(pushed.error), `and its message says the transfer is owed back, not that nothing was charged (${pushed.error})`);
+    }
+    // A registration through the deferred path (a paid or routed call) is refused the same way, with no pending mark stored.
+    let fullPending = null;
+    try { await r.pw.registerPending({ url: "https://h9.buyer.test/h" }, { known: KNOWN, registrant: "payer:0x0000000000000000000000000000000000000009" }); } catch (e) { fullPending = e; }
+    ok(fullPending?.statusCode === 503 && JSON.stringify(r.stored().subs) === before && !Object.values(r.stored().subs).some((x) => x.pending), "a pending registration at the full store is refused before anything is stored: no pending mark");
+    // A renewal takes no new place, so it is still accepted at the full store.
+    const renewed = await r.pw.register({ url: `https://h3.buyer.test/h` }, { known: KNOWN, registrant: `payer:0x${String(3).padStart(40, "0")}` });
+    ok(renewed.renewed === true && renewed.id === live[1].id, "a renewal of a held URL is still accepted at the full store");
     const st = await r.pw.status();
-    eq([st.subscriptions, st.bound, st.hardBound, st.sinceBoot.removedForRoom, st.sinceBoot.refusedFull, st.failing], [6, 3, 6, 1, 2, 0], "the status counts what was removed for room and what was refused");
+    eq([st.subscriptions, st.bound, st.hardBound, st.sinceBoot.removedForRoom, st.sinceBoot.refusedFull, st.failing], [6, 3, 6, 1, 2, 0], "the status counts what was removed for room and what was refused for a full store");
+    ok(!("removedOldest" in st.sinceBoot), "no working subscription is ever removed for room, so nothing counts one");
+  }
+  {
+    // At the hard bound a failing subscription goes, the most failures first;
+    // a pending registration and a working subscription never go.
+    const r = rig({ env: { PRICE_WEBHOOK_SIGNING_KEY: KEY, PRICE_WEBHOOK_MAX: "1", PRICE_WEBHOOK_MAX_PER_PAYER: "1" }, responder: (url) => ({ status: url.includes("miss") ? 500 : 200 }) });
+    const pend = await r.pw.registerPending({ url: "https://pending.buyer.test/h" }, { known: KNOWN, registrant: "payer:0x00000000000000000000000000000000000000a1" });
+    r.clock.t += 60_000;
+    const missing = await r.pw.register({ url: "https://miss.buyer.test/h" }, { known: KNOWN, registrant: "payer:0x00000000000000000000000000000000000000b2" });
+    await r.change("search");
+    await r.pw.deliverDue();
+    ok(r.stored().subs[missing.id].miss === 1 && !r.stored().subs[missing.id].fails, "setup: one subscription's delivery is failing now (retry queued, not yet dropped)");
+    r.clock.t += 60_000;
+    const fresh = await r.pw.register({ url: "https://fresh.buyer.test/h" }, { known: KNOWN, registrant: "payer:0x00000000000000000000000000000000000000c3" });
+    const s = r.stored();
+    ok(fresh.registered === true && !s.subs[missing.id] && s.subs[pend.answer.id] && s.subs[fresh.id] && Object.keys(s.subs).length === 2, "the failing subscription is removed before the pending one, and the new one is admitted");
+    r.clock.t += 60_000;
+    let refused = null;
+    try { await r.pw.register({ url: "https://next.buyer.test/h" }, { known: KNOWN, registrant: "payer:0x00000000000000000000000000000000000000d4" }); } catch (e) { refused = e; }
+    const s2 = r.stored();
+    ok(refused?.statusCode === 503 && s2.subs[pend.answer.id] && s2.subs[fresh.id] && Object.keys(s2.subs).length === 2, "with only a pending registration and a working subscription left, the next one is refused and neither is removed");
   }
   {
     // A registration is kept only when its call settles.
@@ -326,6 +394,55 @@ try {
     q = r.stored().queue;
     ok(!q.some((x) => x.sub === search.id), "a price back at its first value leaves nothing to announce");
     eq(r.announces(q.find((x) => x.sub === hash.id)), [{ slug: "hash", from: "$0.001", to: "$0.002" }], "the other change still waits");
+  }
+  {
+    // A watched tool that leaves the catalog is announced once: "retired" when
+    // the retirement registry lists it (with its replacement), "unavailable"
+    // when a switch or a missing key hides it.
+    const RETIRED = { hash: { replacement: "uuid" }, answer: { replacement: null } };
+    const retiredOf = (slug) => (Object.hasOwn(RETIRED, slug) ? { kind: "tool", slug, ...RETIRED[slug] } : null);
+    eq(removalChanges({ hash: "$0.001", answer: "$0.02", search: "$0.01", uuid: "$0.001" }, { uuid: "$0.001" }, retiredOf), [
+      { slug: "answer", from: "$0.02", to: null, status: "retired" },
+      { slug: "hash", from: "$0.001", to: null, status: "retired", replacement: "uuid" },
+      { slug: "search", from: "$0.01", to: null, status: "unavailable" },
+    ], "a kept tool gone from the catalog is a removal: retired (with its replacement) or unavailable");
+    eq(removalChanges(null, { a: "$1" }, retiredOf), [], "nothing kept, nothing removed");
+    const r = rig({ retiredOf });
+    const watchHash = await r.pw.register({ url: "https://a.buyer.test/h", slugs: ["hash"] }, { known: KNOWN });
+    const watchAll = await r.pw.register({ url: "https://b.buyer.test/h" }, { known: KNOWN });
+    const watchUuid = await r.pw.register({ url: "https://c.buyer.test/h", slugs: ["uuid"] }, { known: KNOWN });
+    await r.pw.notePrices({ search: "$0.01", hash: "$0.001", uuid: "$0.001", answer: "$0.02" });
+    eq(await r.pw.notePrices({ search: "$0.01", uuid: "$0.001" }), { first: false, changes: 2, queued: 2, ok: true }, "two tools gone: two changes, queued for the subscriptions that watch them");
+    let q = r.stored().queue;
+    eq(q.map((x) => x.sub).sort(), [watchHash.id, watchAll.id].sort(), "the retired tool's watcher and the watch-all subscription, not the other tool's watcher");
+    eq(r.announces(q.find((x) => x.sub === watchHash.id)), [{ slug: "hash", from: "$0.001", to: null, status: "retired", replacement: "uuid" }], "the watcher hears the retirement and its replacement");
+    eq(r.announces(q.find((x) => x.sub === watchAll.id)), [{ slug: "answer", from: "$0.02", to: null, status: "retired" }, { slug: "hash", from: "$0.001", to: null, status: "retired", replacement: "uuid" }], "the watch-all subscription hears both");
+    ok(!Object.hasOwn(r.stored().prices, "hash") && !Object.hasOwn(r.stored().prices, "answer"), "a removed tool's kept price goes");
+    eq(await r.pw.notePrices({ search: "$0.01", uuid: "$0.001" }), { first: false, changes: 0, queued: 0, ok: true }, "the next record announces nothing more: once");
+    // Delivered as part of the signed payload.
+    await r.pw.deliverDue();
+    const body = JSON.parse(r.sent.find((x) => x.url === "https://a.buyer.test/h").body);
+    eq(body.changes, [{ slug: "hash", from: "$0.001", to: null, status: "retired", replacement: "uuid" }], "the delivery carries the removal as sent");
+    // A tool hidden by a switch: "unavailable"; when it is back, a later price change is an ordinary one.
+    eq(await r.pw.notePrices({ uuid: "$0.001" }), { first: false, changes: 1, queued: 1, ok: true }, "a tool hidden by a switch is one change");
+    eq(r.announces(r.stored().queue.find((x) => x.sub === watchAll.id)), [{ slug: "search", from: "$0.01", to: null, status: "unavailable" }], "announced as unavailable");
+    await r.pw.notePrices({ uuid: "$0.001", search: "$0.01" });
+    await r.pw.notePrices({ uuid: "$0.001", search: "$0.03" });
+    eq(r.announces(r.stored().queue.find((x) => x.sub === watchAll.id)), [{ slug: "search", from: "$0.01", to: "$0.03" }], "a tool back and repriced is an ordinary change, with no status left over from the removal");
+    ok(!r.stored().queue.some((x) => x.sub === watchUuid.id), "the unchanged tool's watcher hears nothing");
+  }
+  {
+    // A catalog that did not load whole is not a mass retirement.
+    const r = rig({ retiredOf: () => null });
+    await r.pw.register({ url: "https://a.buyer.test/h" }, { known: null });
+    const many = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`tool-${String(i).padStart(2, "0")}`, "$0.01"]));
+    await r.pw.notePrices(many);
+    const few = Object.fromEntries(Object.entries(many).slice(0, 10));
+    eq(await r.pw.notePrices(few), { first: false, changes: 0, queued: 0, ok: true }, `${60 - 10} of 60 tools missing at once (over ${REMOVAL_GUARD_MIN} and ${REMOVAL_GUARD_SHARE * 100}%) announces nothing`);
+    eq(Object.keys(r.stored().prices).length, 60, "and the missing tools' kept prices stay for the next record");
+    eq((await r.pw.status()).sinceBoot.removalsHeld, 50, "the status counts the removals held");
+    const minus = { ...many }; for (const k of Object.keys(many).slice(0, REMOVAL_GUARD_MIN)) delete minus[k];
+    eq(await r.pw.notePrices(minus), { first: false, changes: REMOVAL_GUARD_MIN, queued: 1, ok: true }, `${REMOVAL_GUARD_MIN} missing at once is announced`);
   }
   {
     // One change set, stored once, however many subscriptions it is queued for.

@@ -36,9 +36,11 @@
 // route reports elapsed time against its typical run, labeled estimated.
 // GET /api/jobs/:id sets Retry-After on every state that is not final.
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { carriesPaymentAttempt } from "./payment-attempt.js";
 import { NOT_CHARGED } from "./not-charged.js";
 import { PUSH_FAILURE_NOTE, PUSH_UNCLAIMED_OWED_NOTE, PUSH_UNCLAIMED_NOTE } from "./push-refusal-body.js";
+import { SETTLED_FIRST_FAILURE_NOTE } from "./settle-first-body.js";
 import { JOB_PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { PROGRESS_HEADER, registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
 import { newRunKey } from "./mcp-tasks.js";
@@ -59,6 +61,9 @@ export function failedRunSummary(status, body) {
   const obj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
   const levels = obj(body) ? [body, ...(obj(body.details) ? [body.details] : [])] : [];
   const head = status === 402 ? "The payment was not accepted, so the call did not run." : `The call ended with HTTP ${status}.`;
+  // A payment settled before the run (src/settle-first-body.js): the body
+  // says the charge is owed back, in its own words.
+  if (obj(body) && body.payment === SETTLED_FIRST_FAILURE_NOTE) return `The call ended with HTTP ${status}. ${SETTLED_FIRST_FAILURE_NOTE} The answer is in error.body.`;
   if (levels.some((l) => l.transferClaimed === true || l.charged === true)) return `The call ended with HTTP ${status}. ${PUSH_FAILURE_NOTE} The answer is in error.body.`;
   if (levels.some((l) => l.refundOwed === true)) return `${head} ${PUSH_UNCLAIMED_OWED_NOTE} The answer is in error.body.`;
   const gateNote = obj(body) && typeof body.payment === "string" && /\btransfer\b/i.test(body.payment) ? body.payment.slice(0, 600) : "";
@@ -273,7 +278,7 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     const statusUrl = `${basePath}/${rec.taskId}`;
     const doc = publicJob(rec, { basePath, profile: profileOfSlug(def.slug) });
     res.status(202).set({ Location: statusUrl, "Preference-Applied": "respond-async", "Retry-After": String(doc.pollIntervalSeconds || Math.max(1, Math.round(store.POLL_MS / 1000))), "Cache-Control": "no-store" })
-      .json({ ...doc, message: `Running ${def.slug}. Poll ${statusUrl} (free), waiting Retry-After seconds between polls, until status is completed or failed (state shows queued, running, succeeded or failed). Payment settles only when the result is ready${JOB_PUSH_EXCEPTION}; on x402 a failed run is not charged.` });
+      .json({ ...doc, message: `Running ${def.slug}. Poll ${statusUrl} (free), waiting Retry-After seconds between polls, until status is completed or failed (state shows queued, running, succeeded or failed). Payment settles only when the result is ready${JOB_PUSH_EXCEPTION}; on x402 a failed run is not charged. ${SETTLE_FIRST_SENTENCE}`.trim() });
   }
 
   /** GET /api/jobs/:id - free. */

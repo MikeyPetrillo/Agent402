@@ -35,7 +35,7 @@ export { MAX_POW_DIFFICULTY, MAX_POW_TRIES_FACTOR, solvePowAsync } from "./pow-s
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.10.1";
+const VERSION = "0.11.0";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // A package built on this SDK (an adapter) names itself first: its own
 // product token, then this one. Anything that is not one well-formed token
@@ -807,8 +807,29 @@ export class Agent402 {
             if (!header) throw e;
             answered = await paidSend({ ...asyncHeaders, ...header });
           }
-          const r = await collect(answered);
-          if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
+          let r = await collect(answered);
+          if (!r.ok) {
+            // A payment the seller settled BEFORE the call ran, whose run then
+            // failed: the body says charged: true and retry: "same-payment".
+            // The same signed payment is sent ONCE more (the seller runs it at
+            // no further charge); its amount counts once, as settled spend,
+            // whether or not that resend is served.
+            let charged = await settledFirstFailureOf(r);
+            if (charged) {
+              const header = guarded ? paymentHeaderOf(ctx.lastPayload) : null;
+              let resent = false;
+              if (header) {
+                resent = true;
+                r = await collect(await paidSend({ ...asyncHeaders, ...header }));
+                if (!r.ok) charged = (await settledFirstFailureOf(r)) || charged;
+              }
+              this._spendHold(reservation, null, { settleLast: true });
+              settled = true;
+              if (!r.ok) throw chargedFailure(slug, r, charged, await this._failureDetail(slug, r), { resent });
+              return await this._deliverResponse(slug, r, cacheKey, caching, validator, { maxResponseBytes, paid: true });
+            }
+            throw this._fail(slug, r, await this._failureDetail(slug, r));
+          }
           if (!sentPayment()) this._spendRelease(reservation);
           else this._spendHold(reservation, guarded ? ctx.sent : null, { settleLast: true });
           settled = true;
@@ -1315,6 +1336,32 @@ export class GatewayPendingError extends Error {
 
 /** Sentinel: the 402 offered no batched accept this client signs for. */
 const NO_GATEWAY_ACCEPT = Symbol("no-gateway-accept");
+
+/** The body of a failed paid answer when it says the payment was settled
+ *  before the call ran (charged: true, retry: "same-payment"), or null. Read
+ *  from a copy, so the answer's own body is still there for its message. */
+async function settledFirstFailureOf(r) {
+  try {
+    const copy = typeof r?.clone === "function" ? r.clone() : null;
+    if (!copy) return null;
+    const body = await copy.json();
+    return body && typeof body === "object" && body.charged === true && body.retry === "same-payment" ? body : null;
+  } catch { return null; }
+}
+/** The error for a paid call whose payment was taken and whose run failed:
+ *  `paid: true` (the amount counts as spent), `charged`, `refundOwed`, the
+ *  settlement `transaction` and `refundStatusUrl` when the body names them,
+ *  and whether the same payment was already sent again (`resent`). */
+function chargedFailure(slug, r, body, detail, { resent = false } = {}) {
+  const note = resent
+    ? "The payment was taken before the call ran and the same payment, sent once more, failed too; it is recorded as owed and refunded after on-chain proof"
+    : "The payment was taken before the call ran; send the same payment again to have it run at no further charge, or it is refunded after on-chain proof";
+  return Object.assign(new Error(`${detail}. ${note}${body?.refundStatusUrl ? ` (refund status: ${body.refundStatusUrl})` : ""}.`), {
+    status: r?.status, slug, paid: true, charged: true, refundOwed: body?.refundOwed !== false, retry: "same-payment", resent,
+    ...(typeof body?.transaction === "string" ? { transaction: body.transaction } : {}),
+    ...(typeof body?.refundStatusUrl === "string" ? { refundStatusUrl: body.refundStatusUrl } : {}),
+  });
+}
 
 async function readJsonQuietly(r) {
   try { return await (typeof r?.clone === "function" ? r.clone() : r).json(); } catch { return null; }

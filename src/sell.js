@@ -128,6 +128,39 @@ const formHtml = `
   </div>
   <script src="/js/reg-form.js"></script>`;
 
+// The manifest the "What the crawler reads" section shows. scripts/test-sell-page.js
+// parses the rendered copy with the crawler's own reader (normaliseManifestTools)
+// and requires one listed route, so the example cannot drift from what is read.
+export const MANIFEST_EXAMPLE_ORIGIN = "https://api.example.com";
+export const MANIFEST_EXAMPLE = `{
+  "x402Version": 2,
+  "resources": [
+    {
+      "resource": "${MANIFEST_EXAMPLE_ORIGIN}/v1/quote",
+      "method": "POST",
+      "description": "Shipping quote for one parcel",
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "eip155:8453",
+          "amount": "10000",
+          "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "payTo": "0xYourWalletAddress",
+          "maxTimeoutSeconds": 60,
+          "extra": { "name": "USD Coin", "version": "2" }
+        }
+      ]
+    }
+  ]
+}`;
+
+// Each paragraph of the section, as plain text (rendered escaped).
+export const MANIFEST_RULES = [
+  "Serve a JSON manifest at /.well-known/x402 on the origin you register. The crawler reads its resources array (tools, endpoints, services, items and resourceCatalog are read the same way). Each entry is a route URL, or an object with resource (or url, endpoint, path), an optional method and description, and an accepts list in the shape your 402 returns: scheme, network, amount in the asset's base units, asset, payTo. A manifest for one route can carry resource and accepts at the top level, and x402Version is optional.",
+  "Only routes on the origin you register are listed. An entry that names another host is skipped, so one site cannot list another's endpoints. If your paid API runs on a different host from your website, register that host as its own seller and serve its manifest there.",
+  "With no manifest, the crawler reads /openapi.json, then /agents.json, when an operation carries a payment annotation or a public x402 registry already lists the origin, then /llms.txt list entries that are Markdown links to a route with a dollar price on the same line. The same origin rule applies to each. Every paid route should answer an unpaid request with its 402, which is where the crawler confirms the price and chain.",
+];
+
 // The price string for a catalog slug, or null when the catalog does not carry it (a
 // render with no catalog, or a retired tool): the copy then omits the figure
 // rather than quoting a stale one.
@@ -222,6 +255,15 @@ table{border-collapse:collapse;width:100%}
       <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:18px 0 12px;">What we read from you</div>
       <table class="ml-kv" style="font-family:var(--font-mono);font-size:var(--fs-xs);border:1px solid var(--hairline);"><tbody>${whatWeReadHtml}</tbody></table>
     </div>
+  </div>
+</section>
+
+<section id="manifest" style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
+  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ GET /.well-known/x402</div>
+  ${h2("What the crawler reads", 26)}
+  <div class="sl-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start;">
+    <div>${MANIFEST_RULES.map((p) => `<p class="ml-measure" style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 16px;">${esc(p)}</p>`).join("")}</div>
+    ${codeBlock(MANIFEST_EXAMPLE, { label: "/.well-known/x402", name: "an example manifest", size: "xs", style: "margin:0" })}
   </div>
 </section>
 

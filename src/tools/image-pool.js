@@ -17,7 +17,13 @@
 //    pool size is the memory ceiling, not a throughput knob.
 //  - QUEUE_MAX caps the pending work behind those workers. Without it a burst
 //    would park an unbounded number of ~9MB source buffers on the heap, which is
-//    the same memory-exhaustion failure the pool exists to prevent.
+//    the same memory-exhaustion failure the pool exists to prevent. The bound
+//    is per caller (src/pool-admission.js): past it a caller already holding a
+//    place is answered busy, and a caller holding nothing is queued over it up
+//    to QUEUE_HARD_MAX (48: each waiting job holds a source of at most the
+//    5 MB a fetched image may be, so 240 MB at most, against 160 MB at
+//    QUEUE_MAX), where it takes the newest place of the party holding the
+//    most. A free worker takes the job whose caller holds the fewest places.
 //  - JOB_TIMEOUT_MS is a wall-clock backstop above the worst case the caps allow:
 //    measured on a 16M-pixel source, decode was 160-570ms, resize 130-240ms and
 //    the largest permitted PNG encode ~600ms-1.3s, so ~2s is the realistic worst
@@ -27,6 +33,7 @@ import { Worker } from "node:worker_threads";
 import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
 import { assertDeclaredWithinPixelCap, FREE_MAX_SRC_PIXELS } from "./image-ops.js";
+import { createPoolAdmission, poolCaller } from "../pool-admission.js";
 
 const IMAGE_WORKER = fileURLToPath(new URL("./image-worker.js", import.meta.url));
 // What the worker's import graph reads (lazy-deps.js); the decode helper it
@@ -34,6 +41,7 @@ const IMAGE_WORKER = fileURLToPath(new URL("./image-worker.js", import.meta.url)
 const IMAGE_WORKER_ENV = ["LAZY_DEPS_WARM_GAP_MS"];
 const POOL_MAX = 2;
 const QUEUE_MAX = 32;
+const QUEUE_HARD_MAX = 48;
 const JOB_TIMEOUT_MS = 5_000;
 // The wallet-only tools admit MAX_SRC_PIXELS (2.5x the free cap), so their
 // deadline scales with it; the pool size still bounds resident bitmaps.
@@ -45,6 +53,12 @@ const IDLE_MS = 30_000;
 const slots = [];
 const queue = [];
 let nextJobId = 1;
+const admission = createPoolAdmission({ soft: QUEUE_MAX, hard: QUEUE_HARD_MAX });
+let workerPath = IMAGE_WORKER;
+/** Tests: run jobs on another worker script (null restores the image worker). */
+export function __setImageWorkerForTest(path) { workerPath = path || IMAGE_WORKER; }
+/** Workers running and calls waiting, for tests. */
+export function imagePoolState() { return { workers: slots.length, busy: slots.filter((s) => s.job).length, waiting: queue.length, callers: admission.callers() }; }
 
 // Capacity and internal failure are deliberately NOT 400s: the caller's input was
 // acceptable, we could not serve it. A >=400 response also cancels x402
@@ -82,7 +96,7 @@ function goIdle(slot) {
 function spawnSlot() {
   // resourceLimits: a decoder that outgrows the limit dies in its own thread
   // (terminate + 503) instead of taking the process down with it.
-  const slot = { worker: new Worker(IMAGE_WORKER, { env: threadEnv(IMAGE_WORKER_ENV), resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 64 } }), job: null, idleTimer: null };
+  const slot = { worker: new Worker(workerPath, { env: threadEnv(IMAGE_WORKER_ENV), resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 64 } }), job: null, idleTimer: null };
   slot.worker.on("message", (msg) => {
     if (!slot.job || msg.id !== slot.job.id) return; // stale reply from a job we already gave up on
     if (msg.error) {
@@ -128,7 +142,7 @@ function pump() {
   while (queue.length) {
     const slot = slots.find((s) => !s.job) || (slots.length < POOL_MAX ? spawnSlot() : null);
     if (!slot) return;
-    assign(slot, queue.shift());
+    assign(slot, queue.splice(admission.next(queue), 1)[0]);
   }
 }
 
@@ -141,11 +155,18 @@ export function runImageOffThread({ op, buffer, params = {}, maxPixels = FREE_MA
   // and refusing an oversized image here means a hostile small-file/huge-canvas
   // request never occupies a worker or a queue position either.
   assertDeclaredWithinPixelCap(buffer, maxPixels, { mainThread: true });
-  if (queue.length >= QUEUE_MAX) {
-    return Promise.reject(unavailable("image workers are busy - retry shortly"));
+  const who = poolCaller();
+  const admitted = admission.admit(queue, who);
+  if (admitted.refused) {
+    return Promise.reject(unavailable(admitted.refused === "own" ? "image workers are busy, with this caller's earlier images already waiting - send this one once one of them is answered" : "image workers are busy - retry shortly"));
   }
+  for (const v of admitted.evicted) v.reject(unavailable("image workers are busy - retry shortly"));
+  admission.hold(who);
   return new Promise((resolve, reject) => {
-    queue.push({ id: nextJobId++, op, buffer, params, maxPixels, timeoutMs, resolve, reject, timer: null });
+    // The caller's place is held until the job is answered, however it ends.
+    let held = true;
+    const done = (fn) => (v) => { if (held) { held = false; admission.free(who); } fn(v); };
+    queue.push({ id: nextJobId++, op, buffer, params, maxPixels, timeoutMs, who, resolve: done(resolve), reject: done(reject), timer: null });
     pump();
   });
 }

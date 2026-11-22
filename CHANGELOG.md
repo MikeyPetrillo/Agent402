@@ -4,6 +4,77 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## v2.12.0 - 2026-11-22
+
+### 2026-11-22 (settle-first calls)
+Payments:
+- On a server that does not set `GATEWAY_SETTLE_FIRST=off`, some calls are
+  paid before they run; a failed one can be retried free with the same
+  payment, or is refunded. This covers model calls and web search and
+  answers, image generation, speech, transcription, judgment and code runs.
+- On a server that does not set `GATEWAY_SETTLE_FIRST=off`, a payment whose
+  settle-first call failed can be sent again at most twice; a third resend
+  runs nothing, is not charged again, and returns its refund status.
+
+### 2026-11-22 (settle deadlines and card captures)
+Payments:
+- On Base, Polygon, Arbitrum, Optimism, Avalanche, Celo, Monad and Sei, a
+  USDC payment whose transfer is already on chain is served as soon as the
+  chain shows it, without waiting for the facilitator's answer.
+- A settlement that does not confirm within its network's limit (60 seconds;
+  20 seconds on Celo) is answered as unconfirmed rather than held, and a
+  transfer that lands afterwards is booked as owed and refunded.
+- Sending the same payment again for the same call after its transfer lands
+  returns the call's answer, and any refund booked for it is canceled.
+- A card payment whose capture Stripe answers from an earlier request's
+  record is reported as not confirmed and reviewed, never as uncharged.
+- Card captures that Stripe has not confirmed are read back automatically
+  and closed once Stripe settles them.
+Tools:
+- When the access-key check, Office, image, HTML or PDF queues are full of
+  one caller's work, a call from someone else still gets a place.
+- feed-parse and xml-to-json parse in an isolated worker, so a large feed or
+  XML document no longer holds other requests.
+
+### 2026-11-22 (price webhook notices, the seller manifest and a retirement)
+Tools:
+- Price webhooks now announce a watched tool that is retired or no longer
+  served, once, with `to: null` and a status, and a working subscription is
+  never removed to make room for a new one.
+- New: vat-validate checks an EU VAT number's format and check digits
+  offline for all 27 member states plus XI (Northern Ireland), free with
+  proof of work.
+- market (GET /api/market/tick) joins the routes that are retired and answer
+  410; market names crypto-price as the replacement.
+Surfaces:
+- /sell documents the manifest shape the index reads and the same-origin
+  rule.
+- The index also reads a manifest's items array.
+- Tool search finds the right tool for plurals, version numbers, common
+  synonyms and question-shaped requests, and splits two-part tasks into a
+  plan.
+- Every /tools page now carries a sitemap lastmod.
+- Chain pages' activity charts and the revenue view now resume from their
+  stored scan state after a restart, reading only new blocks.
+
+### 2026-11-22 (wallet subscription renewals retried)
+Payments:
+- On a server with MPP subscriptions on, a wallet subscription whose renewal
+  fails is retried on a schedule through its grace window and canceled only
+  if every retry fails.
+
+### 2026-11-22 (Tempo network fees paid by the server)
+Payments:
+- On a server that sets `TEMPO_GAS_SPONSORSHIP=on`, Tempo buyers can have
+  their network fee paid by Agent402 on a challenge that offers it; past a
+  limit the challenge is the ordinary one and the buyer pays its own fee.
+
+### 2026-11-22 (a spend floor for a returning wallet's paid day)
+Pricing:
+- On a server that sets `RETURNING_WALLET_PRICE=on`, a returning-wallet paid
+  day counts only when the wallet spent at least the per-day floor
+  (`RETURNING_WALLET_MIN_DAY_SPEND_USD`) that UTC day.
+
 ## v2.11.0 - 2026-11-21
 
 ### 2026-11-21 (a mid router tier, price webhooks and router benchmarks)
@@ -610,8 +681,8 @@ Payments:
   it keeps that floor, and `/api/pricing` `payment.minPriceUsdByNetwork`,
   llms.txt and the guides state the floor only when it is set.
 - The optional own settler on Robinhood Chain (`ROBINHOOD_RELAYER_KEY`)
-  settles a sale only when its price is at least
-  `ROBINHOOD_RELAYER_MIN_PRICE_USD` (default 0.004). Under it, a refusal from
+  settles a sale only at or above a minimum price; set
+  `ROBINHOOD_RELAYER_MIN_PRICE_USD` to change it. Under it, a refusal from
   the listed facilitators is answered as a 402 and the x402 payment is not
   settled.
 

@@ -3769,7 +3769,10 @@ function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   // sat in the index at $0.002 across two re-registrations. Rows merge by
   // route, and a price already taken from an earlier catalogue wins, so this
   // can only FILL a gap and never overwrite what the canonical array declared.
-  const catalogues = ["tools", "resources", "endpoints", "services", "resourceCatalog"]
+  // `items` is the discovery-listing shape ({ x402Version, items: [{ resource,
+  // accepts }] }), which a seller may serve as their own manifest; its rows
+  // are read the same way as any other catalogue's.
+  const catalogues = ["tools", "resources", "endpoints", "services", "items", "resourceCatalog"]
     .map((k) => manifest[k])
     .filter((v) => Array.isArray(v) && v.length);
   const pathsCatalogue = manifestPathsCatalogue(manifest);
@@ -13088,7 +13091,32 @@ registerMemoryStore("x402-index.routeIndex", null, {
 });
 registerMemoryStore("x402-index.directory", () => flatCache.rows, { note: "flattened tool directory rows" });
 registerMemoryStore("x402-index.tokenIntern", () => tokenIntern, { note: "interned name tokens" });
-registerMemoryStore("x402-index.bazaarTools", () => bazaarToolsByOrigin, { note: "registry tool rows by origin" });
+// Row-weighted: one registry-only seller can list tens of thousands of rows
+// beside ~1,500 sellers of a few, so an even sample of origins almost never
+// lands on it and reads the store at the small sellers' size. Every origin's
+// row count is read (one step per origin), and the rows sized are spread
+// over all rows, not over origins.
+registerMemoryStore("x402-index.bazaarTools", null, {
+  note: "registry tool rows by origin",
+  figure: () => {
+    let rows = 0, largest = 0;
+    for (const arr of bazaarToolsByOrigin.values()) { const n = Array.isArray(arr) ? arr.length : 0; rows += n; if (n > largest) largest = n; }
+    const want = Math.min(48, rows), sample = [];
+    if (want) {
+      const step = rows / want;
+      let next = 0, at = 0;
+      for (const arr of bazaarToolsByOrigin.values()) {
+        const n = Array.isArray(arr) ? arr.length : 0;
+        while (sample.length < want && next < at + n) { sample.push(arr[Math.floor(next) - at]); next += step; }
+        at += n;
+        if (sample.length >= want) break;
+      }
+    }
+    const perRow = sample.length ? sample.reduce((sum, t) => sum + approxBytes(t), 0) / sample.length : 0;
+    const bytes = 32 + 24 * bazaarToolsByOrigin.size + bazaarToolsByOrigin.size * 16 + rows * (8 + perRow);
+    return { rows: bazaarToolsByOrigin.size, mb: bytes / 1048576, detail: { registryRows: rows, largestOriginRows: largest } };
+  },
+});
 registerMemoryStore("x402-index.sideSynced", () => sideSynced, { note: "side-store rows last synced (JSON per key)" });
 registerMemoryStore("x402-index.docs", () => docs, { note: "state documents held by the index" });
 registerMemoryStore("x402-index.probeExamples", null, {

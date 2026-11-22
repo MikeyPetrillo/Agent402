@@ -11,6 +11,9 @@
 import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import { createHmac } from "node:crypto";
 import { privateKeyToAccount } from "viem/accounts";
+import { installPublicLog, figure } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) money figures print as words.
+installPublicLog();
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, ""), "tempo-sor-live");
 const RPC = process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz";
@@ -39,7 +42,8 @@ const [{ Mppx, tempo }, { Challenge, Receipt }] = await Promise.all([import("mpp
 const client = Mppx.create({ methods: [tempo.charge({ account, autoSwap: true })], polyfill: false });
 
 const before = await usdce(SPENDER);
-console.log(`spending wallet ${SPENDER} USDC.e before: ${before}`);
+// The wallet's balance and its change are not printed: this log is public.
+console.log(`spending wallet ${SPENDER} USDC.e before: ${before == null ? "unreadable" : "read"}`);
 const body = JSON.stringify({ task: TASK, include: "external", params: PARAMS });
 const url = `${TARGET}${ROUTE}`;
 if (new URL(url).origin !== new URL(TARGET).origin) { console.error("refusing: target origin changed"); process.exit(2); }
@@ -63,12 +67,11 @@ const payloadOk = resultText.includes(expectText);
 console.log(`result contains ${JSON.stringify(expectText)}:`, payloadOk, `(result ${resultText.length} chars)`);
 console.log("our Payment-Receipt:", rc ? Receipt.deserialize(rc).status : null, "X-Tollbooth-Error/problem:", paid.headers.get("x-tollbooth-error") || (out && out.problem ? JSON.stringify(out.problem).slice(0, 200) : null));
 const r = out?.receipt || {};
-// Keep the REAL response for the announcement card (router-receipt-card.js
-// renders receipt + a sha256 over result); the workflow uploads it as an artifact.
+// Keep the REAL response (receipt and result); the workflow uploads it as an artifact.
 try { const { writeFileSync } = await import("node:fs"); writeFileSync(process.env.RESPONSE_OUT || "tempo-sor-response.json", JSON.stringify(out)); } catch { /* best-effort */ }
 await new Promise((res) => setTimeout(res, 4000));
 const after = await usdce(SPENDER);
-console.log(`spending wallet USDC.e after: ${after} (delta ${before != null && after != null ? (after - before).toFixed(6) : "?"}); receipt:`, JSON.stringify(r).slice(0, 400));
+console.log(`spending wallet USDC.e after: ${after == null ? "unreadable" : "read"}; receipt:`, JSON.stringify(r).slice(0, 400));
 const ok = paid.status === 200 && r.external === true && r.wire === "mpp" && r.settleNetwork === "eip155:4217" && /^0x[0-9a-f]{64}$/i.test(r.settleTx || "")
   && out.result && typeof out.result === "object" && payloadOk && before != null && after != null && before - after >= Number(r.underlyingPriceUsd || 0) - 1e-6 && before - after > 0;
 if (ok) console.log(`PROVEN: Tempo buyer -> route-execute -> external MPP seller ${r.seller} paid from the spending wallet (seller ${r.underlyingPriceUsd} USDC.e, tx https://explore.tempo.xyz/tx/${r.settleTx}); payload delivered (${resultText.length} chars, contains ${JSON.stringify(expectText)})`);

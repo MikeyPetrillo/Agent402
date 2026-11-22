@@ -336,7 +336,7 @@ const ENV = {
   REFERRAL_MERCHANT_ID: MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS: PAYOUT,
   // The receipt of a settle success is read once in the suite (no waiting on a stub).
   REFERRAL_RECEIPT_WAIT_MS: "0",
-  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker,exa,chatx,scopes,big,exbig,mb,late,picky,units", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
+  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker,exa,chatx,scopes,big,exbig,mb,late,picky,units,peg", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
   // Synthetic figures, chosen to be no real rate.
   REFERRAL_COMMISSION_BPS: "default:1234,busy:4321", REFERRAL_FEE_BPS: "0",
   REFERRAL_DEADLINE_MS: "1000", REFERRAL_SETTLE_RESERVE_MS: "1000", REFERRAL_SETTLE_MS: "2000", REFERRAL_VERIFY_MS: "1000",
@@ -517,6 +517,44 @@ if (ONLY_PART !== "2") {
     ok(gateMod.REFERRAL_PARITY_GRANDFATHERED.length === 0 && referralConfig(ENV).parityGrandfathered.length === 0 && byDefault.defs.size === 0 && byDefault.refused.length === 3 && byDefault.noted.length === 0, "by default no slug is exempt from price parity: every slug the public route gives for less is refused, hash among them");
     ok(/can be had for less than the listed price \(free by proof-of-work/.test(cheaper || "") && grand === null && routes.refused.length === 1 && routes.refused[0].slug === "probe-d" && routes.defs.size === 1 && routes.noted.length === 1 && routes.noted[0].slug === "probe-e" && /named in REFERRAL_PARITY_GRANDFATHERED/.test(routes.noted[0].note) && referralRoutes({ slugs: ["probe-d"], deadlineMs: 60_000 }, { a: { ...base, slug: "probe-d" } }, () => ({ compute: true })).noted.length === 0, `a tool the public route gives for less by a path /ref lacks is refused at boot (${cheaper}); a slug the operator names in REFERRAL_PARITY_GRANDFATHERED is served and named at every boot (${routes.noted[0]?.slug})`);
   }
+  {
+    // Resale terms (src/resale-terms.js): a raw pass-through of a source whose
+    // terms bar resale through a third party is refused at boot with its
+    // reason; a tool that computes its answer from such a source is not.
+    const base = { handler: async () => ({}), price: "$0.01" };
+    const barred = { ...base, slug: "probe-raw", resale: "barred", resaleReason: "raw pass-through of a data source whose terms bar resale or syndication through a third party" };
+    const computed = { ...base, slug: "probe-computed", resale: "computed" };
+    const why = referralIneligibility(barred, { compute: true });
+    const routes = referralRoutes({ slugs: ["probe-raw", "probe-computed"], deadlineMs: 60_000 }, { a: barred, b: computed }, () => ({ compute: true }));
+    ok(why === barred.resaleReason && referralIneligibility(computed, { compute: true }) === null && referralIneligibility({ ...base, slug: "probe-bare", resale: "barred" }, { compute: true }) === "its data source's terms bar resale through a third party" && routes.refused.length === 1 && routes.refused[0].slug === "probe-raw" && routes.refused[0].reason === barred.resaleReason && routes.defs.has("probe-computed"), `a tool marked resale "barred" is refused at boot with its reason (${why}); one marked "computed" is served`);
+    // Every tool that serves the market-data source declares barred or
+    // computed, derived from the kits: each src module that names the source
+    // is imported and every tool it exports is read.
+    const { RESALE_BARRED, RESALE_COMPUTED } = await import("../src/resale-terms.js");
+    const { CG_API_HOSTS } = await import("../src/tools/coingecko-endpoint.js");
+    const srcRoot = fileURLToPath(new URL("../src/", import.meta.url));
+    const files = [];
+    const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { const f = join(d, e.name); if (e.isDirectory()) { if (e.name !== "generated") walk(f); } else if (/\.js$/.test(e.name)) files.push(f); } };
+    walk(srcRoot);
+    const naming = files.filter((f) => /coingecko-endpoint\.js|attribute\([^)]*"coingecko"\)|attribution: "coingecko"/.test(readFileSync(f, "utf8")));
+    const isCgTool = (t) => t && typeof t === "object" && typeof t.slug === "string" && typeof t.handler === "function" && (t.attribution === "coingecko" || (Array.isArray(t.upstreamHosts) && t.upstreamHosts.some((h) => CG_API_HOSTS.includes(h))));
+    const cgTools = new Map();
+    for (const f of naming) {
+      const mod = await import(f);
+      for (const v of Object.values(mod)) for (const t of Array.isArray(v) ? v : [v]) if (isCgTool(t)) cgTools.set(t.slug, t);
+    }
+    const undecided = [...cgTools.values()].filter((t) => !(t.resale === RESALE_COMPUTED || (t.resale === RESALE_BARRED && typeof t.resaleReason === "string" && t.resaleReason.trim())));
+    const RAW = ["crypto-price", "price-coingecko", "crypto-market", "crypto-history", "coin-ohlc", "coin-market-chart-range", "coin-history", "crypto-trending", "crypto-global", "global-defi", "coin-price-by-contract", "coin-profile", "coin-categories", "coin-search", "exchanges", "exchange-tickers", "exchange-rates", "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer"];
+    ok(cgTools.size >= 30 && undecided.length === 0, `every tool that serves the market-data source declares resale "barred" (with a reason) or "computed" (${cgTools.size} tools from ${naming.length} modules; undecided: ${undecided.map((t) => t.slug).join(",") || "none"})`);
+    ok(RAW.every((x) => cgTools.get(x)?.resale === RESALE_BARRED) && ["stablecoin-peg", "token-diligence", "funding-screener"].every((x) => cgTools.get(x)?.resale === RESALE_COMPUTED), "each raw pass-through of the market-data source is barred, and the computed reads are not");
+    // Control: the guard's own predicate reads an unmarked tool on the source as undecided.
+    ok(isCgTool({ slug: "probe-cg", handler: () => ({}), upstreamHosts: [CG_API_HOSTS[0]] }) && isCgTool({ slug: "probe-cg2", handler: () => ({}), attribution: "coingecko" }), "control: a new tool on the source (by host or by attribution) is one the guard reads");
+    // The three whole-year holiday lists are barred for the holiday source's portal term.
+    const { HOLIDAY_TOOLS } = await import("../src/tools/holidays-kit.js");
+    const { DATA_TOOLS } = await import("../src/tools/data-kit.js");
+    const hol = [...HOLIDAY_TOOLS, ...DATA_TOOLS].filter((t) => ["public-holidays", "bank-holidays", "school-holidays"].includes(t.slug));
+    ok(hol.length === 3 && hol.every((t) => t.resale === RESALE_BARRED && /holiday portal/.test(t.resaleReason)) && [...HOLIDAY_TOOLS].filter((t) => t.resale === RESALE_BARRED).length === 2, "public-holidays, bank-holidays and school-holidays are barred (the source's terms bar a holiday portal), and no other holiday tool is");
+  }
   ok(referralSlugOfPath("/ref/hash") === "hash" && referralSlugOfPath("/REF/Hash/") === "hash" && referralSlugOfPath("/ref/%68ash") === "hash" && referralSlugOfPath("/ref/") === null && referralSlugOfPath("/ref/a/b") === null && referralSlugOfPath("/api/hash") === null && referralSlugOfPath("/ref/" + "a".repeat(500)) === null, "the wide reading of a /ref path (for the gates that count every spelling)");
   ok(isCanonicalReferralPath("/ref/hash", "hash") && !isCanonicalReferralPath("/ref/%68ash", "hash") && !isCanonicalReferralPath("/REF/hash", "hash") && !isCanonicalReferralPath("/ref/hash/", "hash"), "only /ref/<slug> exactly is canonical");
 }
@@ -595,6 +633,7 @@ if (ONLY_PART !== "2") {
 
 // --- the gate, mounted on a small app --------------------------------------------
 const runs = { echo: 0, slow: 0, boom: 0, busy: 0 };
+const PEG_DEF = (await import("../src/tools/crypto-kit.js")).CRYPTO_TOOLS.find((t) => t.slug === "stablecoin-peg");
 const seen = { chat: null, budgeted: null, breaker: null, exa: null, chatx: null };
 const TOOLS = {
   echo: { slug: "echo", name: "Echo", category: "test", price: "$0.03", route: "POST /api/echo", handler: async (i) => { runs.echo++; return { echo: i.text ?? null, run: runs.echo }; } },
@@ -604,6 +643,8 @@ const TOOLS = {
   bytes: { slug: "bytes", name: "Bytes", category: "test", price: "$0.03", handler: async () => ({ __binary: Buffer.from("png"), contentType: "image/png" }) },
   list: { slug: "list", name: "List", category: "test", price: "$0.03", handler: async () => [1, 2, 3] },
   owntx: { slug: "owntx", name: "Own", category: "test", price: "$0.03", handler: async () => ({ transaction: "the tool's own field", rows: 1 }) },
+  // stablecoin-peg's published answer and its own /ref transform (src/tools/crypto-kit.js), on a stub handler.
+  peg: { slug: "peg", name: "Peg", category: "test", price: "$0.03", refAnswer: PEG_DEF.refAnswer, handler: async () => { runs.peg = (runs.peg || 0) + 1; return structuredClone(PEG_DEF.discovery.output.example); } },
   chat: { slug: "chat", name: "Chat", category: "llm", price: "$0.001", quote: (b) => 0.001 * (Number(b?.max_tokens) || 1), handler: async (i, req) => { seen.chat = { stream: i.stream, hasOptions: "stream_options" in i, stash: req.__meteredQuoteUsd }; return { id: "c1", choices: [] }; } },
   // Refuses its input from inside the handler (a 400 of the caller's own, or a refusal attributed upstream).
   picky: { slug: "picky", name: "Picky", category: "test", price: "$0.03", discovery: { input: { text: "hello" }, inputSchema: { properties: { text: { type: "string", description: "Text to read" } }, required: ["text"] } }, handler: async (i) => { if (i.upstream) throw Object.assign(new Error("the source refused this server"), { statusCode: 422, attribution: "upstream", upstreamStatus: 403 }); if (typeof i.text !== "string") throw Object.assign(new Error('Missing or invalid "text"'), { statusCode: 400 }); return { read: i.text.length }; } },
@@ -1111,6 +1152,14 @@ try {
     ok(r.status === 500 && settles() === 0, `a binary answer is a 500, not settled (${r.status})`);
     const l = await send(R("list"), { body: {}, headers: { "payment-signature": (await signPayment(accept)).header } });
     ok(l.status === 200 && JSON.stringify(l.json?.result) === "[1,2,3]" && /^0x/.test(l.json?.transaction || "") && Object.keys(l.json).length === 2, `an answer that is not a JSON object is served as { result, transaction } (${l.text})`);
+    // A tool's declared /ref answer (src/resale-terms.js refAnswerOf) is what the copy serves.
+    const pg = await send(R("peg"), { body: {}, headers: { "payment-signature": (await signPayment(accept)).header } });
+    const RAW = ["price", "high24h", "low24h", "marketCap"];
+    const pegCoins = pg.json?.coins || [];
+    ok(pg.status === 200 && pegCoins.length === 2 && pegCoins.every((c) => RAW.every((k) => !Object.hasOwn(c, k)) && ["id", "symbol", "deviationBps", "maxDeviation24hBps", "status"].every((k) => Object.hasOwn(c, k))) && typeof pg.json?.credit === "string" && pg.json.credit.length > 0 && /^0x/.test(pg.json?.transaction || ""),
+      `stablecoin-peg's /ref answer drops the source's price, 24h high and low and market cap per coin and keeps the computed fields and the credit (${pg.text.slice(0, 200)})`);
+    const direct = await TOOLS.peg.handler({});
+    ok(direct.coins.every((c) => RAW.every((k) => Object.hasOwn(c, k))), "the same handler's own answer (what the public route serves) keeps every field");
     const o = await send(R("owntx"), { body: {}, headers: { "payment-signature": (await signPayment(accept)).header } });
     ok(o.status === 200 && o.json?.result?.transaction === "the tool's own field" && /^0x[0-9a-f]{64}$/.test(o.json?.transaction || ""), `an answer with a transaction field of its own is wrapped the same way, so the settle transaction is never mistaken for it (${o.text})`);
   }
@@ -5287,7 +5336,9 @@ writeFileSync(screenFile, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDa
 
 fac.reset();
 // Paid data tools whose reads carry fixed timeouts of their own, each ended by a run's ceiling (src/run-ceiling.js).
-const DATA_SLUGS = "dns,device-510k,device-adverse-events,device-recalls,drug-adverse-events,drug-label,drug-ndc,drug-recalls,earthquakes,fec-candidates,federal-awards,fema-disasters,food-recalls,fx-rate,geo-lookup,http-check,ip-info,place-lookup,public-holidays,robots-check,sitemap,tls-cert,treasury-avg-rates,treasury-debt,treasury-yield-curve,treasury-yield-history,vehicle-recalls,vin-decode,weather-air-quality,weather-alerts,weather-current,weather-daily,weather-forecast,weather-history,weather-hourly,whois,yield-curve-spread".split(",");
+const DATA_SLUGS = "dns,device-510k,device-adverse-events,device-recalls,drug-adverse-events,drug-label,drug-ndc,drug-recalls,earthquakes,fec-candidates,federal-awards,fema-disasters,food-recalls,fx-rate,geo-lookup,http-check,ip-info,place-lookup,robots-check,sitemap,tls-cert,treasury-avg-rates,treasury-debt,treasury-yield-curve,treasury-yield-history,vehicle-recalls,vin-decode,weather-air-quality,weather-alerts,weather-current,weather-daily,weather-forecast,weather-history,weather-hourly,whois,yield-curve-spread".split(",");
+// Raw pass-throughs of a source whose terms bar resale through a third party (src/resale-terms.js): listed, refused at boot with the reason.
+const RESALE_BARRED_SLUGS = ["crypto-price", "price-coingecko", "crypto-market", "crypto-history", "coin-ohlc", "coin-market-chart-range", "coin-history", "crypto-trending", "crypto-global", "global-defi", "coin-price-by-contract", "coin-profile", "coin-categories", "coin-search", "exchanges", "exchange-tickers", "exchange-rates", "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer", "public-holidays", "bank-holidays", "school-holidays"];
 const srv = await bootPaidServer({
   label: "referral-on",
   args: ["--import", "./scripts/lib/openrouter-stub-preload.js", "--import", "./scripts/lib/hang-fetch-preload.js"],
@@ -5295,7 +5346,7 @@ const srv = await bootPaidServer({
     ...REF_ENV, ...COSTS,
     WALLET_ADDRESS: OUR_WALLET, TRUST_PROXY_HOPS: "1",
     FACILITATOR_URL: `http://127.0.0.1:${directFac.address().port}`, AGENT402_BASE_RPC: `${fac.url}/rpc`,
-    REFERRAL_SLUGS: "hash,mime,v1-chat-metered,v1-chat,v1-chat-auto,v1-chat-pro,v1-chat-premium,onchain-sql,perp-funding,perp-basis,stablecoin-peg,edgar-company-facts,image-gen,image-gen-premium,attest,qr,no-such-tool," + UNIT_PRICED.join(",") + "," + DATA_SLUGS.join(","),
+    REFERRAL_SLUGS: "hash,mime,v1-chat-metered,v1-chat,v1-chat-auto,v1-chat-pro,v1-chat-premium,onchain-sql,perp-funding,perp-basis,stablecoin-peg,edgar-company-facts,image-gen,image-gen-premium,attest,qr,no-such-tool," + UNIT_PRICED.join(",") + "," + DATA_SLUGS.join(",") + "," + RESALE_BARRED_SLUGS.join(","),
     // The price feed stablecoin-peg reads never answers: its run has to be cut off at the deadline.
     HANG_FETCH_HOSTS: "api.coingecko.com,pro-api.coingecko.com",
     // The handler deadline is short so a stalled upstream is cut off inside the test.
@@ -5326,7 +5377,7 @@ try {
     const notByCeiling = DATA_SLUGS.filter((x) => !OWN_HOST_SLUGS.includes(x) && !/^upstream work ends at the deadline$/.test(whyServed[x] || ""));
     const refusedData = DATA_SLUGS.filter((x) => new RegExp(`\\[referral\\] ${x} is not served`).test(bootLog));
     ok(OWN_HOST_SLUGS.every((x) => new RegExp(`\\[referral\\] ${x} is not served under /ref: its published example or input hints name this server's own host`).test(bootLog)) && /\[referral\] mime is not served under \/ref: the public route can be had for less than the listed price \(free by proof-of-work or the trial parameter\)/.test(bootLog) && /\[referral\] hash is served under \/ref although the public route can be had for less \(free by proof-of-work or the trial parameter\): it is named in REFERRAL_PARITY_GRANDFATHERED/.test(bootLog) && (await call(`${srv.url}/ref/mime`, { method: "GET", headers: xff() })).status === 404 && (await call(`${srv.url}/ref/robots-check`, { method: "GET", headers: xff() })).status === 404, `a slug whose published example names this server's own host, and one the public route gives free, are refused at boot with the reason; hash, which this boot names in REFERRAL_PARITY_GRANDFATHERED, is named at boot and served (${refusedData.join(",")})`);
-    ok(DATA_SLUGS.length === 37 && notByCeiling.length === 0 && refusedData.join() === OWN_HOST_SLUGS.join() && /\[referral\] dns is served under \/ref: upstream work ends at the deadline/.test(bootLog), `each of the other 34 paid data tools is served under /ref because its upstream work ends at the deadline, dns (a kit tool whose lookup the ceiling cancels) among them (${notByCeiling.join(",") || "all 37 by the ceiling"})`);
+    ok(DATA_SLUGS.length === 36 && notByCeiling.length === 0 && refusedData.join() === OWN_HOST_SLUGS.join() && /\[referral\] dns is served under \/ref: upstream work ends at the deadline/.test(bootLog), `each of the other 33 paid data tools is served under /ref because its upstream work ends at the deadline, dns (a kit tool whose lookup the ceiling cancels) among them (${notByCeiling.join(",") || "all 36 by the ceiling"})`);
     const pricing = (await call(`${srv.url}/api/pricing`, { method: "GET", headers: xff() })).json;
     const rowsP = Array.isArray(pricing?.endpoints) ? pricing.endpoints : [];
     const priceOf = new Map(rowsP.filter((r) => r && r.slug).map((r) => [r.slug, r.price]));
@@ -5389,12 +5440,24 @@ try {
     ok(responses413.length >= 6 && walked >= served.length * 4 + responses413.length && pointed.length === 0, `no answer of a served /ref route points a buyer at this server's catalog, pricing, docs or direct routes: ${walked} answers of ${served.length} slugs walked (${pointed.slice(0, 6).join("; ") || "none"})`);
   }
   ok(/WARNING: referral gate: REFERRAL_SETTLE_MS \(3 s\) is under the 55 s the facilitator's \/settle may take to answer/.test(bootLog) && /Referral gate enabled/.test(bootLog), "a settle wait configured under the facilitator's 55 s is a boot warning that names the setting, and the gate still serves");
+  {
+    // Each raw pass-through of a source whose terms bar resale is refused at boot with its reason, and is not served.
+    const CG_REASON = "raw pass-through of a data source whose terms bar resale or syndication through a third party";
+    const HOLIDAY_REASON = "a whole-year holiday list from a source whose terms bar a holiday portal";
+    const reasonOf = (x) => (/holidays$/.test(x) ? HOLIDAY_REASON : CG_REASON);
+    const lines = bootLog.split("\n");
+    const missing = RESALE_BARRED_SLUGS.filter((x) => served.includes(x) || !lines.some((l) => l.endsWith(`[referral] ${x} is not served under /ref: ${reasonOf(x)}`)));
+    const statuses = [];
+    for (const x of ["crypto-price", "rwa-issuer", "public-holidays", "school-holidays"]) statuses.push((await call(`${srv.url}/ref/${x}`, { method: "GET", headers: xff() })).status);
+    ok(missing.length === 0 && statuses.every((st) => st === 404), `every listed raw pass-through of a source whose terms bar resale is refused at boot with the reason and not served (${missing.join(",") || "all 25"}; ${statuses.join(",")})`);
+  }
   ok(/\[referral\] image-gen is not served under \/ref: its own upstream wait \(60 s\) is past the handler deadline \(4 s\)/.test(bootLog), "image-gen is left out at boot: its own upstream wait is past the handler deadline");
   {
     // A slug that is listed and not served is a reason on the status word (the server hands the gate its boot refusals).
     const opBoot = (await call(`${srv.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } })).json;
     const pub = (await call(`${srv.url}/api/gateway-status`, { method: "GET", headers: xff() })).json?.referralSettlement;
     ok(opBoot?.droppedRefused && Object.keys(opBoot.droppedRefused).sort().join() === "count,evictedEarly,unresolved" && opBoot.droppedRefused.unresolved === 0 && opBoot.droppedRefused.count === 0 && typeof opBoot.bookWrites?.timedOut === "number", `the operator view carries the dropped-record counts, the unresolved one among them (${JSON.stringify(opBoot?.droppedRefused)})`);
+    ok(RESALE_BARRED_SLUGS.every((x) => opBoot?.status?.reasons?.includes(`${x}: listed in REFERRAL_SLUGS and not served under /ref: ${/holidays$/.test(x) ? "a whole-year holiday list from a source whose terms bar a holiday portal" : "raw pass-through of a data source whose terms bar resale or syndication through a third party"}`)), `each resale-barred slug is a reason on the status word, with why (${RESALE_BARRED_SLUGS.filter((x) => !opBoot?.status?.reasons?.some((r) => r.startsWith(`${x}: `))).join(",") || "all named"})`);
     ok(opBoot?.status?.status === "attention" && ["mime", "robots-check", "qr", "no-such-tool"].every((x) => opBoot.status.reasons.some((r) => r.startsWith(`${x}: listed in REFERRAL_SLUGS and not served under /ref: `))) && opBoot.status.reasons.filter((r) => /listed in REFERRAL_SLUGS/.test(r)).length === opBoot.notServed.length && pub?.status === "attention", `every listed slug this boot does not serve is a reason on the status word, and the public word reads attention (${opBoot?.status?.reasons?.filter((r) => /listed in REFERRAL_SLUGS/.test(r)).length} of ${opBoot?.notServed?.length} refused)`);
   }
   {

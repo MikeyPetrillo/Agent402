@@ -688,8 +688,16 @@ export function recordWish({ need, context, source, ip } = {}) {
  *    here, come sell" stays public to pull sellers in. The paid demand-radar
  *    tool sells the analysis layer; this keeps the raw list off the free path.
  */
-export function getWishesAggregate({ limit = 200, detailed = false } = {}) {
+export function getWishesAggregate({ limit = 200, detailed = false, staleDays, offset } = {}) {
   const cap = Math.min(Math.max(parseInt(limit, 10) || 200, 1), 500);
+  // The operator may widen the stale window to review older clusters (the
+  // default hides everything not asked for in WISH_STALE_DAYS). Bounded to the
+  // retention window, past which a cluster keeps no text; a value that is not
+  // a whole number in range reads as the default.
+  const askedDays = Number(String(staleDays ?? "").trim());
+  const windowDays = Number.isInteger(askedDays) && askedDays >= 1 && askedDays <= wishRetentionDays() ? askedDays : WISH_STALE_DAYS;
+  const askedOffset = Number(String(offset ?? "").trim());
+  const skip = Number.isInteger(askedOffset) && askedOffset >= 0 && askedOffset <= 100_000 ? askedOffset : 0;
   // The qualification constants ARE published, deliberately, and an attempt to
   // hide them on 2026-09-14 was reverted the same hour: the PAID demand-radar
   // ($0.005) states the same three figures, so hiding them here protected
@@ -714,7 +722,7 @@ export function getWishesAggregate({ limit = 200, detailed = false } = {}) {
     // to matter, never WHICH — no text, no per-cluster counts, no timestamps.
     return { ...base, qualifiedClusters: merged.filter(([, c]) => clusterQualifies(c)).length };
   }
-  const staleBefore = Date.now() - WISH_STALE_DAYS * 86_400_000;
+  const staleBefore = Date.now() - windowDays * 86_400_000;
   // Rolled-up clusters carry no text and are always older than the stale
   // window, so they are counted (staleHidden) and never listed.
   const live = merged.filter(([key, c]) => key !== null && (c.lastSeen || 0) >= staleBefore);
@@ -724,7 +732,7 @@ export function getWishesAggregate({ limit = 200, detailed = false } = {}) {
     // asked for now", and sorting by count alone is what let a stale sweep
     // own the top of it.
     .sort((a, b) => b[1].lastSeen - a[1].lastSeen || b[1].count - a[1].count)
-    .slice(0, cap)
+    .slice(skip, skip + cap)
     .map(([key, c]) => ({
       // Raw text: every reader escapes for its own medium (the operator
       // board at render, the issue bridge in a code fence, JSON as JSON).
@@ -767,9 +775,13 @@ export function getWishesAggregate({ limit = 200, detailed = false } = {}) {
     ...base,
     attributable: attributableOf(rows),
     // Stated, so a quiet board reads as quiet rather than as a rendering bug.
-    staleDays: WISH_STALE_DAYS,
+    staleDays: windowDays,
     staleHidden: merged.length - live.length,
     liveClusters: live.length,
+    // A page of the clusters in the window: where it starts, and where the
+    // next one does (null on the last page).
+    offset: skip,
+    nextOffset: skip + rows.length < live.length ? skip + rows.length : null,
     clusters: rows,
   };
 }

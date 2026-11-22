@@ -173,6 +173,46 @@ ok(!html.includes("—"), "no em dashes anywhere in the page copy");
   }
 }
 
+// --- what the crawler reads: the page's example is one the crawler lists --
+// A seller asked which manifest shape the index reads and whether one site can
+// list another's endpoints. The page answers both, and its example manifest is
+// parsed here, from the rendered HTML, by the crawler's own reader.
+{
+  const { normaliseManifestTools } = await import("../src/x402-index.js");
+  const { MANIFEST_EXAMPLE_ORIGIN } = await import("../src/sell.js");
+  ok(html.includes('id="manifest"') && text.includes("What the crawler reads"), "the page has a What the crawler reads section");
+  ok(text.includes("Only routes on the origin you register are listed. An entry that names another host is skipped, so one site cannot list another's endpoints."), "the page states the same-origin rule");
+  ok(text.includes("register that host as its own seller"), "the page says a backend on another host registers as its own seller");
+  ok(text.includes("/.well-known/x402") && text.includes("resources array") && text.includes("/openapi.json") && text.includes("/agents.json") && text.includes("/llms.txt"), "the page names the manifest path, its array and the fallback documents");
+  const marker = 'data-name="an example manifest"';
+  const at = html.indexOf(marker);
+  const preOpen = at < 0 ? -1 : html.indexOf("<pre>", at);
+  const preClose = preOpen < 0 ? -1 : html.indexOf("</pre>", preOpen);
+  const shown = preClose < 0 ? "" : decodeEntities(html.slice(preOpen + "<pre>".length, preClose));
+  let manifest = null;
+  try { manifest = JSON.parse(shown); } catch { manifest = null; }
+  ok(manifest && Array.isArray(manifest.resources), "the example manifest on the page is valid JSON with a resources array");
+  const rows = manifest ? normaliseManifestTools(manifest, MANIFEST_EXAMPLE_ORIGIN) : [];
+  const row = rows[0] || {};
+  ok(rows.length === 1 && row.method === "POST" && row.route === "/v1/quote", `the crawler lists the example's one route (${rows.map((r) => `${r.method} ${r.route}`).join(", ")})`);
+  ok(row.price === "$0.01" && Array.isArray(row.networks) && row.networks.length === 1 && row.networks[0] === "eip155:8453", `the crawler reads the example's price and chain (${row.price}, ${JSON.stringify(row.networks)})`);
+  // The rule the page states, read off the same reader: the example moved to
+  // another host lists nothing under the registered origin, and the same entry
+  // in the discovery-listing `items` array lists the same route.
+  if (manifest) {
+    const elsewhere = JSON.parse(JSON.stringify(manifest));
+    elsewhere.resources[0].resource = "https://backend.example.net/v1/quote";
+    ok(normaliseManifestTools(elsewhere, MANIFEST_EXAMPLE_ORIGIN).length === 0, "an entry on another host is not listed under the registered origin");
+    ok(normaliseManifestTools(elsewhere, "https://backend.example.net").length === 1, "the same entry is listed when its own host is the registered seller");
+    const asItems = { x402Version: 2, items: manifest.resources };
+    const itemRows = normaliseManifestTools(asItems, MANIFEST_EXAMPLE_ORIGIN);
+    ok(itemRows.length === 1 && itemRows[0].route === "/v1/quote" && itemRows[0].price === "$0.01", "the items array is read the same way as resources");
+    const noVersion = JSON.parse(JSON.stringify(manifest));
+    delete noVersion.x402Version;
+    ok(normaliseManifestTools(noVersion, MANIFEST_EXAMPLE_ORIGIN).length === 1, "x402Version is optional, as the page says");
+  }
+}
+
 function FAQ_TEXT_OF(h) { const i = h.indexOf("What is the settlement floor"); return i < 0 ? "" : h.slice(i, i + 1500); }
 
 console.log(`\n${pass} passed, ${fail} failed`);

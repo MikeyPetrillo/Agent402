@@ -11,9 +11,6 @@ export const METERED_SLUGS = new Set([
   // holds no key on purpose, so an unkeyed sweep would 503 here and a keyed
   // one would spend on every push. Same rule as Brave, E2B and CoinGecko.
   "stock-quote", "stock-history",
-  // Reads stock-quote (and crypto-price) in-process: the same key dependency.
-  // Listed only with MARKET_TICK=on (src/market-tick-switch.js).
-  "market-tick",
   // CoinGecko's on-chain pool endpoints answer only to a key (401 keyless),
   // and CI holds none: these 503 on an unkeyed sweep. Offline coverage is
   // scripts/test-crypto-screens-kit.js.

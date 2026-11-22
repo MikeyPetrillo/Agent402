@@ -8,6 +8,7 @@
 // surfaces (llms.txt, MCP instructions, package READMEs) point at it, so the
 // points live in ONE place and read the same everywhere. First-party
 // claims only: no comparisons, no third-party names, evergreen "500+" counts.
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
 import { RAILS, countWord } from "./rails.js";
@@ -34,7 +35,7 @@ export const WHY_POINTS = [
     t: "A failed x402 call is not charged.",
     h: "A failed x402 call is not charged, and the response shows it.",
     s: "Settlement runs after the answer and an error cancels it; a keyed retry replays the paid answer instead of paying twice.",
-    p: `Settlement runs after the handler answers and an error status cancels it, so a failed call is answered with no payment receipt, or with a receipt marked success:false, and is not charged. ${LATE_SETTLE_EXCEPTION} ${UNCONFIRMED_RECEIPT_EXCEPTION} A retry that carries the same idempotency key and the same payment credential replays the paid answer instead of paying again. A settled receipt on an error response is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently. A Tempo push payment is sent before the call runs, so a call that then fails or is not served is recorded as a refund owed the same way. Anyone holding the settlement transaction can check it for free at /api/refunds/lookup and see our refund transaction once it is sent.`,
+    p: `Settlement runs after the handler answers and an error status cancels it, so a failed call is answered with no payment receipt, or with a receipt marked success:false, and is not charged. ${LATE_SETTLE_EXCEPTION} ${UNCONFIRMED_RECEIPT_EXCEPTION}${SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE} A call paid before it ran answers \`charged: true\`.` : ""} A retry that carries the same idempotency key and the same payment credential replays the paid answer instead of paying again. A settled receipt on an error response is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently. A Tempo push payment is sent before the call runs, so a call that then fails or is not served is recorded as a refund owed the same way. Anyone holding the settlement transaction can check it for free at /api/refunds/lookup and see our refund transaction once it is sent.`,
     links: [["/x402-test", "check a payment"], ["/guides/x402-and-mpp", "how it settles"]],
     more: [],
   },
@@ -163,6 +164,8 @@ function whyCompareHtml() {
 /** The rows, each a kicker and a one-line heading on the left; on the
  * right one sentence, at most two proof links, and the full claim (with any
  * further proof links) behind "how it works". */
+/** A point's text as HTML: escaped, with a `field` in backticks set as code. */
+export function whyTextHtml(text) { return esc(text).replace(/`([^`<]+)`/g, "<code>$1</code>"); }
 function whyPointsHtml() {
   const linkHtml = ([href, label]) => `<a class="why-proof" href="${esc(href)}">${esc(label)} &rarr;</a>`;
   return WHY_POINTS.map((w) => `
@@ -170,7 +173,7 @@ function whyPointsHtml() {
       <div><div class="why-k">${esc(w.kicker)}</div><h3>${esc(w.t)}</h3></div>
       <div class="why-body">
         <p>${esc(w.s)}</p>
-        <div class="why-row">${w.links.map(linkHtml).join("")}<details><summary>how it works +</summary><p><strong>${esc(w.h)}</strong> ${esc(w.p)}</p>${w.more.length ? `<div class="why-row">${w.more.map(linkHtml).join("")}</div>` : ""}</details></div>
+        <div class="why-row">${w.links.map(linkHtml).join("")}<details><summary>how it works +</summary><p><strong>${esc(w.h)}</strong> ${whyTextHtml(w.p)}</p>${w.more.length ? `<div class="why-row">${w.more.map(linkHtml).join("")}</div>` : ""}</details></div>
       </div>
     </div>`).join("");
 }

@@ -12,8 +12,18 @@ import { markUntrusted } from "./provenance.js";
 import { wantsShare, reserveShare, prepareShare, answerShareEnabled, SHARE_TTL_DAYS } from "../answer-share.js";
 // The share option is offered only while its switch is on (read at boot, as the catalog is built).
 const SHARE_OFFERED = answerShareEnabled();
+import { SETTLE_FIRST_SENTENCE } from "../settle-first-copy.js";
 import { recordUpstreamCall } from "../stats.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { settleBeforeUpstreamHolding } from "../settle-first.js";
+import { hardCapHold } from "../upstream-hard-caps.js";
+
+// THE SETTLE POINT (src/settle-first.js): a run the server armed has its
+// payment settled here, after the handler's input checks and our key check,
+// before the paid upstream request; a unit of the daily usage ceiling is
+// taken first (held for the call, given back when unused), so a ceiling
+// refusal is never a settled charge. Any other run: nothing.
+const settleBeforeBrave = () => settleBeforeUpstreamHolding(hardCapHold("brave"));
 
 const BRAVE_HOST = "https://api.search.brave.com/res/v1";
 
@@ -153,6 +163,7 @@ async function braveAnswerPost(query, opts = {}) {
   if (!token) {
     throw bad("Web answer is not configured on this deployment", 503);
   }
+  await settleBeforeBrave();
   meterBrave("/chat/completions", "answer");
   // The stream runs under its own cap and the handler budget; an abort while
   // it streams is the deadline it is (bodyUnderDeadline below).
@@ -277,6 +288,7 @@ async function braveGet(path, params, apiKey, caller) {
   if (!key) {
     throw bad("Web search is not configured on this deployment", 503);
   }
+  await settleBeforeBrave();
   const url = new URL(`${BRAVE_HOST}${path}`);
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
@@ -729,7 +741,7 @@ export const SEARCH_TOOLS = [
     category: "web",
     price: "$0.08",
     description:
-      "Run 2-5 web searches in one call with a 20% volume discount vs. individual searches. Each query returns ranked results (title, URL, snippet). Ideal for multi-faceted research or comparing sources on different aspects of a topic. If some queries fail upstream, the call returns the ones that succeeded with an error on each failed query and is charged; a call where every query fails is not charged, except a Tempo transfer sent before the call, which is recorded as owed and repaid after on-chain proof.",
+      `Run 2-5 web searches in one call with a 20% volume discount vs. individual searches. Each query returns ranked results (title, URL, snippet). Ideal for multi-faceted research or comparing sources on different aspects of a topic. If some queries fail upstream, the call returns the ones that succeeded with an error on each failed query and is charged; a call where every query fails is not charged, except a Tempo transfer sent before the call, which is recorded as owed and repaid after on-chain proof. ${SETTLE_FIRST_SENTENCE}`,
     tags: ["search", "batch", "multi-search", "research", "parallel"],
     discovery: {
       bodyType: "json",

@@ -16,6 +16,9 @@
 //   * the burner must hold the amount plus a SOL fee reserve
 //   * the transfer amount is integer base units, never a float
 import { createHash } from "node:crypto";
+import { installPublicLog, figure } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) money figures print as words.
+installPublicLog();
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 // SPL Memo v2. Built by hand rather than adding a dependency: the instruction
@@ -109,7 +112,7 @@ const delta = (owner) => {
 const paidIn = delta(payTo), paidOut = delta(TO);
 if (!(paidIn > 0)) { console.error(`evidence tx did not credit our payTo ${payTo} in USDC`); process.exit(1); }
 if (!(paidOut < 0)) { console.error(`evidence tx does not show ${TO} paying - refusing to refund an address that never paid us`); process.exit(1); }
-console.log(`evidence: ${EVIDENCE} moved ${(-paidOut).toFixed(6)} USDC from ${TO} to our payTo (+${paidIn.toFixed(6)})`);
+console.log(`evidence: ${EVIDENCE} moved ${figure((-paidOut).toFixed(6))} USDC from ${TO} to our payTo (+${figure(paidIn.toFixed(6))})`);
 
 
 // AMOUNT BOUND: never more than the ledger says this payer is OWED.
@@ -195,12 +198,12 @@ if (!dstAccts.length) {
 }
 const src = srcAccts[0], dst = dstAccts[0];
 const have = BigInt(src.account.data.parsed.info.tokenAmount.amount);
-console.log(`burner USDC: ${src.account.data.parsed.info.tokenAmount.uiAmountString} (ata ${src.pubkey})`);
-console.log(`dest   USDC: ${dst.account.data.parsed.info.tokenAmount.uiAmountString} (ata ${dst.pubkey})`);
+console.log(`burner USDC: ${figure(src.account.data.parsed.info.tokenAmount.uiAmountString)} (ata ${src.pubkey})`);
+console.log(`dest   USDC: ${figure(dst.account.data.parsed.info.tokenAmount.uiAmountString)} (ata ${dst.pubkey})`);
 if (have < units) { console.error(`burner holds ${have} base units, needs ${units}`); process.exit(1); }
 
 const lamports = await rpc("getBalance", [FROM]);
-console.log(`burner SOL:  ${(lamports.value ?? lamports) / 1e9}`);
+console.log(`burner SOL:  ${figure((lamports.value ?? lamports) / 1e9)}`);
 if ((lamports.value ?? lamports) < 1_000_000) { console.error("burner SOL is too low to pay the fee"); process.exit(1); }
 
 if (!SEND) { console.log("\nDRY RUN - nothing broadcast. Re-run with --send to transfer."); process.exit(0); }

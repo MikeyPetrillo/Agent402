@@ -30,6 +30,7 @@
 import { cgGet, knownIdGate } from "./crypto-markets-kit.js";
 import { cgScopeAll } from "./coingecko-rate.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
+import { markResaleComputed } from "../resale-terms.js";
 import { underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { partialFields } from "../partial-answer.js";
 
@@ -1061,6 +1062,8 @@ export const KEY_ONLY_SCREEN_SLUGS = Object.freeze(["dex-volume-board", "dex-poo
 // COINGECKO_ATTRIBUTION in coingecko-rate.js), in the description and as the
 // `credit` field of every answer.
 for (const t of CRYPTO_SCREENS_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
+// Resale terms (src/resale-terms.js): every screen here is computed.
+markResaleComputed(CRYPTO_SCREENS_TOOLS, CRYPTO_SCREENS_TOOLS.map((t) => t.slug));
 
 export const __test = { memoCounts, answerMemoSize: () => answerMemo.size, median, quantile, stdev, weightedMean, hhi, reducePerps, reduceStables, reduceCategoryPage, reducePlatforms, reducePoolPage, FUNDING_MIN_OI_USD, PEG_CLASS_BAND, LIST_SLICE_CHARS };
 

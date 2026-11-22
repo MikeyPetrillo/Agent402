@@ -18,6 +18,15 @@ ok(WHY_POINTS.length >= 3, `WHY_POINTS has ${WHY_POINTS.length} points`);
 for (const w of WHY_POINTS) ok(want.includes(w.p), `the generated page carries point "${w.kicker}" word for word`);
 ok(have === want, "wiki/Why-Pay-Here.md is current (regenerate with: node scripts/why-wiki.js --write)");
 ok(!/copied from it/.test(have), "the page no longer claims to be a hand copy");
+// The settle-first exception reads in order: the rule, then what such a
+// call answers, with the field in backticks, on the page and in the wiki.
+{
+  const { SETTLE_FIRST_SENTENCE } = await import("../src/settle-first-copy.js");
+  const pair = `${SETTLE_FIRST_SENTENCE} A call paid before it ran answers \`charged: true\`.`;
+  const p = WHY_POINTS.find((w) => w.id === "never-charged")?.p || "";
+  ok(SETTLE_FIRST_SENTENCE && p.includes(pair) && p.split("A call paid before it ran").length === 2, "the never-charged point says what a call paid before it ran answers right after the settle-first sentence, once, with `charged: true` in backticks");
+  ok(have.includes(pair), "and the wiki carries the same pair");
+}
 // Control: a drifted copy is reported through the same comparison.
 ok(want.replace(WHY_POINTS[0].p, WHY_POINTS[0].p + " Extra.") !== want, "control: an edited point would not match");
 

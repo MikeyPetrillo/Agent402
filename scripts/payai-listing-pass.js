@@ -124,6 +124,9 @@ import { multipartBodyFrom } from "../src/openapi-request.js";
 import { awaitJob, DEFAULT_ASYNC_TIMEOUT_MS } from "../client/async-job.js";
 import { redactJobLinks, slowPreferOf, asyncRefusalPreferOf } from "./lib/slow-route-buy.js";
 import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { installPublicLog, forPublicFile } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 export const SETTLE_VIA = "payai";
 export const REGISTRIES = ["bazaar", "payai"];
@@ -710,7 +713,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
   // cut short by a timeout or a kill still leaves what it signed.
   const writeRecords = () => {
     if (!opts.out) return;
-    writeFileSync(`${opts.out}.tmp`, JSON.stringify({ target, registry, chain: chain.name, startedAt, measuredAt: new Date().toISOString(), records }, null, 2));
+    writeFileSync(`${opts.out}.tmp`, JSON.stringify(forPublicFile({ target, registry, chain: chain.name, startedAt, measuredAt: new Date().toISOString(), records }), null, 2));
     renameSync(`${opts.out}.tmp`, opts.out);
   };
   // Every signed attempt counts against the ceiling at the most it may sign
@@ -804,7 +807,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     else { failed++; log(`  FAIL  ${r.method.padEnd(4)} ${r.path.padEnd(40)} ${rec.error}`); }
     if (i < plan.selected.length - 1 && opts.pauseMs) await sleep(opts.pauseMs);
   }
-  log(`\n${settled} settled, ${failed} failed, ${held} held back by the ceiling, $${spent.toFixed(3)} charged (list prices plus premium, 402 quotes for quoted routes), at most $${(Number(signedAtomic) / 1e6).toFixed(3)} signed`);
+  log(`\n${settled} settled, ${failed} failed, ${held} held back by the ceiling`);
   if (opts.out) { writeRecords(); log(`records: ${opts.out}`); }
 
   if (opts.settleWaitMs) { log(`\nwaiting ${Math.round(opts.settleWaitMs / 1000)} s before re-measuring`); await sleep(opts.settleWaitMs); }

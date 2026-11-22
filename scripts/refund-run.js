@@ -74,6 +74,9 @@ import { EVM_RPCS } from "../src/evm-rpcs.js";
 import { isGatewayWire } from "../src/gateway-wire.js";
 import { ALGORAND_MAINNET_CAIP2, canonicalAvmNetwork } from "../src/avm-network.js";
 import { withoutUrls } from "../src/payment-verify.js";
+import { installPublicLog, isPublicLog } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const GATEWAY_TRANSFER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const GATEWAY_NO_ID_HOLD = "Circle Gateway debt with no Gateway transfer id recorded - cannot be proven; resolve by hand from Gateway's transfer history";
@@ -940,7 +943,10 @@ export async function executeRefunds(rows, {
  * before any step that reads a chain or touches the ledger.
  */
 export async function refundRun({ rows, totals = {}, live = false, planOptions = {}, deps = {}, timeBudgetSeconds = null, log = console } = {}) {
-  log.log(`refund-run against ${TARGET} - ledger: ${JSON.stringify(totals)}`);
+  // A public log (PUBLIC_LOG=1, the workflow) names rows, never what they add
+  // up to: the reviewer reads amounts from a dry run in an operator terminal
+  // or GET /__operator/refunds.json.
+  log.log(`refund-run against ${TARGET} - ledger: ${isPublicLog() ? "read (totals in an operator terminal)" : JSON.stringify(totals)}`);
   const plan = planRefunds(rows, planOptions);
   // Each line names the response status the debt was recorded on, so a
   // reviewer reading the dry run can tell a failed answer from a buyer who
@@ -953,7 +959,11 @@ export async function refundRun({ rows, totals = {}, live = false, planOptions =
   log.log(`\nTO SEND: ${plan.send.length} refund(s), $${plan.totalUsd} total`);
   for (const r of plan.send) log.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${tag(r.payer)} (${what(r)})`);
   if (Number.isFinite(timeBudgetSeconds)) log.log(`time budget: no row is started after ${timeBudgetSeconds}s; the rows left then wait, still owed, for the next run (narrow a run with only_rows)`);
-  if (!live) { log.log("\nDRY RUN - no money moved. Set REFUND_LIVE=true to execute."); return { plan, executed: false }; }
+  if (!live) {
+    log.log("\nDRY RUN - no money moved. Set REFUND_LIVE=true to execute.");
+    if (isPublicLog()) log.log("Amounts are withheld in this public log: for the plan with amounts, run `node scripts/refund-run.js` (dry by default) with AGENT402_OPERATOR_TOKEN in an operator terminal, or read GET /__operator/refunds.json?status=owed.");
+    return { plan, executed: false };
+  }
   if (!plan.send.length) { log.log("nothing to send."); return { plan, executed: false }; }
   const result = await executeRefunds(plan.send, { ...(await (typeof deps === "function" ? deps(plan) : deps)), log });
   log.log(`\ndone: ${result.ok} paid, ${result.failed} failed (${result.released || 0} released back to owed), ${result.unverified} held unverified, ${result.stuck} sent and awaiting proof, ${result.deferred || 0} deferred to the next run (all unpaid rows remain owed or sending)`);

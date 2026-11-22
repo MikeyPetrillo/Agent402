@@ -11,7 +11,7 @@ Pick one setup. Both run locally through `npx`.
 **1. Free, no wallet.** Pure-CPU tools (no outbound calls, keys or models) run free. Each call solves a proof-of-work puzzle with your CPU, typically well under a second on a laptop. Tools that reach the network or a model ask for a wallet.
 
 ```
-claude mcp add agent402 -s user -- npx -y agent402-mcp@0.14.1
+claude mcp add agent402 -s user -- npx -y agent402-mcp@0.15.0
 ```
 
 **2. Paid, with a wallet.** Paid tools are settled in USDC on each call.
@@ -21,7 +21,7 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@0.14.1
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.14.1"],
+      "args": ["-y", "agent402-mcp@0.15.0"],
       "env": { "AGENT_KEY": "0xYOUR_PRIVATE_KEY" }
     }
   }
@@ -32,7 +32,7 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@0.14.1
 
 Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $5 by default to protect your wallet (`AGENT402_MAX_PER_CALL`, `0` or `off` turns it off); there is no session budget unless you set `AGENT402_BUDGET`.
 
-Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.14.1`
+Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.15.0`
 (use a new wallet holding only a few dollars of USDC; never your main wallet).
 
 Advanced setup (chains, MPP, error codes, the hosted connector) is in [Advanced](#advanced).
@@ -83,7 +83,10 @@ seller that kept the authorization could still redeem it, so it counts against
 (`https://agent402.tools`, matched by exact origin), an error status is never
 settled, so a hold for one ends at the authorization's `validBefore` plus 10
 minutes (15 minutes after the answer when no `validBefore` is readable). A held
-amount whose authorization expires unused is released, never charged. A payment
+amount whose authorization expires unused is released, never charged. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. A
+failure whose body says `charged: true` and `retry: "same-payment"` is that case:
+this server sends the same payment once more, as it was signed, and counts the
+amount once against `AGENT402_BUDGET` as spent, never held. A payment
 option asking to stay valid for more than a day is refused before anything is
 signed, so no signed authorization outlives a day.
 

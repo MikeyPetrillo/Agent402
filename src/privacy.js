@@ -27,6 +27,7 @@ import { lifetimeMs as priceWebhookLifetimeMs } from "./price-webhooks.js";
 import { directUpstreamPrivacyText, directUpstreamThirdPartyText, directUpstreamLocationText, withDirectUpstreamDate } from "./gateway-direct-upstream.js";
 import { taskRetentionPublic } from "./mcp-tasks.js";
 import { solanaActivityStoreEnabled, solanaActivityMaxWallets, SOLANA_ACTIVITY_KEEP_DAYS } from "./solana-activity-store.js";
+import { evmActivityStoreEnabled, evmActivityMaxWallets, EVM_ACTIVITY_KEEP_DAYS } from "./evm-activity-store.js";
 import { oneHopPublicBounds } from "./sanctions-screen.js";
 import { endedRecordRetentionPublic, offerRetentionPublic } from "./mpp-subscription-retention.js";
 import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
@@ -124,7 +125,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-21.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-22.</p>
 </section>
 
 <section>
@@ -284,6 +285,12 @@ so every claim below is verifiable in code.</p>
   <li><b>Solana wallet activity.</b> To draw a Solana wallet's 30-day activity on its chain page, we read the payments that
   wallet received from the public Solana chain, and keep, for up to ${solanaActivityMaxWallets()} wallets, the time, amount and
   sending wallet address of each payment, in our state database, for ${SOLANA_ACTIVITY_KEEP_DAYS} days after it was last written
+  (a nightly backup made inside that time copies it, see Backups below). These are public on-chain records, read again
+  on the next view once they are deleted.</li>` : ""}${evmActivityStoreEnabled() ? `
+  <li><b>EVM wallet activity.</b> To draw a wallet's 30-day activity on an EVM chain page, we read the payments that
+  wallet received from that public chain, and keep, for up to ${evmActivityMaxWallets()} wallets across those chains, the block number, time, amount and
+  sending wallet address of each payment, whether that sending wallet is one of ours, and the transaction id of payments in the newest and oldest blocks read,
+  in our state database (or in a file on the server when it runs without one), for ${EVM_ACTIVITY_KEEP_DAYS} days after it was last written
   (a nightly backup made inside that time copies it, see Backups below). These are public on-chain records, read again
   on the next view once they are deleted.</li>` : ""}
   <li><b>Card purchases (reports, monitors and prepaid credits).</b> Card details are entered on Stripe's

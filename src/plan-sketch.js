@@ -14,9 +14,11 @@
 export const PLAN_MAX_STEPS = 5;
 const MIN_STEP_CHARS = 3;
 
-// Sequence markers only. A bare "and" is never a split point: "bitcoin and
-// ethereum price" is one step, and guessing otherwise would turn ordinary
-// single-tool queries into plans.
+// Sequence markers, plus one narrow "and": "bitcoin and ethereum price" is
+// one step, and guessing otherwise would turn ordinary single-tool queries
+// into plans. An "and" splits only when BOTH sides open with a task verb and
+// carry an object ("validate the json and generate an md5 hash"): two verbs
+// with their own objects are two tasks (splitOnAnd).
 //
 // A step boundary is a marker with the whitespace around it; a word marker
 // also takes one comma before it. MARKER_RE names the marker alone, and
@@ -56,6 +58,71 @@ function trimTail(p) {
 const NUMBERED_RE = /(?:^|\s)(?:\(?\d{1,2}[.)]|step\s+\d{1,2}:?)\s+/gi;
 const LEAD_RE = /^(?:and|first|firstly|also|please|,)\s+/i;
 
+// The verbs that open a task step. A side that opens with anything else
+// ("bitcoin and ethereum price", "rows and columns") is not a step.
+const TASK_VERBS = new Set([
+  "add", "analyze", "build", "calculate", "check", "compare", "compute", "convert", "count", "create",
+  "decode", "detect", "diff", "encode", "encrypt", "extract", "fetch", "find", "format", "generate",
+  "get", "hash", "list", "locate", "look", "lookup", "make", "map", "merge", "normalize", "parse", "read",
+  "render", "resolve", "scan", "search", "sign", "sort", "split", "summarize", "test", "transcribe",
+  "translate", "validate", "verify",
+]);
+// Words that sequence steps or pad a request. A side of an "and" that holds a
+// marker word anywhere ("then", "step", "also"), or ends on a sequence word
+// ("get the price and first"), is a marker fragment, not a task. "first" and
+// "next" open a side ("first get the quote"); inside one they are ordinary
+// words ("get the first page"), and an "and" inside one is part of it ("count
+// its rows and columns"). A closing "please" is not part of the step.
+const MARKER_WORDS = new Set(["then", "step", "finally", "afterwards", "also"]);
+const SEQUENCE_WORDS = new Set(["and", "first", "firstly", "also", "please", "then", "next", "step", "finally", "afterwards"]);
+const OPENERS = new Set(["first", "firstly", "next"]);
+// The side as a step: its words without an opening sequence word or a
+// closing "please", or null when it is not a task phrase (a task verb, then
+// an object, with no marker word and no "step 1:" label or closing ":").
+function taskPhrase(raw) {
+  const words = trimTail(raw).trim().split(/\s+/);
+  if (/:\s*,?\s*$/.test(raw)) return null;
+  while (words.length && OPENERS.has(words[0].toLowerCase())) words.shift();
+  while (words.length && words[words.length - 1].toLowerCase().replace(/[,.;]+$/, "") === "please") words.pop();
+  const low = words.map((w) => w.toLowerCase());
+  if (low.length < 2 || !TASK_VERBS.has(low[0])) return null;
+  for (const w of low.slice(1)) {
+    if (w.endsWith(":")) return null;
+    if (MARKER_WORDS.has(w.replace(/[,.;]+$/, ""))) return null;
+  }
+  const last = low[low.length - 1].replace(/[,.;]+$/, "");
+  if (SEQUENCE_WORDS.has(last) || !/[a-z]/.test(last)) return null;
+  return trimTail(words.join(" ")).trim();
+}
+// Split at an "and" whose next word is a task verb; any other "and" stays
+// inside its step ("count its rows and columns"). The walk finds each "and"
+// that has whitespace on both sides and reads the word after it by index, so
+// every character is read a bounded number of times (a pattern that took the
+// whitespace before "and" reread a long run of it from each position).
+const AND_WORD_RE = /and/gi;
+function splitOnAnd(q) {
+  const raw = [];
+  let from = 0;
+  for (const m of q.matchAll(AND_WORD_RE)) {
+    const at = m.index;
+    if (at === 0 || !isSpace(q[at - 1])) continue;
+    let j = at + 3;
+    if (j >= q.length || !isSpace(q[j])) continue;
+    while (j < q.length && isSpace(q[j])) j++;
+    let k = j;
+    while (k < q.length && !isSpace(q[k])) k++;
+    if (k === j) continue;
+    if (!TASK_VERBS.has(q.slice(j, k).toLowerCase())) continue;
+    raw.push(q.slice(from, at));
+    from = j;
+    if (raw.length > PLAN_MAX_STEPS) return [];
+  }
+  raw.push(q.slice(from));
+  if (raw.length < 2) return [];
+  const steps = raw.map(taskPhrase);
+  return steps.every(Boolean) ? steps : [];
+}
+
 /** Split a task into ordered steps, or [] when it reads as a single step. */
 export function splitSteps(query) {
   let q = String(query ?? "").slice(0, 500).trim();
@@ -66,7 +133,8 @@ export function splitSteps(query) {
   const parts = splitOnMarkers(q)
     .map((p) => trimTail(p.replace(LEAD_RE, "")).trim())
     .filter((p) => p.length >= MIN_STEP_CHARS && /[a-z]/i.test(p));
-  return parts.length >= 2 ? parts : [];
+  if (parts.length >= 2) return parts;
+  return splitOnAnd(q);
 }
 
 const weakMatch = (r, floor) => !r || r.count === 0 || (r.results?.[0]?.score ?? 0) < floor || r.rarestTermCovered === false;

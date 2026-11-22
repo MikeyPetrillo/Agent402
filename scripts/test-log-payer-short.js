@@ -66,7 +66,7 @@ const SHORTENED = /\.slice\(0,\s*\d+\)|\.length\b|\.size\b|[Cc]ount\b/;
 const SHORTENING_CALL = /\b(?:shortPayer|shortKey|maskAddress|mask|short)\(/g;
 const KEYISH = /(?<![\w$])key\b|[a-z0-9]Key\b/;
 // Payment modules: keys there carry the payer.
-const PAYMENT_FILE = /^src\/(?:payments|payment-[\w-]+|payer|[\w-]+-payer|gateway-[\w-]+|hangup-[\w-]+|late-settlements|pending-settle|refund-[\w-]+|sales-ledger|revenue-ledger|outbound-ledger|settle[\w-]*|settlement-[\w-]+|credits|idempotency[\w-]*|replay-[\w-]+|mpp-[\w-]+|mcp-mpp|verify-[\w-]+|x402-buyer|solana-buyer|tempo-buyer|prepayment-refusal|svm-[\w-]+|shared-paytos|stripe-shadow-ledger|ledger-journal-redis|ledger-mirror)\.js$/;
+const PAYMENT_FILE = /^src\/(?:payments|payment-[\w-]+|payer|[\w-]+-payer|gateway-[\w-]+|hangup-[\w-]+|late-settlements|pending-settle|refund-[\w-]+|sales-ledger|revenue-ledger|outbound-ledger|settle[\w-]*|settlement-[\w-]+|credits|idempotency[\w-]*|replay-[\w-]+|mpp-[\w-]+|mcp-mpp|verify-[\w-]+|x402-buyer|solana-buyer|tempo-buyer|prepayment-refusal|svm-[\w-]+|shared-paytos|ledger-journal-redis|ledger-mirror)\.js$/;
 /** The expression with every shortening call and its argument list removed. */
 function withoutShortened(code) {
   let out = "", last = 0;

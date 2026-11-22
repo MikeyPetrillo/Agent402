@@ -524,6 +524,7 @@
     "uuid",
     "uuid-v5",
     "uuid-validate",
+    "vat-validate",
     "vehicle-recalls",
     "vin-decode",
     "voice-call",

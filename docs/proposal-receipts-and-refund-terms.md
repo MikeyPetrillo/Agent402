@@ -105,6 +105,8 @@ part of it.
 | `repaymentFamily` | The chain family a repayment is sent on, or null. |
 | `settleAfterAnswer`, `hangupForgiveness`, `refundOnChargedFailure` | Cells `{ supported, detail, source }`: whether the rail implements the rule, one sentence on how, and the module that runs it. |
 
+Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
+
 ## 3. Payer screening, stated per rail
 
 A seller that screens payers against a sanctions list states, per rail, which

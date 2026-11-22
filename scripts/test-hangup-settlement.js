@@ -556,11 +556,20 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   // A request whose payment settled before its handler (a Tempo push
   // credential) is owed if undelivered, so it must not spend the budget.
   {
-    const tempoAt = server.indexOf("if (req.tempoSettled) return next();");
-    const awaitAt = server.indexOf("try { await reserveHangupForgiveness(", tempoAt);
+    // Read structurally: the reservation's own middleware (the last
+    // app.use before the awaited reservation) returns early, at its top
+    // level, for a request settled before its handler (a Tempo push, or the
+    // same payment sent again after a settle-first run: src/settle-first.js),
+    // and that return comes before the reservation.
+    const awaitAt = server.indexOf("try { await reserveHangupForgiveness(");
+    const mwStart = server.lastIndexOf("app.use(async (req, res, next) => {", awaitAt);
+    const ticketMw = mwStart >= 0 && awaitAt > mwStart ? server.slice(mwStart, awaitAt) : "";
+    const early = /\n {4}if \(req\.tempoSettled((?: \|\| [A-Za-z]+\(req\))*)\) return next\(\);/.exec(ticketMw);
+    const tempoAt = early ? mwStart + early.index : -1;
     const closeAt = server.indexOf("res.once(\"close\", () => {\n      closed = true;\n      if (!reserved) return;", tempoAt);
     const outcomeAt = server.indexOf("onResponseEnd(req, res, () => { decided = true; if (late) { clearTimeout(late); late = null; } if (reserved) settle(); });", tempoAt);
-    ok(tempoAt > 0 && awaitAt > tempoAt && awaitAt - tempoAt < 3500, "a request already settled before its handler (Tempo push) takes no ticket (the reservation is awaited: a promise with a shared store)");
+    ok(early !== null && !/\n {2}\}\);\n/.test(ticketMw) && /\bawait\b/.test(server.slice(awaitAt, awaitAt + 40)), "a request already settled before its handler (Tempo push) takes no ticket: the reservation's own middleware returns before it, at its top level (the reservation is awaited: a promise with a shared store)");
+    ok(early !== null && /settledFirstResendOf\(req\)/.test(early[1] || ""), "the same payment sent again after a settle-first run takes no ticket either (its debt is held, not forgiven)");
     ok(closeAt > tempoAt && closeAt < awaitAt && outcomeAt > tempoAt && outcomeAt < awaitAt, "the close listener and the outcome listener are registered before the shared budget read, so a socket that closes during it is not missed");
     const tail = server.slice(awaitAt, awaitAt + 900);
     ok(/reserved = true;\s*\n\s*if \(decided\) settle\(\);\s*\n\s*if \(closed \|\| res\.destroyed\) \{\s*\n\s*settle\(\);/.test(tail), "the ticket is settled once the response ended, including a close during the read");
@@ -583,7 +592,12 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
     const order = ["registerWalletBlocklistHook(server);", "registerClientGoneSettleHook(server);", "registerFirstCallAllowanceSettleHook(server);", "registerSettlementClaimHooks(server);", MARK_HOOK, "registerPhaseTimingHooks(server);"].map((s) => (typeof s === "string" ? payments.indexOf(s) : markAt));
     ok(order.every((i, n) => i > 0 && (n === 0 || i > order[n - 1])), `every hook that can abort or skip a settle is registered before the mark hook, and only the timing hook after it (${JSON.stringify(order)})`);
     const afterMark = payments.slice(markAt);
-    ok(!/server\.onBeforeSettle\(/.test(afterMark.slice(0, afterMark.indexOf("registerPhaseTimingHooks(server);"))), "nothing registers an onBeforeSettle between the mark hook and the timing hook");
+    // A note hook may sit there only through passingHook (src/x402-hook-guard.js),
+    // which returns nothing and swallows its own throw, so it cannot end the
+    // chain (the settle deadlines' context note); any other registration can.
+    const between = afterMark.slice(0, afterMark.indexOf("registerPhaseTimingHooks(server);"));
+    const regs = [...between.matchAll(/server\.onBeforeSettle\(([^\n]*)/g)].map((m) => m[1]);
+    ok(regs.every((r) => /^passingHook\(HOOK_NAMES\.[A-Za-z]+, /.test(r)), `nothing that can abort or skip a settle registers an onBeforeSettle between the mark hook and the timing hook (only passingHook notes: ${regs.length})`);
     ok(/registerClientGoneSettleHook\(server\);\s*\n\s*registerInflightCoverSettleHook\(server\);\s*\n(\s*\/\/[^\n]*\n)*\s*registerFirstCallAllowanceSettleHook\(server\);\s*\n(\s*\/\/[^\n]*\n)*\s*registerSettlementClaimHooks\(server\);/.test(payments), "the client-gone hook, the allowance skip and the authorization claim keep their order");
   }
   for (const [name, src, call] of [["mpp-tempo", tempo, "markSettleSent(req);\n        if (earlyConfirm) {"], ["mpp-stripe", stripeGate, "markSettleSent(req);\n      const b = await settle(auth);"]]) {
@@ -706,6 +720,10 @@ const bootServer = () => spawn(process.execPath, ["--import", "./scripts/lib/ope
     FLIGHT_SELLERS_JSON: JSON.stringify({ search: [{ url: "https://fares.example.invalid/s?d={from}", method: "GET", format: "fare-search-v1", maxUsd: 0.02, payTo: "0x" + "a1".repeat(20) }], status: [{ url: "https://track.example.invalid/f/{flight}", method: "GET", format: "flight-track-v1", maxUsd: 0.01, payTo: "0x" + "b2".repeat(20) }] }),
     GATEWAY_SETTLE_BREAKER_MAX: "3", GATEWAY_SETTLE_BREAKER_WINDOW_MS: "600000", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "3",
     COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "3",
+    // The scenarios below read runs settled AFTER their handler; the count
+    // that moves a wallet with unsettled runs to settle first
+    // (scripts/test-settle-first.js reads that rule) is raised out of their way.
+    GATEWAY_SETTLE_FIRST_UNSETTLED_MAX: "99",
     HANGUP_FORGIVE: "", HANGUP_FORGIVE_KEY_USD: "0.1", HANGUP_FORGIVE_GLOBAL_USD: "0.4", HANGUP_FORGIVE_WINDOW_MS: "86400000",
     HANGUP_FORGIVE_FILE: HANGUP_FILE, HANGUP_FORGIVE_SALT: "hangup-test-salt",
     // The leaderboard's boot scan (20 s after boot) blocked the loop for 2.6
@@ -806,6 +824,21 @@ try {
   }
   const [{ privateKeyToAccount, generatePrivateKey }, { x402Client }, { registerExactEvmScheme }, { wrapFetchWithPayment }] =
     await Promise.all([import("viem/accounts"), import("@x402/core/client"), import("@x402/evm/exact/client"), import("@x402/fetch")]);
+
+  // The model and image scenarios below are about runs settled after their
+  // handler, which is how a wallet with a paid sale on the books is served
+  // there (a wallet with none has its payment settled before the upstream
+  // call, so nothing is left to forgive: scripts/test-settle-first.js reads
+  // that). So each of those wallets buys one cheap call first. The call is on
+  // a pure-CPU route: no forgiveness ticket is abandoned by it and the settle
+  // breaker does not consult it, so no budget or count below moves.
+  {
+    const scenarioWallets = [0xb4, 0xb5, 0xc1, 0xd1, 0xe1, 0xf1, 0xf2, 0xf3, 0x61c, 0x71, 0x72, 0x73, 0x81, 0x91].map(wallet);
+    const seeded = [];
+    for (const [i, w] of scenarioWallets.entries()) seeded.push((await pay({ path: "/api/uuid", method: "GET", body: undefined }, w, `10.0.250.${i + 1}`)).status);
+    ok(seeded.every((st) => st === 200), `each model and image scenario wallet has one settled call on the books before its scenario (${seeded.join(",")})`);
+    await sleep(300);
+  }
 
   // a. Control: a connected buyer (a real x402 client) settles, nothing owed.
   {

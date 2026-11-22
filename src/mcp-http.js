@@ -419,7 +419,7 @@ export function mcpServerCard({ baseUrl, path = "/mcp", serverName = "agent402",
   };
 }
 
-export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS, serverCardAliases = [], offerCacheMax = OFFER_CACHE_MAX }) {
+export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS, serverCardAliases = [], offerCacheMax = OFFER_CACHE_MAX, quietMiss = () => false }) {
   // The wires this mount takes in the call. `payWires` is the boot's own
   // account (src/connector-pay.js connectorWires, the source the pages read):
   // a wire it denies has no loopback here, so the capability advertisement,
@@ -708,7 +708,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     } catch { return false; }
   }
 
-  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false } = {}) {
+  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false, quiet = false } = {}) {
     const server = new Server(
       {
         name: profile?.serverName || "agent402",
@@ -1157,6 +1157,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
      *  answer (a verify refusal carries no receipt and keeps its offer).
      *  `settle` is the decoded PAYMENT-RESPONSE (or null), `body` the 402's
      *  JSON body. */
+    /** True for a route answer whose body says its payment was charged: a
+     *  payment settled before the run and owed back (src/settle-first-body.js),
+     *  or the same settled payment sent again while its charge is read
+     *  (resend_pending, idempotent_request_in_flight). No "not charged" line
+     *  is written over it. */
+    const settledBeforeRun = (json) => !!json && typeof json === "object" && json.charged === true;
     function failedSettleResult(def, r, body, settle) {
       const failed = Boolean(settle) && typeof settle === "object" && settle.success === false;
       const bare = !settle && !r.headers.get("payment-required") && body?.error === "settlement_failed";
@@ -1209,7 +1215,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       }
       if (r.status >= 400) {
         const detail = r.json ? JSON.stringify(withoutPaymentRequired(r.json)) : String(r.text || "").slice(0, 500);
-        return { content: [{ type: "text", text: `Agent402 (${def.slug}) HTTP ${r.status} - not charged: ${detail}` }], isError: true };
+        // A payment settled before the run (src/settle-first-body.js): the
+        // route's body says the charge is owed back, so this line does not
+        // say "not charged" over it.
+        return { content: [{ type: "text", text: `Agent402 (${def.slug}) HTTP ${r.status}${settledBeforeRun(r.json) ? "" : " - not charged"}: ${detail}` }], isError: true };
       }
       const receiptHeader = r.headers.get("payment-response");
       if (r.bytes) return withPaymentResponse(mcpBinaryResult({ slug: def.slug, bytes: r.bytes, contentType: r.contentType, headers: r.headers }), receiptHeader);
@@ -1310,7 +1319,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       }
       if (r.status >= 400) {
         const detail = r.json ? JSON.stringify(withoutPaymentRequired(r.json)) : String(r.text || "").slice(0, 500);
-        return { content: [{ type: "text", text: `Agent402 (${entry.def.slug}) HTTP ${r.status}${r.status >= 400 && r.status < 500 ? ` - not charged${pushClause(entry.def)}` : `${Boolean(credentialHeaderFromMeta(meta)) && r.status === 502 ? " - settlement normally runs only after a successful handler; check the paying wallet before paying again" : " - not charged (settlement runs only after a successful handler)"}${pushClause(entry.def)}`}: ${detail}` }], isError: true };
+        return { content: [{ type: "text", text: `Agent402 (${entry.def.slug}) HTTP ${r.status}${settledBeforeRun(r.json) ? "" : r.status >= 400 && r.status < 500 ? ` - not charged${pushClause(entry.def)}` : `${Boolean(credentialHeaderFromMeta(meta)) && r.status === 502 ? " - settlement normally runs only after a successful handler; check the paying wallet before paying again" : " - not charged (settlement runs only after a successful handler)"}${pushClause(entry.def)}`}: ${detail}` }], isError: true };
       }
       const receipt = receiptFromHeader(r.headers.get("payment-receipt"));
       const receiptMeta = receipt ? { [MCP_RECEIPT_META]: { ...receipt, ...(challengeIdFromMeta(meta) ? { challengeId: challengeIdFromMeta(meta) } : {}) } } : {};
@@ -1586,9 +1595,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           if (plan) {
             for (const st of plan.steps) {
               if (st.match === "strong") continue;
-              try { recordWish({ need: st.task, source: "find-miss", ip }); } catch { /* best-effort */ }
+              // An operator's own search (a valid X-Operator-Token) is not demand.
+              if (!quiet) try { recordWish({ need: st.task, source: "find-miss", ip }); } catch { /* best-effort */ }
             }
-          } else if (weak && taskStr.trim() && !relatedSellers) {
+          } else if (weak && taskStr.trim() && !relatedSellers && !quiet) {
             try { recordWish({ need: taskStr.trim(), source: "find-miss", ip }); } catch { /* best-effort */ }
           }
           if (plan && !results.length && !r.packs?.length) {
@@ -2267,7 +2277,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     let run = null;
     try {
       const heartbeatToken = typeof req.headers["x-heartbeat-token"] === "string" ? req.headers["x-heartbeat-token"] : null;
-      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall };
+      // A search the operator runs (a valid X-Operator-Token, read by the
+      // host's quietMiss) records no find-miss; the answer is keyed on that
+      // header, and the operator's is private, no-store.
+      res.vary("X-Operator-Token");
+      const quiet = req.headers["x-operator-token"] !== undefined && Boolean(quietMiss(req));
+      if (quiet) res.set("Cache-Control", "private, no-store");
+      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall, quiet };
       // Client disconnect: abort in-flight handler work AND close the transport
       // (F14) — not just close the transport while the handler keeps running.
       res.on("close", () => { ac.abort(); try { transport?.close(); } catch { /* already closing */ } });

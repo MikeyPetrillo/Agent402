@@ -37,7 +37,7 @@ Whether it is on right now is machine-readable: `/api/pricing`
 4. **Batched on chain.** Gateway lands settled payments on chain in batches
    later; the seller withdraws its Gateway balance separately. On
    [/revenue](https://agent402.tools/revenue) these sales are counted from the
-   sales ledger under their own label.
+   sales ledger under their own label. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
 
 The plain accept stays first in `accepts`, so a client that ignores
 `extra.name` keeps paying it and nothing changes for existing buyers.

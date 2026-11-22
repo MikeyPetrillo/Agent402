@@ -18,7 +18,6 @@ import { CRYPTO_TOOLS, clearCryptoCache } from "../src/tools/crypto-kit.js";
 import { CRYPTO_MARKETS_TOOLS, clearCryptoMarketsCache, resetCgRateLimit } from "../src/tools/crypto-markets-kit.js";
 import { CRYPTO_SCREENS_TOOLS } from "../src/tools/crypto-screens-kit.js";
 import { PRICE_FEED_TOOLS, clearPriceFeedCache } from "../src/tools/price-feed-kit.js";
-import { MARKET_TICK_TOOLS, __setMarketTickSources, clearMarketTickCache } from "../src/tools/market-tick-kit.js";
 import { buildSkillTools } from "../src/tools/skill-runner.js";
 import { SKILL_PACKS } from "../src/skills.js";
 import { missingExampleKeys } from "../src/answer-shape.js";
@@ -186,25 +185,6 @@ for (const [mod, call] of MODULES) {
   ok(JSON.stringify(out) === JSON.stringify({ a: 7, nested: { b: 2 }, credit: "Credit (https://example.test)." }), "creditAnswers: every field kept, credit added");
   ok(JSON.stringify(t.discovery.output.example) === JSON.stringify({ a: 1, credit: "Credit (https://example.test)." }), "creditAnswers: example gains the credit");
   ok(JSON.stringify(withCredit([1], "c")) === "[1]" && withCredit(null, "c") === null && withCredit({ credit: "own" }, "c").credit === "own", "withCredit: arrays, null and an answer with its own credit are left as they are");
-}
-
-// Market tick: an answer that serves a coin figure carries the credit; an
-// equities-only answer does not.
-{
-  const tick = MARKET_TICK_TOOLS[0];
-  ok(!Object.hasOwn(tick.discovery.output.example, "credit") && tick.discovery.output.optional?.credit?.description?.includes(COINGECKO_CREDIT), "market-tick: the credit is a declared optional output (present only with a coin figure), not a key of the example");
-  __setMarketTickSources({
-    crypto: async ({ coins }) => ({ currency: "usd", coins: Object.fromEntries(String(coins).split(",").map((id) => [id, { price: 1, change24hPct: 0, lastUpdated: "2026-11-16T00:00:00.000Z" }])), credit: COINGECKO_CREDIT }),
-    equity: async ({ symbol }) => ({ symbol, price: 2, previousClose: 2, change: 0, changePct: 0, currency: "USD", asOf: "2026-11-13" }),
-  });
-  clearMarketTickCache();
-  const mixed = await tick.handler({ symbols: "BTC,AAPL" });
-  ok(mixed.credit === COINGECKO_CREDIT && mixed.items.length === 2, "market-tick: a coin figure in the answer brings the credit");
-  clearMarketTickCache();
-  const eq = await tick.handler({ symbols: "AAPL" });
-  ok(!Object.hasOwn(eq, "credit"), "market-tick: an equities-only answer carries no CoinGecko credit");
-  __setMarketTickSources(null);
-  clearMarketTickCache();
 }
 
 // Skill packs: the credit is printed once on the envelope, not per step.

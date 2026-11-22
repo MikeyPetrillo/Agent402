@@ -11,8 +11,7 @@
 //     names, once only, and no other answer earns that retry;
 //   - scripts/catalog-buy.js buys through it (no Prefer: wait, a failed job is
 //     never retried);
-//   - base-list-sweep, cross-chain-matrix, decide-paid-e2e and
-//     decide-prod-check, each run whole in a child with a throwaway key that
+//   - base-list-sweep, decide-paid-e2e and decide-prod-check, each run whole in a child with a throwaway key that
 //     signs real x402 payloads for the stub (a preload sends the production
 //     and Bazaar hosts to the stub and refuses every other host), pay a slow
 //     route with the header up front and follow its job, and a route that is
@@ -229,7 +228,7 @@ const call = (path, prefer) => paidCallHonoringSlowRoutes(async (extra, attempt)
 }
 
 // --- each other buy script makes its paid call through the helper
-for (const f of ["base-list-sweep.js", "cross-chain-matrix.js", "decide-paid-e2e.mjs", "decide-prod-check.mjs", "catalog-buy.js"]) {
+for (const f of ["base-list-sweep.js", "decide-paid-e2e.mjs", "decide-prod-check.mjs", "catalog-buy.js"]) {
   const src = readFileSync(new URL(f, import.meta.url), "utf8");
   ok(/from "\.\/lib\/slow-route-buy\.js"/.test(src) && /paidCallHonoringSlowRoutes\(/.test(src) && /slowPreferOf\(/.test(src), `${f} makes its paid call through paidCallHonoringSlowRoutes with the route's slowPreferOf`);
   ok(!/Prefer["']?\s*:\s*["`']wait=/.test(src), `${f} sends no Prefer: wait`);
@@ -255,7 +254,7 @@ globalThis.fetch = async (input, init) => {
   return real(to, { method: req.method, headers: req.headers, body, ...(init || {}) });
 };
 `);
-  const env = { PATH: process.env.PATH, HOME: process.env.HOME, STUB_ORIGIN: T, TARGET_URL: T, BURNER_KEY: generatePrivateKey(), POW_SECRET: "test-pow-secret", SWEEP_DELAY_MS: "0", MATRIX_TOP_N: "2" };
+  const env = { PATH: process.env.PATH, HOME: process.env.HOME, STUB_ORIGIN: T, TARGET_URL: T, BURNER_KEY: generatePrivateKey(), POW_SECRET: "test-pow-secret", SWEEP_DELAY_MS: "0" };
   const runChild = (script, args = [], extraEnv = {}) => new Promise((resolve) => {
     execFile(process.execPath, ["--import", pathToFileURL(preload).href, fileURLToPath(new URL(script, import.meta.url)), ...args], { env: { ...env, ...extraEnv }, timeout: 120_000, maxBuffer: 8 << 20 }, (err, stdout, stderr) => resolve({ code: err ? (typeof err.code === "number" ? err.code : 1) : 0, out: `${stdout}${stderr}` }));
   });
@@ -269,11 +268,6 @@ globalThis.fetch = async (input, init) => {
   ok(sw.code === 0 && paidTo("/v1/research").length === 1 && paidTo("/v1/research")[0].prefer === "respond-async", `base-list-sweep pays a slow route with Prefer: respond-async up front (${paidTo("/v1/research").map((x) => x.prefer || "none").join()}; ${tail(sw)})`);
   ok(paidTo("/api/rsi").length === 1 && paidTo("/api/rsi")[0].prefer === null, "base-list-sweep sends no Prefer for a route that is not slow");
   ok(rep?.bought?.some((b) => b.entry === "POST /v1/research" && b.tx === "tx-job-research") && polls.length >= 2 && !rep.failed.length, `base-list-sweep follows the job and records its settlement tx (${JSON.stringify(rep?.bought)})`);
-
-  reset();
-  const mx = await runChild("cross-chain-matrix.js", ["2"]);
-  ok(paidTo("/v1/research").length === 1 && paidTo("/v1/research")[0].prefer === "respond-async" && /✓[^\n]*research/.test(mx.out), `cross-chain-matrix pays a slow route with respond-async and its Base cell is green through the job (${tail(mx)})`);
-  ok(paidTo("/api/rsi").length === 1 && paidTo("/api/rsi")[0].prefer === null, "cross-chain-matrix sends no Prefer for a route that is not slow");
 
   reset();
   const e2eOut = join(dir, "e2e.json");

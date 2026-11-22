@@ -67,6 +67,8 @@ import { cacheGet, cacheSet } from "../cache.js";
 import { unknownModelVerdict, isListedModel, contextTokensOf, listedModelsWithContext, MAX_SUGGESTIONS } from "../model-catalog.js";
 import { stripControlChars } from "../prepayment-refusal.js";
 import { notChargedOn } from "../not-charged.js";
+import { settleBeforeUpstream } from "../settle-first.js";
+import { noteRunUpstreamUsd } from "../settle-first-meter.js";
 import { envPositive } from "../env-num.js";
 import { routeHint, inReferralRun } from "../referral-run.js";
 
@@ -3089,6 +3091,9 @@ export function stripBilling(usage) {
   if (!usage || typeof usage !== "object") return null;
   const upstreamUsd = typeof usage.cost === "number" ? usage.cost : null;
   for (const k of BILLING_USAGE_FIELDS) delete usage[k];
+  // The run's own upstream cost, for the settle-first budget meter
+  // (src/settle-first-meter.js): read only if the run ends unsettled.
+  if (upstreamUsd !== null) noteRunUpstreamUsd(upstreamUsd);
   return upstreamUsd;
 }
 
@@ -3256,9 +3261,20 @@ export function bufferedAttemptMs(maxTokens, tier = null, req = null) {
 
 export { readUpstreamBody };
 
-export async function fetchOpenRouter(body, { timeoutMs, signal, url = OPENROUTER_URL } = {}) {
+/** Refuse (503) when the gateway has no upstream key: the check every paid
+ *  OpenRouter call makes first, and the one a settle point makes before it
+ *  takes a payment, so a gateway that cannot call upstream never settles one. */
+export function assertOpenRouterConfigured() {
   const key = OPENROUTER_KEY();
   if (!key) throw bad("LLM gateway not configured (OPENROUTER_API_KEY unset)", 503);
+  return key;
+}
+export async function fetchOpenRouter(body, { timeoutMs, signal, url = OPENROUTER_URL } = {}) {
+  const key = assertOpenRouterConfigured();
+  // THE SETTLE POINT (src/settle-first.js): a run the server armed has its
+  // payment settled here, before the first paid upstream call; a payment
+  // that does not settle throws and no call is made. Any other run: nothing.
+  await settleBeforeUpstream();
   // Inside a report composite, the client-gone signal is aborted when the
   // buyer's connection closed before the first byte and the charge was
   // cancelled (src/hangup-settlement.js, src/drain-abort.js): the payment will
@@ -3393,6 +3409,7 @@ function directFailure(message, statusCode, reason, extra = {}) {
 }
 async function fetchDirectUpstream(body, { signal, timeoutMs, cfg = directUpstreamConfig() } = {}) {
   if (!cfg) throw directFailure("Direct upstream not configured", 502, "unconfigured");
+  await settleBeforeUpstream(); // the settle point (src/settle-first.js)
   const gone = clientGoneSignal();
   if (gone?.aborted) throw gone.reason;
   const own = signal ?? AbortSignal.timeout(timeoutMs ?? cfg.timeoutMs);
@@ -3473,7 +3490,7 @@ export async function callDirectUpstream(body, { timeoutMs, servedModel, cfg = d
     if (servedModel) data.model = servedModel;
     return data;
   } catch (e) {
-    if (e?.directFallback || e?.statusCode === 499) throw e;
+    if (e?.directFallback || e?.statusCode === 499 || e?.settleFirstRefused) throw e;
     throw directFailure("Direct upstream failed", 502, "other");
   }
 }
@@ -3493,7 +3510,7 @@ export async function streamDirectUpstreamTo(body, res, { onUsage, timeoutMs, cf
     });
   } catch (e) {
     if (e?.directFallback && e.upstreamTimeout) e.directReason = "timeout";
-    if (res.headersSent || e?.directFallback || e?.statusCode === 499) throw e;
+    if (res.headersSent || e?.directFallback || e?.statusCode === 499 || e?.settleFirstRefused) throw e;
     if (e?.errorFrame) throw directFailure("Direct upstream stream opened with an error", 502, "late_error");
     // An answer that ended empty is the direct link's empty answer (not
     // counted by the breaker): the same model is tried on OpenRouter.
@@ -4051,6 +4068,7 @@ async function embeddingsHandler(input, req) {
   const body = validateEmbeddingsRequest(input);
   const key = OPENAI_KEY();
   if (!key) throw bad("Embeddings gateway not configured (OPENAI_API_KEY unset)", 503);
+  await settleBeforeUpstream(req); // the settle point (src/settle-first.js)
   let res;
   try {
     res = await fetch(OPENAI_EMBEDDINGS_URL, {
@@ -4158,6 +4176,7 @@ async function rerankHandler(input, req) {
   const body = validateRerankRequest(input);
   const key = OPENROUTER_KEY();
   if (!key) throw bad("Rerank gateway not configured (OPENROUTER_API_KEY unset)", 503);
+  await settleBeforeUpstream(req); // the settle point (src/settle-first.js)
   const user = upstreamUserId(req);
   let res;
   try {
@@ -4453,6 +4472,7 @@ async function speechHandler(input, req) {
   const { bodies, contentType } = validateSpeechRequest(input);
   const key = OPENROUTER_KEY();
   if (!key) throw bad("LLM gateway not configured (OPENROUTER_API_KEY unset)", 503);
+  await settleBeforeUpstream(req); // the settle point (src/settle-first.js)
   // Per-buyer `user` (see upstreamUserId). Every other wire sends it; this one
   // did not, which the OpenRouter log showed as an empty Client User ID on
   // every speech row (2026-09-18). It is what scopes an upstream provider
@@ -4747,6 +4767,11 @@ function makeHandler(routeTier) {
               if (model === emptyModel) continue;
               let outbound;
               try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
+              // The settle point (src/settle-first.js): this link is about to be
+              // called, so a run the server armed settles its payment here, once
+              // (after the key check an OpenRouter link would fail on).
+              if (!direct) assertOpenRouterConfigured();
+              await settleBeforeUpstream(req);
               const directPlan = directPlanFor(direct, outbound, true);
               if (directPlan === false) continue;
               const directBody = directPlan ? directPlan.body : null;
@@ -4799,12 +4824,17 @@ function makeHandler(routeTier) {
     // What the call's discarded answers (an empty refusal or an empty-for-length
     // answer, on any link) cost: the recovery run is weighed against it too.
     let discardedUsd = 0;
-    const discard = (d) => { const c = d?.usage?.cost; discardedUsd += typeof c === "number" && Number.isFinite(c) && c >= 0 ? c : NaN; };
+    const discard = (d) => { const c = d?.usage?.cost; discardedUsd += typeof c === "number" && Number.isFinite(c) && c >= 0 ? c : NaN; if (typeof c === "number") noteRunUpstreamUsd(c); };
     for (const { model, flex, direct } of attempts) {
       // A model that refused on flex will refuse on default too - don't pay twice.
       if (model === refusedModel) continue;
       let outbound;
       try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
+      // The settle point (src/settle-first.js): this link is about to be
+      // called, so a run the server armed settles its payment here, once
+      // (after the key check an OpenRouter link would fail on).
+      if (!direct) assertOpenRouterConfigured();
+      await settleBeforeUpstream(req);
       const directPlan = directPlanFor(direct, outbound, false);
       if (directPlan === false) continue;
       const directBody = directPlan ? directPlan.body : null;

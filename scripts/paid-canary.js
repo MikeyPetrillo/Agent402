@@ -1952,16 +1952,15 @@ async function main() {
       appendFileSync(process.env.GITHUB_OUTPUT, `rail_status=${JSON.stringify(railStatus)}\n`);
     } catch { /* output file missing in local runs — ignore */ }
   }
-  const spentUsd = decision.rows.filter((r) => r.cls === "settled").reduce((s, r) => s + (r.priceUsd || 0), 0);
   console.log(`\npayer ${account.address}`);
-  console.log(`tools: ${decision.settled} settled, ${results.length - decision.settled} not | spent ~$${spentUsd.toFixed(3)} USDC on Base`);
+  console.log(`tools: ${decision.settled} settled, ${results.length - decision.settled} not`);
   if (decision.warnings.length) console.warn(`\nwarnings (non-blocking — upstream/data, not payments):\n  ${decision.warnings.join("\n  ")}`);
 
   if (decision.broken) {
     const balanceUsd = await baseUsdcBalanceUsd(account.address);
     if (classifyCanaryFailure(decision, { balanceUsd }) === "underfunded") {
       console.error(
-        `\nCANARY UNDERFUNDED — the Base burner is down to $${balanceUsd.toFixed(4)} USDC ` +
+        `\nCANARY UNDERFUNDED — the Base burner holds less USDC ` +
           `(cheapest failed leg costs more). Settlement itself is PROVEN this run ` +
           `(${decision.settled} tool settle(s) + the chain rails above). ` +
           `Top up ${account.address} on Base. Exiting 3 so this is filed as funding, not an outage.`
@@ -1970,7 +1969,7 @@ async function main() {
     }
     console.error(
       `\nPAID CANARY FAILED — buying looks broken:\n  ${decision.reasons.join("\n  ")}\n` +
-        `  (underfunded ruled out: live Base balance ${balanceUsd == null ? "UNREADABLE — see balance-read warnings above" : `$${balanceUsd.toFixed(4)}`})`
+        `  (underfunded ruled out: live Base balance ${balanceUsd == null ? "UNREADABLE — see balance-read warnings above" : "read, and it covers the cheapest failed leg"})`
     );
     process.exit(1);
   }
@@ -2016,8 +2015,8 @@ async function main() {
   if (unreadable.length) console.warn(`WARN  chain balance sweep: unreadable on ${unreadable.join(", ")} (all RPCs failed) — not treated as low`);
   if (baseLow || low.length) {
     const parts = [];
-    if (baseLow) parts.push(`Base $${endBalance.toFixed(4)} (low-water $${lowWater.toFixed(2)})`);
-    for (const c of low) parts.push(`${c.label} $${c.usd.toFixed(4)} (low-water $${(c.lowWater ?? chainLowWater).toFixed(2)})`);
+    if (baseLow) parts.push("Base under its low-water mark");
+    for (const c of low) parts.push(`${c.label} under its low-water mark`);
     console.warn(
       `\nCANARY BURNER LOW — ${parts.join(" · ")}. ` +
         `Top up ${account.address} before the leg(s) starve. Exiting 4 (green, funding warning).`

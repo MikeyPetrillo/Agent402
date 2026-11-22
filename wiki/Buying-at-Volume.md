@@ -32,7 +32,7 @@ An IPv6 /64 is one address. A stock x402 client sends one unpaid read and one pa
 - **`Idempotency-Key`:** the same key with the same credential, route, query and body returns the first 200 (`X-Idempotent-Replay: true`) with no second run and no second settlement; a copy that arrives while the first runs gets 409 `idempotent_request_in_flight` with `Retry-After: 2` (`src/idempotency.js`, store in `src/idempotency-store.js`).
 - **Implicit replay on EVM payments:** the signed payment (network, payer, nonce) is the key, so a re-sent payment returns the first answer marked `X-Replayed-Answer: 1`, except on identity-bound routes, routes with a lasting effect and streamed calls.
 - **Solana:** no implicit key; send `Idempotency-Key` with the exact payment header that went out the first time.
-- On x402 a response of 400 or above is not settled, so a retry after one costs nothing extra. Read `PAYMENT-RESPONSE` on each answer to see whether it settled.
+- On x402 a response of 400 or above is not settled, so a retry after one costs nothing extra. Read `PAYMENT-RESPONSE` on each answer to see whether it settled. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
 
 ## Slow calls
 
@@ -60,6 +60,8 @@ Every cap is checked before a payment is signed. The $5 defaults protect your ow
 | MPP `evm` charge | the same x402 settlement | not charged |
 | MPP Tempo pull | broadcast after the tool answers, only under 400 | not charged |
 | MPP Tempo push | final before the call runs | booked as a refund owed, repaid after on-chain proof |
+
+Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
 
 On the EVM chains and Tempo pull, a settlement whose outcome is not known when the call is answered is read on chain again; one that lands after a failed answer is booked as a refund owed and repaid after on-chain proof.
 

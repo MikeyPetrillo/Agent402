@@ -20,7 +20,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { WHY_POINTS, WHY_COMPARE, whyHomeClaims, whyJsonLd, whyDocsSectionHtml } from "../src/why.js";
+import { WHY_POINTS, WHY_COMPARE, whyHomeClaims, whyJsonLd, whyDocsSectionHtml, whyTextHtml } from "../src/why.js";
 import { llmsFullTxt } from "../src/seo.js";
 import { USE_CASES, useCaseCost } from "../src/use-cases.js";
 import { BADGE_STYLES } from "../src/badges.js";
@@ -340,7 +340,7 @@ try {
     ok(why.includes(`id="why-${w.id}"`) && why.includes(`<h3>${esc(w.t)}</h3>`), `/docs#why carries the ${w.id} row heading`);
     ok(typeof w.t === "string" && w.t.length <= 40, `/docs#why ${w.id} heading is short enough for one line (${w.t.length} chars)`);
     ok(typeof w.s === "string" && w.s.length > 20 && w.s.length <= 130 && why.includes(esc(w.s)), `/docs#why ${w.id} shows its one-sentence claim`);
-    ok(why.includes(esc(w.h)) && why.includes(esc(w.p)), `/docs#why ${w.id} keeps the full claim behind how it works`);
+    ok(why.includes(esc(w.h)) && why.includes(whyTextHtml(w.p)), `/docs#why ${w.id} keeps the full claim behind how it works`);
     ok(Array.isArray(w.links) && w.links.length >= 1 && w.links.length <= 2, `/docs#why ${w.id} shows one or two proof links on its row`);
     for (const [href] of [...w.links, ...(w.more || [])]) ok(why.includes(`href="${esc(href)}"`), `/docs#why ${w.id} links its proof ${href}`);
   }

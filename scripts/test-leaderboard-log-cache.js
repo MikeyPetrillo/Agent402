@@ -222,14 +222,51 @@ for (const step of [300, 1, 0, 2_400, 7]) {
   cache = restarted;
 }
 
-// Row cap: over it, the cache resets and the next scan is a full read.
+// Row cap: past it the cache keeps its newest rows and reads only the rest of
+// the window from the chain; the next scan is incremental, never a full read,
+// a restart reads the kept rows back, and the board is always a full read's.
 {
-  const tiny = newCache(mkdtempSync(join(tmpdir(), "lb-log-cap-")), { maxRows: 10 });
-  await cachedRead(tiny);
-  const second = await cachedRead(tiny);
-  const ref = await fullRead();
-  ok(second.snap.logCacheScan.mode === "full" && tiny.stats().overCap >= 1, "over the row cap the cache keeps nothing and reads in full");
-  ok(figures(second.snap) === figures(ref.snap), "with the same board");
+  const capDir = mkdtempSync(join(tmpdir(), "lb-log-cap-"));
+  const probe = newCache(mkdtempSync(join(tmpdir(), "lb-log-probe-")));
+  await cachedRead(probe);
+  const windowRows = probe.stats().rows;
+  const cap = Math.floor(windowRows * 0.6);
+  const tiny = newCache(capDir, { maxRows: cap });
+  const first = await cachedRead(tiny);
+  let ref = await fullRead();
+  const st1 = tiny.stats();
+  ok(figures(first.snap) === figures(ref.snap), "past the cap, the first scan's board equals a full read");
+  ok(st1.rows > 0 && st1.rows <= cap && st1.heldFrom != null && st1.overCap >= 1 && st1.cursor != null, `past the cap the cache keeps its newest ${st1.rows} of ${windowRows} rows from block ${st1.heldFrom} (cap ${cap})`);
+  const metaBody = JSON.parse(readFileSync(join(capDir, "lbtest-meta.json"), "utf8"));
+  ok(metaBody.v === 2 && metaBody.heldFrom === st1.heldFrom, "its stored meta names the held range (version 2: a build without it reads in full)");
+  for (const step of [300, 0, 1_100]) {
+    HEAD += step;
+    const start = HEAD - SPAN + 1;
+    const held = tiny.stats().heldFrom;
+    const inc = await cachedRead(tiny);
+    ref = await fullRead();
+    const groups = Math.ceil(listed.length / 200);
+    const bound = groups * (Math.ceil((step + 50) / 1_000) + 1) + groups * Math.ceil(Math.max(0, held - start) / 1_000);
+    ok(inc.snap.logCacheScan.mode === "incremental" && figures(inc.snap) === figures(ref.snap), `head +${step} past the cap: an incremental scan with the full read's board`);
+    ok(inc.calls <= bound && inc.calls < ref.calls, `head +${step} past the cap: ${inc.calls} call(s) (the head and the ${Math.max(0, held - start)} unheld blocks; a full read ${ref.calls})`);
+    ok(tiny.stats().rows <= cap, `and the cache stays under its cap (${tiny.stats().rows})`);
+  }
+  // A restart reads the pruned cache back: incremental, the same board.
+  HEAD += 60;
+  const restarted = newCache(capDir, { maxRows: cap });
+  const after = await cachedRead(restarted);
+  ref = await fullRead();
+  ok(after.snap.logCacheScan.mode === "incremental" && restarted.stats().resets === 0 && figures(after.snap) === figures(ref.snap), "a restart reads the pruned cache back and scans incrementally with the same board");
+  // Room again (a higher cap): the rest of the window is kept, and the next
+  // scan reads only the head.
+  const roomy = newCache(capDir, { maxRows: windowRows * 3 });
+  HEAD += 20;
+  await cachedRead(roomy);
+  ok(roomy.stats().heldFrom === null, "with room again the cache takes the rest of the window back");
+  HEAD += 20;
+  const headOnly = await cachedRead(roomy);
+  ref = await fullRead();
+  ok(headOnly.calls <= Math.ceil(listed.length / 200) && figures(headOnly.snap) === figures(ref.snap), `and the next scan reads only the head (${headOnly.calls} calls) with the same board`);
 }
 
 // The switch.

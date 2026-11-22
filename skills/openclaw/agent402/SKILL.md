@@ -81,7 +81,7 @@ Send the request normally. A priced tool answers `402 Payment Required` with:
 
 Pay one of them and retry: x402 clients send `PAYMENT-SIGNATURE`, MPP clients
 send `Authorization: Payment`. On x402 a failed call is not charged: payment settles
-only after the tool returns a successful answer.
+only after the tool returns a successful answer. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
 
 With the JavaScript SDK (`agent402-client`) and a standard x402 client:
 
@@ -165,5 +165,5 @@ If `/api/find` has no strong match, `POST /api/wish` with
 - `GET /api/pricing`: the full priced catalog in one call
 - `GET /.well-known/x402`: machine-readable service manifest
 - `GET /api/reliability`: uptime and error rates
-- MCP: `https://agent402.tools/mcp`, or `npx -y agent402-mcp@0.14.1`
+- MCP: `https://agent402.tools/mcp`, or `npx -y agent402-mcp@0.15.0`
 - Docs: https://agent402.tools/docs · Source: https://github.com/MikeyPetrillo/Agent402

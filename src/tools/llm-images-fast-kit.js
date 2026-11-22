@@ -49,6 +49,7 @@ import { parseMultipartFile } from "../multipart.js";
 import { imageSize, examplePngBase64 } from "./judge-preview-kit.js";
 import { bad, fetchOpenRouter, readUpstreamBody, throwUpstreamError, assertUpstreamBody, MARGIN, OPENROUTER_ATTRIBUTION, upstreamUserId, IMAGES_PATH, IMAGES_PRICE, stripBilling } from "./llm-gateway-kit.js";
 import { redactSecrets } from "./redact.js";
+import { SETTLE_FIRST_SENTENCE } from "../settle-first-copy.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { createHash } from "node:crypto";
 import { shared } from "../shared-limits.js";
@@ -679,7 +680,7 @@ export const IMAGES_FAST_TOOLS = [
     category: "llm",
     price: "$0.020",
     description:
-      `Edit an image with a prompt (model-backed) over x402 - OpenAI images.edit wire (reference images and a prompt in, inline base64 out) at $0.02 per picture. Send one to ${IMAGE_EDIT_MAX_REFS} PNG or JPEG reference images (${IMAGE_EDIT_MIN_SIDE} px a side or more, up to ${IMAGE_EDIT_MAX_REF_BYTES / 1048576} MB each) as base64 or data: URLs in JSON, or one as a multipart "image" file; the output is one JPEG of about one megapixel that follows the first reference's aspect ratio. Served by FLUX 3 Image Klein in about 10 seconds. No mask: describe the change in the prompt. n locked to 1; a failed generation is not charged on x402. Point any OpenAI SDK's images.edit() at base_url https://agent402.tools/v1.`,
+      `Edit an image with a prompt (model-backed) over x402 - OpenAI images.edit wire (reference images and a prompt in, inline base64 out) at $0.02 per picture. Send one to ${IMAGE_EDIT_MAX_REFS} PNG or JPEG reference images (${IMAGE_EDIT_MIN_SIDE} px a side or more, up to ${IMAGE_EDIT_MAX_REF_BYTES / 1048576} MB each) as base64 or data: URLs in JSON, or one as a multipart "image" file; the output is one JPEG of about one megapixel that follows the first reference's aspect ratio. Served by FLUX 3 Image Klein in about 10 seconds. No mask: describe the change in the prompt. n locked to 1; a failed generation is not charged on x402. ${SETTLE_FIRST_SENTENCE} Point any OpenAI SDK's images.edit() at base_url https://agent402.tools/v1.`,
     tags: ["image-edit", "edit-image", "images", "image-to-image", "inpainting", "retouch", "photo-edit", "flux", "klein", ...SHARED_TAGS],
     discovery: {
       bodyType: "json",

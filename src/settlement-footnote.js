@@ -1,3 +1,4 @@
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 // The one sentence a page says about a paid call that fails, shared by every
 // tool page and every integration page so the copies cannot drift apart.
 //
@@ -19,5 +20,5 @@ export const TEMPO_PUSH_EXCEPTION = "The exception is a Tempo push credential, a
  *  `tempoPush`: true where a Tempo push credential is offered. */
 export function failedCallFootnote({ rails = ["x402"], tempoPush = false } = {}) {
   const list = (Array.isArray(rails) && rails.length ? rails : ["x402"]);
-  return `A paid call that ends in any status of 400 or above is not charged over ${listWords(list)}: settlement runs after the tool and only on a successful response.${tempoPush ? ` ${TEMPO_PUSH_EXCEPTION}` : ""}`;
+  return `A paid call that ends in any status of 400 or above is not charged over ${listWords(list)}: settlement runs after the tool and only on a successful response.${SETTLE_FIRST_SENTENCE ? ` ${SETTLE_FIRST_SENTENCE}` : ""}${tempoPush ? ` ${TEMPO_PUSH_EXCEPTION}` : ""}`;
 }

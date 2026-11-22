@@ -335,5 +335,60 @@ inner = async () => new Response("{}");
 }
 globalThis.fetch = realFetch;
 
+// --- the settle point TAKES its unit, never only reads the ceiling -------------
+// (src/settle-first.js settleBeforeUpstreamHolding). Two armed runs reach
+// their settle points together with one unit left: one takes it and settles;
+// the other is refused before its payment is taken. The unit is the run's
+// call's own (no second unit taken), and it goes back when the payment does
+// not settle or the run ends without using it.
+{
+  const sf = await import("../src/settle-first.js");
+  const { hardCapHold } = await import("../src/upstream-hard-caps.js");
+  let current = null;
+  sf.setSettleFirstAmbient(() => current);
+  const used = () => hardCapStatus().upstreams.brave.usedToday;
+  process.env.HARDCAP_BRAVE_CALLS = "1";
+  _resetHardCaps();
+  let runs = 0, open;
+  const gate = new Promise((r) => { open = r; });
+  const armed = (run) => { const req = {}; sf.armSettleFirst(req, { run }); return req; };
+  const a = armed(async () => { runs++; await gate; }), b = armed(async () => { runs++; await gate; });
+  const settleAt = (req) => { try { return Promise.resolve(sf.settleBeforeUpstreamHolding(hardCapHold("brave"), req)); } catch (e) { return Promise.reject(e); } };
+  const both = Promise.allSettled([settleAt(a), settleAt(b)]);
+  open();
+  const [, rb] = await both;
+  const eb = rb.status === "rejected" ? rb.reason : null;
+  ok(runs === 1 && eb?.hardCap === true && eb.statusCode === 503 && used() === 1,
+    `two runs at their settle points with one unit left: one settles, the other is refused before any payment (runs ${runs}, ${eb?.statusCode}, used ${used()})`);
+  current = a;
+  const aCall = hardCapRefusalForHost("api.search.brave.com");
+  current = null;
+  const other = hardCapRefusalForHost("api.search.brave.com");
+  ok(aCall === null && other?.hardCap === true && used() === 1, `the settled run's call uses the unit its settle point took (no second unit); another call is refused (used ${used()})`);
+  sf.disarmSettleFirst(a);
+  ok(used() === 1, "a unit the call used stays counted when the run ends");
+
+  _resetHardCaps();
+  const c = armed(async () => { throw sf.settleFirstRefusal(null); });
+  let ec = null;
+  try { await sf.settleBeforeUpstreamHolding(hardCapHold("brave"), c); } catch (e) { ec = e; }
+  ok(sf.isSettleFirstRefusal(ec) && used() === 0, `a payment that does not settle gives its unit back (used ${used()})`);
+
+  _resetHardCaps();
+  const d = armed(async () => {});
+  await sf.settleBeforeUpstreamHolding(hardCapHold("brave"), d);
+  const held = used();
+  sf.disarmSettleFirst(d);
+  ok(held === 1 && used() === 0, `a unit held and never used is given back when the run ends (${held} -> ${used()})`);
+
+  _resetHardCaps();
+  const plain = {};
+  const r = sf.settleBeforeUpstreamHolding(hardCapHold("brave"), plain);
+  ok(r === undefined && used() === 0, "a run the server did not arm takes nothing at the settle point (its call takes its unit as before)");
+  sf.setSettleFirstAmbient(null);
+  delete process.env.HARDCAP_BRAVE_CALLS;
+  _resetHardCaps();
+}
+
 console.log(`\ntest-upstream-hard-caps: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -34,9 +34,12 @@
 // request goes once more without the field, and that fallback is counted.
 
 import { redactSecrets } from "./redact.js";
+import { SETTLE_FIRST_SENTENCE } from "../settle-first-copy.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
 import { ourKeyRefusedError, readUpstreamBody } from "../upstream-deadline.js";
+import { settleBeforeUpstreamHolding } from "../settle-first.js";
+import { hardCapHold } from "../upstream-hard-caps.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
@@ -189,6 +192,10 @@ function parseError(text) {
 async function callOpenAI(prompt, size, tierSlug, moderation = DEFAULT_MODERATION) {
   const key = OPENAI_KEY();
   if (!key) throw bad("OpenAI not configured", 503);
+  // THE SETTLE POINT (src/settle-first.js): after the input checks and the
+  // key check, before the paid images request (a unit of the daily usage
+  // ceiling taken first and held for the call). A run the server did not arm: nothing.
+  await settleBeforeUpstreamHolding(hardCapHold("openai"));
 
   const tier = TIERS[tierSlug];
   const body = {
@@ -304,7 +311,7 @@ function makeHandler(tierSlug) {
 const SHARED_TAGS = ["image", "ai", "generation", "openai", "text-to-image"];
 
 const MODERATION_PROP = { type: "string", enum: MODERATION_LEVELS, description: 'Content filtering level: "low" (sent by default, less restrictive) or "auto" (stricter). If the model does not take the setting, the call runs at the provider\'s standard level. The model provider\'s usage policies apply at either level; a prompt its content check refuses answers 400 and is not charged on x402.' };
-const MODERATION_COPY = ' The less restrictive "low" content filtering level is sent by default (send moderation "auto" for stricter filtering); if the model does not take the setting, the call runs at the provider\'s standard level. The model provider\'s usage policies still apply, and a refused prompt answers 400, not charged on x402.';
+const MODERATION_COPY = ` The less restrictive "low" content filtering level is sent by default (send moderation "auto" for stricter filtering); if the model does not take the setting, the call runs at the provider\'s standard level. The model provider\'s usage policies still apply, and a refused prompt answers 400, not charged on x402. ${SETTLE_FIRST_SENTENCE}`;
 
 export const IMAGE_GEN_TOOLS = [
   {

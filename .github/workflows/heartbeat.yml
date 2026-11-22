@@ -458,11 +458,11 @@ jobs:
           if [ -n "$LIVE" ]; then WEIGHTS="$LIVE"; SRC=live
           elif [ -n "$PAYAI_FALLBACK_WEIGHTS" ] && echo "$PAYAI_FALLBACK_WEIGHTS" | jq -e '(.avalanche > 0) and (.sei > 0)' >/dev/null 2>&1; then WEIGHTS="$PAYAI_FALLBACK_WEIGHTS"; SRC=fallback; echo "::warning::PayAI live pricing table unreadable - using the PAYAI_FALLBACK_WEIGHTS repo variable"
           else echo "::warning::PayAI credit watch skipped - the live pricing table is unreadable and no PAYAI_FALLBACK_WEIGHTS repo variable is set. Investigate."; exit 0; fi
-          echo "PayAI credit weights ($SRC): $WEIGHTS"
+          echo "PayAI credit weights ($SRC): read"
           CREDITS=$(curl -s --max-time 20 "$PROD/api/revenue/daily" | jq -e --arg cut "$CUT" --argjson w "$WEIGHTS" \
             '[.days[] | select(.day >= $cut) | select(.chain=="avalanche" or .chain=="sei") | (.extTx + .intTx) * $w[.chain]] | add // 0 | . * 100 | round / 100') \
             || { echo "::warning::PayAI credit watch UNREADABLE - /api/revenue/daily missing or unparseable. NOT skipping silently: investigate."; exit 0; }
-          echo "PayAI weighted credits since $CUT: $CREDITS (warn at $THRESH)"
+          if awk -v c="$CREDITS" -v t="$THRESH" 'BEGIN { exit !(c >= t) }'; then echo "PayAI weighted credits since $CUT: at or over the warn mark"; else echo "PayAI weighted credits since $CUT: under the warn mark"; fi
           TITLE="Scheduled check needs review: facilitator-allowance"
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if awk -v c="$CREDITS" -v t="$THRESH" 'BEGIN { exit !(c >= t) }'; then
@@ -493,7 +493,7 @@ jobs:
             echo "WARNING: CDP metering count unreadable from /api/revenue/daily - not treating that as fine"
             exit 0
           fi
-          echo "CDP-first-chain settles, rolling 30d: $COUNT (warn at $THRESH)"
+          if [ "$COUNT" -ge "$THRESH" ] 2>/dev/null; then echo "CDP-first-chain settles, rolling 30d: at or over the warn mark"; else echo "CDP-first-chain settles, rolling 30d: under the warn mark"; fi
           TITLE="Scheduled check needs review: facilitator-metering"
           OPEN=$(ISSUE_TITLE="$TITLE" ISSUE_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ISSUE_TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ISSUE_OWNER | ascii_downcase))][0].number // empty')
           if [ "$COUNT" -ge "$THRESH" ]; then

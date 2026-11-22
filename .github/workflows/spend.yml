@@ -18,7 +18,7 @@ run-name: "Spend: ${{ inputs.job || 'listing-pass (weekly)' }}"
 # left blank. An input a job does not name is ignored by that job.
 #
 # The scheduled canaries and monitors (paid-canary, algorand-rail-canary,
-# facilitator-mainnet-canary, tempo-*, heartbeat), deploy,
+# tempo-*, heartbeat), deploy,
 # refunds and wallet funding keep their own workflows.
 on:
   # The weekly listing pass (keeps our routes listed where buyers discover
@@ -136,6 +136,13 @@ on:
 
 permissions:
   contents: read
+
+# The log, step summaries and artifacts of a run on this repository are
+# public: under PUBLIC_LOG the scripts print dollar figures as words and
+# leave aggregate money keys out of the files they write
+# (scripts/lib/public-log.js).
+env:
+  PUBLIC_LOG: "1"
 
 jobs:
   # Do the paid reports still SAY anything? A research-max run once returned a
@@ -689,7 +696,7 @@ jobs:
         run: |
           mkdir -p /tmp/mint/scripts/lib /tmp/mint/client && cp "$GITHUB_WORKSPACE"/scripts/agentkit-live/package.json "$GITHUB_WORKSPACE"/scripts/agentkit-live/package-lock.json /tmp/mint/
           cp "$GITHUB_WORKSPACE"/scripts/mint-bazaar-rows.js /tmp/mint/scripts/
-          cp "$GITHUB_WORKSPACE"/scripts/lib/buyer-guard.js /tmp/mint/scripts/lib/
+          cp "$GITHUB_WORKSPACE"/scripts/lib/buyer-guard.js "$GITHUB_WORKSPACE"/scripts/lib/public-log.js /tmp/mint/scripts/lib/
           cp "$GITHUB_WORKSPACE"/client/known-assets.js /tmp/mint/client/
           cd /tmp/mint && npm ci --ignore-scripts --no-audit --no-fund
       - name: Buy each unlisted tool once and verify what came back
@@ -708,7 +715,7 @@ jobs:
           [ "$MINT_EXPENSIVE" = "true" ] && ARGS="$ARGS --expensive"
           [ -n "$MINT_ONLY" ] && ARGS="$ARGS --only $MINT_ONLY"
           cd /tmp/mint && env -i PATH="$PATH" HOME="$HOME" \
-            BURNER_KEY="$BURNER_KEY" POW_SECRET="${POW_SECRET}" \
+            BURNER_KEY="$BURNER_KEY" POW_SECRET="${POW_SECRET}" PUBLIC_LOG=1 \
             node scripts/mint-bazaar-rows.js $ARGS
       - name: Keep the mint records (route, status, tx; never a key)
         if: always()
@@ -786,8 +793,9 @@ jobs:
       # signing path here is the one already proven on this rail.
       - name: Install the pinned x402 client
         run: |
-          mkdir -p /tmp/sweep && cp "$GITHUB_WORKSPACE"/scripts/agentkit-live/package.json "$GITHUB_WORKSPACE"/scripts/agentkit-live/package-lock.json /tmp/sweep/
+          mkdir -p /tmp/sweep/lib && cp "$GITHUB_WORKSPACE"/scripts/agentkit-live/package.json "$GITHUB_WORKSPACE"/scripts/agentkit-live/package-lock.json /tmp/sweep/
           cp "$GITHUB_WORKSPACE"/scripts/seller-sweep.mjs "$GITHUB_WORKSPACE"/scripts/seller-verify-core.mjs /tmp/sweep/
+          cp "$GITHUB_WORKSPACE"/scripts/lib/public-log.js /tmp/sweep/lib/
           cd /tmp/sweep && npm ci --ignore-scripts --no-audit --no-fund
       - name: Sweep
         env:
@@ -805,7 +813,7 @@ jobs:
           fi
           cd /tmp/sweep && env -i PATH="$PATH" HOME="$HOME" \
             BURNER_KEY="$BURNER_KEY" AGENT402_OPERATOR_TOKEN="${AGENT402_OPERATOR_TOKEN}" SWEEP_LIMIT="$SWEEP_LIMIT" SWEEP_OFFSET="$SWEEP_OFFSET" SWEEP_MAX_USD="$SWEEP_MAX_USD" \
-            SWEEP_TOTAL_USD="$SWEEP_TOTAL_USD" SWEEP_LIVE="$SWEEP_LIVE" SWEEP_OUT=/tmp/sweep/sweep.json \
+            SWEEP_TOTAL_USD="$SWEEP_TOTAL_USD" SWEEP_LIVE="$SWEEP_LIVE" SWEEP_OUT=/tmp/sweep/sweep.json PUBLIC_LOG=1 \
             node seller-sweep.mjs
       - name: Keep the verdicts
         if: always()

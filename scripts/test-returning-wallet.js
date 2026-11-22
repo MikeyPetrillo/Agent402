@@ -352,6 +352,40 @@ const offerBytes = (o) => Buffer.byteLength(JSON.stringify(o));
   sale(P3, "pow");
   await L.salesLedgerFlush();
   ok(L.payerPaidDays(P3, 0) === 0, "a free proof-of-work call is not a paid day");
+  // The per-day spend floor: a UTC day counts only when the wallet spent at
+  // least the floor that day, so three days of the cheapest calls do not
+  // reach the bar. Sales are written on past days by holding the clock.
+  {
+    const realNow = Date.now;
+    const onDay = (payer, daysAgo, priceUsd) => {
+      const at = Math.floor(now / day - daysAgo) * day + 3_600_000;
+      Date.now = () => at;
+      try { L.recordSale({ slug: "hash", priceUsd, rail: "usdc", network: "eip155:8453", payer, tx: "0x" + randomBytes(32).toString("hex"), synthetic: false, wire: "x402" }); } finally { Date.now = realNow; }
+    };
+    const LOW = "0x" + tag + "44".repeat(16), HIGH = "0x" + tag + "55".repeat(16), SUM = "0x" + tag + "66".repeat(16);
+    for (const d of [2, 3, 4]) onDay(LOW, d, 0.001);
+    for (const d of [2, 3, 4]) onDay(HIGH, d, 0.05);
+    // Many small calls on one day add up: 0.03 + 0.02 is that day's 0.05.
+    for (const d of [2, 3, 4]) { onDay(SUM, d, 0.03); onDay(SUM, d, 0.02); }
+    await L.salesLedgerFlush();
+    const since = now - 30 * day;
+    ok(L.payerPaidDays(LOW, since) === 3, "CONTROL without a floor, three days of the cheapest calls are three paid days");
+    ok(L.payerPaidDays(LOW, since, 0.05) === 0, "three days under the floor are no paid day at all");
+    ok(L.payerPaidDays(HIGH, since, 0.05) === 3, "three days at the floor are three paid days");
+    ok(L.payerPaidDays(SUM, since, 0.05) === 3, "a day's sales are summed against the floor");
+    ok(L.payerPaidDays(HIGH, since, 0.06) === 0 && L.payerPaidDays(HIGH, since, 0) === 3, "the floor is the caller's");
+    // The module's read hands its floor to the ledger, and a wallet under it never qualifies.
+    R.__resetReturningWallet();
+    R.configureReturningWallet({ paidDays: (w, s, floor) => L.payerPaidDays(w, s, floor), isOurs: () => false, host: HOST });
+    ok(R.returningWalletConfig({}).minDaySpendUsd === 0.05, "the default floor is $0.05 a day");
+    ok(R.returningWalletConfig({ RETURNING_WALLET_MIN_DAY_SPEND_USD: "0.2" }).minDaySpendUsd === 0.2 && R.returningWalletConfig({ RETURNING_WALLET_MIN_DAY_SPEND_USD: "-1" }).minDaySpendUsd === 0.05 && R.returningWalletConfig({ RETURNING_WALLET_MIN_DAY_SPEND_USD: "abc" }).minDaySpendUsd === 0.05, "the floor is read, and a malformed one reads as the default");
+    ok(R.walletQualifies(LOW) === false, "a wallet with three sub-floor days does not qualify");
+    ok(R.walletQualifies(HIGH) === true && R.walletQualifies(SUM) === true, "wallets with three days at or above the floor qualify");
+    process.env.RETURNING_WALLET_PRICE = "on";
+    const s = R.returningWalletSentence();
+    ok(/at least \$0\.05 on each of 3 or more UTC days in the last 30/.test(s) && /at least \$0\.05 on each of 3 or more UTC days in the last 30/.test(R.returningWalletHeaderParams(DEF)[0].description), "the prose surfaces state the floor");
+    delete process.env.RETURNING_WALLET_PRICE;
+  }
   const rr = L.externalReturnRate({ days: 60, minPaidDays: 1, now: Date.now() + 1000 });
   ok(rr.payers >= 2 && rr.paidOneDayOnly >= 2 && rr.qualifying >= 2 && rr.paidAgainOnAnotherDay === rr.paidTwoDays + rr.paidThreeOrMoreDays && rr.windowDays === 60, `the return rate counts outside payers by paid days (${JSON.stringify(rr)})`);
   const rrAsync = await L.externalReturnRateAsync({ days: 60, minPaidDays: 1, now: Date.now() + 1000 });
