@@ -33,6 +33,12 @@ concurrency:
 permissions:
   contents: read
 
+# The log of a run on this repository is public: under PUBLIC_LOG the refund
+# plan names rows and prints dollar figures as words (scripts/lib/public-log.js),
+# as refund.yml does.
+env:
+  PUBLIC_LOG: "1"
+
 jobs:
   refund-settle-first:
     if: ${{ vars.REFUND_AUTO_SETTLE_FIRST == 'on' }}
