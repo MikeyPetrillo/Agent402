@@ -14,6 +14,14 @@ import { wantsShare, reserveShare, prepareShare, answerShareEnabled, SHARE_TTL_D
 const SHARE_OFFERED = answerShareEnabled();
 import { recordUpstreamCall } from "../stats.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { settleBeforeUpstreamUnless } from "../settle-first.js";
+import { hardCapReached, hardCapError } from "../upstream-hard-caps.js";
+
+// THE SETTLE POINT (src/settle-first.js): a run the server armed has its
+// payment settled here, after the handler's input checks and our key check,
+// before the paid upstream request; the daily usage ceiling is read first so
+// a ceiling refusal is never a settled charge. Any other run: nothing.
+const settleBeforeBrave = () => settleBeforeUpstreamUnless(() => (hardCapReached("brave") ? hardCapError() : null));
 
 const BRAVE_HOST = "https://api.search.brave.com/res/v1";
 
@@ -153,6 +161,7 @@ async function braveAnswerPost(query, opts = {}) {
   if (!token) {
     throw bad("Web answer is not configured on this deployment", 503);
   }
+  await settleBeforeBrave();
   meterBrave("/chat/completions", "answer");
   // The stream runs under its own cap and the handler budget; an abort while
   // it streams is the deadline it is (bodyUnderDeadline below).
@@ -277,6 +286,7 @@ async function braveGet(path, params, apiKey, caller) {
   if (!key) {
     throw bad("Web search is not configured on this deployment", 503);
   }
+  await settleBeforeBrave();
   const url = new URL(`${BRAVE_HOST}${path}`);
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));

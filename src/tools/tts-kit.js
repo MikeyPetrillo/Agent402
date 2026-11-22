@@ -60,6 +60,7 @@ import { mediaMeterEnabled, setMeterSentinel } from "../gateway-meter.js";
 import { createUnansweredTracker } from "../unanswered-rule.js";
 import { currentCallerKey } from "../request-timing.js";
 import { upstreamFetch, upstreamDeadline, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, KIND } from "../upstream-deadline.js";
+import { settleBeforeUpstream } from "../settle-first.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_SPEECH_URL = "https://openrouter.ai/api/v1/audio/speech";
@@ -193,6 +194,7 @@ export function validateInput(input, tierSlug) {
 async function callKokoro(text, voice, format, tierSlug) {
   const key = OPENROUTER_KEY();
   if (!key) throw bad("Speech gateway not configured (OPENROUTER_API_KEY unset)", 503);
+  await settleBeforeUpstream(); // the settle point (src/settle-first.js): after every input check, before the paid call
   const tier = TIERS[tierSlug];
   // OpenAI voice name -> Kokoro's own id, from the shared table.
   const nativeVoice = KOKORO?.map?.[voice] || KOKORO?.map?.alloy || "af_alloy";
@@ -367,6 +369,11 @@ async function callElevenLabs(text, voice, format, tierSlug, deadline) {
 async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
   const key = OPENROUTER_KEY();
   if (!key) throw Object.assign(bad("Speech gateway not configured (OPENROUTER_API_KEY unset)", 503), { outage: true });
+  // The settle point (src/settle-first.js): a run the server armed settles
+  // here, once, before its first paid speech call; a backup link awaits the
+  // same outcome. A payment that did not settle throws (no outage flag, so
+  // no backup is tried).
+  await settleBeforeUpstream();
   const wireFormat = WIRE_FORMATS.has(format) ? format : "pcm";
   // The cause is read before the shared helper maps the failure, because only
   // a connection that was never set up is certainly unbilled (an outage, so

@@ -57,6 +57,8 @@ import { answerLanguage } from "../text-language.js";
 import { parseMultipartFile } from "../multipart.js";
 import { loadMusicMetadata } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
+import { settleBeforeUpstream, settleBeforeUpstreamUnless, isSettleFirstRefusal } from "../settle-first.js";
+import { hardCapReached, hardCapError } from "../upstream-hard-caps.js";
 import { measureAudio, transcodeSpeech, inputFormatOf, SPEECH_CODECS } from "./media-kit.js";
 import { admissionCallerOf } from "../dispatch-caller.js";
 import { redactSecrets } from "./redact.js";
@@ -570,6 +572,10 @@ function rateLimited(res, message) {
 async function callOpenAI(audioBuffer, filename, model, language, probedDuration = null, timeoutMs = UPSTREAM_CAP_MS.default) {
   const key = OPENAI_KEY();
   if (!key) throw bad("OpenAI not configured", 503);
+  // The settle point (src/settle-first.js): after the audio was read, decoded
+  // and held to the tier's cap, before the paid transcription request (the
+  // daily usage ceiling read first). A run the server did not arm: nothing.
+  await settleBeforeUpstreamUnless(() => (hardCapReached("openai") ? hardCapError() : null));
 
   const form = new FormData();
   form.append("file", new Blob([audioBuffer]), filename);
@@ -638,6 +644,7 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
 async function callScribe(audioBuffer, filename, model, language, probedDuration = null, timeoutMs = UPSTREAM_CAP_MS.diarize, { diarize = true } = {}) {
   const key = OPENROUTER_KEY();
   if (!key) throw bad("Speech gateway not configured (OPENROUTER_API_KEY unset)", 503);
+  await settleBeforeUpstream(); // the settle point (src/settle-first.js), as in callOpenAI
   const form = new FormData();
   form.append("file", new Blob([audioBuffer]), filename);
   form.append("model", model);
@@ -792,6 +799,8 @@ async function transcribeWithRetry(buf, filename, tierSlug, language, diarize, p
   const startedAt = Date.now();
   let first;
   try { return await attempt(capMs); } catch (e) { first = e; }
+  // A payment that did not settle at the settle point ran nothing: its own answer.
+  if (isSettleFirstRefusal(first)) throw first;
   const cls = first?.sttRetry;
   if (!cls || (cls === "maybe-billed" && !twoBilledAttemptsWithinMargin(tierSlug, model, probedDuration))) throw finalFailure(first, { attempts: 1, diarize, req, named });
   const pause = Number.isFinite(first.sttWaitMs) ? first.sttWaitMs : retryKnobs.pauseMs();

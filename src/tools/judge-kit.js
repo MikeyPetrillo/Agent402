@@ -24,6 +24,7 @@ import { askDecisionOne, decisionOneEnabled, openRouterDecisionsEnabled, jevOpen
 import { capturePostHogGatewayUsage } from "../posthog.js";
 import { upstreamFetch, bodyUnderDeadline, withBudget, currentBudget, handlerBudgetMs, PAYMENT_WINDOW_BUDGET_MS, attributed, ATTRIBUTION, KIND } from "../upstream-deadline.js";
 import { noteJudgeBackend, noteJudgeWalk } from "../judge-timing.js";
+import { settleBeforeUpstream, isSettleFirstRefusal } from "../settle-first.js";
 
 // FOUR MODELS, one answer shape. On /v1/judge TypeSafe's Jev answers first,
 // then the same Jev version over OpenRouter (a second route to one model),
@@ -165,7 +166,11 @@ export function buildQuestions(questions, { allowBox = false } = {}) {
 // to the version we tested; "jev-preview" stays the buyer's explicit opt-in.
 export const JEV_PINNED = (process.env.JEV_MODEL || "jev-1.14.0").trim();
 export const upstreamJevModel = (m) => (m === "jev-preview" ? "jev-preview" : JEV_PINNED);
+// THE SETTLE POINT (src/settle-first.js): each backend call awaits it first,
+// after the request was validated; an armed run settles once, before its
+// first paid judgment call, and a later backend awaits the same outcome.
 async function callJev(body, fetchImpl = fetch) {
+  await settleBeforeUpstream();
   return post(ENDPOINT, keyOf(), { ...body, model: upstreamJevModel(body.model) }, fetchImpl, (j) => j?.answers && typeof j.answers === "object");
 }
 
@@ -174,11 +179,13 @@ async function callJev(body, fetchImpl = fetch) {
 const OPENROUTER_MODEL = { "decision-one": DECISION_ONE_MODEL, gemini: GEMINI_DECISION_MODEL };
 const openRouterModelOf = (b) => (b === "jev-openrouter" ? jevOpenRouterModel(JEV_PINNED) : OPENROUTER_MODEL[b]);
 async function callOpenRouter(b, body, fetchImpl = fetch) {
+  await settleBeforeUpstream();
   return askDecisionOne(body, { fetchImpl, timeoutMs: TIMEOUT_MS, model: openRouterModelOf(b) });
 }
 const openRouterBytes = (b, body) => decisionsRequestBytes(body, openRouterModelOf(b));
 
 async function callLuna(request, fetchImpl = fetch) {
+  await settleBeforeUpstream();
   return post(LUNA_ENDPOINT, openaiKey(), request, fetchImpl, (j) => Array.isArray(j?.answers));
 }
 
@@ -347,6 +354,8 @@ async function firstAnswer(order, attempt) {
       return { backend: b, out };
     }
     catch (e) {
+      // A payment that did not settle ran nothing: no other backend is tried.
+      if (isSettleFirstRefusal(e)) throw e;
       last = e;
       timed(() => noteJudgeBackend(b, performance.now() - t0, e?.mayBeBilled ? "unconfirmed" : "failed"));
       console.warn(`[judge] ${b} failed: ${String(e?.message || e).slice(0, 120)}`);
