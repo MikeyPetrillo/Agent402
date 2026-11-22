@@ -23,6 +23,7 @@ import {
   stripeEnabled, mintStripeChallenge, checkStripeCredentialBinding,
   createStripeGate, createStripeChallengeAppender, validateStripeCredential, checkGrantedToken,
   settleStripeCredential, unconfirmedCaptureDebt, STRIPE_UNCONFIRMED_TEXT,
+  STRIPE_CAPTURE_TIMEOUT_MS, STRIPE_RESEND_TIMEOUT_MS, scrubStripeErrorText,
 } from "../src/mpp-stripe.js";
 import { createReplayGuard } from "../src/replay-guard.js";
 import { fullAnswerMiddleware } from "../src/full-answer.js";
@@ -553,15 +554,140 @@ for (const seam of [true, false]) {
   const action = await direct(() => ({ status: "requires_action" }));
   ok(action.ok === false && action.unconfirmed !== true, "settle: a PaymentIntent that requires action took no money: definitive");
   // A first send answered from Stripe's record belongs to an earlier request
-  // with this credential: refused, and never served a second time.
+  // with this credential: never served a second time, and, because what the
+  // earlier request took is not known here, not confirmed: named by its
+  // PaymentIntent, so the row it books is read back (section K).
   {
     const st = stubStripe(() => ({}));
     const cred = tokenCred("spt_twice");
     const one = await settleStripeCredential(cred, { client: st });
     const two = await settleStripeCredential(cred, { client: st });
-    ok(one.ok === true && two.ok === false && two.unconfirmed !== true && st.sends.length === 2 && st.intents.size === 1, "settle: a credential captured by an earlier request is refused on its first send, not served again");
+    const piId = [...st.intents.values()][0]?.id;
+    ok(one.ok === true && two.ok === false && two.unconfirmed === true && two.replayed === true && two.reference === piId && st.sends.length === 2 && st.intents.size === 1, `settle: a credential captured by an earlier request is not served again and is unconfirmed under that PaymentIntent, never "nothing charged" (${JSON.stringify({ ok: two.ok, unconfirmed: two.unconfirmed, reference: two.reference })})`);
+    // A replayed PaymentIntent that took no money stays definitive.
+    const st2 = stubStripe(() => ({ status: "canceled" }));
+    const cred2 = tokenCred("spt_twice_canceled");
+    await settleStripeCredential(cred2, { client: st2 });
+    const again = await settleStripeCredential(cred2, { client: st2 });
+    ok(again.ok === false && again.unconfirmed !== true, "settle: a replayed PaymentIntent that took no money is definitive");
+  }
+  // The capture's own bounds: the first send waits STRIPE_CAPTURE_TIMEOUT_MS
+  // (not the SDK's 80 s), the second STRIPE_RESEND_TIMEOUT_MS; together they
+  // hold the buffered answer at most 30 s.
+  {
+    const st = stubStripe((spt, n) => (n === 1 ? { error: noAnswer() } : {}));
+    const r = await settleStripeCredential(tokenCred("spt_bounds"), { client: st });
+    ok(r.ok === true && st.sends.length === 2 && st.sends[0].options.timeout === STRIPE_CAPTURE_TIMEOUT_MS && st.sends[1].options.timeout === STRIPE_RESEND_TIMEOUT_MS && st.sends[0].options.maxNetworkRetries === 0, `settle: the first send carries its own timeout (${st.sends[0].options.timeout}) and the second its own (${st.sends[1].options.timeout})`);
+    ok(STRIPE_CAPTURE_TIMEOUT_MS + STRIPE_RESEND_TIMEOUT_MS <= 30_000, `settle: a capture holds the answer at most 30 s (${STRIPE_CAPTURE_TIMEOUT_MS + STRIPE_RESEND_TIMEOUT_MS} ms)`);
+  }
+  // Stripe's error text on a 409 names the idempotency key, which carries the
+  // payment token: neither reaches the operator log.
+  {
+    const cred = tokenCred("spt_secretish_token");
+    const chId = Credential.deserialize(cred).challenge.id;
+    const key = `mpp_${chId}_spt_secretish_token`;
+    const conflict = await settleStripeCredential(cred, { client: stubStripe(() => ({ error: stripeErr(`Keys for idempotent requests can only be used with the same parameters they were first used with. Try using a key other than '${key}' if you meant to execute a different request.`, "StripeIdempotencyError", 409) })), resendTimeoutMs: 200 });
+    ok(conflict.unconfirmed === true && !conflict.error.includes("spt_secretish_token") && !conflict.error.includes(key) && /idempotency key/.test(conflict.error) && /same parameters/.test(conflict.error), `settle: a 409's text keeps its words and drops the key and the token (${conflict.error.slice(0, 160)})`);
+    ok(scrubStripeErrorText("x spt_abc123 y mpp_q-w_spt_abc123 z") === "x [payment token] y [idempotency key] z", "settle: the scrub replaces a bare token and a whole key");
+  }
+  // At the gate: the same credential presented again after its claim was lost
+  // (another container, an expired claim) runs, and its capture is answered
+  // from the earlier request's record: the buyer is told the charge is not
+  // confirmed and the PaymentIntent is booked for review.
+  {
+    const st = stubStripe(() => ({}));
+    const bookedR = [];
+    const mk = () => {
+      const app = express();
+      app.use(createStripeGate({ ...GATE, replayGuard: createReplayGuard(),
+        validate: async (auth) => ({ ok: true, validation: { spt: Credential.deserialize(auth).payload.spt } }),
+        settle: (auth) => settleStripeCredential(auth, { client: st, resendTimeoutMs: 200 }),
+        onUnconfirmed: (req, res, info) => { bookedR.push(info); },
+      }));
+      app.post("/paid", (req, res) => res.status(200).json({ answer: "served" }));
+      return app;
+    };
+    const one = await listen(mk()), two = await listen(mk());
+    const cred = tokenCred("spt_lost_claim");
+    const e0 = console.error, w0 = console.warn, l0 = console.log; console.error = () => {}; console.warn = () => {}; console.log = () => {};
+    let first, second;
+    try {
+      first = await fetch(`${one.url}/paid`, { method: "POST", headers: { Authorization: cred } }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
+      second = await fetch(`${two.url}/paid`, { method: "POST", headers: { Authorization: cred } }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
+    } finally { console.error = e0; console.warn = w0; console.log = l0; one.s.close(); two.s.close(); }
+    {
+      const piId = [...st.intents.values()][0]?.id;
+      ok(first.status === 200 && second.status === 402 && second.body?.detail === STRIPE_UNCONFIRMED_TEXT && second.body?.details?.charged === "unconfirmed" && second.body?.answer === undefined, `gate: a capture answered from an earlier request's record says the charge is not confirmed, never that nothing was charged, and serves nothing (${second.status}, ${String(second.body?.detail).slice(0, 80)})`);
+      ok(bookedR.length === 1 && bookedR[0].reference === piId, `gate: it is booked for review under that PaymentIntent (${bookedR[0]?.reference} vs ${piId})`);
+    }
   }
 }
+
+// ---- K) the read-back of unconfirmed card rows (src/stripe-unconfirmed-readback.js) ----
+// A stub Stripe answers retrieve and search; the rows are real refund-ledger
+// rows booked by unconfirmedCaptureDebt.
+{
+  const { createUnconfirmedCardReadback, isUnconfirmedCardRow, UNCONFIRMED_READBACK_LEASE, UNCONFIRMED_READBACK_MAX_PER_PASS } = await import("../src/stripe-unconfirmed-readback.js");
+  const { recordRefundOwed, listRefunds, markRefundVoid, renoteOwedRefund, refundByEvidence } = await import("../src/refund-ledger.js");
+  const book = (o) => recordRefundOwed(unconfirmedCaptureDebt({ slug: "readback-route", priceUsd: 0.5, requestId: `rb-${o.tag}-123456`, reference: o.reference || null, challengeId: o.challengeId || null }));
+  const pis = new Map([
+    ["pi_rb_charged", { id: "pi_rb_charged", status: "succeeded" }],
+    ["pi_rb_served", { id: "pi_rb_served", status: "succeeded" }],
+    ["pi_rb_canceled", { id: "pi_rb_canceled", status: "canceled" }],
+    ["pi_rb_failed", { id: "pi_rb_failed", status: "requires_payment_method" }],
+    ["pi_rb_processing", { id: "pi_rb_processing", status: "processing" }],
+    ["pi_rb_capture", { id: "pi_rb_capture", status: "requires_capture" }],
+    ["pi_rb_bychallenge", { id: "pi_rb_bychallenge", status: "succeeded", metadata: { mpp_challenge_id: "chRBfound" } }],
+  ]);
+  const calls = [];
+  const client = { paymentIntents: {
+    retrieve: async (id, params, options) => { calls.push({ op: "retrieve", id, options }); if (id === "pi_rb_down") throw new Error("socket hang up"); const pi = pis.get(id); if (!pi) throw Object.assign(new Error("No such payment_intent"), { statusCode: 404 }); return pi; },
+    search: async ({ query }, options) => { calls.push({ op: "search", query, options }); const id = /'([^']*)'$/.exec(query)?.[1]; return { data: [...pis.values()].filter((p) => p.metadata?.mpp_challenge_id === id) }; },
+  } };
+  for (const ref of ["pi_rb_charged", "pi_rb_served", "pi_rb_canceled", "pi_rb_failed", "pi_rb_processing", "pi_rb_capture", "pi_rb_down"]) book({ tag: ref, reference: ref, challengeId: "chX" });
+  book({ tag: "bych", challengeId: "chRBfound" });
+  book({ tag: "absent", challengeId: "chRBabsent" });
+  const ours = () => listRefunds({ status: "all", limit: 1000 }).filter((r) => r.slug === "readback-route");
+  const NOW = Date.now();
+  const rb = (clock, extra = {}) => createUnconfirmedCardReadback({ client, now: () => clock, log: () => {},
+    listOwed: () => listRefunds({ status: "owed", limit: 1000 }).filter((r) => r.slug === "readback-route"),
+    voidRow: (row, note) => markRefundVoid(row.id, note),
+    renoteRow: (row, from, to) => renoteOwedRefund(row.evidence, from, to),
+    saleStands: async (pi) => pi === "pi_rb_served", ...extra });
+  ok(ours().length === 9 && ours().every(isUnconfirmedCardRow), `readback: nine unconfirmed card rows are booked (${ours().length})`);
+  // A row younger than the minimum age is not read yet.
+  const young = await rb(NOW).pass();
+  ok(young.checked === 0 && calls.length === 0, `readback: a row just booked is not read before Stripe can finish (${young.checked})`);
+  // Ten minutes on: each row is read once; the absent challenge is still young for "nothing was made".
+  const p1 = await rb(NOW + 10 * 60_000).pass();
+  const by = (ev) => refundByEvidence(ev);
+  ok(p1.checked === 9 && calls.every((c) => c.options?.timeout > 0 && c.options.maxNetworkRetries === 0) && !calls.some((c) => /create|cancel|capture|refund/.test(c.op)), `readback: every row is read once, each read bounded, read-only on Stripe (${p1.checked}, ${calls.map((c) => c.op).join(",")})`);
+  ok(by("pi_rb_charged").status === "owed" && /confirmed charged/.test(by("pi_rb_charged").note) && !isUnconfirmedCardRow(by("pi_rb_charged")), `readback: succeeded with no sale stays owed for the refund, noted as confirmed charged (${by("pi_rb_charged").note})`);
+  ok(by("pi_rb_served").status === "void" && /booked as a sale/.test(by("pi_rb_served").note), "readback: succeeded and booked as a sale under that PaymentIntent (the earlier request was served) is voided");
+  ok(by("pi_rb_canceled").status === "void" && by("pi_rb_failed").status === "void", "readback: canceled and failed PaymentIntents are voided");
+  ok(by("pi_rb_processing").status === "owed" && isUnconfirmedCardRow(by("pi_rb_processing")) && by("pi_rb_capture").status === "owed" && isUnconfirmedCardRow(by("pi_rb_capture")) && by("pi_rb_down").status === "owed" && isUnconfirmedCardRow(by("pi_rb_down")), "readback: processing, requires_capture and a failed read stay unconfirmed for the next pass");
+  const bych = ours().find((r) => r.evidence.includes("|rb-bych-"));
+  ok(bych && bych.status === "owed" && /pi_rb_bychallenge/.test(bych.note), `readback: a row keyed on the request is found by its challenge id and confirmed under the PaymentIntent it names (${bych?.note})`);
+  const absent = ours().find((r) => r.evidence.includes("|rb-absent-"));
+  ok(absent.status === "owed" && isUnconfirmedCardRow(absent), "readback: a challenge no PaymentIntent carries is not voided inside the first hour");
+  ok(p1.voided === 3 && p1.charged === 2 && p1.failed === 1 && p1.unknown === 3, `readback: the pass counts what it did (${JSON.stringify(p1)})`);
+  // Past the hour, nothing found means nothing was made.
+  const p2 = await rb(NOW + 2 * 60 * 60_000).pass();
+  ok(ours().find((r) => r.evidence.includes("|rb-absent-")).status === "void" && /mpp_challenge_id=chRBabsent/.test(ours().find((r) => r.evidence.includes("|rb-absent-")).note) && p2.checked === 4, `readback: past the hour, a challenge no PaymentIntent carries is voided; only the four still unknown are read again (${p2.checked})`);
+  // Bounded per pass, and the rows read longest ago go first.
+  for (let i = 0; i < UNCONFIRMED_READBACK_MAX_PER_PASS + 5; i++) { pis.set(`pi_rb_many_${i}`, { id: `pi_rb_many_${i}`, status: "processing" }); book({ tag: `many${i}`, reference: `pi_rb_many_${i}`, challengeId: "chX" }); }
+  const r3 = rb(NOW + 3 * 60 * 60_000);
+  const a3 = await r3.pass(), b3 = await r3.pass();
+  ok(a3.checked === UNCONFIRMED_READBACK_MAX_PER_PASS && b3.checked === UNCONFIRMED_READBACK_MAX_PER_PASS, `readback: a pass reads at most ${UNCONFIRMED_READBACK_MAX_PER_PASS} rows (${a3.checked}, ${b3.checked})`);
+  const readTwice = [...r3._lastReadAt.keys()].length, dueRows = ours().filter(isUnconfirmedCardRow).length;
+  ok(dueRows > UNCONFIRMED_READBACK_MAX_PER_PASS && readTwice === dueRows, `readback: the second pass reads first the rows the first did not (${readTwice} of ${dueRows} read across two passes)`);
+  // The server starts it under its lease, with the ledger's own guarded changes.
+  const { readFileSync } = await import("node:fs");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const mod = readFileSync(new URL("../src/stripe-unconfirmed-readback.js", import.meta.url), "utf8");
+  ok(/startUnconfirmedCardReadback\(createUnconfirmedCardReadback\(/.test(server) && /markRefundVoid\(row\.id, note\)/.test(server) && /renoteOwedRefund\(row\.evidence, from, to\)/.test(server) && /leased\(UNCONFIRMED_READBACK_LEASE/.test(mod) && UNCONFIRMED_READBACK_LEASE === "stripe-unconfirmed-readback", "readback: the server starts the pass, leased, over the ledger's guarded void and renote");
+}
+
 
 // ---- wiring pin: server.js MUST bypass the x402 paywall for a validated
 // stripe request, exactly like req.tempoSettling. Without it a real card

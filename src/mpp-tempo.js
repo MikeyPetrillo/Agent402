@@ -59,6 +59,9 @@ import { SETTLE_FAULT, tempoRefusalFault } from "./settle-fault.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 import { noteTempoMultisigSettled, withdrawTempoMultisigProof } from "./rail-cover.js";
 import { challengeLifeShortfall, challengeLifeReason, presentChallengeWindow } from "./challenge-life.js";
+import { createCallerPlaces } from "./caller-places.js";
+import { IN_PROCESS_CALLER, ANONYMOUS_CALLER } from "./dispatch-caller.js";
+import { limiterKey } from "./rate-limit.js";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
 
@@ -1069,46 +1072,83 @@ export const KEYCHAIN_UNAVAILABLE = "unavailable";
  *  read not at all, so the next request reads again. A remembered "absent" is
  *  not reused for a credential WITHOUT an inline authorization (the key may
  *  have been installed since), which reads again. At most `maxInFlight` reads
- *  run at once. A new key past that joins a first-come queue and waits for a
- *  slot up to `queueWaitMs` (default: the read timeout); a slot that frees is
- *  handed to the head of the queue alone (no other waiter wakes, and a key
- *  that arrives later never takes it first). Unavailable if none frees in
- *  time, and at once, with no wait, when `maxWaiters` keys already wait.
+ *  run at once. A new key past that joins a queue and waits for a slot up to
+ *  `queueWaitMs` (default: the read timeout); a slot that frees is handed to
+ *  one waiter alone (no other waiter wakes): the one whose client address
+ *  holds the fewest reads and places, first come among equals, so a single
+ *  address's keys are read in the order they came. Unavailable if none frees
+ *  in time.
+ *
+ *  THE QUEUE IS SHARED FAIRLY BY CLIENT ADDRESS (`who`, the second argument:
+ *  `{ who }`, the address key the gate passes, an IPv6 one folded to its /64;
+ *  src/caller-places.js). Up to `maxWaiters` keys wait. Past that, a key from
+ *  an address that already holds a read or a place is unavailable at once,
+ *  with no wait (its own excess), and a key from an address holding nothing
+ *  is queued over the bound, nobody giving way, up to `hardWaiters` (twice
+ *  `maxWaiters` by default; a waiter holds a timer and a few small objects,
+ *  so that bound is a few hundred kilobytes at most). Only there does a
+ *  newcomer take a place: the newest of the address holding the most, while
+ *  one holds more than one (that waiter's read is unavailable). So the queue
+ *  is full of one address's keys only while nobody else waits, and a key from
+ *  another address gets a place unless `hardWaiters` addresses each already
+ *  hold one. A call that names no address (`who` absent: a direct call, not
+ *  the gate) counts under one shared key, as one caller.
  *  Exported for tests. */
-export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlMs = 60_000, negativeTtlMs = 15_000, maxInFlight = 16, maxEntries = 5000, queueWaitMs = null, maxWaiters = 64 } = {}) {
+export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlMs = 60_000, negativeTtlMs = 15_000, maxInFlight = 16, maxEntries = 5000, queueWaitMs = null, maxWaiters = 64, hardWaiters = 2 * maxWaiters } = {}) {
   const cache = new Map(); // "account:key" -> { state, until }
   const inFlight = new Map(); // "account:key" -> Promise<state>, queued or reading
   // THE READ SLOTS. `reading` counts reads under way; `queue` holds the keys
   // waiting for one, oldest first. A read that ends hands its slot straight
-  // to the head of the queue (`reading` stays as it was), so a key that
-  // arrives meanwhile finds the queue non-empty and queues behind it.
+  // to a waiter (`reading` stays as it was), so a key that arrives meanwhile
+  // finds the queue non-empty and queues. Each read and each waiting place is
+  // counted under its client address (`places`), which decides who is
+  // admitted past `maxWaiters` and who is handed a freed slot.
   let reading = 0;
   const queue = [];
-  let waitsGivenUp = 0;
-  const acquireSlot = () => {
-    if (reading < maxInFlight && queue.length === 0) { reading++; return true; }
-    if (queue.length >= maxWaiters) return false;
+  const places = createCallerPlaces();
+  let waitsGivenUp = 0, placesGivenUp = 0;
+  const acquireSlot = (who) => {
+    if (reading < maxInFlight && queue.length === 0) { reading++; places.hold(who); return true; }
+    const fitsWithin = (max) => (taken = []) => queue.length - taken.length < max;
+    const fits = fitsWithin(maxWaiters);
+    if (!fits()) {
+      const admitted = places.admit(queue, who, { fits, fitsHard: fitsWithin(Math.max(hardWaiters, maxWaiters)) });
+      if (admitted.refused) return false;
+      for (const i of admitted.taken.sort((a, b) => b - a)) queue.splice(i, 1)[0].evict();
+    }
     const waitMs = Number.isFinite(queueWaitMs) && queueWaitMs >= 0 ? queueWaitMs : accessKeyTimeoutMs();
+    places.hold(who);
     return new Promise((resolve) => {
-      const place = { done: false, timer: null };
+      const place = { who, done: false, timer: null };
       place.grant = () => { place.done = true; clearTimeout(place.timer); resolve(true); };
+      // Its place went to a newcomer from another address: unavailable now.
+      place.evict = () => { place.done = true; clearTimeout(place.timer); places.free(who); placesGivenUp++; resolve(false); };
       place.timer = setTimeout(() => {
         if (place.done) return;
         place.done = true;
         const at = queue.indexOf(place);
         if (at >= 0) queue.splice(at, 1);
+        places.free(who);
         waitsGivenUp++;
         resolve(false);
       }, waitMs);
       queue.push(place);
     });
   };
-  const releaseSlot = () => {
-    const next = queue.shift();
-    if (next) next.grant(); else reading--;
+  const releaseSlot = (who) => {
+    places.free(who);
+    let at = -1, least = Infinity;
+    for (let i = 0; i < queue.length; i++) {
+      const n = places.most(queue[i].who);
+      if (n < least) { least = n; at = i; }
+    }
+    if (at >= 0) queue.splice(at, 1)[0].grant(); else reading--;
   };
   const stateOf = (v) => (v === true || v === "active" ? "active" : typeof v === "string" ? v : "inactive");
-  const verify = async function verifyKeychainSender(keychain, now = Date.now()) {
+  const verify = async function verifyKeychainSender(keychain, opts = {}) {
+    // The second argument: `{ who, now }` (a bare number is `now`, as before).
+    const { who: whoIn = null, now = Date.now() } = typeof opts === "number" ? { now: opts } : (opts || {});
+    const who = typeof whoIn === "string" && whoIn ? whoIn : IN_PROCESS_CALLER;
     const account = lcAddress(keychain?.account);
     const accessKey = lcAddress(keychain?.accessKey);
     if (!account || !accessKey) return null;
@@ -1121,12 +1161,12 @@ export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlM
     // request for a key already waiting shares that place in the queue.
     let p = inFlight.get(k);
     if (!p) {
-      const slot = acquireSlot();
-      // The queue is full: no wait, no read (a 503 with Retry-After at the gate).
+      const slot = acquireSlot(who);
+      // The queue is full for this caller: no wait, no read (a 503 with Retry-After at the gate).
       if (slot === false) return KEYCHAIN_UNAVAILABLE;
       p = (async () => {
-        if (slot !== true && !(await slot)) return "unreadable"; // no slot within the wait: not remembered
-        try { return stateOf(await check({ account, accessKey })); } catch { return "unreadable"; } finally { releaseSlot(); }
+        if (slot !== true && !(await slot)) return "unreadable"; // no slot within the wait, or its place given up: not remembered
+        try { return stateOf(await check({ account, accessKey })); } catch { return "unreadable"; } finally { releaseSlot(who); }
       })();
       inFlight.set(k, p);
       p.then((state) => {
@@ -1145,12 +1185,27 @@ export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlM
   /** Keys waiting for a read slot now, and how many waits ran out. */
   verify.readsQueued = () => queue.length;
   verify.waitsGivenUp = () => waitsGivenUp;
+  /** Waiting places handed to a newcomer from another address. */
+  verify.placesGivenUp = () => placesGivenUp;
+  /** Addresses holding a read or a place now (0 when the queue is idle). */
+  verify.callersHolding = () => places.callers();
   return verify;
 }
 const verifyTempoKeychainSenderDefault = createKeychainSenderVerifier();
-/** The production keychain check (TEMPO_RPC_URL, cached). */
-export function verifyTempoKeychainSender(keychain) {
-  return verifyTempoKeychainSenderDefault(keychain);
+/** The production keychain check (TEMPO_RPC_URL, cached). `opts.who`: the
+ *  client address key the read's place in the queue is counted under. */
+export function verifyTempoKeychainSender(keychain, opts) {
+  return verifyTempoKeychainSenderDefault(keychain, opts);
+}
+
+/** The key a keychain read's place is counted under (createKeychainSenderVerifier):
+ *  the request's client address, an IPv6 one folded to its /64 as every
+ *  per-address bound folds it; a request whose address is the CDN edge's
+ *  (no proof of its client) names no one and is always a newcomer. Only the
+ *  address: no header a caller writes chooses it. */
+export function keychainCallerOf(req) {
+  if (req && typeof req === "object" && req.ip && req.cdnUnproven !== true) return `ip:${limiterKey(String(req.ip))}`;
+  return ANONYMOUS_CALLER;
 }
 
 /** Reason class + buyer words for a binding refusal (checked before any relay
@@ -1782,7 +1837,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // (KEYCHAIN_UNAVAILABLE), never as a verdict on the key.
       let timer = null;
       const late = new Promise((resolve) => { timer = setTimeout(() => resolve(KEYCHAIN_UNAVAILABLE), accessKeyTimeoutMs()); timer.unref?.(); });
-      keychainRead = Promise.race([Promise.resolve().then(() => verifyKeychainSender(senderInfo.keychain)).then((a) => (a === KEYCHAIN_UNAVAILABLE ? a : lcAddress(a)), () => KEYCHAIN_UNAVAILABLE), late]).finally(() => clearTimeout(timer));
+      keychainRead = Promise.race([Promise.resolve().then(() => verifyKeychainSender(senderInfo.keychain, { who: keychainCallerOf(req) })).then((a) => (a === KEYCHAIN_UNAVAILABLE ? a : lcAddress(a)), () => KEYCHAIN_UNAVAILABLE), late]).finally(() => clearTimeout(timer));
       keychainRead.then((a) => { if (lcAddress(a)) keychainSender = a; });
     }
     const SENDER_REFUSED = Symbol("sender-refused");
