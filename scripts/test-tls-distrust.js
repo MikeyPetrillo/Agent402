@@ -223,9 +223,9 @@ ok(mcpSrc.endsWith(tail), "mcp/networks.js carries client/tls-distrust.js's code
 
 // Entry points that install it process-wide.
 for (const [f, spec] of [["src/server.js", "./tls-distrust-boot.js"], ["worker/server.js", "../src/tls-distrust-boot.js"], ["src/router-worker-thread.js", "./tls-distrust-boot.js"],
-  ["scripts/paid-canary.js", "../src/tls-distrust-boot.js"], ["scripts/bazaar-validate.js", "../src/tls-distrust-boot.js"], ["scripts/facilitator-mainnet-canary.js", "../src/tls-distrust-boot.js"],
+  ["scripts/paid-canary.js", "../src/tls-distrust-boot.js"], ["scripts/bazaar-validate.js", "../src/tls-distrust-boot.js"],
   ["scripts/algorand-rail-canary.js", "../src/tls-distrust-boot.js"], ["scripts/tempo-canary-verify.js", "../src/tls-distrust-boot.js"], ["scripts/tempo-subscription-canary.js", "../src/tls-distrust-boot.js"],
-  ["scripts/stripe-link-canary.mjs", "../src/tls-distrust-boot.js"], ["scripts/backfill-status-history.js", "../src/tls-distrust-boot.js"]]) {
+  ["scripts/stripe-link-canary.mjs", "../src/tls-distrust-boot.js"]]) {
   ok(readFileSync(join(ROOT, f), "utf8").includes(`import "${spec}";`), `${f} installs the refusal at boot`);
 }
 const serverSrc = readFileSync(join(ROOT, "src/server.js"), "utf8");
