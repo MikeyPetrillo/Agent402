@@ -6,10 +6,12 @@ carries its own version on npm.
 
 ## v2.12.0 - 2026-11-22
 
-### 2026-11-22 (model calls paid before they run, settle deadlines and card captures)
+### 2026-11-22 (calls paid before they run, settle deadlines and card captures)
 Payments:
-- Some model calls are paid before they run; a failed one can be retried
-  free with the same payment, or is refunded.
+- Some calls are paid before they run; a failed one can be retried free with
+  the same payment, or is refunded. This covers model calls and web search
+  and answers, image generation, speech, transcription, judgment and code
+  runs.
 - On Base, Polygon, Arbitrum, Optimism, Avalanche, Celo, Monad and Sei, a
   USDC payment whose transfer is already on chain is served as soon as the
   chain shows it, without waiting for the facilitator's answer.
@@ -31,6 +33,9 @@ Tools:
 - Price webhooks now announce a watched tool that is retired or no longer
   served, once, with `to: null` and a status, and a new registration is
   always accepted.
+- New: vat-validate checks an EU VAT number's format and check digits
+  offline for all 27 member states plus XI (Northern Ireland), free with
+  proof of work.
 - market (GET /api/market/tick) joins the routes that are retired and answer
   410; market names crypto-price as the replacement.
 Surfaces:
@@ -38,6 +43,14 @@ Surfaces:
   rule.
 - The index also reads a manifest's items array.
 - Every /tools page now carries a sitemap lastmod.
+- Chain pages' activity charts and the revenue view now resume from their
+  stored scan state after a restart, reading only new blocks.
+
+### 2026-11-22 (wallet subscription renewals retried)
+Payments:
+- On a server with MPP subscriptions on, a wallet subscription whose renewal
+  fails is retried on a schedule through its grace window and canceled only
+  if every retry fails.
 
 ### 2026-11-22 (Tempo network fees paid by the server)
 Payments:

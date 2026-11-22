@@ -41,9 +41,9 @@ const WEBHOOK_PER_WALLET = priceWebhookMaxPerRegistrant();
 const ENTRIES = [
   {
     date: "2026-11-22",
-    title: "Model calls paid before they run, settle deadlines and card captures",
+    title: "Calls paid before they run, settle deadlines and card captures",
     items: [
-      "Payments: Some model calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.",
+      "Payments: Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. This covers model calls and web search and answers, image generation, speech, transcription, judgment and code runs.",
       "Payments: On Base, Polygon, Arbitrum, Optimism, Avalanche, Celo, Monad and Sei, a USDC payment whose transfer is already on chain is served as soon as the chain shows it, without waiting for the facilitator's answer.",
       "Payments: A settlement that does not confirm within its network's limit (60 seconds; 20 seconds on Celo) is answered as unconfirmed rather than held, and a transfer that lands afterwards is booked as owed and refunded.",
       "Payments: Sending the same payment again for the same call after its transfer lands returns the call's answer, and any refund booked for it is canceled.",
@@ -57,10 +57,20 @@ const ENTRIES = [
     title: "Price webhook notices, the seller manifest and a retirement",
     items: [
       "Tools: Price webhooks now announce a watched tool that is retired or no longer served, once, with `to: null` and a status, and a new registration is always accepted.",
+      "Tools: New: vat-validate checks an EU VAT number's format and check digits offline for all 27 member states plus XI (Northern Ireland), free with proof of work.",
       "Tools: market (GET /api/market/tick) joins the routes that are retired and answer 410; market names crypto-price as the replacement.",
       "Surfaces: /sell documents the manifest shape the index reads and the same-origin rule.",
       "Surfaces: The index also reads a manifest's items array.",
       "Surfaces: Every /tools page now carries a sitemap lastmod.",
+      "Surfaces: Chain pages' activity charts and the revenue view now resume from their stored scan state after a restart, reading only new blocks.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Wallet subscription renewals retried",
+    shownWhen: mppSubscriptionsEnabled,
+    items: [
+      "Payments: On a server with MPP subscriptions on, a wallet subscription whose renewal fails is retried on a schedule through its grace window and canceled only if every retry fails.",
     ],
   },
   {

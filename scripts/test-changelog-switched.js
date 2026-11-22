@@ -55,7 +55,7 @@ for (const s of SWITCHED) {
 {
   const { mppSubscriptionsEnabled } = await import("../src/mpp-subscriptions.js");
   const { walletSignInEnabled } = await import("../src/wallet-sign-in.js");
-  for (const [title, fn] of [["x402 by default for python-httpx clients", null], ["Wallet subscriptions for monitors", mppSubscriptionsEnabled], ["Wallet sign-in", walletSignInEnabled]]) {
+  for (const [title, fn] of [["x402 by default for python-httpx clients", null], ["Wallet subscriptions for monitors", mppSubscriptionsEnabled], ["Wallet subscription renewals retried", mppSubscriptionsEnabled], ["Wallet sign-in", walletSignInEnabled]]) {
     const e = CHANGELOG_ENTRIES.find((x) => x.title === title);
     ok(e && typeof e.shownWhen === "function" && (fn === null || e.shownWhen === fn), `the "${title}" entry is shown only while its switch reads on (shownWhen)`);
   }
