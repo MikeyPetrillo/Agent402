@@ -30,7 +30,6 @@ const registries = {
   "/a/domain/co.test": [200, { objectClassName: "domain", ldhName: "co.test", status: ["server delete prohibited"], remarks: [{ title: "Public suffix", description: ["This is a public suffix"] }], events: [{ eventAction: "last changed", eventDate: "2019-01-01T00:00:00Z" }] }],
   "/a/domain/outage.test": [404, "<html>Not Found</html>", "text/html"],
   "/a/domain/bare.test": [404, "", null],
-  "/a/domain/hop.test": [302, "", null, { location: "https://elsewhere.example/domain/hop.test" }],
   "/a/domain/odd.test": [200, "[1,2,3]"],
 };
 let throttleNext = 0; // answer this many lookups on registry B with 429
@@ -42,6 +41,10 @@ const srv = http.createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     return res.end(JSON.stringify({ services: [[["test", "co.test"], ["https://rdap-a.test/a/"]], [["slow"], ["https://rdap-b.test/b/"]], [["plain"], ["http://rdap-c.test/c/"]]] }));
   }
+  // A registry redirect to a host the bootstrap never named, which would
+  // answer "registered" if it were followed.
+  if (req.url === "/a/domain/hop.test") { res.writeHead(302, { location: `http://127.0.0.1:${port}/elsewhere/domain/hop.test` }); return res.end(); }
+  if (req.url.startsWith("/elsewhere/")) { res.writeHead(200, { "content-type": "application/rdap+json" }); return res.end(JSON.stringify({ objectClassName: "domain", ldhName: "hop.test", events: [{ eventAction: "registration" }] })); }
   if (req.url.startsWith("/b/")) {
     if (hangB) return; // never answers
     if (throttleNext > 0) { throttleNext--; res.writeHead(429, { "retry-after": "20" }); return res.end(); }
@@ -56,7 +59,7 @@ const srv = http.createServer((req, res) => {
 });
 await new Promise((r) => srv.listen(0, "127.0.0.1", r));
 const port = srv.address().port;
-const HOSTS = new Map([["data.iana.test", "/iana"], ["rdap-a.test", ""], ["rdap-b.test", ""], ["rdap-c.test", ""], ["elsewhere.example", "/elsewhere"]]);
+const HOSTS = new Map([["data.iana.test", "/iana"], ["rdap-a.test", ""], ["rdap-b.test", ""], ["rdap-c.test", ""]]);
 // The seam: an https URL the kit asks for, served by the stub. Redirect mode
 // and the abort signal pass through untouched.
 const stubFetch = (url, init) => {
