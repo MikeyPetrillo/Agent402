@@ -573,8 +573,11 @@ try {
     const i0 = counts.images;
     const got = [];
     for (let i = 0; i < 5; i++) got.push(await pay({ signer, path: IMG, body: imgBody() }));
-    ok(got.every((g) => g.status === 402 && g.body?.reason === "settlement-unconfirmed" && g.receipt?.errorReason === "settlement_unconfirmed") && counts.images - i0 === 5,
-      `a composite route, one wallet, five unconfirmed settles: each ran and was answered unconfirmed, none refused (${got.map((g) => `${g.status}/${g.body?.reason || g.text.slice(0, 60)}`).join(" ")}; ${counts.images - i0} runs)`);
+    // (This wallet has no paid sale on the books, so on an image tier its
+    // payment is settled before the upstream call, src/settle-first.js: a
+    // settle that ends unconfirmed starts no run. The answer is the same.)
+    ok(got.every((g) => g.status === 402 && g.body?.reason === "settlement-unconfirmed" && g.receipt?.errorReason === "settlement_unconfirmed") && counts.images - i0 === 0,
+      `a composite route, one wallet, five unconfirmed settles: each was answered unconfirmed, none refused, and no run was started for a payment that did not settle (${got.map((g) => `${g.status}/${g.body?.reason || g.text.slice(0, 60)}`).join(" ")}; ${counts.images - i0} runs)`);
     st.fallback = "ok";
     const served = await pay({ signer, path: IMG, body: imgBody() });
     ok(served.status === 200, `after recovery the same wallet is served on the composite route (${served.status} ${served.status === 200 ? "" : served.text.slice(0, 160)})`);

@@ -12,7 +12,7 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1095 variables in 113 groups.
+1097 variables in 113 groups.
 
 ## Contents
 
@@ -489,6 +489,8 @@ may still clamp it, and the read site is the reference.
 | `GATEWAY_SETTLE_BREAKER_OVERRUN_ALARM` | Gateway settle breaker overrun alarm. |  | `src/gateway-settle-breaker.js` |
 | `GATEWAY_SETTLE_BREAKER_UNKNOWN_MAX` | Gateway settle breaker unknown maximum. |  | `src/gateway-settle-breaker.js` |
 | `GATEWAY_SETTLE_BREAKER_WINDOW_MS` | Gateway settle breaker window, in milliseconds. |  | `src/gateway-settle-breaker.js` |
+| `GATEWAY_SETTLE_FIRST` | On by default; `off` settles every paid call after its handler. On, a call on a model route from a wallet with no paid sale on the books, or from a wallet holding calls that did not settle, has its payment settled before the upstream work (src/settle-first.js). |  | `src/gateway-settle-breaker.js` |
+| `GATEWAY_SETTLE_FIRST_UNSETTLED_MAX` | Calls on the model routes that did not settle (default 2, at least 1) a wallet, or one signed authorization, may hold with no settled call since before its next calls settle before the upstream work. |  | `src/gateway-settle-breaker.js` |
 | `GATEWAY_WITHDRAW_ALERT_USD` | Gateway withdraw alert, in USD. |  | `src/gateway-nanopayments.js` |
 
 ## HANGUP

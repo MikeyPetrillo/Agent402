@@ -160,6 +160,56 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   run stays as an outcome and never erases failures; a payer is blocked at
   `COMPOSITE_GUARD_MAX_FAILS` only while failures are more than `COMPOSITE_GUARD_MIN_FAIL_SHARE`
   (default 0.5) of its outcomes, and at `COMPOSITE_GUARD_HARD_MAX` (default 10) whatever it settled.
+- **Settle first (the one exception to handler-first):** `src/settle-first.js`, on by default,
+  `GATEWAY_SETTLE_FIRST=off` settles every run after its handler. On the routes in
+  `SETTLE_FIRST_SLUGS` (server.js: every `/v1` chat, Messages, Responses and generateContent tier
+  and the metered tier, embeddings, rerank, speech, `/v1/images/generations` and the fast, pro and
+  edit image tiers; not video, not reports, search, answer or other media), `settleFirstPlanFor`
+  arms a run when all hold: the payment is an x402 `exact` payment this request verified
+  (`settleFirstNetworkOf`: EVM, the MPP evm wire, Solana, Algorand, Stellar; never `upto`, a
+  payment channel, a Circle Gateway batched payment, Tempo, card, credits, proof-of-work or a
+  trial), it holds no first-call allowance grant, and the settle breaker names the buyer
+  (`gatewaySettleFirstDue`). **Who:** `never-settled`, a wallet with no settled call in the
+  breaker's window and no paid sale on the books (`payerHasPaidSale`; a sale is a served,
+  settled call, so a charge that was owed back is not one; the ledger is durable and shared
+  across replicas through the state database, its mirror at most a refresh behind another
+  container, and a ledger that cannot answer, or none registered, reads `history-unread` and
+  settles first, since that answer refuses nobody); `unsettled-runs`, a wallet (per network)
+  holding `GATEWAY_SETTLE_FIRST_UNSETTLED_MAX` (default 2) `/v1` runs that did not settle,
+  whatever the fault class (buyer, unknown, not-buyer; never a pending Gateway payment or a
+  withdrawn sub-cent refusal), with no settled call since; `authorization`, one signed
+  authorization holding as many, whatever the wallet's other payments did. A settled call (a
+  final 200, on any paid route the breaker hears) clears the wallet's count; counts are this
+  process's and, with Redis, the shared windows `gwb-uns` and `gwb-uns-auth` (a restart keeps
+  them only there; the window is the breaker's). The refusing counts above are unchanged, and
+  an upfront settle that fails is recorded exactly like one that failed after a handler.
+  **When:** at the run's settle point, `settleBeforeUpstream`, which `fetchOpenRouter`,
+  `fetchDirectUpstream`, each chat, Messages and Responses attempt and the embeddings, rerank and
+  speech handlers await before a paid upstream call. Everything a handler checks first (the
+  breaker consult, validation, the unknown-model and size refusals, a cache hit) still answers
+  before any settlement is asked for on x402; an armed run that never reaches the point is
+  settled after its handler as before (`notReached` on the operator view). The request is disarmed when its handler
+  ends, so nothing that inherited its scope settles later. **How:** `settleVerifiedPaymentFirst`
+  (payments.js) calls the vendor's own `processSettlement` with the payment kept by an
+  afterVerify hook, so every settle hook runs once (blocklist, client-gone, authorization
+  claim, settle-sent mark, fallback chain, late book, coverage release); the vendor's call
+  after the handler is answered with that settlement (`installSettleFirst`), never a second
+  settle. The 402, its accepts and the Bazaar metadata are untouched and no payment flow is
+  declared. A payment that does not settle gets the paywall's settle-failure 402 and receipt
+  (`sendSettleFirstRefusal`), nothing run, nothing charged; a buyer already gone gets a 499
+  and no settle. **After the settlement** the receipt (`success: true`) is on the response
+  whatever its status: a 4xx/5xx is booked owed by the charged-failure recorder and an
+  undelivered answer by the hang-up recorder, both with the note
+  `settle-first-failed: answer http <status>` or `settle-first-failed: answer not delivered`
+  (`isSettleFirstFailedRefund`; the row holds the route, network, payer, the amount taken and
+  the settlement transaction as evidence); the failure body is restated
+  (`src/settle-first-body.js`: `charged: true`, `refundOwed: true`, `payment`, `transaction`,
+  `refundStatusUrl`); `chargeCancelledForClientGone` reads false, so no ticket forgives the
+  charge and none of the forgiveness budget is spent on it; the undelivered answer is kept for
+  the same payment sent again, which voids the debt when it is served. Counts by reason and
+  outcome are on the operator view of `/api/gateway-status` (`settleFailures.settleFirst`), one
+  `[settle-first]` log line per settlement (20 a minute, then a summary); nothing public.
+  Suite: `scripts/test-settle-first.js` (both orders, every rail, every failure class).
 - **Runs in flight are covered together:** `src/inflight-cover.js` (`admitCoveredRun`), called
   through `admitPaidRun` (server.js) before the breaker consult on EVERY mount of a paid handler that
   is not proof-of-work payable: the kit dispatcher, and `withToolCallLog` for the six bespoke content

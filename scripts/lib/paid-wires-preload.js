@@ -20,6 +20,9 @@ import net from "node:net";
 const realFetch = globalThis.fetch;
 const stub = String(process.env.OPENROUTER_STUB_URL || "").replace(/\/+$/, "");
 const stripeStub = String(process.env.STRIPE_STUB_URL || "").replace(/\/+$/, "");
+// OPENAI_STUB_URL (when set): a fetch to api.openai.com is answered by that
+// local stub, same path and query (the embeddings route's upstream).
+const openaiStub = String(process.env.OPENAI_STUB_URL || "").replace(/\/+$/, "");
 const LOOPBACK = /^(127\.0\.0\.1|localhost|\[::1\]|::1)$/;
 export const BLOCKED_MARK = "[paid-wires-preload] BLOCKED outbound";
 const blocked = (what, host) => { try { process.stderr.write(`${BLOCKED_MARK} ${what} to ${String(host).slice(0, 120)}\n`); } catch { /* stderr closed */ } };
@@ -29,6 +32,7 @@ globalThis.fetch = async function paidWiresFetch(input, init) {
   try { u = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input?.url || String(input)); } catch { /* not a URL: let fetch say so */ }
   if (!u || LOOPBACK.test(u.hostname)) return realFetch(input, init);
   if (stub && /(^|\.)openrouter\.ai$/.test(u.hostname)) return realFetch(`${stub}${u.pathname}${u.search}`, init);
+  if (openaiStub && u.hostname === "api.openai.com") return realFetch(`${openaiStub}${u.pathname}${u.search}`, init);
   if (process.env.STRIPE_TOKEN_STUB === "on" && u.hostname === "api.stripe.com" && u.pathname.startsWith("/v1/shared_payment/granted_tokens/")) {
     return new Response(JSON.stringify({ id: u.pathname.split("/").pop(), usage_limits: { currency: "usd", max_amount: 1000000, expires_at: Math.floor(Date.now() / 1000) + 3600 }, usage_details: { amount_captured: { value: 0 } } }), { status: 200, headers: { "content-type": "application/json" } });
   }

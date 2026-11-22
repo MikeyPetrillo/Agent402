@@ -1253,6 +1253,47 @@ if (process.env.REDIS_URL) {
     ok(err?.statusCode === 429 && /This payment authorization/.test(err.message), `another replica's runs under one authorization refuse it here (${err?.statusCode}: ${String(err?.message).slice(0, 60)})`);
     await shared.windowClear("gwb-auth", ak);
   }
+  // SETTLE FIRST across replicas: a wallet with paid history whose /v1 runs
+  // did not settle on ANOTHER replica (gwb-uns; this process holds none) has
+  // its next run settled first here, one such run alone does not, and a
+  // settled call here clears the shared count for every replica. The same
+  // for one authorization (gwb-uns-auth). Nobody is refused by any of it.
+  {
+    await b._gatewaySettleBreakerReset();
+    b.setGatewaySettleBreakerPaidSaleReaderForTest(() => true, { loaded: () => true });
+    const W5 = "0x" + "1".repeat(40);
+    const reqOf = () => fakeReq({ from: W5, network: X });
+    const k5 = b.gatewaySettleBreakerCountKey(reqOf());
+    const now = Date.now();
+    const none = await b.gatewaySettleFirstDue(reqOf(), { now });
+    await shared.windowAdd("gwb-uns", k5, { windowMs: KEY_LIFE_MS, member: "other:0", now });
+    const one = await b.gatewaySettleFirstDue(reqOf(), { now });
+    await shared.windowAdd("gwb-uns", k5, { windowMs: KEY_LIFE_MS, member: "other:1", now });
+    const two = await b.gatewaySettleFirstDue(reqOf(), { now });
+    let refused = null;
+    try { await b.gatewaySettleBreakerCheck(reqOf(), { now }); } catch (e) { refused = e; }
+    ok(none === null && one === null && two?.reason === "unsettled-runs" && refused === null && b.gatewaySettleBreakerStatus().settleFirst.keysWithUnsettledRuns === 0,
+      `another replica's two unsettled runs put a wallet with history on settle first here (${JSON.stringify(two)}); one does not, this process holds neither, and the wallet is not refused`);
+    b.recordGatewaySettleSuccess(k5);
+    await sleep(150);
+    const cleared = await shared.windowReadMany([{ name: "gwb-uns", key: k5, windowMs: KEY_LIFE_MS }], { now: Date.now() });
+    ok((await b.gatewaySettleFirstDue(reqOf())) === null && cleared.ok && cleared.results[0].count === 0, "a settled call here clears the shared count: the wallet is back to handler first on every replica");
+    // Recorded here, read from the shared store: the failure's cause does not matter.
+    await b._gatewaySettleBreakerReset();
+    for (const fault of ["not-buyer", "unknown"]) b.recordGatewaySettleFailure(k5, Date.now(), { fault });
+    await sleep(150);
+    const written = await shared.windowReadMany([{ name: "gwb-uns", key: k5, windowMs: KEY_LIFE_MS }], { now: Date.now() });
+    ok(written.ok && written.results[0].count === 2, `a /v1 run that did not settle is written to the shared count whatever its cause (${written.results?.[0]?.count})`);
+    await b._gatewaySettleBreakerReset();
+    const h5 = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: X }, payload: { authorization: { from: W5, nonce: "0x" + "55".repeat(32) } } })).toString("base64");
+    const authReq5 = () => { const req = fakeReq({ from: W5, network: X }); req.header = (n) => (String(n).toLowerCase() === "payment-signature" ? h5 : undefined); return req; };
+    const ak5 = b.gatewaySettleBreakerAuthKey(authReq5());
+    for (let i = 0; i < 2; i++) await shared.windowAdd("gwb-uns-auth", ak5, { windowMs: KEY_LIFE_MS, member: `other:${i}`, now: Date.now() });
+    ok((await b.gatewaySettleFirstDue(authReq5()))?.reason === "authorization" && (await b.gatewaySettleFirstDue(reqOf())) === null, "another replica's two unsettled runs under one authorization settle it first here; the wallet's other payments are not affected");
+    await shared.windowClear("gwb-uns-auth", ak5);
+    await shared.windowClear("gwb-uns", k5);
+    b.setGatewaySettleBreakerPaidSaleReaderForTest(null);
+  }
   await b._gatewaySettleBreakerReset();
 }
 

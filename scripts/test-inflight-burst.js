@@ -234,6 +234,14 @@ try {
       { method: "GET", path: "/api/screenshot?url=http%3A%2F%2F127.0.0.1%3A9%2Fa" },
     ];
     const w = await rig.wallet("evm");
+    // The wallet has a paid sale on the books, so its chat call is settled
+    // after its handler and its balance is held while the call runs (a wallet
+    // with none has that payment settled before the model call:
+    // scripts/test-settle-first.js). It bought that one call with exactly its
+    // price, so no balance read made for it shows more than the wallet holds.
+    rig.fund(w, await rig.priceOf(w, SQL));
+    await ok((await rig.pay(w, SQL)).status === 200, "the holding wallet has one settled call on the books");
+    await sleep(300);
     rig.fund(w, await rig.priceOf(w, CHAT));
     const creds = [];
     for (const route of OUTSIDE) creds.push(await rig.credentialFor(w, route));
@@ -435,7 +443,13 @@ try {
     const creds = []; for (let i = 0; i < 12; i++) creds.push(await rig.credentialFor(c, CHAT));
     const c0 = rig.st.completions, t0 = Date.now(); const at = [];
     rs = await Promise.all(creds.map((cr) => rig.send(CHAT, cr).then((r) => { if (r.status !== 200) at.push(Date.now() - t0); return r; })));
-    await ok(rig.st.completions - c0 === UNREAD_MAX && tallyOf(rs)[200] === UNREAD_MAX && tallyOf(rs)[429] === 12 - UNREAD_MAX && Math.max(...at) < 2500, `/v1/chat/completions, a funded new wallet whose balance read takes 1.5 s: ${UNREAD_MAX} of 12 run and the rest are refused 429 after the one-second wait, none held (${JSON.stringify(tallyOf(rs))}; refusals by ${Math.max(...at)} ms)`);
+    // (A wallet with no paid sale on the books has each model call's payment
+    // settled before the model is called, src/settle-first.js, and a settled
+    // run leaves the allowance: so never more than the allowance is unpaid at
+    // once, every run that was served is paid, and a place a settlement
+    // freed inside the wait may be taken by one more call.)
+    const served = tallyOf(rs)[200] || 0;
+    await ok(served >= UNREAD_MAX && served <= UNREAD_MAX + 2 && rig.st.completions - c0 === served && rig.outcomesOf(c).settled === served && rig.peakOf(c) <= UNREAD_MAX && tallyOf(rs)[429] === 12 - served && Math.max(...at) < 2500, `/v1/chat/completions, a funded new wallet whose balance read takes 1.5 s: ${served} of 12 run, every one paid and never more than ${UNREAD_MAX} unsettled at once, and the rest are refused 429 after the one-second wait, none held (${JSON.stringify(tallyOf(rs))}; refusals by ${Math.max(...at)} ms)`);
     rig.st.readDelayFor = null;
     rig.st.llmDelayMs = 0;
     await sleep(1200);
@@ -511,7 +525,13 @@ try {
     const c0 = rig.st.completions;
     const rs = await rig.burst(w, CHAT, 40);
     const o = rig.outcomesOf(w);
-    await ok(rig.st.completions - c0 === UNREAD_MAX && o.settled === 1 && tallyOf(rs)[429] === 40 - UNREAD_MAX, `${wire}: a wallet that has never settled, holding one price, balance unreadable: 40 chat calls at once reached the model ${rig.st.completions - c0} times (the allowance of ${UNREAD_MAX}), one settled, the rest refused before the handler (${JSON.stringify(tallyOf(rs))})`);
+    // The allowance admits four. On an x402 exact wire a wallet with no paid
+    // sale on the books then has each payment settled before the model is
+    // called (src/settle-first.js): the one the wallet can pay for reaches
+    // the model, the other three are answered 402 with no model call. A
+    // Tempo pull is settled after its handler, so all four reach the model.
+    const reached = rig.st.completions - c0;
+    await ok(reached === (wire === "tempo" ? UNREAD_MAX : 1) && o.settled === 1 && tallyOf(rs)[429] === 40 - UNREAD_MAX, `${wire}: a wallet that has never settled, holding one price, balance unreadable: of 40 chat calls at once the allowance admits ${UNREAD_MAX}, ${reached} reached the model, one settled, the rest refused before the handler (${JSON.stringify(tallyOf(rs))})`);
   }
   for (const wire of ["evm", "stellar"]) {
     // A paid record, ONE price left, unreadable: the paid allowance, not an open door.

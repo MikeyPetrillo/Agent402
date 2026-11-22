@@ -703,6 +703,10 @@ proc = spawn(process.execPath, ["--import", "./scripts/lib/openrouter-stub-prelo
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_STUB_URL: `http://127.0.0.1:${OR_PORT}`, OPENROUTER_FLEX: "off",
     GATEWAY_SETTLE_BREAKER_MAX: "3", GATEWAY_SETTLE_BREAKER_WINDOW_MS: "600000", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "50",
+    // The scenarios below read the bounds on runs settled AFTER their handler;
+    // the count that moves a wallet with unsettled runs to settle first
+    // (scripts/test-settle-first.js reads that rule) is raised out of their way.
+    GATEWAY_SETTLE_FIRST_UNSETTLED_MAX: "99",
     COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "4",
     HANGUP_FORGIVE: "", HANGUP_FORGIVE_KEY_USD: "0.005", HANGUP_FORGIVE_GLOBAL_USD: "1", HANGUP_FORGIVE_FILE: "off", EVM_VALIDITY_FLOOR: "enforce", INFLIGHT_COVER: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
@@ -753,6 +757,19 @@ try {
   {
     const r = await pay(CHAT, wallet(0xa0), "10.1.0.1");
     ok(r.status === 200 && fac.settled >= 1, `a. control: a connected buyer is served and settles (${r.status})`);
+  }
+  // The scenarios below are about runs settled after their handler, which is
+  // how a wallet with a paid sale on the books is served on the model and
+  // image routes (a wallet with none has its payment settled before the
+  // upstream call: scripts/test-settle-first.js). So each scenario wallet
+  // buys one cheap call first. That call is on a pure-CPU route, which the
+  // settle breaker does not consult, so it adds no outcome to any count below.
+  {
+    const scenarioWallets = [0x1a21, 0x1a22, 0x1a23, 0x1a24, 0xb1, 0xb2, 0xc1, 0xd1, 0xf1, 0xf2].map(wallet);
+    const seeded = [];
+    for (const [i, w] of scenarioWallets.entries()) seeded.push((await pay(UUID, w, `10.1.250.${i + 1}`)).status);
+    ok(seeded.every((st) => st === 200), `each scenario wallet has one settled call on the books before its scenario (${seeded.join(",")})`);
+    await sleep(300);
   }
 
   // 2a2. The composite guard's burst alarm refuses nobody. Four different

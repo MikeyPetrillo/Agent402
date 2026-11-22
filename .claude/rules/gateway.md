@@ -22,6 +22,12 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   tier whose 402 is a per-request quote. `handlerInputOf(req)` (`src/handler-input.js`) is the
   one input object for pricing and serving; a body nested past `MAX_INPUT_DEPTH` (64) is refused
   there with a 400 before any handler walks it. Streams commit 200 only on the first `data:` frame.
+  Every paid upstream call of a gateway route is made behind a settle point
+  (`settleBeforeUpstream`, `src/settle-first.js`; `.claude/rules/payments.md`, Settle first):
+  `fetchOpenRouter` and `fetchDirectUpstream` await it, each attempt loop awaits it after the
+  link's own checks and the key check (`assertOpenRouterConfigured`), and the embeddings, rerank
+  and speech handlers await it before their own fetch. A new upstream call goes behind one, after
+  every check that can refuse the buyer's input.
   Every metered route (chat, Messages, Responses, generateContent) refuses a model id missing from the upstream's live model list with a 400
   before any payment gate (`meteredPrePaymentRefusal` in `src/gateway-prepayment.js`, one check over a
   row per wire: where the model id is, how the input is counted, the wire's own error object;

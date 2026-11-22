@@ -39,6 +39,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { carriesPaymentAttempt } from "./payment-attempt.js";
 import { NOT_CHARGED } from "./not-charged.js";
 import { PUSH_FAILURE_NOTE, PUSH_UNCLAIMED_OWED_NOTE, PUSH_UNCLAIMED_NOTE } from "./push-refusal-body.js";
+import { SETTLED_FIRST_FAILURE_NOTE } from "./settle-first-body.js";
 import { JOB_PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { PROGRESS_HEADER, registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
 import { newRunKey } from "./mcp-tasks.js";
@@ -59,6 +60,9 @@ export function failedRunSummary(status, body) {
   const obj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
   const levels = obj(body) ? [body, ...(obj(body.details) ? [body.details] : [])] : [];
   const head = status === 402 ? "The payment was not accepted, so the call did not run." : `The call ended with HTTP ${status}.`;
+  // A payment settled before the run (src/settle-first-body.js): the body
+  // says the charge is owed back, in its own words.
+  if (obj(body) && body.payment === SETTLED_FIRST_FAILURE_NOTE) return `The call ended with HTTP ${status}. ${SETTLED_FIRST_FAILURE_NOTE} The answer is in error.body.`;
   if (levels.some((l) => l.transferClaimed === true || l.charged === true)) return `The call ended with HTTP ${status}. ${PUSH_FAILURE_NOTE} The answer is in error.body.`;
   if (levels.some((l) => l.refundOwed === true)) return `${head} ${PUSH_UNCLAIMED_OWED_NOTE} The answer is in error.body.`;
   const gateNote = obj(body) && typeof body.payment === "string" && /\btransfer\b/i.test(body.payment) ? body.payment.slice(0, 600) : "";

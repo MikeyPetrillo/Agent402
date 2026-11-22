@@ -5,7 +5,8 @@ import { paymentMiddlewareFromHTTPServer, x402HTTPResourceServer } from "@x402/e
 import { registerPhaseTimingHooks } from "./paid-phase-timing.js";
 import { createGuardedInit, withGuardedInit } from "./x402-boot-init.js";
 import { scheduleBazaarRouteCheck, withBazaarHidden } from "./bazaar-route-check.js";
-import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
+import { HTTPFacilitatorClient, x402ResourceServer, FacilitatorResponseError } from "@x402/core/server";
+import { settledFirstOf } from "./settle-first.js";
 import { installAcceptOutputSchema, withOutputSchemaOnFirstAccept, outputSchemaFromExtensions, acceptOutputSchemaEnabled } from "./accept-output-schema.js";
 import { avmSubcentGateEnabled, installAvmSubcentGate, noteAvmSettleRefusal, startAvmSponsorshipRefresher, REFRESH_MS as AVM_SPONSORSHIP_REFRESH_MS } from "./avm-sponsorship.js";
 import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal, unconfirmedSettleRefusal, unconfirmedSettleReceipt, railTxOf } from "./payment-reject.js";
@@ -2704,6 +2705,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // wallet the discount was given to: checked with the other hooks that can
   // abort a settle, before the authorization claim.
   registerReturningWalletSettleHook(server);
+  // The verified payment, kept on its request for the settle point of a run
+  // that settles before its upstream work (src/settle-first.js).
+  registerVerifiedPaymentStash(server);
   registerWalletBlocklistHook(server);
   registerClientGoneSettleHook(server);
   registerInflightCoverSettleHook(server);
@@ -3073,6 +3077,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // The vendor's per-route bazaar check (an Ajv compile per route, one
   // synchronous loop) is moved off the boot path: see src/bazaar-route-check.js.
   const httpServer = new x402HTTPResourceServer(server, routes);
+  // Before the vendor middleware is built: it calls httpServer.processSettlement
+  // per request, so the settle-first echo below is what it reaches.
+  installSettleFirst(httpServer);
   const vendorMw = withBazaarHidden(routes, () => paymentMiddlewareFromHTTPServer(httpServer, undefined, undefined, false));
   scheduleBazaarRouteCheck(routes);
   if (mcpHttpServer) scheduleBazaarRouteCheck(mcpRouteConfigs);
@@ -3203,6 +3210,120 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     console.log(`[payments] rail re-read: ${candidates.join(", ")} dropped on a failed /supported read; ${failedReads.map((f) => f.label).join(", ")} read again in ${Math.round(recheck.firstMs / 1000)} s, then on a backoff up to ${Math.round(recheck.maxMs / 1000)} s`);
   }
   return withMcpTwins(withGuardedInit(vendorMw, init, httpServer), mcpVendorMw && withGuardedInit(mcpVendorMw, init, mcpHttpServer));
+}
+
+// ---- Settle first (src/settle-first.js) --------------------------------------
+//
+// @x402/express settles a verified payment after its handler answered. For a
+// run the server arms (the settle breaker names the buyers, server.js the
+// routes), the SAME settlement is made earlier, at the run's settle point,
+// through the same resource server: every settle hook registered above runs
+// once (the blocklist, the client-gone check, the authorization claim, the
+// settle-sent mark, the fallback chain, the late-settlement book, the
+// coverage release), with the payment and the requirement exactly as verify
+// matched them. Nothing about the 402, the offer or the accepted requirement
+// changes: the opt-in upfront flow is NOT declared on the wire, and a payment
+// is settled for the amount it was signed for, once.
+//
+// Two pieces:
+//   - the verified payment is kept on its request by an afterVerify hook
+//     (the vendor holds it in a closure this module cannot read);
+//   - httpServer.processSettlement, which the vendor calls after a handler
+//     answered under 400, answers a request already settled here with that
+//     settlement (its PAYMENT-RESPONSE headers), the way the vendor answers
+//     its own before-handler settlement, and settles nothing a second time.
+//     scripts/test-settle-first.js pins that one settle call is made.
+// A handler answer of 400 or above after such a settlement is not settled by
+// the vendor either way; the receipt the server put on the response at the
+// settlement stays on it, and the charge is booked as owed (server.js).
+const VERIFIED_PAYMENT = Symbol("a402.verifiedPayment");
+/** Keep a payment that verified on its request (own, non-enumerable), for the
+ *  settle point. Same request path as the client-gone hook
+ *  (transportContext.request.adapter.req): if a vendor bump moves it, nothing
+ *  is kept and every run settles after its handler, as before. */
+export function registerVerifiedPaymentStash(server) {
+  server.onAfterVerify((ctx) => {
+    try {
+      if (ctx?.result?.isValid !== true || !ctx.paymentPayload || !ctx.requirements) return;
+      const req = ctx?.transportContext?.request?.adapter?.req;
+      if (!req || typeof req !== "object") return;
+      Object.defineProperty(req, VERIFIED_PAYMENT, {
+        value: { paymentPayload: ctx.paymentPayload, requirements: ctx.requirements, declaredExtensions: ctx.declaredExtensions, request: ctx.transportContext.request },
+        enumerable: false, configurable: true,
+      });
+    } catch { /* nothing kept: the run settles after its handler */ }
+  });
+  return server;
+}
+function verifiedPaymentOf(req) {
+  const v = req && typeof req === "object" && Object.hasOwn(req, VERIFIED_PAYMENT) ? req[VERIFIED_PAYMENT] : null;
+  return v && typeof v === "object" ? v : null;
+}
+/** The namespaces of the networks a payment may settle first on: the x402
+ *  `exact` rails, where the settled amount is the signed amount. */
+export const SETTLE_FIRST_NAMESPACES = Object.freeze(["eip155", "solana", "algorand", "stellar"]);
+/**
+ * Can this request's payment be settled before its handler's upstream work?
+ * Only an x402 payment this server verified on this request, on the `exact`
+ * scheme (the settled amount is the amount signed, so settling earlier takes
+ * exactly what settling later would): never `upto` or a payment channel
+ * (their amount is named after the handler), never a Circle Gateway batched
+ * payment (settled off chain by its own client and book), and never while
+ * the settle function below is not installed. Returns the matched network
+ * (CAIP-2) or null.
+ */
+export function settleFirstNetworkOf(req) {
+  if (!settleFirstImpl) return null;
+  return settleFirstNetworkFor(verifiedPaymentOf(req));
+}
+/** The same rule over a verified payment's own fields (`requirements`,
+ *  `paymentPayload`), with no request: the matched network, or null. */
+export function settleFirstNetworkFor(v) {
+  if (!v || typeof v !== "object" || !v.requirements) return null;
+  if (String(v.requirements.scheme || "").toLowerCase() !== "exact") return null;
+  if (isGatewayBatchedPayment(v.paymentPayload) || isGatewayBatchedPayment(v.requirements)) return null;
+  const network = String(v.requirements.network || "");
+  return SETTLE_FIRST_NAMESPACES.includes(network.split(":")[0]) ? network : null;
+}
+let settleFirstImpl = null;
+/**
+ * Settle this request's verified payment now, before its handler's upstream
+ * work. Resolves `{ settled: true, result, requirements, paymentPayload,
+ * headers }` (headers: the PAYMENT-RESPONSE receipt to put on the response),
+ * or `{ settled: false, response }` with the settle-failure answer the vendor
+ * would have sent after the handler (status, headers, body). Never throws.
+ */
+export async function settleVerifiedPaymentFirst(req) {
+  if (!settleFirstImpl) return { settled: false, response: null };
+  return settleFirstImpl(req);
+}
+function installSettleFirst(httpServer) {
+  const settleNow = httpServer.processSettlement.bind(httpServer);
+  httpServer.processSettlement = async function settleOnceProcessSettlement(paymentPayload, requirements, declaredExtensions, transportContext, settlementOverrides, beforeHandlerSettlement, phase) {
+    const early = phase === "before-handler" ? null : settledFirstOf(transportContext?.request?.adapter?.req);
+    // The same payment object this request settled at its settle point: the
+    // vendor's own shape for a completed before-handler settlement.
+    if (early && early.paymentPayload === paymentPayload && early.result?.success === true) {
+      return { ...early.result, success: true, headers: httpServer.createSettlementHeaders(early.result), requirements: early.requirements };
+    }
+    return settleNow(paymentPayload, requirements, declaredExtensions, transportContext, settlementOverrides, beforeHandlerSettlement, phase);
+  };
+  settleFirstImpl = async (req) => {
+    const v = verifiedPaymentOf(req);
+    if (!v) return { settled: false, response: null };
+    let out;
+    try {
+      out = await settleNow(v.paymentPayload, v.requirements, v.declaredExtensions, { request: v.request }, undefined, undefined, "before-handler");
+    } catch (error) {
+      // The vendor's own two answers for a settle that threw.
+      if (error instanceof FacilitatorResponseError) return { settled: false, response: { status: 502, headers: {}, body: { error: error.message } } };
+      console.error(error);
+      return { settled: false, response: { status: 402, headers: {}, body: { error: "settlement_failed" } } };
+    }
+    if (!out || out.success !== true) return { settled: false, response: out?.response || { status: 402, headers: {}, body: { error: "settlement_failed" } } };
+    const { headers, requirements, ...result } = out;
+    return { settled: true, result, requirements, paymentPayload: v.paymentPayload, headers: headers || {} };
+  };
 }
 
 /**

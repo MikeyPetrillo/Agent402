@@ -5,6 +5,7 @@ import { RAILS_PAREN, RAILS_OR, RAILS } from "./rails.js";
 import { gatewayOfferPublic, gatewayOfferNetworkNames } from "./gateway-nanopayments.js";
 import { inputDepthRefusal } from "./handler-input.js";
 import { runAsCallerOf } from "./dispatch-caller.js";
+import { SETTLED_FIRST_FAILURE_NOTE } from "./settle-first-body.js";
 // The report/monitor ladder, DERIVED from the same tables that sell them.
 // No cycle: report-tiers is a leaf over the kit tier tables, and neither
 // checkout module imports this one.
@@ -1157,6 +1158,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
      *  answer (a verify refusal carries no receipt and keeps its offer).
      *  `settle` is the decoded PAYMENT-RESPONSE (or null), `body` the 402's
      *  JSON body. */
+    /** True for a route answer whose body says its payment was settled
+     *  before the run and is owed back (src/settle-first-body.js). */
+    const settledBeforeRun = (json) => !!json && typeof json === "object" && json.charged === true && json.refundOwed === true && json.payment === SETTLED_FIRST_FAILURE_NOTE;
     function failedSettleResult(def, r, body, settle) {
       const failed = Boolean(settle) && typeof settle === "object" && settle.success === false;
       const bare = !settle && !r.headers.get("payment-required") && body?.error === "settlement_failed";
@@ -1209,7 +1213,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       }
       if (r.status >= 400) {
         const detail = r.json ? JSON.stringify(withoutPaymentRequired(r.json)) : String(r.text || "").slice(0, 500);
-        return { content: [{ type: "text", text: `Agent402 (${def.slug}) HTTP ${r.status} - not charged: ${detail}` }], isError: true };
+        // A payment settled before the run (src/settle-first-body.js): the
+        // route's body says the charge is owed back, so this line does not
+        // say "not charged" over it.
+        return { content: [{ type: "text", text: `Agent402 (${def.slug}) HTTP ${r.status}${settledBeforeRun(r.json) ? "" : " - not charged"}: ${detail}` }], isError: true };
       }
       const receiptHeader = r.headers.get("payment-response");
       if (r.bytes) return withPaymentResponse(mcpBinaryResult({ slug: def.slug, bytes: r.bytes, contentType: r.contentType, headers: r.headers }), receiptHeader);
@@ -1310,7 +1317,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       }
       if (r.status >= 400) {
         const detail = r.json ? JSON.stringify(withoutPaymentRequired(r.json)) : String(r.text || "").slice(0, 500);
-        return { content: [{ type: "text", text: `Agent402 (${entry.def.slug}) HTTP ${r.status}${r.status >= 400 && r.status < 500 ? ` - not charged${pushClause(entry.def)}` : `${Boolean(credentialHeaderFromMeta(meta)) && r.status === 502 ? " - settlement normally runs only after a successful handler; check the paying wallet before paying again" : " - not charged (settlement runs only after a successful handler)"}${pushClause(entry.def)}`}: ${detail}` }], isError: true };
+        return { content: [{ type: "text", text: `Agent402 (${entry.def.slug}) HTTP ${r.status}${settledBeforeRun(r.json) ? "" : r.status >= 400 && r.status < 500 ? ` - not charged${pushClause(entry.def)}` : `${Boolean(credentialHeaderFromMeta(meta)) && r.status === 502 ? " - settlement normally runs only after a successful handler; check the paying wallet before paying again" : " - not charged (settlement runs only after a successful handler)"}${pushClause(entry.def)}`}: ${detail}` }], isError: true };
       }
       const receipt = receiptFromHeader(r.headers.get("payment-receipt"));
       const receiptMeta = receipt ? { [MCP_RECEIPT_META]: { ...receipt, ...(challengeIdFromMeta(meta) ? { challengeId: challengeIdFromMeta(meta) } : {}) } } : {};
