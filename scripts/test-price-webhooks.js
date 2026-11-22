@@ -36,6 +36,10 @@ import {
 import { hasLastingEffect } from "../src/lasting-effect-slugs.js";
 import { PRICE_WEBHOOK_TOOLS, registrantOf, makePriceWebhookHandler } from "../src/tools/price-webhook-kit.js";
 import { runAsCallerOf } from "../src/dispatch-caller.js";
+import { toolErrorFields } from "../src/tool-error-fields.js";
+import { errorCodeField } from "../src/stable-error-code.js";
+import { pushRefusalBody, PUSH_FAILURE_NOTE } from "../src/push-refusal-body.js";
+import { OWED_REPAID } from "../src/tempo-push-debts.js";
 
 let pass = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); pass++; };
@@ -230,6 +234,25 @@ try {
     try { await reg(8); } catch (e) { full = e; }
     ok(full && full.statusCode === 503 && full.retryAfter === FULL_RETRY_AFTER_SECONDS && full.charged === false && /nothing was charged/.test(full.message) && /retry later/.test(full.message), `at the hard bound with every subscription working, a new registration is refused 503 with Retry-After and charged: false (${full ? `${full.statusCode} ${full.message}` : "admitted"})`);
     ok(JSON.stringify(r.stored().subs) === before, "and no working subscription is removed, and nothing is stored for the refused one");
+    // The description states exactly this: a working subscription is never
+    // removed for room, and the full-store 503 comes before any settlement, so
+    // it is not charged on the rails that settle after the handler (x402, MPP
+    // evm, card, credits); it names no unscoped "not charged".
+    {
+      const d = PRICE_WEBHOOK_TOOLS[0].description;
+      ok(d.includes("subscriptions whose deliveries keep failing are removed; a working subscription never is."), "the description says a working subscription is never removed for room, the behavior above");
+      ok(d.includes("a new registration is refused with 503 and Retry-After before any settlement, so it is not charged on x402, MPP evm, card or credits.") && (d.match(/not charged/g) || []).length === 1, "the description scopes the full-store 503's not-charged claim to the rails that settle after the handler, once");
+    }
+    // A Tempo push payer's transfer was final before the call ran: the push
+    // gate's rewrite of this 503 (src/push-refusal-body.js) answers
+    // charged: true with the refund owed, and keeps no "nothing was charged".
+    {
+      const body = JSON.stringify({ error: full.message, tool: PRICE_WEBHOOK_SLUG, ...toolErrorFields(full), ...errorCodeField(503) });
+      ok(JSON.parse(body).charged === false, "control: the 503 as served to the other rails says charged: false");
+      const pushed = JSON.parse(pushRefusalBody(body));
+      ok(pushed.charged === true && pushed.refundOwed === true && pushed.transferClaimed === true && pushed.payment === PUSH_FAILURE_NOTE, `a Tempo push payer's 503 says charged: true and the refund is owed (${JSON.stringify({ charged: pushed.charged, refundOwed: pushed.refundOwed })})`);
+      ok(!/nothing was charged|not charged/i.test(pushed.error) && pushed.error.includes(OWED_REPAID) && /retry later/.test(pushed.error), `and its message says the transfer is owed back, not that nothing was charged (${pushed.error})`);
+    }
     // A registration through the deferred path (a paid or routed call) is refused the same way, with no pending mark stored.
     let fullPending = null;
     try { await r.pw.registerPending({ url: "https://h9.buyer.test/h" }, { known: KNOWN, registrant: "payer:0x0000000000000000000000000000000000000009" }); } catch (e) { fullPending = e; }
