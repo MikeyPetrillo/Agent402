@@ -394,9 +394,8 @@ the failure body says `charged: true`, `retry: "same-payment"`, the `transaction
 `refundStatusUrl` (`src/settle-first-body.js`). The same payment sent again to the same route and
 body (a credit kept by `src/idempotency.js`) is run with no settlement: its debt is held void
 before the run (`voidOwedForServe`), kept void when served, owed again otherwise; a hold whose run
-never ended is reopened by the held-claim sweep. The class alone is repaid automatically by
-`refund-settle-first.yml` (off until `REFUND_AUTO_SETTLE_FIRST=on`; the proof-checked
-`scripts/refund-run.js` with `REFUND_ONLY_CLASS`). An `upto` or Circle Gateway batched payment the
+never ended is reopened by the held-claim sweep. A row of the class still owed is repaid by the
+human-run `refund.yml`, like every other owed row; nothing repays it on a schedule. An `upto` or Circle Gateway batched payment the
 plan names is answered the route's own 402 with the exact accepts first, uncharged (option A).
 Never settled first: Tempo, card, credits, a first-call allowance grant. A new paid upstream call on
 a listed route goes behind a settle point, and a route joins the list only with a test that reads

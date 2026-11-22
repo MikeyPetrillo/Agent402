@@ -38,14 +38,6 @@
 //     partly sent or whose send was not confirmed) is held in its own bucket,
 //     printed with why, and released only by REFUND_INCLUDE_REVIEW_HOLDS=true
 //     (the repeat hang-up switch does not release it).
-//   * REFUND_ONLY_CLASS=settle-first-failed (the scheduled run,
-//     refund-settle-first.yml) repays only that class: a payment settled
-//     before its run whose run then failed. Every other row is held; so is a
-//     row of the class booked for an answer not delivered (the answer is
-//     kept for the same payment sent again), one younger than
-//     REFUND_MIN_AGE_MINUTES, and every row of a wallet owed more than
-//     REFUND_MAX_CLASS_ROWS_PER_PAYER of them. Every other rule here applies
-//     to it unchanged: the inbound proof, the claim, the caps.
 //   * a chain without an implemented sender or a configured key HOLDS its
 //     rows and says so. The debt stays on the ledger; nothing is written off.
 //   * marking paid requires the outbound tx hash, enforced server-side too.
@@ -140,38 +132,6 @@ const MAX_PER_PAYER = capUsd(process.env.REFUND_MAX_PER_PAYER_USD, "0.5", "REFUN
 // gas genuinely outweighs the debt, and the held rows say so out loud.
 const MIN_REFUND = capUsd(process.env.REFUND_MIN_USD, "0", "REFUND_MIN_USD");
 const ONLY_CHAIN = (process.env.REFUND_ONLY_CHAIN || "").trim(); // optional CAIP-2 filter
-
-/**
- * REFUND_ONLY_CLASS: a run that repays one class of debt and holds every
- * other row. The one class it names is SETTLE_FIRST_CLASS (a payment settled
- * before its run, src/settle-first.js, whose run then failed): the class the
- * scheduled run (refund-settle-first.yml) repays without a person approving
- * each run. Any other value refuses the run, so a typo never widens it.
- * Empty: every class, as every human-run dispatch is.
- */
-export const SETTLE_FIRST_CLASS = "settle-first-failed";
-export const REFUND_CLASSES = Object.freeze([SETTLE_FIRST_CLASS]);
-export function parseOnlyClass(raw) {
-  const v = String(raw ?? "").trim();
-  if (!v) return null;
-  if (!REFUND_CLASSES.includes(v)) throw new Error(`REFUND_ONLY_CLASS must be one of ${REFUND_CLASSES.join(", ")} or empty - refusing to run rather than send to rows it did not name`);
-  return v;
-}
-/** Is this row in the named class? (Its note starts with the class.) */
-export function rowInClass(row, cls) {
-  return typeof row?.note === "string" && row.note.startsWith(cls);
-}
-const ONLY_CLASS = parseOnlyClass(process.env.REFUND_ONLY_CLASS);
-// A class run leaves a debt this many minutes for the same payment to be
-// sent again (which voids it when served) before repaying it.
-const MIN_AGE_MINUTES = capUsd(process.env.REFUND_MIN_AGE_MINUTES, "0", "REFUND_MIN_AGE_MINUTES");
-// A class run holds every row of a payer owed more than this many rows of
-// the class (a pattern a person reads first); 0 holds none for it.
-const MAX_CLASS_ROWS_PER_PAYER = capUsd(process.env.REFUND_MAX_CLASS_ROWS_PER_PAYER, "0", "REFUND_MAX_CLASS_ROWS_PER_PAYER");
-export const CLASS_FILTER_HOLD = "not the class this run repays (REFUND_ONLY_CLASS)";
-export const CLASS_UNDELIVERED_HOLD = "an answer not delivered: kept for the same payment sent again; repaid by a human-run dispatch";
-export const CLASS_TOO_YOUNG_HOLD = "younger than this run's wait for the same payment to be sent again (REFUND_MIN_AGE_MINUTES)";
-export const CLASS_PAYER_ROWS_HOLD = "this wallet is owed more rows of the class than a scheduled run repays (REFUND_MAX_CLASS_ROWS_PER_PAYER) - review, then repay by a human-run dispatch";
 // When this process started: the time budget below is counted from here.
 const STARTED_AT = Date.now();
 
@@ -371,10 +331,6 @@ export function planRefunds(rawRows, {
   includeRepeatHangups = false,
   includeReviewHolds = false,
   senders = {},              // family -> truthy when a key+implementation exists
-  onlyClass = null,          // parseOnlyClass(REFUND_ONLY_CLASS): null repays every class
-  minAgeMs = 0,              // a class run: rows younger than this wait
-  maxClassRowsPerPayer = 0,  // a class run: a payer owed more rows of the class is held (0: no hold)
-  now = Date.now(),
 } = {}) {
   // Normalized ONCE at intake so familyOf, the accepts lookup and the row the
   // sender receives all agree on the CAIP-2 form.
@@ -398,24 +354,10 @@ export function planRefunds(rawRows, {
     const have = firstOfKey.get(key);
     if (!have || (Number.isFinite(Number(row.id)) && Number.isFinite(Number(have.id)) && Number(row.id) < Number(have.id))) firstOfKey.set(key, row);
   }
-  // A class run: how many owed rows of the class each payer holds.
-  const classRowsOf = new Map();
-  if (onlyClass) for (const row of rows) if ((!row.status || row.status === "owed") && rowInClass(row, onlyClass) && row.payer) classRowsOf.set(row.payer, (classRowsOf.get(row.payer) || 0) + 1);
   for (const row of rows) {
     if (row.status && row.status !== "owed") continue;
     const evmKey = evmEvidenceKey(row.evidence);
     if (evmKey && firstOfKey.get(evmKey) !== row) { hold(DUPLICATE_EVIDENCE_HOLD, row); continue; }
-    // A class run: only rows of that class, and of those only an answer that
-    // failed (an answer not delivered is kept for the same payment sent
-    // again), old enough for that payment to have been sent again, from a
-    // wallet not owed more of them than a scheduled run repays.
-    if (onlyClass) {
-      if (!rowInClass(row, onlyClass)) { hold(CLASS_FILTER_HOLD, row); continue; }
-      if (Number(row.httpStatus) === HANGUP_STATUS) { hold(CLASS_UNDELIVERED_HOLD, row); continue; }
-      const created = Number(row.createdAt);
-      if (!(Number.isFinite(created) && created <= now - minAgeMs)) { hold(CLASS_TOO_YOUNG_HOLD, row); continue; }
-      if (maxClassRowsPerPayer > 0 && !((classRowsOf.get(row.payer) || 0) <= maxClassRowsPerPayer)) { hold(CLASS_PAYER_ROWS_HOLD, row); continue; }
-    }
     if (onlyChain && row.network !== onlyChain) { hold("filtered by chain", row); continue; }
     if (onlyRows && !rowFilterMatches(onlyRows, row)) { hold("filtered by row", row); continue; }
     if (row.synthetic && !includeSynthetic) { hold("synthetic (our own canary - opt in to refund it)", row); continue; }
@@ -1005,7 +947,6 @@ export async function refundRun({ rows, totals = {}, live = false, planOptions =
   // up to: the reviewer reads amounts from a dry run in an operator terminal
   // or GET /__operator/refunds.json.
   log.log(`refund-run against ${TARGET} - ledger: ${isPublicLog() ? "read (totals in an operator terminal)" : JSON.stringify(totals)}`);
-  if (planOptions.onlyClass) log.log(`class run: only rows of class ${planOptions.onlyClass} are repaid; every other row is held and stays owed`);
   const plan = planRefunds(rows, planOptions);
   // Each line names the response status the debt was recorded on, so a
   // reviewer reading the dry run can tell a failed answer from a buyer who
@@ -1156,9 +1097,6 @@ async function main() {
       includeRepeatHangups: /^(1|true|yes)$/i.test((process.env.REFUND_INCLUDE_REPEAT_HANGUPS || "").trim()),
       includeReviewHolds: /^(1|true|yes)$/i.test((process.env.REFUND_INCLUDE_REVIEW_HOLDS || "").trim()),
       senders,
-      onlyClass: ONLY_CLASS,
-      minAgeMs: MIN_AGE_MINUTES * 60_000,
-      maxClassRowsPerPayer: MAX_CLASS_ROWS_PER_PAYER,
     },
   });
   if (!out.executed) return;

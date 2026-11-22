@@ -201,8 +201,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   request (`settledFirstResendOf`: the paywall, the cover admission and the hang-up ticket skip it),
   runs it, and keeps the row void with the served note on a final 200 or reopens it under its class
   otherwise; the held-claim sweep (src/tempo-push-debts.js) reopens a hold whose run never ended.
-  **Refunds:** `refund-settle-first.yml` repays this class alone (`REFUND_ONLY_CLASS`), off until
-  `REFUND_AUTO_SETTLE_FIRST=on`. Suites: `scripts/test-settle-first.js`,
+  **Refunds:** an owed row of this class is repaid by the human-run `refund.yml` like every other
+  owed row; nothing repays it on a schedule. Suites: `scripts/test-settle-first.js`,
   `scripts/test-settle-first-meter-redis.js`.
 - **Runs in flight are covered together:** `src/inflight-cover.js` (`admitCoveredRun`), called
   through `admitPaidRun` (server.js) before the breaker consult on EVERY mount of a paid handler that
