@@ -65,6 +65,7 @@ export async function proveAuthorizationSettled({
   pollDelaysMs = [0, 1500, 3000, 4500, 6000],
   callTimeoutMs = 4000,
   notBeforeMs = null,
+  head = null,
 } = {}) {
   const network = String(requirements?.network || "");
   if (!network.startsWith("eip155:")) return { proven: false, reason: "not an EVM network" };
@@ -87,14 +88,19 @@ export async function proveAuthorizationSettled({
     return rpc(url, method, params, fetchImpl, Math.min(callTimeoutMs, left), []);
   };
   let lastReason = "authorization not found on chain";
+  // A chain head the caller already read (the settle deadlines' chain check
+  // reads one per network for every settle it watches): its first read uses
+  // it instead of asking the chain again.
+  let known = Number.isSafeInteger(head) && head >= 0 ? head : null;
   for (const delay of pollDelaysMs) {
     if (delay) {
       if (Date.now() - started + delay >= deadlineMs) break;
       await sleep(delay);
     }
     try {
-      const head = Number(BigInt(await call("eth_blockNumber", [])));
-      const fromBlock = `0x${Math.max(0, head - LOG_WINDOW_BLOCKS).toString(16)}`;
+      const tip = known ?? Number(BigInt(await call("eth_blockNumber", [])));
+      known = null;
+      const fromBlock = `0x${Math.max(0, tip - LOG_WINDOW_BLOCKS).toString(16)}`;
       const logs = await call("eth_getLogs", [{ address: asset, fromBlock, toBlock: "latest", topics: [AUTHORIZATION_USED_TOPIC, topicOf(auth.from), String(auth.nonce).toLowerCase()] }]);
       const log = (logs || []).find((l) => String(l?.address || "").toLowerCase() === String(asset).toLowerCase() && isB32(l?.transactionHash));
       if (!log) { lastReason = "authorization not found on chain"; continue; }
@@ -125,6 +131,16 @@ export async function proveAuthorizationSettled({
   // or block not readable yet, or the reads failed): the transfer may still
   // have landed, so the caller books the authorization (`unread`).
   return { proven: false, reason: lastReason, unread: true };
+}
+
+/** The chain's head block on `network`, or null when it cannot be read. */
+export async function readChainHead({ network, rpcFor = evmRpcFor, fetchImpl = fetch, timeoutMs = 2000 } = {}) {
+  const url = rpcFor(String(network || ""));
+  if (!url) return null;
+  try {
+    const n = Number(BigInt(await rpc(url, "eth_blockNumber", [], fetchImpl, timeoutMs, [])));
+    return Number.isSafeInteger(n) && n >= 0 ? n : null;
+  } catch { return null; }
 }
 
 const reqOf = (ctx) => ctx?.transportContext?.request?.adapter?.req;

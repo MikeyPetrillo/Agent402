@@ -214,7 +214,7 @@ if (mod) {
     const p = payloadOf(claims ? 5 : 6);
     noteSettleContext({ paymentPayload: p, transportContext: { request: { adapter: { req: {} } } } });
     withSettleDeadline(client, {
-      env: testEnv, rpcFor, log: quiet,
+      env: testEnv, rpcFor, log: quiet, readHead: async () => 100,
       prove: async () => (await sleep(450), proven),
       recover: async () => { await sleep(400); return claims ? { recovered: true, result: { success: true, transaction: proven.transaction, network: CELO, payer: FROM } } : { recovered: false, reason: "another request owns this authorization" }; },
     });
@@ -224,6 +224,84 @@ if (mod) {
     const ms = Date.now() - t0;
     ok(want === "chain" ? (out?.success === true && out.transaction === proven.transaction && ms > 600) : (settleDeadlineStopOf(err)?.kind === "cap" && ms > 600),
       `the cap fires while the transfer is being claimed: ${want === "chain" ? "the claimed transfer is served" : "the claim fails, the cap's answer stands"} (${ms} ms)`);
+  }
+  // The chain check's reads are bounded per network, whatever the number of
+  // settles hung on it: the head is read once per checkEveryMs for all of
+  // them (one read in flight, shared, and handed to each log read), at most
+  // SETTLE_CHAIN_CHECK_MAX_PER_NETWORK log reads run at once, and each
+  // settle's checks back off after a miss.
+  {
+    _resetSettleDeadlines();
+    const N = 20;
+    let heads = 0, proves = 0, inFlight = 0, maxInFlight = 0, headsSeen = new Set();
+    const perSettle = new Map();
+    const settles = [];
+    const t0 = Date.now();
+    for (let i = 0; i < N; i++) {
+      const client = { settle: () => new Promise(() => {}) };
+      const p = payloadOf(1000 + i);
+      noteSettleContext({ paymentPayload: p, transportContext: { request: { adapter: { req: {} } } } });
+      withSettleDeadline(client, {
+        env: { ...testEnv, SETTLE_CHAIN_CHECK_MAX_PER_NETWORK: "4" }, rpcFor, log: quiet,
+        readHead: async () => { heads++; await sleep(5); return 7000 + Math.floor((Date.now() - t0) / 50); },
+        prove: async (a) => {
+          proves++; inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+          headsSeen.add(typeof a.head);
+          perSettle.set(i, (perSettle.get(i) || 0) + 1);
+          await sleep(30); inFlight--;
+          return { proven: false, unread: true };
+        },
+      });
+      settles.push(client.settle(p, reqs(CELO)).catch(() => null));
+    }
+    await Promise.all(settles);
+    const most = Math.max(0, ...perSettle.values());
+    ok(maxInFlight <= 4 && maxInFlight > 0, `log reads at once on one network stay at the cap (${maxInFlight} of ${N} settles)`);
+    ok(heads <= 16, `one head read per check interval for every settle on the network (${heads} reads for ${N} settles over 500 ms)`);
+    ok(headsSeen.size === 1 && headsSeen.has("number"), "each log read is handed the shared head");
+    ok(most <= 5 && proves <= 5 * N, `each settle's checks back off after a miss (at most ${most} log reads per settle, ${proves} in all)`);
+  }
+  // One settle alone (no slot ever taken): its checks back off after each
+  // miss (checkEveryMs, then twice that, and so on), where reading every
+  // checkEveryMs until the cap made about ten reads here.
+  {
+    _resetSettleDeadlines();
+    let proves = 0;
+    const client = { settle: () => new Promise(() => {}) };
+    const p = payloadOf(1050);
+    noteSettleContext({ paymentPayload: p, transportContext: { request: { adapter: { req: {} } } } });
+    withSettleDeadline(client, { env: testEnv, rpcFor, log: quiet, readHead: async () => 42, prove: async () => { proves++; return { proven: false, unread: true }; } });
+    let err = null; try { await client.settle(p, reqs(CELO)); } catch (e) { err = e; }
+    ok(proves >= 2 && proves <= 5 && settleDeadlineStopOf(err)?.kind === "cap", `one hung settle backs off its chain reads (${proves} log reads before the cap)`);
+  }
+  // A head that cannot be read skips the log read; the cap still decides.
+  {
+    _resetSettleDeadlines();
+    let proves = 0;
+    const client = { settle: () => new Promise(() => {}) };
+    const p = payloadOf(1100);
+    noteSettleContext({ paymentPayload: p, transportContext: { request: { adapter: { req: {} } } } });
+    withSettleDeadline(client, { env: testEnv, rpcFor, log: quiet, readHead: async () => null, prove: async () => { proves++; return { proven: false, unread: true }; } });
+    let err = null; try { await client.settle(p, reqs(CELO)); } catch (e) { err = e; }
+    ok(proves === 0 && settleDeadlineStopOf(err)?.kind === "cap", `no head, no log read: the cap answers (${proves} log reads)`);
+  }
+  // A settle that answers ends its chain check's wait at once: nothing of
+  // the request is held after the answer.
+  {
+    _resetSettleDeadlines();
+    const fast = { success: true, transaction: `0x${"0".repeat(63)}9`, network: CELO };
+    const client = { settle: () => new Promise((r) => setTimeout(() => r(fast), 200)) };
+    const p = payloadOf(1200);
+    noteSettleContext({ paymentPayload: p, transportContext: { request: { adapter: { req: {} } } } });
+    const env2 = { SETTLE_DEADLINES: JSON.stringify({ celo: { capMs: 20000, checkAfterMs: 50, checkEveryMs: 5000, slowMs: 10000 } }) };
+    withSettleDeadline(client, { env: env2, rpcFor, log: quiet, readHead: async () => 5, prove: async () => ({ proven: false, unread: true }) });
+    const timers = () => process.getActiveResourcesInfo().filter((t) => t === "Timeout").length;
+    await sleep(20);
+    const before = timers();
+    const out = await client.settle(p, reqs(CELO));
+    await sleep(20);
+    const after = timers();
+    ok(out === fast && after <= before, `the chain check's timer is cleared when the settle answers (${before} timers before, ${after} after)`);
   }
   // A facilitator error before anything else passes through as is.
   {
