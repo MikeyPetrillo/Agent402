@@ -461,7 +461,7 @@ if (mod) {
     ok(v?.serve === false && v.status === 503 && v.body.error === "replay_pending" && m.log.sales.length === 0, "a void that did not land: retry shortly, nothing served");
     m = mk({ claim: { claimed: false, holder: "late-settle:k" }, row: { status: "sending" }, verdict: { verdict: "refunded", row: { status: "sending" } } });
     v = await cappedResendVerdict(P, m.deps);
-    ok(v?.serve === false && v.status === 402 && v.body.error === "payment_refunded" && v.body.refund.status === "sending" && v.body.refund.lookup.endsWith(TX) && m.log.sales.length === 0, "a debt being repaid: refused as refunded, never served too");
+    ok(v?.serve === false && v.status === 402 && v.body.error === "payment_refunded" && v.body.refund.status === "sending" && v.body.refund.lookup === `https://x.example/api/refunds/lookup?tx=${TX}` && m.log.sales.length === 0, "a debt being repaid: refused as refunded, never served too");
     m = mk({ claim: { claimed: false, holder: "some-other-request" } });
     ok((await cappedResendVerdict(P, m.deps)) === null && m.log.sales.length === 0, "another request holds the transfer: the kept 402 stands");
     ok((await cappedResendVerdict({ ...P, network: "eip155:4663" }, mk().deps)) === null && (await cappedResendVerdict({ ...P, from: "x" }, mk().deps)) === null, "a network off the table or an unreadable payment: nothing");
