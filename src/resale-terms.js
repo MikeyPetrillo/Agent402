@@ -55,3 +55,18 @@ export function resaleBarredReason(def) {
   const why = typeof def.resaleReason === "string" && def.resaleReason.trim() ? def.resaleReason.trim() : "its data source's terms bar resale through a third party";
   return why.slice(0, 200);
 }
+
+/** Declare, beside a tool's handler, what its answer becomes on a /ref copy:
+ *  `transform(answer)` returns the answer the referral gate serves (a new
+ *  value; it never changes the one it is given). The public route serves the
+ *  handler's own answer, untouched. */
+export function markRefAnswer(tools, slugs, transform) {
+  if (typeof transform !== "function") throw new Error("resale terms: a /ref answer transform must be a function");
+  return mark(tools, slugs, { refAnswer: transform });
+}
+
+/** The answer a /ref copy serves for `def`: its declared transform applied
+ *  (src/referral-gate.js is the one caller), or the answer as it came. */
+export function refAnswerOf(def, answer) {
+  return def && typeof def.refAnswer === "function" ? def.refAnswer(answer) : answer;
+}

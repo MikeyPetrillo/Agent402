@@ -336,7 +336,7 @@ const ENV = {
   REFERRAL_MERCHANT_ID: MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS: PAYOUT,
   // The receipt of a settle success is read once in the suite (no waiting on a stub).
   REFERRAL_RECEIPT_WAIT_MS: "0",
-  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker,exa,chatx,scopes,big,exbig,mb,late,picky,units", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
+  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker,exa,chatx,scopes,big,exbig,mb,late,picky,units,peg", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
   // Synthetic figures, chosen to be no real rate.
   REFERRAL_COMMISSION_BPS: "default:1234,busy:4321", REFERRAL_FEE_BPS: "0",
   REFERRAL_DEADLINE_MS: "1000", REFERRAL_SETTLE_RESERVE_MS: "1000", REFERRAL_SETTLE_MS: "2000", REFERRAL_VERIFY_MS: "1000",
@@ -633,6 +633,7 @@ if (ONLY_PART !== "2") {
 
 // --- the gate, mounted on a small app --------------------------------------------
 const runs = { echo: 0, slow: 0, boom: 0, busy: 0 };
+const PEG_DEF = (await import("../src/tools/crypto-kit.js")).CRYPTO_TOOLS.find((t) => t.slug === "stablecoin-peg");
 const seen = { chat: null, budgeted: null, breaker: null, exa: null, chatx: null };
 const TOOLS = {
   echo: { slug: "echo", name: "Echo", category: "test", price: "$0.03", route: "POST /api/echo", handler: async (i) => { runs.echo++; return { echo: i.text ?? null, run: runs.echo }; } },
@@ -642,6 +643,8 @@ const TOOLS = {
   bytes: { slug: "bytes", name: "Bytes", category: "test", price: "$0.03", handler: async () => ({ __binary: Buffer.from("png"), contentType: "image/png" }) },
   list: { slug: "list", name: "List", category: "test", price: "$0.03", handler: async () => [1, 2, 3] },
   owntx: { slug: "owntx", name: "Own", category: "test", price: "$0.03", handler: async () => ({ transaction: "the tool's own field", rows: 1 }) },
+  // stablecoin-peg's published answer and its own /ref transform (src/tools/crypto-kit.js), on a stub handler.
+  peg: { slug: "peg", name: "Peg", category: "test", price: "$0.03", refAnswer: PEG_DEF.refAnswer, handler: async () => { runs.peg = (runs.peg || 0) + 1; return structuredClone(PEG_DEF.discovery.output.example); } },
   chat: { slug: "chat", name: "Chat", category: "llm", price: "$0.001", quote: (b) => 0.001 * (Number(b?.max_tokens) || 1), handler: async (i, req) => { seen.chat = { stream: i.stream, hasOptions: "stream_options" in i, stash: req.__meteredQuoteUsd }; return { id: "c1", choices: [] }; } },
   // Refuses its input from inside the handler (a 400 of the caller's own, or a refusal attributed upstream).
   picky: { slug: "picky", name: "Picky", category: "test", price: "$0.03", discovery: { input: { text: "hello" }, inputSchema: { properties: { text: { type: "string", description: "Text to read" } }, required: ["text"] } }, handler: async (i) => { if (i.upstream) throw Object.assign(new Error("the source refused this server"), { statusCode: 422, attribution: "upstream", upstreamStatus: 403 }); if (typeof i.text !== "string") throw Object.assign(new Error('Missing or invalid "text"'), { statusCode: 400 }); return { read: i.text.length }; } },
@@ -1149,6 +1152,14 @@ try {
     ok(r.status === 500 && settles() === 0, `a binary answer is a 500, not settled (${r.status})`);
     const l = await send(R("list"), { body: {}, headers: { "payment-signature": (await signPayment(accept)).header } });
     ok(l.status === 200 && JSON.stringify(l.json?.result) === "[1,2,3]" && /^0x/.test(l.json?.transaction || "") && Object.keys(l.json).length === 2, `an answer that is not a JSON object is served as { result, transaction } (${l.text})`);
+    // A tool's declared /ref answer (src/resale-terms.js refAnswerOf) is what the copy serves.
+    const pg = await send(R("peg"), { body: {}, headers: { "payment-signature": (await signPayment(accept)).header } });
+    const RAW = ["price", "high24h", "low24h", "marketCap"];
+    const pegCoins = pg.json?.coins || [];
+    ok(pg.status === 200 && pegCoins.length === 2 && pegCoins.every((c) => RAW.every((k) => !Object.hasOwn(c, k)) && ["id", "symbol", "deviationBps", "maxDeviation24hBps", "status"].every((k) => Object.hasOwn(c, k))) && typeof pg.json?.credit === "string" && pg.json.credit.length > 0 && /^0x/.test(pg.json?.transaction || ""),
+      `stablecoin-peg's /ref answer drops the source's price, 24h high and low and market cap per coin and keeps the computed fields and the credit (${pg.text.slice(0, 200)})`);
+    const direct = await TOOLS.peg.handler({});
+    ok(direct.coins.every((c) => RAW.every((k) => Object.hasOwn(c, k))), "the same handler's own answer (what the public route serves) keeps every field");
     const o = await send(R("owntx"), { body: {}, headers: { "payment-signature": (await signPayment(accept)).header } });
     ok(o.status === 200 && o.json?.result?.transaction === "the tool's own field" && /^0x[0-9a-f]{64}$/.test(o.json?.transaction || ""), `an answer with a transaction field of its own is wrapped the same way, so the settle transaction is never mistaken for it (${o.text})`);
   }

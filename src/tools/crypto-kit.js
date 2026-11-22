@@ -23,7 +23,7 @@ const CRYPTO_RETRY_READ_MS = 12_000;
 import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll, cgNoteUnknownId, cgUnknownIdOfPath } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
-import { markResaleBarred, markResaleComputed, MARKET_DATA_RESALE_REASON } from "../resale-terms.js";
+import { markResaleBarred, markResaleComputed, markRefAnswer, MARKET_DATA_RESALE_REASON } from "../resale-terms.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { knownIdsGate, knownIdGate, seriesSummary } from "./crypto-markets-kit.js";
 import { hlSharedInfo } from "./hyperliquid-shared.js";
@@ -773,6 +773,20 @@ for (const t of CRYPTO_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO
 // a deviation and a band computed here.
 markResaleBarred(CRYPTO_TOOLS, ["crypto-price", "crypto-market", "crypto-history", "crypto-trending", "crypto-global"], MARKET_DATA_RESALE_REASON);
 markResaleComputed(CRYPTO_TOOLS, ["stablecoin-peg"]);
+// On a /ref copy (src/referral-gate.js only) stablecoin-peg serves what it
+// computes and the credit, without the source's own figures per coin (price,
+// 24h high and low, market cap). The public route's answer is unchanged.
+export const STABLECOIN_PEG_REF_RAW_FIELDS = Object.freeze(["price", "high24h", "low24h", "marketCap"]);
+markRefAnswer(CRYPTO_TOOLS, ["stablecoin-peg"], (answer) => {
+  if (!answer || typeof answer !== "object" || !Array.isArray(answer.coins)) return answer;
+  const coins = answer.coins.map((c) => {
+    if (!c || typeof c !== "object") return c;
+    const kept = { ...c };
+    for (const k of STABLECOIN_PEG_REF_RAW_FIELDS) delete kept[k];
+    return kept;
+  });
+  return { ...answer, coins };
+});
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 // A call that ends in an error counts its CoinGecko reads on the unsettled

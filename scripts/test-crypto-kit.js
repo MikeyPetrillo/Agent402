@@ -168,6 +168,27 @@ for (const [slug, args, label] of [
     ok(s.maxDrawdownPct === -25 && s.volatilityPct === vol, `crypto-history: max drawdown and hourly volatility annualized over 365 days (${s.maxDrawdownPct}, ${s.volatilityPct} vs ${vol})`);
     const keys = Object.keys(hist);
     ok(keys.indexOf("summary") < keys.indexOf("bars") && hist.count === 4, "crypto-history: the summary comes before the series");
+
+    // stablecoin-peg: the public answer carries the source's figures and is
+    // byte for byte what it was; the /ref copy's answer (its declared
+    // refAnswer, applied by src/referral-gate.js only) drops them and keeps
+    // every computed field and the credit.
+    fresh();
+    const pegRow = (id, symbol, name, p, hi, lo, cap) => ({ id, symbol, name, current_price: p, high_24h: hi, low_24h: lo, market_cap: cap });
+    cg = (u) => res(200, u.pathname.endsWith("/coins/markets") ? [pegRow("tether", "usdt", "Tether", 0.9989, 0.9994, 0.9985, 1e11), pegRow("usd-coin", "usdc", "USDC", 1.0001, 1.0003, 0.9999, 5e10)] : []);
+    const pegDef = CRYPTO_TOOLS.find((t) => t.slug === "stablecoin-peg");
+    const pub = await pegDef.handler({});
+    const expected = { peg: "USD $1.00", count: 2, coins: [
+      { id: "tether", symbol: "USDT", name: "Tether", price: 0.9989, deviationBps: -11, high24h: 0.9994, low24h: 0.9985, maxDeviation24hBps: 15, marketCap: 1e11, status: "on-peg" },
+      { id: "usd-coin", symbol: "USDC", name: "USDC", price: 1.0001, deviationBps: 1, high24h: 1.0003, low24h: 0.9999, maxDeviation24hBps: 3, marketCap: 5e10, status: "on-peg" },
+    ], credit: COINGECKO_CREDIT };
+    ok(JSON.stringify(pub) === JSON.stringify(expected), `stablecoin-peg: the public route's answer is byte for byte the handler's, the source's figures included (${JSON.stringify(pub).slice(0, 160)})`);
+    const pubText = JSON.stringify(pub);
+    const ref = pegDef.refAnswer(pub);
+    const RAW = ["price", "high24h", "low24h", "marketCap"];
+    ok(typeof pegDef.refAnswer === "function" && ref.coins.length === 2 && ref.coins.every((c) => RAW.every((k) => !Object.hasOwn(c, k))), "stablecoin-peg: the /ref answer drops price, 24h high and low, and market cap per coin");
+    ok(ref.coins.every((c) => ["id", "symbol", "name", "deviationBps", "maxDeviation24hBps", "status"].every((k) => Object.hasOwn(c, k))) && ref.coins[0].deviationBps === -11 && ref.coins[0].maxDeviation24hBps === 15 && ref.peg === "USD $1.00" && ref.count === 2 && ref.credit === COINGECKO_CREDIT, "stablecoin-peg: the /ref answer keeps every computed field, the peg, the count and the credit");
+    ok(JSON.stringify(pub) === pubText, "stablecoin-peg: the /ref transform leaves the answer it is given unchanged");
   } finally {
     globalThis.fetch = realFetch;
     fresh();
