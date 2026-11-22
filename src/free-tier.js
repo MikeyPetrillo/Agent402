@@ -37,7 +37,7 @@ export const FREE_TIER_SLUGS = new Set([
   "skill-webhook-intake", "slugify", "solidity-scan", "sort-lines", "sql-cert-verify", "srt-convert",
   "stats", "stats-summary", "text-chunk", "text-diff", "text-stats", "time",
   "time-convert", "timezone-convert", "token-count", "totp", "truncate", "ulid",
-  "unit-convert", "url-code", "url-parse", "user-agent", "uuid", "uuid-validate",
+  "unit-convert", "url-code", "url-parse", "user-agent", "uuid", "uuid-validate", "vat-validate",
   "webhook-verify", "x402-market-pulse", "xml-to-json", "yaml-to-json",
   // Weather calculators (src/tools/weather-calc-kit.js): published formulas
   // over the caller's own numbers, no forecast read.
