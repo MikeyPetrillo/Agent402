@@ -78,7 +78,6 @@
     "test-public-reports.js",
     "test-refund-ledger-limiter.js",
     "test-refund-lookup.js",
-    "test-refund-owed-card.js",
     "test-replay-consumed-hold.js",
     "test-replay-store-outage.js",
     "test-retired-routes.js",
