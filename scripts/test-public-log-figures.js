@@ -56,20 +56,28 @@ function workflowHits(name, yml) {
     if (/::add-mask::/.test(line)) return;
     for (const [rule, re] of SHELL_RULES) if (re.test(line)) hits.push(`${name}:${i + 1} ${rule}: ${line.trim().slice(0, 100)}`);
   });
+  // A step env value is printed in the step's log header, so a figure handed
+  // from one step to the next through an output is printed too.
+  yml.split("\n").forEach((line, i) => {
+    if (/^\s*#/.test(line)) return;
+    if (/outputs\.(?:total|bycaller|credits|balance|spent|payers|sales|revenue)\b/i.test(line)) hits.push(`${name}:${i + 1} figure passed through a step output: ${line.trim().slice(0, 100)}`);
+    if (/\)x\\\(length\)/.test(line)) hits.push(`${name}:${i + 1} per-route count built for the log: ${line.trim().slice(0, 100)}`);
+  });
   for (const t of issueBodyTexts(yml)) {
     for (const [rule, re] of COMMON) if (re.test(t)) hits.push(`${name} issue body ${rule}: ${t.replace(/\s+/g, " ").slice(0, 100)}`);
   }
   return hits;
 }
 
-// Comments out, strings kept: a line comment starts at // outside a string or
-// regex-looking span only when preceded by whitespace or line start, which is
-// all these scripts use (URLs inside strings have no space before //).
+// Comments out, strings kept. A line comment is // preceded by whitespace or
+// the line start (a URL inside a string has no space before its //), and it
+// goes first, so a "/*" written inside one ("/v1/*/audio") opens nothing. A
+// block comment is /* at a line start or after whitespace, { ; or (.
 function stripComments(src, isShell) {
   if (isShell) return src.split("\n").map((l) => (/^\s*#/.test(l) ? "" : l)).join("\n");
   return src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ""))
-    .split("\n").map((l) => l.replace(/(^|\s)\/\/.*$/, "$1")).join("\n");
+    .split("\n").map((l) => l.replace(/(^|\s)\/\/.*$/, "$1")).join("\n")
+    .replace(/(^|[\s{;(])\/\*[\s\S]*?\*\//g, (m, lead) => lead + m.slice(lead.length).replace(/[^\n]/g, ""));
 }
 
 function scriptHits(rel, src) {
@@ -94,6 +102,7 @@ function scriptHits(rel, src) {
   ok(s("console.log(`spent ~$${spentUsd.toFixed(3)}`);"), "control: an interpolated spend is seen");
   ok(!s("console.log(`OK ${t.path} settled at its list price $${t.priceUsd.toFixed(3)}`);"), "control: a catalog list price passes");
   ok(!s("// payers and $4-9 in a comment\nconsole.log('ran');"), "control: a comment is not output");
+  ok(s("// the /v1/*/audio routes\nconsole.log(`spent $${spentUsd}`);\n} catch { /* x */ }"), "control: a \"/*\" inside a line comment hides nothing after it");
   ok(!s("console.log(`routes missing: ${missing.length}`);"), "control: a count of missing routes passes");
   ok(!s("log(`ceiling $${opts.maxSpendUsd} per run`);"), "control: a configured cap passes");
   ok(w('          echo "PayAI weighted credits since $CUT: $CREDITS (warn at $THRESH)"'), "control: a printed credit count is seen");
@@ -103,6 +112,8 @@ function scriptHits(rel, src) {
   ok(!w('          echo "upstream buyer wallet: $STATUS"'), "control: a status word passes");
   ok(!w('          echo "::add-mask::$BURNER_KEY"'), "control: a mask line passes");
   ok(!w('          # echo "payers $TOTAL"'), "control: a commented line passes");
+  ok(w('          TOTAL: ${{ steps.series.outputs.total }}'), "control: a total handed to a later step's env is seen");
+  ok(w('            | map("\\(.[0].slug)(\\(.[0].status))x\\(length)")'), "control: a per-route count built in jq is seen");
 }
 
 // --- the scheduled jobs and the scripts they run ------------------------------

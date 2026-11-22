@@ -804,7 +804,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     else { failed++; log(`  FAIL  ${r.method.padEnd(4)} ${r.path.padEnd(40)} ${rec.error}`); }
     if (i < plan.selected.length - 1 && opts.pauseMs) await sleep(opts.pauseMs);
   }
-  log(`\n${settled} settled, ${failed} failed, ${held} held back by the ceiling, $${spent.toFixed(3)} charged (list prices plus premium, 402 quotes for quoted routes), at most $${(Number(signedAtomic) / 1e6).toFixed(3)} signed`);
+  log(`\n${settled} settled, ${failed} failed, ${held} held back by the ceiling`);
   if (opts.out) { writeRecords(); log(`records: ${opts.out}`); }
 
   if (opts.settleWaitMs) { log(`\nwaiting ${Math.round(opts.settleWaitMs / 1000)} s before re-measuring`); await sleep(opts.settleWaitMs); }
