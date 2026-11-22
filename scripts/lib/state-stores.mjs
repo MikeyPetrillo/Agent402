@@ -42,6 +42,9 @@ export const SQLITE_STORES = [
   { file: "status.db", env: (d) => ({ STATUS_DB_PATH: join(d, "status.db") }), tables: { status_probes: "status_probes" } },
   { file: "agent402-economy.db", env: (d) => ({ X402_ECONOMY_DB: join(d, "agent402-economy.db") }), tables: { daily: "economy_daily" } },
   { file: "agent402-revenue.db", env: (d) => ({ REVENUE_LEDGER_DB: join(d, "agent402-revenue.db") }), tables: { transfers: "revenue_transfers", cursors: "revenue_cursors" } },
+  // A retired store (the settlement mirror, removed 2026-11-22): no module
+  // writes it now; the mapping stays so an export of a database that still
+  // holds the table maps it instead of naming it unmapped.
   { file: "agent402-stripe-shadow.db", env: () => ({}), tables: { shadow: "stripe_shadow" } },
   { file: "agent402-pow.db", env: (d) => ({ POW_DB_PATH: join(d, "agent402-pow.db") }), tables: { pow_used: "pow_used" } },
 ];
@@ -84,10 +87,6 @@ export async function bootStores(dir, { log = () => {} } = {}) {
   const memory = await import(src("tools/memory.js"));
   const { openDecideLedger } = await import(src("decide/ledger.js"));
   const decide = openDecideLedger(join(resolve(dir), "agent402-decide.db"));
-  const { createShadowLedger } = await import(src("stripe-shadow-ledger.js"));
-  // The shadow ledger only opens its store when it is switched on; it is
-  // constructed here and never started (no timer, no network).
-  const shadow = createShadowLedger({ env: { STRIPE_SHADOW_LEDGER: "on", STRIPE_SECRET_KEY: "unused-never-started" }, dbFile: join(resolve(dir), "agent402-stripe-shadow.db"), fetchImpl: async () => { throw new Error("never started"); }, log });
   // The record directories and the append logs.
   const { createCredits } = await import(src("credits.js"));
   const credits = createCredits({ stripe: null, baseUrl: "http://127.0.0.1", storeDir: join(resolve(dir), "credits"), onDebit: () => {}, onLoad: () => {}, log });
@@ -115,7 +114,7 @@ export async function bootStores(dir, { log = () => {} } = {}) {
     await sdb.stateDb();
     await sdb.stateStoresReady({ timeoutMs: 120_000 });
   }
-  return { pg, modules: { sales, refunds, revenue, stats, status, economy, pow, memory, decide, shadow, credits, checkout, outbound, wish } };
+  return { pg, modules: { sales, refunds, revenue, stats, status, economy, pow, memory, decide, credits, checkout, outbound, wish } };
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

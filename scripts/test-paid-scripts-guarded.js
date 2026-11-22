@@ -62,8 +62,6 @@ const EXTERNAL_FORBIDDEN = {
 
 // Scripts whose payee is fixed in code and is not a seller's HTTP route.
 const FIXED_TARGET = {
-  // Signs a payload and posts it straight to the facilitator it is testing.
-  "facilitator-mainnet-canary.js": "pays through the facilitator under test, no HTTP seller",
   // Boots its own tollbooth in process and pays that.
   "tollbooth-cdp-live.js": "pays a tollbooth it boots in process",
 };
@@ -141,7 +139,7 @@ ok(verdictFor("test-x.js", `const T = process.env.TARGET_URL || "https://agent40
 ok(verdictFor("x.js", `const T = assertOwnPaidTarget(process.env.TARGET_URL, "x");\nconst c = disableVendorSpendControls(new x402Client()); registerExactEvmScheme(c, {});`) !== null, "fixture: spend control off with no cap fails");
 ok(verdictFor("x.js", `const T = assertOwnPaidTarget(process.env.TARGET_URL, "x");\nconst c = disableVendorSpendControls(new x402Client()); registerExactEvmScheme(c, {}); guardCappedSigning(c, { maxUsd: 1, networks: ["eip155:8453"] });`) === null, "fixture: spend control off with the capped guard passes");
 ok(verdictFor("drain-burner.js", `const T = assertOwnPaidTarget(process.env.TARGET_URL, "x");\nconst c = disableVendorSpendControls(new x402Client()); registerExactEvmScheme(c, {});`) !== null, "fixture: a script once excepted fails with no cap (there is no exception list)");
-for (const f of ["algorand-rail-canary.js", "base-list-sweep.js", "capture-bestsellers.js", "challenge-sweep.js", "cross-chain-matrix.js", "decide-paid-e2e.mjs", "decide-prod-check.mjs", "drain-burner.js", "evm-settle-test.js", "rh-settle-test.js", "solana-sor-live.js", "sweep-burner.js"]) {
+for (const f of ["algorand-rail-canary.js", "base-list-sweep.js", "capture-bestsellers.js", "challenge-sweep.js", "decide-paid-e2e.mjs", "decide-prod-check.mjs", "drain-burner.js", "evm-settle-test.js", "rh-settle-test.js", "solana-sor-live.js", "sweep-burner.js"]) {
   const src = stripComments(readFileSync(join(HERE, f), "utf8"));
   ok(VENDOR_OFF.test(src) && /guardCappedSigning\(\w+, \{ maxUsd: [^\n]+, networks: [^\n]+\}\);/.test(src) && verdictFor(f, src.replace(/guardCappedSigning\(/g, "void (")) !== null,
     `${f}: its signing client carries the per-accept cap, and fails this scan without it`);

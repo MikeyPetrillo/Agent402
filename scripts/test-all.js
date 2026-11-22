@@ -193,8 +193,6 @@ const NETWORK = new Set([
   "/api/stablecoin-peg",
   // bundle-kit: token-diligence runs two CoinGecko tools per coin.
   "/api/token-diligence",
-  // market-tick reads crypto-price and stock-quote in-process (listed only with MARKET_TICK=on).
-  "/api/market/tick",
   // Network-kit: live DNS resolution against 1.1.1.1/8.8.8.8/9.9.9.9. Public
   // resolvers can NXDOMAIN, time out, or return SERVFAIL for placeholder inputs —
   // tolerate transient failures, the shape check still gates the happy path.

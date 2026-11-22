@@ -31,7 +31,6 @@ const boot = `
   const ss = await import("./src/status-store.js");
   const ec = await import("./src/x402-economy.js");
   const pw = await import("./src/pow.js");
-  const sh = await import("./src/stripe-shadow-ledger.js");
   const wi = await import("./src/wish.js");
   const rv = await import("./src/revenue-ledger.js");
   const sl = await import("./src/sales-ledger.js");
@@ -43,7 +42,6 @@ const boot = `
   const credits = createCredits({ stripe: {}, baseUrl: "https://agent402.tools", storeDir: H + "/credits", log: () => {} });
   const decide = openDecideLedger(H + "/decide.db");
   const hc = createHumanCheckout({ stripe: {}, generate: async () => ({}), baseUrl: "https://agent402.tools", storeDir: H + "/checkout", onSale: () => {}, log: () => {} });
-  const shadow = sh.createShadowLedger({ env: { ...process.env, STRIPE_SHADOW_LEDGER: "on", STRIPE_SECRET_KEY: "sk_test_x", STRIPE_SHADOW_INTERVAL_MS: "0" }, dbFile: H + "/shadow.db", log: () => {} });
   const { stateStoresReady } = await import("./src/state-db.js");
   await stateStoresReady({ timeoutMs: 20000 });
   console.log("DONE");
@@ -60,7 +58,7 @@ function child(env) {
 }
 const FAILED = /first load failed|load failed|setup failed|store unavailable|import into the state database failed|could not rebuild|duplicate key value|already exists/;
 // The stores this test covers: every store whose first load runs its own DDL.
-const MINE = /^(\[(stats|status-store|pow|stripe-shadow|wish|credits|decide|human-checkout|sales-ledger|refund-ledger|memory)\]|x402-economy:|revenue-ledger:|sales ledger |refund ledger |memory )/;
+const MINE = /^(\[(stats|status-store|pow|wish|credits|decide|human-checkout|sales-ledger|refund-ledger|memory)\]|x402-economy:|revenue-ledger:|sales ledger |refund ledger |memory )/;
 const pg = (await import("pg")).default;
 for (let i = 0; i < ROUNDS; i++) {
   const schema = `t_race_${randomBytes(4).toString("hex")}`;

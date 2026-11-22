@@ -33,7 +33,7 @@ const cleanup = () => { for (const s of servers) s.child.kill("SIGKILL"); facili
 process.on("exit", cleanup);
 
 const BASE_ENV = { X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", POSTHOG_API_KEY: "",
-  AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999", STOCK_DATA_PROVIDER: "", DATABENTO_API_KEY: "", MARKET_TICK: "" };
+  AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999", STOCK_DATA_PROVIDER: "", DATABENTO_API_KEY: "" };
 async function boot(label, env, args = []) {
   const srv = await bootServer({ env: { ...BASE_ENV, ...env }, stores: label, args, timeoutMs: 180_000 });
   servers.push(srv);

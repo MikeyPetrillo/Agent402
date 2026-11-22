@@ -204,7 +204,7 @@ r = await runSmoke(pr2([v2({ network: "eip155:137", asset: USDC_POLYGON })]));
 ok(r.code !== 0 && r.signed === null, `an accept on a chain the check does not register is never signed (${r.code}, ${r.signed}; ${tail(r)})`);
 
 // ---- own-target guard on the scripts that buy from our service ----
-const SCRIPTS = ["capture-bestsellers.js", "base-list-sweep.js", "challenge-sweep.js", "cross-chain-matrix.js", "catalog-buy.js", "payai-listing-pass.js", "drain-burner.js", "sweep-burner.js",
+const SCRIPTS = ["capture-bestsellers.js", "base-list-sweep.js", "challenge-sweep.js", "catalog-buy.js", "payai-listing-pass.js", "drain-burner.js", "sweep-burner.js",
   "paid-canary.js", "agent-e2e.js", "mint-bazaar-rows.js", "mpp-probe.js", "tempo-volume.js", "mpp-new-agent-e2e.js", "tempo-canary-verify.js",
   "algorand-rail-canary.js", "decide-paid-e2e.mjs", "evm-settle-test.js", "rh-settle-test.js", "solana-sor-live.js", "tempo-sor-live.js",
   "tempo-subscription-canary.js", "test-client-paid-live.js", "test-treasury-paid-live.js", "smoke-buy.js"];

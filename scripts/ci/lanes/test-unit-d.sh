@@ -111,8 +111,6 @@ t node scripts/test-email-postal-address.js
 t node scripts/test-email-unsub-headers.js
 # Prepaid credits are not SOLD by default (no held balance), but existing keys still redeem
 t node scripts/test-credits-sales-gate.js
-# Stripe shadow ledger (off by default and inert, idempotent on tx hash, failures swallowed, restart-durable, caller unchanged in every world)
-t node scripts/test-stripe-shadow-ledger.js
 # Every Stripe client sends the pinned API version, never the SDK default
 t node scripts/test-stripe-api-version.js
 # Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)

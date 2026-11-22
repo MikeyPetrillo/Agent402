@@ -4,7 +4,7 @@
 // that drops every connection while "down"; after the database is back the
 // child exercises each store (credits authorize, Decide redeem and bookRun,
 // card checkout fulfil and peek, stats flush and health, status and economy
-// write and read, the shared PoW replay pull, the Stripe shadow enqueue, the
+// write and read, the shared PoW replay pull, the
 // wish board and append, the revenue ledger's first load).
 // Requires STATE_DATABASE_URL (CI fails without it).
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
@@ -53,7 +53,6 @@ const code = `
   const ss = await import("./src/status-store.js");
   const ec = await import("./src/x402-economy.js");
   const pw = await import("./src/pow.js");
-  const sh = await import("./src/stripe-shadow-ledger.js");
   const wi = await import("./src/wish.js");
   const rv = await import("./src/revenue-ledger.js");
   const sl = await import("./src/sales-ledger.js");
@@ -70,8 +69,6 @@ const code = `
   const credits = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: H + "/credits", log: () => {} });
   const decide = openDecideLedger(H + "/decide.db");
   const hc = createHumanCheckout({ stripe, generate: async () => ({ report: "# R\\n\\nText. [1]", title: "T", sources: [], tables: [] }), baseUrl: "https://agent402.tools", storeDir: H + "/checkout", onSale: () => {}, log: () => {} });
-  const shadow = sh.createShadowLedger({ env: { ...process.env, STRIPE_SHADOW_LEDGER: "on", STRIPE_SECRET_KEY: "sk_test_x", STRIPE_SHADOW_INTERVAL_MS: "0" }, dbFile: H + "/shadow.db", log: () => {} });
-  shadow.record({ slug: "early", priceUsd: 0.01, rail: "usdc", network: "base", tx: "0x" + "2".repeat(64) }); // during the outage
   // The server's boot wiring: the retrying stores' labels feed the status.
   db.setUnloadedStoresProbe((await import("./src/store-retry.js")).unloadedStores);
   const bootWait = await db.stateStoresReady({ timeoutMs: 500 });
@@ -103,7 +100,6 @@ const code = `
     await wait(1500);
     return pw.verifySolution(sol, "hash").reason === "challenge already used";
   });
-  await t("shadow", async () => { shadow.record({ slug: "late", priceUsd: 0.01, rail: "usdc", network: "base", tx: "0x" + "1".repeat(64) }); await shadow.flush(); const n = Number((await db.stateQuery("SELECT count(*) n FROM " + db.stateDbSchema() + ".stripe_shadow")).rows[0].n); return n === 2 && shadow.report().live !== false; });
   await t("wish", async () => { wi.recordWish({ need: "a wish after the blip", source: "api" }); await wait(300); const n = Number((await db.stateQuery("SELECT count(*) n FROM " + db.stateDbSchema() + ".log_lines WHERE stream = 'wishes'")).rows[0].n); return n === 2 && wi.getWishesAggregate().totalWishes === 2; });
   await t("revenue", async () => !(await rv.ledgerStoreReady()).error);
   res.statusAfter = { word: db.stateDbStatus(), unloaded: db.unloadedStateStores() };
@@ -126,7 +122,7 @@ const out = await new Promise((res) => {
 const m = out.o.match(/RESULT (.*)/);
 if (!m) console.error(out.e.slice(-2000));
 const r = m ? JSON.parse(m[1]) : {};
-for (const k of ["credits", "decide", "checkout", "stats", "status", "economy", "pow", "shadow", "wish", "revenue"]) {
+for (const k of ["credits", "decide", "checkout", "stats", "status", "economy", "pow", "wish", "revenue"]) {
   ok(r[k] === true, `${k}: works once the database answers after a failed first load (${JSON.stringify(r[k])})`);
 }
 // While a first load is still failing the status says so and names the store;

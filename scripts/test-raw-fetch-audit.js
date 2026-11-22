@@ -159,7 +159,6 @@ const DEFAULTS = {
   "src/solana-buyer.js": { n: 4, cls: "fixed" },
   "src/stellar-confirm.js": { n: 2, cls: "fixed" },
   "src/stellar-facilitator-status.js": { n: 1, cls: "fixed" },
-  "src/stripe-shadow-ledger.js": { n: 1, cls: "fixed" },
   "src/svm-clarify.js": { n: 1, cls: "fixed" },
   "src/tempo-confirm.js": { n: 2, cls: "fixed" },
   "src/tempo-transfers.js": { n: 1, cls: "fixed" },
