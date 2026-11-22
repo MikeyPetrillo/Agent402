@@ -885,7 +885,8 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, payerPaidDays, externalReturnRateAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow, saleRepeatStats } from "./sales-ledger.js";
+import { topExternalPayersAsync, payerPaidDays, externalReturnRateAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, returningBuyersAsync, funnelLedgerAsync, FUNNEL_MAX_DAYS, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, scoreboardLedgerAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow, saleRepeatStats, salesLedgerFilePath } from "./sales-ledger.js";
+import { correctServerLedger, summaryOf as saleRepeatsSummary } from "./sale-repeats-correction.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -7401,6 +7402,36 @@ app.post("/__operator/refunds/backfill-sales", async (req, res) => {
   } catch (e) {
     res.status(e?.statusCode === 400 ? 400 : 500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 300) });
   }
+});
+// Sales rows that repeat a Solana settlement (src/sale-repeats.js): the dry
+// run and the correction of scripts/sale-repeats.js, run against this
+// server's own ledger (src/sale-repeats-correction.js, the same code). The
+// answer is counts, dates and tools, never a payer or a settlement id. The
+// correction runs only when `expect` equals the repeat-row count a dry run
+// reads now, in one transaction under a lease; a second one moves nothing.
+const saleRepeatsError = (res, e) => res.status(500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 300) });
+app.get("/__operator/sale-repeats.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  if (operatorHeavyLimited(req, res)) return;
+  res.set("Cache-Control", "private, no-store");
+  try {
+    const r = await correctServerLedger({ filePath: salesLedgerFilePath });
+    res.json({ dryRun: true, ...saleRepeatsSummary(r.plan), apply: { method: "POST", path: "/__operator/sale-repeats/apply", body: { expect: r.plan.rows } } });
+  } catch (e) { saleRepeatsError(res, e); }
+});
+app.post("/__operator/sale-repeats/apply", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  if (operatorHeavyLimited(req, res)) return;
+  res.set("Cache-Control", "private, no-store");
+  const expect = req.body && typeof req.body === "object" ? req.body.expect : undefined;
+  if (!Number.isInteger(expect) || expect < 0) return res.status(400).json({ error: "expect must be the repeat-row count the dry run answered (an integer)" });
+  try {
+    const r = await correctServerLedger({ filePath: salesLedgerFilePath, apply: true, expect });
+    if (r.busy) return res.status(409).json({ error: "a correction is already running", reason: r.busy });
+    const summary = saleRepeatsSummary(r.plan);
+    if (r.refused) return res.status(409).json({ error: `expect ${expect} but the ledger holds ${r.plan.rows} repeat row(s); read the dry run again`, applied: false, ...summary });
+    res.json({ applied: true, moved: r.moved, ...summary, note: "a running server leaves the moved rows out of its own figures already; its in-memory copy drops them at its next restart" });
+  } catch (e) { saleRepeatsError(res, e); }
 });
 app.get("/__operator/dataset.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);

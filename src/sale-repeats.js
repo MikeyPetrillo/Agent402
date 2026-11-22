@@ -10,7 +10,7 @@
 //
 // This module is the rule alone (no store, no imports), shared by the ledger's
 // writer and readers (src/sales-ledger.js) and the operator's listing
-// (scripts/sale-repeats.js).
+// (scripts/sale-repeats.js, src/sale-repeats-correction.js).
 
 /** The rail a settlement of this kind is booked on. */
 export const ONE_SALE_RAIL = "usdc";

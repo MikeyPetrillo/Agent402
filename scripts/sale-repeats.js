@@ -21,11 +21,15 @@
 // buyer can reach it. A running server keeps the rows in its own copy until
 // its next restart; its readers leave them out either way.
 //
+// The read and the correction are src/sale-repeats-correction.js, the same
+// code the operator routes run (/__operator/sale-repeats.json and
+// /__operator/sale-repeats/apply).
+//
 // The default is a dry run: it opens the file read-only (or reads the
 // database in a read-only transaction) and changes nothing. It prints counts
 // and dates, never a payer.
 import { writeFileSync } from "node:fs";
-import { oneSaleScopeSql, repeatRowsSql } from "../src/sale-repeats.js";
+import { correctFile, correctPgInTx } from "../src/sale-repeats-correction.js";
 
 const args = process.argv.slice(2);
 const has = (n) => args.includes(n);
@@ -36,37 +40,7 @@ if (has("--db") === has("--pg")) usage();
 const expect = opt("--expect") == null ? null : Number(opt("--expect"));
 if (APPLY && !Number.isInteger(expect)) { console.error("--apply needs --expect <rows>: the repeat-row count the dry run printed"); process.exit(2); }
 
-const COLS = ["id", "ts", "slug", "price_usd", "rail", "network", "payer", "tx", "internal", "wire", "quote_usd", "response_sha256", "attest_uid", "attest_tx", "via", "run_key"];
-const day = (ms) => new Date(Number(ms)).toISOString().slice(0, 10);
 const usd = (n) => `$${(Number(n) || 0).toFixed(6)}`;
-
-/** The plan from the repeat rows and the rows they repeat. Pure. */
-function planOf(repeats, firsts, heldIds) {
-  const firstByTx = new Map(firsts.map((r) => [r.tx, r]));
-  const held = new Set(heldIds.map(Number));
-  const byDay = new Map(), bySlug = new Map();
-  const plan = { settlements: new Set(), rows: 0, usd: 0, external: 0, externalUsd: 0, internal: 0, otherSlug: 0, otherPayer: 0, heldBack: 0, firstDay: null, lastDay: null, move: [], list: [] };
-  for (const r of repeats) {
-    const f = firstByTx.get(r.tx);
-    plan.settlements.add(r.tx);
-    plan.rows++;
-    plan.usd += Number(r.price_usd) || 0;
-    if (Number(r.internal)) plan.internal++; else { plan.external++; plan.externalUsd += Number(r.price_usd) || 0; }
-    if (f && f.slug !== r.slug) plan.otherSlug++;
-    if (f && (f.payer || null) !== (r.payer || null)) plan.otherPayer++;
-    const d = day(r.ts);
-    if (!plan.firstDay || d < plan.firstDay) plan.firstDay = d;
-    if (!plan.lastDay || d > plan.lastDay) plan.lastDay = d;
-    byDay.set(d, (byDay.get(d) || 0) + 1);
-    bySlug.set(r.slug, (bySlug.get(r.slug) || 0) + 1);
-    const isHeld = held.has(Number(r.id));
-    if (isHeld) plan.heldBack++; else plan.move.push(Number(r.id));
-    plan.list.push({ id: Number(r.id), keptId: f ? Number(f.id) : null, tx: r.tx, day: d, slug: r.slug, keptSlug: f ? f.slug : null, internal: Boolean(Number(r.internal)), heldBack: isHeld });
-  }
-  plan.byDay = [...byDay].sort((a, b) => (a[0] < b[0] ? -1 : 1));
-  plan.bySlug = [...bySlug].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
-  return plan;
-}
 
 function print(plan, where) {
   const lines = [];
@@ -75,7 +49,7 @@ function print(plan, where) {
   lines.push(`repeat rows: ${plan.rows} (${plan.external} external, ${plan.internal} our own), ${plan.firstDay || "none"} to ${plan.lastDay || "none"}`);
   lines.push(`booked in the repeat rows: ${usd(plan.usd)} (${usd(plan.externalUsd)} external)`);
   lines.push(`repeat rows under another tool than the first row: ${plan.otherSlug}; under another payer: ${plan.otherPayer}`);
-  lines.push(`held back (an attestation or a feedback row names the row): ${plan.heldBack}`);
+  lines.push(`held back (an attestation or a feedback row names the row): ${plan.heldBack} (attestation ${plan.heldAttested}, feedback ${plan.heldFeedback})`);
   lines.push(`a correction would move ${plan.move.length} row(s) from sales to sales_repeats and leave ${plan.settlements.size} settlement(s) with one sale each${plan.heldBack ? ` (${plan.heldBack} held back stay)` : ""}`);
   if (plan.byDay.length) lines.push(`by day: ${plan.byDay.map(([d, n]) => `${d} ${n}`).join(", ")}`);
   if (plan.bySlug.length) lines.push(`by tool: ${plan.bySlug.slice(0, 15).map(([s, n]) => `${s} ${n}`).join(", ")}${plan.bySlug.length > 15 ? `, and ${plan.bySlug.length - 15} more` : ""}`);
@@ -87,65 +61,38 @@ function finish(plan) {
   if (out) { writeFileSync(out, JSON.stringify({ settlements: plan.settlements.size, rows: plan.rows, move: plan.move.length, heldBack: plan.heldBack, list: plan.list }, null, 1)); console.log(`wrote ${plan.list.length} row(s) to ${out}`); }
 }
 
-function refuseUnlessExpected(plan) {
-  if (plan.rows !== expect) { console.error(`refused: --expect ${expect} but the store holds ${plan.rows} repeat row(s); run the dry run again and read it`); process.exit(3); }
+function refused(plan) {
+  console.error(`refused: --expect ${expect} but the store holds ${plan.rows} repeat row(s); run the dry run again and read it`);
+  process.exit(3);
 }
 
 async function runFile(path) {
-  const { default: Database } = await import("better-sqlite3");
-  const db = new Database(path, { readonly: !APPLY, fileMustExist: true });
-  try {
-    const has = (c) => db.prepare("SELECT 1 FROM pragma_table_info('sales') WHERE name = ?").get(c);
-    const cols = COLS.filter(has);
-    const repeats = db.prepare(`SELECT ${cols.map((c) => `s.${c}`).join(", ")} FROM sales s WHERE s.id IN (${repeatRowsSql("sales")}) ORDER BY s.id`).all();
-    const firsts = db.prepare(`SELECT f.id, f.tx, f.slug, f.payer FROM sales f WHERE ${oneSaleScopeSql("f")} AND f.id = (SELECT MIN(m.id) FROM sales m WHERE m.tx = f.tx AND ${oneSaleScopeSql("m")}) AND f.tx IN (SELECT r2.tx FROM sales r2 WHERE r2.id IN (${repeatRowsSql("sales")}))`).all();
-    const fb = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sale_feedback'").get();
-    const heldIds = repeats.filter((r) => (has("attest_uid") && r.attest_uid) || (fb && db.prepare("SELECT 1 FROM sale_feedback WHERE sale_id = ?").get(r.id))).map((r) => r.id);
-    const plan = planOf(repeats, firsts, heldIds);
-    print(plan, `ledger file ${path}`);
-    finish(plan);
-    if (!APPLY) return;
-    refuseUnlessExpected(plan);
-    const all = db.prepare("SELECT name FROM pragma_table_info('sales')").all().map((r) => r.name);
-    db.transaction(() => {
-      db.exec(`CREATE TABLE IF NOT EXISTS sales_repeats (${all.map((c) => `${c}`).join(", ")}, moved_at INTEGER NOT NULL)`);
-      const copy = db.prepare(`INSERT INTO sales_repeats (${all.join(", ")}, moved_at) SELECT ${all.join(", ")}, ? FROM sales WHERE id = ?`);
-      const drop = db.prepare("DELETE FROM sales WHERE id = ?");
-      const now = Date.now();
-      for (const id of plan.move) { if (copy.run(now, id).changes !== 1 || drop.run(id).changes !== 1) throw new Error(`row ${id} changed under the run`); }
-    })();
-    console.log(`moved ${plan.move.length} row(s) to sales_repeats`);
-  } finally { db.close(); }
+  const r = await correctFile(path, { apply: APPLY, expect });
+  print(r.plan, `ledger file ${path}`);
+  finish(r.plan);
+  if (r.refused) refused(r.plan);
+  if (r.applied) console.log(`moved ${r.moved} row(s) to sales_repeats`);
 }
 
 async function runPg() {
   const { default: pg } = await import("pg");
-  const { stateDbUrl, stateDbSchema } = await import("../src/state-db.js");
+  const { stateDbUrl, stateDbSchema, SCHEMA_LOCK_KEY } = await import("../src/state-db.js");
   const url = stateDbUrl();
   if (!url) { console.error("--pg needs STATE_DATABASE_URL"); process.exit(2); }
   const schema = stateDbSchema();
-  const T = (t) => `${schema}.${t}`;
   const client = new pg.Client({ connectionString: url });
   await client.connect();
+  let r;
   try {
-    await client.query(APPLY ? "BEGIN" : "BEGIN TRANSACTION READ ONLY");
-    if (APPLY) await client.query(`LOCK TABLE ${T("sales")} IN SHARE ROW EXCLUSIVE MODE`);
-    const repeats = (await client.query(`SELECT ${COLS.map((c) => `s.${c}`).join(", ")} FROM ${T("sales")} s WHERE s.id IN (${repeatRowsSql(T("sales"))}) ORDER BY s.id`)).rows;
-    const firsts = (await client.query(`SELECT f.id, f.tx, f.slug, f.payer FROM ${T("sales")} f WHERE ${oneSaleScopeSql("f")} AND f.id = (SELECT MIN(m.id) FROM ${T("sales")} m WHERE m.tx = f.tx AND ${oneSaleScopeSql("m")}) AND f.tx IN (SELECT r2.tx FROM ${T("sales")} r2 WHERE r2.id IN (${repeatRowsSql(T("sales"))}))`)).rows;
-    const named = new Set((await client.query(`SELECT sale_id FROM ${T("sale_feedback")} WHERE sale_id = ANY($1::bigint[])`, [repeats.map((r) => r.id)])).rows.map((r) => Number(r.sale_id)));
-    const heldIds = repeats.filter((r) => r.attest_uid || named.has(Number(r.id))).map((r) => r.id);
-    const plan = planOf(repeats, firsts, heldIds);
-    print(plan, `state database, schema ${schema}`);
-    finish(plan);
-    if (!APPLY) { await client.query("ROLLBACK"); return; }
-    refuseUnlessExpected(plan);
-    await client.query(`CREATE TABLE IF NOT EXISTS ${T("sales_repeats")} (LIKE ${T("sales")}, moved_at BIGINT NOT NULL)`);
-    const moved = await client.query(`WITH gone AS (DELETE FROM ${T("sales")} WHERE id = ANY($1::bigint[]) RETURNING *) INSERT INTO ${T("sales_repeats")} SELECT gone.*, $2::bigint FROM gone`, [plan.move, Date.now()]);
-    if (moved.rowCount !== plan.move.length) throw new Error(`moved ${moved.rowCount} of ${plan.move.length}: rolled back`);
-    await client.query("COMMIT");
-    console.log(`moved ${plan.move.length} row(s) to ${T("sales_repeats")}; a running server drops them from its own copy at its next restart`);
+    await client.query("BEGIN");
+    r = await correctPgInTx(client, { schema, apply: APPLY, expect, schemaLockKey: SCHEMA_LOCK_KEY });
+    await client.query(r.applied ? "COMMIT" : "ROLLBACK");
   } catch (e) { try { await client.query("ROLLBACK"); } catch { /* closed */ } throw e; }
   finally { await client.end(); }
+  print(r.plan, `state database, schema ${schema}`);
+  finish(r.plan);
+  if (r.refused) refused(r.plan);
+  if (r.applied) console.log(`moved ${r.moved} row(s) to ${schema}.sales_repeats; a running server drops them from its own copy at its next restart`);
 }
 
 if (has("--db")) { const p = opt("--db"); if (!p) usage(); await runFile(p); }
