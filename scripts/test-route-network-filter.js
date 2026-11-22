@@ -70,6 +70,45 @@ ok(sellers({ networkFilter: SOL }).length === 3, "a raw CAIP-2 id works as the f
 const echoed = routeQuery({ query: "chat completions", top: 10, include: "external", ...ctx, networkFilter: "solana" }).network;
 ok(echoed === SOL, "the response still echoes the resolved network");
 
+// Every chain the router pays on reads by its short name, and /api/route
+// agrees with the router. ?network=celo used to pass "celo" through unresolved
+// (the short-name table named seven chains), so every row whose 402 said
+// eip155:42220 was dropped while the Celo router call paid one of them.
+{
+  const { EVM_BUYER_CHAINS } = await import("../src/evm-buyer-chains.js");
+  const { CHAIN_PAGES } = await import("../src/market-page.js");
+  const { allIndexedTools } = await import("../src/x402-index.js");
+  for (const k of [...cache.keys()]) cache.delete(k);
+  const ids = Object.fromEntries(Object.values(EVM_BUYER_CHAINS).map((c) => [c.name, c.caip2]));
+  const seedWeather = (origin, networks) => cache.set(origin, {
+    manifest: { name: origin, homepage: origin }, openapiSummary: null,
+    tools: [{ seller: origin, method: "GET", route: "/api/weather", slug: "weather", name: "Weather", description: "current weather for a city", category: "data", tags: [], price: 0.002, networks }],
+    fetchedAt: Date.now(), error: null, history: [1, 1, 1, 1, 1],
+  });
+  seedWeather("https://many-chains.example", [ids.base, "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", ids.polygon, ids.arbitrum, ids.celo]);
+  seedWeather("https://celo-only.example", [ids.celo]);
+  seedWeather("https://base-only-weather.example", [ids.base]);
+  const q = (networkFilter, strictNetwork = false) => routeQuery({ query: "weather", top: 25, include: "external", ...ctx, networkFilter, strictNetwork });
+  const celo = q("celo");
+  ok(celo.network === ids.celo, "network=celo resolves to eip155:42220");
+  ok(has(celo.results.map((r) => r.seller), "https://celo-only.example") && has(celo.results.map((r) => r.seller), "https://many-chains.example"),
+    "a seller whose accepts include eip155:42220 shows under network=celo");
+  ok(!has(celo.results.map((r) => r.seller), "https://base-only-weather.example"), "and a Base-only seller does not");
+  for (const chain of ["base", "polygon", "arbitrum", "celo"]) {
+    // What the router's EVM branch asks for (server.js resolveExternalSeller:
+    // the chain's CAIP-2, strict) against what a buyer reads by short name.
+    const router = q(ids[chain], true).results.map((r) => `${r.seller}${r.route}`).sort();
+    const shown = q(chain).results.filter((r) => (r.networks || []).includes(ids[chain])).map((r) => `${r.seller}${r.route}`).sort();
+    ok(router.length > 0 && JSON.stringify(router) === JSON.stringify(shown), `network=${chain} shows every row the ${chain} router would consider (${router.length})`);
+  }
+  for (const c of Object.values(EVM_BUYER_CHAINS)) ok(q(c.name).network === c.caip2, `buyer chain "${c.name}" resolves to ${c.caip2}`);
+  for (const C of Object.values(CHAIN_PAGES)) ok(q(C.networkParam).network === C.acceptNetwork, `chain page "${C.networkParam}" resolves to ${C.acceptNetwork}`);
+  ok(q(" Celo ").network === ids.celo && q("Celo Mainnet").network === ids.celo, "case, spaces and a mainnet suffix fold onto the same chain");
+  ok(q("eip155:42220").network === ids.celo && q(" eip155:42220 ").network === ids.celo, "a raw CAIP-2 id still passes through, trimmed");
+  const dirSellers = (allIndexedTools({ network: "celo", limit: 100 }).results || []).map((r) => r.seller);
+  ok(has(dirSellers, "https://celo-only.example") && !has(dirSellers, "https://base-only-weather.example"), "/api/index/tools?network=celo reads the same short name");
+}
+
 // The CALLER: the Solana SOR branch must ask for Solana rows, strictly.
 {
   const { readFileSync } = await import("node:fs");
