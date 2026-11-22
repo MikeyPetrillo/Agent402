@@ -62,6 +62,30 @@ for (const s of SWITCHED) {
 }
 
 const render = () => `${changelogPage("https://example.test")}\n${changelogRss("https://example.test")}`;
+
+// Calls paid before they run (settle-first, on unless GATEWAY_SETTLE_FIRST=off,
+// src/settle-first-copy.js settleFirstCopyOn): every item that names it or its
+// resend bound sits in an entry that reads the switch, neither surface names
+// either with the switch off, both do with it on, and each CHANGELOG.md item
+// is scoped to a server that leaves the switch on.
+{
+  const { settleFirstCopyOn, SETTLE_FIRST_MARK } = await import("../src/settle-first-copy.js");
+  const RESEND = "sent again at most twice";
+  const naming = CHANGELOG_ENTRIES.filter((x) => x.items.some((i) => i.includes(SETTLE_FIRST_MARK) || i.includes(RESEND)));
+  ok(naming.length > 0 && naming.every((x) => x.shownWhen === settleFirstCopyOn), `every entry that says calls are ${SETTLE_FIRST_MARK} or names the resend bound is shown only while settle-first is on (shownWhen)`);
+  const was = process.env.GATEWAY_SETTLE_FIRST;
+  process.env.GATEWAY_SETTLE_FIRST = "off";
+  const off = render();
+  ok(!off.includes(SETTLE_FIRST_MARK) && !off.includes(RESEND), "GATEWAY_SETTLE_FIRST=off: /changelog and /changelog.xml name neither the settle-first rule nor its resend bound");
+  delete process.env.GATEWAY_SETTLE_FIRST;
+  const on = render();
+  ok(on.includes(SETTLE_FIRST_MARK) && on.includes(RESEND), "settle-first on (the default): both surfaces name the rule and the bound");
+  if (was === undefined) delete process.env.GATEWAY_SETTLE_FIRST; else process.env.GATEWAY_SETTLE_FIRST = was;
+  const mdItems = md.split(/\n(?:- |#)/).map((i) => i.split("\n\n")[0].replace(/\s+/g, " ").trim()).filter((i) => !i.startsWith("#") && (i.includes(SETTLE_FIRST_MARK) || i.includes(RESEND)));
+  const unscoped = mdItems.filter((i) => !i.startsWith("On a server that does not set `GATEWAY_SETTLE_FIRST=off`,"));
+  ok(mdItems.length >= 2 && unscoped.length === 0, `each CHANGELOG.md item about it opens "On a server that does not set \`GATEWAY_SETTLE_FIRST=off\`" (${unscoped.map((i) => JSON.stringify(i.slice(0, 60))).join(", ") || mdItems.length + " items"})`);
+}
+
 const mdItemAt = (needle) => {
   const at = md.indexOf(needle);
   return at >= 0 ? md.slice(md.lastIndexOf("\n- ", at), md.indexOf("\n- ", at + 1)).replace(/\s+/g, " ") : "";

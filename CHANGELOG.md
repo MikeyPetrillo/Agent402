@@ -6,15 +6,18 @@ carries its own version on npm.
 
 ## v2.12.0 - 2026-11-22
 
-### 2026-11-22 (calls paid before they run, settle deadlines and card captures)
+### 2026-11-22 (settle-first calls)
 Payments:
-- Some calls are paid before they run; a failed one can be retried free with
-  the same payment, or is refunded. This covers model calls and web search
-  and answers, image generation, speech, transcription, judgment and code
-  runs.
-- A payment whose settle-first call failed can be sent again at most twice;
-  a third resend runs nothing, is not charged again, and returns its refund
-  status.
+- On a server that does not set `GATEWAY_SETTLE_FIRST=off`, some calls are
+  paid before they run; a failed one can be retried free with the same
+  payment, or is refunded. This covers model calls and web search and
+  answers, image generation, speech, transcription, judgment and code runs.
+- On a server that does not set `GATEWAY_SETTLE_FIRST=off`, a payment whose
+  settle-first call failed can be sent again at most twice; a third resend
+  runs nothing, is not charged again, and returns its refund status.
+
+### 2026-11-22 (settle deadlines and card captures)
+Payments:
 - On Base, Polygon, Arbitrum, Optimism, Avalanche, Celo, Monad and Sei, a
   USDC payment whose transfer is already on chain is served as soon as the
   chain shows it, without waiting for the facilitator's answer.

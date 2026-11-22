@@ -11,6 +11,7 @@ import { speechAdditions } from "./tools/llm-gateway-kit.js";
 import { returningWalletEnabled, WALLET_HINT_HEADER, WALLET_PROOF_HEADER } from "./returning-wallet.js";
 import { BOARD_REFRESH_MS } from "./refresh-cadence.js";
 import { tempoGasSponsorConfig, chargeSponsorAccount } from "./tempo-charge-sponsor.js";
+import { settleFirstCopyOn, SETTLE_FIRST_TEXT } from "./settle-first-copy.js";
 import { lifetimeMs as priceWebhookLifetimeMs, maxPerRegistrant as priceWebhookMaxPerRegistrant } from "./price-webhooks.js";
 import { REVISIT_CAP_MS, DAILY_BUDGET, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, revisitIntervalMs, probeShareLabel } from "./seller-load.js";
 
@@ -35,16 +36,27 @@ const tempoGasSponsorShown = () => mppMethodsSummary().enabled && tempoGasSponso
 const WEBHOOK_LIFETIME_DAYS = Math.round(priceWebhookLifetimeMs() / 86_400_000);
 const WEBHOOK_PER_WALLET = priceWebhookMaxPerRegistrant();
 
+// The settle-first entry: shown while runs can settle first (on unless
+// GATEWAY_SETTLE_FIRST=off), its words read from the one sentence family.
+const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
+
 // An entry with `shownWhen` describes something a switch sells: the page and
 // the feed show it only while that function reads true (CHANGELOG.md scopes
 // the same item to a server that sets the switch).
 const ENTRIES = [
   {
     date: "2026-11-22",
-    title: "Calls paid before they run, settle deadlines and card captures",
+    title: "Settle-first calls",
+    shownWhen: settleFirstCopyOn,
     items: [
-      "Payments: Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. This covers model calls and web search and answers, image generation, speech, transcription, judgment and code runs.",
-      "Payments: A payment whose settle-first call failed can be sent again at most twice; a third resend runs nothing, is not charged again, and returns its refund status.",
+      `Payments: On a server that does not set \`GATEWAY_SETTLE_FIRST=off\`, ${lowerFirst(SETTLE_FIRST_TEXT)} This covers model calls and web search and answers, image generation, speech, transcription, judgment and code runs.`,
+      "Payments: On a server that does not set `GATEWAY_SETTLE_FIRST=off`, a payment whose settle-first call failed can be sent again at most twice; a third resend runs nothing, is not charged again, and returns its refund status.",
+    ],
+  },
+  {
+    date: "2026-11-22",
+    title: "Settle deadlines and card captures",
+    items: [
       "Payments: On Base, Polygon, Arbitrum, Optimism, Avalanche, Celo, Monad and Sei, a USDC payment whose transfer is already on chain is served as soon as the chain shows it, without waiting for the facilitator's answer.",
       "Payments: A settlement that does not confirm within its network's limit (60 seconds; 20 seconds on Celo) is answered as unconfirmed rather than held, and a transfer that lands afterwards is booked as owed and refunded.",
       "Payments: Sending the same payment again for the same call after its transfer lands returns the call's answer, and any refund booked for it is canceled.",

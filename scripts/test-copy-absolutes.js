@@ -1217,7 +1217,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   // constant), and with GATEWAY_SETTLE_FIRST=off the constants and a rendered
   // surface carry none of them.
   {
-    const typed = tracked.filter((f) => /^src\/.*\.js$/.test(f) && f !== "src/settle-first-copy.js" && f !== "src/changelog.js")
+    const typed = tracked.filter((f) => /^src\/.*\.js$/.test(f) && f !== "src/settle-first-copy.js")
       .filter((f) => (read(f) || "").includes(fam.SETTLE_FIRST_MARK));
     ok(typed.length === 0, `no served module types the settle-first words; each interpolates the switch-reading sentence${typed.length ? ` (typed: ${typed.join(", ")})` : ""}`);
     const probe = `
