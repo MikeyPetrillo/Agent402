@@ -24,6 +24,9 @@
 import { createPublicClient, createWalletClient, http, parseAbi, formatEther } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
+import { installPublicLog, figure } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const REGISTRY = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432";
 const RPC = process.env.AGENT402_BASE_RPC || "https://mainnet.base.org";
@@ -78,7 +81,7 @@ console.log(`estimate ${gas} gas at ${price} wei = ${formatEther(costWei)} ETH ~
 if (costUsd > MAX_GAS_USD) { console.error("over the gas bound - refusing"); process.exit(1); }
 
 const bal = await pub.getBalance({ address: account.address });
-console.log(`wallet ETH ${formatEther(bal)}`);
+console.log(`wallet ETH ${figure(formatEther(bal))}`);
 if (bal < costWei * 2n) { console.error("wallet ETH is under twice the estimate - top up before minting"); process.exit(1); }
 
 if (!LIVE) { console.log("\nDRY RUN - nothing signed. Re-run with LIVE=true to mint."); process.exit(0); }

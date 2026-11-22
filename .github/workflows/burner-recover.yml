@@ -16,6 +16,11 @@ on:
 permissions:
   contents: read
 
+# The log and artifacts of a run on this repository are public: scripts
+# print money figures as words (scripts/lib/public-log.js).
+env:
+  PUBLIC_LOG: "1"
+
 jobs:
   recover:
     # Money moves out of a spending wallet on dispatch: the `spending` GitHub

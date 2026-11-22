@@ -35,6 +35,13 @@ on:
 permissions:
   contents: read
 
+# The log, step summaries and artifacts of a run on this repository are
+# public: under PUBLIC_LOG the scripts print dollar figures as words and
+# leave aggregate money keys out of the files they write
+# (scripts/lib/public-log.js).
+env:
+  PUBLIC_LOG: "1"
+
 jobs:
   buy:
     runs-on: ubuntu-24.04

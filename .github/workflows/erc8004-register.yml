@@ -42,6 +42,13 @@ on:
 permissions:
   contents: read
 
+# The log, step summaries and artifacts of a run on this repository are
+# public: under PUBLIC_LOG the scripts print dollar figures as words and
+# leave aggregate money keys out of the files they write
+# (scripts/lib/public-log.js).
+env:
+  PUBLIC_LOG: "1"
+
 jobs:
   register:
     runs-on: ubuntu-24.04
@@ -54,8 +61,9 @@ jobs:
           node-version: 22
       - name: Install the pinned tree (viem only)
         run: |
-          mkdir -p /tmp/reg && cp "$GITHUB_WORKSPACE"/scripts/agentkit-live/package.json "$GITHUB_WORKSPACE"/scripts/agentkit-live/package-lock.json /tmp/reg/
+          mkdir -p /tmp/reg/lib && cp "$GITHUB_WORKSPACE"/scripts/agentkit-live/package.json "$GITHUB_WORKSPACE"/scripts/agentkit-live/package-lock.json /tmp/reg/
           cp "$GITHUB_WORKSPACE"/scripts/erc8004-register.js /tmp/reg/
+          cp "$GITHUB_WORKSPACE"/scripts/lib/public-log.js /tmp/reg/lib/
           cd /tmp/reg && npm ci --ignore-scripts --no-audit --no-fund
       - name: Register (or dry-run)
         env:
@@ -66,4 +74,4 @@ jobs:
         run: |
           [ -n "$BASE_KEY" ] || { echo "::error::X402_UPSTREAM_BUYER_KEY secret missing"; exit 1; }
           echo "::add-mask::$BASE_KEY"
-          cd /tmp/reg && env -i PATH="$PATH" HOME="$HOME" BASE_KEY="$BASE_KEY" LIVE="$LIVE" AGENT_URI="$AGENT_URI" MAX_GAS_USD="$MAX_GAS_USD" node erc8004-register.js
+          cd /tmp/reg && env -i PATH="$PATH" HOME="$HOME" BASE_KEY="$BASE_KEY" LIVE="$LIVE" AGENT_URI="$AGENT_URI" MAX_GAS_USD="$MAX_GAS_USD" PUBLIC_LOG=1 node erc8004-register.js

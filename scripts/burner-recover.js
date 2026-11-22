@@ -14,6 +14,9 @@
 // Usage (CI): node scripts/burner-recover.js <algoAmount>
 //   with ALGORAND_BURNER_MNEMONIC in env. Amount is capped defensively.
 import algosdk from "algosdk";
+import { installPublicLog, figure } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) money figures print as words.
+installPublicLog();
 
 const BURNER = "ZKFACAZATPUUYUXVVVE7QWMMZTSMLGQVA4G4QKW7D2UI7FCIFE3QB2SHRE";
 const DEST = "C7IIHG7SPLPZ5H7ZT6HW3UV2OQMQQE6Y2HBNGZXSLRJULE42BEE2OY2XIE"; // revenue wallet — HARDCODED, never an input
@@ -37,9 +40,9 @@ async function main() {
   const wantMicro = BigInt(Math.round(amtArg * 1e6));
   const maxSendable = balMicro > MIN_RESERVE_MICRO ? balMicro - MIN_RESERVE_MICRO : 0n;
   const sendMicro = wantMicro <= maxSendable ? wantMicro : maxSendable;
-  if (sendMicro <= 0n) die(`nothing sendable (balance ${Number(balMicro) / 1e6} ALGO, reserve kept)`);
+  if (sendMicro <= 0n) die("nothing sendable (the balance is at or under the kept reserve)");
 
-  console.log(`burner balance: ${(Number(balMicro) / 1e6).toFixed(4)} ALGO`);
+  console.log("burner balance read (not printed: this log is public)");
   console.log(`sending ${(Number(sendMicro) / 1e6).toFixed(4)} ALGO -> ${DEST}`);
 
   const sp = await client.getTransactionParams().do();
@@ -62,7 +65,7 @@ async function main() {
   if (!confirmed) die("not confirmed within timeout — check the explorer");
 
   const after = await client.accountInformation(BURNER).do();
-  console.log(`burner now: ${(Number(after.amount) / 1e6).toFixed(4)} ALGO`);
+  console.log(`burner now: ${figure((Number(after.amount) / 1e6).toFixed(4))} ALGO`);
   console.log(`https://allo.info/tx/${txid}`);
 }
 

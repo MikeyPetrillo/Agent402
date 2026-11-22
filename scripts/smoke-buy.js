@@ -28,6 +28,9 @@ import { createHmac, createHash } from "node:crypto";
 import { decodeSettlementHeader, receiptOutputPath, signedOfferReceiptFromSettlement, writeSignedOfferReceipt } from "./lib/smoke-receipt.js";
 import { assertOwnPaidTarget, guardCappedSigning } from "./lib/buyer-guard.js";
 import { smokeNetwork, SMOKE_NETWORK_NAMES } from "./lib/smoke-network.js";
+import { installPublicLog } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const EXTERNAL_TARGET = (process.env.SMOKE_TARGET || "").trim().replace(/\/+$/, "");
 // SMOKE_TARGET is the explicit outside-seller mode (capped below); TARGET_URL

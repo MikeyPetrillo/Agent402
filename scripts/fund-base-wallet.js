@@ -8,6 +8,9 @@
 import { createWalletClient, createPublicClient, http, encodeFunctionData, isAddress, getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
+import { installPublicLog, figure } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) money figures print as words.
+installPublicLog();
 
 const RPC = process.env.AGENT402_BASE_RPC || "https://mainnet.base.org";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -34,13 +37,13 @@ const ERC20 = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "a", type: "address" }], outputs: [{ type: "uint256" }] },
 ];
 const bal = (a) => pub.readContract({ address: USDC, abi: ERC20, functionName: "balanceOf", args: [a] });
-const usd = (u) => (Number(u) / 1e6).toFixed(6);
+const usd = (u) => figure((Number(u) / 1e6).toFixed(6));
 
 const units = BigInt(Math.round(amountUsd * 1e6));
 const before = await bal(account.address);
 const beforeTo = await bal(target);
 const eth = await pub.getBalance({ address: account.address });
-console.log(`from   ${account.address}  ${usd(before)} USDC  ${(Number(eth) / 1e18).toFixed(6)} ETH`);
+console.log(`from   ${account.address}  ${usd(before)} USDC  ${figure((Number(eth) / 1e18).toFixed(6))} ETH`);
 console.log(`to     ${target}  ${usd(beforeTo)} USDC`);
 console.log(`amount ${usd(units)} USDC on Base`);
 if (before < units) die(`sender holds ${usd(before)}, needs ${usd(units)}`);

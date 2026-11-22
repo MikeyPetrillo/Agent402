@@ -15,6 +15,9 @@ import { privateKeyToAccount } from "viem/accounts";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment } from "@x402/fetch";
+import { installPublicLog, figure } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) money figures print as words.
+installPublicLog();
 
 const CHAIN = (process.env.CHAIN || "polygon").toLowerCase();
 const TARGET = assertOwnPaidTarget(process.env.TARGET_URL || "http://127.0.0.1:3791", "evm-settle-test");
@@ -64,7 +67,7 @@ const balHex = await rpc("eth_call", [
   "latest",
 ]);
 const bal = BigInt(balHex && balHex !== "0x" ? balHex : "0x0");
-console.log(`burner USDC balance on ${CHAIN} (chain ${cfg.chainId}):`, (Number(bal) / 1e6).toFixed(6), "USDC");
+console.log(`burner USDC balance on ${CHAIN} (chain ${cfg.chainId}):`, figure((Number(bal) / 1e6).toFixed(6)), "USDC");
 if (bal === 0n) {
   console.log(`>>> burner holds 0 USDC on ${CHAIN} — fund it, then retry`);
   process.exit(2);

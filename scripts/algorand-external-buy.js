@@ -41,6 +41,9 @@ import { algorandCatalog } from "../src/algorand-sellers.js";
 import { getJsonAcross, ALGORAND_INDEXER_BASES } from "../src/revenue-live.js";
 import { makeBudget, verifySettlement } from "./spend-budget.js";
 import { guardCappedSigning } from "./lib/buyer-guard.js";
+import { installPublicLog, forPublicFile } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const OUR_TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
 const OUR_ORIGIN = new URL(OUR_TARGET).origin.toLowerCase();
@@ -275,7 +278,7 @@ if (report.skipped.length) {
   for (const s of report.skipped.slice(0, 20)) console.log(`  ${s.label} — ${s.reason}`);
   if (report.skipped.length > 20) console.log(`  … ${report.skipped.length - 20} more (see the report artifact)`);
 }
-if (OUT) { writeFileSync(OUT, JSON.stringify(report, null, 2)); console.log(`\nwrote ${OUT}`); }
+if (OUT) { writeFileSync(OUT, JSON.stringify(forPublicFile(report), null, 2)); console.log(`\nwrote ${OUT}`); }
 
 // Buying from third parties is informational: a seller being down is THEIR
 // outage, not our defect, so a failed buy must never page us. The run only

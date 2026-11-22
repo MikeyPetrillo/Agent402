@@ -29,6 +29,9 @@ import { McpClient } from "mppx/mcp/client";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { installPublicLog, figure } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) dollar figures print as words.
+installPublicLog();
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, ""), "mpp-new-agent-e2e");
 const RPC = process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz";
@@ -51,7 +54,7 @@ if (!(FUND_USD > 0) || !(BUDGET_USD > 0)) die("FUND_USD and BUDGET_USD must be p
 
 const hb = () => createHmac("sha256", powSecret).update(`heartbeat:${Math.floor(Date.now() / 60_000)}`).digest("base64url").slice(0, 32);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const usd = (units) => (Number(units) / 1e6).toFixed(6);
+const usd = (units) => figure((Number(units) / 1e6).toFixed(6));
 
 const burner = privateKeyToAccount(burnerPk.startsWith("0x") ? burnerPk : `0x${burnerPk}`);
 const fresh = privateKeyToAccount(generatePrivateKey());   // never persisted; leftovers go back below

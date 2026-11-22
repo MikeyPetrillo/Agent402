@@ -14,6 +14,9 @@
 // to repeat, a no-op once the account exists.
 import * as kit from "@solana/kit";
 import { getTransferInstruction, getCreateAssociatedTokenIdempotentInstruction, findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from "@solana-program/token";
+import { installPublicLog, figure } from "./lib/public-log.js";
+// Under PUBLIC_LOG=1 (set by the workflow: its log is public) money figures print as words.
+installPublicLog();
 
 const DESTINATION = "8KqQG8MefNvQEQmp9gBjov39DXcWsUpSeqjL9pPCGKKE"; // the SVM spending wallet (SOLANA_UPSTREAM_BUYER_KEY's address)
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -55,8 +58,8 @@ console.log(`burner (source): ${signer.address}`);
 const srcAccounts = await rpc("getTokenAccountsByOwner", [signer.address, { mint: USDC_MINT }, { encoding: "jsonParsed" }]);
 const src = srcAccounts?.value?.[0];
 const srcBal = Number(src?.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0);
-console.log(`burner USDC balance: ${srcBal}`);
-if (!src || srcBal < USD) { console.error(`refusing: burner holds ${srcBal} USDC, need ${USD}`); process.exit(1); }
+console.log(`burner USDC balance: ${figure(srcBal)}`);
+if (!src || srcBal < USD) { console.error(`refusing: burner holds ${figure(srcBal)} USDC, need ${USD}`); process.exit(1); }
 
 const [destAta] = await findAssociatedTokenPda({ mint: kit.address(USDC_MINT), owner: kit.address(DESTINATION), tokenProgram: TOKEN_PROGRAM_ADDRESS });
 console.log(`destination ATA: ${destAta}${destHas === 0 ? " (will be created, burner pays rent)" : ""}`);
