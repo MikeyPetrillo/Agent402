@@ -473,6 +473,37 @@ try {
     ok(retried?.replay === true && retried.subId === first.subId && L.calls.activate === 1 && (await rowBody())?.[`a402:sub:${first.subId}`]?.status === "active", `setup: the retry rebuilt the record in the row before the activation wrote it (${retried?.subId})`);
     ok(L.calls.sales.length === 1, `the activation that lost the write books nothing: the first period is booked once (${L.calls.sales.length})`);
   }
+  // ---- renewal retries across containers: one charge per period ----------------
+  // A past_due subscription is retried by each container's retry sweep; two
+  // sweeps (and the leased wrapper on each) running at the same moment on one
+  // row sign and book the period once, and the other container then reads it paid.
+  {
+    const P = makeEngine(join(D1, "retry", "mpp-subscriptions.json"));
+    await P.engine.ready();
+    const offerT = await P.engine.mintOffer({ product: "fund-monitor", target: "Retry Overlap LP" });
+    const subT = await P.engine.activateFromCredential(await signCredential(Challenge.deserialize(offerT.header)));
+    await P.engine.flush();
+    const Q = makeEngine(join(D2, "retry", "mpp-subscriptions.json"));
+    await Q.engine.ready();
+    advance(PERIOD);
+    P.setCharge(() => new Error("insufficient funds"));
+    ok(await P.engine.refreshStatus(subT.subId) === "past_due", "setup: the renewal failed on one container (past_due in the row)");
+    await P.engine.flush();
+    advance(60 * 60_000 + 1000);
+    const slow = (ref) => async () => { await new Promise((r) => setTimeout(r, 40)); return { reference: ref }; };
+    P.setCharge(slow("0xp-retry")); Q.setCharge(slow("0xq-retry"));
+    const charges = () => P.calls.charge + Q.calls.charge;
+    const sales = () => P.calls.sales.length + Q.calls.sales.length;
+    const before = charges(), salesBefore = sales();
+    await Promise.all([P.engine._retryDueRenewalsUnleased(), Q.engine._retryDueRenewalsUnleased(), P.engine.retryDueRenewals(), Q.engine.retryDueRenewals()]);
+    await P.engine.flush(); await Q.engine.flush();
+    const row = (await rowBody())?.[`a402:sub:${subT.subId}`];
+    ok(charges() - before === 1 && sales() - salesBefore === 1, `two containers retrying at once sign and book the period once (${charges() - before} signed, ${sales() - salesBefore} booked)`);
+    ok(row?.status === "active" && row.lastChargedPeriod === 1 && !row.chargeClaim, "the row reads the period paid, with no claim left behind");
+    const again = charges();
+    await Promise.all([P.engine._retryDueRenewalsUnleased(), Q.engine._retryDueRenewalsUnleased()]);
+    ok(charges() === again, "a later sweep on either container signs nothing");
+  }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();

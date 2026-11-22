@@ -1500,5 +1500,111 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   ok(worst < took / 3 && worst < 400, `the sweep yields as it goes: the longest event-loop turn was ${worst.toFixed(0)} ms over a ${took.toFixed(0)} ms sweep (${turns} timer turns)`);
 }
 
+// ---------------------------------------------------------------------------
+// Renewal retries (RENEWAL RETRIES in src/mpp-subscriptions.js). A past_due
+// subscription is not listed to the scheduler, so without the retry sweep its
+// failed renewal is never tried again and the subscription is lost at the end
+// of the grace window. The sweep retries it on a bounded schedule inside that
+// window, renews once on the first attempt that confirms, and cancels only
+// when the last attempt (placed at the grace end) failed too.
+// ---------------------------------------------------------------------------
+{
+  const mod = await import("../src/mpp-subscriptions.js");
+  ok(typeof mod.nextRenewalAttemptAt === "function", "the retry schedule is exported (nextRenewalAttemptAt)");
+  const H = 3_600_000;
+  const T0 = Date.parse("2026-01-01T00:00:00Z");
+  const sched = (f, tr, at) => mod.nextRenewalAttemptAt({ failures: f, transient: tr, firstFailedAtMs: T0, atMs: at });
+  ok(sched(1, true, T0) - T0 === 2 * 60_000 && sched(2, true, T0) - T0 === 4 * 60_000 && sched(3, true, T0) - T0 === 6 * 60_000, "transient failures retry in 2, 4, 6 minutes");
+  ok(sched(4, true, T0) - T0 === 8 * H, "a fourth transient failure falls back to the hourly doubling (8 h)");
+  ok(sched(1, false, T0) - T0 === H && sched(2, false, T0) - T0 === 2 * H && sched(9, false, T0) - T0 === 24 * H, "other failures: 1 h doubling, at most 24 h");
+  ok(sched(5, false, T0 + PAST_DUE_GRACE_MS - H) === T0 + PAST_DUE_GRACE_MS, "no retry is placed past the grace end: the last one is AT the grace end");
+  ok(sched(5, false, T0 + PAST_DUE_GRACE_MS) === null, "a failure at the grace end ends the episode");
+
+  // (a) A transient failure, then success on the sweep's retry: renewed once.
+  {
+    const h = makeEngine({ name: "retry-ok" });
+    const offer = await h.engine.mintOffer({ product: "fund-monitor", target: "Retry Manager LP" });
+    const { header } = await signCredential(Challenge.deserialize(offer.header));
+    const sub = await h.engine.activateFromCredential(header);
+    await h.engine.warm();
+    const salesBefore = h.calls.sales.length;
+    h.setCharge(() => Object.assign(new Error("fetch failed"), { details: "ECONNRESET" }));
+    advance(PERIOD);
+    ok(await h.engine.refreshStatus(sub.subId) === "past_due" && h.calls.charge === 1, "(a) the scheduled pull fails transiently: past_due");
+    ok(h.engine.listActive().every((r) => r.subId !== sub.subId), "(a) a past_due subscription is not listed to the scheduler, so only the retry sweep can pull it again");
+    ok(typeof h.engine.retryDueRenewals === "function", "(a) the engine has a renewal retry sweep");
+    let r = await h.engine.retryDueRenewals();
+    ok(r.tried === 0 && h.calls.charge === 1, "(a) before the retry time the sweep pulls nothing");
+    h.setCharge(() => ({ reference: "0xretried" }));
+    advance(TRANSIENT_CHARGE_BACKOFF_MS + 1000);
+    r = await h.engine.retryDueRenewals();
+    ok(r.tried === 1 && r.renewed === 1 && h.calls.charge === 2, "(a) the sweep retries once the time has come and the renewal confirms");
+    const rec = h.engine.get(sub.subId);
+    ok(rec.status === "active" && rec.lastChargedPeriod === 1 && rec.lastChargeTx === "0xretried" && rec.chargeFailures === 0, "(a) the subscription is active again for period 1");
+    ok(h.calls.sales.length - salesBefore === 1, `(a) the renewed period is booked once (${h.calls.sales.length - salesBefore})`);
+    r = await h.engine.retryDueRenewals();
+    ok(r.tried === 0 && h.calls.charge === 2, "(a) a second sweep pulls nothing: the period is paid");
+    ok(h.engine.listActive().some((x) => x.subId === sub.subId), "(a) and the scheduler serves it again");
+  }
+
+  // (b) Every retry fails: past_due through the window, canceled only after the
+  // attempt at the grace end, with a bounded number of attempts.
+  {
+    const h = makeEngine({ name: "retry-fail" });
+    const offer = await h.engine.mintOffer({ product: "fund-monitor", target: "Unpaid Manager LP" });
+    const { header } = await signCredential(Challenge.deserialize(offer.header));
+    const sub = await h.engine.activateFromCredential(header);
+    await h.engine.warm();
+    h.setCharge(() => new Error("insufficient funds"));
+    advance(PERIOD);
+    ok(await h.engine.refreshStatus(sub.subId) === "past_due", "(b) the first renewal fails: past_due");
+    const firstFailedAt = Date.parse(h.engine.get(sub.subId).firstFailedAt);
+    const graceEnd = firstFailedAt + PAST_DUE_GRACE_MS;
+    const attempts = [clock];
+    let canceledAt = null, stillPastDueBeforeEnd = true;
+    for (let i = 0; i < 400 && canceledAt === null; i++) {
+      const next = Date.parse(h.engine.get(sub.subId).nextChargeAttemptAt || "");
+      if (!Number.isFinite(next)) break;
+      clock = Math.max(clock, next) + 1;
+      const before = h.calls.charge;
+      const r = await h.engine.retryDueRenewals();
+      if (h.calls.charge > before) attempts.push(clock);
+      const st = h.engine.get(sub.subId).status;
+      if (st === "canceled") canceledAt = clock;
+      else if (st !== "past_due") stillPastDueBeforeEnd = false;
+      if (r.tried !== 1) break;
+    }
+    ok(stillPastDueBeforeEnd, "(b) every failed retry before the grace end leaves it past_due");
+    ok(canceledAt !== null && canceledAt >= graceEnd, `(b) it is canceled only by the attempt at or after the grace end (${canceledAt === null ? "never" : `${((canceledAt - firstFailedAt) / H).toFixed(1)} h`})`);
+    ok(attempts.length >= 8 && attempts.length <= 16, `(b) the attempts are bounded (${attempts.length} over the window)`);
+    ok(attempts.every((t, i) => i === 0 || t <= graceEnd + 1), "(b) no attempt is made past the grace end");
+    const rec = h.engine.get(sub.subId);
+    ok(rec.canceledReason === "unpaid" && rec.nextChargeAttemptAt == null, "(b) canceled as unpaid, with no further attempt scheduled");
+    const charges = h.calls.charge;
+    advance(PERIOD);
+    const r = await h.engine.retryDueRenewals();
+    ok(r.tried === 0 && h.calls.charge === charges, "(b) a canceled subscription is never retried");
+  }
+
+  // (c) Two sweeps at once on one engine (two timers, or a sweep beside a
+  // scheduler pull): the period is claimed before signing, so it is paid once.
+  {
+    const h = makeEngine({ name: "retry-race" });
+    const offer = await h.engine.mintOffer({ product: "fund-monitor", target: "Race Manager LP" });
+    const { header } = await signCredential(Challenge.deserialize(offer.header));
+    const sub = await h.engine.activateFromCredential(header);
+    await h.engine.warm();
+    h.setCharge(() => new Error("insufficient funds"));
+    advance(PERIOD);
+    await h.engine.refreshStatus(sub.subId);
+    advance(CHARGE_BACKOFF_MS + 1000);
+    h.setCharge(async () => { await new Promise((res) => setTimeout(res, 30)); return { reference: "0xonce" }; });
+    const salesBefore = h.calls.sales.length;
+    const chargesBefore = h.calls.charge;
+    await Promise.all([h.engine._retryDueRenewalsUnleased(), h.engine._retryDueRenewalsUnleased(), h.engine.refreshStatus(sub.subId)]);
+    ok(h.calls.charge - chargesBefore === 1 && h.calls.sales.length - salesBefore === 1 && h.engine.get(sub.subId).status === "active", `(c) concurrent retries sign and book the period once (${h.calls.charge - chargesBefore} signed)`);
+  }
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${pass} passed, 0 failed`);
