@@ -12,6 +12,11 @@
 //      per character, `sttPerMinute.<id>` per audio minute); and
 //   3. the route's worst case on it stays inside the margin bound: the cap
 //      (characters, or minutes) times the row is at most MARGIN of the price.
+//      The cap is the route's, or the model's own where it declares a lower
+//      one (`maxChars` for speech, `maxMinutes` for transcription: a number,
+//      or one per tier). A request past a model's own cap is a 400 that names
+//      it, before any upstream call; the route's other models keep the
+//      route's cap.
 // Otherwise the model is not offered: a request that names it gets the 400
 // every unknown model gets, and no listing, schema or description names it.
 // The rows are required keys of the table (it reads partial without them),
@@ -49,6 +54,10 @@ export const SPEECH_ADDITIONS = Object.freeze([
   Object.freeze({
     id: "elevenlabs/eleven-v3-conversational",
     aliases: Object.freeze(["eleven-v3-conversational"]),
+    // Its own cap, under the route's: sized so its worst case stays inside
+    // the margin bound of the route's price (scripts/test-pricing-margin.js
+    // checks it against the private row).
+    maxChars: 1000,
     // The same speaker per OpenAI name as /api/tts gives (ELEVENLABS_VOICE_MAP in tts-kit.js).
     map: Object.freeze({ alloy: "river", ash: "chris", ballad: "callum", coral: "jessica", echo: "eric", fable: "george", onyx: "brian", nova: "sarah", sage: "matilda", shimmer: "lily", verse: "liam" }),
     voices: new Set(ELEVEN_VOICES),
@@ -86,6 +95,12 @@ export function namedAudioModelsOn(env = process.env) {
   return new Set(raw.split(",").map((s) => s.trim()).filter((id) => ADDITION_MODEL_IDS.includes(id)));
 }
 
+// Test seam: per-model caps laid over the declared ones, { [id]: { maxChars?, maxMinutes? } }.
+let capOverrides = null;
+/** Test seam: lay caps over the declared ones (null clears). */
+export function __setAdditionCapsForTest(map) { capOverrides = map || null; }
+const capField = (m, field) => (capOverrides && Object.hasOwn(capOverrides, m?.id) ? capOverrides[m.id]?.[field] : m?.[field]);
+
 const positive = (x) => typeof x === "number" && Number.isFinite(x) && x > 0;
 /** Is a cap times a rate inside the margin bound of a price? */
 export function withinMargin(cap, rate, priceUsd) {
@@ -101,13 +116,31 @@ export const speechAdditionNamed = (name) => find(SPEECH_ADDITIONS, name);
 /** The transcription addition a `model` value names (admitted or not), or null. */
 export const sttAdditionNamed = (name) => find(STT_ADDITIONS, name);
 
-/** The speech additions this server serves on a route of `priceUsd` and `maxChars`. */
+/** The character cap a speech model holds on a route whose cap is
+ *  `routeMaxChars`: its own where it declares a lower one, else the route's.
+ *  Any entry works (a chain link declares none). */
+export function speechMaxCharsFor(m, routeMaxChars) {
+  const own = capField(m, "maxChars");
+  return positive(own) ? Math.min(own, routeMaxChars) : routeMaxChars;
+}
+/** The audio-minute cap a transcription model holds on `tierSlug`, whose cap
+ *  is `tierMaxMinutes`: its own (one number, or one per tier) where lower,
+ *  else the tier's. */
+export function sttMaxMinutesFor(m, tierSlug, tierMaxMinutes) {
+  const raw = capField(m, "maxMinutes");
+  const own = raw && typeof raw === "object" ? raw[tierSlug] : raw;
+  return positive(own) ? Math.min(own, tierMaxMinutes) : tierMaxMinutes;
+}
+
+/** The speech additions this server serves on a route of `priceUsd` and
+ *  `maxChars`, each held to its own cap where it declares one. */
 export function admittedSpeechAdditions({ priceUsd, maxChars, costs = upstreamCosts(), env = process.env } = {}) {
   const on = namedAudioModelsOn(env);
-  return SPEECH_ADDITIONS.filter((m) => on.has(m.id) && withinMargin(maxChars, costs?.speech?.[m.id], priceUsd));
+  return SPEECH_ADDITIONS.filter((m) => on.has(m.id) && withinMargin(speechMaxCharsFor(m, maxChars), costs?.speech?.[m.id], priceUsd));
 }
-/** The transcription additions this server serves on a tier of `priceUsd` and `maxMinutes`. */
-export function admittedSttAdditions({ priceUsd, maxMinutes, costs = upstreamCosts(), env = process.env } = {}) {
+/** The transcription additions this server serves on a tier of `priceUsd`
+ *  and `maxMinutes`, each held to its own cap where it declares one. */
+export function admittedSttAdditions({ priceUsd, maxMinutes, tierSlug = null, costs = upstreamCosts(), env = process.env } = {}) {
   const on = namedAudioModelsOn(env);
-  return STT_ADDITIONS.filter((m) => on.has(m.id) && withinMargin(maxMinutes, costs?.sttPerMinute?.[m.id], priceUsd));
+  return STT_ADDITIONS.filter((m) => on.has(m.id) && withinMargin(sttMaxMinutesFor(m, tierSlug, maxMinutes), costs?.sttPerMinute?.[m.id], priceUsd));
 }
