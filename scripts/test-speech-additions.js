@@ -261,7 +261,7 @@ const speechListed = () => G.modelsList().data.filter((m) => m.x402?.tier === "v
     const calls = [];
     const realFetch = globalThis.fetch;
     globalThis.fetch = async (url, init) => {
-      if (String(url).startsWith(AUDIO)) return new Response(audio, { status: 200, headers: { "content-type": "audio/wav" } });
+      if (new URL(String(url)).origin === new URL(AUDIO).origin) return new Response(audio, { status: 200, headers: { "content-type": "audio/wav" } });
       if (!(init?.body instanceof FormData)) throw new Error(`unexpected fetch in an offline suite: ${String(url).slice(0, 60)}`);
       calls.push(Object.fromEntries([...init.body.entries()].filter(([, v]) => typeof v === "string")));
       return new Response(JSON.stringify({ text: "ok", language: "en", duration: 60 }), { status: 200, headers: { "content-type": "application/json" } });
