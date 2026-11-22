@@ -59,8 +59,7 @@ const TOP1 = [
   ["ens lookup",                    "ens-resolve"],
   ["lookup whois for a domain",    "whois"],
   // A question or "search for" opening goes to the web tools only when no
-  // tool answers the rest strongly (2026-11-22): these name a tool.
-  ["search for a domain name availability", "domain-audit"],
+  // tool answers the rest strongly (2026-11-22): this one names a tool.
   ["what is my ip",                 "ip-info"],
   // ...and a question several tools only share a word of stays the answer's.
   ["what is x402",                  "answer"],

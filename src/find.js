@@ -143,9 +143,9 @@ const THIRD_PARTY_MARKERS = new Set(["external", "another", "other", "others", "
  * "look up X" is a web search for X, and a question about how or why the
  * world works ("how does X work", "what is X", "explain X") is the cited
  * answer's job. Weaker than the phrase rules in applyFrontDoorTerms: "what
- * is my ip" and "search for a domain name availability" open the same way
- * and name a tool that answers them, so findTools adds this term only when
- * no tool answers the rest of the query strongly.
+ * is my ip" and "what is the price of ethereum" open the same way and name a
+ * tool that answers them, so findTools adds this term only when no tool
+ * answers the rest of the query strongly.
  * @param {string[]} terms  the query's terms so far (a term already there is not added again)
  * @param {string} q
  * @returns {{ term: string, rest: string, words: string[] }|null} the term, the query after its
@@ -163,12 +163,13 @@ export function openingDoorTerm(terms, q) {
 const openingOf = (term, ql, opening) => ({ term, rest: ql.slice(opening.length), words: opening.split(/[^a-z0-9]+/).filter(Boolean) });
 
 // A tool answers the rest of an opening query strongly when, ranked on the
-// words after the opening, it is not itself the front-door tool and it leads
-// at OPENING_STRONG_SCORE or more, covering their rarest word and ahead of
-// the next tool by OPENING_LEAD ("my ip"), or at OPENING_CLEAR_SCORE or more
-// ("a domain name availability"). A world question whose words a tool only
-// grazes ("how do solar panels work" against sun-times) or that several
-// tools share alike ("what is x402") stays the cited answer's.
+// words after the opening, it is not itself the front-door tool, it covers
+// their rarest word, and it leads at OPENING_CLEAR_SCORE or more, or at
+// OPENING_STRONG_SCORE or more ahead of the next tool by OPENING_LEAD ("my
+// ip"). A query whose defining word no tool covers ("a domain name
+// availability"), a world question whose words a tool only grazes ("how do
+// solar panels work" against sun-times) or one that several tools share
+// alike ("what is x402") stays the web tool's.
 const OPENING_STRONG_SCORE = 12;
 const OPENING_LEAD = 1.2;
 const OPENING_CLEAR_SCORE = 30;
@@ -367,8 +368,8 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs, openi
     const leadDef = lead && Object.values(catalog).find((t) => t && t.slug === lead.slug);
     const isDoor = !!leadDef && (leadDef.slug === openingTerm || (leadDef.tags || []).some((tg) => String(tg).toLowerCase() === openingTerm));
     const runnerUp = plain.results?.[1]?.score || 0;
-    const strong = !!lead && !isDoor && (lead.score >= OPENING_CLEAR_SCORE
-      || (plain.rarestTermCovered !== false && lead.score >= OPENING_STRONG_SCORE && lead.score >= OPENING_LEAD * runnerUp));
+    const strong = !!lead && !isDoor && plain.rarestTermCovered !== false
+      && (lead.score >= OPENING_CLEAR_SCORE || (lead.score >= OPENING_STRONG_SCORE && lead.score >= OPENING_LEAD * runnerUp));
     if (!strong) terms.push(openingTerm);
     else {
       // The tool is ranked on the rest: the opening's own words ("search",

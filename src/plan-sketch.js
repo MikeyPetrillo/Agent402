@@ -67,20 +67,32 @@ const TASK_VERBS = new Set([
   "render", "resolve", "scan", "search", "sign", "sort", "split", "summarize", "test", "transcribe",
   "translate", "validate", "verify",
 ]);
-// Words that sequence steps or pad a request. A side of an "and" that holds
-// one past its verb, or ends on one ("get the price and first"), is a marker
-// fragment, not a task.
+// Words that sequence steps or pad a request. A side of an "and" that holds a
+// marker word anywhere ("then", "step", "also"), or ends on a sequence word
+// ("get the price and first"), is a marker fragment, not a task. "first" and
+// "next" open a side ("first get the quote"); inside one they are ordinary
+// words ("get the first page"), and an "and" inside one is part of it ("count
+// its rows and columns"). A closing "please" is not part of the step.
+const MARKER_WORDS = new Set(["then", "step", "finally", "afterwards", "also"]);
 const SEQUENCE_WORDS = new Set(["and", "first", "firstly", "also", "please", "then", "next", "step", "finally", "afterwards"]);
-// A task phrase: a task verb, then an object, with no sequence word, no
-// "step 1:" label and no closing ":" anywhere in it.
-function isTaskPhrase(raw) {
-  const words = raw.trim().toLowerCase().split(/\s+/);
-  if (words.length < 2 || !TASK_VERBS.has(words[0])) return false;
-  for (const w of words.slice(1)) {
-    if (w.endsWith(":")) return false;
-    if (SEQUENCE_WORDS.has(w.replace(/[,.;]+$/, ""))) return false;
+const OPENERS = new Set(["first", "firstly", "next"]);
+// The side as a step: its words without an opening sequence word or a
+// closing "please", or null when it is not a task phrase (a task verb, then
+// an object, with no marker word and no "step 1:" label or closing ":").
+function taskPhrase(raw) {
+  const words = trimTail(raw).trim().split(/\s+/);
+  if (/:\s*,?\s*$/.test(raw)) return null;
+  while (words.length && OPENERS.has(words[0].toLowerCase())) words.shift();
+  while (words.length && words[words.length - 1].toLowerCase().replace(/[,.;]+$/, "") === "please") words.pop();
+  const low = words.map((w) => w.toLowerCase());
+  if (low.length < 2 || !TASK_VERBS.has(low[0])) return null;
+  for (const w of low.slice(1)) {
+    if (w.endsWith(":")) return null;
+    if (MARKER_WORDS.has(w.replace(/[,.;]+$/, ""))) return null;
   }
-  return /[a-z]/.test(words[words.length - 1]);
+  const last = low[low.length - 1].replace(/[,.;]+$/, "");
+  if (SEQUENCE_WORDS.has(last) || !/[a-z]/.test(last)) return null;
+  return trimTail(words.join(" ")).trim();
 }
 // Split at an "and" whose next word is a task verb; any other "and" stays
 // inside its step ("count its rows and columns"). The walk finds each "and"
@@ -106,8 +118,8 @@ function splitOnAnd(q) {
     if (raw.length > PLAN_MAX_STEPS) return [];
   }
   raw.push(q.slice(from));
-  if (raw.length < 2 || !raw.every(isTaskPhrase)) return [];
-  const steps = raw.map((p) => trimTail(p).trim());
+  if (raw.length < 2) return [];
+  const steps = raw.map(taskPhrase);
   return steps.every(Boolean) ? steps : [];
 }
 

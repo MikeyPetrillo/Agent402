@@ -43,6 +43,15 @@ for (const q of ["search the web for x402 adoption", "bitcoin and ethereum price
 // Each side of an "and" is a task phrase: a task verb, an object, and no
 // sequence word or "step 1:" label inside it, so marker fragments a split on
 // the markers left behind never pair up into steps.
+// An "and" inside a side is part of it, a sequence word only opens one, and
+// a closing "please" is not part of the step.
+for (const [q, want] of [
+  ["count its rows and columns and sort them", ["count its rows and columns", "sort them"]],
+  ["parse the csv and count rows and columns", ["parse the csv", "count rows and columns"]],
+  ["get the first page and summarize it", ["get the first page", "summarize it"]],
+  ["translate the text and summarize it please", ["translate the text", "summarize it"]],
+  ["get price step 1: and   first and get price authen", []],
+]) ok(JSON.stringify(splitSteps(q)) === JSON.stringify(want), `"${q}" splits into ${JSON.stringify(want)} (got ${JSON.stringify(splitSteps(q))})`);
 for (const q of ["get price step 1: and   first and get price authen", "get price and get price   get price also    get price get price next, \n 1.", "get the price and first", "get price: and get price", "get first and get price"]) {
   ok(splitSteps(q).length === 0, `"${q.replace(/\n/g, "\\n")}" stays a single step (got ${JSON.stringify(splitSteps(q))})`);
 }

@@ -298,6 +298,10 @@
       "q": "what is the price of ethereum",
       "top": "crypto-price",
       "lead": 1.2
+    },
+    {
+      "q": "search for a domain name availability",
+      "top": "search"
     }
   ],
   "gaps": [
