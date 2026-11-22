@@ -1166,6 +1166,14 @@
     "SOLANA_LB_TX_CONCURRENCY": "Transaction reads in flight per payTo in a Solana board scan (1 to 32). Unset = 2, which keeps the paced public lane's queue short for other readers.",
     "UPSTREAM_BUDGET_SYNC_MS": "How often each process adds its calls to the upstream budgets' shared day counters and reads the totals back, in milliseconds. Unset = 15000.",
     "UPSTREAM_CALL_DAYS_FILE": "File holding the per-caller daily call counts without a state database (default /data/upstream-call-days.json, the temp directory without a volume).",
-    "UPSTREAM_CALL_DAYS_FLUSH_MS": "How often the per-caller daily call counts are folded into their document, in milliseconds. Unset = 60000."
+    "UPSTREAM_CALL_DAYS_FLUSH_MS": "How often the per-caller daily call counts are folded into their document, in milliseconds. Unset = 60000.",
+    "AWS_MARKETPLACE_QUOTE_KEY": "Private key (PEM, or base64 of the PEM) that signs the quotes of the AWS Marketplace front door under /aws; its presence turns the gate on (a credential, set on the host).",
+    "AWS_MARKETPLACE_QUOTE_KEY_ID": "Key id (kid) of that quote key, as published at /aws/.well-known/jwks.json.",
+    "AWS_MARKETPLACE_PRODUCT_ID": "The AWS Marketplace product id (prod-...) every quote names; the gate stays off without it.",
+    "AWS_MARKETPLACE_SLUGS": "Comma list of catalog slugs sold under /aws/<slug>; the first also answers at /aws (default: the first listing in the gate).",
+    "AWS_MARKETPLACE_QUOTE_SECONDS": "How long a quote stays payable, in seconds (30 to 3600).",
+    "AWS_MARKETPLACE_RETRY_MAX": "Further attempts one payment buys after a run that ended without an answer (0 to 5).",
+    "AWS_MARKETPLACE_PAYMENT_JWKS_URL": "Base URL of the payment service's signing keys (an https AWS host, or loopback for a local test); unset reads AWS's own.",
+    "AWS_MARKETPLACE_JWKS_EXTRA": "JSON public key (or list) published beside the quote key, for a key rotation."
   }
 }

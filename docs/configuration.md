@@ -12,11 +12,11 @@ its first read site when there is one, else the value `docs/configuration.json` 
 named constant, an expression or a branch (checked against the code by `scripts/test-config-reference.js`); a helper
 may still clamp it, and the read site is the reference.
 
-1090 variables in 112 groups.
+1098 variables in 113 groups.
 
 ## Contents
 
-[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
+[AGENT402](#agent402) · [ALERT](#alert) · [ALGORAND](#algorand) · [ANALYTICS](#analytics) · [ANSWER](#answer) · [ARC](#arc) · [ATTEST](#attest) · [AVM](#avm) · [AWS](#aws) · [BACKUP](#backup) · [BASE](#base) · [BAZAAR](#bazaar) · [BRAVE](#brave) · [BROKEN](#broken) · [BUDGET](#budget) · [CDN](#cdn) · [CDP](#cdp) · [CELO](#celo) · [CIRCLE](#circle) · [COINGECKO](#coingecko) · [COMPOSITE](#composite) · [CRAWL](#crawl) · [CREDITS](#credits) · [DATABENTO](#databento) · [DECIDE](#decide) · [DECISION](#decision) · [DIRECT](#direct) · [DISCOVERY](#discovery) · [EMAIL](#email) · [EMBEDDINGS](#embeddings) · [EVM](#evm) · [EXTERNAL](#external) · [FACILITATOR](#facilitator) · [FIRST](#first) · [FLOOR](#floor) · [FREE](#free) · [FUNNEL](#funnel) · [GATEWAY](#gateway) · [HANGUP](#hangup) · [HARDCAP](#hardcap) · [HTML](#html) · [HTTP](#http) · [HUMAN](#human) · [INDEX](#index) · [INFLIGHT](#inflight) · [JUDGE](#judge) · [LATE](#late) · [LAZY](#lazy) · [LEADERBOARD](#leaderboard) · [LEDGER](#ledger) · [LOOP](#loop) · [MEMORY](#memory) · [MONAD](#monad) · [MPP](#mpp) · [MTA](#mta) · [NETWORK](#network) · [OCR](#ocr) · [ONCHAIN](#onchain) · [OPENROUTER](#openrouter) · [OUR](#our) · [OUTBOUND](#outbound) · [OX](#ox) · [PAYAI](#payai) · [PAYMENT](#payment) · [PENDING](#pending) · [POSTHOG](#posthog) · [POW](#pow) · [PRICE](#price) · [PROGRAMMATIC](#programmatic) · [RAILWAY](#railway) · [RECEIPT](#receipt) · [REDIS](#redis) · [REFERRAL](#referral) · [REFUND](#refund) · [RENDER](#render) · [RERANK](#rerank) · [RETURNING](#returning) · [REVENUE](#revenue) · [ROBINHOOD](#robinhood) · [ROUTE](#route) · [ROUTER](#router) · [RUGCHECK](#rugcheck) · [SANCTIONS](#sanctions) · [SEARCH](#search) · [SELLER](#seller) · [SETTLE](#settle) · [SHARED](#shared) · [SHED](#shed) · [SIWE](#siwe) · [SOLANA](#solana) · [SOLVADOR](#solvador) · [SOR](#sor) · [SQL](#sql) · [STALL](#stall) · [STATE](#state) · [STATUS](#status) · [STELLAR](#stellar) · [STRIPE](#stripe) · [SVM](#svm) · [TEMPO](#tempo) · [TOOL](#tool) · [TOP](#top) · [TRAFFIC](#traffic) · [TRIAL](#trial) · [TWEET](#tweet) · [TWITTER](#twitter) · [TYPESAFE](#typesafe) · [UPSTREAM](#upstream) · [WALLET](#wallet) · [WISH](#wish) · [X](#x) · [X402](#x402) · [Other](#other)
 
 ## AGENT402
 
@@ -120,6 +120,19 @@ may still clamp it, and the read site is the reference.
 | `AVM_SPONSORSHIP_STALE_MS` | Avm sponsorship stale, in milliseconds. |  | `src/avm-sponsorship.js` |
 | `AVM_SUBCENT_GATE` | Avm subcent gate. |  | `src/avm-sponsorship.js` |
 | `AVM_SUBCENT_SHARED_SYNC_MS` | Avm subcent shared sync, in milliseconds. |  | `src/avm-sponsorship.js` |
+
+## AWS
+
+| Variable | Purpose | Default | Read in |
+| --- | --- | --- | --- |
+| `AWS_MARKETPLACE_JWKS_EXTRA` | JSON public key (or list) published beside the quote key, for a key rotation. |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_PAYMENT_JWKS_URL` | Base URL of the payment service's signing keys (an https AWS host, or loopback for a local test); unset reads AWS's own. |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_PRODUCT_ID` | The AWS Marketplace product id (prod-...) every quote names; the gate stays off without it. |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_QUOTE_KEY` | Private key (PEM, or base64 of the PEM) that signs the quotes of the AWS Marketplace front door under /aws; its presence turns the gate on (a credential, set on the host). |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_QUOTE_KEY_ID` | Key id (kid) of that quote key, as published at /aws/.well-known/jwks.json. |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_QUOTE_SECONDS` | How long a quote stays payable, in seconds (30 to 3600). |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_RETRY_MAX` | Further attempts one payment buys after a run that ended without an answer (0 to 5). |  | `src/aws-marketplace-gate.js` |
+| `AWS_MARKETPLACE_SLUGS` | Comma list of catalog slugs sold under /aws/<slug>; the first also answers at /aws (default: the first listing in the gate). |  | `src/aws-marketplace-gate.js` |
 
 ## BACKUP
 
