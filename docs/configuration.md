@@ -13,7 +13,7 @@ named constant, an expression or a branch (checked against the code by `scripts/
 may still clamp it, and the read site is the reference. A default marked "not listed" is kept off this page; the read site
 holds it.
 
-1095 variables in 113 groups.
+1096 variables in 113 groups.
 
 ## Contents
 
@@ -1566,6 +1566,7 @@ holds it.
 | `EDGAR_FETCH_TIMEOUT_MS` | Edgar fetch timeout, in milliseconds. | `12000` | `src/tools/edgar-13f-datasets.js`, `src/tools/edgar-kit.js` |
 | `EDGAR_USER_AGENT` | Edgar user agent. |  | `src/tools/edgar-kit.js` |
 | `ERC8004_AGENT_ID` | ERC-8004 agent id this server publishes in its agent card. |  | `src/tools/a2a-card.js` |
+| `FEATURE_FLAGS_RAILWAY_TOKEN` | A Railway project token (a credential, set on the host); set, runtime switches read Railway feature flags first (src/feature-flags-railway.js). |  | `src/feature-flags-railway.js` |
 | `FLIGHT_SELLERS_JSON` | Flight sellers JSON. |  | `src/server.js` |
 | `FOLLOWUPS` | off stops the follow-up loop. |  | `src/server.js` |
 | `FRED_API_KEY` | Fred API key (a credential, set on the host). |  | `src/selfcheck.js`, `src/tools/macro-kit.js` |

@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (19 scripts, one process each)
+# @step 1: Offline suites (20 scripts, one process each)
 # Boot /supported guard (a dead facilitator costs ONE rail, not every paid route — the 2026-08-01 Celo outage; probe-driven drop, fail-open on total blindness, escape hatch — offline)
 t node scripts/test-supported-guard.js
 # A rail dropped at boot on a failed or slow /supported read is read again on a backoff and rejoins the 402 and every derived surface without a restart
@@ -41,6 +41,8 @@ t node scripts/test-mpp-flagship.js
 t node scripts/test-load-concurrency.js
 # Runtime switches: provider, then environment, then the declared default; booleans and declared names only (offline)
 t node scripts/test-feature-flags.js
+# Railway feature flags as the switch provider: off unless FEATURE_FLAGS_RAILWAY_TOKEN is set; the real SDK against a stub endpoint (offline)
+t node scripts/test-feature-flags-railway.js
 # /integrations/agentcore: copy follows the MPP offer gate and the Tempo switch; route, index, sitemaps, llms.txt and page date (offline, port 0)
 t node scripts/test-agentcore-page.js
 # Every issue a scheduled check opens is the fixed neutral title and body, in every workflow and the status Worker (offline)
