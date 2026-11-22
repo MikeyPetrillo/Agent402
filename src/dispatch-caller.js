@@ -81,6 +81,17 @@ export function currentDispatchCaller() {
   return scope.getStore()?.capKey || null;
 }
 
+/** For a request-less call inside a dispatch whose payment settles after its
+ *  handler: a function that adds a hook the dispatcher runs once with whether
+ *  that request's final response was a settled 200 (the hook list on the
+ *  request, `__onSettled`; the request itself is never handed out). Null
+ *  when the call runs for no such request. A step whose effect is kept only
+ *  when the call is paid for (src/tools/price-webhook-kit.js) registers its
+ *  outcome here. */
+export function currentSettleHook() {
+  return scope.getStore()?.onSettled || null;
+}
+
 /** Every caller key the current request-less call runs for, or null. */
 export function currentDispatchCallerKeys() {
   return scope.getStore()?.keys || null;
@@ -113,5 +124,8 @@ export function runAsCallerOf(req, fn) {
   const own = callerKeysOf(req);
   const keys = own.length ? Object.freeze(own) : ANONYMOUS_KEYS;
   const capKey = callerKeyOf(req) || `${ANONYMOUS_CALLER}:${++anonymousRequests}`;
-  return scope.run(Object.freeze({ keys, capKey }), fn);
+  // Only a request whose response the dispatcher waits on reports its
+  // settlement to the hooks on it.
+  const onSettled = req.res && typeof req.res.once === "function" ? (hook) => { if (typeof hook === "function") (req.__onSettled ||= []).push(hook); } : null;
+  return scope.run(Object.freeze({ keys, capKey, onSettled }), fn);
 }

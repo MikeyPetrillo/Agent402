@@ -84,6 +84,25 @@ try {
     const lapsed = await rig.pay(good, route(urlGood, ["hash", "search"]));
     await ok(lapsed.status === 402 && await eventually(() => stored().subs[paid.json.id]?.renew === undefined) && JSON.stringify(stored().subs[paid.json.id]) === was, `${wire}: a renewal whose settlement failed leaves the subscription as it was (${lapsed.status}; ${JSON.stringify(stored().subs[paid.json.id])})`);
   }
+  // Routed through route-execute-plus (the handler runs as a step of that paid
+  // call, with no request of its own): kept only when route-execute's own
+  // payment settles, removed when it does not.
+  {
+    const routed = (url) => ({ method: "POST", path: "/api/route/execute-plus", body: { slug: "price-webhook", params: { url } } });
+    const good = await rig.wallet("evm");
+    const urlR = target("1.1.1.1");
+    const r1 = await rig.pay(good, routed(urlR));
+    const id1 = r1.json?.result?.id || r1.json?.id || subsFor(urlR)[0]?.[0];
+    await ok(r1.status === 200 && rig.outcomesOf(good).settled === 1 && await eventually(() => subsFor(urlR).length === 1 && subsFor(urlR)[0][1].pending === undefined), `routed: a registration made through a settled route-execute call is kept, confirmed (${r1.status}, ${id1 ? "id" : "no id"}, ${JSON.stringify(subsFor(urlR).map(([, x]) => x.pending ?? "confirmed"))})`);
+    const broke = await rig.wallet("evm");
+    rig.fund(broke, 0n, { shown: 10n ** 12n });
+    const urlB = target("1.1.1.1");
+    const call = rig.pay(broke, routed(urlB));
+    const sawPending = await eventually(() => subsFor(urlB).some(([, x]) => x.pending > 0));
+    const r2 = await call;
+    await ok(sawPending && r2.status === 402 && rig.outcomesOf(broke).refused === 1, `routed: with route-execute's settlement refused the call answers 402, and its registration was only pending meanwhile (${r2.status}, pending seen ${sawPending})`);
+    await ok(await eventually(() => subsFor(urlB).length === 0), `routed: a registration whose route-execute call did not settle leaves nothing stored (${JSON.stringify(subsFor(urlB))})`);
+  }
   await ok(!/0x[0-9a-fA-F]{40}|payer:|svm:|tempo:/.test(JSON.stringify(Object.values(stored().subs).map((s) => s.owner))) && Object.values(stored().subs).every((s) => /^o_[0-9a-f]{32}$/.test(s.owner)), "every stored subscription names its registrant by a digest, never by its wallet");
 } finally { await rig.stop(); rmSync(dir, { recursive: true, force: true }); }
 console.log(`\n${pass} checks passed`);

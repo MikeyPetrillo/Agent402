@@ -35,6 +35,7 @@ import {
 } from "../src/price-webhooks.js";
 import { hasLastingEffect } from "../src/lasting-effect-slugs.js";
 import { PRICE_WEBHOOK_TOOLS, registrantOf, makePriceWebhookHandler } from "../src/tools/price-webhook-kit.js";
+import { runAsCallerOf } from "../src/dispatch-caller.js";
 
 let pass = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); pass++; };
@@ -261,7 +262,21 @@ try {
     for (let i = 0; i < 40 && h.stored().subs[ans2.id]?.pending; i++) await sleep(10);
     ok(h.stored().subs[ans2.id] && h.stored().subs[ans2.id].pending === undefined, "a settled 200 keeps it");
     const direct = await handler({ url: "https://b.buyer.test/h" });
-    ok(direct.registered === true && h.stored().subs[direct.id].pending === undefined, "a call with no response to wait for is kept at once");
+    ok(direct.registered === true && h.stored().subs[direct.id].pending === undefined, "a call with no paying request to wait for is kept at once");
+    // A step an in-process executor runs (route-execute, decide-execute: the
+    // handler with no request, inside runAsCallerOf of the paying request) is
+    // kept on the same terms against that request's final response.
+    const outer = { headers: {}, ip: "198.51.100.7", res: { once() {} } };
+    const routed = await runAsCallerOf(outer, () => handler({ url: "https://c.buyer.test/h" }));
+    ok(routed.registered === true && h.stored().subs[routed.id]?.pending > 0 && Array.isArray(outer.__onSettled) && outer.__onSettled.length === 1, "a routed registration is stored pending, with its hook on the paying request");
+    outer.__onSettled[0](false);
+    for (let i = 0; i < 40 && h.stored().subs[routed.id]; i++) await sleep(10);
+    ok(!h.stored().subs[routed.id], "a routed registration whose paying request did not end in a settled 200 is removed");
+    const outer2 = { headers: {}, ip: "198.51.100.7", res: { once() {} } };
+    const routed2 = await runAsCallerOf(outer2, () => handler({ url: "https://d.buyer.test/h" }));
+    outer2.__onSettled[0](true);
+    for (let i = 0; i < 40 && h.stored().subs[routed2.id]?.pending; i++) await sleep(10);
+    ok(h.stored().subs[routed2.id] && h.stored().subs[routed2.id].pending === undefined, "one whose paying request settled is kept");
   }
   {
     // The registrant of a request (src/tools/price-webhook-kit.js).

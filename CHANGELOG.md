@@ -29,7 +29,8 @@ Tools:
   subscription, and `POST /api/price-webhook/unsubscribe` removes it, free.
   A subscription lasts 90 days, and registering the same URL again from the
   same wallet renews it with the same id and secret. One wallet holds up to
-  25, a registration is kept only when its call settles, and many
+  25, a registration is kept only when the call that made it settles (a
+  call through route-execute or decide-execute included), and many
   subscriptions may name one receiving host. Each delivery attempt waits a
   few seconds for the receiver, so a receiver that does not answer does not
   hold up the others.

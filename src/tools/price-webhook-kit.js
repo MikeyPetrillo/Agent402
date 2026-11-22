@@ -13,13 +13,17 @@
 // subscription as pending and leaves a hook on the request
 // (`req.__onSettled`, which the dispatcher runs once with whether the final
 // response was a settled 200; src/hangup-settlement.js onSettleOutcome): a
-// settled call confirms it, any other outcome removes it. A call with no
-// response to wait for (a step an in-process executor runs) is kept at once.
+// settled call confirms it, any other outcome removes it. A step an in-process
+// executor runs (route-execute, decide-execute) has no request of its own: it
+// is kept on the same terms against the PAYING request it runs for, whose
+// dispatcher reports that request's final response (currentSettleHook). Only
+// a call that has no paying request to wait for (no payment settles after it,
+// as in FREE_MODE) is kept at once.
 import { createHash } from "node:crypto";
 import { priceWebhooks, PRICE_WEBHOOK_SLUG, UNSUBSCRIBE_PATH, SIGNATURE_HEADER, DELIVERY_HEADER, SIGNATURE_SCHEME, EVENT_PRICE_CHANGED, MAX_SLUGS, MAX_URL_CHARS, RETRY_DELAYS_MS, lifetimeMs, maxPerRegistrant } from "../price-webhooks.js";
 import { identityPayerOf, paymentHeaderOf, freeModeOn } from "../payer.js";
 import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
-import { currentDispatchCaller, IN_PROCESS_CALLER, ANONYMOUS_CALLER } from "../dispatch-caller.js";
+import { currentDispatchCaller, currentSettleHook, IN_PROCESS_CALLER, ANONYMOUS_CALLER } from "../dispatch-caller.js";
 import { limiterKey } from "../rate-limit.js";
 
 // The catalog's slugs, handed over by server.js once the catalog is built.
@@ -60,16 +64,24 @@ export async function registrantOf(req) {
 
 /** True when the dispatcher reports this request's final response to the hooks on it. */
 const settlesLater = (req) => Boolean(req && typeof req === "object" && req.res && typeof req.res.once === "function");
+/** Where this call's outcome is reported: its own request's hooks; for a
+ *  request-less step, those of the paying request it runs for; else none. */
+const settleHookOf = (req) => {
+  if (settlesLater(req)) return (hook) => { (req.__onSettled ||= []).push(hook); };
+  if (!req || typeof req !== "object" || !req.headers) return currentSettleHook();
+  return null;
+};
 
 export function makePriceWebhookHandler(deps = {}) {
   const store = deps.store || priceWebhooks;
   return async (input, req) => {
     const body = input && typeof input === "object" ? input : {};
     const opts = { known: (deps.known || knownSlugs)(), registrant: await (deps.registrantOf || registrantOf)(req) };
-    if (!settlesLater(req)) return store().register({ url: body.url, slugs: body.slugs }, opts);
+    const onSettled = settleHookOf(req);
+    if (!onSettled) return store().register({ url: body.url, slugs: body.slugs }, opts);
     const { answer, settle } = await store().registerPending({ url: body.url, slugs: body.slugs }, opts);
     // Kept only when the FINAL response is a settled 200 (settlement runs after this handler).
-    (req.__onSettled ||= []).push((settledOk) => { Promise.resolve(settle(settledOk === true)).catch(() => {}); });
+    onSettled((settledOk) => { Promise.resolve(settle(settledOk === true)).catch(() => {}); });
     return answer;
   };
 }
