@@ -64,6 +64,8 @@ const DB_PATH = process.env.SALES_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/t
 const USE_PG = stateDbEnabled();
 /** "pg" when the ledger lives in the state database, "file" when it is the SQLite file. */
 export const salesLedgerBackend = USE_PG ? "pg" : "file";
+/** The ledger file this process writes when the state database is off (the operator correction reads it). */
+export const salesLedgerFilePath = DB_PATH;
 export const salesPersistent = HAS_DATA_DIR || Boolean(process.env.SALES_LEDGER_DB) || USE_PG;
 
 // EVM burners lowercase; Solana/Stellar/Algorand burners case-exact (base58
