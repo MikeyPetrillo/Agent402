@@ -81,7 +81,7 @@ Send the request normally. A priced tool answers `402 Payment Required` with:
 
 Pay one of them and retry: x402 clients send `PAYMENT-SIGNATURE`, MPP clients
 send `Authorization: Payment`. On x402 a failed call is not charged: payment settles
-only after the tool returns a successful answer. Some model calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
+only after the tool returns a successful answer. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
 
 With the JavaScript SDK (`agent402-client`) and a standard x402 client:
 

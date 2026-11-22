@@ -110,7 +110,7 @@ console.log(res.status, res.headers.get("payment-receipt"), await res.json());`;
   const howToLd = { "@type": "HowTo", "@id": `${canonical}#howto`, name: "Pay for one Agent402 call", description, step: [
     { "@type": "HowToStep", name: "Ask", text: "Send the request with no payment. The answer is 402 Payment Required with the price and every way to pay it." },
     { "@type": "HowToStep", name: "Pay", text: "Sign the payment with your wallet key (or present a credits key, or a solved proof-of-work puzzle) and repeat the identical request with the credential in a header." },
-    { "@type": "HowToStep", name: "Read the receipt", text: "A 200 carries the result and a receipt header naming the settlement; a 4xx or 5xx on x402, MPP evm, Tempo charge, card and credits is not charged. Some model calls are paid before they run; a failed one can be retried free with the same payment, or is refunded." },
+    { "@type": "HowToStep", name: "Read the receipt", text: "A 200 carries the result and a receipt header naming the settlement; a 4xx or 5xx on x402, MPP evm, Tempo charge, card and credits is not charged. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded." },
   ] };
 
   const extraCss = `

@@ -1140,8 +1140,8 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
       }
     }
   }
-  ok(fam.FAILED_CALL_SENTENCE === "Some model calls are paid before they run. If one fails, send the same payment again to retry it free, or it is refunded."
-    && fam.SETTLE_FIRST_SENTENCE === "Some model calls are paid before they run; a failed one can be retried free with the same payment, or is refunded."
+  ok(fam.FAILED_CALL_SENTENCE === "Some calls are paid before they run. If one fails, send the same payment again to retry it free, or it is refunded."
+    && fam.SETTLE_FIRST_SENTENCE === "Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded."
     && fam.FAILED_CALL_SENTENCE.includes(fam.SETTLE_FIRST_MARK) && fam.SETTLE_FIRST_SENTENCE.includes(fam.SETTLE_FIRST_MARK)
     && ![fam.FAILED_CALL_SENTENCE, fam.SETTLE_FIRST_SENTENCE].some((x) => /not charged|automatic/i.test(x)),
     "the shared sentences are the approved wording: which calls are paid first, and what a failure gets (the same payment again, or a refund), with no restated promise and no 'automatically'");

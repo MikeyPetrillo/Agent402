@@ -39,7 +39,7 @@ export function refundClauses({ gatewayBatched = false } = {}) {
     {
       id: "settle-after-success",
       section: "Payments",
-      text: "An x402 payment on our own routes settles only after your call returns a successful response; if the call returns an error, the payment is not settled and you are not charged. Some model calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.",
+      text: "An x402 payment on our own routes settles only after your call returns a successful response; if the call returns an error, the payment is not settled and you are not charged. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.",
       appliesTo: ["x402"],
       chargedOnError: false,
       owed: false,

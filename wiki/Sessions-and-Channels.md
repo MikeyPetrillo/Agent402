@@ -14,7 +14,7 @@ final 200. A 4xx or 5xx is never settled, an x402 buyer who hangs up before the
 answer is not charged on x402 while the run holds a hang-up forgiveness ticket,
 and nothing is debited before the handler has answered. (A Tempo push transfer
 is the one exception: it is on chain before the call runs, so a failed call on
-it is recorded as owed and repaid.) Some model calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
+it is recorded as owed and repaid.) Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
 
 ## What is offered
 
