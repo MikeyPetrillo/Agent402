@@ -142,7 +142,8 @@ async function quote(path = "/aws/echo") {
   const a = required.accepts;
   ok(a.length === 1 && a[0].scheme === "exact" && a[0].network === "aws:base" && a[0].asset === "iso4217:USD" && a[0].amount === "0.003" && a[0].payTo === "urn:x402:agentic-commerce:see-quote", "one offer only: exact on aws:base, USD, the list price, the product inside the quote");
   const body = await r.text();
-  ok(!/agent402\.tools|eip155|solana|usdc/i.test(body + JSON.stringify(required)), "the 402 names no other rail and no other surface");
+  const resourceUrl = new URL(required.resource.url);
+  ok(JSON.stringify(JSON.parse(body)) === JSON.stringify({ error: "Payment required" }) && resourceUrl.origin === BASE && resourceUrl.pathname === "/aws/echo" && required.extensions === undefined, "the 402 body is the bare refusal, its resource is the route itself, and it declares no extension");
   const q = a[0].extra.quoteToken;
   const claims0 = claimsOf(q);
   ok(claims0.iss === config.serviceUrl && claims0.aud === "aws:marketplace" && claims0.price?.amount === "0.003" && claims0.price?.currency === "USD" && claims0.settlement?.product_id === PRODUCT && claims0.payTo === PRODUCT && claims0.network === "aws:base" && claims0.scheme === "exact" && claims0.reference === "echo", "the quote's claims: issuer, audience, price, product, scheme, network, route");
@@ -309,7 +310,8 @@ try {
   const snapOn = await snapshot(on.url);
   const same = snapOn.every((s, i) => s.status === snapOff[i].status && JSON.stringify(s.headers) === JSON.stringify(snapOff[i].headers) && s.body === snapOff[i].body);
   ok(same && snapOn.some((s) => s.status === 402), "switch on: every direct route's 402 (status, headers, body) is byte-identical to the switch off");
-  ok(snapOn.every((s) => !/aws:base|iso4217/.test(JSON.stringify(s))), "and no direct 402 carries the AWS offer");
+  const offers = snapOn.flatMap((s) => { const h = s.headers.find(([k]) => k === "payment-required"); return h ? JSON.parse(Buffer.from(h[1], "base64").toString("utf8")).accepts : []; });
+  ok(offers.length > 0 && offers.every((a) => a.network !== "aws:base" && a.asset !== "iso4217:USD"), "and no direct 402 carries the AWS offer");
 
   const jw = await fetch(`${on.url}/aws/.well-known/jwks.json`);
   const jwks = await jw.json();
@@ -331,7 +333,7 @@ try {
   const opNo = await fetch(`${on.url}/__operator/aws.json`);
   ok(opNo.status === 404, "the operator view without the token: 404");
   const pricing = await (await fetch(`${on.url}/api/pricing`)).text();
-  ok(!/aws:base|\/aws\/redact/.test(pricing), "the public pricing names no AWS route or network");
+  ok(!pricing.includes("aws:base") && !pricing.includes("/aws/redact"), "the public pricing names no AWS route or network");
 } finally {
   await off.stop();
   if (on) await on.stop();
