@@ -1,7 +1,7 @@
 // Server-rendered technical guides — the prose layer for organic search.
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
-import { SETTLE_FIRST_SENTENCE, SETTLE_FIRST_SENTENCE_LOWER } from "./settle-first-copy.js";
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { usdToBaseUnits } from "./base-units.js";
 import { siteOrgRef } from "./site-org.js";
 import { GUIDE_SITE_NAME, GUIDE_EXPLAINERS } from "./ask402-links.js";
@@ -1812,9 +1812,9 @@ maxPerCallUsd: 0.05, dailyLimitUsd: 2 })\` from
 ## What you get back
 
 A \`200\` with JSON and a \`PAYMENT-RESPONSE\` header (the settle receipt).
-A \`4xx\`/\`5xx\` is not charged on x402 (${SETTLE_FIRST_SENTENCE_LOWER}): settlement runs after the handler and only
+A \`4xx\`/\`5xx\` is not charged on x402: settlement runs after the handler and only
 for a successful response, and you can verify that from the headers you hold
-(no \`PAYMENT-RESPONSE\` = nothing settled). One exception: a transfer that
+(no \`PAYMENT-RESPONSE\` = nothing settled). ${SETTLE_FIRST_SENTENCE} One exception: a transfer that
 lands after a timed-out settle, a disconnect during settle, or a settle the
 facilitator answered as pending whose receipt was not read in time, is booked
 as a refund owed and repaid after on-chain proof. Prefer MPP? The same 402 also
@@ -2637,8 +2637,8 @@ receipt shape:
 Why pay here, in one section with the proof links:
 [agent402.tools/docs#why](https://agent402.tools/docs#why). The short version: usage is
 priced under a ceiling you see before you pay, a failed x402 call is not charged and the
-receipt shows it (${SETTLE_FIRST_SENTENCE_LOWER}) (a payment that lands late is repaid after on-chain proof), a keyed retry never pays twice, and uptime and transactions are published from
-outside production.
+receipt shows it (a payment that lands late is repaid after on-chain proof), a keyed retry never pays twice, and uptime and transactions are published from
+outside production. ${SETTLE_FIRST_SENTENCE}
 `,
   },
 ];

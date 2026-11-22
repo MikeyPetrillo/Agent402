@@ -105,7 +105,7 @@ part of it.
 | `repaymentFamily` | The chain family a repayment is sent on, or null. |
 | `settleAfterAnswer`, `hangupForgiveness`, `refundOnChargedFailure` | Cells `{ supported, detail, source }`: whether the rail implements the rule, one sentence on how, and the module that runs it. |
 
-When this server is protecting itself from unpaid runs, a model or image call from a new wallet, or from a wallet whose recent payments did not settle, may be settled before it runs; if it fails, sending the same payment again runs it at no further charge, or the amount is refunded.
+Some model calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.
 
 ## 3. Payer screening, stated per rail
 

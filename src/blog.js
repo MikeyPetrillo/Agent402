@@ -134,7 +134,7 @@ export const BLOG_POSTS = [
 
 <p>${routingProofSentence()} The <a href="/agentic-finance">category page</a> sets out each piece and the surface that proves it.</p>
 
-<p>Settlement ordering is the detail we care most about, because it is where a marketplace can quietly cheat its buyers: Agent402 runs the tool first and settles only on a successful response, so a failed x402 call is not charged, and a payment that lands late is repaid after on-chain proof. When this server is protecting itself from unpaid runs, a model or image call from a new wallet, or from a wallet whose recent payments did not settle, may be settled before it runs; if it fails, sending the same payment again runs it at no further charge, or the amount is refunded. A daily canary buys real tools over both x402 and MPP so the claim is re-proven on mainnet rather than asserted once.</p>
+<p>Settlement ordering is the detail we care most about, because it is where a marketplace can quietly cheat its buyers: Agent402 runs the tool first and settles only on a successful response, so a failed x402 call is not charged, and a payment that lands late is repaid after on-chain proof. Some model calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. A daily canary buys real tools over both x402 and MPP so the claim is re-proven on mainnet rather than asserted once.</p>
 
 <h2>Do agents need crypto to take part?</h2>
 

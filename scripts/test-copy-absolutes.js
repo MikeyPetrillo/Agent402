@@ -1106,10 +1106,8 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "control: the unscoped sentence is matched and is not taken as carrying the clause");
 }
 
-// "A failed call is not charged" has one more exception: while this server
-// protects itself from unpaid runs, a model or image call from a new wallet
-// (or one whose recent payments did not settle) may be settled before it runs
-// (src/settle-first.js). Every copy surface that says a failed call, an
+// "A failed call is not charged" has one more exception: some model calls
+// are paid before they run (src/settle-first.js). Every copy surface that says a failed call, an
 // error answer or a 4xx/5xx is not charged (or is not settled) carries the
 // shared sentence (src/settle-first-copy.js) beside the claim: by
 // interpolation in a module, word for word in markdown. A refusal of the
@@ -1138,12 +1136,15 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
       const flat = text.replace(/\s*\n\s*/g, " ");
       for (const m of flat.matchAll(new RegExp(fam.SETTLE_FIRST_MARK, "g"))) {
         const around = flat.slice(Math.max(0, m.index - 40), m.index + 400);
-        if (![fam.SETTLE_FIRST_SENTENCE, fam.SETTLE_FIRST_EXCEPTION, fam.SETTLE_FIRST_SENTENCE_LOWER].some((x) => around.includes(x.slice(x.indexOf(fam.SETTLE_FIRST_MARK), x.indexOf(fam.SETTLE_FIRST_MARK) + 300)))) drift.push(rel);
+        if (![fam.SETTLE_FIRST_SENTENCE, fam.FAILED_CALL_SENTENCE].some((x) => around.includes(x.slice(x.indexOf(fam.SETTLE_FIRST_MARK))))) drift.push(rel);
       }
     }
   }
-  ok(fam.FAILED_CALL_SENTENCE.startsWith("A paid call over x402 that fails is not charged, except when this server is protecting itself from unpaid runs") && /sending the same payment again runs it at no further charge/.test(fam.SETTLE_FIRST_SENTENCE) && /or the amount is refunded/.test(fam.SETTLE_FIRST_SENTENCE) && fam.SETTLE_FIRST_SENTENCE.includes(fam.SETTLE_FIRST_MARK),
-    "the shared sentence says when, whose call, that it may be settled before it runs, and what a failure gets: the same payment again, or a refund");
+  ok(fam.FAILED_CALL_SENTENCE === "Some model calls are paid before they run. If one fails, send the same payment again to retry it free, or it is refunded."
+    && fam.SETTLE_FIRST_SENTENCE === "Some model calls are paid before they run; a failed one can be retried free with the same payment, or is refunded."
+    && fam.FAILED_CALL_SENTENCE.includes(fam.SETTLE_FIRST_MARK) && fam.SETTLE_FIRST_SENTENCE.includes(fam.SETTLE_FIRST_MARK)
+    && ![fam.FAILED_CALL_SENTENCE, fam.SETTLE_FIRST_SENTENCE].some((x) => /not charged|automatic/i.test(x)),
+    "the shared sentences are the approved wording: which calls are paid first, and what a failure gets (the same payment again, or a refund), with no restated promise and no 'automatically'");
   ok(claims >= 40, `the failed-call not-charged claim is found where it is made (${claims} places)`);
   ok(bare.length === 0, `every failed-call not-charged claim carries the settle-first sentence${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
   ok(drift.length === 0, `every copy of the settle-first words is one of the shared sentences, word for word${drift.length ? ` (drifted: ${[...new Set(drift)].join(", ")})` : ""}`);

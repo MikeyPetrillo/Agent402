@@ -83,7 +83,7 @@ seller that kept the authorization could still redeem it, so it counts against
 (`https://agent402.tools`, matched by exact origin), an error status is never
 settled, so a hold for one ends at the authorization's `validBefore` plus 10
 minutes (15 minutes after the answer when no `validBefore` is readable). A held
-amount whose authorization expires unused is released, never charged. When this server is protecting itself from unpaid runs, a model or image call from a new wallet, or from a wallet whose recent payments did not settle, may be settled before it runs; if it fails, sending the same payment again runs it at no further charge, or the amount is refunded. A
+amount whose authorization expires unused is released, never charged. Some model calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. A
 failure whose body says `charged: true` and `retry: "same-payment"` is that case:
 this server sends the same payment once more, as it was signed, and counts the
 amount once against `AGENT402_BUDGET` as spent, never held. A payment
