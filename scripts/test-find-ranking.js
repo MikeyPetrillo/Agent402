@@ -113,6 +113,9 @@ const TOP1 = [
   ["uuid v7",                       "uuid"],
   ["uuid version 7",                "uuid"],
   ["time ordered ids",              "uuid"],
+  // A plural beside its written singular counts once: "PDFs" and "PDF" both
+  // named the pdf tool, which carried it over the page tool this text names.
+  ["Turn arbitrary URLs and PDFs into clean structured text - articles, page metadata, PDF pages, OCR'd images, browser-rendered SPAs.", "pdf-extract-pages"],
 ];
 
 const TOPN = [
