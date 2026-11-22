@@ -194,7 +194,7 @@ try {
     const [a, b2, c] = runs;
     await ok(first.status >= 500 && row?.status === "owed" && [a, b2].every((x) => x.status >= 500 && x.upstream === 1 && x.order === "upstream-only" && x.row === "owed"),
       `search: the same payment sent again after its run failed runs again twice, each with no settle call, the debt owed again after each (${JSON.stringify([a, b2].map((x) => [x.status, x.order, x.row]))})`);
-    await ok(c.status === 402 && c.json?.error === "resend_limit_reached" && c.json?.charged === false && c.json?.resends?.max === 2 && c.json?.refund?.status === "owed" && /\/api\/refunds\/lookup\?tx=/.test(c.json?.refund?.lookup || "") && c.upstream === 0 && c.order === "nothing" && c.row === "owed" && rig.outcomesOf(w).attempts === 1,
+    await ok(c.status === 402 && c.json?.error === "resend_limit_reached" && c.json?.charged === false && c.json?.resends?.max === 2 && c.json?.refund?.status === "owed" && (() => { try { const u = new URL(c.json.refund.lookup); return u.pathname === "/api/refunds/lookup" && !!u.searchParams.get("tx"); } catch { return false; } })() && c.upstream === 0 && c.order === "nothing" && c.row === "owed" && rig.outcomesOf(w).attempts === 1,
       `search: a third resend of that payment runs nothing, is charged nothing, and is answered with the debt's refund status (${c.status} ${JSON.stringify(c.json).slice(0, 200)} ${c.order} ${c.row})`);
   }
 
