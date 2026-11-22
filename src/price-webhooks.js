@@ -5,10 +5,18 @@
 // tool publishes on /api/pricing). At boot the catalog is compared with the
 // prices kept from the last boot; each slug whose price differs is a change. A
 // first boot (nothing kept) records the prices and announces nothing. A tool
-// that is added or removed is not a price change.
+// that is added is not a price change. A kept tool that is gone from the
+// catalog is announced once, as { slug, from, to: null, status }: "retired"
+// when src/retired-tools.js lists it (with its `replacement` when it names
+// one), else "unavailable" (hidden by a switch or a missing key); its kept
+// price is then dropped, so it is not announced again. A record that would
+// remove more than REMOVAL_GUARD_SHARE of the kept tools (and more than
+// REMOVAL_GUARD_MIN) is read as a catalog that did not load whole: no removal
+// is announced and the kept prices of the missing tools stay for the next boot.
 //
 // WHAT IS SENT. One POST per subscription per set of changes, JSON:
-//   { type: "price.changed", id, deliveryId, sentAt, changes: [{ slug, from, to }],
+//   { type: "price.changed", id, deliveryId, sentAt,
+//     changes: [{ slug, from, to }, { slug, from, to: null, status, replacement? }],
 //     unsubscribe: { method, url, body } }
 // signed with the subscription's secret:
 //   X-Agent402-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<body>")>
@@ -45,9 +53,14 @@
 // and each time the prices are recorded (a boot); one that has expired is
 // never delivered to in between. From PRICE_WEBHOOK_MAX on, a new registration first removes the
 // subscriptions whose last delivery was dropped after every attempt (the most
-// failures first, then the oldest) and is admitted all the same, up to twice
-// that number, the hard bound (a 503 with Retry-After, nothing charged).
-// Nothing a receiver still answers is ever removed for room.
+// failures first, then the oldest) and is admitted all the same. At twice that
+// number, the hard bound, a new registration is still admitted: room is made
+// by removing, in order, the subscriptions with the most dropped deliveries,
+// then those whose current delivery is failing, then the one whose last
+// delivery a receiver answered 2xx longest ago (one never delivered to counts
+// from its registration); a registration whose call has not settled goes
+// last. A new registration is never refused for room, and never removed to
+// make room for the one after it before anything older.
 //
 // OUTBOUND RULES. Every delivery goes through the fetch guard
 // (src/tools/fetch-guard.js probePublicUrl): the host is resolved and refused
@@ -93,6 +106,7 @@ import { leased } from "./state-db.js";
 import { contained } from "./contained-turn.js";
 import { flagEnabled } from "./feature-flags.js";
 import { assertPublicUrl, probePublicUrl } from "./tools/fetch-guard.js";
+import { retiredEntryForSlug } from "./retired-tools.js";
 
 export const PRICE_WEBHOOKS_DOC = "price-webhooks";
 export const PRICE_WEBHOOK_SLUG = "price-webhook";
@@ -119,6 +133,11 @@ export const TURN_BUDGET_MS = 40_000;
 export const PENDING_MS = 10 * 60_000;
 /** Change sets kept at most; past it the two oldest are folded into one. */
 export const MAX_CHANGE_SETS = 16;
+/** A record that removes more than this share of the kept tools (and more than REMOVAL_GUARD_MIN) announces no removal. */
+export const REMOVAL_GUARD_SHARE = 0.25;
+export const REMOVAL_GUARD_MIN = 10;
+export const STATUS_RETIRED = "retired";
+export const STATUS_UNAVAILABLE = "unavailable";
 export const DELIVERY_USER_AGENT = "agent402-price-webhook/1";
 const DAY_MS = 86_400_000;
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
@@ -213,14 +232,31 @@ export function priceChanges(before, after) {
   return out;
 }
 
+/** The kept slugs gone from `after`, as changes: { slug, from, to: null,
+ *  status } with status "retired" when `retiredOf(slug)` names a retirement
+ *  (and its replacement, when it names one), else "unavailable". */
+export function removalChanges(before, after, retiredOf = retiredEntryForSlug) {
+  const out = [];
+  if (!before || !after) return out;
+  for (const slug of Object.keys(before).sort()) {
+    if (Object.hasOwn(after, slug)) continue;
+    let entry = null;
+    try { entry = retiredOf(slug); } catch { entry = null; }
+    const replacement = entry && typeof entry.replacement === "string" && entry.replacement ? entry.replacement : null;
+    out.push({ slug, from: String(before[slug]), to: null, status: entry ? STATUS_RETIRED : STATUS_UNAVAILABLE, ...(replacement ? { replacement } : {}) });
+  }
+  return out;
+}
+
 /** Lists of changes, oldest first, as one: a slug keeps its first `from` and
- *  takes its latest `to`, and one that is back where it began is left out. */
+ *  takes its latest `to` (and the latest change's status and replacement, when
+ *  it names them), and one that is back where it began is left out. */
 function foldChanges(lists) {
   const bySlug = new Map();
   for (const list of lists) {
     for (const c of Array.isArray(list) ? list : []) {
       const was = bySlug.get(c.slug);
-      bySlug.set(c.slug, { slug: c.slug, from: was ? was.from : c.from, to: c.to });
+      bySlug.set(c.slug, { slug: c.slug, from: was ? was.from : c.from, to: c.to, ...(c.status ? { status: c.status } : {}), ...(c.replacement ? { replacement: c.replacement } : {}) });
     }
   }
   return [...bySlug.values()].filter((c) => c.from !== c.to).sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
@@ -265,13 +301,14 @@ export function createPriceWebhooks({
   attemptTimeoutMs = DELIVERY_TIMEOUT_MS,
   settleRetryDelaysMs = [1_000, 5_000, 30_000],
   deliveriesOn = () => flagEnabled("PRICE_WEBHOOK_DELIVERIES", { env }),
+  retiredOf = retiredEntryForSlug,
   log = console.warn,
 } = {}) {
   if (!doc) throw new Error("createPriceWebhooks needs a document");
   let processKey = null; // only for a documentation host's answer when no signing key is set
   let turning = false; // a delivery turn is under way in this process
   let saidFullAt = -Infinity; // when the hard bound was last logged (one line an hour)
-  const counts = { delivered: 0, retried: 0, dropped: 0, removedOn410: 0, expired: 0, unsettled: 0, removedForRoom: 0, refusedFull: 0, refusedOwn: 0 };
+  const counts = { delivered: 0, retried: 0, dropped: 0, removedOn410: 0, expired: 0, unsettled: 0, removedForRoom: 0, removedOldest: 0, refusedOwn: 0, removalsHeld: 0 };
 
   const describe = (id, sub, key) => ({
     id,
@@ -341,6 +378,31 @@ export function createPriceWebhooks({
     return gone;
   }
 
+  /** Make room at the hard bound, so a new registration is never refused: the
+   *  most dropped deliveries first, then a delivery failing now, then the
+   *  longest since a receiver last answered 2xx (registration time when it
+   *  never has); a registration whose call has not settled goes last. Removed
+   *  healthy subscriptions are counted apart from failing ones. */
+  function removeOldest(body, want, tally) {
+    if (want <= 0) return 0;
+    const lastGood = (s) => Number(s.ok) || Number(s.at) || 0;
+    const ranked = Object.entries(body.subs).sort(([, a], [, b]) =>
+      ((a.pending ? 1 : 0) - (b.pending ? 1 : 0))
+      || ((Number(b.fails) || 0) - (Number(a.fails) || 0))
+      || ((Number(b.miss) || 0) - (Number(a.miss) || 0))
+      || (lastGood(a) - lastGood(b)));
+    let gone = 0;
+    for (const [id, sub] of ranked) {
+      if (gone >= want) break;
+      const failing = Number(sub.fails) >= 1 || Number(sub.miss) >= 1;
+      delete body.subs[id];
+      gone++;
+      if (failing) tally.removedForRoom++; else tally.removedOldest++;
+    }
+    if (gone) body.queue = body.queue.filter((q) => body.subs[q.sub]);
+    return gone;
+  }
+
   /**
    * Register a target and report its call's outcome later. `known`: the
    * catalog's slugs (a Set). `registrant`: the key of the party that paid
@@ -375,11 +437,11 @@ export function createPriceWebhooks({
     const renewable = who !== null && PROVEN_REGISTRANT_RE.test(who);
     const cap = maxPerRegistrant(env), soft = maxSubscriptions(env), hard = hardMaxSubscriptions(env), life = lifetimeMs(env);
     let refusal = null, placed = null;
-    const tally = { expired: 0, unsettled: 0, removedForRoom: 0 };
+    const tally = { expired: 0, unsettled: 0, removedForRoom: 0, removedOldest: 0 };
     const r = await doc.update((b) => {
       const body = bodyOf(b);
       refusal = null; placed = null;
-      tally.expired = tally.unsettled = tally.removedForRoom = 0;
+      tally.expired = tally.unsettled = tally.removedForRoom = tally.removedOldest = 0;
       const t = now();
       const swept = sweep(body, t, tally);
       const mine = owner ? Object.entries(body.subs).filter(([, s]) => s.owner === owner) : [];
@@ -398,22 +460,16 @@ export function createPriceWebhooks({
       }
       let n = Object.keys(body.subs).length;
       if (n >= soft) n -= removeFailing(body, n - soft + 1, tally);
-      if (n >= hard) {
-        refusal = bad("This server holds as many price webhooks as it can keep; nothing was registered. Retry later.", 503, { retryAfterSeconds: 3600, full: true });
-        return swept || tally.removedForRoom ? body : SKIP_UPDATE;
-      }
+      if (n >= hard) n -= removeOldest(body, n - hard + 1, tally);
       const id = `pw_${randomBytes(16).toString("hex")}`;
       body.subs[id] = { url: target.url, host: target.host, slugs, at: t, exp: t + life, ...(owner ? { owner } : {}), ...(deferred ? { pending: t + PENDING_MS } : {}) };
       placed = { id, exp: t + life, renewed: false };
       return body;
     }, { fallback: emptyBody() });
     if (r?.ok) for (const k of Object.keys(tally)) counts[k] += tally[k];
+    if (r?.ok && tally.removedOldest && now() - saidFullAt >= 3_600_000) { saidFullAt = now(); log(`[price-webhooks] the store is at its hard bound (${hard} subscriptions): a registration removed the subscription delivered to longest ago; PRICE_WEBHOOK_MAX raises the bound`); }
     if (refusal) {
       if (refusal.own) counts.refusedOwn++;
-      else {
-        counts.refusedFull++;
-        if (now() - saidFullAt >= 3_600_000) { saidFullAt = now(); log(`[price-webhooks] the store is at its hard bound (${hard} subscriptions, none expired or failing): a registration was refused; PRICE_WEBHOOK_MAX raises it`); }
-      }
       throw refusal;
     }
     if (!r?.ok || !placed) throw bad("The registration could not be stored; nothing was registered.", 503, { retryAfterSeconds: 30 });
@@ -484,15 +540,27 @@ export function createPriceWebhooks({
     const after = {};
     for (const [slug, price] of Object.entries(prices || {})) if (SLUG_RE.test(slug) && typeof price === "string" && price) after[slug] = price;
     let out = { first: false, changes: 0, queued: 0 };
-    const tally = { expired: 0, unsettled: 0, removedForRoom: 0 };
+    const tally = { expired: 0, unsettled: 0, removedForRoom: 0, removalsHeld: 0 };
     const r = await doc.update((b) => {
       const body = bodyOf(b);
       out = { first: !body.prices, changes: 0, queued: 0 };
-      tally.expired = tally.unsettled = 0;
+      tally.expired = tally.unsettled = tally.removalsHeld = 0;
       const at = now();
       const swept = sweep(body, at, tally);
-      const changes = priceChanges(body.prices, after);
-      const same = body.prices && changes.length === 0 && Object.keys(body.prices).length === Object.keys(after).length && Object.keys(after).every((s) => Object.hasOwn(body.prices, s));
+      // A tool gone from the catalog is announced once (its kept price then
+      // goes). Past the guard the catalog is read as not loaded whole: nothing
+      // is announced for the missing tools and their kept prices stay.
+      let removals = removalChanges(body.prices, after, retiredOf);
+      let kept = after;
+      const keptCount = body.prices ? Object.keys(body.prices).length : 0;
+      if (removals.length > REMOVAL_GUARD_MIN && removals.length > keptCount * REMOVAL_GUARD_SHARE) {
+        tally.removalsHeld = removals.length;
+        kept = { ...after };
+        for (const c of removals) kept[c.slug] = c.from;
+        removals = [];
+      }
+      const changes = [...priceChanges(body.prices, after), ...removals].sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+      const same = body.prices && changes.length === 0 && Object.keys(body.prices).length === Object.keys(kept).length && Object.keys(kept).every((s) => Object.hasOwn(body.prices, s));
       if (same) return swept ? body : SKIP_UPDATE;
       out.changes = changes.length;
       if (changes.length) {
@@ -518,11 +586,12 @@ export function createPriceWebhooks({
         body.queue = body.queue.filter((q) => changesOf(body, q, body.subs[q.sub], memo).length > 0);
         tidySets(body);
       }
-      body.prices = after;
+      body.prices = kept;
       return body;
     }, { fallback: emptyBody() });
     if (!r?.ok) { log("[price-webhooks] the price record could not be stored"); return { ...out, ok: false }; }
     counts.expired += tally.expired; counts.unsettled += tally.unsettled;
+    if (tally.removalsHeld) { counts.removalsHeld += tally.removalsHeld; log(`[price-webhooks] ${tally.removalsHeld} kept tools are missing from this catalog, more than the guard allows at once: no removal was announced and their kept prices stay`); }
     return { ...out, ok: true };
   }
 
@@ -637,7 +706,7 @@ export function createPriceWebhooks({
         const sub = cur.subs[q.sub];
         if (o.how === "done") {
           if (!o.silent) tally.delivered++;
-          if (sub) { delete sub.miss; delete sub.fails; }
+          if (sub) { delete sub.miss; delete sub.fails; if (!o.silent) sub.ok = now(); }
           // A set that joined while this one was on its way is still to be announced.
           const later = Array.isArray(q.sets) ? q.sets.slice(o.sets) : [];
           if (later.length) keep.push({ k: q.k, sub: q.sub, at: q.at, sets: later, tries: 0, next: Number(q.next) || now() });
