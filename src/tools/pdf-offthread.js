@@ -40,11 +40,13 @@ export const PDF_QUEUE_HARD_BYTES = 320 * 1024 * 1024;
 let running = 0;
 const waiting = [];
 const admission = createPoolAdmission({ soft: PDF_QUEUE_MAX, hard: PDF_QUEUE_HARD_MAX, hardBytes: PDF_QUEUE_HARD_BYTES });
-const busy = (own = false) => Object.assign(new Error(own ? "PDF processing is busy, with this caller's earlier documents already waiting; send this one once one of them is answered. Nothing was charged." : "PDF processing is busy; retry in a few seconds. Nothing was charged."), { statusCode: 503, retryAfter: 5, shed: true });
+const shed = (message) => Object.assign(new Error(message), { statusCode: 503, retryAfter: 5, shed: true });
+const busy = () => shed("PDF processing is busy; retry in a few seconds. Nothing was charged.");
+const busyOwn = () => shed("PDF processing is busy, with this caller's earlier documents already waiting; send this one once one of them is answered. Nothing was charged.");
 function acquire(who, bytes) {
   if (running < PDF_WORKERS_MAX && waiting.length === 0) { running++; admission.hold(who); return Promise.resolve(); }
   const admitted = admission.admit(waiting, who, bytes);
-  if (admitted.refused) return Promise.reject(busy(admitted.refused === "own"));
+  if (admitted.refused) return Promise.reject(admitted.refused === "own" ? busyOwn() : busy());
   for (const v of admitted.evicted) { admission.free(v.who); v.reject(busy()); }
   admission.hold(who);
   return new Promise((resolve, reject) => waiting.push({ who, bytes, resolve, reject }));
