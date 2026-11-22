@@ -79,6 +79,20 @@ import { receiptsServed, RECEIPT_HEADER } from "./receipt-signing.js";
  *  answer carried, over that answer's bytes (a JSON result is those bytes
  *  parsed, so JSON.stringify(result) recomputes the digest). */
 export const MCP_SIGNED_RECEIPT_META = "tools.agent402/receipt";
+const ACCEPTS_JSON_RANGES = new Set(["application/json", "application/*", "*/*"]);
+/** The Accept value a 2025-era POST to /mcp is served under: a client that
+ *  accepts JSON (no Accept, a wildcard, or application/json alone) is answered
+ *  as one that names both types, since the answer is JSON either way. null
+ *  leaves the header as sent (it names text/event-stream, or a type the
+ *  endpoint does not answer with). */
+export function lenientMcpAccept(value) {
+  const text = Array.isArray(value) ? value.join(",") : typeof value === "string" ? value : "";
+  const ranges = text.split(",").map((r) => r.split(";")[0].trim().toLowerCase()).filter(Boolean);
+  if (ranges.includes("text/event-stream")) return null;
+  if (ranges.length && !ranges.every((r) => ACCEPTS_JSON_RANGES.has(r))) return null;
+  return "application/json, text/event-stream";
+}
+
 /** A settled paid result with the loopback answer's signed receipt in _meta.
  *  Never throws: a header that cannot be read leaves the result as it was. */
 export function withSignedReceipt(out, r) {
@@ -2295,6 +2309,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         run = mcpRequestContext.run({ ip, signal: ac.signal, heartbeatToken, serverOpts }, () => modernHandler().fetch(webReq, { parsedBody: req.body }))
           .then((response) => writeWebResponse(res, response, ac.signal));
       } else {
+        // The 2025-era transport answers JSON here (enableJsonResponse) but
+        // refuses with 406 a POST whose Accept does not name both JSON and
+        // SSE. A client that accepts JSON (Accept missing, */*, or
+        // application/json alone) gets the JSON answer instead.
+        const accept = lenientMcpAccept(req.headers.accept);
+        if (accept) req.headers.accept = accept;
         transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
         await buildServer(ip, ac.signal, heartbeatToken, serverOpts).connect(transport);
         run = transport.handleRequest(req, res, req.body);

@@ -118,10 +118,21 @@ export function mcpX402InputSchema(def) {
   return boundedSchema(full, MCP_X402_INPUT_SCHEMA_MAX_BYTES) || { type: "object" };
 }
 
-/** The tool's published example arguments, when they are an object. */
+/** Example arguments for a twin whose HTTP route publishes an empty example
+ *  (memory-read lists keys with no argument). The Bazaar indexes an MCP tool
+ *  by calling it with its example as the arguments, and an empty example is
+ *  not indexed. The key is the one memory-write's published example writes. */
+export const MCP_X402_EXAMPLE_FALLBACKS = Object.freeze({
+  "memory-read": Object.freeze({ key: "research/task-42" }),
+});
+
+/** The tool's published example arguments, when they are an object with at
+ *  least one argument; else the twin's fallback, when it has one. */
 export function mcpX402Example(def) {
   const ex = def?.discovery?.input ?? def?.discovery?.example;
-  return ex && typeof ex === "object" && !Array.isArray(ex) ? ex : undefined;
+  if (ex && typeof ex === "object" && !Array.isArray(ex) && Object.keys(ex).length) return ex;
+  const fallback = typeof def?.slug === "string" && Object.hasOwn(MCP_X402_EXAMPLE_FALLBACKS, def.slug) ? MCP_X402_EXAMPLE_FALLBACKS[def.slug] : undefined;
+  return fallback ? { ...fallback } : undefined;
 }
 
 /** The twin's Bazaar discovery extension ({ bazaar: ... }), built by the

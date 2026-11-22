@@ -39,7 +39,7 @@
 // or another version fails.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -54,7 +54,7 @@ import { encodePaymentRequiredHeader, encodePaymentResponseHeader, encodePayment
 import { bootServer } from "./lib/boot-server.js";
 import { generateKeyPairSync } from "node:crypto";
 import { verifyReceipt as verifySignedReceipt } from "../client/receipt.js";
-import { MCP_SIGNED_RECEIPT_META } from "../src/mcp-http.js";
+import { MCP_SIGNED_RECEIPT_META, lenientMcpAccept } from "../src/mcp-http.js";
 
 const MCP_CLIENT_VERSION = "2.30.0";
 let x402MCPClient;
@@ -613,6 +613,40 @@ try {
   ok(ask.isError === true && !("structuredContent" in ask) && pr?.x402Version === 2 && Array.isArray(pr.accepts) && pr.accepts.some((a) => a.network === BASE_NET), `memory.read's first ask is an isError result whose first text block is a v2 PaymentRequired, with no structuredContent (${JSON.stringify(pr).slice(0, 120)})`);
   ok(pr?.resource?.url === "https://agent402.tools/mcp" && pr.extensions?.bazaar?.info?.input?.type === "mcp" && pr.extensions.bazaar.info.input.toolName === "memory.read", `it is the twin's offer: resource /mcp, an MCP extension for memory.read (${pr?.resource?.url})`);
   ok(JSON.stringify(JSON.parse(ask.content?.[0]?.text || "null")) === JSON.stringify(pr), "content[0].text is the same PaymentRequired as JSON");
+
+  // 1b. A client whose Accept names JSON but not SSE (no Accept, */*, or
+  // application/json alone: a plain Node fetch or a probe) is answered as
+  // one that names both, with JSON; an unpaid paid tool gives it the twin's
+  // offer. Accept that names SSE, or only a type never answered, is sent on as is.
+  ok(lenientMcpAccept(undefined) && lenientMcpAccept("") && lenientMcpAccept("*/*") && lenientMcpAccept("application/json") && lenientMcpAccept("application/json; q=0.9, */*;q=0.1")
+    && lenientMcpAccept("application/json, text/event-stream") === null && lenientMcpAccept("text/event-stream") === null && lenientMcpAccept("text/html") === null,
+  "the lenient Accept rule: JSON-accepting values are served, SSE-naming and other values are left as sent");
+  const rawPost = (accept, ip, body) => new Promise((resolve, reject) => {
+    const u = new URL(`${B}/mcp`);
+    const headers = { "content-type": "application/json", "x-forwarded-for": ip, ...(accept === null ? {} : { accept }) };
+    const rq = httpRequest({ host: u.hostname, port: u.port, path: u.pathname, method: "POST", headers }, (rs) => {
+      let t = ""; rs.setEncoding("utf8"); rs.on("data", (c) => { t += c; }); rs.on("end", () => resolve({ status: rs.statusCode, type: String(rs.headers["content-type"] || ""), text: t }));
+    });
+    rq.on("error", reject); rq.end(JSON.stringify(body));
+  });
+  const ACCEPTS = [[null, "no Accept"], ["*/*", "*/*"], ["application/json", "application/json alone"]];
+  for (const [i, [accept, label]] of ACCEPTS.entries()) {
+    const ip = `198.51.100.${40 + i}`;
+    const init = await rawPost(accept, ip, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "accept-probe", version: "0" } } });
+    const list = await rawPost(accept, ip, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+    const call = await rawPost(accept, ip, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "web.search", arguments: { q: "x402 payment protocol adoption", count: 2 } } });
+    const j = (r) => { try { return JSON.parse(r.text); } catch { return null; } };
+    const callPr = PR(j(call)?.result || {});
+    ok(init.status === 200 && /^application\/json/.test(init.type) && j(init)?.result?.serverInfo, `${label}: initialize answers 200 JSON (${init.status} ${init.type})`);
+    ok(list.status === 200 && /^application\/json/.test(list.type) && j(list)?.result?.tools?.some((t) => t.name === "web.search"), `${label}: tools/list answers 200 JSON with web.search (${list.status})`);
+    ok(call.status === 200 && /^application\/json/.test(call.type) && j(call)?.result?.isError === true && callPr?.x402Version === 2 && callPr.resource?.url === "https://agent402.tools/mcp"
+      && callPr.extensions?.bazaar?.info?.input?.type === "mcp" && callPr.extensions.bazaar.info.input.toolName === "web.search" && callPr.accepts?.some((a) => a.network === BASE_NET),
+    `${label}: an unpaid tools/call web.search answers 200 JSON with the twin's PaymentRequired (${call.status} ${callPr?.resource?.url})`);
+  }
+  for (const [i, accept] of ["text/event-stream", "text/html"].entries()) {
+    const r = await rawPost(accept, `198.51.100.${50 + i}`, { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+    ok(r.status === 406, `Accept ${accept} is sent on to the transport as is (${r.status})`);
+  }
   const mppAsk = ask._meta?.[MCP_PAYMENT_REQUIRED_META];
   ok(mppAsk?.httpStatus === 402 && Array.isArray(mppAsk.challenges) && mppAsk.challenges.some((c) => c.method === "evm" && c.intent === "charge"), `the MPP challenges ride unchanged in _meta (${(mppAsk?.challenges || []).map((c) => c.method).join(",")})`);
   ok(/agent402-mcp|credits/.test(JSON.stringify(ask.content.slice(1))), "the readable text naming the ways to pay follows the JSON block");
