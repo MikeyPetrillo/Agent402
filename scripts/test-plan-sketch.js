@@ -40,6 +40,24 @@ for (const [q, n] of [["validate the json and generate an md5 hash", 2], ["parse
 for (const q of ["search the web for x402 adoption", "bitcoin and ethereum price", "what happened then", "a then b", "", "hash and encode", "count rows and columns", "hash and encode the text", "the price of gold and silver"]) {
   ok(splitSteps(q).length === 0, `"${q}" stays a single step`);
 }
+// Each side of an "and" is a task phrase: a task verb, an object, and no
+// sequence word or "step 1:" label inside it, so marker fragments a split on
+// the markers left behind never pair up into steps.
+for (const q of ["get price step 1: and   first and get price authen", "get price and get price   get price also    get price get price next, \n 1.", "get the price and first", "get price: and get price", "get first and get price"]) {
+  ok(splitSteps(q).length === 0, `"${q.replace(/\n/g, "\\n")}" stays a single step (got ${JSON.stringify(splitSteps(q))})`);
+}
+// The "and" split reads each character a bounded number of times: a run of
+// whitespace (the pattern it replaced backtracked on one, 20 ms and more per
+// task on every uncached find) splits in well under a millisecond.
+{
+  const slow = [];
+  for (const [name, q] of [["spaces", "a" + " ".repeat(498) + "b"], ["tabs", "a" + "\t".repeat(498) + "b"], ["spaces before and", "get x" + " ".repeat(480) + " and"], ["comma runs", "get x" + " ,".repeat(240) + " and get y"], ["ands", "get x" + " and ".repeat(98)]]) {
+    let best = Infinity;
+    for (let i = 0; i < 5; i++) { const t = performance.now(); splitSteps(q); best = Math.min(best, performance.now() - t); }
+    if (best > 3) slow.push(`${name}: ${best.toFixed(1)}ms`);
+  }
+  ok(slow.length === 0, `a 500-character whitespace run splits inside 3ms (${slow.join(", ") || "all"})`);
+}
 
 // ---- building against the real catalog kits
 const C = Object.fromEntries([...KIT, ...KIT2, ...STATS_TOOLS].map((t) => [t.route, t]));

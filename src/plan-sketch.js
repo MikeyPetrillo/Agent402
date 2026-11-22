@@ -67,22 +67,48 @@ const TASK_VERBS = new Set([
   "render", "resolve", "scan", "search", "sign", "sort", "split", "summarize", "test", "transcribe",
   "translate", "validate", "verify",
 ]);
-// Split at an "and" whose next word is a task verb; any other "and" stays
-// inside its step ("count its rows and columns").
-const AND_RE = /\s*,?\s+and\s+(\S+)/gi;
-function splitOnAnd(q) {
-  const parts = [];
-  let from = 0;
-  for (const m of q.matchAll(AND_RE)) {
-    if (!TASK_VERBS.has(m[1].toLowerCase())) continue;
-    parts.push(q.slice(from, m.index));
-    from = m.index + m[0].length - m[1].length;
-    if (parts.length > PLAN_MAX_STEPS) return [];
+// Words that sequence steps or pad a request. A side of an "and" that holds
+// one past its verb, or ends on one ("get the price and first"), is a marker
+// fragment, not a task.
+const SEQUENCE_WORDS = new Set(["and", "first", "firstly", "also", "please", "then", "next", "step", "finally", "afterwards"]);
+// A task phrase: a task verb, then an object, with no sequence word, no
+// "step 1:" label and no closing ":" anywhere in it.
+function isTaskPhrase(raw) {
+  const words = raw.trim().toLowerCase().split(/\s+/);
+  if (words.length < 2 || !TASK_VERBS.has(words[0])) return false;
+  for (const w of words.slice(1)) {
+    if (w.endsWith(":")) return false;
+    if (SEQUENCE_WORDS.has(w.replace(/[,.;]+$/, ""))) return false;
   }
-  parts.push(q.slice(from));
-  const steps = parts.map((p) => trimTail(p).trim()).filter(Boolean);
-  if (steps.length < 2) return [];
-  return steps.every((p) => { const w = p.split(/\s+/); return w.length >= 2 && TASK_VERBS.has(w[0].toLowerCase()); }) ? steps : [];
+  return /[a-z]/.test(words[words.length - 1]);
+}
+// Split at an "and" whose next word is a task verb; any other "and" stays
+// inside its step ("count its rows and columns"). The walk finds each "and"
+// that has whitespace on both sides and reads the word after it by index, so
+// every character is read a bounded number of times (a pattern that took the
+// whitespace before "and" reread a long run of it from each position).
+const AND_WORD_RE = /and/gi;
+function splitOnAnd(q) {
+  const raw = [];
+  let from = 0;
+  for (const m of q.matchAll(AND_WORD_RE)) {
+    const at = m.index;
+    if (at === 0 || !isSpace(q[at - 1])) continue;
+    let j = at + 3;
+    if (j >= q.length || !isSpace(q[j])) continue;
+    while (j < q.length && isSpace(q[j])) j++;
+    let k = j;
+    while (k < q.length && !isSpace(q[k])) k++;
+    if (k === j) continue;
+    if (!TASK_VERBS.has(q.slice(j, k).toLowerCase())) continue;
+    raw.push(q.slice(from, at));
+    from = j;
+    if (raw.length > PLAN_MAX_STEPS) return [];
+  }
+  raw.push(q.slice(from));
+  if (raw.length < 2 || !raw.every(isTaskPhrase)) return [];
+  const steps = raw.map((p) => trimTail(p).trim());
+  return steps.every(Boolean) ? steps : [];
 }
 
 /** Split a task into ordered steps, or [] when it reads as a single step. */
