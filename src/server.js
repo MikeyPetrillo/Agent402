@@ -12367,14 +12367,17 @@ function settledFirstCreditFor(req, status) {
   return { tx, network: sf.requirements?.network || sf.result?.network || null, wire: x402WireOf(req), note: settleFirstFailedNote(status), receipt };
 }
 /** The answer to a resend past THE RESEND BOUND (src/settle-first.js): nothing
- *  runs and nothing is charged; the debt stays owed and is repaid. */
+ *  runs and nothing MORE is charged. The payment was taken once (charged:
+ *  true, as every settled-first answer says); its debt stays owed and is
+ *  repaid (refundOwed until the refund is paid). */
 async function settledFirstResendSpentAnswer(credit) {
   let row = null;
   try { row = await refundByEvidenceFresh(credit.tx); } catch { row = null; }
   const status = ["owed", "sending", "paid"].includes(row?.status) ? row.status : "owed";
   return { status: 402, body: {
     error: "resend_limit_reached",
-    charged: false,
+    charged: true,
+    refundOwed: status !== "paid",
     resends: { max: SETTLE_FIRST_MAX_RESENDS },
     hint: `This payment already ran again ${SETTLE_FIRST_MAX_RESENDS} times after its call failed, the most one payment runs again. Nothing ran and nothing more is charged. The payment is owed back to the paying wallet and is repaid after on-chain proof (refund.lookup shows where it stands). Request the resource again with a fresh payment.`,
     refund: { status, lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(credit.tx)}` },

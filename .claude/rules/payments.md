@@ -209,7 +209,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   credit keeps the count, written before each run under its claim. A resend that is not served is
   counted like a run that did not settle (the wallet's settle-first count and the budget meter;
   never the wallet's refusing count or the alarms); a further resend runs nothing, is charged
-  nothing, and is answered 402 `resend_limit_reached` with the debt's refund status and lookup.
+  nothing more, and is answered 402 `resend_limit_reached` (`charged: true`, `refundOwed: true`
+  until the refund is paid) with the debt's refund status and lookup.
   **A daily usage ceiling at a settle point** is TAKEN, not read (`settleBeforeUpstreamHolding`,
   `hardCapHold`): the unit is held for the run's call (`takeHardCap` uses it), given back when the
   payment does not settle or the run ends unused, so runs settling together never pass a ceiling

@@ -397,7 +397,8 @@ body (a credit kept by `src/idempotency.js`) is run with no settlement: its debt
 before the run (`voidOwedForServe`), kept void when served, owed again otherwise; a hold whose run
 never ended is reopened by the held-claim sweep. At most two resends per payment
 (`SETTLE_FIRST_MAX_RESENDS`), each one not served counted like an unsettled run; a third is
-answered 402 `resend_limit_reached` with the refund status, uncharged. A row of the class still owed is repaid by the
+answered 402 `resend_limit_reached` with the refund status: nothing runs and nothing more is charged
+(`charged: true`, `refundOwed: true`: the one charge is owed back). A row of the class still owed is repaid by the
 human-run `refund.yml`, like every other owed row; nothing repays it on a schedule. An `upto` or Circle Gateway batched payment the
 plan names is answered the route's own 402 with the exact accepts first, uncharged (option A).
 Never settled first: Tempo, card, credits, a first-call allowance grant. A new paid upstream call on

@@ -472,10 +472,12 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       let spent = null;
       try { spent = typeof settledFirstResendSpent === "function" ? await settledFirstResendSpent(req, { ...credit, resends }) : null; } catch { spent = null; }
       store.release(cKey).catch(() => {});
-      res.status(Number(spent?.status) || 402).json(spent?.body && typeof spent.body === "object" ? spent.body : { error: "resend_limit_reached", charged: false, resends: { max: SETTLE_FIRST_MAX_RESENDS } });
+      res.status(Number(spent?.status) || 402).json(spent?.body && typeof spent.body === "object" ? spent.body : { error: "resend_limit_reached", charged: true, refundOwed: true, resends: { max: SETTLE_FIRST_MAX_RESENDS } });
       return true;
     }
-    const recOf = (n) => ({ [CREDIT]: 1, sig: credit.sig, tx: credit.tx, network: credit.network ?? null, wire: credit.wire ?? null, note: typeof credit.note === "string" ? credit.note : null, receipt: typeof credit.receipt === "string" ? credit.receipt : null, at: Number(credit.at) || Date.now(), resends: n });
+    // The record keeps every field the lookup reads (the body it is bound to
+    // included), so a counted credit is still found on the next resend.
+    const recOf = (n) => ({ [CREDIT]: 1, sig: credit.sig, body: credit.body, tx: credit.tx, network: credit.network ?? null, wire: credit.wire ?? null, note: typeof credit.note === "string" ? credit.note : null, receipt: typeof credit.receipt === "string" ? credit.receipt : null, at: Number(credit.at) || Date.now(), resends: n });
     const keepCount = async (n) => { const rec = recOf(n); await store.set(cKey, rec, Buffer.byteLength(JSON.stringify(rec), "utf8"), { ttlMs: CREDIT_TTL_MS }); };
     try { await keepCount(resends + 1); } catch {
       store.release(cKey).catch(() => {});
