@@ -123,7 +123,7 @@ export const VALIDATION_TOOLS = [
   {
     route: "POST /api/vat-validate", name: "EU VAT number check", slug: "vat-validate", category: "validation", price: "$0.001",
     description:
-      "Check an EU VAT number offline: the country prefix, the national format and the published check-digit rule, for all 27 member states plus XI (Northern Ireland). Format and check digits only: it does not query any registry, so it does not confirm that a number is registered or active.",
+      "Check an EU VAT number offline: the country prefix, the national format and the published check-digit rule where the number carries one, for all 27 member states plus XI (Northern Ireland). Format and check digits only: it does not query any registry, so it does not confirm that a number is registered or active.",
     tags: ["vat", "eu", "tax", "validate", "finance"],
     discovery: {
       bodyType: "json",

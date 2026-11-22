@@ -7,6 +7,7 @@
 //
 // Each clause carries the facts its sentence states as fields, and nothing
 // the sentence does not state.
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 
 /** The chain families a repayment is sent on, in the order /terms names them.
  *  Each key is a family scripts/refund-run.js familyOf() sends on. */
@@ -39,7 +40,7 @@ export function refundClauses({ gatewayBatched = false } = {}) {
     {
       id: "settle-after-success",
       section: "Payments",
-      text: "An x402 payment on our own routes settles only after your call returns a successful response; if the call returns an error, the payment is not settled and you are not charged. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.",
+      text: `An x402 payment on our own routes settles only after your call returns a successful response; if the call returns an error, the payment is not settled and you are not charged. ${SETTLE_FIRST_SENTENCE}`,
       appliesTo: ["x402"],
       chargedOnError: false,
       owed: false,
@@ -97,7 +98,7 @@ export function refundClauses({ gatewayBatched = false } = {}) {
     {
       id: "ordinary-failure",
       section: "Refunds on-chain",
-      text: "Because an x402 payment settles only after a call succeeds, the ordinary failure case costs nothing and needs no refund.",
+      text: `Because an x402 payment settles only after a call succeeds, the ordinary failure case costs nothing and needs no refund. ${SETTLE_FIRST_SENTENCE}`.trim(),
       owed: false,
     },
     {

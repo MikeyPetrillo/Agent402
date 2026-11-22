@@ -16,6 +16,7 @@
 // Both are pure functions of already-computed state - no network, no secrets.
 
 import { frontDoorOneLine } from "./front-door.js";
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { SKILL_PACKS } from "./skills.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
@@ -364,7 +365,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       // and only completes for an under-400 response, so an error cancels
       // payment in the middleware itself. A Tempo push payment is final before
       // the call, so its failure is booked as owed instead.
-      failedCalls: "not charged on x402: settlement runs after the handler and only for an under-400 response; a Tempo transfer sent before the call is final, and a failed call it paid for is recorded as a refund owed to that wallet",
+      failedCalls: `not charged on x402: settlement runs after the handler and only for an under-400 response; a Tempo transfer sent before the call is final, and a failed call it paid for is recorded as a refund owed to that wallet. ${SETTLE_FIRST_SENTENCE}`.trim(),
       details: `${baseUrl}/api/reliability`,
     },
   };

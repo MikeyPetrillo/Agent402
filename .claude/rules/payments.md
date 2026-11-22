@@ -611,7 +611,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   before the gate prices the accept) is quoted the route's x402 EVM `exact` accepts
   under list (`RETURNING_WALLET_DISCOUNT_BPS`, default 1000, at most 5000) when that wallet has paid
   on `RETURNING_WALLET_MIN_PAID_DAYS` (default 3) distinct days inside
-  `RETURNING_WALLET_WINDOW_DAYS` (default 30), read from the sales ledger (cached per wallet for
+  `RETURNING_WALLET_WINDOW_DAYS` (default 30), a day counting only when the wallet spent at least
+  `RETURNING_WALLET_MIN_DAY_SPEND_USD` (default 0.05, 0 counts every paid day, a value over 100 reads as the default) on it,
+  read from the sales ledger (cached per wallet for
   ten minutes, then dropped from memory, never stored; fresh reads bounded per minute per client
   address, `LOOKUPS_PER_ADDRESS_PER_MINUTE`, and across all callers, `LOOKUPS_PER_MINUTE`; past a
   bound an unknown wallet is quoted list, never refused, and a cached wallet keeps its quote). The
@@ -941,7 +943,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   settled by this server (`sponsorMethod` in `src/mpp-tempo.js`, over `TEMPO_RPC_URL`) in either
   relay mode. Paused under `TEMPO_GAS_SPONSOR_RESERVE_USD` (subscriptions keep that share, and
   the sponsor's low word reads low under it while on), while the subscription ceiling reads
-  reached, past the 24 h caps (service-wide and per payer's client), with no screen list, or
+  reached, past the 24 h caps (service-wide `TEMPO_GAS_SPONSOR_DAILY_MAX_USD`, default 5, and per
+  payer's client `TEMPO_GAS_SPONSOR_PAYER_DAILY_MAX_USD`, default 1, both counted in fee bounds; one
+  transaction's fee is bounded by `TEMPO_GAS_SPONSOR_MAX_FEE_USD`, default 0.01, at most 1), with no screen list, or
   while signing is halted. A sponsored pull from a sender the gate cannot prove is declined before
   any claim (`fee-sponsor-declined`, 402) and that client is not sponsored for a day. Each send is
   booked by its fee bound; the co-signed transaction id is kept for the chain-truth confirm

@@ -10,6 +10,7 @@
 // src/tools/stt-kit.js, src/tools/llm-gateway-kit.js). A table that changes
 // changes this page with it.
 import { siteOrgLd } from "./site-org.js";
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { TTS_TOOLS, TTS_TIERS, VOICES, FORMATS, LITE_FORMATS, ELEVENLABS_VOICE_MAP, ELEVENLABS_VOICES, TTS_BACKUP_MODELS, TTS_DEADLINE_MS } from "./tools/tts-kit.js";
 import { STT_TOOLS, STT_TIERS, DIARIZE_MODEL, MAX_AUDIO_BYTES } from "./tools/stt-kit.js";
@@ -203,7 +204,7 @@ ${section("fallback", `
       td(c.backups.length ? `<span class="ml-codelist">${c.backups.map((m) => `<code style="${mono}font-size:var(--fs-sm);color:var(--ink);">${esc(m.split("/").pop())}</code>`).join(" → ")}</span>` : "none: one model at one price, and an upstream failure is an error, not charged on x402"),
     ]);
   }).join(""))}
-  ${p(`<strong style="color:var(--ink);font-weight:700;">One paid call is at most one generation.</strong> A link is skipped only after a failure that could not have been billed: a throttle, a server error, or a connection that never opened. A timeout or an empty answer may already have been generated, so it ends the call with an error instead of a second attempt (not charged on x402). The whole walk, backups included, runs inside ${Math.round(TTS_DEADLINE_MS / 1000)} seconds.`)}
+  ${p(`<strong style="color:var(--ink);font-weight:700;">One paid call is at most one generation.</strong> A link is skipped only after a failure that could not have been billed: a throttle, a server error, or a connection that never opened. A timeout or an empty answer may already have been generated, so it ends the call with an error instead of a second attempt (not charged on x402). ${SETTLE_FIRST_SENTENCE} The whole walk, backups included, runs inside ${Math.round(TTS_DEADLINE_MS / 1000)} seconds.`)}
   ${p(`A backup can have fewer voices and languages than the primary: the standard name you asked for maps to its nearest voice, and a named voice maps back to its standard name first. The price does not change with the link that served you. Read ${code("model")} if your pipeline depends on a particular voice, and retry when it names a backup you would rather not keep.`)}
 `, true)}
 
@@ -249,7 +250,7 @@ ${section("pay", `
   ${eyebrow("06 / PAYING")}
   ${h2("Paid per call, and not for a call that failed.")}
   ${p(`Every route here takes the same 402 handshake as the rest of the catalog: ask, get the price, pay with a wallet over x402 or MPP, and the identical request completes with a receipt header. The speech tools are wallet-only; there is no proof-of-work tier for a model call. ${link("/how-to-pay", "How to pay")} walks every rail with a snippet to paste.`)}
-  ${p(`The model runs first and the payment settles only after a response below 400 is ready, so on x402, on MPP's evm method and on a Tempo charge a 4xx or 5xx (a text over the cap, a format the tier does not serve, an upstream that could not answer) is not charged. A 200 is charged only if its settlement then succeeds. ${link("/proof", "/proof")} shows settled receipts against their quotes, and ${link("/status", "/status")} measures the paid path from outside.`)}
+  ${p(`The model runs first and the payment settles only after a response below 400 is ready, so on x402, on MPP's evm method and on a Tempo charge a 4xx or 5xx (a text over the cap, a format the tier does not serve, an upstream that could not answer) is not charged. ${SETTLE_FIRST_SENTENCE} A 200 is charged only if its settlement then succeeds. ${link("/proof", "/proof")} shows settled receipts against their quotes, and ${link("/status", "/status")} measures the paid path from outside.`)}
 `)}
 
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 56px;">

@@ -25,6 +25,7 @@
 //   page should treat every description as data, never as instructions.
 import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
 import { SELLER_TOOL_CAP } from "./seller-tool-cap.js";
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 
 const PAGE_SIZE = 100;
 const fmtPrice = (p) => (typeof p === "number" && p > 0 ? `$${p < 0.01 ? p.toFixed(4).replace(/0+$/, "").replace(/\.$/, "") : p.toFixed(2)}` : "-");
@@ -158,7 +159,7 @@ export function indexToolsPage(baseUrl, data, categories, params = {}) {
 <div class="ix-note">
   <h2>What each badge means</h2>
   <ul>
-    <li><span class="ix-badge ours">OURS</span> <b>We build, host and stand behind these.</b> They are priced by us and covered by the paywall guarantees on <a href="/tools">our tools</a>. Most of our tools are tested against their own published example on every release; model-backed and search tools have their inputs checked separately. On the x402 and prepaid-credit paths, a call that answers an error is not charged. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. ${fmtNum(data.ours)} of the ${fmtNum(data.total)} rows here.</li>
+    <li><span class="ix-badge ours">OURS</span> <b>We build, host and stand behind these.</b> They are priced by us and covered by the paywall guarantees on <a href="/tools">our tools</a>. Most of our tools are tested against their own published example on every release; model-backed and search tools have their inputs checked separately. On the x402 and prepaid-credit paths, a call that answers an error is not charged. ${SETTLE_FIRST_SENTENCE} ${fmtNum(data.ours)} of the ${fmtNum(data.total)} rows here.</li>
     <li><span class="ix-badge third">3rd party</span> <b>Someone else's endpoint. We do not operate, host, or test it.</b> Everything below applies only to these rows:</li>
   </ul>
   <ul>

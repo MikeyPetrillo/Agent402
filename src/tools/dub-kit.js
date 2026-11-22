@@ -32,6 +32,7 @@
 // `json: 1` or `format: "json"` answers JSON instead, the audio base64 in it.
 
 import { LLM_GATEWAY_TOOLS, TIERS as GATEWAY_TIERS } from "./llm-gateway-kit.js";
+import { SETTLE_FIRST_SENTENCE } from "../settle-first-copy.js";
 import { TTS_TOOLS, VOICES, FORMATS, FORMAT_CONTENT_TYPES, ELEVENLABS_VOICES, validateInput as validateTtsInput, makeTtsHandler, ttsQuoteUsd } from "./tts-kit.js";
 import { underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
@@ -226,7 +227,7 @@ export const DUB_TOOLS = [
     // so the listing and the first /openapi.json content type say JSON.
     mimeType: "application/json",
     description:
-      `Translate a text into a target language and speak the translation, in one paid call. The translation runs on the ${translateDef.route.split(" ")[1]} gateway tier and the speech on ${ttsDefOf("standard").route.split(" ")[1]} (tier "standard", ${priceLabel("standard")}) or ${ttsDefOf("hd").route.split(" ")[1]} (tier "hd", ${priceLabel("hd")}); the price is the sum of the two. Answers the audio as raw bytes (mp3, opus, aac, flac, wav or pcm) with the translation, the detected source language and the models that served in the X-Dub-Translation header (base64 JSON); add json: 1 or format "json" for a JSON answer with the audio base64 in it. targetLanguage is a BCP-47 tag or an English name. The same ten standard voice names and named voices as the speech tiers. Text capped at ${standardCap} chars, checked before any model call, and the cap applies to the translation. A failed step answers an error naming the step and is not charged on x402, card and credits. Model-backed.`,
+      `Translate a text into a target language and speak the translation, in one paid call. The translation runs on the ${translateDef.route.split(" ")[1]} gateway tier and the speech on ${ttsDefOf("standard").route.split(" ")[1]} (tier "standard", ${priceLabel("standard")}) or ${ttsDefOf("hd").route.split(" ")[1]} (tier "hd", ${priceLabel("hd")}); the price is the sum of the two. Answers the audio as raw bytes (mp3, opus, aac, flac, wav or pcm) with the translation, the detected source language and the models that served in the X-Dub-Translation header (base64 JSON); add json: 1 or format "json" for a JSON answer with the audio base64 in it. targetLanguage is a BCP-47 tag or an English name. The same ten standard voice names and named voices as the speech tiers. Text capped at ${standardCap} chars, checked before any model call, and the cap applies to the translation. A failed step answers an error naming the step and is not charged on x402, card and credits. ${SETTLE_FIRST_SENTENCE} Model-backed.`,
     tags: ["dub", "translate", "translation", "tts", "text-to-speech", "speech", "audio", "voice", "localization"],
     discovery: {
       bodyType: "json",

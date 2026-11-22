@@ -6,6 +6,7 @@ import { powCostPhrase } from "./pow.js";
 
 import { REPO_URL } from "./repo-link.js";
 import { stockDataEnabled } from "./tools/stock-provider.js";
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 export const BLOG_POSTS = [
   {
     slug: "pay-per-call-tools-on-arc",
@@ -26,7 +27,7 @@ export const BLOG_POSTS = [
   <li>The agent calls a tool, for example <code>POST /api/hash</code>, with no payment.</li>
   <li>The server answers <code>402 Payment Required</code> with its offer: the price, the asset and an <code>accepts</code> entry for each chain it takes, Arc included (<code>eip155:5042</code>).</li>
   <li>The agent signs a USDC transfer authorization for exactly that price on the chain it chooses and sends the call again with the signature.</li>
-  <li>The tool runs, and only a successful answer is settled on x402: an answer with an error status is not settled. The successful answer carries a receipt with the transaction.</li>
+  <li>The tool runs, and only a successful answer is settled on x402: an answer with an error status is not settled. ${SETTLE_FIRST_SENTENCE} The successful answer carries a receipt with the transaction.</li>
 </ol>
 
 <p>The agent signs; it never sends a raw transfer and never hands over a key. On Arc, the settlement goes through Circle's facilitator, which submits the transfer on chain.</p>
@@ -134,7 +135,7 @@ export const BLOG_POSTS = [
 
 <p>${routingProofSentence()} The <a href="/agentic-finance">category page</a> sets out each piece and the surface that proves it.</p>
 
-<p>Settlement ordering is the detail we care most about, because it is where a marketplace can quietly cheat its buyers: Agent402 runs the tool first and settles only on a successful response, so a failed x402 call is not charged, and a payment that lands late is repaid after on-chain proof. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded. A daily canary buys real tools over both x402 and MPP so the claim is re-proven on mainnet rather than asserted once.</p>
+<p>Settlement ordering is the detail we care most about, because it is where a marketplace can quietly cheat its buyers: Agent402 runs the tool first and settles only on a successful response, so a failed x402 call is not charged, and a payment that lands late is repaid after on-chain proof. ${SETTLE_FIRST_SENTENCE} A daily canary buys real tools over both x402 and MPP so the claim is re-proven on mainnet rather than asserted once.</p>
 
 <h2>Do agents need crypto to take part?</h2>
 

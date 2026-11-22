@@ -14,6 +14,7 @@ import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
 // while sales are off, a key is something a buyer already holds.
 const PREPAID = creditsSalesEnabled() ? "a prepaid key" : "a prepaid key bought earlier";
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbNavFromLd, codeBlock } from "./ledger-chrome.js";
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 
 const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
@@ -216,7 +217,7 @@ export const LEARN = [
         P(`Reading a 402 is free. It is a quote, not a charge, and no payment is taken until a request arrives carrying a signed payment that matches one of the offers. So an agent can learn the price of any route before it buys.`),
       ]],
       ["Was I charged?", [
-        P(`On this server settlement runs after the tool, and only for a successful response. So for a wallet payment the answer you hold tells you: a 200 with a ${C("PAYMENT-RESPONSE")} header (x402) or a ${C("Payment-Receipt")} header (MPP) was paid; a failed call is answered with no receipt header, or with an x402 receipt that reads ${C("success: false")}, and is not charged. ${LATE_SETTLE_EXCEPTION} ${UNCONFIRMED_RECEIPT_EXCEPTION} A Tempo push payment is sent before the call runs, so one that is not served is recorded as a refund owed and the 402 says so (${C("refundOwed")}). A payment that is refused comes back as another 402, and when the refusal is about the credential the body says why in plain words.`),
+        P(`On this server settlement runs after the tool, and only for a successful response. So for a wallet payment the answer you hold tells you: a 200 with a ${C("PAYMENT-RESPONSE")} header (x402) or a ${C("Payment-Receipt")} header (MPP) was paid; a failed call is answered with no receipt header, or with an x402 receipt that reads ${C("success: false")}, and is not charged. ${SETTLE_FIRST_SENTENCE ? `A call paid before it ran answers ${C("charged: true")}.` : ""} ${SETTLE_FIRST_SENTENCE} ${LATE_SETTLE_EXCEPTION} ${UNCONFIRMED_RECEIPT_EXCEPTION} A Tempo push payment is sent before the call runs, so one that is not served is recorded as a refund owed and the 402 says so (${C("refundOwed")}). A payment that is refused comes back as another 402, and when the refusal is about the credential the body says why in plain words.`),
       ]],
     ],
     links: [["/x402-test", "See why a payment was refused"], ["/learn/x402", "x402"], ["/learn/mpp", "MPP"], ["/integrations/tollbooth", "Answer 402s on your own site"], ["/tools", "Every priced route"]],
@@ -287,7 +288,7 @@ export const LEARN = [
     glossary: "pay-per-call",
     title: "Pay-per-call APIs: pricing each request on its own",
     description: "A pay-per-call API prices each request separately and takes payment with the request, instead of a subscription or a quota behind an API key. How it works, what gets charged, and how retries and failures are handled.",
-    summary: "A pay-per-call API prices every request on its own and takes payment with the request, rather than through a subscription, a quota or an API key. The price is quoted in an HTTP 402 before anything is paid, and on x402 a failed call is not charged. Some calls are paid before they run; a failed one can be retried free with the same payment, or is refunded.",
+    summary: `A pay-per-call API prices every request on its own and takes payment with the request, rather than through a subscription, a quota or an API key. The price is quoted in an HTTP 402 before anything is paid, and on x402 a failed call is not charged. ${SETTLE_FIRST_SENTENCE}`,
     sections: [
       ["One request, one price", [
         P(`A pay-per-call API charges for each request individually. There is no plan to pick and no monthly minimum: the caller pays the stated price for the call it makes, and a caller who makes one request pays for one request. Prices on this server start at $0.001 per call.`),
@@ -299,7 +300,7 @@ export const LEARN = [
         P(`Some routes price a request by its size rather than a flat fee. The metered model routes quote each request from its body, and a buyer paying through a Permit2 allowance (or ${PREPAID}) settles at actual usage under that quote.`),
       ]],
       ["What is charged, and what is not", [
-        `<ul><li>A successful answer is charged once, and carries a receipt.</li><li>A failed call (an error, a timeout, an upstream outage) is not charged on x402, because settlement runs after the tool and only on success; a Tempo transfer sent before the call is recorded as owed and repaid after on-chain proof.</li><li>A retry with the same ${C("Idempotency-Key")} and the same credential replays the first answer instead of paying again.</li><li>Reading the 402 quote is free.</li></ul>`,
+        `<ul><li>A successful answer is charged once, and carries a receipt.</li><li>A failed call (an error, a timeout, an upstream outage) is not charged on x402, because settlement runs after the tool and only on success; a Tempo transfer sent before the call is recorded as owed and repaid after on-chain proof. ${SETTLE_FIRST_SENTENCE}</li><li>A retry with the same ${C("Idempotency-Key")} and the same credential replays the first answer instead of paying again.</li><li>Reading the 402 quote is free.</li></ul>`,
       ]],
       ["Paying at volume", [
         P(`Signing and settling every request on chain is the right shape for occasional calls and the wrong one for thousands. ${creditsSalesEnabled() ? "Two options avoid it: a prepaid credits key (one card purchase, then a Bearer header on each call, debited per success) or, with a wallet on Base, a one-time Permit2 approval so metered calls settle at actual usage. Both keep the per-request price; only the settlement changes." : "With a wallet on Base, a one-time Permit2 approval lets metered calls settle at actual usage under the quoted ceiling; the per-request price stays the same, only the settlement changes. A prepaid credits key bought earlier also avoids per-call signing (new keys are not on sale)."}`),

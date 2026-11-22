@@ -288,8 +288,9 @@ so every claim below is verifiable in code.</p>
   (a nightly backup made inside that time copies it, see Backups below). These are public on-chain records, read again
   on the next view once they are deleted.</li>` : ""}${evmActivityStoreEnabled() ? `
   <li><b>EVM wallet activity.</b> To draw a wallet's 30-day activity on an EVM chain page, we read the payments that
-  wallet received from that public chain, and keep, for up to ${evmActivityMaxWallets()} wallets across those chains, the time, amount and
-  sending wallet address of each payment, in our state database, for ${EVM_ACTIVITY_KEEP_DAYS} days after it was last written
+  wallet received from that public chain, and keep, for up to ${evmActivityMaxWallets()} wallets across those chains, the block number, time, amount and
+  sending wallet address of each payment, whether that sending wallet is one of ours, and the transaction id of payments in the newest and oldest blocks read,
+  in our state database (or in a file on the server when it runs without one), for ${EVM_ACTIVITY_KEEP_DAYS} days after it was last written
   (a nightly backup made inside that time copies it, see Backups below). These are public on-chain records, read again
   on the next view once they are deleted.</li>` : ""}
   <li><b>Card purchases (reports, monitors and prepaid credits).</b> Card details are entered on Stripe's

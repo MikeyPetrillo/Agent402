@@ -9,6 +9,7 @@
 // both protocols; this page is the dedicated landing page for MPP-specific
 // search intent, and the two cross-link rather than duplicate scope.
 import { siteOrgLd } from "./site-org.js";
+import { SETTLE_FIRST_SENTENCE } from "./settle-first-copy.js";
 import { GUIDE_SITE_NAME, GUIDE_EXPLAINERS, guideLink } from "./ask402-links.js";
 import { ledgerShell, ledgerFooterCompact, codeBlock, esc } from "./ledger-chrome.js";
 
@@ -17,7 +18,7 @@ import { mppOfferGateSentenceIfOffered } from "./mpp-offers.js";
 const STEPS = [
   ["01", "The client requests a paid resource", "A plain HTTP request, no credentials attached. The server answers 402 Payment Required with a WWW-Authenticate: Payment challenge naming the price, the asset, the chain, and a one-time challenge id."],
   ["02", "The client signs and retries", "It signs a payment authorization for exactly that amount with its own wallet key and repeats the identical request, carrying the signed credential in an Authorization: Payment header. The key never leaves the client."],
-  ["03", "The server verifies, runs, then settles", "The credential is checked against the challenge, the request runs, and the payment settles only when the response succeeds, so on the evm method a failed call is not charged. The exception is a Tempo credential the client broadcast itself (push mode): that transfer is already on chain before the request runs."],
+  ["03", "The server verifies, runs, then settles", `The credential is checked against the challenge, the request runs, and the payment settles only when the response succeeds, so on the evm method a failed call is not charged. ${SETTLE_FIRST_SENTENCE} The exception is a Tempo credential the client broadcast itself (push mode): that transfer is already on chain before the request runs.`],
   ["04", "The response carries a receipt", "A signed Payment-Receipt header returns with the result - a verifiable record that this exact payment bought this exact answer."],
 ];
 

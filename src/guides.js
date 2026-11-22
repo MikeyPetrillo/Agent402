@@ -588,6 +588,8 @@ curl -s https://agent402.tools/v1/models \\
 | 502, 503 with \`attribution: "unknown"\` and \`hint: "connect-failed"\` | the connection to a source failed before any answer (refused, reset or unreachable), and nothing shows which side failed | retry the same call later; not charged on x402 |
 | 504 with \`hint: "source-timeout"\` or \`"source-unreachable"\` | a URL you supplied did not answer within our limit, or could not be connected to (\`attribution: "unknown"\`) | check that the URL is correct and publicly reachable, or retry; not charged on x402 |
 
+${SETTLE_FIRST_SENTENCE}
+
 A 429 for a wallet whose balance does not cover its paid calls in flight
 carries \`attribution: "ours"\`, a \`hint\` (\`cover-short\`, \`cover-settling\`,
 \`cover-unread\`, \`cover-kept\`, \`cover-beside\`), the matching \`reason\`
@@ -1509,7 +1511,7 @@ provenance stays explicit.
 
 - **Failures are not charged on x402.** Any 4xx/5xx - no match, over-cap, seller
   down - cancels your settlement, and a Tempo transfer sent before the call is
-  recorded as owed and repaid after on-chain proof. So is a payment that settles after your connection closed.
+  recorded as owed and repaid after on-chain proof. So is a payment that settles after your connection closed. ${SETTLE_FIRST_SENTENCE}
 - **Spend is bounded on our side** by per-window budgets and per-quote caps,
   so the router cannot be drained into misbehavior.
 - **Receipts are recomputable.** Paid EVM calls carry a \`callRef\` derived
