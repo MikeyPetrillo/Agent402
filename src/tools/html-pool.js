@@ -15,7 +15,14 @@
 //    dies in its own thread instead of the process.
 //  - LARGE_MAX: at most this many jobs over LARGE_BYTES in flight at once, so a
 //    burst of large pages cannot hold POOL_MAX large heaps together.
-//  - QUEUE_MAX caps pending jobs; each holds its HTML string on the heap.
+//  - QUEUE_MAX caps pending jobs; each holds its HTML string on the heap. The
+//    bound is per caller (src/pool-admission.js): past it a caller already
+//    holding a place is answered busy, and a caller holding nothing is queued
+//    over it up to QUEUE_HARD_MAX (half again, 48 by default: each waiting
+//    job holds at most the 5 MB page the tools accept, so 240 MB at most,
+//    against 160 MB at QUEUE_MAX), where it takes the newest place of the
+//    party holding the most. A free worker takes the eligible job whose
+//    caller holds the fewest places.
 //  - JOB_TIMEOUT_MS sits well above the legitimate worst case (the 5 MB page
 //    above, with slower production CPUs) and far below a stall that matters.
 //
@@ -24,6 +31,7 @@
 import { Worker, isMainThread } from "node:worker_threads";
 import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
+import { createPoolAdmission, poolCaller } from "../pool-admission.js";
 
 const HTML_WORKER = fileURLToPath(new URL("./html-worker.js", import.meta.url));
 // What the worker's import graph reads (lazy-deps.js, and this module through html-kit.js).
@@ -33,6 +41,7 @@ const POOL_MAX = num(process.env.HTML_POOL_MAX, 2);
 const LARGE_MAX = 1;
 const LARGE_BYTES = 1024 * 1024;
 const QUEUE_MAX = num(process.env.HTML_POOL_QUEUE_MAX, 32);
+const QUEUE_HARD_MAX = Math.ceil(1.5 * QUEUE_MAX);
 const JOB_TIMEOUT_MS = num(process.env.HTML_PARSE_TIMEOUT_MS, 15_000);
 const HEAP_MB = 1024;
 // Idle workers are terminated so a large page's heap is not kept for the life
@@ -44,6 +53,10 @@ const queue = [];
 let nextJobId = 1;
 let largeInFlight = 0;
 let directOps = null;
+const admission = createPoolAdmission({ soft: QUEUE_MAX, hard: QUEUE_HARD_MAX });
+let workerPath = HTML_WORKER;
+/** Tests: run jobs on another worker script (null restores the HTML worker). */
+export function __setHtmlWorkerForTest(path) { workerPath = path || HTML_WORKER; }
 
 // Capacity, timeout and worker failure are 503s: the input may be fine and we
 // did not serve it. A >= 400 also cancels x402 settlement.
@@ -77,7 +90,7 @@ function goIdle(slot) {
 }
 
 function spawnSlot() {
-  const slot = { worker: new Worker(HTML_WORKER, { env: threadEnv(HTML_WORKER_ENV), resourceLimits: { maxOldGenerationSizeMb: HEAP_MB, maxYoungGenerationSizeMb: 64 } }), job: null, idleTimer: null };
+  const slot = { worker: new Worker(workerPath, { env: threadEnv(HTML_WORKER_ENV), resourceLimits: { maxOldGenerationSizeMb: HEAP_MB, maxYoungGenerationSizeMb: 64 } }), job: null, idleTimer: null };
   slot.worker.on("message", (msg) => {
     if (!slot.job || msg.id !== slot.job.id) return; // a reply from a job already given up on
     if (msg.error) settle(slot, slot.job.reject, Object.assign(new Error(msg.error), { statusCode: msg.statusCode || 500 }, msg.threw ? { threw: msg.threw } : {}));
@@ -110,13 +123,13 @@ function assign(slot, job) {
 }
 
 function pump() {
-  for (let i = 0; i < queue.length;) {
-    const job = queue[i];
-    if (job.large && largeInFlight >= LARGE_MAX) { i++; continue; } // a small job behind it may still run
+  for (;;) {
+    // A large job waits while LARGE_MAX large ones run; a small job may still run.
+    const i = admission.next(queue, (job) => !(job.large && largeInFlight >= LARGE_MAX));
+    if (i < 0) return;
     const slot = slots.find((s) => !s.job) || (slots.length < POOL_MAX ? spawnSlot() : null);
     if (!slot) return;
-    queue.splice(i, 1);
-    assign(slot, job);
+    assign(slot, queue.splice(i, 1)[0]);
   }
 }
 
@@ -130,14 +143,21 @@ export async function runHtml(op, payload, bytes = 0) {
     directOps ||= (await import("./html-worker-ops.js")).runOp;
     return directOps(op, payload);
   }
-  if (queue.length >= QUEUE_MAX) throw unavailable("HTML workers are busy, retry shortly");
+  const who = poolCaller();
+  const admitted = admission.admit(queue, who);
+  if (admitted.refused) throw unavailable(admitted.refused === "own" ? "HTML workers are busy, with this caller's earlier pages already waiting; send this one once one of them is answered" : "HTML workers are busy, retry shortly");
+  for (const v of admitted.evicted) v.reject(unavailable("HTML workers are busy, retry shortly"));
+  admission.hold(who);
   return new Promise((resolve, reject) => {
-    queue.push({ id: nextJobId++, op, payload, large: bytes > LARGE_BYTES, resolve, reject, timer: null });
+    // The caller's place is held until the job is answered, however it ends.
+    let held = true;
+    const done = (fn) => (v) => { if (held) { held = false; admission.free(who); } fn(v); };
+    queue.push({ id: nextJobId++, op, payload, large: bytes > LARGE_BYTES, who, resolve: done(resolve), reject: done(reject), timer: null });
     pump();
   });
 }
 
 /** Pool state for tests and operator views. */
 export function htmlPoolState() {
-  return { workers: slots.length, busy: slots.filter((s) => s.job).length, queued: queue.length, largeInFlight, timeoutMs: JOB_TIMEOUT_MS };
+  return { workers: slots.length, busy: slots.filter((s) => s.job).length, queued: queue.length, largeInFlight, timeoutMs: JOB_TIMEOUT_MS, callers: admission.callers() };
 }

@@ -362,3 +362,5 @@ t node scripts/test-capped-body-reads.js
 t node scripts/test-hidden-content.js
 # HTML parsing runs in the worker pool: the main thread stays available during a slow parse, a parse past the limit is stopped with a 503 and the pool recovers, a full queue is a
 t node scripts/test-html-pool.js
+# Worker pool queues shared fairly by caller (Office, image, HTML, PDF: own excess refused, a newcomer admitted over the bound - offline, stand-in worker)
+t node scripts/test-pool-fairness.js
