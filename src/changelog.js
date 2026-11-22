@@ -381,7 +381,7 @@ const ENTRIES = [
     title: "Robinhood Chain price",
     items: [
       "Payments: Robinhood Chain (`eip155:4663`) no longer carries a price floor by default. A server that leaves `ROBINHOOD_MIN_PRICE_USD` unset quotes every call there at its list price, like every other chain. A server that sets it keeps that floor, and `/api/pricing` `payment.minPriceUsdByNetwork`, llms.txt and the guides state the floor only when it is set.",
-      "Payments: The optional own settler on Robinhood Chain (`ROBINHOOD_RELAYER_KEY`) settles a sale only when its price is at least `ROBINHOOD_RELAYER_MIN_PRICE_USD` (default 0.004). Under it, a refusal from the listed facilitators is answered as a 402 and the x402 payment is not settled.",
+      "Payments: The optional own settler on Robinhood Chain (`ROBINHOOD_RELAYER_KEY`) settles a sale only at or above a minimum price; set `ROBINHOOD_RELAYER_MIN_PRICE_USD` to change it. Under it, a refusal from the listed facilitators is answered as a 402 and the x402 payment is not settled.",
     ],
   },
   {

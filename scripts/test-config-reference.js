@@ -10,7 +10,7 @@
 //
 //   node scripts/test-config-reference.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanSource, scanTree, envNames, stripComments } from "./lib/env-reads.js";
@@ -53,6 +53,34 @@ ok(dollars.length === 0, `no purpose line carries a dollar figure or an em dash$
   ok(leaked.length === 0, `every withheld default reads "${WITHHELD_DEFAULT_TEXT}" and has no defaults entry${list(leaked)}`);
   for (const n of ["ATTEST_MAX_GAS_USD", "ATTEST_SCHEMA_MAX_GAS_USD", "ATTEST_ETH_USD", "DATABENTO_MAX_QUERY_USD", "ROBINHOOD_RELAYER_MIN_PRICE_USD", "PLANTED_MARKUP_BPS", "PLANTED_VENDOR_COST_USD"]) ok(isCostShapedName(n), `control: ${n} reads as a cost-shaped name`);
   for (const n of ["MAX_CALL_USD", "EXTERNAL_MAX_UNSETTLED_USD", "TEMPO_UPSTREAM_BUYER_LOW_USD", "PRICE_WEBHOOK_MAX", "DATABENTO_COST_TIMEOUT_MS", "FACILITATOR_GAS_CHECK_MS"]) ok(!isCostShapedName(n), `control: ${n} does not read as a cost-shaped name`);
+  // Nor does a withheld figure appear beside its variable's name in the wiki,
+  // docs/ or the changelogs (CHANGELOG.md, src/changelog.js). Each figure is
+  // read from the code; only names are printed here.
+  const figureOf = async (n) => {
+    if (n === "ROBINHOOD_RELAYER_MIN_PRICE_USD") return String((await import("../src/network-floors.js")).robinhoodRelayerMinPriceUsd({}));
+    const files = [...(scan.vars.get(n)?.files || [])];
+    return defaultOf(n, files.map((f) => stripComments(readFileSync(new URL(`../${f}`, import.meta.url), "utf8"))));
+  };
+  const figures = [];
+  for (const n of withheld) { const v = await figureOf(n); if (v !== null && Number(v) !== 0) figures.push([n, v]); }
+  ok(figures.length === withheld.length, `every withheld default has a figure read from the code (${figures.length} of ${withheld.length})`);
+  const walkMd = (d) => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walkMd(join(d, e.name)) : /\.(md|json|txt)$/.test(e.name) ? [join(d, e.name)] : []));
+  const ROOT_DIR = new URL("..", import.meta.url).pathname;
+  const surfaces = [...walkMd(join(ROOT_DIR, "wiki")), ...walkMd(join(ROOT_DIR, "docs")), join(ROOT_DIR, "CHANGELOG.md"), join(ROOT_DIR, "src", "changelog.js")];
+  // The figure as a number token within 240 characters after a mention of the name.
+  const figureNear = (body, n, v) => {
+    const num = new RegExp(String.raw`(?<![\d.])${v.replace(/\./g, "\\.")}(?![\d])`);
+    let i = body.indexOf(n);
+    while (i !== -1) { if (num.test(body.slice(i, i + n.length + 240))) return true; i = body.indexOf(n, i + 1); }
+    return false;
+  };
+  const shown = [];
+  for (const f of surfaces) {
+    const body = readFileSync(f, "utf8");
+    for (const [n, v] of figures) if (figureNear(body, n, v)) shown.push(`${f.slice(ROOT_DIR.length)}: ${n}`);
+  }
+  ok(shown.length === 0, `no withheld default's figure appears beside its name in wiki/, docs/ or the changelogs${list(shown)}`);
+  ok(figures.length > 0 && figureNear(`set ${figures[0][0]} (default ${figures[0][1]}) here`, figures[0][0], figures[0][1]) && !figureNear(`set ${figures[0][0]} to change it`, figures[0][0], figures[0][1]), "control: a figure beside the name is seen, a sentence without it is not");
   // Control: the same build with the withheld list emptied prints the figures, and the guard sees them.
   const bare = buildReference({ config: { ...config, withheldDefaults: {} } }).text;
   const bareRow = (n) => (bare.split("\n").find((l) => l.startsWith(`| \`${n}\` |`)) || "").split(" | ")[2]?.trim() || "";
