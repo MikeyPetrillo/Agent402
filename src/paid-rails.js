@@ -60,7 +60,16 @@ export const PAYING_RAILS_SQL = `(${PAYING_RAILS.map((r) => `'${r}'`).join(",")}
 // and usage read these rows at the gross (BUYER_AMOUNT_SQL).
 // scripts/test-referral-gate.js reads every SELECT in src/sales-ledger.js
 // against this rule.
-export const PRIVATE_RAILS = Object.freeze(["referral"]);
+//
+// An "aws" row (src/aws-marketplace-gate.js) is a sale through the AWS
+// Marketplace front door: paid in US dollars on the buyer's AWS bill, its
+// transaction the payment id, its payer none (the AWS buyer is an opaque id
+// that stays with the gate). It is private like "referral" (no public reader
+// returns it) and, unlike "referral", HELD out of every public figure
+// (UNCOUNTED_PRIVATE_RAILS): no total, ranking or per-network split counts it.
+export const PRIVATE_RAILS = Object.freeze(["referral", "aws"]);
+/** Private rails no public figure counts: read only by operator views. */
+export const UNCOUNTED_PRIVATE_RAILS = Object.freeze(["aws"]);
 export function isPrivateRail(rail) {
   return PRIVATE_RAILS.includes(String(rail || ""));
 }
@@ -74,7 +83,7 @@ export const BUYER_AMOUNT_SQL = `(CASE WHEN rail IN (${PRIVATE_RAILS.map((r) => 
 // THE SALES FIGURES. Every sale counted in a public figure (totals, rankings,
 // the scorecard, the per-network split, the bestsellers feed): the paying
 // rails plus the private ones, each row once, valued at what its buyer paid.
-export const COUNTED_RAILS = Object.freeze([...PAYING_RAILS, ...PRIVATE_RAILS]);
+export const COUNTED_RAILS = Object.freeze([...PAYING_RAILS, ...PRIVATE_RAILS.filter((r) => !UNCOUNTED_PRIVATE_RAILS.includes(r))]);
 /** Is this rail's row a sale the public figures count? */
 export function isCountedRail(rail) {
   return COUNTED_RAILS.includes(String(rail || ""));

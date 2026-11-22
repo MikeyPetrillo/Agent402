@@ -1045,6 +1045,9 @@ import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllo
 import { hangupForgiven, hangupTicketDenial, hangupTicketAbandoned, hangupDebtReason, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
 import { referralConfig, referralConfigProblem, referralTimingWarnings, referralRoutes, referralSlugOfPath, createReferralGate, referralRefundWriter } from "./referral-gate.js";
 import { createReferralSettler } from "./referral-settle.js";
+import { awsMarketplaceConfig, awsMarketplaceConfigProblem, awsRoutes, awsSlugOfPath, createAwsPaymentClaims, createAwsMarketplaceGate, AWS_JWKS_PATH } from "./aws-marketplace-gate.js";
+import { getSharedRedisClient } from "./shared-limit.js";
+import { boundedRedisClient } from "./bounded-redis.js";
 import { createReferralChainReader } from "./referral-chain.js";
 import { createReferralBook, startReferralBookSweep, referralBookFile } from "./referral-book.js";
 import { createReferralAnswerStore, ANSWER_DIR_NAME as REFERRAL_ANSWER_DIR_NAME } from "./referral-answers.js";
@@ -2791,6 +2794,33 @@ function referralDefOfPath(path) {
   const slug = referralSlugOfPath(path);
   return slug ? REFERRAL_ROUTES.defs.get(slug) || null : null;
 }
+// The AWS Marketplace front door under /aws/<slug> (src/aws-marketplace-gate.js):
+// a standalone gate whose 402 offers only the AWS Billing x402 offer
+// (`exact` on aws:base). Paid mode only, and only with the quote-signing key,
+// its key id and the product id set; otherwise nothing is built and /aws
+// answers as any unknown path. Each listed slug passes the boot checks here
+// or is left out with one log line.
+let AWS_CONFIG = null;
+try { AWS_CONFIG = FREE_MODE ? null : awsMarketplaceConfig(process.env, { baseUrl: BASE_URL }); } catch { AWS_CONFIG = null; }
+if (!FREE_MODE && !AWS_CONFIG) { const why = awsMarketplaceConfigProblem(process.env); if (why) console.warn(`WARNING: AWS Marketplace gate is off: ${why}`); }
+const AWS_ROUTES = AWS_CONFIG ? awsRoutes(AWS_CONFIG, CATALOG, (def) => ({
+  identityBound: isIdentityBoundRoute(def),
+  lastingEffect: defHasLastingEffect(def),
+  paysThirdParty: paysThirdParty(def),
+  longRunning: isLongRunningSlug(def.slug),
+  modelBacked: isModelBacked(def),
+  chatTier: isChatTierDef(def),
+}), { ownHosts: REFERRAL_OWN_HOSTS }) : null;
+if (AWS_ROUTES) {
+  for (const r of AWS_ROUTES.refused) console.warn(`[aws-marketplace] ${r.slug} is not served under /aws: ${r.reason}`);
+  console.log(`AWS Marketplace gate enabled for ${AWS_ROUTES.defs.size} route(s): ${[...AWS_ROUTES.defs.keys()].join(", ") || "none"}`);
+}
+/** The catalog definition an /aws path serves, or null (gate off, or a path it does not serve). */
+function awsDefOfPath(path) {
+  if (!AWS_ROUTES || !AWS_ROUTES.defs.size) return null;
+  const slug = awsSlugOfPath(path, AWS_ROUTES.defs);
+  return slug ? AWS_ROUTES.defs.get(slug) || null : null;
+}
 /** The /ref twins of the given direct-route paths (a prefix match with `prefix: true`). */
 function referralTwinsOf(match) {
   if (!REFERRAL_ROUTES) return [];
@@ -3145,6 +3175,8 @@ app.use((req, res, next) => {
   if (cp.startsWith("/v1/") || cp === "/v1" || cp.startsWith("/v1beta/") || cp.startsWith("/api/chain/") || cp === "/mcp" || cp.startsWith("/mcp/") || Object.prototype.hasOwnProperty.call(CATALOG, `GET ${cp}`) || Object.prototype.hasOwnProperty.call(CATALOG, `POST ${cp}`)) return next();
   // A referral copy of a priced route is the same purchase under another path.
   if (referralDefOfPath(cp)) return next();
+  // So is a tool sold through the AWS Marketplace front door.
+  if (awsDefOfPath(path)) return next();
   noteShed(why);
   // A search turned away here is counted with the discovery rules' own
   // refusals (src/discovery-refusals.js), under the rule "load-gate".
@@ -3901,11 +3933,11 @@ const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
   paidTrust: QUOTE_TRUST,
   budget: UNPAID_QUOTE_BUDGET,
   // A /ref/<slug> copy is priced like the route it copies (either verb).
-  isPriced: (method, path) => Boolean(CATALOG[`${method} ${path}`]) || Boolean(referralDefOfPath(path)),
+  isPriced: (method, path) => Boolean(CATALOG[`${method} ${path}`]) || Boolean(referralDefOfPath(path)) || Boolean(awsDefOfPath(path)),
   // A /ref copy is on no discovery document, and its paid-client allowance
   // is the paid-quote trust window a settled call opens: its 429 says so,
   // and names no page of this site (a referred buyer is not pointed at it).
-  hintFor: (req, { rule, paidCeiling }) => (referralDefOfPath(req.path)
+  hintFor: (req, { rule, paidCeiling }) => (referralDefOfPath(req.path) || awsDefOfPath(req.path)
     ? `${rule} A request carrying a payment is never counted, and an address that settled a paid call in the last ${PAID_QUOTE_TRUST_MINUTES} minutes reads against ${paidCeiling} per hour.`
     : null),
   isSynthetic: isSyntheticRequest,
@@ -11748,6 +11780,51 @@ if (REFERRAL_GATE) {
   // Open settlements are read against the chain at boot and every minute, under a lease.
   void startReferralBookSweep({ sweepOnce: () => REFERRAL_GATE.sweepOnce(), intervalMs: Math.max(1000, Number(process.env.REFERRAL_SWEEP_MS) || 60_000) });
 }
+// The AWS Marketplace gate (src/aws-marketplace-gate.js), mounted beside the
+// referral gate and ahead of every payment gate: its own paywall for /aws and
+// /aws/<slug>, offering only the AWS Billing x402 offer. A served call is
+// booked once on the private rail "aws", which no public reader or figure
+// counts; the paid-quote trust a settled call earns is earned here too.
+// Built asynchronously (it imports the seller SDK); until it is ready, or if
+// it could not be built, /aws answers as an unknown path.
+let AWS_GATE = null;
+if (AWS_ROUTES && AWS_ROUTES.defs.size) {
+  const awsGateReady = createAwsMarketplaceGate({
+    config: AWS_CONFIG,
+    defs: AWS_ROUTES.defs,
+    claims: createAwsPaymentClaims({ getClient: async () => boundedRedisClient(await getSharedRedisClient()) }),
+    recordSale,
+    preValidate: (def, req) => preValidateInput(def, req),
+    handlerInputOf,
+    runAsCaller: runAsCallerOf,
+    isSynthetic: isSyntheticRequest,
+    redact: redactSecrets,
+    ownHosts: REFERRAL_OWN_HOSTS,
+    onServed: (req) => { try { QUOTE_TRUST.mark(quoteClientKeyOf(req)); } catch { /* trust is best effort */ } },
+    onToolError: (slug, status, err) => logToolError(slug, status, redactSecrets(String(err?.message || "")), undefined, false),
+  }).then((g) => { AWS_GATE = g; console.log(`AWS Marketplace gate ready: ${g.slugs().join(", ")}`); return g; })
+    .catch((err) => { console.warn(`WARNING: AWS Marketplace gate is off: it could not be built (${redactSecrets(String(err?.message || err)).slice(0, 120)})`); return null; });
+  addApiHeaderPrefix("/aws");
+  const awsRoute = async (req, res, next) => {
+    const gate = AWS_GATE || await awsGateReady;
+    if (!gate) return next();
+    noteFunnelOnFinish(req, res);
+    return gate.handler(req, res, next);
+  };
+  app.get(AWS_JWKS_PATH, async (req, res, next) => {
+    const gate = AWS_GATE || await awsGateReady;
+    if (!gate) return next();
+    res.set("Cache-Control", "public, max-age=300").json(gate.jwks);
+  });
+  app.all(["/aws", "/aws/:slug"], awsRoute);
+}
+// The AWS Marketplace gate's counters and the paid runs that ended without an answer (operator only).
+app.get("/__operator/aws.json", (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store").json(AWS_GATE
+    ? { enabled: true, routes: AWS_GATE.slugs(), endpointSlug: AWS_GATE.endpointSlug, notServed: AWS_ROUTES.refused, sinceBoot: AWS_GATE.stats(), chargedWithoutAnswer: AWS_GATE.failed() }
+    : { enabled: false, ...(AWS_ROUTES ? { notServed: AWS_ROUTES.refused } : {}) });
+});
 // The referral gate's counters and its open settlements (operator only).
 app.get("/__operator/referral.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);

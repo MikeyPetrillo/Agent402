@@ -59,6 +59,7 @@
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "dependencies": {
+    "@aws/fiat-extension-for-x402": "1.0.1",
     "@e2b/code-interpreter": "^2.9.0",
     "@modelcontextprotocol/node": "2.1.2",
     "@modelcontextprotocol/server": "2.4.0",
