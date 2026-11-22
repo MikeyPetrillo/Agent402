@@ -555,7 +555,23 @@ function csvEscape(v) {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-function parseCsv(text, delimiter = ",") {
+// A CSV delimiter from a caller's field: a name (comma, semicolon, tab, pipe),
+// "\\t", or any one character that is not a quote or a line break. Absent reads
+// as a comma. Any other value also reads as a comma, as it always has, and the
+// answer says so (`note`) rather than refusing a call that used to be served.
+const CSV_DELIMITER_NAMES = { comma: ",", semicolon: ";", tab: "\t", pipe: "|", space: " ", "\\t": "\t" };
+export const CSV_DELIMITER_NOTE = "unrecognized delimiter value; comma used (use comma, semicolon, tab, pipe, or one character other than a quote or a line break)";
+export function csvDelimiterOf(raw) {
+  if (raw === undefined || raw === null || raw === "") return { delimiter: "," };
+  if (typeof raw === "string") {
+    const named = CSV_DELIMITER_NAMES[raw.trim().toLowerCase()];
+    if (named) return { delimiter: named };
+    if (raw.length === 1 && raw !== '"' && raw !== "\n" && raw !== "\r") return { delimiter: raw };
+  }
+  return { delimiter: ",", note: CSV_DELIMITER_NOTE };
+}
+
+export function parseCsv(text, delimiter = ",") {
   const rows = [];
   let row = [];
   let field = "";
@@ -718,7 +734,7 @@ const dataTools = [
     slug: "csv-to-json", aliases: ["csv-parse", "csv-column"],
     category: "conversion",
     price: "$0.002",
-    description: "Parse CSV (quoted fields supported) into a JSON array of objects, using the first row as headers (header=false for arrays).",
+    description: "Parse CSV (quoted fields supported) into a JSON array of objects, using the first row as headers (header=false for arrays). Comma by default, or delimiter: semicolon, tab, pipe, or any single character.",
     tags: ["csv", "json", "convert", "parse"],
     discovery: {
       bodyType: "json",
@@ -726,7 +742,7 @@ const dataTools = [
       inputSchema: {
         properties: {
           csv: { type: "string", description: "CSV text (max 100KB)" },
-          delimiter: { type: "string", description: "Default ," },
+          delimiter: { type: "string", description: "comma (default), semicolon, tab, pipe, or any single character" },
           header: { type: "boolean", description: "First row is headers (default true)" },
         },
         required: ["csv"],
@@ -735,14 +751,16 @@ const dataTools = [
     },
     handler: (input) => {
       const text = capText(need(input, "csv"), 100_000, "csv");
-      const delimiter = typeof input.delimiter === "string" && input.delimiter.length === 1 ? input.delimiter : ",";
+      const { delimiter, note } = csvDelimiterOf(input.delimiter);
+      // Shown only when the value sent was not read, so every other answer is unchanged.
+      const fellBack = note ? { delimiterUsed: delimiter, delimiterNote: note } : {};
       const grid = parseCsv(text, delimiter).filter((r) => !(r.length === 1 && r[0] === ""));
       if (!grid.length) throw bad("Empty CSV");
       const header = input.header !== false && input.header !== "false";
-      if (!header) return { rows: grid, count: grid.length };
+      if (!header) return { rows: grid, count: grid.length, ...fellBack };
       const cols = grid[0];
       const rows = grid.slice(1).map((r) => Object.fromEntries(cols.map((c, i) => [c, r[i] ?? ""])));
-      return { rows, count: rows.length };
+      return { rows, count: rows.length, ...fellBack };
     },
   },
   {
@@ -1293,6 +1311,22 @@ export function isoInTz(date, tz) {
   return { localIso: `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}${utcOffset}`, utcOffset };
 }
 
+// A list of IANA zones from an array or a comma-separated string; absent reads
+// as none. Each name is checked, and a bad one is a 400 naming the field.
+const TIME_CONVERT_MAX_ZONES = 50;
+function zoneList(raw) {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const list = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(",") : null;
+  if (!list || list.length > TIME_CONVERT_MAX_ZONES) throw bad(`"zones" must be a list of at most ${TIME_CONVERT_MAX_ZONES} IANA timezones`);
+  const zones = [];
+  for (const z of list) {
+    if (typeof z !== "string" || !z.trim() || z.length > 64) throw bad('"zones" must hold IANA timezone names, like Asia/Tokyo');
+    try { new Intl.DateTimeFormat("en-US", { timeZone: z.trim() }); } catch { throw bad(`"zones" holds an unknown timezone: ${z.trim()}`); }
+    zones.push(z.trim());
+  }
+  return zones;
+}
+
 function parseWhen(value) {
   if (value === undefined || value === null || value === "now") return new Date();
   if (typeof value === "number" || /^\d+$/.test(String(value))) {
@@ -1361,7 +1395,7 @@ const timeTools = [
     slug: "time-convert",
     category: "time",
     price: "$0.001",
-    description: "Convert between epoch (s or ms), ISO 8601, and any IANA timezone. Give a value (epoch seconds or milliseconds, an ISO string, or 'now'), get every representation back: utc, epochSeconds, epochMillis and, with tz, timezone, localIso (ISO 8601 with the zone's offset, e.g. 2026-06-11T19:00:00+09:00), utcOffset and local (a display string). A bare number under 1e12 is read as seconds, otherwise as milliseconds.",
+    description: "Convert between epoch (s or ms), ISO 8601, and any IANA timezone. Give a value (epoch seconds or milliseconds, an ISO string, or 'now'), get every representation back: utc, epochSeconds, epochMillis and, with tz, timezone, localIso (ISO 8601 with the zone's offset, e.g. 2026-06-11T19:00:00+09:00), utcOffset and local (a display string). zones takes a list of up to 50 IANA timezones and returns the same instant in each, in one answer. A bare number under 1e12 is read as seconds, otherwise as milliseconds.",
     tags: ["time", "epoch", "timezone", "convert", "iso8601"],
     discovery: {
       bodyType: "json",
@@ -1370,6 +1404,7 @@ const timeTools = [
         properties: {
           value: { description: "Epoch seconds/ms, ISO string, or 'now'" },
           tz: { type: "string", description: "IANA timezone to render in (optional)" },
+          zones: { type: "array", items: { type: "string" }, description: `Up to ${TIME_CONVERT_MAX_ZONES} IANA timezones to render the same instant in (optional); a comma-separated string also works` },
         },
         required: ["value"],
       },
@@ -1383,6 +1418,8 @@ const timeTools = [
         out.local = formatInTz(d, input.tz);
         Object.assign(out, isoInTz(d, input.tz));
       }
+      const zones = zoneList(input.zones);
+      if (zones) out.zones = zones.map((tz) => ({ timezone: tz, local: formatInTz(d, tz), ...isoInTz(d, tz) }));
       return out;
     },
   },
