@@ -143,6 +143,7 @@ export function rowWalletFigures(row, walletEvidence = null) {
  *   settled, payers           the best wallet (clearing first, then most calls, then
  *                             most payers): the projection every pre-probe filter
  *                             and label reads
+ *   wallet                    that best wallet (null with no evidence)
  *   payTos       Set(wallet)  every wallet with evidence
  *   ownSettled, ownPayers    the chain join alone (evidence on the origin's own
  *                             advertised address), for reporting
@@ -290,12 +291,12 @@ export function buildEvidenceBinding({ leaderboardRows = [], walletEvidence = nu
   const out = new Map();
   for (const [o, e] of m) {
     const clearing = new Set();
-    let best = null, bestClears = false;
+    let best = null, bestClears = false, bestWallet = null;
     for (const [w, v] of e.byWallet) {
       const clears = meetsRouterGate({ settled: v.settled, payers: v.payers, minSettled, minPayers }).ok;
       if (clears) clearing.add(w);
       if (!best || (clears && !bestClears) || (clears === bestClears && (v.settled > best.settled || (v.settled === best.settled && Number(v.payers ?? 0) > Number(best.payers ?? 0))))) {
-        best = v; bestClears = clears;
+        best = v; bestClears = clears; bestWallet = w;
       }
     }
     out.set(o, {
@@ -303,6 +304,8 @@ export function buildEvidenceBinding({ leaderboardRows = [], walletEvidence = nu
       clearing,
       settled: best ? best.settled : 0,
       payers: best ? best.payers : undefined,
+      // The wallet `settled` / `payers` were measured at (null with no evidence).
+      wallet: best ? bestWallet : null,
       payTos: new Set(e.byWallet.keys()),
       ownSettled: e.ownSettled,
       ownPayers: e.ownPayers,

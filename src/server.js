@@ -2513,6 +2513,9 @@ for (const tier of EXEC_TIERS) {
   const tool = buildSellerTrustTool({
     getSellerDetail: (host) => sellerDetail(host),
     getSettledCalls: (origin) => dispatchEvidence().settled.get(norm(origin)) || 0,
+    // The same binding entry: the wallet those figures were measured at and
+    // every wallet's own figures, so routerGate can name where it counted.
+    getGateEvidence: (origin) => dispatchEvidence().binding.get(norm(origin)) || null,
     // Evidence for the address the seller ADVERTISES, from the cached on-chain
     // merchant scan. Never fetches — a cold cache reports "not checked", never
     // a clean bill.

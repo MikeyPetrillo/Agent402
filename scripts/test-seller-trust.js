@@ -14,7 +14,7 @@
 //   node scripts/test-seller-trust.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
-import { buildSellerTrustTool, assessSeller } from "../src/tools/seller-trust.js";
+import { buildSellerTrustTool, assessSeller, WALLET_MISMATCH_NOTE } from "../src/tools/seller-trust.js";
 import { dispatchEligibility } from "../src/dispatch-eligibility.js";
 import { priceUsdOf } from "../src/price-usd.js";
 import { EXEC_TIERS } from "../src/tools/route-execute.js";
@@ -387,6 +387,45 @@ check("the example's unproven lane equals the live lane under the default env", 
     for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
   }
 });
+
+// --- routerGate names the wallet its figures were measured at ---------------
+{
+  const W_OLD = "0x" + "5".repeat(40), W_LIVE = "0x" + "6".repeat(40);
+  const moved = { ...PROVEN, origin: "https://moved.example", payToByNetwork: { "eip155:8453": W_LIVE.toUpperCase().replace("0X", "0x") } };
+  const evidence = { wallet: W_OLD, settled: 145, byWallet: new Map([[W_OLD, { settled: 145, payers: 12 }], [W_LIVE, { settled: 4, payers: 2 }]]) };
+  const tool = (ev, details) => build(details, { [details[0].origin]: ev?.settled || 0 }, { getGateEvidence: () => ev });
+  check("mismatch: routerGate names both wallets, the 402 payTo's own figures and the note; figures and verdict unchanged", () => {
+    const withWallet = tool(evidence, [moved]).handler({ origin: "moved.example" });
+    const without = build([moved], { [moved.origin]: 145 }).handler({ origin: "moved.example" });
+    const g = withWallet.routerGate;
+    assert.equal(g.measuredAtWallet, W_OLD);
+    assert.equal(g.livePayTo, W_LIVE);
+    assert.equal(g.measuredAtLivePayTo, false);
+    assert.equal(g.livePayToSettledCalls, 4);
+    assert.equal(g.livePayToPayers, 2);
+    assert.equal(g.walletNote, WALLET_MISMATCH_NOTE);
+    for (const k of Object.keys(without.routerGate)) assert.deepEqual(g[k], without.routerGate[k], `routerGate.${k} unchanged`);
+    for (const k of ["routableByOurRouter", "routableAsProven", "routableVia", "blockers", "provenBlockers", "lanes"]) assert.deepEqual(withWallet[k], without[k], `${k} unchanged`);
+  });
+  check("match: routerGate gains the wallet fields and no note", () => {
+    const same = { ...PROVEN, origin: "https://same.example", payToByNetwork: { "eip155:8453": W_OLD } };
+    const g = tool({ wallet: W_OLD, settled: 145, byWallet: new Map([[W_OLD, { settled: 145, payers: 12 }]]) }, [same]).handler({ origin: "same.example" }).routerGate;
+    assert.equal(g.measuredAtWallet, W_OLD);
+    assert.equal(g.measuredAtLivePayTo, true);
+    assert.equal(g.livePayToSettledCalls, 145);
+    assert.ok(!("walletNote" in g));
+  });
+  check("no evidence, or no readable payTo: nothing is claimed", () => {
+    const g = tool(null, [moved]).handler({ origin: "moved.example" }).routerGate;
+    assert.equal(g.measuredAtWallet, null);
+    assert.equal(g.measuredAtLivePayTo, null);
+    assert.ok(!("walletNote" in g));
+    const g2 = tool(evidence, [{ ...PROVEN, origin: "https://nopay.example" }]).handler({ origin: "nopay.example" }).routerGate;
+    assert.equal(g2.livePayTo, null);
+    assert.equal(g2.measuredAtLivePayTo, null);
+    assert.equal(g2.livePayToSettledCalls, null);
+  });
+}
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
