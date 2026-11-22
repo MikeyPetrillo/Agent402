@@ -1,7 +1,7 @@
 ---
 title: "Agent402 Plugin"
 description: "Discover and call 500+ pay-per-call web tools via x402 payments (USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Ink, Stellar & Algorand; USDG on Robinhood Chain - 14 chains) through Agent402.tools"
-tags: [x402, tools, api, payments, agents]
+tags: [x402, tools, api, payments, agents, agentic-commerce]
 name: agent402
 version: 0.1.0
 integration: http-api

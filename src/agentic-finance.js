@@ -40,7 +40,7 @@ export function agenticFinancePage(baseUrl) {
   const canonical = `${baseUrl}/agentic-finance`;
   const title = "What is Agentic Finance (AIFI)? Agents that pay and get paid";
   const description =
-    "Agentic Finance (AIFI) is software agents paying and getting paid on their own, per request, over the open protocols x402 and MPP. The definition and where Agent402 fits: tools, reports, routing, selling and on-chain proof.";
+    "Agentic Finance (AIFI) is the applied finance layer of agentic commerce: agents paying and getting paid on their own, per request, over x402 and MPP.";
 
   const orgLd = siteOrgLd(baseUrl);
   const termLd = { "@type": "DefinedTerm", "@id": `${canonical}#term`, name: "Agentic Finance", alternateName: "AIFI", description: DEFINITION, url: canonical, inDefinedTermSet: { "@type": "DefinedTermSet", "@id": `${baseUrl}/glossary#set`, name: "Agentic Finance (AIFI) glossary", url: `${baseUrl}/glossary` } };
@@ -48,7 +48,7 @@ export function agenticFinancePage(baseUrl) {
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Agentic Finance (AIFI)", item: canonical },
   ] };
-  const articleLd = { "@type": "Article", "@id": `${canonical}#article`, headline: title, description, about: { "@id": `${canonical}#term` }, publisher: { "@id": `${baseUrl}/#organization` }, author: { "@id": `${baseUrl}/#organization` }, mainEntityOfPage: canonical, keywords: "agentic finance, AIFI, agentic payments, x402, MPP, machine payments protocol, AI agents, pay-per-call, machine-to-machine payments" };
+  const articleLd = { "@type": "Article", "@id": `${canonical}#article`, headline: title, description, about: { "@id": `${canonical}#term` }, publisher: { "@id": `${baseUrl}/#organization` }, author: { "@id": `${baseUrl}/#organization` }, mainEntityOfPage: canonical, keywords: "agentic finance, AIFI, agentic commerce, agentic payments, x402, MPP, machine payments protocol, AI agents, pay-per-call, machine-to-machine payments" };
   const faqLd = { "@type": "FAQPage", "@id": `${canonical}#faq`, mainEntity: faqs.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
 
   const extraCss = `
@@ -70,7 +70,7 @@ export function agenticFinancePage(baseUrl) {
     </nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">Agentic Finance <span style="color:var(--accent);">(AIFI)</span></h1>
     <p id="definition" class="ml-measure" style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 16px;">${esc(DEFINITION)}</p>
-    <p class="ml-measure" style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">The long form, with the stack and one purchase traced on the wire, is ${link("/blog/what-is-agentic-finance-aifi#stack", "the AIFI post")}. Every term is defined once in ${link("/glossary", "the glossary")}, and ${link("/101", "x402 and MPP 101")} starts from zero.</p>
+    <p class="ml-measure" style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">Agentic commerce is agents paying for goods, services, tools and data; Agentic Finance is its applied finance layer. The long form, with the stack and one purchase traced on the wire, is ${link("/blog/what-is-agentic-finance-aifi#stack", "the AIFI post")}. Every term is defined once in ${link("/glossary", "the glossary")}, and ${link("/101", "x402 and MPP 101")} starts from zero.</p>
   </div>
 </header>
 

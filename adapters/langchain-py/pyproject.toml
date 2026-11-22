@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Havok Holdings LLC", email = "mike@agent402.tools" }]
-keywords = ["langchain", "x402", "mpp", "agentic-finance", "aifi", "agent", "tools", "mcp", "agent402", "ai-agents"]
+keywords = ["langchain", "x402", "mpp", "agentic-commerce", "agentic-finance", "aifi", "agent", "tools", "mcp", "agent402", "ai-agents"]
 dependencies = ["requests>=2.25"]
 
 [project.optional-dependencies]

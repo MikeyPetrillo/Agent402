@@ -128,7 +128,7 @@ export function mcpServerDescription({ mpp = true, receipts = true } = {}) {
 /** The short description (100 characters at most) the MCP Registry entry
  *  (mcp/server.json) and the server card carry. */
 export function mcpShortDescription({ mpp = true } = {}) {
-  return `Payment and trust layer for agent commerce (Agentic Finance): pay and verify calls over ${mpp ? "x402 and MPP" : "x402"}`;
+  return `Payment and trust layer for agentic commerce (Agentic Finance): pay and verify over ${mpp ? "x402 and MPP" : "x402"}`;
 }
 /** The published description (both wires), identical to the stdio package's. */
 export const MCP_SERVER_DESCRIPTION = mcpServerDescription();
