@@ -12,7 +12,7 @@
 //
 // Our own Robinhood relayer (src/robinhood-relayer.js) pays the gas of the
 // sales it settles, so it takes a sale only when its price is at least
-// ROBINHOOD_RELAYER_MIN_PRICE_USD (default 0.004; "0" lets it settle any
+// ROBINHOOD_RELAYER_MIN_PRICE_USD (default ROBINHOOD_RELAYER_MIN_PRICE_DEFAULT_USD; "0" lets it settle any
 // price). Under it the listed facilitators alone settle the sale, and a
 // refusal from them stands as the buyer's 402.
 //
