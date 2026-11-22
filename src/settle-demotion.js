@@ -47,6 +47,15 @@ export function settleAttemptOf(paymentPayload, network) {
   const a = attempts.get(paymentPayload);
   return a && a.network === network ? a : null;
 }
+/** Note that `name` was asked while settling this payload on `network`
+ *  (the settle deadlines' slow-primary switch, src/settle-deadlines.js), so
+ *  neither this wrapper nor the settle-failure hook asks it again. */
+export function noteSettleAsked(paymentPayload, network, name) {
+  if (!paymentPayload || typeof paymentPayload !== "object" || !name) return;
+  let a = attempts.get(paymentPayload);
+  if (!a || a.network !== network) { a = { network, asked: new Set() }; attempts.set(paymentPayload, a); }
+  a.asked.add(name);
+}
 const keyOf = (network, label) => `${network}|${label}`;
 
 /** True for the refusal class that demotes: the facilitator's own account cannot pay. */

@@ -14,8 +14,9 @@
 //                 charged with no sale): a throw refuses with this hook's own
 //                 reason, so the buyer reads why and is not charged.
 //   passingHook   a buyer courtesy whose failure has its own backstop (the
-//                 client-gone cancel): a throw is logged and the payment goes
-//                 on as before.
+//                 client-gone cancel, the settle deadlines' context note: a
+//                 settle with no note is cut at its cap without the chain
+//                 check): a throw is logged and the payment goes on as before.
 //
 // The non-throwing path is untouched: a sync hook stays sync and its return
 // value is passed through as is.
@@ -66,6 +67,7 @@ export const HOOK_NAMES = Object.freeze({
   returningWallet: "returning-wallet",
   clientGone: "client-gone",
   settleSent: "settle-sent",
+  settleDeadline: "settle-deadline-context",
 });
 export const ARC_CONTRACT_WALLET_CHECK_FAILED = "contract_wallet_check_failed";
 export const WALLET_CHECK_FAILED = "wallet_check_failed";

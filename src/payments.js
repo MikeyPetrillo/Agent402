@@ -55,7 +55,8 @@ import { gatedRailWasOffered, recordGatedRailOffered } from "./gated-rail-histor
 import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
 import { hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
-import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from "./settle-demotion.js";
+import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf, noteSettleAsked } from "./settle-demotion.js";
+import { withSettleDeadline, noteSettleContext, settleDeadlineStopOf, noteCappedRequest } from "./settle-deadlines.js";
 import { createRobinhoodOrder, stateDbOrderStore, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
 import { isPaymentVerdictReason, isUsedAuthorizationReason } from "./settle-verdict.js";
@@ -2655,7 +2656,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     });
     DEMOTION_NETWORKS.add(CELO_CAIP2);
   }
-  registerFacilitatorFailureHooks(server, payAiClient, solvadorClient, {
+  const settleFallbackOverrides = {
     [ARC_CAIP2]: [],
     // With a second Solana facilitator, no Solana settle fallback: the
     // transaction names one facilitator's fee payer, and no other can co-sign it.
@@ -2672,7 +2673,22 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // Base and Polygon: the chain they always had, then the issuer's
     // facilitator last, once its /supported listed the network.
     ...(circleEvm ? lastResortFallbackOverrides({ networks: circleEvmWanted, payAiClient, solvadorClient, last: { name: CIRCLE_EVM_LABEL, client: circleEvm }, confirmed: circleEvmConfirmed }) : {}),
-  }, { outageFor: (network) => (network === ROBINHOOD_CAIP2 ? robinhoodOutage : null) });
+  };
+  // Per-network settle deadlines on every routing client (src/settle-deadlines.js):
+  // the chain check, the slow-primary switch (to the same fallbacks the
+  // settle-fallback chain asks, only under its opt-in) and the hard cap.
+  // Outermost, so the cap covers the settle demotion's alternates too.
+  {
+    const switchOn = /^(1|true|yes|on)$/i.test((process.env.PAYMENT_SETTLE_FALLBACK || "").trim());
+    facilitatorClients.forEach((c, i) => withSettleDeadline(c, {
+      labelOf: (n) => (facilitatorLabelOfs[i] ? facilitatorLabelOfs[i](n) : facilitatorLabels[i]) || `#${i}`,
+      alternatesFor: (n) => (switchOn ? fallbackCandidatesFor(n, payAiClient, solvadorClient, settleFallbackOverrides) : []),
+      isPreBroadcast: isPreBroadcastSettleRejection,
+      exclude: (p, r) => isGatewayBatchedPayment(p) || isGatewayBatchedPayment(r),
+      noteAsked: noteSettleAsked,
+    }));
+  }
+  registerFacilitatorFailureHooks(server, payAiClient, solvadorClient, settleFallbackOverrides, { outageFor: (network) => (network === ROBINHOOD_CAIP2 ? robinhoodOutage : null) });
   // Contract wallets on Arc (ARC_CONTRACT_WALLETS=on) pay only routes whose
   // effect is not keyed on the payer. An identity-bound route (memory, attest,
   // feedback, my-usage, receipts) keys the caller on authorization.from; for a
@@ -2731,6 +2747,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // only failures nothing settled.
   registerLateSettleHook(server, lateSettleBook);
   startLateSettleReconcile();
+  // The settle deadlines' chain check reads the payment's settle context
+  // (src/settle-deadlines.js). A note only: it never ends the chain.
+  server.onBeforeSettle(passingHook(HOOK_NAMES.settleDeadline, (ctx) => { noteSettleContext(ctx); }));
   // Per-phase timing (src/paid-phase-timing.js). Registered last: a hook
   // that aborts settlement first leaves no settle mark, which is the truth.
   registerPhaseTimingHooks(server);
@@ -4231,6 +4250,19 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
       `[payments] facilitator SETTLE failed${ctx?.error?.__a402Facilitator ? "" : ` at ${via}`} on ${ctx?.requirements?.network} ` +
         `${ctx?.requirements?.scheme}: ${failure}`
     );
+    // Ended by the settle deadlines (src/settle-deadlines.js): nothing
+    // answered by the network's cap, or a fallback asked first while the
+    // primary was slow failed without proving nothing was sent. The transfer
+    // may still land, so no other settle is tried: the answer is an
+    // unconfirmed stop, the authorization is booked for the late-settlement
+    // read (owed once if it lands), and the request keeps what a resend of
+    // the same payment is answered from (src/idempotency.js).
+    const deadlineStop = settleDeadlineStopOf(ctx?.error);
+    if (deadlineStop) {
+      await markUnconfirmedStop(ctx, ctx.error, deadlineStop.via);
+      noteCappedRequest(ctx?.transportContext?.request?.adapter?.req, ctx);
+      return;
+    }
     // "Already on-chain": the facilitator's own transfer may have landed, or
     // the payload is a replay of one that settled another call. Only chain
     // proof that the transfer is THIS request's recovers it
@@ -4301,7 +4333,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     const facilitatorRetry = ownRefusedFirst ? facilitatorRetryOf(ctx?.paymentPayload) : null;
     const candidates = fallbackCandidatesFor(ctx?.requirements?.network, payAiClient, solvadorClient, fallbackOverrides)
       .flatMap((c) => (ownFirst && c.own ? (facilitatorRetry ? [{ name: facilitatorRetry.name, client: { settle: facilitatorRetry.settle }, revertRetry: true }] : []) : [c]))
-      .filter(({ name }) => !demotionAttempt?.asked.has(name));
+      .filter(({ name }) => !(demotionAttempt || settleAttemptOf(ctx?.paymentPayload, ctx?.requirements?.network))?.asked.has(name));
     for (const { name, client, revertRetry, own } of candidates) {
       if (passedOn && (revertRetry !== true || own)) continue;
       if (revertOnly && revertRetry !== true) continue;

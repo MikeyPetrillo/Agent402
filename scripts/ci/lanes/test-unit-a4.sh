@@ -115,6 +115,8 @@ t node scripts/test-tempo-paging-oracle.js
 t node scripts/test-settle-fallback.js
 # A settle chain a fallback ends unconfirmed: 402 settlement-unconfirmed with no offer, the authorization booked (per-payer bound journaled), never counted against the wallet, the same payment answered again with no run (paid-mode boot vs stub facilitators - offline)
 t node scripts/test-settle-fallback-unconfirmed.js
+# Per-network settle deadlines: Base's 30 s settle that succeeds is served (cap 60 s); a landed transfer read on chain is served before the facilitator answers; a 30 s Celo settle is cut at its cap, booked and owed once, and on file stores its resend keeps the 402; a slow primary switches to the fallback and recovers (paid-mode boot vs stub facilitators and chain - offline)
+t node scripts/test-settle-deadlines.js
 # A listed Robinhood settle fallback is tried only after its /supported confirms eip155:4663 (paid-mode boot vs stub facilitators - offline)
 t node scripts/test-rh-fallback-confirm.js
 # Robinhood boot order: the first listed facilitator whose /supported confirms eip155:4663 settles first; a 200 refusal in words with no verdict goes to the next listed, a verdict

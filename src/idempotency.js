@@ -39,7 +39,17 @@ const unwrapStored = (hit) => (hit && typeof hit === "object" && !Array.isArray(
 // authorization can no longer move money, and a new one is safe) plus a
 // minute, at least a minute, at most MAX_SETTLED_VALIDITY_HOLD_MS (30 days);
 // a payment that names no validBefore (Solana, Stellar, Algorand), a day.
+//
+// A payment cut at its network's settle deadline (src/settle-deadlines.js)
+// also keeps the route's own answer beside it, when that answer replays (the
+// server's implicitReplay rule: no lasting effect, no identity binding, not
+// streamed) and fits. The same payment sent again is then asked of
+// onCappedResend first: once the chain proves its transfer landed it is
+// served that answer (its debt, if one was booked, voided first); until then,
+// and whenever the check cannot say, the kept 402.
 const UNCONFIRMED = "__a402Unconfirmed";
+// What the settle deadlines leave on a request they cut (src/settle-deadlines.js CAPPED).
+const CAPPED = Symbol.for("agent402.settleCapped");
 const UNCONFIRMED_MIN_MS = 60_000;
 const UNCONFIRMED_NO_EXPIRY_MS = 24 * 3600_000;
 // A header field read as text: a string as is, a number as its digits,
@@ -186,7 +196,7 @@ export async function chargedReplayVerdict(tx, { voidOnClaim, rowOf }) {
  *  Resolving { serve: false, status, body, retryAfter? } answers that instead
  *  of the stored body (the charge was refunded, or its debt's void has not
  *  landed yet); any other result serves it. */
-export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore(), implicitReplay = null, onReplay = null }) {
+export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore(), implicitReplay = null, onReplay = null, onCappedResend = null }) {
   // Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
   // `Idempotency-Key`, a successful gated call is cached keyed by that key + the
   // gate credential it presented (the x402 payment authorization or the
@@ -278,6 +288,16 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     const wire = isX402McpRequest(req) ? "x402-mcp " : "";
     return { key: createHash("sha256").update(`${wire}${req.method} ${req.path}${qs}\n${idem}\n${cred}\n${bodyHash}`).digest("hex"), kind, implicit };
   };
+  // The call a request makes (its wire, route, query and body), so a kept
+  // route answer is served only to the same call: the unconfirmed 402 is the
+  // payment's whatever the call, the route's answer is that call's alone.
+  const callDigestOf = (req) => {
+    const bodyHash = req.body && typeof req.body === "object" && Object.keys(req.body).length ? createHash("sha256").update(JSON.stringify(req.body)).digest("hex") : "-";
+    const url = String(req.originalUrl || req.url || "");
+    const qs = url.includes("?") ? `\n?${url.slice(url.indexOf("?") + 1)}` : "";
+    const wire = isX402McpRequest(req) ? "x402-mcp " : "";
+    return createHash("sha256").update(`${wire}${req.method} ${req.path}${qs}\n${bodyHash}`).digest("hex");
+  };
   // The unconfirmed answer of a payment, back for the same payment (above).
   const replayUnconfirmed = (req, res, rec) => {
     // Every 402 is no-store already (src/paid-no-store.js).
@@ -287,9 +307,40 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     res.status(402).type("application/json");
     return res.send(JSON.stringify(rec.body));
   };
+  // The same payment sent again after a settle-deadline cut, with the
+  // route's answer kept: served once the transfer is proven (onCappedResend),
+  // else the kept 402.
+  const replayCapped = async (req, res, rec) => {
+    let v = null;
+    try { v = await onCappedResend(req, { payment: rec.capped.payment }); } catch { v = null; }
+    if (v && typeof v === "object" && v.serve === true) {
+      if (typeof v.receipt === "string" && v.receipt) res.setHeader("PAYMENT-RESPONSE", v.receipt);
+      res.setHeader("X-Idempotent-Replay", "true");
+      res.setHeader("X-Replayed-Answer", "1");
+      return res.status(200).json(rec.capped.answer);
+    }
+    if (v && typeof v === "object" && v.serve === false) {
+      if (Number(v.retryAfter) > 0) res.setHeader("Retry-After", String(Math.ceil(Number(v.retryAfter))));
+      return res.status(Number(v.status) || 402).json(v.body && typeof v.body === "object" ? v.body : { error: "replay_refused" });
+    }
+    return replayUnconfirmed(req, res, rec);
+  };
   // Keep this request's unconfirmed answer (set on the request by the
   // paywall when it sent one) for the same payment sent again.
   const keepUnconfirmed = (req, res, uKey, sig) => {
+    // The route's own answer, for a payment the settle deadlines cut: the
+    // first JSON body the handler sent as a 200 (the paywall's 402 that
+    // replaces it is written with its own status).
+    let answer;
+    let replays = false;
+    try { replays = typeof onCappedResend === "function" && typeof implicitReplay === "function" && implicitReplay(req) === true; } catch { replays = false; }
+    if (replays && typeof res.json === "function") {
+      const prior = res.json;
+      res.json = function cappedAnswerJson(body) {
+        if (answer === undefined && res.statusCode === 200 && body !== undefined) answer = body;
+        return prior.call(this, body);
+      };
+    }
     let done = false;
     const keep = () => {
       if (done) return;
@@ -301,9 +352,17 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       const a = req.__a402UnconfirmedAnswer;
       if (res.statusCode !== 402 || !a || typeof a !== "object" || !a.body || typeof a.body !== "object") return;
       if (typeof sig !== "string" || !sig) return;
-      const rec = { [UNCONFIRMED]: 1, body: a.body, receipt: typeof a.receipt === "string" ? a.receipt : null, sig };
+      let rec = { [UNCONFIRMED]: 1, body: a.body, receipt: typeof a.receipt === "string" ? a.receipt : null, sig };
+      const capped = req[CAPPED];
       let bytes = 0;
-      try { bytes = Buffer.byteLength(JSON.stringify(rec), "utf8"); } catch { bytes = 0; }
+      if (replays && answer !== undefined && capped && typeof capped === "object") {
+        let call = null;
+        try { call = callDigestOf(req); } catch { call = null; }
+        const withAnswer = call ? { ...rec, capped: { answer, payment: capped, call } } : rec;
+        try { bytes = Buffer.byteLength(JSON.stringify(withAnswer), "utf8"); } catch { bytes = 0; }
+        if (bytes && bytes <= IDEM_MAX_BODY_BYTES) rec = withAnswer;
+      }
+      if (rec.capped === undefined) { try { bytes = Buffer.byteLength(JSON.stringify(rec), "utf8"); } catch { bytes = 0; } }
       if (!bytes || bytes > IDEM_MAX_BODY_BYTES) return;
       store.set(uKey, rec, bytes, { ttlMs: unconfirmedReplayMs(a.validBefore) }).catch(() => {});
     };
@@ -325,7 +384,13 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     // Only the payer's own signature gets its answer back; any other header
     // naming the same payment takes the normal path (verify refuses it), and
     // never replaces the payer's stored answer.
-    if (uStored && typeof uSig === "string" && uSig && uHit.sig === uSig) return replayUnconfirmed(req, res, uHit);
+    if (uStored && typeof uSig === "string" && uSig && uHit.sig === uSig) {
+      const capped = uHit.capped;
+      let sameCall = false;
+      try { sameCall = !!capped && typeof capped === "object" && typeof capped.call === "string" && capped.call === callDigestOf(req); } catch { sameCall = false; }
+      if (typeof onCappedResend === "function" && sameCall && capped.answer !== undefined && capped.payment && typeof capped.payment === "object") return replayCapped(req, res, uHit);
+      return replayUnconfirmed(req, res, uHit);
+    }
     if (uKey && !uStored) keepUnconfirmed(req, res, uKey, uSig);
     if (!bound) return next();
     const { key, kind, implicit } = bound;
