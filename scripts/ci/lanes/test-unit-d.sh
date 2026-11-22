@@ -311,6 +311,8 @@ t node scripts/test-egress-proxy.js
 t node scripts/test-code-run-caps.js
 # Safe-regex guard (rejects ReDoS patterns for caller-supplied regexes — DoS lock — offline)
 t node scripts/test-safe-regex.js
+# Regex tool budget covers the run, not the thread start: the published example answers under a slow worker start, a catastrophic pattern still ends as an uncharged 400, a worker that never starts answers 503 (offline)
+t node scripts/test-regex-budget.js
 # Sales ledger unit tests (named sales, internal/external classification, revenue math — offline)
 t node scripts/test-sales-ledger.js
 # One settlement, one sale: the writer does not write a second sale for a Solana signature, every counting reader reads a file with repeat rows as the file without them, the operator script's dry run changes nothing (offline)

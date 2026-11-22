@@ -7,6 +7,10 @@ import { parentPort, workerData } from "node:worker_threads";
 
 const { pattern, flags, text, maxMatches } = workerData;
 
+// The parent arms its regex budget on this message, so the budget measures the
+// regex run and not the thread's start.
+parentPort.postMessage({ started: true });
+
 let re;
 try {
   re = new RegExp(pattern, flags.includes("g") ? flags : flags + "g");

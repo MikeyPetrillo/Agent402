@@ -29,15 +29,28 @@ import QRCode from "qrcode";
 import { assertPublicUrl, safeFetch, ssrfDispatcher, isSsrfBlock, UNRESOLVED_OR_PRIVATE, isTransientLookupError, lookupUnavailable, resolveHostAddress } from "./fetch-guard.js";
 import { jsonLeafBytes, jsonStringBytes } from "../json-bytes.js";
 
-const REGEX_WORKER = fileURLToPath(new URL("./regex-worker.js", import.meta.url));
+const REGEX_WORKER_DEFAULT = fileURLToPath(new URL("./regex-worker.js", import.meta.url));
+let REGEX_WORKER = REGEX_WORKER_DEFAULT;
 const REGEX_TIMEOUT_MS = 750;
+/** Test seam: run the regex tool on another worker file (a fixture that starts slowly); null restores the real one. */
+export function setRegexWorkerForTest(path) { REGEX_WORKER = path || REGEX_WORKER_DEFAULT; }
+
+// How long a regex worker may take to start (thread spawn and module load on a
+// busy host) before the call is answered 503. The regex budget above starts
+// only once the worker says it is about to run the pattern.
+const REGEX_START_TIMEOUT_MS = 10_000;
 
 // Run a user regex in a worker thread with a hard timeout. ReDoS patterns are
 // contained to a single terminated worker instead of freezing the event loop.
-function runRegexSafely({ pattern, flags, text, maxMatches }) {
+// The timeout covers the regex run alone: the worker posts { started } just
+// before it compiles the pattern, and only then is the budget armed, so a slow
+// thread start cannot fail a benign pattern while a hostile one is still cut
+// at its own budget.
+export function runRegexSafely({ pattern, flags, text, maxMatches }, { startTimeoutMs = REGEX_START_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(REGEX_WORKER, { env: threadEnv(), workerData: { pattern, flags, text, maxMatches } });
     let done = false;
+    let timer = null;
     const finish = (fn, arg) => {
       if (done) return;
       done = true;
@@ -45,13 +58,22 @@ function runRegexSafely({ pattern, flags, text, maxMatches }) {
       worker.terminate();
       fn(arg);
     };
-    const timer = setTimeout(
-      () => finish(reject, bad("Regex timed out (>750ms) - pattern likely has catastrophic backtracking")),
-      REGEX_TIMEOUT_MS
-    );
-    worker.on("message", (msg) =>
-      msg.error ? finish(reject, bad(msg.error)) : finish(resolve, msg)
-    );
+    timer = setTimeout(() => {
+      const err = new Error("Regex worker did not start in time; retry the call");
+      err.statusCode = 503;
+      finish(reject, err);
+    }, startTimeoutMs);
+    worker.on("message", (msg) => {
+      if (msg && msg.started === true) {
+        clearTimeout(timer);
+        timer = setTimeout(
+          () => finish(reject, bad("Regex timed out (>750ms) - pattern likely has catastrophic backtracking")),
+          REGEX_TIMEOUT_MS
+        );
+        return;
+      }
+      msg.error ? finish(reject, bad(msg.error)) : finish(resolve, msg);
+    });
     worker.on("error", (e) => finish(reject, bad(`Regex execution error: ${e.message}`)));
     worker.on("exit", (code) => {
       if (!done && code !== 0) finish(reject, bad("Regex worker stopped unexpectedly"));
