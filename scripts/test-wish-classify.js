@@ -151,8 +151,10 @@ for (const [label, opts] of [["a refused key (401)", { status: 401 }], ["a 500",
   ok(/try \{ await classifyWishes/.test(seg), "a failing pass cannot take the board down with it");
 
   // Both routes must go through the same seam, or one of them grows its own rules.
-  const htmlRoute = srv.slice(srv.indexOf('app.get("/__operator/wishes"'), srv.indexOf('app.get("/__operator/wishes"') + 420);
-  const jsonRoute = srv.slice(srv.indexOf('app.get("/__operator/wishes.json"'), srv.indexOf('app.get("/__operator/wishes.json"') + 420);
+  // Each route's own body: from its registration to the "});" that closes it.
+  const routeBody = (head) => { const at = srv.indexOf(head); if (at < 0) return ""; const end = srv.indexOf("\n});", at); return end < 0 ? "" : srv.slice(at, end); };
+  const htmlRoute = routeBody('app.get("/__operator/wishes", ');
+  const jsonRoute = routeBody('app.get("/__operator/wishes.json"');
   ok(/withIntent\(req, agg\)/.test(htmlRoute), "the HTML board routes through the shared seam");
   ok(/withIntent\(req, agg\)/.test(jsonRoute), "and so does the JSON feed");
 
