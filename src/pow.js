@@ -235,7 +235,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "page-speed", "html-frames",
   "memory-write", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-revoke",
   "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",
-  "http-check", "tls-cert", "whois", "robots-check", "sitemap",
+  "http-check", "tls-cert", "whois", "domain-availability", "robots-check", "sitemap",
   "email-validate", "ip-info", "search", "search-lite", "search-news", "search-images", "search-videos", "search-suggest", "answer",
   "llm-context",  // llm-context-kit.js - spends the Brave subscription per call (never PoW-eligible)
   "pdf-info", "pdf-merge", "pdf-extract-pages", "pdf-rotate", "images-to-pdf",

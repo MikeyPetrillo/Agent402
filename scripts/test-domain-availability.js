@@ -13,6 +13,7 @@ import http from "node:http";
 import { createDomainAvailability, DOMAIN_AVAILABILITY_TOOLS, CACHE_TTL_MS, rdapBaseFor, domainOf } from "../src/tools/domain-availability-kit.js";
 import { KIT } from "../src/tools/kit.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
+import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { withRunCeiling } from "../src/run-ceiling.js";
 
 let pass = 0, fail = 0;
@@ -192,7 +193,7 @@ try {
     const whois = KIT.find((x) => x.slug === "whois");
     ok(t.slug === "domain-availability" && t.route === "POST /api/domain-availability", "route and slug");
     ok(t.price === whois.price, `priced as whois (${t.price})`);
-    ok(!FREE_TIER_SLUGS.has(t.slug), "wallet-only: not in the free tier (it has egress)");
+    ok(!FREE_TIER_SLUGS.has(t.slug) && WALLET_ONLY_SLUGS.has(t.slug), "wallet-only: not in the free tier and listed wallet-only (it has egress)");
     ok(t.endsAtCeiling === true, "every wait ends at the run's ceiling (marked)");
     const ex = t.discovery.output.example;
     ok(ex.registered === true && ex.source === "RDAP" && typeof ex.checkedAt === "string" && Array.isArray(ex.status), "the published example has the answer's shape");
