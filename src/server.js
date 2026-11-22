@@ -81,7 +81,7 @@ import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
 import { evmLogsStatus } from "./evm-logs-rpc.js";
 import { compositeGuardBlocked, compositeGuardAlarmStatus, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
 import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus, setGatewaySettleBreakerSalesLedger, gatewaySettleFirstPlan, noteSettleFirst, setUnsettledRunListener, setSettleFirstRouteReader } from "./gateway-settle-breaker.js";
-import { armSettleFirst, disarmSettleFirst, settleFirstStarted, markSettledFirst, settledFirstOf, setSettleFirstAmbient, settleFirstRefusal, isSettleFirstRefusal, settleFirstRefusalOf, settleFirstFailedNote, markExactRequired, settledFirstResendOf, markSettledFirstResend, isSettleFirstFailedRefund, SETTLE_FIRST_RESEND_HOLD, SETTLE_FIRST_MAX_RESENDS } from "./settle-first.js";
+import { armSettleFirst, disarmSettleFirst, settleFirstStarted, markSettledFirst, settledFirstOf, setSettleFirstAmbient, settleFirstRefusal, isSettleFirstRefusal, settleFirstRefusalOf, settleFirstFailedNote, markExactRequired, settledFirstResendOf, markSettledFirstResend, isSettleFirstFailedRefund, SETTLE_FIRST_RESEND_HOLD, resendSpentBody } from "./settle-first.js";
 import { RETRY_SAME_PAYMENT } from "./payment-reject.js";
 import { admitServedFirst, noteUnsettledRunCost, runUpstreamUsdOf, bindRunScope } from "./settle-first-meter.js";
 import { installSettledFirstBody } from "./settle-first-body.js";
@@ -12380,19 +12380,11 @@ function settledFirstCreditFor(req, status) {
 /** The answer to a resend past THE RESEND BOUND (src/settle-first.js): nothing
  *  runs and nothing MORE is charged. The payment was taken once (charged:
  *  true, as every settled-first answer says); its debt stays owed and is
- *  repaid (refundOwed until the refund is paid). */
+ *  repaid (refundOwed until the refund is paid; src/settle-first.js resendSpentBody). */
 async function settledFirstResendSpentAnswer(credit) {
   let row = null;
   try { row = await refundByEvidenceFresh(credit.tx); } catch { row = null; }
-  const status = ["owed", "sending", "paid"].includes(row?.status) ? row.status : "owed";
-  return { status: 402, body: {
-    error: "resend_limit_reached",
-    charged: true,
-    refundOwed: status !== "paid",
-    resends: { max: SETTLE_FIRST_MAX_RESENDS },
-    hint: `This payment already ran again ${SETTLE_FIRST_MAX_RESENDS} times after its call failed, the most one payment runs again. Nothing ran and nothing more is charged. The payment is owed back to the paying wallet and is repaid after on-chain proof (refund.lookup shows where it stands). Request the resource again with a fresh payment.`,
-    refund: { status, lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(credit.tx)}` },
-  } };
+  return { status: 402, body: resendSpentBody({ status: row?.status, tx: credit.tx, baseUrl: BASE_URL }) };
 }
 /**
  * The same payment sent again after its settle-first run failed: its debt is

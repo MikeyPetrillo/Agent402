@@ -241,6 +241,28 @@ export function exactRequiredOf(req) {
 // stays owed and is repaid after on-chain proof), and a fresh payment makes
 // the call. src/idempotency.js keeps the count with the payment's credit.
 export const SETTLE_FIRST_MAX_RESENDS = 2;
+const timesWord = (n) => (n === 1 ? "once" : n === 2 ? "twice" : `${n} times`);
+/**
+ * The answer to a resend past the bound: nothing runs and nothing MORE is
+ * charged. The payment was taken once (charged: true, as every settled-first
+ * answer says); refundOwed until its refund is paid, and a paid refund is
+ * said to be refunded. `status` is the debt's (owed, sending, paid; anything
+ * else reads as owed).
+ */
+export function resendSpentBody({ status, tx, baseUrl = "" } = {}) {
+  const st = ["owed", "sending", "paid"].includes(status) ? status : "owed";
+  const where = st === "paid"
+    ? "The payment was refunded to the paying wallet (refund.lookup shows the refund transaction)."
+    : "The payment is owed back to the paying wallet and is repaid after on-chain proof (refund.lookup shows where it stands).";
+  return {
+    error: "resend_limit_reached",
+    charged: true,
+    refundOwed: st !== "paid",
+    resends: { max: SETTLE_FIRST_MAX_RESENDS },
+    hint: `This payment already ran again ${timesWord(SETTLE_FIRST_MAX_RESENDS)} after its call failed, the most one payment runs again. Nothing ran and nothing more is charged. ${where} Request the resource again with a fresh payment.`,
+    refund: { status: st, lookup: `${baseUrl}/api/refunds/lookup?tx=${encodeURIComponent(String(tx ?? ""))}` },
+  };
+}
 const RESEND = Symbol("a402.settledFirstResend");
 /** Mark a request as the resend of a payment already settled first. */
 export function markSettledFirstResend(req, info) {

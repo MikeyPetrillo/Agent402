@@ -57,6 +57,22 @@ if (ONLY.includes("1")) {
     for (let h = 0; h < 72; h++) for (let q = 0; q < 60; q += 15) meter.noteUnsettledRunCost(0.001, T + h * 3_600_000 + q * 60_000);
     await ok(meter._ownCostMinutesForTest() <= 24 * 4 + 1, `the meter keeps only its window's minutes when never read (${meter._ownCostMinutesForTest()} minutes after 72 hours of writes)`);
   }
+  // The answer to a resend past the bound: the count in words, and the
+  // refund's own status (a paid refund is said to be refunded, never owed).
+  {
+    const { resendSpentBody, SETTLE_FIRST_MAX_RESENDS } = await import("../src/settle-first.js");
+    const tx = "0x" + "ab".repeat(32);
+    const owed = resendSpentBody({ status: "owed", tx, baseUrl: "https://example.test" });
+    await ok(SETTLE_FIRST_MAX_RESENDS === 2 && owed.error === "resend_limit_reached" && owed.charged === true && owed.refundOwed === true && /already ran again twice after its call failed/.test(owed.hint) && /owed back to the paying wallet/.test(owed.hint) && !/\d times/.test(owed.hint) && owed.refund.status === "owed" && owed.refund.lookup === `https://example.test/api/refunds/lookup?tx=${tx}`,
+      `an owed resend answer says "ran again twice" and that the payment is owed back (${owed.hint})`);
+    const sending = resendSpentBody({ status: "sending", tx, baseUrl: "" });
+    await ok(sending.refundOwed === true && /owed back/.test(sending.hint), "a refund being sent is still owed");
+    const paid = resendSpentBody({ status: "paid", tx, baseUrl: "" });
+    await ok(paid.charged === true && paid.refundOwed === false && paid.refund.status === "paid" && /was refunded to the paying wallet/.test(paid.hint) && !/owed/.test(paid.hint),
+      `a paid refund's resend answer says it was refunded, refundOwed false, and never that it is owed (${paid.hint})`);
+    const junk = resendSpentBody({ status: "weird", tx, baseUrl: "" });
+    await ok(junk.refund.status === "owed" && junk.refundOwed === true, "an unknown refund status reads as owed");
+  }
   const b = await import("../src/gateway-settle-breaker.js");
   const { settleReceiptHeaderGuard } = await import("../src/facilitator-diagnostics.js");
   const { COVER_STATE } = await import("../src/inflight-cover-state.js");
