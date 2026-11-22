@@ -46,6 +46,13 @@ const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
 const ENTRIES = [
   {
     date: "2026-11-22",
+    title: "Agentic commerce",
+    items: [
+      "Site: The lead line now reads: Agent402 is the payment and trust layer for agentic commerce, and the glossary defines agentic commerce, with Agentic Finance (AIFI) as its applied finance layer.",
+    ],
+  },
+  {
+    date: "2026-11-22",
     title: "Settle-first calls",
     shownWhen: settleFirstCopyOn,
     items: [

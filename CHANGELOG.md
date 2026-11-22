@@ -4,6 +4,14 @@ All notable user-facing changes to the Agent402 server and site. Package
 releases are listed under the server version they shipped with; each package
 carries its own version on npm.
 
+## v2.12.1 - 2026-11-22
+
+### 2026-11-22 (agentic commerce)
+Site:
+- The lead line now reads: Agent402 is the payment and trust layer for
+  agentic commerce, and the glossary defines agentic commerce, with Agentic
+  Finance (AIFI) as its applied finance layer.
+
 ## v2.12.0 - 2026-11-22
 
 ### 2026-11-22 (settle-first calls)
