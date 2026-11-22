@@ -146,6 +146,7 @@
     "dns-lookup",
     "dns-propagation",
     "docx-create",
+    "domain-availability",
     "drug-adverse-events",
     "drug-label",
     "drug-ndc",

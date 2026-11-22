@@ -301,7 +301,19 @@
     },
     {
       "q": "search for a domain name availability",
-      "top": "search"
+      "top": "domain-availability"
+    },
+    {
+      "q": "is this domain available",
+      "top": "domain-availability"
+    },
+    {
+      "q": "domain name availability",
+      "top": "domain-availability"
+    },
+    {
+      "q": "check if a domain name is registered",
+      "top": "domain-availability"
     }
   ],
   "gaps": [

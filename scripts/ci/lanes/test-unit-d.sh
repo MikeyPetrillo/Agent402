@@ -482,6 +482,8 @@ t node scripts/test-redis-persistence.js
 t node scripts/test-sql-guard.js
 # Whois RDAP bootstrap parser (IANA dns.json → TLD map — offline)
 t node scripts/test-whois-bootstrap.js
+# domain-availability against a stub RDAP bootstrap and registries (offline)
+t node scripts/test-domain-availability.js
 # B20 decode unit tests (offline, synthetic logs in both indexed layouts)
 t node scripts/test-b20-decode.js
 # Base activity via CDP SQL — guard/fail-safe paths (offline)
