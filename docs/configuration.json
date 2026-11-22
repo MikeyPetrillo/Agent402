@@ -1,5 +1,5 @@
 {
-  "note": "Purpose lines for docs/configuration.md (node scripts/gen-config-reference.js --write). vars: one line per environment variable src/ reads; notEnv: ALL_CAPS literals in src/ that are not settings this server reads, with the reason; patterns: names built at run time; defaults: the default the code falls back to where it is not a plain literal at the read site (a named constant, an expression or a branch), each checked against the code. Never a configured value, a rate or a cost. Enforced by scripts/test-config-reference.js.",
+  "note": "Purpose lines for docs/configuration.md (node scripts/gen-config-reference.js --write). vars: one line per environment variable src/ reads; notEnv: ALL_CAPS literals in src/ that are not settings this server reads, with the reason; patterns: names built at run time; defaults: the default the code falls back to where it is not a plain literal at the read site (a named constant, an expression or a branch), each checked against the code; withheldDefaults: variables whose default reads as a cost, printed as not listed. Never a configured value, a rate or a cost. Enforced by scripts/test-config-reference.js.",
   "scope": "the server that runs as node src/server.js (every file under src/). The facilitator service (facilitator/), the Cloudflare workers (workers/), the scripts and the published packages are separate programs with their own settings.",
   "notEnv": {
     "ACCESSION_NUMBER": "a filing field name",
@@ -73,8 +73,14 @@
     "COINGECKO_UNSETTLED_PER_CALLER_HOUR": "8",
     "CREDITS_INDEXES": "on",
     "FUNNEL_FOUND_CAP": "50000",
-    "FUNNEL_FOUND_WINDOW_MS": "21600000",
-    "ROBINHOOD_RELAYER_MIN_PRICE_USD": "0.004"
+    "FUNNEL_FOUND_WINDOW_MS": "21600000"
+  },
+  "withheldDefaults": {
+    "ATTEST_ETH_USD": "the exchange rate attest gas is priced with",
+    "ATTEST_MAX_GAS_USD": "a gas ceiling",
+    "ATTEST_SCHEMA_MAX_GAS_USD": "a gas ceiling",
+    "DATABENTO_MAX_QUERY_USD": "a vendor query ceiling",
+    "ROBINHOOD_RELAYER_MIN_PRICE_USD": "follows the relayer's gas"
   },
   "vars": {
     "ACCEPT_OUTPUT_SCHEMA": "Accept output schema.",
