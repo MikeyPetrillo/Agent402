@@ -10,7 +10,7 @@
 // recipient (our treasury for 4663) are fixed at boot and anything else is
 // refused before any read or write. It pays the gas of every sale it settles,
 // so a sale whose price is under ROBINHOOD_RELAYER_MIN_PRICE_USD
-// (src/network-floors.js, default 0.004) is refused the same way, nothing
+// (src/network-floors.js; its default is the constant there) is refused the same way, nothing
 // sent: the listed facilitators' answer then stands (covers() lets the
 // settle order and the outage read skip it before asking).
 //

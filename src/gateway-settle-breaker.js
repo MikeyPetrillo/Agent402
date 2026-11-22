@@ -196,7 +196,7 @@ import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { positiveNum as num } from "./env-num.js";
 import { limiterKey } from "./rate-limit.js";
 import { settleFirstBudgetMode, settleFirstMeterStatus } from "./settle-first-meter.js";
-import { exactRequiredOf } from "./settle-first.js";
+import { exactRequiredOf, settledFirstResendOf } from "./settle-first.js";
 
 /** Settle failures a wallet may accumulate inside the window before it is refused. */
 export const MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_MAX, 3);
@@ -959,6 +959,20 @@ export function recordGatewaySettleSuccess(key, now = Date.now(), { authKey = nu
   if (SHARED) sharedRecordSuccess(key, now, typeof authKey === "string" && authKey ? authKey : null);
 }
 
+/** A resend of a payment settled first that was not served: one more
+ *  unsettled run under a key that names a wallet (and its authorization), on
+ *  this process and the shared store. Nothing else is counted. */
+function recordUnpaidResendRun(key, authKey, now) {
+  if (!key || !payerOfKey(key)) return false;
+  const a = typeof authKey === "string" && authKey ? authKey : null;
+  noteUnsettledRun(key, a, now);
+  if (SHARED) {
+    const member = `${PROC}:${++sharedSeq}`;
+    void write(shared.windowAdd("gwb-uns", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
+    if (a) void write(shared.windowAdd("gwb-uns-auth", sharedKey(a), { windowMs: WINDOW_MS, member, now }));
+  }
+  return true;
+}
 /** One more /v1 run under `key` (and its authorization) that did not settle. */
 function noteUnsettledRun(key, authKey, now) {
   const push = (map, k) => {
@@ -1174,6 +1188,17 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
       // offered for settlement; neither counted nor cleared.
       if (exactRequiredOf(req)) return;
       const st = res.statusCode;
+      // The same payment sent again after its settle-first run failed
+      // (src/settle-first.js THE RESEND BOUND) runs with no new payment: one
+      // that is not served is a run that did not settle, counted toward
+      // settling the wallet's next runs first and on the budget meter; never
+      // toward refusing the wallet or the alarms (its failure is the run's,
+      // not the payment's). A served one is the payment's settled call.
+      if (settledFirstResendOf(req) && st !== 200) {
+        const sfRoute = !global && onSettleFirstRoute(req);
+        if ((global || sfRoute) && recordUnpaidResendRun(key, authKey, Date.now()) && typeof unsettledRunListener === "function") { try { unsettledRunListener(req); } catch { /* metering only */ } }
+        return;
+      }
       const receipt = decodeReceipt(res);
       // The Algorand facilitator refused a SUB-CENT settle for our spent
       // sponsored allowance (2026-09-28: one outside buyer refused 325 calls

@@ -63,7 +63,9 @@ for (const f of readdirSync(scriptsDir)) {
     if (/extensions\?\.bazaar\?\.info\?\.input\b/.test(line)) readers.push({ f, line: i + 1, through: line.includes("resolveReplayableInput(") });
   });
 }
-ok(readers.length >= 4, `the buyer scripts that replay a 402 example are found (${readers.length})`);
+// Three buyer scripts replay a 402 example (base-list-sweep, challenge-sweep,
+// algorand-rail-canary); the floor is that count, so losing one fails here.
+ok(readers.length >= 3, `the buyer scripts that replay a 402 example are found (${readers.length})`);
 for (const r of readers) ok(r.through, `${r.f}:${r.line} reads the 402's example through resolveReplayableInput`);
 
 // 4. html-frames keeps its document in the 402

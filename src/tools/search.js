@@ -15,14 +15,15 @@ const SHARE_OFFERED = answerShareEnabled();
 import { SETTLE_FIRST_SENTENCE } from "../settle-first-copy.js";
 import { recordUpstreamCall } from "../stats.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
-import { settleBeforeUpstreamUnless } from "../settle-first.js";
-import { hardCapReached, hardCapError } from "../upstream-hard-caps.js";
+import { settleBeforeUpstreamHolding } from "../settle-first.js";
+import { hardCapHold } from "../upstream-hard-caps.js";
 
 // THE SETTLE POINT (src/settle-first.js): a run the server armed has its
 // payment settled here, after the handler's input checks and our key check,
-// before the paid upstream request; the daily usage ceiling is read first so
-// a ceiling refusal is never a settled charge. Any other run: nothing.
-const settleBeforeBrave = () => settleBeforeUpstreamUnless(() => (hardCapReached("brave") ? hardCapError() : null));
+// before the paid upstream request; a unit of the daily usage ceiling is
+// taken first (held for the call, given back when unused), so a ceiling
+// refusal is never a settled charge. Any other run: nothing.
+const settleBeforeBrave = () => settleBeforeUpstreamHolding(hardCapHold("brave"));
 
 const BRAVE_HOST = "https://api.search.brave.com/res/v1";
 

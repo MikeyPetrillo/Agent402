@@ -65,7 +65,7 @@ function stateOf(req) {
  *  request cannot carry one. */
 export function armSettleFirst(req, { run, reason = null } = {}) {
   if (!req || typeof req !== "object" || typeof run !== "function") return null;
-  const state = { armed: true, reason, run, promise: null, settled: null, refusal: null };
+  const state = { armed: true, reason, run, promise: null, settled: null, refusal: null, holds: new Map() };
   try { Object.defineProperty(req, STATE, { value: state, enumerable: false, configurable: true }); } catch { return null; }
   return state;
 }
@@ -74,7 +74,10 @@ export function armSettleFirst(req, { run, reason = null } = {}) {
  *  settlement already started keeps its outcome. */
 export function disarmSettleFirst(req) {
   const s = stateOf(req);
-  if (s) s.armed = false;
+  if (!s) return;
+  s.armed = false;
+  // A unit the settle point held and no call used is given back.
+  for (const name of [...s.holds.keys()]) giveBackHeldUnit(s, name);
 }
 
 /** Why this request was armed, or null when it was not. */
@@ -132,6 +135,56 @@ export function settleBeforeUpstreamUnless(refusal, req = null) {
   return settleBeforeUpstream(r);
 }
 
+/**
+ * The settle point with one unit of a daily usage ceiling TAKEN first, not
+ * read. For an armed request whose settlement has not started, `take()` is
+ * called: false (the ceiling is reached) throws `refusal()` BEFORE any payment
+ * is taken. A unit taken is held by the request: the first call in its run
+ * that would take a unit of `name` uses it instead (useHeldUnit), a payment
+ * that does not settle gives it back (`release(takenAt)`), and so does the
+ * handler's end with the unit unused (disarmSettleFirst). The check and the
+ * take are one synchronous step, so runs that reach their settle points
+ * together cannot all pass a check that leaves room for one, and settle a
+ * charge whose call the ceiling then refuses. A take that throws holds
+ * nothing and refuses nothing. Any other request: exactly settleBeforeUpstream().
+ */
+export function settleBeforeUpstreamHolding({ name, take, release, refusal }, req = null) {
+  let r = req;
+  if (!r && ambient) { try { r = ambient(); } catch { r = null; } }
+  const s = stateOf(r);
+  if (s && s.armed && !s.promise && typeof take === "function" && typeof name === "string" && !s.holds.has(name)) {
+    let took = null;
+    const takenAt = Date.now();
+    try { took = take(); } catch { took = null; }
+    if (took === false) throw (typeof refusal === "function" ? refusal() : new Error("usage limit reached"));
+    if (took === true) s.holds.set(name, { release, takenAt });
+    const p = settleBeforeUpstream(r);
+    if (p && typeof p.then === "function") p.catch(() => giveBackHeldUnit(s, name));
+    return p;
+  }
+  return settleBeforeUpstream(r);
+}
+function giveBackHeldUnit(s, name) {
+  const h = s?.holds?.get(name);
+  if (!h) return;
+  s.holds.delete(name);
+  try { if (typeof h.release === "function") h.release(h.takenAt); } catch { /* the count stays: never more than the ceiling */ }
+}
+/**
+ * The unit of `name` the settle point of this call's request holds, used by
+ * the caller about to take one: true when one was held (it is now spent, and
+ * the caller takes no other); false otherwise. Reads the ambient request when
+ * none is given.
+ */
+export function useHeldUnit(name, req = null) {
+  let r = req;
+  if (!r && ambient) { try { r = ambient(); } catch { r = null; } }
+  const s = stateOf(r);
+  if (!s || !s.holds.has(name)) return false;
+  s.holds.delete(name);
+  return true;
+}
+
 /** The error a settle point throws when the payment did not settle: `response`
  *  is the settle-failure answer to send (status, headers, body). */
 export function settleFirstRefusal(response, message = "The payment did not settle, so the call was not run.") {
@@ -177,6 +230,17 @@ export function exactRequiredOf(req) {
 // both served and refunded (src/idempotency.js keeps the credit, server.js
 // runs it). The request of such a resend carries this mark (own,
 // non-enumerable): { tx, network, wire, held, note }.
+//
+// THE RESEND BOUND. One payment runs again at most SETTLE_FIRST_MAX_RESENDS
+// times after its settle-first run failed: each resend is a run with no new
+// payment, so one that is not served is counted like a run that did not
+// settle (src/gateway-settle-breaker.js: toward settling the wallet's next
+// runs first, and its upstream cost on the budget meter; never toward
+// refusing the wallet). A further resend of that payment runs nothing and is
+// charged nothing: it is answered with the debt's refund status (the debt
+// stays owed and is repaid after on-chain proof), and a fresh payment makes
+// the call. src/idempotency.js keeps the count with the payment's credit.
+export const SETTLE_FIRST_MAX_RESENDS = 2;
 const RESEND = Symbol("a402.settledFirstResend");
 /** Mark a request as the resend of a payment already settled first. */
 export function markSettledFirstResend(req, info) {

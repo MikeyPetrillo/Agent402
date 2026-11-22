@@ -374,7 +374,8 @@ idempotency cache, credits debit and refund ledger all follow this rule.
 (`node_modules/@x402/express/dist/esm/index.mjs`.)
 **One exception, settle first** (`src/settle-first.js`; `GATEWAY_SETTLE_FIRST=off` removes it).
 Normal operation is unchanged: every buyer is served first and charged only on success. On the
-model and image routes in `SETTLE_FIRST_SLUGS` (server.js), an x402 `exact` payment is settled
+routes in `SETTLE_FIRST_SLUGS` (server.js: the `/v1` model and image routes, dub, web search and
+answer, image generation, speech, transcription, judgment and code runs), an x402 `exact` payment is settled
 BEFORE the handler's upstream work when `gatewaySettleFirstPlan` names its buyer: per wallet,
 always, a wallet (per network) or one authorization holding `GATEWAY_SETTLE_FIRST_UNSETTLED_MAX`
 (2) /v1 runs that did not settle, whatever the cause, with no settled call since; and, only while
@@ -394,7 +395,9 @@ the failure body says `charged: true`, `retry: "same-payment"`, the `transaction
 `refundStatusUrl` (`src/settle-first-body.js`). The same payment sent again to the same route and
 body (a credit kept by `src/idempotency.js`) is run with no settlement: its debt is held void
 before the run (`voidOwedForServe`), kept void when served, owed again otherwise; a hold whose run
-never ended is reopened by the held-claim sweep. A row of the class still owed is repaid by the
+never ended is reopened by the held-claim sweep. At most two resends per payment
+(`SETTLE_FIRST_MAX_RESENDS`), each one not served counted like an unsettled run; a third is
+answered 402 `resend_limit_reached` with the refund status, uncharged. A row of the class still owed is repaid by the
 human-run `refund.yml`, like every other owed row; nothing repays it on a schedule. An `upto` or Circle Gateway batched payment the
 plan names is answered the route's own 402 with the exact accepts first, uncharged (option A).
 Never settled first: Tempo, card, credits, a first-call allowance grant. A new paid upstream call on

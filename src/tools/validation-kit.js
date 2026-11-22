@@ -131,7 +131,7 @@ export const VALIDATION_TOOLS = [
       inputSchema: {
         type: "object",
         properties: {
-          vat: { type: "string", description: `VAT number, with or without its 2-letter prefix; spaces, dots and dashes are ignored (max ${VAT_MAX_CHARS} characters)` },
+          vat: { type: "string", maxLength: VAT_MAX_CHARS, description: `VAT number, with or without its 2-letter prefix; spaces, dots and dashes are ignored (max ${VAT_MAX_CHARS} characters)` },
           country: { type: "string", description: "2-letter VAT prefix (EL or GR for Greece, XI for Northern Ireland); needed when vat has no prefix" },
         },
         required: ["vat"],

@@ -166,7 +166,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   on, anything else is automatic. Normal operation is unchanged. On the routes in
   `SETTLE_FIRST_SLUGS` (server.js: every `/v1` chat, Messages, Responses and generateContent tier
   and the metered tier, embeddings, rerank, speech, `/v1/images/generations` and the fast, pro and
-  edit image tiers; not video), `settleFirstPlanFor` asks `gatewaySettleFirstPlan` (the settle
+  edit image tiers, and dub; not video; plus `SETTLE_FIRST_CATALOG_SLUGS`: web search and answer,
+  image generation, speech, transcription, judgment and code runs, each settling after its own
+  input checks and before its first paid upstream call), `settleFirstPlanFor` asks `gatewaySettleFirstPlan` (the settle
   breaker) for a verified x402 payment (`settleFirstPaymentKindOf`: never Tempo, card, credits,
   proof-of-work, a trial, a first-call allowance grant, or the resend of a payment already settled
   first). **Who, always:** `unsettled-runs`, a wallet (per network) holding
@@ -201,6 +203,15 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   request (`settledFirstResendOf`: the paywall, the cover admission and the hang-up ticket skip it),
   runs it, and keeps the row void with the served note on a final 200 or reopens it under its class
   otherwise; the held-claim sweep (src/tempo-push-debts.js) reopens a hold whose run never ended.
+  **The resend bound** (`SETTLE_FIRST_MAX_RESENDS`, 2): one payment runs again at most twice; the
+  credit keeps the count, written before each run under its claim. A resend that is not served is
+  counted like a run that did not settle (the wallet's settle-first count and the budget meter;
+  never the wallet's refusing count or the alarms); a further resend runs nothing, is charged
+  nothing, and is answered 402 `resend_limit_reached` with the debt's refund status and lookup.
+  **A daily usage ceiling at a settle point** is TAKEN, not read (`settleBeforeUpstreamHolding`,
+  `hardCapHold`): the unit is held for the run's call (`takeHardCap` uses it), given back when the
+  payment does not settle or the run ends unused, so runs settling together never pass a ceiling
+  that then refuses a charged call.
   **Refunds:** an owed row of this class is repaid by the human-run `refund.yml` like every other
   owed row; nothing repays it on a schedule. Suites: `scripts/test-settle-first.js`,
   `scripts/test-settle-first-meter-redis.js`.
@@ -521,8 +532,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   eip155:4663 included (it quotes the list price like every chain); `ROBINHOOD_MIN_PRICE_USD`
   sets one there (unset or "0": none) and `NETWORK_PRICE_FLOORS` on any chain. A floor is static
   so the paid retry re-derives the same amount. Our own relayer pays the gas of what it settles,
-  so it takes a sale only when its amount is at least `ROBINHOOD_RELAYER_MIN_PRICE_USD` (default
-  0.004; "0" any price; `covers()` in `src/robinhood-relayer.js`): under it the relayer refuses
+  so it takes a sale only when its amount is at least `ROBINHOOD_RELAYER_MIN_PRICE_USD` (its
+  default is in the code; "0" any price; `covers()` in `src/robinhood-relayer.js`): under it the relayer refuses
   with nothing sent (`own_relayer_below_minimum`), the gas order asks the facilitator instead of
   it, and the outage read books the authorization without submitting, so a refusal from the
   listed facilitators stands as the buyer's 402 and the x402 payment is not settled

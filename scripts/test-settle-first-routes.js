@@ -175,6 +175,29 @@ try {
     }
   }
 
+  // ---- THE RESEND BOUND: one payment runs again at most twice after its run failed ----
+  {
+    const SEARCH = ROUTES[0];
+    const w = await fresh(SEARCH.route);
+    const cred = await rig.credentialFor(w, SEARCH.route);
+    failing.add(SEARCH.host);
+    const first = await rig.send(SEARCH.route, cred);
+    const row = await refundOf((x) => x.payer === w.address.toLowerCase() && x.slug === SEARCH.slug);
+    const runs = [];
+    for (let i = 0; i < 3; i++) {
+      const from = mark();
+      const r = await rig.send(SEARCH.route, cred);
+      await sleep(150);
+      runs.push({ status: r.status, json: r.json, upstream: upstreamSince(from), order: orderOf(w, from), row: (await refunds()).find((x) => x.id === row?.id)?.status });
+    }
+    failing.delete(SEARCH.host);
+    const [a, b2, c] = runs;
+    await ok(first.status >= 500 && row?.status === "owed" && [a, b2].every((x) => x.status >= 500 && x.upstream === 1 && x.order === "upstream-only" && x.row === "owed"),
+      `search: the same payment sent again after its run failed runs again twice, each with no settle call, the debt owed again after each (${JSON.stringify([a, b2].map((x) => [x.status, x.order, x.row]))})`);
+    await ok(c.status === 402 && c.json?.error === "resend_limit_reached" && c.json?.charged === false && c.json?.resends?.max === 2 && c.json?.refund?.status === "owed" && (() => { try { const u = new URL(c.json.refund.lookup); return u.pathname === "/api/refunds/lookup" && !!u.searchParams.get("tx"); } catch { return false; } })() && c.upstream === 0 && c.order === "nothing" && c.row === "owed" && rig.outcomesOf(w).attempts === 1,
+      `search: a third resend of that payment runs nothing, is charged nothing, and is answered with the debt's refund status (${c.status} ${JSON.stringify(c.json).slice(0, 200)} ${c.order} ${c.row})`);
+  }
+
   // ---- a daily usage ceiling already reached: refused before any settle call ----
   // (HARDCAP_E2B_SANDBOXES=2 here: the failed run above took one sandbox.)
   {

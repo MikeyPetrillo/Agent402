@@ -81,7 +81,7 @@ import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
 import { evmLogsStatus } from "./evm-logs-rpc.js";
 import { compositeGuardBlocked, compositeGuardAlarmStatus, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
 import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus, setGatewaySettleBreakerSalesLedger, gatewaySettleFirstPlan, noteSettleFirst, setUnsettledRunListener, setSettleFirstRouteReader } from "./gateway-settle-breaker.js";
-import { armSettleFirst, disarmSettleFirst, settleFirstStarted, markSettledFirst, settledFirstOf, setSettleFirstAmbient, settleFirstRefusal, isSettleFirstRefusal, settleFirstRefusalOf, settleFirstFailedNote, markExactRequired, settledFirstResendOf, markSettledFirstResend, isSettleFirstFailedRefund, SETTLE_FIRST_RESEND_HOLD } from "./settle-first.js";
+import { armSettleFirst, disarmSettleFirst, settleFirstStarted, markSettledFirst, settledFirstOf, setSettleFirstAmbient, settleFirstRefusal, isSettleFirstRefusal, settleFirstRefusalOf, settleFirstFailedNote, markExactRequired, settledFirstResendOf, markSettledFirstResend, isSettleFirstFailedRefund, SETTLE_FIRST_RESEND_HOLD, SETTLE_FIRST_MAX_RESENDS } from "./settle-first.js";
 import { RETRY_SAME_PAYMENT } from "./payment-reject.js";
 import { admitServedFirst, noteUnsettledRunCost, runUpstreamUsdOf, bindRunScope } from "./settle-first-meter.js";
 import { installSettledFirstBody } from "./settle-first-body.js";
@@ -12349,6 +12349,7 @@ app.use(createIdempotency({
   // what the credit for sending the same payment again holds.
   settledFirstCredit: (req, status) => settledFirstCreditFor(req, status),
   onSettledFirstResend: (req, credit) => settledFirstResend(req, credit),
+  settledFirstResendSpent: (req, credit) => settledFirstResendSpentAnswer(credit),
 }));
 markGateMounted("idempotency");
 
@@ -12364,6 +12365,20 @@ function settledFirstCreditFor(req, status) {
   let receipt = null;
   try { const h = req.res?.getHeader?.("PAYMENT-RESPONSE"); receipt = typeof h === "string" ? h : null; } catch { receipt = null; }
   return { tx, network: sf.requirements?.network || sf.result?.network || null, wire: x402WireOf(req), note: settleFirstFailedNote(status), receipt };
+}
+/** The answer to a resend past THE RESEND BOUND (src/settle-first.js): nothing
+ *  runs and nothing is charged; the debt stays owed and is repaid. */
+async function settledFirstResendSpentAnswer(credit) {
+  let row = null;
+  try { row = await refundByEvidenceFresh(credit.tx); } catch { row = null; }
+  const status = ["owed", "sending", "paid"].includes(row?.status) ? row.status : "owed";
+  return { status: 402, body: {
+    error: "resend_limit_reached",
+    charged: false,
+    resends: { max: SETTLE_FIRST_MAX_RESENDS },
+    hint: `This payment already ran again ${SETTLE_FIRST_MAX_RESENDS} times after its call failed, the most one payment runs again. Nothing ran and nothing more is charged. The payment is owed back to the paying wallet and is repaid after on-chain proof (refund.lookup shows where it stands). Request the resource again with a fresh payment.`,
+    refund: { status, lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(credit.tx)}` },
+  } };
 }
 /**
  * The same payment sent again after its settle-first run failed: its debt is
@@ -13820,10 +13835,12 @@ setSettleFirstAmbient(() => currentRequestScope()?.settleFirstRequest || null);
 // The settle-first budget meter (src/settle-first-meter.js): every /v1 run
 // served and not paid adds its upstream cost (the upstream's own figure, or
 // the cost table's, noted on the run's scope), or its quoted price when the
-// run noted none. A payment refused at its settle point, or one that was
-// already taken (settled first, or the resend of one), ran nothing unpaid.
+// run noted none. A payment refused at its settle point, or one settled first,
+// ran nothing unpaid. The resend of a payment settled first that was not
+// served (src/settle-first.js THE RESEND BOUND) ran with no new payment and is
+// metered like any unsettled run.
 setUnsettledRunListener((req) => {
-  if (settleFirstRefusalOf(req) || settledFirstOf(req) || settledFirstResendOf(req)) return;
+  if (settleFirstRefusalOf(req) || settledFirstOf(req)) return;
   let usd = runUpstreamUsdOf(req);
   if (!(usd > 0)) {
     const def = CATALOG[`${req.method} ${req.path}`];
