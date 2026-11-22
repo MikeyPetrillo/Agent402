@@ -14,7 +14,8 @@
 //
 // WRITES ARE OFF THE REQUEST PATH. A finished scan marks its key's state as
 // waiting; a timer writes at most `flushChunk` keys a tick, one row each,
-// under the store's lease, and prunes once an hour. A write that does not
+// under the store's lease, and prunes once an hour. Each key's state is
+// compacted and written in a turn of its own. A write that does not
 // land keeps the key waiting for the next tick. Nothing here throws to a
 // caller: a store that cannot be read is a cold key, as before.
 import { existsSync } from "node:fs";
@@ -98,40 +99,58 @@ export function createScanStateStore({ name, collection, env, keyOk, compact, ex
     lastPruneAt = now;
   }
 
+  // One key's state is compacted and written in its own turn of the event
+  // loop: a flush of many large states never holds the loop for all of them
+  // at once (the drain's flush of up to 100 included).
+  const nextTurn = () => new Promise((r) => { setImmediate(r); });
+  // The stored form of one waiting state, or null when its compact form does
+  // not keep it (over the store's bound): not written, and the key stays cold
+  // for the next process, as before.
+  const compactOne = (key, st) => {
+    const body = compact(st);
+    if (body) return body;
+    counters.notKept++;
+    if (waiting.get(key) === st) waiting.delete(key);
+    return null;
+  };
   async function flushUnleased({ max = flushChunk, now = Date.now() } = {}) {
     counters.flushes++;
     const batch = [...waiting.entries()].slice(0, Math.max(1, max));
     let written = 0;
-    // A state its compact form does not keep (over the store's bound) is not
-    // written; the key stays cold for the next process, as before.
-    const bodies = new Map();
-    for (const [key, st] of batch) {
-      const body = compact(st);
-      if (body) bodies.set(key, body);
-      else { counters.notKept++; if (waiting.get(key) === st) waiting.delete(key); }
-    }
     if (stateDbEnabled()) {
+      let i = 0;
       for (const [key, st] of batch) {
-        if (!bodies.has(key)) continue;
+        if (i++) await nextTurn();
+        const body = compactOne(key, st);
+        if (!body) continue;
         try {
-          await records.put(collection, key, bodies.get(key));
+          await records.put(collection, key, body);
           // A newer state noted while this row was being written stays waiting.
           if (waiting.get(key) === st) waiting.delete(key);
           written++; counters.writes++;
         } catch { counters.writeFailures++; break; } // the store is not answering: the rest waits for the next tick
       }
       if (now - lastPruneAt >= PRUNE_EVERY_MS) { try { await pruneRows(now); } catch { /* the next tick tries again */ } }
-    } else if (bodies.size) {
-      try {
-        const r = await docOf().update((b) => {
-          const x = fileBody(b);
-          const wallets = { ...x.wallets };
-          for (const [key, body] of bodies) wallets[key] = body;
-          return { v: 1, wallets: pruneWallets(wallets, now) };
-        }, { fallback: null });
-        if (r?.ok) { for (const [key, st] of batch) if (bodies.has(key) && waiting.get(key) === st) waiting.delete(key); written = bodies.size; counters.writes += written; }
-        else counters.writeFailures++;
-      } catch { counters.writeFailures++; }
+    } else {
+      const bodies = new Map();
+      let i = 0;
+      for (const [key, st] of batch) {
+        if (i++) await nextTurn();
+        const body = compactOne(key, st);
+        if (body) bodies.set(key, body);
+      }
+      if (bodies.size) {
+        try {
+          const r = await docOf().update((b) => {
+            const x = fileBody(b);
+            const wallets = { ...x.wallets };
+            for (const [key, body] of bodies) wallets[key] = body;
+            return { v: 1, wallets: pruneWallets(wallets, now) };
+          }, { fallback: null });
+          if (r?.ok) { for (const [key, st] of batch) if (bodies.has(key) && waiting.get(key) === st) waiting.delete(key); written = bodies.size; counters.writes += written; }
+          else counters.writeFailures++;
+        } catch { counters.writeFailures++; }
+      }
     }
     return { ok: true, written, waiting: waiting.size };
   }
