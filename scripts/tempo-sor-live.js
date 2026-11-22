@@ -63,8 +63,7 @@ const payloadOk = resultText.includes(expectText);
 console.log(`result contains ${JSON.stringify(expectText)}:`, payloadOk, `(result ${resultText.length} chars)`);
 console.log("our Payment-Receipt:", rc ? Receipt.deserialize(rc).status : null, "X-Tollbooth-Error/problem:", paid.headers.get("x-tollbooth-error") || (out && out.problem ? JSON.stringify(out.problem).slice(0, 200) : null));
 const r = out?.receipt || {};
-// Keep the REAL response for the announcement card (router-receipt-card.js
-// renders receipt + a sha256 over result); the workflow uploads it as an artifact.
+// Keep the REAL response (receipt and result); the workflow uploads it as an artifact.
 try { const { writeFileSync } = await import("node:fs"); writeFileSync(process.env.RESPONSE_OUT || "tempo-sor-response.json", JSON.stringify(out)); } catch { /* best-effort */ }
 await new Promise((res) => setTimeout(res, 4000));
 const after = await usdce(SPENDER);
