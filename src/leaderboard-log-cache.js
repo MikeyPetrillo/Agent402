@@ -26,15 +26,16 @@
 //     wallet that left and came back) are dropped before its new rows go in.
 //   * Rows older than the window are not folded; a segment wholly older is
 //     deleted.
-//   * Past maxRows (LEADERBOARD_LOG_CACHE_MAX_ROWS, default 1,500,000) the
+//   * Past maxRows (LEADERBOARD_LOG_CACHE_MAX_ROWS, default 2,000,000) the
 //     oldest segments are dropped and `heldFrom` names the first block still
 //     kept. The kept rows stay in the heap between scans: about 45 to 50
 //     bytes of live heap a row (read after a full GC; a scan's own garbage
 //     comes on top until it is collected) and about 70 bytes stored, so the
-//     default holds about 75 MB. Against a 2.15M-row window (7 days of
-//     200 ms blocks, a 7,077-call full read) a scan at the default reads
-//     about 2,200 calls (the head plus the unheld oldest blocks), against
-//     about 550 at 2,000,000 rows (about 100 MB) and 3,800 at 1,000,000. Each scan then also reads [window start, heldFrom) from the chain
+//     default holds under 100 MB (about 96 MB measured live). Against a
+//     2.15M-row window (7 days of 200 ms blocks, a 7,077-call full read) a
+//     scan at the default reads about 550 calls (the head plus the unheld
+//     oldest blocks), against about 2,200 at 1,500,000 rows (about 75 MB)
+//     and 3,800 at 1,000,000: the cap is sized for the upstream read bill. Each scan then also reads [window start, heldFrom) from the chain
 //     for the covered wallets and folds it unkept (kept again once there is
 //     room). The cache is never reset for size, so a busy window costs the
 //     head plus that remainder per scan, not a full read.
@@ -67,7 +68,7 @@ export const LOG_CACHE_DEFAULTS = Object.freeze({
   // block time on every scan.
   reorgMarginBlocks: String(process.env.LEADERBOARD_LOG_CACHE_REORG_BLOCKS ?? "").trim() === "" ? null : num(process.env.LEADERBOARD_LOG_CACHE_REORG_BLOCKS, null),
   reorgMarginSeconds: 600,
-  maxRows: num(process.env.LEADERBOARD_LOG_CACHE_MAX_ROWS, 1_500_000),
+  maxRows: num(process.env.LEADERBOARD_LOG_CACHE_MAX_ROWS, 2_000_000),
   saveTimeoutMs: 20_000,
 });
 const VERSION = 1;

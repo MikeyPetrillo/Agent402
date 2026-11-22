@@ -120,7 +120,7 @@ async function reloads(store, latest, wallets = W) {
   const perRow = (withRows - without) / rows;
   const atCap = perRow * C.LOG_CACHE_DEFAULTS.maxRows;
   console.log(`  ${rows} kept rows: ${perRow.toFixed(1)} bytes of live heap a row; the default cap of ${C.LOG_CACHE_DEFAULTS.maxRows} rows holds about ${MB(atCap)} MB`);
-  ok(perRow > 0 && atCap < 75 * 1048576, `the default row cap holds at most half of a 150 MB heap budget (${MB(atCap)} MB at ${C.LOG_CACHE_DEFAULTS.maxRows} rows; bound 75 MB)`);
+  ok(perRow > 0 && C.LOG_CACHE_DEFAULTS.maxRows === 2_000_000 && atCap < 100 * 1048576, `the default row cap (2,000,000, sized for the upstream read bill) times the live heap a row costs stays under 100 MB (${MB(atCap)} MB at ${C.LOG_CACHE_DEFAULTS.maxRows} rows; bound 100 MB)`);
 }
 
 // ---- 1. scale: a cache at the row cap and a scan with a few new logs -------

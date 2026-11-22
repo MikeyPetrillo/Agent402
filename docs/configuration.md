@@ -644,7 +644,7 @@ holds it.
 | `LEADERBOARD_HISTORY_FILE` | Leaderboard history file path. | `/data/leaderboard-history.json` | `src/leaderboard.js` |
 | `LEADERBOARD_LOG_CACHE` | Leaderboard log cache. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_DIR` | Leaderboard log cache directory. |  | `src/leaderboard.js` |
-| `LEADERBOARD_LOG_CACHE_MAX_ROWS` | Rows the Base board's log cache keeps in the heap between scans (default 1500000, about 75 MB at 45 to 50 bytes a row); past it the oldest segments are dropped and each scan reads the window's unkept oldest blocks from the chain, never a full re-read. A higher cap reads fewer blocks a scan and holds more heap. |  | `src/leaderboard-log-cache.js` |
+| `LEADERBOARD_LOG_CACHE_MAX_ROWS` | Rows the Base board's log cache keeps in the heap between scans (default 2000000, under 100 MB at 45 to 50 bytes a row); past it the oldest segments are dropped and each scan reads the window's unkept oldest blocks from the chain, never a full re-read. A higher cap reads fewer blocks a scan and holds more heap. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_REORG_BLOCKS` | Leaderboard log cache reorg blocks. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_LOG_CACHE_SEGMENT_BLOCKS` | Leaderboard log cache segment blocks. |  | `src/leaderboard-log-cache.js` |
 | `LEADERBOARD_REFRESH_MS` | Leaderboard refresh, in milliseconds. |  | `src/leaderboard.js`, `src/refresh-cadence.js` |
