@@ -1145,6 +1145,19 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     && fam.FAILED_CALL_SENTENCE.includes(fam.SETTLE_FIRST_MARK) && fam.SETTLE_FIRST_SENTENCE.includes(fam.SETTLE_FIRST_MARK)
     && ![fam.FAILED_CALL_SENTENCE, fam.SETTLE_FIRST_SENTENCE].some((x) => /not charged|automatic/i.test(x)),
     "the shared sentences are the approved wording: which calls are paid first, and what a failure gets (the same payment again, or a refund), with no restated promise and no 'automatically'");
+  // The tools that settle first (server.js SETTLE_FIRST_CATALOG_SLUGS): a
+  // description that says a failure is not charged carries the sentence too.
+  {
+    const fams = await Promise.all([
+      import("../src/tools/search.js").then((m) => m.SEARCH_TOOLS), import("../src/tools/image-gen-kit.js").then((m) => m.IMAGE_GEN_TOOLS),
+      import("../src/tools/tts-kit.js").then((m) => m.TTS_TOOLS), import("../src/tools/stt-kit.js").then((m) => m.STT_TOOLS),
+      import("../src/tools/judge-kit.js").then((m) => m.JUDGE_TOOLS), import("../src/tools/code-run-kit.js").then((m) => m.CODE_RUN_TOOLS),
+    ]);
+    const tools = fams.flat();
+    const claimers = tools.filter((t) => /\bnot charged\b/i.test(String(t.description || "")));
+    const bareTools = claimers.filter((t) => !String(t.description).includes(fam.SETTLE_FIRST_MARK)).map((t) => t.slug);
+    ok(tools.length >= 6 && claimers.length >= 2 && bareTools.length === 0, `every settle-first tool description that says a failure is not charged carries the settle-first sentence (${claimers.length} of ${tools.length}${bareTools.length ? `; bare: ${bareTools.join(", ")}` : ""})`);
+  }
   ok(claims >= 40, `the failed-call not-charged claim is found where it is made (${claims} places)`);
   ok(bare.length === 0, `every failed-call not-charged claim carries the settle-first sentence${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
   ok(drift.length === 0, `every copy of the settle-first words is one of the shared sentences, word for word${drift.length ? ` (drifted: ${[...new Set(drift)].join(", ")})` : ""}`);

@@ -12,6 +12,7 @@ import { markUntrusted } from "./provenance.js";
 import { wantsShare, reserveShare, prepareShare, answerShareEnabled, SHARE_TTL_DAYS } from "../answer-share.js";
 // The share option is offered only while its switch is on (read at boot, as the catalog is built).
 const SHARE_OFFERED = answerShareEnabled();
+import { SETTLE_FIRST_SENTENCE } from "../settle-first-copy.js";
 import { recordUpstreamCall } from "../stats.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { settleBeforeUpstreamUnless } from "../settle-first.js";
@@ -739,7 +740,7 @@ export const SEARCH_TOOLS = [
     category: "web",
     price: "$0.08",
     description:
-      "Run 2-5 web searches in one call with a 20% volume discount vs. individual searches. Each query returns ranked results (title, URL, snippet). Ideal for multi-faceted research or comparing sources on different aspects of a topic. If some queries fail upstream, the call returns the ones that succeeded with an error on each failed query and is charged; a call where every query fails is not charged, except a Tempo transfer sent before the call, which is recorded as owed and repaid after on-chain proof.",
+      `Run 2-5 web searches in one call with a 20% volume discount vs. individual searches. Each query returns ranked results (title, URL, snippet). Ideal for multi-faceted research or comparing sources on different aspects of a topic. If some queries fail upstream, the call returns the ones that succeeded with an error on each failed query and is charged; a call where every query fails is not charged, except a Tempo transfer sent before the call, which is recorded as owed and repaid after on-chain proof. ${SETTLE_FIRST_SENTENCE}`,
     tags: ["search", "batch", "multi-search", "research", "parallel"],
     discovery: {
       bodyType: "json",
